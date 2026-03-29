@@ -684,25 +684,25 @@
             "id": 1,
             "title": "Define packaging, installer, and update policy for the first supported OS",
             "description": "Choose and document the official end-user distribution target and update expectations.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [],
             "details": "Set the initial supported OS, bundle target, installer type, update model, and data retention expectations so the app has one official non-engineer launch story instead of a development-only startup path.",
             "testStrategy": "Confirm the supported-platform, install, update, and data-retention rules are reflected in planning docs and packaging configuration expectations.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T08:25:26Z"
           },
           {
             "id": 2,
             "title": "Implement startup preflight, friendly failure states, and self-recovery",
             "description": "Make initialization and storage issues understandable and recoverable from the app UI.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1
             ],
             "details": "Extend the startup flow so missing app data storage, inaccessible save locations, or first-run setup problems show plain-language guidance, retry, reset, and support-oriented diagnostic actions instead of technical errors.",
             "testStrategy": "Verify startup failures surface clear problem, reason, and next-step guidance plus at least one retry, reset, or diagnostic action.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T08:59:54Z"
           },
           {
             "id": 3,
@@ -733,7 +733,7 @@
             "updatedAt": "2026-03-29T08:12:43Z"
           }
         ],
-        "updatedAt": "2026-03-29T08:12:43Z"
+        "updatedAt": "2026-03-29T08:59:54Z"
       },
       {
         "id": "12",
@@ -1079,7 +1079,7 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-29T08:12:43Z",
+      "lastModified": "2026-03-29T08:59:54Z",
       "taskCount": 16,
       "completedCount": 10,
       "tags": [

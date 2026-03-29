@@ -325,6 +325,7 @@ Manual verification:
 
 Post-MVP usability work aimed at non-engineer operators is captured in `.taskmaster/docs/prd_non_engineer_ux.txt`.
 The corresponding Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as follow-up tasks `11` through `16`.
+The first packaged end-user release path is now fixed by `docs/PACKAGING_POLICY.md` to Windows 10/11 x64 via an NSIS installer, with manual installer-driven updates until signed updater infrastructure exists.
 
 That follow-up should be planned as a new milestone set that preserves the current safety model:
 

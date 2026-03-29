@@ -92,7 +92,7 @@ impl AppStorage {
     }
 
     pub fn storage_ready(&self) -> bool {
-        self.app_local_data_dir.is_none() || self.manifest.is_some()
+        self.app_local_data_dir.is_some() && self.manifest.is_some()
     }
 
     pub fn session_count(&self) -> usize {

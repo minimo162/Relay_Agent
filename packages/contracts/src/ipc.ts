@@ -10,6 +10,20 @@ import { relayModeSchema } from "./shared";
 import { diffSummarySchema } from "./workbook";
 
 export const storageModeSchema = z.enum(["memory", "local-json"]);
+export const startupStatusSchema = z.enum(["ready", "attention"]);
+export const startupRecoveryActionSchema = z.enum([
+  "retryInit",
+  "continueTemporaryMode",
+  "openSettings"
+]);
+
+export const startupIssueSchema = z.object({
+  problem: z.string().trim().min(1),
+  reason: z.string().trim().min(1),
+  nextSteps: z.array(z.string().trim().min(1)).default([]),
+  recoveryActions: z.array(startupRecoveryActionSchema).default([]),
+  storagePath: z.string().trim().min(1).optional()
+});
 
 export const initializeAppResponseSchema = z.object({
   appName: z.literal("Relay Agent"),
@@ -17,7 +31,9 @@ export const initializeAppResponseSchema = z.object({
   storageReady: z.boolean(),
   storageMode: storageModeSchema,
   sessionCount: z.number().int().nonnegative(),
-  supportedRelayModes: z.array(relayModeSchema).default(relayModeSchema.options)
+  supportedRelayModes: z.array(relayModeSchema).default(relayModeSchema.options),
+  startupStatus: startupStatusSchema,
+  startupIssue: startupIssueSchema.optional()
 });
 
 export const createSessionRequestSchema = z.object({
@@ -111,6 +127,9 @@ export const runExecutionResponseSchema = z.object({
 });
 
 export type StorageMode = z.infer<typeof storageModeSchema>;
+export type StartupStatus = z.infer<typeof startupStatusSchema>;
+export type StartupRecoveryAction = z.infer<typeof startupRecoveryActionSchema>;
+export type StartupIssue = z.infer<typeof startupIssueSchema>;
 export type InitializeAppResponse = z.infer<typeof initializeAppResponseSchema>;
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 export type ReadSessionRequest = z.infer<typeof readSessionRequestSchema>;

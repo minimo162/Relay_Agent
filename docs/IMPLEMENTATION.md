@@ -11,6 +11,8 @@
   - `.taskmaster/docs/repo_audit.md`
 - Follow-up planning input: `.taskmaster/docs/prd_non_engineer_ux.txt` captures a post-MVP usability scope focused on making the app easier for non-engineer operators, especially around app startup, distribution/install/update expectations, recovery/diagnostics, data-handling clarity, permission explanations, file readiness, locale and CSV compatibility, early constraint surfacing, resumable work, crash recovery, recent-item access, progress visibility, template-driven starts, output-name safety, duplicate-run prevention, safe defaults, reviewer-friendly summaries, read-only review, inline help, pre-copy sensitivity warnings, local audit history, accessibility baselines, and the preview, approval, and save-copy execution flow
 - Follow-up task graph: `.taskmaster/tasks/tasks.json` now breaks that supplemental PRD into Task Master follow-up tasks `11` through `16`, covering startup, data trust, continuity, guided onboarding, review/save simplification, and cross-cutting recovery plus accessibility work
+- Follow-up packaging policy: `docs/PACKAGING_POLICY.md` now fixes the first packaged end-user release path to Windows 10/11 x64 via NSIS, with manual installer-driven updates and preserved app-local storage across upgrades as the current expectation
+- Follow-up implementation status: Task `11.2` is now complete; startup preflight failures no longer abort desktop launch, `initialize_app` returns plain-language recovery guidance, and Home can retry startup checks or continue in temporary mode
 
 ## Milestone Log
 
@@ -574,6 +576,49 @@ Outcome:
 - Tightened the README walkthrough by making the `workbook.save_copy` example path explicitly operator-supplied and writable, and by documenting the concrete bundled-sample outcome of 3 approved output rows with 3 sanitized `comment` cells.
 - Reconciled the implementation log so the milestone status, known limitations, and next-step section reflect that the documented demo flow has now been verified instead of remaining a pending manual task.
 
+### Follow-up Milestone 11
+
+#### 11.1 Define packaging, installer, and update policy for the first supported OS
+
+Completed.
+
+Artifacts:
+
+- `docs/PACKAGING_POLICY.md`
+- `apps/desktop/src-tauri/tauri.windows.conf.json`
+- `PLANS.md`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Fixed the first packaged end-user release path to Windows 10/11 x64 using the `x86_64-pc-windows-msvc` target and an NSIS installer.
+- Kept the base Tauri config cross-platform for development while adding a Windows-specific override that narrows bundle output to `nsis`.
+- Chose manual installer-driven updates for the first non-engineer release track and documented that upgrade installs are expected to preserve app-local storage under the existing app identifier.
+- Left macOS, Linux end-user packaging, MSI rollout, and in-app updater infrastructure deferred instead of implying they are already supported.
+
+#### 11.2 Implement startup preflight, friendly failure states, and self-recovery
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src-tauri/src/lib.rs`
+- `apps/desktop/src-tauri/src/state.rs`
+- `apps/desktop/src-tauri/src/app.rs`
+- `apps/desktop/src-tauri/src/storage.rs`
+- `packages/contracts/src/ipc.ts`
+- `apps/desktop/src/routes/+page.svelte`
+- `docs/IMPLEMENTATION.md`
+- `.taskmaster/tasks/tasks.json`
+
+Outcome:
+
+- Changed Tauri startup so storage initialization failure no longer aborts the desktop app; the shell now falls back to temporary in-memory mode and records a recoverable startup preflight issue.
+- Extended `initialize_app` to return `startupStatus` plus a plain-language `startupIssue` containing the problem, reason, next steps, recovery actions, and storage path when available.
+- Added retry-based storage recovery inside `initialize_app`, so Home can re-run startup checks and switch back to local JSON storage if the underlying storage issue is cleared.
+- Updated Home to show the startup warning state, offer retry or temporary-mode continuation, and block persisted session creation until the user either resolves the issue or explicitly continues in temporary mode.
+- Added Rust unit coverage for startup recovery and path-unavailable fallback behavior.
+
 ## Decisions
 
 - Treat the repository as greenfield apart from `.taskmaster/`.
@@ -587,6 +632,8 @@ Outcome:
 - Keep write-preview expression parsing intentionally narrow until save-copy execution exists: bracketed column references for spaced headers, one comparison in `filter_rows`, and basic arithmetic or string concatenation in `derive_column`.
 - Capture non-engineer UX simplification as a separate follow-up PRD instead of retroactively widening the completed MVP milestone set, with startup simplicity, distribution/recovery/diagnostics UX, data-handling clarity, permission/constraint clarity, locale/csv compatibility, resumable-work UX, crash recovery, progress visibility, template starts, output-name safety, duplicate-run prevention, safe defaults, reviewer-friendly summaries, read-only review, inline help, pre-copy sensitivity warnings, local audit history, accessibility baselines, and execution-phase simplification called out as the primary next planning targets.
 - Decompose that follow-up PRD into Task Master tasks `11` through `16` so the post-MVP scope can be worked milestone by milestone instead of remaining a narrative-only planning artifact.
+- Treat Windows 10/11 x64 plus an NSIS installer as the first official end-user packaging target, keep updates manual until signing and updater infrastructure exist, and require upgrade installs to preserve app-local storage.
+- Let the desktop shell continue launching when local storage startup fails, but surface that failure as a plain-language preflight issue and keep retry-driven recovery inside `initialize_app` instead of crashing the app at boot.
 
 ## Verification Log
 
@@ -1093,6 +1140,44 @@ Observed result:
 - `PLANS.md` now points future scope expansion at this follow-up PRD instead of silently widening the completed MVP milestone set.
 - Task Master JSON remains valid and now includes the follow-up task breakdown for the supplemental non-engineer UX PRD.
 - The updated planning artifacts also pass `git diff --check`, so the new task breakdown did not introduce whitespace or patch-format issues.
+
+Packaging policy verification:
+
+```bash
+test -f docs/PACKAGING_POLICY.md
+jq empty apps/desktop/src-tauri/tauri.windows.conf.json
+rg -n 'Windows 10/11 x64|NSIS|manual installer|preserve app-local storage' docs/PACKAGING_POLICY.md PLANS.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select(.id == "11") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- `docs/PACKAGING_POLICY.md` now records a concrete first-release packaging policy for non-engineer distribution instead of leaving the installer and update path implicit.
+- A Windows-specific Tauri override now narrows bundle output to `nsis` without changing the base cross-platform development config.
+- `PLANS.md` and the implementation log now point at the same first-release decision: Windows 10/11 x64, NSIS installer, manual installer-driven updates, and preserved app-local storage across upgrades.
+- Task Master subtask `11.1` is now marked done while parent task `11` remains pending for the later startup UX implementation subtasks.
+- The updated docs and task graph continue to pass JSON validation and `git diff --check`.
+
+Startup preflight recovery verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'startupStatus|startupIssue|retryInit|continueTemporaryMode' packages/contracts/src/ipc.ts apps/desktop/src-tauri/src/app.rs apps/desktop/src-tauri/src/state.rs apps/desktop/src/routes/+page.svelte
+jq '.master.tasks[] | select(.id == "11") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- Workspace typecheck passes after extending the IPC contract and Home route with startup preflight metadata.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` passes with 26 tests, including the new startup recovery coverage in `state.rs`.
+- The shared contracts, Tauri command layer, startup state, and Home route now all reference the same `startupStatus` or `startupIssue` shape plus `retryInit` and `continueTemporaryMode` recovery actions.
+- Task Master subtask `11.2` is now marked done while parent task `11` remains pending for first-run welcome and startup-doc alignment work.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
 
 ## Known Limitations
 

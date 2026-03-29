@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { projectInfo, type Session } from "@relay-agent/contracts";
+  import { projectInfo, type Session, type StartupIssue } from "@relay-agent/contracts";
   import { createSession, initializeApp, listSessions, pingDesktop } from "$lib";
 
   let ping = "loading";
@@ -8,6 +8,9 @@
   let storageMode = "unavailable";
   let sessionCount = "0";
   let supportedModes = "loading";
+  let startupStatus = "loading";
+  let startupIssue: StartupIssue | null = null;
+  let temporaryModeEnabled = false;
 
   let sessions: Session[] = [];
   let sessionsLoading = true;
@@ -43,6 +46,20 @@
     }).format(new Date(value));
   }
 
+  function canRetryStartupChecks(): boolean {
+    return startupIssue?.recoveryActions.includes("retryInit") ?? false;
+  }
+
+  function canContinueTemporaryMode(): boolean {
+    return startupIssue?.recoveryActions.includes("continueTemporaryMode") ?? false;
+  }
+
+  function enableTemporaryMode(): void {
+    temporaryModeEnabled = true;
+  }
+
+  $: createBlockedByStartup = Boolean(startupIssue) && !temporaryModeEnabled;
+
   async function loadHome(): Promise<void> {
     sessionsLoading = true;
     homeError = "";
@@ -61,10 +78,18 @@
       storageMode = appResult.value.storageMode;
       supportedModes = appResult.value.supportedRelayModes.join(", ");
       sessionCount = String(appResult.value.sessionCount);
+      startupStatus = appResult.value.startupStatus;
+      startupIssue = appResult.value.startupIssue ?? null;
+
+      if (!startupIssue) {
+        temporaryModeEnabled = false;
+      }
     } else {
       ipcStatus = "tauri-unavailable";
       storageMode = "unavailable";
       supportedModes = "unavailable";
+      startupStatus = "attention";
+      startupIssue = null;
       homeError = toErrorMessage(appResult.reason);
     }
 
@@ -143,6 +168,43 @@
     </section>
   {/if}
 
+  {#if startupIssue}
+    <section class="feedback feedback-warning" aria-live="polite">
+      <strong>{startupIssue.problem}</strong>
+      <p>{startupIssue.reason}</p>
+
+      {#if startupIssue.storagePath}
+        <p class="feedback-detail">
+          Storage path: <code>{startupIssue.storagePath}</code>
+        </p>
+      {/if}
+
+      {#if startupIssue.nextSteps.length > 0}
+        <ul class="feedback-list">
+          {#each startupIssue.nextSteps as step}
+            <li>{step}</li>
+          {/each}
+        </ul>
+      {/if}
+
+      <div class="feedback-actions">
+        {#if canRetryStartupChecks()}
+          <button class="route-chip action-chip" type="button" on:click={() => void loadHome()}>
+            Retry startup checks
+          </button>
+        {/if}
+
+        {#if canContinueTemporaryMode() && !temporaryModeEnabled}
+          <button class="route-chip action-chip" type="button" on:click={enableTemporaryMode}>
+            Continue in temporary mode
+          </button>
+        {/if}
+
+        <a class="route-chip" href="/settings">Open settings</a>
+      </div>
+    </section>
+  {/if}
+
   <section class="home-grid">
     <article class="ra-panel create-panel">
       <div class="panel-heading">
@@ -150,12 +212,18 @@
           <p class="panel-eyebrow">Create session</p>
           <h2>Start a new objective</h2>
         </div>
-        <span class={`status-pill status-${ipcStatus}`}>{ipcStatus}</span>
+        <span class={`status-pill status-${startupStatus}`}>{startupStatus}</span>
       </div>
 
       <p class="panel-copy">
-        Sessions persist immediately through the typed IPC layer. The workbook path stays
-        optional until the CSV and Studio flows are wired further.
+        {#if createBlockedByStartup}
+          Startup checks still need attention before saved work can be created.
+        {:else if temporaryModeEnabled}
+          Temporary mode is active. New sessions will work for this run, but they will not survive restart.
+        {:else}
+          Sessions persist immediately through the typed IPC layer. The workbook path stays
+          optional until the CSV and Studio flows are wired further.
+        {/if}
       </p>
 
       <form class="session-form" on:submit|preventDefault={() => void handleCreateSession()}>
@@ -182,6 +250,12 @@
           />
         </label>
 
+        {#if createBlockedByStartup}
+          <p class="form-message form-warning" aria-live="polite">
+            Resolve the startup issue or choose temporary mode before creating a session.
+          </p>
+        {/if}
+
         {#if createError}
           <p class="form-message form-error" aria-live="polite">{createError}</p>
         {/if}
@@ -190,7 +264,11 @@
           <p class="form-message form-success" aria-live="polite">{createSuccess}</p>
         {/if}
 
-        <button class="primary-button" disabled={createPending || ipcStatus !== "ready"} type="submit">
+        <button
+          class="primary-button"
+          disabled={createPending || ipcStatus !== "ready" || createBlockedByStartup}
+          type="submit"
+        >
           {createPending ? "Creating session..." : "Create session"}
         </button>
       </form>
@@ -258,6 +336,10 @@
         <div>
           <dt>Stage</dt>
           <dd>{projectInfo.stage}</dd>
+        </div>
+        <div>
+          <dt>Startup status</dt>
+          <dd>{startupStatus}</dd>
         </div>
         <div>
           <dt>IPC status</dt>
@@ -337,6 +419,29 @@
     color: #7f2a20;
   }
 
+  .feedback-warning {
+    border-color: rgba(138, 90, 23, 0.24);
+    background: rgba(138, 90, 23, 0.08);
+    color: #7a5316;
+  }
+
+  .feedback-detail {
+    font-size: 0.92rem;
+    word-break: break-word;
+  }
+
+  .feedback-list {
+    margin: 0.75rem 0 0;
+    padding-left: 1.15rem;
+  }
+
+  .feedback-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.7rem;
+    margin-top: 0.9rem;
+  }
+
   .home-grid {
     display: grid;
     gap: 1rem;
@@ -410,6 +515,12 @@
     background: rgba(141, 45, 31, 0.08);
   }
 
+  .status-attention {
+    border-color: rgba(138, 90, 23, 0.28);
+    color: #8a5a17;
+    background: rgba(138, 90, 23, 0.08);
+  }
+
   .session-form {
     display: grid;
     gap: 0.95rem;
@@ -454,6 +565,10 @@
 
   .form-error {
     color: #7f2a20;
+  }
+
+  .form-warning {
+    color: #8a5a17;
   }
 
   .form-success {
