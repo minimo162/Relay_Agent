@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.relayagent.desktop",
   "build": {
-    "beforeBuildCommand": "cd .. && pnpm build",
-    "beforeDevCommand": "cd .. && pnpm dev",
+    "beforeBuildCommand": "pnpm build",
+    "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../build"
   },

@@ -1,0 +1,98 @@
+# Startup Test Harness PRD
+
+## Summary
+
+Relay Agent の source-run startup を継続的に確認できるように、GUI に依存しない startup smoke harness と、実 GUI 起動用の manual verification artifact を追加する。対象は通常起動、recoverable startup issue、temporary mode に関わる startup 状態の確認であり、product guardrail や installer scope を広げない。
+
+## Problem
+
+現在の Relay Agent には非エンジニア向け startup UX は実装済みだが、それを継続的に確認する専用の起動テスト導線がない。結果として、以下の問題がある。
+
+- `initialize_app` と startup preflight の振る舞いを壊しても、専用の smoke command では検出できない
+- startup recovery、sample flow discoverability、temporary mode attention state のような boot-time behavior が既存テスト群の中に埋もれている
+- README の起動手順はあるが、起動確認を何で完了とみなすかの test artifact が薄い
+- GUI を含む本格 E2E をまだ持たないため、起動確認が人手や断片的な `cargo test` に依存しやすい
+
+Relay Agent は Home startup が first-run, recovery, trust messaging, sample onboarding の入口になっているため、起動確認の回帰検知は独立スコープとして価値が高い。
+
+## Goals
+
+- source-run startup の主要状態を GUI なしで確認できる smoke command を追加する
+- startup bootstrapping と `initialize_app` response 生成を共有ロジックとしてテスト可能にする
+- 通常起動、recoverable startup issue、attention state を deterministic に確認できるようにする
+- 実 GUI 起動の manual verification checklist を追加し、README と docs を同期する
+
+## Non-goals
+
+- packaged installer E2E
+- OS 権限ダイアログの自動操作
+- screenshot-based frontend E2E
+- execution resume や broader workflow automation
+- 外部ネットワークや model provider を使う起動確認
+
+## Target Users
+
+- 開発者: startup regressions を早く見つけたい
+- QA / internal ops: source-run startup の確認手順を固定したい
+- support / maintainers: startup issue の再現条件を短く確認したい
+
+## User Stories
+
+- 開発者として、GUI を開かずに source-run startup の重要状態を一通り確認したい
+- 開発者として、`initialize_app` の ready / attention / retry-recovery を deterministic にテストしたい
+- QA として、manual 起動確認を README ではなく専用 checklist で実施したい
+- maintainer として、起動テストのコマンドを 1 本にまとめたい
+
+## UX Principles
+
+- Deterministic first: GUI がなくても同じ startup state を再現できること
+- Source-run aligned: README の source 起動導線と矛盾しないこと
+- Small surface: product behaviorは増やさず testability だけを増やすこと
+- Same startup contract: smoke harness と実アプリが同じ startup logic を使うこと
+- Explicit evidence: manual と automated の両方に acceptance artifact を残すこと
+
+## Functional Requirements
+
+1. startup bootstrapping を shared logic として切り出す
+2. `initialize_app` response 生成を pure-ish helper 経由で smoke test 可能にする
+3. smoke command は少なくとも以下の scenario を確認する
+   - ready startup
+   - retry-recovery startup
+   - attention startup
+4. smoke command は non-zero exit code で failure を返す
+5. smoke command は scenario ごとの summary を機械可読に近い形で出力する
+6. startup 専用の verification artifact を `docs/` に追加する
+7. README には起動テスト command と `.env` 非依存性の関係を明記する
+8. 新スコープは product workflow の guardrail を変更しない
+
+## Acceptance Criteria
+
+- `pnpm startup:test` で startup smoke command と関連 startup test suite を実行できる
+- ready startup で `storageMode=local-json` と sample path discoverability が確認できる
+- retry-recovery scenario で recoverable startup issue から ready へ戻れることを確認できる
+- attention scenario で plain-language startup issue と recovery actions が確認できる
+- 実 GUI 起動用の verification checklist が `docs/` に存在する
+- README, PLANS, IMPLEMENTATION が同じ startup test surface を説明している
+
+## Risks and Mitigations
+
+1. Smoke harness が product startup path とズレる
+   - Mitigation: shared startup bootstrap helper を使い回す
+2. GUI E2E をやったつもりの不十分な coverage になる
+   - Mitigation: scope を source-run smoke と manual GUI verification に明確化する
+3. Startup test command が一時ディレクトリ依存で flaky になる
+   - Mitigation: temp path を明示生成し、scenario ごとに cleanup する
+
+## Suggested Implementation Phases
+
+### Phase 1
+
+startup bootstrap と `initialize_app` response 生成を shared helper に切り出す
+
+### Phase 2
+
+non-interactive startup smoke binary と package scripts を追加する
+
+### Phase 3
+
+manual verification artifact、README、PLANS、IMPLEMENTATION、Task Master を同期する

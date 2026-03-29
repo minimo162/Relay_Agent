@@ -39,6 +39,20 @@ From the repository root:
 pnpm install
 ```
 
+## Environment Variables
+
+No `.env` file is required to start the Relay Agent desktop app from source.
+
+- `pnpm --filter @relay-agent/desktop tauri:dev` works without copying
+  `.env.example`.
+- The root [`.env.example`](.env.example) is for optional Task Master and model
+  provider integrations, not for the local desktop app workflow described in
+  this README.
+- If you only want to run the desktop app, you can skip `.env` setup entirely.
+- If you also want Task Master AI-assisted parsing or planning features, copy
+  `.env.example` to `.env` and set the provider keys that match your
+  [`.taskmaster/config.json`](.taskmaster/config.json) model configuration.
+
 ## Run The Desktop App
 
 Start the Tauri desktop shell:
@@ -57,13 +71,102 @@ The packaged non-engineer release target is tracked in
 [`docs/PACKAGING_POLICY.md`](docs/PACKAGING_POLICY.md). The commands above are still
 the current verified way to run the app from source.
 
+## Windows Installer Status
+
+- This repository does not currently include a prebuilt Windows installer.
+- The first packaged end-user target is Windows 10/11 x64 with an NSIS
+  installer, as documented in
+  [`docs/PACKAGING_POLICY.md`](docs/PACKAGING_POLICY.md).
+- The current verified way to run Relay Agent is still the source-run path
+  shown above with `pnpm --filter @relay-agent/desktop tauri:dev`.
+
+If you want to build a Windows installer yourself on a Windows machine with the
+required Tauri toolchain installed, run:
+
+```bash
+pnpm install
+pnpm --filter @relay-agent/desktop tauri:build
+```
+
+When that packaging step succeeds, check the generated bundle output under:
+
+```text
+target/release/bundle/nsis/
+```
+
+Treat that as a locally built packaging artifact. It is not a checked-in
+release file in this repository today.
+
 Repo checks:
 
 ```bash
 pnpm check
 pnpm typecheck
+pnpm startup:test
+pnpm launch:test
+pnpm workflow:test
 . "$HOME/.cargo/env" && cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 ```
+
+## Startup Test
+
+Run the dedicated source-run startup smoke command from the repository root:
+
+```bash
+pnpm startup:test
+```
+
+This command does not open the desktop window. It validates the shared startup
+path for:
+
+- normal ready startup
+- retry-recovery startup
+- attention startup with temporary memory fallback
+
+The matching manual GUI checklist lives in
+[`docs/STARTUP_TEST_VERIFICATION.md`](docs/STARTUP_TEST_VERIFICATION.md).
+
+## App Launch Test
+
+Run the real launch smoke command from the repository root:
+
+```bash
+pnpm launch:test
+```
+
+This command starts `Xvfb` directly, launches `pnpm tauri:dev`, waits for the
+frontend dev server, confirms the desktop binary started, and checks that the
+app stays alive for a short stability window before cleanup.
+
+The matching verification checklist lives in
+[`docs/APP_LAUNCH_TEST_VERIFICATION.md`](docs/APP_LAUNCH_TEST_VERIFICATION.md).
+
+## App Workflow Test
+
+Run the launched-app workflow smoke command from the repository root:
+
+```bash
+pnpm workflow:test
+```
+
+This command starts `Xvfb`, launches `pnpm tauri:dev`, waits for the frontend
+and desktop shell to come up, then asks the launched app to run the bundled
+sample workflow through:
+
+- session creation
+- turn start
+- relay packet generation
+- response validation
+- preview
+- approval
+- save-copy execution
+
+It uses an isolated test app-data directory, writes a workflow summary JSON,
+confirms the reviewed copy matches the expected bundled sample output, and
+checks that the original sample CSV stays unchanged.
+
+The matching verification checklist lives in
+[`docs/APP_WORKFLOW_TEST_VERIFICATION.md`](docs/APP_WORKFLOW_TEST_VERIFICATION.md).
 
 ## Home Startup Behavior
 

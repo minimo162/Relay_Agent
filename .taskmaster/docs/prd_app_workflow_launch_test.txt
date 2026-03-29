@@ -1,0 +1,113 @@
+# App Workflow Launch Test PRD
+
+## Summary
+
+Relay Agent の source-run app を実際に起動した状態で、bundled sample CSV の安全ワークフローを end to end で通せる automated test surface を追加する。対象は `tauri:dev` で立ち上がった app process 上での sample session 作成、turn 開始、relay packet 生成、response validation、preview、approval、save-copy execution の確認であり、GUI の pixel-level E2E や packaged installer automation までは広げない。
+
+## Problem
+
+現在の repository には startup smoke と app launch smoke はあるが、「起動した app が実際に safe workflow を最後まで完走できるか」を継続確認する automated path はない。そのため、以下の問題がある。
+
+- app が起動しても、sample workflow の backend path が launch 時に壊れているかどうかは別途手動確認しないと分からない
+- README の sample flow は実在するが、launch された desktop shell と同じ起動条件で end-to-end まで回す command がない
+- preview before write、approval before write、save-copy only の guardrail を保ったまま execution まで到達できるかが launch smoke だけでは確認できない
+- headless 環境で app launch と workflow completion を一緒に確認する契約がない
+
+Relay Agent の価値は「安全に preview して approval して save-copy する」ことなので、launch 後にその workflow 自体が通るかを継続検証できる価値は高い。
+
+## Goals
+
+- 起動した `tauri:dev` app 上で bundled sample workflow を自動完走できる test-only path を追加する
+- workflow smoke は session create、turn start、packet、validation、preview、approval、execution を順に確認する
+- output copy が生成され、元の sample CSV は unchanged であることを確認する
+- repository root から `pnpm workflow:test` で走る headless command を提供する
+- README と verification doc に app workflow test command を追加する
+
+## Non-goals
+
+- full GUI click automation
+- screenshot or visual diff E2E
+- packaged installer workflow automation
+- arbitrary custom workbook automation beyond the bundled sample flow
+- cross-platform desktop automation parity beyond the current Linux headless environment
+
+## Target Users
+
+- 開発者: launch 後の safe workflow が壊れていないことを 1 command で確認したい
+- QA / maintainers: sample flow の end-to-end 成功を headless 環境で再現したい
+- release owners: README にある sample workflow が app launch 条件込みで動くことを確認したい
+
+## User Stories
+
+- 開発者として、起動した app が sample session を作り、turn を進め、save-copy execution まで通ることを自動確認したい
+- maintainer として、workflow failure が startup failure なのか validation / preview / execution failure なのか summary で切り分けたい
+- QA として、output copy ができても source CSV は unchanged のままだと自動確認したい
+
+## UX Principles
+
+- Real app, small surface: 実際に app を起動したうえで workflow を通すが、GUI 自動操作までは広げない
+- Guardrails preserved: preview before write、approval before write、save-copy only を bypass しない
+- Actionable summary: どの workflow step まで進んだか、どこで失敗したかを JSON summary で出す
+- Isolated test state: workflow test は通常の app data や sample source を汚さない
+- Same documented sample: README の bundled sample flow と同じ objective / response shape を使う
+
+## Functional Requirements
+
+1. launched app 上でのみ動く workflow smoke path を追加する
+2. workflow smoke は env var で opt-in し、通常の product flow では無効にする
+3. workflow smoke は少なくとも以下を順に実行する
+   - startup initialization
+   - sample session creation
+   - plan turn start
+   - relay packet generation
+   - valid Copilot response submission
+   - preview generation
+   - approval recording
+   - save-copy execution
+4. workflow smoke は success / failure summary を JSON file に書き出す
+5. summary には少なくとも以下を含める
+   - startup status
+   - session id / turn id
+   - workflow step completion
+   - output path
+   - output exists
+   - source unchanged
+   - failure reason if any
+6. workflow smoke は test 専用 storage path を使える
+7. headless harness は `Xvfb` で app を起動し、frontend ready、desktop launch、workflow summary completion を待つ
+8. repository root から `pnpm workflow:test` を実行できる
+9. README と `docs/` に workflow test command と verification checklist を追加する
+
+## Acceptance Criteria
+
+- `pnpm workflow:test` が repository root から実行できる
+- command は `pnpm tauri:dev` を launch し、workflow smoke summary が success で終わる
+- success path で session create、turn start、packet、validation、preview、approval、execution の各 step が完了したことが確認できる
+- output copy が存在し、sample source file は unchanged のままだと確認できる
+- workflow smoke は preview before write と approval before write を bypass しない
+- README、PLANS、IMPLEMENTATION、verification doc が同じ workflow-test surface を説明する
+
+## Risks and Mitigations
+
+1. GUI automation ではないので「起動した app 上で workflow を通す」保証が弱くなる
+   - Mitigation: launched Tauri app process の setup で test-only autorun を起動し、same managed app state と bundled sample source を使う
+2. workflow test が通常の local app data を汚す
+   - Mitigation: test-only app data override path を env で渡し、isolated storage を使う
+3. smoke runner が product flow とズレる
+   - Mitigation: create_session / start_turn / generate_relay_packet / submit_copilot_response / preview_execution / respond_to_approval / run_execution の既存 storage path をそのまま呼ぶ
+4. headless harness が flaky になる
+   - Mitigation: explicit timeouts、frontend polling、workflow summary polling、process-group cleanup を入れる
+
+## Suggested Implementation Phases
+
+### Phase 1
+
+PRD と task breakdown を追加し、workflow smoke の env contract と isolated storage 方針を固定する
+
+### Phase 2
+
+launched app の test-only workflow autorun runner と JSON summary emission を追加する
+
+### Phase 3
+
+Xvfb-based workflow launch harness、package scripts、verification docs、README / PLANS / IMPLEMENTATION / Task Master を同期する

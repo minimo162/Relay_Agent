@@ -7,7 +7,10 @@
   },
   "scripts": {
     "check": "pnpm --filter @relay-agent/contracts check && pnpm --filter @relay-agent/desktop check",
-    "typecheck": "pnpm --filter @relay-agent/contracts typecheck && pnpm --filter @relay-agent/desktop typecheck"
+    "launch:test": "pnpm --filter @relay-agent/desktop launch:test",
+    "workflow:test": "pnpm --filter @relay-agent/desktop workflow:test",
+    "typecheck": "pnpm --filter @relay-agent/contracts typecheck && pnpm --filter @relay-agent/desktop typecheck",
+    "startup:test": "pnpm --filter @relay-agent/desktop startup:test"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

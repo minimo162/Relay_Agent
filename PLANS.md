@@ -332,6 +332,12 @@ The next shipped follow-up scope is captured in `.taskmaster/docs/prd_workbook_a
 Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `17` through `20`, and that follow-up is now implementation-complete with verification recorded in `docs/WORKBOOK_ARTIFACT_BROWSER_VERIFICATION.md`.
 The next shipped follow-up scope is captured in `.taskmaster/docs/prd_turn_lifecycle_details.txt`.
 Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `21` through `26`, and that follow-up is now implementation-complete with verification recorded in `docs/TURN_LIFECYCLE_DETAILS_VERIFICATION.md`.
+The next shipped follow-up scope is captured in `.taskmaster/docs/prd_startup_test_harness.txt`.
+Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `27` through `31`, and that follow-up is now implementation-complete with verification recorded in `docs/STARTUP_TEST_VERIFICATION.md`.
+The next shipped follow-up scope is captured in `.taskmaster/docs/prd_app_launch_execution_test.txt`.
+Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `32` through `36`, and that follow-up is now implementation-complete with verification recorded in `docs/APP_LAUNCH_TEST_VERIFICATION.md`.
+The next shipped follow-up scope is captured in `.taskmaster/docs/prd_app_workflow_launch_test.txt`.
+Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `37` through `41`, and that follow-up is now implementation-complete with verification recorded in `docs/APP_WORKFLOW_TEST_VERIFICATION.md`.
 
 That follow-up preserved the current safety model:
 

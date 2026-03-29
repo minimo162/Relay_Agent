@@ -2,6 +2,7 @@
 name = "relay-agent-desktop"
 version = "0.1.0"
 edition = "2021"
+default-run = "relay-agent-desktop"
 
 [lib]
 name = "relay_agent_desktop_lib"

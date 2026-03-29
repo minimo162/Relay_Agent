@@ -1207,13 +1207,202 @@
         "details": "Make the same `Turn details` surface available from reviewer mode and relevant audit-history entry points, then align `PLANS.md`, `docs/IMPLEMENTATION.md`, README if behavior becomes real, and any new verification artifacts so the follow-up is documented from source of truth through shipped UX.",
         "testStrategy": "Run reviewer-mode flow tests, history-entry regression checks, documentation checklist review, and a manual smoke test that confirms the new lifecycle inspection surface stays read-only across modes.",
         "updatedAt": "2026-03-29T20:47:12Z"
+      },
+      {
+        "id": "27",
+        "title": "Define the startup testing follow-up contract and scenarios",
+        "description": "Capture the source-run startup testing scope and the minimum scenarios that the harness must cover.",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "details": "Define the startup test follow-up around ready startup, retry-recovery startup, and attention startup without widening into packaged installer E2E or screenshot-driven UI automation. The new planning artifact should also fix the acceptance expectation that README, docs, and the runnable startup-test command all describe the same startup surface.",
+        "testStrategy": "Verify the PRD exists, Task Master contains the new dependency-ordered task graph, and planning docs point to the new startup-testing follow-up scope without implying the implementation already ships.",
+        "updatedAt": "2026-03-29T22:41:06Z"
+      },
+      {
+        "id": "28",
+        "title": "Extract shared startup bootstrap helpers for testability",
+        "description": "Refactor startup bootstrapping and initialize-app response generation into shared helpers that do not require the GUI shell to run.",
+        "status": "done",
+        "dependencies": [
+          "27"
+        ],
+        "priority": "high",
+        "details": "Move the storage bootstrap and initialize-app response logic behind shared helpers so Tauri setup, Rust unit tests, and a smoke harness all use the same startup path. Cover ready state, retry-based recovery, sample workbook discovery, and attention-state startup issues without changing product guardrails.",
+        "testStrategy": "Add Rust unit tests for ready startup, retry-recovery, and attention startup so the shared helper surface can be verified without opening the desktop window.",
+        "updatedAt": "2026-03-29T22:41:06Z"
+      },
+      {
+        "id": "29",
+        "title": "Add a non-interactive startup smoke command",
+        "description": "Provide one command that runs deterministic source-run startup smoke checks.",
+        "status": "done",
+        "dependencies": [
+          "28"
+        ],
+        "priority": "high",
+        "details": "Add a startup smoke binary or equivalent harness plus package scripts so developers can run a single startup-test command that checks ready, retry-recovery, and attention startup scenarios. The command should exit non-zero on failure and print concise scenario summaries.",
+        "testStrategy": "Run the new startup-test command locally and confirm it exits successfully only when all startup scenarios pass.",
+        "updatedAt": "2026-03-29T22:41:06Z"
+      },
+      {
+        "id": "30",
+        "title": "Publish startup test verification artifacts and usage docs",
+        "description": "Add the manual startup verification checklist and update user-facing documentation for the new test surface.",
+        "status": "done",
+        "dependencies": [
+          "29"
+        ],
+        "priority": "medium",
+        "details": "Create a startup-test verification document under `docs/`, update README with the runnable command and `.env` expectations, and keep PLANS plus IMPLEMENTATION aligned with the new startup-test surface.",
+        "testStrategy": "Confirm the new verification artifact exists and the README plus docs describe the same startup-test command and supported scenarios.",
+        "updatedAt": "2026-03-29T22:41:06Z"
+      },
+      {
+        "id": "31",
+        "title": "Close the startup-testing follow-up with final verification",
+        "description": "Sync Task Master, docs, and verification results once the startup test harness is real and passing.",
+        "status": "done",
+        "dependencies": [
+          "30"
+        ],
+        "priority": "medium",
+        "details": "Mark the startup-testing follow-up complete only after the PRD, smoke command, shared helper tests, manual verification artifact, and doc updates all exist and the final repo checks pass.",
+        "testStrategy": "Run the startup-test command, relevant typechecks or cargo tests, Task Master JSON validation, and `git diff --check`, then update Task Master and implementation notes with the observed results.",
+        "updatedAt": "2026-03-29T22:41:06Z"
+      },
+      {
+        "id": "32",
+        "title": "Define the real app launch testing follow-up",
+        "description": "Capture the scope for actual Tauri app launch testing in headless environments.",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "details": "Define the follow-up around actual `tauri:dev` launch coverage with a virtual display harness, frontend readiness detection, desktop binary launch detection, and deterministic cleanup. Keep the scope limited to launch smoke rather than full workflow automation or packaged installer E2E.",
+        "testStrategy": "Verify the new PRD exists, Task Master contains tasks `32` through `36`, and planning docs describe the scope as planned until implementation artifacts are added.",
+        "updatedAt": "2026-03-29T22:18:47Z"
+      },
+      {
+        "id": "33",
+        "title": "Stabilize the source-run Tauri launch contract",
+        "description": "Fix config issues that prevent `tauri:dev` from launching reliably in the current multi-binary workspace.",
+        "status": "done",
+        "dependencies": [
+          "32"
+        ],
+        "priority": "high",
+        "details": "Fix the `beforeDevCommand` and `beforeBuildCommand` assumptions plus the Cargo default-run ambiguity introduced by auxiliary binaries so the documented `tauri:dev` path launches the intended desktop binary again.",
+        "testStrategy": "Confirm the documented `tauri:dev` launch path gets through frontend readiness and desktop binary startup instead of failing on command resolution or binary ambiguity.",
+        "updatedAt": "2026-03-29T22:18:47Z"
+      },
+      {
+        "id": "34",
+        "title": "Add an Xvfb-based app launch smoke harness",
+        "description": "Provide one command that launches the real Tauri app in a virtual display and verifies it stays alive briefly.",
+        "status": "done",
+        "dependencies": [
+          "33"
+        ],
+        "priority": "high",
+        "details": "Add a launch smoke harness that starts `Xvfb` directly, launches `pnpm tauri:dev`, waits for frontend readiness, confirms the desktop binary launched, enforces a short stability window, and then cleans up the process tree. Publish the command as `pnpm launch:test`.",
+        "testStrategy": "Run `pnpm launch:test` and confirm it exits successfully only when frontend readiness, desktop binary launch, and stability-window checks all pass.",
+        "updatedAt": "2026-03-29T22:18:47Z"
+      },
+      {
+        "id": "35",
+        "title": "Publish app launch verification docs",
+        "description": "Add the manual launch verification artifact and align README with the real launch test command.",
+        "status": "done",
+        "dependencies": [
+          "34"
+        ],
+        "priority": "medium",
+        "details": "Create a launch-test verification checklist under `docs/`, update README with the new `pnpm launch:test` command, and keep PLANS plus IMPLEMENTATION aligned with the real app launch testing surface.",
+        "testStrategy": "Confirm the new verification doc exists and the docs describe the same Xvfb-backed launch command and launch-success conditions.",
+        "updatedAt": "2026-03-29T22:18:47Z"
+      },
+      {
+        "id": "36",
+        "title": "Close the app launch testing follow-up with final verification",
+        "description": "Sync Task Master and verification results once the real launch smoke path is implemented and passing.",
+        "status": "done",
+        "dependencies": [
+          "35"
+        ],
+        "priority": "medium",
+        "details": "Mark the launch-testing follow-up complete only after the PRD, Xvfb launch harness, doc updates, manual verification artifact, and final repo checks all exist and pass.",
+        "testStrategy": "Run `pnpm launch:test`, `pnpm startup:test`, relevant typechecks or cargo tests, Task Master JSON validation, and `git diff --check`, then record the observed results before closing the tasks.",
+        "updatedAt": "2026-03-29T22:18:47Z"
+      },
+      {
+        "id": "37",
+        "title": "Define the launched app workflow testing follow-up",
+        "description": "Capture the scope for launching the real app and driving the bundled sample workflow end to end.",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "details": "Define a small follow-up around a test-only workflow autorun path inside the launched Tauri app, an isolated storage path, a workflow completion summary, and an Xvfb-backed harness that waits for workflow completion without adding GUI click automation.",
+        "testStrategy": "Verify the new PRD exists, Task Master contains tasks `37` through `41`, and planning docs describe the workflow-launch scope as planned until implementation artifacts are added.",
+        "updatedAt": "2026-03-29T23:01:54Z"
+      },
+      {
+        "id": "38",
+        "title": "Add a test-only launched-app workflow autorun runner",
+        "description": "Run the bundled sample session-turn-preview-save workflow inside the launched app when explicit smoke env vars are set.",
+        "status": "done",
+        "dependencies": [
+          "37"
+        ],
+        "priority": "high",
+        "details": "Add a workflow smoke module that reads opt-in env vars, optionally isolates the app data directory, initializes app startup state, runs the sample create-session through save-copy flow against the managed storage, and writes a JSON summary file with per-step results, output path, and failure details.",
+        "testStrategy": "Run cargo tests plus the new workflow smoke path in a launched app and confirm the summary records packet, validation, preview, approval, execution, output existence, and unchanged source checks.",
+        "updatedAt": "2026-03-29T23:01:54Z"
+      },
+      {
+        "id": "39",
+        "title": "Add an Xvfb-based launched workflow harness",
+        "description": "Provide one command that launches `tauri:dev`, waits for frontend readiness, and verifies the app finishes the bundled sample workflow.",
+        "status": "done",
+        "dependencies": [
+          "38"
+        ],
+        "priority": "high",
+        "details": "Add a headless workflow harness that starts `Xvfb`, launches the real desktop app with workflow smoke env vars, waits for frontend readiness and desktop binary launch, polls the workflow summary file, validates output and source-safety fields, and then cleans up the spawned process tree. Publish the command as `pnpm workflow:test`.",
+        "testStrategy": "Run `pnpm workflow:test` and confirm it succeeds only when launch readiness and workflow completion checks all pass.",
+        "updatedAt": "2026-03-29T23:01:54Z"
+      },
+      {
+        "id": "40",
+        "title": "Publish app workflow verification docs",
+        "description": "Add the workflow launch verification artifact and align README with the new test command.",
+        "status": "done",
+        "dependencies": [
+          "39"
+        ],
+        "priority": "medium",
+        "details": "Create a workflow-test verification checklist under `docs/`, update README with `pnpm workflow:test`, and keep PLANS plus IMPLEMENTATION aligned with the launched-workflow testing surface.",
+        "testStrategy": "Confirm the new verification doc exists and the docs describe the same workflow launch command, summary fields, and success conditions.",
+        "updatedAt": "2026-03-29T23:01:54Z"
+      },
+      {
+        "id": "41",
+        "title": "Close the launched app workflow testing follow-up with final verification",
+        "description": "Sync Task Master and verification results once the launched workflow smoke path is implemented and passing.",
+        "status": "done",
+        "dependencies": [
+          "40"
+        ],
+        "priority": "medium",
+        "details": "Mark the workflow-launch follow-up complete only after the PRD, autorun runner, Xvfb harness, doc updates, manual verification artifact, and final repo checks all exist and pass.",
+        "testStrategy": "Run `pnpm workflow:test`, `pnpm launch:test`, `pnpm startup:test`, relevant typechecks or cargo tests, Task Master JSON validation, and `git diff --check`, then record the observed results before closing the tasks.",
+        "updatedAt": "2026-03-29T23:01:54Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-29T20:47:12Z",
-      "taskCount": 26,
-      "completedCount": 26,
+      "lastModified": "2026-03-29T23:01:54Z",
+      "taskCount": 41,
+      "completedCount": 41,
       "tags": [
         "master"
       ]

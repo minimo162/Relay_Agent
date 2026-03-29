@@ -1,0 +1,94 @@
+# App Launch Execution Test PRD
+
+## Summary
+
+Relay Agent の source-run launch path を実際に起動して確認できるように、Linux CI 互換の virtual display harness と Tauri launch smoke command を追加する。対象は `tauri:dev` を使った実アプリ起動、frontend readiness、desktop process survival の確認であり、installer E2E やフル操作自動化までは広げない。
+
+## Problem
+
+現在の repository には startup smoke はあるが、実際に Tauri app を起動して一定時間動かす automated test surface はない。そのため、以下の問題がある。
+
+- `pnpm --filter @relay-agent/desktop tauri:dev` が壊れても、shared startup helper test だけでは検知できない
+- Tauri config の `beforeDevCommand`、multi-binary 時の `cargo run` default、display 依存の起動失敗は runtime launch まで行かないと分からない
+- README の source-run launch 手順が real launch verification を伴っていない
+- `xvfb-run` のような wrapper が使えない環境でも、virtual display を使った deterministic な launch check が欲しい
+
+Relay Agent は desktop app なので、startup contract に加えて「アプリプロセスが実際に起動し、frontend と desktop shell が一定時間共存できること」を継続確認する価値がある。
+
+## Goals
+
+- `tauri:dev` の actual launch path を自動で確認できる command を追加する
+- Xvfb を直接起動する harness で Linux CI / headless 環境でも launch test を走らせる
+- frontend readiness と desktop binary launch の両方を確認する
+- README と verification docs に real launch test command を追加する
+
+## Non-goals
+
+- packaged installer launch test
+- screenshot or pixel diff E2E
+- full user-flow automation after Home launch
+- OS dialog automation
+- cross-platform launch parity beyond the current Linux test environment
+
+## Target Users
+
+- 開発者: `tauri:dev` が壊れていないことを継続確認したい
+- QA / maintainers: source-run desktop launch の確認を 1 command にまとめたい
+- release owners: README の launch path が本当に動くかを確認したい
+
+## User Stories
+
+- 開発者として、headless 環境でも Tauri app launch を smoke test したい
+- maintainer として、frontend dev server だけでなく desktop binary まで起動したことを確認したい
+- QA として、launch failure が config 問題か display 問題かをログから切り分けたい
+
+## UX Principles
+
+- Real launch, small scope: actual Tauri launch までは行くが、操作自動化までは広げない
+- Deterministic cleanup: test 実行後に child process と virtual display を確実に止める
+- Actionable failure: frontend not ready, desktop binary not launched, early exit を区別して出す
+- Same documented path: README の source-run command と同じ launch path を通す
+
+## Functional Requirements
+
+1. `tauri:dev` の current source-run path を launch-test で直接使う
+2. virtual display harness は `xvfb-run` ではなく `Xvfb` 直接起動で動く
+3. launch test は少なくとも以下を確認する
+   - frontend dev server ready
+   - desktop binary launched
+   - process survives for a short stability window
+4. launch test は timeout と cleanup を内包する
+5. launch failure summary は scenario ごとの plain JSON summary を出す
+6. README に `pnpm launch:test` を追加する
+7. manual verification artifact を `docs/` に追加する
+
+## Acceptance Criteria
+
+- `pnpm launch:test` が repository root から実行できる
+- command は Xvfb を直接起動し、desktop launch smoke を成功時 `0` で返す
+- success path で frontend readiness, desktop binary launch, stability window の 3 条件が確認される
+- current multi-binary setup でも `tauri:dev` が曖昧な binary selection で落ちない
+- README, PLANS, IMPLEMENTATION, verification doc が同じ launch-test surface を説明する
+
+## Risks and Mitigations
+
+1. headless launch harness が flaky になる
+   - Mitigation: explicit timeout, readiness polling, process-group cleanup を入れる
+2. frontend ready だけを見て desktop launch を見逃す
+   - Mitigation: log から main binary launch も確認する
+3. smoke test が product launch path とズレる
+   - Mitigation: README が使う `tauri:dev` をそのまま通す
+
+## Suggested Implementation Phases
+
+### Phase 1
+
+PRD と task breakdown を追加し、launch path を壊している config 問題を固定する
+
+### Phase 2
+
+Xvfb-based launch smoke harness と package scripts を追加する
+
+### Phase 3
+
+verification artifact と README / PLANS / IMPLEMENTATION / Task Master を同期する

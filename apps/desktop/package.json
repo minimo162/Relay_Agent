@@ -8,6 +8,10 @@
     "build": "svelte-kit sync && vite build",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "launch:test": "node ./scripts/launch_tauri_smoke.mjs",
+    "workflow:test": "node ./scripts/launch_workflow_smoke.mjs",
+    "startup:smoke": "cargo run --manifest-path src-tauri/Cargo.toml --bin startup_smoke",
+    "startup:test": "cargo run --manifest-path src-tauri/Cargo.toml --bin startup_smoke && cargo test --manifest-path src-tauri/Cargo.toml startup::tests",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },

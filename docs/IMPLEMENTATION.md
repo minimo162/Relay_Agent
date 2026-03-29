@@ -2,18 +2,17 @@
 
 ## Status
 
-- Current phase: Milestone 5 is complete; follow-up tasks `11` through `20` are now implemented, documented, and verification-clean on top of the safe CSV-first preview, approval, and save-copy slice
+- Current phase: Milestone 5 is complete; follow-up tasks `11` through `41` are now implemented, documented, and verification-clean on top of the safe CSV-first preview, approval, and save-copy slice
 - Repository state: pnpm workspace, SvelteKit SPA shell, Tauri v2 shell, and shared contracts package are now bootstrapped and verification-clean
 - Active source-of-truth documents:
   - `PLANS.md`
   - `AGENTS.md`
   - `docs/IMPLEMENTATION.md`
   - `.taskmaster/docs/repo_audit.md`
-- Follow-up planning input: `.taskmaster/docs/prd_non_engineer_ux.txt` captures the non-engineer usability follow-up, and `.taskmaster/docs/prd_workbook_artifact_browser.txt` captures the read-only Studio artifact-browser follow-up for persisted workbook evidence
-- Follow-up planning input also now includes `.taskmaster/docs/prd_turn_lifecycle_details.txt`, which scopes the next planned expansion of `Inspection details` from workbook evidence to packet, validation, approval, and execution lifecycle summaries
-- Follow-up task graph: `.taskmaster/tasks/tasks.json` now breaks those supplemental PRDs into Task Master follow-up tasks `11` through `26`, covering startup, data trust, continuity, guided onboarding, review/save simplification, cross-cutting recovery plus accessibility work, the Studio workbook inspection artifact browser, and the next planned turn-lifecycle inspection scope
+- Follow-up planning input: `.taskmaster/docs/prd_non_engineer_ux.txt` captures the non-engineer usability follow-up, `.taskmaster/docs/prd_workbook_artifact_browser.txt` captures the read-only Studio artifact-browser follow-up for persisted workbook evidence, `.taskmaster/docs/prd_turn_lifecycle_details.txt` captures the turn-lifecycle inspection follow-up, `.taskmaster/docs/prd_startup_test_harness.txt` captures the dedicated startup-testing follow-up, `.taskmaster/docs/prd_app_launch_execution_test.txt` captures the real app launch-testing follow-up, and `.taskmaster/docs/prd_app_workflow_launch_test.txt` captures the launched-app workflow smoke follow-up
+- Follow-up task graph: `.taskmaster/tasks/tasks.json` now breaks those supplemental PRDs into Task Master follow-up tasks `11` through `41`, covering startup, data trust, continuity, guided onboarding, review/save simplification, cross-cutting recovery plus accessibility work, the Studio workbook inspection artifact browser, turn-lifecycle inspection details, source-run startup test coverage, actual Tauri launch smoke coverage, and launched-app workflow completion smoke coverage
 - Follow-up packaging policy: `docs/PACKAGING_POLICY.md` now fixes the first packaged end-user release path to Windows 10/11 x64 via NSIS, with manual installer-driven updates and preserved app-local storage across upgrades as the current expectation
-- Follow-up implementation status: Tasks `11` through `20` are now complete; Home and Studio cover the non-engineer startup, trust, continuity, onboarding, review, recovery, and accessibility follow-up plus a read-only `Inspection details` browser for workbook profile, sampled rows, column inference, and diff artifacts, with verification recorded in `docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md` and `docs/WORKBOOK_ARTIFACT_BROWSER_VERIFICATION.md`
+- Follow-up implementation status: Tasks `11` through `41` are now complete; Home and Studio cover the non-engineer startup, trust, continuity, onboarding, review, recovery, accessibility, workbook inspection, turn-lifecycle inspection, startup smoke-test, actual launch-smoke follow-ups, and launched-app workflow smoke coverage, with verification recorded in `docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md`, `docs/WORKBOOK_ARTIFACT_BROWSER_VERIFICATION.md`, `docs/TURN_LIFECYCLE_DETAILS_VERIFICATION.md`, `docs/STARTUP_TEST_VERIFICATION.md`, `docs/APP_LAUNCH_TEST_VERIFICATION.md`, and `docs/APP_WORKFLOW_TEST_VERIFICATION.md`
 
 ## Milestone Log
 
@@ -1702,12 +1701,174 @@ Observed result:
 - The demo flow wording now points readers at both `Turn details` and `Workbook evidence`, matching the shipped Studio IA instead of the earlier workbook-browser-only framing.
 - The docs-only follow-up continues to pass `git diff --check`.
 
+README and environment-template alignment verification:
+
+```bash
+rg -n '## Environment Variables|No `.env` file is required|Task Master and provider integration environment variables|NOT required to run the Relay Agent desktop app' README.md .env.example docs/IMPLEMENTATION.md
+git diff --check
+```
+
+Observed result:
+
+- `README.md` now states explicitly that the desktop app can start from source without copying `.env.example`, so the verified launch path and the environment setup guidance no longer conflict.
+- `.env.example` now describes itself as a Task Master or provider integration template instead of a prerequisite for the local Tauri app.
+- The comments in `.env.example` now line up with the current `.taskmaster/config.json` defaults by calling out Anthropic for main or fallback and Perplexity for research rather than implying every key is part of the normal app startup path.
+- The docs-only alignment change continues to pass `git diff --check`.
+
+Startup testing follow-up PRD verification:
+
+```bash
+test -f .taskmaster/docs/prd_startup_test_harness.txt
+rg -n '^# Startup Test Harness PRD|^## Summary|^## Problem|^## Goals|^## Non-goals|^## Target Users|^## User Stories|^## UX Principles|^## Functional Requirements|^## Acceptance Criteria|^## Risks and Mitigations|^## Suggested Implementation Phases|startup smoke|retry-recovery|attention startup' .taskmaster/docs/prd_startup_test_harness.txt
+rg -n 'prd_startup_test_harness|tasks `27` through `31`|planning-only' PLANS.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select((.id | tonumber) >= 27 and (.id | tonumber) <= 31) | {id, title, status, dependencies, priority}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- `.taskmaster/docs/prd_startup_test_harness.txt` now scopes the next follow-up around deterministic source-run startup testing rather than broader installer E2E or screenshot-based UI automation.
+- The PRD fixes the acceptance target to a small startup-test surface: shared bootstrap helpers, a non-interactive smoke command, and a manual GUI verification artifact.
+- `PLANS.md` now points the next planned scope at this new PRD, and Task Master now contains tasks `27` through `31` for shared startup helpers, a smoke command, verification docs, and final sync work.
+- Task Master JSON remains valid, and the planning artifact updates continue to pass `git diff --check`.
+
+Startup testing follow-up verification:
+
+```bash
+test -f .taskmaster/docs/prd_startup_test_harness.txt
+test -f docs/STARTUP_TEST_VERIFICATION.md
+rg -n 'startup:test|startup:smoke|startup_smoke|bootstrap_desktop_state|bootstrap_retry_recovery_state|build_initialize_app_response' package.json apps/desktop/package.json apps/desktop/src-tauri/src/lib.rs apps/desktop/src-tauri/src/startup.rs apps/desktop/src-tauri/src/bin/startup_smoke.rs README.md docs/STARTUP_TEST_VERIFICATION.md
+pnpm startup:test
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+jq '.master.tasks[] | select((.id | tonumber) >= 27 and (.id | tonumber) <= 31) | {id, status, updatedAt}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- The desktop Tauri shell now routes startup bootstrapping and `initialize_app` response generation through shared helpers in `startup.rs`, so the production startup path, Rust unit tests, and the new smoke binary all exercise the same logic.
+- `apps/desktop/src-tauri/src/bin/startup_smoke.rs` now runs deterministic `ready`, `retry-recovery`, and `attention` startup scenarios without opening the desktop window, and `pnpm startup:test` wraps that smoke command plus the dedicated `startup::tests` suite.
+- The automated startup smoke command confirms local-json startup, retry-based recovery back to ready, bundled sample workbook discovery, and attention-state fallback to temporary memory mode with the expected recovery actions.
+- `README.md`, `PLANS.md`, and `docs/STARTUP_TEST_VERIFICATION.md` now all describe the same startup-test surface, and the new verification artifact adds a short real-window launch checklist alongside the automated command.
+- `pnpm startup:test`, workspace `pnpm typecheck`, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` all pass after closing the startup-testing follow-up.
+- Task Master tasks `27` through `31` are now marked done, completing the current startup-testing follow-up set.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+App launch execution test PRD verification:
+
+```bash
+test -f .taskmaster/docs/prd_app_launch_execution_test.txt
+rg -n '^# App Launch Execution Test PRD|^## Summary|^## Problem|^## Goals|^## Non-goals|^## Target Users|^## User Stories|^## UX Principles|^## Functional Requirements|^## Acceptance Criteria|^## Risks and Mitigations|^## Suggested Implementation Phases|Xvfb|tauri:dev|desktop binary launch' .taskmaster/docs/prd_app_launch_execution_test.txt
+rg -n 'prd_app_launch_execution_test|tasks `32` through `36`|planning-only' PLANS.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select((.id | tonumber) >= 32 and (.id | tonumber) <= 36) | {id, title, status, dependencies, priority}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- `.taskmaster/docs/prd_app_launch_execution_test.txt` now scopes the next follow-up around actual `tauri:dev` launch coverage instead of startup-state-only smoke or packaged installer E2E.
+- The PRD fixes the acceptance target to an Xvfb-backed launch harness that verifies frontend readiness, desktop binary launch, and short process stability using the same documented source-run path.
+- `PLANS.md` now points the next planned scope at this new PRD, and Task Master now contains tasks `32` through `36` for launch-contract fixes, an Xvfb harness, verification docs, and final sync work.
+- Task Master JSON remains valid, and the planning artifact updates continue to pass `git diff --check`.
+
+App launch execution follow-up verification:
+
+```bash
+test -f .taskmaster/docs/prd_app_launch_execution_test.txt
+test -f docs/APP_LAUNCH_TEST_VERIFICATION.md
+rg -n 'default-run = \"relay-agent-desktop\"|beforeDevCommand|beforeBuildCommand|launch:test|launch_tauri_smoke|Xvfb' apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/tauri.conf.json package.json apps/desktop/package.json apps/desktop/scripts/launch_tauri_smoke.mjs README.md docs/APP_LAUNCH_TEST_VERIFICATION.md
+pnpm launch:test
+pnpm startup:test
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+jq '.master.tasks[] | select((.id | tonumber) >= 32 and (.id | tonumber) <= 36) | {id, status, updatedAt}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- `tauri.conf.json` now uses `pnpm dev` and `pnpm build` directly for the current desktop package working directory, so the documented source-run launch path no longer fails by jumping to the wrong folder.
+- `Cargo.toml` now fixes `default-run = "relay-agent-desktop"`, preventing the additional `startup_smoke` binary from breaking `tauri:dev` with ambiguous `cargo run` resolution.
+- `apps/desktop/scripts/launch_tauri_smoke.mjs` now launches `Xvfb` directly, starts the real `pnpm tauri:dev` flow, polls frontend readiness on `http://127.0.0.1:1420`, detects the desktop binary launch from the Tauri logs, enforces a short stability window, and then cleans up the spawned process tree.
+- `pnpm launch:test` now passes in the current Linux headless environment and prints a JSON summary showing `frontendReady: true` and `desktopBinaryLaunchDetected: true`.
+- `README.md`, `PLANS.md`, and `docs/APP_LAUNCH_TEST_VERIFICATION.md` now describe the same launch-test surface, and the new verification artifact adds a short manual desktop-window checklist alongside the automated launch harness.
+- `pnpm launch:test`, `pnpm startup:test`, workspace `pnpm typecheck`, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` all pass after closing the launch-testing follow-up.
+- Task Master tasks `32` through `36` are now marked done, completing the current app-launch testing follow-up set.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+App workflow launch test PRD verification:
+
+```bash
+test -f .taskmaster/docs/prd_app_workflow_launch_test.txt
+rg -n '^# App Workflow Launch Test PRD|^## Summary|^## Problem|^## Goals|^## Non-goals|^## Target Users|^## User Stories|^## UX Principles|^## Functional Requirements|^## Acceptance Criteria|^## Risks and Mitigations|^## Suggested Implementation Phases|workflow:test|save-copy execution|isolated test state' .taskmaster/docs/prd_app_workflow_launch_test.txt
+rg -n 'prd_app_workflow_launch_test|tasks `37` through `41`|launched-app workflow smoke' PLANS.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select((.id | tonumber) >= 37 and (.id | tonumber) <= 41) | {id, title, status, dependencies, priority}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- `.taskmaster/docs/prd_app_workflow_launch_test.txt` now scopes the next follow-up around launching the real app and completing the bundled sample workflow, without broadening into GUI click automation or packaged installer E2E.
+- The PRD fixes the acceptance target to a test-only autorun runner inside the launched app, isolated test storage, an output summary JSON, and an Xvfb-backed harness that waits for workflow completion.
+- `PLANS.md` now points the next planned scope at this new PRD, and Task Master now contains tasks `37` through `41` for the autorun runner, launched-workflow harness, verification docs, and final sync work.
+- Task Master JSON remains valid, and the planning artifact updates continue to pass `git diff --check`.
+
+App workflow launch follow-up verification:
+
+```bash
+test -f .taskmaster/docs/prd_app_workflow_launch_test.txt
+test -f docs/APP_WORKFLOW_TEST_VERIFICATION.md
+rg -n 'workflow:test|launch_workflow_smoke|RELAY_AGENT_AUTORUN_WORKFLOW_SMOKE|RELAY_AGENT_WORKFLOW_SMOKE_SUMMARY_PATH|RELAY_AGENT_TEST_APP_LOCAL_DATA_DIR|spawn_if_configured|EXPECTED_SAMPLE_OUTPUT' package.json apps/desktop/package.json apps/desktop/scripts/launch_workflow_smoke.mjs apps/desktop/scripts/tauri_smoke_shared.mjs apps/desktop/src-tauri/src/lib.rs apps/desktop/src-tauri/src/workflow_smoke.rs README.md docs/APP_WORKFLOW_TEST_VERIFICATION.md
+pnpm workflow:test
+pnpm launch:test
+pnpm startup:test
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+jq '.master.tasks[] | select((.id | tonumber) >= 37 and (.id | tonumber) <= 41) | {id, status, updatedAt}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/workflow_smoke.rs` now adds a test-only launched-app runner that uses the managed desktop state, runs the bundled sample session-turn-preview-approval-save flow, verifies the reviewed copy content, verifies the source CSV stayed unchanged, and writes a structured JSON summary.
+- `apps/desktop/src-tauri/src/lib.rs` now supports a test-only `RELAY_AGENT_TEST_APP_LOCAL_DATA_DIR` override and starts the workflow smoke runner only when the explicit autorun env vars are set, so normal app usage stays unchanged.
+- `apps/desktop/scripts/tauri_smoke_shared.mjs` now holds the shared Xvfb and process helpers, while `apps/desktop/scripts/launch_workflow_smoke.mjs` launches `pnpm tauri:dev`, waits for frontend and desktop readiness, polls the workflow summary file, validates the expected steps and reviewed-copy checks, and cleans up the test output plus isolated app-data directory.
+- `pnpm workflow:test` now passes in the current Linux headless environment and prints a JSON summary showing launch readiness plus nested workflow success with `outputExists: true`, `outputMatchesExpected: true`, and `sourceUnchanged: true`.
+- `README.md`, `PLANS.md`, and `docs/APP_WORKFLOW_TEST_VERIFICATION.md` now describe the same launched-workflow test surface, and the new verification artifact adds a short manual sample-flow checklist alongside the automated harness.
+- `pnpm workflow:test`, `pnpm launch:test`, `pnpm startup:test`, workspace `pnpm typecheck`, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` all pass after closing the launched-workflow testing follow-up.
+- Task Master tasks `37` through `41` are now marked done, completing the current launched-app workflow testing follow-up set.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+README Windows installer doc sync verification:
+
+```bash
+rg -n '## Windows Installer Status|prebuilt Windows installer|tauri:build|target/release/bundle/nsis' README.md docs/PACKAGING_POLICY.md apps/desktop/package.json
+git diff --check
+```
+
+Observed result:
+
+- `README.md` now states explicitly that the repository does not currently ship a prebuilt Windows installer, so the source-run path and the packaging policy are no longer easy to confuse.
+- The README now points Windows readers at the existing NSIS packaging policy, the local `pnpm --filter @relay-agent/desktop tauri:build` command, and the expected `target/release/bundle/nsis/` output directory for locally built artifacts.
+- This remains a docs-only clarification: the currently verified runtime path is still source-run, while the Windows installer guidance is now clearly framed as a local build path rather than a checked-in release artifact.
+- The docs-only change continues to pass `git diff --check`.
+
 ## Known Limitations
 
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.
 - Browser or window close still relies on the platform-native confirmation dialog, so explicit keep-vs-discard choices are currently available only for in-app navigation and draft-replacement flows.
 - `Inspection details` are read-only by design. They now explain lifecycle and workbook evidence, but they do not provide restart, retry, export, or bypass controls from the inspection surface.
 - Temporary mode can reconstruct the current turn lifecycle from live state, but that evidence disappears when the app closes, and older turns without saved lifecycle artifacts still fall back to explicit unavailable-state messaging.
+- `pnpm startup:test` currently covers source-run startup smoke scenarios and shared startup helper tests; it does not replace packaged-installer E2E or screenshot-driven UI automation.
+- `pnpm launch:test` currently targets the Linux headless path with `Xvfb`; it does not yet provide cross-platform GUI automation or packaged-app launch coverage.
+- `pnpm workflow:test` now proves that a launched app can complete the bundled sample flow in a Linux headless environment, but it still uses a test-only autorun runner instead of real GUI click automation or cross-platform packaged-app coverage.
 - Reviewer mode currently depends on local audit history and the same device profile; it is a safe local review surface, not a shared remote approval link.
 - Preview predicates and derive expressions intentionally support a narrow grammar for now: bracketed column references for spaced headers, one comparison in `filter_rows`, and basic arithmetic or string concatenation in `derive_column`.
 - Limited xlsx support is still inspect-and-copy oriented; current test coverage still centers on CSV execution plus xlsx preview planning rather than richer xlsx write flows.
@@ -1717,4 +1878,4 @@ Observed result:
 
 Next planned work:
 
-- The current follow-up queue is complete through task `26`. Any new scope should start from a new PRD and keep inspection-only expansions separate from restart-safe execution resume or portable review export.
+- The current shipped queue is complete through task `41`. Any new scope should start from a new PRD and keep packaged installer E2E, cross-platform GUI automation, and arbitrary workflow scripting separate from the current launched-workflow smoke surface.
