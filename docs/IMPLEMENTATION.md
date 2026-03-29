@@ -1877,6 +1877,21 @@ Observed result:
 - This change cannot be fully executed from the current local environment because GitHub Actions and release publishing require a GitHub-hosted run with repository `contents: write` permission, so local verification is limited to file presence, workflow shape, and documentation alignment.
 - The workflow and docs changes continue to pass `git diff --check`.
 
+GitHub Releases workflow hotfix verification:
+
+```bash
+gh run view 23722130376
+rg -n 'tauri-apps/tauri-action@action-v0.6.0' .github/workflows/release-windows-installer.yml docs/IMPLEMENTATION.md
+git diff --check
+```
+
+Observed result:
+
+- The first tag-triggered run for `v0.1.0` failed immediately because `tauri-apps/tauri-action@v1` does not currently resolve on GitHub Actions for this repository.
+- `.github/workflows/release-windows-installer.yml` now pins the Tauri release action to the concrete published ref `tauri-apps/tauri-action@action-v0.6.0`, which avoids the missing-major-tag failure and keeps the workflow on a resolvable upstream release.
+- After this hotfix, the intended retry path is `workflow_dispatch` with `release_tag: v0.1.0`, because the original tag-push run has already failed and pushing the same tag again would not retrigger the workflow automatically.
+- The hotfix continues to pass `git diff --check`.
+
 ## Known Limitations
 
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.

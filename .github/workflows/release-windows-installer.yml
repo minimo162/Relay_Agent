@@ -77,7 +77,7 @@ jobs:
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 
       - name: Build Windows installer and upload to GitHub Releases
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@action-v0.6.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
