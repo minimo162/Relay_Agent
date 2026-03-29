@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    path::PathBuf,
-};
+use std::{collections::HashMap, path::PathBuf};
 
 use chrono::{SecondsFormat, Utc};
 use serde::Serialize;
@@ -12,12 +9,12 @@ use crate::models::{
     ApprovalDecision, CopilotTurnResponse, CreateSessionRequest, DiffSummary,
     GenerateRelayPacketRequest, PreviewExecutionRequest, PreviewExecutionResponse, RelayPacket,
     RelayPacketResponseContract, RespondToApprovalRequest, RespondToApprovalResponse,
-    RunExecutionRequest, RunExecutionResponse, Session, SessionDetail, SessionStatus, SheetDiff,
+    RunExecutionRequest, RunExecutionResponse, Session, SessionDetail, SessionStatus,
     SpreadsheetAction, StartTurnRequest, StartTurnResponse, SubmitCopilotResponseRequest,
     SubmitCopilotResponseResponse, ToolDescriptor, ToolPhase, Turn, TurnStatus, ValidationIssue,
 };
 use crate::persistence::{self, StorageManifest};
-use crate::workbook::{default_output_path, WorkbookEngine, WorkbookSource};
+use crate::workbook::{WorkbookEngine, WorkbookSource};
 
 #[derive(Clone, Debug)]
 struct StoredResponse {
@@ -368,8 +365,16 @@ impl AppStorage {
             .clone()
             .ok_or_else(|| "no parsed Copilot response is available for preview".to_string())?;
 
-        let (mut diff_summary, requires_approval, mut warnings) =
-            build_preview(&session, &parsed_response.actions);
+        let engine = WorkbookEngine::default();
+        let source = session
+            .primary_workbook_path
+            .as_deref()
+            .map(WorkbookSource::detect)
+            .transpose()?;
+        let preview = engine.preview_actions(source.as_ref(), &parsed_response.actions)?;
+        let mut diff_summary = preview.diff_summary;
+        let requires_approval = preview.requires_approval;
+        let mut warnings = preview.warnings;
         let read_tool_artifacts = self.collect_read_tool_artifacts(
             &session,
             &turn,
@@ -1505,132 +1510,6 @@ fn build_repair_prompt(validation_issues: &[ValidationIssue]) -> String {
     lines.join("\n")
 }
 
-fn build_preview(
-    session: &Session,
-    actions: &[SpreadsheetAction],
-) -> (DiffSummary, bool, Vec<String>) {
-    let mut sheets: BTreeMap<String, SheetDiff> = BTreeMap::new();
-    let mut warnings = Vec::new();
-    let mut output_path = session
-        .primary_workbook_path
-        .as_deref()
-        .map(default_output_path)
-        .unwrap_or_else(|| "relay-agent-output-preview.csv".to_string());
-
-    let requires_approval = actions.iter().any(is_write_action);
-
-    for action in actions {
-        match action.tool.as_str() {
-            "table.rename_columns" => {
-                let sheet = action.sheet.clone().unwrap_or_else(|| "Sheet1".to_string());
-                let diff = sheet_diff(&mut sheets, &sheet);
-                if let Some(renames) = action.args.get("renames").and_then(Value::as_array) {
-                    for rename in renames {
-                        if let Some(to_name) = rename.get("to").and_then(Value::as_str) {
-                            push_unique(&mut diff.changed_columns, to_name.to_string());
-                        }
-                    }
-                }
-                push_unique(
-                    &mut diff.warnings,
-                    "Rename preview is approximate until the workbook engine is implemented."
-                        .to_string(),
-                );
-            }
-            "table.cast_columns" => {
-                let sheet = action.sheet.clone().unwrap_or_else(|| "Sheet1".to_string());
-                let diff = sheet_diff(&mut sheets, &sheet);
-                if let Some(casts) = action.args.get("casts").and_then(Value::as_array) {
-                    for cast in casts {
-                        if let Some(column) = cast.get("column").and_then(Value::as_str) {
-                            push_unique(&mut diff.changed_columns, column.to_string());
-                        }
-                    }
-                }
-            }
-            "table.filter_rows" => {
-                let sheet = action.sheet.clone().unwrap_or_else(|| "Sheet1".to_string());
-                let diff = sheet_diff(&mut sheets, &sheet);
-                diff.estimated_rows = diff.estimated_rows.max(1);
-                push_unique(
-                    &mut diff.warnings,
-                    "Filtered row count is an estimate until file inspection is implemented."
-                        .to_string(),
-                );
-            }
-            "table.derive_column" => {
-                let sheet = action.sheet.clone().unwrap_or_else(|| "Sheet1".to_string());
-                let diff = sheet_diff(&mut sheets, &sheet);
-                if let Some(column) = action.args.get("column").and_then(Value::as_str) {
-                    push_unique(&mut diff.added_columns, column.to_string());
-                }
-            }
-            "table.group_aggregate" => {
-                let sheet = action.sheet.clone().unwrap_or_else(|| "Sheet1".to_string());
-                let diff = sheet_diff(&mut sheets, &sheet);
-                diff.estimated_rows = diff.estimated_rows.max(1);
-                if let Some(measures) = action.args.get("measures").and_then(Value::as_array) {
-                    for measure in measures {
-                        if let Some(alias) = measure.get("as").and_then(Value::as_str) {
-                            push_unique(&mut diff.added_columns, alias.to_string());
-                        }
-                    }
-                }
-            }
-            "workbook.save_copy" => {
-                if let Some(path) = action.args.get("outputPath").and_then(Value::as_str) {
-                    output_path = path.to_string();
-                }
-            }
-            "workbook.inspect"
-            | "sheet.preview"
-            | "sheet.profile_columns"
-            | "session.diff_from_base" => {
-                warnings.push(format!(
-                    "Read-only action `{}` will not change workbook contents during execution.",
-                    action.tool
-                ));
-            }
-            _ => {}
-        }
-    }
-
-    if output_path == "relay-agent-output-preview.csv" {
-        warnings.push(
-            "No explicit save-copy path was provided, so the preview used a derived output path."
-                .to_string(),
-        );
-    }
-
-    (
-        DiffSummary {
-            source_path: session
-                .primary_workbook_path
-                .clone()
-                .unwrap_or_else(|| "unspecified-input".to_string()),
-            output_path,
-            mode: "preview".to_string(),
-            sheets: sheets.into_values().collect(),
-            warnings: warnings.clone(),
-        },
-        requires_approval,
-        warnings,
-    )
-}
-
-fn sheet_diff<'a>(sheets: &'a mut BTreeMap<String, SheetDiff>, sheet: &str) -> &'a mut SheetDiff {
-    sheets
-        .entry(sheet.to_string())
-        .or_insert_with(|| SheetDiff {
-            sheet: sheet.to_string(),
-            estimated_rows: 0,
-            added_columns: Vec::new(),
-            changed_columns: Vec::new(),
-            removed_columns: Vec::new(),
-            warnings: Vec::new(),
-        })
-}
-
 fn is_write_action(action: &SpreadsheetAction) -> bool {
     matches!(
         action.tool.as_str(),
@@ -1961,12 +1840,6 @@ fn validate_enum(
     }
 }
 
-fn push_unique(items: &mut Vec<String>, value: String) {
-    if !items.iter().any(|existing| existing == &value) {
-        items.push(value);
-    }
-}
-
 fn format_path(path: &[Value]) -> String {
     let mut output = String::new();
 
@@ -2073,13 +1946,14 @@ mod tests {
 
     #[test]
     fn validates_preview_and_approval_flow() {
+        let csv_path = write_test_csv("customer_id,amount\n1,42.5\n2,13.0\n");
         let mut storage = AppStorage::default();
 
         let session = storage
             .create_session(CreateSessionRequest {
                 title: "Revenue cleanup".to_string(),
                 objective: "Prepare a safe save-copy plan".to_string(),
-                primary_workbook_path: Some("/tmp/revenue.csv".to_string()),
+                primary_workbook_path: Some(csv_path.to_string_lossy().into_owned()),
             })
             .expect("session should be created");
         let turn = storage
@@ -2161,6 +2035,8 @@ mod tests {
             execution.output_path.as_deref(),
             Some("/tmp/revenue-clean.csv")
         );
+
+        fs::remove_file(csv_path).expect("test csv should clean up");
     }
 
     #[test]
@@ -2382,6 +2258,7 @@ mod tests {
     #[test]
     fn persists_turn_artifacts_and_logs_with_session_linkage() {
         let app_local_data_dir = unique_test_app_data_dir();
+        let csv_path = write_test_csv("customer_id,amount\n1,42.5\n2,13.0\n");
         let (session_id, turn_id) = {
             let mut storage =
                 AppStorage::open(app_local_data_dir.clone()).expect("storage should initialize");
@@ -2390,7 +2267,7 @@ mod tests {
                 .create_session(CreateSessionRequest {
                     title: "Artifact check".to_string(),
                     objective: "Persist relay history".to_string(),
-                    primary_workbook_path: Some("/tmp/artifact-source.csv".to_string()),
+                    primary_workbook_path: Some(csv_path.to_string_lossy().into_owned()),
                 })
                 .expect("session should be created");
             let turn = storage
@@ -2567,6 +2444,7 @@ mod tests {
             .all(|entry| entry.turn_id.as_deref() == Some(turn_id.as_str())));
 
         fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
+        fs::remove_file(csv_path).expect("test csv should clean up");
     }
 
     #[test]

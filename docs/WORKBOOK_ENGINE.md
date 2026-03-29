@@ -24,7 +24,7 @@
 - `apps/desktop/src-tauri/src/workbook/inspect.rs`
   Responsibility: inspect-time limits and policies for `workbook.inspect`, `sheet.preview`, and `sheet.profile_columns`.
 - `apps/desktop/src-tauri/src/workbook/preview.rs`
-  Responsibility: source-format gating for write-preview versus inspect-only flows.
+  Responsibility: source-format gating plus CSV-backed write-preview synthesis for the supported `table.*` action subset.
 - `apps/desktop/src-tauri/src/workbook/engine.rs`
   Responsibility: bind the selected libraries and module boundaries into one backend-facing workbook engine surface.
 

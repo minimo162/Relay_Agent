@@ -8,5 +8,4 @@ mod source;
 mod xlsx_backend;
 
 pub use engine::WorkbookEngine;
-pub use source::default_output_path;
 pub use source::WorkbookSource;
