@@ -1,0 +1,226 @@
+criteria# Codex への実装指示（Excel Relay Agent MVP）
+
+## 使い方
+
+1. このリポジトリを Codex で開く。
+2. まず `/plan` を有効にして、下の「Plan 用プロンプト」を送る。
+3. Codex が `PLANS.md` を作ったら内容を確認する。
+4. 続けて同じスレッドで「実装用プロンプト」を送る。
+5. 仕上げに「最終確認用プロンプト」を送る。
+
+---
+
+## Plan 用プロンプト
+
+```text
+このリポジトリは、SvelteKit + Tauri で動くローカルの Excel/CSV 向け半自動エージェントの MVP です。
+目的は「Copilot は計画、アプリは実行」です。Copilot API は使わず、ユーザーが Copilot Chat を手動中継します。
+
+まずは実装前の計画だけを行ってください。まだコード変更は最小限に留め、先に PLANS.md と AGENTS.md を整備してください。
+
+前提:
+- 既存のディレクトリ構成とファイル名はできるだけ維持する
+- 既存の packages/contracts の型定義を正本として扱う
+- apps/desktop は SvelteKit SPA + Tauri v2 を維持する
+- Rust 側は local agent kernel と workbook engine の骨格を維持する
+- v1 は Excel/CSV 専用。将来の汎用エージェント拡張を妨げない設計にする
+
+やること:
+1. リポジトリを読み、現在の stub と不足点を整理
+2. 実装を milestone に分割した PLANS.md を作成
+3. リポジトリ運用ルールを AGENTS.md に記述
+4. docs/IMPLEMENTATION.md を作成し、以後の進捗・決定・検証ログの置き場所にする
+
+PLANS.md に必ず含めること:
+- milestone ごとの目的
+- 変更対象ファイル/ディレクトリ
+- 受け入れ条件
+- 各 milestone 後に実行する検証コマンド
+- スコープ外事項
+- リスクと軽減策
+
+このタスクの完成条件の草案も PLANS.md に入れてください:
+- pnpm install 後に workspace が解決する
+- `pnpm check` と `pnpm typecheck` が通る
+- `pnpm --filter @relay-agent/desktop build` が通る
+- `cargo check` が通る
+- UI 上で session 作成 → turn 開始 → relay packet 生成 → pasted Copilot response の検証 → execution preview まで一連で触れる
+- write 実行前に diff preview と approval 導線がある
+- CSV で end-to-end の最小デモが動く
+- README に起動手順と制約が追記される
+
+実装の優先順位は次の通りです:
+A. まず縦切りの動作を通す
+B. その後に validation / diff / file IO を堅くする
+C. 余力があれば workbook 処理を拡張する
+
+計画を出したら止まり、次の指示を待ってください。
+```
+
+---
+
+## 実装用プロンプト
+
+```text
+PLANS.md と AGENTS.md と docs/IMPLEMENTATION.md を source of truth として、実装を開始してください。
+
+重要ルール:
+- milestone 単位で進めること
+- milestone ごとに検証を実行し、失敗したら先に修正すること
+- 変更はスコープ内に限定し、勝手に広げないこと
+- 実装中の判断は docs/IMPLEMENTATION.md に残すこと
+- 不要な抽象化や過剰設計は避けること
+- ユーザーへの逐次説明文を大量に増やすのではなく、コード・ドキュメント・検証結果で進捗を残すこと
+
+今回実装してほしい具体要件:
+
+1. Monorepo / build 基盤
+- pnpm workspace がそのまま動くよう package.json を調整
+- apps/desktop の SvelteKit + Vite + Tauri dev/build を成立させる
+- packages/contracts を TypeScript から import 可能にする
+- 必要なら tsconfig, exports, path alias, workspace 依存関係を整理
+
+2. Contracts
+- packages/contracts/src の schema を見直し、相互参照の型崩れなく typecheck できるようにする
+- `Session / Turn / Item / RelayPacket / CopilotTurnResponse / ToolDescriptor / SpreadsheetAction / WorkbookProfile / DiffSummary` を正本にする
+- index.ts から必要な型と schema を export する
+- zod schema と inferred types を一貫させる
+
+3. Frontend MVP
+- Home: session 一覧と新規作成
+- Session detail / Studio:
+  - 左: timeline
+  - 中: objective, relay packet 表示, pasted response 入力, validation 結果, preview ボタン
+  - 右: workbook inspector summary と diff preview
+- Settings: policy のプレースホルダ表示
+- 最低限の状態管理を store で実装
+- Tauri command を呼ぶ typed IPC wrapper を整える
+- デザインは簡素でよいが、操作導線は通す
+
+4. Rust backend MVP
+- initialize_app
+- create_session
+- list_sessions
+- read_session
+- start_turn
+- generate_relay_packet
+- submit_copilot_response
+- preview_execution
+- approval/respond の最小実装
+- execution/run の最小実装
+
+5. Session / storage
+- セッションをローカル JSON として保存・再読込できるようにする
+- 保存先はアプリローカルの data dir 配下
+- sessions, turns, artifacts, logs の最低限の保存構造を作る
+- session list が再起動後も残るようにする
+
+6. Relay
+- packet_builder.rs で discover / plan / repair / followup packet を生成
+- allowedReadTools / allowedWriteTools を固定 registry から供給
+- response_parser.rs で pasted JSON を parse / validate し、validation errors を構造化して返す
+- repair 用の follow-up prompt 文面も生成できるようにする
+
+7. Workbook / CSV engine
+- v1 は「安全に動く縦切り」を優先する
+- CSV は end-to-end で必ず動かす
+- xlsx は inspect と save-copy を優先し、複雑な workbook fidelity は狙わない
+- read-only tools:
+  - workbook.inspect
+  - sheet.preview
+  - sheet.profile_columns
+  - session.diff_from_base
+- write tools の最小実装:
+  - table.rename_columns
+  - table.cast_columns
+  - table.filter_rows
+  - table.derive_column
+  - table.group_aggregate
+  - workbook.save_copy
+- join_lookup は余力があれば入れる。難しければ stub と TODO を残す
+
+8. 安全性
+- save-copy only を既定にする
+- original file は read-only 前提
+- 任意コード実行、shell、VBA、外部 network access は実装しない
+- raw Excel formula をモデルから受け取らない
+- derive_column は Expr AST を評価して values_only で書き込むのを既定にする
+- CSV injection を防ぐため、CSV 出力時は先頭が = + - @ の文字列セルを安全化する
+
+9. 差分 preview
+- 実際の write 前に、変更予定の summary を返す
+- 少なくとも以下を表示できるようにする:
+  - 対象シート
+  - 追加/変更列
+  - 対象行数の概算
+  - 出力先ファイル
+- UI で preview_execution の結果が読めること
+
+10. サンプル / デモ
+- `examples/` に小さな CSV サンプルを追加
+- README に、Copilot へ貼る例の packet と、valid response の最小例を追記
+- アプリを起動して demo flow を試すための手順を README に書く
+
+技術選定の指針:
+- 既存構成を尊重すること
+- フロントは SvelteKit の標準流儀でシンプルに
+- Rust 側は module 分割を活かす
+- workbook 処理ライブラリは安定性重視で選ぶこと
+- 依存は必要最小限にすること
+
+実装の進め方:
+- milestone 1: build/typecheck が通る足場づくり
+- milestone 2: session/turn/relay の縦切り
+- milestone 3: CSV ベースの workbook inspect / preview / write preview
+- milestone 4: execution/run と save-copy
+- milestone 5: README / docs / examples / polish
+
+各 milestone の最後に必ず実行すること:
+- JS/TS 側の typecheck/check/build
+- Rust 側の cargo check または cargo test
+- 失敗したら、その場で修正してから次へ進む
+
+完了時に欲しい成果物:
+- 実装済みコード
+- README 更新
+- AGENTS.md
+- PLANS.md
+- docs/IMPLEMENTATION.md
+- examples ディレクトリ
+- known limitations の明記
+
+最後に、変更内容・検証結果・未実装の点を docs/IMPLEMENTATION.md にまとめてください。
+```
+
+---
+
+## 最終確認用プロンプト
+
+```text
+実装の最終確認をしてください。
+
+やること:
+1. 変更差分を見直し、スコープ外の変更があれば戻す
+2. README / AGENTS.md / PLANS.md / docs/IMPLEMENTATION.md を整える
+3. 主要コマンドを実行して結果を記録する
+4. 残っている known limitations / TODO / リスクを明記する
+5. この MVP で実際にできること / まだできないことを簡潔に整理する
+
+最終報告は以下の形式でまとめてください:
+- Summary
+- Files changed
+- Verification run
+- Known limitations
+- Next recommended step
+```
+
+---
+
+## Codex への補足メモ
+
+- まず plan を作らせ、実装はその後に回す。
+- 常時しゃべらせるより、PLANS.md / IMPLEMENTATION.md に状態を残させる。
+- 小さい milestone ごとに検証させる。
+- この MVP の勝ち筋は「全部入り」ではなく「安全な縦切り」です。
+:
+

@@ -1,0 +1,2234 @@
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::PathBuf,
+};
+
+use chrono::{SecondsFormat, Utc};
+use serde::Serialize;
+use serde_json::{json, Value};
+use uuid::Uuid;
+
+use crate::models::{
+    ApprovalDecision, CopilotTurnResponse, CreateSessionRequest, DiffSummary,
+    GenerateRelayPacketRequest, PreviewExecutionRequest, PreviewExecutionResponse, RelayPacket,
+    RelayPacketResponseContract, RespondToApprovalRequest, RespondToApprovalResponse,
+    RunExecutionRequest, RunExecutionResponse, Session, SessionDetail, SessionStatus, SheetDiff,
+    SpreadsheetAction, StartTurnRequest, StartTurnResponse, SubmitCopilotResponseRequest,
+    SubmitCopilotResponseResponse, ToolDescriptor, ToolPhase, Turn, TurnStatus, ValidationIssue,
+};
+use crate::persistence::{self, StorageManifest};
+
+#[derive(Clone, Debug)]
+struct StoredResponse {
+    parsed_response: Option<CopilotTurnResponse>,
+    validation_issues: Vec<ValidationIssue>,
+}
+
+#[derive(Clone, Debug)]
+struct StoredPreview {
+    diff_summary: DiffSummary,
+    requires_approval: bool,
+    warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct StoredApproval {
+    decision: ApprovalDecision,
+    note: Option<String>,
+}
+
+pub struct AppStorage {
+    app_local_data_dir: Option<PathBuf>,
+    manifest: Option<StorageManifest>,
+    sessions: HashMap<String, Session>,
+    turns: HashMap<String, Turn>,
+    relay_packets: HashMap<String, RelayPacket>,
+    responses: HashMap<String, StoredResponse>,
+    previews: HashMap<String, StoredPreview>,
+    approvals: HashMap<String, StoredApproval>,
+}
+
+impl Default for AppStorage {
+    fn default() -> Self {
+        Self {
+            app_local_data_dir: None,
+            manifest: None,
+            sessions: HashMap::new(),
+            turns: HashMap::new(),
+            relay_packets: HashMap::new(),
+            responses: HashMap::new(),
+            previews: HashMap::new(),
+            approvals: HashMap::new(),
+        }
+    }
+}
+
+impl AppStorage {
+    pub fn open(app_local_data_dir: PathBuf) -> Result<Self, String> {
+        let loaded = persistence::initialize_storage(&app_local_data_dir, &timestamp())?;
+
+        Ok(Self {
+            app_local_data_dir: Some(app_local_data_dir),
+            manifest: Some(loaded.manifest),
+            sessions: loaded.sessions,
+            turns: loaded.turns,
+            ..Self::default()
+        })
+    }
+
+    pub fn storage_mode(&self) -> &'static str {
+        if self.app_local_data_dir.is_some() {
+            "local-json"
+        } else {
+            "memory"
+        }
+    }
+
+    pub fn storage_ready(&self) -> bool {
+        self.app_local_data_dir.is_none() || self.manifest.is_some()
+    }
+
+    pub fn session_count(&self) -> usize {
+        self.sessions.len()
+    }
+
+    pub fn create_session(&mut self, request: CreateSessionRequest) -> Result<Session, String> {
+        let title = require_text("title", request.title)?;
+        let objective = require_text("objective", request.objective)?;
+        let primary_workbook_path = request
+            .primary_workbook_path
+            .map(|path| require_text("primaryWorkbookPath", path))
+            .transpose()?;
+        let now = timestamp();
+
+        let session = Session {
+            id: Uuid::new_v4().to_string(),
+            title,
+            objective,
+            status: SessionStatus::Draft,
+            primary_workbook_path,
+            created_at: now.clone(),
+            updated_at: now,
+            latest_turn_id: None,
+            turn_ids: Vec::new(),
+        };
+
+        self.sessions.insert(session.id.clone(), session.clone());
+        self.persist_session_state(&session.id)?;
+        self.append_session_log(
+            &session.id,
+            "session-created",
+            format!("Session `{}` was created.", session.title),
+            None,
+            Some(json!({
+                "status": session.status,
+                "primaryWorkbookPath": session.primary_workbook_path.clone(),
+            })),
+        )?;
+
+        Ok(session)
+    }
+
+    pub fn list_sessions(&self) -> Vec<Session> {
+        let mut sessions = self.sessions.values().cloned().collect::<Vec<_>>();
+        sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        sessions
+    }
+
+    pub fn read_session(&self, session_id: &str) -> Result<SessionDetail, String> {
+        let session = self
+            .sessions
+            .get(session_id)
+            .cloned()
+            .ok_or_else(|| format!("session `{session_id}` was not found"))?;
+
+        let mut turns = session
+            .turn_ids
+            .iter()
+            .filter_map(|turn_id| self.turns.get(turn_id).cloned())
+            .collect::<Vec<_>>();
+        turns.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+
+        Ok(SessionDetail { session, turns })
+    }
+
+    pub fn start_turn(&mut self, request: StartTurnRequest) -> Result<StartTurnResponse, String> {
+        let title = require_text("title", request.title)?;
+        let objective = require_text("objective", request.objective)?;
+        let now = timestamp();
+
+        let session = self
+            .sessions
+            .get_mut(&request.session_id)
+            .ok_or_else(|| format!("session `{}` was not found", request.session_id))?;
+
+        let turn = Turn {
+            id: Uuid::new_v4().to_string(),
+            session_id: session.id.clone(),
+            title,
+            objective,
+            mode: request.mode,
+            status: TurnStatus::Draft,
+            created_at: now.clone(),
+            updated_at: now.clone(),
+            item_ids: Vec::new(),
+            validation_error_count: 0,
+        };
+
+        session.status = SessionStatus::Active;
+        session.updated_at = now;
+        session.latest_turn_id = Some(turn.id.clone());
+        session.turn_ids.push(turn.id.clone());
+
+        let session_snapshot = session.clone();
+        self.turns.insert(turn.id.clone(), turn.clone());
+        self.persist_session_state(&session_snapshot.id)?;
+        self.append_session_log(
+            &session_snapshot.id,
+            "turn-started",
+            format!("Turn `{}` was added to the session.", turn.title),
+            None,
+            Some(json!({
+                "turnId": turn.id.clone(),
+                "mode": turn.mode,
+                "status": turn.status,
+            })),
+        )?;
+        self.append_turn_log(
+            &session_snapshot.id,
+            &turn.id,
+            None,
+            "turn-started",
+            format!("Turn `{}` started.", turn.title),
+            Some(json!({
+                "mode": turn.mode,
+                "objective": turn.objective.clone(),
+            })),
+        )?;
+
+        Ok(StartTurnResponse {
+            session: session_snapshot,
+            turn,
+        })
+    }
+
+    pub fn generate_relay_packet(
+        &mut self,
+        request: GenerateRelayPacketRequest,
+    ) -> Result<RelayPacket, String> {
+        let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
+        let context = build_packet_context(&session, &turn);
+        let packet = RelayPacket {
+            version: "1.0",
+            session_id: session.id.clone(),
+            turn_id: turn.id.clone(),
+            mode: turn.mode,
+            objective: turn.objective.clone(),
+            context,
+            allowed_read_tools: read_tool_registry(),
+            allowed_write_tools: write_tool_registry(),
+            response_contract: RelayPacketResponseContract {
+                format: "json",
+                expects_actions: true,
+                notes: vec![
+                    "Return strict JSON only.".to_string(),
+                    "Use only the listed tools.".to_string(),
+                    "Write actions require preview and approval before execution.".to_string(),
+                ],
+            },
+        };
+
+        self.relay_packets.insert(turn.id.clone(), packet.clone());
+        let packet_artifact_id =
+            self.record_turn_artifact(&session.id, &turn.id, "relay-packet", &packet, None)?;
+        self.update_turn_status(&turn.id, TurnStatus::PacketReady, 0)?;
+        self.touch_session(&session.id)?;
+        self.append_turn_log(
+            &session.id,
+            &turn.id,
+            Some(&packet_artifact_id),
+            "relay-packet-generated",
+            "Relay packet generated for the current turn.".to_string(),
+            Some(json!({
+                "mode": turn.mode,
+                "contextCount": packet.context.len(),
+            })),
+        )?;
+
+        Ok(packet)
+    }
+
+    pub fn submit_copilot_response(
+        &mut self,
+        request: SubmitCopilotResponseRequest,
+    ) -> Result<SubmitCopilotResponseResponse, String> {
+        let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
+
+        if !self.relay_packets.contains_key(&turn.id) {
+            return Err("relay packet must be generated before submitting a response".to_string());
+        }
+
+        let (parsed_response, validation_issues) = parse_copilot_response(&request.raw_response);
+        let accepted = validation_issues.is_empty();
+        let repair_prompt = if accepted {
+            None
+        } else {
+            Some(build_repair_prompt(&validation_issues))
+        };
+        let response_artifact_id = self.record_turn_artifact(
+            &session.id,
+            &turn.id,
+            "copilot-response",
+            &json!({
+                "rawResponse": request.raw_response.clone(),
+                "accepted": accepted,
+                "parsedResponse": parsed_response.clone(),
+            }),
+            None,
+        )?;
+        let validation_artifact_id = self.record_turn_artifact(
+            &session.id,
+            &turn.id,
+            "validation",
+            &json!({
+                "accepted": accepted,
+                "validationIssues": validation_issues.clone(),
+                "repairPrompt": repair_prompt.clone(),
+            }),
+            None,
+        )?;
+
+        let next_status = if accepted {
+            TurnStatus::Validated
+        } else {
+            TurnStatus::AwaitingResponse
+        };
+        let next_turn =
+            self.update_turn_status(&turn.id, next_status, validation_issues.len() as u32)?;
+
+        self.responses.insert(
+            turn.id.clone(),
+            StoredResponse {
+                parsed_response: parsed_response.clone(),
+                validation_issues: validation_issues.clone(),
+            },
+        );
+        self.previews.remove(&turn.id);
+        self.approvals.remove(&turn.id);
+        self.touch_session(&session.id)?;
+        self.append_turn_log(
+            &session.id,
+            &turn.id,
+            Some(&validation_artifact_id),
+            "copilot-response-submitted",
+            "Copied model response was stored and validated.".to_string(),
+            Some(json!({
+                "accepted": accepted,
+                "responseArtifactId": response_artifact_id.clone(),
+                "validationArtifactId": validation_artifact_id.clone(),
+                "validationIssueCount": validation_issues.len(),
+            })),
+        )?;
+
+        Ok(SubmitCopilotResponseResponse {
+            turn: next_turn,
+            accepted,
+            validation_issues,
+            parsed_response,
+            repair_prompt,
+        })
+    }
+
+    pub fn preview_execution(
+        &mut self,
+        request: PreviewExecutionRequest,
+    ) -> Result<PreviewExecutionResponse, String> {
+        let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
+        let stored_response = self
+            .responses
+            .get(&turn.id)
+            .ok_or_else(|| "submit a Copilot response before previewing execution".to_string())?;
+
+        if !stored_response.validation_issues.is_empty() {
+            return Err("cannot preview execution while validation issues remain".to_string());
+        }
+
+        let parsed_response = stored_response
+            .parsed_response
+            .clone()
+            .ok_or_else(|| "no parsed Copilot response is available for preview".to_string())?;
+
+        let (diff_summary, requires_approval, warnings) =
+            build_preview(&session, &parsed_response.actions);
+        let preview_artifact_id = self.record_turn_artifact(
+            &session.id,
+            &turn.id,
+            "preview",
+            &json!({
+                "diffSummary": diff_summary.clone(),
+                "requiresApproval": requires_approval,
+                "warnings": warnings.clone(),
+            }),
+            None,
+        )?;
+        let next_turn = self.update_turn_status(&turn.id, TurnStatus::PreviewReady, 0)?;
+        self.previews.insert(
+            turn.id.clone(),
+            StoredPreview {
+                diff_summary: diff_summary.clone(),
+                requires_approval,
+                warnings: warnings.clone(),
+            },
+        );
+        self.approvals.remove(&turn.id);
+        self.touch_session(&session.id)?;
+        self.append_turn_log(
+            &session.id,
+            &turn.id,
+            Some(&preview_artifact_id),
+            "execution-preview-created",
+            "Execution preview was generated for the turn.".to_string(),
+            Some(json!({
+                "previewArtifactId": preview_artifact_id.clone(),
+                "requiresApproval": requires_approval,
+                "warningCount": warnings.len(),
+            })),
+        )?;
+
+        Ok(PreviewExecutionResponse {
+            turn: next_turn,
+            ready: true,
+            requires_approval,
+            can_execute: !requires_approval,
+            diff_summary,
+            warnings,
+        })
+    }
+
+    pub fn respond_to_approval(
+        &mut self,
+        request: RespondToApprovalRequest,
+    ) -> Result<RespondToApprovalResponse, String> {
+        let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
+        let preview = self.previews.get(&turn.id).ok_or_else(|| {
+            "execution preview must exist before approval can be recorded".to_string()
+        })?;
+
+        let next_status = match request.decision {
+            ApprovalDecision::Approved if preview.requires_approval => TurnStatus::Approved,
+            ApprovalDecision::Approved => TurnStatus::PreviewReady,
+            ApprovalDecision::Rejected => TurnStatus::PreviewReady,
+        };
+        let ready_for_execution = matches!(request.decision, ApprovalDecision::Approved);
+        let approval_artifact_id = self.record_turn_artifact(
+            &session.id,
+            &turn.id,
+            "approval",
+            &json!({
+                "decision": request.decision,
+                "note": request.note.clone(),
+                "readyForExecution": ready_for_execution,
+            }),
+            None,
+        )?;
+
+        let next_turn =
+            self.update_turn_status(&turn.id, next_status, turn.validation_error_count)?;
+        self.approvals.insert(
+            turn.id.clone(),
+            StoredApproval {
+                decision: request.decision,
+                note: request.note.clone(),
+            },
+        );
+        self.touch_session(&session.id)?;
+        self.append_turn_log(
+            &session.id,
+            &turn.id,
+            Some(&approval_artifact_id),
+            "approval-recorded",
+            "Approval decision recorded for the current preview.".to_string(),
+            Some(json!({
+                "approvalArtifactId": approval_artifact_id.clone(),
+                "decision": request.decision,
+                "readyForExecution": ready_for_execution,
+            })),
+        )?;
+
+        Ok(RespondToApprovalResponse {
+            turn: next_turn,
+            decision: request.decision,
+            ready_for_execution,
+        })
+    }
+
+    pub fn run_execution(
+        &mut self,
+        request: RunExecutionRequest,
+    ) -> Result<RunExecutionResponse, String> {
+        let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
+        let preview =
+            self.previews.get(&turn.id).cloned().ok_or_else(|| {
+                "execution preview must exist before running execution".to_string()
+            })?;
+
+        if preview.requires_approval {
+            let approval = self.approvals.get(&turn.id).ok_or_else(|| {
+                "execution approval is required before running execution".to_string()
+            })?;
+            if approval.decision != ApprovalDecision::Approved {
+                return Err("execution cannot proceed until the preview is approved".to_string());
+            }
+        }
+
+        let stored_response = self
+            .responses
+            .get(&turn.id)
+            .ok_or_else(|| "no validated response is available for execution".to_string())?;
+        let parsed_response = stored_response
+            .parsed_response
+            .clone()
+            .ok_or_else(|| "no parsed response is available for execution".to_string())?;
+
+        if parsed_response.actions.iter().any(is_write_action) {
+            let mut warnings = preview.warnings.clone();
+            if let Some(approval) = self.approvals.get(&turn.id) {
+                if let Some(note) = &approval.note {
+                    warnings.push(format!("Approval note: {note}"));
+                }
+            }
+            let output_path = preview.diff_summary.output_path.clone();
+            let execution_artifact_id = self.record_turn_artifact(
+                &session.id,
+                &turn.id,
+                "execution",
+                &json!({
+                    "executed": false,
+                    "outputPath": output_path.clone(),
+                    "warnings": warnings.clone(),
+                    "reason": "Execution is not implemented yet for write actions. Preview and approval state were recorded only.",
+                }),
+                Some(output_path.clone()),
+            )?;
+            self.touch_session(&session.id)?;
+            let turn_snapshot = self
+                .turns
+                .get(&turn.id)
+                .cloned()
+                .ok_or_else(|| format!("turn `{}` was not found", turn.id))?;
+            self.append_turn_log(
+                &session.id,
+                &turn.id,
+                Some(&execution_artifact_id),
+                "execution-recorded",
+                "Execution request was recorded without applying write actions.".to_string(),
+                Some(json!({
+                    "executionArtifactId": execution_artifact_id.clone(),
+                    "executed": false,
+                    "outputPath": output_path.clone(),
+                })),
+            )?;
+
+            return Ok(RunExecutionResponse {
+                turn: turn_snapshot,
+                executed: false,
+                output_path: Some(output_path),
+                warnings,
+                reason: Some(
+                    "Execution is not implemented yet for write actions. Preview and approval state were recorded only."
+                        .to_string(),
+                ),
+            });
+        }
+
+        self.update_turn_status(&turn.id, TurnStatus::Executed, 0)?;
+        let execution_artifact_id = self.record_turn_artifact(
+            &session.id,
+            &turn.id,
+            "execution",
+            &json!({
+                "executed": true,
+                "warnings": ["No write actions were present, so execution completed as a no-op."],
+            }),
+            None,
+        )?;
+        self.touch_session(&session.id)?;
+        let turn_snapshot = self
+            .turns
+            .get(&turn.id)
+            .cloned()
+            .ok_or_else(|| format!("turn `{}` was not found", turn.id))?;
+        self.append_turn_log(
+            &session.id,
+            &turn.id,
+            Some(&execution_artifact_id),
+            "execution-recorded",
+            "Execution completed without write actions.".to_string(),
+            Some(json!({
+                "executionArtifactId": execution_artifact_id.clone(),
+                "executed": true,
+            })),
+        )?;
+
+        Ok(RunExecutionResponse {
+            turn: turn_snapshot,
+            executed: true,
+            output_path: None,
+            warnings: vec![
+                "No write actions were present, so execution completed as a no-op.".to_string(),
+            ],
+            reason: None,
+        })
+    }
+
+    fn get_session_and_turn(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+    ) -> Result<(Session, Turn), String> {
+        let session = self
+            .sessions
+            .get(session_id)
+            .cloned()
+            .ok_or_else(|| format!("session `{session_id}` was not found"))?;
+        if !session.turn_ids.iter().any(|id| id == turn_id) {
+            return Err(format!(
+                "turn `{turn_id}` does not belong to session `{session_id}`"
+            ));
+        }
+        let turn = self
+            .turns
+            .get(turn_id)
+            .cloned()
+            .ok_or_else(|| format!("turn `{turn_id}` was not found"))?;
+
+        Ok((session, turn))
+    }
+
+    fn update_turn_status(
+        &mut self,
+        turn_id: &str,
+        status: TurnStatus,
+        validation_error_count: u32,
+    ) -> Result<Turn, String> {
+        let turn = self
+            .turns
+            .get_mut(turn_id)
+            .ok_or_else(|| format!("turn `{turn_id}` was not found"))?;
+        turn.status = status;
+        turn.validation_error_count = validation_error_count;
+        turn.updated_at = timestamp();
+
+        Ok(turn.clone())
+    }
+
+    fn persist_session_state(&mut self, session_id: &str) -> Result<(), String> {
+        let Some(app_local_data_dir) = self.app_local_data_dir.as_deref() else {
+            return Ok(());
+        };
+        let manifest = self
+            .manifest
+            .as_mut()
+            .ok_or_else(|| "storage manifest was not initialized".to_string())?;
+
+        persistence::persist_session_state(
+            app_local_data_dir,
+            manifest,
+            &self.sessions,
+            &self.turns,
+            session_id,
+            &timestamp(),
+        )
+    }
+
+    fn record_turn_artifact<T: Serialize>(
+        &mut self,
+        session_id: &str,
+        turn_id: &str,
+        artifact_type: &str,
+        payload: &T,
+        external_output_path: Option<String>,
+    ) -> Result<String, String> {
+        let artifact_id = Uuid::new_v4().to_string();
+
+        if let Some(app_local_data_dir) = self.app_local_data_dir.as_deref() {
+            let meta = persistence::PersistedArtifactMeta {
+                id: artifact_id.clone(),
+                session_id: session_id.to_string(),
+                turn_id: turn_id.to_string(),
+                artifact_type: artifact_type.to_string(),
+                created_at: timestamp(),
+                relative_payload_path: format!("artifacts/{artifact_id}/payload.json"),
+                external_output_path,
+            };
+            persistence::persist_artifact(app_local_data_dir, &meta, payload)?;
+        }
+
+        let turn = self
+            .turns
+            .get_mut(turn_id)
+            .ok_or_else(|| format!("turn `{turn_id}` was not found"))?;
+        turn.item_ids.push(artifact_id.clone());
+
+        Ok(artifact_id)
+    }
+
+    fn append_session_log(
+        &self,
+        session_id: &str,
+        event_type: &str,
+        message: String,
+        artifact_id: Option<&str>,
+        details: Option<Value>,
+    ) -> Result<(), String> {
+        let Some(app_local_data_dir) = self.app_local_data_dir.as_deref() else {
+            return Ok(());
+        };
+        let entry = persistence::PersistedLogEntry {
+            timestamp: timestamp(),
+            session_id: session_id.to_string(),
+            turn_id: None,
+            artifact_id: artifact_id.map(str::to_string),
+            event_type: event_type.to_string(),
+            message,
+            details,
+        };
+
+        persistence::append_session_log(app_local_data_dir, &entry)
+    }
+
+    fn append_turn_log(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        artifact_id: Option<&str>,
+        event_type: &str,
+        message: String,
+        details: Option<Value>,
+    ) -> Result<(), String> {
+        let Some(app_local_data_dir) = self.app_local_data_dir.as_deref() else {
+            return Ok(());
+        };
+        let entry = persistence::PersistedLogEntry {
+            timestamp: timestamp(),
+            session_id: session_id.to_string(),
+            turn_id: Some(turn_id.to_string()),
+            artifact_id: artifact_id.map(str::to_string),
+            event_type: event_type.to_string(),
+            message,
+            details,
+        };
+
+        persistence::append_turn_log(app_local_data_dir, &entry)
+    }
+
+    fn touch_session(&mut self, session_id: &str) -> Result<(), String> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| format!("session `{session_id}` was not found"))?;
+        session.updated_at = timestamp();
+        self.persist_session_state(session_id)
+    }
+}
+
+fn build_packet_context(session: &Session, turn: &Turn) -> Vec<String> {
+    let mut context = vec![
+        format!("Session objective: {}", session.objective),
+        format!("Turn title: {}", turn.title),
+        "Safe mode: preview and approval are required before writes.".to_string(),
+    ];
+
+    if let Some(path) = &session.primary_workbook_path {
+        context.push(format!("Primary workbook path: {path}"));
+    }
+
+    context
+}
+
+fn parse_copilot_response(
+    raw_response: &str,
+) -> (Option<CopilotTurnResponse>, Vec<ValidationIssue>) {
+    let parsed = match serde_json::from_str::<Value>(raw_response) {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                None,
+                vec![issue(
+                    vec![],
+                    format!("Response must be valid JSON: {error}"),
+                    "invalid_json",
+                )],
+            );
+        }
+    };
+
+    let root = match parsed.as_object() {
+        Some(object) => object,
+        None => {
+            return (
+                None,
+                vec![issue(
+                    vec![],
+                    "Response must be a JSON object.".to_string(),
+                    "invalid_root",
+                )],
+            );
+        }
+    };
+
+    let mut validation_issues = Vec::new();
+
+    let version = optional_string(
+        root.get("version"),
+        vec![json!("version")],
+        &mut validation_issues,
+    )
+    .unwrap_or_else(|| "1.0".to_string());
+    let summary = match required_string(
+        root.get("summary"),
+        vec![json!("summary")],
+        &mut validation_issues,
+    ) {
+        Some(summary) => summary,
+        None => String::new(),
+    };
+    let follow_up_questions = optional_string_array(
+        root.get("followUpQuestions"),
+        vec![json!("followUpQuestions")],
+        &mut validation_issues,
+    )
+    .unwrap_or_default();
+    let warnings = optional_string_array(
+        root.get("warnings"),
+        vec![json!("warnings")],
+        &mut validation_issues,
+    )
+    .unwrap_or_default();
+
+    let actions = match root.get("actions") {
+        None => Vec::new(),
+        Some(value) => parse_actions(value, &mut validation_issues),
+    };
+
+    if validation_issues.is_empty() {
+        (
+            Some(CopilotTurnResponse {
+                version,
+                summary,
+                actions,
+                follow_up_questions,
+                warnings,
+            }),
+            validation_issues,
+        )
+    } else {
+        (None, validation_issues)
+    }
+}
+
+fn parse_actions(
+    value: &Value,
+    validation_issues: &mut Vec<ValidationIssue>,
+) -> Vec<SpreadsheetAction> {
+    let Some(action_values) = value.as_array() else {
+        validation_issues.push(issue(
+            vec![json!("actions")],
+            "actions must be an array.".to_string(),
+            "invalid_actions",
+        ));
+        return Vec::new();
+    };
+
+    let mut actions = Vec::new();
+
+    for (index, action_value) in action_values.iter().enumerate() {
+        let action_path = vec![json!("actions"), json!(index)];
+        let Some(action_object) = action_value.as_object() else {
+            validation_issues.push(issue(
+                action_path,
+                "Each action must be an object.".to_string(),
+                "invalid_action",
+            ));
+            continue;
+        };
+
+        let tool = match required_string(
+            action_object.get("tool"),
+            vec![json!("actions"), json!(index), json!("tool")],
+            validation_issues,
+        ) {
+            Some(tool) => tool,
+            None => continue,
+        };
+
+        if !is_known_tool(&tool) {
+            validation_issues.push(issue(
+                vec![json!("actions"), json!(index), json!("tool")],
+                format!("Unsupported tool `{tool}`."),
+                "unknown_tool",
+            ));
+            continue;
+        }
+
+        let id = optional_string(
+            action_object.get("id"),
+            vec![json!("actions"), json!(index), json!("id")],
+            validation_issues,
+        );
+        let rationale = optional_string(
+            action_object.get("rationale"),
+            vec![json!("actions"), json!(index), json!("rationale")],
+            validation_issues,
+        );
+        let sheet = optional_string(
+            action_object.get("sheet"),
+            vec![json!("actions"), json!(index), json!("sheet")],
+            validation_issues,
+        );
+        let args_path = vec![json!("actions"), json!(index), json!("args")];
+        let args = match action_object.get("args") {
+            Some(args) if args.is_object() => args.clone(),
+            Some(_) => {
+                validation_issues.push(issue(
+                    args_path,
+                    "args must be an object.".to_string(),
+                    "invalid_args",
+                ));
+                continue;
+            }
+            None => {
+                validation_issues.push(issue(
+                    args_path,
+                    "args is required.".to_string(),
+                    "missing_args",
+                ));
+                continue;
+            }
+        };
+
+        validate_action_shape(&tool, sheet.as_deref(), &args, index, validation_issues);
+
+        actions.push(SpreadsheetAction {
+            id,
+            tool,
+            rationale,
+            sheet,
+            args,
+        });
+    }
+
+    actions
+}
+
+fn validate_action_shape(
+    tool: &str,
+    sheet: Option<&str>,
+    args: &Value,
+    index: usize,
+    validation_issues: &mut Vec<ValidationIssue>,
+) {
+    if tool_requires_sheet(tool) && sheet.is_none() {
+        validation_issues.push(issue(
+            vec![json!("actions"), json!(index), json!("sheet")],
+            format!("Action `{tool}` requires a sheet."),
+            "missing_sheet",
+        ));
+    }
+
+    let Some(args_object) = args.as_object() else {
+        return;
+    };
+
+    match tool {
+        "workbook.inspect" => {
+            if let Some(source_path) = args_object.get("sourcePath") {
+                validate_non_empty_string(
+                    source_path,
+                    path(index, "args", "sourcePath"),
+                    validation_issues,
+                );
+            }
+        }
+        "sheet.preview" => {
+            require_arg_string(args_object, index, "sheet", validation_issues);
+            validate_optional_positive_integer(
+                args_object.get("limit"),
+                index,
+                "limit",
+                validation_issues,
+            );
+        }
+        "sheet.profile_columns" => {
+            require_arg_string(args_object, index, "sheet", validation_issues);
+            validate_optional_positive_integer(
+                args_object.get("sampleSize"),
+                index,
+                "sampleSize",
+                validation_issues,
+            );
+        }
+        "session.diff_from_base" => {
+            if let Some(artifact_id) = args_object.get("artifactId") {
+                validate_non_empty_string(
+                    artifact_id,
+                    path(index, "args", "artifactId"),
+                    validation_issues,
+                );
+            }
+        }
+        "table.rename_columns" => {
+            validate_rename_columns(args_object, index, validation_issues);
+        }
+        "table.cast_columns" => {
+            validate_cast_columns(args_object, index, validation_issues);
+        }
+        "table.filter_rows" => {
+            require_arg_string(args_object, index, "predicate", validation_issues);
+            if let Some(output_sheet) = args_object.get("outputSheet") {
+                validate_non_empty_string(
+                    output_sheet,
+                    path(index, "args", "outputSheet"),
+                    validation_issues,
+                );
+            }
+        }
+        "table.derive_column" => {
+            require_arg_string(args_object, index, "column", validation_issues);
+            require_arg_string(args_object, index, "expression", validation_issues);
+            if let Some(position) = args_object.get("position") {
+                validate_enum(
+                    position,
+                    path(index, "args", "position"),
+                    &["start", "end", "after"],
+                    validation_issues,
+                );
+            }
+            if let Some(after_column) = args_object.get("afterColumn") {
+                validate_non_empty_string(
+                    after_column,
+                    path(index, "args", "afterColumn"),
+                    validation_issues,
+                );
+            }
+        }
+        "table.group_aggregate" => {
+            validate_group_aggregate(args_object, index, validation_issues);
+        }
+        "workbook.save_copy" => {
+            require_arg_string(args_object, index, "outputPath", validation_issues);
+        }
+        _ => {}
+    }
+}
+
+fn validate_rename_columns(
+    args_object: &serde_json::Map<String, Value>,
+    index: usize,
+    validation_issues: &mut Vec<ValidationIssue>,
+) {
+    let Some(renames) = args_object.get("renames").and_then(Value::as_array) else {
+        validation_issues.push(issue(
+            path(index, "args", "renames"),
+            "renames must be a non-empty array.".to_string(),
+            "missing_renames",
+        ));
+        return;
+    };
+
+    if renames.is_empty() {
+        validation_issues.push(issue(
+            path(index, "args", "renames"),
+            "renames must be a non-empty array.".to_string(),
+            "empty_renames",
+        ));
+    }
+
+    for (rename_index, rename) in renames.iter().enumerate() {
+        let Some(rename_object) = rename.as_object() else {
+            validation_issues.push(issue(
+                vec![
+                    json!("actions"),
+                    json!(index),
+                    json!("args"),
+                    json!("renames"),
+                    json!(rename_index),
+                ],
+                "Each rename must be an object.".to_string(),
+                "invalid_rename",
+            ));
+            continue;
+        };
+        validate_non_empty_string(
+            rename_object.get("from").unwrap_or(&Value::Null),
+            vec![
+                json!("actions"),
+                json!(index),
+                json!("args"),
+                json!("renames"),
+                json!(rename_index),
+                json!("from"),
+            ],
+            validation_issues,
+        );
+        validate_non_empty_string(
+            rename_object.get("to").unwrap_or(&Value::Null),
+            vec![
+                json!("actions"),
+                json!(index),
+                json!("args"),
+                json!("renames"),
+                json!(rename_index),
+                json!("to"),
+            ],
+            validation_issues,
+        );
+    }
+}
+
+fn validate_cast_columns(
+    args_object: &serde_json::Map<String, Value>,
+    index: usize,
+    validation_issues: &mut Vec<ValidationIssue>,
+) {
+    let Some(casts) = args_object.get("casts").and_then(Value::as_array) else {
+        validation_issues.push(issue(
+            path(index, "args", "casts"),
+            "casts must be a non-empty array.".to_string(),
+            "missing_casts",
+        ));
+        return;
+    };
+
+    if casts.is_empty() {
+        validation_issues.push(issue(
+            path(index, "args", "casts"),
+            "casts must be a non-empty array.".to_string(),
+            "empty_casts",
+        ));
+    }
+
+    for (cast_index, cast) in casts.iter().enumerate() {
+        let Some(cast_object) = cast.as_object() else {
+            validation_issues.push(issue(
+                vec![
+                    json!("actions"),
+                    json!(index),
+                    json!("args"),
+                    json!("casts"),
+                    json!(cast_index),
+                ],
+                "Each cast must be an object.".to_string(),
+                "invalid_cast",
+            ));
+            continue;
+        };
+        validate_non_empty_string(
+            cast_object.get("column").unwrap_or(&Value::Null),
+            vec![
+                json!("actions"),
+                json!(index),
+                json!("args"),
+                json!("casts"),
+                json!(cast_index),
+                json!("column"),
+            ],
+            validation_issues,
+        );
+        validate_enum(
+            cast_object.get("toType").unwrap_or(&Value::Null),
+            vec![
+                json!("actions"),
+                json!(index),
+                json!("args"),
+                json!("casts"),
+                json!(cast_index),
+                json!("toType"),
+            ],
+            &["string", "number", "integer", "boolean", "date"],
+            validation_issues,
+        );
+    }
+}
+
+fn validate_group_aggregate(
+    args_object: &serde_json::Map<String, Value>,
+    index: usize,
+    validation_issues: &mut Vec<ValidationIssue>,
+) {
+    validate_non_empty_string_array(
+        args_object.get("groupBy"),
+        path(index, "args", "groupBy"),
+        validation_issues,
+    );
+
+    let Some(measures) = args_object.get("measures").and_then(Value::as_array) else {
+        validation_issues.push(issue(
+            path(index, "args", "measures"),
+            "measures must be a non-empty array.".to_string(),
+            "missing_measures",
+        ));
+        return;
+    };
+
+    if measures.is_empty() {
+        validation_issues.push(issue(
+            path(index, "args", "measures"),
+            "measures must be a non-empty array.".to_string(),
+            "empty_measures",
+        ));
+    }
+
+    for (measure_index, measure) in measures.iter().enumerate() {
+        let Some(measure_object) = measure.as_object() else {
+            validation_issues.push(issue(
+                vec![
+                    json!("actions"),
+                    json!(index),
+                    json!("args"),
+                    json!("measures"),
+                    json!(measure_index),
+                ],
+                "Each measure must be an object.".to_string(),
+                "invalid_measure",
+            ));
+            continue;
+        };
+
+        validate_non_empty_string(
+            measure_object.get("column").unwrap_or(&Value::Null),
+            vec![
+                json!("actions"),
+                json!(index),
+                json!("args"),
+                json!("measures"),
+                json!(measure_index),
+                json!("column"),
+            ],
+            validation_issues,
+        );
+        validate_enum(
+            measure_object.get("op").unwrap_or(&Value::Null),
+            vec![
+                json!("actions"),
+                json!(index),
+                json!("args"),
+                json!("measures"),
+                json!(measure_index),
+                json!("op"),
+            ],
+            &["sum", "avg", "count", "min", "max"],
+            validation_issues,
+        );
+        validate_non_empty_string(
+            measure_object.get("as").unwrap_or(&Value::Null),
+            vec![
+                json!("actions"),
+                json!(index),
+                json!("args"),
+                json!("measures"),
+                json!(measure_index),
+                json!("as"),
+            ],
+            validation_issues,
+        );
+    }
+
+    if let Some(output_sheet) = args_object.get("outputSheet") {
+        validate_non_empty_string(
+            output_sheet,
+            path(index, "args", "outputSheet"),
+            validation_issues,
+        );
+    }
+}
+
+fn build_repair_prompt(validation_issues: &[ValidationIssue]) -> String {
+    let mut lines = vec![
+        "The pasted JSON did not validate against the expected response contract.".to_string(),
+        "Please resend strict JSON only and fix these issues:".to_string(),
+    ];
+
+    for issue in validation_issues.iter().take(5) {
+        lines.push(format!(
+            "- {} ({})",
+            format_path(&issue.path),
+            issue.message
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn build_preview(
+    session: &Session,
+    actions: &[SpreadsheetAction],
+) -> (DiffSummary, bool, Vec<String>) {
+    let mut sheets: BTreeMap<String, SheetDiff> = BTreeMap::new();
+    let mut warnings = Vec::new();
+    let mut output_path = session
+        .primary_workbook_path
+        .as_deref()
+        .map(default_output_path)
+        .unwrap_or_else(|| "relay-agent-output-preview.csv".to_string());
+
+    let requires_approval = actions.iter().any(is_write_action);
+
+    for action in actions {
+        match action.tool.as_str() {
+            "table.rename_columns" => {
+                let sheet = action.sheet.clone().unwrap_or_else(|| "Sheet1".to_string());
+                let diff = sheet_diff(&mut sheets, &sheet);
+                if let Some(renames) = action.args.get("renames").and_then(Value::as_array) {
+                    for rename in renames {
+                        if let Some(to_name) = rename.get("to").and_then(Value::as_str) {
+                            push_unique(&mut diff.changed_columns, to_name.to_string());
+                        }
+                    }
+                }
+                push_unique(
+                    &mut diff.warnings,
+                    "Rename preview is approximate until the workbook engine is implemented."
+                        .to_string(),
+                );
+            }
+            "table.cast_columns" => {
+                let sheet = action.sheet.clone().unwrap_or_else(|| "Sheet1".to_string());
+                let diff = sheet_diff(&mut sheets, &sheet);
+                if let Some(casts) = action.args.get("casts").and_then(Value::as_array) {
+                    for cast in casts {
+                        if let Some(column) = cast.get("column").and_then(Value::as_str) {
+                            push_unique(&mut diff.changed_columns, column.to_string());
+                        }
+                    }
+                }
+            }
+            "table.filter_rows" => {
+                let sheet = action.sheet.clone().unwrap_or_else(|| "Sheet1".to_string());
+                let diff = sheet_diff(&mut sheets, &sheet);
+                diff.estimated_rows = diff.estimated_rows.max(1);
+                push_unique(
+                    &mut diff.warnings,
+                    "Filtered row count is an estimate until file inspection is implemented."
+                        .to_string(),
+                );
+            }
+            "table.derive_column" => {
+                let sheet = action.sheet.clone().unwrap_or_else(|| "Sheet1".to_string());
+                let diff = sheet_diff(&mut sheets, &sheet);
+                if let Some(column) = action.args.get("column").and_then(Value::as_str) {
+                    push_unique(&mut diff.added_columns, column.to_string());
+                }
+            }
+            "table.group_aggregate" => {
+                let sheet = action.sheet.clone().unwrap_or_else(|| "Sheet1".to_string());
+                let diff = sheet_diff(&mut sheets, &sheet);
+                diff.estimated_rows = diff.estimated_rows.max(1);
+                if let Some(measures) = action.args.get("measures").and_then(Value::as_array) {
+                    for measure in measures {
+                        if let Some(alias) = measure.get("as").and_then(Value::as_str) {
+                            push_unique(&mut diff.added_columns, alias.to_string());
+                        }
+                    }
+                }
+            }
+            "workbook.save_copy" => {
+                if let Some(path) = action.args.get("outputPath").and_then(Value::as_str) {
+                    output_path = path.to_string();
+                }
+            }
+            "workbook.inspect"
+            | "sheet.preview"
+            | "sheet.profile_columns"
+            | "session.diff_from_base" => {
+                warnings.push(format!(
+                    "Read-only action `{}` will not change workbook contents during execution.",
+                    action.tool
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    if output_path == "relay-agent-output-preview.csv" {
+        warnings.push(
+            "No explicit save-copy path was provided, so the preview used a derived output path."
+                .to_string(),
+        );
+    }
+
+    (
+        DiffSummary {
+            source_path: session
+                .primary_workbook_path
+                .clone()
+                .unwrap_or_else(|| "unspecified-input".to_string()),
+            output_path,
+            mode: "preview",
+            sheets: sheets.into_values().collect(),
+            warnings: warnings.clone(),
+        },
+        requires_approval,
+        warnings,
+    )
+}
+
+fn sheet_diff<'a>(sheets: &'a mut BTreeMap<String, SheetDiff>, sheet: &str) -> &'a mut SheetDiff {
+    sheets
+        .entry(sheet.to_string())
+        .or_insert_with(|| SheetDiff {
+            sheet: sheet.to_string(),
+            estimated_rows: 0,
+            added_columns: Vec::new(),
+            changed_columns: Vec::new(),
+            removed_columns: Vec::new(),
+            warnings: Vec::new(),
+        })
+}
+
+fn default_output_path(source_path: &str) -> String {
+    if let Some((stem, ext)) = source_path.rsplit_once('.') {
+        format!("{stem}.relay-copy.{ext}")
+    } else {
+        format!("{source_path}.relay-copy")
+    }
+}
+
+fn is_write_action(action: &SpreadsheetAction) -> bool {
+    matches!(
+        action.tool.as_str(),
+        "table.rename_columns"
+            | "table.cast_columns"
+            | "table.filter_rows"
+            | "table.derive_column"
+            | "table.group_aggregate"
+            | "workbook.save_copy"
+    )
+}
+
+fn is_known_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "workbook.inspect"
+            | "sheet.preview"
+            | "sheet.profile_columns"
+            | "session.diff_from_base"
+            | "table.rename_columns"
+            | "table.cast_columns"
+            | "table.filter_rows"
+            | "table.derive_column"
+            | "table.group_aggregate"
+            | "workbook.save_copy"
+    )
+}
+
+fn tool_requires_sheet(tool: &str) -> bool {
+    matches!(
+        tool,
+        "table.rename_columns"
+            | "table.cast_columns"
+            | "table.filter_rows"
+            | "table.derive_column"
+            | "table.group_aggregate"
+    )
+}
+
+fn read_tool_registry() -> Vec<ToolDescriptor> {
+    vec![
+        ToolDescriptor {
+            id: "workbook.inspect".to_string(),
+            title: "Inspect workbook".to_string(),
+            description: "Read workbook metadata, sheets, and basic summary information."
+                .to_string(),
+            phase: ToolPhase::Read,
+            requires_approval: false,
+        },
+        ToolDescriptor {
+            id: "sheet.preview".to_string(),
+            title: "Preview sheet rows".to_string(),
+            description: "Read a small sample of rows from a sheet.".to_string(),
+            phase: ToolPhase::Read,
+            requires_approval: false,
+        },
+        ToolDescriptor {
+            id: "sheet.profile_columns".to_string(),
+            title: "Profile columns".to_string(),
+            description: "Inspect inferred types and sample values for sheet columns.".to_string(),
+            phase: ToolPhase::Read,
+            requires_approval: false,
+        },
+        ToolDescriptor {
+            id: "session.diff_from_base".to_string(),
+            title: "Diff from base".to_string(),
+            description: "Compare the current session state to the original workbook input."
+                .to_string(),
+            phase: ToolPhase::Read,
+            requires_approval: false,
+        },
+    ]
+}
+
+fn write_tool_registry() -> Vec<ToolDescriptor> {
+    vec![
+        ToolDescriptor {
+            id: "table.rename_columns".to_string(),
+            title: "Rename columns".to_string(),
+            description: "Rename one or more columns in a table or sheet.".to_string(),
+            phase: ToolPhase::Write,
+            requires_approval: true,
+        },
+        ToolDescriptor {
+            id: "table.cast_columns".to_string(),
+            title: "Cast columns".to_string(),
+            description: "Convert one or more columns to new logical types.".to_string(),
+            phase: ToolPhase::Write,
+            requires_approval: true,
+        },
+        ToolDescriptor {
+            id: "table.filter_rows".to_string(),
+            title: "Filter rows".to_string(),
+            description: "Filter table rows into a refined output.".to_string(),
+            phase: ToolPhase::Write,
+            requires_approval: true,
+        },
+        ToolDescriptor {
+            id: "table.derive_column".to_string(),
+            title: "Derive column".to_string(),
+            description: "Create a derived output column from an expression.".to_string(),
+            phase: ToolPhase::Write,
+            requires_approval: true,
+        },
+        ToolDescriptor {
+            id: "table.group_aggregate".to_string(),
+            title: "Group aggregate".to_string(),
+            description: "Group rows and calculate aggregated output columns.".to_string(),
+            phase: ToolPhase::Write,
+            requires_approval: true,
+        },
+        ToolDescriptor {
+            id: "workbook.save_copy".to_string(),
+            title: "Save copy".to_string(),
+            description: "Write the output to a new workbook or CSV copy.".to_string(),
+            phase: ToolPhase::Write,
+            requires_approval: true,
+        },
+    ]
+}
+
+fn issue(path: Vec<Value>, message: String, code: &str) -> ValidationIssue {
+    ValidationIssue {
+        path,
+        message,
+        code: code.to_string(),
+    }
+}
+
+fn path(index: usize, segment1: &str, segment2: &str) -> Vec<Value> {
+    vec![
+        json!("actions"),
+        json!(index),
+        json!(segment1),
+        json!(segment2),
+    ]
+}
+
+fn required_string(
+    value: Option<&Value>,
+    path: Vec<Value>,
+    validation_issues: &mut Vec<ValidationIssue>,
+) -> Option<String> {
+    match value {
+        Some(value) => match value.as_str() {
+            Some(text) if !text.trim().is_empty() => Some(text.trim().to_string()),
+            _ => {
+                validation_issues.push(issue(
+                    path,
+                    "Expected a non-empty string.".to_string(),
+                    "invalid_string",
+                ));
+                None
+            }
+        },
+        None => {
+            validation_issues.push(issue(
+                path,
+                "Field is required.".to_string(),
+                "missing_field",
+            ));
+            None
+        }
+    }
+}
+
+fn optional_string(
+    value: Option<&Value>,
+    path: Vec<Value>,
+    validation_issues: &mut Vec<ValidationIssue>,
+) -> Option<String> {
+    match value {
+        None | Some(Value::Null) => None,
+        Some(value) => match value.as_str() {
+            Some(text) if !text.trim().is_empty() => Some(text.trim().to_string()),
+            _ => {
+                validation_issues.push(issue(
+                    path,
+                    "Expected a non-empty string.".to_string(),
+                    "invalid_string",
+                ));
+                None
+            }
+        },
+    }
+}
+
+fn optional_string_array(
+    value: Option<&Value>,
+    path: Vec<Value>,
+    validation_issues: &mut Vec<ValidationIssue>,
+) -> Option<Vec<String>> {
+    match value {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(items)) => {
+            let mut values = Vec::new();
+            for (index, item) in items.iter().enumerate() {
+                if let Some(text) = item.as_str() {
+                    if text.trim().is_empty() {
+                        validation_issues.push(issue(
+                            [path.clone(), vec![json!(index)]].concat(),
+                            "Expected a non-empty string.".to_string(),
+                            "invalid_string",
+                        ));
+                    } else {
+                        values.push(text.trim().to_string());
+                    }
+                } else {
+                    validation_issues.push(issue(
+                        [path.clone(), vec![json!(index)]].concat(),
+                        "Expected a string.".to_string(),
+                        "invalid_string",
+                    ));
+                }
+            }
+            Some(values)
+        }
+        Some(_) => {
+            validation_issues.push(issue(
+                path,
+                "Expected an array of strings.".to_string(),
+                "invalid_array",
+            ));
+            None
+        }
+    }
+}
+
+fn require_arg_string(
+    args_object: &serde_json::Map<String, Value>,
+    index: usize,
+    key: &str,
+    validation_issues: &mut Vec<ValidationIssue>,
+) {
+    validate_non_empty_string(
+        args_object.get(key).unwrap_or(&Value::Null),
+        path(index, "args", key),
+        validation_issues,
+    );
+}
+
+fn validate_non_empty_string(
+    value: &Value,
+    path: Vec<Value>,
+    validation_issues: &mut Vec<ValidationIssue>,
+) {
+    if !value.as_str().is_some_and(|text| !text.trim().is_empty()) {
+        validation_issues.push(issue(
+            path,
+            "Expected a non-empty string.".to_string(),
+            "invalid_string",
+        ));
+    }
+}
+
+fn validate_non_empty_string_array(
+    value: Option<&Value>,
+    path: Vec<Value>,
+    validation_issues: &mut Vec<ValidationIssue>,
+) {
+    let Some(items) = value.and_then(Value::as_array) else {
+        validation_issues.push(issue(
+            path,
+            "Expected a non-empty array of strings.".to_string(),
+            "invalid_array",
+        ));
+        return;
+    };
+
+    if items.is_empty() {
+        validation_issues.push(issue(
+            path,
+            "Expected a non-empty array of strings.".to_string(),
+            "empty_array",
+        ));
+        return;
+    }
+
+    for (index, item) in items.iter().enumerate() {
+        let mut item_path = path.clone();
+        item_path.push(json!(index));
+        validate_non_empty_string(item, item_path, validation_issues);
+    }
+}
+
+fn validate_optional_positive_integer(
+    value: Option<&Value>,
+    index: usize,
+    key: &str,
+    validation_issues: &mut Vec<ValidationIssue>,
+) {
+    if let Some(value) = value {
+        match value.as_u64() {
+            Some(number) if number > 0 => {}
+            _ => validation_issues.push(issue(
+                path(index, "args", key),
+                "Expected a positive integer.".to_string(),
+                "invalid_number",
+            )),
+        }
+    }
+}
+
+fn validate_enum(
+    value: &Value,
+    path: Vec<Value>,
+    allowed: &[&str],
+    validation_issues: &mut Vec<ValidationIssue>,
+) {
+    let Some(candidate) = value.as_str() else {
+        validation_issues.push(issue(
+            path,
+            format!("Expected one of: {}.", allowed.join(", ")),
+            "invalid_enum",
+        ));
+        return;
+    };
+
+    if !allowed
+        .iter()
+        .any(|allowed_value| *allowed_value == candidate)
+    {
+        validation_issues.push(issue(
+            path,
+            format!("Expected one of: {}.", allowed.join(", ")),
+            "invalid_enum",
+        ));
+    }
+}
+
+fn push_unique(items: &mut Vec<String>, value: String) {
+    if !items.iter().any(|existing| existing == &value) {
+        items.push(value);
+    }
+}
+
+fn format_path(path: &[Value]) -> String {
+    let mut output = String::new();
+
+    for segment in path {
+        match segment {
+            Value::String(text) => {
+                if output.is_empty() {
+                    output.push_str(text);
+                } else {
+                    output.push('.');
+                    output.push_str(text);
+                }
+            }
+            Value::Number(number) => {
+                output.push('[');
+                output.push_str(&number.to_string());
+                output.push(']');
+            }
+            _ => {}
+        }
+    }
+
+    output
+}
+
+fn require_text(field: &str, value: String) -> Result<String, String> {
+    let trimmed = value.trim();
+
+    if trimmed.is_empty() {
+        return Err(format!("{field} must not be empty"));
+    }
+
+    Ok(trimmed.to_string())
+}
+
+fn timestamp() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeSet, env, fs, path::Path};
+
+    use super::AppStorage;
+    use crate::models::{
+        ApprovalDecision, CreateSessionRequest, GenerateRelayPacketRequest,
+        PreviewExecutionRequest, ReadSessionRequest, RelayMode, RespondToApprovalRequest,
+        RunExecutionRequest, StartTurnRequest, SubmitCopilotResponseRequest,
+    };
+    use crate::persistence;
+    use serde::de::DeserializeOwned;
+    use serde_json::Value;
+    use uuid::Uuid;
+
+    #[test]
+    fn creates_reads_and_starts_turns() {
+        let mut storage = AppStorage::default();
+
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Quarterly cleanup".to_string(),
+                objective: "Normalize the CSV import".to_string(),
+                primary_workbook_path: Some("/tmp/input.csv".to_string()),
+            })
+            .expect("session should be created");
+
+        assert_eq!(storage.session_count(), 1);
+        assert_eq!(storage.list_sessions().len(), 1);
+
+        let started = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Initial pass".to_string(),
+                objective: "Profile columns".to_string(),
+                mode: RelayMode::Discover,
+            })
+            .expect("turn should start");
+
+        assert_eq!(
+            started.session.latest_turn_id,
+            Some(started.turn.id.clone())
+        );
+        assert_eq!(started.session.turn_ids, vec![started.turn.id.clone()]);
+
+        let detail = storage
+            .read_session(
+                &ReadSessionRequest {
+                    session_id: session.id,
+                }
+                .session_id,
+            )
+            .expect("session should be readable");
+
+        assert_eq!(detail.turns.len(), 1);
+        assert_eq!(detail.turns[0].title, "Initial pass");
+    }
+
+    #[test]
+    fn validates_preview_and_approval_flow() {
+        let mut storage = AppStorage::default();
+
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Revenue cleanup".to_string(),
+                objective: "Prepare a safe save-copy plan".to_string(),
+                primary_workbook_path: Some("/tmp/revenue.csv".to_string()),
+            })
+            .expect("session should be created");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Draft the packet".to_string(),
+                objective: "Plan a derived column and save-copy".to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+
+        let packet = storage
+            .generate_relay_packet(GenerateRelayPacketRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+            })
+            .expect("packet should generate");
+        assert_eq!(packet.allowed_write_tools.len(), 6);
+
+        let submitted = storage
+            .submit_copilot_response(SubmitCopilotResponseRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+                raw_response: r#"{
+                  "summary": "Create a normalized output copy.",
+                  "actions": [
+                    {
+                      "tool": "table.derive_column",
+                      "sheet": "Sheet1",
+                      "args": {
+                        "column": "normalized_total",
+                        "expression": "amount",
+                        "position": "end"
+                      }
+                    },
+                    {
+                      "tool": "workbook.save_copy",
+                      "args": {
+                        "outputPath": "/tmp/revenue-clean.csv"
+                      }
+                    }
+                  ]
+                }"#
+                .to_string(),
+            })
+            .expect("response should parse");
+        assert!(submitted.accepted);
+
+        let preview = storage
+            .preview_execution(PreviewExecutionRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+            })
+            .expect("preview should succeed");
+        assert!(preview.ready);
+        assert!(preview.requires_approval);
+        assert_eq!(preview.diff_summary.output_path, "/tmp/revenue-clean.csv");
+
+        let approval = storage
+            .respond_to_approval(RespondToApprovalRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+                decision: ApprovalDecision::Approved,
+                note: Some("Looks safe".to_string()),
+            })
+            .expect("approval should be recorded");
+        assert!(approval.ready_for_execution);
+
+        let execution = storage
+            .run_execution(RunExecutionRequest {
+                session_id: session.id,
+                turn_id: turn.id,
+            })
+            .expect("execution response should return");
+        assert!(!execution.executed);
+        assert!(execution.reason.is_some());
+        assert_eq!(
+            execution.output_path.as_deref(),
+            Some("/tmp/revenue-clean.csv")
+        );
+    }
+
+    #[test]
+    fn invalid_responses_return_validation_issues() {
+        let mut storage = AppStorage::default();
+
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Bad payload".to_string(),
+                objective: "Check validation".to_string(),
+                primary_workbook_path: None,
+            })
+            .expect("session should be created");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Validate bad input".to_string(),
+                objective: "Expect validation issues".to_string(),
+                mode: RelayMode::Repair,
+            })
+            .expect("turn should start")
+            .turn;
+
+        storage
+            .generate_relay_packet(GenerateRelayPacketRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+            })
+            .expect("packet should generate");
+
+        let submitted = storage
+            .submit_copilot_response(SubmitCopilotResponseRequest {
+                session_id: session.id,
+                turn_id: turn.id,
+                raw_response: r#"{
+                  "summary": "",
+                  "actions": [{ "tool": "table.derive_column", "args": {} }]
+                }"#
+                .to_string(),
+            })
+            .expect("submission should return validation issues");
+
+        assert!(!submitted.accepted);
+        assert!(!submitted.validation_issues.is_empty());
+        assert!(submitted.repair_prompt.is_some());
+    }
+
+    #[test]
+    fn persists_sessions_and_turns_across_reloads() {
+        let app_local_data_dir = unique_test_app_data_dir();
+
+        let session_id = {
+            let mut storage =
+                AppStorage::open(app_local_data_dir.clone()).expect("storage should initialize");
+
+            let session = storage
+                .create_session(CreateSessionRequest {
+                    title: "Persistence check".to_string(),
+                    objective: "Reload sessions from disk".to_string(),
+                    primary_workbook_path: Some("/tmp/persist.csv".to_string()),
+                })
+                .expect("session should be created");
+            let started = storage
+                .start_turn(StartTurnRequest {
+                    session_id: session.id.clone(),
+                    title: "Reload me".to_string(),
+                    objective: "Confirm turn data survives restart".to_string(),
+                    mode: RelayMode::Plan,
+                })
+                .expect("turn should start");
+
+            let storage_root = persistence::storage_root(&app_local_data_dir);
+            assert!(storage_root.join("manifest.json").is_file());
+            assert!(storage_root.join("sessions/index.json").is_file());
+            assert!(storage_root
+                .join("sessions")
+                .join(&session.id)
+                .join("session.json")
+                .is_file());
+            assert!(storage_root
+                .join("sessions")
+                .join(&session.id)
+                .join("turns")
+                .join(format!("{}.json", started.turn.id))
+                .is_file());
+
+            session.id
+        };
+
+        let reloaded = AppStorage::open(app_local_data_dir.clone()).expect("storage should reload");
+        let sessions = reloaded.list_sessions();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, session_id);
+        assert_eq!(
+            sessions[0].latest_turn_id.as_deref(),
+            sessions[0].turn_ids.last().map(String::as_str)
+        );
+
+        let detail = reloaded
+            .read_session(&session_id)
+            .expect("persisted session should be readable");
+        assert_eq!(detail.turns.len(), 1);
+        assert_eq!(detail.turns[0].title, "Reload me");
+        assert_eq!(detail.turns[0].session_id, session_id);
+
+        fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
+    }
+
+    #[test]
+    fn persists_turn_artifacts_and_logs_with_session_linkage() {
+        let app_local_data_dir = unique_test_app_data_dir();
+        let (session_id, turn_id) = {
+            let mut storage =
+                AppStorage::open(app_local_data_dir.clone()).expect("storage should initialize");
+
+            let session = storage
+                .create_session(CreateSessionRequest {
+                    title: "Artifact check".to_string(),
+                    objective: "Persist relay history".to_string(),
+                    primary_workbook_path: Some("/tmp/artifact-source.csv".to_string()),
+                })
+                .expect("session should be created");
+            let turn = storage
+                .start_turn(StartTurnRequest {
+                    session_id: session.id.clone(),
+                    title: "Persist every step".to_string(),
+                    objective: "Generate packet, validate response, preview, approve, and run."
+                        .to_string(),
+                    mode: RelayMode::Plan,
+                })
+                .expect("turn should start")
+                .turn;
+
+            storage
+                .generate_relay_packet(GenerateRelayPacketRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                })
+                .expect("packet should generate");
+            storage
+                .submit_copilot_response(SubmitCopilotResponseRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                    raw_response: r#"{
+                      "summary": "Create a normalized output copy.",
+                      "actions": [
+                        {
+                          "tool": "table.derive_column",
+                          "sheet": "Sheet1",
+                          "args": {
+                            "column": "normalized_total",
+                            "expression": "amount",
+                            "position": "end"
+                          }
+                        },
+                        {
+                          "tool": "workbook.save_copy",
+                          "args": {
+                            "outputPath": "/tmp/artifact-output.csv"
+                          }
+                        }
+                      ]
+                    }"#
+                    .to_string(),
+                })
+                .expect("response should parse");
+            storage
+                .preview_execution(PreviewExecutionRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                })
+                .expect("preview should succeed");
+            storage
+                .respond_to_approval(RespondToApprovalRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                    decision: ApprovalDecision::Approved,
+                    note: Some("Persist this decision".to_string()),
+                })
+                .expect("approval should be recorded");
+            storage
+                .run_execution(RunExecutionRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                })
+                .expect("execution response should return");
+
+            (session.id, turn.id)
+        };
+
+        let storage_root = persistence::storage_root(&app_local_data_dir);
+        let reloaded = AppStorage::open(app_local_data_dir.clone()).expect("storage should reload");
+        let detail = reloaded
+            .read_session(&session_id)
+            .expect("persisted session should be readable");
+        let turn = detail
+            .turns
+            .iter()
+            .find(|turn| turn.id == turn_id)
+            .expect("turn should be present after reload");
+
+        assert_eq!(turn.item_ids.len(), 6);
+
+        let mut artifact_types = BTreeSet::new();
+        let mut execution_output_path = None;
+        for artifact_id in &turn.item_ids {
+            let artifact_dir = storage_root
+                .join("sessions")
+                .join(&session_id)
+                .join("artifacts")
+                .join(artifact_id);
+            let meta: persistence::PersistedArtifactMeta = serde_json::from_slice(
+                &fs::read(artifact_dir.join("meta.json")).expect("meta should exist"),
+            )
+            .expect("meta should parse");
+            let payload: Value = serde_json::from_slice(
+                &fs::read(artifact_dir.join("payload.json")).expect("payload should exist"),
+            )
+            .expect("payload should parse");
+
+            assert_eq!(meta.session_id, session_id);
+            assert_eq!(meta.turn_id, turn_id);
+            assert_eq!(
+                meta.relative_payload_path,
+                format!("artifacts/{artifact_id}/payload.json")
+            );
+            assert!(payload.is_object());
+
+            if meta.artifact_type == "execution" {
+                execution_output_path = meta.external_output_path.clone();
+            }
+
+            artifact_types.insert(meta.artifact_type);
+        }
+
+        assert_eq!(
+            artifact_types,
+            BTreeSet::from([
+                "approval".to_string(),
+                "copilot-response".to_string(),
+                "execution".to_string(),
+                "preview".to_string(),
+                "relay-packet".to_string(),
+                "validation".to_string(),
+            ])
+        );
+        assert_eq!(
+            execution_output_path.as_deref(),
+            Some("/tmp/artifact-output.csv")
+        );
+
+        let session_log = storage_root
+            .join("sessions")
+            .join(&session_id)
+            .join("logs")
+            .join("session.ndjson");
+        let turn_log = storage_root
+            .join("sessions")
+            .join(&session_id)
+            .join("logs")
+            .join(format!("{turn_id}.ndjson"));
+        let session_events: Vec<persistence::PersistedLogEntry> =
+            read_ndjson(&session_log).expect("session log should parse");
+        let turn_events: Vec<persistence::PersistedLogEntry> =
+            read_ndjson(&turn_log).expect("turn log should parse");
+
+        assert!(session_events
+            .iter()
+            .any(|entry| entry.event_type == "session-created"));
+        assert!(session_events
+            .iter()
+            .any(|entry| entry.event_type == "turn-started"));
+
+        let turn_event_types = turn_events
+            .iter()
+            .map(|entry| entry.event_type.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            turn_event_types,
+            BTreeSet::from([
+                "approval-recorded".to_string(),
+                "copilot-response-submitted".to_string(),
+                "execution-preview-created".to_string(),
+                "execution-recorded".to_string(),
+                "relay-packet-generated".to_string(),
+                "turn-started".to_string(),
+            ])
+        );
+        assert!(turn_events
+            .iter()
+            .all(|entry| entry.session_id == session_id));
+        assert!(turn_events
+            .iter()
+            .all(|entry| entry.turn_id.as_deref() == Some(turn_id.as_str())));
+
+        fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
+    }
+
+    fn unique_test_app_data_dir() -> std::path::PathBuf {
+        env::temp_dir().join(format!("relay-agent-storage-test-{}", Uuid::new_v4()))
+    }
+
+    fn read_ndjson<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>, String> {
+        let contents = fs::read_to_string(path)
+            .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
+
+        contents
+            .lines()
+            .map(|line| {
+                serde_json::from_str(line)
+                    .map_err(|error| format!("failed to parse `{}` line: {error}", path.display()))
+            })
+            .collect()
+    }
+}

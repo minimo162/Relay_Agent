@@ -1,0 +1,20 @@
+{
+  "name": "relay-agent",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "check": "pnpm --filter @relay-agent/contracts check && pnpm --filter @relay-agent/desktop check",
+    "typecheck": "pnpm --filter @relay-agent/contracts typecheck && pnpm --filter @relay-agent/desktop typecheck"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

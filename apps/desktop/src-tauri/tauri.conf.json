@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Relay Agent",
+  "version": "0.1.0",
+  "identifier": "com.relayagent.desktop",
+  "build": {
+    "beforeBuildCommand": "cd .. && pnpm build",
+    "beforeDevCommand": "cd .. && pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Relay Agent",
+        "width": 1280,
+        "height": 840
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png"]
+  }
+}

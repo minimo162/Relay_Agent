@@ -1,0 +1,656 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": "1",
+        "title": "Create planning and repository guardrails for the MVP",
+        "description": "Review the current stub repository and establish the planning documents and operating rules that the rest of the implementation will follow.",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "details": "Audit the existing workspace before implementation. Create `PLANS.md` with milestones, acceptance criteria, verification commands, scope exclusions, and risks. Create `AGENTS.md` with repository-specific operating rules. Create `docs/IMPLEMENTATION.md` as the running log for decisions, progress, and verification results. Keep the current directory structure and package boundaries intact wherever possible.",
+        "testStrategy": "Verify that `PLANS.md`, `AGENTS.md`, and `docs/IMPLEMENTATION.md` exist and that each document covers the required planning, scope, and verification content from the PRD.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Audit the current repository structure and implementation gaps",
+            "description": "Inspect the existing workspace to document what is present, what is stubbed, and what is missing before planning begins.",
+            "status": "done",
+            "dependencies": [],
+            "details": "Review the current directories, package boundaries, and `.taskmaster` materials. Capture the current state of the repo so the planning documents reflect actual starting conditions instead of assumptions.",
+            "testStrategy": "Confirm the audit notes cover the current directories, stubs, and missing implementation areas referenced by the PRD.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T21:21:46.583Z"
+          },
+          {
+            "id": 2,
+            "title": "Draft `PLANS.md` with milestone structure and acceptance criteria",
+            "description": "Break the MVP into milestones with clear scope, acceptance conditions, verification commands, and risks.",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "details": "Create `PLANS.md` as the implementation plan source of truth. Include milestone goals, target files or directories, acceptance criteria, verification commands, scope exclusions, and risk mitigation tied to the PRD.",
+            "testStrategy": "Verify `PLANS.md` includes milestones, verification commands, scope exclusions, and risks that map back to the PRD requirements.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T21:25:44.417Z"
+          },
+          {
+            "id": 3,
+            "title": "Write repository operating rules in `AGENTS.md`",
+            "description": "Define the local workflow conventions that implementation work must follow in this repository.",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "details": "Document repository-specific rules for milestone-based delivery, verification discipline, scope control, documentation updates, and any local constraints relevant to the MVP implementation.",
+            "testStrategy": "Confirm `AGENTS.md` gives concrete repo rules for implementation, verification, and documentation updates.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T21:26:35.707Z"
+          },
+          {
+            "id": 4,
+            "title": "Create `docs/IMPLEMENTATION.md` as the execution log template",
+            "description": "Prepare the document that will hold progress notes, decisions, and verification results throughout implementation.",
+            "status": "done",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Create `docs/IMPLEMENTATION.md` with sections for milestone progress, decisions, verification logs, unresolved limitations, and follow-up notes so later work can append to a stable structure.",
+            "testStrategy": "Verify the document exists and contains sections for progress, decisions, verification, and limitations.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T21:27:12.147Z"
+          }
+        ],
+        "updatedAt": "2026-03-28T21:27:12.147Z"
+      },
+      {
+        "id": "2",
+        "title": "Stabilize the monorepo and desktop build foundation",
+        "description": "Make the pnpm workspace, SvelteKit SPA, Tauri v2 app, and workspace package resolution build cleanly as the implementation base.",
+        "status": "done",
+        "dependencies": [
+          "1"
+        ],
+        "priority": "high",
+        "details": "Set up or correct the root workspace configuration so `pnpm install` resolves packages. Ensure `apps/desktop` remains a SvelteKit SPA backed by Tauri v2. Fix package manifests, tsconfig setup, path aliases, Vite/Tauri build wiring, and workspace dependency links so the desktop build and Rust check commands can run successfully.",
+        "testStrategy": "Run `pnpm install`, `pnpm check`, `pnpm typecheck`, `pnpm --filter @relay-agent/desktop build`, and `cargo check` successfully from the workspace.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Establish the root workspace manifests and package links",
+            "description": "Add or fix the root package and workspace configuration so the monorepo resolves correctly.",
+            "status": "done",
+            "dependencies": [],
+            "details": "Create or update the root `package.json`, `pnpm-workspace.yaml`, and related workspace declarations so package discovery and installs work without manual adjustment.",
+            "testStrategy": "Run `pnpm install` and confirm the workspace resolves all packages without path or manifest errors.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T21:47:48.527Z"
+          },
+          {
+            "id": 2,
+            "title": "Align TypeScript config, aliases, and package exports",
+            "description": "Normalize tsconfig layering and package export rules across the workspace.",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "details": "Update tsconfig files, path aliases, and package export fields so shared packages such as `packages/contracts` can be consumed cleanly by the desktop app and any future packages.",
+            "testStrategy": "Run workspace typecheck and confirm cross-package imports resolve without alias or export errors.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T21:47:54.191Z"
+          },
+          {
+            "id": 3,
+            "title": "Stabilize the SvelteKit, Vite, and Tauri desktop app configuration",
+            "description": "Keep the desktop app as a SvelteKit SPA with Tauri v2 while making dev and build wiring valid.",
+            "status": "done",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "Correct `apps/desktop` configuration for SvelteKit SPA mode, Vite integration, and Tauri v2 build expectations so local development and production build paths are consistent.",
+            "testStrategy": "Run `pnpm --filter @relay-agent/desktop build` successfully.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T21:47:59.788Z"
+          },
+          {
+            "id": 4,
+            "title": "Run the baseline verification suite and fix build breakages",
+            "description": "Close the loop on the foundation milestone by executing the required JS and Rust checks.",
+            "status": "done",
+            "dependencies": [
+              3
+            ],
+            "details": "Execute the baseline commands from the PRD and address any remaining install, check, typecheck, or cargo issues until the workspace foundation is stable.",
+            "testStrategy": "Run `pnpm check`, `pnpm typecheck`, `pnpm --filter @relay-agent/desktop build`, and `cargo check` without failures.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T21:48:05.643Z"
+          }
+        ],
+        "updatedAt": "2026-03-28T21:48:05.643Z"
+      },
+      {
+        "id": "3",
+        "title": "Normalize the contracts package as the schema source of truth",
+        "description": "Define the shared Zod schemas and inferred TypeScript types that all frontend and backend flows will rely on.",
+        "status": "done",
+        "dependencies": [
+          "2"
+        ],
+        "priority": "high",
+        "details": "Implement and export consistent schemas and inferred types for `Session`, `Turn`, `Item`, `RelayPacket`, `CopilotTurnResponse`, `ToolDescriptor`, `SpreadsheetAction`, `WorkbookProfile`, and `DiffSummary` in `packages/contracts`. Remove broken cross-references and keep `index.ts` as the public export surface used by the desktop app and any generated interfaces.",
+        "testStrategy": "Run workspace typecheck and confirm frontend imports compile cleanly against the contracts package without schema/type drift.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Audit existing `packages/contracts` models and broken references",
+            "description": "Inspect the current contracts package to identify missing exports, drifted types, and invalid cross-schema references.",
+            "status": "done",
+            "dependencies": [],
+            "details": "Review the current contracts source tree and note where types or schemas are incomplete, duplicated, or out of sync with how the PRD expects them to be used.",
+            "testStrategy": "Produce a complete inventory of contracts that need to be added, merged, or corrected.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T21:48:16.287Z"
+          },
+          {
+            "id": 2,
+            "title": "Define the core session, turn, item, and relay schemas",
+            "description": "Implement the foundational schemas for the main relay workflow entities.",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "details": "Add or correct the Zod schemas and inferred types for `Session`, `Turn`, `Item`, and `RelayPacket`, keeping relationships explicit and avoiding circular type drift.",
+            "testStrategy": "Typecheck the contracts package and confirm these core workflow entities infer consistent TypeScript types.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T21:48:22.076Z"
+          },
+          {
+            "id": 3,
+            "title": "Define Copilot response, tool, workbook, and diff schemas",
+            "description": "Complete the remaining schema layer for model responses and workbook execution artifacts.",
+            "status": "done",
+            "dependencies": [
+              2
+            ],
+            "details": "Implement `CopilotTurnResponse`, `ToolDescriptor`, `SpreadsheetAction`, `WorkbookProfile`, and `DiffSummary` so backend parsing and frontend rendering can share one source of truth.",
+            "testStrategy": "Validate that all required PRD entities are represented in the contracts package with matching schema and inferred type pairs.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T21:48:27.598Z"
+          },
+          {
+            "id": 4,
+            "title": "Export the public package surface and verify consumers compile",
+            "description": "Make `index.ts` the stable export surface for both schemas and types, then verify usage from consumers.",
+            "status": "done",
+            "dependencies": [
+              3
+            ],
+            "details": "Re-export the finalized contracts from `index.ts`, remove dead or duplicate exports, and confirm the desktop and backend code can import the package cleanly.",
+            "testStrategy": "Run workspace typecheck and confirm no consumer relies on private paths or broken exports.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T21:48:33.021Z"
+          }
+        ],
+        "updatedAt": "2026-03-28T21:48:33.021Z"
+      },
+      {
+        "id": "4",
+        "title": "Implement the Rust agent kernel and typed IPC surface",
+        "description": "Build the minimum backend command surface and the matching frontend IPC wrapper for the relay workflow.",
+        "status": "done",
+        "dependencies": [
+          "2",
+          "3"
+        ],
+        "priority": "high",
+        "details": "Implement the Tauri-side commands for `initialize_app`, `create_session`, `list_sessions`, `read_session`, `start_turn`, `generate_relay_packet`, `submit_copilot_response`, `preview_execution`, `approval/respond`, and `execution/run`. Add a typed IPC wrapper on the frontend that matches the contracts package and keeps request and response payloads consistent.",
+        "testStrategy": "Run `cargo check` and frontend typecheck, then verify the desktop app can call each command without request or response type mismatches.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Scaffold the Rust module layout for app, session, relay, and execution commands",
+            "description": "Create or align the Rust-side module boundaries needed for the MVP command surface.",
+            "status": "done",
+            "dependencies": [],
+            "details": "Organize the Tauri backend into modules that can hold app initialization, session lifecycle, relay handling, preview generation, approval, and execution behavior without collapsing everything into one file.",
+            "testStrategy": "Run `cargo check` to confirm the module skeleton compiles and command registration paths resolve.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T21:51:20.622Z"
+          },
+          {
+            "id": 2,
+            "title": "Implement session and turn lifecycle commands",
+            "description": "Add the commands required to initialize the app and manage session and turn state.",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "details": "Implement `initialize_app`, `create_session`, `list_sessions`, `read_session`, and `start_turn` using the contracts package payloads and backend storage abstractions.",
+            "testStrategy": "Run `cargo check` and verify the lifecycle commands can be invoked with the expected request and response shapes.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T22:00:56.617Z"
+          },
+          {
+            "id": 3,
+            "title": "Implement relay submission, preview, approval, and execution commands",
+            "description": "Add the backend endpoints needed after a turn starts and the user pastes a model response.",
+            "status": "done",
+            "dependencies": [
+              2
+            ],
+            "details": "Implement `generate_relay_packet`, `submit_copilot_response`, `preview_execution`, `approval/respond`, and `execution/run` with consistent command signatures and MVP-safe behavior.",
+            "testStrategy": "Confirm the backend command set compiles and all command handlers are registered with Tauri.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T22:17:18.692Z"
+          },
+          {
+            "id": 4,
+            "title": "Build the typed frontend IPC wrapper for the command surface",
+            "description": "Expose the Rust command set through a typed frontend API layer that uses the shared contracts.",
+            "status": "done",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Implement a typed IPC wrapper in the frontend so the UI can call backend commands using the contracts package instead of ad hoc payload shapes.",
+            "testStrategy": "Run frontend typecheck and verify the IPC layer enforces the same request and response types as the backend contracts.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T22:24:09.076Z"
+          }
+        ],
+        "updatedAt": "2026-03-28T22:24:09.076Z"
+      },
+      {
+        "id": "5",
+        "title": "Add local session persistence and artifact storage",
+        "description": "Persist sessions, turns, artifacts, and logs under the application data directory so state survives restarts.",
+        "status": "in-progress",
+        "dependencies": [
+          "4"
+        ],
+        "priority": "high",
+        "details": "Design the app-local storage layout for `sessions`, `turns`, `artifacts`, and `logs`. Serialize session state to local JSON, keep a listable session index, and reload session detail data after app restart. Make persistence conservative and local-only, matching the PRD requirement that sessions remain available across launches.",
+        "testStrategy": "Create at least one session, restart the app, and confirm `list_sessions` and `read_session` reload the persisted data from disk.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define the application data directory layout and naming conventions",
+            "description": "Design the on-disk structure for sessions, turns, artifacts, and logs.",
+            "status": "done",
+            "dependencies": [],
+            "details": "Specify where session JSON, turn data, generated artifacts, and logs live under the app-local data directory, including naming and lookup conventions that work across restarts.",
+            "testStrategy": "Review the planned storage layout and confirm it covers sessions, turns, artifacts, and logs without ambiguity.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T22:41:46.502Z"
+          },
+          {
+            "id": 2,
+            "title": "Implement session persistence and reload for local JSON storage",
+            "description": "Create the repository logic that writes sessions to disk and reads them back.",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "details": "Implement the persistence layer for session creation, update, serialization, and readback using local JSON files in the configured data directory.",
+            "testStrategy": "Create a session, save it, and confirm it can be read back accurately from disk.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T22:54:02.813Z"
+          },
+          {
+            "id": 3,
+            "title": "Persist turns, artifacts, and logs with session linkage",
+            "description": "Store turn-level state and related files in a way that preserves session context.",
+            "status": "done",
+            "dependencies": [
+              2
+            ],
+            "details": "Write turn records, artifacts, and logs to disk with stable references back to the owning session so preview and execution history remain inspectable.",
+            "testStrategy": "Verify a session write also produces recoverable turn, artifact, and log records with correct linkage.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-28T23:07:35.567Z"
+          },
+          {
+            "id": 4,
+            "title": "Verify restart recovery and session list behavior",
+            "description": "Make sure persisted sessions survive relaunch and remain visible in the app.",
+            "status": "pending",
+            "dependencies": [
+              3
+            ],
+            "details": "Confirm `list_sessions` and `read_session` work after the app restarts and that the session index reflects what was previously written to disk.",
+            "testStrategy": "Restart the app and confirm persisted sessions are listed and readable without manual repair.",
+            "parentId": "undefined"
+          }
+        ],
+        "updatedAt": "2026-03-28T23:07:35.567Z"
+      },
+      {
+        "id": "6",
+        "title": "Build the frontend MVP studio flow",
+        "description": "Implement the minimum user-facing Home, Session Studio, and Settings flows needed to drive the relay workflow end to end.",
+        "status": "pending",
+        "dependencies": [
+          "3",
+          "4",
+          "5"
+        ],
+        "priority": "high",
+        "details": "Create the Home screen with session listing and creation, a Session detail/Studio view with the required three-column layout, and a Settings page with policy placeholders. Add the minimal store-based state management needed for session and turn progression. Wire the UI to the typed IPC layer so users can create sessions, start turns, view relay packets, paste responses, see validation results, and request previews.",
+        "testStrategy": "Run the desktop app and manually verify session creation, turn start, relay packet display, pasted response entry, validation result display, and preview button flow.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Create the app shell and routes for Home, Studio, and Settings",
+            "description": "Set up the minimum frontend route structure required by the MVP.",
+            "status": "pending",
+            "dependencies": [],
+            "details": "Implement the routing and layout shell for the Home page, Session Studio page, and Settings page while preserving the project’s SvelteKit structure.",
+            "testStrategy": "Run the desktop app and confirm the three primary routes render without navigation errors.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Build the Home screen session list and creation flow",
+            "description": "Provide the entry point for creating and selecting sessions.",
+            "status": "pending",
+            "dependencies": [
+              1
+            ],
+            "details": "Implement the Home page so users can view existing sessions and create a new one using the typed IPC layer and the persisted session store.",
+            "testStrategy": "Verify users can create a session from Home and see it appear in the list.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Build the Studio panes and local state model",
+            "description": "Implement the three-column session detail layout and the minimal store state needed to drive it.",
+            "status": "pending",
+            "dependencies": [
+              1
+            ],
+            "details": "Create the timeline pane, the center workflow pane for objective, packet, pasted response, validation, and preview controls, and the right pane for workbook summary and diff preview, backed by minimal stores.",
+            "testStrategy": "Verify the Studio layout renders all required regions and state updates appear in the correct pane.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Wire the Studio flow to backend commands and validation feedback",
+            "description": "Connect the UI to the relay lifecycle so the flow is usable end to end.",
+            "status": "pending",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Use the IPC wrapper to drive session selection, turn start, relay packet generation, pasted response submission, validation result display, and preview requests from the Studio screen.",
+            "testStrategy": "Manually verify session creation, turn start, packet display, pasted response handling, validation feedback, and preview initiation.",
+            "parentId": "undefined"
+          }
+        ]
+      },
+      {
+        "id": "7",
+        "title": "Implement relay packet generation and Copilot response validation",
+        "description": "Generate the relay prompts and validate pasted Copilot responses into structured actions the app can preview and execute.",
+        "status": "pending",
+        "dependencies": [
+          "3",
+          "4",
+          "5"
+        ],
+        "priority": "high",
+        "details": "Implement `packet_builder.rs` to generate `discover`, `plan`, `repair`, and `followup` relay packets. Supply `allowedReadTools` and `allowedWriteTools` from a fixed registry. Implement `response_parser.rs` to parse pasted JSON, validate it against contracts, and return structured validation errors. Generate repair-oriented follow-up packet text when pasted responses fail validation.",
+        "testStrategy": "Feed both valid and invalid response samples through submission and verify structured parsing, validation error reporting, and repair follow-up generation.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define the fixed read and write tool registry",
+            "description": "Lock down the allowed tool surface that relay packets and response validation will reference.",
+            "status": "pending",
+            "dependencies": [],
+            "details": "Create the canonical registry for allowed read and write tools so relay packet generation and response validation use the same fixed source instead of dynamic inference.",
+            "testStrategy": "Confirm the registry covers the MVP tool set and can be referenced from both packet building and validation code.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Implement `packet_builder.rs` for discover, plan, repair, and followup modes",
+            "description": "Generate the user-facing relay packets for each stage of the Copilot handoff flow.",
+            "status": "pending",
+            "dependencies": [
+              1
+            ],
+            "details": "Implement relay packet construction using the fixed tool registry and session context so the app can generate discover, plan, repair, and follow-up prompts consistently.",
+            "testStrategy": "Generate sample packets for each mode and verify the correct tool allowances and context appear.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Implement `response_parser.rs` for pasted JSON parsing and validation",
+            "description": "Parse user-pasted Copilot output into contract-backed structures and return useful errors when parsing fails.",
+            "status": "pending",
+            "dependencies": [
+              1
+            ],
+            "details": "Parse pasted JSON into `CopilotTurnResponse`, validate it against the shared contracts, and return structured validation errors rather than opaque failures.",
+            "testStrategy": "Submit valid and invalid sample payloads and confirm parsing succeeds or returns structured validation errors accordingly.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Generate repair follow-ups and validation fixtures",
+            "description": "Close the validation loop by producing repair prompts and a stable sample set for regression checks.",
+            "status": "pending",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Generate repair-oriented follow-up text when validation fails and add sample valid and invalid payload fixtures to support future regression checks.",
+            "testStrategy": "Verify failed submissions return actionable repair follow-ups and that fixtures exercise both success and failure paths.",
+            "parentId": "undefined"
+          }
+        ]
+      },
+      {
+        "id": "8",
+        "title": "Implement the workbook inspection and CSV-first transformation engine",
+        "description": "Deliver the safe vertical slice for workbook inspection, profiling, and CSV-based transformations, with xlsx support limited to inspect and save-copy priorities.",
+        "status": "pending",
+        "dependencies": [
+          "3",
+          "4"
+        ],
+        "priority": "high",
+        "details": "Prioritize a CSV end-to-end flow that is safe and demonstrable. Implement the read tools `workbook.inspect`, `sheet.preview`, `sheet.profile_columns`, and `session.diff_from_base`. Implement the minimum write tools `table.rename_columns`, `table.cast_columns`, `table.filter_rows`, `table.derive_column`, `table.group_aggregate`, and `workbook.save_copy`. Treat xlsx fidelity work as secondary, focusing first on inspect and save-copy. Leave `join_lookup` as a stub with TODOs if it is not feasible inside the MVP scope.",
+        "testStrategy": "Use a small CSV sample to inspect workbook state and generate previews for each supported action without mutating the original source file.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Select workbook libraries and define engine module boundaries",
+            "description": "Choose the CSV and xlsx handling approach that keeps the MVP safe and maintainable.",
+            "status": "pending",
+            "dependencies": [],
+            "details": "Pick stable libraries for CSV and limited xlsx support, then define the engine modules so inspect, preview, and write-preview logic can be implemented cleanly.",
+            "testStrategy": "Review the selected library approach and confirm it supports CSV end-to-end plus limited xlsx inspect and save-copy behavior.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Implement the read-side workbook tools",
+            "description": "Add the read-only tools required for workbook inspection and diff comparison.",
+            "status": "pending",
+            "dependencies": [
+              1
+            ],
+            "details": "Implement `workbook.inspect`, `sheet.preview`, `sheet.profile_columns`, and `session.diff_from_base` using the workbook engine boundaries chosen for the MVP.",
+            "testStrategy": "Run the read tools against a sample file and confirm inspection, preview, profiling, and diff data return correctly.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Implement the core CSV-first write-preview tools",
+            "description": "Support the minimum transformation set needed for the MVP execution preview flow.",
+            "status": "pending",
+            "dependencies": [
+              2
+            ],
+            "details": "Implement `table.rename_columns`, `table.cast_columns`, `table.filter_rows`, and `table.derive_column` with CSV safety and previewability in mind.",
+            "testStrategy": "Generate previews for each core transformation on sample CSV input and verify the source file is not mutated.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Add aggregation, save-copy support, and CSV demo verification",
+            "description": "Complete the remaining MVP workbook operations and validate the vertical slice on sample data.",
+            "status": "pending",
+            "dependencies": [
+              3
+            ],
+            "details": "Implement `table.group_aggregate` and `workbook.save_copy`, and leave `join_lookup` as a documented stub if necessary. Verify the CSV path supports end-to-end inspection and preview behavior on sample data.",
+            "testStrategy": "Run the CSV demo flow through inspect and preview paths and confirm save-copy behavior is available without touching the original file.",
+            "parentId": "undefined"
+          }
+        ]
+      },
+      {
+        "id": "9",
+        "title": "Add execution preview, approval flow, and safe save-copy execution",
+        "description": "Show a diff summary before writes, require approval, and run changes through save-copy only behavior with the specified safety constraints.",
+        "status": "pending",
+        "dependencies": [
+          "6",
+          "7",
+          "8"
+        ],
+        "priority": "high",
+        "details": "Implement `preview_execution` so it returns at least the target sheet, added or changed columns, estimated affected row count, and output destination. Surface that preview clearly in the UI and add an approval path before any write. Implement `execution/run` so it writes only to a copy, keeps the original file read-only, sanitizes CSV output against formula injection, avoids arbitrary code execution, shell access, VBA, network access, and rejects raw Excel formulas from model output.",
+        "testStrategy": "Complete a session-to-preview-to-approval-to-run flow on a CSV sample and verify the original file remains unchanged, the output is written to a copy, and dangerous CSV cell prefixes are sanitized.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define the preview payload and diff summary structure",
+            "description": "Formalize the data returned by `preview_execution` before any writes are approved.",
+            "status": "pending",
+            "dependencies": [],
+            "details": "Specify the preview payload so it includes the target sheet, changed or added columns, approximate affected row count, and output destination in a stable `DiffSummary`-aligned shape.",
+            "testStrategy": "Confirm the preview payload shape supports every UI field required by the PRD.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Implement backend preview generation from parsed actions",
+            "description": "Turn validated action plans into a concrete pre-execution summary on the backend.",
+            "status": "pending",
+            "dependencies": [
+              1
+            ],
+            "details": "Generate execution previews from parsed spreadsheet actions and workbook context so the backend can explain what will happen before any file output is written.",
+            "testStrategy": "Verify `preview_execution` returns meaningful summaries for supported CSV actions.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Render diff preview and approval flow in the Studio UI",
+            "description": "Expose the preview result and explicit approval step to the user before execution.",
+            "status": "pending",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "Show the execution preview in the right-side diff area and add an approval path that must be completed before a write-capable execution can proceed.",
+            "testStrategy": "Verify the UI shows preview details clearly and prevents execution until approval is granted.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Enforce save-copy only execution safeguards and CSV sanitization",
+            "description": "Apply the safety rules that keep the MVP within the allowed execution envelope.",
+            "status": "pending",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Ensure execution writes only to a copy, treats the original workbook as read-only, sanitizes CSV cells starting with `=`, `+`, `-`, or `@`, and rejects unsafe inputs such as shell, VBA, arbitrary code, network access, or raw Excel formulas from model output.",
+            "testStrategy": "Run a CSV execution flow and confirm output is save-copy only, the original file stays unchanged, and unsafe CSV prefixes are neutralized.",
+            "parentId": "undefined"
+          }
+        ]
+      },
+      {
+        "id": "10",
+        "title": "Ship demo assets, README guidance, and implementation log updates",
+        "description": "Add the examples and documentation needed to run, understand, and evaluate the MVP consistently.",
+        "status": "pending",
+        "dependencies": [
+          "1",
+          "6",
+          "9"
+        ],
+        "priority": "medium",
+        "details": "Add `examples/` with at least one small CSV sample. Update `README` with startup instructions, the demo flow, a sample relay packet, a minimal valid pasted Copilot response, and known limitations. Keep `docs/IMPLEMENTATION.md` updated with milestone decisions, progress notes, and verification results so later work can follow the documented source of truth.",
+        "testStrategy": "Follow the documented README flow on a clean workspace and confirm the CSV demo works as described and the documented limitations match the implementation state.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Add example CSV assets for the MVP demo flow",
+            "description": "Provide a small sample dataset that exercises the inspect, preview, and save-copy path.",
+            "status": "pending",
+            "dependencies": [],
+            "details": "Create `examples/` and add at least one compact CSV sample suited to the demo transformations and preview flow described in the PRD.",
+            "testStrategy": "Verify the example data can be loaded and used in the MVP workflow without additional manual setup.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Update `README` with setup, packet, and response examples",
+            "description": "Document how to start the app and what relay input and output should look like.",
+            "status": "pending",
+            "dependencies": [
+              1
+            ],
+            "details": "Add startup instructions, the demo flow, a sample relay packet to paste into Copilot, and a minimal valid Copilot JSON response example that matches the implemented contracts.",
+            "testStrategy": "Review the README and confirm a new contributor can reach the demo flow using only documented steps.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Keep `docs/IMPLEMENTATION.md` aligned with milestones and verification results",
+            "description": "Record the actual implementation progress and verification outcomes as work lands.",
+            "status": "pending",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "Update `docs/IMPLEMENTATION.md` with milestone decisions, execution notes, command results, and known limitations so it reflects the real implementation instead of an aspirational plan.",
+            "testStrategy": "Confirm the implementation log tracks milestone progress, verification output, and known limitations in a current state.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Run the documented demo flow and reconcile docs with reality",
+            "description": "Use the example assets and docs to verify the MVP can be demonstrated as described.",
+            "status": "pending",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Follow the README steps against the example CSV flow, compare the actual app behavior to the docs, and tighten any mismatches or missing limitation notes before considering the MVP documented.",
+            "testStrategy": "Execute the documented demo path and verify the README and known limitations match actual behavior.",
+            "parentId": "undefined"
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "version": "1.0.0",
+      "lastModified": "2026-03-28T23:07:35.569Z",
+      "taskCount": 10,
+      "completedCount": 4,
+      "tags": [
+        "master"
+      ]
+    }
+  }
+}
