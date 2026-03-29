@@ -11,6 +11,8 @@ import {
   previewExecutionRequestSchema,
   previewExecutionResponseSchema,
   readSessionRequestSchema,
+  readTurnArtifactsRequestSchema,
+  readTurnArtifactsResponseSchema,
   relayPacketSchema,
   respondToApprovalRequestSchema,
   respondToApprovalResponseSchema,
@@ -34,6 +36,8 @@ import {
   type PreviewExecutionRequest,
   type PreviewExecutionResponse,
   type ReadSessionRequest,
+  type ReadTurnArtifactsRequest,
+  type ReadTurnArtifactsResponse,
   type RespondToApprovalRequest,
   type RespondToApprovalResponse,
   type RunExecutionRequest,
@@ -154,6 +158,17 @@ export function readSession(
   );
 }
 
+export function readTurnArtifacts(
+  payload: ReadTurnArtifactsRequest
+): Promise<ReadTurnArtifactsResponse> {
+  return invokeWithPayload(
+    "read_turn_artifacts",
+    payload,
+    readTurnArtifactsRequestSchema,
+    readTurnArtifactsResponseSchema
+  );
+}
+
 export function startTurn(
   payload: StartTurnRequest
 ): Promise<StartTurnResponse> {
@@ -238,6 +253,7 @@ export const relayAgentIpc = {
   createSession,
   listSessions,
   readSession,
+  readTurnArtifacts,
   startTurn,
   generateRelayPacket,
   assessCopilotHandoff,

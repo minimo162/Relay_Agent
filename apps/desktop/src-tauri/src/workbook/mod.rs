@@ -9,5 +9,6 @@ mod source;
 mod xlsx_backend;
 
 pub use engine::WorkbookEngine;
+pub use inspect::{SheetColumnProfile, SheetPreview};
 pub use preflight::{preflight_workbook, WorkbookPreflightReport};
 pub use source::WorkbookSource;

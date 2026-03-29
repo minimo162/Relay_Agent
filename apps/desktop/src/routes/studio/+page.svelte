@@ -8,8 +8,10 @@
     type AssessCopilotHandoffResponse,
     type ApprovalDecision,
     type PreviewExecutionResponse,
+    type ReadTurnArtifactsResponse,
     type RespondToApprovalResponse,
     type RunExecutionResponse,
+    type TurnArtifact,
     type SessionDetail,
     type SubmitCopilotResponseResponse,
     type Turn,
@@ -26,6 +28,7 @@
     markStudioDraftClean,
     previewExecution,
     readSession,
+    readTurnArtifacts,
     rememberAuditHistory,
     rememberRecentFile,
     rememberRecentSession,
@@ -88,6 +91,13 @@
   let previewSnapshot: PersistedPreviewSnapshot | null = null;
   let auditHistoryEntries: AuditHistoryEntry[] = [];
   let auditHistoryEntry: AuditHistoryEntry | null = null;
+  let turnArtifacts: TurnArtifact[] = [];
+  let selectedArtifactId: string | null = null;
+  let selectedArtifact: TurnArtifact | null = null;
+  let artifactLoading = false;
+  let artifactError = "";
+  let artifactKey = "";
+  let lastArtifactKey = "";
   let continuityNotice = "";
   let draftPersistenceEnabled = false;
   let pendingStudioAction: PendingStudioAction | null = null;
@@ -211,6 +221,69 @@
 
       return result ? `${result}.${segment}` : segment;
     }, "");
+  }
+
+  function artifactLabel(artifact: TurnArtifact): string {
+    switch (artifact.artifactType) {
+      case "workbook-profile":
+        return "Workbook profile";
+      case "sheet-preview":
+        return "Sheet preview";
+      case "column-profile":
+        return "Column profile";
+      case "diff-summary":
+        return "Diff from base";
+      case "preview":
+        return "Checked changes snapshot";
+    }
+  }
+
+  function artifactSummary(artifact: TurnArtifact): string {
+    switch (artifact.artifactType) {
+      case "workbook-profile":
+        return `${artifact.payload.sheetCount} sheet${artifact.payload.sheetCount === 1 ? "" : "s"} in ${artifact.payload.format.toUpperCase()}`;
+      case "sheet-preview":
+        return `${artifact.payload.rows.length} sampled row${artifact.payload.rows.length === 1 ? "" : "s"} from ${artifact.payload.sheet}`;
+      case "column-profile":
+        return `${artifact.payload.columns.length} column${artifact.payload.columns.length === 1 ? "" : "s"} profiled on ${artifact.payload.sheet}`;
+      case "diff-summary":
+        return `${artifact.payload.targetCount} target${artifact.payload.targetCount === 1 ? "" : "s"} and ${artifact.payload.estimatedAffectedRows} affected row${artifact.payload.estimatedAffectedRows === 1 ? "" : "s"}`;
+      case "preview":
+        return `${artifact.payload.diffSummary.targetCount} target${artifact.payload.diffSummary.targetCount === 1 ? "" : "s"} with ${artifact.payload.requiresApproval ? "approval required" : "review only"}`;
+    }
+  }
+
+  function resetArtifactBrowser(): void {
+    turnArtifacts = [];
+    selectedArtifactId = null;
+    artifactLoading = false;
+    artifactError = "";
+  }
+
+  async function loadArtifactsForTurn(
+    sessionId: string,
+    turnId: string
+  ): Promise<void> {
+    artifactLoading = true;
+    artifactError = "";
+
+    try {
+      const response: ReadTurnArtifactsResponse = await readTurnArtifacts({
+        sessionId,
+        turnId
+      });
+      turnArtifacts = response.artifacts;
+
+      if (!response.artifacts.some((artifact) => artifact.artifactId === selectedArtifactId)) {
+        selectedArtifactId = response.artifacts[0]?.artifactId ?? null;
+      }
+    } catch (error) {
+      turnArtifacts = [];
+      selectedArtifactId = null;
+      artifactError = toErrorMessage(error);
+    } finally {
+      artifactLoading = false;
+    }
   }
 
   function dedupeStrings(values: string[]): string[] {
@@ -793,6 +866,7 @@
   function selectTurn(turn: Turn | null): void {
     selectedTurnId = turn?.id ?? null;
     restoredPreviewSnapshot = null;
+    resetArtifactBrowser();
     continuityNotice = "";
     syncDraftFromTurn(turn);
     clearAllCommandFeedback(true);
@@ -832,6 +906,7 @@
 
     selectedTurnId = null;
     restoredPreviewSnapshot = null;
+    resetArtifactBrowser();
     continuityNotice = "";
     syncDraftFromTurn(null);
     studio.updateWorkbookPath(sessionDetail?.session.primaryWorkbookPath ?? "");
@@ -1249,6 +1324,18 @@
     ? buildPreviewSnapshot(previewResult)
     : restoredPreviewSnapshot;
 
+  $: artifactKey = currentSessionId && selectedTurnId ? `${currentSessionId}:${selectedTurnId}` : "";
+
+  $: if (browser && artifactKey !== lastArtifactKey) {
+    lastArtifactKey = artifactKey;
+
+    if (currentSessionId && selectedTurnId) {
+      void loadArtifactsForTurn(currentSessionId, selectedTurnId);
+    } else {
+      resetArtifactBrowser();
+    }
+  }
+
   $: auditHistoryEntries = browser ? listAuditHistory() : [];
 
   $: auditHistoryEntry =
@@ -1258,6 +1345,11 @@
           && (!selectedTurnId || entry.turnId === selectedTurnId)
         ) ?? auditHistoryEntries.find((entry) => entry.sessionId === currentSessionId) ?? null
       : null;
+
+  $: selectedArtifact =
+    turnArtifacts.find((artifact) => artifact.artifactId === selectedArtifactId)
+    ?? turnArtifacts[0]
+    ?? null;
 
   $: turns = sessionDetail ? sortTurns(sessionDetail.turns) : [];
 
@@ -1958,7 +2050,7 @@
           <strong>Read-only review mode</strong>
           <p>
             Editing, Copilot handoff, and save controls are hidden here. Use this screen to inspect
-            the saved summary, output path, and warnings for the selected turn.
+            the saved summary, inspection details, output path, and warnings for the selected turn.
           </p>
         </section>
       {:else}
@@ -2268,6 +2360,259 @@
           </section>
         </div>
       {/if}
+
+      <section class="subpanel artifact-browser">
+        <div class="subpanel-header">
+          <div>
+            <h3>Inspection details</h3>
+            <p class="support-copy">
+              Review the saved workbook evidence for this turn without leaving Studio.
+            </p>
+          </div>
+          <span class={`status-pill ${turnArtifacts.length > 0 ? "status-ready" : "status-pending"}`}>
+            {artifactLoading
+              ? "loading"
+              : turnArtifacts.length > 0
+                ? `${turnArtifacts.length} saved`
+                : "none yet"}
+          </span>
+        </div>
+
+        {#if artifactError}
+          <section class="feedback feedback-error" aria-live="polite">
+            <strong>Could not open saved inspection details yet.</strong>
+            <p>{artifactError}</p>
+          </section>
+        {/if}
+
+        {#if !selectedTurn}
+          <div class="empty-state empty-inline">
+            <h3>No turn selected</h3>
+            <p>Select a turn to review its saved workbook evidence.</p>
+          </div>
+        {:else if artifactLoading}
+          <div class="empty-state empty-inline">
+            <h3>Loading inspection details</h3>
+            <p>Reading saved workbook artifacts for the selected turn.</p>
+          </div>
+        {:else if turnArtifacts.length === 0}
+          <div class="empty-state empty-inline">
+            <h3>No saved inspection details yet</h3>
+            <p>
+              This turn has no persisted workbook artifacts. Read tools such as `workbook.inspect`,
+              `sheet.preview`, `sheet.profile_columns`, and `session.diff_from_base` create them.
+              This also happens in temporary mode, where local artifact history is not kept after
+              the app closes.
+            </p>
+          </div>
+        {:else if selectedArtifact}
+          <div class="artifact-browser-grid">
+            <div class="artifact-list" role="list" aria-label="Saved inspection artifacts">
+              {#each turnArtifacts as artifact}
+                <button
+                  aria-pressed={artifact.artifactId === selectedArtifactId}
+                  class:selected-artifact={artifact.artifactId === selectedArtifactId}
+                  class="artifact-card"
+                  type="button"
+                  on:click={() => (selectedArtifactId = artifact.artifactId)}
+                >
+                  <strong>{artifactLabel(artifact)}</strong>
+                  <span>{artifactSummary(artifact)}</span>
+                  <small>{formatDate(artifact.createdAt)}</small>
+                </button>
+              {/each}
+            </div>
+
+            <div class="artifact-detail">
+              <div class="artifact-detail-head">
+                <div>
+                  <p class="preview-label">Selected artifact</p>
+                  <h3>{artifactLabel(selectedArtifact)}</h3>
+                </div>
+                <span class="status-pill">{formatDate(selectedArtifact.createdAt)}</span>
+              </div>
+
+              {#if selectedArtifact.artifactType === "workbook-profile"}
+                <div class="result-grid">
+                  <article class="result-card">
+                    <p class="preview-label">Source path</p>
+                    <h3>{selectedArtifact.payload.sourcePath}</h3>
+                  </article>
+                  <article class="result-card">
+                    <p class="preview-label">Workbook format</p>
+                    <h3>{selectedArtifact.payload.format.toUpperCase()}</h3>
+                    <p>{selectedArtifact.payload.sheetCount} sheet{selectedArtifact.payload.sheetCount === 1 ? "" : "s"}</p>
+                  </article>
+                </div>
+
+                {#if selectedArtifact.payload.warnings.length > 0}
+                  <div class="warning-list">
+                    {#each selectedArtifact.payload.warnings as warning}
+                      <span>{warning}</span>
+                    {/each}
+                  </div>
+                {/if}
+
+                <div class="artifact-sheet-grid">
+                  {#each selectedArtifact.payload.sheets as sheet}
+                    <article class="preview-card">
+                      <p class="preview-label">{sheet.name}</p>
+                      <h3>{sheet.rowCount} row{sheet.rowCount === 1 ? "" : "s"}</h3>
+                      <p>{sheet.columnCount} column{sheet.columnCount === 1 ? "" : "s"}</p>
+                      <div class="diff-tags">
+                        {#each sheet.columns as column}
+                          <span class="tag tag-changed">{column}</span>
+                        {/each}
+                      </div>
+                    </article>
+                  {/each}
+                </div>
+              {:else if selectedArtifact.artifactType === "sheet-preview"}
+                <div class="result-grid">
+                  <article class="result-card">
+                    <p class="preview-label">Sheet</p>
+                    <h3>{selectedArtifact.payload.sheet}</h3>
+                    <p>{selectedArtifact.payload.rows.length} sampled row{selectedArtifact.payload.rows.length === 1 ? "" : "s"}</p>
+                  </article>
+                  <article class="result-card">
+                    <p class="preview-label">Preview size</p>
+                    <h3>{selectedArtifact.payload.columns.length} column{selectedArtifact.payload.columns.length === 1 ? "" : "s"}</h3>
+                    <p>{selectedArtifact.payload.truncated ? "The preview was truncated." : "The preview fit within the requested row limit."}</p>
+                  </article>
+                </div>
+
+                {#if selectedArtifact.payload.warnings.length > 0}
+                  <div class="warning-list">
+                    {#each selectedArtifact.payload.warnings as warning}
+                      <span>{warning}</span>
+                    {/each}
+                  </div>
+                {/if}
+
+                <div class="artifact-table-wrap">
+                  <table class="artifact-table">
+                    <thead>
+                      <tr>
+                        <th>Row</th>
+                        {#each selectedArtifact.payload.columns as column}
+                          <th>{column}</th>
+                        {/each}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each selectedArtifact.payload.rows as row}
+                        <tr>
+                          <td>{row.rowNumber}</td>
+                          {#each row.values as value}
+                            <td>{value}</td>
+                          {/each}
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+              {:else if selectedArtifact.artifactType === "column-profile"}
+                <div class="result-grid">
+                  <article class="result-card">
+                    <p class="preview-label">Sheet</p>
+                    <h3>{selectedArtifact.payload.sheet}</h3>
+                    <p>{selectedArtifact.payload.columns.length} column{selectedArtifact.payload.columns.length === 1 ? "" : "s"} profiled</p>
+                  </article>
+                  <article class="result-card">
+                    <p class="preview-label">Sample size</p>
+                    <h3>{selectedArtifact.payload.sampledRows} row{selectedArtifact.payload.sampledRows === 1 ? "" : "s"}</h3>
+                    <p>{selectedArtifact.payload.rowCount} total row{selectedArtifact.payload.rowCount === 1 ? "" : "s"} scanned</p>
+                  </article>
+                </div>
+
+                {#if selectedArtifact.payload.warnings.length > 0}
+                  <div class="warning-list">
+                    {#each selectedArtifact.payload.warnings as warning}
+                      <span>{warning}</span>
+                    {/each}
+                  </div>
+                {/if}
+
+                <div class="artifact-column-grid">
+                  {#each selectedArtifact.payload.columns as column}
+                    <article class="preview-card">
+                      <p class="preview-label">{column.column}</p>
+                      <h3>{column.inferredType}</h3>
+                      <p>{column.nonEmptyCount} non-empty, {column.nullCount} blank</p>
+                      <div class="diff-tags">
+                        {#each column.sampleValues as sample}
+                          <span class="tag tag-added">{sample}</span>
+                        {/each}
+                      </div>
+                    </article>
+                  {/each}
+                </div>
+              {:else}
+                {@const diffPayload = selectedArtifact.artifactType === "preview" ? selectedArtifact.payload.diffSummary : selectedArtifact.payload}
+                {@const diffWarnings = selectedArtifact.artifactType === "preview" ? selectedArtifact.payload.warnings : selectedArtifact.payload.warnings}
+                <div class="result-grid">
+                  <article class="result-card">
+                    <p class="preview-label">Source path</p>
+                    <h3>{diffPayload.sourcePath}</h3>
+                  </article>
+                  <article class="result-card">
+                    <p class="preview-label">Reviewed copy path</p>
+                    <h3>{diffPayload.outputPath}</h3>
+                    <p>
+                      {selectedArtifact.artifactType === "preview"
+                        ? selectedArtifact.payload.requiresApproval
+                          ? "This saved preview required review confirmation before save."
+                          : "This saved preview was read-only."
+                        : "This diff was saved as a read-side artifact for the turn."}
+                    </p>
+                  </article>
+                </div>
+
+                <div class="result-grid">
+                  <article class="result-card">
+                    <p class="preview-label">Targets</p>
+                    <h3>{diffPayload.targetCount}</h3>
+                    <p>{diffPayload.estimatedAffectedRows} affected row{diffPayload.estimatedAffectedRows === 1 ? "" : "s"}</p>
+                  </article>
+                  <article class="result-card">
+                    <p class="preview-label">Warnings</p>
+                    <h3>{diffWarnings.length}</h3>
+                    <p>Saved with the artifact for later review.</p>
+                  </article>
+                </div>
+
+                {#if diffWarnings.length > 0}
+                  <div class="warning-list">
+                    {#each diffWarnings as warning}
+                      <span>{warning}</span>
+                    {/each}
+                  </div>
+                {/if}
+
+                <div class="artifact-sheet-grid">
+                  {#each diffPayload.sheets as sheet}
+                    <article class="preview-card">
+                      <p class="preview-label">{sheet.target.label}</p>
+                      <h3>{sheet.estimatedAffectedRows} row{sheet.estimatedAffectedRows === 1 ? "" : "s"} affected</h3>
+                      <div class="diff-tags">
+                        {#each sheet.addedColumns as column}
+                          <span class="tag tag-added">+ {column}</span>
+                        {/each}
+                        {#each sheet.changedColumns as column}
+                          <span class="tag tag-changed">~ {column}</span>
+                        {/each}
+                        {#each sheet.removedColumns as column}
+                          <span class="tag tag-removed">- {column}</span>
+                        {/each}
+                      </div>
+                    </article>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/if}
+      </section>
     </article>
 
     <article class="ra-panel pane pane-preview">
@@ -3241,6 +3586,115 @@
     background: rgba(255, 255, 255, 0.72);
   }
 
+  .artifact-browser {
+    background: rgba(255, 255, 255, 0.72);
+  }
+
+  .artifact-browser-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(13rem, 16rem) minmax(0, 1fr);
+  }
+
+  .artifact-list {
+    display: grid;
+    gap: 0.75rem;
+    align-content: start;
+  }
+
+  .artifact-card {
+    display: grid;
+    gap: 0.35rem;
+    width: 100%;
+    padding: 0.9rem;
+    border: 1px solid var(--ra-border);
+    border-radius: 1rem;
+    background: rgba(255, 255, 255, 0.84);
+    color: inherit;
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+    transition:
+      border-color 160ms ease,
+      transform 160ms ease,
+      box-shadow 160ms ease;
+  }
+
+  .artifact-card:hover,
+  .artifact-card.selected-artifact {
+    transform: translateY(-1px);
+    border-color: rgba(91, 125, 56, 0.3);
+    box-shadow: 0 1rem 2rem rgba(31, 45, 36, 0.08);
+  }
+
+  .artifact-card strong,
+  .artifact-card span,
+  .artifact-card small {
+    margin: 0;
+  }
+
+  .artifact-card span,
+  .artifact-card small {
+    color: var(--ra-muted);
+    line-height: 1.45;
+  }
+
+  .artifact-detail {
+    display: grid;
+    gap: 0.95rem;
+    align-content: start;
+  }
+
+  .artifact-detail-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .artifact-detail-head h3 {
+    margin: 0;
+    word-break: break-word;
+  }
+
+  .artifact-sheet-grid,
+  .artifact-column-grid {
+    display: grid;
+    gap: 0.9rem;
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  }
+
+  .artifact-table-wrap {
+    overflow-x: auto;
+    border: 1px solid rgba(37, 50, 32, 0.08);
+    border-radius: 0.95rem;
+    background: rgba(255, 255, 255, 0.86);
+  }
+
+  .artifact-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 28rem;
+  }
+
+  .artifact-table th,
+  .artifact-table td {
+    padding: 0.7rem 0.8rem;
+    border-bottom: 1px solid rgba(37, 50, 32, 0.08);
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .artifact-table th {
+    background: rgba(31, 45, 36, 0.04);
+    font-size: 0.9rem;
+  }
+
+  .artifact-table td {
+    line-height: 1.5;
+    word-break: break-word;
+  }
+
   .help-list {
     display: grid;
     gap: 0.75rem;
@@ -3323,6 +3777,10 @@
 
   @media (max-width: 720px) {
     .workflow-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .artifact-browser-grid {
       grid-template-columns: 1fr;
     }
 

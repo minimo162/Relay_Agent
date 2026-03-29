@@ -16,6 +16,7 @@ Relay Agent is a desktop MVP for turning a validated JSON action plan into a saf
 - Studio can start turns, generate relay packets, validate pasted Copilot JSON, request execution preview, record approval, and run save-copy execution.
 - Studio now provides a `Copy for Copilot` path that warns first when the workbook path, current objective, or available column names look sensitive.
 - Studio now exposes a read-only reviewer mode plus `Copy review summary` so approvers can inspect a saved turn without editing controls.
+- Studio now exposes an `Inspection details` browser for the selected turn, covering saved workbook profile, sampled rows, column inference, and diff evidence without opening local JSON files by hand.
 - Studio now rewrites validation, preview, and save failures into plain-language guidance with copyable Copilot follow-up prompts.
 - Studio now restores local turn drafts, pasted response text, relay packet text, and the last preview summary snapshot after restart.
 - Studio now warns before leaving, going back, or switching turns when local draft or preview review state would otherwise be thrown away.
@@ -125,6 +126,18 @@ pnpm typecheck
   non-engineer operator can ask for a safer retry without writing the repair
   request from scratch.
 
+## Inspection Details
+
+- Studio now keeps a read-only `Inspection details` section for the selected
+  turn so operators and reviewers can inspect saved workbook evidence without
+  browsing the local storage folder directly.
+- The browser currently supports persisted `workbook-profile`,
+  `sheet-preview`, `column-profile`, `diff-summary`, and `preview` artifacts.
+- Reviewer mode shows the same artifact browser while still hiding editing,
+  Copilot handoff, approval, and save controls.
+- If a turn has no persisted workbook artifacts, or the app is running in
+  temporary mode, Studio shows an empty state instead of silently failing.
+
 ## Demo Asset
 
 Use the sample CSV at [examples/revenue-workflow-demo.csv](examples/revenue-workflow-demo.csv).
@@ -165,14 +178,16 @@ Then use:
    Relay mode: `plan`
 7. Click `Generate packet`.
 8. Either click `Load demo response` for the bundled sample walkthrough, or paste the valid response example below, then click `Validate response`.
-9. Click `Check changes` and review the summary, output path, and warnings in the right pane.
+9. Click `Check changes` and review the summary, output path, warnings, and `Inspection details` in Studio.
 10. If the plan changes the workbook, add an optional review note, click `Confirm review`, then click `Save reviewed copy`.
-11. After save, use `Copy review summary` or `Open reviewer view` if you want a read-only confirmation path.
+11. After save, use `Copy review summary` or `Open reviewer view` if you want a read-only confirmation path with the same inspection details.
 12. Confirm the output file exists at the configured `outputPath`.
 13. Confirm the original file under `examples/` is unchanged.
 
 The full follow-up verification checklist for the non-engineer usability scope is
 tracked in [`docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md`](docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md).
+The workbook artifact browser verification checklist is tracked in
+[`docs/WORKBOOK_ARTIFACT_BROWSER_VERIFICATION.md`](docs/WORKBOOK_ARTIFACT_BROWSER_VERIFICATION.md).
 
 With the response example below, the output copy should contain only rows where `approved = true`, add a derived `review_label` column, and prefix any dangerous `comment` values before writing the new CSV. On the bundled sample CSV, that produces 3 output rows and sanitizes 3 `comment` cells.
 
@@ -336,7 +351,8 @@ Replace `outputPath` with a writable absolute path for your operating system, th
   - bracketed column references for spaced headers
   - basic arithmetic or string concatenation in `table.derive_column`
 - Runtime preview, approval, and validation caches are not resumable after restart even though sessions, turns, artifacts, and logs persist to disk.
-- The Studio UI does not yet expose dedicated workbook-profile, sheet-preview, or column-profile artifact panels.
+- `Inspection details` currently focuses on persisted workbook-facing artifacts only; relay packet, validation, approval, and execution payload JSON are still not exposed as dedicated UI panels.
+- `Inspection details` depend on persisted local storage, so temporary mode and turns without saved read-side artifacts show an empty state instead of reconstructing old evidence.
 - The product workflow does not implement shell access, arbitrary code execution, VBA execution, or external network execution.
 
 ## Repository Layout

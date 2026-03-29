@@ -233,6 +233,14 @@ pub struct WorkbookProfile {
     pub warnings: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewArtifactPayload {
+    pub diff_summary: DiffSummary,
+    pub requires_approval: bool,
+    pub warnings: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSessionRequest {
@@ -245,6 +253,13 @@ pub struct CreateSessionRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ReadSessionRequest {
     pub session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadTurnArtifactsRequest {
+    pub session_id: String,
+    pub turn_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -306,6 +321,43 @@ pub struct RunExecutionRequest {
 pub struct SessionDetail {
     pub session: Session,
     pub turns: Vec<Turn>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "artifactType", rename_all = "kebab-case")]
+pub enum TurnArtifactRecord {
+    WorkbookProfile {
+        artifact_id: String,
+        created_at: String,
+        payload: WorkbookProfile,
+    },
+    SheetPreview {
+        artifact_id: String,
+        created_at: String,
+        payload: crate::workbook::SheetPreview,
+    },
+    ColumnProfile {
+        artifact_id: String,
+        created_at: String,
+        payload: crate::workbook::SheetColumnProfile,
+    },
+    DiffSummary {
+        artifact_id: String,
+        created_at: String,
+        payload: DiffSummary,
+    },
+    Preview {
+        artifact_id: String,
+        created_at: String,
+        payload: PreviewArtifactPayload,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadTurnArtifactsResponse {
+    pub turn: Turn,
+    pub artifacts: Vec<TurnArtifactRecord>,
 }
 
 #[derive(Clone, Debug, Serialize)]

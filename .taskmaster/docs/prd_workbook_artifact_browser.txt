@@ -1,0 +1,158 @@
+Product Requirements Document: Workbook Inspection Artifact Browser
+
+Document status: Drafted after follow-up tasks 11-16 completed
+Owner: Relay Agent follow-up scope
+Primary audience: product, implementation, and support
+
+1. Summary
+
+Relay Agent already persists workbook inspection and diff artifacts during turn execution, but
+the desktop UI still exposes only the condensed review summary. This follow-up scope adds a
+read-only artifact browser inside Studio so operators and reviewers can inspect workbook
+structure, sampled rows, inferred column types, and saved diff summaries without opening the
+JSON storage folder manually.
+
+2. Problem
+
+The backend already records these artifacts:
+
+- `workbook-profile`
+- `sheet-preview`
+- `column-profile`
+- `diff-summary`
+- `preview`
+
+Today they are useful only if someone manually opens the local storage directory. This creates
+three problems:
+
+- Operators cannot confirm what Relay Agent learned from a workbook before approving changes.
+- Reviewers cannot inspect the read-side evidence behind a saved result from the UI.
+- Support and debugging depend on reading raw JSON files instead of using an in-product browser.
+
+3. Goals
+
+- Surface persisted workbook inspection artifacts for the selected turn in Studio.
+- Keep the surface read-only and safe in both editable Studio and reviewer mode.
+- Translate artifact payloads into plain-language cards instead of requiring raw JSON reading.
+- Make the artifact browser useful for both CSV and inspect-oriented xlsx flows.
+
+4. Non-goals
+
+- Remote artifact sharing or cloud sync.
+- Editing artifact payloads.
+- Arbitrary filesystem browsing outside the current session and turn.
+- Rich xlsx write execution.
+- Replacing the existing review-and-save summary; this scope supplements it.
+
+5. Target users
+
+- Non-engineer operators who want to inspect what Relay Agent learned before saving a copy.
+- Reviewers or approvers who need more evidence than the short summary cards.
+- Support or QA users who need local artifact visibility without browsing JSON files by hand.
+
+6. User stories
+
+- As an operator, after a turn runs read tools, I want to see workbook structure and sampled data
+  so I can confirm Relay Agent looked at the right sheet and columns.
+- As an operator, I want to inspect inferred column types so I can understand type-cast or
+  filter-related warnings before saving.
+- As a reviewer, I want to open a saved turn in read-only mode and inspect the same evidence
+  without exposing editing controls.
+- As support, I want the app to explain what artifact types exist for a turn instead of making
+  me inspect payload files directly.
+
+7. UX principles
+
+- Read-only first: the browser never mutates artifact data.
+- Plain-language first: prefer labels and summaries over raw JSON.
+- Chronology matters: artifacts should be shown in a stable order for the selected turn.
+- Empty states should explain what action creates each artifact.
+- Reviewer mode should show the same evidence, but without edit or execution affordances.
+
+8. Functional requirements
+
+8.1 Artifact browser data source
+
+- Add a read-only IPC path that loads persisted artifact metadata and typed payloads for a
+  specific `sessionId` and `turnId`.
+- The response must support at least:
+  - `workbook-profile`
+  - `sheet-preview`
+  - `column-profile`
+  - `diff-summary`
+  - `preview`
+- Artifacts unrelated to workbook inspection, such as relay packet or execution records, may stay
+  out of this browser.
+
+8.2 Studio artifact browser
+
+- Studio must show an `Inspection details` or equivalent section for the selected turn.
+- The browser must work in both normal Studio and reviewer mode.
+- The browser must list available artifacts for the turn and allow switching between them.
+- If no supported artifacts exist, show a read-only empty state that explains which read tools
+  create them.
+
+8.3 Artifact detail rendering
+
+- `workbook-profile` must show:
+  - source path
+  - workbook format
+  - sheet count
+  - sheet names, row counts, column counts, and column headers
+- `sheet-preview` must show:
+  - sheet name
+  - sampled rows in a readable table
+  - whether the preview was truncated
+  - preview warnings
+- `column-profile` must show:
+  - sheet name
+  - sampled row count
+  - per-column inferred type
+  - non-empty count
+  - null count
+  - sample values
+- `diff-summary` and `preview` must show:
+  - source path
+  - output path
+  - target count
+  - estimated affected rows
+  - changed, added, or removed columns
+  - warnings
+
+8.4 Reviewer-mode behavior
+
+- Reviewer mode must expose the artifact browser but keep it read-only.
+- The browser must not re-enable packet generation, response validation, approval, or execution.
+
+8.5 Trust and empty-state messaging
+
+- If the app is running in temporary mode or no local storage artifacts exist, the browser must
+  explain that persisted inspection history is unavailable for that turn.
+- The browser must continue reinforcing that the original workbook remains read-only.
+
+9. Acceptance criteria
+
+- A new PRD exists under `.taskmaster/docs` for this scope.
+- Task Master contains a new task breakdown for the artifact browser scope.
+- Studio can load and display persisted `workbook-profile`, `sheet-preview`, `column-profile`,
+  and diff-related artifacts for the selected turn.
+- Reviewer mode can inspect the same artifact browser without edit controls.
+- The browser has clear empty states and does not require manual JSON browsing.
+- README and implementation logs reflect the shipped behavior.
+- A verification artifact documents how to manually confirm the new browser.
+
+10. Risks
+
+- Risk: artifact payload contracts drift from backend payload reality.
+  Mitigation: define typed schemas for the new IPC response and validate it in the frontend.
+- Risk: the browser becomes too technical for operators.
+  Mitigation: render labels, counts, and warnings first, and keep raw JSON out of the primary UI.
+- Risk: temporary mode or sessions without persisted artifacts produce confusing blanks.
+  Mitigation: show explicit empty-state explanations tied to local persistence.
+
+11. Suggested implementation phases
+
+Phase 1: add typed read-only artifact IPC and backend loading for supported artifact types
+Phase 2: add Studio artifact list and detail rendering for workbook profile plus sheet preview
+Phase 3: add column profile and diff-detail rendering, then wire reviewer mode access
+Phase 4: document verification and sync Task Master plus README to the real behavior

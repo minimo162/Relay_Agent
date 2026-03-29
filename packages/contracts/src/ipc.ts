@@ -7,7 +7,13 @@ import {
   validationIssueSchema
 } from "./relay";
 import { relayModeSchema } from "./shared";
-import { diffSummarySchema, workbookFormatSchema } from "./workbook";
+import {
+  diffSummarySchema,
+  sheetColumnProfileSchema,
+  sheetPreviewSchema,
+  workbookFormatSchema,
+  workbookProfileSchema
+} from "./workbook";
 
 export const storageModeSchema = z.enum(["memory", "local-json"]);
 export const startupStatusSchema = z.enum(["ready", "attention"]);
@@ -81,6 +87,50 @@ export const readSessionRequestSchema = z.object({
 export const sessionDetailSchema = z.object({
   session: sessionSchema,
   turns: z.array(turnSchema).default([])
+});
+
+export const readTurnArtifactsRequestSchema = z.object({
+  sessionId: z.string().trim().min(1),
+  turnId: z.string().trim().min(1)
+});
+
+export const previewArtifactPayloadSchema = z.object({
+  diffSummary: diffSummarySchema,
+  requiresApproval: z.boolean(),
+  warnings: z.array(z.string()).default([])
+});
+
+const turnArtifactBaseSchema = z.object({
+  artifactId: z.string().trim().min(1),
+  createdAt: z.string().trim().min(1)
+});
+
+export const turnArtifactSchema = z.discriminatedUnion("artifactType", [
+  turnArtifactBaseSchema.extend({
+    artifactType: z.literal("workbook-profile"),
+    payload: workbookProfileSchema
+  }),
+  turnArtifactBaseSchema.extend({
+    artifactType: z.literal("sheet-preview"),
+    payload: sheetPreviewSchema
+  }),
+  turnArtifactBaseSchema.extend({
+    artifactType: z.literal("column-profile"),
+    payload: sheetColumnProfileSchema
+  }),
+  turnArtifactBaseSchema.extend({
+    artifactType: z.literal("diff-summary"),
+    payload: diffSummarySchema
+  }),
+  turnArtifactBaseSchema.extend({
+    artifactType: z.literal("preview"),
+    payload: previewArtifactPayloadSchema
+  })
+]);
+
+export const readTurnArtifactsResponseSchema = z.object({
+  turn: turnSchema,
+  artifacts: z.array(turnArtifactSchema).default([])
 });
 
 export const startTurnRequestSchema = z.object({
@@ -198,6 +248,10 @@ export type PreflightWorkbookResponse = z.infer<
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 export type ReadSessionRequest = z.infer<typeof readSessionRequestSchema>;
 export type SessionDetail = z.infer<typeof sessionDetailSchema>;
+export type ReadTurnArtifactsRequest = z.infer<typeof readTurnArtifactsRequestSchema>;
+export type PreviewArtifactPayload = z.infer<typeof previewArtifactPayloadSchema>;
+export type TurnArtifact = z.infer<typeof turnArtifactSchema>;
+export type ReadTurnArtifactsResponse = z.infer<typeof readTurnArtifactsResponseSchema>;
 export type StartTurnRequest = z.infer<typeof startTurnRequestSchema>;
 export type StartTurnResponse = z.infer<typeof startTurnResponseSchema>;
 export type ListSessionsResponse = z.infer<typeof listSessionsResponseSchema>;

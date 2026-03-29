@@ -328,6 +328,8 @@ The corresponding Task Master breakdown now lives in `.taskmaster/tasks/tasks.js
 That follow-up set is now implementation-complete, with the shipped verification checklist recorded in `docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md`.
 The first packaged end-user release path is now fixed by `docs/PACKAGING_POLICY.md` to Windows 10/11 x64 via an NSIS installer, with manual installer-driven updates until signed updater infrastructure exists.
 The current verified source-run startup walkthrough remains in `README.md`; packaged installer behavior stays documented in `docs/PACKAGING_POLICY.md` until installer builds are real and testable.
+The next shipped follow-up scope is captured in `.taskmaster/docs/prd_workbook_artifact_browser.txt`.
+Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `17` through `20`, and that follow-up is now implementation-complete with verification recorded in `docs/WORKBOOK_ARTIFACT_BROWSER_VERIFICATION.md`.
 
 That follow-up should be planned as a new milestone set that preserves the current safety model:
 

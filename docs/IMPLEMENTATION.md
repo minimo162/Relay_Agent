@@ -2,17 +2,17 @@
 
 ## Status
 
-- Current phase: Milestone 5 is complete; the safe CSV-first preview, approval, and save-copy execution slice is now documented, demo-backed, and verification-clean
+- Current phase: Milestone 5 is complete; follow-up tasks `11` through `20` are now implemented, documented, and verification-clean on top of the safe CSV-first preview, approval, and save-copy slice
 - Repository state: pnpm workspace, SvelteKit SPA shell, Tauri v2 shell, and shared contracts package are now bootstrapped and verification-clean
 - Active source-of-truth documents:
   - `PLANS.md`
   - `AGENTS.md`
   - `docs/IMPLEMENTATION.md`
   - `.taskmaster/docs/repo_audit.md`
-- Follow-up planning input: `.taskmaster/docs/prd_non_engineer_ux.txt` captures a post-MVP usability scope focused on making the app easier for non-engineer operators, especially around app startup, distribution/install/update expectations, recovery/diagnostics, data-handling clarity, permission explanations, file readiness, locale and CSV compatibility, early constraint surfacing, resumable work, crash recovery, recent-item access, progress visibility, template-driven starts, output-name safety, duplicate-run prevention, safe defaults, reviewer-friendly summaries, read-only review, inline help, pre-copy sensitivity warnings, local audit history, accessibility baselines, and the preview, approval, and save-copy execution flow
-- Follow-up task graph: `.taskmaster/tasks/tasks.json` now breaks that supplemental PRD into Task Master follow-up tasks `11` through `16`, covering startup, data trust, continuity, guided onboarding, review/save simplification, and cross-cutting recovery plus accessibility work
+- Follow-up planning input: `.taskmaster/docs/prd_non_engineer_ux.txt` captures the non-engineer usability follow-up, and `.taskmaster/docs/prd_workbook_artifact_browser.txt` captures the read-only Studio artifact-browser follow-up for persisted workbook evidence
+- Follow-up task graph: `.taskmaster/tasks/tasks.json` now breaks those supplemental PRDs into Task Master follow-up tasks `11` through `20`, covering startup, data trust, continuity, guided onboarding, review/save simplification, cross-cutting recovery plus accessibility work, and the Studio workbook inspection artifact browser
 - Follow-up packaging policy: `docs/PACKAGING_POLICY.md` now fixes the first packaged end-user release path to Windows 10/11 x64 via NSIS, with manual installer-driven updates and preserved app-local storage across upgrades as the current expectation
-- Follow-up implementation status: Tasks `15` and `16` are now complete; Home and Studio now cover reviewer-safe review mode, local audit history, plain-language retry guidance, persistent file-safety messaging, and the non-engineer accessibility baseline recorded in `docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md`
+- Follow-up implementation status: Tasks `11` through `20` are now complete; Home and Studio cover the non-engineer startup, trust, continuity, onboarding, review, recovery, and accessibility follow-up plus a read-only `Inspection details` browser for workbook profile, sampled rows, column inference, and diff artifacts, with verification recorded in `docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md` and `docs/WORKBOOK_ARTIFACT_BROWSER_VERIFICATION.md`
 
 ## Milestone Log
 
@@ -1618,12 +1618,36 @@ Observed result:
 - Task Master task `16` and subtasks `16.1` through `16.4` are now marked done, completing the current non-engineer follow-up task set.
 - The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
 
+Workbook artifact browser follow-up verification:
+
+```bash
+test -f .taskmaster/docs/prd_workbook_artifact_browser.txt
+test -f docs/WORKBOOK_ARTIFACT_BROWSER_VERIFICATION.md
+rg -n 'read_turn_artifacts|Inspection details|Workbook profile|Sheet preview|Column profile|Checked changes snapshot|No saved inspection details yet' packages/contracts/src/ipc.ts apps/desktop/src-tauri/src/session.rs apps/desktop/src-tauri/src/storage.rs apps/desktop/src/routes/studio/+page.svelte README.md docs/WORKBOOK_ARTIFACT_BROWSER_VERIFICATION.md
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+jq '.master.tasks[] | select((.id | tonumber) >= 17 and (.id | tonumber) <= 20) | {id, status, updatedAt}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- `.taskmaster/docs/prd_workbook_artifact_browser.txt` now captures the scoped follow-up for surfacing persisted workbook evidence inside Studio instead of relying on manual JSON inspection.
+- The contracts package, frontend IPC wrapper, Tauri command layer, and storage layer now expose a typed read-only `read_turn_artifacts` flow for persisted `workbook-profile`, `sheet-preview`, `column-profile`, `diff-summary`, and `preview` artifacts.
+- Studio now renders those persisted artifacts under `Inspection details`, including workbook structure cards, sampled row tables, column inference summaries, and diff or preview evidence, while keeping the surface read-only in both editable Studio and reviewer mode.
+- The new browser now explains empty-state conditions in plain language, including turns that never created persisted workbook artifacts and temporary-mode runs that do not keep local artifact history across restart.
+- `README.md`, `PLANS.md`, and this implementation log now describe the same shipped follow-up behavior, and `docs/WORKBOOK_ARTIFACT_BROWSER_VERIFICATION.md` records a stable manual verification checklist for the browser.
+- Workspace typecheck still passes, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 30 tests after closing the artifact-browser follow-up.
+- Task Master tasks `17` through `20` are now marked done, completing the current scoped follow-up set through the workbook artifact browser.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
 ## Known Limitations
 
-- The desktop UI now supports session listing, turn start, relay packet generation, response validation, preview requests, approval decisions, and save-copy execution in Studio, but dedicated artifact browsers for workbook profiles and diffs are still not surfaced.
+- `Inspection details` currently focuses on persisted workbook-facing artifacts only; relay packet, validation, approval, and execution payload JSON are still not exposed as dedicated UI panels.
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.
 - Browser or window close still relies on the platform-native confirmation dialog, so explicit keep-vs-discard choices are currently available only for in-app navigation and draft-replacement flows.
-- The workbook pane still renders preview summaries from backend metadata only; the newly persisted workbook-profile, sheet-preview, and column-profile artifacts are not yet surfaced in dedicated UI panels.
+- `Inspection details` depend on persisted local storage, so temporary mode and turns without saved read-side artifacts show an empty state instead of reconstructing old evidence.
 - Reviewer mode currently depends on local audit history and the same device profile; it is a safe local review surface, not a shared remote approval link.
 - Preview predicates and derive expressions intentionally support a narrow grammar for now: bracketed column references for spaced headers, one comparison in `filter_rows`, and basic arithmetic or string concatenation in `derive_column`.
 - Limited xlsx support is still inspect-and-copy oriented; current test coverage still centers on CSV execution plus xlsx preview planning rather than richer xlsx write flows.
@@ -1633,4 +1657,4 @@ Observed result:
 
 Next planned work:
 
-- No additional Task Master work is planned in the current non-engineer follow-up set; any further UX expansion should start as a new scoped follow-up instead of reopening tasks `11` through `16`.
+- No additional Task Master work is planned in the current follow-up sets; any further UX or workbook-evidence expansion should start as a new scoped follow-up instead of reopening tasks `11` through `20`.

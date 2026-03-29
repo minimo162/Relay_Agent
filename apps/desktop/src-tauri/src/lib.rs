@@ -50,6 +50,7 @@ pub fn run() {
             session::create_session,
             session::list_sessions,
             session::read_session,
+            session::read_turn_artifacts,
             session::start_turn,
             relay::generate_relay_packet,
             relay::assess_copilot_handoff,

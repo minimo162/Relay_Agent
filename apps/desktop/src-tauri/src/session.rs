@@ -1,8 +1,8 @@
 use tauri::State;
 
 use crate::models::{
-    CreateSessionRequest, ReadSessionRequest, Session, SessionDetail, StartTurnRequest,
-    StartTurnResponse,
+    CreateSessionRequest, ReadSessionRequest, ReadTurnArtifactsRequest, ReadTurnArtifactsResponse,
+    Session, SessionDetail, StartTurnRequest, StartTurnResponse,
 };
 use crate::state::DesktopState;
 
@@ -28,6 +28,15 @@ pub fn read_session(
 ) -> Result<SessionDetail, String> {
     let storage = state.storage.lock().expect("desktop storage poisoned");
     storage.read_session(&request.session_id)
+}
+
+#[tauri::command]
+pub fn read_turn_artifacts(
+    state: State<'_, DesktopState>,
+    request: ReadTurnArtifactsRequest,
+) -> Result<ReadTurnArtifactsResponse, String> {
+    let storage = state.storage.lock().expect("desktop storage poisoned");
+    storage.read_turn_artifacts(&request.session_id, &request.turn_id)
 }
 
 #[tauri::command]

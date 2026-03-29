@@ -35,6 +35,35 @@ export const workbookProfileSchema = z.object({
   warnings: z.array(z.string()).default([])
 });
 
+export const sheetPreviewRowSchema = z.object({
+  rowNumber: z.number().int().nonnegative(),
+  values: z.array(z.string()).default([])
+});
+
+export const sheetPreviewSchema = z.object({
+  sheet: nonEmptyStringSchema,
+  columns: z.array(nonEmptyStringSchema).default([]),
+  rows: z.array(sheetPreviewRowSchema).default([]),
+  truncated: z.boolean(),
+  warnings: z.array(z.string()).default([])
+});
+
+export const columnProfileSummarySchema = z.object({
+  column: nonEmptyStringSchema,
+  inferredType: columnTypeSchema,
+  nonEmptyCount: z.number().int().nonnegative(),
+  nullCount: z.number().int().nonnegative(),
+  sampleValues: z.array(z.string()).default([])
+});
+
+export const sheetColumnProfileSchema = z.object({
+  sheet: nonEmptyStringSchema,
+  rowCount: z.number().int().nonnegative(),
+  sampledRows: z.number().int().nonnegative(),
+  columns: z.array(columnProfileSummarySchema).default([]),
+  warnings: z.array(z.string()).default([])
+});
+
 const readActionBaseSchema = z.object({
   id: entityIdSchema.optional(),
   rationale: z.string().trim().min(1).optional()
@@ -190,6 +219,10 @@ export type DeriveColumnPosition = z.infer<typeof deriveColumnPositionSchema>;
 export type PreviewTargetKind = z.infer<typeof previewTargetKindSchema>;
 export type WorkbookSheet = z.infer<typeof workbookSheetSchema>;
 export type WorkbookProfile = z.infer<typeof workbookProfileSchema>;
+export type SheetPreviewRow = z.infer<typeof sheetPreviewRowSchema>;
+export type SheetPreview = z.infer<typeof sheetPreviewSchema>;
+export type ColumnProfileSummary = z.infer<typeof columnProfileSummarySchema>;
+export type SheetColumnProfile = z.infer<typeof sheetColumnProfileSchema>;
 export type SpreadsheetAction = z.infer<typeof spreadsheetActionSchema>;
 export type PreviewTarget = z.infer<typeof previewTargetSchema>;
 export type DiffSummary = z.infer<typeof diffSummarySchema>;

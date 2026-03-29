@@ -1075,13 +1075,68 @@
           }
         ],
         "updatedAt": "2026-03-29T12:21:48Z"
+      },
+      {
+        "id": "17",
+        "title": "Add typed read-only IPC for persisted workbook inspection artifacts",
+        "description": "Expose the saved workbook-profile, sheet-preview, column-profile, and diff artifacts for one turn through validated contracts.",
+        "status": "done",
+        "dependencies": [
+          "15",
+          "16"
+        ],
+        "priority": "high",
+        "details": "Create a new read-only turn-artifact API in contracts, frontend IPC, and the Rust/Tauri backend that returns typed workbook inspection artifacts for a selected session and turn without exposing arbitrary filesystem access.",
+        "testStrategy": "Verify the new IPC command returns supported artifact types with validated payloads for persisted local-json sessions and degrades cleanly when no artifacts exist.",
+        "updatedAt": "2026-03-29T12:41:36Z"
+      },
+      {
+        "id": "18",
+        "title": "Surface workbook profile and sheet preview artifacts in Studio",
+        "description": "Add a first artifact browser slice that shows workbook structure and sampled rows for the selected turn.",
+        "status": "done",
+        "dependencies": [
+          "17"
+        ],
+        "priority": "high",
+        "details": "Add an `Inspection details` browser in Studio that lists supported artifacts for the current turn and renders workbook-profile plus sheet-preview payloads in plain-language cards and tables.",
+        "testStrategy": "Verify Studio loads artifacts for the selected turn and can render workbook metadata plus sampled row previews without leaving the app.",
+        "updatedAt": "2026-03-29T12:41:36Z"
+      },
+      {
+        "id": "19",
+        "title": "Render column profiling and diff artifacts in both editable and reviewer Studio",
+        "description": "Complete the artifact browser with column inference and diff-detail views across both Studio modes.",
+        "status": "done",
+        "dependencies": [
+          "18"
+        ],
+        "priority": "medium",
+        "details": "Extend the Studio artifact browser so column-profile and diff-summary or preview artifacts render readable summaries, warnings, and detail cards in both normal Studio and read-only reviewer mode, with clear empty states when the turn has no saved inspection history.",
+        "testStrategy": "Verify reviewer mode can inspect the same artifact browser without execution controls and that column-profile plus diff artifacts render correctly.",
+        "updatedAt": "2026-03-29T12:41:36Z"
+      },
+      {
+        "id": "20",
+        "title": "Document and verify the workbook artifact browser follow-up",
+        "description": "Close the new follow-up scope with synced docs, Task Master state, and a manual verification artifact.",
+        "status": "done",
+        "dependencies": [
+          "17",
+          "18",
+          "19"
+        ],
+        "priority": "medium",
+        "details": "Update planning and implementation docs, add a manual verification checklist for the artifact browser, and sync README plus Task Master so the shipped scope is documented as real behavior rather than aspirational follow-up.",
+        "testStrategy": "Confirm the verification artifact exists, docs match the implementation, Task Master reflects the completed work, and the standard repo checks still pass.",
+        "updatedAt": "2026-03-29T12:41:36Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-29T12:21:48Z",
-      "taskCount": 16,
-      "completedCount": 16,
+      "lastModified": "2026-03-29T12:41:36Z",
+      "taskCount": 20,
+      "completedCount": 20,
       "tags": [
         "master"
       ]

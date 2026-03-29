@@ -9,14 +9,15 @@ use crate::models::{
     ApprovalDecision, AssessCopilotHandoffRequest, AssessCopilotHandoffResponse,
     CopilotHandoffReason, CopilotHandoffReasonSource, CopilotHandoffStatus,
     CopilotTurnResponse, CreateSessionRequest, DiffSummary, GenerateRelayPacketRequest,
-    PreviewExecutionRequest, PreviewExecutionResponse, RelayPacket, RelayPacketResponseContract,
-    RespondToApprovalRequest, RespondToApprovalResponse, RunExecutionRequest,
-    RunExecutionResponse, Session, SessionDetail, SessionStatus, SpreadsheetAction,
-    StartTurnRequest, StartTurnResponse, SubmitCopilotResponseRequest,
-    SubmitCopilotResponseResponse, ToolDescriptor, ToolPhase, Turn, TurnStatus, ValidationIssue,
+    PreviewArtifactPayload, PreviewExecutionRequest, PreviewExecutionResponse, ReadTurnArtifactsResponse,
+    RelayPacket, RelayPacketResponseContract, RespondToApprovalRequest,
+    RespondToApprovalResponse, RunExecutionRequest, RunExecutionResponse, Session,
+    SessionDetail, SessionStatus, SpreadsheetAction, StartTurnRequest, StartTurnResponse,
+    SubmitCopilotResponseRequest, SubmitCopilotResponseResponse, ToolDescriptor, ToolPhase,
+    Turn, TurnArtifactRecord, TurnStatus, ValidationIssue,
 };
-use crate::persistence::{self, StorageManifest};
-use crate::workbook::{WorkbookEngine, WorkbookSource};
+use crate::persistence::{self, PersistedArtifactMeta, StorageManifest};
+use crate::workbook::{SheetColumnProfile, SheetPreview, WorkbookEngine, WorkbookSource};
 
 #[derive(Clone, Debug)]
 struct StoredResponse {
@@ -166,6 +167,37 @@ impl AppStorage {
         turns.sort_by(|left, right| left.created_at.cmp(&right.created_at));
 
         Ok(SessionDetail { session, turns })
+    }
+
+    pub fn read_turn_artifacts(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+    ) -> Result<ReadTurnArtifactsResponse, String> {
+        let (_, turn) = self.get_session_and_turn(session_id, turn_id)?;
+        let Some(app_local_data_dir) = self.app_local_data_dir.as_deref() else {
+            return Ok(ReadTurnArtifactsResponse {
+                turn: turn.clone(),
+                artifacts: Vec::new(),
+            });
+        };
+
+        let mut artifacts = Vec::new();
+
+        for artifact_id in &turn.item_ids {
+            let meta = persistence::read_artifact_meta(app_local_data_dir, session_id, artifact_id)?;
+
+            if let Some(record) =
+                self.read_supported_turn_artifact(app_local_data_dir, session_id, &meta)?
+            {
+                artifacts.push(record);
+            }
+        }
+
+        Ok(ReadTurnArtifactsResponse {
+            turn: turn.clone(),
+            artifacts,
+        })
     }
 
     pub fn start_turn(&mut self, request: StartTurnRequest) -> Result<StartTurnResponse, String> {
@@ -974,6 +1006,62 @@ impl AppStorage {
         }
 
         Ok(current_diff.clone())
+    }
+
+    fn read_supported_turn_artifact(
+        &self,
+        app_local_data_dir: &std::path::Path,
+        session_id: &str,
+        meta: &PersistedArtifactMeta,
+    ) -> Result<Option<TurnArtifactRecord>, String> {
+        match meta.artifact_type.as_str() {
+            "workbook-profile" => {
+                let payload: crate::models::WorkbookProfile =
+                    persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
+                Ok(Some(TurnArtifactRecord::WorkbookProfile {
+                    artifact_id: meta.id.clone(),
+                    created_at: meta.created_at.clone(),
+                    payload,
+                }))
+            }
+            "sheet-preview" => {
+                let payload: SheetPreview =
+                    persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
+                Ok(Some(TurnArtifactRecord::SheetPreview {
+                    artifact_id: meta.id.clone(),
+                    created_at: meta.created_at.clone(),
+                    payload,
+                }))
+            }
+            "column-profile" => {
+                let payload: SheetColumnProfile =
+                    persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
+                Ok(Some(TurnArtifactRecord::ColumnProfile {
+                    artifact_id: meta.id.clone(),
+                    created_at: meta.created_at.clone(),
+                    payload,
+                }))
+            }
+            "diff-summary" => {
+                let payload: DiffSummary =
+                    persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
+                Ok(Some(TurnArtifactRecord::DiffSummary {
+                    artifact_id: meta.id.clone(),
+                    created_at: meta.created_at.clone(),
+                    payload,
+                }))
+            }
+            "preview" => {
+                let payload: PreviewArtifactPayload =
+                    persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
+                Ok(Some(TurnArtifactRecord::Preview {
+                    artifact_id: meta.id.clone(),
+                    created_at: meta.created_at.clone(),
+                    payload,
+                }))
+            }
+            _ => Ok(None),
+        }
     }
 
     fn read_diff_summary_artifact(
@@ -2157,7 +2245,7 @@ mod tests {
         ApprovalDecision, AssessCopilotHandoffRequest, CopilotHandoffStatus,
         CreateSessionRequest, GenerateRelayPacketRequest, PreviewExecutionRequest,
         ReadSessionRequest, RelayMode, RespondToApprovalRequest, RunExecutionRequest,
-        StartTurnRequest, SubmitCopilotResponseRequest, TurnStatus,
+        StartTurnRequest, SubmitCopilotResponseRequest, TurnArtifactRecord, TurnStatus,
     };
     use crate::persistence;
     use serde::{de::DeserializeOwned, Deserialize};
@@ -3305,6 +3393,9 @@ mod tests {
         let detail = reloaded
             .read_session(&session_id)
             .expect("persisted session should be readable");
+        let artifact_response = reloaded
+            .read_turn_artifacts(&session_id, &turn_id)
+            .expect("turn artifacts should be readable");
         let turn = detail
             .turns
             .iter()
@@ -3390,6 +3481,28 @@ mod tests {
         assert!(column_profile_found);
         assert!(diff_summary_found);
         assert!(artifact_types.contains("preview"));
+        assert_eq!(artifact_response.turn.id, turn_id);
+        assert_eq!(artifact_response.artifacts.len(), 5);
+        assert!(matches!(
+            artifact_response.artifacts.first(),
+            Some(TurnArtifactRecord::WorkbookProfile { .. })
+        ));
+        assert!(artifact_response.artifacts.iter().any(|artifact| matches!(
+            artifact,
+            TurnArtifactRecord::SheetPreview { .. }
+        )));
+        assert!(artifact_response.artifacts.iter().any(|artifact| matches!(
+            artifact,
+            TurnArtifactRecord::ColumnProfile { .. }
+        )));
+        assert!(artifact_response.artifacts.iter().any(|artifact| matches!(
+            artifact,
+            TurnArtifactRecord::DiffSummary { .. }
+        )));
+        assert!(artifact_response.artifacts.iter().any(|artifact| matches!(
+            artifact,
+            TurnArtifactRecord::Preview { .. }
+        )));
 
         fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
         fs::remove_file(csv_path).expect("test csv should clean up");
