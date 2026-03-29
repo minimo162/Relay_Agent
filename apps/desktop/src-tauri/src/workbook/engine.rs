@@ -3,7 +3,10 @@ use super::{
     inspect::{
         profile_sheet_columns, sheet_preview, InspectPlan, SheetColumnProfile, SheetPreview,
     },
-    preview::{preview_actions, preview_strategy, PreviewResult, PreviewStrategy},
+    preview::{
+        execute_actions, preview_actions, preview_strategy, PreviewResult, PreviewStrategy,
+        WriteExecutionResult,
+    },
     source::WorkbookSource,
     xlsx_backend::XlsxBackend,
 };
@@ -40,7 +43,7 @@ pub const WORKBOOK_ENGINE_BOUNDARIES: [ModuleBoundary; 5] = [
     },
     ModuleBoundary {
         module: "workbook::preview",
-        responsibility: "Choose whether a source can participate in write-preview or inspect-only flows.",
+        responsibility: "Replay CSV-first workbook actions for preview summaries and save-copy execution while enforcing source-path safety.",
     },
 ];
 
@@ -72,6 +75,14 @@ impl WorkbookEngine {
         actions: &[SpreadsheetAction],
     ) -> Result<PreviewResult, String> {
         preview_actions(&self.csv, source, actions)
+    }
+
+    pub fn execute_actions(
+        &self,
+        source: &WorkbookSource,
+        actions: &[SpreadsheetAction],
+    ) -> Result<WriteExecutionResult, String> {
+        execute_actions(&self.csv, source, actions)
     }
 
     pub fn inspect_workbook(&self, source: &WorkbookSource) -> Result<WorkbookProfile, String> {

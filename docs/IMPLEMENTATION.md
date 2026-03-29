@@ -2,7 +2,7 @@
 
 ## Status
 
-- Current phase: Read-side workbook tools are implemented for the CSV-first path; write-preview tooling is next
+- Current phase: Milestone 5 is complete; the safe CSV-first preview, approval, and save-copy execution slice is now documented, demo-backed, and verification-clean
 - Repository state: pnpm workspace, SvelteKit SPA shell, Tauri v2 shell, and shared contracts package are now bootstrapped and verification-clean
 - Active source-of-truth documents:
   - `PLANS.md`
@@ -429,6 +429,149 @@ Outcome:
 - Added a narrow preview expression and predicate grammar that supports bracketed column references for headers with spaces, basic arithmetic or string concatenation in `derive_column`, and single-comparison `filter_rows` predicates so preview can compute actual affected row counts for the supported MVP slice.
 - Added workbook preview unit tests plus storage-level preview regressions that now use real CSV fixtures instead of placeholder workbook paths.
 
+#### 8.4 Aggregation, save-copy support, and CSV demo verification
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src-tauri/src/workbook/preview.rs`
+- `apps/desktop/src-tauri/src/storage.rs`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Implemented real CSV-backed `table.group_aggregate` preview behavior, including grouped row synthesis, post-aggregation schema diffs, and numeric-aggregation warnings when non-numeric values are ignored.
+- Tightened `workbook.save_copy` preview handling so copy-only xlsx plans are accepted, explicit output paths cannot point at the original source workbook, and derived output paths remain available when a write preview omits an explicit save-copy action.
+- Added workbook preview regressions plus a storage-level demo regression that verify aggregated CSV output can be rendered from staged table state, inspect-plus-aggregate preview works through `preview_execution`, copy-only xlsx save-copy previews succeed, and the original CSV input remains unchanged after preview generation.
+- Left `join_lookup` out of the MVP tool surface for now so the workbook slice stays aligned with the planned safe vertical slice.
+
+#### 9.1 Preview payload and diff summary structure
+
+Completed.
+
+Artifacts:
+
+- `packages/contracts/src/workbook.ts`
+- `apps/desktop/src-tauri/src/models.rs`
+- `apps/desktop/src-tauri/src/workbook/preview.rs`
+- `apps/desktop/src-tauri/src/storage.rs`
+- `apps/desktop/src/routes/studio/+page.svelte`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Standardized the preview payload around explicit target context by adding a `target` object per diff entry plus top-level `targetCount` and `estimatedAffectedRows` summary fields.
+- Kept the existing `sheets` collection name for compatibility while making each entry explicit enough to support later approval UI work for sheet- or table-oriented previews.
+- Updated the Rust preview engine and persisted preview artifacts so the richer shape is produced by `preview_execution` rather than being a contracts-only stub.
+- Updated the Studio diff pane to consume the new payload fields without widening the UI scope into approval controls ahead of Task `9.3`.
+
+#### 9.2 Backend preview generation from parsed actions
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src-tauri/src/workbook/preview.rs`
+- `apps/desktop/src-tauri/src/storage.rs`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Kept `preview_execution` backed by the real workbook preview engine so validated action plans continue to produce target-aware diff summaries, affected-row estimates, output-path planning, and warning propagation before any write is allowed.
+- Added a storage-level regression that drives parsed CSV write actions through the real session, relay-packet, response-validation, and preview path, then asserts the backend returns concrete column diffs, row estimates, and save-copy output metadata.
+- Left Studio approval controls and save-copy execution out of scope for this task so the remaining Milestone 9 work stays focused on UI gating and write-time safeguards.
+
+#### 9.3 Render diff preview and approval flow in the Studio UI
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src/routes/studio/+page.svelte`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Extended the Studio timeline and right-side preview pane to show approval and execution stages alongside the existing preview diff summary.
+- Added approval-note entry plus explicit approve/reject controls that call the typed IPC approval command and update execution readiness in the UI from live preview state and refreshed turn status.
+- Added execution gating in the Studio preview pane so execution cannot be requested until a write-capable preview has been approved, while still surfacing the backend execution response and warnings for the current turn.
+
+#### 9.4 Enforce save-copy only execution safeguards and CSV sanitization
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src-tauri/src/workbook/preview.rs`
+- `apps/desktop/src-tauri/src/workbook/engine.rs`
+- `apps/desktop/src-tauri/src/storage.rs`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Added workbook-engine-backed save-copy execution so approved CSV write actions now replay through the same staged transform path used for preview before writing a new output file.
+- Replaced the write-execution stub in storage with real execution that keeps the original source workbook read-only, records executed artifacts and logs, and still refuses write runs until preview and approval have completed.
+- Added CSV output sanitization that prefixes cells starting with `=`, `+`, `-`, or `@` before save-copy output is written, and covered the behavior with storage regressions for approval gating, executed output generation, source immutability, and dangerous-prefix neutralization.
+
+#### 10.1 Example CSV asset for the MVP demo flow
+
+Completed.
+
+Artifacts:
+
+- `examples/revenue-workflow-demo.csv`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Added a compact demo CSV under `examples/` that can drive the current MVP inspect, preview, approval, and save-copy workflow without extra setup.
+- Chose columns and values that match the implemented tool surface: booleans and dates for inspect and filter flows, numeric plus non-numeric `amount` values for cast or aggregation warnings, and formula-like leading characters in `comment` values so CSV sanitization can be demonstrated on save-copy output.
+
+#### 10.2 README setup, demo flow, and packet or response examples
+
+Completed.
+
+Artifacts:
+
+- `README.md`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Replaced the placeholder README with real setup instructions, desktop run commands, a representative Studio demo flow, and the demo CSV location under `examples/`.
+- Added a representative relay packet example plus a valid pasted Copilot response example that matches the implemented contracts and current Studio approval or execution flow.
+- Documented the current MVP limitations in README so unsupported workbook paths and execution behaviors are explicit instead of implied.
+
+#### 10.3 Keep `docs/IMPLEMENTATION.md` aligned with milestones and verification results
+
+Completed.
+
+Artifacts:
+
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Reconciled the implementation log after the Milestone 5 documentation work so completed tasks, current status, verification notes, known limitations, and next planned work all reflect the real repository state.
+- Kept the log focused on shipped behavior by pointing the current phase and next-step sections at the remaining manual walkthrough task instead of the already-finished CSV asset or README updates.
+
+#### 10.4 Run the documented demo flow and reconcile docs with reality
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src-tauri/src/storage.rs`
+- `README.md`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Added a storage-level regression that exercises the README demo path against the real example CSV: create session, start turn, generate packet, validate the documented response shape, preview, approve, execute, and assert the save-copy output plus source-file immutability.
+- Tightened the README walkthrough by making the `workbook.save_copy` example path explicitly operator-supplied and writable, and by documenting the concrete bundled-sample outcome of 3 approved output rows with 3 sanitized `comment` cells.
+- Reconciled the implementation log so the milestone status, known limitations, and next-step section reflect that the documented demo flow has now been verified instead of remaining a pending manual task.
+
 ## Decisions
 
 - Treat the repository as greenfield apart from `.taskmaster/`.
@@ -751,21 +894,185 @@ Observed result:
 - Workspace typecheck, Svelte check, and the desktop production build remain green after the preview path stopped relying on the synthetic diff builder.
 - This environment did not have Rust or the required Tauri GTK/WebKit development libraries preinstalled, so verification also included installing the stable Rust toolchain plus Debian `libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, and `zlib1g-dev`.
 
+Aggregation and save-copy preview verification:
+
+```bash
+cargo fmt --all
+. "$HOME/.cargo/env" && cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+. "$HOME/.cargo/env" && cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- `cargo test` now covers real CSV `table.group_aggregate` preview behavior, copy-only xlsx save-copy planning, save-copy target-path rejection, source-file immutability, and a storage-level CSV demo flow that runs inspect plus aggregation through `preview_execution`.
+- `cargo check`, workspace `pnpm check`, `pnpm typecheck`, and the desktop production build all pass after the aggregation and save-copy preview changes.
+
+Preview payload structure verification:
+
+```bash
+cargo fmt --all
+. "$HOME/.cargo/env" && cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+. "$HOME/.cargo/env" && cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- `cargo test` passes with the updated `DiffSummary` shape, including preview regressions that now assert `targetCount`, `estimatedAffectedRows`, and explicit sheet target metadata.
+- `cargo check` succeeds after aligning the Rust preview models, workbook preview generation, and storage-layer preview assertions to the new payload fields.
+- `pnpm check`, `pnpm typecheck`, and the desktop production build all pass after the Studio UI switched from ad hoc `sheet` or `estimatedRows` fields to the standardized preview target structure.
+
+Backend preview generation verification:
+
+```bash
+cargo fmt --all
+. "$HOME/.cargo/env" && cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+. "$HOME/.cargo/env" && cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- `cargo test` passes with a storage-level regression that submits parsed CSV write actions and verifies `preview_execution` returns concrete changed-column, added-column, affected-row, and output-path summary data before any run step.
+- `cargo check` succeeds with backend preview generation still routed through the workbook engine rather than placeholder diff synthesis.
+- `pnpm check`, `pnpm typecheck`, and the desktop production build continue to pass with no additional frontend scope added for Task `9.2`.
+
+Studio approval flow verification:
+
+```bash
+. "$HOME/.cargo/env" && cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- `pnpm check` and `pnpm typecheck` pass with the Studio route now wiring approval decisions, execution gating, and backend execution-result rendering into the preview pane without Svelte diagnostics.
+- The desktop production build succeeds after adding preview-side approval note entry, approve/reject actions, and execution readiness messaging on top of the existing diff UI.
+- `cargo check` remains green after the UI changes, confirming the frontend stayed aligned with the existing Rust approval and execution IPC surface.
+
+Save-copy execution and sanitization verification:
+
+```bash
+cargo fmt --all
+. "$HOME/.cargo/env" && cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+. "$HOME/.cargo/env" && cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- `cargo test` passes with 23 tests, including storage regressions that confirm write execution stays blocked before approval, approved CSV actions write to a save-copy output, the original CSV input remains unchanged, persisted execution artifacts keep their output path metadata, and dangerous CSV-leading prefixes are sanitized in the written copy.
+- `cargo check` succeeds after routing `run_execution` through the workbook engine instead of the previous write stub.
+- `pnpm check`, `pnpm typecheck`, and the desktop production build remain green after the Studio approval and execution UI starts consuming successful execution responses from the backend.
+
+Example CSV asset verification:
+
+```bash
+node -e "const fs=require('fs'); const path='examples/revenue-workflow-demo.csv'; const text=fs.readFileSync(path,'utf8').trim(); const rows=text.split(/\\r?\\n/); const header=rows[0].split(','); if (rows.length !== 6) throw new Error(`expected 6 rows including header, found ${rows.length}`); if (!header.includes('amount') || !header.includes('approved') || !header.includes('comment')) throw new Error('demo CSV is missing required workflow columns'); if (!rows.some((row) => /,oops,/.test(row))) throw new Error('demo CSV should include a non-numeric amount example'); if (!rows.some((row) => /,(=|\\+|@)/.test(row))) throw new Error('demo CSV should include formula-like prefixes for sanitization demos'); console.log('demo csv ok');"
+```
+
+Observed result:
+
+- The example CSV exists under `examples/`, has the expected six-line shape including header plus five sample rows, exposes the `amount`, `approved`, and `comment` columns needed by the current workflow, includes one non-numeric amount for warning scenarios, and includes formula-like leading characters for save-copy sanitization demos.
+
+README coverage verification:
+
+```bash
+node - <<'NODE'
+const fs = require('fs');
+const readme = fs.readFileSync('README.md', 'utf8');
+const requiredSections = [
+  '## Requirements',
+  '## Demo Flow',
+  '## Relay Packet Example',
+  '## Valid Copilot Response Example',
+  '## Limitations'
+];
+for (const section of requiredSections) {
+  if (!readme.includes(section)) {
+    throw new Error(`README is missing required section: ${section}`);
+  }
+}
+if (!readme.includes('examples/revenue-workflow-demo.csv')) {
+  throw new Error('README does not reference the demo CSV asset');
+}
+const responseMatch = readme.match(
+  /## Valid Copilot Response Example[\s\S]*?```json\n([\s\S]*?)\n```/
+);
+if (!responseMatch) {
+  throw new Error('README does not contain the valid response JSON block');
+}
+const response = JSON.parse(responseMatch[1]);
+if (!Array.isArray(response.actions) || response.actions.length === 0) {
+  throw new Error('README response example does not include any actions');
+}
+if (response.actions.at(-1).tool !== 'workbook.save_copy') {
+  throw new Error('README response example must end with workbook.save_copy');
+}
+console.log('readme ok');
+NODE
+
+jq empty .taskmaster/tasks/tasks.json
+```
+
+Observed result:
+
+- README now includes setup instructions, demo usage, a relay packet example, a valid pasted response example, and explicit limitations aligned with the current CSV-first MVP.
+- The response example JSON parses successfully and ends in `workbook.save_copy`, matching the implemented save-copy approval flow.
+
+Implementation log alignment verification:
+
+```bash
+rg -n '^## Status|^#### 10\.1|^#### 10\.2|^#### 10\.3|^#### 10\.4|^## Known Limitations|^## Next Step' docs/IMPLEMENTATION.md
+jq empty .taskmaster/tasks/tasks.json
+```
+
+Observed result:
+
+- `docs/IMPLEMENTATION.md` includes the full Milestone 5 task set through `10.4`, an up-to-date status summary, explicit known limitations, and a next-step note that the current MVP plan has no remaining tasks.
+- Task Master JSON remains valid after syncing the implementation-log task state.
+
+Documented demo flow verification:
+
+```bash
+. "$HOME/.cargo/env" && cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml readme_demo_flow_matches_documented_example_csv_workflow
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+. "$HOME/.cargo/env" && cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+. "$HOME/.cargo/env" && cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+jq empty .taskmaster/tasks/tasks.json
+```
+
+Observed result:
+
+- The new regression passes against `examples/revenue-workflow-demo.csv`, confirming the README flow can create a session, start a plan-mode turn, validate the documented response shape, require approval, execute a save-copy output, sanitize the three dangerous `comment` cells, and leave the bundled source CSV unchanged.
+- `pnpm check`, `pnpm typecheck`, and `pnpm --filter @relay-agent/desktop build` remain green after the README clarifications and storage-level walkthrough coverage.
+- `cargo check` and `cargo test` pass with 24 total Rust tests, so Milestone 5 now ends with the documented demo path verified alongside the broader backend suite.
+- Task Master JSON remains valid after closing the final Milestone 5 task.
+
 ## Known Limitations
 
-- The desktop UI now supports session listing, turn start, relay packet generation, response validation, and preview requests, but approval and execution are not yet surfaced in the Studio UI.
-- The Rust backend now supports in-memory relay packet, response validation, preview, approval, and execution command paths, but write execution remains intentionally blocked until the workbook engine and save-copy flow exist.
-- Persisted artifact and log files are not yet rehydrated into active in-memory relay caches on startup, so restart preserves history linkage but not resumable packet/validation/preview runtime state.
+- The desktop UI now supports session listing, turn start, relay packet generation, response validation, preview requests, approval decisions, and save-copy execution in Studio, but dedicated artifact browsers for workbook profiles and diffs are still not surfaced.
+- Persisted artifact and log files are not yet rehydrated into active in-memory relay caches on startup, so restart preserves history linkage but not resumable packet, validation, preview, or approval runtime state.
 - The workbook pane still renders preview summaries from backend metadata only; the newly persisted workbook-profile, sheet-preview, and column-profile artifacts are not yet surfaced in dedicated UI panels.
-- The CSV path now previews `table.rename_columns`, `table.cast_columns`, `table.filter_rows`, and `table.derive_column` against real CSV data, but `table.group_aggregate` remains approximate and `workbook.save_copy` still stops at output-path planning.
 - Preview predicates and derive expressions intentionally support a narrow grammar for now: bracketed column references for spaced headers, one comparison in `filter_rows`, and basic arithmetic or string concatenation in `derive_column`.
-- Limited xlsx read support is compiled through `calamine`, but the new read-side tests currently cover CSV inputs only.
-- README and demo assets have not been updated yet.
+- Limited xlsx support is still inspect-and-copy oriented; current test coverage still centers on CSV execution plus xlsx preview planning rather than richer xlsx write flows.
 - Task Master native AI PRD parsing is still blocked unless provider API keys are configured.
 
 ## Next Step
 
 Next planned work:
 
-- Begin task `8.4` by adding `table.group_aggregate`, `workbook.save_copy`, and the remaining CSV demo verification path on top of the new real preview engine.
-- Then surface the richer workbook artifacts, approval controls, and execution controls in the Studio right pane once the save-copy path exists.
+- No remaining tasks are pending in the current MVP plan; future work should start from a new planned milestone or follow-up scope update.

@@ -3,7 +3,10 @@
   import { page } from "$app/stores";
   import {
     projectInfo,
+    type ApprovalDecision,
     type PreviewExecutionResponse,
+    type RespondToApprovalResponse,
+    type RunExecutionResponse,
     type SessionDetail,
     type SubmitCopilotResponseResponse,
     type Turn,
@@ -15,6 +18,8 @@
     generateRelayPacket,
     previewExecution,
     readSession,
+    respondToApproval,
+    runExecution,
     startTurn,
     submitCopilotResponse
   } from "$lib";
@@ -42,20 +47,29 @@
   let packetPending = false;
   let validationPending = false;
   let previewPending = false;
+  let approvalPending = false;
+  let executionPending = false;
 
   let sessionNotice = "";
   let sessionError = "";
   let packetError = "";
   let validationError = "";
   let previewError = "";
+  let approvalError = "";
+  let executionError = "";
 
   let relayPacketText = "";
   let relayPacketSummary = "";
   let validationSummary = "";
   let previewSummary = "";
+  let approvalSummary = "";
+  let executionSummary = "";
+  let approvalNote = "";
 
   let validationResult: SubmitCopilotResponseResponse | null = null;
   let previewResult: PreviewExecutionResponse | null = null;
+  let approvalResult: RespondToApprovalResponse | null = null;
+  let executionResult: RunExecutionResponse | null = null;
 
   let lastLoadToken = 0;
   let lastRawResponse = "";
@@ -121,9 +135,23 @@
     previewSummary = "";
     validationResult = null;
     previewResult = null;
+    clearApprovalAndExecution(true);
 
     if (clearRawResponse) {
       studio.updateRawResponse("");
+    }
+  }
+
+  function clearApprovalAndExecution(clearApprovalNote = false): void {
+    approvalError = "";
+    executionError = "";
+    approvalSummary = "";
+    executionSummary = "";
+    approvalResult = null;
+    executionResult = null;
+
+    if (clearApprovalNote) {
+      approvalNote = "";
     }
   }
 
@@ -318,6 +346,7 @@
     previewError = "";
     previewSummary = "";
     previewResult = null;
+    clearApprovalAndExecution(true);
 
     try {
       const result = await submitCopilotResponse({
@@ -348,6 +377,7 @@
 
     previewPending = true;
     previewError = "";
+    clearApprovalAndExecution(true);
 
     try {
       const result = await previewExecution({
@@ -359,12 +389,81 @@
       previewSummary = result.requiresApproval
         ? `Preview is ready and approval will be required before any write execution. Output target: ${result.diffSummary.outputPath}.`
         : `Preview is ready with no approval gate for this action set. Output target: ${result.diffSummary.outputPath}.`;
-      sessionNotice = "Preview generated. The right pane now reflects the backend diff summary.";
+      sessionNotice = result.requiresApproval
+        ? "Preview generated. Review the diff and record approval before requesting execution."
+        : "Preview generated. Review the diff and request execution when ready.";
       await refreshSessionDetail(selectedTurnId);
     } catch (error) {
       previewError = toErrorMessage(error);
     } finally {
       previewPending = false;
+    }
+  }
+
+  async function handleApproval(decision: ApprovalDecision): Promise<void> {
+    if (!sessionDetail || !selectedTurnId || !previewResult) {
+      return;
+    }
+
+    approvalPending = true;
+    approvalError = "";
+    executionError = "";
+    executionSummary = "";
+    executionResult = null;
+
+    try {
+      const result = await respondToApproval({
+        sessionId: sessionDetail.session.id,
+        turnId: selectedTurnId,
+        decision,
+        note: approvalNote.trim() || undefined
+      });
+
+      approvalResult = result;
+      approvalSummary =
+        decision === "approved"
+          ? result.readyForExecution
+            ? "Approval recorded. Execution is now enabled for the current preview."
+            : "Approval recorded, but the backend still marks execution as unavailable."
+          : "Rejection recorded. Execution remains blocked until approval is granted.";
+      sessionNotice =
+        decision === "approved"
+          ? "Approval recorded. Execution can now be requested for this preview."
+          : "Preview rejection recorded. Execution stays blocked until approval is granted.";
+      await refreshSessionDetail(selectedTurnId);
+    } catch (error) {
+      approvalError = toErrorMessage(error);
+    } finally {
+      approvalPending = false;
+    }
+  }
+
+  async function handleExecution(): Promise<void> {
+    if (!sessionDetail || !selectedTurnId || !previewResult) {
+      return;
+    }
+
+    executionPending = true;
+    executionError = "";
+
+    try {
+      const result = await runExecution({
+        sessionId: sessionDetail.session.id,
+        turnId: selectedTurnId
+      });
+
+      executionResult = result;
+      executionSummary = result.executed
+        ? "Execution completed for the current turn."
+        : result.reason ?? "Execution request was recorded without applying changes.";
+      sessionNotice = result.executed
+        ? "Execution completed. Review the recorded warnings and artifacts for this turn."
+        : result.reason ?? "Execution request was recorded.";
+      await refreshSessionDetail(selectedTurnId);
+    } catch (error) {
+      executionError = toErrorMessage(error);
+    } finally {
+      executionPending = false;
     }
   }
 
@@ -416,13 +515,67 @@
       label: "Preview request",
       note: previewSummary || "Request preview after validation succeeds.",
       tone: previewResult ? "ready" : validationResult?.accepted ? "active" : "pending"
+    },
+    {
+      id: "approval",
+      label: "Approval gate",
+      note: !previewResult
+        ? "Record an approval decision after preview is ready."
+        : !previewResult.requiresApproval
+          ? "This preview is read-only, so no approval step is required."
+          : selectedTurn?.status === "approved"
+            ? approvalSummary || "Approval was recorded and execution is now available."
+            : approvalResult?.decision === "rejected"
+              ? approvalSummary || "Preview was rejected. Execution remains blocked."
+              : "Preview is waiting for an approval decision before execution can proceed.",
+      tone: !previewResult
+        ? "pending"
+        : !previewResult.requiresApproval || selectedTurn?.status === "approved"
+          ? "ready"
+          : "active"
+    },
+    {
+      id: "execution",
+      label: "Execution request",
+      note: executionSummary
+        || (!previewResult
+          ? "Execution stays locked until preview is ready."
+          : previewResult.requiresApproval && selectedTurn?.status !== "approved"
+            ? approvalResult?.decision === "rejected"
+              ? "Execution is blocked because the current preview was rejected."
+              : "Execution is blocked until approval is recorded."
+            : "Execution can be requested from the preview pane."),
+      tone: executionResult
+        ? executionResult.executed
+          ? "ready"
+          : "active"
+        : !previewResult
+          ? "pending"
+          : previewResult.requiresApproval && selectedTurn?.status !== "approved"
+            ? "pending"
+            : "active"
     }
   ] satisfies StudioTimelineEntry[];
 
   $: reloadNote =
     selectedTurn && !relayPacketText && !validationResult && !previewResult && selectedTurn.itemIds.length > 0
-      ? "This turn was reloaded from local storage. Packet, validation, and preview caches are not resumable yet, so regenerate them in the current app run."
+      ? "This turn was reloaded from local storage. Packet, validation, preview, and approval runtime state are not resumable yet, so regenerate preview and re-record approval in the current app run before execution."
       : "";
+
+  $: approvalGranted = previewResult
+    ? !previewResult.requiresApproval
+      || selectedTurn?.status === "approved"
+      || approvalResult?.readyForExecution
+    : false;
+
+  $: executionBlockedReason =
+    !previewResult
+      ? "Request preview after validation succeeds."
+      : previewResult.requiresApproval && !approvalGranted
+        ? approvalResult?.decision === "rejected"
+          ? "Approval was rejected. Record an approved decision to continue."
+          : "Approve the current preview before execution can be requested."
+        : "Execution can be requested for the current preview.";
 
   $: if ($studioState.rawResponse !== lastRawResponse) {
     lastRawResponse = $studioState.rawResponse;
@@ -440,11 +593,11 @@
 <div class="ra-view">
   <section class="ra-hero">
     <p class="ra-eyebrow">Studio route</p>
-    <h1 class="ra-headline">Run the relay flow from session detail through backend preview.</h1>
+    <h1 class="ra-headline">Run the relay flow through preview, approval, and execution gating.</h1>
     <p class="ra-lede">
       Studio now loads persisted session detail, starts turns through the typed IPC layer,
-      generates relay packets, validates pasted Copilot JSON responses, and requests preview
-      summaries from the Rust backend.
+      generates relay packets, validates pasted Copilot JSON responses, requests preview
+      summaries from the Rust backend, and records approval decisions before execution can run.
     </p>
   </section>
 
@@ -561,7 +714,7 @@
       <p class="pane-copy">
         The center pane now drives the real backend command surface: start a turn, generate
         the relay packet, paste the Copilot response, inspect validation feedback, and ask
-        the backend for a preview.
+        the backend for a preview before approval and execution controls unlock in the diff pane.
       </p>
 
       {#if sessionNotice}
@@ -785,8 +938,8 @@
     <article class="ra-panel pane pane-preview">
       <div class="pane-header">
         <div>
-          <p class="pane-label">Workbook view</p>
-          <h2>Preview summary and diff output</h2>
+          <p class="pane-label">Workbook preview</p>
+          <h2>Diff, approval, and execution readiness</h2>
         </div>
         <span class={`status-pill ${previewResult ? "status-ready" : "status-pending"}`}>
           {previewResult ? "preview ready" : "awaiting preview"}
@@ -813,7 +966,11 @@
           <p>
             {#if previewResult}
               {previewResult.requiresApproval
-                ? "Preview includes write-capable actions, so approval will be required."
+                ? approvalResult?.decision === "rejected"
+                  ? "Preview was rejected. Execution remains blocked until it is approved."
+                  : approvalGranted
+                    ? "Preview was approved. Execution can now be requested."
+                    : "Preview includes write-capable actions, so approval will be required."
                 : "Preview contains no approval-gated actions."}
             {:else}
               Request preview after validation succeeds to see the output target and gating.
@@ -823,8 +980,128 @@
 
         <section class="preview-card">
           <p class="preview-label">Diff headline</p>
-          <h3>{previewResult ? `${previewResult.diffSummary.sheets.length} sheet diff${previewResult.diffSummary.sheets.length === 1 ? "" : "s"} staged` : "Diff preview has not been requested yet."}</h3>
-          <p>{previewSummary || "The right pane will show the backend diff summary once preview is available."}</p>
+          <h3>{previewResult ? `${previewResult.diffSummary.targetCount} target diff${previewResult.diffSummary.targetCount === 1 ? "" : "s"} staged` : "Diff preview has not been requested yet."}</h3>
+          <p>
+            {#if previewResult}
+              {previewResult.diffSummary.estimatedAffectedRows} row{previewResult.diffSummary.estimatedAffectedRows === 1 ? "" : "s"} estimated across the staged target{previewResult.diffSummary.targetCount === 1 ? "" : "s"}.
+            {:else}
+              The right pane will show the backend diff summary once preview is available.
+            {/if}
+          </p>
+
+          {#if previewSummary}
+            <p class="support-copy">{previewSummary}</p>
+          {/if}
+        </section>
+
+        <section class="preview-card">
+          <p class="preview-label">Approval decision</p>
+          <h3>
+            {#if !previewResult}
+              Approval waits for preview.
+            {:else if !previewResult.requiresApproval}
+              No approval required
+            {:else if approvalGranted}
+              Approved for execution
+            {:else if approvalResult?.decision === "rejected"}
+              Rejected for now
+            {:else}
+              Decision required
+            {/if}
+          </h3>
+          <p>
+            {approvalSummary || (!previewResult
+              ? "Generate preview first so the current diff can be reviewed."
+              : !previewResult.requiresApproval
+                ? "This preview is read-only, so execution is already available."
+                : "Record an approval decision before write execution can proceed.")}
+          </p>
+
+          {#if approvalError}
+            <p class="subpanel-error">{approvalError}</p>
+          {/if}
+
+          {#if previewResult && previewResult.requiresApproval}
+            <label class="field">
+              <span>Approval note</span>
+              <textarea
+                on:input={(event) => (approvalNote = (event.currentTarget as HTMLTextAreaElement).value)}
+                placeholder="Optional note for why this preview is safe to run."
+                rows="3"
+              >{approvalNote}</textarea>
+            </label>
+
+            <div class="action-row action-row-compact">
+              <button
+                class="primary-button"
+                disabled={approvalPending}
+                type="button"
+                on:click={() => void handleApproval("approved")}
+              >
+                {approvalPending ? "Recording approval..." : "Approve preview"}
+              </button>
+
+              <button
+                class="ghost-button"
+                disabled={approvalPending}
+                type="button"
+                on:click={() => void handleApproval("rejected")}
+              >
+                Reject preview
+              </button>
+            </div>
+          {/if}
+        </section>
+
+        <section class="preview-card">
+          <p class="preview-label">Execution readiness</p>
+          <h3>
+            {#if !previewResult}
+              Execution is locked
+            {:else if approvalGranted}
+              Ready to request execution
+            {:else}
+              Approval still required
+            {/if}
+          </h3>
+          <p>{executionSummary || executionBlockedReason}</p>
+
+          {#if executionError}
+            <p class="subpanel-error">{executionError}</p>
+          {/if}
+
+          <div class="action-row action-row-compact">
+            <button
+              class="secondary-button"
+              disabled={!previewResult || executionPending || !approvalGranted}
+              type="button"
+              on:click={() => void handleExecution()}
+            >
+              {executionPending
+                ? "Requesting execution..."
+                : executionResult
+                  ? "Request execution again"
+                  : "Request execution"}
+            </button>
+          </div>
+
+          {#if executionResult}
+            <div class="result-grid">
+              <div class="result-card">
+                <p class="preview-label">Result</p>
+                <h3>{executionResult.executed ? "Executed" : "Recorded only"}</h3>
+                <p>{executionResult.outputPath || "No output path was produced."}</p>
+              </div>
+            </div>
+
+            {#if executionResult.warnings.length > 0}
+              <div class="warning-list">
+                {#each executionResult.warnings as warning}
+                  <span>{warning}</span>
+                {/each}
+              </div>
+            {/if}
+          {/if}
         </section>
 
         <section class="preview-card">
@@ -854,8 +1131,8 @@
                 {#each previewResult.diffSummary.sheets as sheet}
                   <article class="sheet-diff-card">
                     <div class="sheet-diff-head">
-                      <h3>{sheet.sheet}</h3>
-                      <span>{sheet.estimatedRows} row{sheet.estimatedRows === 1 ? "" : "s"} affected</span>
+                      <h3>{sheet.target.label}</h3>
+                      <span>{sheet.estimatedAffectedRows} row{sheet.estimatedAffectedRows === 1 ? "" : "s"} affected</span>
                     </div>
 
                     <div class="diff-tags">
@@ -1230,6 +1507,10 @@
     display: flex;
     flex-wrap: wrap;
     gap: 0.75rem;
+  }
+
+  .action-row-compact {
+    align-items: center;
   }
 
   .primary-button,

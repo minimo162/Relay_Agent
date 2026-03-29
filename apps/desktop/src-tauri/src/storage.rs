@@ -533,57 +533,70 @@ impl AppStorage {
             .ok_or_else(|| "no parsed response is available for execution".to_string())?;
 
         if parsed_response.actions.iter().any(is_write_action) {
-            let mut warnings = preview.warnings.clone();
+            let source = session
+                .primary_workbook_path
+                .as_deref()
+                .ok_or_else(|| {
+                    format!(
+                        "session `{}` does not have a workbook source path for execution",
+                        session.id
+                    )
+                })
+                .and_then(|path| WorkbookSource::detect(path.to_string()))?;
+            let engine = WorkbookEngine::default();
+            let execution = engine.execute_actions(&source, &parsed_response.actions)?;
+            let mut warnings = collect_execution_warnings(&preview);
             if let Some(approval) = self.approvals.get(&turn.id) {
                 if let Some(note) = &approval.note {
-                    warnings.push(format!("Approval note: {note}"));
+                    push_unique_string(&mut warnings, format!("Approval note: {note}"));
                 }
             }
-            let output_path = preview.diff_summary.output_path.clone();
+            for warning in execution.warnings {
+                push_unique_string(&mut warnings, warning);
+            }
+
+            let output_path = execution.output_path;
+            let next_turn = self.update_turn_status(
+                &turn.id,
+                TurnStatus::Executed,
+                turn.validation_error_count,
+            )?;
             let execution_artifact_id = self.record_turn_artifact(
                 &session.id,
                 &turn.id,
                 "execution",
                 &json!({
-                    "executed": false,
+                    "executed": true,
                     "outputPath": output_path.clone(),
                     "warnings": warnings.clone(),
-                    "reason": "Execution is not implemented yet for write actions. Preview and approval state were recorded only.",
                 }),
                 Some(output_path.clone()),
             )?;
             self.touch_session(&session.id)?;
-            let turn_snapshot = self
-                .turns
-                .get(&turn.id)
-                .cloned()
-                .ok_or_else(|| format!("turn `{}` was not found", turn.id))?;
             self.append_turn_log(
                 &session.id,
                 &turn.id,
                 Some(&execution_artifact_id),
                 "execution-recorded",
-                "Execution request was recorded without applying write actions.".to_string(),
+                "Execution wrote a save-copy output for the current turn.".to_string(),
                 Some(json!({
                     "executionArtifactId": execution_artifact_id.clone(),
-                    "executed": false,
+                    "executed": true,
                     "outputPath": output_path.clone(),
                 })),
             )?;
 
             return Ok(RunExecutionResponse {
-                turn: turn_snapshot,
-                executed: false,
+                turn: next_turn,
+                executed: true,
                 output_path: Some(output_path),
                 warnings,
-                reason: Some(
-                    "Execution is not implemented yet for write actions. Preview and approval state were recorded only."
-                        .to_string(),
-                ),
+                reason: None,
             });
         }
 
-        self.update_turn_status(&turn.id, TurnStatus::Executed, 0)?;
+        let next_turn =
+            self.update_turn_status(&turn.id, TurnStatus::Executed, turn.validation_error_count)?;
         let execution_artifact_id = self.record_turn_artifact(
             &session.id,
             &turn.id,
@@ -595,11 +608,6 @@ impl AppStorage {
             None,
         )?;
         self.touch_session(&session.id)?;
-        let turn_snapshot = self
-            .turns
-            .get(&turn.id)
-            .cloned()
-            .ok_or_else(|| format!("turn `{}` was not found", turn.id))?;
         self.append_turn_log(
             &session.id,
             &turn.id,
@@ -613,7 +621,7 @@ impl AppStorage {
         )?;
 
         Ok(RunExecutionResponse {
-            turn: turn_snapshot,
+            turn: next_turn,
             executed: true,
             output_path: None,
             warnings: vec![
@@ -994,6 +1002,30 @@ fn build_packet_context(session: &Session, turn: &Turn) -> Vec<String> {
     }
 
     context
+}
+
+fn collect_execution_warnings(preview: &StoredPreview) -> Vec<String> {
+    let mut warnings = preview.warnings.clone();
+
+    for warning in &preview.diff_summary.warnings {
+        push_unique_string(&mut warnings, warning.clone());
+    }
+
+    for sheet in &preview.diff_summary.sheets {
+        for warning in &sheet.warnings {
+            push_unique_string(&mut warnings, warning.clone());
+        }
+    }
+
+    warnings
+}
+
+fn push_unique_string(values: &mut Vec<String>, value: String) {
+    if values.iter().any(|existing| existing == &value) {
+        return;
+    }
+
+    values.push(value);
 }
 
 fn parse_copilot_response(
@@ -1887,7 +1919,7 @@ mod tests {
     use crate::models::{
         ApprovalDecision, CreateSessionRequest, GenerateRelayPacketRequest,
         PreviewExecutionRequest, ReadSessionRequest, RelayMode, RespondToApprovalRequest,
-        RunExecutionRequest, StartTurnRequest, SubmitCopilotResponseRequest,
+        RunExecutionRequest, StartTurnRequest, SubmitCopilotResponseRequest, TurnStatus,
     };
     use crate::persistence;
     use serde::{de::DeserializeOwned, Deserialize};
@@ -1947,6 +1979,10 @@ mod tests {
     #[test]
     fn validates_preview_and_approval_flow() {
         let csv_path = write_test_csv("customer_id,amount\n1,42.5\n2,13.0\n");
+        let output_path = env::temp_dir()
+            .join(format!("relay-agent-run-output-{}.csv", Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
         let mut storage = AppStorage::default();
 
         let session = storage
@@ -1978,27 +2014,29 @@ mod tests {
             .submit_copilot_response(SubmitCopilotResponseRequest {
                 session_id: session.id.clone(),
                 turn_id: turn.id.clone(),
-                raw_response: r#"{
+                raw_response: format!(
+                    r#"{{
                   "summary": "Create a normalized output copy.",
                   "actions": [
-                    {
+                    {{
                       "tool": "table.derive_column",
                       "sheet": "Sheet1",
-                      "args": {
+                      "args": {{
                         "column": "normalized_total",
                         "expression": "amount",
                         "position": "end"
-                      }
-                    },
-                    {
+                      }}
+                    }},
+                    {{
                       "tool": "workbook.save_copy",
-                      "args": {
-                        "outputPath": "/tmp/revenue-clean.csv"
-                      }
-                    }
+                      "args": {{
+                        "outputPath": "{}"
+                      }}
+                    }}
                   ]
-                }"#
-                .to_string(),
+                }}"#,
+                    output_path
+                ),
             })
             .expect("response should parse");
         assert!(submitted.accepted);
@@ -2011,7 +2049,15 @@ mod tests {
             .expect("preview should succeed");
         assert!(preview.ready);
         assert!(preview.requires_approval);
-        assert_eq!(preview.diff_summary.output_path, "/tmp/revenue-clean.csv");
+        assert_eq!(preview.diff_summary.output_path, output_path);
+
+        let approval_error = storage
+            .run_execution(RunExecutionRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+            })
+            .expect_err("execution should stay blocked until approval");
+        assert!(approval_error.contains("approval"));
 
         let approval = storage
             .respond_to_approval(RespondToApprovalRequest {
@@ -2029,14 +2075,431 @@ mod tests {
                 turn_id: turn.id,
             })
             .expect("execution response should return");
-        assert!(!execution.executed);
-        assert!(execution.reason.is_some());
+        assert!(execution.executed);
+        assert!(execution.reason.is_none());
+        assert_eq!(execution.output_path.as_deref(), Some(output_path.as_str()));
         assert_eq!(
-            execution.output_path.as_deref(),
-            Some("/tmp/revenue-clean.csv")
+            fs::read_to_string(&output_path).expect("executed CSV output should exist"),
+            "customer_id,amount,normalized_total\n1,42.5,42.5\n2,13.0,13.0\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&csv_path).expect("source CSV should remain unchanged"),
+            "customer_id,amount\n1,42.5\n2,13.0\n"
         );
 
+        fs::remove_file(output_path).expect("executed CSV output should clean up");
         fs::remove_file(csv_path).expect("test csv should clean up");
+    }
+
+    #[test]
+    fn preview_execution_summarizes_parsed_csv_write_actions() {
+        let csv_path = write_test_csv(
+            "customer_id,amount,approved\n1,42.5,true\n2,oops,false\n3,11.25,true\n",
+        );
+        let output_path = env::temp_dir()
+            .join(format!(
+                "relay-agent-storage-preview-summary-{}.csv",
+                Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let mut storage = AppStorage::default();
+
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Revenue cleanup".to_string(),
+                objective: "Summarize parsed write actions before execution".to_string(),
+                primary_workbook_path: Some(csv_path.to_string_lossy().into_owned()),
+            })
+            .expect("session should be created");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Generate preview summary".to_string(),
+                objective: "Preview rename, cast, filter, derive, and save-copy actions."
+                    .to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+
+        storage
+            .generate_relay_packet(GenerateRelayPacketRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+            })
+            .expect("packet should generate");
+        let submitted = storage
+            .submit_copilot_response(SubmitCopilotResponseRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+                raw_response: format!(
+                    r#"{{
+                      "summary": "Preview a normalized output copy.",
+                      "actions": [
+                        {{
+                          "tool": "table.rename_columns",
+                          "sheet": "Sheet1",
+                          "args": {{
+                            "renames": [
+                              {{ "from": "amount", "to": "net_amount" }}
+                            ]
+                          }}
+                        }},
+                        {{
+                          "tool": "table.cast_columns",
+                          "sheet": "Sheet1",
+                          "args": {{
+                            "casts": [
+                              {{ "column": "net_amount", "toType": "number" }}
+                            ]
+                          }}
+                        }},
+                        {{
+                          "tool": "table.filter_rows",
+                          "sheet": "Sheet1",
+                          "args": {{
+                            "predicate": "approved = true"
+                          }}
+                        }},
+                        {{
+                          "tool": "table.derive_column",
+                          "sheet": "Sheet1",
+                          "args": {{
+                            "column": "gross_amount",
+                            "expression": "[net_amount] + 10",
+                            "position": "after",
+                            "afterColumn": "net_amount"
+                          }}
+                        }},
+                        {{
+                          "tool": "workbook.save_copy",
+                          "args": {{
+                            "outputPath": "{}"
+                          }}
+                        }}
+                      ]
+                    }}"#,
+                    output_path
+                ),
+            })
+            .expect("response should parse");
+        assert!(submitted.accepted);
+
+        let preview = storage
+            .preview_execution(PreviewExecutionRequest {
+                session_id: session.id,
+                turn_id: turn.id,
+            })
+            .expect("preview should succeed");
+
+        assert!(preview.ready);
+        assert!(preview.requires_approval);
+        assert_eq!(preview.diff_summary.output_path, output_path);
+        assert_eq!(preview.diff_summary.target_count, 1);
+        assert_eq!(preview.diff_summary.estimated_affected_rows, 2);
+        assert_eq!(preview.diff_summary.sheets.len(), 1);
+        assert_eq!(preview.diff_summary.sheets[0].target.label, "Sheet1");
+        assert_eq!(preview.diff_summary.sheets[0].target.sheet, "Sheet1");
+        assert_eq!(
+            preview.diff_summary.sheets[0].changed_columns,
+            vec!["net_amount".to_string()]
+        );
+        assert_eq!(
+            preview.diff_summary.sheets[0].added_columns,
+            vec!["gross_amount".to_string()]
+        );
+        assert_eq!(preview.diff_summary.sheets[0].estimated_affected_rows, 2);
+        assert!(preview.diff_summary.sheets[0]
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("do not match `number`")));
+        assert!(!Path::new(&output_path).exists());
+
+        fs::remove_file(csv_path).expect("test csv should clean up");
+    }
+
+    #[test]
+    fn execution_sanitizes_formula_like_csv_cells_on_save_copy() {
+        let original_csv = "customer_id,comment,balance\n1,=SUM(A1:A2),-5\n2,@mention,+4\n";
+        let csv_path = write_test_csv(original_csv);
+        let output_path = env::temp_dir()
+            .join(format!(
+                "relay-agent-sanitized-output-{}.csv",
+                Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let mut storage = AppStorage::default();
+
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Sanitize CSV output".to_string(),
+                objective: "Neutralize formula-like prefixes in save-copy execution".to_string(),
+                primary_workbook_path: Some(csv_path.to_string_lossy().into_owned()),
+            })
+            .expect("session should be created");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Create safe CSV copy".to_string(),
+                objective: "Preview and execute a sanitized CSV output.".to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+
+        storage
+            .generate_relay_packet(GenerateRelayPacketRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+            })
+            .expect("packet should generate");
+        storage
+            .submit_copilot_response(SubmitCopilotResponseRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+                raw_response: format!(
+                    r#"{{
+                      "summary": "Write a sanitized CSV save-copy output.",
+                      "actions": [
+                        {{
+                          "tool": "table.derive_column",
+                          "sheet": "Sheet1",
+                          "args": {{
+                            "column": "review_flag",
+                            "expression": "\"=needs-review\"",
+                            "position": "end"
+                          }}
+                        }},
+                        {{
+                          "tool": "workbook.save_copy",
+                          "args": {{
+                            "outputPath": "{}"
+                          }}
+                        }}
+                      ]
+                    }}"#,
+                    output_path
+                ),
+            })
+            .expect("response should parse");
+        storage
+            .preview_execution(PreviewExecutionRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+            })
+            .expect("preview should succeed");
+        storage
+            .respond_to_approval(RespondToApprovalRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+                decision: ApprovalDecision::Approved,
+                note: Some("Sanitize dangerous prefixes".to_string()),
+            })
+            .expect("approval should be recorded");
+
+        let execution = storage
+            .run_execution(RunExecutionRequest {
+                session_id: session.id,
+                turn_id: turn.id,
+            })
+            .expect("execution should write a sanitized copy");
+
+        assert!(execution.executed);
+        assert_eq!(execution.output_path.as_deref(), Some(output_path.as_str()));
+        assert!(execution
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("CSV output sanitization prefixed 6 cell(s)")));
+        assert_eq!(
+            fs::read_to_string(&output_path).expect("sanitized CSV output should exist"),
+            "customer_id,comment,balance,review_flag\n1,'=SUM(A1:A2),'-5,'=needs-review\n2,'@mention,'+4,'=needs-review\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&csv_path).expect("source CSV should remain unchanged"),
+            original_csv
+        );
+
+        fs::remove_file(output_path).expect("sanitized CSV output should clean up");
+        fs::remove_file(csv_path).expect("test csv should clean up");
+    }
+
+    #[test]
+    fn readme_demo_flow_matches_documented_example_csv_workflow() {
+        let app_local_data_dir = unique_test_app_data_dir();
+        let example_csv_path = fs::canonicalize(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../..")
+                .join("examples")
+                .join("revenue-workflow-demo.csv"),
+        )
+        .expect("README demo CSV should exist");
+        let original_csv =
+            fs::read_to_string(&example_csv_path).expect("README demo CSV should be readable");
+        let output_path = env::temp_dir()
+            .join(format!(
+                "relay-agent-readme-demo-output-{}.csv",
+                Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+
+        let execution = {
+            let mut storage =
+                AppStorage::open(app_local_data_dir.clone()).expect("storage should initialize");
+
+            let session = storage
+                .create_session(CreateSessionRequest {
+                    title: "Revenue workflow demo".to_string(),
+                    objective:
+                        "Inspect the sample CSV, preview a safe transform, and write a sanitized copy."
+                            .to_string(),
+                    primary_workbook_path: Some(example_csv_path.to_string_lossy().into_owned()),
+                })
+                .expect("session should be created");
+            let turn = storage
+                .start_turn(StartTurnRequest {
+                    session_id: session.id.clone(),
+                    title: "Approved revenue cleanup".to_string(),
+                    objective:
+                        "Keep approved rows, add a review label, preview the diff, approve it, and save a copy."
+                            .to_string(),
+                    mode: RelayMode::Plan,
+                })
+                .expect("turn should start")
+                .turn;
+
+            let packet = storage
+                .generate_relay_packet(GenerateRelayPacketRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                })
+                .expect("packet should generate");
+            assert_eq!(packet.mode, RelayMode::Plan);
+            assert_eq!(packet.allowed_read_tools.len(), 4);
+            assert_eq!(packet.allowed_write_tools.len(), 6);
+            assert!(packet.context.iter().any(|line| line
+                == &format!(
+                    "Primary workbook path: {}",
+                    example_csv_path.to_string_lossy()
+                )));
+
+            let submission = storage
+                .submit_copilot_response(SubmitCopilotResponseRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                    raw_response: format!(
+                        r#"{{
+                          "version": "1.0",
+                          "summary": "Keep approved rows, add a review label, and write a sanitized CSV copy.",
+                          "actions": [
+                            {{
+                              "tool": "table.filter_rows",
+                              "sheet": "Sheet1",
+                              "args": {{
+                                "predicate": "approved = true"
+                              }}
+                            }},
+                            {{
+                              "tool": "table.derive_column",
+                              "sheet": "Sheet1",
+                              "args": {{
+                                "column": "review_label",
+                                "expression": "[segment] + \"-approved\"",
+                                "position": "end"
+                              }}
+                            }},
+                            {{
+                              "tool": "workbook.save_copy",
+                              "args": {{
+                                "outputPath": "{}"
+                              }}
+                            }}
+                          ],
+                          "followupQuestions": [],
+                          "warnings": []
+                        }}"#,
+                        output_path
+                    ),
+                })
+                .expect("README response example should parse");
+            assert!(submission.accepted);
+            assert_eq!(
+                submission
+                    .parsed_response
+                    .as_ref()
+                    .map(|response| response.actions.len()),
+                Some(3)
+            );
+
+            let preview = storage
+                .preview_execution(PreviewExecutionRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                })
+                .expect("preview should succeed");
+            assert!(preview.ready);
+            assert!(preview.requires_approval);
+            assert_eq!(preview.diff_summary.output_path, output_path);
+            assert_eq!(preview.diff_summary.target_count, 1);
+            assert_eq!(preview.diff_summary.estimated_affected_rows, 3);
+            assert!(preview.warnings.is_empty());
+            assert_eq!(preview.diff_summary.sheets.len(), 1);
+            assert_eq!(preview.diff_summary.sheets[0].target.sheet, "Sheet1");
+            assert_eq!(
+                preview.diff_summary.sheets[0].added_columns,
+                vec!["review_label".to_string()]
+            );
+            assert!(preview.diff_summary.sheets[0].changed_columns.is_empty());
+            assert_eq!(preview.diff_summary.sheets[0].estimated_affected_rows, 3);
+            assert!(preview.diff_summary.sheets[0].warnings.is_empty());
+
+            let approval = storage
+                .respond_to_approval(RespondToApprovalRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                    decision: ApprovalDecision::Approved,
+                    note: Some("README demo approval".to_string()),
+                })
+                .expect("approval should be recorded");
+            assert!(approval.ready_for_execution);
+
+            storage
+                .run_execution(RunExecutionRequest {
+                    session_id: session.id,
+                    turn_id: turn.id,
+                })
+                .expect("execution should write the documented output")
+        };
+
+        assert!(execution.executed);
+        assert_eq!(execution.output_path.as_deref(), Some(output_path.as_str()));
+        assert!(execution
+            .warnings
+            .iter()
+            .any(|warning| warning == "Approval note: README demo approval"));
+        assert!(execution
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("CSV output sanitization prefixed 3 cell(s)")));
+        assert_eq!(
+            fs::read_to_string(&output_path).expect("README demo output should exist"),
+            concat!(
+                "customer_id,region,segment,amount,approved,posted_on,comment,review_label\n",
+                "1,East,Retail,42.5,true,2025-01-01,'=needs-review,Retail-approved\n",
+                "3,West,Retail,11.25,true,2025-01-03,'+follow-up,Retail-approved\n",
+                "4,West,Enterprise,oops,true,2025-01-04,'@vip,Enterprise-approved\n"
+            )
+        );
+        assert_eq!(
+            fs::read_to_string(&example_csv_path)
+                .expect("README demo source should stay unchanged"),
+            original_csv
+        );
+
+        fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
+        fs::remove_file(output_path).expect("README demo output should clean up");
     }
 
     #[test]
@@ -2259,6 +2722,13 @@ mod tests {
     fn persists_turn_artifacts_and_logs_with_session_linkage() {
         let app_local_data_dir = unique_test_app_data_dir();
         let csv_path = write_test_csv("customer_id,amount\n1,42.5\n2,13.0\n");
+        let output_path = env::temp_dir()
+            .join(format!(
+                "relay-agent-artifact-output-{}.csv",
+                Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
         let (session_id, turn_id) = {
             let mut storage =
                 AppStorage::open(app_local_data_dir.clone()).expect("storage should initialize");
@@ -2291,27 +2761,29 @@ mod tests {
                 .submit_copilot_response(SubmitCopilotResponseRequest {
                     session_id: session.id.clone(),
                     turn_id: turn.id.clone(),
-                    raw_response: r#"{
+                    raw_response: format!(
+                        r#"{{
                       "summary": "Create a normalized output copy.",
                       "actions": [
-                        {
+                        {{
                           "tool": "table.derive_column",
                           "sheet": "Sheet1",
-                          "args": {
+                          "args": {{
                             "column": "normalized_total",
                             "expression": "amount",
                             "position": "end"
-                          }
-                        },
-                        {
+                          }}
+                        }},
+                        {{
                           "tool": "workbook.save_copy",
-                          "args": {
-                            "outputPath": "/tmp/artifact-output.csv"
-                          }
-                        }
+                          "args": {{
+                            "outputPath": "{}"
+                          }}
+                        }}
                       ]
-                    }"#
-                    .to_string(),
+                    }}"#,
+                        output_path
+                    ),
                 })
                 .expect("response should parse");
             storage
@@ -2350,6 +2822,7 @@ mod tests {
             .expect("turn should be present after reload");
 
         assert_eq!(turn.item_ids.len(), 6);
+        assert_eq!(turn.status, TurnStatus::Executed);
 
         let mut artifact_types = BTreeSet::new();
         let mut execution_output_path = None;
@@ -2394,10 +2867,7 @@ mod tests {
                 "validation".to_string(),
             ])
         );
-        assert_eq!(
-            execution_output_path.as_deref(),
-            Some("/tmp/artifact-output.csv")
-        );
+        assert_eq!(execution_output_path.as_deref(), Some(output_path.as_str()));
 
         let session_log = storage_root
             .join("sessions")
@@ -2444,6 +2914,7 @@ mod tests {
             .all(|entry| entry.turn_id.as_deref() == Some(turn_id.as_str())));
 
         fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
+        fs::remove_file(output_path).expect("artifact output should clean up");
         fs::remove_file(csv_path).expect("test csv should clean up");
     }
 
@@ -2621,6 +3092,9 @@ mod tests {
                 }
                 "diff-summary" => {
                     diff_summary_found = true;
+                    assert_eq!(payload["targetCount"], 1);
+                    assert_eq!(payload["estimatedAffectedRows"], 3);
+                    assert_eq!(payload["sheets"][0]["target"]["sheet"], "Sheet1");
                     assert_eq!(
                         payload["sheets"][0]["changedColumns"][0],
                         "normalized_amount"
@@ -2636,6 +3110,144 @@ mod tests {
         assert!(column_profile_found);
         assert!(diff_summary_found);
         assert!(artifact_types.contains("preview"));
+
+        fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
+        fs::remove_file(csv_path).expect("test csv should clean up");
+    }
+
+    #[test]
+    fn preview_runs_group_aggregate_through_the_storage_flow_without_writing_files() {
+        let app_local_data_dir = unique_test_app_data_dir();
+        let original_csv =
+            "region,segment,amount,units\nEast,Retail,10,1\nEast,SMB,15,2\nWest,Retail,3,1\nWest,SMB,oops,4\n";
+        let csv_path = write_test_csv(original_csv);
+        let output_path = env::temp_dir()
+            .join(format!("relay-agent-demo-aggregate-{}.csv", Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
+
+        let preview = {
+            let mut storage =
+                AppStorage::open(app_local_data_dir.clone()).expect("storage should initialize");
+
+            let session = storage
+                .create_session(CreateSessionRequest {
+                    title: "CSV demo aggregation".to_string(),
+                    objective: "Inspect and aggregate the source workbook".to_string(),
+                    primary_workbook_path: Some(csv_path.to_string_lossy().into_owned()),
+                })
+                .expect("session should be created");
+            let turn = storage
+                .start_turn(StartTurnRequest {
+                    session_id: session.id.clone(),
+                    title: "Summarize revenue by region".to_string(),
+                    objective: "Inspect the CSV and preview grouped totals.".to_string(),
+                    mode: RelayMode::Plan,
+                })
+                .expect("turn should start")
+                .turn;
+
+            storage
+                .generate_relay_packet(GenerateRelayPacketRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                })
+                .expect("packet should generate");
+            storage
+                .submit_copilot_response(SubmitCopilotResponseRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                    raw_response: format!(
+                        r#"{{
+                          "summary": "Inspect the workbook and preview an aggregated save-copy output.",
+                          "actions": [
+                            {{
+                              "tool": "workbook.inspect",
+                              "args": {{}}
+                            }},
+                            {{
+                              "tool": "table.group_aggregate",
+                              "sheet": "Sheet1",
+                              "args": {{
+                                "groupBy": ["region"],
+                                "measures": [
+                                  {{
+                                    "column": "amount",
+                                    "op": "sum",
+                                    "as": "total_amount"
+                                  }},
+                                  {{
+                                    "column": "units",
+                                    "op": "avg",
+                                    "as": "average_units"
+                                  }},
+                                  {{
+                                    "column": "segment",
+                                    "op": "count",
+                                    "as": "row_count"
+                                  }}
+                                ]
+                              }}
+                            }},
+                            {{
+                              "tool": "workbook.save_copy",
+                              "args": {{
+                                "outputPath": "{}"
+                              }}
+                            }}
+                          ]
+                        }}"#,
+                        output_path
+                    ),
+                })
+                .expect("response should parse");
+
+            storage
+                .preview_execution(PreviewExecutionRequest {
+                    session_id: session.id,
+                    turn_id: turn.id,
+                })
+                .expect("preview should succeed")
+        };
+
+        assert!(preview.ready);
+        assert!(preview.requires_approval);
+        assert_eq!(preview.diff_summary.output_path, output_path);
+        assert_eq!(preview.diff_summary.target_count, 1);
+        assert_eq!(preview.diff_summary.estimated_affected_rows, 2);
+        assert_eq!(preview.diff_summary.sheets.len(), 1);
+        assert_eq!(preview.diff_summary.sheets[0].target.sheet, "Sheet1");
+        assert_eq!(preview.diff_summary.sheets[0].estimated_affected_rows, 2);
+        assert_eq!(
+            preview.diff_summary.sheets[0].added_columns,
+            vec![
+                "total_amount".to_string(),
+                "average_units".to_string(),
+                "row_count".to_string()
+            ]
+        );
+        assert_eq!(
+            preview.diff_summary.sheets[0].removed_columns,
+            vec![
+                "segment".to_string(),
+                "amount".to_string(),
+                "units".to_string()
+            ]
+        );
+        assert!(preview
+            .diff_summary
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("workbook.inspect")));
+        assert!(preview.diff_summary.sheets[0]
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("ignored 1 non-numeric value")));
+        assert_eq!(
+            fs::read_to_string(&csv_path).expect("source CSV should still exist"),
+            original_csv
+        );
+        assert!(!Path::new(&output_path).exists());
 
         fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
         fs::remove_file(csv_path).expect("test csv should clean up");

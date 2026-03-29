@@ -468,7 +468,7 @@
         "id": "8",
         "title": "Implement the workbook inspection and CSV-first transformation engine",
         "description": "Deliver the safe vertical slice for workbook inspection, profiling, and CSV-based transformations, with xlsx support limited to inspect and save-copy priorities.",
-        "status": "in-progress",
+        "status": "done",
         "dependencies": [
           "3",
           "4"
@@ -518,22 +518,23 @@
             "id": 4,
             "title": "Add aggregation, save-copy support, and CSV demo verification",
             "description": "Complete the remaining MVP workbook operations and validate the vertical slice on sample data.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               3
             ],
             "details": "Implement `table.group_aggregate` and `workbook.save_copy`, and leave `join_lookup` as a documented stub if necessary. Verify the CSV path supports end-to-end inspection and preview behavior on sample data.",
             "testStrategy": "Run the CSV demo flow through inspect and preview paths and confirm save-copy behavior is available without touching the original file.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T05:30:48Z"
           }
         ],
-        "updatedAt": "2026-03-29T04:15:29Z"
+        "updatedAt": "2026-03-29T05:30:48Z"
       },
       {
         "id": "9",
         "title": "Add execution preview, approval flow, and safe save-copy execution",
         "description": "Show a diff summary before writes, require approval, and run changes through save-copy only behavior with the specified safety constraints.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "6",
           "7",
@@ -547,57 +548,62 @@
             "id": 1,
             "title": "Define the preview payload and diff summary structure",
             "description": "Formalize the data returned by `preview_execution` before any writes are approved.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [],
             "details": "Specify the preview payload so it includes the target sheet, changed or added columns, approximate affected row count, and output destination in a stable `DiffSummary`-aligned shape.",
             "testStrategy": "Confirm the preview payload shape supports every UI field required by the PRD.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T05:40:36Z"
           },
           {
             "id": 2,
             "title": "Implement backend preview generation from parsed actions",
             "description": "Turn validated action plans into a concrete pre-execution summary on the backend.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1
             ],
             "details": "Generate execution previews from parsed spreadsheet actions and workbook context so the backend can explain what will happen before any file output is written.",
             "testStrategy": "Verify `preview_execution` returns meaningful summaries for supported CSV actions.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T05:56:42Z"
           },
           {
             "id": 3,
             "title": "Render diff preview and approval flow in the Studio UI",
             "description": "Expose the preview result and explicit approval step to the user before execution.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1,
               2
             ],
             "details": "Show the execution preview in the right-side diff area and add an approval path that must be completed before a write-capable execution can proceed.",
             "testStrategy": "Verify the UI shows preview details clearly and prevents execution until approval is granted.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T06:07:10Z"
           },
           {
             "id": 4,
             "title": "Enforce save-copy only execution safeguards and CSV sanitization",
             "description": "Apply the safety rules that keep the MVP within the allowed execution envelope.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               2,
               3
             ],
             "details": "Ensure execution writes only to a copy, treats the original workbook as read-only, sanitizes CSV cells starting with `=`, `+`, `-`, or `@`, and rejects unsafe inputs such as shell, VBA, arbitrary code, network access, or raw Excel formulas from model output.",
             "testStrategy": "Run a CSV execution flow and confirm output is save-copy only, the original file stays unchanged, and unsafe CSV prefixes are neutralized.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T06:29:36Z"
           }
-        ]
-      },
+        ],
+      "updatedAt": "2026-03-29T06:29:36Z"
+    },
       {
         "id": "10",
         "title": "Ship demo assets, README guidance, and implementation log updates",
         "description": "Add the examples and documentation needed to run, understand, and evaluate the MVP consistently.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "1",
           "6",
@@ -611,58 +617,63 @@
             "id": 1,
             "title": "Add example CSV assets for the MVP demo flow",
             "description": "Provide a small sample dataset that exercises the inspect, preview, and save-copy path.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [],
             "details": "Create `examples/` and add at least one compact CSV sample suited to the demo transformations and preview flow described in the PRD.",
             "testStrategy": "Verify the example data can be loaded and used in the MVP workflow without additional manual setup.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T06:34:33Z"
           },
           {
             "id": 2,
             "title": "Update `README` with setup, packet, and response examples",
             "description": "Document how to start the app and what relay input and output should look like.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1
             ],
             "details": "Add startup instructions, the demo flow, a sample relay packet to paste into Copilot, and a minimal valid Copilot JSON response example that matches the implemented contracts.",
             "testStrategy": "Review the README and confirm a new contributor can reach the demo flow using only documented steps.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T06:43:34Z"
           },
           {
             "id": 3,
             "title": "Keep `docs/IMPLEMENTATION.md` aligned with milestones and verification results",
             "description": "Record the actual implementation progress and verification outcomes as work lands.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1,
               2
             ],
             "details": "Update `docs/IMPLEMENTATION.md` with milestone decisions, execution notes, command results, and known limitations so it reflects the real implementation instead of an aspirational plan.",
             "testStrategy": "Confirm the implementation log tracks milestone progress, verification output, and known limitations in a current state.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T06:47:31Z"
           },
           {
             "id": 4,
             "title": "Run the documented demo flow and reconcile docs with reality",
             "description": "Use the example assets and docs to verify the MVP can be demonstrated as described.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               2,
               3
             ],
             "details": "Follow the README steps against the example CSV flow, compare the actual app behavior to the docs, and tighten any mismatches or missing limitation notes before considering the MVP documented.",
             "testStrategy": "Execute the documented demo path and verify the README and known limitations match actual behavior.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T07:04:50Z"
           }
-        ]
+        ],
+        "updatedAt": "2026-03-29T07:04:50Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-29T04:15:29Z",
+      "lastModified": "2026-03-29T07:04:50Z",
       "taskCount": 10,
-      "completedCount": 7,
+      "completedCount": 10,
       "tags": [
         "master"
       ]

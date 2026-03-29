@@ -1,0 +1,6 @@
+customer_id,region,segment,amount,approved,posted_on,comment
+1,East,Retail,42.5,true,2025-01-01,=needs-review
+2,East,SMB,13.0,false,2025-01-02,ok
+3,West,Retail,11.25,true,2025-01-03,+follow-up
+4,West,Enterprise,oops,true,2025-01-04,@vip
+5,South,Retail,7.5,false,2025-01-05,clean

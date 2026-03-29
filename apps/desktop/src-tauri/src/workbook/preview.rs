@@ -1,4 +1,9 @@
-use std::collections::BTreeSet;
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+};
 
 use chrono::{NaiveDate, NaiveDateTime};
 use serde::de::DeserializeOwned;
@@ -10,7 +15,10 @@ use super::{
     inspect::{normalize_headers, pad_row},
     source::WorkbookSource,
 };
-use crate::models::{ColumnType, DiffSummary, SheetDiff, SpreadsheetAction, WorkbookFormat};
+use crate::models::{
+    ColumnType, DiffSummary, PreviewTarget, PreviewTargetKind, SheetDiff, SpreadsheetAction,
+    WorkbookFormat,
+};
 
 const CSV_SHEET_NAME: &str = "Sheet1";
 
@@ -18,6 +26,12 @@ const CSV_SHEET_NAME: &str = "Sheet1";
 pub struct PreviewResult {
     pub diff_summary: DiffSummary,
     pub requires_approval: bool,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct WriteExecutionResult {
+    pub output_path: String,
     pub warnings: Vec<String>,
 }
 
@@ -64,25 +78,7 @@ pub fn preview_actions(
         );
     }
 
-    let mut warnings = Vec::new();
-    let explicit_output_path = actions
-        .iter()
-        .filter_map(extract_save_copy_output_path)
-        .last()
-        .map(str::to_string);
-    let output_path = explicit_output_path
-        .clone()
-        .or_else(|| {
-            source.map(|source| source.default_output_path().to_string_lossy().into_owned())
-        })
-        .unwrap_or_else(|| "relay-agent-output-preview.csv".to_string());
-
-    if requires_approval && explicit_output_path.is_none() {
-        warnings.push(
-            "No explicit save-copy path was provided, so the preview used a derived output path."
-                .to_string(),
-        );
-    }
+    let (output_path, warnings) = resolve_output_path(source, actions, requires_approval)?;
 
     let mut table = if requires_csv_preview {
         Some(CsvPreviewTable::load(
@@ -93,95 +89,16 @@ pub fn preview_actions(
         None
     };
     let mut sheet_diff = None;
-
-    for action in actions {
-        match action.tool.as_str() {
-            "table.rename_columns" => {
-                let table = require_csv_table(table.as_mut())?;
-                table.ensure_sheet(action.sheet.as_deref())?;
-                let args: RenameColumnsArgs = parse_args("table.rename_columns", &action.args)?;
-                let changed_columns = table.rename_columns(&args.renames)?;
-                let diff = ensure_sheet_diff(&mut sheet_diff, table.row_count());
-                diff.estimated_rows = table.row_count();
-                for column in changed_columns {
-                    push_unique(&mut diff.changed_columns, column);
-                }
-            }
-            "table.cast_columns" => {
-                let table = require_csv_table(table.as_mut())?;
-                table.ensure_sheet(action.sheet.as_deref())?;
-                let args: CastColumnsArgs = parse_args("table.cast_columns", &action.args)?;
-                let cast_warnings = table.cast_columns(&args.casts)?;
-                let diff = ensure_sheet_diff(&mut sheet_diff, table.row_count());
-                diff.estimated_rows = table.row_count();
-                for cast in args.casts {
-                    push_unique(&mut diff.changed_columns, cast.column);
-                }
-                for warning in cast_warnings {
-                    push_unique(&mut diff.warnings, warning);
-                }
-            }
-            "table.filter_rows" => {
-                let table = require_csv_table(table.as_mut())?;
-                table.ensure_sheet(action.sheet.as_deref())?;
-                let args: FilterRowsArgs = parse_args("table.filter_rows", &action.args)?;
-                let diff = ensure_sheet_diff(&mut sheet_diff, table.row_count());
-                if let Some(output_sheet) = args.output_sheet.as_deref() {
-                    push_unique(
-                        &mut diff.warnings,
-                        format!(
-                            "CSV preview ignores outputSheet `{output_sheet}` and keeps a single logical sheet."
-                        ),
-                    );
-                }
-                table.filter_rows(&args.predicate)?;
-                diff.estimated_rows = table.row_count();
-            }
-            "table.derive_column" => {
-                let table = require_csv_table(table.as_mut())?;
-                table.ensure_sheet(action.sheet.as_deref())?;
-                let args: DeriveColumnArgs = parse_args("table.derive_column", &action.args)?;
-                table.derive_column(&args)?;
-                let diff = ensure_sheet_diff(&mut sheet_diff, table.row_count());
-                diff.estimated_rows = table.row_count();
-                push_unique(&mut diff.added_columns, args.column);
-            }
-            "table.group_aggregate" => {
-                let table = require_csv_table(table.as_mut())?;
-                table.ensure_sheet(action.sheet.as_deref())?;
-                let args: GroupAggregateArgs = parse_args("table.group_aggregate", &action.args)?;
-                let diff = ensure_sheet_diff(&mut sheet_diff, table.row_count());
-                diff.estimated_rows = table.row_count().max(1);
-                for measure in args.measures {
-                    push_unique(&mut diff.added_columns, measure.alias);
-                }
-                push_unique(
-                    &mut diff.warnings,
-                    "Aggregation preview remains approximate until workbook save-copy execution is implemented."
-                        .to_string(),
-                );
-                if let Some(output_sheet) = args.output_sheet {
-                    push_unique(
-                        &mut diff.warnings,
-                        format!(
-                            "CSV preview ignores outputSheet `{output_sheet}` and keeps a single logical sheet."
-                        ),
-                    );
-                }
-            }
-            "workbook.save_copy"
-            | "workbook.inspect"
-            | "sheet.preview"
-            | "sheet.profile_columns"
-            | "session.diff_from_base" => {}
-            _ => {}
-        }
-    }
+    apply_actions_to_csv_table(actions, &mut table, &mut sheet_diff)?;
 
     let mut sheets = Vec::new();
     if let Some(sheet_diff) = sheet_diff {
         sheets.push(sheet_diff);
     }
+    let estimated_affected_rows = sheets
+        .iter()
+        .map(|sheet| sheet.estimated_affected_rows)
+        .sum();
 
     let diff_summary = DiffSummary {
         source_path: source
@@ -189,6 +106,8 @@ pub fn preview_actions(
             .unwrap_or_else(|| "unspecified-input".to_string()),
         output_path,
         mode: "preview".to_string(),
+        target_count: sheets.len() as u32,
+        estimated_affected_rows,
         sheets,
         warnings: warnings.clone(),
     };
@@ -196,6 +115,54 @@ pub fn preview_actions(
     Ok(PreviewResult {
         diff_summary,
         requires_approval,
+        warnings,
+    })
+}
+
+pub fn execute_actions(
+    csv_backend: &CsvBackend,
+    source: &WorkbookSource,
+    actions: &[SpreadsheetAction],
+) -> Result<WriteExecutionResult, String> {
+    if !actions.iter().any(is_write_action) {
+        return Err("write execution requires at least one write action".to_string());
+    }
+
+    let requires_csv_replay = actions.iter().any(requires_csv_transform_preview);
+    let (output_path, mut warnings) = resolve_output_path(Some(source), actions, true)?;
+
+    if source.format() == WorkbookFormat::Xlsx {
+        if requires_csv_replay {
+            return Err(
+                "write execution is currently supported only for CSV workbook sources".to_string(),
+            );
+        }
+
+        write_output_copy(source.path(), Path::new(&output_path))?;
+        return Ok(WriteExecutionResult {
+            output_path,
+            warnings,
+        });
+    }
+
+    let mut table = Some(CsvPreviewTable::load(csv_backend, source)?);
+    let mut sheet_diff = None;
+    apply_actions_to_csv_table(actions, &mut table, &mut sheet_diff)?;
+
+    let rendered = table
+        .expect("CSV write execution initializes a staged table")
+        .render_sanitized_csv(csv_backend)?;
+    write_output_contents(Path::new(&output_path), rendered.contents.as_bytes())?;
+
+    if rendered.sanitized_cell_count > 0 {
+        warnings.push(format!(
+            "CSV output sanitization prefixed {} cell(s) that started with `=`, `+`, `-`, or `@`.",
+            rendered.sanitized_cell_count
+        ));
+    }
+
+    Ok(WriteExecutionResult {
+        output_path,
         warnings,
     })
 }
@@ -253,20 +220,95 @@ struct DeriveColumnArgs {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GroupAggregateArgs {
+    group_by: Vec<String>,
     measures: Vec<AggregateMeasure>,
     output_sheet: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum AggregateOperation {
+    Sum,
+    Avg,
+    Count,
+    Min,
+    Max,
+}
+
+impl AggregateOperation {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Sum => "sum",
+            Self::Avg => "avg",
+            Self::Count => "count",
+            Self::Min => "min",
+            Self::Max => "max",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AggregateMeasure {
+    column: String,
+    op: AggregateOperation,
     #[serde(rename = "as")]
     alias: String,
+}
+
+#[derive(Debug)]
+struct GroupAggregateResult {
+    added_columns: Vec<String>,
+    changed_columns: Vec<String>,
+    removed_columns: Vec<String>,
+    warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct AggregateMeasurePlan {
+    column: String,
+    column_index: usize,
+    op: AggregateOperation,
+    alias: String,
+}
+
+#[derive(Clone, Debug)]
+struct GroupAccumulator {
+    key_values: Vec<String>,
+    states: Vec<AggregateState>,
+}
+
+#[derive(Clone, Debug)]
+enum AggregateState {
+    Sum {
+        total: f64,
+        numeric_count: u32,
+        invalid_count: u32,
+    },
+    Avg {
+        total: f64,
+        numeric_count: u32,
+        invalid_count: u32,
+    },
+    Count {
+        count: u32,
+    },
+    Min {
+        best: Option<String>,
+    },
+    Max {
+        best: Option<String>,
+    },
 }
 
 struct CsvPreviewTable {
     columns: Vec<String>,
     rows: Vec<Vec<String>>,
+}
+
+struct RenderedCsvOutput {
+    contents: String,
+    sanitized_cell_count: usize,
 }
 
 impl CsvPreviewTable {
@@ -438,6 +480,152 @@ impl CsvPreviewTable {
         Ok(())
     }
 
+    fn group_aggregate(
+        &mut self,
+        args: &GroupAggregateArgs,
+    ) -> Result<GroupAggregateResult, String> {
+        let original_columns = self.columns.clone();
+        let group_by_indexes = args
+            .group_by
+            .iter()
+            .map(|column| self.column_index(column))
+            .collect::<Result<Vec<_>, _>>()?;
+        let measures = args
+            .measures
+            .iter()
+            .map(|measure| {
+                Ok(AggregateMeasurePlan {
+                    column: measure.column.clone(),
+                    column_index: self.column_index(&measure.column)?,
+                    op: measure.op,
+                    alias: measure.alias.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let next_columns = args
+            .group_by
+            .iter()
+            .cloned()
+            .chain(args.measures.iter().map(|measure| measure.alias.clone()))
+            .collect::<Vec<_>>();
+        ensure_unique_columns(&next_columns)?;
+
+        let mut group_indexes = BTreeMap::<Vec<String>, usize>::new();
+        let mut groups = Vec::new();
+
+        for row in &self.rows {
+            let key_values = group_by_indexes
+                .iter()
+                .map(|index| row.get(*index).cloned().unwrap_or_default())
+                .collect::<Vec<_>>();
+            let group_index = match group_indexes.get(&key_values).copied() {
+                Some(existing) => existing,
+                None => {
+                    let next_index = groups.len();
+                    group_indexes.insert(key_values.clone(), next_index);
+                    groups.push(GroupAccumulator::new(key_values, &measures));
+                    next_index
+                }
+            };
+            groups[group_index].observe(row, &measures);
+        }
+
+        let mut warnings = Vec::new();
+        let aggregated_rows = groups
+            .into_iter()
+            .map(|group| {
+                let (row, group_warnings) = group.into_row(&measures);
+                warnings.extend(group_warnings);
+                row
+            })
+            .collect::<Vec<_>>();
+
+        self.columns = next_columns.clone();
+        self.rows = aggregated_rows;
+
+        let mut added_columns = Vec::new();
+        let mut changed_columns = Vec::new();
+        let mut removed_columns = Vec::new();
+
+        for column in &next_columns {
+            if original_columns.iter().any(|existing| existing == column) {
+                if !args.group_by.iter().any(|group_by| group_by == column) {
+                    push_unique(&mut changed_columns, column.clone());
+                }
+            } else {
+                push_unique(&mut added_columns, column.clone());
+            }
+        }
+
+        for column in &original_columns {
+            if !next_columns.iter().any(|next| next == column) {
+                push_unique(&mut removed_columns, column.clone());
+            }
+        }
+
+        Ok(GroupAggregateResult {
+            added_columns,
+            changed_columns,
+            removed_columns,
+            warnings,
+        })
+    }
+
+    fn render_csv(&self, csv_backend: &CsvBackend) -> Result<String, String> {
+        let mut writer = csv_backend.writer_builder().from_writer(Vec::new());
+        writer
+            .write_record(&self.columns)
+            .map_err(|error| format!("failed to write CSV headers for preview output: {error}"))?;
+
+        for row in &self.rows {
+            writer.write_record(row).map_err(|error| {
+                format!("failed to write CSV preview output row to buffer: {error}")
+            })?;
+        }
+
+        let bytes = writer.into_inner().map_err(|error| {
+            format!(
+                "failed to finalize CSV preview output buffer: {}",
+                error.error()
+            )
+        })?;
+
+        String::from_utf8(bytes)
+            .map_err(|error| format!("failed to decode CSV preview output as UTF-8: {error}"))
+    }
+
+    fn render_sanitized_csv(&self, csv_backend: &CsvBackend) -> Result<RenderedCsvOutput, String> {
+        let mut writer = csv_backend.writer_builder().from_writer(Vec::new());
+        let (headers, header_sanitized_count) = sanitize_csv_record(&self.columns);
+        writer.write_record(headers).map_err(|error| {
+            format!("failed to write CSV headers for execution output: {error}")
+        })?;
+
+        let mut sanitized_cell_count = header_sanitized_count;
+        for row in &self.rows {
+            let (sanitized_row, row_sanitized_count) = sanitize_csv_record(row);
+            sanitized_cell_count += row_sanitized_count;
+            writer.write_record(sanitized_row).map_err(|error| {
+                format!("failed to write CSV execution output row to buffer: {error}")
+            })?;
+        }
+
+        let bytes = writer.into_inner().map_err(|error| {
+            format!(
+                "failed to finalize CSV execution output buffer: {}",
+                error.error()
+            )
+        })?;
+
+        let contents = String::from_utf8(bytes)
+            .map_err(|error| format!("failed to decode CSV execution output as UTF-8: {error}"))?;
+
+        Ok(RenderedCsvOutput {
+            contents,
+            sanitized_cell_count,
+        })
+    }
+
     fn column_index(&self, column: &str) -> Result<usize, String> {
         self.find_column_index(column)
             .ok_or_else(|| format!("column `{column}` was not found in the staged CSV preview"))
@@ -445,6 +633,156 @@ impl CsvPreviewTable {
 
     fn find_column_index(&self, column: &str) -> Option<usize> {
         self.columns.iter().position(|existing| existing == column)
+    }
+}
+
+impl GroupAccumulator {
+    fn new(key_values: Vec<String>, measures: &[AggregateMeasurePlan]) -> Self {
+        Self {
+            key_values,
+            states: measures
+                .iter()
+                .map(|measure| AggregateState::new(measure.op))
+                .collect(),
+        }
+    }
+
+    fn observe(&mut self, row: &[String], measures: &[AggregateMeasurePlan]) {
+        for (state, measure) in self.states.iter_mut().zip(measures) {
+            let value = row
+                .get(measure.column_index)
+                .map(String::as_str)
+                .unwrap_or("");
+            state.observe(value);
+        }
+    }
+
+    fn into_row(self, measures: &[AggregateMeasurePlan]) -> (Vec<String>, Vec<String>) {
+        let mut row = self.key_values;
+        let mut warnings = Vec::new();
+
+        for (state, measure) in self.states.into_iter().zip(measures) {
+            let (value, warning) = state.finalize(measure);
+            row.push(value);
+            if let Some(warning) = warning {
+                push_unique(&mut warnings, warning);
+            }
+        }
+
+        (row, warnings)
+    }
+}
+
+impl AggregateState {
+    fn new(op: AggregateOperation) -> Self {
+        match op {
+            AggregateOperation::Sum => Self::Sum {
+                total: 0.0,
+                numeric_count: 0,
+                invalid_count: 0,
+            },
+            AggregateOperation::Avg => Self::Avg {
+                total: 0.0,
+                numeric_count: 0,
+                invalid_count: 0,
+            },
+            AggregateOperation::Count => Self::Count { count: 0 },
+            AggregateOperation::Min => Self::Min { best: None },
+            AggregateOperation::Max => Self::Max { best: None },
+        }
+    }
+
+    fn observe(&mut self, raw_value: &str) {
+        let value = raw_value.trim();
+
+        match self {
+            Self::Sum {
+                total,
+                numeric_count,
+                invalid_count,
+            }
+            | Self::Avg {
+                total,
+                numeric_count,
+                invalid_count,
+            } => {
+                if value.is_empty() {
+                    return;
+                }
+
+                match value.parse::<f64>() {
+                    Ok(parsed) => {
+                        *total += parsed;
+                        *numeric_count += 1;
+                    }
+                    Err(_) => *invalid_count += 1,
+                }
+            }
+            Self::Count { count } => {
+                if !value.is_empty() {
+                    *count += 1;
+                }
+            }
+            Self::Min { best } => {
+                if value.is_empty() {
+                    return;
+                }
+
+                match best {
+                    Some(current) if compare_aggregate_values(value, current) == Ordering::Less => {
+                        *best = Some(value.to_string());
+                    }
+                    None => *best = Some(value.to_string()),
+                    _ => {}
+                }
+            }
+            Self::Max { best } => {
+                if value.is_empty() {
+                    return;
+                }
+
+                match best {
+                    Some(current)
+                        if compare_aggregate_values(value, current) == Ordering::Greater =>
+                    {
+                        *best = Some(value.to_string());
+                    }
+                    None => *best = Some(value.to_string()),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn finalize(self, measure: &AggregateMeasurePlan) -> (String, Option<String>) {
+        match self {
+            Self::Sum {
+                total,
+                numeric_count,
+                invalid_count,
+            } => (
+                if numeric_count == 0 {
+                    String::new()
+                } else {
+                    format_number(total)
+                },
+                build_numeric_aggregation_warning(measure, invalid_count),
+            ),
+            Self::Avg {
+                total,
+                numeric_count,
+                invalid_count,
+            } => (
+                if numeric_count == 0 {
+                    String::new()
+                } else {
+                    format_number(total / numeric_count as f64)
+                },
+                build_numeric_aggregation_warning(measure, invalid_count),
+            ),
+            Self::Count { count } => (count.to_string(), None),
+            Self::Min { best } | Self::Max { best } => (best.unwrap_or_default(), None),
+        }
     }
 }
 
@@ -833,9 +1171,9 @@ fn column_type_label(column_type: ColumnType) -> &'static str {
     }
 }
 
-fn parse_args<T: DeserializeOwned>(tool: &str, args: &Value) -> Result<T, String> {
+fn parse_args<T: DeserializeOwned>(context: &str, tool: &str, args: &Value) -> Result<T, String> {
     serde_json::from_value(args.clone())
-        .map_err(|error| format!("failed to parse `{tool}` arguments for preview: {error}"))
+        .map_err(|error| format!("failed to parse `{tool}` arguments for {context}: {error}"))
 }
 
 fn ensure_unique_columns(columns: &[String]) -> Result<(), String> {
@@ -892,8 +1230,13 @@ fn find_last_operator<'a>(input: &str, operators: &'a [&'a str]) -> Option<(usiz
 
 fn ensure_sheet_diff(sheet_diff: &mut Option<SheetDiff>, row_count: u32) -> &mut SheetDiff {
     sheet_diff.get_or_insert_with(|| SheetDiff {
-        sheet: CSV_SHEET_NAME.to_string(),
-        estimated_rows: row_count,
+        target: PreviewTarget {
+            kind: PreviewTargetKind::Sheet,
+            sheet: CSV_SHEET_NAME.to_string(),
+            table: None,
+            label: CSV_SHEET_NAME.to_string(),
+        },
+        estimated_affected_rows: row_count,
         added_columns: Vec::new(),
         changed_columns: Vec::new(),
         removed_columns: Vec::new(),
@@ -903,6 +1246,229 @@ fn ensure_sheet_diff(sheet_diff: &mut Option<SheetDiff>, row_count: u32) -> &mut
 
 fn require_csv_table(table: Option<&mut CsvPreviewTable>) -> Result<&mut CsvPreviewTable, String> {
     table.ok_or_else(|| "CSV write preview state was not initialized".to_string())
+}
+
+fn apply_actions_to_csv_table(
+    actions: &[SpreadsheetAction],
+    table: &mut Option<CsvPreviewTable>,
+    sheet_diff: &mut Option<SheetDiff>,
+) -> Result<(), String> {
+    for action in actions {
+        match action.tool.as_str() {
+            "table.rename_columns" => {
+                let table = require_csv_table(table.as_mut())?;
+                table.ensure_sheet(action.sheet.as_deref())?;
+                let args: RenameColumnsArgs =
+                    parse_args("CSV replay", "table.rename_columns", &action.args)?;
+                let changed_columns = table.rename_columns(&args.renames)?;
+                let diff = ensure_sheet_diff(sheet_diff, table.row_count());
+                diff.estimated_affected_rows = table.row_count();
+                for column in changed_columns {
+                    push_unique(&mut diff.changed_columns, column);
+                }
+            }
+            "table.cast_columns" => {
+                let table = require_csv_table(table.as_mut())?;
+                table.ensure_sheet(action.sheet.as_deref())?;
+                let args: CastColumnsArgs =
+                    parse_args("CSV replay", "table.cast_columns", &action.args)?;
+                let cast_warnings = table.cast_columns(&args.casts)?;
+                let diff = ensure_sheet_diff(sheet_diff, table.row_count());
+                diff.estimated_affected_rows = table.row_count();
+                for cast in args.casts {
+                    push_unique(&mut diff.changed_columns, cast.column);
+                }
+                for warning in cast_warnings {
+                    push_unique(&mut diff.warnings, warning);
+                }
+            }
+            "table.filter_rows" => {
+                let table = require_csv_table(table.as_mut())?;
+                table.ensure_sheet(action.sheet.as_deref())?;
+                let args: FilterRowsArgs =
+                    parse_args("CSV replay", "table.filter_rows", &action.args)?;
+                let diff = ensure_sheet_diff(sheet_diff, table.row_count());
+                if let Some(output_sheet) = args.output_sheet.as_deref() {
+                    push_unique(
+                        &mut diff.warnings,
+                        format!(
+                            "CSV preview ignores outputSheet `{output_sheet}` and keeps a single logical sheet."
+                        ),
+                    );
+                }
+                table.filter_rows(&args.predicate)?;
+                diff.estimated_affected_rows = table.row_count();
+            }
+            "table.derive_column" => {
+                let table = require_csv_table(table.as_mut())?;
+                table.ensure_sheet(action.sheet.as_deref())?;
+                let args: DeriveColumnArgs =
+                    parse_args("CSV replay", "table.derive_column", &action.args)?;
+                table.derive_column(&args)?;
+                let diff = ensure_sheet_diff(sheet_diff, table.row_count());
+                diff.estimated_affected_rows = table.row_count();
+                push_unique(&mut diff.added_columns, args.column);
+            }
+            "table.group_aggregate" => {
+                let table = require_csv_table(table.as_mut())?;
+                table.ensure_sheet(action.sheet.as_deref())?;
+                let args: GroupAggregateArgs =
+                    parse_args("CSV replay", "table.group_aggregate", &action.args)?;
+                let aggregation = table.group_aggregate(&args)?;
+                let diff = ensure_sheet_diff(sheet_diff, table.row_count());
+                diff.estimated_affected_rows = table.row_count();
+                for column in aggregation.added_columns {
+                    push_unique(&mut diff.added_columns, column);
+                }
+                for column in aggregation.changed_columns {
+                    push_unique(&mut diff.changed_columns, column);
+                }
+                for column in aggregation.removed_columns {
+                    push_unique(&mut diff.removed_columns, column);
+                }
+                for warning in aggregation.warnings {
+                    push_unique(&mut diff.warnings, warning);
+                }
+                if let Some(output_sheet) = args.output_sheet.as_deref() {
+                    push_unique(
+                        &mut diff.warnings,
+                        format!(
+                            "CSV preview ignores outputSheet `{output_sheet}` and keeps a single logical sheet."
+                        ),
+                    );
+                }
+            }
+            "workbook.save_copy"
+            | "workbook.inspect"
+            | "sheet.preview"
+            | "sheet.profile_columns"
+            | "session.diff_from_base" => {}
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn sanitize_csv_record(record: &[String]) -> (Vec<String>, usize) {
+    let mut sanitized_count = 0;
+    let values = record
+        .iter()
+        .map(|value| match sanitize_csv_cell(value) {
+            Some(sanitized) => {
+                sanitized_count += 1;
+                sanitized
+            }
+            None => value.clone(),
+        })
+        .collect();
+
+    (values, sanitized_count)
+}
+
+fn sanitize_csv_cell(value: &str) -> Option<String> {
+    let first = value.chars().next()?;
+    if matches!(first, '=' | '+' | '-' | '@') {
+        Some(format!("'{value}"))
+    } else {
+        None
+    }
+}
+
+fn write_output_contents(path: &Path, contents: &[u8]) -> Result<(), String> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create output directory `{}`: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    fs::write(path, contents)
+        .map_err(|error| format!("failed to write output file `{}`: {error}", path.display()))
+}
+
+fn write_output_copy(source: &Path, destination: &Path) -> Result<(), String> {
+    if let Some(parent) = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create output directory `{}`: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    fs::copy(source, destination).map_err(|error| {
+        format!(
+            "failed to copy workbook source `{}` to `{}`: {error}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+fn resolve_output_path(
+    source: Option<&WorkbookSource>,
+    actions: &[SpreadsheetAction],
+    requires_approval: bool,
+) -> Result<(String, Vec<String>), String> {
+    let explicit_output_paths = actions
+        .iter()
+        .filter_map(extract_save_copy_output_path)
+        .collect::<Vec<_>>();
+    if explicit_output_paths.len() > 1 {
+        return Err("preview supports at most one `workbook.save_copy` action".to_string());
+    }
+
+    let explicit_output_path = explicit_output_paths
+        .first()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+        .map(str::to_string);
+    let output_path = explicit_output_path
+        .clone()
+        .or_else(|| {
+            source.map(|source| source.default_output_path().to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "relay-agent-output-preview.csv".to_string());
+
+    if let Some(source) = source {
+        if !supports_save_copy(source.format()) {
+            return Err(format!(
+                "save-copy preview is not supported for `{}` workbook sources",
+                match source.format() {
+                    WorkbookFormat::Csv => "csv",
+                    WorkbookFormat::Xlsx => "xlsx",
+                }
+            ));
+        }
+
+        if Path::new(&output_path) == source.path() {
+            return Err(
+                "save-copy output path must differ from the original workbook source path"
+                    .to_string(),
+            );
+        }
+    }
+
+    let mut warnings = Vec::new();
+    if requires_approval && explicit_output_path.is_none() {
+        warnings.push(
+            "No explicit save-copy path was provided, so the preview used a derived output path."
+                .to_string(),
+        );
+    }
+
+    Ok((output_path, warnings))
 }
 
 fn requires_csv_transform_preview(action: &SpreadsheetAction) -> bool {
@@ -944,6 +1510,38 @@ fn push_unique(values: &mut Vec<String>, value: String) {
     values.push(value);
 }
 
+fn compare_aggregate_values(left: &str, right: &str) -> Ordering {
+    if let (Ok(left), Ok(right)) = (left.parse::<f64>(), right.parse::<f64>()) {
+        return left.partial_cmp(&right).unwrap_or(Ordering::Equal);
+    }
+
+    if let (Some(left), Some(right)) = (parse_datetime(left), parse_datetime(right)) {
+        return left.cmp(&right);
+    }
+
+    if let (Some(left), Some(right)) = (parse_boolean(left), parse_boolean(right)) {
+        return left.cmp(&right);
+    }
+
+    left.cmp(right)
+}
+
+fn build_numeric_aggregation_warning(
+    measure: &AggregateMeasurePlan,
+    invalid_count: u32,
+) -> Option<String> {
+    if invalid_count == 0 {
+        return None;
+    }
+
+    Some(format!(
+        "Aggregation preview ignored {invalid_count} non-numeric value(s) while computing `{}` on `{}` into `{}`.",
+        measure.op.label(),
+        measure.column,
+        measure.alias
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{env, fs};
@@ -951,8 +1549,11 @@ mod tests {
     use serde_json::{json, Value};
     use uuid::Uuid;
 
-    use super::{preview_actions, CsvBackend};
-    use crate::models::{SpreadsheetAction, WorkbookFormat};
+    use super::{
+        preview_actions, AggregateMeasure, AggregateOperation, CsvBackend, CsvPreviewTable,
+        GroupAggregateArgs,
+    };
+    use crate::models::{PreviewTargetKind, SpreadsheetAction, WorkbookFormat};
     use crate::workbook::WorkbookSource;
 
     #[test]
@@ -1013,9 +1614,16 @@ mod tests {
         .expect("preview should build");
 
         assert!(preview.requires_approval);
+        assert_eq!(preview.diff_summary.target_count, 1);
+        assert_eq!(preview.diff_summary.estimated_affected_rows, 2);
         assert_eq!(preview.diff_summary.sheets.len(), 1);
         assert_eq!(preview.diff_summary.output_path, output_path);
-        assert_eq!(preview.diff_summary.sheets[0].estimated_rows, 2);
+        assert_eq!(preview.diff_summary.sheets[0].estimated_affected_rows, 2);
+        assert_eq!(preview.diff_summary.sheets[0].target.sheet, "Sheet1");
+        assert_eq!(
+            preview.diff_summary.sheets[0].target.kind,
+            PreviewTargetKind::Sheet
+        );
         assert_eq!(
             preview.diff_summary.sheets[0].added_columns,
             vec!["gross_amount".to_string()]
@@ -1061,13 +1669,173 @@ mod tests {
         )
         .expect("preview should build");
 
-        assert_eq!(preview.diff_summary.sheets[0].estimated_rows, 2);
+        assert_eq!(preview.diff_summary.target_count, 1);
+        assert_eq!(preview.diff_summary.estimated_affected_rows, 2);
+        assert_eq!(preview.diff_summary.sheets[0].estimated_affected_rows, 2);
         assert_eq!(
             preview.diff_summary.sheets[0].added_columns,
             vec!["Label".to_string()]
         );
 
         fs::remove_file(csv_path).expect("test csv should clean up");
+    }
+
+    #[test]
+    fn previews_group_aggregate_and_keeps_source_csv_immutable() {
+        let original_csv =
+            "region,segment,amount,units\nEast,Retail,10,1\nEast,SMB,15,2\nWest,Retail,3,1\nWest,SMB,oops,4\n";
+        let csv_path = write_test_csv(original_csv);
+        let output_path = env::temp_dir()
+            .join(format!("relay-agent-aggregate-{}.csv", Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
+        let source = WorkbookSource::new(csv_path.clone(), WorkbookFormat::Csv);
+
+        let preview = preview_actions(
+            &CsvBackend::default(),
+            Some(&source),
+            &[
+                action(
+                    "table.group_aggregate",
+                    Some("Sheet1"),
+                    json!({
+                        "groupBy": ["region"],
+                        "measures": [
+                            { "column": "amount", "op": "sum", "as": "total_amount" },
+                            { "column": "units", "op": "avg", "as": "average_units" },
+                            { "column": "segment", "op": "count", "as": "row_count" }
+                        ]
+                    }),
+                ),
+                action(
+                    "workbook.save_copy",
+                    None,
+                    json!({
+                        "outputPath": output_path
+                    }),
+                ),
+            ],
+        )
+        .expect("aggregation preview should build");
+
+        assert!(preview.requires_approval);
+        assert_eq!(preview.diff_summary.target_count, 1);
+        assert_eq!(preview.diff_summary.estimated_affected_rows, 2);
+        assert_eq!(preview.diff_summary.output_path, output_path);
+        assert_eq!(preview.diff_summary.sheets.len(), 1);
+        assert_eq!(preview.diff_summary.sheets[0].estimated_affected_rows, 2);
+        assert_eq!(preview.diff_summary.sheets[0].target.label, "Sheet1");
+        assert_eq!(
+            preview.diff_summary.sheets[0].added_columns,
+            vec![
+                "total_amount".to_string(),
+                "average_units".to_string(),
+                "row_count".to_string()
+            ]
+        );
+        assert!(preview.diff_summary.sheets[0].changed_columns.is_empty());
+        assert_eq!(
+            preview.diff_summary.sheets[0].removed_columns,
+            vec![
+                "segment".to_string(),
+                "amount".to_string(),
+                "units".to_string()
+            ]
+        );
+        assert!(preview.diff_summary.sheets[0]
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("ignored 1 non-numeric value")));
+        assert_eq!(
+            fs::read_to_string(&csv_path).expect("source CSV should still exist"),
+            original_csv
+        );
+
+        let mut table = CsvPreviewTable::load(&CsvBackend::default(), &source)
+            .expect("table should load from CSV source");
+        table
+            .group_aggregate(&GroupAggregateArgs {
+                group_by: vec!["region".to_string()],
+                measures: vec![
+                    AggregateMeasure {
+                        column: "amount".to_string(),
+                        op: AggregateOperation::Sum,
+                        alias: "total_amount".to_string(),
+                    },
+                    AggregateMeasure {
+                        column: "units".to_string(),
+                        op: AggregateOperation::Avg,
+                        alias: "average_units".to_string(),
+                    },
+                    AggregateMeasure {
+                        column: "segment".to_string(),
+                        op: AggregateOperation::Count,
+                        alias: "row_count".to_string(),
+                    },
+                ],
+                output_sheet: None,
+            })
+            .expect("direct aggregation should succeed");
+
+        assert_eq!(
+            table
+                .render_csv(&CsvBackend::default())
+                .expect("aggregated CSV should render"),
+            "region,total_amount,average_units,row_count\nEast,25,1.5,2\nWest,3,2.5,2\n"
+        );
+
+        fs::remove_file(csv_path).expect("test csv should clean up");
+    }
+
+    #[test]
+    fn rejects_save_copy_paths_that_match_the_source_path() {
+        let csv_path = write_test_csv("region,amount\nEast,10\n");
+        let source = WorkbookSource::new(csv_path.clone(), WorkbookFormat::Csv);
+
+        let error = preview_actions(
+            &CsvBackend::default(),
+            Some(&source),
+            &[action(
+                "workbook.save_copy",
+                None,
+                json!({
+                    "outputPath": csv_path.to_string_lossy()
+                }),
+            )],
+        )
+        .expect_err("preview should reject overwriting the source workbook");
+
+        assert!(error.contains("must differ from the original workbook source path"));
+
+        fs::remove_file(csv_path).expect("test csv should clean up");
+    }
+
+    #[test]
+    fn supports_copy_only_save_copy_preview_for_xlsx_sources() {
+        let source = WorkbookSource::new("/tmp/input.xlsx", WorkbookFormat::Xlsx);
+
+        let preview = preview_actions(
+            &CsvBackend::default(),
+            Some(&source),
+            &[action(
+                "workbook.save_copy",
+                None,
+                json!({
+                    "outputPath": "/tmp/input.relay-copy.xlsx"
+                }),
+            )],
+        )
+        .expect("xlsx save-copy preview should be allowed");
+
+        assert!(preview.requires_approval);
+        assert_eq!(preview.diff_summary.target_count, 0);
+        assert_eq!(preview.diff_summary.estimated_affected_rows, 0);
+        assert!(preview.diff_summary.sheets.is_empty());
+        assert_eq!(
+            preview.diff_summary.output_path,
+            "/tmp/input.relay-copy.xlsx"
+        );
+        assert!(preview.warnings.is_empty());
     }
 
     fn action(tool: &str, sheet: Option<&str>, args: Value) -> SpreadsheetAction {

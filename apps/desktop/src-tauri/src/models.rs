@@ -159,9 +159,26 @@ pub struct CopilotTurnResponse {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SheetDiff {
+pub struct PreviewTarget {
+    pub kind: PreviewTargetKind,
     pub sheet: String,
-    pub estimated_rows: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table: Option<String>,
+    pub label: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum PreviewTargetKind {
+    Sheet,
+    Table,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetDiff {
+    pub target: PreviewTarget,
+    pub estimated_affected_rows: u32,
     pub added_columns: Vec<String>,
     pub changed_columns: Vec<String>,
     pub removed_columns: Vec<String>,
@@ -174,6 +191,8 @@ pub struct DiffSummary {
     pub source_path: String,
     pub output_path: String,
     pub mode: String,
+    pub target_count: u32,
+    pub estimated_affected_rows: u32,
     pub sheets: Vec<SheetDiff>,
     pub warnings: Vec<String>,
 }

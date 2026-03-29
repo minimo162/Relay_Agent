@@ -18,6 +18,7 @@ export const aggregateOperationSchema = z.enum([
   "max"
 ]);
 export const deriveColumnPositionSchema = z.enum(["start", "end", "after"]);
+export const previewTargetKindSchema = z.enum(["sheet", "table"]);
 
 export const workbookSheetSchema = z.object({
   name: nonEmptyStringSchema,
@@ -156,9 +157,16 @@ export const spreadsheetActionSchema = z.discriminatedUnion("tool", [
   saveCopyActionSchema
 ]);
 
-export const sheetDiffSchema = z.object({
+export const previewTargetSchema = z.object({
+  kind: previewTargetKindSchema,
   sheet: nonEmptyStringSchema,
-  estimatedRows: z.number().int().nonnegative(),
+  table: nonEmptyStringSchema.optional(),
+  label: nonEmptyStringSchema
+});
+
+export const sheetDiffSchema = z.object({
+  target: previewTargetSchema,
+  estimatedAffectedRows: z.number().int().nonnegative(),
   addedColumns: z.array(nonEmptyStringSchema).default([]),
   changedColumns: z.array(nonEmptyStringSchema).default([]),
   removedColumns: z.array(nonEmptyStringSchema).default([]),
@@ -169,6 +177,8 @@ export const diffSummarySchema = z.object({
   sourcePath: z.string().min(1),
   outputPath: z.string().min(1),
   mode: z.enum(["preview", "approval", "execution"]).default("preview"),
+  targetCount: z.number().int().nonnegative(),
+  estimatedAffectedRows: z.number().int().nonnegative(),
   sheets: z.array(sheetDiffSchema),
   warnings: z.array(z.string()).default([])
 });
@@ -177,7 +187,9 @@ export type WorkbookFormat = z.infer<typeof workbookFormatSchema>;
 export type ColumnType = z.infer<typeof columnTypeSchema>;
 export type AggregateOperation = z.infer<typeof aggregateOperationSchema>;
 export type DeriveColumnPosition = z.infer<typeof deriveColumnPositionSchema>;
+export type PreviewTargetKind = z.infer<typeof previewTargetKindSchema>;
 export type WorkbookSheet = z.infer<typeof workbookSheetSchema>;
 export type WorkbookProfile = z.infer<typeof workbookProfileSchema>;
 export type SpreadsheetAction = z.infer<typeof spreadsheetActionSchema>;
+export type PreviewTarget = z.infer<typeof previewTargetSchema>;
 export type DiffSummary = z.infer<typeof diffSummarySchema>;
