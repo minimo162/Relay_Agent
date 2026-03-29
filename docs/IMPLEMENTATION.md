@@ -10,7 +10,8 @@
   - `docs/IMPLEMENTATION.md`
   - `.taskmaster/docs/repo_audit.md`
 - Follow-up planning input: `.taskmaster/docs/prd_non_engineer_ux.txt` captures the non-engineer usability follow-up, and `.taskmaster/docs/prd_workbook_artifact_browser.txt` captures the read-only Studio artifact-browser follow-up for persisted workbook evidence
-- Follow-up task graph: `.taskmaster/tasks/tasks.json` now breaks those supplemental PRDs into Task Master follow-up tasks `11` through `20`, covering startup, data trust, continuity, guided onboarding, review/save simplification, cross-cutting recovery plus accessibility work, and the Studio workbook inspection artifact browser
+- Follow-up planning input also now includes `.taskmaster/docs/prd_turn_lifecycle_details.txt`, which scopes the next planned expansion of `Inspection details` from workbook evidence to packet, validation, approval, and execution lifecycle summaries
+- Follow-up task graph: `.taskmaster/tasks/tasks.json` now breaks those supplemental PRDs into Task Master follow-up tasks `11` through `26`, covering startup, data trust, continuity, guided onboarding, review/save simplification, cross-cutting recovery plus accessibility work, the Studio workbook inspection artifact browser, and the next planned turn-lifecycle inspection scope
 - Follow-up packaging policy: `docs/PACKAGING_POLICY.md` now fixes the first packaged end-user release path to Windows 10/11 x64 via NSIS, with manual installer-driven updates and preserved app-local storage across upgrades as the current expectation
 - Follow-up implementation status: Tasks `11` through `20` are now complete; Home and Studio cover the non-engineer startup, trust, continuity, onboarding, review, recovery, and accessibility follow-up plus a read-only `Inspection details` browser for workbook profile, sampled rows, column inference, and diff artifacts, with verification recorded in `docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md` and `docs/WORKBOOK_ARTIFACT_BROWSER_VERIFICATION.md`
 
@@ -1244,6 +1245,25 @@ Observed result:
 - Task Master subtask `11.2` is now marked done while parent task `11` remains pending for first-run welcome and startup-doc alignment work.
 - The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
 
+Turn lifecycle details PRD verification:
+
+```bash
+test -f .taskmaster/docs/prd_turn_lifecycle_details.txt
+rg -n '^# Turn Lifecycle Details PRD|^## Summary|^## Problem|^## Goals|^## Non-goals|^## Target Users|^## User Stories|^## UX Principles|^## Functional Requirements|^## Acceptance Criteria|^## Risks and Mitigations|^## Suggested Implementation Phases|Turn details|temporary mode|reviewer mode|TurnDetailsViewModel' .taskmaster/docs/prd_turn_lifecycle_details.txt
+rg -n 'prd_turn_lifecycle_details|tasks `21` through `26`|planning-only' PLANS.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select((.id | tonumber) >= 21 and (.id | tonumber) <= 26) | {id, title, status, dependencies, priority}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- `.taskmaster/docs/prd_turn_lifecycle_details.txt` now captures the next scoped follow-up for extending `Inspection details` from workbook-only artifacts to turn lifecycle summaries covering packet, validation, approval, and execution.
+- The PRD keeps the scope inspection-only and explicitly excludes restart-safe resume, portable review bundle export, raw JSON editing, richer xlsx execution, and any weakening of the current write guardrails.
+- `PLANS.md` now points future scope expansion at this new PRD and records that Task Master tasks `21` through `26` are planning artifacts only until implementation work begins.
+- Task Master now contains a six-task breakdown for the turn-lifecycle inspection follow-up, with contract, backend emission, resolver, UI shell, category renderers, and reviewer-history-doc integration split into dependency-ordered work items.
+- Task Master JSON remains valid, and the planning-only artifact updates continue to pass `git diff --check`.
+
 First-run welcome and permission-rationale verification:
 
 ```bash
@@ -1642,12 +1662,39 @@ Observed result:
 - Task Master tasks `17` through `20` are now marked done, completing the current scoped follow-up set through the workbook artifact browser.
 - The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
 
+Turn lifecycle details follow-up verification:
+
+```bash
+test -f .taskmaster/docs/prd_turn_lifecycle_details.txt
+test -f docs/TURN_LIFECYCLE_DETAILS_VERIFICATION.md
+rg -n 'turnDetailsViewModelSchema|turnOverviewSchema|packetInspectionSectionSchema|validationInspectionSectionSchema|approvalInspectionSectionSchema|executionInspectionSectionSchema' packages/contracts/src/ipc.ts
+rg -n 'record_execution_failure|build_turn_details|read_turn_artifacts_persist_failed_execution_details_after_save_error|read_turn_artifacts_returns_live_turn_details_in_memory_mode' apps/desktop/src-tauri/src/storage.rs
+rg -n 'Turn details|Workbook evidence|Packet details unavailable|Validation details unavailable|Approval state|Execution state' apps/desktop/src/routes/studio/+page.svelte README.md docs/TURN_LIFECYCLE_DETAILS_VERIFICATION.md
+pnpm --filter @relay-agent/contracts typecheck
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+jq '.master.tasks[] | select((.id | tonumber) >= 21 and (.id | tonumber) <= 26) | {id, status, updatedAt}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- The shared contracts now define summary-first turn lifecycle inspection schemas for overview, packet, validation, approval, and execution, and `read_turn_artifacts` now returns a typed `turnDetails` payload alongside workbook artifacts.
+- The Tauri storage layer now resolves turn details from both live runtime state and persisted local artifacts, so current turns, temporary mode, restarted sessions, and execution failures all have explicit read-only inspection output instead of falling back to workbook-only evidence.
+- Execution failures are now recorded as lifecycle evidence rather than disappearing after an error toast. The new failure path persists an `execution` summary with the intended output path, reason summary, and warnings, and the selected turn moves to `Failed` without weakening any write guardrail.
+- Studio `Inspection details` now renders a `Turn details` surface with `Overview`, `Packet`, `Validation`, `Approval`, and `Execution` tabs above the existing `Workbook evidence` browser, and reviewer mode continues to expose the same surface read-only.
+- `README.md`, `PLANS.md`, and `docs/TURN_LIFECYCLE_DETAILS_VERIFICATION.md` now all describe the same shipped behavior, so the turn lifecycle follow-up is documented from PRD through verification artifact.
+- `pnpm --filter @relay-agent/contracts typecheck`, workspace `pnpm typecheck`, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` all pass after closing the follow-up. Rust test coverage now includes 32 passing tests, including live-memory and persisted execution-failure lifecycle inspection cases.
+- Task Master tasks `21` through `26` are now marked done, completing the current turn-lifecycle inspection follow-up set.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
 ## Known Limitations
 
-- `Inspection details` currently focuses on persisted workbook-facing artifacts only; relay packet, validation, approval, and execution payload JSON are still not exposed as dedicated UI panels.
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.
 - Browser or window close still relies on the platform-native confirmation dialog, so explicit keep-vs-discard choices are currently available only for in-app navigation and draft-replacement flows.
-- `Inspection details` depend on persisted local storage, so temporary mode and turns without saved read-side artifacts show an empty state instead of reconstructing old evidence.
+- `Inspection details` are read-only by design. They now explain lifecycle and workbook evidence, but they do not provide restart, retry, export, or bypass controls from the inspection surface.
+- Temporary mode can reconstruct the current turn lifecycle from live state, but that evidence disappears when the app closes, and older turns without saved lifecycle artifacts still fall back to explicit unavailable-state messaging.
 - Reviewer mode currently depends on local audit history and the same device profile; it is a safe local review surface, not a shared remote approval link.
 - Preview predicates and derive expressions intentionally support a narrow grammar for now: bracketed column references for spaced headers, one comparison in `filter_rows`, and basic arithmetic or string concatenation in `derive_column`.
 - Limited xlsx support is still inspect-and-copy oriented; current test coverage still centers on CSV execution plus xlsx preview planning rather than richer xlsx write flows.
@@ -1657,4 +1704,4 @@ Observed result:
 
 Next planned work:
 
-- No additional Task Master work is planned in the current follow-up sets; any further UX or workbook-evidence expansion should start as a new scoped follow-up instead of reopening tasks `11` through `20`.
+- The current follow-up queue is complete through task `26`. Any new scope should start from a new PRD and keep inspection-only expansions separate from restart-safe execution resume or portable review export.

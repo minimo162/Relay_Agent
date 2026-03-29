@@ -1,0 +1,223 @@
+# Turn Lifecycle Details PRD（Relay Agent 補助PRD）
+
+Date: 2026-03-29
+
+## Summary
+
+`Inspection details` を workbook artifact 中心の read-only browser から一段広げ、turn lifecycle 全体の read-only inspection surface にする。具体的には、各 turn について `relay packet`、`validation`、`approval`、`execution` を構造化して表示し、persisted artifact がない current turn や `temporary mode` でも、live runtime state から意味のある表示ができるようにする。
+
+## Problem
+
+現状、Relay Agent は「安全に preview して approval して save-copy する」流れ自体は成立しているが、ユーザーが最も確認したい turn の中盤以降に専用の inspection UI がない。
+
+そのため、以下の問題がある。
+
+- validation で落ちた理由が UI 上で追いにくい
+- approval において何を承認したのかを後から確認しにくい
+- execution の結果が preview / diff とどうつながるかが見えにくい
+- temporary mode や未persist turn で `Inspection details` が空に見え、信頼感が下がる
+- reviewer mode / audit history の材料が workbook artifact に偏っている
+
+Relay Agent の価値は「安全性」そのものだけでなく、安全であることが分かることにもある。今はその説明責任が turn lifecycle に対して不足している。
+
+## Goals
+
+- `Inspection details` で turn lifecycle の主要ステップを read-only で確認できるようにする
+- 非エンジニアでも理解できる要約表示を提供する
+- persisted artifact がない current turn / `temporary mode` でも意味のある inspection を成立させる
+- reviewer mode / audit history で過去 turn を一貫した形で確認できるようにする
+
+## Non-goals
+
+- restart 後の preview / approval / execution の再開
+- shared link やネットワーク越しレビュー
+- AI 能力の拡張や「なんでもできる」方向への拡張
+- xlsx の rich write execution
+- raw Excel formulas の受け入れ方針変更
+- shell / code execution / VBA / external network の解禁
+- raw JSON editor の提供
+
+## Target Users
+
+### Primary operator
+
+- CSV / spreadsheet 変換を実行する非エンジニア
+- validation fail や save 結果を自力で理解したい
+- original workbook を壊さないことを重視する
+
+### Reviewer / approver
+
+- 何を承認したかを read-only で確認したい
+- workbook artifact だけでなく turn lifecycle 全体を追いたい
+- reviewer mode で安全に確認したい
+
+### Support / QA / internal ops
+
+- 問い合わせ時にユーザーへ `Inspection details` を案内できるようにしたい
+- 再現条件や失敗箇所を turn 単位で確認したい
+- local-only の運用を維持したい
+
+## User Stories
+
+- オペレーターとして、validation が失敗したときに、何が拒否理由だったのかを UI 上で理解したい
+- オペレーターとして、temporary mode でも current turn の packet / validation / preview の関係を確認したい
+- reviewer として、過去 turn で「何を承認し、何が保存されたか」を read-only で追いたい
+- QA として、ユーザーに `Inspection details` を開いてもらえば、再現条件や失敗箇所を特定しやすくしたい
+- ユーザーとして、artifact がまだないのか、temporary だから残らないのか、失敗したから生成されなかったのかを区別したい
+
+## UX Principles
+
+- Summary first: まずは人間向け要約を見せ、内部表現は前面に出さない
+- Read-only by default: どの画面からも write path を増やさない
+- No empty mystery: 空欄ではなく理由のある unavailable state を出す
+- Same mental model across modes: standard / temporary / reviewer で見え方の筋を揃える
+- Traceable to the turn: すべての表示がどの turn のどの段階かに結びつく
+- Guardrail visible, not hidden: preview / approval / save-copy の制約が UI からも分かる
+
+## Functional Requirements
+
+### 1. Turn Details セクション
+
+- `Inspection details` に workbook artifact とは別の `Turn details` セクションを追加する
+- turn lifecycle 専用の navigation を持つ
+- lifecycle overview と step-specific details を同じ surface 内で読めるようにする
+
+### 2. カテゴリ構成
+
+`Turn details` は少なくとも以下の 4 カテゴリを持つ。
+
+- `Packet`
+- `Validation`
+- `Approval`
+- `Execution`
+
+### 3. Overview 表示
+
+- turn 全体のステータス、時系列、現在位置を簡潔に示す overview を持つ
+- 例:
+  - `Packet generated`
+  - `Response pasted`
+  - `Validation passed`
+  - `Preview ready`
+  - `Approved`
+  - `Execution completed`
+
+### 4. Packet 表示要件
+
+`relay packet` に関して少なくとも以下を表示する。
+
+- source file / session / turn の識別
+- 対象 sheet / row / column などのスコープ要約
+- 適用テンプレートや変換意図の要約
+- 生成時刻
+- `live artifact` / `persisted artifact` の別
+
+### 5. Validation 表示要件
+
+validation に関して少なくとも以下を表示する。
+
+- `pass` / `fail` / `warning` の状態
+- 主な rejection / warning reason
+- どの制約に抵触したかの要約
+- preview に進めるか否か
+- 対応する preview / `diff-summary` への導線
+
+### 6. Approval 表示要件
+
+approval に関して少なくとも以下を表示する。
+
+- approval 済み / 未承認
+- 承認時刻
+- 承認対象 preview の参照
+- `save-copy only` / `original read-only` の説明
+- `temporary mode` における揮発性の明示
+
+### 7. Execution 表示要件
+
+execution に関して少なくとも以下を表示する。
+
+- 未実行 / 実行中 / 成功 / 失敗
+- 出力先ファイル名または save-copy target の要約
+- 実行時刻
+- 生成された output artifact の参照
+- 失敗時の reason summary
+
+### 8. Current turn の live inspection
+
+- persisted artifact がまだ存在しない場合でも、runtime state から current turn の表示を成立させる
+- current turn は `live` source と分かるようにする
+
+### 9. Temporary mode の挙動
+
+- `temporary mode` でも current turn の `Turn details` は見える
+- ただし「セッション終了後には保持されない」ことを明示する
+
+### 10. Unavailable state
+
+以下を UI 上で区別する。
+
+- まだ生成されていない
+- この turn では未到達
+- 一時データのため現在のみ参照可能
+- 旧バージョンの turn で未対応
+- 処理失敗により生成されなかった
+
+### 11. Reviewer mode 対応
+
+- reviewer mode では read-only で同じ内容を閲覧できる
+- reviewer mode から packet generation、validation、approval、execution を再開できてはならない
+
+### 12. Write path 非追加
+
+- この PRD により preview / approval / execution の bypass 手段が増えてはならない
+- action surface は inspection-only に限定する
+
+### 13. Local-only data source
+
+- 外部ネットワークを使わない
+- すべて local artifact / runtime state を source とする
+
+## Acceptance Criteria
+
+- active turn で packet 生成後、ユーザーは `Inspection details` から packet summary を確認できる
+- validation 実行後、`pass` / `fail` / `warning` と主な理由が人間向け文言で表示される
+- approval 実行後、何をいつ承認したかが確認できる
+- execution 後、成功 / 失敗と save-copy 結果が確認できる
+- `temporary mode` でも current turn の `Turn details` は空表示ではなく、live state または明示的 unavailable reason を表示する
+- reviewer mode で persisted turn details を read-only で閲覧できる
+- 旧 turn では blank ではなく `not available for this turn/version` を表示する
+- 新 UI から preview / approval / execution を直接実行・再実行できない
+- 既存の guardrail を回避する導線が増えていない
+- `PLANS.md`、`docs/IMPLEMENTATION.md`、`.taskmaster/tasks/tasks.json` に artifact 種別、state source、mode 差分、実装計画が反映されている
+
+## Risks and Mitigations
+
+### 1. UI が技術者向けに寄りすぎる
+
+- Mitigation: summary-first を徹底し、内部表現は二段目に落とす
+
+### 2. live state と persisted artifact がズレる
+
+- Mitigation: UI 用の共通 `TurnDetailsViewModel` を定義し、resolver で `live` / `persisted` を吸収する
+
+### 3. 旧 turn との互換性で空表示が残る
+
+- Mitigation: schema version と fallback renderer を用意し、未対応 turn は明示メッセージにする
+
+### 4. payload が大きく表示が重い
+
+- Mitigation: summary artifact を中心にし、巨大な生データは前提にしない
+
+### 5. resume / export まで scope creep する
+
+- Mitigation: この PRD は inspection-only に固定し、restart-safe resume と portable bundle は後続テーマへ分離する
+
+## Suggested Implementation Phases
+
+Phase 1: turn lifecycle 用の artifact contract と共通 metadata を定義する
+
+Phase 2: packet / validation / approval / execution の summary artifact を backend から emit し、runtime source と persisted source を解決できるようにする
+
+Phase 3: `Inspection details` に `Turn details` UI を追加し、overview、packet、validation、approval、execution の read-only renderer と unavailable state を整える
+
+Phase 4: reviewer mode / audit history / docs を統合し、follow-up scope の検証 artifact を追加する

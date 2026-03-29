@@ -1130,13 +1130,90 @@
         "details": "Update planning and implementation docs, add a manual verification checklist for the artifact browser, and sync README plus Task Master so the shipped scope is documented as real behavior rather than aspirational follow-up.",
         "testStrategy": "Confirm the verification artifact exists, docs match the implementation, Task Master reflects the completed work, and the standard repo checks still pass.",
         "updatedAt": "2026-03-29T12:41:36Z"
+      },
+      {
+        "id": "21",
+        "title": "Define turn inspection artifact contracts for lifecycle details",
+        "description": "Add summary-first contracts for packet, validation, approval, execution, and turn-overview inspection records.",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "details": "Define lifecycle inspection artifact schemas covering at least `packet-summary`, `validation-summary`, `approval-record`, `execution-summary`, and `turn-overview`. Include shared metadata such as `sessionId`, `turnId`, `mode`, `status`, `createdAt`, `schemaVersion`, and `sourceType` so live and persisted sources can be normalized later.",
+        "testStrategy": "Add schema validation tests, fixture-based compatibility tests, and legacy fallback coverage for older turns that do not yet have lifecycle inspection artifacts.",
+        "updatedAt": "2026-03-29T20:47:12Z"
+      },
+      {
+        "id": "22",
+        "title": "Emit turn lifecycle summary artifacts from backend commands",
+        "description": "Generate lifecycle inspection summaries when packet, validation, approval, and execution state changes.",
+        "status": "done",
+        "dependencies": [
+          "21"
+        ],
+        "priority": "high",
+        "details": "When relay packet generation, validation, approval, or execution runs, emit the new summary artifacts and persist the supported records through the existing artifact storage path. For current turns, keep equivalent runtime summaries available even before persistence exists so temporary mode and in-progress turns can still render inspection details.",
+        "testStrategy": "Use integration tests to cover happy path, validation failure, execution failure, and temporary-mode behavior, and verify the expected lifecycle summary artifacts or runtime summaries are available at each step.",
+        "updatedAt": "2026-03-29T20:47:12Z"
+      },
+      {
+        "id": "23",
+        "title": "Build a TurnDetails resolver across live and persisted state",
+        "description": "Unify runtime and stored lifecycle evidence behind one UI-facing view model.",
+        "status": "done",
+        "dependencies": [
+          "21",
+          "22"
+        ],
+        "priority": "high",
+        "details": "Create a `TurnDetailsViewModel` resolver that merges live runtime state and persisted artifacts into one read-only inspection payload for the UI. The resolver should centralize source priority, missing-step reasoning, temporary-mode messaging, and legacy-turn fallbacks so the frontend does not branch on storage internals.",
+        "testStrategy": "Add unit coverage for live-only, persisted-only, both-available, legacy turn, failed-before-step, and expired-temporary-state scenarios.",
+        "updatedAt": "2026-03-29T20:47:12Z"
+      },
+      {
+        "id": "24",
+        "title": "Add the Turn Details shell and overview to Inspection details",
+        "description": "Extend Studio with a read-only lifecycle inspection shell without changing the existing write flow.",
+        "status": "done",
+        "dependencies": [
+          "23"
+        ],
+        "priority": "medium",
+        "details": "Extend the existing `Inspection details` information architecture with a `Turn details` entry point, lifecycle overview, status badges, mode badges, and explicit unavailable states for current turns, persisted turns, temporary mode, and unsupported legacy turns.",
+        "testStrategy": "Cover the shell with component or route tests, accessibility checks, and fixtures for current-turn, persisted-turn, temporary-mode, and unavailable-state rendering.",
+        "updatedAt": "2026-03-29T20:47:12Z"
+      },
+      {
+        "id": "25",
+        "title": "Render packet, validation, approval, and execution summaries",
+        "description": "Implement summary-first read-only renderers for each lifecycle category and their cross-references.",
+        "status": "done",
+        "dependencies": [
+          "24"
+        ],
+        "priority": "medium",
+        "details": "Implement category-specific read-only renderers for packet, validation, approval, and execution, using plain-language summaries first and only limited detail disclosure afterward. Include links back to related preview or diff evidence where relevant, but do not add any new preview, approval, execution, or retry actions from this surface.",
+        "testStrategy": "Use renderer tests and flow-level UI checks for success, warning, and failure cases to confirm summaries, status labels, and cross-references render correctly.",
+        "updatedAt": "2026-03-29T20:47:12Z"
+      },
+      {
+        "id": "26",
+        "title": "Integrate turn lifecycle details with reviewer mode, history, and docs",
+        "description": "Finish the follow-up with reviewer-safe access paths, planning sync, and verification artifacts.",
+        "status": "done",
+        "dependencies": [
+          "25"
+        ],
+        "priority": "medium",
+        "details": "Make the same `Turn details` surface available from reviewer mode and relevant audit-history entry points, then align `PLANS.md`, `docs/IMPLEMENTATION.md`, README if behavior becomes real, and any new verification artifacts so the follow-up is documented from source of truth through shipped UX.",
+        "testStrategy": "Run reviewer-mode flow tests, history-entry regression checks, documentation checklist review, and a manual smoke test that confirms the new lifecycle inspection surface stays read-only across modes.",
+        "updatedAt": "2026-03-29T20:47:12Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-29T12:41:36Z",
-      "taskCount": 20,
-      "completedCount": 20,
+      "lastModified": "2026-03-29T20:47:12Z",
+      "taskCount": 26,
+      "completedCount": 26,
       "tags": [
         "master"
       ]

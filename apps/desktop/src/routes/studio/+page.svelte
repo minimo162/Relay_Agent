@@ -12,6 +12,7 @@
     type RespondToApprovalResponse,
     type RunExecutionResponse,
     type TurnArtifact,
+    type TurnDetailsViewModel,
     type SessionDetail,
     type SubmitCopilotResponseResponse,
     type Turn,
@@ -61,6 +62,12 @@
     nextSteps: string[];
     followupPrompt?: string;
   };
+  type TurnDetailsTab = "overview" | "packet" | "validation" | "approval" | "execution";
+  type TurnDetailSection =
+    | TurnDetailsViewModel["packet"]
+    | TurnDetailsViewModel["validation"]
+    | TurnDetailsViewModel["approval"]
+    | TurnDetailsViewModel["execution"];
   type PendingStudioAction =
     | {
         kind: "route-leave";
@@ -79,6 +86,13 @@
   const studio = createStudioState();
   const studioState = studio.state;
   const relayModes = projectInfo.supportedRelayModes;
+  const turnDetailsTabs: TurnDetailsTab[] = [
+    "overview",
+    "packet",
+    "validation",
+    "approval",
+    "execution"
+  ];
 
   let currentSessionId: string | null = null;
   let routeSessionId: string | null = null;
@@ -92,8 +106,10 @@
   let auditHistoryEntries: AuditHistoryEntry[] = [];
   let auditHistoryEntry: AuditHistoryEntry | null = null;
   let turnArtifacts: TurnArtifact[] = [];
+  let turnDetails: TurnDetailsViewModel | null = null;
   let selectedArtifactId: string | null = null;
   let selectedArtifact: TurnArtifact | null = null;
+  let selectedTurnDetailsTab: TurnDetailsTab = "overview";
   let artifactLoading = false;
   let artifactError = "";
   let artifactKey = "";
@@ -253,9 +269,73 @@
     }
   }
 
+  function turnDetailsTabLabel(tab: TurnDetailsTab): string {
+    switch (tab) {
+      case "overview":
+        return "Overview";
+      case "packet":
+        return "Packet";
+      case "validation":
+        return "Validation";
+      case "approval":
+        return "Approval";
+      case "execution":
+        return "Execution";
+    }
+  }
+
+  function turnDetailsTabSummary(tab: TurnDetailsTab, details: TurnDetailsViewModel | null): string {
+    if (!details) {
+      return "";
+    }
+
+    switch (tab) {
+      case "overview":
+        return details.overview.summary;
+      case "packet":
+        return details.packet.summary;
+      case "validation":
+        return details.validation.summary;
+      case "approval":
+        return details.approval.summary;
+      case "execution":
+        return details.execution.summary;
+    }
+  }
+
+  function inspectionSourceLabel(sourceType?: TurnDetailSection["sourceType"]): string {
+    switch (sourceType) {
+      case "live":
+        return "Live current turn";
+      case "persisted":
+        return "Saved locally";
+      case "mixed":
+        return "Live + saved";
+      default:
+        return "Unavailable";
+    }
+  }
+
+  function overviewStepTone(state: TurnDetailsViewModel["overview"]["steps"][number]["state"]): string {
+    switch (state) {
+      case "complete":
+        return "status-ready";
+      case "failed":
+        return "status-failed";
+      case "current":
+        return "status-pending";
+      case "notRequired":
+        return "status-ready";
+      default:
+        return "status-pending";
+    }
+  }
+
   function resetArtifactBrowser(): void {
+    turnDetails = null;
     turnArtifacts = [];
     selectedArtifactId = null;
+    selectedTurnDetailsTab = "overview";
     artifactLoading = false;
     artifactError = "";
   }
@@ -272,12 +352,14 @@
         sessionId,
         turnId
       });
+      turnDetails = response.turnDetails;
       turnArtifacts = response.artifacts;
 
       if (!response.artifacts.some((artifact) => artifact.artifactId === selectedArtifactId)) {
         selectedArtifactId = response.artifacts[0]?.artifactId ?? null;
       }
     } catch (error) {
+      turnDetails = null;
       turnArtifacts = [];
       selectedArtifactId = null;
       artifactError = toErrorMessage(error);
@@ -2366,15 +2448,15 @@
           <div>
             <h3>Inspection details</h3>
             <p class="support-copy">
-              Review the saved workbook evidence for this turn without leaving Studio.
+              Review the current turn lifecycle and saved workbook evidence without leaving Studio.
             </p>
           </div>
-          <span class={`status-pill ${turnArtifacts.length > 0 ? "status-ready" : "status-pending"}`}>
+          <span class={`status-pill ${turnDetails ? "status-ready" : "status-pending"}`}>
             {artifactLoading
               ? "loading"
-              : turnArtifacts.length > 0
-                ? `${turnArtifacts.length} saved`
-                : "none yet"}
+              : turnDetails
+                ? turnDetails.overview.currentStageLabel
+                : "waiting"}
           </span>
         </div>
 
@@ -2388,228 +2470,472 @@
         {#if !selectedTurn}
           <div class="empty-state empty-inline">
             <h3>No turn selected</h3>
-            <p>Select a turn to review its saved workbook evidence.</p>
+            <p>Select a turn to review its lifecycle details and saved workbook evidence.</p>
           </div>
         {:else if artifactLoading}
           <div class="empty-state empty-inline">
             <h3>Loading inspection details</h3>
-            <p>Reading saved workbook artifacts for the selected turn.</p>
+            <p>Reading the selected turn lifecycle and any saved workbook artifacts.</p>
           </div>
-        {:else if turnArtifacts.length === 0}
-          <div class="empty-state empty-inline">
-            <h3>No saved inspection details yet</h3>
-            <p>
-              This turn has no persisted workbook artifacts. Read tools such as `workbook.inspect`,
-              `sheet.preview`, `sheet.profile_columns`, and `session.diff_from_base` create them.
-              This also happens in temporary mode, where local artifact history is not kept after
-              the app closes.
-            </p>
-          </div>
-        {:else if selectedArtifact}
-          <div class="artifact-browser-grid">
-            <div class="artifact-list" role="list" aria-label="Saved inspection artifacts">
-              {#each turnArtifacts as artifact}
-                <button
-                  aria-pressed={artifact.artifactId === selectedArtifactId}
-                  class:selected-artifact={artifact.artifactId === selectedArtifactId}
-                  class="artifact-card"
-                  type="button"
-                  on:click={() => (selectedArtifactId = artifact.artifactId)}
-                >
-                  <strong>{artifactLabel(artifact)}</strong>
-                  <span>{artifactSummary(artifact)}</span>
-                  <small>{formatDate(artifact.createdAt)}</small>
-                </button>
-              {/each}
-            </div>
-
-            <div class="artifact-detail">
-              <div class="artifact-detail-head">
+        {:else}
+          {#if turnDetails}
+            <div class="turn-details-shell">
+              <div class="subpanel-header">
                 <div>
-                  <p class="preview-label">Selected artifact</p>
-                  <h3>{artifactLabel(selectedArtifact)}</h3>
+                  <h4>Turn details</h4>
+                  <p class="support-copy">
+                    Inspect the packet, validation, approval, and execution state for this turn.
+                  </p>
                 </div>
-                <span class="status-pill">{formatDate(selectedArtifact.createdAt)}</span>
+                <span class="status-pill">{turnDetails.overview.currentStageLabel}</span>
               </div>
 
-              {#if selectedArtifact.artifactType === "workbook-profile"}
+              <section class="feedback feedback-info" aria-live="polite">
+                <strong>{turnDetails.overview.summary}</strong>
+                <p>{turnDetails.overview.guardrailSummary}</p>
+              </section>
+
+              <div class="turn-details-nav" role="tablist" aria-label="Turn detail categories">
+                {#each turnDetailsTabs as tab}
+                  <button
+                    aria-selected={selectedTurnDetailsTab === tab}
+                    class:selected-turn-detail={selectedTurnDetailsTab === tab}
+                    class="chip-button turn-detail-button"
+                    role="tab"
+                    type="button"
+                    on:click={() => (selectedTurnDetailsTab = tab)}
+                  >
+                    <strong>{turnDetailsTabLabel(tab)}</strong>
+                    <span>{turnDetailsTabSummary(tab, turnDetails)}</span>
+                  </button>
+                {/each}
+              </div>
+
+              {#if selectedTurnDetailsTab === "overview"}
                 <div class="result-grid">
                   <article class="result-card">
-                    <p class="preview-label">Source path</p>
-                    <h3>{selectedArtifact.payload.sourcePath}</h3>
+                    <p class="preview-label">Current stage</p>
+                    <h3>{turnDetails.overview.currentStageLabel}</h3>
+                    <p>{turnDetails.overview.summary}</p>
                   </article>
                   <article class="result-card">
-                    <p class="preview-label">Workbook format</p>
-                    <h3>{selectedArtifact.payload.format.toUpperCase()}</h3>
-                    <p>{selectedArtifact.payload.sheetCount} sheet{selectedArtifact.payload.sheetCount === 1 ? "" : "s"}</p>
+                    <p class="preview-label">Relay mode</p>
+                    <h3>{turnDetails.overview.relayMode}</h3>
+                    <p>{turnDetails.overview.storageMode === "memory" ? "Temporary mode" : "Saved locally"}</p>
                   </article>
                 </div>
 
-                {#if selectedArtifact.payload.warnings.length > 0}
-                  <div class="warning-list">
-                    {#each selectedArtifact.payload.warnings as warning}
-                      <span>{warning}</span>
-                    {/each}
-                  </div>
-                {/if}
-
-                <div class="artifact-sheet-grid">
-                  {#each selectedArtifact.payload.sheets as sheet}
-                    <article class="preview-card">
-                      <p class="preview-label">{sheet.name}</p>
-                      <h3>{sheet.rowCount} row{sheet.rowCount === 1 ? "" : "s"}</h3>
-                      <p>{sheet.columnCount} column{sheet.columnCount === 1 ? "" : "s"}</p>
-                      <div class="diff-tags">
-                        {#each sheet.columns as column}
-                          <span class="tag tag-changed">{column}</span>
-                        {/each}
+                <div class="turn-overview-grid">
+                  {#each turnDetails.overview.steps as step}
+                    <article class="preview-card turn-overview-card">
+                      <div class="turn-overview-head">
+                        <p class="preview-label">{step.label}</p>
+                        <span class={`status-pill ${overviewStepTone(step.state)}`}>{step.state}</span>
                       </div>
+                      <h3>{step.label}</h3>
+                      <p>{step.summary}</p>
                     </article>
                   {/each}
                 </div>
-              {:else if selectedArtifact.artifactType === "sheet-preview"}
-                <div class="result-grid">
-                  <article class="result-card">
-                    <p class="preview-label">Sheet</p>
-                    <h3>{selectedArtifact.payload.sheet}</h3>
-                    <p>{selectedArtifact.payload.rows.length} sampled row{selectedArtifact.payload.rows.length === 1 ? "" : "s"}</p>
-                  </article>
-                  <article class="result-card">
-                    <p class="preview-label">Preview size</p>
-                    <h3>{selectedArtifact.payload.columns.length} column{selectedArtifact.payload.columns.length === 1 ? "" : "s"}</h3>
-                    <p>{selectedArtifact.payload.truncated ? "The preview was truncated." : "The preview fit within the requested row limit."}</p>
-                  </article>
-                </div>
-
-                {#if selectedArtifact.payload.warnings.length > 0}
-                  <div class="warning-list">
-                    {#each selectedArtifact.payload.warnings as warning}
-                      <span>{warning}</span>
-                    {/each}
+              {:else if selectedTurnDetailsTab === "packet"}
+                {#if turnDetails.packet.available && turnDetails.packet.payload}
+                  <div class="result-grid">
+                    <article class="result-card">
+                      <p class="preview-label">Source</p>
+                      <h3>{turnDetails.packet.payload.sourcePath || "No source path recorded"}</h3>
+                      <p>{turnDetails.packet.payload.sessionTitle} / {turnDetails.packet.payload.turnTitle}</p>
+                    </article>
+                    <article class="result-card">
+                      <p class="preview-label">Packet source</p>
+                      <h3>{inspectionSourceLabel(turnDetails.packet.sourceType)}</h3>
+                      <p>{turnDetails.packet.updatedAt ? formatDate(turnDetails.packet.updatedAt) : "No timestamp recorded"}</p>
+                    </article>
+                    <article class="result-card">
+                      <p class="preview-label">Allowed tools</p>
+                      <h3>{turnDetails.packet.payload.allowedReadToolCount} read / {turnDetails.packet.payload.allowedWriteToolCount} write</h3>
+                      <p>{turnDetails.packet.payload.relayMode} mode</p>
+                    </article>
                   </div>
-                {/if}
 
-                <div class="artifact-table-wrap">
-                  <table class="artifact-table">
-                    <thead>
-                      <tr>
-                        <th>Row</th>
-                        {#each selectedArtifact.payload.columns as column}
-                          <th>{column}</th>
-                        {/each}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {#each selectedArtifact.payload.rows as row}
-                        <tr>
-                          <td>{row.rowNumber}</td>
-                          {#each row.values as value}
-                            <td>{value}</td>
-                          {/each}
-                        </tr>
+                  <article class="preview-card">
+                    <p class="preview-label">Intent summary</p>
+                    <h3>{turnDetails.packet.payload.objective}</h3>
+                    <div class="turn-detail-list">
+                      {#each turnDetails.packet.payload.contextLines as line}
+                        <span>{line}</span>
                       {/each}
-                    </tbody>
-                  </table>
-                </div>
-              {:else if selectedArtifact.artifactType === "column-profile"}
-                <div class="result-grid">
-                  <article class="result-card">
-                    <p class="preview-label">Sheet</p>
-                    <h3>{selectedArtifact.payload.sheet}</h3>
-                    <p>{selectedArtifact.payload.columns.length} column{selectedArtifact.payload.columns.length === 1 ? "" : "s"} profiled</p>
+                    </div>
                   </article>
-                  <article class="result-card">
-                    <p class="preview-label">Sample size</p>
-                    <h3>{selectedArtifact.payload.sampledRows} row{selectedArtifact.payload.sampledRows === 1 ? "" : "s"}</h3>
-                    <p>{selectedArtifact.payload.rowCount} total row{selectedArtifact.payload.rowCount === 1 ? "" : "s"} scanned</p>
-                  </article>
-                </div>
 
-                {#if selectedArtifact.payload.warnings.length > 0}
-                  <div class="warning-list">
-                    {#each selectedArtifact.payload.warnings as warning}
-                      <span>{warning}</span>
-                    {/each}
-                  </div>
-                {/if}
-
-                <div class="artifact-column-grid">
-                  {#each selectedArtifact.payload.columns as column}
+                  {#if turnDetails.packet.payload.responseNotes.length > 0}
                     <article class="preview-card">
-                      <p class="preview-label">{column.column}</p>
-                      <h3>{column.inferredType}</h3>
-                      <p>{column.nonEmptyCount} non-empty, {column.nullCount} blank</p>
-                      <div class="diff-tags">
-                        {#each column.sampleValues as sample}
-                          <span class="tag tag-added">{sample}</span>
+                      <p class="preview-label">Packet notes</p>
+                      <div class="turn-detail-list">
+                        {#each turnDetails.packet.payload.responseNotes as note}
+                          <span>{note}</span>
                         {/each}
                       </div>
                     </article>
-                  {/each}
-                </div>
-              {:else}
-                {@const diffPayload = selectedArtifact.artifactType === "preview" ? selectedArtifact.payload.diffSummary : selectedArtifact.payload}
-                {@const diffWarnings = selectedArtifact.artifactType === "preview" ? selectedArtifact.payload.warnings : selectedArtifact.payload.warnings}
-                <div class="result-grid">
-                  <article class="result-card">
-                    <p class="preview-label">Source path</p>
-                    <h3>{diffPayload.sourcePath}</h3>
-                  </article>
-                  <article class="result-card">
-                    <p class="preview-label">Reviewed copy path</p>
-                    <h3>{diffPayload.outputPath}</h3>
-                    <p>
-                      {selectedArtifact.artifactType === "preview"
-                        ? selectedArtifact.payload.requiresApproval
-                          ? "This saved preview required review confirmation before save."
-                          : "This saved preview was read-only."
-                        : "This diff was saved as a read-side artifact for the turn."}
+                  {/if}
+                {:else}
+                  <div class="empty-state empty-inline">
+                    <h3>Packet details unavailable</h3>
+                    <p>{turnDetails.packet.summary}</p>
+                  </div>
+                {/if}
+              {:else if selectedTurnDetailsTab === "validation"}
+                {#if turnDetails.validation.available && turnDetails.validation.payload}
+                  <div class="result-grid">
+                    <article class="result-card">
+                      <p class="preview-label">Validation status</p>
+                      <h3>{turnDetails.validation.payload.headline}</h3>
+                      <p>{turnDetails.validation.payload.primaryReason}</p>
+                    </article>
+                    <article class="result-card">
+                      <p class="preview-label">Issues</p>
+                      <h3>{turnDetails.validation.payload.issueCount}</h3>
+                      <p>{turnDetails.validation.payload.warningCount} warning note{turnDetails.validation.payload.warningCount === 1 ? "" : "s"}</p>
+                    </article>
+                    <article class="result-card">
+                      <p class="preview-label">Next step</p>
+                      <h3>{turnDetails.validation.payload.canPreview ? "Preview can run" : "Repair needed first"}</h3>
+                      <p>{inspectionSourceLabel(turnDetails.validation.sourceType)}</p>
+                    </article>
+                  </div>
+
+                  {#if turnDetails.validation.payload.issues.length > 0}
+                    <div class="issue-list">
+                      {#each turnDetails.validation.payload.issues as issue}
+                        <article class="issue-card">
+                          <p>{issue.message}</p>
+                          <span>{issue.path} · {issue.code}</span>
+                        </article>
+                      {/each}
+                    </div>
+                  {/if}
+
+                  {#if turnDetails.validation.payload.relatedPreviewArtifactId}
+                    <p class="support-copy">
+                      Related preview evidence is available for this turn and can be checked in the workbook evidence list below.
                     </p>
-                  </article>
-                </div>
-
-                <div class="result-grid">
-                  <article class="result-card">
-                    <p class="preview-label">Targets</p>
-                    <h3>{diffPayload.targetCount}</h3>
-                    <p>{diffPayload.estimatedAffectedRows} affected row{diffPayload.estimatedAffectedRows === 1 ? "" : "s"}</p>
-                  </article>
-                  <article class="result-card">
-                    <p class="preview-label">Warnings</p>
-                    <h3>{diffWarnings.length}</h3>
-                    <p>Saved with the artifact for later review.</p>
-                  </article>
-                </div>
-
-                {#if diffWarnings.length > 0}
-                  <div class="warning-list">
-                    {#each diffWarnings as warning}
-                      <span>{warning}</span>
-                    {/each}
+                  {/if}
+                {:else}
+                  <div class="empty-state empty-inline">
+                    <h3>Validation details unavailable</h3>
+                    <p>{turnDetails.validation.summary}</p>
                   </div>
                 {/if}
-
-                <div class="artifact-sheet-grid">
-                  {#each diffPayload.sheets as sheet}
-                    <article class="preview-card">
-                      <p class="preview-label">{sheet.target.label}</p>
-                      <h3>{sheet.estimatedAffectedRows} row{sheet.estimatedAffectedRows === 1 ? "" : "s"} affected</h3>
-                      <div class="diff-tags">
-                        {#each sheet.addedColumns as column}
-                          <span class="tag tag-added">+ {column}</span>
-                        {/each}
-                        {#each sheet.changedColumns as column}
-                          <span class="tag tag-changed">~ {column}</span>
-                        {/each}
-                        {#each sheet.removedColumns as column}
-                          <span class="tag tag-removed">- {column}</span>
-                        {/each}
-                      </div>
+              {:else if selectedTurnDetailsTab === "approval"}
+                {#if turnDetails.approval.available && turnDetails.approval.payload}
+                  <div class="result-grid">
+                    <article class="result-card">
+                      <p class="preview-label">Approval state</p>
+                      <h3>{turnDetails.approval.payload.requiresApproval ? (turnDetails.approval.payload.decision || "Not approved yet") : "Not required"}</h3>
+                      <p>{turnDetails.approval.summary}</p>
                     </article>
-                  {/each}
-                </div>
+                    <article class="result-card">
+                      <p class="preview-label">Recorded at</p>
+                      <h3>{turnDetails.approval.payload.approvedAt ? formatDate(turnDetails.approval.payload.approvedAt) : "No approval recorded yet"}</h3>
+                      <p>{inspectionSourceLabel(turnDetails.approval.sourceType)}</p>
+                    </article>
+                    <article class="result-card">
+                      <p class="preview-label">Execution access</p>
+                      <h3>{turnDetails.approval.payload.readyForExecution ? "Ready to save" : "Still blocked"}</h3>
+                      <p>{turnDetails.approval.payload.saveCopyGuardrail}</p>
+                    </article>
+                  </div>
+
+                  <section class="feedback feedback-info" aria-live="polite">
+                    <strong>Original file protection</strong>
+                    <p>{turnDetails.approval.payload.originalFileGuardrail}</p>
+                  </section>
+
+                  {#if turnDetails.approval.payload.note}
+                    <article class="preview-card">
+                      <p class="preview-label">Approval note</p>
+                      <h3>{turnDetails.approval.payload.note}</h3>
+                    </article>
+                  {/if}
+
+                  {#if turnDetails.approval.payload.temporaryModeNote}
+                    <section class="feedback feedback-warn" aria-live="polite">
+                      <strong>Temporary mode note</strong>
+                      <p>{turnDetails.approval.payload.temporaryModeNote}</p>
+                    </section>
+                  {/if}
+                {:else}
+                  <div class="empty-state empty-inline">
+                    <h3>Approval details unavailable</h3>
+                    <p>{turnDetails.approval.summary}</p>
+                  </div>
+                {/if}
+              {:else if selectedTurnDetailsTab === "execution"}
+                {#if turnDetails.execution.available && turnDetails.execution.payload}
+                  <div class="result-grid">
+                    <article class="result-card">
+                      <p class="preview-label">Execution state</p>
+                      <h3>{turnDetails.execution.payload.state}</h3>
+                      <p>{turnDetails.execution.payload.reasonSummary}</p>
+                    </article>
+                    <article class="result-card">
+                      <p class="preview-label">Output path</p>
+                      <h3>{turnDetails.execution.payload.outputPath || "No output path recorded"}</h3>
+                      <p>{turnDetails.execution.payload.executedAt ? formatDate(turnDetails.execution.payload.executedAt) : "No execution timestamp recorded"}</p>
+                    </article>
+                    <article class="result-card">
+                      <p class="preview-label">Warnings</p>
+                      <h3>{turnDetails.execution.payload.warningCount}</h3>
+                      <p>{inspectionSourceLabel(turnDetails.execution.sourceType)}</p>
+                    </article>
+                  </div>
+
+                  {#if turnDetails.execution.payload.warnings.length > 0}
+                    <div class="warning-list">
+                      {#each turnDetails.execution.payload.warnings as warning}
+                        <span>{warning}</span>
+                      {/each}
+                    </div>
+                  {/if}
+                {:else}
+                  <div class="empty-state empty-inline">
+                    <h3>Execution details unavailable</h3>
+                    <p>{turnDetails.execution.summary}</p>
+                  </div>
+                {/if}
               {/if}
             </div>
+          {/if}
+
+          <div class="artifact-evidence-shell">
+            <div class="subpanel-header">
+              <div>
+                <h4>Workbook evidence</h4>
+                <p class="support-copy">
+                  Review saved workbook inspection artifacts for this turn.
+                </p>
+              </div>
+              <span class={`status-pill ${turnArtifacts.length > 0 ? "status-ready" : "status-pending"}`}>
+                {turnArtifacts.length > 0 ? `${turnArtifacts.length} saved` : "none yet"}
+              </span>
+            </div>
+
+            {#if turnArtifacts.length === 0}
+              <div class="empty-state empty-inline">
+                <h3>No saved workbook evidence yet</h3>
+                <p>
+                  This turn has no persisted workbook artifacts. Read tools such as `workbook.inspect`,
+                  `sheet.preview`, `sheet.profile_columns`, and `session.diff_from_base` create them.
+                  This also happens in temporary mode, where local artifact history is not kept after
+                  the app closes.
+                </p>
+              </div>
+            {:else if selectedArtifact}
+              <div class="artifact-browser-grid">
+                <div class="artifact-list" role="list" aria-label="Saved inspection artifacts">
+                  {#each turnArtifacts as artifact}
+                    <button
+                      aria-pressed={artifact.artifactId === selectedArtifactId}
+                      class:selected-artifact={artifact.artifactId === selectedArtifactId}
+                      class="artifact-card"
+                      type="button"
+                      on:click={() => (selectedArtifactId = artifact.artifactId)}
+                    >
+                      <strong>{artifactLabel(artifact)}</strong>
+                      <span>{artifactSummary(artifact)}</span>
+                      <small>{formatDate(artifact.createdAt)}</small>
+                    </button>
+                  {/each}
+                </div>
+
+                <div class="artifact-detail">
+                  <div class="artifact-detail-head">
+                    <div>
+                      <p class="preview-label">Selected artifact</p>
+                      <h3>{artifactLabel(selectedArtifact)}</h3>
+                    </div>
+                    <span class="status-pill">{formatDate(selectedArtifact.createdAt)}</span>
+                  </div>
+
+                  {#if selectedArtifact.artifactType === "workbook-profile"}
+                    <div class="result-grid">
+                      <article class="result-card">
+                        <p class="preview-label">Source path</p>
+                        <h3>{selectedArtifact.payload.sourcePath}</h3>
+                      </article>
+                      <article class="result-card">
+                        <p class="preview-label">Workbook format</p>
+                        <h3>{selectedArtifact.payload.format.toUpperCase()}</h3>
+                        <p>{selectedArtifact.payload.sheetCount} sheet{selectedArtifact.payload.sheetCount === 1 ? "" : "s"}</p>
+                      </article>
+                    </div>
+
+                    {#if selectedArtifact.payload.warnings.length > 0}
+                      <div class="warning-list">
+                        {#each selectedArtifact.payload.warnings as warning}
+                          <span>{warning}</span>
+                        {/each}
+                      </div>
+                    {/if}
+
+                    <div class="artifact-sheet-grid">
+                      {#each selectedArtifact.payload.sheets as sheet}
+                        <article class="preview-card">
+                          <p class="preview-label">{sheet.name}</p>
+                          <h3>{sheet.rowCount} row{sheet.rowCount === 1 ? "" : "s"}</h3>
+                          <p>{sheet.columnCount} column{sheet.columnCount === 1 ? "" : "s"}</p>
+                          <div class="diff-tags">
+                            {#each sheet.columns as column}
+                              <span class="tag tag-changed">{column}</span>
+                            {/each}
+                          </div>
+                        </article>
+                      {/each}
+                    </div>
+                  {:else if selectedArtifact.artifactType === "sheet-preview"}
+                    <div class="result-grid">
+                      <article class="result-card">
+                        <p class="preview-label">Sheet</p>
+                        <h3>{selectedArtifact.payload.sheet}</h3>
+                        <p>{selectedArtifact.payload.rows.length} sampled row{selectedArtifact.payload.rows.length === 1 ? "" : "s"}</p>
+                      </article>
+                      <article class="result-card">
+                        <p class="preview-label">Preview size</p>
+                        <h3>{selectedArtifact.payload.columns.length} column{selectedArtifact.payload.columns.length === 1 ? "" : "s"}</h3>
+                        <p>{selectedArtifact.payload.truncated ? "The preview was truncated." : "The preview fit within the requested row limit."}</p>
+                      </article>
+                    </div>
+
+                    {#if selectedArtifact.payload.warnings.length > 0}
+                      <div class="warning-list">
+                        {#each selectedArtifact.payload.warnings as warning}
+                          <span>{warning}</span>
+                        {/each}
+                      </div>
+                    {/if}
+
+                    <div class="artifact-table-wrap">
+                      <table class="artifact-table">
+                        <thead>
+                          <tr>
+                            <th>Row</th>
+                            {#each selectedArtifact.payload.columns as column}
+                              <th>{column}</th>
+                            {/each}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {#each selectedArtifact.payload.rows as row}
+                            <tr>
+                              <td>{row.rowNumber}</td>
+                              {#each row.values as value}
+                                <td>{value}</td>
+                              {/each}
+                            </tr>
+                          {/each}
+                        </tbody>
+                      </table>
+                    </div>
+                  {:else if selectedArtifact.artifactType === "column-profile"}
+                    <div class="result-grid">
+                      <article class="result-card">
+                        <p class="preview-label">Sheet</p>
+                        <h3>{selectedArtifact.payload.sheet}</h3>
+                        <p>{selectedArtifact.payload.columns.length} column{selectedArtifact.payload.columns.length === 1 ? "" : "s"} profiled</p>
+                      </article>
+                      <article class="result-card">
+                        <p class="preview-label">Sample size</p>
+                        <h3>{selectedArtifact.payload.sampledRows} row{selectedArtifact.payload.sampledRows === 1 ? "" : "s"}</h3>
+                        <p>{selectedArtifact.payload.rowCount} total row{selectedArtifact.payload.rowCount === 1 ? "" : "s"} scanned</p>
+                      </article>
+                    </div>
+
+                    {#if selectedArtifact.payload.warnings.length > 0}
+                      <div class="warning-list">
+                        {#each selectedArtifact.payload.warnings as warning}
+                          <span>{warning}</span>
+                        {/each}
+                      </div>
+                    {/if}
+
+                    <div class="artifact-column-grid">
+                      {#each selectedArtifact.payload.columns as column}
+                        <article class="preview-card">
+                          <p class="preview-label">{column.column}</p>
+                          <h3>{column.inferredType}</h3>
+                          <p>{column.nonEmptyCount} non-empty, {column.nullCount} blank</p>
+                          <div class="diff-tags">
+                            {#each column.sampleValues as sample}
+                              <span class="tag tag-added">{sample}</span>
+                            {/each}
+                          </div>
+                        </article>
+                      {/each}
+                    </div>
+                  {:else}
+                    {@const diffPayload = selectedArtifact.artifactType === "preview" ? selectedArtifact.payload.diffSummary : selectedArtifact.payload}
+                    {@const diffWarnings = selectedArtifact.artifactType === "preview" ? selectedArtifact.payload.warnings : selectedArtifact.payload.warnings}
+                    <div class="result-grid">
+                      <article class="result-card">
+                        <p class="preview-label">Source path</p>
+                        <h3>{diffPayload.sourcePath}</h3>
+                      </article>
+                      <article class="result-card">
+                        <p class="preview-label">Reviewed copy path</p>
+                        <h3>{diffPayload.outputPath}</h3>
+                        <p>
+                          {selectedArtifact.artifactType === "preview"
+                            ? selectedArtifact.payload.requiresApproval
+                              ? "This saved preview required review confirmation before save."
+                              : "This saved preview was read-only."
+                            : "This diff was saved as a read-side artifact for the turn."}
+                        </p>
+                      </article>
+                    </div>
+
+                    <div class="result-grid">
+                      <article class="result-card">
+                        <p class="preview-label">Targets</p>
+                        <h3>{diffPayload.targetCount}</h3>
+                        <p>{diffPayload.estimatedAffectedRows} affected row{diffPayload.estimatedAffectedRows === 1 ? "" : "s"}</p>
+                      </article>
+                      <article class="result-card">
+                        <p class="preview-label">Warnings</p>
+                        <h3>{diffWarnings.length}</h3>
+                        <p>Saved with the artifact for later review.</p>
+                      </article>
+                    </div>
+
+                    {#if diffWarnings.length > 0}
+                      <div class="warning-list">
+                        {#each diffWarnings as warning}
+                          <span>{warning}</span>
+                        {/each}
+                      </div>
+                    {/if}
+
+                    <div class="artifact-sheet-grid">
+                      {#each diffPayload.sheets as sheet}
+                        <article class="preview-card">
+                          <p class="preview-label">{sheet.target.label}</p>
+                          <h3>{sheet.estimatedAffectedRows} row{sheet.estimatedAffectedRows === 1 ? "" : "s"} affected</h3>
+                          <div class="diff-tags">
+                            {#each sheet.addedColumns as column}
+                              <span class="tag tag-added">+ {column}</span>
+                            {/each}
+                            {#each sheet.changedColumns as column}
+                              <span class="tag tag-changed">~ {column}</span>
+                            {/each}
+                            {#each sheet.removedColumns as column}
+                              <span class="tag tag-removed">- {column}</span>
+                            {/each}
+                          </div>
+                        </article>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            {/if}
           </div>
         {/if}
       </section>
@@ -3345,6 +3671,7 @@
 
   .turn-card-head h3,
   .subpanel-header h3,
+  .subpanel-header h4,
   .preview-card h3,
   .sheet-diff-head h3 {
     margin: 0;
@@ -3588,6 +3915,74 @@
 
   .artifact-browser {
     background: rgba(255, 255, 255, 0.72);
+  }
+
+  .turn-details-shell,
+  .artifact-evidence-shell {
+    display: grid;
+    gap: 1rem;
+  }
+
+  .turn-details-nav {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  }
+
+  .turn-detail-button {
+    display: grid;
+    gap: 0.3rem;
+    justify-items: start;
+    min-height: 0;
+    padding: 0.9rem;
+    text-align: left;
+  }
+
+  .turn-detail-button strong,
+  .turn-detail-button span {
+    margin: 0;
+  }
+
+  .turn-detail-button span {
+    color: var(--ra-muted);
+    line-height: 1.45;
+  }
+
+  .turn-detail-button.selected-turn-detail {
+    border-style: solid;
+    border-color: rgba(91, 125, 56, 0.28);
+    background: rgba(91, 125, 56, 0.08);
+    color: var(--ra-text);
+  }
+
+  .turn-overview-grid {
+    display: grid;
+    gap: 0.9rem;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  }
+
+  .turn-overview-card {
+    align-content: start;
+  }
+
+  .turn-overview-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .turn-detail-list {
+    display: grid;
+    gap: 0.6rem;
+  }
+
+  .turn-detail-list span {
+    padding: 0.65rem 0.8rem;
+    border-radius: 0.95rem;
+    background: rgba(31, 45, 36, 0.05);
+    color: var(--ra-text);
+    line-height: 1.5;
   }
 
   .artifact-browser-grid {

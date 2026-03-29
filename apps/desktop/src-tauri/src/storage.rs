@@ -6,23 +6,37 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::models::{
-    ApprovalDecision, AssessCopilotHandoffRequest, AssessCopilotHandoffResponse,
-    CopilotHandoffReason, CopilotHandoffReasonSource, CopilotHandoffStatus,
-    CopilotTurnResponse, CreateSessionRequest, DiffSummary, GenerateRelayPacketRequest,
-    PreviewArtifactPayload, PreviewExecutionRequest, PreviewExecutionResponse, ReadTurnArtifactsResponse,
-    RelayPacket, RelayPacketResponseContract, RespondToApprovalRequest,
-    RespondToApprovalResponse, RunExecutionRequest, RunExecutionResponse, Session,
-    SessionDetail, SessionStatus, SpreadsheetAction, StartTurnRequest, StartTurnResponse,
-    SubmitCopilotResponseRequest, SubmitCopilotResponseResponse, ToolDescriptor, ToolPhase,
-    Turn, TurnArtifactRecord, TurnStatus, ValidationIssue,
+    ApprovalDecision, ApprovalInspectionPayload, AssessCopilotHandoffRequest,
+    AssessCopilotHandoffResponse, CopilotHandoffReason, CopilotHandoffReasonSource,
+    CopilotHandoffStatus, CopilotTurnResponse, CreateSessionRequest, DiffSummary,
+    ExecutionInspectionPayload, ExecutionInspectionState, GenerateRelayPacketRequest,
+    PacketInspectionPayload, PreviewArtifactPayload, PreviewExecutionRequest,
+    PreviewExecutionResponse, ReadTurnArtifactsResponse, RelayPacket,
+    RelayPacketResponseContract, RespondToApprovalRequest, RespondToApprovalResponse,
+    RunExecutionRequest, RunExecutionResponse, Session, SessionDetail, SessionStatus,
+    SpreadsheetAction, StartTurnRequest, StartTurnResponse, SubmitCopilotResponseRequest,
+    SubmitCopilotResponseResponse, ToolDescriptor, ToolPhase, Turn, TurnArtifactRecord,
+    TurnDetailsViewModel, TurnInspectionSection, TurnInspectionSourceType,
+    TurnInspectionUnavailableReason, TurnOverview, TurnOverviewStep, TurnOverviewStepState,
+    TurnStatus, ValidationInspectionPayload, ValidationIssue, ValidationIssueSummary,
 };
 use crate::persistence::{self, PersistedArtifactMeta, StorageManifest};
 use crate::workbook::{SheetColumnProfile, SheetPreview, WorkbookEngine, WorkbookSource};
 
 #[derive(Clone, Debug)]
+struct StoredRelayPacket {
+    packet: RelayPacket,
+    created_at: String,
+    artifact_id: String,
+}
+
+#[derive(Clone, Debug)]
 struct StoredResponse {
     parsed_response: Option<CopilotTurnResponse>,
     validation_issues: Vec<ValidationIssue>,
+    repair_prompt: Option<String>,
+    created_at: String,
+    artifact_id: String,
 }
 
 #[derive(Clone, Debug)]
@@ -30,12 +44,27 @@ struct StoredPreview {
     diff_summary: DiffSummary,
     requires_approval: bool,
     warnings: Vec<String>,
+    created_at: String,
+    artifact_id: String,
 }
 
 #[derive(Clone, Debug)]
 struct StoredApproval {
     decision: ApprovalDecision,
     note: Option<String>,
+    ready_for_execution: bool,
+    created_at: String,
+    artifact_id: String,
+}
+
+#[derive(Clone, Debug)]
+struct StoredExecution {
+    executed: bool,
+    output_path: Option<String>,
+    warnings: Vec<String>,
+    reason: Option<String>,
+    created_at: String,
+    artifact_id: String,
 }
 
 #[derive(Clone, Debug)]
@@ -47,15 +76,87 @@ struct ReadToolArtifact {
     warning: String,
 }
 
+#[derive(Clone, Debug)]
+struct RecordedArtifact {
+    id: String,
+    created_at: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ValidationArtifactPayload {
+    accepted: bool,
+    validation_issues: Vec<ValidationIssue>,
+    repair_prompt: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CopilotResponseArtifactPayload {
+    parsed_response: Option<CopilotTurnResponse>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RelayPacketResponseContractArtifactPayload {
+    notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RelayPacketArtifactPayload {
+    mode: crate::models::RelayMode,
+    objective: String,
+    context: Vec<String>,
+    allowed_read_tools: Vec<ToolDescriptor>,
+    allowed_write_tools: Vec<ToolDescriptor>,
+    response_contract: RelayPacketResponseContractArtifactPayload,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApprovalArtifactPayload {
+    decision: ApprovalDecision,
+    note: Option<String>,
+    ready_for_execution: bool,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExecutionArtifactPayload {
+    executed: bool,
+    output_path: Option<String>,
+    warnings: Vec<String>,
+    reason: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct PersistedLifecycleArtifact<T> {
+    artifact_id: String,
+    created_at: String,
+    payload: T,
+}
+
+#[derive(Clone, Debug, Default)]
+struct PersistedTurnLifecycleArtifacts {
+    packet: Option<PersistedLifecycleArtifact<RelayPacketArtifactPayload>>,
+    response: Option<PersistedLifecycleArtifact<CopilotResponseArtifactPayload>>,
+    validation: Option<PersistedLifecycleArtifact<ValidationArtifactPayload>>,
+    preview: Option<PersistedLifecycleArtifact<PreviewArtifactPayload>>,
+    approval: Option<PersistedLifecycleArtifact<ApprovalArtifactPayload>>,
+    execution: Option<PersistedLifecycleArtifact<ExecutionArtifactPayload>>,
+}
+
 pub struct AppStorage {
     app_local_data_dir: Option<PathBuf>,
     manifest: Option<StorageManifest>,
     sessions: HashMap<String, Session>,
     turns: HashMap<String, Turn>,
-    relay_packets: HashMap<String, RelayPacket>,
+    relay_packets: HashMap<String, StoredRelayPacket>,
     responses: HashMap<String, StoredResponse>,
     previews: HashMap<String, StoredPreview>,
     approvals: HashMap<String, StoredApproval>,
+    executions: HashMap<String, StoredExecution>,
 }
 
 impl Default for AppStorage {
@@ -69,7 +170,77 @@ impl Default for AppStorage {
             responses: HashMap::new(),
             previews: HashMap::new(),
             approvals: HashMap::new(),
+            executions: HashMap::new(),
         }
+    }
+}
+
+impl PersistedTurnLifecycleArtifacts {
+    fn capture(
+        &mut self,
+        app_local_data_dir: &std::path::Path,
+        session_id: &str,
+        meta: &PersistedArtifactMeta,
+    ) -> Result<(), String> {
+        match meta.artifact_type.as_str() {
+            "relay-packet" => {
+                let payload: RelayPacketArtifactPayload =
+                    persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
+                self.packet = Some(PersistedLifecycleArtifact {
+                    artifact_id: meta.id.clone(),
+                    created_at: meta.created_at.clone(),
+                    payload,
+                });
+            }
+            "copilot-response" => {
+                let payload: CopilotResponseArtifactPayload =
+                    persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
+                self.response = Some(PersistedLifecycleArtifact {
+                    artifact_id: meta.id.clone(),
+                    created_at: meta.created_at.clone(),
+                    payload,
+                });
+            }
+            "validation" => {
+                let payload: ValidationArtifactPayload =
+                    persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
+                self.validation = Some(PersistedLifecycleArtifact {
+                    artifact_id: meta.id.clone(),
+                    created_at: meta.created_at.clone(),
+                    payload,
+                });
+            }
+            "preview" => {
+                let payload: PreviewArtifactPayload =
+                    persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
+                self.preview = Some(PersistedLifecycleArtifact {
+                    artifact_id: meta.id.clone(),
+                    created_at: meta.created_at.clone(),
+                    payload,
+                });
+            }
+            "approval" => {
+                let payload: ApprovalArtifactPayload =
+                    persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
+                self.approval = Some(PersistedLifecycleArtifact {
+                    artifact_id: meta.id.clone(),
+                    created_at: meta.created_at.clone(),
+                    payload,
+                });
+            }
+            "execution" => {
+                let payload: ExecutionArtifactPayload =
+                    persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
+                self.execution = Some(PersistedLifecycleArtifact {
+                    artifact_id: meta.id.clone(),
+                    created_at: meta.created_at.clone(),
+                    payload,
+                });
+            }
+            _ => {}
+        }
+
+        Ok(())
     }
 }
 
@@ -174,29 +345,29 @@ impl AppStorage {
         session_id: &str,
         turn_id: &str,
     ) -> Result<ReadTurnArtifactsResponse, String> {
-        let (_, turn) = self.get_session_and_turn(session_id, turn_id)?;
-        let Some(app_local_data_dir) = self.app_local_data_dir.as_deref() else {
-            return Ok(ReadTurnArtifactsResponse {
-                turn: turn.clone(),
-                artifacts: Vec::new(),
-            });
-        };
-
+        let (session, turn) = self.get_session_and_turn(session_id, turn_id)?;
         let mut artifacts = Vec::new();
+        let mut persisted_lifecycle = PersistedTurnLifecycleArtifacts::default();
 
-        for artifact_id in &turn.item_ids {
-            let meta = persistence::read_artifact_meta(app_local_data_dir, session_id, artifact_id)?;
+        if let Some(app_local_data_dir) = self.app_local_data_dir.as_deref() {
+            for artifact_id in &turn.item_ids {
+                let meta =
+                    persistence::read_artifact_meta(app_local_data_dir, session_id, artifact_id)?;
 
-            if let Some(record) =
-                self.read_supported_turn_artifact(app_local_data_dir, session_id, &meta)?
-            {
-                artifacts.push(record);
+                if let Some(record) =
+                    self.read_supported_turn_artifact(app_local_data_dir, session_id, &meta)?
+                {
+                    artifacts.push(record);
+                }
+                persisted_lifecycle.capture(app_local_data_dir, session_id, &meta)?;
             }
         }
 
         Ok(ReadTurnArtifactsResponse {
             turn: turn.clone(),
+            storage_mode: self.storage_mode(),
             artifacts,
+            turn_details: self.build_turn_details(&session, &turn, &persisted_lifecycle),
         })
     }
 
@@ -286,15 +457,22 @@ impl AppStorage {
             },
         };
 
-        self.relay_packets.insert(turn.id.clone(), packet.clone());
-        let packet_artifact_id =
+        let packet_artifact =
             self.record_turn_artifact(&session.id, &turn.id, "relay-packet", &packet, None)?;
+        self.relay_packets.insert(
+            turn.id.clone(),
+            StoredRelayPacket {
+                packet: packet.clone(),
+                created_at: packet_artifact.created_at.clone(),
+                artifact_id: packet_artifact.id.clone(),
+            },
+        );
         self.update_turn_status(&turn.id, TurnStatus::PacketReady, 0)?;
         self.touch_session(&session.id)?;
         self.append_turn_log(
             &session.id,
             &turn.id,
-            Some(&packet_artifact_id),
+            Some(&packet_artifact.id),
             "relay-packet-generated",
             "Relay packet generated for the current turn.".to_string(),
             Some(json!({
@@ -398,7 +576,7 @@ impl AppStorage {
         } else {
             Some(build_repair_prompt(&validation_issues))
         };
-        let response_artifact_id = self.record_turn_artifact(
+        let response_artifact = self.record_turn_artifact(
             &session.id,
             &turn.id,
             "copilot-response",
@@ -409,7 +587,7 @@ impl AppStorage {
             }),
             None,
         )?;
-        let validation_artifact_id = self.record_turn_artifact(
+        let validation_artifact = self.record_turn_artifact(
             &session.id,
             &turn.id,
             "validation",
@@ -434,21 +612,25 @@ impl AppStorage {
             StoredResponse {
                 parsed_response: parsed_response.clone(),
                 validation_issues: validation_issues.clone(),
+                repair_prompt: repair_prompt.clone(),
+                created_at: validation_artifact.created_at.clone(),
+                artifact_id: validation_artifact.id.clone(),
             },
         );
         self.previews.remove(&turn.id);
         self.approvals.remove(&turn.id);
+        self.executions.remove(&turn.id);
         self.touch_session(&session.id)?;
         self.append_turn_log(
             &session.id,
             &turn.id,
-            Some(&validation_artifact_id),
+            Some(&validation_artifact.id),
             "copilot-response-submitted",
             "Copied model response was stored and validated.".to_string(),
             Some(json!({
                 "accepted": accepted,
-                "responseArtifactId": response_artifact_id.clone(),
-                "validationArtifactId": validation_artifact_id.clone(),
+                "responseArtifactId": response_artifact.id.clone(),
+                "validationArtifactId": validation_artifact.id.clone(),
                 "validationIssueCount": validation_issues.len(),
             })),
         )?;
@@ -497,28 +679,28 @@ impl AppStorage {
             &parsed_response.actions,
             &diff_summary,
         )?;
-        for artifact in read_tool_artifacts {
-            let artifact_id = self.record_turn_artifact(
+        for read_tool_artifact in read_tool_artifacts {
+            let recorded_artifact = self.record_turn_artifact(
                 &session.id,
                 &turn.id,
-                artifact.artifact_type,
-                &artifact.payload,
+                read_tool_artifact.artifact_type,
+                &read_tool_artifact.payload,
                 None,
             )?;
             self.append_turn_log(
                 &session.id,
                 &turn.id,
-                Some(&artifact_id),
-                artifact.event_type,
-                artifact.message,
+                Some(&recorded_artifact.id),
+                read_tool_artifact.event_type,
+                read_tool_artifact.message,
                 Some(json!({
-                    "artifactType": artifact.artifact_type,
+                    "artifactType": read_tool_artifact.artifact_type,
                 })),
             )?;
-            diff_summary.warnings.push(artifact.warning.clone());
-            warnings.push(artifact.warning);
+            diff_summary.warnings.push(read_tool_artifact.warning.clone());
+            warnings.push(read_tool_artifact.warning);
         }
-        let preview_artifact_id = self.record_turn_artifact(
+        let preview_artifact = self.record_turn_artifact(
             &session.id,
             &turn.id,
             "preview",
@@ -536,18 +718,21 @@ impl AppStorage {
                 diff_summary: diff_summary.clone(),
                 requires_approval,
                 warnings: warnings.clone(),
+                created_at: preview_artifact.created_at.clone(),
+                artifact_id: preview_artifact.id.clone(),
             },
         );
         self.approvals.remove(&turn.id);
+        self.executions.remove(&turn.id);
         self.touch_session(&session.id)?;
         self.append_turn_log(
             &session.id,
             &turn.id,
-            Some(&preview_artifact_id),
+            Some(&preview_artifact.id),
             "execution-preview-created",
             "Execution preview was generated for the turn.".to_string(),
             Some(json!({
-                "previewArtifactId": preview_artifact_id.clone(),
+                "previewArtifactId": preview_artifact.id.clone(),
                 "requiresApproval": requires_approval,
                 "warningCount": warnings.len(),
             })),
@@ -578,7 +763,7 @@ impl AppStorage {
             ApprovalDecision::Rejected => TurnStatus::PreviewReady,
         };
         let ready_for_execution = matches!(request.decision, ApprovalDecision::Approved);
-        let approval_artifact_id = self.record_turn_artifact(
+        let approval_artifact = self.record_turn_artifact(
             &session.id,
             &turn.id,
             "approval",
@@ -597,17 +782,20 @@ impl AppStorage {
             StoredApproval {
                 decision: request.decision,
                 note: request.note.clone(),
+                ready_for_execution,
+                created_at: approval_artifact.created_at.clone(),
+                artifact_id: approval_artifact.id.clone(),
             },
         );
         self.touch_session(&session.id)?;
         self.append_turn_log(
             &session.id,
             &turn.id,
-            Some(&approval_artifact_id),
+            Some(&approval_artifact.id),
             "approval-recorded",
             "Approval decision recorded for the current preview.".to_string(),
             Some(json!({
-                "approvalArtifactId": approval_artifact_id.clone(),
+                "approvalArtifactId": approval_artifact.id.clone(),
                 "decision": request.decision,
                 "readyForExecution": ready_for_execution,
             })),
@@ -658,9 +846,22 @@ impl AppStorage {
                         session.id
                     )
                 })
-                .and_then(|path| WorkbookSource::detect(path.to_string()))?;
+                .and_then(|path| WorkbookSource::detect(path.to_string()))
+                .map_err(|error| {
+                    self.record_execution_failure(&session, &turn, &preview, error.clone())
+                        .unwrap_or_else(|record_error| {
+                            format!("{error} (also failed to record execution failure: {record_error})")
+                        })
+                })?;
             let engine = WorkbookEngine::default();
-            let execution = engine.execute_actions(&source, &parsed_response.actions)?;
+            let execution = engine
+                .execute_actions(&source, &parsed_response.actions)
+                .map_err(|error| {
+                    self.record_execution_failure(&session, &turn, &preview, error.clone())
+                        .unwrap_or_else(|record_error| {
+                            format!("{error} (also failed to record execution failure: {record_error})")
+                        })
+                })?;
             let mut warnings = collect_execution_warnings(&preview);
             if let Some(approval) = self.approvals.get(&turn.id) {
                 if let Some(note) = &approval.note {
@@ -677,7 +878,7 @@ impl AppStorage {
                 TurnStatus::Executed,
                 turn.validation_error_count,
             )?;
-            let execution_artifact_id = self.record_turn_artifact(
+            let execution_artifact = self.record_turn_artifact(
                 &session.id,
                 &turn.id,
                 "execution",
@@ -688,15 +889,26 @@ impl AppStorage {
                 }),
                 Some(output_path.clone()),
             )?;
+            self.executions.insert(
+                turn.id.clone(),
+                StoredExecution {
+                    executed: true,
+                    output_path: Some(output_path.clone()),
+                    warnings: warnings.clone(),
+                    reason: None,
+                    created_at: execution_artifact.created_at.clone(),
+                    artifact_id: execution_artifact.id.clone(),
+                },
+            );
             self.touch_session(&session.id)?;
             self.append_turn_log(
                 &session.id,
                 &turn.id,
-                Some(&execution_artifact_id),
+                Some(&execution_artifact.id),
                 "execution-recorded",
                 "Execution wrote a save-copy output for the current turn.".to_string(),
                 Some(json!({
-                    "executionArtifactId": execution_artifact_id.clone(),
+                    "executionArtifactId": execution_artifact.id.clone(),
                     "executed": true,
                     "outputPath": output_path.clone(),
                 })),
@@ -713,7 +925,7 @@ impl AppStorage {
 
         let next_turn =
             self.update_turn_status(&turn.id, TurnStatus::Executed, turn.validation_error_count)?;
-        let execution_artifact_id = self.record_turn_artifact(
+        let execution_artifact = self.record_turn_artifact(
             &session.id,
             &turn.id,
             "execution",
@@ -723,15 +935,29 @@ impl AppStorage {
             }),
             None,
         )?;
+        self.executions.insert(
+            turn.id.clone(),
+            StoredExecution {
+                executed: true,
+                output_path: None,
+                warnings: vec![
+                    "No write actions were present, so execution completed as a no-op."
+                        .to_string(),
+                ],
+                reason: None,
+                created_at: execution_artifact.created_at.clone(),
+                artifact_id: execution_artifact.id.clone(),
+            },
+        );
         self.touch_session(&session.id)?;
         self.append_turn_log(
             &session.id,
             &turn.id,
-            Some(&execution_artifact_id),
+            Some(&execution_artifact.id),
             "execution-recorded",
             "Execution completed without write actions.".to_string(),
             Some(json!({
-                "executionArtifactId": execution_artifact_id.clone(),
+                "executionArtifactId": execution_artifact.id.clone(),
                 "executed": true,
             })),
         )?;
@@ -745,6 +971,65 @@ impl AppStorage {
             ],
             reason: None,
         })
+    }
+
+    fn record_execution_failure(
+        &mut self,
+        session: &Session,
+        turn: &Turn,
+        preview: &StoredPreview,
+        reason: String,
+    ) -> Result<String, String> {
+        let mut warnings = collect_execution_warnings(preview);
+        if let Some(approval) = self.approvals.get(&turn.id) {
+            if let Some(note) = &approval.note {
+                push_unique_string(&mut warnings, format!("Approval note: {note}"));
+            }
+        }
+
+        let next_turn =
+            self.update_turn_status(&turn.id, TurnStatus::Failed, turn.validation_error_count)?;
+        let output_path = Some(preview.diff_summary.output_path.clone());
+        let execution_artifact = self.record_turn_artifact(
+            &session.id,
+            &turn.id,
+            "execution",
+            &json!({
+                "executed": false,
+                "outputPath": output_path.clone(),
+                "warnings": warnings.clone(),
+                "reason": reason.clone(),
+            }),
+            output_path.clone(),
+        )?;
+        self.executions.insert(
+            turn.id.clone(),
+            StoredExecution {
+                executed: false,
+                output_path: output_path.clone(),
+                warnings: warnings.clone(),
+                reason: Some(reason.clone()),
+                created_at: execution_artifact.created_at.clone(),
+                artifact_id: execution_artifact.id.clone(),
+            },
+        );
+        self.touch_session(&session.id)?;
+        self.append_turn_log(
+            &session.id,
+            &turn.id,
+            Some(&execution_artifact.id),
+            "execution-failed",
+            "Execution could not write the reviewed copy for the current turn.".to_string(),
+            Some(json!({
+                "executionArtifactId": execution_artifact.id.clone(),
+                "executed": false,
+                "outputPath": output_path,
+                "reason": reason.clone(),
+                "turnStatus": next_turn.status,
+            })),
+        )?;
+
+        Ok(reason)
     }
 
     fn get_session_and_turn(
@@ -814,8 +1099,9 @@ impl AppStorage {
         artifact_type: &str,
         payload: &T,
         external_output_path: Option<String>,
-    ) -> Result<String, String> {
+    ) -> Result<RecordedArtifact, String> {
         let artifact_id = Uuid::new_v4().to_string();
+        let created_at = timestamp();
 
         if let Some(app_local_data_dir) = self.app_local_data_dir.as_deref() {
             let meta = persistence::PersistedArtifactMeta {
@@ -823,7 +1109,7 @@ impl AppStorage {
                 session_id: session_id.to_string(),
                 turn_id: turn_id.to_string(),
                 artifact_type: artifact_type.to_string(),
-                created_at: timestamp(),
+                created_at: created_at.clone(),
                 relative_payload_path: format!("artifacts/{artifact_id}/payload.json"),
                 external_output_path,
             };
@@ -836,7 +1122,663 @@ impl AppStorage {
             .ok_or_else(|| format!("turn `{turn_id}` was not found"))?;
         turn.item_ids.push(artifact_id.clone());
 
-        Ok(artifact_id)
+        Ok(RecordedArtifact {
+            id: artifact_id,
+            created_at,
+        })
+    }
+
+    fn available_section<T: Serialize>(
+        &self,
+        summary: String,
+        source_type: TurnInspectionSourceType,
+        updated_at: String,
+        artifact_id: Option<String>,
+        payload: T,
+    ) -> TurnInspectionSection<T> {
+        TurnInspectionSection {
+            available: true,
+            summary,
+            source_type: Some(source_type),
+            updated_at: Some(updated_at),
+            artifact_id,
+            unavailable_reason: None,
+            payload: Some(payload),
+        }
+    }
+
+    fn unavailable_section<T: Serialize>(
+        &self,
+        summary: String,
+        unavailable_reason: TurnInspectionUnavailableReason,
+    ) -> TurnInspectionSection<T> {
+        TurnInspectionSection {
+            available: false,
+            summary,
+            source_type: None,
+            updated_at: None,
+            artifact_id: None,
+            unavailable_reason: Some(unavailable_reason),
+            payload: None,
+        }
+    }
+
+    fn build_turn_details(
+        &self,
+        session: &Session,
+        turn: &Turn,
+        persisted: &PersistedTurnLifecycleArtifacts,
+    ) -> TurnDetailsViewModel {
+        let packet = self.resolve_packet_section(session, turn, persisted);
+        let validation = self.resolve_validation_section(turn, persisted);
+        let approval = self.resolve_approval_section(turn, persisted);
+        let execution = self.resolve_execution_section(turn, persisted);
+
+        TurnDetailsViewModel {
+            overview: self.build_turn_overview(turn, persisted, &packet, &validation, &approval, &execution),
+            packet,
+            validation,
+            approval,
+            execution,
+        }
+    }
+
+    fn build_turn_overview(
+        &self,
+        turn: &Turn,
+        persisted: &PersistedTurnLifecycleArtifacts,
+        packet: &TurnInspectionSection<PacketInspectionPayload>,
+        validation: &TurnInspectionSection<ValidationInspectionPayload>,
+        approval: &TurnInspectionSection<ApprovalInspectionPayload>,
+        execution: &TurnInspectionSection<ExecutionInspectionPayload>,
+    ) -> TurnOverview {
+        let preview_ready = self.previews.contains_key(&turn.id) || persisted.preview.is_some();
+        let steps = vec![
+            TurnOverviewStep {
+                id: "packet".to_string(),
+                label: "Packet".to_string(),
+                state: if packet.available {
+                    TurnOverviewStepState::Complete
+                } else if turn.status == TurnStatus::Draft {
+                    TurnOverviewStepState::Current
+                } else {
+                    TurnOverviewStepState::Pending
+                },
+                summary: packet.summary.clone(),
+            },
+            TurnOverviewStep {
+                id: "validation".to_string(),
+                label: "Validation".to_string(),
+                state: if validation.available {
+                    if validation
+                        .payload
+                        .as_ref()
+                        .map(|payload| payload.accepted)
+                        .unwrap_or(false)
+                    {
+                        TurnOverviewStepState::Complete
+                    } else {
+                        TurnOverviewStepState::Failed
+                    }
+                } else if matches!(turn.status, TurnStatus::PacketReady | TurnStatus::AwaitingResponse) {
+                    TurnOverviewStepState::Current
+                } else {
+                    TurnOverviewStepState::Pending
+                },
+                summary: validation.summary.clone(),
+            },
+            TurnOverviewStep {
+                id: "preview".to_string(),
+                label: "Preview".to_string(),
+                state: if preview_ready {
+                    TurnOverviewStepState::Complete
+                } else if matches!(turn.status, TurnStatus::Validated) {
+                    TurnOverviewStepState::Current
+                } else {
+                    TurnOverviewStepState::Pending
+                },
+                summary: if let Some(preview) = self.previews.get(&turn.id) {
+                    if preview.requires_approval {
+                        "Preview is ready and still needs a review decision.".to_string()
+                    } else {
+                        "Preview is ready and does not need approval.".to_string()
+                    }
+                } else if let Some(preview) = persisted.preview.as_ref() {
+                    if preview.payload.requires_approval {
+                        "A persisted preview is available and still needs review before save."
+                            .to_string()
+                    } else {
+                        "A persisted preview is available for read-only review.".to_string()
+                    }
+                } else {
+                    "Preview details appear after checked changes are generated.".to_string()
+                },
+            },
+            TurnOverviewStep {
+                id: "approval".to_string(),
+                label: "Approval".to_string(),
+                state: if approval.available {
+                    match approval.payload.as_ref() {
+                        Some(payload) if !payload.requires_approval => TurnOverviewStepState::NotRequired,
+                        Some(payload) if payload.ready_for_execution => TurnOverviewStepState::Complete,
+                        Some(_) if preview_ready => TurnOverviewStepState::Current,
+                        _ => TurnOverviewStepState::Pending,
+                    }
+                } else if preview_ready {
+                    TurnOverviewStepState::Current
+                } else {
+                    TurnOverviewStepState::Pending
+                },
+                summary: approval.summary.clone(),
+            },
+            TurnOverviewStep {
+                id: "execution".to_string(),
+                label: "Execution".to_string(),
+                state: if execution.available {
+                    match execution.payload.as_ref().map(|payload| payload.state) {
+                        Some(ExecutionInspectionState::Completed) => TurnOverviewStepState::Complete,
+                        Some(ExecutionInspectionState::Failed) => TurnOverviewStepState::Failed,
+                        Some(ExecutionInspectionState::NotRequired) => TurnOverviewStepState::NotRequired,
+                        Some(ExecutionInspectionState::NotRun) => TurnOverviewStepState::Current,
+                        None => TurnOverviewStepState::Pending,
+                    }
+                } else if matches!(turn.status, TurnStatus::Approved | TurnStatus::PreviewReady) {
+                    TurnOverviewStepState::Current
+                } else {
+                    TurnOverviewStepState::Pending
+                },
+                summary: execution.summary.clone(),
+            },
+        ];
+
+        TurnOverview {
+            turn_status: turn.status,
+            relay_mode: turn.mode,
+            storage_mode: self.storage_mode(),
+            current_stage_label: humanize_turn_status(turn.status),
+            summary: match self.storage_mode() {
+                "memory" => "Turn details are coming from live in-memory state. They stay available only while this app session stays open.".to_string(),
+                _ => "Turn details combine the current turn state with any persisted lifecycle records that were saved locally for this turn.".to_string(),
+            },
+            guardrail_summary: "Relay Agent still requires preview before write, approval before write, and save-copy only output while keeping the original workbook read-only.".to_string(),
+            steps,
+        }
+    }
+
+    fn resolve_packet_section(
+        &self,
+        session: &Session,
+        turn: &Turn,
+        persisted: &PersistedTurnLifecycleArtifacts,
+    ) -> TurnInspectionSection<PacketInspectionPayload> {
+        if let Some(packet) = self.relay_packets.get(&turn.id) {
+            return self.available_section(
+                "Relay packet is ready for this turn.".to_string(),
+                TurnInspectionSourceType::Live,
+                packet.created_at.clone(),
+                Some(packet.artifact_id.clone()),
+                PacketInspectionPayload {
+                    session_title: session.title.clone(),
+                    turn_title: turn.title.clone(),
+                    source_path: session.primary_workbook_path.clone(),
+                    relay_mode: packet.packet.mode,
+                    objective: packet.packet.objective.clone(),
+                    context_lines: packet.packet.context.clone(),
+                    allowed_read_tool_count: packet.packet.allowed_read_tools.len(),
+                    allowed_write_tool_count: packet.packet.allowed_write_tools.len(),
+                    response_notes: packet.packet.response_contract.notes.clone(),
+                },
+            );
+        }
+
+        if let Some(packet) = persisted.packet.as_ref() {
+            return self.available_section(
+                "A saved relay packet is available for this turn.".to_string(),
+                TurnInspectionSourceType::Persisted,
+                packet.created_at.clone(),
+                Some(packet.artifact_id.clone()),
+                PacketInspectionPayload {
+                    session_title: session.title.clone(),
+                    turn_title: turn.title.clone(),
+                    source_path: session.primary_workbook_path.clone(),
+                    relay_mode: packet.payload.mode,
+                    objective: packet.payload.objective.clone(),
+                    context_lines: packet.payload.context.clone(),
+                    allowed_read_tool_count: packet.payload.allowed_read_tools.len(),
+                    allowed_write_tool_count: packet.payload.allowed_write_tools.len(),
+                    response_notes: packet.payload.response_contract.notes.clone(),
+                },
+            );
+        }
+
+        if turn.status == TurnStatus::Draft {
+            return self.unavailable_section(
+                "Packet details appear after a relay packet is generated for this turn."
+                    .to_string(),
+                TurnInspectionUnavailableReason::NotGeneratedYet,
+            );
+        }
+
+        self.unavailable_section(
+            "Packet details are not available for this turn or this older turn version."
+                .to_string(),
+            TurnInspectionUnavailableReason::NotSupportedForTurnVersion,
+        )
+    }
+
+    fn resolve_validation_section(
+        &self,
+        turn: &Turn,
+        persisted: &PersistedTurnLifecycleArtifacts,
+    ) -> TurnInspectionSection<ValidationInspectionPayload> {
+        let preview_artifact_id = self
+            .previews
+            .get(&turn.id)
+            .map(|preview| preview.artifact_id.clone())
+            .or_else(|| persisted.preview.as_ref().map(|preview| preview.artifact_id.clone()));
+
+        if let Some(response) = self.responses.get(&turn.id) {
+            let accepted = response.validation_issues.is_empty();
+            let warning_count = response
+                .parsed_response
+                .as_ref()
+                .map(|payload| payload.warnings.len())
+                .unwrap_or(0);
+            let issues = response
+                .validation_issues
+                .iter()
+                .map(|issue| ValidationIssueSummary {
+                    path: format_issue_path(&issue.path),
+                    message: issue.message.clone(),
+                    code: issue.code.clone(),
+                })
+                .collect::<Vec<_>>();
+            return self.available_section(
+                if accepted {
+                    "Validation passed for the current response.".to_string()
+                } else {
+                    format!(
+                        "Validation found {} issue(s) in the current response.",
+                        response.validation_issues.len()
+                    )
+                },
+                TurnInspectionSourceType::Live,
+                response.created_at.clone(),
+                Some(response.artifact_id.clone()),
+                ValidationInspectionPayload {
+                    accepted,
+                    can_preview: accepted,
+                    issue_count: response.validation_issues.len(),
+                    warning_count,
+                    headline: if accepted {
+                        if warning_count > 0 {
+                            "Validation passed with warnings.".to_string()
+                        } else {
+                            "Validation passed.".to_string()
+                        }
+                    } else {
+                        "Validation needs changes.".to_string()
+                    },
+                    primary_reason: if let Some(issue) = response.validation_issues.first() {
+                        issue.message.clone()
+                    } else if warning_count > 0 {
+                        "The response passed validation, but it still includes warning notes."
+                            .to_string()
+                    } else {
+                        "The response is safe to send into preview.".to_string()
+                    },
+                    issues,
+                    repair_prompt_available: response.repair_prompt.is_some(),
+                    related_preview_artifact_id: preview_artifact_id,
+                },
+            );
+        }
+
+        if let Some(validation) = persisted.validation.as_ref() {
+            let warning_count = persisted
+                .response
+                .as_ref()
+                .and_then(|response| response.payload.parsed_response.as_ref())
+                .map(|payload| payload.warnings.len())
+                .unwrap_or(0);
+            return self.available_section(
+                if validation.payload.accepted {
+                    "A saved validation result is available for this turn.".to_string()
+                } else {
+                    format!(
+                        "A saved validation result shows {} issue(s).",
+                        validation.payload.validation_issues.len()
+                    )
+                },
+                TurnInspectionSourceType::Persisted,
+                validation.created_at.clone(),
+                Some(validation.artifact_id.clone()),
+                ValidationInspectionPayload {
+                    accepted: validation.payload.accepted,
+                    can_preview: validation.payload.accepted,
+                    issue_count: validation.payload.validation_issues.len(),
+                    warning_count,
+                    headline: if validation.payload.accepted {
+                        if warning_count > 0 {
+                            "Validation passed with warnings.".to_string()
+                        } else {
+                            "Validation passed.".to_string()
+                        }
+                    } else {
+                        "Validation needs changes.".to_string()
+                    },
+                    primary_reason: validation
+                        .payload
+                        .validation_issues
+                        .first()
+                        .map(|issue| issue.message.clone())
+                        .unwrap_or_else(|| {
+                            if warning_count > 0 {
+                                "The saved response passed validation, but it still carried warning notes.".to_string()
+                            } else {
+                                "The saved response was accepted for preview.".to_string()
+                            }
+                        }),
+                    issues: validation
+                        .payload
+                        .validation_issues
+                        .iter()
+                        .map(|issue| ValidationIssueSummary {
+                            path: format_issue_path(&issue.path),
+                            message: issue.message.clone(),
+                            code: issue.code.clone(),
+                        })
+                        .collect(),
+                    repair_prompt_available: validation.payload.repair_prompt.is_some(),
+                    related_preview_artifact_id: preview_artifact_id,
+                },
+            );
+        }
+
+        if turn.status == TurnStatus::Draft {
+            return self.unavailable_section(
+                "Validation becomes available after a packet is generated and a Copilot response is pasted back into Studio.".to_string(),
+                TurnInspectionUnavailableReason::StepNotReached,
+            );
+        }
+
+        if turn.status == TurnStatus::PacketReady {
+            return self.unavailable_section(
+                "A Copilot response has not been validated for this turn yet.".to_string(),
+                TurnInspectionUnavailableReason::NotGeneratedYet,
+            );
+        }
+
+        self.unavailable_section(
+            "Validation details are not available for this turn or this older turn version."
+                .to_string(),
+            TurnInspectionUnavailableReason::NotSupportedForTurnVersion,
+        )
+    }
+
+    fn resolve_approval_section(
+        &self,
+        turn: &Turn,
+        persisted: &PersistedTurnLifecycleArtifacts,
+    ) -> TurnInspectionSection<ApprovalInspectionPayload> {
+        let live_preview = self.previews.get(&turn.id);
+        let persisted_preview = persisted.preview.as_ref();
+        let requires_approval = live_preview
+            .map(|preview| preview.requires_approval)
+            .or_else(|| persisted_preview.map(|preview| preview.payload.requires_approval));
+        let preview_artifact_id = live_preview
+            .map(|preview| preview.artifact_id.clone())
+            .or_else(|| persisted_preview.map(|preview| preview.artifact_id.clone()));
+        let temporary_mode_note = (self.storage_mode() == "memory").then(|| {
+            "Temporary mode keeps this approval detail only for the current app session."
+                .to_string()
+        });
+
+        if let Some(approval) = self.approvals.get(&turn.id) {
+            return self.available_section(
+                if approval.ready_for_execution {
+                    "Approval is recorded and execution is allowed.".to_string()
+                } else {
+                    "Approval was recorded as not ready for execution.".to_string()
+                },
+                TurnInspectionSourceType::Live,
+                approval.created_at.clone(),
+                Some(approval.artifact_id.clone()),
+                ApprovalInspectionPayload {
+                    decision: Some(approval.decision),
+                    ready_for_execution: approval.ready_for_execution,
+                    requires_approval: requires_approval.unwrap_or(true),
+                    approved_at: Some(approval.created_at.clone()),
+                    note: approval.note.clone(),
+                    preview_artifact_id,
+                    original_file_guardrail:
+                        "The original workbook stays read-only even after approval."
+                            .to_string(),
+                    save_copy_guardrail:
+                        "Approval only unlocks save-copy execution to a separate output."
+                            .to_string(),
+                    temporary_mode_note,
+                },
+            );
+        }
+
+        if let Some(approval) = persisted.approval.as_ref() {
+            return self.available_section(
+                if approval.payload.ready_for_execution {
+                    "A saved approval is available for this turn.".to_string()
+                } else {
+                    "A saved approval record shows this turn was not ready for execution."
+                        .to_string()
+                },
+                TurnInspectionSourceType::Persisted,
+                approval.created_at.clone(),
+                Some(approval.artifact_id.clone()),
+                ApprovalInspectionPayload {
+                    decision: Some(approval.payload.decision),
+                    ready_for_execution: approval.payload.ready_for_execution,
+                    requires_approval: requires_approval.unwrap_or(true),
+                    approved_at: Some(approval.created_at.clone()),
+                    note: approval.payload.note.clone(),
+                    preview_artifact_id,
+                    original_file_guardrail:
+                        "The original workbook stays read-only even after approval."
+                            .to_string(),
+                    save_copy_guardrail:
+                        "Approval only unlocks save-copy execution to a separate output."
+                            .to_string(),
+                    temporary_mode_note,
+                },
+            );
+        }
+
+        if let Some(requires_approval) = requires_approval {
+            let summary = if requires_approval {
+                "Approval has not been recorded yet for the current preview.".to_string()
+            } else {
+                "This preview is read-only, so no approval step is required.".to_string()
+            };
+
+            return self.available_section(
+                summary,
+                if live_preview.is_some() {
+                    TurnInspectionSourceType::Live
+                } else {
+                    TurnInspectionSourceType::Persisted
+                },
+                live_preview
+                    .map(|preview| preview.created_at.clone())
+                    .or_else(|| persisted_preview.map(|preview| preview.created_at.clone()))
+                    .unwrap_or_else(|| turn.updated_at.clone()),
+                preview_artifact_id.clone(),
+                ApprovalInspectionPayload {
+                    decision: None,
+                    ready_for_execution: false,
+                    requires_approval,
+                    approved_at: None,
+                    note: None,
+                    preview_artifact_id,
+                    original_file_guardrail:
+                        "The original workbook stays read-only even when review is complete."
+                            .to_string(),
+                    save_copy_guardrail:
+                        "Only a separate reviewed copy can be written after the required review."
+                            .to_string(),
+                    temporary_mode_note,
+                },
+            );
+        }
+
+        self.unavailable_section(
+            "Approval details appear after checked changes are ready for review.".to_string(),
+            TurnInspectionUnavailableReason::StepNotReached,
+        )
+    }
+
+    fn resolve_execution_section(
+        &self,
+        turn: &Turn,
+        persisted: &PersistedTurnLifecycleArtifacts,
+    ) -> TurnInspectionSection<ExecutionInspectionPayload> {
+        if let Some(execution) = self.executions.get(&turn.id) {
+            return self.available_section(
+                if execution.executed {
+                    "Execution finished for this turn.".to_string()
+                } else {
+                    "Execution recorded a failure for this turn.".to_string()
+                },
+                TurnInspectionSourceType::Live,
+                execution.created_at.clone(),
+                Some(execution.artifact_id.clone()),
+                ExecutionInspectionPayload {
+                    state: if execution.executed {
+                        ExecutionInspectionState::Completed
+                    } else {
+                        ExecutionInspectionState::Failed
+                    },
+                    output_path: execution.output_path.clone(),
+                    executed_at: Some(execution.created_at.clone()),
+                    warning_count: execution.warnings.len(),
+                    reason_summary: execution
+                        .reason
+                        .clone()
+                        .unwrap_or_else(|| {
+                            if execution.executed {
+                                "Execution completed and kept the original workbook unchanged."
+                                    .to_string()
+                            } else {
+                                "Execution did not complete.".to_string()
+                            }
+                        }),
+                    warnings: execution.warnings.clone(),
+                    output_artifact_id: Some(execution.artifact_id.clone()),
+                },
+            );
+        }
+
+        if let Some(execution) = persisted.execution.as_ref() {
+            return self.available_section(
+                if execution.payload.executed {
+                    "A saved execution result is available for this turn.".to_string()
+                } else {
+                    "A saved execution failure is available for this turn.".to_string()
+                },
+                TurnInspectionSourceType::Persisted,
+                execution.created_at.clone(),
+                Some(execution.artifact_id.clone()),
+                ExecutionInspectionPayload {
+                    state: if execution.payload.executed {
+                        ExecutionInspectionState::Completed
+                    } else {
+                        ExecutionInspectionState::Failed
+                    },
+                    output_path: execution.payload.output_path.clone(),
+                    executed_at: Some(execution.created_at.clone()),
+                    warning_count: execution.payload.warnings.len(),
+                    reason_summary: execution
+                        .payload
+                        .reason
+                        .clone()
+                        .unwrap_or_else(|| {
+                            if execution.payload.executed {
+                                "Execution completed and kept the original workbook unchanged."
+                                    .to_string()
+                            } else {
+                                "Execution did not complete.".to_string()
+                            }
+                        }),
+                    warnings: execution.payload.warnings.clone(),
+                    output_artifact_id: Some(execution.artifact_id.clone()),
+                },
+            );
+        }
+
+        let preview_requires_approval = self
+            .previews
+            .get(&turn.id)
+            .map(|preview| preview.requires_approval)
+            .or_else(|| persisted.preview.as_ref().map(|preview| preview.payload.requires_approval));
+
+        if let Some(requires_approval) = preview_requires_approval {
+            let (state, summary) = if !requires_approval {
+                (
+                    ExecutionInspectionState::NotRequired,
+                    "This turn only reviewed workbook state, so no save-copy execution is needed."
+                        .to_string(),
+                )
+            } else if self
+                .approvals
+                .get(&turn.id)
+                .map(|approval| approval.ready_for_execution)
+                .or_else(|| {
+                    persisted
+                        .approval
+                        .as_ref()
+                        .map(|approval| approval.payload.ready_for_execution)
+                })
+                .unwrap_or(false)
+            {
+                (
+                    ExecutionInspectionState::NotRun,
+                    "Approval is complete. The turn is ready to save a reviewed copy."
+                        .to_string(),
+                )
+            } else {
+                (
+                    ExecutionInspectionState::NotRun,
+                    "Execution stays blocked until the required review is completed."
+                        .to_string(),
+                )
+            };
+
+            return self.available_section(
+                summary.clone(),
+                if self.previews.contains_key(&turn.id) {
+                    TurnInspectionSourceType::Live
+                } else {
+                    TurnInspectionSourceType::Persisted
+                },
+                self.previews
+                    .get(&turn.id)
+                    .map(|preview| preview.created_at.clone())
+                    .or_else(|| persisted.preview.as_ref().map(|preview| preview.created_at.clone()))
+                    .unwrap_or_else(|| turn.updated_at.clone()),
+                None,
+                ExecutionInspectionPayload {
+                    state,
+                    output_path: None,
+                    executed_at: None,
+                    warning_count: 0,
+                    reason_summary: summary,
+                    warnings: Vec::new(),
+                    output_artifact_id: None,
+                },
+            );
+        }
+
+        self.unavailable_section(
+            "Execution details appear after preview is ready for this turn.".to_string(),
+            TurnInspectionUnavailableReason::StepNotReached,
+        )
     }
 
     fn collect_read_tool_artifacts(
@@ -1160,6 +2102,23 @@ impl AppStorage {
         session.updated_at = timestamp();
         self.persist_session_state(session_id)
     }
+}
+
+fn humanize_turn_status(status: TurnStatus) -> String {
+    match status {
+        TurnStatus::Draft => "Draft".to_string(),
+        TurnStatus::PacketReady => "Packet ready".to_string(),
+        TurnStatus::AwaitingResponse => "Awaiting a corrected response".to_string(),
+        TurnStatus::Validated => "Validation passed".to_string(),
+        TurnStatus::PreviewReady => "Preview ready".to_string(),
+        TurnStatus::Approved => "Approved".to_string(),
+        TurnStatus::Executed => "Execution completed".to_string(),
+        TurnStatus::Failed => "Failed".to_string(),
+    }
+}
+
+fn format_issue_path(path: &[Value]) -> String {
+    format_path(path)
 }
 
 fn build_packet_context(session: &Session, turn: &Turn) -> Vec<String> {
@@ -2243,9 +3202,10 @@ mod tests {
     use super::AppStorage;
     use crate::models::{
         ApprovalDecision, AssessCopilotHandoffRequest, CopilotHandoffStatus,
-        CreateSessionRequest, GenerateRelayPacketRequest, PreviewExecutionRequest,
-        ReadSessionRequest, RelayMode, RespondToApprovalRequest, RunExecutionRequest,
-        StartTurnRequest, SubmitCopilotResponseRequest, TurnArtifactRecord, TurnStatus,
+        CreateSessionRequest, ExecutionInspectionState, GenerateRelayPacketRequest,
+        PreviewExecutionRequest, ReadSessionRequest, RelayMode, RespondToApprovalRequest,
+        RunExecutionRequest, StartTurnRequest, SubmitCopilotResponseRequest, TurnArtifactRecord,
+        TurnInspectionSourceType, TurnStatus,
     };
     use crate::persistence;
     use serde::{de::DeserializeOwned, Deserialize};
@@ -3503,8 +4463,348 @@ mod tests {
             artifact,
             TurnArtifactRecord::Preview { .. }
         )));
+        assert_eq!(artifact_response.storage_mode, "local-json");
+        assert_eq!(
+            artifact_response.turn_details.overview.storage_mode,
+            "local-json"
+        );
+        assert!(artifact_response.turn_details.packet.available);
+        assert_eq!(
+            artifact_response.turn_details.packet.source_type,
+            Some(TurnInspectionSourceType::Persisted)
+        );
+        assert!(artifact_response.turn_details.validation.available);
+        assert_eq!(
+            artifact_response
+                .turn_details
+                .validation
+                .payload
+                .as_ref()
+                .map(|payload| payload.accepted),
+            Some(true)
+        );
+        assert!(artifact_response.turn_details.approval.available);
+        assert_eq!(
+            artifact_response
+                .turn_details
+                .approval
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.decision),
+            None
+        );
+        assert_eq!(
+            artifact_response
+                .turn_details
+                .execution
+                .payload
+                .as_ref()
+                .map(|payload| payload.state),
+            Some(ExecutionInspectionState::NotRun)
+        );
 
         fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
+        fs::remove_file(csv_path).expect("test csv should clean up");
+    }
+
+    #[test]
+    fn read_turn_artifacts_persist_failed_execution_details_after_save_error() {
+        let app_local_data_dir = unique_test_app_data_dir();
+        let csv_path = write_test_csv("customer_id,amount\n1,42.5\n2,13.0\n");
+        let output_path = csv_path
+            .join("reviewed-copy.csv")
+            .to_string_lossy()
+            .into_owned();
+
+        let (session_id, turn_id) = {
+            let mut storage =
+                AppStorage::open(app_local_data_dir.clone()).expect("storage should initialize");
+
+            let session = storage
+                .create_session(CreateSessionRequest {
+                    title: "Execution failure details".to_string(),
+                    objective: "Capture failed execution evidence for inspection.".to_string(),
+                    primary_workbook_path: Some(csv_path.to_string_lossy().into_owned()),
+                })
+                .expect("session should be created");
+            let turn = storage
+                .start_turn(StartTurnRequest {
+                    session_id: session.id.clone(),
+                    title: "Blocked output path".to_string(),
+                    objective:
+                        "Try to save a reviewed copy into a path that cannot be created."
+                            .to_string(),
+                    mode: RelayMode::Plan,
+                })
+                .expect("turn should start")
+                .turn;
+
+            storage
+                .generate_relay_packet(GenerateRelayPacketRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                })
+                .expect("packet should generate");
+            storage
+                .submit_copilot_response(SubmitCopilotResponseRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                    raw_response: format!(
+                        r#"{{
+                          "summary": "Rename a column and attempt to save a reviewed copy.",
+                          "actions": [
+                            {{
+                              "tool": "table.rename_columns",
+                              "sheet": "Sheet1",
+                              "args": {{
+                                "renames": [
+                                  {{
+                                    "from": "amount",
+                                    "to": "normalized_amount"
+                                  }}
+                                ]
+                              }}
+                            }},
+                            {{
+                              "tool": "workbook.save_copy",
+                              "args": {{
+                                "outputPath": "{}"
+                              }}
+                            }}
+                          ]
+                        }}"#,
+                        output_path
+                    ),
+                })
+                .expect("response should parse");
+            storage
+                .preview_execution(PreviewExecutionRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                })
+                .expect("preview should succeed");
+            storage
+                .respond_to_approval(RespondToApprovalRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                    decision: ApprovalDecision::Approved,
+                    note: Some("Capture the failure details".to_string()),
+                })
+                .expect("approval should be recorded");
+
+            let execution_error = storage
+                .run_execution(RunExecutionRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                })
+                .expect_err("execution should fail when the output parent is a file path");
+            assert!(execution_error.contains("failed to create output directory"));
+
+            let live_artifact_response = storage
+                .read_turn_artifacts(&session.id, &turn.id)
+                .expect("live turn details should be readable");
+            assert_eq!(
+                live_artifact_response.turn_details.execution.source_type,
+                Some(TurnInspectionSourceType::Live)
+            );
+            assert_eq!(
+                live_artifact_response
+                    .turn_details
+                    .execution
+                    .payload
+                    .as_ref()
+                    .map(|payload| payload.state),
+                Some(ExecutionInspectionState::Failed)
+            );
+            assert_eq!(
+                live_artifact_response
+                    .turn_details
+                    .execution
+                    .payload
+                    .as_ref()
+                    .and_then(|payload| payload.output_path.as_deref()),
+                Some(output_path.as_str())
+            );
+            assert!(live_artifact_response
+                .turn_details
+                .execution
+                .payload
+                .as_ref()
+                .map(|payload| payload.reason_summary.contains("failed to create output directory"))
+                .unwrap_or(false));
+
+            let detail = storage
+                .read_session(&session.id)
+                .expect("session should be readable after the failure");
+            let failed_turn = detail
+                .turns
+                .iter()
+                .find(|candidate| candidate.id == turn.id)
+                .expect("turn should still exist");
+            assert_eq!(failed_turn.status, TurnStatus::Failed);
+
+            (session.id, turn.id)
+        };
+
+        let reloaded = AppStorage::open(app_local_data_dir.clone()).expect("storage should reload");
+        let detail = reloaded
+            .read_session(&session_id)
+            .expect("persisted session should be readable");
+        let failed_turn = detail
+            .turns
+            .iter()
+            .find(|turn| turn.id == turn_id)
+            .expect("turn should still exist after reload");
+        let artifact_response = reloaded
+            .read_turn_artifacts(&session_id, &turn_id)
+            .expect("persisted turn details should be readable");
+
+        assert_eq!(failed_turn.status, TurnStatus::Failed);
+        assert_eq!(artifact_response.storage_mode, "local-json");
+        assert_eq!(
+            artifact_response.turn_details.execution.source_type,
+            Some(TurnInspectionSourceType::Persisted)
+        );
+        assert_eq!(
+            artifact_response
+                .turn_details
+                .execution
+                .payload
+                .as_ref()
+                .map(|payload| payload.state),
+            Some(ExecutionInspectionState::Failed)
+        );
+        assert_eq!(
+            artifact_response
+                .turn_details
+                .execution
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.output_path.as_deref()),
+            Some(output_path.as_str())
+        );
+        assert!(artifact_response
+            .turn_details
+            .execution
+            .payload
+            .as_ref()
+            .map(|payload| payload.reason_summary.contains("failed to create output directory"))
+            .unwrap_or(false));
+
+        fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
+        fs::remove_file(csv_path).expect("test csv should clean up");
+    }
+
+    #[test]
+    fn read_turn_artifacts_returns_live_turn_details_in_memory_mode() {
+        let csv_path = write_test_csv(
+            "customer_id,amount,posted_on,approved\n1,42.5,2025-01-01,true\n2,13.0,2025-01-02,false\n",
+        );
+        let output_path = env::temp_dir()
+            .join(format!("relay-agent-memory-turn-details-{}.csv", Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
+
+        let mut storage = AppStorage::default();
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Memory mode details".to_string(),
+                objective: "Inspect details without local persistence".to_string(),
+                primary_workbook_path: Some(csv_path.to_string_lossy().into_owned()),
+            })
+            .expect("session should be created");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Current turn details".to_string(),
+                objective: "Generate a packet, validate it, and preview it in memory mode."
+                    .to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+
+        storage
+            .generate_relay_packet(GenerateRelayPacketRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+            })
+            .expect("packet should generate");
+        storage
+            .submit_copilot_response(SubmitCopilotResponseRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+                raw_response: format!(
+                    r#"{{
+                      "summary": "Filter approved rows and stage a save-copy preview.",
+                      "actions": [
+                        {{
+                          "tool": "table.filter_rows",
+                          "sheet": "Sheet1",
+                          "args": {{
+                            "predicate": "approved = true"
+                          }}
+                        }},
+                        {{
+                          "tool": "workbook.save_copy",
+                          "args": {{
+                            "outputPath": "{}"
+                          }}
+                        }}
+                      ]
+                    }}"#,
+                    output_path
+                ),
+            })
+            .expect("response should parse");
+        storage
+            .preview_execution(PreviewExecutionRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+            })
+            .expect("preview should succeed");
+
+        let artifact_response = storage
+            .read_turn_artifacts(&session.id, &turn.id)
+            .expect("turn details should still resolve");
+
+        assert_eq!(artifact_response.storage_mode, "memory");
+        assert!(artifact_response.artifacts.is_empty());
+        assert_eq!(
+            artifact_response.turn_details.overview.storage_mode,
+            "memory"
+        );
+        assert_eq!(
+            artifact_response.turn_details.packet.source_type,
+            Some(TurnInspectionSourceType::Live)
+        );
+        assert_eq!(
+            artifact_response.turn_details.validation.source_type,
+            Some(TurnInspectionSourceType::Live)
+        );
+        assert_eq!(
+            artifact_response.turn_details.approval.source_type,
+            Some(TurnInspectionSourceType::Live)
+        );
+        assert_eq!(
+            artifact_response.turn_details.execution.source_type,
+            Some(TurnInspectionSourceType::Live)
+        );
+        assert_eq!(
+            artifact_response
+                .turn_details
+                .execution
+                .payload
+                .as_ref()
+                .map(|payload| payload.state),
+            Some(ExecutionInspectionState::NotRun)
+        );
+        assert!(artifact_response
+            .turn_details
+            .overview
+            .summary
+            .contains("in-memory"));
+
         fs::remove_file(csv_path).expect("test csv should clean up");
     }
 

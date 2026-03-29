@@ -109,7 +109,7 @@ pub struct Turn {
     pub validation_error_count: u32,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolDescriptor {
     pub id: String,
@@ -119,7 +119,7 @@ pub struct ToolDescriptor {
     pub requires_approval: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayPacketResponseContract {
     pub format: &'static str,
@@ -127,7 +127,7 @@ pub struct RelayPacketResponseContract {
     pub notes: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayPacket {
     pub version: &'static str,
@@ -141,7 +141,7 @@ pub struct RelayPacket {
     pub response_contract: RelayPacketResponseContract,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ValidationIssue {
     pub path: Vec<Value>,
@@ -149,7 +149,7 @@ pub struct ValidationIssue {
     pub code: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpreadsheetAction {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -162,7 +162,7 @@ pub struct SpreadsheetAction {
     pub args: Value,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopilotTurnResponse {
     pub version: String,
@@ -239,6 +239,163 @@ pub struct PreviewArtifactPayload {
     pub diff_summary: DiffSummary,
     pub requires_approval: bool,
     pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TurnInspectionSourceType {
+    Live,
+    Persisted,
+    Mixed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum TurnInspectionUnavailableReason {
+    NotGeneratedYet,
+    StepNotReached,
+    TemporaryLiveOnly,
+    NotSupportedForTurnVersion,
+    GenerationFailed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum TurnOverviewStepState {
+    Complete,
+    Current,
+    Pending,
+    Failed,
+    NotRequired,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExecutionInspectionState {
+    NotRun,
+    Completed,
+    Failed,
+    NotRequired,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnOverviewStep {
+    pub id: String,
+    pub label: String,
+    pub state: TurnOverviewStepState,
+    pub summary: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnOverview {
+    pub turn_status: TurnStatus,
+    pub relay_mode: RelayMode,
+    pub storage_mode: &'static str,
+    pub current_stage_label: String,
+    pub summary: String,
+    pub guardrail_summary: String,
+    pub steps: Vec<TurnOverviewStep>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PacketInspectionPayload {
+    pub session_title: String,
+    pub turn_title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    pub relay_mode: RelayMode,
+    pub objective: String,
+    pub context_lines: Vec<String>,
+    pub allowed_read_tool_count: usize,
+    pub allowed_write_tool_count: usize,
+    pub response_notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidationIssueSummary {
+    pub path: String,
+    pub message: String,
+    pub code: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidationInspectionPayload {
+    pub accepted: bool,
+    pub can_preview: bool,
+    pub issue_count: usize,
+    pub warning_count: usize,
+    pub headline: String,
+    pub primary_reason: String,
+    pub issues: Vec<ValidationIssueSummary>,
+    pub repair_prompt_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub related_preview_artifact_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalInspectionPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<ApprovalDecision>,
+    pub ready_for_execution: bool,
+    pub requires_approval: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approved_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_artifact_id: Option<String>,
+    pub original_file_guardrail: String,
+    pub save_copy_guardrail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temporary_mode_note: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionInspectionPayload {
+    pub state: ExecutionInspectionState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executed_at: Option<String>,
+    pub warning_count: usize,
+    pub reason_summary: String,
+    pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_artifact_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnInspectionSection<T: Serialize> {
+    pub available: bool,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_type: Option<TurnInspectionSourceType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<TurnInspectionUnavailableReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<T>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnDetailsViewModel {
+    pub overview: TurnOverview,
+    pub packet: TurnInspectionSection<PacketInspectionPayload>,
+    pub validation: TurnInspectionSection<ValidationInspectionPayload>,
+    pub approval: TurnInspectionSection<ApprovalInspectionPayload>,
+    pub execution: TurnInspectionSection<ExecutionInspectionPayload>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -357,7 +514,9 @@ pub enum TurnArtifactRecord {
 #[serde(rename_all = "camelCase")]
 pub struct ReadTurnArtifactsResponse {
     pub turn: Turn,
+    pub storage_mode: &'static str,
     pub artifacts: Vec<TurnArtifactRecord>,
+    pub turn_details: TurnDetailsViewModel,
 }
 
 #[derive(Clone, Debug, Serialize)]

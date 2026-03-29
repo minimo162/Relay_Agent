@@ -330,8 +330,10 @@ The first packaged end-user release path is now fixed by `docs/PACKAGING_POLICY.
 The current verified source-run startup walkthrough remains in `README.md`; packaged installer behavior stays documented in `docs/PACKAGING_POLICY.md` until installer builds are real and testable.
 The next shipped follow-up scope is captured in `.taskmaster/docs/prd_workbook_artifact_browser.txt`.
 Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `17` through `20`, and that follow-up is now implementation-complete with verification recorded in `docs/WORKBOOK_ARTIFACT_BROWSER_VERIFICATION.md`.
+The next shipped follow-up scope is captured in `.taskmaster/docs/prd_turn_lifecycle_details.txt`.
+Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `21` through `26`, and that follow-up is now implementation-complete with verification recorded in `docs/TURN_LIFECYCLE_DETAILS_VERIFICATION.md`.
 
-That follow-up should be planned as a new milestone set that preserves the current safety model:
+That follow-up preserved the current safety model:
 
 - preview before write
 - approval before write
