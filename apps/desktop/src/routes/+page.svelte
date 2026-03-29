@@ -8,10 +8,20 @@
   } from "@relay-agent/contracts";
   import {
     createSession,
+    discardStudioDraft,
     initializeApp,
+    listRecoverableStudioDrafts,
+    listRecentFiles,
+    listRecentSessions,
     listSessions,
+    markStudioDraftClean,
     pingDesktop,
-    preflightWorkbook
+    preflightWorkbook,
+    rememberRecentFile,
+    rememberRecentSession,
+    type PersistedStudioDraft,
+    type RecentFile,
+    type RecentSession
   } from "$lib";
 
   let ping = "loading";
@@ -29,6 +39,9 @@
   let startupDiagnosticError = "";
 
   let sessions: Session[] = [];
+  let recentSessions: RecentSession[] = [];
+  let recentFiles: RecentFile[] = [];
+  let recoverableDrafts: PersistedStudioDraft[] = [];
   let sessionsLoading = true;
   let homeError = "";
 
@@ -60,6 +73,30 @@
 
   function syncSessionCount(): void {
     sessionCount = String(sessions.length);
+  }
+
+  function loadRecentWork(): void {
+    recentSessions = listRecentSessions();
+    recentFiles = listRecentFiles();
+    recoverableDrafts = listRecoverableStudioDrafts();
+  }
+
+  function describeRecoverySession(draft: PersistedStudioDraft): string {
+    return (
+      sessions.find((session) => session.id === draft.sessionId)?.title ??
+      recentSessions.find((session) => session.sessionId === draft.sessionId)?.title ??
+      `Session ${draft.sessionId.slice(0, 8)}`
+    );
+  }
+
+  function acknowledgeRecoveryDraft(sessionId: string): void {
+    markStudioDraftClean(sessionId);
+    loadRecentWork();
+  }
+
+  function discardRecoveryDraft(sessionId: string): void {
+    discardStudioDraft(sessionId);
+    loadRecentWork();
   }
 
   function formatDate(value: string): string {
@@ -327,6 +364,25 @@
         primaryWorkbookPath: workbookPath || undefined
       });
 
+      rememberRecentSession({
+        sessionId: createdSession.id,
+        title: createdSession.title,
+        workbookPath: createdSession.primaryWorkbookPath ?? "",
+        lastOpenedAt: new Date().toISOString(),
+        lastTurnTitle: ""
+      });
+
+      if (workbookPath) {
+        rememberRecentFile({
+          path: workbookPath,
+          lastUsedAt: new Date().toISOString(),
+          sessionId: createdSession.id,
+          source: "session"
+        });
+      }
+
+      loadRecentWork();
+
       sessions = sortSessions([
         createdSession,
         ...sessions.filter((existingSession) => existingSession.id !== createdSession.id)
@@ -347,6 +403,7 @@
 
   onMount(async () => {
     await loadHome();
+    loadRecentWork();
   });
 </script>
 
@@ -425,6 +482,54 @@
       {#if startupDiagnosticMessage}
         <p class="form-message form-success" aria-live="polite">{startupDiagnosticMessage}</p>
       {/if}
+    </section>
+  {/if}
+
+  {#if recoverableDrafts.length > 0}
+    <section class="feedback feedback-warning" aria-live="polite">
+      <strong>Recovery available</strong>
+      <p>
+        Relay Agent found locally autosaved work from a previous run that did not close cleanly.
+        Restore it in Studio or discard it here.
+      </p>
+
+      <div class="recovery-list">
+        {#each recoverableDrafts as draft}
+          <article class="recovery-card">
+            <div class="session-card-head">
+              <div>
+                <h3>{describeRecoverySession(draft)}</h3>
+                <p>{draft.selectedTurnTitle || draft.turnTitle || "In-progress draft"}</p>
+              </div>
+              <span class="status-pill status-attention">recovery</span>
+            </div>
+
+            <div class="session-meta">
+              <span>Saved {formatDate(draft.lastUpdatedAt)}</span>
+              {#if draft.workbookPath}
+                <span title={draft.workbookPath}>{draft.workbookPath}</span>
+              {/if}
+            </div>
+
+            <div class="feedback-actions">
+              <a
+                class="session-link"
+                href={`/studio?sessionId=${draft.sessionId}`}
+                on:click={() => acknowledgeRecoveryDraft(draft.sessionId)}
+              >
+                Restore in Studio
+              </a>
+              <button
+                class="route-chip action-chip"
+                type="button"
+                on:click={() => discardRecoveryDraft(draft.sessionId)}
+              >
+                Discard saved draft
+              </button>
+            </div>
+          </article>
+        {/each}
+      </div>
     </section>
   {/if}
 
@@ -743,6 +848,61 @@
     </article>
 
     <article class="ra-panel">
+      <h2>Recent work</h2>
+
+      {#if recentSessions.length === 0 && recentFiles.length === 0}
+        <p class="path-fallback">
+          Open a session in Studio or create one here, and Relay Agent will keep a short recent-work list on this device.
+        </p>
+      {:else}
+        {#if recentSessions.length > 0}
+          <div class="recent-block">
+            <p class="panel-eyebrow">Recent sessions</p>
+            <div class="session-list compact-session-list">
+              {#each recentSessions as recentSession}
+                <article class="session-card compact-session-card">
+                  <div class="session-card-head">
+                    <div>
+                      <h3>{recentSession.title}</h3>
+                      <p>{recentSession.lastTurnTitle || "Ready to resume in Studio."}</p>
+                    </div>
+                    <a class="session-link" href={`/studio?sessionId=${recentSession.sessionId}`}>
+                      Resume
+                    </a>
+                  </div>
+
+                  <div class="session-meta">
+                    <span>Opened {formatDate(recentSession.lastOpenedAt)}</span>
+                    {#if recentSession.workbookPath}
+                      <span title={recentSession.workbookPath}>{recentSession.workbookPath}</span>
+                    {/if}
+                  </div>
+                </article>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
+        {#if recentFiles.length > 0}
+          <div class="recent-block">
+            <p class="panel-eyebrow">Recent files</p>
+            <div class="recent-file-list">
+              {#each recentFiles as recentFile}
+                <article class="recent-file-card">
+                  <code>{recentFile.path}</code>
+                  <div class="session-meta">
+                    <span>{recentFile.source}</span>
+                    <span>{formatDate(recentFile.lastUsedAt)}</span>
+                  </div>
+                </article>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      {/if}
+    </article>
+
+    <article class="ra-panel">
       <h2>Current guidance coverage</h2>
       <ul class="ra-list">
         <li>File checks now catch unsupported, unreadable, or locale-sensitive inputs before session creation.</li>
@@ -859,6 +1019,21 @@
     flex-wrap: wrap;
     gap: 0.7rem;
     margin-top: 0.9rem;
+  }
+
+  .recovery-list {
+    display: grid;
+    gap: 0.8rem;
+    margin-top: 0.9rem;
+  }
+
+  .recovery-card {
+    display: grid;
+    gap: 0.8rem;
+    padding: 0.95rem;
+    border: 1px solid rgba(138, 90, 23, 0.18);
+    border-radius: 1rem;
+    background: rgba(255, 255, 255, 0.68);
   }
 
   .first-run-grid {
@@ -1059,6 +1234,11 @@
     gap: 0.9rem;
   }
 
+  .compact-session-list,
+  .recent-file-list {
+    gap: 0.75rem;
+  }
+
   .session-card {
     display: grid;
     gap: 0.9rem;
@@ -1066,6 +1246,11 @@
     border: 1px solid var(--ra-border);
     border-radius: 1rem;
     background: rgba(255, 255, 255, 0.76);
+  }
+
+  .compact-session-card,
+  .recent-file-card {
+    padding: 0.9rem;
   }
 
   .session-card-head {
@@ -1193,6 +1378,27 @@
 
   .path-fallback {
     margin-top: 1rem;
+  }
+
+  .recent-block {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .recent-block + .recent-block {
+    margin-top: 1rem;
+  }
+
+  .recent-file-card {
+    display: grid;
+    gap: 0.65rem;
+    border: 1px solid var(--ra-border);
+    border-radius: 1rem;
+    background: rgba(255, 255, 255, 0.76);
+  }
+
+  .recent-file-card code {
+    word-break: break-word;
   }
 
   @media (max-width: 960px) {

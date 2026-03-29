@@ -818,25 +818,25 @@
             "id": 1,
             "title": "Persist resumable drafts, preview state, and recent items",
             "description": "Save enough local state for users to continue where they left off.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [],
             "details": "Persist objective drafts, pasted response drafts, preview state, output-path candidates, recent sessions, and recent files so users can re-enter the flow without redoing setup work.",
             "testStrategy": "Verify restart shows recent work and restores draft plus preview context for resumable sessions.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T11:02:48Z"
           },
           {
             "id": 2,
             "title": "Add crash recovery from autosaved state after abnormal shutdown",
             "description": "Offer a safe restore flow after the app or machine exits unexpectedly.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1
             ],
             "details": "Store a minimal safe autosave state and present a recovery prompt on the next launch so users can restore or discard the previous in-progress work after a crash or reboot.",
             "testStrategy": "Verify an abnormal shutdown leads to a recovery prompt and that restored state matches the last safe autosave instead of a partially corrupted draft.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T11:14:26Z"
           },
           {
             "id": 3,
@@ -867,7 +867,7 @@
             "updatedAt": "2026-03-29T08:12:43Z"
           }
         ],
-        "updatedAt": "2026-03-29T08:12:43Z"
+        "updatedAt": "2026-03-29T11:14:26Z"
       },
       {
         "id": "14",
@@ -1081,7 +1081,7 @@
       "version": "1.0.0",
       "lastModified": "2026-03-29T09:25:22Z",
       "taskCount": 16,
-      "completedCount": 14,
+      "completedCount": 16,
       "tags": [
         "master"
       ]

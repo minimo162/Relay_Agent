@@ -5,8 +5,10 @@ Relay Agent is a desktop MVP for turning a validated JSON action plan into a saf
 ## Current MVP Scope
 
 - Home can create and reopen persisted sessions from local JSON storage.
+- Home now surfaces a short recent-work list so the last opened sessions and workbook paths are easier to resume.
 - Studio can start turns, generate relay packets, validate pasted Copilot JSON, request execution preview, record approval, and run save-copy execution.
 - Studio now provides a `Copy for Copilot` path that warns first when the workbook path, current objective, or available column names look sensitive.
+- Studio now restores local turn drafts, pasted response text, relay packet text, and the last preview summary snapshot after restart.
 - CSV write execution is supported for `table.rename_columns`, `table.cast_columns`, `table.filter_rows`, `table.derive_column`, `table.group_aggregate`, and `workbook.save_copy`.
 - CSV save-copy output is sanitized so cells starting with `=`, `+`, `-`, or `@` are prefixed before the new file is written.
 - Xlsx support is currently limited to inspect-oriented flows and save-copy preview planning, not rich write execution.
@@ -64,10 +66,27 @@ pnpm typecheck
 - Home now runs a file check before session creation when a workbook path is
   present, surfacing unreadable files, unsupported separators, and locale- or
   CSV-specific compatibility notes in plain language.
+- Home also surfaces recent sessions and recent workbook paths that were used in
+  the last local runs so the next Studio handoff is quicker.
+- If the previous app run ended unexpectedly while a draft was still autosaved,
+  Home shows a recovery prompt so you can restore that work in Studio or discard
+  it.
 - If local storage cannot be opened at startup, Home shows a plain-language
   startup issue and offers `Retry startup checks` or `Continue in temporary
   mode`. Temporary mode is for short-lived testing only and does not survive
   restart.
+
+## Continuity Behavior
+
+- Studio keeps a local resumable draft per session, including the turn title,
+  turn objective, workbook path, pasted response text, relay packet text, and
+  the last preview summary snapshot.
+- When you reopen that session in Studio, the draft is restored automatically
+  and the UI tells you when a preview snapshot came from a previous run.
+- If the app did not close cleanly, Home offers that same draft as recovery
+  work before you even enter Studio.
+- Preview and approval runtime state are still not executable after restart, so
+  request preview again before approval or execution.
 
 ## Demo Asset
 

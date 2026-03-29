@@ -12,7 +12,7 @@
 - Follow-up planning input: `.taskmaster/docs/prd_non_engineer_ux.txt` captures a post-MVP usability scope focused on making the app easier for non-engineer operators, especially around app startup, distribution/install/update expectations, recovery/diagnostics, data-handling clarity, permission explanations, file readiness, locale and CSV compatibility, early constraint surfacing, resumable work, crash recovery, recent-item access, progress visibility, template-driven starts, output-name safety, duplicate-run prevention, safe defaults, reviewer-friendly summaries, read-only review, inline help, pre-copy sensitivity warnings, local audit history, accessibility baselines, and the preview, approval, and save-copy execution flow
 - Follow-up task graph: `.taskmaster/tasks/tasks.json` now breaks that supplemental PRD into Task Master follow-up tasks `11` through `16`, covering startup, data trust, continuity, guided onboarding, review/save simplification, and cross-cutting recovery plus accessibility work
 - Follow-up packaging policy: `docs/PACKAGING_POLICY.md` now fixes the first packaged end-user release path to Windows 10/11 x64 via NSIS, with manual installer-driven updates and preserved app-local storage across upgrades as the current expectation
-- Follow-up implementation status: Task `12` is now complete; Home now runs workbook preflight before session creation, and Studio now inserts a sensitivity caution before copying relay packets that appear to reference personal, customer, employee, account, or confidential data
+- Follow-up implementation status: Task `13.2` is now complete; Home now surfaces recent work plus abnormal-shutdown recovery prompts, and Studio now restores resumable local draft state plus the last preview summary snapshot for each session across restart
 
 ## Milestone Log
 
@@ -1379,10 +1379,50 @@ Observed result:
 - Task Master subtask `12.4` is now marked done, and parent task `12` is now complete.
 - The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
 
+Resumable draft and recent-work verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'continuity|Recent work|Restored local draft|snapshot restored' apps/desktop/src/lib/continuity.ts apps/desktop/src/routes/+page.svelte apps/desktop/src/routes/studio/+page.svelte README.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select(.id == "13") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- The frontend now persists per-session Studio drafts in local storage, including turn title, turn objective, workbook path, pasted response text, relay packet text, execution summaries, and the last preview summary snapshot.
+- Home now surfaces recent sessions and recent workbook paths from that same continuity layer so users can re-enter Studio without searching for the last file or session again.
+- Studio now restores local draft state automatically when the matching session is reopened and makes it explicit when preview information came from a previous run rather than a fresh backend preview.
+- Workspace typecheck still passes, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 30 tests after the continuity-layer changes.
+- Task Master subtask `13.1` is now marked done while parent task `13` remains pending for abnormal-shutdown recovery and leave warnings.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+Abnormal-shutdown recovery verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'listRecoverableStudioDrafts|Recovery available|restore that work|markStudioDraftClean' apps/desktop/src/lib/continuity.ts apps/desktop/src/routes/+page.svelte apps/desktop/src/routes/studio/+page.svelte README.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select(.id == "13") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- The continuity layer now flags drafts that were autosaved without a clean shutdown and exposes them as recoverable local work on the next launch.
+- Home now shows a recovery prompt before first-run or normal recent-work flows so users can restore the autosaved session in Studio or discard it explicitly.
+- Opening the affected session in Studio acknowledges that recovery state and restores the local draft, while normal route leave and normal unload now mark the draft as closed cleanly.
+- Workspace typecheck still passes, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 30 tests after the recovery-prompt additions.
+- Task Master subtask `13.2` is now marked done while parent task `13` remains pending for leave warnings and the final continuity verification pass.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
 ## Known Limitations
 
 - The desktop UI now supports session listing, turn start, relay packet generation, response validation, preview requests, approval decisions, and save-copy execution in Studio, but dedicated artifact browsers for workbook profiles and diffs are still not surfaced.
-- Persisted artifact and log files are not yet rehydrated into active in-memory relay caches on startup, so restart preserves history linkage but not resumable packet, validation, preview, or approval runtime state.
+- Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.
 - The workbook pane still renders preview summaries from backend metadata only; the newly persisted workbook-profile, sheet-preview, and column-profile artifacts are not yet surfaced in dedicated UI panels.
 - Preview predicates and derive expressions intentionally support a narrow grammar for now: bracketed column references for spaced headers, one comparison in `filter_rows`, and basic arithmetic or string concatenation in `derive_column`.
 - Limited xlsx support is still inspect-and-copy oriented; current test coverage still centers on CSV execution plus xlsx preview planning rather than richer xlsx write flows.
@@ -1392,4 +1432,4 @@ Observed result:
 
 Next planned work:
 
-- Continue follow-up task `13.1` for resumable drafts, in-progress state persistence, and recent-work recovery.
+- Continue follow-up task `13.3` for leave warnings and explicit keep-draft or discard choices.

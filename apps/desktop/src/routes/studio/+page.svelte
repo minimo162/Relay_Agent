@@ -1,6 +1,7 @@
 <script lang="ts">
   import { browser } from "$app/environment";
   import { page } from "$app/stores";
+  import { onMount } from "svelte";
   import {
     projectInfo,
     type AssessCopilotHandoffResponse,
@@ -17,13 +18,20 @@
 
   import {
     assessCopilotHandoff,
+    discardStudioDraft,
     generateRelayPacket,
+    loadStudioDraft,
+    markStudioDraftClean,
     previewExecution,
     readSession,
+    rememberRecentFile,
+    rememberRecentSession,
     respondToApproval,
     runExecution,
+    saveStudioDraft,
     startTurn,
-    submitCopilotResponse
+    submitCopilotResponse,
+    type PersistedPreviewSnapshot
   } from "$lib";
   import { createStudioState } from "$lib/studio-state";
 
@@ -43,6 +51,10 @@
   let currentSessionId: string | null = null;
   let sessionDetail: SessionDetail | null = null;
   let selectedTurnId: string | null = null;
+  let restoredPreviewSnapshot: PersistedPreviewSnapshot | null = null;
+  let previewSnapshot: PersistedPreviewSnapshot | null = null;
+  let continuityNotice = "";
+  let draftPersistenceEnabled = false;
 
   let sessionLoading = false;
   let startTurnPending = false;
@@ -113,6 +125,144 @@
       return result ? `${result}.${segment}` : segment;
     }, "");
   }
+
+  function buildPreviewSnapshot(
+    result: PreviewExecutionResponse | null
+  ): PersistedPreviewSnapshot | null {
+    if (!result) {
+      return null;
+    }
+
+    return {
+      sourcePath: result.diffSummary.sourcePath,
+      outputPath: result.diffSummary.outputPath,
+      targetCount: result.diffSummary.targetCount,
+      estimatedAffectedRows: result.diffSummary.estimatedAffectedRows,
+      warnings: result.warnings,
+      requiresApproval: result.requiresApproval,
+      lastGeneratedAt: new Date().toISOString()
+    };
+  }
+
+  function restoreContinuityDraft(detail: SessionDetail, fallbackTurnId: string | null): string | null {
+    const savedDraft = loadStudioDraft(detail.session.id);
+
+    continuityNotice = "";
+    restoredPreviewSnapshot = null;
+
+    if (!savedDraft) {
+      return fallbackTurnId;
+    }
+
+    const resumedTurnId =
+      savedDraft.selectedTurnId === null
+        ? null
+        : detail.turns.some((turn) => turn.id === savedDraft.selectedTurnId)
+          ? savedDraft.selectedTurnId
+          : fallbackTurnId;
+    const resumedTurn =
+      detail.turns.find((turn) => turn.id === resumedTurnId) ?? null;
+
+    studioState.set({
+      selectedSessionId: detail.session.id,
+      turnTitle: savedDraft.turnTitle || resumedTurn?.title || "",
+      turnObjective: savedDraft.turnObjective || resumedTurn?.objective || "",
+      relayMode: savedDraft.relayMode,
+      workbookPath:
+        savedDraft.workbookPath || detail.session.primaryWorkbookPath || "",
+      workbookFocus: savedDraft.workbookFocus || "Sheet1",
+      packetDraft: "",
+      rawResponse: savedDraft.rawResponse,
+      validationNote: "",
+      previewNote: "",
+      diffHeadline: "",
+      previewWarnings: []
+    });
+
+    relayPacketText = savedDraft.relayPacketText;
+    relayPacketSummary = savedDraft.relayPacketSummary;
+    validationSummary = savedDraft.validationSummary;
+    previewSummary = savedDraft.previewSummary;
+    approvalSummary = savedDraft.approvalSummary;
+    executionSummary = savedDraft.executionSummary;
+    restoredPreviewSnapshot = savedDraft.previewSnapshot;
+
+    continuityNotice = savedDraft.previewSnapshot
+      ? `Restored local draft from ${formatDate(savedDraft.lastUpdatedAt)}. Preview context came back too, but request preview again before execution.`
+      : `Restored local draft from ${formatDate(savedDraft.lastUpdatedAt)}.`;
+
+    return resumedTurnId;
+  }
+
+  function persistStudioContinuity(): void {
+    if (!browser || !draftPersistenceEnabled || !currentSessionId) {
+      return;
+    }
+
+    const state = get(studioState);
+    const activeTurn =
+      sessionDetail?.turns.find((turn) => turn.id === selectedTurnId) ?? null;
+    const lastUpdatedAt = new Date().toISOString();
+    const workbookPath =
+      state.workbookPath.trim() || sessionDetail?.session.primaryWorkbookPath || "";
+
+    saveStudioDraft({
+      sessionId: currentSessionId,
+      selectedTurnId,
+      selectedTurnTitle: activeTurn?.title ?? "",
+      turnTitle: state.turnTitle,
+      turnObjective: state.turnObjective,
+      relayMode: state.relayMode,
+      workbookPath,
+      workbookFocus: state.workbookFocus,
+      relayPacketText,
+      relayPacketSummary,
+      rawResponse: state.rawResponse,
+      validationSummary,
+      previewSummary,
+      approvalSummary,
+      executionSummary,
+      previewSnapshot: previewResult
+        ? buildPreviewSnapshot(previewResult)
+        : restoredPreviewSnapshot,
+      lastUpdatedAt,
+      cleanShutdown: false
+    });
+
+    if (sessionDetail) {
+      rememberRecentSession({
+        sessionId: sessionDetail.session.id,
+        title: sessionDetail.session.title,
+        workbookPath: sessionDetail.session.primaryWorkbookPath ?? workbookPath,
+        lastOpenedAt: lastUpdatedAt,
+        lastTurnTitle: activeTurn?.title ?? ""
+      });
+    }
+
+    if (workbookPath) {
+      rememberRecentFile({
+        path: workbookPath,
+        lastUsedAt: lastUpdatedAt,
+        sessionId: currentSessionId,
+        source: selectedTurnId ? "draft" : "session"
+      });
+    }
+  }
+
+  onMount(() => {
+    const handleLeave = (): void => {
+      if (currentSessionId) {
+        markStudioDraftClean(currentSessionId);
+      }
+    };
+
+    window.addEventListener("beforeunload", handleLeave);
+
+    return () => {
+      handleLeave();
+      window.removeEventListener("beforeunload", handleLeave);
+    };
+  });
 
   function summarizeTurnStatus(status: Turn["status"]): string {
     switch (status) {
@@ -252,6 +402,8 @@
 
   function selectTurn(turn: Turn | null): void {
     selectedTurnId = turn?.id ?? null;
+    restoredPreviewSnapshot = null;
+    continuityNotice = "";
     syncDraftFromTurn(turn);
     clearAllCommandFeedback(true);
 
@@ -263,7 +415,13 @@
   }
 
   function prepareNewTurnDraft(): void {
+    if (currentSessionId) {
+      discardStudioDraft(currentSessionId);
+    }
+
     selectedTurnId = null;
+    restoredPreviewSnapshot = null;
+    continuityNotice = "";
     syncDraftFromTurn(null);
     studio.updateWorkbookPath(sessionDetail?.session.primaryWorkbookPath ?? "");
     studio.updateWorkbookFocus("Sheet1");
@@ -294,9 +452,12 @@
   }
 
   async function loadStudioSession(sessionId: string | null): Promise<void> {
+    draftPersistenceEnabled = false;
     currentSessionId = sessionId;
     sessionDetail = null;
     selectedTurnId = null;
+    restoredPreviewSnapshot = null;
+    continuityNotice = "";
     sessionError = "";
     sessionNotice = "";
     studio.setSession(sessionId);
@@ -325,14 +486,47 @@
       studio.updateWorkbookPath(detail.session.primaryWorkbookPath ?? "");
 
       const turns = sortTurns(detail.turns);
-      const preferredTurn =
+      const savedDraft = loadStudioDraft(detail.session.id);
+      const fallbackTurn =
         turns.find((turn) => turn.id === detail.session.latestTurnId) ?? turns[0] ?? null;
+      const restoredTurnId = restoreContinuityDraft(detail, fallbackTurn?.id ?? null);
+      const preferredTurn =
+        turns.find((turn) => turn.id === restoredTurnId) ??
+        (restoredTurnId === null ? null : fallbackTurn);
 
-      if (preferredTurn) {
+      if (savedDraft) {
+        markStudioDraftClean(detail.session.id);
+      }
+
+      if (preferredTurn && !savedDraft) {
         selectTurn(preferredTurn);
+      } else if (preferredTurn) {
+        selectedTurnId = preferredTurn.id;
+        sessionNotice =
+          continuityNotice || `Turn "${preferredTurn.title}" is selected and ready to resume.`;
+      } else if (restoredTurnId === null) {
+        selectedTurnId = null;
+        sessionNotice = continuityNotice || `Session "${detail.session.title}" is ready for a new turn.`;
       } else {
         syncDraftFromTurn(null);
         sessionNotice = `Session "${detail.session.title}" is ready for its first turn.`;
+      }
+
+      rememberRecentSession({
+        sessionId: detail.session.id,
+        title: detail.session.title,
+        workbookPath: detail.session.primaryWorkbookPath ?? "",
+        lastOpenedAt: new Date().toISOString(),
+        lastTurnTitle: preferredTurn?.title ?? ""
+      });
+
+      if (detail.session.primaryWorkbookPath) {
+        rememberRecentFile({
+          path: detail.session.primaryWorkbookPath,
+          lastUsedAt: new Date().toISOString(),
+          sessionId: detail.session.id,
+          source: "session"
+        });
       }
     } catch (error) {
       if (loadToken !== lastLoadToken) {
@@ -345,6 +539,7 @@
       syncDraftFromTurn(null);
     } finally {
       if (loadToken === lastLoadToken) {
+        draftPersistenceEnabled = true;
         sessionLoading = false;
       }
     }
@@ -548,6 +743,10 @@
     void loadStudioSession(routeSessionId);
   }
 
+  $: previewSnapshot = previewResult
+    ? buildPreviewSnapshot(previewResult)
+    : restoredPreviewSnapshot;
+
   $: turns = sessionDetail ? sortTurns(sessionDetail.turns) : [];
 
   $: selectedTurn = turns.find((turn) => turn.id === selectedTurnId) ?? null;
@@ -658,6 +857,20 @@
     if (!validationPending && !previewPending && (validationResult || previewResult || validationError || previewError || validationSummary || previewSummary)) {
       clearValidationAndPreview(false);
     }
+  }
+
+  $: if (browser && draftPersistenceEnabled && currentSessionId) {
+    $studioState;
+    selectedTurnId;
+    relayPacketText;
+    relayPacketSummary;
+    validationSummary;
+    previewSummary;
+    approvalSummary;
+    executionSummary;
+    sessionDetail;
+    previewSnapshot;
+    persistStudioContinuity();
   }
 </script>
 
@@ -796,6 +1009,13 @@
         <section class="feedback feedback-info" aria-live="polite">
           <strong>Studio status</strong>
           <p>{sessionNotice}</p>
+        </section>
+      {/if}
+
+      {#if continuityNotice}
+        <section class="feedback feedback-info" aria-live="polite">
+          <strong>Resume status</strong>
+          <p>{continuityNotice}</p>
         </section>
       {/if}
 
@@ -1064,7 +1284,9 @@
             {/if}
           {:else}
             <p class="support-copy">
-              Validation results will appear here after `submit_copilot_response` runs.
+              {validationSummary
+                ? `${validationSummary} Re-run validation before preview so the current app run has fresh parser state.`
+                : "Validation results will appear here after `submit_copilot_response` runs."}
             </p>
           {/if}
         </section>
@@ -1077,8 +1299,14 @@
           <p class="pane-label">Workbook preview</p>
           <h2>Diff, approval, and execution readiness</h2>
         </div>
-        <span class={`status-pill ${previewResult ? "status-ready" : "status-pending"}`}>
-          {previewResult ? "preview ready" : "awaiting preview"}
+        <span class={`status-pill ${previewResult || previewSnapshot ? "status-ready" : "status-pending"}`}>
+          {#if previewResult}
+            preview ready
+          {:else if previewSnapshot}
+            snapshot restored
+          {:else}
+            awaiting preview
+          {/if}
         </span>
       </div>
 
@@ -1092,13 +1320,13 @@
       <div class="preview-stack">
         <section class="preview-card">
           <p class="preview-label">Source path</p>
-          <h3>{previewResult?.diffSummary.sourcePath || $studioState.workbookPath || sessionDetail?.session.primaryWorkbookPath || "No workbook path has been staged yet."}</h3>
+          <h3>{previewResult?.diffSummary.sourcePath || previewSnapshot?.sourcePath || $studioState.workbookPath || sessionDetail?.session.primaryWorkbookPath || "No workbook path has been staged yet."}</h3>
           <p>{$studioState.workbookFocus || "Sheet1"}</p>
         </section>
 
         <section class="preview-card">
           <p class="preview-label">Output and approval</p>
-          <h3>{previewResult?.diffSummary.outputPath || "Preview output path will appear here."}</h3>
+          <h3>{previewResult?.diffSummary.outputPath || previewSnapshot?.outputPath || "Preview output path will appear here."}</h3>
           <p>
             {#if previewResult}
               {previewResult.requiresApproval
@@ -1108,6 +1336,10 @@
                     ? "Preview was approved. Execution can now be requested."
                     : "Preview includes write-capable actions, so approval will be required."
                 : "Preview contains no approval-gated actions."}
+            {:else if previewSnapshot}
+              {previewSnapshot.requiresApproval
+                ? "This restored snapshot came from an approval-gated preview. Request preview again before execution."
+                : "This restored snapshot came from a read-only preview. Request preview again to refresh the backend state."}
             {:else}
               Request preview after validation succeeds to see the output target and gating.
             {/if}
@@ -1116,10 +1348,20 @@
 
         <section class="preview-card">
           <p class="preview-label">Diff headline</p>
-          <h3>{previewResult ? `${previewResult.diffSummary.targetCount} target diff${previewResult.diffSummary.targetCount === 1 ? "" : "s"} staged` : "Diff preview has not been requested yet."}</h3>
+          <h3>
+            {#if previewResult}
+              {previewResult.diffSummary.targetCount} target diff{previewResult.diffSummary.targetCount === 1 ? "" : "s"} staged
+            {:else if previewSnapshot}
+              {previewSnapshot.targetCount} target diff{previewSnapshot.targetCount === 1 ? "" : "s"} restored
+            {:else}
+              Diff preview has not been requested yet.
+            {/if}
+          </h3>
           <p>
             {#if previewResult}
               {previewResult.diffSummary.estimatedAffectedRows} row{previewResult.diffSummary.estimatedAffectedRows === 1 ? "" : "s"} estimated across the staged target{previewResult.diffSummary.targetCount === 1 ? "" : "s"}.
+            {:else if previewSnapshot}
+              {previewSnapshot.estimatedAffectedRows} row{previewSnapshot.estimatedAffectedRows === 1 ? "" : "s"} were estimated in the restored snapshot from the last run.
             {:else}
               The right pane will show the backend diff summary once preview is available.
             {/if}
@@ -1134,7 +1376,7 @@
           <p class="preview-label">Approval decision</p>
           <h3>
             {#if !previewResult}
-              Approval waits for preview.
+              {previewSnapshot ? "Preview snapshot restored" : "Approval waits for preview."}
             {:else if !previewResult.requiresApproval}
               No approval required
             {:else if approvalGranted}
@@ -1147,7 +1389,9 @@
           </h3>
           <p>
             {approvalSummary || (!previewResult
-              ? "Generate preview first so the current diff can be reviewed."
+              ? previewSnapshot
+                ? "A previous preview summary was restored, but you still need a fresh preview before approval or execution."
+                : "Generate preview first so the current diff can be reviewed."
               : !previewResult.requiresApproval
                 ? "This preview is read-only, so execution is already available."
                 : "Record an approval decision before write execution can proceed.")}
@@ -1245,6 +1489,10 @@
           <div class="warning-list">
             {#if previewResult && previewResult.warnings.length > 0}
               {#each previewResult.warnings as warning}
+                <span>{warning}</span>
+              {/each}
+            {:else if previewSnapshot && previewSnapshot.warnings.length > 0}
+              {#each previewSnapshot.warnings as warning}
                 <span>{warning}</span>
               {/each}
             {:else}
