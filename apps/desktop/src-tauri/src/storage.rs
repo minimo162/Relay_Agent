@@ -17,6 +17,7 @@ use crate::models::{
     SubmitCopilotResponseResponse, ToolDescriptor, ToolPhase, Turn, TurnStatus, ValidationIssue,
 };
 use crate::persistence::{self, StorageManifest};
+use crate::workbook::{default_output_path, WorkbookEngine, WorkbookSource};
 
 #[derive(Clone, Debug)]
 struct StoredResponse {
@@ -35,6 +36,15 @@ struct StoredPreview {
 struct StoredApproval {
     decision: ApprovalDecision,
     note: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct ReadToolArtifact {
+    artifact_type: &'static str,
+    payload: Value,
+    event_type: &'static str,
+    message: String,
+    warning: String,
 }
 
 pub struct AppStorage {
@@ -358,8 +368,35 @@ impl AppStorage {
             .clone()
             .ok_or_else(|| "no parsed Copilot response is available for preview".to_string())?;
 
-        let (diff_summary, requires_approval, warnings) =
+        let (mut diff_summary, requires_approval, mut warnings) =
             build_preview(&session, &parsed_response.actions);
+        let read_tool_artifacts = self.collect_read_tool_artifacts(
+            &session,
+            &turn,
+            &parsed_response.actions,
+            &diff_summary,
+        )?;
+        for artifact in read_tool_artifacts {
+            let artifact_id = self.record_turn_artifact(
+                &session.id,
+                &turn.id,
+                artifact.artifact_type,
+                &artifact.payload,
+                None,
+            )?;
+            self.append_turn_log(
+                &session.id,
+                &turn.id,
+                Some(&artifact_id),
+                artifact.event_type,
+                artifact.message,
+                Some(json!({
+                    "artifactType": artifact.artifact_type,
+                })),
+            )?;
+            diff_summary.warnings.push(artifact.warning.clone());
+            warnings.push(artifact.warning);
+        }
         let preview_artifact_id = self.record_turn_artifact(
             &session.id,
             &turn.id,
@@ -671,6 +708,214 @@ impl AppStorage {
         turn.item_ids.push(artifact_id.clone());
 
         Ok(artifact_id)
+    }
+
+    fn collect_read_tool_artifacts(
+        &self,
+        session: &Session,
+        turn: &Turn,
+        actions: &[SpreadsheetAction],
+        current_diff: &DiffSummary,
+    ) -> Result<Vec<ReadToolArtifact>, String> {
+        let engine = WorkbookEngine::default();
+        let mut artifacts = Vec::new();
+
+        for action in actions {
+            match action.tool.as_str() {
+                "workbook.inspect" => {
+                    let source = self.resolve_workbook_source(
+                        session,
+                        action.args.get("sourcePath").and_then(Value::as_str),
+                    )?;
+                    let profile = engine.inspect_workbook(&source)?;
+                    artifacts.push(ReadToolArtifact {
+                        artifact_type: "workbook-profile",
+                        payload: serde_json::to_value(&profile).map_err(|error| {
+                            format!("failed to serialize workbook profile: {error}")
+                        })?,
+                        event_type: "workbook-inspected",
+                        message: format!(
+                            "Workbook inspection captured {} sheet metadata record(s).",
+                            profile.sheet_count
+                        ),
+                        warning: format!(
+                            "Read tool `workbook.inspect` captured {} sheet profile(s).",
+                            profile.sheet_count
+                        ),
+                    });
+                }
+                "sheet.preview" => {
+                    let sheet = action
+                        .args
+                        .get("sheet")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "sheet.preview requires a sheet argument".to_string())?;
+                    let source = self.resolve_workbook_source(session, None)?;
+                    let preview = engine.sheet_preview(
+                        &source,
+                        sheet,
+                        action
+                            .args
+                            .get("limit")
+                            .and_then(Value::as_u64)
+                            .map(|value| value as usize),
+                    )?;
+                    artifacts.push(ReadToolArtifact {
+                        artifact_type: "sheet-preview",
+                        payload: serde_json::to_value(&preview).map_err(|error| {
+                            format!("failed to serialize sheet preview: {error}")
+                        })?,
+                        event_type: "sheet-preview-generated",
+                        message: format!(
+                            "Sheet preview captured {} row(s) from `{}`.",
+                            preview.rows.len(),
+                            preview.sheet
+                        ),
+                        warning: format!(
+                            "Read tool `sheet.preview` captured {} preview row(s) from `{}`.",
+                            preview.rows.len(),
+                            preview.sheet
+                        ),
+                    });
+                }
+                "sheet.profile_columns" => {
+                    let sheet = action
+                        .args
+                        .get("sheet")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            "sheet.profile_columns requires a sheet argument".to_string()
+                        })?;
+                    let source = self.resolve_workbook_source(session, None)?;
+                    let profile = engine.profile_sheet_columns(
+                        &source,
+                        sheet,
+                        action
+                            .args
+                            .get("sampleSize")
+                            .and_then(Value::as_u64)
+                            .map(|value| value as usize),
+                    )?;
+                    artifacts.push(ReadToolArtifact {
+                        artifact_type: "column-profile",
+                        payload: serde_json::to_value(&profile).map_err(|error| {
+                            format!("failed to serialize column profile: {error}")
+                        })?,
+                        event_type: "sheet-columns-profiled",
+                        message: format!(
+                            "Column profiling ran on `{}` using {} sampled row(s).",
+                            profile.sheet, profile.sampled_rows
+                        ),
+                        warning: format!(
+                            "Read tool `sheet.profile_columns` profiled {} column(s) on `{}`.",
+                            profile.columns.len(),
+                            profile.sheet
+                        ),
+                    });
+                }
+                "session.diff_from_base" => {
+                    let diff = self.session_diff_from_base(
+                        session,
+                        turn,
+                        action.args.get("artifactId").and_then(Value::as_str),
+                        current_diff,
+                    )?;
+                    artifacts.push(ReadToolArtifact {
+                        artifact_type: "diff-summary",
+                        payload: serde_json::to_value(&diff)
+                            .map_err(|error| format!("failed to serialize diff summary: {error}"))?,
+                        event_type: "session-diff-from-base-generated",
+                        message: format!(
+                            "Diff-from-base resolved {} sheet summary record(s).",
+                            diff.sheets.len()
+                        ),
+                        warning: format!(
+                            "Read tool `session.diff_from_base` resolved {} sheet diff summary record(s).",
+                            diff.sheets.len()
+                        ),
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        Ok(artifacts)
+    }
+
+    fn resolve_workbook_source(
+        &self,
+        session: &Session,
+        override_source_path: Option<&str>,
+    ) -> Result<WorkbookSource, String> {
+        let source_path = override_source_path
+            .or(session.primary_workbook_path.as_deref())
+            .ok_or_else(|| {
+                format!(
+                    "session `{}` does not have a workbook source path for read-side tools",
+                    session.id
+                )
+            })?;
+
+        WorkbookSource::detect(source_path.to_string())
+    }
+
+    fn session_diff_from_base(
+        &self,
+        session: &Session,
+        turn: &Turn,
+        artifact_id: Option<&str>,
+        current_diff: &DiffSummary,
+    ) -> Result<DiffSummary, String> {
+        if let Some(artifact_id) = artifact_id {
+            return self.read_diff_summary_artifact(&session.id, artifact_id);
+        }
+
+        for persisted_artifact_id in turn.item_ids.iter().rev() {
+            if let Ok(diff) = self.read_diff_summary_artifact(&session.id, persisted_artifact_id) {
+                return Ok(diff);
+            }
+        }
+
+        Ok(current_diff.clone())
+    }
+
+    fn read_diff_summary_artifact(
+        &self,
+        session_id: &str,
+        artifact_id: &str,
+    ) -> Result<DiffSummary, String> {
+        let app_local_data_dir = self
+            .app_local_data_dir
+            .as_deref()
+            .ok_or_else(|| "diff artifacts can only be read from local JSON storage".to_string())?;
+        let meta = persistence::read_artifact_meta(app_local_data_dir, session_id, artifact_id)?;
+
+        if !matches!(meta.artifact_type.as_str(), "preview" | "diff-summary") {
+            return Err(format!(
+                "artifact `{artifact_id}` is `{}` and cannot be used for session.diff_from_base",
+                meta.artifact_type
+            ));
+        }
+
+        let payload: Value =
+            persistence::read_artifact_payload(app_local_data_dir, session_id, artifact_id)?;
+
+        match meta.artifact_type.as_str() {
+            "preview" => {
+                serde_json::from_value(payload.get("diffSummary").cloned().ok_or_else(|| {
+                    format!(
+                        "preview artifact `{artifact_id}` does not contain a diffSummary payload"
+                    )
+                })?)
+                .map_err(|error| {
+                    format!("failed to parse preview diff summary from `{artifact_id}`: {error}")
+                })
+            }
+            "diff-summary" => serde_json::from_value(payload).map_err(|error| {
+                format!("failed to parse diff summary artifact `{artifact_id}`: {error}")
+            }),
+            _ => unreachable!("artifact type was filtered above"),
+        }
     }
 
     fn append_session_log(
@@ -1364,7 +1609,7 @@ fn build_preview(
                 .clone()
                 .unwrap_or_else(|| "unspecified-input".to_string()),
             output_path,
-            mode: "preview",
+            mode: "preview".to_string(),
             sheets: sheets.into_values().collect(),
             warnings: warnings.clone(),
         },
@@ -1384,14 +1629,6 @@ fn sheet_diff<'a>(sheets: &'a mut BTreeMap<String, SheetDiff>, sheet: &str) -> &
             removed_columns: Vec::new(),
             warnings: Vec::new(),
         })
-}
-
-fn default_output_path(source_path: &str) -> String {
-    if let Some((stem, ext)) = source_path.rsplit_once('.') {
-        format!("{stem}.relay-copy.{ext}")
-    } else {
-        format!("{source_path}.relay-copy")
-    }
 }
 
 fn is_write_action(action: &SpreadsheetAction) -> bool {
@@ -1780,9 +2017,16 @@ mod tests {
         RunExecutionRequest, StartTurnRequest, SubmitCopilotResponseRequest,
     };
     use crate::persistence;
-    use serde::de::DeserializeOwned;
+    use serde::{de::DeserializeOwned, Deserialize};
     use serde_json::Value;
     use uuid::Uuid;
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PersistedSessionIndexEntry {
+        id: String,
+        latest_turn_id: Option<String>,
+    }
 
     #[test]
     fn creates_reads_and_starts_turns() {
@@ -2026,6 +2270,116 @@ mod tests {
     }
 
     #[test]
+    fn reloads_session_index_and_lists_all_persisted_sessions_after_restart() {
+        let app_local_data_dir = unique_test_app_data_dir();
+
+        let (draft_session_id, active_session_id, active_turn_id) = {
+            let mut storage =
+                AppStorage::open(app_local_data_dir.clone()).expect("storage should initialize");
+
+            let draft_session = storage
+                .create_session(CreateSessionRequest {
+                    title: "Draft session".to_string(),
+                    objective: "Remain visible after restart".to_string(),
+                    primary_workbook_path: None,
+                })
+                .expect("draft session should be created");
+            let active_session = storage
+                .create_session(CreateSessionRequest {
+                    title: "Active session".to_string(),
+                    objective: "Retain list and detail visibility after restart".to_string(),
+                    primary_workbook_path: Some("/tmp/restart-check.csv".to_string()),
+                })
+                .expect("active session should be created");
+            let active_turn = storage
+                .start_turn(StartTurnRequest {
+                    session_id: active_session.id.clone(),
+                    title: "Resume after relaunch".to_string(),
+                    objective: "Confirm the session index matches persisted records".to_string(),
+                    mode: RelayMode::Plan,
+                })
+                .expect("active turn should start")
+                .turn;
+
+            let storage_root = persistence::storage_root(&app_local_data_dir);
+            let persisted_index: Vec<PersistedSessionIndexEntry> =
+                read_json(&storage_root.join("sessions").join("index.json"))
+                    .expect("session index should parse");
+            let persisted_ids = persisted_index
+                .iter()
+                .map(|entry| entry.id.clone())
+                .collect::<BTreeSet<_>>();
+
+            assert_eq!(persisted_index.len(), 2);
+            assert_eq!(
+                persisted_ids,
+                BTreeSet::from([draft_session.id.clone(), active_session.id.clone()])
+            );
+            assert_eq!(
+                persisted_index
+                    .iter()
+                    .find(|entry| entry.id == active_session.id)
+                    .and_then(|entry| entry.latest_turn_id.as_deref()),
+                Some(active_turn.id.as_str())
+            );
+            assert_eq!(
+                persisted_index
+                    .iter()
+                    .find(|entry| entry.id == draft_session.id)
+                    .and_then(|entry| entry.latest_turn_id.as_deref()),
+                None
+            );
+
+            (draft_session.id, active_session.id, active_turn.id)
+        };
+
+        let storage_root = persistence::storage_root(&app_local_data_dir);
+        let reloaded = AppStorage::open(app_local_data_dir.clone()).expect("storage should reload");
+        let persisted_index: Vec<PersistedSessionIndexEntry> =
+            read_json(&storage_root.join("sessions").join("index.json"))
+                .expect("reloaded session index should parse");
+
+        assert_eq!(reloaded.session_count(), 2);
+
+        let listed_ids = reloaded
+            .list_sessions()
+            .into_iter()
+            .map(|session| session.id)
+            .collect::<BTreeSet<_>>();
+        let persisted_ids = persisted_index
+            .iter()
+            .map(|entry| entry.id.clone())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(listed_ids, persisted_ids);
+        assert_eq!(
+            persisted_index
+                .iter()
+                .find(|entry| entry.id == active_session_id)
+                .and_then(|entry| entry.latest_turn_id.as_deref()),
+            Some(active_turn_id.as_str())
+        );
+
+        let draft_detail = reloaded
+            .read_session(&draft_session_id)
+            .expect("draft session should still be readable");
+        assert!(draft_detail.turns.is_empty());
+        assert_eq!(draft_detail.session.latest_turn_id, None);
+
+        let active_detail = reloaded
+            .read_session(&active_session_id)
+            .expect("active session should still be readable");
+        assert_eq!(active_detail.turns.len(), 1);
+        assert_eq!(active_detail.turns[0].id, active_turn_id);
+        assert_eq!(
+            active_detail.session.latest_turn_id.as_deref(),
+            Some(active_turn_id.as_str())
+        );
+
+        fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
+    }
+
+    #[test]
     fn persists_turn_artifacts_and_logs_with_session_linkage() {
         let app_local_data_dir = unique_test_app_data_dir();
         let (session_id, turn_id) = {
@@ -2215,8 +2569,216 @@ mod tests {
         fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
     }
 
+    #[test]
+    fn preview_executes_read_side_workbook_tools_against_csv_inputs() {
+        let app_local_data_dir = unique_test_app_data_dir();
+        let csv_path = write_test_csv(
+            "customer_id,amount,posted_on,approved\n1,42.5,2025-01-01,true\n2,13.0,2025-01-02,false\n3,11.25,2025-01-03,true\n",
+        );
+        let output_path = env::temp_dir()
+            .join(format!("relay-agent-read-tools-{}.csv", Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
+
+        let (session_id, turn_id, preview_warnings) = {
+            let mut storage =
+                AppStorage::open(app_local_data_dir.clone()).expect("storage should initialize");
+
+            let session = storage
+                .create_session(CreateSessionRequest {
+                    title: "Read-side workbook tools".to_string(),
+                    objective: "Inspect and preview CSV state".to_string(),
+                    primary_workbook_path: Some(csv_path.to_string_lossy().into_owned()),
+                })
+                .expect("session should be created");
+            let turn = storage
+                .start_turn(StartTurnRequest {
+                    session_id: session.id.clone(),
+                    title: "Inspect source".to_string(),
+                    objective: "Run read-only workbook tools before preview.".to_string(),
+                    mode: RelayMode::Discover,
+                })
+                .expect("turn should start")
+                .turn;
+
+            storage
+                .generate_relay_packet(GenerateRelayPacketRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                })
+                .expect("packet should generate");
+            storage
+                .submit_copilot_response(SubmitCopilotResponseRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                    raw_response: format!(
+                        r#"{{
+                          "summary": "Inspect the workbook and stage a rename preview.",
+                          "actions": [
+                            {{
+                              "tool": "workbook.inspect",
+                              "args": {{}}
+                            }},
+                            {{
+                              "tool": "sheet.preview",
+                              "args": {{
+                                "sheet": "Sheet1",
+                                "limit": 2
+                              }}
+                            }},
+                            {{
+                              "tool": "sheet.profile_columns",
+                              "args": {{
+                                "sheet": "Sheet1",
+                                "sampleSize": 2
+                              }}
+                            }},
+                            {{
+                              "tool": "session.diff_from_base",
+                              "args": {{}}
+                            }},
+                            {{
+                              "tool": "table.rename_columns",
+                              "sheet": "Sheet1",
+                              "args": {{
+                                "renames": [
+                                  {{
+                                    "from": "amount",
+                                    "to": "normalized_amount"
+                                  }}
+                                ]
+                              }}
+                            }},
+                            {{
+                              "tool": "workbook.save_copy",
+                              "args": {{
+                                "outputPath": "{}"
+                              }}
+                            }}
+                          ]
+                        }}"#,
+                        output_path
+                    ),
+                })
+                .expect("response should parse");
+            let preview = storage
+                .preview_execution(PreviewExecutionRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                })
+                .expect("preview should succeed");
+
+            (session.id, turn.id, preview.warnings)
+        };
+
+        let storage_root = persistence::storage_root(&app_local_data_dir);
+        let reloaded = AppStorage::open(app_local_data_dir.clone()).expect("storage should reload");
+        let detail = reloaded
+            .read_session(&session_id)
+            .expect("persisted session should be readable");
+        let turn = detail
+            .turns
+            .iter()
+            .find(|turn| turn.id == turn_id)
+            .expect("turn should be present after reload");
+
+        assert!(preview_warnings
+            .iter()
+            .any(|warning| warning.contains("workbook.inspect")));
+        assert!(preview_warnings
+            .iter()
+            .any(|warning| warning.contains("sheet.preview")));
+        assert!(preview_warnings
+            .iter()
+            .any(|warning| warning.contains("sheet.profile_columns")));
+        assert!(preview_warnings
+            .iter()
+            .any(|warning| warning.contains("session.diff_from_base")));
+
+        let mut artifact_types = BTreeSet::new();
+        let mut workbook_profile_found = false;
+        let mut sheet_preview_found = false;
+        let mut column_profile_found = false;
+        let mut diff_summary_found = false;
+
+        for artifact_id in &turn.item_ids {
+            let meta: persistence::PersistedArtifactMeta = read_json(
+                &storage_root
+                    .join("sessions")
+                    .join(&session_id)
+                    .join("artifacts")
+                    .join(artifact_id)
+                    .join("meta.json"),
+            )
+            .expect("artifact meta should parse");
+            let payload: Value = read_json(
+                &storage_root
+                    .join("sessions")
+                    .join(&session_id)
+                    .join("artifacts")
+                    .join(artifact_id)
+                    .join("payload.json"),
+            )
+            .expect("artifact payload should parse");
+
+            artifact_types.insert(meta.artifact_type.clone());
+
+            match meta.artifact_type.as_str() {
+                "workbook-profile" => {
+                    workbook_profile_found = true;
+                    assert_eq!(payload["sheetCount"], 1);
+                    assert_eq!(payload["sheets"][0]["columns"][0], "customer_id");
+                }
+                "sheet-preview" => {
+                    sheet_preview_found = true;
+                    assert_eq!(payload["rows"].as_array().map(Vec::len), Some(2));
+                    assert_eq!(payload["rows"][0]["values"][1], "42.5");
+                }
+                "column-profile" => {
+                    column_profile_found = true;
+                    assert_eq!(payload["columns"][0]["inferredType"], "integer");
+                    assert_eq!(payload["columns"][1]["inferredType"], "number");
+                    assert_eq!(payload["columns"][2]["inferredType"], "date");
+                    assert_eq!(payload["columns"][3]["inferredType"], "boolean");
+                }
+                "diff-summary" => {
+                    diff_summary_found = true;
+                    assert_eq!(
+                        payload["sheets"][0]["changedColumns"][0],
+                        "normalized_amount"
+                    );
+                    assert_eq!(payload["outputPath"], output_path);
+                }
+                _ => {}
+            }
+        }
+
+        assert!(workbook_profile_found);
+        assert!(sheet_preview_found);
+        assert!(column_profile_found);
+        assert!(diff_summary_found);
+        assert!(artifact_types.contains("preview"));
+
+        fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
+        fs::remove_file(csv_path).expect("test csv should clean up");
+    }
+
     fn unique_test_app_data_dir() -> std::path::PathBuf {
         env::temp_dir().join(format!("relay-agent-storage-test-{}", Uuid::new_v4()))
+    }
+
+    fn write_test_csv(contents: &str) -> std::path::PathBuf {
+        let path = env::temp_dir().join(format!("relay-agent-storage-test-{}.csv", Uuid::new_v4()));
+        fs::write(&path, contents).expect("test csv should be written");
+        path
+    }
+
+    fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
+        let contents = fs::read(path)
+            .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?;
+
+        serde_json::from_slice(&contents)
+            .map_err(|error| format!("failed to parse `{}`: {error}", path.display()))
     }
 
     fn read_ndjson<T: DeserializeOwned>(path: &Path) -> Result<Vec<T>, String> {

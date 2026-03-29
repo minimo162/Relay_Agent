@@ -198,6 +198,24 @@ pub fn persist_artifact<T: Serialize>(
     Ok(())
 }
 
+pub fn read_artifact_meta(
+    app_local_data_dir: &Path,
+    session_id: &str,
+    artifact_id: &str,
+) -> Result<PersistedArtifactMeta, String> {
+    let storage_root = storage_root(app_local_data_dir);
+    read_json_file(&artifact_dir(&storage_root, session_id, artifact_id).join("meta.json"))
+}
+
+pub fn read_artifact_payload<T: DeserializeOwned>(
+    app_local_data_dir: &Path,
+    session_id: &str,
+    artifact_id: &str,
+) -> Result<T, String> {
+    let storage_root = storage_root(app_local_data_dir);
+    read_json_file(&artifact_dir(&storage_root, session_id, artifact_id).join("payload.json"))
+}
+
 pub fn append_session_log(
     app_local_data_dir: &Path,
     entry: &PersistedLogEntry,

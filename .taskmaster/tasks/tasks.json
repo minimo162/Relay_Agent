@@ -267,7 +267,7 @@
         "id": "5",
         "title": "Add local session persistence and artifact storage",
         "description": "Persist sessions, turns, artifacts, and logs under the application data directory so state survives restarts.",
-        "status": "in-progress",
+        "status": "done",
         "dependencies": [
           "4"
         ],
@@ -316,22 +316,23 @@
             "id": 4,
             "title": "Verify restart recovery and session list behavior",
             "description": "Make sure persisted sessions survive relaunch and remain visible in the app.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               3
             ],
             "details": "Confirm `list_sessions` and `read_session` work after the app restarts and that the session index reflects what was previously written to disk.",
             "testStrategy": "Restart the app and confirm persisted sessions are listed and readable without manual repair.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T00:29:52.628Z"
           }
         ],
-        "updatedAt": "2026-03-28T23:07:35.567Z"
+        "updatedAt": "2026-03-29T00:29:52.628Z"
       },
       {
         "id": "6",
         "title": "Build the frontend MVP studio flow",
         "description": "Implement the minimum user-facing Home, Session Studio, and Settings flows needed to drive the relay workflow end to end.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "3",
           "4",
@@ -345,50 +346,55 @@
             "id": 1,
             "title": "Create the app shell and routes for Home, Studio, and Settings",
             "description": "Set up the minimum frontend route structure required by the MVP.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [],
             "details": "Implement the routing and layout shell for the Home page, Session Studio page, and Settings page while preserving the project’s SvelteKit structure.",
             "testStrategy": "Run the desktop app and confirm the three primary routes render without navigation errors.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T00:45:07.545Z"
           },
           {
             "id": 2,
             "title": "Build the Home screen session list and creation flow",
             "description": "Provide the entry point for creating and selecting sessions.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1
             ],
             "details": "Implement the Home page so users can view existing sessions and create a new one using the typed IPC layer and the persisted session store.",
             "testStrategy": "Verify users can create a session from Home and see it appear in the list.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T00:54:08.363Z"
           },
           {
             "id": 3,
             "title": "Build the Studio panes and local state model",
             "description": "Implement the three-column session detail layout and the minimal store state needed to drive it.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1
             ],
             "details": "Create the timeline pane, the center workflow pane for objective, packet, pasted response, validation, and preview controls, and the right pane for workbook summary and diff preview, backed by minimal stores.",
             "testStrategy": "Verify the Studio layout renders all required regions and state updates appear in the correct pane.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T01:04:36.731Z"
           },
           {
             "id": 4,
             "title": "Wire the Studio flow to backend commands and validation feedback",
             "description": "Connect the UI to the relay lifecycle so the flow is usable end to end.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               2,
               3
             ],
             "details": "Use the IPC wrapper to drive session selection, turn start, relay packet generation, pasted response submission, validation result display, and preview requests from the Studio screen.",
             "testStrategy": "Manually verify session creation, turn start, packet display, pasted response handling, validation feedback, and preview initiation.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T01:30:14.756Z"
           }
-        ]
+        ],
+        "updatedAt": "2026-03-29T01:30:14.756Z"
       },
       {
         "id": "7",
@@ -457,7 +463,7 @@
         "id": "8",
         "title": "Implement the workbook inspection and CSV-first transformation engine",
         "description": "Deliver the safe vertical slice for workbook inspection, profiling, and CSV-based transformations, with xlsx support limited to inspect and save-copy priorities.",
-        "status": "pending",
+        "status": "in-progress",
         "dependencies": [
           "3",
           "4"
@@ -470,23 +476,25 @@
             "id": 1,
             "title": "Select workbook libraries and define engine module boundaries",
             "description": "Choose the CSV and xlsx handling approach that keeps the MVP safe and maintainable.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [],
             "details": "Pick stable libraries for CSV and limited xlsx support, then define the engine modules so inspect, preview, and write-preview logic can be implemented cleanly.",
             "testStrategy": "Review the selected library approach and confirm it supports CSV end-to-end plus limited xlsx inspect and save-copy behavior.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T01:52:07.268Z"
           },
           {
             "id": 2,
             "title": "Implement the read-side workbook tools",
             "description": "Add the read-only tools required for workbook inspection and diff comparison.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1
             ],
             "details": "Implement `workbook.inspect`, `sheet.preview`, `sheet.profile_columns`, and `session.diff_from_base` using the workbook engine boundaries chosen for the MVP.",
             "testStrategy": "Run the read tools against a sample file and confirm inspection, preview, profiling, and diff data return correctly.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T02:09:58.189Z"
           },
           {
             "id": 3,
@@ -512,7 +520,8 @@
             "testStrategy": "Run the CSV demo flow through inspect and preview paths and confirm save-copy behavior is available without touching the original file.",
             "parentId": "undefined"
           }
-        ]
+        ],
+        "updatedAt": "2026-03-29T02:09:58.189Z"
       },
       {
         "id": "9",
@@ -645,9 +654,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-28T23:07:35.569Z",
+      "lastModified": "2026-03-29T02:09:58.191Z",
       "taskCount": 10,
-      "completedCount": 4,
+      "completedCount": 6,
       "tags": [
         "master"
       ]

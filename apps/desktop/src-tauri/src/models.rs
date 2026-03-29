@@ -39,6 +39,25 @@ pub enum ToolPhase {
     Write,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkbookFormat {
+    Csv,
+    Xlsx,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ColumnType {
+    String,
+    Number,
+    Integer,
+    Boolean,
+    Date,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ApprovalDecision {
@@ -138,7 +157,7 @@ pub struct CopilotTurnResponse {
     pub warnings: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SheetDiff {
     pub sheet: String,
@@ -149,13 +168,34 @@ pub struct SheetDiff {
     pub warnings: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffSummary {
     pub source_path: String,
     pub output_path: String,
-    pub mode: &'static str,
+    pub mode: String,
     pub sheets: Vec<SheetDiff>,
+    pub warnings: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbookSheet {
+    pub name: String,
+    pub row_count: u32,
+    pub column_count: u32,
+    pub columns: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbookProfile {
+    pub source_path: String,
+    pub format: WorkbookFormat,
+    pub sheet_count: u32,
+    pub sheets: Vec<WorkbookSheet>,
     pub warnings: Vec<String>,
 }
 

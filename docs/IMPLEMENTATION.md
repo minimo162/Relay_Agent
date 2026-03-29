@@ -2,7 +2,7 @@
 
 ## Status
 
-- Current phase: turn-linked artifacts and logs are persisted; restart recovery verification is next
+- Current phase: Read-side workbook tools are implemented for the CSV-first path; write-preview tooling is next
 - Repository state: pnpm workspace, SvelteKit SPA shell, Tauri v2 shell, and shared contracts package are now bootstrapped and verification-clean
 - Active source-of-truth documents:
   - `PLANS.md`
@@ -274,6 +274,140 @@ Outcome:
 - Preserved save-copy semantics by recording user-selected output paths in execution artifact metadata without moving those outputs into the app-local storage root.
 - Added a Rust test that runs the relay flow, reloads the session, and verifies artifact metadata, payload files, log files, and turn linkage all persist correctly.
 
+#### 5.4 Restart recovery and session list verification
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src-tauri/src/storage.rs`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Added restart-focused regression coverage for multiple persisted sessions so the on-disk session index is checked alongside `list_sessions` and `read_session`.
+- Verified that reopening app-local storage preserves both draft and active sessions, including `latestTurnId` linkage for the active session.
+- Confirmed that the persisted `sessions/index.json` entries match the session IDs returned after reload, so the session list remains aligned with disk state across relaunches.
+
+### Frontend MVP Flow Foundation
+
+#### 6.1 App shell and primary routes
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src/routes/+layout.svelte`
+- `apps/desktop/src/routes/+page.svelte`
+- `apps/desktop/src/routes/studio/+page.svelte`
+- `apps/desktop/src/routes/settings/+page.svelte`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Added a shared desktop route shell with persistent navigation for Home, Studio, and Settings so the frontend no longer hangs off a single landing page.
+- Kept the existing typed IPC initialization snapshot on Home while reshaping the page into a route-aware session hub placeholder for the next subtask.
+- Added a three-pane Studio placeholder route that reserves stable regions for timeline, workflow controls, and workbook preview work without pulling in session state early.
+- Added a Settings route for MVP execution and storage policies so later UI work has a stable location for safety and local-behavior controls.
+
+#### 6.2 Home session list and creation flow
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src/routes/+page.svelte`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Replaced the static Home placeholder with a real session hub that loads persisted sessions through `list_sessions` and surfaces the current typed IPC/storage snapshot.
+- Added a create-session form that calls `create_session`, updates the visible session list immediately, and keeps workbook path optional for the current MVP slice.
+- Added session cards that expose status, turn count, updated timestamp, persisted workbook path, and a Studio handoff link carrying the `sessionId` in the route query.
+- Kept the implementation local to Home so the upcoming Studio state task can layer session detail loading onto a stable session-entry surface instead of rebuilding the route.
+
+#### 6.3 Studio panes and local state model
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src/lib/studio-state.ts`
+- `apps/desktop/src/routes/studio/+page.svelte`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Replaced the Studio placeholder with a real three-pane workspace for timeline, workflow, and workbook preview responsibilities.
+- Added a minimal store-backed Studio state model that tracks the selected `sessionId`, turn draft fields, staged packet text, pasted response text, local validation notes, and preview notes.
+- Wired the route query handoff into the store so Home can pass a selected session into Studio before backend detail loading exists.
+- Added derived timeline and workbook-preview state so edits in the workflow pane immediately show up in the correct left and right panes without waiting for backend command wiring.
+
+#### 6.4 Studio backend command wiring and validation feedback
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src/routes/studio/+page.svelte`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Replaced the Studio route's local-only placeholders with a command-backed flow that loads session detail through `read_session` and surfaces persisted turns in the left pane.
+- Wired `start_turn`, `generate_relay_packet`, `submit_copilot_response`, and `preview_execution` through the typed frontend IPC layer so the Studio workflow now advances through the real backend lifecycle.
+- Added structured validation rendering for accepted responses, issue lists, and repair prompts, plus preview rendering for output-path, approval-gate, warnings, and per-sheet diff summary data.
+- Added an explicit reload note for persisted turns because session history survives restart while in-memory relay caches still need to be regenerated in the current app run.
+
+### Workbook Engine Foundation
+
+#### 8.1 Workbook library selection and module boundaries
+
+Completed.
+
+Artifacts:
+
+- `docs/WORKBOOK_ENGINE.md`
+- `apps/desktop/src-tauri/Cargo.toml`
+- `apps/desktop/src-tauri/src/lib.rs`
+- `apps/desktop/src-tauri/src/models.rs`
+- `apps/desktop/src-tauri/src/storage.rs`
+- `apps/desktop/src-tauri/src/workbook/mod.rs`
+- `apps/desktop/src-tauri/src/workbook/source.rs`
+- `apps/desktop/src-tauri/src/workbook/csv_backend.rs`
+- `apps/desktop/src-tauri/src/workbook/xlsx_backend.rs`
+- `apps/desktop/src-tauri/src/workbook/inspect.rs`
+- `apps/desktop/src-tauri/src/workbook/preview.rs`
+- `apps/desktop/src-tauri/src/workbook/engine.rs`
+
+Outcome:
+
+- Selected `csv` as the CSV-first read/write dependency and `calamine` as the limited xlsx-family read dependency, matching the MVP guardrail that spreadsheet mutation should stay CSV-first and xlsx should stay inspect-oriented.
+- Added a dedicated Rust `workbook` module boundary that separates source detection, CSV backend setup, xlsx backend setup, inspect policy, and preview gating instead of continuing to grow workbook logic inside `storage.rs`.
+- Added Rust-side workbook model types for `WorkbookFormat`, `WorkbookSheet`, and `WorkbookProfile` so the backend now has a stable shape for the upcoming inspect tools.
+- Moved derived save-copy output-path logic behind the new workbook module so preview synthesis already depends on the new engine boundary for source-path handling.
+
+#### 8.2 Read-side workbook tools
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src-tauri/src/models.rs`
+- `apps/desktop/src-tauri/src/persistence.rs`
+- `apps/desktop/src-tauri/src/storage.rs`
+- `apps/desktop/src-tauri/src/workbook/mod.rs`
+- `apps/desktop/src-tauri/src/workbook/engine.rs`
+- `apps/desktop/src-tauri/src/workbook/inspect.rs`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Implemented `workbook.inspect`, `sheet.preview`, and `sheet.profile_columns` for CSV inputs, with limited xlsx read support through the same workbook engine boundary.
+- Added typed Rust payloads for sheet preview rows and column profile summaries, including CSV-first type inference for integer, number, boolean, date, and string columns.
+- Wired read-side tool execution into `preview_execution` so pasted responses that request inspect tools now produce persisted artifacts and turn-log entries during preview generation.
+- Implemented `session.diff_from_base` as a read-side artifact resolver that can return the current diff summary or a persisted preview/diff artifact when an `artifactId` is supplied.
+
 ## Decisions
 
 - Treat the repository as greenfield apart from `.taskmaster/`.
@@ -283,6 +417,7 @@ Outcome:
 - Allow `esbuild` as an approved pnpm build dependency so installs remain reproducible and non-interactive.
 - Use SvelteKit `kit.alias` instead of tsconfig `paths` for app-local aliasing to avoid drift against the generated `.svelte-kit/tsconfig.json`.
 - Keep `packages/contracts` source-first and modular until a compiled distribution artifact is actually needed.
+- Keep the workbook stack limited to `csv` plus `calamine` until the CSV-first inspect and preview slice proves a heavier engine is necessary.
 
 ## Verification Log
 
@@ -464,12 +599,126 @@ Observed result:
 - Rust tests pass for both restart-safe session reload and persisted turn artifact and log linkage.
 - Workspace typecheck, Svelte check, and the desktop production build remain green after the storage layer started writing artifact and log records.
 
+Milestone 4 restart recovery verification:
+
+```bash
+cargo fmt --all
+. "$HOME/.cargo/env" && cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+. "$HOME/.cargo/env" && cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- Rust formatting still succeeds after adding the restart recovery regression coverage.
+- The desktop crate compiles and the storage test suite now covers multiple-session restart recovery plus persisted session index consistency.
+- Workspace typecheck, Svelte check, and the desktop production build remain green after closing the persistence milestone acceptance checks.
+
+Frontend route shell verification:
+
+```bash
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- Svelte route compilation passes with the new shared layout and the added Home, Studio, and Settings pages.
+- Workspace typecheck remains green after introducing the route shell and shared UI utility styles.
+- The desktop production build succeeds and emits the new route entries without navigation or bundling errors.
+
+Home session flow verification:
+
+```bash
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- Svelte check passes with the Home page now invoking `initialize_app`, `list_sessions`, and `create_session` through the typed IPC wrapper.
+- Workspace typecheck remains green after adding the Home session form, optimistic list update, and persisted session card rendering.
+- The desktop production build succeeds with the new Home route UI and Studio handoff links.
+- Interactive desktop click-through for create-and-open was not run in this headless environment, so that last acceptance check remains a manual confirmation step.
+
+Studio pane state verification:
+
+```bash
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- Svelte check passes with the Studio route consuming a shared local state store and route query handoff.
+- Workspace typecheck remains green after introducing the store-backed timeline, workflow, and workbook preview models.
+- The desktop production build succeeds with the larger Studio route and its new `$lib/studio-state.ts` module.
+- Interactive route walkthrough for typing into each pane and confirming updates visually remains a manual verification step in a real desktop session.
+
+Studio backend wiring verification:
+
+```bash
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- Svelte check passes with the Studio route now invoking `read_session`, `start_turn`, `generate_relay_packet`, `submit_copilot_response`, and `preview_execution`.
+- Workspace typecheck remains green after adding backend response rendering, validation issue formatting, and preview diff summary panels to the Studio route.
+- The desktop production build succeeds with the command-backed Studio workflow and the expanded mobile-safe layout styles.
+- Full desktop click-through for starting a turn, pasting a valid or invalid response, and requesting preview still needs to be confirmed manually in a real Tauri session.
+
+Workbook engine boundary verification:
+
+```bash
+cargo fmt --all
+cargo check
+cargo test
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- Rust formatting succeeds after adding the dedicated workbook module tree and the new Cargo dependencies.
+- `cargo check` succeeds with `csv` and `calamine` resolved into the desktop crate and the preview layer consuming the new save-copy path helper from `workbook::source`.
+- `cargo test` passes for the new workbook boundary coverage, including source-format detection, derived save-copy paths, and CSV-versus-xlsx preview strategy selection.
+- Workspace typecheck, Svelte check, and the desktop production build remain green after adding the Rust workbook foundation files and workbook-related model types.
+
+Read-side workbook tool verification:
+
+```bash
+cargo fmt --all
+cargo check
+cargo test
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- `cargo check` succeeds with the workbook engine now compiling real `workbook.inspect`, `sheet.preview`, `sheet.profile_columns`, and `session.diff_from_base` implementations.
+- `cargo test` passes for the new CSV inspection coverage plus the preview-flow regression that verifies read-side tool artifacts are persisted during preview generation.
+- Workspace typecheck, Svelte check, and the desktop production build remain green after the Rust preview flow started recording workbook-profile, sheet-preview, column-profile, and diff-summary artifacts.
+- Manual desktop verification for rendering these new read-side artifacts in the Studio right pane is still pending because the current UI only reads preview summary data.
+
 ## Known Limitations
 
-- The desktop UI is still a foundation shell and does not yet expose session creation, relay packet generation, response validation, or preview flows.
+- The desktop UI now supports session listing, turn start, relay packet generation, response validation, and preview requests, but approval and execution are not yet surfaced in the Studio UI.
 - The Rust backend now supports in-memory relay packet, response validation, preview, approval, and execution command paths, but write execution remains intentionally blocked until the workbook engine and save-copy flow exist.
-- The frontend now has a typed IPC wrapper, but the Home and Studio flows still need stores and UI wiring to drive real session, relay, validation, and preview behavior.
-- Persisted artifact and log files are not yet rehydrated into active in-memory relay caches on startup, so restart currently preserves history linkage but not resumable preview/approval runtime state.
+- Persisted artifact and log files are not yet rehydrated into active in-memory relay caches on startup, so restart preserves history linkage but not resumable packet/validation/preview runtime state.
+- The workbook pane still renders preview summaries from backend metadata only; the newly persisted workbook-profile, sheet-preview, and column-profile artifacts are not yet surfaced in dedicated UI panels.
+- The CSV path now has read-side inspection, but write-preview transformations are still synthetic until the `table.*` tool implementations replace the current placeholder diff builder.
+- Limited xlsx read support is compiled through `calamine`, but the new read-side tests currently cover CSV inputs only.
 - README and demo assets have not been updated yet.
 - Task Master native AI PRD parsing is still blocked unless provider API keys are configured.
 
@@ -477,5 +726,5 @@ Observed result:
 
 Next planned work:
 
-- Implement `5.4` by verifying restart recovery behavior for persisted sessions and confirming the session index remains correct after reload.
-- Then move into the frontend MVP studio flow once Milestone 4 acceptance is closed.
+- Begin task `8.3` by replacing the synthetic write-preview path with real CSV-first `table.rename_columns`, `table.cast_columns`, `table.filter_rows`, and `table.derive_column` behavior.
+- Then surface the richer workbook artifacts in the Studio right pane once real preview payloads exist.

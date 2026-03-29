@@ -6,6 +6,7 @@ mod relay;
 mod session;
 mod state;
 mod storage;
+mod workbook;
 
 use std::io::Error;
 
