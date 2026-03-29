@@ -5,6 +5,7 @@ type RelayMode = "discover" | "plan" | "repair" | "followup";
 const STORAGE_KEY = "relay-agent.continuity.v1";
 const MAX_RECENT_SESSIONS = 6;
 const MAX_RECENT_FILES = 6;
+const MAX_AUDIT_HISTORY = 12;
 
 export type PersistedPreviewSnapshot = {
   sourcePath: string;
@@ -52,11 +53,27 @@ export type RecentFile = {
   source: "session" | "draft" | "preflight";
 };
 
+export type AuditHistoryEntry = {
+  id: string;
+  sessionId: string;
+  sessionTitle: string;
+  turnId: string | null;
+  turnTitle: string;
+  sourcePath: string;
+  outputPath: string;
+  executedAt: string;
+  summary: string;
+  targetCount: number;
+  affectedRows: number;
+  warnings: string[];
+};
+
 type ContinuityState = {
   version: 1;
   studioDrafts: Record<string, PersistedStudioDraft>;
   recentSessions: RecentSession[];
   recentFiles: RecentFile[];
+  auditHistory: AuditHistoryEntry[];
 };
 
 function createDefaultState(): ContinuityState {
@@ -64,7 +81,8 @@ function createDefaultState(): ContinuityState {
     version: 1,
     studioDrafts: {},
     recentSessions: [],
-    recentFiles: []
+    recentFiles: [],
+    auditHistory: []
   };
 }
 
@@ -85,7 +103,8 @@ function readState(): ContinuityState {
       version: 1,
       studioDrafts: normalizeDraftRecord(parsed.studioDrafts),
       recentSessions: normalizeRecentSessions(parsed.recentSessions),
-      recentFiles: normalizeRecentFiles(parsed.recentFiles)
+      recentFiles: normalizeRecentFiles(parsed.recentFiles),
+      auditHistory: normalizeAuditHistory(parsed.auditHistory)
     };
   } catch {
     return createDefaultState();
@@ -247,6 +266,49 @@ function normalizeRecentFile(value: unknown): RecentFile | null {
   };
 }
 
+function normalizeAuditHistory(value: unknown): AuditHistoryEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => normalizeAuditHistoryEntry(entry))
+    .filter((entry): entry is AuditHistoryEntry => Boolean(entry))
+    .slice(0, MAX_AUDIT_HISTORY);
+}
+
+function normalizeAuditHistoryEntry(value: unknown): AuditHistoryEntry | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const id = asString(record.id);
+  const sessionId = asString(record.sessionId);
+  const sessionTitle = asString(record.sessionTitle);
+  const executedAt = asString(record.executedAt);
+  const summary = asString(record.summary);
+
+  if (!id || !sessionId || !sessionTitle || !executedAt || !summary) {
+    return null;
+  }
+
+  return {
+    id,
+    sessionId,
+    sessionTitle,
+    turnId: asOptionalString(record.turnId),
+    turnTitle: asString(record.turnTitle) ?? "",
+    sourcePath: asString(record.sourcePath) ?? "",
+    outputPath: asString(record.outputPath) ?? "",
+    executedAt,
+    summary,
+    targetCount: asNumber(record.targetCount) ?? 0,
+    affectedRows: asNumber(record.affectedRows) ?? 0,
+    warnings: asStringArray(record.warnings)
+  };
+}
+
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
@@ -305,6 +367,16 @@ function upsertRecentFile(items: RecentFile[], entry: RecentFile): RecentFile[] 
   return [entry, ...items.filter((item) => item.path !== entry.path)].slice(
     0,
     MAX_RECENT_FILES
+  );
+}
+
+function upsertAuditHistory(
+  items: AuditHistoryEntry[],
+  entry: AuditHistoryEntry
+): AuditHistoryEntry[] {
+  return [entry, ...items.filter((item) => item.id !== entry.id)].slice(
+    0,
+    MAX_AUDIT_HISTORY
   );
 }
 
@@ -388,4 +460,15 @@ export function listRecoverableStudioDrafts(): PersistedStudioDraft[] {
   return Object.values(readState().studioDrafts)
     .filter((draft) => !draft.cleanShutdown && hasMeaningfulDraft(draft))
     .sort((left, right) => right.lastUpdatedAt.localeCompare(left.lastUpdatedAt));
+}
+
+export function rememberAuditHistory(entry: AuditHistoryEntry): void {
+  updateState((current) => ({
+    ...current,
+    auditHistory: upsertAuditHistory(current.auditHistory, entry)
+  }));
+}
+
+export function listAuditHistory(): AuditHistoryEntry[] {
+  return readState().auditHistory;
 }

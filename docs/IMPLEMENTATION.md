@@ -12,7 +12,7 @@
 - Follow-up planning input: `.taskmaster/docs/prd_non_engineer_ux.txt` captures a post-MVP usability scope focused on making the app easier for non-engineer operators, especially around app startup, distribution/install/update expectations, recovery/diagnostics, data-handling clarity, permission explanations, file readiness, locale and CSV compatibility, early constraint surfacing, resumable work, crash recovery, recent-item access, progress visibility, template-driven starts, output-name safety, duplicate-run prevention, safe defaults, reviewer-friendly summaries, read-only review, inline help, pre-copy sensitivity warnings, local audit history, accessibility baselines, and the preview, approval, and save-copy execution flow
 - Follow-up task graph: `.taskmaster/tasks/tasks.json` now breaks that supplemental PRD into Task Master follow-up tasks `11` through `16`, covering startup, data trust, continuity, guided onboarding, review/save simplification, and cross-cutting recovery plus accessibility work
 - Follow-up packaging policy: `docs/PACKAGING_POLICY.md` now fixes the first packaged end-user release path to Windows 10/11 x64 via NSIS, with manual installer-driven updates and preserved app-local storage across upgrades as the current expectation
-- Follow-up implementation status: Task `15.2` is now complete; Studio now exposes a plain-language review-and-save step model with a single primary CTA, progress messaging, and a three-point summary for changes, affected rows, and reviewed-copy location
+- Follow-up implementation status: Tasks `15` and `16` are now complete; Home and Studio now cover reviewer-safe review mode, local audit history, plain-language retry guidance, persistent file-safety messaging, and the non-engineer accessibility baseline recorded in `docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md`
 
 ## Milestone Log
 
@@ -1576,12 +1576,55 @@ Observed result:
 - Task Master subtask `15.2` is now marked done while parent task `15` remains pending for duplicate-run prevention, reviewer mode, and local audit history.
 - The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
 
+Reviewer mode and audit history verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'Recent saves|Read-only review mode|Copy review summary|Open reviewer view|Reviewed copy already saved' apps/desktop/src/routes/+page.svelte apps/desktop/src/routes/studio/+page.svelte README.md
+jq '.master.tasks[] | select(.id == "15") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- Home now records recent reviewed saves with input, output, timestamp, and summary, and each save links directly into a read-only Studio reviewer view for the same turn.
+- Studio now blocks duplicate save actions for already executed turns, exposes `Copy review summary`, and offers explicit post-save actions such as opening reviewer mode, returning Home, or starting another turn.
+- Reviewer mode now hides editing, Copilot handoff, and save controls while still surfacing the summary cards, output path, warnings, and saved-turn status.
+- Workspace typecheck still passes, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 30 tests after closing task `15`.
+- Task Master task `15` plus subtasks `15.3` and `15.4` are now marked done, while the next pending follow-up work shifts to task `16.1`.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+Plain-language recovery, trust messaging, and accessibility verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'File safety|Copy follow-up prompt|could not trust this response yet|could not save a reviewed copy yet|aria-current|Read-only review mode' apps/desktop/src/routes/+page.svelte apps/desktop/src/routes/studio/+page.svelte README.md docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md
+jq '.master.tasks[] | select(.id == "16") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- Validation, preview, approval, and save failures now render as stable `problem`, `reason`, and `next steps` guidance in Studio instead of raw backend-only wording.
+- Each repairable failure state now exposes a copyable Copilot follow-up prompt so a non-engineer can request a safer retry without composing new instructions from scratch.
+- Home and Studio now keep file-safety messaging visible in plain language, reinforcing that the original workbook remains read-only and writes go only to a separate reviewed copy.
+- Accessibility baselines are now explicitly reinforced through readable default control text sizing, stronger keyboard focus outlines, and `aria-current` markers on selected turns and the active timeline step so status does not rely on color alone.
+- `docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md` now records the final manual verification checklist for the non-engineer follow-up set instead of leaving the acceptance pass implicit.
+- Workspace typecheck still passes, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 30 tests after closing task `16`.
+- Task Master task `16` and subtasks `16.1` through `16.4` are now marked done, completing the current non-engineer follow-up task set.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
 ## Known Limitations
 
 - The desktop UI now supports session listing, turn start, relay packet generation, response validation, preview requests, approval decisions, and save-copy execution in Studio, but dedicated artifact browsers for workbook profiles and diffs are still not surfaced.
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.
 - Browser or window close still relies on the platform-native confirmation dialog, so explicit keep-vs-discard choices are currently available only for in-app navigation and draft-replacement flows.
 - The workbook pane still renders preview summaries from backend metadata only; the newly persisted workbook-profile, sheet-preview, and column-profile artifacts are not yet surfaced in dedicated UI panels.
+- Reviewer mode currently depends on local audit history and the same device profile; it is a safe local review surface, not a shared remote approval link.
 - Preview predicates and derive expressions intentionally support a narrow grammar for now: bracketed column references for spaced headers, one comparison in `filter_rows`, and basic arithmetic or string concatenation in `derive_column`.
 - Limited xlsx support is still inspect-and-copy oriented; current test coverage still centers on CSV execution plus xlsx preview planning rather than richer xlsx write flows.
 - Task Master native AI PRD parsing is still blocked unless provider API keys are configured.
@@ -1590,4 +1633,4 @@ Observed result:
 
 Next planned work:
 
-- Continue follow-up task `15.3` for duplicate-run prevention, completion actions, reviewer summaries, and read-only review mode.
+- No additional Task Master work is planned in the current non-engineer follow-up set; any further UX expansion should start as a new scoped follow-up instead of reopening tasks `11` through `16`.

@@ -941,7 +941,7 @@
         "id": "15",
         "title": "Simplify review, save, reviewer confirmation, and operational history",
         "description": "Turn the current technical execution path into a clearer review-and-save flow with reviewer-safe surfaces and local operation history.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "12",
           "13",
@@ -979,7 +979,7 @@
             "id": 3,
             "title": "Add duplicate-run prevention, completion actions, reviewer summaries, and read-only review mode",
             "description": "Prevent accidental re-runs and support fast review by non-executing stakeholders.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1,
               2
@@ -987,13 +987,13 @@
             "details": "Disable duplicate save actions while work is in progress, add clear post-run next steps, generate reviewer-friendly summaries, and provide a read-only review surface that exposes changes without execution controls.",
             "testStrategy": "Verify repeated save clicks do not create duplicate work and that reviewer-only users can inspect change summaries without execution access.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T12:21:48Z"
           },
           {
             "id": 4,
             "title": "Add local audit history for inputs, outputs, timestamps, and change summaries",
             "description": "Keep a human-readable record of what work was performed and when.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               2,
               3
@@ -1001,16 +1001,16 @@
             "details": "Persist and surface a local operation history that records the input file, output file, execution time, and summary of changes so support and approval follow-up do not depend on memory or manual notes.",
             "testStrategy": "Verify completed runs appear in local operation history with the expected input, output, timestamp, and change-summary fields.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T12:21:48Z"
           }
         ],
-        "updatedAt": "2026-03-29T11:58:58Z"
+        "updatedAt": "2026-03-29T12:21:48Z"
       },
       {
         "id": "16",
         "title": "Harden non-technical recovery, trust communication, and accessibility",
         "description": "Make errors repairable, safety guarantees visible, and the follow-up UX accessible enough for everyday use.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "12",
           "13",
@@ -1024,31 +1024,31 @@
             "id": 1,
             "title": "Rewrite validation and execution failures into non-technical copy with re-prompt support",
             "description": "Turn backend failures into plain-language next steps for non-engineers.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [],
             "details": "Translate parse, validation, preview, and execution failures into a stable format of problem, reason, and next action, and provide copyable follow-up prompts when Copilot needs to retry.",
             "testStrategy": "Verify failed responses and execution problems show at least one concrete correction path plus a reusable Copilot follow-up prompt when applicable.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T12:21:48Z"
           },
           {
             "id": 2,
             "title": "Keep original-file protection and save-copy-only guidance visible across the app",
             "description": "Reinforce the safety model in user-facing language at the points where confidence matters most.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1
             ],
             "details": "Surface steady trust messaging in Home, Studio, review, and completion states so users can always see that the original file remains read-only and writes only go to a save-copy output.",
             "testStrategy": "Verify the app consistently shows original-file and save-copy protections in key entry, review, and completion states.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T12:21:48Z"
           },
           {
             "id": 3,
             "title": "Apply the accessibility baseline for text, contrast, keyboard flow, and status cues",
             "description": "Meet the minimum UX accessibility bar defined by the follow-up PRD.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1,
               2
@@ -1056,13 +1056,13 @@
             "details": "Audit and improve typography, contrast, focus order, keyboard completion paths, and non-color state indicators across the non-engineer follow-up surfaces so the UX does not depend on perfect vision or mouse-only operation.",
             "testStrategy": "Verify the main flow is keyboard-navigable, readable at the chosen default text sizes, and understandable without relying on color alone.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T12:21:48Z"
           },
           {
             "id": 4,
             "title": "Run the follow-up verification pass and align planning or implementation docs with reality",
             "description": "Close the loop on the non-engineer milestone set with documented evidence.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1,
               2,
@@ -1071,17 +1071,17 @@
             "details": "Execute the agreed verification commands, reconcile `PLANS.md`, `docs/IMPLEMENTATION.md`, and any real user docs with the shipped follow-up behavior, and record remaining limitations instead of leaving the scope aspirational.",
             "testStrategy": "Confirm verification artifacts exist, docs match the implementation, and unresolved follow-up limitations are recorded explicitly.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T12:21:48Z"
           }
         ],
-        "updatedAt": "2026-03-29T08:12:43Z"
+        "updatedAt": "2026-03-29T12:21:48Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-29T11:58:58Z",
+      "lastModified": "2026-03-29T12:21:48Z",
       "taskCount": 16,
-      "completedCount": 14,
+      "completedCount": 16,
       "tags": [
         "master"
       ]

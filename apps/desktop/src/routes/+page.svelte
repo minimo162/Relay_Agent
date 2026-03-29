@@ -7,6 +7,7 @@
     type StartupIssue
   } from "@relay-agent/contracts";
   import {
+    listAuditHistory,
     createSession,
     discardStudioDraft,
     initializeApp,
@@ -19,6 +20,7 @@
     preflightWorkbook,
     rememberRecentFile,
     rememberRecentSession,
+    type AuditHistoryEntry,
     type PersistedStudioDraft,
     type RecentFile,
     type RecentSession
@@ -144,6 +146,7 @@
   let sessions: Session[] = [];
   let recentSessions: RecentSession[] = [];
   let recentFiles: RecentFile[] = [];
+  let auditHistory: AuditHistoryEntry[] = [];
   let recoverableDrafts: PersistedStudioDraft[] = [];
   let sessionsLoading = true;
   let homeError = "";
@@ -182,6 +185,7 @@
   function loadRecentWork(): void {
     recentSessions = listRecentSessions();
     recentFiles = listRecentFiles();
+    auditHistory = listAuditHistory();
     recoverableDrafts = listRecoverableStudioDrafts();
   }
 
@@ -772,6 +776,14 @@
         {/if}
       </p>
 
+      <section class="feedback feedback-info" aria-live="polite">
+        <strong>File safety</strong>
+        <p>
+          Relay Agent keeps the original workbook read-only. After review, it writes a separate
+          copy instead of overwriting the source file.
+        </p>
+      </section>
+
       {#if showGuidedStartGate}
         <div class="guided-start-card">
           <p class="panel-eyebrow">First-time steps</p>
@@ -1179,6 +1191,50 @@
     </article>
 
     <article class="ra-panel">
+      <h2>Recent saves</h2>
+
+      {#if auditHistory.length === 0}
+        <p class="path-fallback">
+          When Relay Agent saves a reviewed copy, the latest input, output, and summary will appear here.
+        </p>
+      {:else}
+        <div class="recent-file-list">
+          {#each auditHistory as entry}
+            <article class="recent-file-card audit-card">
+              <div class="session-card-head">
+                <div>
+                  <h3>{entry.turnTitle || entry.sessionTitle}</h3>
+                  <p>{entry.summary}</p>
+                </div>
+                <a class="session-link" href={`/studio?sessionId=${entry.sessionId}${entry.turnId ? `&turnId=${entry.turnId}` : ""}&view=review`}>
+                  Review
+                </a>
+              </div>
+
+              <div class="session-meta">
+                <span>Saved {formatDate(entry.executedAt)}</span>
+                {#if entry.affectedRows > 0}
+                  <span>{entry.affectedRows} row{entry.affectedRows === 1 ? "" : "s"}</span>
+                {/if}
+                {#if entry.targetCount > 0}
+                  <span>{entry.targetCount} target{entry.targetCount === 1 ? "" : "s"}</span>
+                {/if}
+              </div>
+
+              {#if entry.sourcePath}
+                <code>{entry.sourcePath}</code>
+              {/if}
+
+              {#if entry.outputPath}
+                <code>{entry.outputPath}</code>
+              {/if}
+            </article>
+          {/each}
+        </div>
+      {/if}
+    </article>
+
+    <article class="ra-panel">
       <h2>Current guidance coverage</h2>
       <ul class="ra-list">
         <li>File checks now catch unsupported, unreadable, or locale-sensitive inputs before session creation.</li>
@@ -1546,6 +1602,8 @@
     background: rgba(255, 255, 255, 0.95);
     color: var(--ra-text);
     font: inherit;
+    font-size: 1rem;
+    line-height: 1.5;
   }
 
   .session-form textarea {
@@ -1603,7 +1661,8 @@
   .session-form input:focus,
   .session-form textarea:focus,
   .objective-starter:focus {
-    outline: 2px solid rgba(138, 90, 23, 0.18);
+    outline: 3px solid rgba(138, 90, 23, 0.22);
+    outline-offset: 2px;
     border-color: var(--ra-accent);
   }
 
@@ -1625,6 +1684,7 @@
   }
 
   .primary-button {
+    min-height: 2.75rem;
     padding: 0.85rem 1rem;
     border: 0;
     border-radius: 0.95rem;
@@ -1806,6 +1866,10 @@
     border: 1px solid var(--ra-border);
     border-radius: 1rem;
     background: rgba(255, 255, 255, 0.76);
+  }
+
+  .audit-card h3 {
+    font-size: 1.05rem;
   }
 
   .recent-file-card code {

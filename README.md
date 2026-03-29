@@ -9,10 +9,14 @@ Relay Agent is a desktop MVP for turning a validated JSON action plan into a saf
 - Home now keeps first-run setup focused on one choice at a time and offers plain-language objective starters before the first session is created.
 - Home now also offers quick-start templates for common spreadsheet tasks and reminds first-time users which safe defaults are already on.
 - Home and Studio now expose short in-product help so users can re-check terms and next actions without leaving the app.
+- Home now keeps a local `Recent saves` history so reviewers can reopen a saved turn without retracing the full editing flow.
 - Studio now exposes `Load demo response` for the bundled sample walkthrough so preview can be reached without copying the README example JSON.
 - Studio now collapses the technical preview, approval, and execution steps into a clearer `Review and save` pane with one primary action and a three-point summary.
+- Studio now prevents duplicate save runs for turns that already completed and exposes post-save actions for summary sharing and reviewer handoff.
 - Studio can start turns, generate relay packets, validate pasted Copilot JSON, request execution preview, record approval, and run save-copy execution.
 - Studio now provides a `Copy for Copilot` path that warns first when the workbook path, current objective, or available column names look sensitive.
+- Studio now exposes a read-only reviewer mode plus `Copy review summary` so approvers can inspect a saved turn without editing controls.
+- Studio now rewrites validation, preview, and save failures into plain-language guidance with copyable Copilot follow-up prompts.
 - Studio now restores local turn drafts, pasted response text, relay packet text, and the last preview summary snapshot after restart.
 - Studio now warns before leaving, going back, or switching turns when local draft or preview review state would otherwise be thrown away.
 - CSV write execution is supported for `table.rename_columns`, `table.cast_columns`, `table.filter_rows`, `table.derive_column`, `table.group_aggregate`, and `workbook.save_copy`.
@@ -80,8 +84,12 @@ pnpm typecheck
 - Home now runs a file check before session creation when a workbook path is
   present, surfacing unreadable files, unsupported separators, and locale- or
   CSV-specific compatibility notes in plain language.
+- Home now keeps a visible `File safety` note on the create-session path so the
+  original workbook protection is always stated in plain language.
 - Home also surfaces recent sessions and recent workbook paths that were used in
   the last local runs so the next Studio handoff is quicker.
+- Home now also surfaces recent reviewed saves so approvers can jump directly
+  into reviewer mode for the latest saved turn.
 - If the previous app run ended unexpectedly while a draft was still autosaved,
   Home shows a recovery prompt so you can restore that work in Studio or discard
   it.
@@ -104,6 +112,18 @@ pnpm typecheck
   it deliberately before continuing.
 - Preview and approval runtime state are still not executable after restart, so
   request preview again before approval or execution.
+- Recent reviewed saves can be reopened in a read-only reviewer mode that hides
+  editing and save controls while still showing summary, output path, and
+  warnings.
+
+## Review Recovery
+
+- When validation, preview, approval, or save cannot continue, Studio now shows
+  plain-language `problem`, `reason`, and `next steps` guidance instead of only
+  backend wording.
+- Those failure states also provide a copyable Copilot follow-up prompt so a
+  non-engineer operator can ask for a safer retry without writing the repair
+  request from scratch.
 
 ## Demo Asset
 
@@ -147,8 +167,12 @@ Then use:
 8. Either click `Load demo response` for the bundled sample walkthrough, or paste the valid response example below, then click `Validate response`.
 9. Click `Check changes` and review the summary, output path, and warnings in the right pane.
 10. If the plan changes the workbook, add an optional review note, click `Confirm review`, then click `Save reviewed copy`.
-11. Confirm the output file exists at the configured `outputPath`.
-12. Confirm the original file under `examples/` is unchanged.
+11. After save, use `Copy review summary` or `Open reviewer view` if you want a read-only confirmation path.
+12. Confirm the output file exists at the configured `outputPath`.
+13. Confirm the original file under `examples/` is unchanged.
+
+The full follow-up verification checklist for the non-engineer usability scope is
+tracked in [`docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md`](docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md).
 
 With the response example below, the output copy should contain only rows where `approved = true`, add a derived `review_label` column, and prefix any dangerous `comment` values before writing the new CSV. On the bundled sample CSV, that produces 3 output rows and sanitizes 3 `comment` cells.
 
