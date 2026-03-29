@@ -400,7 +400,7 @@
         "id": "7",
         "title": "Implement relay packet generation and Copilot response validation",
         "description": "Generate the relay prompts and validate pasted Copilot responses into structured actions the app can preview and execute.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "3",
           "4",
@@ -414,50 +414,55 @@
             "id": 1,
             "title": "Define the fixed read and write tool registry",
             "description": "Lock down the allowed tool surface that relay packets and response validation will reference.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [],
             "details": "Create the canonical registry for allowed read and write tools so relay packet generation and response validation use the same fixed source instead of dynamic inference.",
             "testStrategy": "Confirm the registry covers the MVP tool set and can be referenced from both packet building and validation code.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T04:15:29Z"
           },
           {
             "id": 2,
             "title": "Implement `packet_builder.rs` for discover, plan, repair, and followup modes",
             "description": "Generate the user-facing relay packets for each stage of the Copilot handoff flow.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1
             ],
             "details": "Implement relay packet construction using the fixed tool registry and session context so the app can generate discover, plan, repair, and follow-up prompts consistently.",
             "testStrategy": "Generate sample packets for each mode and verify the correct tool allowances and context appear.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T04:15:29Z"
           },
           {
             "id": 3,
             "title": "Implement `response_parser.rs` for pasted JSON parsing and validation",
             "description": "Parse user-pasted Copilot output into contract-backed structures and return useful errors when parsing fails.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1
             ],
             "details": "Parse pasted JSON into `CopilotTurnResponse`, validate it against the shared contracts, and return structured validation errors rather than opaque failures.",
             "testStrategy": "Submit valid and invalid sample payloads and confirm parsing succeeds or returns structured validation errors accordingly.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T04:15:29Z"
           },
           {
             "id": 4,
             "title": "Generate repair follow-ups and validation fixtures",
             "description": "Close the validation loop by producing repair prompts and a stable sample set for regression checks.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               2,
               3
             ],
             "details": "Generate repair-oriented follow-up text when validation fails and add sample valid and invalid payload fixtures to support future regression checks.",
             "testStrategy": "Verify failed submissions return actionable repair follow-ups and that fixtures exercise both success and failure paths.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T04:15:29Z"
           }
-        ]
+        ],
+        "updatedAt": "2026-03-29T04:15:29Z"
       },
       {
         "id": "8",
@@ -500,13 +505,14 @@
             "id": 3,
             "title": "Implement the core CSV-first write-preview tools",
             "description": "Support the minimum transformation set needed for the MVP execution preview flow.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               2
             ],
             "details": "Implement `table.rename_columns`, `table.cast_columns`, `table.filter_rows`, and `table.derive_column` with CSV safety and previewability in mind.",
             "testStrategy": "Generate previews for each core transformation on sample CSV input and verify the source file is not mutated.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T04:15:29Z"
           },
           {
             "id": 4,
@@ -521,7 +527,7 @@
             "parentId": "undefined"
           }
         ],
-        "updatedAt": "2026-03-29T02:09:58.189Z"
+        "updatedAt": "2026-03-29T04:15:29Z"
       },
       {
         "id": "9",
@@ -654,9 +660,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-29T02:09:58.191Z",
+      "lastModified": "2026-03-29T04:15:29Z",
       "taskCount": 10,
-      "completedCount": 6,
+      "completedCount": 7,
       "tags": [
         "master"
       ]

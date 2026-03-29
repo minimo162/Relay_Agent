@@ -3,11 +3,11 @@ use super::{
     inspect::{
         profile_sheet_columns, sheet_preview, InspectPlan, SheetColumnProfile, SheetPreview,
     },
-    preview::{preview_strategy, PreviewStrategy},
+    preview::{preview_actions, preview_strategy, PreviewResult, PreviewStrategy},
     source::WorkbookSource,
     xlsx_backend::XlsxBackend,
 };
-use crate::models::WorkbookProfile;
+use crate::models::{SpreadsheetAction, WorkbookProfile};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkbookLibrarySelection {
@@ -64,6 +64,14 @@ impl WorkbookEngine {
 
     pub fn preview_strategy(&self, source: &WorkbookSource) -> PreviewStrategy {
         preview_strategy(source.format())
+    }
+
+    pub fn preview_actions(
+        &self,
+        source: Option<&WorkbookSource>,
+        actions: &[SpreadsheetAction],
+    ) -> Result<PreviewResult, String> {
+        preview_actions(&self.csv, source, actions)
     }
 
     pub fn inspect_workbook(&self, source: &WorkbookSource) -> Result<WorkbookProfile, String> {

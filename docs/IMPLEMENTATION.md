@@ -408,6 +408,27 @@ Outcome:
 - Wired read-side tool execution into `preview_execution` so pasted responses that request inspect tools now produce persisted artifacts and turn-log entries during preview generation.
 - Implemented `session.diff_from_base` as a read-side artifact resolver that can return the current diff summary or a persisted preview/diff artifact when an `artifactId` is supplied.
 
+#### 8.3 Core CSV-first write-preview tools
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src-tauri/src/storage.rs`
+- `apps/desktop/src-tauri/src/workbook/engine.rs`
+- `apps/desktop/src-tauri/src/workbook/inspect.rs`
+- `apps/desktop/src-tauri/src/workbook/mod.rs`
+- `apps/desktop/src-tauri/src/workbook/preview.rs`
+- `docs/WORKBOOK_ENGINE.md`
+- `docs/IMPLEMENTATION.md`
+
+Outcome:
+
+- Replaced the synthetic diff builder in `storage.rs` with a workbook-engine preview path that loads real CSV headers and row data before summarizing mutations.
+- Implemented CSV-backed preview behavior for `table.rename_columns`, `table.cast_columns`, `table.filter_rows`, and `table.derive_column`, including sequential table-state updates, duplicate-header rejection, and derived save-copy path handling.
+- Added a narrow preview expression and predicate grammar that supports bracketed column references for headers with spaces, basic arithmetic or string concatenation in `derive_column`, and single-comparison `filter_rows` predicates so preview can compute actual affected row counts for the supported MVP slice.
+- Added workbook preview unit tests plus storage-level preview regressions that now use real CSV fixtures instead of placeholder workbook paths.
+
 ## Decisions
 
 - Treat the repository as greenfield apart from `.taskmaster/`.
@@ -418,6 +439,7 @@ Outcome:
 - Use SvelteKit `kit.alias` instead of tsconfig `paths` for app-local aliasing to avoid drift against the generated `.svelte-kit/tsconfig.json`.
 - Keep `packages/contracts` source-first and modular until a compiled distribution artifact is actually needed.
 - Keep the workbook stack limited to `csv` plus `calamine` until the CSV-first inspect and preview slice proves a heavier engine is necessary.
+- Keep write-preview expression parsing intentionally narrow until save-copy execution exists: bracketed column references for spaced headers, one comparison in `filter_rows`, and basic arithmetic or string concatenation in `derive_column`.
 
 ## Verification Log
 
@@ -711,13 +733,32 @@ Observed result:
 - Workspace typecheck, Svelte check, and the desktop production build remain green after the Rust preview flow started recording workbook-profile, sheet-preview, column-profile, and diff-summary artifacts.
 - Manual desktop verification for rendering these new read-side artifacts in the Studio right pane is still pending because the current UI only reads preview summary data.
 
+Core CSV write-preview verification:
+
+```bash
+cargo fmt --all
+. "$HOME/.cargo/env" && cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+. "$HOME/.cargo/env" && cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- `cargo fmt`, `cargo check`, and `cargo test` all pass after moving write-preview synthesis into `workbook::preview` and delegating `preview_execution` to the workbook engine.
+- Rust tests now cover real CSV-backed rename, cast, filter, and derive preview behavior, including bracketed column references for spaced headers and end-to-end preview or approval storage flow with actual CSV fixtures.
+- Workspace typecheck, Svelte check, and the desktop production build remain green after the preview path stopped relying on the synthetic diff builder.
+- This environment did not have Rust or the required Tauri GTK/WebKit development libraries preinstalled, so verification also included installing the stable Rust toolchain plus Debian `libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, and `zlib1g-dev`.
+
 ## Known Limitations
 
 - The desktop UI now supports session listing, turn start, relay packet generation, response validation, and preview requests, but approval and execution are not yet surfaced in the Studio UI.
 - The Rust backend now supports in-memory relay packet, response validation, preview, approval, and execution command paths, but write execution remains intentionally blocked until the workbook engine and save-copy flow exist.
 - Persisted artifact and log files are not yet rehydrated into active in-memory relay caches on startup, so restart preserves history linkage but not resumable packet/validation/preview runtime state.
 - The workbook pane still renders preview summaries from backend metadata only; the newly persisted workbook-profile, sheet-preview, and column-profile artifacts are not yet surfaced in dedicated UI panels.
-- The CSV path now has read-side inspection, but write-preview transformations are still synthetic until the `table.*` tool implementations replace the current placeholder diff builder.
+- The CSV path now previews `table.rename_columns`, `table.cast_columns`, `table.filter_rows`, and `table.derive_column` against real CSV data, but `table.group_aggregate` remains approximate and `workbook.save_copy` still stops at output-path planning.
+- Preview predicates and derive expressions intentionally support a narrow grammar for now: bracketed column references for spaced headers, one comparison in `filter_rows`, and basic arithmetic or string concatenation in `derive_column`.
 - Limited xlsx read support is compiled through `calamine`, but the new read-side tests currently cover CSV inputs only.
 - README and demo assets have not been updated yet.
 - Task Master native AI PRD parsing is still blocked unless provider API keys are configured.
@@ -726,5 +767,5 @@ Observed result:
 
 Next planned work:
 
-- Begin task `8.3` by replacing the synthetic write-preview path with real CSV-first `table.rename_columns`, `table.cast_columns`, `table.filter_rows`, and `table.derive_column` behavior.
-- Then surface the richer workbook artifacts in the Studio right pane once real preview payloads exist.
+- Begin task `8.4` by adding `table.group_aggregate`, `workbook.save_copy`, and the remaining CSV demo verification path on top of the new real preview engine.
+- Then surface the richer workbook artifacts, approval controls, and execution controls in the Studio right pane once the save-copy path exists.

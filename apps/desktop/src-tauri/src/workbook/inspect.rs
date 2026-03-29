@@ -565,7 +565,7 @@ fn ensure_csv_sheet(sheet: &str) -> Result<(), String> {
     }
 }
 
-fn normalize_headers(headers: Vec<String>) -> Vec<String> {
+pub(crate) fn normalize_headers(headers: Vec<String>) -> Vec<String> {
     headers
         .into_iter()
         .enumerate()
@@ -580,7 +580,7 @@ fn normalize_headers(headers: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn pad_row(mut values: Vec<String>, width: usize) -> Vec<String> {
+pub(crate) fn pad_row(mut values: Vec<String>, width: usize) -> Vec<String> {
     if values.len() < width {
         values.resize(width, String::new());
     }
