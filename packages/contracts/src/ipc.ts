@@ -7,7 +7,7 @@ import {
   validationIssueSchema
 } from "./relay";
 import { relayModeSchema } from "./shared";
-import { diffSummarySchema } from "./workbook";
+import { diffSummarySchema, workbookFormatSchema } from "./workbook";
 
 export const storageModeSchema = z.enum(["memory", "local-json"]);
 export const startupStatusSchema = z.enum(["ready", "attention"]);
@@ -30,10 +30,42 @@ export const initializeAppResponseSchema = z.object({
   initialized: z.boolean(),
   storageReady: z.boolean(),
   storageMode: storageModeSchema,
+  storagePath: z.string().trim().min(1).optional(),
   sessionCount: z.number().int().nonnegative(),
   supportedRelayModes: z.array(relayModeSchema).default(relayModeSchema.options),
   startupStatus: startupStatusSchema,
-  startupIssue: startupIssueSchema.optional()
+  startupIssue: startupIssueSchema.optional(),
+  sampleWorkbookPath: z.string().trim().min(1).optional()
+});
+
+export const workbookPreflightStatusSchema = z.enum([
+  "ready",
+  "warning",
+  "blocked"
+]);
+export const workbookPreflightCheckLevelSchema = z.enum([
+  "info",
+  "warning",
+  "blocking"
+]);
+export const preflightWorkbookRequestSchema = z.object({
+  workbookPath: z.string().trim().min(1)
+});
+export const workbookPreflightCheckSchema = z.object({
+  code: z.string().trim().min(1),
+  title: z.string().trim().min(1),
+  detail: z.string().trim().min(1),
+  level: workbookPreflightCheckLevelSchema
+});
+export const preflightWorkbookResponseSchema = z.object({
+  workbookPath: z.string().trim().min(1),
+  status: workbookPreflightStatusSchema,
+  headline: z.string().trim().min(1),
+  summary: z.string().trim().min(1),
+  format: workbookFormatSchema.optional(),
+  fileSizeBytes: z.number().int().nonnegative().optional(),
+  checks: z.array(workbookPreflightCheckSchema).default([]),
+  guidance: z.array(z.string().trim().min(1)).default([])
 });
 
 export const createSessionRequestSchema = z.object({
@@ -68,6 +100,29 @@ export const listSessionsResponseSchema = z.array(sessionSchema);
 export const generateRelayPacketRequestSchema = z.object({
   sessionId: z.string().trim().min(1),
   turnId: z.string().trim().min(1)
+});
+
+export const copilotHandoffStatusSchema = z.enum(["clear", "caution"]);
+export const copilotHandoffReasonSourceSchema = z.enum([
+  "path",
+  "column",
+  "objective"
+]);
+export const assessCopilotHandoffRequestSchema = z.object({
+  sessionId: z.string().trim().min(1),
+  turnId: z.string().trim().min(1)
+});
+export const copilotHandoffReasonSchema = z.object({
+  source: copilotHandoffReasonSourceSchema,
+  label: z.string().trim().min(1),
+  detail: z.string().trim().min(1)
+});
+export const assessCopilotHandoffResponseSchema = z.object({
+  status: copilotHandoffStatusSchema,
+  headline: z.string().trim().min(1),
+  summary: z.string().trim().min(1),
+  reasons: z.array(copilotHandoffReasonSchema).default([]),
+  suggestedActions: z.array(z.string().trim().min(1)).default([])
 });
 
 export const submitCopilotResponseRequestSchema = z.object({
@@ -131,6 +186,15 @@ export type StartupStatus = z.infer<typeof startupStatusSchema>;
 export type StartupRecoveryAction = z.infer<typeof startupRecoveryActionSchema>;
 export type StartupIssue = z.infer<typeof startupIssueSchema>;
 export type InitializeAppResponse = z.infer<typeof initializeAppResponseSchema>;
+export type WorkbookPreflightStatus = z.infer<typeof workbookPreflightStatusSchema>;
+export type WorkbookPreflightCheckLevel = z.infer<
+  typeof workbookPreflightCheckLevelSchema
+>;
+export type PreflightWorkbookRequest = z.infer<typeof preflightWorkbookRequestSchema>;
+export type WorkbookPreflightCheck = z.infer<typeof workbookPreflightCheckSchema>;
+export type PreflightWorkbookResponse = z.infer<
+  typeof preflightWorkbookResponseSchema
+>;
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 export type ReadSessionRequest = z.infer<typeof readSessionRequestSchema>;
 export type SessionDetail = z.infer<typeof sessionDetailSchema>;
@@ -139,6 +203,17 @@ export type StartTurnResponse = z.infer<typeof startTurnResponseSchema>;
 export type ListSessionsResponse = z.infer<typeof listSessionsResponseSchema>;
 export type GenerateRelayPacketRequest = z.infer<typeof generateRelayPacketRequestSchema>;
 export type GenerateRelayPacketResponse = z.infer<typeof relayPacketSchema>;
+export type CopilotHandoffStatus = z.infer<typeof copilotHandoffStatusSchema>;
+export type CopilotHandoffReasonSource = z.infer<
+  typeof copilotHandoffReasonSourceSchema
+>;
+export type AssessCopilotHandoffRequest = z.infer<
+  typeof assessCopilotHandoffRequestSchema
+>;
+export type CopilotHandoffReason = z.infer<typeof copilotHandoffReasonSchema>;
+export type AssessCopilotHandoffResponse = z.infer<
+  typeof assessCopilotHandoffResponseSchema
+>;
 export type SubmitCopilotResponseRequest = z.infer<
   typeof submitCopilotResponseRequestSchema
 >;

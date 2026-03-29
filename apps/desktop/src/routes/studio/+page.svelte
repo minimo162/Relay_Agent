@@ -3,6 +3,7 @@
   import { page } from "$app/stores";
   import {
     projectInfo,
+    type AssessCopilotHandoffResponse,
     type ApprovalDecision,
     type PreviewExecutionResponse,
     type RespondToApprovalResponse,
@@ -15,6 +16,7 @@
   import { get } from "svelte/store";
 
   import {
+    assessCopilotHandoff,
     generateRelayPacket,
     previewExecution,
     readSession,
@@ -60,6 +62,11 @@
 
   let relayPacketText = "";
   let relayPacketSummary = "";
+  let handoffAssessment: AssessCopilotHandoffResponse | null = null;
+  let handoffCheckPending = false;
+  let handoffCopyMessage = "";
+  let handoffCopyError = "";
+  let handoffCopyRequiresConfirm = false;
   let validationSummary = "";
   let previewSummary = "";
   let approvalSummary = "";
@@ -159,7 +166,75 @@
     packetError = "";
     relayPacketText = "";
     relayPacketSummary = "";
+    clearHandoffFeedback();
     clearValidationAndPreview(clearRawResponse);
+  }
+
+  function clearHandoffFeedback(): void {
+    handoffAssessment = null;
+    handoffCheckPending = false;
+    handoffCopyMessage = "";
+    handoffCopyError = "";
+    handoffCopyRequiresConfirm = false;
+  }
+
+  function dismissHandoffAssessment(): void {
+    handoffCopyRequiresConfirm = false;
+  }
+
+  async function copyRelayPacketToClipboard(): Promise<void> {
+    if (!navigator.clipboard?.writeText) {
+      throw new Error("Clipboard access is not available in this build.");
+    }
+
+    await navigator.clipboard.writeText(relayPacketText);
+    handoffCopyRequiresConfirm = false;
+    handoffCopyMessage =
+      "Relay packet copied. Share only the minimum content Copilot needs.";
+  }
+
+  async function handleCopyRelayPacket(): Promise<void> {
+    if (!sessionDetail || !selectedTurnId || !relayPacketText) {
+      return;
+    }
+
+    handoffCheckPending = true;
+    handoffCopyError = "";
+    handoffCopyMessage = "";
+
+    try {
+      const assessment = await assessCopilotHandoff({
+        sessionId: sessionDetail.session.id,
+        turnId: selectedTurnId
+      });
+
+      handoffAssessment = assessment;
+
+      if (assessment.status === "caution") {
+        handoffCopyRequiresConfirm = true;
+        return;
+      }
+
+      await copyRelayPacketToClipboard();
+    } catch (error) {
+      handoffCopyError = toErrorMessage(error);
+    } finally {
+      handoffCheckPending = false;
+    }
+  }
+
+  async function handleConfirmRelayPacketCopy(): Promise<void> {
+    handoffCheckPending = true;
+    handoffCopyError = "";
+    handoffCopyMessage = "";
+
+    try {
+      await copyRelayPacketToClipboard();
+    } catch (error) {
+      handoffCopyError = toErrorMessage(error);
+    } finally {
+      handoffCheckPending = false;
+    }
   }
 
   function syncDraftFromTurn(turn: Turn | null): void {
@@ -838,14 +913,75 @@
       <div class="workflow-panels">
         <section class="subpanel">
           <div class="subpanel-header">
-            <h3>Relay packet</h3>
-            <span class={`status-pill ${relayPacketText ? "status-ready" : "status-pending"}`}>
-              {relayPacketText ? "generated" : "pending"}
-            </span>
+            <div>
+              <h3>Relay packet</h3>
+              <span class={`status-pill ${relayPacketText ? "status-ready" : "status-pending"}`}>
+                {relayPacketText ? "generated" : "pending"}
+              </span>
+            </div>
+
+            <button
+              class="chip-button"
+              disabled={!relayPacketText || handoffCheckPending || packetPending}
+              type="button"
+              on:click={() => void handleCopyRelayPacket()}
+            >
+              {handoffCheckPending ? "Checking copy..." : "Copy for Copilot"}
+            </button>
           </div>
 
           {#if packetError}
             <p class="subpanel-error">{packetError}</p>
+          {/if}
+
+          {#if handoffCopyError}
+            <p class="subpanel-error">{handoffCopyError}</p>
+          {/if}
+
+          {#if handoffCopyMessage}
+            <p class="support-copy">{handoffCopyMessage}</p>
+          {/if}
+
+          {#if handoffAssessment && handoffCopyRequiresConfirm}
+            <section class="feedback feedback-warn" aria-live="polite">
+              <strong>{handoffAssessment.headline}</strong>
+              <p>{handoffAssessment.summary}</p>
+
+              {#if handoffAssessment.reasons.length > 0}
+                <ul class="feedback-list">
+                  {#each handoffAssessment.reasons as reason}
+                    <li>
+                      <strong>{reason.label}:</strong> {reason.detail}
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+
+              {#if handoffAssessment.suggestedActions.length > 0}
+                <div class="copy-guidance">
+                  <p class="copy-guidance-label">Before you copy anyway</p>
+                  <ul class="feedback-list">
+                    {#each handoffAssessment.suggestedActions as action}
+                      <li>{action}</li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
+
+              <div class="action-row action-row-compact">
+                <button
+                  class="secondary-button"
+                  disabled={handoffCheckPending}
+                  type="button"
+                  on:click={() => void handleConfirmRelayPacketCopy()}
+                >
+                  {handoffCheckPending ? "Copying..." : "Copy anyway"}
+                </button>
+                <button class="ghost-button" type="button" on:click={dismissHandoffAssessment}>
+                  Cancel
+                </button>
+              </div>
+            </section>
           {/if}
 
           <pre class="packet-preview">{relayPacketText || "Select a turn and generate a relay packet to display the backend JSON payload here."}</pre>
@@ -1272,6 +1408,11 @@
     margin-top: 0.35rem;
   }
 
+  .feedback-list {
+    margin: 0.75rem 0 0;
+    padding-left: 1.15rem;
+  }
+
   .feedback-error {
     border-color: rgba(141, 45, 31, 0.22);
     background: rgba(141, 45, 31, 0.08);
@@ -1511,6 +1652,16 @@
 
   .action-row-compact {
     align-items: center;
+  }
+
+  .copy-guidance {
+    margin-top: 0.9rem;
+  }
+
+  .copy-guidance-label {
+    margin: 0;
+    font-size: 0.9rem;
+    font-weight: 700;
   }
 
   .primary-button,

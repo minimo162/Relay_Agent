@@ -672,7 +672,7 @@
         "id": "11",
         "title": "Package the app and simplify startup for non-engineer operators",
         "description": "Turn startup into a packaged-app-first flow with first-run guidance, permission explanations, recovery actions, and diagnostic export.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "10"
         ],
@@ -708,7 +708,7 @@
             "id": 3,
             "title": "Build first-run welcome, sample/custom entry, and permission rationale",
             "description": "Guide users into the app with a safe first-run choice and pre-permission explanations.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1,
               2
@@ -716,13 +716,13 @@
             "details": "Add a first-run welcome surface that explains what the app does, highlights save-copy behavior, offers sample or real-file entry points, and explains OS permission prompts before the system dialog appears.",
             "testStrategy": "Verify first-run users can choose sample or real-file entry and understand why any permission prompt is needed before the OS dialog opens.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T09:17:46Z"
           },
           {
             "id": 4,
             "title": "Align packaged-startup docs and verification with the implemented flow",
             "description": "Keep the planning and execution logs in sync once the startup UX is real.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               2,
               3
@@ -730,16 +730,16 @@
             "details": "Update `PLANS.md`, `docs/IMPLEMENTATION.md`, and any real user-facing setup docs so the packaged-app-first startup flow, recovery actions, and diagnostic export behavior stay documented and verifiable.",
             "testStrategy": "Confirm the implementation log and real setup docs describe the same startup flow and verification steps that the app actually supports.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T09:17:46Z"
           }
         ],
-        "updatedAt": "2026-03-29T08:59:54Z"
+        "updatedAt": "2026-03-29T09:21:28Z"
       },
       {
         "id": "12",
         "title": "Add data trust, file readiness, and safe handoff guidance",
         "description": "Make local storage, file compatibility, and Copilot handoff safety understandable before work starts.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "11"
         ],
@@ -751,31 +751,31 @@
             "id": 1,
             "title": "Explain local-only storage, retention, and deletion behavior",
             "description": "Surface what the app stores locally and how users can remove it.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [],
             "details": "Define and expose clear copy for local session storage, logs, generated file references, retention expectations, and deletion paths so non-engineers can understand the trust model without reading technical docs.",
             "testStrategy": "Verify Home or Studio surfaces what data is kept locally, what is not auto-sent, and how users can delete saved app data.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T09:25:22Z"
           },
           {
             "id": 2,
             "title": "Add file preflight, constraint surfacing, and locale or CSV compatibility guidance",
             "description": "Warn users early about unreadable files, unsupported inputs, or format mismatches.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1
             ],
             "details": "Implement preflight checks for file readability, lock state, size hints, unsupported workbook complexity, and locale-driven CSV issues such as encoding, delimiters, date formats, decimal separators, and thousands separators.",
             "testStrategy": "Verify users see plain-language preflight results and early constraint messages before starting a flow with unsupported or risky inputs.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T10:02:44Z"
           },
           {
             "id": 3,
             "title": "Warn before Copilot copy when confidential or personal data may be included",
             "description": "Insert a lightweight sensitivity check before users copy a relay packet out of the app.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1,
               2
@@ -783,13 +783,13 @@
             "details": "Add a pre-copy caution that highlights possible personal data, customer identifiers, or confidential fields and reminds users to share only the minimum necessary content before continuing to Copilot.",
             "testStrategy": "Verify the app shows a short caution before copy when file or column context suggests confidential or personal data may be present.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T10:27:15Z"
           },
           {
             "id": 4,
             "title": "Verify risky inputs and handoffs are blocked or clarified before execution",
             "description": "Close the loop on file-readiness and trust checks before the app reaches preview or save.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               2,
               3
@@ -797,10 +797,10 @@
             "details": "Add verification coverage that proves unsupported files, locale or CSV mismatches, and sensitive-data copy warnings are surfaced before preview or execution instead of appearing as late-stage failures.",
             "testStrategy": "Run targeted UI and backend verification for preflight messaging, locale or CSV warnings, and copy-time sensitivity cautions.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T10:35:03Z"
           }
         ],
-        "updatedAt": "2026-03-29T08:12:43Z"
+        "updatedAt": "2026-03-29T10:35:03Z"
       },
       {
         "id": "13",
@@ -1079,9 +1079,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-29T08:59:54Z",
+      "lastModified": "2026-03-29T09:25:22Z",
       "taskCount": 16,
-      "completedCount": 10,
+      "completedCount": 14,
       "tags": [
         "master"
       ]

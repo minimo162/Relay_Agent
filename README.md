@@ -6,6 +6,7 @@ Relay Agent is a desktop MVP for turning a validated JSON action plan into a saf
 
 - Home can create and reopen persisted sessions from local JSON storage.
 - Studio can start turns, generate relay packets, validate pasted Copilot JSON, request execution preview, record approval, and run save-copy execution.
+- Studio now provides a `Copy for Copilot` path that warns first when the workbook path, current objective, or available column names look sensitive.
 - CSV write execution is supported for `table.rename_columns`, `table.cast_columns`, `table.filter_rows`, `table.derive_column`, `table.group_aggregate`, and `workbook.save_copy`.
 - CSV save-copy output is sanitized so cells starting with `=`, `+`, `-`, or `@` are prefixed before the new file is written.
 - Xlsx support is currently limited to inspect-oriented flows and save-copy preview planning, not rich write execution.
@@ -39,6 +40,10 @@ Optional frontend-only shell:
 pnpm --filter @relay-agent/desktop dev
 ```
 
+The packaged non-engineer release target is tracked in
+[`docs/PACKAGING_POLICY.md`](docs/PACKAGING_POLICY.md). The commands above are still
+the current verified way to run the app from source.
+
 Repo checks:
 
 ```bash
@@ -46,6 +51,23 @@ pnpm check
 pnpm typecheck
 . "$HOME/.cargo/env" && cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 ```
+
+## Home Startup Behavior
+
+- On a clean profile with no saved sessions, Home shows a first-run welcome with
+  `Try the sample flow` and `Use my own file`.
+- `Try the sample flow` preloads the bundled demo objective and
+  `examples/revenue-workflow-demo.csv` when that sample path is discoverable in
+  the current build.
+- `Use my own file` keeps the flow manual and explains why Windows may later ask
+  for access to the chosen workbook or save destination.
+- Home now runs a file check before session creation when a workbook path is
+  present, surfacing unreadable files, unsupported separators, and locale- or
+  CSV-specific compatibility notes in plain language.
+- If local storage cannot be opened at startup, Home shows a plain-language
+  startup issue and offers `Retry startup checks` or `Continue in temporary
+  mode`. Temporary mode is for short-lived testing only and does not survive
+  restart.
 
 ## Demo Asset
 
@@ -72,21 +94,25 @@ Then use:
 ## Demo Flow
 
 1. Start the app with `pnpm --filter @relay-agent/desktop tauri:dev`.
-2. On Home, create a session with:
+2. On a clean profile, either:
+   - click `Try the sample flow` to preload the session draft, or
+   - click `Use my own file` and fill the form manually with the values below.
+3. If you are filling the form manually, create a session with:
    Title: `Revenue workflow demo`
    Objective: `Inspect the sample CSV, preview a safe transform, and write a sanitized copy.`
    Primary workbook path: `<repo-root>/examples/revenue-workflow-demo.csv`
-3. Open that session in Studio.
-4. Start a turn, for example:
+4. Click `Check this file` and confirm Home reports the sample CSV as ready.
+5. Open that session in Studio.
+6. Start a turn, for example:
    Title: `Approved revenue cleanup`
    Objective: `Keep approved rows, add a review label, preview the diff, approve it, and save a copy.`
    Relay mode: `plan`
-5. Click `Generate packet`.
-6. Paste the valid response example below and click `Validate response`.
-7. Click `Request preview` and review the diff summary, output path, and warnings in the right pane.
-8. Add an optional approval note, click `Approve preview`, then click `Request execution`.
-9. Confirm the output file exists at the configured `outputPath`.
-10. Confirm the original file under `examples/` is unchanged.
+7. Click `Generate packet`.
+8. Paste the valid response example below and click `Validate response`.
+9. Click `Request preview` and review the diff summary, output path, and warnings in the right pane.
+10. Add an optional approval note, click `Approve preview`, then click `Request execution`.
+11. Confirm the output file exists at the configured `outputPath`.
+12. Confirm the original file under `examples/` is unchanged.
 
 With the response example below, the output copy should contain only rows where `approved = true`, add a derived `review_label` column, and prefix any dangerous `comment` values before writing the new CSV. On the bundled sample CSV, that produces 3 output rows and sanitizes 3 `comment` cells.
 

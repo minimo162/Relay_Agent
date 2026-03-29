@@ -6,11 +6,13 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::models::{
-    ApprovalDecision, CopilotTurnResponse, CreateSessionRequest, DiffSummary,
-    GenerateRelayPacketRequest, PreviewExecutionRequest, PreviewExecutionResponse, RelayPacket,
-    RelayPacketResponseContract, RespondToApprovalRequest, RespondToApprovalResponse,
-    RunExecutionRequest, RunExecutionResponse, Session, SessionDetail, SessionStatus,
-    SpreadsheetAction, StartTurnRequest, StartTurnResponse, SubmitCopilotResponseRequest,
+    ApprovalDecision, AssessCopilotHandoffRequest, AssessCopilotHandoffResponse,
+    CopilotHandoffReason, CopilotHandoffReasonSource, CopilotHandoffStatus,
+    CopilotTurnResponse, CreateSessionRequest, DiffSummary, GenerateRelayPacketRequest,
+    PreviewExecutionRequest, PreviewExecutionResponse, RelayPacket, RelayPacketResponseContract,
+    RespondToApprovalRequest, RespondToApprovalResponse, RunExecutionRequest,
+    RunExecutionResponse, Session, SessionDetail, SessionStatus, SpreadsheetAction,
+    StartTurnRequest, StartTurnResponse, SubmitCopilotResponseRequest,
     SubmitCopilotResponseResponse, ToolDescriptor, ToolPhase, Turn, TurnStatus, ValidationIssue,
 };
 use crate::persistence::{self, StorageManifest};
@@ -97,6 +99,13 @@ impl AppStorage {
 
     pub fn session_count(&self) -> usize {
         self.sessions.len()
+    }
+
+    pub fn storage_path(&self) -> Option<String> {
+        self.app_local_data_dir
+            .as_deref()
+            .map(|app_local_data_dir| persistence::storage_root(app_local_data_dir))
+            .map(|path| path.display().to_string())
     }
 
     pub fn create_session(&mut self, request: CreateSessionRequest) -> Result<Session, String> {
@@ -263,6 +272,81 @@ impl AppStorage {
         )?;
 
         Ok(packet)
+    }
+
+    pub fn assess_copilot_handoff(
+        &self,
+        request: AssessCopilotHandoffRequest,
+    ) -> Result<AssessCopilotHandoffResponse, String> {
+        let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
+        let mut reasons = Vec::new();
+
+        if let Some(path) = session.primary_workbook_path.as_deref() {
+            collect_sensitivity_reasons(
+                path,
+                CopilotHandoffReasonSource::Path,
+                Some(path),
+                &mut reasons,
+            );
+
+            if let Ok(source) = WorkbookSource::detect(path.to_string()) {
+                if let Ok(profile) = WorkbookEngine::default().inspect_workbook(&source) {
+                    for sheet in profile.sheets {
+                        for column in sheet.columns {
+                            collect_sensitivity_reasons(
+                                &column,
+                                CopilotHandoffReasonSource::Column,
+                                Some(&column),
+                                &mut reasons,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        collect_sensitivity_reasons(
+            &session.objective,
+            CopilotHandoffReasonSource::Objective,
+            None,
+            &mut reasons,
+        );
+        collect_sensitivity_reasons(
+            &turn.title,
+            CopilotHandoffReasonSource::Objective,
+            None,
+            &mut reasons,
+        );
+        collect_sensitivity_reasons(
+            &turn.objective,
+            CopilotHandoffReasonSource::Objective,
+            None,
+            &mut reasons,
+        );
+
+        if reasons.is_empty() {
+            return Ok(AssessCopilotHandoffResponse {
+                status: CopilotHandoffStatus::Clear,
+                headline: "No obvious sensitive signals were found before copy.".to_string(),
+                summary: "Relay Agent did not detect common personal-data, identifier, or confidentiality keywords from the workbook path, current objectives, or available column names.".to_string(),
+                reasons,
+                suggested_actions: vec![
+                    "Share only the minimum schema, prompt text, or sample rows that Copilot needs.".to_string(),
+                ],
+            });
+        }
+
+        Ok(AssessCopilotHandoffResponse {
+            status: CopilotHandoffStatus::Caution,
+            headline: "This relay packet may describe sensitive data.".to_string(),
+            summary: "Before you copy the packet into Copilot, confirm that you really need to share any personal, customer, employee, account, or confidential context it may reference.".to_string(),
+            reasons,
+            suggested_actions: vec![
+                "Remove direct identifiers such as names, email addresses, phone numbers, account numbers, and customer IDs unless Copilot truly needs them.".to_string(),
+                "If you only need structural help, share column names and the intended transform instead of raw rows.".to_string(),
+                "Keep the copied content to the minimum sample that still explains the task.".to_string(),
+            ],
+        })
     }
 
     pub fn submit_copilot_response(
@@ -1002,6 +1086,159 @@ fn build_packet_context(session: &Session, turn: &Turn) -> Vec<String> {
     }
 
     context
+}
+
+#[derive(Clone, Copy)]
+struct SensitivityKeyword {
+    needle: &'static str,
+    label: &'static str,
+}
+
+const SENSITIVITY_KEYWORDS: &[SensitivityKeyword] = &[
+    SensitivityKeyword {
+        needle: "email",
+        label: "email addresses",
+    },
+    SensitivityKeyword {
+        needle: "phone",
+        label: "phone numbers",
+    },
+    SensitivityKeyword {
+        needle: "address",
+        label: "street or mailing addresses",
+    },
+    SensitivityKeyword {
+        needle: "name",
+        label: "personal names",
+    },
+    SensitivityKeyword {
+        needle: "customer",
+        label: "customer identifiers or customer records",
+    },
+    SensitivityKeyword {
+        needle: "employee",
+        label: "employee records",
+    },
+    SensitivityKeyword {
+        needle: "payroll",
+        label: "payroll information",
+    },
+    SensitivityKeyword {
+        needle: "salary",
+        label: "salary or compensation data",
+    },
+    SensitivityKeyword {
+        needle: "ssn",
+        label: "government or personal identifiers",
+    },
+    SensitivityKeyword {
+        needle: "social security",
+        label: "government or personal identifiers",
+    },
+    SensitivityKeyword {
+        needle: "dob",
+        label: "dates of birth",
+    },
+    SensitivityKeyword {
+        needle: "birth",
+        label: "dates of birth",
+    },
+    SensitivityKeyword {
+        needle: "account",
+        label: "account numbers or account records",
+    },
+    SensitivityKeyword {
+        needle: "routing",
+        label: "bank routing data",
+    },
+    SensitivityKeyword {
+        needle: "iban",
+        label: "bank account details",
+    },
+    SensitivityKeyword {
+        needle: "card",
+        label: "payment card details",
+    },
+    SensitivityKeyword {
+        needle: "tax",
+        label: "tax identifiers",
+    },
+    SensitivityKeyword {
+        needle: "passport",
+        label: "passport details",
+    },
+    SensitivityKeyword {
+        needle: "confidential",
+        label: "confidential material",
+    },
+    SensitivityKeyword {
+        needle: "private",
+        label: "private material",
+    },
+    SensitivityKeyword {
+        needle: "internal",
+        label: "internal-only material",
+    },
+];
+
+fn collect_sensitivity_reasons(
+    text: &str,
+    source: CopilotHandoffReasonSource,
+    context_label: Option<&str>,
+    reasons: &mut Vec<CopilotHandoffReason>,
+) {
+    let normalized_text = text.to_ascii_lowercase();
+
+    for keyword in SENSITIVITY_KEYWORDS {
+        if !normalized_text.contains(keyword.needle) {
+            continue;
+        }
+
+        let label = match source {
+            CopilotHandoffReasonSource::Path => "Workbook path looks sensitive",
+            CopilotHandoffReasonSource::Column => "A column name looks sensitive",
+            CopilotHandoffReasonSource::Objective => "The current objective mentions sensitive context",
+        };
+        let context = context_label.unwrap_or(text);
+        let detail = match source {
+            CopilotHandoffReasonSource::Path => format!(
+                "`{context}` includes `{}`, which often signals {}.",
+                keyword.needle, keyword.label
+            ),
+            CopilotHandoffReasonSource::Column => format!(
+                "Column `{context}` looks like it may contain {}.",
+                keyword.label
+            ),
+            CopilotHandoffReasonSource::Objective => format!(
+                "The current task text mentions `{}`, which can imply {}.",
+                keyword.needle, keyword.label
+            ),
+        };
+
+        push_unique_handoff_reason(
+            reasons,
+            CopilotHandoffReason {
+                source,
+                label: label.to_string(),
+                detail,
+            },
+        );
+    }
+}
+
+fn push_unique_handoff_reason(
+    reasons: &mut Vec<CopilotHandoffReason>,
+    reason: CopilotHandoffReason,
+) {
+    if reasons.iter().any(|existing| existing.detail == reason.detail) {
+        return;
+    }
+
+    if reasons.len() >= 6 {
+        return;
+    }
+
+    reasons.push(reason);
 }
 
 fn collect_execution_warnings(preview: &StoredPreview) -> Vec<String> {
@@ -1917,9 +2154,10 @@ mod tests {
 
     use super::AppStorage;
     use crate::models::{
-        ApprovalDecision, CreateSessionRequest, GenerateRelayPacketRequest,
-        PreviewExecutionRequest, ReadSessionRequest, RelayMode, RespondToApprovalRequest,
-        RunExecutionRequest, StartTurnRequest, SubmitCopilotResponseRequest, TurnStatus,
+        ApprovalDecision, AssessCopilotHandoffRequest, CopilotHandoffStatus,
+        CreateSessionRequest, GenerateRelayPacketRequest, PreviewExecutionRequest,
+        ReadSessionRequest, RelayMode, RespondToApprovalRequest, RunExecutionRequest,
+        StartTurnRequest, SubmitCopilotResponseRequest, TurnStatus,
     };
     use crate::persistence;
     use serde::{de::DeserializeOwned, Deserialize};
@@ -2088,6 +2326,48 @@ mod tests {
         );
 
         fs::remove_file(output_path).expect("executed CSV output should clean up");
+        fs::remove_file(csv_path).expect("test csv should clean up");
+    }
+
+    #[test]
+    fn cautions_before_copy_when_columns_look_sensitive() {
+        let csv_path = write_test_csv("customer_id,email,amount\nC-1,pat@example.com,42.5\n");
+        let mut storage = AppStorage::default();
+
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Customer export".to_string(),
+                objective: "Prepare a packet for customer cleanup".to_string(),
+                primary_workbook_path: Some(csv_path.to_string_lossy().into_owned()),
+            })
+            .expect("session should be created");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Share with Copilot".to_string(),
+                objective: "Review customer identifiers before generating the transform".to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+
+        let assessment = storage
+            .assess_copilot_handoff(AssessCopilotHandoffRequest {
+                session_id: session.id,
+                turn_id: turn.id,
+            })
+            .expect("handoff assessment should succeed");
+
+        assert_eq!(assessment.status, CopilotHandoffStatus::Caution);
+        assert!(assessment
+            .reasons
+            .iter()
+            .any(|reason| reason.source == crate::models::CopilotHandoffReasonSource::Column));
+        assert!(assessment
+            .suggested_actions
+            .iter()
+            .any(|action| action.contains("minimum")));
+
         fs::remove_file(csv_path).expect("test csv should clean up");
     }
 

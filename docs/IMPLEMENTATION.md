@@ -12,7 +12,7 @@
 - Follow-up planning input: `.taskmaster/docs/prd_non_engineer_ux.txt` captures a post-MVP usability scope focused on making the app easier for non-engineer operators, especially around app startup, distribution/install/update expectations, recovery/diagnostics, data-handling clarity, permission explanations, file readiness, locale and CSV compatibility, early constraint surfacing, resumable work, crash recovery, recent-item access, progress visibility, template-driven starts, output-name safety, duplicate-run prevention, safe defaults, reviewer-friendly summaries, read-only review, inline help, pre-copy sensitivity warnings, local audit history, accessibility baselines, and the preview, approval, and save-copy execution flow
 - Follow-up task graph: `.taskmaster/tasks/tasks.json` now breaks that supplemental PRD into Task Master follow-up tasks `11` through `16`, covering startup, data trust, continuity, guided onboarding, review/save simplification, and cross-cutting recovery plus accessibility work
 - Follow-up packaging policy: `docs/PACKAGING_POLICY.md` now fixes the first packaged end-user release path to Windows 10/11 x64 via NSIS, with manual installer-driven updates and preserved app-local storage across upgrades as the current expectation
-- Follow-up implementation status: Task `11.2` is now complete; startup preflight failures no longer abort desktop launch, `initialize_app` returns plain-language recovery guidance, and Home can retry startup checks or continue in temporary mode
+- Follow-up implementation status: Task `12` is now complete; Home now runs workbook preflight before session creation, and Studio now inserts a sensitivity caution before copying relay packets that appear to reference personal, customer, employee, account, or confidential data
 
 ## Milestone Log
 
@@ -619,6 +619,68 @@ Outcome:
 - Updated Home to show the startup warning state, offer retry or temporary-mode continuation, and block persisted session creation until the user either resolves the issue or explicitly continues in temporary mode.
 - Added Rust unit coverage for startup recovery and path-unavailable fallback behavior.
 
+#### 11.3 Build first-run welcome, sample/custom entry, and permission rationale
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src-tauri/src/lib.rs`
+- `apps/desktop/src-tauri/src/state.rs`
+- `apps/desktop/src-tauri/src/app.rs`
+- `packages/contracts/src/ipc.ts`
+- `apps/desktop/src/routes/+page.svelte`
+- `docs/IMPLEMENTATION.md`
+- `.taskmaster/tasks/tasks.json`
+
+Outcome:
+
+- Added startup metadata for a best-effort sample workbook path so Home can offer a real sample-start CTA when the bundled demo CSV is discoverable.
+- Added a first-run welcome surface on Home that emphasizes save-copy safety, offers `Try the sample flow` and `Use my own file` entry points, and prioritizes those choices before the normal session list.
+- Wired the sample CTA to preload the bundled demo path plus a safe starter objective, while the custom CTA focuses the workbook-path field and keeps the session draft in business-language wording.
+- Added a pre-permission rationale card and inline note that explain why Windows may ask for file or destination access before any system dialog appears.
+
+#### 11.4 Align packaged-startup docs and verification with the implemented flow
+
+Completed.
+
+Artifacts:
+
+- `README.md`
+- `PLANS.md`
+- `docs/IMPLEMENTATION.md`
+- `.taskmaster/tasks/tasks.json`
+
+Outcome:
+
+- Updated the README to document the currently testable startup behavior from source, including the first-run sample/custom choice, startup recovery behavior, and the distinction between verified source-run instructions and the future packaged installer path.
+- Clarified in planning docs that `docs/PACKAGING_POLICY.md` is the source for packaged end-user policy, while `README.md` stays limited to verified source-run behavior until installer builds are testable.
+- Kept the follow-up implementation log and Task Master graph aligned with the current startup flow instead of leaving the README on the older manual-only Home walkthrough.
+- Added a support-facing `Copy startup details` action on the Home startup-warning surface so non-engineer users can share the current startup summary without using the terminal.
+
+### Follow-up Milestone 12
+
+#### 12.1 Explain local-only storage, retention, and deletion behavior
+
+Completed.
+
+Artifacts:
+
+- `packages/contracts/src/ipc.ts`
+- `apps/desktop/src-tauri/src/storage.rs`
+- `apps/desktop/src-tauri/src/app.rs`
+- `apps/desktop/src/routes/+page.svelte`
+- `apps/desktop/src/routes/settings/+page.svelte`
+- `docs/IMPLEMENTATION.md`
+- `.taskmaster/tasks/tasks.json`
+
+Outcome:
+
+- Extended `initialize_app` to return the current `storagePath`, letting the UI show the actual `storage-v1` location when local storage is available.
+- Added a Home trust panel that explains which records stay local, that nothing is auto-sent externally, and that saved work can currently be removed by deleting the shown storage folder after closing the app.
+- Reworked Settings into a live policy page that explains local-only retention, clarifies that save-copy outputs stay in the user-selected destination, and shows the current deletion path or fallback state when storage is unavailable.
+- Kept the explanation user-facing and operational, so non-engineers do not need to read `docs/STORAGE_LAYOUT.md` to understand what stays on-device and how to clear it today.
+
 ## Decisions
 
 - Treat the repository as greenfield apart from `.taskmaster/`.
@@ -634,6 +696,9 @@ Outcome:
 - Decompose that follow-up PRD into Task Master tasks `11` through `16` so the post-MVP scope can be worked milestone by milestone instead of remaining a narrative-only planning artifact.
 - Treat Windows 10/11 x64 plus an NSIS installer as the first official end-user packaging target, keep updates manual until signing and updater infrastructure exist, and require upgrade installs to preserve app-local storage.
 - Let the desktop shell continue launching when local storage startup fails, but surface that failure as a plain-language preflight issue and keep retry-driven recovery inside `initialize_app` instead of crashing the app at boot.
+- Use Home as the first-run onboarding surface for now, with sample/custom entry choices and pre-permission guidance driven by `initialize_app` metadata instead of waiting for a separate onboarding route.
+- Keep `README.md` limited to behavior that can be run and verified from source today, and point packaged end-user policy at `docs/PACKAGING_POLICY.md` until installer builds are actually testable.
+- Expose the actual `storage-v1` path through `initialize_app` so Home and Settings can explain deletion and retention behavior with the real current location instead of generic wording.
 
 ## Verification Log
 
@@ -1179,6 +1244,141 @@ Observed result:
 - Task Master subtask `11.2` is now marked done while parent task `11` remains pending for first-run welcome and startup-doc alignment work.
 - The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
 
+First-run welcome and permission-rationale verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'sampleWorkbookPath|Try the sample flow|Use my own file|Before Windows asks|permission' packages/contracts/src/ipc.ts apps/desktop/src-tauri/src/app.rs apps/desktop/src-tauri/src/lib.rs apps/desktop/src/routes/+page.svelte
+jq '.master.tasks[] | select(.id == "11") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- Workspace typecheck still passes after extending startup metadata with an optional sample workbook path and wiring the Home route to first-run onboarding controls.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 26 tests after adding sample-path discovery in the Tauri startup layer.
+- The contracts, Tauri startup path, and Home route all now reference the same sample-start and permission-rationale surfaces needed for the first-run welcome flow.
+- Task Master subtask `11.3` is now marked done while parent task `11` remains pending for startup-doc alignment.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+Startup docs-alignment verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'Home Startup Behavior|Try the sample flow|Continue in temporary mode|PACKAGING_POLICY' README.md PLANS.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select(.id == "11") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- The README now documents the implemented Home startup behavior instead of the older manual-only startup flow.
+- `PLANS.md` and `docs/IMPLEMENTATION.md` now clearly separate packaged end-user policy from the currently verified source-run path.
+- Typecheck and Rust tests still pass after the documentation updates, so the docs remain aligned with the current implementation rather than describing aspirational behavior.
+- Task Master subtask `11.4` is now marked done and parent task `11` is now closed because the startup slice also exposes a support-facing startup-detail copy action.
+- The updated docs and task graph continue to pass JSON validation and `git diff --check`.
+
+Startup milestone completion verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'Copy startup details|startup summary|Try the sample flow|Use my own file|Continue in temporary mode' apps/desktop/src/routes/+page.svelte README.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select(.id == "11") | {id, status, updatedAt, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- The Home route now exposes a copyable startup summary alongside retry, temporary-mode, and settings actions, covering the diagnostic support path for startup issues.
+- README, planning docs, and the implementation log now describe the same startup slice: first-run welcome, sample/custom entry, permission rationale, startup recovery, and support-friendly startup details.
+- Task Master task `11` is now marked done, and the next pending follow-up work starts at task `12`.
+- The updated code, docs, and task graph continue to pass workspace verification and `git diff --check`.
+
+Local-only storage guidance verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'storagePath|Data stays on this device|What stays local|Nothing is auto-sent|delete the folder' packages/contracts/src/ipc.ts apps/desktop/src-tauri/src/app.rs apps/desktop/src/routes/+page.svelte apps/desktop/src/routes/settings/+page.svelte docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select(.id == "12") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- `initialize_app` now exposes `storagePath`, and both Home and Settings render local-only storage, no-auto-send behavior, and the current manual deletion path from that live value.
+- Workspace typecheck and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still pass after the IPC, Home, and Settings changes.
+- Task Master subtask `12.1` is now marked done while parent task `12` remains pending for file-readiness and safe-handoff work.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+File preflight and locale-guidance verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'preflight_workbook|csv-delimiter|locale-ambiguous-date|Check this file|Current guidance coverage' packages/contracts/src/ipc.ts apps/desktop/src-tauri/src/app.rs apps/desktop/src-tauri/src/workbook/preflight.rs apps/desktop/src/routes/+page.svelte README.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select(.id == "12") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- The typed IPC surface now exposes `preflight_workbook`, and Home uses it before session creation to surface plain-language file readiness, early constraint messages, and locale or CSV compatibility hints.
+- The backend preflight covers unreadable paths, Excel lock files, unsupported extensions, CSV encoding and delimiter mismatches, CSV header-shape problems, locale-like number and date patterns, large-file warnings, and Excel inspect-only guidance.
+- Workspace typecheck still passes, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` now passes with 29 tests including the new preflight coverage.
+- README and Home now describe the same verified behavior: run a workbook check first, then continue once the file is ready.
+- Task Master subtask `12.2` is now marked done while parent task `12` remains pending for copy-time sensitivity work.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+Copy-time sensitivity warning verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'assess_copilot_handoff|Copy for Copilot|Copy anyway|sensitive' packages/contracts/src/ipc.ts apps/desktop/src-tauri/src/relay.rs apps/desktop/src-tauri/src/storage.rs apps/desktop/src/routes/studio/+page.svelte README.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select(.id == "12") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- The typed IPC surface now exposes `assess_copilot_handoff`, and Studio uses it before copying a relay packet to clipboard.
+- The backend assessment checks workbook path keywords, current objective text, and available workbook column names for common personal-data, customer, employee, account, payroll, and confidentiality signals.
+- Studio now shows a short caution with concrete reasons and "Copy anyway" only when those signals are present; otherwise the relay packet copies immediately.
+- Workspace typecheck still passes, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` now passes with 30 tests including the new handoff-sensitivity coverage.
+- README and Studio now describe the same verified behavior for the supported copy path.
+- Task Master subtask `12.3` is now marked done while parent task `12` remains pending for the broader risky-input and handoff verification pass.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+Risky-input and handoff verification coverage:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'preflight_workbook|csv-delimiter|locale-ambiguous-date|assess_copilot_handoff|Copy for Copilot|Copy anyway' packages/contracts/src/ipc.ts apps/desktop/src-tauri/src/app.rs apps/desktop/src-tauri/src/relay.rs apps/desktop/src-tauri/src/workbook/preflight.rs apps/desktop/src-tauri/src/storage.rs apps/desktop/src/routes/+page.svelte apps/desktop/src/routes/studio/+page.svelte README.md
+jq '.master.tasks[] | select(.id == "12") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- Workspace typecheck still passes with the combined preflight and handoff-warning surface in place.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` now passes with 30 tests, covering blocked delimiter mismatches, locale-sensitive CSV hints, and copy-time sensitivity assessment against workbook column names.
+- The codebase now surfaces unsupported files and locale or CSV mismatches before session creation, and it surfaces sensitivity cautions before packet copy rather than after preview or execution.
+- README, Home, Studio, and the implementation log all describe the same supported verification path.
+- Task Master subtask `12.4` is now marked done, and parent task `12` is now complete.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
 ## Known Limitations
 
 - The desktop UI now supports session listing, turn start, relay packet generation, response validation, preview requests, approval decisions, and save-copy execution in Studio, but dedicated artifact browsers for workbook profiles and diffs are still not surfaced.
@@ -1192,4 +1392,4 @@ Observed result:
 
 Next planned work:
 
-- No remaining tasks are pending in the current MVP plan; future work should start from a new planned milestone or follow-up scope update.
+- Continue follow-up task `13.1` for resumable drafts, in-progress state persistence, and recent-work recovery.

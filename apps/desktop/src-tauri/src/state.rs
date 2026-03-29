@@ -88,21 +88,27 @@ pub struct DesktopState {
     pub initialized: Mutex<bool>,
     pub storage: Mutex<AppStorage>,
     pub startup_preflight: Mutex<StartupPreflight>,
+    pub sample_workbook_path: Option<PathBuf>,
 }
 
 impl DesktopState {
-    pub fn new(storage: AppStorage, startup_preflight: StartupPreflight) -> Self {
+    pub fn new(
+        storage: AppStorage,
+        startup_preflight: StartupPreflight,
+        sample_workbook_path: Option<PathBuf>,
+    ) -> Self {
         Self {
             initialized: Mutex::new(false),
             storage: Mutex::new(storage),
             startup_preflight: Mutex::new(startup_preflight),
+            sample_workbook_path,
         }
     }
 }
 
 impl Default for DesktopState {
     fn default() -> Self {
-        Self::new(AppStorage::default(), StartupPreflight::ready(None))
+        Self::new(AppStorage::default(), StartupPreflight::ready(None), None)
     }
 }
 

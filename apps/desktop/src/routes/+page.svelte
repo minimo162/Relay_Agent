@@ -1,16 +1,32 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { projectInfo, type Session, type StartupIssue } from "@relay-agent/contracts";
-  import { createSession, initializeApp, listSessions, pingDesktop } from "$lib";
+  import { onMount, tick } from "svelte";
+  import {
+    projectInfo,
+    type PreflightWorkbookResponse,
+    type Session,
+    type StartupIssue
+  } from "@relay-agent/contracts";
+  import {
+    createSession,
+    initializeApp,
+    listSessions,
+    pingDesktop,
+    preflightWorkbook
+  } from "$lib";
 
   let ping = "loading";
   let ipcStatus = "loading";
   let storageMode = "unavailable";
+  let storagePath: string | null = null;
   let sessionCount = "0";
   let supportedModes = "loading";
   let startupStatus = "loading";
   let startupIssue: StartupIssue | null = null;
   let temporaryModeEnabled = false;
+  let sampleWorkbookPath: string | null = null;
+  let entryMode: "sample" | "custom" | null = null;
+  let startupDiagnosticMessage = "";
+  let startupDiagnosticError = "";
 
   let sessions: Session[] = [];
   let sessionsLoading = true;
@@ -19,9 +35,16 @@
   let title = "";
   let objective = "";
   let primaryWorkbookPath = "";
+  let workbookPreflight: PreflightWorkbookResponse | null = null;
+  let preflightPending = false;
+  let preflightError = "";
+  let lastPreflightPath = "";
   let createPending = false;
   let createError = "";
   let createSuccess = "";
+  let titleInput: HTMLInputElement | undefined;
+  let workbookPathInput: HTMLInputElement | undefined;
+  let createButton: HTMLButtonElement | undefined;
 
   function toErrorMessage(error: unknown): string {
     if (error instanceof Error && error.message) {
@@ -46,6 +69,39 @@
     }).format(new Date(value));
   }
 
+  function formatFileSize(value: number): string {
+    const kib = 1024;
+    const mib = kib * 1024;
+
+    if (value >= mib) {
+      return `${(value / mib).toFixed(1)} MB`;
+    }
+
+    if (value >= kib) {
+      return `${(value / kib).toFixed(1)} KB`;
+    }
+
+    return `${value} bytes`;
+  }
+
+  function formatWorkbookFormat(value: PreflightWorkbookResponse["format"]): string {
+    return value === "xlsx" ? "Excel workbook" : "CSV";
+  }
+
+  function preflightTone(
+    status: PreflightWorkbookResponse["status"]
+  ): "ready" | "warning" | "error" {
+    if (status === "blocked") {
+      return "error";
+    }
+
+    if (status === "warning") {
+      return "warning";
+    }
+
+    return "ready";
+  }
+
   function canRetryStartupChecks(): boolean {
     return startupIssue?.recoveryActions.includes("retryInit") ?? false;
   }
@@ -58,12 +114,144 @@
     temporaryModeEnabled = true;
   }
 
+  function clearWorkbookPreflight(): void {
+    workbookPreflight = null;
+    preflightPending = false;
+    preflightError = "";
+    lastPreflightPath = "";
+  }
+
+  function handleWorkbookPathInput(): void {
+    createError = "";
+    createSuccess = "";
+
+    if (primaryWorkbookPath.trim() !== lastPreflightPath) {
+      workbookPreflight = null;
+      preflightError = "";
+    }
+  }
+
+  async function runWorkbookPreflight(force = false): Promise<PreflightWorkbookResponse | null> {
+    const workbookPath = primaryWorkbookPath.trim();
+
+    if (!workbookPath) {
+      clearWorkbookPreflight();
+      return null;
+    }
+
+    if (!force && workbookPath === lastPreflightPath && workbookPreflight) {
+      return workbookPreflight;
+    }
+
+    preflightPending = true;
+    preflightError = "";
+
+    try {
+      const result = await preflightWorkbook({ workbookPath });
+      workbookPreflight = result;
+      lastPreflightPath = workbookPath;
+      return result;
+    } catch (error) {
+      workbookPreflight = null;
+      preflightError = toErrorMessage(error);
+      return null;
+    } finally {
+      preflightPending = false;
+    }
+  }
+
   $: createBlockedByStartup = Boolean(startupIssue) && !temporaryModeEnabled;
+  $: showFirstRunWelcome = !sessionsLoading && sessions.length === 0;
+  $: showPermissionRationale = showFirstRunWelcome || entryMode === "custom";
+  $: sampleFlowAvailable = Boolean(sampleWorkbookPath);
+  $: workbookPathNeedsRecheck =
+    primaryWorkbookPath.trim().length > 0 && primaryWorkbookPath.trim() !== lastPreflightPath;
+
+  async function startSampleFlow(): Promise<void> {
+    entryMode = "sample";
+    createError = "";
+    createSuccess = "";
+
+    if (!sampleWorkbookPath) {
+      return;
+    }
+
+    title = title.trim() ? title : "Bundled sample walkthrough";
+    objective = objective.trim()
+      ? objective
+      : "Open the bundled sample CSV, review the changes, and prepare a safe save-copy plan.";
+    primaryWorkbookPath = sampleWorkbookPath;
+
+    await tick();
+    await runWorkbookPreflight(true);
+    createButton?.focus();
+  }
+
+  async function startCustomFlow(): Promise<void> {
+    entryMode = "custom";
+    createError = "";
+    createSuccess = "";
+
+    title = title.trim() ? title : "My first workbook task";
+    objective = objective.trim()
+      ? objective
+      : "Open my workbook, check the planned changes, and save a safe copy.";
+
+    if (sampleWorkbookPath && primaryWorkbookPath === sampleWorkbookPath) {
+      primaryWorkbookPath = "";
+    }
+
+    clearWorkbookPreflight();
+
+    await tick();
+    workbookPathInput?.focus();
+  }
+
+  function buildStartupDiagnosticText(): string {
+    const lines = [
+      "Relay Agent startup summary",
+      `startupStatus: ${startupStatus}`,
+      `storageMode: ${storageMode}`,
+      `sessionCount: ${sessionCount}`,
+      `supportedRelayModes: ${supportedModes}`
+    ];
+
+    if (startupIssue) {
+      lines.push(`problem: ${startupIssue.problem}`);
+      lines.push(`reason: ${startupIssue.reason}`);
+      if (startupIssue.storagePath) {
+        lines.push(`storagePath: ${startupIssue.storagePath}`);
+      }
+      if (startupIssue.nextSteps.length > 0) {
+        lines.push(`nextSteps: ${startupIssue.nextSteps.join(" | ")}`);
+      }
+    }
+
+    return lines.join("\n");
+  }
+
+  async function copyStartupDetails(): Promise<void> {
+    startupDiagnosticMessage = "";
+    startupDiagnosticError = "";
+
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard access is not available in this build.");
+      }
+
+      await navigator.clipboard.writeText(buildStartupDiagnosticText());
+      startupDiagnosticMessage = "Startup details copied. Share them with support if the problem continues.";
+    } catch (error) {
+      startupDiagnosticError = toErrorMessage(error);
+    }
+  }
 
   async function loadHome(): Promise<void> {
     sessionsLoading = true;
     homeError = "";
     createSuccess = "";
+    startupDiagnosticMessage = "";
+    startupDiagnosticError = "";
 
     const [pingResult, appResult, sessionsResult] = await Promise.allSettled([
       pingDesktop(),
@@ -76,10 +264,12 @@
     if (appResult.status === "fulfilled") {
       ipcStatus = appResult.value.initialized ? "ready" : "pending";
       storageMode = appResult.value.storageMode;
+      storagePath = appResult.value.storagePath ?? appResult.value.startupIssue?.storagePath ?? null;
       supportedModes = appResult.value.supportedRelayModes.join(", ");
       sessionCount = String(appResult.value.sessionCount);
       startupStatus = appResult.value.startupStatus;
       startupIssue = appResult.value.startupIssue ?? null;
+      sampleWorkbookPath = appResult.value.sampleWorkbookPath ?? null;
 
       if (!startupIssue) {
         temporaryModeEnabled = false;
@@ -87,9 +277,11 @@
     } else {
       ipcStatus = "tauri-unavailable";
       storageMode = "unavailable";
+      storagePath = null;
       supportedModes = "unavailable";
       startupStatus = "attention";
       startupIssue = null;
+      sampleWorkbookPath = null;
       homeError = toErrorMessage(appResult.reason);
     }
 
@@ -110,10 +302,29 @@
     createSuccess = "";
 
     try {
+      const workbookPath = primaryWorkbookPath.trim();
+
+      if (workbookPath) {
+        const preflightResult = await runWorkbookPreflight(true);
+
+        if (!preflightResult) {
+          createError =
+            preflightError || "Relay Agent could not finish the file check for this workbook.";
+          return;
+        }
+
+        if (preflightResult.status === "blocked") {
+          createError = preflightResult.summary;
+          return;
+        }
+      } else {
+        clearWorkbookPreflight();
+      }
+
       const createdSession = await createSession({
         title,
         objective,
-        primaryWorkbookPath: primaryWorkbookPath.trim() || undefined
+        primaryWorkbookPath: workbookPath || undefined
       });
 
       sessions = sortSessions([
@@ -126,6 +337,7 @@
       title = "";
       objective = "";
       primaryWorkbookPath = "";
+      clearWorkbookPreflight();
     } catch (error) {
       createError = toErrorMessage(error);
     } finally {
@@ -200,8 +412,68 @@
           </button>
         {/if}
 
+        <button class="route-chip action-chip" type="button" on:click={() => void copyStartupDetails()}>
+          Copy startup details
+        </button>
         <a class="route-chip" href="/settings">Open settings</a>
       </div>
+
+      {#if startupDiagnosticError}
+        <p class="form-message form-error" aria-live="polite">{startupDiagnosticError}</p>
+      {/if}
+
+      {#if startupDiagnosticMessage}
+        <p class="form-message form-success" aria-live="polite">{startupDiagnosticMessage}</p>
+      {/if}
+    </section>
+  {/if}
+
+  {#if showFirstRunWelcome}
+    <section class="first-run-grid">
+      <article class="ra-panel first-run-panel">
+        <p class="panel-eyebrow">First run</p>
+        <h2>Start safely with one clear choice.</h2>
+        <p class="panel-copy">
+          Relay Agent always writes a copy. Your original workbook stays unchanged while you
+          review the plan first.
+        </p>
+
+        <div class="welcome-actions">
+          <button
+            class="primary-button"
+            disabled={!sampleFlowAvailable}
+            type="button"
+            on:click={() => void startSampleFlow()}
+          >
+            Try the sample flow
+          </button>
+          <button class="route-chip action-chip" type="button" on:click={() => void startCustomFlow()}>
+            Use my own file
+          </button>
+        </div>
+
+        <ul class="welcome-list">
+          <li>Start with the bundled sample if you want a low-risk walkthrough.</li>
+          <li>Use your own file if you already know what workbook you want to inspect.</li>
+          <li>Every write stays save-copy only, so the source file is not overwritten.</li>
+        </ul>
+
+        {#if !sampleFlowAvailable}
+          <p class="form-message form-warning">
+            This build does not currently expose the bundled sample path, so the custom-file path is the safe starting point.
+          </p>
+        {/if}
+      </article>
+
+      <article class="ra-panel permission-panel">
+        <p class="panel-eyebrow">Before Windows asks</p>
+        <h2>Why access prompts appear</h2>
+        <ul class="ra-list">
+          <li>Relay Agent needs access to the file you choose so it can inspect it safely.</li>
+          <li>When you save a copy, Windows may also ask for access to the destination you picked.</li>
+          <li>The original workbook is still treated as read-only and is not overwritten.</li>
+        </ul>
+      </article>
     </section>
   {/if}
 
@@ -220,16 +492,36 @@
           Startup checks still need attention before saved work can be created.
         {:else if temporaryModeEnabled}
           Temporary mode is active. New sessions will work for this run, but they will not survive restart.
+        {:else if entryMode === "sample"}
+          The bundled sample path is loaded. Review the details below, then create the session.
+        {:else if entryMode === "custom"}
+          Enter your workbook path here. Relay Agent will only inspect the file you choose and later write a separate copy.
         {:else}
           Sessions persist immediately through the typed IPC layer. The workbook path stays
           optional until the CSV and Studio flows are wired further.
         {/if}
       </p>
 
+      {#if showPermissionRationale && !showFirstRunWelcome}
+        <div class="permission-inline-note">
+          <strong>Before Windows asks for access</strong>
+          <p>
+            Relay Agent only needs access to inspect the file you choose and to write the save-copy destination later.
+            It does not overwrite the original workbook.
+          </p>
+        </div>
+      {/if}
+
       <form class="session-form" on:submit|preventDefault={() => void handleCreateSession()}>
         <label>
           <span>Title</span>
-          <input bind:value={title} maxlength="120" placeholder="Revenue cleanup Q2" required />
+          <input
+            bind:this={titleInput}
+            bind:value={title}
+            maxlength="120"
+            placeholder="Revenue cleanup Q2"
+            required
+          />
         </label>
 
         <label>
@@ -245,10 +537,73 @@
         <label>
           <span>Primary workbook path</span>
           <input
+            bind:this={workbookPathInput}
             bind:value={primaryWorkbookPath}
+            on:blur={() => void runWorkbookPreflight(true)}
+            on:input={handleWorkbookPathInput}
             placeholder="/tmp/revenue-q2.csv"
           />
         </label>
+
+        <div class="inline-action-row">
+          <button
+            class="route-chip action-chip compact-chip"
+            disabled={preflightPending || !primaryWorkbookPath.trim()}
+            type="button"
+            on:click={() => void runWorkbookPreflight(true)}
+          >
+            {preflightPending ? "Checking file..." : "Check this file"}
+          </button>
+
+          {#if workbookPathNeedsRecheck}
+            <p class="inline-note">Run the file check again after changing the workbook path.</p>
+          {/if}
+        </div>
+
+        {#if preflightError}
+          <p class="form-message form-error" aria-live="polite">{preflightError}</p>
+        {/if}
+
+        {#if workbookPreflight}
+          <section
+            class={`feedback feedback-${preflightTone(workbookPreflight.status)}`}
+            aria-live="polite"
+          >
+            <strong>{workbookPreflight.headline}</strong>
+            <p>{workbookPreflight.summary}</p>
+
+            <div class="preflight-meta">
+              {#if workbookPreflight.format}
+                <span>{formatWorkbookFormat(workbookPreflight.format)}</span>
+              {/if}
+
+              {#if workbookPreflight.fileSizeBytes !== undefined}
+                <span>{formatFileSize(workbookPreflight.fileSizeBytes)}</span>
+              {/if}
+            </div>
+
+            {#if workbookPreflight.checks.length > 0}
+              <ul class="feedback-list">
+                {#each workbookPreflight.checks as check}
+                  <li>
+                    <strong>{check.title}:</strong> {check.detail}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+
+            {#if workbookPreflight.guidance.length > 0}
+              <div class="preflight-guidance">
+                <p class="preflight-guidance-label">Before you continue</p>
+                <ul class="feedback-list">
+                  {#each workbookPreflight.guidance as hint}
+                    <li>{hint}</li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
+          </section>
+        {/if}
 
         {#if createBlockedByStartup}
           <p class="form-message form-warning" aria-live="polite">
@@ -265,6 +620,7 @@
         {/if}
 
         <button
+          bind:this={createButton}
           class="primary-button"
           disabled={createPending || ipcStatus !== "ready" || createBlockedByStartup}
           type="submit"
@@ -354,6 +710,10 @@
           <dd>{storageMode}</dd>
         </div>
         <div>
+          <dt>Storage path</dt>
+          <dd>{storagePath ?? "Unavailable"}</dd>
+        </div>
+        <div>
           <dt>Session count</dt>
           <dd>{sessionCount}</dd>
         </div>
@@ -365,11 +725,29 @@
     </article>
 
     <article class="ra-panel">
-      <h2>What lands next</h2>
+      <h2>Data stays on this device</h2>
       <ul class="ra-list">
-        <li>Studio pane state bound to the selected session</li>
-        <li>Turn start flow and relay packet generation</li>
-        <li>Validation feedback and preview initiation from Studio</li>
+        <li>Sessions, turn history, preview records, and logs stay in local app storage.</li>
+        <li>Nothing is auto-sent outside the app. Only text you manually paste into Copilot leaves the device.</li>
+        <li>To remove saved work today, close Relay Agent and delete the folder shown below.</li>
+      </ul>
+
+      {#if storagePath}
+        <p class="path-label">Current local storage folder</p>
+        <code class="path-block">{storagePath}</code>
+      {:else}
+        <p class="path-fallback">
+          Local storage is not ready yet, so there is no stable folder to remove from this run.
+        </p>
+      {/if}
+    </article>
+
+    <article class="ra-panel">
+      <h2>Current guidance coverage</h2>
+      <ul class="ra-list">
+        <li>File checks now catch unsupported, unreadable, or locale-sensitive inputs before session creation.</li>
+        <li>CSV guidance now calls out delimiter, encoding, date, and number-format issues in plain language.</li>
+        <li>Copy-time sensitivity warnings before Copilot handoff</li>
       </ul>
     </article>
   </section>
@@ -425,6 +803,12 @@
     color: #7a5316;
   }
 
+  .feedback-ready {
+    border-color: rgba(30, 115, 72, 0.22);
+    background: rgba(30, 115, 72, 0.08);
+    color: #1e7348;
+  }
+
   .feedback-detail {
     font-size: 0.92rem;
     word-break: break-word;
@@ -435,11 +819,73 @@
     padding-left: 1.15rem;
   }
 
+  .inline-action-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .compact-chip {
+    padding: 0.55rem 0.85rem;
+  }
+
+  .inline-note {
+    margin: 0;
+    color: var(--ra-muted);
+    font-size: 0.92rem;
+  }
+
+  .preflight-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 0.65rem;
+    font-size: 0.92rem;
+  }
+
+  .preflight-guidance {
+    margin-top: 0.9rem;
+  }
+
+  .preflight-guidance-label {
+    margin: 0;
+    font-size: 0.92rem;
+    font-weight: 700;
+  }
+
   .feedback-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 0.7rem;
     margin-top: 0.9rem;
+  }
+
+  .first-run-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(0, 1.4fr) minmax(18rem, 0.9fr);
+  }
+
+  .first-run-panel,
+  .permission-panel {
+    display: grid;
+    gap: 1rem;
+    align-content: start;
+  }
+
+  .welcome-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+  }
+
+  .welcome-list {
+    margin: 0;
+    padding-left: 1.2rem;
+    color: var(--ra-muted);
+    display: grid;
+    gap: 0.55rem;
   }
 
   .home-grid {
@@ -524,6 +970,23 @@
   .session-form {
     display: grid;
     gap: 0.95rem;
+  }
+
+  .permission-inline-note {
+    padding: 0.95rem 1rem;
+    border: 1px solid rgba(138, 90, 23, 0.18);
+    border-radius: 0.95rem;
+    background: rgba(138, 90, 23, 0.06);
+  }
+
+  .permission-inline-note strong,
+  .permission-inline-note p {
+    margin: 0;
+  }
+
+  .permission-inline-note p {
+    margin-top: 0.4rem;
+    color: var(--ra-muted);
   }
 
   .session-form label {
@@ -703,9 +1166,37 @@
     margin: 0.4rem 0 0;
     font-size: 1.1rem;
     font-weight: 600;
+    word-break: break-word;
+  }
+
+  .path-label {
+    margin-top: 1rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--ra-accent);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .path-block {
+    display: block;
+    margin-top: 0.55rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid var(--ra-border);
+    border-radius: 0.95rem;
+    background: rgba(255, 255, 255, 0.88);
+    color: var(--ra-text);
+    font-size: 0.92rem;
+    line-height: 1.5;
+    word-break: break-word;
+  }
+
+  .path-fallback {
+    margin-top: 1rem;
   }
 
   @media (max-width: 960px) {
+    .first-run-grid,
     .home-grid {
       grid-template-columns: 1fr;
     }

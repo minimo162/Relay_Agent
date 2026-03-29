@@ -1,8 +1,8 @@
 use tauri::State;
 
 use crate::models::{
-    GenerateRelayPacketRequest, RelayPacket, SubmitCopilotResponseRequest,
-    SubmitCopilotResponseResponse,
+    AssessCopilotHandoffRequest, AssessCopilotHandoffResponse, GenerateRelayPacketRequest,
+    RelayPacket, SubmitCopilotResponseRequest, SubmitCopilotResponseResponse,
 };
 use crate::state::DesktopState;
 
@@ -22,4 +22,13 @@ pub fn submit_copilot_response(
 ) -> Result<SubmitCopilotResponseResponse, String> {
     let mut storage = state.storage.lock().expect("desktop storage poisoned");
     storage.submit_copilot_response(request)
+}
+
+#[tauri::command]
+pub fn assess_copilot_handoff(
+    state: State<'_, DesktopState>,
+    request: AssessCopilotHandoffRequest,
+) -> Result<AssessCopilotHandoffResponse, String> {
+    let storage = state.storage.lock().expect("desktop storage poisoned");
+    storage.assess_copilot_handoff(request)
 }

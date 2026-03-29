@@ -1,9 +1,12 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::models::RelayMode;
 use crate::state::{
     DesktopState, StartupIssue, StartupRecoveryAction as StateStartupRecoveryAction,
+};
+use crate::workbook::{
+    preflight_workbook as run_workbook_preflight, WorkbookPreflightReport,
 };
 
 #[derive(Serialize)]
@@ -39,16 +42,31 @@ pub struct InitializeAppResponse {
     pub initialized: bool,
     pub storage_ready: bool,
     pub storage_mode: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_path: Option<String>,
     pub session_count: usize,
     pub supported_relay_modes: Vec<RelayMode>,
     pub startup_status: StartupStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub startup_issue: Option<InitializeAppStartupIssue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_workbook_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreflightWorkbookRequest {
+    pub workbook_path: String,
 }
 
 #[tauri::command]
 pub fn ping() -> &'static str {
     "pong"
+}
+
+#[tauri::command]
+pub fn preflight_workbook(request: PreflightWorkbookRequest) -> WorkbookPreflightReport {
+    run_workbook_preflight(request.workbook_path)
 }
 
 #[tauri::command]
@@ -79,6 +97,7 @@ pub fn initialize_app(state: State<'_, DesktopState>) -> InitializeAppResponse {
         initialized: *initialized,
         storage_ready: storage.storage_ready() && startup_issue.is_none(),
         storage_mode: storage.storage_mode(),
+        storage_path: storage.storage_path(),
         session_count: storage.session_count(),
         supported_relay_modes: vec![
             RelayMode::Discover,
@@ -88,6 +107,10 @@ pub fn initialize_app(state: State<'_, DesktopState>) -> InitializeAppResponse {
         ],
         startup_status,
         startup_issue,
+        sample_workbook_path: state
+            .sample_workbook_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
     }
 }
 

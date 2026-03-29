@@ -65,6 +65,21 @@ pub enum ApprovalDecision {
     Rejected,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum CopilotHandoffStatus {
+    Clear,
+    Caution,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum CopilotHandoffReasonSource {
+    Path,
+    Column,
+    Objective,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Session {
@@ -258,6 +273,13 @@ pub struct SubmitCopilotResponseRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AssessCopilotHandoffRequest {
+    pub session_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PreviewExecutionRequest {
     pub session_id: String,
     pub turn_id: String,
@@ -303,6 +325,24 @@ pub struct SubmitCopilotResponseResponse {
     pub parsed_response: Option<CopilotTurnResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repair_prompt: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopilotHandoffReason {
+    pub source: CopilotHandoffReasonSource,
+    pub label: String,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssessCopilotHandoffResponse {
+    pub status: CopilotHandoffStatus,
+    pub headline: String,
+    pub summary: String,
+    pub reasons: Vec<CopilotHandoffReason>,
+    pub suggested_actions: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]

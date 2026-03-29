@@ -1,9 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
+  assessCopilotHandoffRequestSchema,
+  assessCopilotHandoffResponseSchema,
   createSessionRequestSchema,
   generateRelayPacketRequestSchema,
   initializeAppResponseSchema,
   listSessionsResponseSchema,
+  preflightWorkbookRequestSchema,
+  preflightWorkbookResponseSchema,
   previewExecutionRequestSchema,
   previewExecutionResponseSchema,
   readSessionRequestSchema,
@@ -18,11 +22,15 @@ import {
   startTurnResponseSchema,
   submitCopilotResponseRequestSchema,
   submitCopilotResponseResponseSchema,
+  type AssessCopilotHandoffRequest,
+  type AssessCopilotHandoffResponse,
   type CreateSessionRequest,
   type GenerateRelayPacketRequest,
   type GenerateRelayPacketResponse,
   type InitializeAppResponse,
   type ListSessionsResponse,
+  type PreflightWorkbookRequest,
+  type PreflightWorkbookResponse,
   type PreviewExecutionRequest,
   type PreviewExecutionResponse,
   type ReadSessionRequest,
@@ -109,6 +117,17 @@ export function initializeApp(): Promise<InitializeAppResponse> {
   return invokeWithoutPayload("initialize_app", initializeAppResponseSchema);
 }
 
+export function preflightWorkbook(
+  payload: PreflightWorkbookRequest
+): Promise<PreflightWorkbookResponse> {
+  return invokeWithPayload(
+    "preflight_workbook",
+    payload,
+    preflightWorkbookRequestSchema,
+    preflightWorkbookResponseSchema
+  );
+}
+
 export function createSession(
   payload: CreateSessionRequest
 ): Promise<Session> {
@@ -154,6 +173,17 @@ export function generateRelayPacket(
     payload,
     generateRelayPacketRequestSchema,
     relayPacketSchema
+  );
+}
+
+export function assessCopilotHandoff(
+  payload: AssessCopilotHandoffRequest
+): Promise<AssessCopilotHandoffResponse> {
+  return invokeWithPayload(
+    "assess_copilot_handoff",
+    payload,
+    assessCopilotHandoffRequestSchema,
+    assessCopilotHandoffResponseSchema
   );
 }
 
@@ -204,11 +234,13 @@ export function runExecution(
 export const relayAgentIpc = {
   pingDesktop,
   initializeApp,
+  preflightWorkbook,
   createSession,
   listSessions,
   readSession,
   startTurn,
   generateRelayPacket,
+  assessCopilotHandoff,
   submitCopilotResponse,
   previewExecution,
   respondToApproval,
