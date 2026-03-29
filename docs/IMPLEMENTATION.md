@@ -1689,6 +1689,19 @@ Observed result:
 - Task Master tasks `21` through `26` are now marked done, completing the current turn-lifecycle inspection follow-up set.
 - The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
 
+README lifecycle doc sync verification:
+
+```bash
+rg -n 'Turn details|Workbook evidence|Execution tab keeps the failed state|Check changes' README.md
+git diff --check
+```
+
+Observed result:
+
+- `README.md` now explicitly calls out that `Inspection details > Execution` keeps failed save-copy state, intended output path, and a plain-language reason summary so operators and reviewers know failure evidence survives reload.
+- The demo flow wording now points readers at both `Turn details` and `Workbook evidence`, matching the shipped Studio IA instead of the earlier workbook-browser-only framing.
+- The docs-only follow-up continues to pass `git diff --check`.
+
 ## Known Limitations
 
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.

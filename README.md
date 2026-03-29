@@ -140,6 +140,9 @@ pnpm typecheck
   `sheet-preview`, `column-profile`, `diff-summary`, and `preview` artifacts.
 - Reviewer mode shows the same `Turn details` and `Workbook evidence` surfaces
   while still hiding editing, Copilot handoff, approval, and save controls.
+- If save-copy execution fails, the `Execution` tab keeps the failed state, the
+  intended output path, and the plain-language reason summary so the same turn
+  can be reviewed again after reload.
 - If a step has not been reached yet, belongs to an older unsupported turn, or
   temporary-mode evidence is only live for the current app session, Studio now
   shows an explicit unavailable-state reason instead of a blank panel.
@@ -184,7 +187,7 @@ Then use:
    Relay mode: `plan`
 7. Click `Generate packet`.
 8. Either click `Load demo response` for the bundled sample walkthrough, or paste the valid response example below, then click `Validate response`.
-9. Click `Check changes` and review the summary, output path, warnings, and `Inspection details` in Studio.
+9. Click `Check changes` and review the summary, output path, warnings, plus both `Turn details` and `Workbook evidence` inside `Inspection details`.
 10. If the plan changes the workbook, add an optional review note, click `Confirm review`, then click `Save reviewed copy`.
 11. After save, use `Copy review summary` or `Open reviewer view` if you want a read-only confirmation path with the same inspection details.
 12. Confirm the output file exists at the configured `outputPath`.
