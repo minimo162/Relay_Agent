@@ -12,7 +12,7 @@
 - Follow-up planning input: `.taskmaster/docs/prd_non_engineer_ux.txt` captures a post-MVP usability scope focused on making the app easier for non-engineer operators, especially around app startup, distribution/install/update expectations, recovery/diagnostics, data-handling clarity, permission explanations, file readiness, locale and CSV compatibility, early constraint surfacing, resumable work, crash recovery, recent-item access, progress visibility, template-driven starts, output-name safety, duplicate-run prevention, safe defaults, reviewer-friendly summaries, read-only review, inline help, pre-copy sensitivity warnings, local audit history, accessibility baselines, and the preview, approval, and save-copy execution flow
 - Follow-up task graph: `.taskmaster/tasks/tasks.json` now breaks that supplemental PRD into Task Master follow-up tasks `11` through `16`, covering startup, data trust, continuity, guided onboarding, review/save simplification, and cross-cutting recovery plus accessibility work
 - Follow-up packaging policy: `docs/PACKAGING_POLICY.md` now fixes the first packaged end-user release path to Windows 10/11 x64 via NSIS, with manual installer-driven updates and preserved app-local storage across upgrades as the current expectation
-- Follow-up implementation status: Task `13.2` is now complete; Home now surfaces recent work plus abnormal-shutdown recovery prompts, and Studio now restores resumable local draft state plus the last preview summary snapshot for each session across restart
+- Follow-up implementation status: Task `15.2` is now complete; Studio now exposes a plain-language review-and-save step model with a single primary CTA, progress messaging, and a three-point summary for changes, affected rows, and reviewed-copy location
 
 ## Milestone Log
 
@@ -1419,10 +1419,168 @@ Observed result:
 - Task Master subtask `13.2` is now marked done while parent task `13` remains pending for leave warnings and the final continuity verification pass.
 - The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
 
+Intentional-exit continuity verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'Leave warning|Leave and keep draft|Leave and discard draft|Discard draft and switch turns|beforeNavigate' apps/desktop/src/routes/studio/+page.svelte README.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select(.id == "13") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- Studio now computes leave-risk state from local draft edits, staged response text, validation checkpoints, preview review state, and execution-ready previews before allowing route leave or destructive turn resets.
+- In-app route leave and same-session replacement flows now stop on a plain-language dialog that distinguishes `Leave and keep draft`, `Leave and discard draft`, `Keep working on this draft`, and discard-and-continue actions.
+- Browser or window close now falls back to the platform-native `beforeunload` prompt when risky continuity state is present, so the next launch can still recover that draft if the user leaves anyway.
+- Workspace typecheck still passes, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 30 tests after the leave-warning additions.
+- Task Master subtask `13.3` is now marked done while parent task `13` remains pending for the final continuity verification pass in `13.4`.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+Continuity walkthrough artifact:
+
+```bash
+test -f docs/CONTINUITY_VERIFICATION.md
+rg -n 'Scenario 1|Scenario 2|Scenario 3|Scenario 4|Scenario 5|Command Checks' docs/CONTINUITY_VERIFICATION.md
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+jq '.master.tasks[] | select(.id == "13") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- `docs/CONTINUITY_VERIFICATION.md` now captures a stable manual verification walkthrough for restart resume, abnormal-shutdown recovery, intentional keep-draft leave, intentional discard leave, and in-Studio draft replacement.
+- The walkthrough keeps verification grounded in the current source-run build instead of assuming packaged-app automation or a frontend e2e runner that does not exist yet in this repo.
+- Workspace typecheck still passes, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 30 tests after adding the walkthrough artifact and closing task `13`.
+- Task Master task `13` and subtask `13.4` are now marked done, while the next pending follow-up work shifts to task `14.1`.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+Guided first-run onboarding verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'Start your first task|First-time steps|What do you want done|Show changes first|Check my file safely' apps/desktop/src/routes/+page.svelte README.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select(.id == "14") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- Home first-run creation now stays focused on one clear choice first, then opens the session form only after the user chooses either the bundled sample path or their own file path.
+- The create-session form now uses plainer labels such as `Task name`, `What do you want done?`, and `File to inspect`, plus short helper copy that keeps the wording in business language.
+- Objective starter cards now let first-time users seed common goals without having to write internal workflow vocabulary on their own.
+- Workspace typecheck still passes, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 30 tests after the onboarding copy and gating changes.
+- Task Master subtask `14.1` is now marked done while parent task `14` remains pending for templates, inline help, and guided-flow verification.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+Template-driven start verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'Quick-start templates|Safe defaults already on|Rename columns|Change data types|Summarize totals' apps/desktop/src/routes/+page.svelte README.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select(.id == "14") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- Home now exposes quick-start templates for common spreadsheet tasks, including rename, type cleanup, filtering, and totals-style starts, so first-time users can prefill both task name and objective without writing the entire request from scratch.
+- The create-session form now also shows an explicit `Safe defaults already on` note that keeps save-copy, review-first, and source-file protection visible without opening a separate settings surface.
+- Workspace typecheck still passes, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 30 tests after the template and defaults changes.
+- Task Master subtask `14.2` is now marked done while parent task `14` remains pending for inline help and the guided-flow verification pass.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+Inline help verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'Need help\\?|Quick help for this step|Need help with this step\\?|Show help|Hide help' apps/desktop/src/routes/+page.svelte apps/desktop/src/routes/studio/+page.svelte README.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select(.id == "14") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- Home now exposes a short first-run and create-step help panel that explains start choices, task wording, and file checks in plain language behind a `Show help` toggle.
+- Studio now exposes a matching step help panel that updates its glossary cues for turn setup, packet handoff, pasted response, preview, approval, and save-copy stages.
+- Workspace typecheck still passes, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 30 tests after adding the inline help surfaces.
+- Task Master subtask `14.3` is now marked done while parent task `14` remains pending only for the guided-flow verification pass.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+Guided-flow walkthrough artifact:
+
+```bash
+test -f docs/GUIDED_FLOW_VERIFICATION.md
+rg -n 'First-Run Sample Walkthrough|Load demo response|Real-File Guided Entry Check|Command Checks' docs/GUIDED_FLOW_VERIFICATION.md README.md apps/desktop/src/routes/studio/+page.svelte
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+jq '.master.tasks[] | select(.id == "14") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- `docs/GUIDED_FLOW_VERIFICATION.md` now captures a first-run sample walkthrough and a real-file entry check that rely on the in-product guidance, templates, help panels, and the new `Load demo response` path instead of the README.
+- Studio now exposes `Load demo response` for the bundled sample workbook so a first-time user can validate and preview the sample flow without copying example JSON from documentation.
+- Workspace typecheck still passes, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 30 tests after closing the guided-flow loop.
+- Task Master task `14` and subtask `14.4` are now marked done; the next pending follow-up work shifts to task `15.1`.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+Review-and-save UX verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'Review and save|Check changes|Save reviewed copy|Confirm review|Waiting for valid response' apps/desktop/src/routes/studio/+page.svelte README.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select(.id == "15") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- Studio now collapses the user-facing execution flow into `Prepare request`, `Bring back Copilot response`, and `Review and save`, while the backend preview and approval gates remain unchanged behind the scenes.
+- The review pane now leads with one primary action that changes from `Check changes` to `Confirm review` to `Save reviewed copy`, so operators no longer have to understand backend stage names to continue.
+- Workspace typecheck still passes, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 30 tests after the review-and-save wording changes.
+- Task Master subtask `15.1` is now marked done while parent task `15` remains pending for review summary, reviewer-safe surfaces, and audit history.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
+Three-point review summary verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+rg -n 'What will change|How many rows|Where the new copy goes|Checking changes|Saving reviewed copy' apps/desktop/src/routes/studio/+page.svelte README.md docs/IMPLEMENTATION.md
+jq '.master.tasks[] | select(.id == "15") | {id, status, subtasks: [.subtasks[] | {id, status}]}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- The review pane now surfaces a three-point summary for what will change, how many rows are affected, and where the reviewed copy will go before the save action is available.
+- Review progress is now shown in plain language while Relay Agent is checking changes, confirming review, or saving the reviewed copy, rather than leaving the user with only button-spinner feedback.
+- The reviewed-copy location now includes a plain-language safety note that explains why the original file remains protected.
+- Workspace typecheck still passes, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 30 tests after the summary and progress additions.
+- Task Master subtask `15.2` is now marked done while parent task `15` remains pending for duplicate-run prevention, reviewer mode, and local audit history.
+- The updated code, docs, and task graph continue to pass JSON validation and `git diff --check`.
+
 ## Known Limitations
 
 - The desktop UI now supports session listing, turn start, relay packet generation, response validation, preview requests, approval decisions, and save-copy execution in Studio, but dedicated artifact browsers for workbook profiles and diffs are still not surfaced.
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.
+- Browser or window close still relies on the platform-native confirmation dialog, so explicit keep-vs-discard choices are currently available only for in-app navigation and draft-replacement flows.
 - The workbook pane still renders preview summaries from backend metadata only; the newly persisted workbook-profile, sheet-preview, and column-profile artifacts are not yet surfaced in dedicated UI panels.
 - Preview predicates and derive expressions intentionally support a narrow grammar for now: bracketed column references for spaced headers, one comparison in `filter_rows`, and basic arithmetic or string concatenation in `derive_column`.
 - Limited xlsx support is still inspect-and-copy oriented; current test coverage still centers on CSV execution plus xlsx preview planning rather than richer xlsx write flows.
@@ -1432,4 +1590,4 @@ Observed result:
 
 Next planned work:
 
-- Continue follow-up task `13.3` for leave warnings and explicit keep-draft or discard choices.
+- Continue follow-up task `15.3` for duplicate-run prevention, completion actions, reviewer summaries, and read-only review mode.

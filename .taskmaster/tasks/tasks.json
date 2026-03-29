@@ -806,7 +806,7 @@
         "id": "13",
         "title": "Implement resumable work, crash recovery, and leave-safe continuity",
         "description": "Keep in-progress work recoverable across restart, abnormal shutdown, and intentional exit.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "11"
         ],
@@ -842,7 +842,7 @@
             "id": 3,
             "title": "Add unsaved or unreviewed leave warnings and clear retry or discard choices",
             "description": "Prevent users from accidentally losing work when closing or backing out.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1,
               2
@@ -850,13 +850,13 @@
             "details": "Warn before leaving dirty drafts or unreviewed preview states, and make the difference between retry, keep draft, discard, and close explicit in plain language.",
             "testStrategy": "Verify closing or backing out with dirty state shows clear leave options and preserves or discards work exactly as labeled.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T11:32:56Z"
           },
           {
             "id": 4,
             "title": "Verify continuity flows across restart, crash recovery, and intentional exit",
             "description": "Cover the full set of resume and recovery paths with verification.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               2,
               3
@@ -864,16 +864,16 @@
             "details": "Add verification for restart-based resume, abnormal-shutdown restore, recent-item recall, and leave-warning actions so continuity behavior stays predictable as the follow-up UX evolves.",
             "testStrategy": "Run continuity-focused tests and manual walkthroughs for resume, restore, discard, and keep-draft behavior.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T11:36:23Z"
           }
         ],
-        "updatedAt": "2026-03-29T11:14:26Z"
+        "updatedAt": "2026-03-29T11:36:23Z"
       },
       {
         "id": "14",
         "title": "Guide non-engineer users with templates, onboarding, and inline help",
         "description": "Reduce first-use friction with sample-first entry, safe defaults, templates, and contextual guidance.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "11",
           "12"
@@ -886,31 +886,31 @@
             "id": 1,
             "title": "Add sample-first onboarding and plain-language objective entry",
             "description": "Lead first-time users into a successful start without technical wording.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [],
             "details": "Prioritize a bundled sample path on first run, simplify the objective prompt into business-language examples, and keep the initial path focused on one clear next action at a time.",
             "testStrategy": "Verify first-time users can choose a sample path and understand how to describe their goal without using internal workflow terms.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T11:39:49Z"
           },
           {
             "id": 2,
             "title": "Add template-driven starts and safe defaults",
             "description": "Provide common starting points and hide advanced configuration by default.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1
             ],
             "details": "Offer common spreadsheet tasks such as rename, cast, filter, derive, and aggregate as template starts while keeping save-copy, review, and output-path behaviors on safe defaults unless the user explicitly changes them.",
             "testStrategy": "Verify common tasks can start from templates and that first-run flows do not require opening advanced settings.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T11:42:43Z"
           },
           {
             "id": 3,
             "title": "Add inline help and glossary that matches the current step",
             "description": "Let users resolve uncertainty inside the UI instead of leaving for documentation.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1,
               2
@@ -918,13 +918,13 @@
             "details": "Show short first-run hints by default and keep deeper help behind an explicit affordance so users can re-check terms and next actions without cluttering the main flow.",
             "testStrategy": "Verify users can re-open concise help for the current step and that the UI does not expose unnecessary technical detail by default.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T11:45:15Z"
           },
           {
             "id": 4,
             "title": "Verify the guided flow works without README dependency",
             "description": "Confirm the in-product guidance is sufficient for first-use success.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               2,
               3
@@ -932,10 +932,10 @@
             "details": "Run guided-flow verification to ensure first-time users can move from onboarding through request entry and Copilot handoff using the app's own prompts, templates, and help surfaces.",
             "testStrategy": "Execute a first-run walkthrough without referring to README and confirm the user can reach the review step using only the implemented UX cues.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T11:48:33Z"
           }
         ],
-        "updatedAt": "2026-03-29T08:12:43Z"
+        "updatedAt": "2026-03-29T11:48:33Z"
       },
       {
         "id": "15",
@@ -955,25 +955,25 @@
             "id": 1,
             "title": "Collapse preview, approval, and execution into a review-and-save UX",
             "description": "Hide backend stage jargon behind a simpler user-facing step model.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [],
             "details": "Rework Studio so users see a plain-language stepper and a single review-and-save phase while the existing preview and approval requirements remain enforced behind the scenes.",
             "testStrategy": "Verify users can complete the save flow without understanding preview or approval terminology and that approval is still required before any write-capable execution.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T11:58:58Z"
           },
           {
             "id": 2,
             "title": "Add three-point review summary, progress visibility, and output-path safety",
             "description": "Keep the main review information short, visible, and safe.",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               1
             ],
             "details": "Show what will change, how many rows are affected, and where output goes at the top of the review step, while also surfacing progress states, output-path suggestions, and filename collision warnings in plain language.",
             "testStrategy": "Verify review screens always surface the three key summary points plus progress and filename safeguards before save actions are enabled.",
             "parentId": "undefined",
-            "updatedAt": "2026-03-29T08:12:43Z"
+            "updatedAt": "2026-03-29T11:58:58Z"
           },
           {
             "id": 3,
@@ -1004,7 +1004,7 @@
             "updatedAt": "2026-03-29T08:12:43Z"
           }
         ],
-        "updatedAt": "2026-03-29T08:12:43Z"
+        "updatedAt": "2026-03-29T11:58:58Z"
       },
       {
         "id": "16",
@@ -1079,9 +1079,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-29T09:25:22Z",
+      "lastModified": "2026-03-29T11:58:58Z",
       "taskCount": 16,
-      "completedCount": 16,
+      "completedCount": 14,
       "tags": [
         "master"
       ]

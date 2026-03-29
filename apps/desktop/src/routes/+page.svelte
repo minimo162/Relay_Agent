@@ -24,6 +24,109 @@
     type RecentSession
   } from "$lib";
 
+  type ObjectiveStarter = {
+    label: string;
+    objective: string;
+    note: string;
+  };
+  type HelpEntry = {
+    term: string;
+    detail: string;
+    action: string;
+  };
+  type QuickStartTemplate = {
+    label: string;
+    title: string;
+    objective: string;
+    note: string;
+  };
+
+  const sampleObjectiveStarters: ObjectiveStarter[] = [
+    {
+      label: "Show changes first",
+      objective: "Open the sample file, show what would change, and save a safe copy.",
+      note: "Good for a first walkthrough."
+    },
+    {
+      label: "Keep approved rows",
+      objective: "Keep approved rows, explain the planned changes, and save a safe copy.",
+      note: "Matches the bundled demo workflow."
+    },
+    {
+      label: "Check for risks",
+      objective: "Inspect the sample file, point out anything risky, and prepare a safe copy plan.",
+      note: "Useful when you want more explanation before saving."
+    }
+  ];
+  const customObjectiveStarters: ObjectiveStarter[] = [
+    {
+      label: "Check my file safely",
+      objective: "Open my workbook, show the planned changes, and save a separate safe copy.",
+      note: "A simple default for first use."
+    },
+    {
+      label: "Filter what I need",
+      objective: "Keep only the rows I need, explain the result, and save a separate copy.",
+      note: "Good for cleanup or review work."
+    },
+    {
+      label: "Rename some columns",
+      objective: "Rename the columns I choose, show the impact, and save a separate copy.",
+      note: "Useful when column names need to be cleaned up."
+    }
+  ];
+  const genericObjectiveStarters: ObjectiveStarter[] = [
+    sampleObjectiveStarters[0],
+    customObjectiveStarters[0],
+    customObjectiveStarters[1]
+  ];
+  const sampleQuickStartTemplates: QuickStartTemplate[] = [
+    {
+      label: "Filter rows",
+      title: "Approved sample review",
+      objective: "Keep approved rows from the sample, explain what changed, and save a separate copy.",
+      note: "A safe first walkthrough on the bundled file."
+    },
+    {
+      label: "Add a new column",
+      title: "Sample review label",
+      objective: "Add a review label to the sample rows, show the impact, and save a separate copy.",
+      note: "Good for learning preview before save."
+    },
+    {
+      label: "Summarize totals",
+      title: "Sample totals summary",
+      objective: "Group the sample data into totals, explain the result, and save a separate copy.",
+      note: "Useful for aggregate-style work."
+    }
+  ];
+  const customQuickStartTemplates: QuickStartTemplate[] = [
+    {
+      label: "Rename columns",
+      title: "Column rename cleanup",
+      objective: "Rename the columns I choose, explain the impact, and save a separate copy.",
+      note: "Good when headers need cleanup."
+    },
+    {
+      label: "Change data types",
+      title: "Column type cleanup",
+      objective: "Fix the column types I choose, explain the impact, and save a separate copy.",
+      note: "Useful when dates or numbers are inconsistent."
+    },
+    {
+      label: "Filter rows",
+      title: "Filtered workbook copy",
+      objective: "Keep only the rows I need, explain the result, and save a separate copy.",
+      note: "Good for reducing a large sheet."
+    },
+    {
+      label: "Summarize totals",
+      title: "Workbook totals summary",
+      objective: "Summarize the rows I choose into totals, explain the result, and save a separate copy.",
+      note: "Useful for aggregate reports."
+    }
+  ];
+
   let ping = "loading";
   let ipcStatus = "loading";
   let storageMode = "unavailable";
@@ -55,6 +158,7 @@
   let createPending = false;
   let createError = "";
   let createSuccess = "";
+  let homeHelpOpen = false;
   let titleInput: HTMLInputElement | undefined;
   let workbookPathInput: HTMLInputElement | undefined;
   let createButton: HTMLButtonElement | undefined;
@@ -203,6 +307,52 @@
   $: sampleFlowAvailable = Boolean(sampleWorkbookPath);
   $: workbookPathNeedsRecheck =
     primaryWorkbookPath.trim().length > 0 && primaryWorkbookPath.trim() !== lastPreflightPath;
+  $: objectiveStarters =
+    entryMode === "sample"
+      ? sampleObjectiveStarters
+      : entryMode === "custom"
+        ? customObjectiveStarters
+        : genericObjectiveStarters;
+  $: quickStartTemplates =
+    entryMode === "sample"
+      ? sampleQuickStartTemplates
+      : customQuickStartTemplates;
+  $: showGuidedStartGate = showFirstRunWelcome && entryMode === null;
+  $: homeHelpEntries = showGuidedStartGate
+    ? [
+        {
+          term: "Try the sample flow",
+          detail: "Uses the bundled workbook so you can learn the steps without touching your own file first.",
+          action: "Choose this when you want a low-risk walkthrough."
+        },
+        {
+          term: "Use my own file",
+          detail: "Opens the same guided form, but for a workbook path you already know.",
+          action: "Choose this when you want to work on a real file right away."
+        },
+        {
+          term: "Next step",
+          detail: "After you choose one path, Relay Agent opens the form and gives example wording for your goal.",
+          action: "Pick one start option above to continue."
+        }
+      ]
+    : [
+        {
+          term: "Task name",
+          detail: "A short label so you can spot this work later in Home and Studio.",
+          action: "Keep it short and recognizable."
+        },
+        {
+          term: "What do you want done?",
+          detail: "Describe the business result you want in everyday language instead of technical commands.",
+          action: "Say what should change, then let Relay Agent guide the steps."
+        },
+        {
+          term: "Check this file",
+          detail: "Runs a quick readiness check so unreadable or risky files are caught before Studio starts.",
+          action: "Use it after choosing or editing the file path."
+        }
+      ] satisfies HelpEntry[];
 
   async function startSampleFlow(): Promise<void> {
     entryMode = "sample";
@@ -242,6 +392,19 @@
 
     await tick();
     workbookPathInput?.focus();
+  }
+
+  function useObjectiveStarter(starter: ObjectiveStarter): void {
+    objective = starter.objective;
+    createError = "";
+    createSuccess = "";
+  }
+
+  function applyQuickStartTemplate(template: QuickStartTemplate): void {
+    title = template.title;
+    objective = template.objective;
+    createError = "";
+    createSuccess = "";
   }
 
   function buildStartupDiagnosticText(): string {
@@ -587,7 +750,7 @@
       <div class="panel-heading">
         <div>
           <p class="panel-eyebrow">Create session</p>
-          <h2>Start a new objective</h2>
+          <h2>{showFirstRunWelcome ? "Start your first task" : "Start a new task"}</h2>
         </div>
         <span class={`status-pill status-${startupStatus}`}>{startupStatus}</span>
       </div>
@@ -595,144 +758,257 @@
       <p class="panel-copy">
         {#if createBlockedByStartup}
           Startup checks still need attention before saved work can be created.
+        {:else if showGuidedStartGate}
+          Start with one choice above. After that, Relay Agent will guide you
+          through describing the result you want in plain language.
         {:else if temporaryModeEnabled}
           Temporary mode is active. New sessions will work for this run, but they will not survive restart.
         {:else if entryMode === "sample"}
-          The bundled sample path is loaded. Review the details below, then create the session.
+          Step 2 of 3: the bundled sample path is loaded. Describe what you want to happen, then create the session.
         {:else if entryMode === "custom"}
-          Enter your workbook path here. Relay Agent will only inspect the file you choose and later write a separate copy.
+          Step 2 of 3: describe the result you want, then add the file Relay Agent should inspect.
         {:else}
-          Sessions persist immediately through the typed IPC layer. The workbook path stays
-          optional until the CSV and Studio flows are wired further.
+          Describe the result you want and Relay Agent will store that task here before Studio begins.
         {/if}
       </p>
 
-      {#if showPermissionRationale && !showFirstRunWelcome}
-        <div class="permission-inline-note">
-          <strong>Before Windows asks for access</strong>
-          <p>
-            Relay Agent only needs access to inspect the file you choose and to write the save-copy destination later.
-            It does not overwrite the original workbook.
-          </p>
+      {#if showGuidedStartGate}
+        <div class="guided-start-card">
+          <p class="panel-eyebrow">First-time steps</p>
+          <h3>Pick one starting path first.</h3>
+          <ol class="guided-step-list">
+            <li>Choose `Try the sample flow` for a safe walkthrough, or `Use my own file` for real work.</li>
+            <li>Describe the business result you want in everyday language.</li>
+            <li>Check the file path and create the session when the form looks right.</li>
+          </ol>
         </div>
-      {/if}
-
-      <form class="session-form" on:submit|preventDefault={() => void handleCreateSession()}>
-        <label>
-          <span>Title</span>
-          <input
-            bind:this={titleInput}
-            bind:value={title}
-            maxlength="120"
-            placeholder="Revenue cleanup Q2"
-            required
-          />
-        </label>
-
-        <label>
-          <span>Objective</span>
-          <textarea
-            bind:value={objective}
-            rows="4"
-            placeholder="Normalize the inbound CSV and prepare a safe save-copy plan."
-            required
-          ></textarea>
-        </label>
-
-        <label>
-          <span>Primary workbook path</span>
-          <input
-            bind:this={workbookPathInput}
-            bind:value={primaryWorkbookPath}
-            on:blur={() => void runWorkbookPreflight(true)}
-            on:input={handleWorkbookPathInput}
-            placeholder="/tmp/revenue-q2.csv"
-          />
-        </label>
-
-        <div class="inline-action-row">
-          <button
-            class="route-chip action-chip compact-chip"
-            disabled={preflightPending || !primaryWorkbookPath.trim()}
-            type="button"
-            on:click={() => void runWorkbookPreflight(true)}
-          >
-            {preflightPending ? "Checking file..." : "Check this file"}
-          </button>
-
-          {#if workbookPathNeedsRecheck}
-            <p class="inline-note">Run the file check again after changing the workbook path.</p>
-          {/if}
-        </div>
-
-        {#if preflightError}
-          <p class="form-message form-error" aria-live="polite">{preflightError}</p>
+      {:else}
+        {#if showPermissionRationale && !showFirstRunWelcome}
+          <div class="permission-inline-note">
+            <strong>Before Windows asks for access</strong>
+            <p>
+              Relay Agent only needs access to inspect the file you choose and to write the save-copy destination later.
+              It does not overwrite the original workbook.
+            </p>
+          </div>
         {/if}
 
-        {#if workbookPreflight}
-          <section
-            class={`feedback feedback-${preflightTone(workbookPreflight.status)}`}
-            aria-live="polite"
-          >
-            <strong>{workbookPreflight.headline}</strong>
-            <p>{workbookPreflight.summary}</p>
-
-            <div class="preflight-meta">
-              {#if workbookPreflight.format}
-                <span>{formatWorkbookFormat(workbookPreflight.format)}</span>
-              {/if}
-
-              {#if workbookPreflight.fileSizeBytes !== undefined}
-                <span>{formatFileSize(workbookPreflight.fileSizeBytes)}</span>
-              {/if}
+        <section class="help-panel">
+          <div class="help-panel-head">
+            <div>
+              <p class="panel-eyebrow">Need help?</p>
+              <h3>{showGuidedStartGate ? "What these choices mean" : "Quick help for this step"}</h3>
             </div>
+            <button
+              class="route-chip action-chip compact-chip"
+              type="button"
+              on:click={() => (homeHelpOpen = !homeHelpOpen)}
+            >
+              {homeHelpOpen ? "Hide help" : "Show help"}
+            </button>
+          </div>
 
-            {#if workbookPreflight.checks.length > 0}
-              <ul class="feedback-list">
-                {#each workbookPreflight.checks as check}
-                  <li>
-                    <strong>{check.title}:</strong> {check.detail}
-                  </li>
-                {/each}
-              </ul>
+          {#if homeHelpOpen}
+            <div class="help-list">
+              {#each homeHelpEntries as entry}
+                <article class="help-card">
+                  <strong>{entry.term}</strong>
+                  <p>{entry.detail}</p>
+                  <span>{entry.action}</span>
+                </article>
+              {/each}
+            </div>
+          {/if}
+        </section>
+
+        <div class="guided-start-card">
+          <p class="panel-eyebrow">{entryMode ? "Step 2 of 3" : "Describe your goal"}</p>
+          <h3>
+            {entryMode === "sample"
+              ? "What do you want to learn from the sample?"
+              : entryMode === "custom"
+                ? "What should happen to your file?"
+                : "Describe the result you want."}
+          </h3>
+          <p class="guided-start-copy">
+            Use plain work language. You do not need to mention relay packets, JSON, or tool names.
+          </p>
+
+          <div class="objective-starter-grid">
+            {#each objectiveStarters as starter}
+              <button
+                class="objective-starter"
+                type="button"
+                on:click={() => useObjectiveStarter(starter)}
+              >
+                <strong>{starter.label}</strong>
+                <span>{starter.note}</span>
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <div class="guided-start-card">
+          <p class="panel-eyebrow">Quick-start templates</p>
+          <h3>Start from a common spreadsheet task.</h3>
+          <p class="guided-start-copy">
+            Templates fill both the task name and the goal. You can still edit the text before
+            creating the session.
+          </p>
+
+          <div class="objective-starter-grid">
+            {#each quickStartTemplates as template}
+              <button
+                class="objective-starter"
+                type="button"
+                on:click={() => applyQuickStartTemplate(template)}
+              >
+                <strong>{template.label}</strong>
+                <span>{template.note}</span>
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <form class="session-form" on:submit|preventDefault={() => void handleCreateSession()}>
+          <label>
+            <span>Task name</span>
+            <input
+              bind:this={titleInput}
+              bind:value={title}
+              maxlength="120"
+              placeholder="Monthly sales cleanup"
+              required
+            />
+            <p class="field-help">Use a short name so you can find this work again later.</p>
+          </label>
+
+          <label>
+            <span>What do you want done?</span>
+            <textarea
+              bind:value={objective}
+              rows="4"
+              placeholder="Example: Keep approved rows, explain what will change, and save a separate copy."
+              required
+            ></textarea>
+            <p class="field-help">
+              Write the business outcome you want. Relay Agent will guide the technical steps later.
+            </p>
+          </label>
+
+          <label>
+            <span>File to inspect</span>
+            <input
+              bind:this={workbookPathInput}
+              bind:value={primaryWorkbookPath}
+              on:blur={() => void runWorkbookPreflight(true)}
+              on:input={handleWorkbookPathInput}
+              placeholder="/tmp/revenue-q2.csv"
+            />
+            <p class="field-help">
+              {entryMode === "sample"
+                ? "The sample path is already filled in. Check it once, then continue."
+                : "Step 3 of 3: add the file Relay Agent should inspect before it prepares a safe copy."}
+            </p>
+          </label>
+
+          <div class="inline-action-row">
+            <button
+              class="route-chip action-chip compact-chip"
+              disabled={preflightPending || !primaryWorkbookPath.trim()}
+              type="button"
+              on:click={() => void runWorkbookPreflight(true)}
+            >
+              {preflightPending ? "Checking file..." : "Check this file"}
+            </button>
+
+            {#if workbookPathNeedsRecheck}
+              <p class="inline-note">Run the file check again after changing the file path.</p>
             {/if}
+          </div>
 
-            {#if workbookPreflight.guidance.length > 0}
-              <div class="preflight-guidance">
-                <p class="preflight-guidance-label">Before you continue</p>
+          {#if preflightError}
+            <p class="form-message form-error" aria-live="polite">{preflightError}</p>
+          {/if}
+
+          {#if workbookPreflight}
+            <section
+              class={`feedback feedback-${preflightTone(workbookPreflight.status)}`}
+              aria-live="polite"
+            >
+              <strong>{workbookPreflight.headline}</strong>
+              <p>{workbookPreflight.summary}</p>
+
+              <div class="preflight-meta">
+                {#if workbookPreflight.format}
+                  <span>{formatWorkbookFormat(workbookPreflight.format)}</span>
+                {/if}
+
+                {#if workbookPreflight.fileSizeBytes !== undefined}
+                  <span>{formatFileSize(workbookPreflight.fileSizeBytes)}</span>
+                {/if}
+              </div>
+
+              {#if workbookPreflight.checks.length > 0}
                 <ul class="feedback-list">
-                  {#each workbookPreflight.guidance as hint}
-                    <li>{hint}</li>
+                  {#each workbookPreflight.checks as check}
+                    <li>
+                      <strong>{check.title}:</strong> {check.detail}
+                    </li>
                   {/each}
                 </ul>
-              </div>
-            {/if}
-          </section>
-        {/if}
+              {/if}
 
-        {#if createBlockedByStartup}
-          <p class="form-message form-warning" aria-live="polite">
-            Resolve the startup issue or choose temporary mode before creating a session.
-          </p>
-        {/if}
+              {#if workbookPreflight.guidance.length > 0}
+                <div class="preflight-guidance">
+                  <p class="preflight-guidance-label">Before you continue</p>
+                  <ul class="feedback-list">
+                    {#each workbookPreflight.guidance as hint}
+                      <li>{hint}</li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
+            </section>
+          {/if}
 
-        {#if createError}
-          <p class="form-message form-error" aria-live="polite">{createError}</p>
-        {/if}
+          {#if createBlockedByStartup}
+            <p class="form-message form-warning" aria-live="polite">
+              Resolve the startup issue or choose temporary mode before creating a session.
+            </p>
+          {/if}
 
-        {#if createSuccess}
-          <p class="form-message form-success" aria-live="polite">{createSuccess}</p>
-        {/if}
+          {#if createError}
+            <p class="form-message form-error" aria-live="polite">{createError}</p>
+          {/if}
 
-        <button
-          bind:this={createButton}
-          class="primary-button"
-          disabled={createPending || ipcStatus !== "ready" || createBlockedByStartup}
-          type="submit"
-        >
-          {createPending ? "Creating session..." : "Create session"}
-        </button>
-      </form>
+          {#if createSuccess}
+            <p class="form-message form-success" aria-live="polite">{createSuccess}</p>
+          {/if}
+
+          <div class="safe-defaults-card">
+            <p class="panel-eyebrow">Safe defaults already on</p>
+            <ul class="guided-step-list">
+              <li>Your original file stays unchanged.</li>
+              <li>Relay Agent shows the plan before anything is saved.</li>
+              <li>The result is written as a separate copy instead of overwriting the source file.</li>
+            </ul>
+          </div>
+
+          <button
+            bind:this={createButton}
+            class="primary-button"
+            disabled={createPending || ipcStatus !== "ready" || createBlockedByStartup}
+            type="submit"
+          >
+            {createPending
+              ? "Creating session..."
+              : showFirstRunWelcome
+                ? "Create first session"
+                : "Create session"}
+          </button>
+        </form>
+      {/if}
     </article>
 
     <article class="ra-panel session-panel">
@@ -1101,6 +1377,93 @@
     color: var(--ra-muted);
   }
 
+  .guided-start-card {
+    display: grid;
+    gap: 0.85rem;
+    padding: 1rem;
+    border: 1px solid rgba(138, 90, 23, 0.18);
+    border-radius: 1rem;
+    background: rgba(255, 249, 240, 0.82);
+  }
+
+  .guided-start-card h3,
+  .guided-start-copy {
+    margin: 0;
+  }
+
+  .guided-start-copy {
+    color: var(--ra-muted);
+  }
+
+  .guided-step-list {
+    margin: 0;
+    padding-left: 1.2rem;
+    display: grid;
+    gap: 0.55rem;
+    color: var(--ra-text);
+  }
+
+  .safe-defaults-card {
+    display: grid;
+    gap: 0.75rem;
+    padding: 0.95rem 1rem;
+    border: 1px solid rgba(91, 125, 56, 0.18);
+    border-radius: 1rem;
+    background: rgba(91, 125, 56, 0.08);
+  }
+
+  .help-panel {
+    display: grid;
+    gap: 0.85rem;
+    padding: 1rem;
+    border: 1px solid rgba(37, 50, 32, 0.12);
+    border-radius: 1rem;
+    background: rgba(255, 255, 255, 0.7);
+  }
+
+  .help-panel-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.8rem;
+  }
+
+  .help-panel-head h3 {
+    margin: 0.2rem 0 0;
+  }
+
+  .help-list {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  }
+
+  .help-card {
+    display: grid;
+    gap: 0.35rem;
+    padding: 0.9rem;
+    border: 1px solid rgba(37, 50, 32, 0.08);
+    border-radius: 0.95rem;
+    background: rgba(255, 255, 255, 0.84);
+  }
+
+  .help-card strong,
+  .help-card p,
+  .help-card span {
+    margin: 0;
+  }
+
+  .help-card p {
+    color: var(--ra-text);
+    line-height: 1.5;
+  }
+
+  .help-card span {
+    color: var(--ra-muted);
+    font-size: 0.9rem;
+    line-height: 1.45;
+  }
+
   .status-pill {
     display: inline-flex;
     align-items: center;
@@ -1190,8 +1553,56 @@
     min-height: 7rem;
   }
 
+  .field-help {
+    margin: 0;
+    color: var(--ra-muted);
+    font-size: 0.9rem;
+    line-height: 1.5;
+  }
+
+  .objective-starter-grid {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  }
+
+  .objective-starter {
+    display: grid;
+    gap: 0.35rem;
+    padding: 0.9rem;
+    border: 1px solid rgba(138, 90, 23, 0.18);
+    border-radius: 0.95rem;
+    background: rgba(255, 255, 255, 0.84);
+    color: var(--ra-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition:
+      transform 160ms ease,
+      border-color 160ms ease,
+      box-shadow 160ms ease;
+  }
+
+  .objective-starter strong,
+  .objective-starter span {
+    margin: 0;
+  }
+
+  .objective-starter span {
+    color: var(--ra-muted);
+    font-size: 0.9rem;
+    line-height: 1.45;
+  }
+
+  .objective-starter:hover {
+    transform: translateY(-0.08rem);
+    border-color: var(--ra-accent);
+    box-shadow: 0 1rem 2rem rgba(31, 45, 36, 0.08);
+  }
+
   .session-form input:focus,
-  .session-form textarea:focus {
+  .session-form textarea:focus,
+  .objective-starter:focus {
     outline: 2px solid rgba(138, 90, 23, 0.18);
     border-color: var(--ra-accent);
   }
@@ -1410,6 +1821,7 @@
 
   @media (max-width: 640px) {
     .panel-heading,
+    .help-panel-head,
     .session-card-head,
     .session-actions {
       grid-template-columns: 1fr;

@@ -6,9 +6,15 @@ Relay Agent is a desktop MVP for turning a validated JSON action plan into a saf
 
 - Home can create and reopen persisted sessions from local JSON storage.
 - Home now surfaces a short recent-work list so the last opened sessions and workbook paths are easier to resume.
+- Home now keeps first-run setup focused on one choice at a time and offers plain-language objective starters before the first session is created.
+- Home now also offers quick-start templates for common spreadsheet tasks and reminds first-time users which safe defaults are already on.
+- Home and Studio now expose short in-product help so users can re-check terms and next actions without leaving the app.
+- Studio now exposes `Load demo response` for the bundled sample walkthrough so preview can be reached without copying the README example JSON.
+- Studio now collapses the technical preview, approval, and execution steps into a clearer `Review and save` pane with one primary action and a three-point summary.
 - Studio can start turns, generate relay packets, validate pasted Copilot JSON, request execution preview, record approval, and run save-copy execution.
 - Studio now provides a `Copy for Copilot` path that warns first when the workbook path, current objective, or available column names look sensitive.
 - Studio now restores local turn drafts, pasted response text, relay packet text, and the last preview summary snapshot after restart.
+- Studio now warns before leaving, going back, or switching turns when local draft or preview review state would otherwise be thrown away.
 - CSV write execution is supported for `table.rename_columns`, `table.cast_columns`, `table.filter_rows`, `table.derive_column`, `table.group_aggregate`, and `workbook.save_copy`.
 - CSV save-copy output is sanitized so cells starting with `=`, `+`, `-`, or `@` are prefixed before the new file is written.
 - Xlsx support is currently limited to inspect-oriented flows and save-copy preview planning, not rich write execution.
@@ -63,6 +69,14 @@ pnpm typecheck
   the current build.
 - `Use my own file` keeps the flow manual and explains why Windows may later ask
   for access to the chosen workbook or save destination.
+- On first run, the create-session panel stays gated until you choose sample or
+  custom start, then it shows plain-language example goals instead of requiring
+  technical wording.
+- After that choice, Home also offers quick-start templates such as rename,
+  type cleanup, filtering, and totals so the first draft can start from a
+  familiar spreadsheet task.
+- Home and Studio both expose short `Show help` panels that explain the current
+  step in plain language instead of sending first-time users to the README.
 - Home now runs a file check before session creation when a workbook path is
   present, surfacing unreadable files, unsupported separators, and locale- or
   CSV-specific compatibility notes in plain language.
@@ -85,6 +99,9 @@ pnpm typecheck
   and the UI tells you when a preview snapshot came from a previous run.
 - If the app did not close cleanly, Home offers that same draft as recovery
   work before you even enter Studio.
+- If you try to leave Studio or switch turns while draft or preview review work
+  is still staged, Studio asks whether to keep that draft for later or discard
+  it deliberately before continuing.
 - Preview and approval runtime state are still not executable after restart, so
   request preview again before approval or execution.
 
@@ -127,9 +144,9 @@ Then use:
    Objective: `Keep approved rows, add a review label, preview the diff, approve it, and save a copy.`
    Relay mode: `plan`
 7. Click `Generate packet`.
-8. Paste the valid response example below and click `Validate response`.
-9. Click `Request preview` and review the diff summary, output path, and warnings in the right pane.
-10. Add an optional approval note, click `Approve preview`, then click `Request execution`.
+8. Either click `Load demo response` for the bundled sample walkthrough, or paste the valid response example below, then click `Validate response`.
+9. Click `Check changes` and review the summary, output path, and warnings in the right pane.
+10. If the plan changes the workbook, add an optional review note, click `Confirm review`, then click `Save reviewed copy`.
 11. Confirm the output file exists at the configured `outputPath`.
 12. Confirm the original file under `examples/` is unchanged.
 

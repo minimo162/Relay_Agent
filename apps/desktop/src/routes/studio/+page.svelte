@@ -1,5 +1,6 @@
 <script lang="ts">
   import { browser } from "$app/environment";
+  import { beforeNavigate, goto } from "$app/navigation";
   import { page } from "$app/stores";
   import { onMount } from "svelte";
   import {
@@ -33,7 +34,7 @@
     submitCopilotResponse,
     type PersistedPreviewSnapshot
   } from "$lib";
-  import { createStudioState } from "$lib/studio-state";
+  import { createStudioState, type StudioState } from "$lib/studio-state";
 
   type RelayMode = "discover" | "plan" | "repair" | "followup";
   type StudioTimelineTone = "pending" | "active" | "ready";
@@ -43,6 +44,25 @@
     note: string;
     tone: StudioTimelineTone;
   };
+  type HelpEntry = {
+    term: string;
+    detail: string;
+    action: string;
+  };
+  type PendingStudioAction =
+    | {
+        kind: "route-leave";
+        href: string;
+        targetLabel: string;
+      }
+    | {
+        kind: "new-turn";
+      }
+    | {
+        kind: "switch-turn";
+        turnId: string;
+        turnTitle: string;
+      };
 
   const studio = createStudioState();
   const studioState = studio.state;
@@ -55,6 +75,9 @@
   let previewSnapshot: PersistedPreviewSnapshot | null = null;
   let continuityNotice = "";
   let draftPersistenceEnabled = false;
+  let pendingStudioAction: PendingStudioAction | null = null;
+  let bypassNavigationGuard = false;
+  let studioHelpOpen = false;
 
   let sessionLoading = false;
   let startTurnPending = false;
@@ -93,6 +116,47 @@
   let lastLoadToken = 0;
   let lastRawResponse = "";
 
+  function normalizeWorkbookFocus(value: string): string {
+    return value.trim() || "Sheet1";
+  }
+
+  function hasDraftFieldChanges(
+    state: StudioState,
+    turn: Turn | null,
+    detail: SessionDetail | null
+  ): boolean {
+    const baselineTitle = turn?.title ?? "";
+    const baselineObjective = turn?.objective ?? "";
+    const baselineMode = turn?.mode ?? "plan";
+    const baselineWorkbookPath = detail?.session.primaryWorkbookPath ?? "";
+    const baselineFocus = "Sheet1";
+
+    return (
+      state.turnTitle.trim() !== baselineTitle.trim()
+      || state.turnObjective.trim() !== baselineObjective.trim()
+      || state.relayMode !== baselineMode
+      || state.workbookPath.trim() !== baselineWorkbookPath.trim()
+      || normalizeWorkbookFocus(state.workbookFocus) !== baselineFocus
+    );
+  }
+
+  function hasMeaningfulStudioDraftState(
+    state: StudioState,
+    turn: Turn | null,
+    detail: SessionDetail | null
+  ): boolean {
+    return Boolean(
+      hasDraftFieldChanges(state, turn, detail)
+        || relayPacketText.trim()
+        || state.rawResponse.trim()
+        || validationSummary.trim()
+        || previewSummary.trim()
+        || approvalSummary.trim()
+        || executionSummary.trim()
+        || previewSnapshot
+    );
+  }
+
   function toErrorMessage(error: unknown): string {
     if (error instanceof Error && error.message) {
       return error.message;
@@ -126,6 +190,79 @@
     }, "");
   }
 
+  function buildDemoOutputPath(sourcePath: string): string {
+    const normalized = sourcePath.trim();
+
+    if (!normalized) {
+      return "/absolute/path/to/revenue-workflow-demo.guided.csv";
+    }
+
+    const lastSlash = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
+    const directory = lastSlash >= 0 ? normalized.slice(0, lastSlash + 1) : "";
+    const fileName = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
+    const extensionIndex = fileName.lastIndexOf(".");
+    const baseName = extensionIndex > 0 ? fileName.slice(0, extensionIndex) : fileName;
+
+    return `${directory}${baseName}.guided-demo.csv`;
+  }
+
+  function fileNameFromPath(path: string): string {
+    const normalized = path.trim();
+    if (!normalized) {
+      return "";
+    }
+
+    const lastSlash = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
+    return lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
+  }
+
+  function directoryFromPath(path: string): string {
+    const normalized = path.trim();
+    if (!normalized) {
+      return "";
+    }
+
+    const lastSlash = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
+    return lastSlash >= 0 ? normalized.slice(0, lastSlash + 1) : "";
+  }
+
+  function buildDemoResponse(sourcePath: string): string {
+    return JSON.stringify(
+      {
+        version: "1.0",
+        summary: "Keep approved rows, add a review label, and write a sanitized CSV copy.",
+        actions: [
+          {
+            tool: "table.filter_rows",
+            sheet: "Sheet1",
+            args: {
+              predicate: "approved = true"
+            }
+          },
+          {
+            tool: "table.derive_column",
+            sheet: "Sheet1",
+            args: {
+              column: "review_label",
+              expression: "[segment] + \"-approved\"",
+              position: "end"
+            }
+          },
+          {
+            tool: "workbook.save_copy",
+            args: {
+              outputPath: buildDemoOutputPath(sourcePath)
+            }
+          }
+        ],
+        followupQuestions: [],
+        warnings: []
+      },
+      null,
+      2
+    );
+  }
+
   function buildPreviewSnapshot(
     result: PreviewExecutionResponse | null
   ): PersistedPreviewSnapshot | null {
@@ -142,6 +279,69 @@
       requiresApproval: result.requiresApproval,
       lastGeneratedAt: new Date().toISOString()
     };
+  }
+
+  function describePendingAction(action: PendingStudioAction): string {
+    if (action.kind === "route-leave") {
+      return `Open ${action.targetLabel}`;
+    }
+
+    if (action.kind === "switch-turn") {
+      return `Switch to "${action.turnTitle}"`;
+    }
+
+    return "Start a fresh turn";
+  }
+
+  function queuePendingStudioAction(action: PendingStudioAction): void {
+    pendingStudioAction = action;
+  }
+
+  function closePendingStudioAction(): void {
+    pendingStudioAction = null;
+  }
+
+  async function continueWithRouteLeave(discardDraft: boolean): Promise<void> {
+    if (!currentSessionId || !pendingStudioAction || pendingStudioAction.kind !== "route-leave") {
+      return;
+    }
+
+    const { href } = pendingStudioAction;
+
+    if (discardDraft) {
+      discardStudioDraft(currentSessionId);
+    } else {
+      markStudioDraftClean(currentSessionId);
+    }
+
+    closePendingStudioAction();
+    bypassNavigationGuard = true;
+
+    try {
+      await goto(href);
+    } finally {
+      bypassNavigationGuard = false;
+    }
+  }
+
+  function discardDraftAndContinue(): void {
+    if (!currentSessionId || !pendingStudioAction) {
+      return;
+    }
+
+    const action = pendingStudioAction;
+    discardStudioDraft(currentSessionId);
+    closePendingStudioAction();
+
+    if (action.kind === "switch-turn") {
+      const turn = turns.find((item) => item.id === action.turnId) ?? null;
+      selectTurn(turn);
+      return;
+    }
+
+    if (action.kind === "new-turn") {
+      prepareNewTurnDraft();
+    }
   }
 
   function restoreContinuityDraft(detail: SessionDetail, fallbackTurnId: string | null): string | null {
@@ -250,18 +450,62 @@
   }
 
   onMount(() => {
-    const handleLeave = (): void => {
-      if (currentSessionId) {
-        markStudioDraftClean(currentSessionId);
+    const handleBeforeUnload = (event: BeforeUnloadEvent): string | void => {
+      if (!currentSessionId) {
+        return;
       }
+
+      if (leaveWarningRequired) {
+        event.preventDefault();
+        event.returnValue = "";
+        return "";
+      }
+
+      markStudioDraftClean(currentSessionId);
     };
 
-    window.addEventListener("beforeunload", handleLeave);
+    window.addEventListener("beforeunload", handleBeforeUnload);
 
     return () => {
-      handleLeave();
-      window.removeEventListener("beforeunload", handleLeave);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
     };
+  });
+
+  beforeNavigate((navigation) => {
+    if (
+      !browser
+      || !currentSessionId
+      || bypassNavigationGuard
+      || !navigation.to
+    ) {
+      return;
+    }
+
+    const nextSessionId = navigation.to.url.searchParams.get("sessionId");
+    const nextHref = `${navigation.to.url.pathname}${navigation.to.url.search}${navigation.to.url.hash}`;
+    const stayingOnSameSession =
+      navigation.to.url.pathname === "/studio" && nextSessionId === currentSessionId;
+
+    if (stayingOnSameSession) {
+      return;
+    }
+
+    if (!leaveWarningRequired) {
+      markStudioDraftClean(currentSessionId);
+      return;
+    }
+
+    navigation.cancel();
+    queuePendingStudioAction({
+      kind: "route-leave",
+      href: nextHref || "/",
+      targetLabel:
+        navigation.to.url.pathname === "/"
+          ? "Home"
+          : navigation.to.url.pathname === "/studio"
+            ? "another Studio session"
+            : "the next screen"
+    });
   });
 
   function summarizeTurnStatus(status: Turn["status"]): string {
@@ -414,6 +658,23 @@
     }
   }
 
+  function handleTurnSelectionRequest(turn: Turn): void {
+    if (turn.id === selectedTurnId) {
+      return;
+    }
+
+    if (!leaveWarningRequired) {
+      selectTurn(turn);
+      return;
+    }
+
+    queuePendingStudioAction({
+      kind: "switch-turn",
+      turnId: turn.id,
+      turnTitle: turn.title
+    });
+  }
+
   function prepareNewTurnDraft(): void {
     if (currentSessionId) {
       discardStudioDraft(currentSessionId);
@@ -429,6 +690,15 @@
     sessionNotice = sessionDetail
       ? `Session "${sessionDetail.session.title}" is ready for a new turn.`
       : "Select a session from Home to start a new turn.";
+  }
+
+  function handlePrepareNewTurnRequest(): void {
+    if (!leaveWarningRequired) {
+      prepareNewTurnDraft();
+      return;
+    }
+
+    queuePendingStudioAction({ kind: "new-turn" });
   }
 
   async function refreshSessionDetail(preferredTurnId = selectedTurnId): Promise<void> {
@@ -657,17 +927,26 @@
 
       previewResult = result;
       previewSummary = result.requiresApproval
-        ? `Preview is ready and approval will be required before any write execution. Output target: ${result.diffSummary.outputPath}.`
-        : `Preview is ready with no approval gate for this action set. Output target: ${result.diffSummary.outputPath}.`;
+        ? `Changes are ready to review. Confirm the review before Relay Agent saves a new copy to ${result.diffSummary.outputPath}.`
+        : "Changes are ready to review. This plan is read-only, so no save step is needed.";
       sessionNotice = result.requiresApproval
-        ? "Preview generated. Review the diff and record approval before requesting execution."
-        : "Preview generated. Review the diff and request execution when ready.";
+        ? "Changes are ready to review. Confirm them when they look right, then save a new copy."
+        : "Changes are ready to review. This plan does not need a saved copy.";
       await refreshSessionDetail(selectedTurnId);
     } catch (error) {
       previewError = toErrorMessage(error);
     } finally {
       previewPending = false;
     }
+  }
+
+  function loadDemoResponse(): void {
+    const sourcePath =
+      get(studioState).workbookPath.trim() || sessionDetail?.session.primaryWorkbookPath || "";
+
+    studio.updateRawResponse(buildDemoResponse(sourcePath));
+    sessionNotice =
+      "A sample Copilot response was loaded for the bundled walkthrough. Validate it next.";
   }
 
   async function handleApproval(decision: ApprovalDecision): Promise<void> {
@@ -693,13 +972,13 @@
       approvalSummary =
         decision === "approved"
           ? result.readyForExecution
-            ? "Approval recorded. Execution is now enabled for the current preview."
-            : "Approval recorded, but the backend still marks execution as unavailable."
-          : "Rejection recorded. Execution remains blocked until approval is granted.";
+            ? "Review confirmed. Saving a new copy is now enabled."
+            : "Review confirmed, but saving is still unavailable until the backend rechecks the plan."
+          : "Review marked as not ready. Saving stays blocked until the changes are checked again.";
       sessionNotice =
         decision === "approved"
-          ? "Approval recorded. Execution can now be requested for this preview."
-          : "Preview rejection recorded. Execution stays blocked until approval is granted.";
+          ? "Review confirmed. You can now save a new copy."
+          : "The current review was marked as not ready. Save stays blocked until the changes are checked again.";
       await refreshSessionDetail(selectedTurnId);
     } catch (error) {
       approvalError = toErrorMessage(error);
@@ -724,17 +1003,39 @@
 
       executionResult = result;
       executionSummary = result.executed
-        ? "Execution completed for the current turn."
-        : result.reason ?? "Execution request was recorded without applying changes.";
+        ? `A new reviewed copy was saved${result.outputPath ? ` to ${result.outputPath}` : ""}.`
+        : result.reason ?? "The save request was recorded without writing a new copy.";
       sessionNotice = result.executed
-        ? "Execution completed. Review the recorded warnings and artifacts for this turn."
-        : result.reason ?? "Execution request was recorded.";
+        ? "Save complete. Review the output path and warnings below."
+        : result.reason ?? "The save request was recorded.";
       await refreshSessionDetail(selectedTurnId);
     } catch (error) {
       executionError = toErrorMessage(error);
     } finally {
       executionPending = false;
     }
+  }
+
+  async function handlePrimaryReviewAction(): Promise<void> {
+    if (!validationResult?.accepted || previewPending || approvalPending || executionPending) {
+      return;
+    }
+
+    if (!previewResult || approvalResult?.decision === "rejected") {
+      await handlePreview();
+      return;
+    }
+
+    if (previewResult.requiresApproval && !approvalGranted) {
+      await handleApproval("approved");
+      return;
+    }
+
+    if (!previewResult.requiresApproval) {
+      return;
+    }
+
+    await handleExecution();
   }
 
   $: routeSessionId = $page.url.searchParams.get("sessionId");
@@ -750,90 +1051,165 @@
   $: turns = sessionDetail ? sortTurns(sessionDetail.turns) : [];
 
   $: selectedTurn = turns.find((turn) => turn.id === selectedTurnId) ?? null;
+  $: demoResponseAvailable = Boolean(
+    (sessionDetail?.session.primaryWorkbookPath || $studioState.workbookPath).endsWith(
+      "revenue-workflow-demo.csv"
+    )
+  );
+
+  $: hasMeaningfulDraft = hasMeaningfulStudioDraftState(
+    $studioState,
+    selectedTurn,
+    sessionDetail
+  );
+
+  $: hasValidationCheckpoint = Boolean(validationResult?.accepted && !previewResult);
+
+  $: hasUnreviewedPreview = Boolean(
+    previewResult && previewResult.requiresApproval && !approvalGranted && !approvalPending
+  );
+
+  $: hasExecutionReadyCheckpoint = Boolean(
+    previewResult && approvalGranted && !executionResult
+  );
+
+  $: leaveWarningReasons = [
+    hasMeaningfulDraft
+      ? "This session still has local draft text or staged response content that you can reopen later."
+      : null,
+    hasValidationCheckpoint
+      ? "Validation passed, but preview has not been requested in this app run yet."
+      : null,
+    hasUnreviewedPreview
+      ? "Preview is ready, but no approval or rejection decision has been recorded yet."
+      : null,
+    hasExecutionReadyCheckpoint
+      ? "Preview review is complete, but save-copy execution has not been requested yet."
+      : null
+  ].filter((value): value is string => Boolean(value));
+
+  $: leaveWarningRequired = Boolean(currentSessionId && leaveWarningReasons.length > 0);
+
+  $: studioHelpEntries = !selectedTurn
+    ? [
+        {
+          term: "Turn title",
+          detail: "A short label for the change request you want to run in this session.",
+          action: "Name the work first, then start the turn."
+        },
+        {
+          term: "Turn objective",
+          detail: "Describe the business result you want instead of listing low-level tool steps.",
+          action: "Say what should happen to the file in plain language."
+        },
+        {
+          term: "Start turn",
+          detail: "Saves this request so Relay Agent can prepare the next Studio steps.",
+          action: "Use this after the title and objective look right."
+        }
+      ]
+    : !relayPacketText
+      ? [
+          {
+            term: "Copy for Copilot",
+            detail: "Prepares the current request so you can paste it into Copilot with the needed context.",
+            action: "Generate the packet first, then copy it."
+          },
+          {
+            term: "Next step",
+            detail: "This turn is saved, but Copilot has not been asked for a response yet.",
+            action: "Generate a packet for the selected turn."
+          }
+        ]
+      : !validationResult
+        ? [
+            {
+              term: "Pasted response",
+              detail: "Paste the full Copilot JSON response here so Relay Agent can check it safely.",
+              action: "Paste the response, then run validation."
+            },
+            {
+              term: "Check changes",
+              detail: "After the response passes validation, Relay Agent can show what would change before any new file is saved.",
+              action: "Fix any validation issue before moving on."
+            }
+          ]
+        : !previewResult
+          ? [
+              {
+                term: "Check changes",
+                detail: "Shows what would change before anything is saved to a new file.",
+                action: "Check the planned changes after validation succeeds."
+              },
+              {
+                term: "Review confirmation",
+                detail: "Some changes need one explicit review confirmation before Relay Agent can save a new copy.",
+                action: "Review the change summary when it appears."
+              }
+            ]
+          : [
+              {
+                term: "Save new copy",
+                detail: "Relay Agent writes a new file and keeps the original workbook unchanged.",
+                action: "Save only after the reviewed changes look right."
+              },
+              {
+                term: "Points to check",
+                detail: "These notes call out risks, limits, or assumptions before the copy is written.",
+                action: "Read them before confirming review or saving."
+              }
+            ] satisfies HelpEntry[];
 
   $: stageTimeline = [
     {
-      id: "session",
-      label: "Session detail",
-      note: sessionDetail
-        ? `${sessionDetail.turns.length} persisted turn${sessionDetail.turns.length === 1 ? "" : "s"} loaded from local JSON storage.`
-        : routeSessionId
-          ? "Loading the selected session detail."
-          : "Open a session from Home to continue.",
-      tone: sessionDetail ? "ready" : routeSessionId ? "active" : "pending"
+      id: "prepare",
+      label: "Prepare request",
+      note: !sessionDetail
+        ? routeSessionId
+          ? "Loading the selected session."
+          : "Open a session from Home to begin."
+        : selectedTurn
+          ? `${selectedTurn.title} is ready. Update the request here if needed, or move on to the Copilot step.`
+          : $studioState.turnTitle.trim() || $studioState.turnObjective.trim()
+            ? "The request draft is filled in and ready to start."
+            : "Name what you want to change, then start a turn.",
+      tone: !sessionDetail ? (routeSessionId ? "active" : "pending") : selectedTurn ? "ready" : $studioState.turnTitle.trim() || $studioState.turnObjective.trim() ? "active" : "pending"
     },
     {
-      id: "turn",
-      label: "Turn selection",
-      note: selectedTurn
-        ? `${selectedTurn.title} is selected. ${summarizeTurnStatus(selectedTurn.status)}`
-        : $studioState.turnTitle.trim() || $studioState.turnObjective.trim()
-          ? "Draft fields are filled in and ready for a new turn."
-          : "Start a new turn or pick an existing one from the left pane.",
-      tone: selectedTurn ? "ready" : $studioState.turnTitle.trim() || $studioState.turnObjective.trim() ? "active" : "pending"
+      id: "copilot",
+      label: "Bring back Copilot response",
+      note: validationResult?.accepted
+        ? validationSummary || "The response passed validation and is ready for review."
+        : $studioState.rawResponse.trim()
+          ? "A response is pasted in. Validate it before review starts."
+          : relayPacketText
+            ? "The request packet is ready. Copy it into Copilot, then bring the full JSON response back here."
+            : "Generate the Copilot packet for the selected turn first.",
+      tone: validationResult?.accepted ? "ready" : relayPacketText || $studioState.rawResponse.trim() ? "active" : selectedTurn ? "pending" : "pending"
     },
     {
-      id: "packet",
-      label: "Relay packet",
-      note: relayPacketSummary || "Generate a relay packet for the selected turn.",
-      tone: relayPacketText ? "ready" : selectedTurn ? "active" : "pending"
-    },
-    {
-      id: "validation",
-      label: "Validation feedback",
-      note: validationSummary || "Paste a Copilot JSON response and validate it here.",
-      tone: validationResult ? (validationResult.accepted ? "ready" : "active") : "pending"
-    },
-    {
-      id: "preview",
-      label: "Preview request",
-      note: previewSummary || "Request preview after validation succeeds.",
-      tone: previewResult ? "ready" : validationResult?.accepted ? "active" : "pending"
-    },
-    {
-      id: "approval",
-      label: "Approval gate",
-      note: !previewResult
-        ? "Record an approval decision after preview is ready."
-        : !previewResult.requiresApproval
-          ? "This preview is read-only, so no approval step is required."
-          : selectedTurn?.status === "approved"
-            ? approvalSummary || "Approval was recorded and execution is now available."
-            : approvalResult?.decision === "rejected"
-              ? approvalSummary || "Preview was rejected. Execution remains blocked."
-              : "Preview is waiting for an approval decision before execution can proceed.",
-      tone: !previewResult
-        ? "pending"
-        : !previewResult.requiresApproval || selectedTurn?.status === "approved"
-          ? "ready"
-          : "active"
-    },
-    {
-      id: "execution",
-      label: "Execution request",
-      note: executionSummary
-        || (!previewResult
-          ? "Execution stays locked until preview is ready."
-          : previewResult.requiresApproval && selectedTurn?.status !== "approved"
-            ? approvalResult?.decision === "rejected"
-              ? "Execution is blocked because the current preview was rejected."
-              : "Execution is blocked until approval is recorded."
-            : "Execution can be requested from the preview pane."),
-      tone: executionResult
-        ? executionResult.executed
-          ? "ready"
-          : "active"
-        : !previewResult
-          ? "pending"
-          : previewResult.requiresApproval && selectedTurn?.status !== "approved"
-            ? "pending"
-            : "active"
+      id: "review-save",
+      label: "Review and save",
+      note: executionResult?.executed
+        ? executionSummary || "A reviewed copy was saved for this turn."
+        : !validationResult?.accepted
+          ? "Review starts after the response passes validation."
+          : !previewResult
+            ? "Check the planned changes next."
+            : !previewResult.requiresApproval
+              ? "This plan is review-only. No saved copy is needed."
+              : approvalResult?.decision === "rejected"
+                ? "The changes were marked as not ready. Check them again before saving."
+                : approvalGranted
+                  ? "Review is complete. Save the new copy when you are ready."
+                  : "Changes are ready to review. Confirm them before saving a new copy.",
+      tone: executionResult?.executed ? "ready" : !validationResult?.accepted ? "pending" : previewResult ? "active" : "active"
     }
   ] satisfies StudioTimelineEntry[];
 
   $: reloadNote =
     selectedTurn && !relayPacketText && !validationResult && !previewResult && selectedTurn.itemIds.length > 0
-      ? "This turn was reloaded from local storage. Packet, validation, preview, and approval runtime state are not resumable yet, so regenerate preview and re-record approval in the current app run before execution."
+      ? "This turn was reloaded from local storage. Check the changes again in the current app run before saving a new copy."
       : "";
 
   $: approvalGranted = previewResult
@@ -844,12 +1220,165 @@
 
   $: executionBlockedReason =
     !previewResult
-      ? "Request preview after validation succeeds."
+      ? "Check the changes after validation succeeds."
       : previewResult.requiresApproval && !approvalGranted
         ? approvalResult?.decision === "rejected"
-          ? "Approval was rejected. Record an approved decision to continue."
-          : "Approve the current preview before execution can be requested."
-        : "Execution can be requested for the current preview.";
+          ? "The current review was marked as not ready. Check the changes again to continue."
+          : "Confirm the reviewed changes before saving a new copy."
+        : "You can save the reviewed copy now.";
+
+  $: reviewActionPending = previewPending || approvalPending || executionPending;
+
+  $: reviewPrimaryLabel =
+    executionResult?.executed
+      ? "Reviewed copy saved"
+      : !validationResult?.accepted
+        ? "Check changes after validation"
+        : !previewResult || approvalResult?.decision === "rejected"
+          ? previewPending
+            ? "Checking changes..."
+            : "Check changes"
+          : !previewResult.requiresApproval
+            ? "Review complete"
+            : !approvalGranted
+              ? approvalPending
+                ? "Confirming review..."
+                : "Confirm review"
+              : executionPending
+                ? "Saving reviewed copy..."
+                : "Save reviewed copy";
+
+  $: reviewPrimaryDisabled =
+    Boolean(
+      executionResult?.executed
+        || !validationResult?.accepted
+        || reviewActionPending
+        || (previewResult && !previewResult.requiresApproval)
+    );
+
+  $: reviewHeadline =
+    executionResult?.executed
+      ? "New copy saved"
+      : !validationResult?.accepted
+        ? "Review starts after a valid response"
+        : !previewResult
+          ? "Check the planned changes"
+          : !previewResult.requiresApproval
+            ? "Review complete"
+            : approvalResult?.decision === "rejected"
+              ? "This plan needs changes before save"
+              : !approvalGranted
+                ? "Confirm this review before save"
+                : "Save the reviewed copy";
+
+  $: reviewCopy =
+    executionResult?.executed
+      ? executionSummary || "Relay Agent saved a new copy and kept the original workbook unchanged."
+      : !validationResult?.accepted
+        ? "Paste and validate a Copilot response first. Review and save unlock after that step succeeds."
+        : !previewResult
+          ? "Relay Agent can now show what will change before anything is saved."
+          : !previewResult.requiresApproval
+            ? "This plan only reviewed the workbook. There is no save step for this result."
+            : approvalResult?.decision === "rejected"
+              ? "The current review was marked as not ready. Check the changes again or adjust the response before saving."
+              : !approvalGranted
+                ? "Read the change summary below, then confirm the review when it looks right."
+                : "The reviewed plan is ready. Save a new copy when you are ready.";
+
+  $: showRejectReviewAction = Boolean(
+    previewResult
+      && previewResult.requiresApproval
+      && !approvalGranted
+      && approvalResult?.decision !== "rejected"
+      && !approvalPending
+  );
+
+  $: showReviewNote = Boolean(
+    previewResult
+      && previewResult.requiresApproval
+      && !approvalGranted
+      && approvalResult?.decision !== "rejected"
+  );
+
+  $: reviewSourcePath =
+    previewResult?.diffSummary.sourcePath
+    || previewSnapshot?.sourcePath
+    || $studioState.workbookPath
+    || sessionDetail?.session.primaryWorkbookPath
+    || "";
+
+  $: reviewOutputPath =
+    previewResult?.diffSummary.outputPath || previewSnapshot?.outputPath || "";
+
+  $: hasReviewSummary = Boolean(previewResult || previewSnapshot);
+
+  $: reviewTargetCount =
+    previewResult?.diffSummary.targetCount ?? previewSnapshot?.targetCount ?? 0;
+
+  $: reviewAffectedRows =
+    previewResult?.diffSummary.estimatedAffectedRows
+    ?? previewSnapshot?.estimatedAffectedRows
+    ?? 0;
+
+  $: reviewWhatChanges =
+    !previewResult && !previewSnapshot
+      ? "Check the changes to see a short summary of what Relay Agent plans to update."
+      : previewResult && previewResult.diffSummary.sheets.length === 0
+        ? "This step only reviews the workbook. No rows or columns will be rewritten."
+        : previewResult
+          ? `${reviewTargetCount} change area${reviewTargetCount === 1 ? "" : "s"} ${reviewAffectedRows === 0 ? "are" : "cover"} ${reviewAffectedRows} row${reviewAffectedRows === 1 ? "" : "s"} in the reviewed copy.`
+          : "A previous review snapshot was restored. Check the changes again to refresh the live summary.";
+
+  $: reviewRowsSummary =
+    !previewResult && !previewSnapshot
+      ? "Row counts appear here after Relay Agent checks the changes."
+      : `${reviewAffectedRows} row${reviewAffectedRows === 1 ? "" : "s"} estimated across ${reviewTargetCount} target${reviewTargetCount === 1 ? "" : "s"}.`;
+
+  $: reviewOutputSafety =
+    !reviewOutputPath
+      ? "The reviewed copy location will appear here after changes are checked."
+      : reviewOutputPath === reviewSourcePath
+        ? "This path matches the original file, so Relay Agent keeps save blocked until a separate copy path is available."
+        : fileNameFromPath(reviewOutputPath) === fileNameFromPath(reviewSourcePath)
+          ? "The reviewed copy keeps the same file name in a different folder. The original file still stays unchanged."
+          : directoryFromPath(reviewOutputPath) === directoryFromPath(reviewSourcePath)
+            ? "Relay Agent already suggests a different copy name in the same folder, so the original file stays untouched."
+            : "Relay Agent already suggests a separate copy path, so the original file stays untouched.";
+
+  $: reviewProgressLabel =
+    previewPending
+      ? "Checking changes"
+      : approvalPending
+        ? "Confirming review"
+        : executionPending
+          ? "Saving reviewed copy"
+          : executionResult?.executed
+            ? "Copy saved"
+            : previewResult
+              ? approvalGranted || !previewResult.requiresApproval
+                ? "Ready to save"
+                : "Ready for review"
+              : validationResult?.accepted
+                ? "Ready to check changes"
+                : "Waiting for valid response";
+
+  $: reviewProgressCopy =
+    previewPending
+      ? "Relay Agent is building the change summary now. Saving stays locked until this finishes."
+      : approvalPending
+        ? "Relay Agent is recording the review confirmation before enabling save."
+        : executionPending
+          ? "Relay Agent is writing the new copy now. The original workbook still stays unchanged."
+          : executionResult?.executed
+            ? "The reviewed copy was saved successfully."
+            : previewResult
+              ? approvalGranted || !previewResult.requiresApproval
+                ? "The review step is complete."
+                : "Review the summary below, then confirm the changes when they look right."
+              : validationResult?.accepted
+                ? "You can check the planned changes next."
+                : "Validation must succeed before review and save can begin.";
 
   $: if ($studioState.rawResponse !== lastRawResponse) {
     lastRawResponse = $studioState.rawResponse;
@@ -881,11 +1410,11 @@
 <div class="ra-view">
   <section class="ra-hero">
     <p class="ra-eyebrow">Studio route</p>
-    <h1 class="ra-headline">Run the relay flow through preview, approval, and execution gating.</h1>
+    <h1 class="ra-headline">Move from Copilot response to review and save.</h1>
     <p class="ra-lede">
-      Studio now loads persisted session detail, starts turns through the typed IPC layer,
-      generates relay packets, validates pasted Copilot JSON responses, requests preview
-      summaries from the Rust backend, and records approval decisions before execution can run.
+      Studio keeps the backend safety gates, but the user-facing flow is now simpler:
+      prepare the request, bring back the Copilot response, review the planned changes,
+      and save a new copy only after that review is complete.
     </p>
   </section>
 
@@ -903,7 +1432,7 @@
 
       <p class="pane-copy">
         Home hands a `sessionId` into this route. From there, Studio reads persisted session
-        detail and lets you step through the current turn workflow in order.
+        detail and keeps the next safe step visible without requiring backend stage jargon.
       </p>
 
       {#if sessionLoading}
@@ -935,7 +1464,7 @@
         <section class="subpanel turn-subpanel">
           <div class="subpanel-header">
             <h3>Session turns</h3>
-            <button class="chip-button" type="button" on:click={prepareNewTurnDraft}>
+            <button class="chip-button" type="button" on:click={handlePrepareNewTurnRequest}>
               Prepare new turn
             </button>
           </div>
@@ -953,7 +1482,7 @@
                   class:selected-turn={turn.id === selectedTurnId}
                   class="turn-card"
                   type="button"
-                  on:click={() => selectTurn(turn)}
+                  on:click={() => handleTurnSelectionRequest(turn)}
                 >
                   <div class="turn-card-head">
                     <div>
@@ -1000,9 +1529,8 @@
       </div>
 
       <p class="pane-copy">
-        The center pane now drives the real backend command surface: start a turn, generate
-        the relay packet, paste the Copilot response, inspect validation feedback, and ask
-        the backend for a preview before approval and execution controls unlock in the diff pane.
+        The center pane captures the request, Copilot handoff, and response checks. Once the
+        response passes validation, the right pane turns into a single review-and-save step.
       </p>
 
       {#if sessionNotice}
@@ -1016,6 +1544,40 @@
         <section class="feedback feedback-info" aria-live="polite">
           <strong>Resume status</strong>
           <p>{continuityNotice}</p>
+        </section>
+      {/if}
+
+      <section class="subpanel help-subpanel">
+        <div class="subpanel-header">
+          <div>
+            <h3>Need help with this step?</h3>
+            <p class="support-copy">Open a short glossary without leaving Studio.</p>
+          </div>
+          <button class="chip-button" type="button" on:click={() => (studioHelpOpen = !studioHelpOpen)}>
+            {studioHelpOpen ? "Hide help" : "Show help"}
+          </button>
+        </div>
+
+        {#if studioHelpOpen}
+          <div class="help-list">
+            {#each studioHelpEntries as entry}
+              <article class="help-card">
+                <strong>{entry.term}</strong>
+                <p>{entry.detail}</p>
+                <span>{entry.action}</span>
+              </article>
+            {/each}
+          </div>
+        {/if}
+      </section>
+
+      {#if leaveWarningRequired}
+        <section class="feedback feedback-warn" aria-live="polite">
+          <strong>Leave warning</strong>
+          <p>
+            If you close Studio, go back, or switch turns now, the app will ask whether to
+            keep this local draft or discard it.
+          </p>
         </section>
       {/if}
 
@@ -1122,10 +1684,10 @@
           type="button"
           on:click={() => void handlePreview()}
         >
-          {previewPending ? "Requesting preview..." : previewResult ? "Refresh preview" : "Request preview"}
+          {previewPending ? "Checking changes..." : previewResult ? "Refresh changes" : "Check changes"}
         </button>
 
-        <button class="ghost-button" type="button" on:click={prepareNewTurnDraft}>
+        <button class="ghost-button" type="button" on:click={handlePrepareNewTurnRequest}>
           Reset draft
         </button>
       </div>
@@ -1209,16 +1771,33 @@
 
         <section class="subpanel">
           <div class="subpanel-header">
-            <h3>Pasted response</h3>
-            <span class={`status-pill ${$studioState.rawResponse.trim() ? "status-ready" : "status-pending"}`}>
-              {$studioState.rawResponse.trim() ? "captured" : "empty"}
-            </span>
+            <div>
+              <h3>Pasted response</h3>
+              <p class="support-copy">Paste the full Copilot JSON response here.</p>
+            </div>
+            <div class="action-row action-row-compact">
+              {#if demoResponseAvailable}
+                <button class="chip-button" type="button" on:click={loadDemoResponse}>
+                  Load demo response
+                </button>
+              {/if}
+              <span class={`status-pill ${$studioState.rawResponse.trim() ? "status-ready" : "status-pending"}`}>
+                {$studioState.rawResponse.trim() ? "captured" : "empty"}
+              </span>
+            </div>
           </div>
 
           <p class="support-copy">
             Paste the Copilot response JSON here. The validation command checks the schema and
             tool/action payload shapes before preview is allowed.
           </p>
+
+          {#if demoResponseAvailable}
+            <p class="support-copy">
+              For the bundled sample walkthrough, `Load demo response` fills a safe example so you
+              can reach preview without opening the README.
+            </p>
+          {/if}
 
           <textarea
             class="response-draft"
@@ -1296,16 +1875,18 @@
     <article class="ra-panel pane pane-preview">
       <div class="pane-header">
         <div>
-          <p class="pane-label">Workbook preview</p>
-          <h2>Diff, approval, and execution readiness</h2>
+          <p class="pane-label">Review and save</p>
+          <h2>Check the plan, then save a new copy</h2>
         </div>
         <span class={`status-pill ${previewResult || previewSnapshot ? "status-ready" : "status-pending"}`}>
-          {#if previewResult}
-            preview ready
+          {#if executionResult?.executed}
+            copy saved
+          {:else if previewResult}
+            ready to review
           {:else if previewSnapshot}
             snapshot restored
           {:else}
-            awaiting preview
+            waiting for review
           {/if}
         </span>
       </div>
@@ -1317,37 +1898,109 @@
         </section>
       {/if}
 
+      <section class="feedback feedback-info" aria-live="polite">
+        <strong>{reviewProgressLabel}</strong>
+        <p>{reviewProgressCopy}</p>
+      </section>
+
       <div class="preview-stack">
+        <section class="preview-summary-grid" aria-label="Review summary">
+          <article class="preview-card summary-card">
+            <p class="preview-label">What will change</p>
+            <h3>{hasReviewSummary ? `${reviewTargetCount} target${reviewTargetCount === 1 ? "" : "s"} in scope` : "Waiting for change summary"}</h3>
+            <p>{reviewWhatChanges}</p>
+          </article>
+
+          <article class="preview-card summary-card">
+            <p class="preview-label">How many rows</p>
+            <h3>{hasReviewSummary ? `${reviewAffectedRows} row${reviewAffectedRows === 1 ? "" : "s"} estimated` : "No row estimate yet"}</h3>
+            <p>{reviewRowsSummary}</p>
+          </article>
+
+          <article class="preview-card summary-card">
+            <p class="preview-label">Where the new copy goes</p>
+            <h3>{reviewOutputPath || "Waiting for reviewed copy path"}</h3>
+            <p>{reviewOutputSafety}</p>
+          </article>
+        </section>
+
+        <section class="preview-card review-save-card">
+          <p class="preview-label">Review and save</p>
+          <h3>{reviewHeadline}</h3>
+          <p>{reviewCopy}</p>
+
+          {#if showReviewNote}
+            <label class="field">
+              <span>Review note</span>
+              <textarea
+                on:input={(event) => (approvalNote = (event.currentTarget as HTMLTextAreaElement).value)}
+                placeholder="Optional note about why these changes look right."
+                rows="3"
+              >{approvalNote}</textarea>
+            </label>
+          {/if}
+
+          {#if approvalError}
+            <p class="subpanel-error">{approvalError}</p>
+          {/if}
+
+          {#if executionError}
+            <p class="subpanel-error">{executionError}</p>
+          {/if}
+
+          <div class="action-row action-row-compact">
+            <button
+              class="primary-button"
+              disabled={reviewPrimaryDisabled}
+              type="button"
+              on:click={() => void handlePrimaryReviewAction()}
+            >
+              {reviewPrimaryLabel}
+            </button>
+
+            {#if showRejectReviewAction}
+              <button
+                class="ghost-button"
+                disabled={approvalPending}
+                type="button"
+                on:click={() => void handleApproval("rejected")}
+              >
+                Needs changes
+              </button>
+            {/if}
+          </div>
+        </section>
+
         <section class="preview-card">
-          <p class="preview-label">Source path</p>
+          <p class="preview-label">Original file</p>
           <h3>{previewResult?.diffSummary.sourcePath || previewSnapshot?.sourcePath || $studioState.workbookPath || sessionDetail?.session.primaryWorkbookPath || "No workbook path has been staged yet."}</h3>
           <p>{$studioState.workbookFocus || "Sheet1"}</p>
         </section>
 
         <section class="preview-card">
-          <p class="preview-label">Output and approval</p>
+          <p class="preview-label">New copy location</p>
           <h3>{previewResult?.diffSummary.outputPath || previewSnapshot?.outputPath || "Preview output path will appear here."}</h3>
           <p>
             {#if previewResult}
               {previewResult.requiresApproval
                 ? approvalResult?.decision === "rejected"
-                  ? "Preview was rejected. Execution remains blocked until it is approved."
+                  ? "The current review was marked as not ready, so no new copy can be saved yet."
                   : approvalGranted
-                    ? "Preview was approved. Execution can now be requested."
-                    : "Preview includes write-capable actions, so approval will be required."
-                : "Preview contains no approval-gated actions."}
+                    ? "Review is confirmed. Relay Agent can now save the reviewed copy."
+                    : "This plan changes the workbook, so one review confirmation is still required."
+                : "This plan is review-only, so no new copy will be written."}
             {:else if previewSnapshot}
               {previewSnapshot.requiresApproval
-                ? "This restored snapshot came from an approval-gated preview. Request preview again before execution."
-                : "This restored snapshot came from a read-only preview. Request preview again to refresh the backend state."}
+                ? "This restored snapshot came from a save-ready review. Check the changes again before saving in this app run."
+                : "This restored snapshot came from a review-only step. Check the changes again to refresh the backend state."}
             {:else}
-              Request preview after validation succeeds to see the output target and gating.
+              Check the changes after validation succeeds to see where the reviewed copy will go.
             {/if}
           </p>
         </section>
 
         <section class="preview-card">
-          <p class="preview-label">Diff headline</p>
+          <p class="preview-label">Change size</p>
           <h3>
             {#if previewResult}
               {previewResult.diffSummary.targetCount} target diff{previewResult.diffSummary.targetCount === 1 ? "" : "s"} staged
@@ -1373,103 +2026,51 @@
         </section>
 
         <section class="preview-card">
-          <p class="preview-label">Approval decision</p>
+          <p class="preview-label">Review status</p>
           <h3>
             {#if !previewResult}
-              {previewSnapshot ? "Preview snapshot restored" : "Approval waits for preview."}
+              {previewSnapshot ? "Review snapshot restored" : "Review waits for checked changes."}
             {:else if !previewResult.requiresApproval}
-              No approval required
+              No confirmation needed
             {:else if approvalGranted}
-              Approved for execution
+              Ready to save
             {:else if approvalResult?.decision === "rejected"}
-              Rejected for now
+              Needs changes
             {:else}
-              Decision required
+              Confirmation needed
             {/if}
           </h3>
           <p>
             {approvalSummary || (!previewResult
               ? previewSnapshot
-                ? "A previous preview summary was restored, but you still need a fresh preview before approval or execution."
-                : "Generate preview first so the current diff can be reviewed."
+                ? "A previous review summary was restored, but you still need to check the changes again before saving."
+                : "Check the changes first so the current diff can be reviewed."
               : !previewResult.requiresApproval
-                ? "This preview is read-only, so execution is already available."
-                : "Record an approval decision before write execution can proceed.")}
+                ? "This plan only reviews the workbook, so there is no save action here."
+                : "Confirm the review before Relay Agent can save a new copy.")}
           </p>
-
-          {#if approvalError}
-            <p class="subpanel-error">{approvalError}</p>
-          {/if}
-
-          {#if previewResult && previewResult.requiresApproval}
-            <label class="field">
-              <span>Approval note</span>
-              <textarea
-                on:input={(event) => (approvalNote = (event.currentTarget as HTMLTextAreaElement).value)}
-                placeholder="Optional note for why this preview is safe to run."
-                rows="3"
-              >{approvalNote}</textarea>
-            </label>
-
-            <div class="action-row action-row-compact">
-              <button
-                class="primary-button"
-                disabled={approvalPending}
-                type="button"
-                on:click={() => void handleApproval("approved")}
-              >
-                {approvalPending ? "Recording approval..." : "Approve preview"}
-              </button>
-
-              <button
-                class="ghost-button"
-                disabled={approvalPending}
-                type="button"
-                on:click={() => void handleApproval("rejected")}
-              >
-                Reject preview
-              </button>
-            </div>
-          {/if}
         </section>
 
         <section class="preview-card">
-          <p class="preview-label">Execution readiness</p>
+          <p class="preview-label">Save status</p>
           <h3>
             {#if !previewResult}
-              Execution is locked
+              Save is waiting
+            {:else if !previewResult.requiresApproval}
+              No save step needed
             {:else if approvalGranted}
-              Ready to request execution
+              Ready to save
             {:else}
-              Approval still required
+              Review still needed
             {/if}
           </h3>
           <p>{executionSummary || executionBlockedReason}</p>
-
-          {#if executionError}
-            <p class="subpanel-error">{executionError}</p>
-          {/if}
-
-          <div class="action-row action-row-compact">
-            <button
-              class="secondary-button"
-              disabled={!previewResult || executionPending || !approvalGranted}
-              type="button"
-              on:click={() => void handleExecution()}
-            >
-              {executionPending
-                ? "Requesting execution..."
-                : executionResult
-                  ? "Request execution again"
-                  : "Request execution"}
-            </button>
-          </div>
 
           {#if executionResult}
             <div class="result-grid">
               <div class="result-card">
                 <p class="preview-label">Result</p>
-                <h3>{executionResult.executed ? "Executed" : "Recorded only"}</h3>
+                <h3>{executionResult.executed ? "Copy saved" : "Recorded only"}</h3>
                 <p>{executionResult.outputPath || "No output path was produced."}</p>
               </div>
             </div>
@@ -1485,7 +2086,7 @@
         </section>
 
         <section class="preview-card">
-          <p class="preview-label">Warnings</p>
+          <p class="preview-label">Points to check</p>
           <div class="warning-list">
             {#if previewResult && previewResult.warnings.length > 0}
               {#each previewResult.warnings as warning}
@@ -1496,13 +2097,13 @@
                 <span>{warning}</span>
               {/each}
             {:else}
-              <span>Preview warnings will appear here after the backend diff is generated.</span>
+              <span>Review notes will appear here after the backend diff is generated.</span>
             {/if}
           </div>
         </section>
 
         <section class="preview-card">
-          <p class="preview-label">Sheet diff summary</p>
+          <p class="preview-label">Detailed changes</p>
 
           {#if previewResult}
             {#if previewResult.diffSummary.sheets.length === 0}
@@ -1546,14 +2147,81 @@
             {/if}
           {:else}
             <div class="empty-state empty-inline">
-              <h3>No preview yet</h3>
-              <p>Generate a packet, validate a pasted response, and request preview to fill this pane with backend diff data.</p>
+              <h3>No checked changes yet</h3>
+              <p>Generate a packet, validate a pasted response, and check the changes to fill this pane with backend diff data.</p>
             </div>
           {/if}
         </section>
       </div>
     </article>
   </section>
+
+  {#if pendingStudioAction}
+    <div class="leave-dialog-backdrop" role="presentation">
+      <div
+        aria-describedby="leave-dialog-copy"
+        aria-labelledby="leave-dialog-title"
+        aria-modal="true"
+        class="leave-dialog"
+        role="dialog"
+      >
+        <p class="pane-label">Before you continue</p>
+        <h2 id="leave-dialog-title">
+          {pendingStudioAction.kind === "route-leave"
+            ? "Leave Studio with this draft?"
+            : "Replace the current draft?"}
+        </h2>
+        <p class="support-copy" id="leave-dialog-copy">
+          {#if pendingStudioAction.kind === "route-leave"}
+            {describePendingAction(pendingStudioAction)}. Choose whether Home should keep this
+            draft for later or remove it now.
+          {:else}
+            {describePendingAction(pendingStudioAction)}. Continuing will replace the current
+            Studio draft for this session.
+          {/if}
+        </p>
+
+        <ul class="feedback-list leave-dialog-list">
+          {#each leaveWarningReasons as reason}
+            <li>{reason}</li>
+          {/each}
+        </ul>
+
+        {#if pendingStudioAction.kind === "route-leave"}
+          <div class="action-row leave-dialog-actions">
+            <button
+              class="primary-button"
+              type="button"
+              on:click={() => void continueWithRouteLeave(false)}
+            >
+              Leave and keep draft
+            </button>
+            <button
+              class="secondary-button"
+              type="button"
+              on:click={() => void continueWithRouteLeave(true)}
+            >
+              Leave and discard draft
+            </button>
+            <button class="ghost-button" type="button" on:click={closePendingStudioAction}>
+              Stay in Studio
+            </button>
+          </div>
+        {:else}
+          <div class="action-row leave-dialog-actions">
+            <button class="primary-button" type="button" on:click={closePendingStudioAction}>
+              Keep working on this draft
+            </button>
+            <button class="secondary-button" type="button" on:click={discardDraftAndContinue}>
+              {pendingStudioAction.kind === "switch-turn"
+                ? "Discard draft and switch turns"
+                : "Discard draft and start fresh"}
+            </button>
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -1679,6 +2347,40 @@
     color: #8a5a17;
   }
 
+  .leave-dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: grid;
+    place-items: center;
+    padding: 1.5rem;
+    background: rgba(31, 45, 36, 0.4);
+    backdrop-filter: blur(6px);
+  }
+
+  .leave-dialog {
+    width: min(100%, 34rem);
+    display: grid;
+    gap: 1rem;
+    padding: 1.35rem;
+    border: 1px solid var(--ra-border-strong);
+    border-radius: 1.2rem;
+    background: rgba(255, 251, 244, 0.96);
+    box-shadow: 0 1.5rem 3rem rgba(31, 45, 36, 0.18);
+  }
+
+  .leave-dialog h2 {
+    margin: 0;
+  }
+
+  .leave-dialog-list {
+    margin-top: 0;
+  }
+
+  .leave-dialog-actions {
+    justify-content: flex-end;
+  }
+
   .empty-state {
     display: grid;
     gap: 0.45rem;
@@ -1733,6 +2435,7 @@
   .turn-list,
   .workflow-panels,
   .preview-stack,
+  .preview-summary-grid,
   .sheet-diff-list {
     display: grid;
     gap: 0.9rem;
@@ -1965,6 +2668,14 @@
     background: rgba(255, 255, 255, 0.78);
   }
 
+  .preview-summary-grid {
+    grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  }
+
+  .summary-card h3 {
+    font-size: 1.15rem;
+  }
+
   .packet-preview {
     margin: 0;
     padding: 0.95rem;
@@ -2008,6 +2719,41 @@
   .warning-list span {
     background: rgba(138, 90, 23, 0.08);
     color: #8a5a17;
+  }
+
+  .help-subpanel {
+    background: rgba(255, 255, 255, 0.72);
+  }
+
+  .help-list {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  }
+
+  .help-card {
+    display: grid;
+    gap: 0.35rem;
+    padding: 0.9rem;
+    border: 1px solid rgba(37, 50, 32, 0.08);
+    border-radius: 0.95rem;
+    background: rgba(255, 255, 255, 0.84);
+  }
+
+  .help-card strong,
+  .help-card p,
+  .help-card span {
+    margin: 0;
+  }
+
+  .help-card p {
+    line-height: 1.5;
+  }
+
+  .help-card span {
+    color: var(--ra-muted);
+    font-size: 0.9rem;
+    line-height: 1.45;
   }
 
   .issue-list {
@@ -2073,6 +2819,10 @@
     .subpanel-header,
     .sheet-diff-head {
       display: grid;
+      justify-content: stretch;
+    }
+
+    .leave-dialog-actions {
       justify-content: stretch;
     }
   }
