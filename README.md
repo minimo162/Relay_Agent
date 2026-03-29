@@ -77,6 +77,8 @@ the current verified way to run the app from source.
 - The first packaged end-user target is Windows 10/11 x64 with an NSIS
   installer, as documented in
   [`docs/PACKAGING_POLICY.md`](docs/PACKAGING_POLICY.md).
+- The intended distribution channel for packaged Windows installers is GitHub
+  Releases, not committed binary files inside the repository.
 - The current verified way to run Relay Agent is still the source-run path
   shown above with `pnpm --filter @relay-agent/desktop tauri:dev`.
 
@@ -96,6 +98,11 @@ target/release/bundle/nsis/
 
 Treat that as a locally built packaging artifact. It is not a checked-in
 release file in this repository today.
+
+For maintainers, the repository also includes GitHub Actions release automation
+at [`.github/workflows/release-windows-installer.yml`](.github/workflows/release-windows-installer.yml).
+Pushing a tag such as `v0.1.0` to GitHub is the intended way to build the
+Windows NSIS installer and attach it to a GitHub Release.
 
 Repo checks:
 

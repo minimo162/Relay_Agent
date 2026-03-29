@@ -1860,6 +1860,23 @@ Observed result:
 - This remains a docs-only clarification: the currently verified runtime path is still source-run, while the Windows installer guidance is now clearly framed as a local build path rather than a checked-in release artifact.
 - The docs-only change continues to pass `git diff --check`.
 
+GitHub Releases Windows installer automation verification:
+
+```bash
+test -f .github/workflows/release-windows-installer.yml
+rg -n 'release-windows-installer|workflow_dispatch|v\\*|tauri-apps/tauri-action@v1|releaseAssetNamePattern|contents: write' .github/workflows/release-windows-installer.yml
+rg -n 'GitHub Releases|release-windows-installer.yml|not committed binary files' README.md docs/PACKAGING_POLICY.md PLANS.md
+git diff --check
+```
+
+Observed result:
+
+- `.github/workflows/release-windows-installer.yml` now adds a Windows-only GitHub Actions workflow that triggers on `v*` tags or manual dispatch, installs the workspace toolchain, runs `pnpm typecheck` plus desktop Rust tests, builds the NSIS installer with `tauri-apps/tauri-action`, and publishes the installer asset to GitHub Releases.
+- The workflow uses GitHub Releases as the distribution channel for packaged Windows installers, which keeps binary artifacts out of git history while preserving the existing manual installer-driven update policy.
+- `README.md`, `docs/PACKAGING_POLICY.md`, and `PLANS.md` now all point at the same release story: source-run remains the current verified local path, while packaged Windows installers are meant to be built on GitHub and attached to Releases.
+- This change cannot be fully executed from the current local environment because GitHub Actions and release publishing require a GitHub-hosted run with repository `contents: write` permission, so local verification is limited to file presence, workflow shape, and documentation alignment.
+- The workflow and docs changes continue to pass `git diff --check`.
+
 ## Known Limitations
 
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.
@@ -1869,6 +1886,7 @@ Observed result:
 - `pnpm startup:test` currently covers source-run startup smoke scenarios and shared startup helper tests; it does not replace packaged-installer E2E or screenshot-driven UI automation.
 - `pnpm launch:test` currently targets the Linux headless path with `Xvfb`; it does not yet provide cross-platform GUI automation or packaged-app launch coverage.
 - `pnpm workflow:test` now proves that a launched app can complete the bundled sample flow in a Linux headless environment, but it still uses a test-only autorun runner instead of real GUI click automation or cross-platform packaged-app coverage.
+- The new GitHub Releases workflow is defined in-repo, but it has not been executed from this local environment; the first real installer publication still depends on a GitHub-hosted Windows run succeeding with the repository's release permissions.
 - Reviewer mode currently depends on local audit history and the same device profile; it is a safe local review surface, not a shared remote approval link.
 - Preview predicates and derive expressions intentionally support a narrow grammar for now: bracketed column references for spaced headers, one comparison in `filter_rows`, and basic arithmetic or string concatenation in `derive_column`.
 - Limited xlsx support is still inspect-and-copy oriented; current test coverage still centers on CSV execution plus xlsx preview planning rather than richer xlsx write flows.

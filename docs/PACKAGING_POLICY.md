@@ -22,8 +22,10 @@ data-retention expectations for non-engineer operators.
 
 - The first non-engineer release track uses manual installer-driven updates
 - In-app auto-update is out of scope for this phase
-- Users should download the newer signed Windows installer and run it over the
-  existing install
+- Windows installer assets should be distributed from GitHub Releases rather
+  than committed into the repository
+- Users should download the newer signed Windows installer from GitHub Releases
+  and run it over the existing install
 - Release notes must call out any version that changes storage layout or
   requires a migration step
 
@@ -46,6 +48,8 @@ data-retention expectations for non-engineer operators.
   `apps/desktop/src-tauri/tauri.windows.conf.json`
 - The Windows override narrows the bundle target to `nsis` so the release path
   matches the first supported non-engineer distribution story
+- GitHub Actions release automation for Windows installer publication lives in
+  `.github/workflows/release-windows-installer.yml`
 
 ## Deferred
 
@@ -53,4 +57,3 @@ data-retention expectations for non-engineer operators.
 - Linux packaged distribution for end users
 - MSI-based enterprise rollout
 - In-app updater channels, signing automation, and background update UX
-

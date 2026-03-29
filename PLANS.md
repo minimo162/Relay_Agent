@@ -338,6 +338,7 @@ The next shipped follow-up scope is captured in `.taskmaster/docs/prd_app_launch
 Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `32` through `36`, and that follow-up is now implementation-complete with verification recorded in `docs/APP_LAUNCH_TEST_VERIFICATION.md`.
 The next shipped follow-up scope is captured in `.taskmaster/docs/prd_app_workflow_launch_test.txt`.
 Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `37` through `41`, and that follow-up is now implementation-complete with verification recorded in `docs/APP_WORKFLOW_TEST_VERIFICATION.md`.
+Windows installer distribution now also has a concrete release channel: `.github/workflows/release-windows-installer.yml` builds the NSIS installer on Windows and publishes it to GitHub Releases instead of committing binary installers into the repository.
 
 That follow-up preserved the current safety model:
 
