@@ -321,6 +321,20 @@ Manual verification:
 - Risk: examples do not reflect real supported behavior.
   Mitigation: generate example content from the actual supported CSV path, not hypothetical future capabilities.
 
+## Follow-up Scope Note
+
+Post-MVP usability work aimed at non-engineer operators is captured in `.taskmaster/docs/prd_non_engineer_ux.txt`.
+The corresponding Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as follow-up tasks `11` through `16`.
+
+That follow-up should be planned as a new milestone set that preserves the current safety model:
+
+- preview before write
+- approval before write
+- save-copy only
+- original workbook read-only
+
+The primary follow-up emphasis should be simplifying app startup for non-engineers, including distribution, installer/update, recovery, diagnostics, data-handling clarity, permission explanations, file preflight, locale and CSV compatibility, early constraint surfacing, resumable work, crash recovery, recent-item access, progress visibility, template-driven starts, output-name safety, duplicate-run prevention, safe defaults, reviewer-friendly summaries, read-only review, inline help, pre-copy sensitivity warnings, local audit history, accessibility baselines, and a clearer completion flow, while also collapsing the user-facing preview, approval, and save-copy stages into a clearer execution flow without relaxing those guardrails.
+
 ## Global Scope Exclusions
 
 These items remain outside the MVP unless explicitly pulled in later:

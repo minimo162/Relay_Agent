@@ -667,12 +667,420 @@
           }
         ],
         "updatedAt": "2026-03-29T07:04:50Z"
+      },
+      {
+        "id": "11",
+        "title": "Package the app and simplify startup for non-engineer operators",
+        "description": "Turn startup into a packaged-app-first flow with first-run guidance, permission explanations, recovery actions, and diagnostic export.",
+        "status": "pending",
+        "dependencies": [
+          "10"
+        ],
+        "priority": "high",
+        "details": "Implement the follow-up PRD's launch and first-run scope: supported OS and installer decisions, packaged launch path, `initialize_app` startup preflight messaging, friendly failure states, permission rationale, self-recovery actions, and diagnostic export. Preserve the current backend safety model and keep developer-oriented CLI startup outside the end-user path.",
+        "testStrategy": "Verify the follow-up implementation provides a packaged-app-first startup path, first-run welcome states, permission explanations, recoverable startup errors, and diagnostic export behavior without requiring terminal commands.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define packaging, installer, and update policy for the first supported OS",
+            "description": "Choose and document the official end-user distribution target and update expectations.",
+            "status": "pending",
+            "dependencies": [],
+            "details": "Set the initial supported OS, bundle target, installer type, update model, and data retention expectations so the app has one official non-engineer launch story instead of a development-only startup path.",
+            "testStrategy": "Confirm the supported-platform, install, update, and data-retention rules are reflected in planning docs and packaging configuration expectations.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 2,
+            "title": "Implement startup preflight, friendly failure states, and self-recovery",
+            "description": "Make initialization and storage issues understandable and recoverable from the app UI.",
+            "status": "pending",
+            "dependencies": [
+              1
+            ],
+            "details": "Extend the startup flow so missing app data storage, inaccessible save locations, or first-run setup problems show plain-language guidance, retry, reset, and support-oriented diagnostic actions instead of technical errors.",
+            "testStrategy": "Verify startup failures surface clear problem, reason, and next-step guidance plus at least one retry, reset, or diagnostic action.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 3,
+            "title": "Build first-run welcome, sample/custom entry, and permission rationale",
+            "description": "Guide users into the app with a safe first-run choice and pre-permission explanations.",
+            "status": "pending",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "Add a first-run welcome surface that explains what the app does, highlights save-copy behavior, offers sample or real-file entry points, and explains OS permission prompts before the system dialog appears.",
+            "testStrategy": "Verify first-run users can choose sample or real-file entry and understand why any permission prompt is needed before the OS dialog opens.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 4,
+            "title": "Align packaged-startup docs and verification with the implemented flow",
+            "description": "Keep the planning and execution logs in sync once the startup UX is real.",
+            "status": "pending",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Update `PLANS.md`, `docs/IMPLEMENTATION.md`, and any real user-facing setup docs so the packaged-app-first startup flow, recovery actions, and diagnostic export behavior stay documented and verifiable.",
+            "testStrategy": "Confirm the implementation log and real setup docs describe the same startup flow and verification steps that the app actually supports.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          }
+        ],
+        "updatedAt": "2026-03-29T08:12:43Z"
+      },
+      {
+        "id": "12",
+        "title": "Add data trust, file readiness, and safe handoff guidance",
+        "description": "Make local storage, file compatibility, and Copilot handoff safety understandable before work starts.",
+        "status": "pending",
+        "dependencies": [
+          "11"
+        ],
+        "priority": "high",
+        "details": "Implement the PRD scope around local-only data handling explanations, file preflight checks, early constraint surfacing, locale and CSV compatibility guidance, and pre-copy sensitivity warnings for confidential or personal data before users hand anything to Copilot.",
+        "testStrategy": "Verify users are told what stays local, what is not auto-sent externally, whether a file is safe to use, and when a Copilot handoff may expose sensitive data.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Explain local-only storage, retention, and deletion behavior",
+            "description": "Surface what the app stores locally and how users can remove it.",
+            "status": "pending",
+            "dependencies": [],
+            "details": "Define and expose clear copy for local session storage, logs, generated file references, retention expectations, and deletion paths so non-engineers can understand the trust model without reading technical docs.",
+            "testStrategy": "Verify Home or Studio surfaces what data is kept locally, what is not auto-sent, and how users can delete saved app data.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 2,
+            "title": "Add file preflight, constraint surfacing, and locale or CSV compatibility guidance",
+            "description": "Warn users early about unreadable files, unsupported inputs, or format mismatches.",
+            "status": "pending",
+            "dependencies": [
+              1
+            ],
+            "details": "Implement preflight checks for file readability, lock state, size hints, unsupported workbook complexity, and locale-driven CSV issues such as encoding, delimiters, date formats, decimal separators, and thousands separators.",
+            "testStrategy": "Verify users see plain-language preflight results and early constraint messages before starting a flow with unsupported or risky inputs.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 3,
+            "title": "Warn before Copilot copy when confidential or personal data may be included",
+            "description": "Insert a lightweight sensitivity check before users copy a relay packet out of the app.",
+            "status": "pending",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "Add a pre-copy caution that highlights possible personal data, customer identifiers, or confidential fields and reminds users to share only the minimum necessary content before continuing to Copilot.",
+            "testStrategy": "Verify the app shows a short caution before copy when file or column context suggests confidential or personal data may be present.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 4,
+            "title": "Verify risky inputs and handoffs are blocked or clarified before execution",
+            "description": "Close the loop on file-readiness and trust checks before the app reaches preview or save.",
+            "status": "pending",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Add verification coverage that proves unsupported files, locale or CSV mismatches, and sensitive-data copy warnings are surfaced before preview or execution instead of appearing as late-stage failures.",
+            "testStrategy": "Run targeted UI and backend verification for preflight messaging, locale or CSV warnings, and copy-time sensitivity cautions.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          }
+        ],
+        "updatedAt": "2026-03-29T08:12:43Z"
+      },
+      {
+        "id": "13",
+        "title": "Implement resumable work, crash recovery, and leave-safe continuity",
+        "description": "Keep in-progress work recoverable across restart, abnormal shutdown, and intentional exit.",
+        "status": "pending",
+        "dependencies": [
+          "11"
+        ],
+        "priority": "high",
+        "details": "Implement the PRD continuity scope: resumable drafts, recent items, abnormal-shutdown recovery, unsaved or unreviewed leave warnings, and clearer retry, discard, or keep-draft choices so non-engineers do not lose context mid-flow.",
+        "testStrategy": "Verify in-progress work can be resumed after restart, restored after abnormal shutdown, and safely left with clear warnings and recovery choices.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Persist resumable drafts, preview state, and recent items",
+            "description": "Save enough local state for users to continue where they left off.",
+            "status": "pending",
+            "dependencies": [],
+            "details": "Persist objective drafts, pasted response drafts, preview state, output-path candidates, recent sessions, and recent files so users can re-enter the flow without redoing setup work.",
+            "testStrategy": "Verify restart shows recent work and restores draft plus preview context for resumable sessions.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 2,
+            "title": "Add crash recovery from autosaved state after abnormal shutdown",
+            "description": "Offer a safe restore flow after the app or machine exits unexpectedly.",
+            "status": "pending",
+            "dependencies": [
+              1
+            ],
+            "details": "Store a minimal safe autosave state and present a recovery prompt on the next launch so users can restore or discard the previous in-progress work after a crash or reboot.",
+            "testStrategy": "Verify an abnormal shutdown leads to a recovery prompt and that restored state matches the last safe autosave instead of a partially corrupted draft.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 3,
+            "title": "Add unsaved or unreviewed leave warnings and clear retry or discard choices",
+            "description": "Prevent users from accidentally losing work when closing or backing out.",
+            "status": "pending",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "Warn before leaving dirty drafts or unreviewed preview states, and make the difference between retry, keep draft, discard, and close explicit in plain language.",
+            "testStrategy": "Verify closing or backing out with dirty state shows clear leave options and preserves or discards work exactly as labeled.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 4,
+            "title": "Verify continuity flows across restart, crash recovery, and intentional exit",
+            "description": "Cover the full set of resume and recovery paths with verification.",
+            "status": "pending",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Add verification for restart-based resume, abnormal-shutdown restore, recent-item recall, and leave-warning actions so continuity behavior stays predictable as the follow-up UX evolves.",
+            "testStrategy": "Run continuity-focused tests and manual walkthroughs for resume, restore, discard, and keep-draft behavior.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          }
+        ],
+        "updatedAt": "2026-03-29T08:12:43Z"
+      },
+      {
+        "id": "14",
+        "title": "Guide non-engineer users with templates, onboarding, and inline help",
+        "description": "Reduce first-use friction with sample-first entry, safe defaults, templates, and contextual guidance.",
+        "status": "pending",
+        "dependencies": [
+          "11",
+          "12"
+        ],
+        "priority": "high",
+        "details": "Implement the guided-start portion of the PRD: sample-first onboarding, plain-language objective entry, template-driven starts, safe defaults, and contextual inline help that lets users complete the flow without understanding technical vocabulary or reading the README first.",
+        "testStrategy": "Verify a first-time user can start from the sample flow or a real file, understand the next step, and reach the review stage using only in-product guidance.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Add sample-first onboarding and plain-language objective entry",
+            "description": "Lead first-time users into a successful start without technical wording.",
+            "status": "pending",
+            "dependencies": [],
+            "details": "Prioritize a bundled sample path on first run, simplify the objective prompt into business-language examples, and keep the initial path focused on one clear next action at a time.",
+            "testStrategy": "Verify first-time users can choose a sample path and understand how to describe their goal without using internal workflow terms.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 2,
+            "title": "Add template-driven starts and safe defaults",
+            "description": "Provide common starting points and hide advanced configuration by default.",
+            "status": "pending",
+            "dependencies": [
+              1
+            ],
+            "details": "Offer common spreadsheet tasks such as rename, cast, filter, derive, and aggregate as template starts while keeping save-copy, review, and output-path behaviors on safe defaults unless the user explicitly changes them.",
+            "testStrategy": "Verify common tasks can start from templates and that first-run flows do not require opening advanced settings.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 3,
+            "title": "Add inline help and glossary that matches the current step",
+            "description": "Let users resolve uncertainty inside the UI instead of leaving for documentation.",
+            "status": "pending",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "Show short first-run hints by default and keep deeper help behind an explicit affordance so users can re-check terms and next actions without cluttering the main flow.",
+            "testStrategy": "Verify users can re-open concise help for the current step and that the UI does not expose unnecessary technical detail by default.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 4,
+            "title": "Verify the guided flow works without README dependency",
+            "description": "Confirm the in-product guidance is sufficient for first-use success.",
+            "status": "pending",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Run guided-flow verification to ensure first-time users can move from onboarding through request entry and Copilot handoff using the app's own prompts, templates, and help surfaces.",
+            "testStrategy": "Execute a first-run walkthrough without referring to README and confirm the user can reach the review step using only the implemented UX cues.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          }
+        ],
+        "updatedAt": "2026-03-29T08:12:43Z"
+      },
+      {
+        "id": "15",
+        "title": "Simplify review, save, reviewer confirmation, and operational history",
+        "description": "Turn the current technical execution path into a clearer review-and-save flow with reviewer-safe surfaces and local operation history.",
+        "status": "pending",
+        "dependencies": [
+          "12",
+          "13",
+          "14"
+        ],
+        "priority": "high",
+        "details": "Implement the PRD's execution-phase simplification: one review-and-save UX over the existing preview and approval gates, three-point summaries, output-path suggestion, filename collision guards, progress visibility, duplicate-run prevention, completion actions, reviewer-friendly summaries, read-only review mode, and local audit history.",
+        "testStrategy": "Verify users can review, save, and share outcomes through one clear flow while the backend approval and save-copy guardrails remain intact.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Collapse preview, approval, and execution into a review-and-save UX",
+            "description": "Hide backend stage jargon behind a simpler user-facing step model.",
+            "status": "pending",
+            "dependencies": [],
+            "details": "Rework Studio so users see a plain-language stepper and a single review-and-save phase while the existing preview and approval requirements remain enforced behind the scenes.",
+            "testStrategy": "Verify users can complete the save flow without understanding preview or approval terminology and that approval is still required before any write-capable execution.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 2,
+            "title": "Add three-point review summary, progress visibility, and output-path safety",
+            "description": "Keep the main review information short, visible, and safe.",
+            "status": "pending",
+            "dependencies": [
+              1
+            ],
+            "details": "Show what will change, how many rows are affected, and where output goes at the top of the review step, while also surfacing progress states, output-path suggestions, and filename collision warnings in plain language.",
+            "testStrategy": "Verify review screens always surface the three key summary points plus progress and filename safeguards before save actions are enabled.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 3,
+            "title": "Add duplicate-run prevention, completion actions, reviewer summaries, and read-only review mode",
+            "description": "Prevent accidental re-runs and support fast review by non-executing stakeholders.",
+            "status": "pending",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "Disable duplicate save actions while work is in progress, add clear post-run next steps, generate reviewer-friendly summaries, and provide a read-only review surface that exposes changes without execution controls.",
+            "testStrategy": "Verify repeated save clicks do not create duplicate work and that reviewer-only users can inspect change summaries without execution access.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 4,
+            "title": "Add local audit history for inputs, outputs, timestamps, and change summaries",
+            "description": "Keep a human-readable record of what work was performed and when.",
+            "status": "pending",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Persist and surface a local operation history that records the input file, output file, execution time, and summary of changes so support and approval follow-up do not depend on memory or manual notes.",
+            "testStrategy": "Verify completed runs appear in local operation history with the expected input, output, timestamp, and change-summary fields.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          }
+        ],
+        "updatedAt": "2026-03-29T08:12:43Z"
+      },
+      {
+        "id": "16",
+        "title": "Harden non-technical recovery, trust communication, and accessibility",
+        "description": "Make errors repairable, safety guarantees visible, and the follow-up UX accessible enough for everyday use.",
+        "status": "pending",
+        "dependencies": [
+          "12",
+          "13",
+          "15"
+        ],
+        "priority": "medium",
+        "details": "Implement the remaining cross-cutting PRD work: non-technical validation and execution errors, Copilot re-prompt support, always-visible original-file and save-copy guidance, accessibility baselines, and the final documentation plus verification pass for the non-engineer follow-up milestone set.",
+        "testStrategy": "Verify errors always explain the next recovery action, trust messaging stays visible in key steps, accessibility basics are covered, and the final follow-up docs match the real behavior.",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Rewrite validation and execution failures into non-technical copy with re-prompt support",
+            "description": "Turn backend failures into plain-language next steps for non-engineers.",
+            "status": "pending",
+            "dependencies": [],
+            "details": "Translate parse, validation, preview, and execution failures into a stable format of problem, reason, and next action, and provide copyable follow-up prompts when Copilot needs to retry.",
+            "testStrategy": "Verify failed responses and execution problems show at least one concrete correction path plus a reusable Copilot follow-up prompt when applicable.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 2,
+            "title": "Keep original-file protection and save-copy-only guidance visible across the app",
+            "description": "Reinforce the safety model in user-facing language at the points where confidence matters most.",
+            "status": "pending",
+            "dependencies": [
+              1
+            ],
+            "details": "Surface steady trust messaging in Home, Studio, review, and completion states so users can always see that the original file remains read-only and writes only go to a save-copy output.",
+            "testStrategy": "Verify the app consistently shows original-file and save-copy protections in key entry, review, and completion states.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 3,
+            "title": "Apply the accessibility baseline for text, contrast, keyboard flow, and status cues",
+            "description": "Meet the minimum UX accessibility bar defined by the follow-up PRD.",
+            "status": "pending",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "Audit and improve typography, contrast, focus order, keyboard completion paths, and non-color state indicators across the non-engineer follow-up surfaces so the UX does not depend on perfect vision or mouse-only operation.",
+            "testStrategy": "Verify the main flow is keyboard-navigable, readable at the chosen default text sizes, and understandable without relying on color alone.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          },
+          {
+            "id": 4,
+            "title": "Run the follow-up verification pass and align planning or implementation docs with reality",
+            "description": "Close the loop on the non-engineer milestone set with documented evidence.",
+            "status": "pending",
+            "dependencies": [
+              1,
+              2,
+              3
+            ],
+            "details": "Execute the agreed verification commands, reconcile `PLANS.md`, `docs/IMPLEMENTATION.md`, and any real user docs with the shipped follow-up behavior, and record remaining limitations instead of leaving the scope aspirational.",
+            "testStrategy": "Confirm verification artifacts exist, docs match the implementation, and unresolved follow-up limitations are recorded explicitly.",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-29T08:12:43Z"
+          }
+        ],
+        "updatedAt": "2026-03-29T08:12:43Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-29T07:04:50Z",
-      "taskCount": 10,
+      "lastModified": "2026-03-29T08:12:43Z",
+      "taskCount": 16,
       "completedCount": 10,
       "tags": [
         "master"

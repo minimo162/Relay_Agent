@@ -9,6 +9,8 @@
   - `AGENTS.md`
   - `docs/IMPLEMENTATION.md`
   - `.taskmaster/docs/repo_audit.md`
+- Follow-up planning input: `.taskmaster/docs/prd_non_engineer_ux.txt` captures a post-MVP usability scope focused on making the app easier for non-engineer operators, especially around app startup, distribution/install/update expectations, recovery/diagnostics, data-handling clarity, permission explanations, file readiness, locale and CSV compatibility, early constraint surfacing, resumable work, crash recovery, recent-item access, progress visibility, template-driven starts, output-name safety, duplicate-run prevention, safe defaults, reviewer-friendly summaries, read-only review, inline help, pre-copy sensitivity warnings, local audit history, accessibility baselines, and the preview, approval, and save-copy execution flow
+- Follow-up task graph: `.taskmaster/tasks/tasks.json` now breaks that supplemental PRD into Task Master follow-up tasks `11` through `16`, covering startup, data trust, continuity, guided onboarding, review/save simplification, and cross-cutting recovery plus accessibility work
 
 ## Milestone Log
 
@@ -583,6 +585,8 @@ Outcome:
 - Keep `packages/contracts` source-first and modular until a compiled distribution artifact is actually needed.
 - Keep the workbook stack limited to `csv` plus `calamine` until the CSV-first inspect and preview slice proves a heavier engine is necessary.
 - Keep write-preview expression parsing intentionally narrow until save-copy execution exists: bracketed column references for spaced headers, one comparison in `filter_rows`, and basic arithmetic or string concatenation in `derive_column`.
+- Capture non-engineer UX simplification as a separate follow-up PRD instead of retroactively widening the completed MVP milestone set, with startup simplicity, distribution/recovery/diagnostics UX, data-handling clarity, permission/constraint clarity, locale/csv compatibility, resumable-work UX, crash recovery, progress visibility, template starts, output-name safety, duplicate-run prevention, safe defaults, reviewer-friendly summaries, read-only review, inline help, pre-copy sensitivity warnings, local audit history, accessibility baselines, and execution-phase simplification called out as the primary next planning targets.
+- Decompose that follow-up PRD into Task Master tasks `11` through `16` so the post-MVP scope can be worked milestone by milestone instead of remaining a narrative-only planning artifact.
 
 ## Verification Log
 
@@ -1061,6 +1065,34 @@ Observed result:
 - `pnpm check`, `pnpm typecheck`, and `pnpm --filter @relay-agent/desktop build` remain green after the README clarifications and storage-level walkthrough coverage.
 - `cargo check` and `cargo test` pass with 24 total Rust tests, so Milestone 5 now ends with the documented demo path verified alongside the broader backend suite.
 - Task Master JSON remains valid after closing the final Milestone 5 task.
+
+### 2026-03-29
+
+Non-engineer UX follow-up PRD verification:
+
+```bash
+test -f .taskmaster/docs/prd_non_engineer_ux.txt
+rg -n '^# 非エンジニア向けUX強化PRD|^## Problem Statement|^## Development Roadmap|^## Acceptance Criteria|^### Capability: Easy Launch and First Run|^### Capability: Data Trust and File Readiness|^### Capability: Session Continuity|^### Capability: Guided Templates and Safe Defaults|^### Capability: Progress Visibility|^### Capability: Accessibility Baseline|権限|未保存|制約|承認者|アクセシビリティ|地域設定|CSV|二重実行|読み取り専用|ヘルプ|やり直し|破棄|異常終了|復旧|機密|個人情報|監査|操作履歴' .taskmaster/docs/prd_non_engineer_ux.txt
+rg -n '^## Follow-up Scope Note' PLANS.md
+jq '.master.tasks[] | select((.id | tonumber) >= 11 and (.id | tonumber) <= 16) | {id, title, status, dependencies}' .taskmaster/tasks/tasks.json
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- The new supplemental PRD exists under `.taskmaster/docs/` and records a concrete post-MVP usability scope for non-engineer operators.
+- The document now explicitly includes startup simplicity for non-engineers, including packaged-app-first launch expectations, first-run guidance, installer/update expectations, recovery guidance, and diagnostic-export behavior.
+- The document now also covers data-handling clarity, file preflight checks, resumable drafts, recent-work access, and post-run next actions needed for everyday non-engineer operation.
+- The document also adds progress visibility, template-driven starts, output-name collision avoidance, shareable completion paths, and safe-default behavior as explicit non-engineer requirements.
+- The document now further covers permission-request explanations, unsaved-work warnings, early constraint surfacing, reviewer-friendly summaries, and accessibility baselines for non-engineer operation.
+- The document now also covers locale or CSV compatibility guidance, duplicate-run prevention, read-only review mode, inline help, and clearer retry or discard choices for non-engineer operation.
+- The document now also covers crash recovery after abnormal shutdown, pre-copy sensitivity warnings for confidential or personal data, and local audit history for later review or support handoff.
+- The supplemental PRD is now decomposed in Task Master as follow-up tasks `11` through `16`, covering startup, data trust, continuity, onboarding, review/save simplification, and cross-cutting recovery plus accessibility work.
+- The document continues to center execution-path simplification by collapsing the user-facing preview, approval, and save-copy flow into a clearer "review and save" experience while preserving the existing backend guardrails.
+- `PLANS.md` now points future scope expansion at this follow-up PRD instead of silently widening the completed MVP milestone set.
+- Task Master JSON remains valid and now includes the follow-up task breakdown for the supplemental non-engineer UX PRD.
+- The updated planning artifacts also pass `git diff --check`, so the new task breakdown did not introduce whitespace or patch-format issues.
 
 ## Known Limitations
 

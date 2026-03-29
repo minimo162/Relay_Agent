@@ -1,0 +1,831 @@
+# 非エンジニア向けUX強化PRD（Relay_Agent 補助PRD）
+
+Date: 2026-03-29
+
+## Overview
+
+Relay_Agent の現行MVPは、安全な `session -> turn -> relay packet -> pasted response -> preview -> approval -> save-copy execution` の流れをすでに持っている。一方で、この流れは用語と操作単位が技術寄りで、非エンジニアには「何を、どの順番で、どこまで確認すればよいか」が伝わりにくい。
+
+さらに現在の起動手順は README 上では開発者向けの `pnpm` / `tauri` コマンドを前提としており、非エンジニアにとっては「アプリをどう起動すればよいか」自体が最初の障壁になりうる。配布形態、インストール方法、更新方法、起動失敗時の対処も曖昧なままだと、実利用前に離脱しやすい。加えて、データがどこに保存されるか、対応外ファイルを開いたらどうなるか、途中で閉じても再開できるか、作業完了後に次に何をすべきか、待ち時間に何が進んでいるのか、安全な既定値のままで使えるのか、権限ダイアログにどう答えればよいのか、未保存のまま閉じるとどうなるのか、CSV の文字コードや区切り文字が期待どおりか、同じ保存操作を重ねてしまわないか、画面内の短い説明だけで意味が分かるか、異常終了後に元の作業へ戻れるか、機密情報や個人情報をうっかり Copilot へ貼らないか、後から誰がどの出力を作ったかを説明できるかも、実務利用では重要になる。
+
+この補助PRDの目的は、既存の安全モデルを壊さずに、非エンジニアでも迷わず使える体験へ整理することにある。特にアプリの起動部分と実行部分を簡単にし、起動は「迷わず開ける」、実行は「確認して保存する」1本の導線として再設計する。
+
+## Problem Statement
+
+- セッション、ターン、リレーパケット、バリデーションといった内部概念の理解を前提にしている
+- アプリ起動自体がターミナルや開発者向けコマンドを連想させ、一般利用者が最初の一歩を踏み出しにくい
+- インストール方法、更新方法、対象OSが曖昧だと、そもそも正しい利用手順が伝わらない
+- OS の権限リクエストが突然出ると、許可してよいのか判断できず離脱しやすい
+- 何がローカル保存され、何が外部送信されないのかが見えないと、利用者が安心して使えない
+- 対応外ファイル、ロック中ファイル、大きすぎるファイルに対する事前案内がないと、失敗理由が分かりにくい
+- 複雑すぎる workbook や未対応操作の制約が後から出ると、作業開始後のやり直しコストが高い
+- 地域設定、日付形式、CSV の文字コードや区切り文字が想定とずれると、内容を誤読しやすい
+- Copilot への貼り付けと結果の貼り戻しはできるが、利用者は「次に何をするか」を自力で判断する必要がある
+- よくある作業でも毎回ゼロから指示を書く必要があると、入力負荷が高くなる
+- 作業途中の状態が保持されないと、貼り戻しや確認の途中でやり直しになりやすい
+- 未保存の入力や未確認の preview があるまま閉じると、利用者が状態を見失いやすい
+- 最近使った作業やファイルにすぐ戻れないと、日常運用で手数が増える
+- 検証中、preview 生成中、保存中に何が起きているか見えないと、失敗か待機かの判断がしづらい
+- 実行前の安全確認は正しいが、`preview`、`approval`、`execution` の境界が非エンジニアには分かりにくい
+- 保存や実行ボタンを不安で再度押すと、二重実行や重複出力の心配が生まれる
+- 承認者や上司が短時間で確認できる読みやすい要約がないと、実運用のレビューが回りにくい
+- 承認者が読み取り専用で確認できないと、「誤って実行してしまうのでは」という不安が残る
+- 出力ファイル名が既存ファイルと紛らわしいと、保存後の確認や再実行で混乱しやすい
+- エラーや検証失敗が「何を直せば先に進めるか」に十分つながっていない
+- 画面内の短いヘルプがないと、用語の意味を都度推測することになる
+- やり直す、破棄する、下書きを残す、の違いが曖昧だと、復旧より混乱が増える
+- 異常終了やPC再起動のあとに直前の状態へ戻れないと、再入力の負担が大きい
+- Copilot へ貼る前に機密情報や個人情報への注意がないと、利用者が不安を抱えたまま手作業することになる
+- 誰がいつどの入力からどの出力を作ったか残らないと、問い合わせや承認で説明しにくい
+- 実行結果の保存先や元ファイル保護の説明が弱いと、不安から利用をためらいやすい
+- 詳細設定を触らないと前に進めない設計だと、初回利用で離脱しやすい
+- 文字サイズ、コントラスト、キーボード操作、色以外の状態表示が弱いと、一部利用者が継続利用できない
+
+## Target Users
+
+### Persona 1: 営業事務・バックオフィス担当
+
+- Excel/CSV は日常的に使う
+- SQL、JSON、CLI、型、スキーマは理解していない前提
+- 欲しいのは「やりたい作業を日本語で伝え、安全にコピーを作る」こと
+
+### Persona 2: 現場オペレーション担当
+
+- 定型的な CSV 加工を短時間で終わらせたい
+- 元ファイルを壊したくない
+- 失敗時に原因と次の行動が一目で分かることを重視する
+
+### Persona 3: 業務改善の一次担当
+
+- 技術者ではないが、チーム向けに操作手順を整えたい
+- アプリ内の文言と画面遷移だけで利用説明が完結してほしい
+
+## Success Metrics
+
+- 初回ユーザーが README を読まなくても、サンプルCSVで保存コピー作成まで完了できる
+- 配布済みアプリを、ターミナルや `pnpm` の知識なしで起動できる
+- 対象OS向けのインストーラから迷わず導入でき、更新時も利用者が判断に迷わない
+- 権限リクエストが必要な場面で、利用者が理由と許可対象を理解したうえで進める
+- 利用者が「データはローカル保存」「外部送信は手動の Copilot 貼り付けのみ」と説明できる
+- 対応外または問題のあるファイルを開く前に、利用者が平易な事前チェック結果を確認できる
+- 未対応制約がある場合、作業開始前または実行前のできるだけ早い段階で通知される
+- 地域設定や CSV 互換性に応じて、日付・数値・文字コード・区切り文字の注意点を案内できる
+- 初回ユーザーが 15 分以内に `ファイル選択 -> 指示作成 -> Copilot 貼り付け -> 結果確認 -> 保存` を完了できる
+- よくある作業はテンプレートから開始でき、初回入力の負担を大きく減らせる
+- 再起動後も、途中の作業状態と最近使った作業に迷わず戻れる
+- 異常終了のあとでも、自動復旧から直前の下書きや確認状態へ戻れる
+- 未保存または未確認の状態で閉じようとしたときに、利用者が意図せず作業を失わない
+- 検証中、preview 生成中、保存中に現在の処理状態と次アクションが表示される
+- 実行中や保存中は二重実行が防止され、重複操作の不安を減らせる
+- Copilot へ貼る前に、機密情報や個人情報を含む可能性がある場合の注意が表示される
+- テスト参加者の 80% 以上が、元ファイルが変更されないことを画面だけで理解できる
+- テスト参加者の 80% 以上が、実行前に「何が変わるか」「どこに保存されるか」を説明できる
+- 実行失敗時に、次にやるべき修正行動を画面上の案内だけで判断できる
+- 起動失敗時に、利用者またはサポート担当が診断情報を書き出して復旧導線に進める
+- 保存完了後に、利用者が「保存先を開く」「結果を確認する」「別ファイルに同じ流れを適用する」を迷わず選べる
+- 安全な既定値のままで、設定画面を開かずに最初の成功体験を完了できる
+- 承認者向けの要約だけで、何が変わるかを短時間で説明できる
+- 読み取り専用の確認モードで、実行権限なしに変更点を確認できる
+- 画面内ヘルプや用語ガイドだけで、主要概念を都度確認できる
+- 操作履歴や監査ログから、入力ファイル、出力ファイル、実行時刻、変更要約を後から確認できる
+- アクセシビリティ最低条件を満たし、色やマウス操作だけに依存しない
+
+## Product Goals
+
+- 技術用語を排し、「業務作業の言葉」で操作できるUIにする
+- 起動から初回画面表示までを CLI 不要で完了できるようにする
+- 配布、インストール、更新、復旧までを一般利用者が扱える運用導線にする
+- データ取り扱い、途中保存、再開方法を明示して安心感を高める
+- 待ち時間を可視化し、定型作業はテンプレートから始められるようにする
+- 権限要求、未対応制約、未保存状態を早く分かりやすく伝える
+- 地域設定や CSV 互換性の違いで誤解が起きにくい案内を行う
+- 画面ごとに次の1アクションを明確にする
+- 実行前の確認を簡単にしつつ、安全性は維持する
+- Copilot 手動中継の流れをアプリ内で完結的に案内する
+- 実行結果と保存先を明瞭にし、安心して再実行できるようにする
+- 初回は安全な既定値で始められ、詳細設定を触らなくても使えるようにする
+- 実行者以外でも読める変更要約と、最低限のアクセシビリティを確保する
+- 二重実行を防ぎ、読み取り専用確認や短い画面内ヘルプで迷いを減らす
+- 異常終了からの復旧、機密情報への事前注意、操作履歴の確認まで含めて安心感を高める
+
+## Non-Goals
+
+- Copilot Chat の自動操作
+- save-copy only の解除
+- 任意コード実行、shell、VBA、外部ネットワーク実行
+- 高度な xlsx 編集機能の追加
+- パワーユーザー向けの詳細設定を初期画面に露出すること
+
+## UX Principles
+
+1. 用語は業務語に置き換える
+   `approval` ではなく「内容を確認」、`execution` ではなく「コピーを保存」などの表現を使う。
+
+2. 常に次の1手を示す
+   各画面で、主ボタンは常に1つに絞る。補助操作は二次導線に下げる。
+
+3. 実行前の不安を減らす
+   「元ファイルは変更しない」「保存先はここ」「変更点はこれだけ」を短い文で明示する。
+
+4. 詳細は必要になってから見せる
+   JSON、生の検証結果、技術詳細は折りたたみ配下に置き、初期表示では見せすぎない。
+
+5. エラーは修正指示まで含める
+   失敗理由だけでなく、「Copilot にこのまま再依頼する」「この欄を修正する」を提示する。
+
+6. 起動前から迷わせない
+   アプリを開くまでの手順、初回起動時の案内、必要な準備を利用者に推測させない。
+
+7. 待ち時間を無言にしない
+   検証中、preview 中、保存中は、現在の処理内容と次に起こることを必ず表示する。
+
+8. まずは安全な既定値で動く
+   初回利用では詳細設定を不要にし、保存先提案、確認レベル、表示内容は安全側の既定値を使う。
+
+9. 制約は後出ししない
+   未対応形式、複雑すぎる入力、権限不足、未保存状態は、できるだけ早い段階で知らせる。
+
+10. 実行者以外にも読める
+    承認者や上司が短時間で確認できる要約を用意し、色だけに頼らない見せ方にする。
+
+11. 迷ったときは画面内で解決できる
+    用語や次の行動は短いヘルプで再確認でき、長いマニュアルに戻らなくても進める。
+
+12. 不意の中断や共有前の不安に備える
+    異常終了時は復旧し、Copilot に貼る前は機密情報や個人情報の扱いを短く再確認できるようにする。
+
+## Key User Flows
+
+### Flow 0: かんたん起動
+
+1. ユーザーが配布済みアプリをダブルクリックまたはショートカットから起動する
+2. 初回起動時は、アプリが「できること」「元ファイルは変更しない」「まず試す / 自分のファイルで始める」を案内する
+3. ファイルアクセスや保存先アクセスの権限が必要な場合は、OS ダイアログの前に「なぜ必要か」を短く説明する
+4. 必要な保存先権限や設定が不足している場合は、専門用語なしで対処方法を表示する
+5. ユーザーはそのままサンプル開始または自分のファイル選択へ進める
+
+### Flow 1: かんたん開始
+
+1. ユーザーがファイルを選ぶ
+2. アプリがテンプレートまたは自由入力のどちらかを提示する
+3. ユーザーは「列名変更」「型変換」「絞り込み」「集計」などのテンプレートを選ぶか、自然文で入力する
+4. アプリが「何をしたいですか」を自然文で補助しながら聞く
+5. 機密情報や個人情報を含む可能性がある場合は、アプリが Copilot に貼る前の注意を短く表示する
+6. アプリが Copilot に貼る文面を生成し、コピーボタンを出す
+7. ユーザーが Copilot の結果を貼り戻す
+8. アプリが変更内容を自然文で要約する
+9. ユーザーが保存先を確認し、「コピーを保存」を押す
+10. 完了画面で保存先と結果概要を確認する
+
+### Flow 1.5: ファイルを開く前に問題を知る
+
+1. ユーザーが CSV または workbook を選ぶ
+2. アプリが対応形式、読み取り可否、ロック状態、サイズ目安、CSV の文字コードや区切り文字の注意点を事前確認する
+3. 未対応形式や複雑すぎる workbook、未対応操作の可能性があれば、できるだけ早い段階で制約を知らせる
+4. 問題があれば「開けません」ではなく、「理由」と「次にやること」を示す
+5. 問題がなければ、そのまま作業開始に進む
+
+### Flow 2: 実行前確認を簡単にする
+
+1. ユーザーが貼り戻した結果をアプリが検証する
+2. アプリは技術的な検証結果ではなく、まず「そのまま保存できる / 確認が必要 / 修正が必要」を表示する
+3. 検証中や preview 生成中は、「今確認している内容」と「次にできること」を表示する
+4. 保存前確認では次の3点だけを最上部に固定表示する
+   - 何が変わるか
+   - 何件くらい変わるか
+   - どこに保存されるか
+5. ユーザーは「詳細を見る」を開いたときだけ技術詳細を確認できる
+
+### Flow 3: 修正しやすいエラー対応
+
+1. 貼り戻し内容が不正なら、アプリは失敗箇所を平易な日本語で説明する
+2. その下に「Copilot に再依頼する文」を自動生成する
+3. ユーザーは再依頼文をコピーして戻れる
+4. 以前の入力内容は保持される
+
+### Flow 4: 中断した作業を再開する
+
+1. ユーザーがアプリを再起動する
+2. Home に最近使った作業と最近使ったファイルが表示される
+3. ユーザーは途中の objective、貼り戻し内容、preview 状態を保ったまま再開できる
+
+### Flow 4.2: 異常終了から自動復旧する
+
+1. ユーザーが異常終了またはPC再起動のあとにアプリを開く
+2. アプリが直前の自動保存状態を検出し、「前回の続きから戻るか」を短く確認する
+3. ユーザーは復旧する、復旧せず破棄する、のどちらかを選べる
+4. 復旧時は、下書き、貼り戻し内容、直前の確認状態、保存先候補が戻る
+
+### Flow 4.5: 未保存のまま閉じる前に気づく
+
+1. ユーザーが途中入力や未確認の preview を残したまま閉じようとする
+2. アプリが「保存前に閉じてもよいか」「あとで再開できるか」を短く確認する
+3. ユーザーは、戻る、下書きを残して閉じる、破棄して閉じる、から選べる
+
+### Flow 5: 完了後に次の行動へ進む
+
+1. 保存完了後、アプリが結果概要と保存先を表示する
+2. 出力ファイル名が既存ファイルと紛らわしい場合は、保存前に別名提案または警告が出る
+3. 保存処理中は重複クリックや再実行が抑止される
+4. ユーザーは「保存先を開く」「結果を見直す」「別ファイルでもう一度試す」から選べる
+5. 必要なら変更サマリーをコピーして、承認者や関係者へ共有できる
+6. 操作履歴には、入力ファイル、出力ファイル、実行時刻、変更要約がローカルに記録される
+
+### Flow 6: 承認者が短く確認する
+
+1. 実行者または承認者が、変更予定または変更結果の要約を見る
+2. 承認者は読み取り専用の確認モードで内容だけを確認できる
+3. 画面は「何が変わるか」「何件くらい影響するか」「保存先はどこか」を短く示す
+4. 詳細を知らなくても、承認可否や共有の判断ができる
+
+## Core Features
+
+### Capability: Easy Launch and First Run
+
+#### Feature: 非エンジニア向け起動導線
+
+- **Description**: 配布済みデスクトップアプリを、CLI なしで起動できる前提をプロダクト要件にする
+- **Inputs**: desktop bundle / installer, OS launcher entry
+- **Outputs**: 起動可能なアプリ本体、分かりやすい起動導線
+- **Behavior**: 利用者向けの正規導線は「インストールして開く」であり、`pnpm` や開発者コマンドは利用手順に含めない
+
+#### Feature: 初回起動ウェルカム
+
+- **Description**: 初回起動時に、何ができるかと最初の選択肢を短く案内する
+- **Inputs**: first-run state
+- **Outputs**: welcome card, sample start CTA, custom file CTA
+- **Behavior**: 初回はセッション一覧より先に「まず試す」「自分のファイルで始める」を強く出す
+
+#### Feature: 起動時の事前確認とやさしい失敗案内
+
+- **Description**: 保存先や必要なアプリデータ領域が使えない場合でも、専門用語なしで案内する
+- **Inputs**: initialize_app result, storage availability, permission/preflight state
+- **Outputs**: friendly startup status, next-action guidance
+- **Behavior**: 起動失敗や保存先問題を stack trace ではなく「問題」「理由」「次にやること」で表示する
+
+#### Feature: 権限リクエストの事前説明
+
+- **Description**: OS 権限ダイアログの前に、何のための許可かを利用者へ説明する
+- **Inputs**: permission type, user action context, OS prompt trigger
+- **Outputs**: pre-permission explanation, proceed/cancel guidance
+- **Behavior**: ファイル選択や保存先アクセスで許可が必要な場合に、システムダイアログ任せにせずアプリ側で理由を先に示す
+
+#### Feature: 配布形態と対象OSの固定
+
+- **Description**: 非エンジニア向けの正規配布方法と対象OSを曖昧にしない
+- **Inputs**: supported OS policy, packaging target decision
+- **Outputs**: official distribution rule, supported-platform messaging
+- **Behavior**: 最初の提供対象を絞る場合でも、ユーザーには「どこから入手し、どのOSで使えるか」がすぐ分かるようにする
+
+#### Feature: インストールと更新のやさしい案内
+
+- **Description**: インストール方法と更新時の挙動を利用者向けに説明する
+- **Inputs**: installer behavior, update strategy, privilege requirements
+- **Outputs**: install guidance, update guidance, expectation-setting copy
+- **Behavior**: 管理者権限の要否、再起動の要否、更新で保持されるデータを平易な文言で案内する
+
+#### Feature: 起動失敗時のセルフリカバリ
+
+- **Description**: 初期化失敗や保存先不備のときに、再試行・設定リセット・サポート連絡の導線を示す
+- **Inputs**: startup error category, recoverable state, diagnostic availability
+- **Outputs**: retry action, reset action, support guidance
+- **Behavior**: 利用者が自力で復旧できる手順を優先し、それでも解決しない場合だけサポート連絡へ進ませる
+
+#### Feature: 診断情報の書き出し
+
+- **Description**: サポート向けに必要な最小限の診断情報を利用者が簡単に渡せるようにする
+- **Inputs**: app version, OS, storage status, recent log references
+- **Outputs**: diagnostic summary, copy/export action
+- **Behavior**: 生ログ全文を読ませるのではなく、バージョン情報と最近の失敗状況をまとめてコピーまたは保存できるようにする
+
+### Capability: Data Trust and File Readiness
+
+#### Feature: データ取り扱いの明示
+
+- **Description**: どのデータがローカルに保存され、どの操作だけが手動で外部へ出るかを利用者に明示する
+- **Inputs**: storage policy, relay workflow policy
+- **Outputs**: privacy/safety copy, local-only explanation
+- **Behavior**: セッション履歴、ログ、生成物参照はローカル保存であり、外部送信は利用者自身による Copilot 貼り付けだけであることを示す
+
+#### Feature: Copilot 貼り付け前の機密情報・個人情報注意
+
+- **Description**: Copilot へ貼る前に、機密情報や個人情報の扱いを短く再確認できるようにする
+- **Inputs**: relay packet copy intent, column names, file context, lightweight sensitivity hints
+- **Outputs**: sensitivity caution, continue/cancel choice, redaction reminder
+- **Behavior**: 個人名、連絡先、顧客ID、社外秘らしき列名や文脈がある場合、コピー直前に「必要最小限だけ貼る」「問題なければ続行」の注意を出す
+
+#### Feature: ファイル事前チェック
+
+- **Description**: 作業開始前に、ファイルが扱えるかを平易な言葉で確認する
+- **Inputs**: selected file path, format, readability, lock state, size hints
+- **Outputs**: preflight result, friendly warnings, next-action guidance
+- **Behavior**: 対応外形式、他アプリで使用中、読み取り不可、大きすぎる可能性などを開始前に伝える
+
+#### Feature: 制約の先出し
+
+- **Description**: 未対応の入力や操作制約を、失敗直前ではなく早い段階で伝える
+- **Inputs**: workbook complexity hints, unsupported-feature rules, action support policy
+- **Outputs**: constraint summary, supported-path guidance
+- **Behavior**: 複雑すぎる xlsx、未対応変換、制約のある保存経路などを、開始前か preview 前に分かりやすく通知する
+
+#### Feature: 地域設定と CSV 互換の案内
+
+- **Description**: 地域設定や CSV 互換差分で内容を誤解しないように案内する
+- **Inputs**: locale settings, delimiter detection, encoding hints, date/number formatting expectations
+- **Outputs**: locale/csv guidance, compatibility warnings
+- **Behavior**: 日付形式、小数点、桁区切り、UTF-8/Shift_JIS、区切り文字の違いが影響しうる場合に、開始前に短く注意を示す
+
+### Capability: Session Continuity
+
+#### Feature: 途中保存と再開
+
+- **Description**: 作業途中の状態を保持し、再起動後もそのまま再開できるようにする
+- **Inputs**: objective draft, pasted response draft, preview state, output path candidate
+- **Outputs**: resumable session state
+- **Behavior**: 途中入力と確認状態を消さずに戻れることを、Home と Studio の両方で分かるようにする
+
+#### Feature: 異常終了からの自動復旧
+
+- **Description**: アプリ異常終了やPC再起動のあとでも、直前の安全な状態から戻れるようにする
+- **Inputs**: autosaved draft state, crash marker, last-known preview state, output path candidate
+- **Outputs**: recovery prompt, restored working state, discard option
+- **Behavior**: 次回起動時に直前の自動保存を検出し、復旧または破棄を選べるようにする
+
+#### Feature: 未保存・未完了の警告
+
+- **Description**: 途中入力や未確認状態を残したまま閉じる前に注意を出す
+- **Inputs**: dirty draft state, unreviewed preview state, pending execution state
+- **Outputs**: leave-warning dialog, save-draft option, discard option
+- **Behavior**: 利用者が意図せず作業を失わないように、閉じる前に現在の状態と再開可否を示す
+
+#### Feature: やり直し・破棄・下書き保持の明確化
+
+- **Description**: やり直す、破棄する、下書きを残す、の違いを明確にする
+- **Inputs**: current draft state, retry intent, discard intent
+- **Outputs**: clear recovery choices, destructive-action confirmation
+- **Behavior**: 失敗後や離脱前に、再試行、下書き保持、破棄の選択肢を言葉の意味ごとに区別して示す
+
+#### Feature: 最近使った作業と最近のファイル
+
+- **Description**: 日常利用で直近の作業にすぐ戻れるようにする
+- **Inputs**: session history, recent workbook paths, updated timestamps
+- **Outputs**: recent-work list, recent-file list
+- **Behavior**: Home に「最近の作業」「最近のファイル」を表示し、新規開始より再開を優先しやすくする
+
+### Capability: Guided Templates and Safe Defaults
+
+#### Feature: 定型テンプレートから始める
+
+- **Description**: よくある作業をテンプレートから始められるようにする
+- **Inputs**: common spreadsheet task templates, workbook context
+- **Outputs**: prefilled objective, template-based quick start
+- **Behavior**: 列名変更、型変換、絞り込み、集計などの定型操作を、自由入力の前に選べるようにする
+
+#### Feature: 安全な既定値で始める
+
+- **Description**: 初回利用では詳細設定を触らなくても安全に進めるようにする
+- **Inputs**: default policy, save-copy rules, review policy
+- **Outputs**: sensible defaults, hidden-advanced-settings posture
+- **Behavior**: 保存先提案、確認表示、危険操作の抑止は最初から安全側に設定し、詳細設定は必要時のみ見せる
+
+#### Feature: 画面内ヘルプと用語ガイド
+
+- **Description**: 用語や次の行動を画面内で短く再確認できるようにする
+- **Inputs**: current step, UI term glossary, contextual help copy
+- **Outputs**: inline help, glossary popovers, first-run tips
+- **Behavior**: 初回だけ短い説明を出し、その後は `?` などから必要なときだけ確認できるようにする
+
+### Capability: Guided Onboarding
+
+#### Feature: サンプルから試す導線
+
+- **Description**: 実ファイルを使う前に、同梱CSVで一連の操作を体験できる
+- **Inputs**: サンプル選択または初回起動判定
+- **Outputs**: サンプル付きセッション、説明付き画面導線
+- **Behavior**: 初回時は「まず試す」導線を最優先表示する
+
+#### Feature: やりたいこと入力の平文化
+
+- **Description**: objective 入力欄を業務文脈で書ける案内文にする
+- **Inputs**: ユーザーの自然文
+- **Outputs**: わかりやすい指示文、入力例
+- **Behavior**: プレースホルダとテンプレートで入力負荷を下げる
+
+### Capability: Copilot Handoff Assist
+
+#### Feature: 1クリックでコピーできる依頼文
+
+- **Description**: relay packet をそのまま使わせるのではなく、貼り付け用整形文として提示する
+- **Inputs**: objective、利用可能ツール、現在のファイル情報
+- **Outputs**: コピー用テキスト、コピー完了通知
+- **Behavior**: 技術的なメタ情報は保持しつつ、利用者には「Copilot に貼る文」として見せる
+
+#### Feature: 貼り戻し欄のガイド
+
+- **Description**: Copilot の返答をどこまで貼ればよいかを画面で明示する
+- **Inputs**: pasted response
+- **Outputs**: 貼り付け例、検証結果、再依頼文
+- **Behavior**: JSON 全体を要求する理由を短文で説明する
+
+### Capability: Simplified Review and Save
+
+#### Feature: 実行導線の一本化
+
+- **Description**: `preview`、`approval`、`execution` を利用者には「確認して保存」の1ステップとして見せる
+- **Inputs**: validated response、preview result、approval requirement
+- **Outputs**: 実行可否、要約カード、保存ボタン
+- **Behavior**: バックエンドの安全段階は維持したまま、UI 上は段差を減らす
+
+#### Feature: 3点要約プレビュー
+
+- **Description**: 実行前に「変更内容」「影響件数」「保存先」だけを最上部で示す
+- **Inputs**: diff summary、estimated affected rows、output path
+- **Outputs**: 非技術者向け要約カード
+- **Behavior**: 列名変更や行数の変化は自然文で要約し、技術詳細は折りたたむ
+
+#### Feature: 保存先の自動提案
+
+- **Description**: save-copy の安全制約を保ったまま、推奨保存先を最初から提示する
+- **Inputs**: source workbook path、session context
+- **Outputs**: 推奨出力パス、変更可能な保存先UI
+- **Behavior**: 元ファイルと同じ場所に上書きされないことを明示する
+
+#### Feature: 出力ファイル名の衝突防止
+
+- **Description**: 保存先の既存ファイルと混同しないように、出力名を安全に提案する
+- **Inputs**: suggested output path, existing file presence, naming policy
+- **Outputs**: conflict-safe filename, overwrite warning, alternate suggestion
+- **Behavior**: 同名ファイルや紛らわしい名前を避けるため、日時付き候補や別名案を提示し、利用者に上書き誤認をさせない
+
+#### Feature: 二重実行防止
+
+- **Description**: 同じ保存や実行を誤って重ねないようにする
+- **Inputs**: execution state, pending output state, duplicate-action detection
+- **Outputs**: disabled duplicate actions, already-running guidance
+- **Behavior**: 保存中や実行中は重複クリックを無効化し、同一処理が進行中または完了済みであることを伝える
+
+#### Feature: 実行後の完了画面
+
+- **Description**: 保存完了後に、結果概要と保存先を明快に表示する
+- **Inputs**: execution result
+- **Outputs**: 成功メッセージ、保存先、次の選択肢
+- **Behavior**: 「保存先を開く」「同じ条件でもう一度試す」を提供する
+
+#### Feature: 完了後導線と共有しやすい変更サマリー
+
+- **Description**: 保存後に、次の行動と関係者共有をしやすくする
+- **Inputs**: execution result, diff summary, output path
+- **Outputs**: post-run actions, shareable summary
+- **Behavior**: 保存先を開く、結果を見直す、別ファイルでもう一度試す、変更サマリーをコピーする導線を出す
+
+#### Feature: 承認者向けの読みやすい要約
+
+- **Description**: 実行者以外でも短時間で判断できる変更要約を出す
+- **Inputs**: diff summary, estimated affected rows, output path, warnings
+- **Outputs**: reviewer-friendly summary card, shareable approval summary
+- **Behavior**: 専門用語を減らし、何が変わるか、影響件数、保存先、注意点だけを短く読める形にする
+
+#### Feature: 読み取り専用の確認モード
+
+- **Description**: 実行権限なしで変更内容だけを確認できるようにする
+- **Inputs**: session summary, diff summary, reviewer access intent
+- **Outputs**: read-only review mode, reviewer-safe controls
+- **Behavior**: 承認者や関係者は、変更要約や注意点を読めるが、実行ボタンや破壊的操作には進めない
+
+### Capability: Progress Visibility
+
+#### Feature: 待ち時間の見える化
+
+- **Description**: 処理中に現在の状態と次の行動を利用者へ示す
+- **Inputs**: startup state, validation state, preview state, execution state
+- **Outputs**: progress status, busy messaging, next-step messaging
+- **Behavior**: 起動中、検証中、preview 生成中、保存中に、待機ではなく進行中であることと次に何が起きるかを表示する
+
+### Capability: Accessibility Baseline
+
+#### Feature: アクセシビリティ最低条件
+
+- **Description**: 読みやすさと操作しやすさの最低条件を最初から要件化する
+- **Inputs**: typography choices, color usage, keyboard flows, message patterns
+- **Outputs**: accessibility baseline rules
+- **Behavior**: 十分な文字サイズ、コントラスト、キーボード操作、色以外の状態表現、長文の分割、明確なエラー見出しを前提にする
+
+### Capability: Clear Error Recovery
+
+#### Feature: 非技術者向けエラー文言
+
+- **Description**: 検証失敗や実行不可の理由を、専門用語なしで説明する
+- **Inputs**: validation issues、preview warnings、execution errors
+- **Outputs**: 平易なエラー文、再試行方法
+- **Behavior**: 「問題」「理由」「次にやること」を固定フォーマットで出す
+
+#### Feature: Copilot 再依頼支援
+
+- **Description**: 修正用 follow-up prompt をそのままコピーできる
+- **Inputs**: parser/validator repair prompt
+- **Outputs**: 再依頼文、コピー操作
+- **Behavior**: 修正ループをアプリ主導にする
+
+### Capability: Trust and Safety Communication
+
+#### Feature: 元ファイル保護の明示
+
+- **Description**: 元ファイルは変更されないことを継続的に見せる
+- **Inputs**: current workflow state
+- **Outputs**: 固定メッセージ、保存方式の説明
+- **Behavior**: 実行前後の両方で read-only と save-copy only を表示する
+
+#### Feature: 危険操作の不採用をUIで説明
+
+- **Description**: なぜ直接上書きできないかを利用者視点で説明する
+- **Inputs**: app policy
+- **Outputs**: 簡潔な安全説明
+- **Behavior**: 制約ではなく安心材料として見せる
+
+### Capability: Audit and Team Operations
+
+#### Feature: 操作履歴と監査ログ
+
+- **Description**: 誰がいつどの入力からどの出力を作ったかを、後から確認できるようにする
+- **Inputs**: session id, source file path, output file path, execution timestamp, diff summary
+- **Outputs**: local audit history, support-friendly operation record
+- **Behavior**: ローカルに人が読める履歴を残し、問い合わせや承認時に入力、出力、時刻、変更要約を確認できるようにする
+
+## Technical Architecture
+
+### Frontend
+
+- `apps/desktop/src/routes/+page.svelte`
+  初回導線、起動直後のウェルカム、権限説明、最近使った作業、最近のファイル、異常終了からの復旧確認、サンプル開始、セッション作成、やりたいこと入力の簡略化、画面内ヘルプを担当
+- `apps/desktop/src/routes/studio/+page.svelte`
+  「準備」「Copilot」「確認して保存」の段階表示、途中再開、異常終了復旧後の状態表示、Copilot 貼り付け前の機密注意、未保存警告、待ち時間表示、二重実行防止、完了後導線、読み取り専用確認モードの中心
+- `apps/desktop/src/lib/studio-state.ts`
+  現在の技術状態を、非エンジニア向けステップ状態、再開状態、異常終了復旧状態、進行状態、機密注意状態、未保存警告状態、完了後状態、read-only review 状態へ写像するUI状態を追加
+- `apps/desktop/src/lib/ipc.ts`
+  `initialize_app`、permission/preflight 系、locale/csv compatibility 系、review summary 系、sensitivity caution 系、audit history 系の結果をやさしい案内へ変換する責務を持たせる
+- 新規コンポーネント候補
+  `apps/desktop/src/lib/components/welcome/*`
+  `apps/desktop/src/lib/components/crash-recovery/*`
+  `apps/desktop/src/lib/components/permission-help/*`
+  `apps/desktop/src/lib/components/recent-work/*`
+  `apps/desktop/src/lib/components/file-preflight/*`
+  `apps/desktop/src/lib/components/template-picker/*`
+  `apps/desktop/src/lib/components/inline-help/*`
+  `apps/desktop/src/lib/components/sensitivity-warning/*`
+  `apps/desktop/src/lib/components/stepper/*`
+  `apps/desktop/src/lib/components/progress-status/*`
+  `apps/desktop/src/lib/components/leave-warning/*`
+  `apps/desktop/src/lib/components/review-summary/*`
+  `apps/desktop/src/lib/components/reviewer-summary/*`
+  `apps/desktop/src/lib/components/read-only-review/*`
+  `apps/desktop/src/lib/components/output-name-guard/*`
+  `apps/desktop/src/lib/components/post-run-actions/*`
+  `apps/desktop/src/lib/components/audit-history/*`
+  `apps/desktop/src/lib/components/error-help/*`
+
+### Backend
+
+- 既存の `generate_relay_packet`、`submit_copilot_response`、`preview_execution`、`approval/respond`、`execution/run` を維持する
+- 起動フェーズでは `initialize_app` を非エンジニア向け初回案内と preflight 状態表示の基点として再活用する
+- セッション永続化は、履歴保持だけでなく再開しやすい draft 状態、異常終了復旧用の自動保存状態、recent lists の返却も担う
+- このフェーズでは実行エンジンの大幅な変更よりも、UI が安全段階をどう束ねて見せるかを優先する
+- 必要があれば、非技術者向け要約文を返すための軽量メタデータを preview/execution payload に追加する
+- 必要があれば、起動時に必要な保存先・データ領域・初回状態を返す軽量メタデータを `initialize_app` に追加する
+- 必要があれば、permission rationale、file preflight 結果、constraint hints、locale/csv compatibility hints、sensitivity hints、recent sessions/files、crash recovery state、post-run summary、reviewer summary、read-only review flags、progress 状態、template descriptors、output-name collision hints、duplicate-run guards、audit history summaries を返す軽量メタデータを追加する
+
+### Contracts
+
+- `packages/contracts/src/workbook.ts`
+  preview payload に非技術者向け summary 文や UI hint を追加する余地を持たせる
+- `packages/contracts/src/ipc.ts`
+  review/save ステップ、startup/preflight 状態、permission rationale、constraint hints、locale/csv compatibility hints、sensitivity hints、recent items、resumable drafts、crash recovery state、leave warnings、post-run summary、reviewer summary、read-only review flags、progress 状態、template descriptors、output-name collision hints、duplicate-run guards、audit history summaries を表現するためのレスポンス項目を追加する場合はここを正本にする
+
+### Data Handling and Storage
+
+- セッション履歴、途中入力、preview 状態、診断情報、最近使った作業、操作履歴はローカル保存を前提に設計する
+- 既定値は安全側に固定し、利用者が明示的に変更しない限り危険寄りの設定へ寄らないようにする
+- 利用者向けには「何が保存されるか」「どう削除できるか」を分かる文言にする
+- 外部送信は利用者が手動で行う Copilot 貼り付けのみであり、アプリが自動送信しないことを明示する
+
+### Locale and CSV Compatibility
+
+- 日付形式、小数点、桁区切り、文字コード、区切り文字の違いで誤認しやすい箇所を明示する
+- CSV 入出力は利用者の期待する地域設定とずれた場合に、開始前または保存前に注意を示す
+
+### Accessibility
+
+- 重要状態は色だけでなく文言とアイコンでも示す
+- キーボードで主要導線を完了できることを前提にする
+- 長い説明やエラーは短い見出しと本文へ分割する
+- 承認者向け要約も小さすぎる文字や過密レイアウトを避ける
+
+### Packaging and Distribution
+
+- `apps/desktop/src-tauri/tauri.conf.json`
+  非エンジニア向け配布を前提に、bundle target、アプリ名、アイコン、起動エントリの妥当性を見直す
+- 最初の正規配布対象OSと installer 方式を明示する
+- 更新方式は「自動更新」「手動更新」「再配布」のどれかを先に決め、利用者向け案内を分ける
+- 利用者向けの正規起動導線は packaged desktop app を前提とし、開発用コマンド起動は実装者向け手順として分離する
+- 初回対象OSを絞る場合でも、「対象外だから難しい」のではなく「まずはこの配布形態で迷わず起動できる」を優先する
+
+### Docs and Demo
+
+- `README.md`
+  実装が現実化した段階で、非エンジニア向けの最短導線、packaged app の起動手順、データ取り扱い、再開方法を記載する
+- `docs/IMPLEMENTATION.md`
+  配布形態、更新方針、起動失敗時の復旧導線、診断情報、データ取り扱い、recent/resume、異常終了復旧、機密情報注意、操作履歴、完了後導線の扱いを decision log と verification log に残す
+- `examples/**`
+  初回ユーザー向けに「成功しやすいサンプル」を残す
+
+## Development Roadmap
+
+### Phase 1: 起動と初回体験の簡略化
+
+- 正規配布対象OSと installer 方式を定義する
+- packaged app を前提にした起動導線を定義する
+- インストール/更新時の案内文と言葉を定義する
+- 初回起動ウェルカムと sample/custom の二択導線を追加する
+- 安全な既定値と詳細設定の隠し方を定義する
+- 権限リクエスト前の説明文を定義する
+- データ取り扱いの説明と local-only の見せ方を定義する
+- Copilot 貼り付け前の機密情報・個人情報注意を定義する
+- ファイル事前チェックの案内文を定義する
+- 地域設定と CSV 互換に関する注意文を定義する
+- 制約の先出し方を定義する
+- 起動時 preflight の失敗案内を非エンジニア向け文面にする
+- 診断情報コピーまたは書き出しの最小導線を定義する
+
+### Phase 2: 用語と導線の再設計
+
+- 技術用語を業務用語へ置き換える
+- 画面内ヘルプと用語ガイドを追加する
+- 定型テンプレートの開始導線を追加する
+- 最近使った作業と最近のファイルを Home に組み込む
+- 異常終了からの復旧導線を追加する
+- Studio を 3 段階表示に整理する
+- 待ち時間の状態表示を追加する
+- 主ボタンを各段階で 1 つに絞る
+
+### Phase 3: 実行部分の簡略化
+
+- `preview`、`approval`、`execution` を UI 上で「確認して保存」に統合する
+- 保存前の最重要情報を 3 点要約で表示する
+- 読み取り専用の確認モードを追加する
+- 推奨保存先と保存後の完了画面を追加する
+- 出力ファイル名の衝突防止を追加する
+- 二重実行防止を追加する
+- 承認者向けの読みやすい要約を追加する
+- 操作履歴と監査ログを追加する
+- 完了後の共有しやすい変更サマリーを追加する
+
+### Phase 4: エラー修正と再依頼支援
+
+- 検証エラーを非技術者向け文面へ変換する
+- 再依頼文のコピー導線を強化する
+- 入力保持とやり直し/破棄の分かりやすさを改善する
+- 作業途中の状態を保持し、再開導線を改善する
+- 未保存・未完了のまま閉じる前の警告を追加する
+
+### Phase 5: 初回体験と安心感の補強
+
+- サンプル開始導線を追加する
+- 元ファイル保護と save-copy only を画面上で継続表示する
+- データ保存場所と削除方法を利用者向けに整理する
+- 必要最小限のアクセシビリティ調整を行う
+- 色やマウス操作だけに依存しない状態表示を確認する
+
+## Logical Dependency Chain
+
+1. 配布形態、対象OS、更新方式、起動時 preflight で何を返すかを定義する
+2. データ取り扱い、local-only 保存、Copilot 貼り付け前の機密注意、ファイル事前チェック、locale/csv compatibility の方針を定義する
+3. Home の初回起動ウェルカム、permission help、inline help、recent work、異常終了復旧、template start、sample/custom 分岐を設計する
+4. 起動失敗時の再試行、設定リセット、診断情報書き出し導線を定義する
+5. 現行 Home / Studio の文言と状態遷移を棚卸しする
+6. UI 上の非エンジニア向けステップモデル、resumable state、progress state、safe defaults、leave warnings、duplicate-run guards、audit history を定義する
+7. Studio の表示を「準備」「Copilot」「確認して保存」に再構成し、Copilot 貼り付け前の機密注意を差し込む
+8. review/save 要約カード、承認者向け要約、read-only review、保存先導線、出力名衝突防止、完了後導線、監査ログ確認導線を追加する
+9. エラー再依頼導線、やり直し/破棄導線、制約先出し導線を改善する
+10. README とデモ手順を実装済み挙動に合わせて更新する
+
+## Acceptance Criteria
+
+- 利用者向けの正規手順が、ターミナルや `pnpm` ではなく packaged desktop app の起動として定義されている
+- 正規配布対象OSと installer 方式が決まっており、利用者向け説明が存在する
+- 更新時に何が起きるか、データが保持されるか、再起動が必要かが利用者向けに定義されている
+- 利用者向けに、何がローカル保存され、何が自動外部送信されないかが明示されている
+- Copilot へ貼る前に、機密情報や個人情報を含む可能性がある場合の注意が表示される
+- 初回起動時に「まず試す」「自分のファイルで始める」が明確に表示される
+- 権限ダイアログが必要な場合、OS ダイアログの前に理由と影響範囲が説明される
+- 初回利用時に、設定画面を開かずに安全な既定値のまま最初のフローを完了できる
+- 画面内ヘルプや用語ガイドから、主要概念を再確認できる
+- よくある作業はテンプレートから始められる
+- ファイル選択時に、対応形式、読み取り可否、ロック状態、サイズ上の注意を平易に案内できる
+- 未対応制約がある場合、作業開始または preview 前のできるだけ早い段階で通知される
+- 地域設定や CSV 互換性の違いが問題になりうる場合、利用者向け注意が表示される
+- 起動時に保存先やアプリデータ領域の問題がある場合、専門用語なしで対処方法が示される
+- 起動失敗時に、再試行、設定リセット、診断情報のコピーまたは書き出しの少なくとも 1 つが案内される
+- 再起動後に、途中の作業状態または最近使った作業から再開できる
+- 異常終了のあとに、直前の自動保存状態から復旧するかどうかを選べる
+- 未保存の入力や未確認の preview を残したまま閉じようとすると、利用者へ警告と選択肢が出る
+- 失敗後や離脱前に、やり直す、下書きを残す、破棄する、の違いが明確に示される
+- Home からサンプル開始またはファイル選択後、次に押すべき主ボタンが常に 1 つだけ明確に見える
+- 検証中、preview 生成中、保存中に現在の状態と次アクションが表示される
+- Studio では `preview`、`approval`、`execution` の内部概念を知らなくても、`確認して保存` の導線でコピー保存まで完了できる
+- 保存前画面の最上部に「何が変わるか」「何件くらい変わるか」「どこに保存されるか」が必ず表示される
+- 読み取り専用の確認モードで、実行権限なしに変更点を確認できる
+- 承認者向けの読みやすい要約だけで、主要な変更点と注意点を確認できる
+- 保存時に、既存ファイルと紛らわしい出力名や同名衝突への対策が提示される
+- 実行中や保存中に二重実行が防止される
+- バリデーション失敗時に、少なくとも 1 つの具体的な修正行動が画面上に出る
+- 保存完了後に、保存先を開く、結果を見直す、別ファイルでもう一度試す、のいずれかへ進める
+- 操作履歴または監査ログから、入力ファイル、出力ファイル、実行時刻、変更要約を後から確認できる
+- 元ファイルが変更されないことが、Home または Studio の常設文言で確認できる
+- 主要導線はキーボードでも辿れ、状態は色以外の文言でも判別できる
+- 既存の save-copy only、read-only original、approval gate は維持される
+
+## Risks and Mitigations
+
+- Risk: 簡略化の結果、安全確認が弱く見える
+  Mitigation: バックエンドの preview/approval gate は維持し、UI だけを簡潔化する
+
+- Risk: 起動しやすさの改善が、配布やOS差分まで一気に広がってスコープ過多になる
+  Mitigation: まずは packaged app、初回ウェルカム、起動時 preflight という最小セットに限定する
+
+- Risk: 更新や復旧導線を曖昧にしたまま配布すると、サポート負荷が利用者側へ跳ね返る
+  Mitigation: 更新方法、データ保持、再試行、設定リセット、診断情報書き出しを最初から最小限で定義する
+
+- Risk: データ取り扱いを曖昧にすると、利用前の不信感や社内確認コストが増える
+  Mitigation: local-only 保存、手動貼り付けのみの外部連携、削除方法を短い文で明示する
+
+- Risk: 機密情報や個人情報への注意が弱いと、Copilot 貼り付け時の利用不安や誤共有リスクが残る
+  Mitigation: コピー直前だけ短く注意を出し、必要最小限を貼る方針と続行判断を示す
+
+- Risk: recent/resume を入れても状態保持が不完全だと、かえって利用者が混乱する
+  Mitigation: 最初は objective、貼り戻し内容、preview 状態、保存先候補など最小限の再開対象に絞る
+
+- Risk: 異常終了復旧が壊れた状態まで戻すと、復旧後の混乱が増える
+  Mitigation: 自動復旧対象は直前の安全な保存状態に限定し、復旧せず破棄する選択肢も常に残す
+
+- Risk: 定型テンプレートが過剰だと、自由入力より分かりにくくなる
+  Mitigation: 最初は頻度の高い少数テンプレートに絞り、自由入力を常に残す
+
+- Risk: 待ち時間表示が曖昧だと、処理失敗か進行中かの判別に役立たない
+  Mitigation: 状態名と次アクションを短文で固定表示し、正確な残り時間表示は必須にしない
+
+- Risk: 安全な既定値を増やしすぎると、利用者が設定変更の必要性に気づきにくい
+  Mitigation: 初回は既定値で進めつつ、詳細設定は必要時のみ説明付きで開示する
+
+- Risk: 権限説明や未保存警告が多すぎると、かえって読まれなくなる
+  Mitigation: 本当に必要な場面だけに絞り、理由と選択肢を短文で統一する
+
+- Risk: 地域設定や CSV 互換の説明が不足すると、正しく読めているのに不安を増やすか、逆に誤読を見逃す
+  Mitigation: 影響が大きい日付、数値、文字コード、区切り文字だけを短く案内し、常時過剰表示はしない
+
+- Risk: 承認者向け要約を簡略化しすぎると、重要な注意点が落ちる
+  Mitigation: 主要変更点、影響件数、保存先、警告の4点は必ず残す
+
+- Risk: 操作履歴や監査ログが技術的すぎると、利用者や承認者が結局使えない
+  Mitigation: 人が読める最小項目に絞り、入力、出力、時刻、変更要約を優先して残す
+
+- Risk: アクセシビリティ要件が後回しになると、後で修正コストが高い
+  Mitigation: 文字サイズ、コントラスト、キーボード操作、色以外の状態表現を最初から最低条件に含める
+
+- Risk: 二重実行防止が不十分だと、重複出力や「保存されたか不安で再クリックする」行動を招く
+  Mitigation: 実行中は重複操作を止め、進行状態と完了状態を明確に見せる
+
+- Risk: 画面内ヘルプが多すぎると画面が散らかり、本来の主導線を邪魔する
+  Mitigation: 初回は短いヒント、以後は明示的に開くヘルプへ寄せる
+
+- Risk: 非技術者向け文言が曖昧すぎて、実際の変更内容が伝わらない
+  Mitigation: 3 点要約と詳細表示を両立し、必要な時だけ深掘りできるようにする
+
+- Risk: 実行部分の簡略化が保存先誤認を生む
+  Mitigation: 推奨保存先を先に提示し、元ファイル非上書きを常時明記する
+
+- Risk: UI 側だけの変更で用語が二重化する
+  Mitigation: 画面文言、README、実装ログの用語集を同時に更新する
+
+## Appendix
+
+### Recommended Copy Direction
+
+- `セッションを作成` より `作業を始める`
+- `ターンを開始` より `新しい依頼を作る`
+- `Preview` より `変更内容を確認`
+- `Approval` より `内容を確認`
+- `Execute` より `コピーを保存`
+- `pnpm で起動` より `アプリを開く`
+- `ログを確認してください` より `診断情報をコピーしてください`
+- `session storage` より `作業内容をこの端末に保存します`
+- `advanced settings` より `詳細設定`
+- `permission denied` より `アクセス許可が必要です`
+- `discard` より `破棄する`
+
+### Guardrails That Must Stay Intact
+
+- 元ファイルは常に read-only
+- 書き込みは save-copy only
+- 実行前に必ず差分確認を通す
+- 非エンジニア向けの正規利用手順は CLI ではなく packaged app を前提にする
+- 任意コード実行、shell、VBA、外部 network access は追加しない
+- raw Excel formula は受け取らない
