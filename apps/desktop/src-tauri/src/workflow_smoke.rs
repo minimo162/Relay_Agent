@@ -10,9 +10,9 @@ use uuid::Uuid;
 
 use crate::{
     models::{
-        ApprovalDecision, CreateSessionRequest, GenerateRelayPacketRequest, PreviewExecutionRequest,
-        RelayMode, RespondToApprovalRequest, RunExecutionRequest, StartTurnRequest,
-        SubmitCopilotResponseRequest,
+        ApprovalDecision, CreateSessionRequest, GenerateRelayPacketRequest,
+        PreviewExecutionRequest, RelayMode, RespondToApprovalRequest, RunExecutionRequest,
+        StartTurnRequest, SubmitCopilotResponseRequest,
     },
     startup::{self, StartupStatus},
 };
@@ -183,10 +183,12 @@ fn run_workflow_smoke_inner(
         ));
     }
 
-    let sample_workbook_path = init
-        .sample_workbook_path
-        .clone()
-        .ok_or_else(|| summary.fail("locate-sample", "Bundled sample workbook path was not available."))?;
+    let sample_workbook_path = init.sample_workbook_path.clone().ok_or_else(|| {
+        summary.fail(
+            "locate-sample",
+            "Bundled sample workbook path was not available.",
+        )
+    })?;
     let original_source = fs::read_to_string(&sample_workbook_path).map_err(|error| {
         summary.fail(
             "locate-sample",
@@ -232,7 +234,10 @@ fn run_workflow_smoke_inner(
             .map_err(|error| summary.fail("start-turn", error))?
             .turn;
         summary.turn_id = Some(turn.id.clone());
-        summary.push_ok("start-turn", format!("Turn `{}` started in `plan` mode.", turn.id));
+        summary.push_ok(
+            "start-turn",
+            format!("Turn `{}` started in `plan` mode.", turn.id),
+        );
 
         let packet = storage
             .generate_relay_packet(GenerateRelayPacketRequest {
@@ -334,10 +339,12 @@ fn run_workflow_smoke_inner(
         );
     }
 
-    let output_path = summary
-        .output_path
-        .clone()
-        .ok_or_else(|| summary.fail("verify-output", "Workflow smoke did not record an output path."))?;
+    let output_path = summary.output_path.clone().ok_or_else(|| {
+        summary.fail(
+            "verify-output",
+            "Workflow smoke did not record an output path.",
+        )
+    })?;
     let output_contents = fs::read_to_string(&output_path).map_err(|error| {
         summary.fail(
             "verify-output",

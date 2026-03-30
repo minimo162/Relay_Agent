@@ -40,8 +40,10 @@ fn repo_sample_workbook_path() -> Option<PathBuf> {
 
 fn ready_scenario() -> Result<StartupSmokeSummary, String> {
     let app_data_dir = unique_test_path("startup-smoke-ready");
-    let response =
-        build_initialize_app_response(&bootstrap_desktop_state(Ok(app_data_dir.clone()), repo_sample_workbook_path()));
+    let response = build_initialize_app_response(&bootstrap_desktop_state(
+        Ok(app_data_dir.clone()),
+        repo_sample_workbook_path(),
+    ));
 
     if response.startup_status != StartupStatus::Ready {
         return Err("ready scenario did not return `ready` startup status".to_string());
@@ -103,8 +105,10 @@ fn attention_scenario() -> Result<StartupSmokeSummary, String> {
         format!("attention scenario could not create blocked startup file: {error}")
     })?;
 
-    let response =
-        build_initialize_app_response(&bootstrap_desktop_state(Ok(blocked_path.clone()), repo_sample_workbook_path()));
+    let response = build_initialize_app_response(&bootstrap_desktop_state(
+        Ok(blocked_path.clone()),
+        repo_sample_workbook_path(),
+    ));
 
     if response.startup_status != StartupStatus::Attention {
         return Err("attention scenario did not return `attention` startup status".to_string());
@@ -115,7 +119,11 @@ fn attention_scenario() -> Result<StartupSmokeSummary, String> {
     if !response
         .startup_issue
         .as_ref()
-        .map(|issue| issue.recovery_actions.contains(&StartupRecoveryAction::RetryInit))
+        .map(|issue| {
+            issue
+                .recovery_actions
+                .contains(&StartupRecoveryAction::RetryInit)
+        })
         .unwrap_or(false)
     {
         return Err("attention scenario did not include retry recovery guidance".to_string());
@@ -149,7 +157,11 @@ fn attention_scenario() -> Result<StartupSmokeSummary, String> {
 }
 
 fn main() {
-    let scenarios = [ready_scenario(), retry_recovery_scenario(), attention_scenario()];
+    let scenarios = [
+        ready_scenario(),
+        retry_recovery_scenario(),
+        attention_scenario(),
+    ];
 
     for scenario in scenarios {
         match scenario {

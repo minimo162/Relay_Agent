@@ -59,10 +59,7 @@ pub fn bootstrap_desktop_state(
 ) -> DesktopState {
     let (storage, startup_preflight) = match app_local_data_dir {
         Ok(app_local_data_dir) => match AppStorage::open(app_local_data_dir.clone()) {
-            Ok(storage) => (
-                storage,
-                StartupPreflight::ready(Some(app_local_data_dir)),
-            ),
+            Ok(storage) => (storage, StartupPreflight::ready(Some(app_local_data_dir))),
             Err(error) => (
                 AppStorage::default(),
                 StartupPreflight::storage_unavailable(app_local_data_dir, error),
@@ -236,14 +233,16 @@ mod tests {
         assert!(response
             .startup_issue
             .as_ref()
-            .map(|issue| issue.recovery_actions.contains(&StartupRecoveryAction::RetryInit))
+            .map(|issue| issue
+                .recovery_actions
+                .contains(&StartupRecoveryAction::RetryInit))
             .unwrap_or(false));
         assert!(response
             .startup_issue
             .as_ref()
-            .map(|issue| issue.recovery_actions.contains(
-                &StartupRecoveryAction::ContinueTemporaryMode
-            ))
+            .map(|issue| issue
+                .recovery_actions
+                .contains(&StartupRecoveryAction::ContinueTemporaryMode))
             .unwrap_or(false));
 
         fs::remove_file(blocked_path).expect("blocked startup file should clean up");

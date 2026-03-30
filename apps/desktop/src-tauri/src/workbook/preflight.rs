@@ -138,9 +138,7 @@ pub fn preflight_workbook(path: impl Into<PathBuf>) -> WorkbookPreflightReport {
             "read-access",
             WorkbookPreflightCheckLevel::Blocking,
             "Relay Agent cannot read this file yet",
-            format!(
-                "The workbook exists, but the app could not open it for inspection: {error}"
-            ),
+            format!("The workbook exists, but the app could not open it for inspection: {error}"),
         );
         push_guidance(
             &mut guidance,
@@ -176,7 +174,9 @@ pub fn preflight_workbook(path: impl Into<PathBuf>) -> WorkbookPreflightReport {
         WorkbookPreflightCheckLevel::Info,
         "Workbook type detected",
         match source.format() {
-            WorkbookFormat::Csv => "Relay Agent recognized this file as a CSV workbook.".to_string(),
+            WorkbookFormat::Csv => {
+                "Relay Agent recognized this file as a CSV workbook.".to_string()
+            }
             WorkbookFormat::Xlsx => {
                 "Relay Agent recognized this file as an Excel workbook.".to_string()
             }
@@ -184,18 +184,12 @@ pub fn preflight_workbook(path: impl Into<PathBuf>) -> WorkbookPreflightReport {
     );
 
     match source.format() {
-        WorkbookFormat::Csv => inspect_csv_source(
-            &source,
-            file_size_bytes,
-            &mut checks,
-            &mut guidance,
-        ),
-        WorkbookFormat::Xlsx => inspect_xlsx_source(
-            &source,
-            file_size_bytes,
-            &mut checks,
-            &mut guidance,
-        ),
+        WorkbookFormat::Csv => {
+            inspect_csv_source(&source, file_size_bytes, &mut checks, &mut guidance)
+        }
+        WorkbookFormat::Xlsx => {
+            inspect_xlsx_source(&source, file_size_bytes, &mut checks, &mut guidance)
+        }
     }
 
     finalize_report(
@@ -645,7 +639,9 @@ fn finalize_report(
         WorkbookPreflightStatus::Warning => {
             "This file can open, but there are a few things to review first.".to_string()
         }
-        WorkbookPreflightStatus::Blocked => "This file needs attention before you start.".to_string(),
+        WorkbookPreflightStatus::Blocked => {
+            "This file needs attention before you start.".to_string()
+        }
     };
     let summary = checks
         .iter()
@@ -661,9 +657,7 @@ fn finalize_report(
                 .find(|check| matches!(check.level, WorkbookPreflightCheckLevel::Info))
         })
         .map(|check| check.detail.clone())
-        .unwrap_or_else(|| {
-            "Relay Agent did not find any early file-readiness issues.".to_string()
-        });
+        .unwrap_or_else(|| "Relay Agent did not find any early file-readiness issues.".to_string());
 
     WorkbookPreflightReport {
         workbook_path,
@@ -839,13 +833,16 @@ fn looks_like_grouped_thousands(value: &str) -> bool {
     let Some(first) = groups.first() else {
         return false;
     };
-    if first.is_empty() || first.len() > 3 || !first.chars().all(|character| character.is_ascii_digit()) {
+    if first.is_empty()
+        || first.len() > 3
+        || !first.chars().all(|character| character.is_ascii_digit())
+    {
         return false;
     }
 
-    groups[1..].iter().all(|group| {
-        group.len() == 3 && group.chars().all(|character| character.is_ascii_digit())
-    })
+    groups[1..]
+        .iter()
+        .all(|group| group.len() == 3 && group.chars().all(|character| character.is_ascii_digit()))
 }
 
 fn looks_like_ambiguous_slash_date(value: &str) -> bool {
@@ -891,11 +888,7 @@ mod tests {
 
     #[test]
     fn blocks_semicolon_delimited_csv_files() {
-        let csv_path = write_test_file(
-            "region;amount\nWest;12,5\nEast;8,2\n",
-            "csv",
-            "semicolon",
-        );
+        let csv_path = write_test_file("region;amount\nWest;12,5\nEast;8,2\n", "csv", "semicolon");
 
         let report = preflight_workbook(csv_path.clone());
 

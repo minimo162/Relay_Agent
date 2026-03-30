@@ -66,7 +66,6 @@ pub fn default_output_path(source_path: &str) -> String {
 }
 
 fn default_output_path_path(path: &Path) -> PathBuf {
-    let parent = path.parent().unwrap_or_else(|| Path::new(""));
     let file_stem = path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -74,14 +73,16 @@ fn default_output_path_path(path: &Path) -> PathBuf {
 
     match path.extension().and_then(|ext| ext.to_str()) {
         Some(extension) if !extension.is_empty() => {
-            parent.join(format!("{file_stem}.relay-copy.{extension}"))
+            path.with_file_name(format!("{file_stem}.relay-copy.{extension}"))
         }
-        _ => parent.join(format!("{}.relay-copy", path.to_string_lossy())),
+        _ => path.with_file_name(format!("{}.relay-copy", path.to_string_lossy())),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::{default_output_path, detect_workbook_source, WorkbookSource};
     use crate::models::WorkbookFormat;
 
@@ -107,15 +108,20 @@ mod tests {
 
     #[test]
     fn derives_save_copy_paths_from_source_paths() {
+        let csv_output = default_output_path("/tmp/revenue.csv");
+        let csv_output_path = Path::new(&csv_output);
         assert_eq!(
-            default_output_path("/tmp/revenue.csv"),
-            "/tmp/revenue.relay-copy.csv"
+            csv_output_path.file_name().and_then(|name| name.to_str()),
+            Some("revenue.relay-copy.csv")
         );
+        assert_eq!(csv_output_path.parent(), Some(Path::new("/tmp")));
+
+        let workbook_output =
+            WorkbookSource::new("/tmp/revenue.xlsx", WorkbookFormat::Xlsx).default_output_path();
         assert_eq!(
-            WorkbookSource::new("/tmp/revenue.xlsx", WorkbookFormat::Xlsx)
-                .default_output_path()
-                .to_string_lossy(),
-            "/tmp/revenue.relay-copy.xlsx"
+            workbook_output.file_name().and_then(|name| name.to_str()),
+            Some("revenue.relay-copy.xlsx")
         );
+        assert_eq!(workbook_output.parent(), Some(Path::new("/tmp")));
     }
 }

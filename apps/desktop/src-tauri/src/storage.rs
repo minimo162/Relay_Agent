@@ -11,12 +11,11 @@ use crate::models::{
     CopilotHandoffStatus, CopilotTurnResponse, CreateSessionRequest, DiffSummary,
     ExecutionInspectionPayload, ExecutionInspectionState, GenerateRelayPacketRequest,
     PacketInspectionPayload, PreviewArtifactPayload, PreviewExecutionRequest,
-    PreviewExecutionResponse, ReadTurnArtifactsResponse, RelayPacket,
-    RelayPacketResponseContract, RespondToApprovalRequest, RespondToApprovalResponse,
-    RunExecutionRequest, RunExecutionResponse, Session, SessionDetail, SessionStatus,
-    SpreadsheetAction, StartTurnRequest, StartTurnResponse, SubmitCopilotResponseRequest,
-    SubmitCopilotResponseResponse, ToolDescriptor, ToolPhase, Turn, TurnArtifactRecord,
-    TurnDetailsViewModel, TurnInspectionSection, TurnInspectionSourceType,
+    PreviewExecutionResponse, ReadTurnArtifactsResponse, RelayPacket, RelayPacketResponseContract,
+    RespondToApprovalRequest, RespondToApprovalResponse, RunExecutionRequest, RunExecutionResponse,
+    Session, SessionDetail, SessionStatus, SpreadsheetAction, StartTurnRequest, StartTurnResponse,
+    SubmitCopilotResponseRequest, SubmitCopilotResponseResponse, ToolDescriptor, ToolPhase, Turn,
+    TurnArtifactRecord, TurnDetailsViewModel, TurnInspectionSection, TurnInspectionSourceType,
     TurnInspectionUnavailableReason, TurnOverview, TurnOverviewStep, TurnOverviewStepState,
     TurnStatus, ValidationInspectionPayload, ValidationIssue, ValidationIssueSummary,
 };
@@ -697,7 +696,9 @@ impl AppStorage {
                     "artifactType": read_tool_artifact.artifact_type,
                 })),
             )?;
-            diff_summary.warnings.push(read_tool_artifact.warning.clone());
+            diff_summary
+                .warnings
+                .push(read_tool_artifact.warning.clone());
             warnings.push(read_tool_artifact.warning);
         }
         let preview_artifact = self.record_turn_artifact(
@@ -850,7 +851,9 @@ impl AppStorage {
                 .map_err(|error| {
                     self.record_execution_failure(&session, &turn, &preview, error.clone())
                         .unwrap_or_else(|record_error| {
-                            format!("{error} (also failed to record execution failure: {record_error})")
+                            format!(
+                                "{error} (also failed to record execution failure: {record_error})"
+                            )
                         })
                 })?;
             let engine = WorkbookEngine::default();
@@ -859,7 +862,9 @@ impl AppStorage {
                 .map_err(|error| {
                     self.record_execution_failure(&session, &turn, &preview, error.clone())
                         .unwrap_or_else(|record_error| {
-                            format!("{error} (also failed to record execution failure: {record_error})")
+                            format!(
+                                "{error} (also failed to record execution failure: {record_error})"
+                            )
                         })
                 })?;
             let mut warnings = collect_execution_warnings(&preview);
@@ -941,8 +946,7 @@ impl AppStorage {
                 executed: true,
                 output_path: None,
                 warnings: vec![
-                    "No write actions were present, so execution completed as a no-op."
-                        .to_string(),
+                    "No write actions were present, so execution completed as a no-op.".to_string(),
                 ],
                 reason: None,
                 created_at: execution_artifact.created_at.clone(),
@@ -1175,7 +1179,14 @@ impl AppStorage {
         let execution = self.resolve_execution_section(turn, persisted);
 
         TurnDetailsViewModel {
-            overview: self.build_turn_overview(turn, persisted, &packet, &validation, &approval, &execution),
+            overview: self.build_turn_overview(
+                turn,
+                persisted,
+                &packet,
+                &validation,
+                &approval,
+                &execution,
+            ),
             packet,
             validation,
             approval,
@@ -1220,7 +1231,10 @@ impl AppStorage {
                     } else {
                         TurnOverviewStepState::Failed
                     }
-                } else if matches!(turn.status, TurnStatus::PacketReady | TurnStatus::AwaitingResponse) {
+                } else if matches!(
+                    turn.status,
+                    TurnStatus::PacketReady | TurnStatus::AwaitingResponse
+                ) {
                     TurnOverviewStepState::Current
                 } else {
                     TurnOverviewStepState::Pending
@@ -1259,8 +1273,12 @@ impl AppStorage {
                 label: "Approval".to_string(),
                 state: if approval.available {
                     match approval.payload.as_ref() {
-                        Some(payload) if !payload.requires_approval => TurnOverviewStepState::NotRequired,
-                        Some(payload) if payload.ready_for_execution => TurnOverviewStepState::Complete,
+                        Some(payload) if !payload.requires_approval => {
+                            TurnOverviewStepState::NotRequired
+                        }
+                        Some(payload) if payload.ready_for_execution => {
+                            TurnOverviewStepState::Complete
+                        }
                         Some(_) if preview_ready => TurnOverviewStepState::Current,
                         _ => TurnOverviewStepState::Pending,
                     }
@@ -1276,9 +1294,13 @@ impl AppStorage {
                 label: "Execution".to_string(),
                 state: if execution.available {
                     match execution.payload.as_ref().map(|payload| payload.state) {
-                        Some(ExecutionInspectionState::Completed) => TurnOverviewStepState::Complete,
+                        Some(ExecutionInspectionState::Completed) => {
+                            TurnOverviewStepState::Complete
+                        }
                         Some(ExecutionInspectionState::Failed) => TurnOverviewStepState::Failed,
-                        Some(ExecutionInspectionState::NotRequired) => TurnOverviewStepState::NotRequired,
+                        Some(ExecutionInspectionState::NotRequired) => {
+                            TurnOverviewStepState::NotRequired
+                        }
                         Some(ExecutionInspectionState::NotRun) => TurnOverviewStepState::Current,
                         None => TurnOverviewStepState::Pending,
                     }
@@ -1375,7 +1397,12 @@ impl AppStorage {
             .previews
             .get(&turn.id)
             .map(|preview| preview.artifact_id.clone())
-            .or_else(|| persisted.preview.as_ref().map(|preview| preview.artifact_id.clone()));
+            .or_else(|| {
+                persisted
+                    .preview
+                    .as_ref()
+                    .map(|preview| preview.artifact_id.clone())
+            });
 
         if let Some(response) = self.responses.get(&turn.id) {
             let accepted = response.validation_issues.is_empty();
@@ -1552,8 +1579,7 @@ impl AppStorage {
                     note: approval.note.clone(),
                     preview_artifact_id,
                     original_file_guardrail:
-                        "The original workbook stays read-only even after approval."
-                            .to_string(),
+                        "The original workbook stays read-only even after approval.".to_string(),
                     save_copy_guardrail:
                         "Approval only unlocks save-copy execution to a separate output."
                             .to_string(),
@@ -1581,8 +1607,7 @@ impl AppStorage {
                     note: approval.payload.note.clone(),
                     preview_artifact_id,
                     original_file_guardrail:
-                        "The original workbook stays read-only even after approval."
-                            .to_string(),
+                        "The original workbook stays read-only even after approval.".to_string(),
                     save_copy_guardrail:
                         "Approval only unlocks save-copy execution to a separate output."
                             .to_string(),
@@ -1658,17 +1683,14 @@ impl AppStorage {
                     output_path: execution.output_path.clone(),
                     executed_at: Some(execution.created_at.clone()),
                     warning_count: execution.warnings.len(),
-                    reason_summary: execution
-                        .reason
-                        .clone()
-                        .unwrap_or_else(|| {
-                            if execution.executed {
-                                "Execution completed and kept the original workbook unchanged."
-                                    .to_string()
-                            } else {
-                                "Execution did not complete.".to_string()
-                            }
-                        }),
+                    reason_summary: execution.reason.clone().unwrap_or_else(|| {
+                        if execution.executed {
+                            "Execution completed and kept the original workbook unchanged."
+                                .to_string()
+                        } else {
+                            "Execution did not complete.".to_string()
+                        }
+                    }),
                     warnings: execution.warnings.clone(),
                     output_artifact_id: Some(execution.artifact_id.clone()),
                 },
@@ -1694,18 +1716,14 @@ impl AppStorage {
                     output_path: execution.payload.output_path.clone(),
                     executed_at: Some(execution.created_at.clone()),
                     warning_count: execution.payload.warnings.len(),
-                    reason_summary: execution
-                        .payload
-                        .reason
-                        .clone()
-                        .unwrap_or_else(|| {
-                            if execution.payload.executed {
-                                "Execution completed and kept the original workbook unchanged."
-                                    .to_string()
-                            } else {
-                                "Execution did not complete.".to_string()
-                            }
-                        }),
+                    reason_summary: execution.payload.reason.clone().unwrap_or_else(|| {
+                        if execution.payload.executed {
+                            "Execution completed and kept the original workbook unchanged."
+                                .to_string()
+                        } else {
+                            "Execution did not complete.".to_string()
+                        }
+                    }),
                     warnings: execution.payload.warnings.clone(),
                     output_artifact_id: Some(execution.artifact_id.clone()),
                 },
@@ -1716,7 +1734,12 @@ impl AppStorage {
             .previews
             .get(&turn.id)
             .map(|preview| preview.requires_approval)
-            .or_else(|| persisted.preview.as_ref().map(|preview| preview.payload.requires_approval));
+            .or_else(|| {
+                persisted
+                    .preview
+                    .as_ref()
+                    .map(|preview| preview.payload.requires_approval)
+            });
 
         if let Some(requires_approval) = preview_requires_approval {
             let (state, summary) = if !requires_approval {
@@ -1739,14 +1762,12 @@ impl AppStorage {
             {
                 (
                     ExecutionInspectionState::NotRun,
-                    "Approval is complete. The turn is ready to save a reviewed copy."
-                        .to_string(),
+                    "Approval is complete. The turn is ready to save a reviewed copy.".to_string(),
                 )
             } else {
                 (
                     ExecutionInspectionState::NotRun,
-                    "Execution stays blocked until the required review is completed."
-                        .to_string(),
+                    "Execution stays blocked until the required review is completed.".to_string(),
                 )
             };
 
@@ -1760,7 +1781,12 @@ impl AppStorage {
                 self.previews
                     .get(&turn.id)
                     .map(|preview| preview.created_at.clone())
-                    .or_else(|| persisted.preview.as_ref().map(|preview| preview.created_at.clone()))
+                    .or_else(|| {
+                        persisted
+                            .preview
+                            .as_ref()
+                            .map(|preview| preview.created_at.clone())
+                    })
                     .unwrap_or_else(|| turn.updated_at.clone()),
                 None,
                 ExecutionInspectionPayload {
@@ -2244,7 +2270,9 @@ fn collect_sensitivity_reasons(
         let label = match source {
             CopilotHandoffReasonSource::Path => "Workbook path looks sensitive",
             CopilotHandoffReasonSource::Column => "A column name looks sensitive",
-            CopilotHandoffReasonSource::Objective => "The current objective mentions sensitive context",
+            CopilotHandoffReasonSource::Objective => {
+                "The current objective mentions sensitive context"
+            }
         };
         let context = context_label.unwrap_or(text);
         let detail = match source {
@@ -2277,7 +2305,10 @@ fn push_unique_handoff_reason(
     reasons: &mut Vec<CopilotHandoffReason>,
     reason: CopilotHandoffReason,
 ) {
-    if reasons.iter().any(|existing| existing.detail == reason.detail) {
+    if reasons
+        .iter()
+        .any(|existing| existing.detail == reason.detail)
+    {
         return;
     }
 
@@ -3201,15 +3232,15 @@ mod tests {
 
     use super::AppStorage;
     use crate::models::{
-        ApprovalDecision, AssessCopilotHandoffRequest, CopilotHandoffStatus,
-        CreateSessionRequest, ExecutionInspectionState, GenerateRelayPacketRequest,
-        PreviewExecutionRequest, ReadSessionRequest, RelayMode, RespondToApprovalRequest,
-        RunExecutionRequest, StartTurnRequest, SubmitCopilotResponseRequest, TurnArtifactRecord,
+        ApprovalDecision, AssessCopilotHandoffRequest, CopilotHandoffStatus, CreateSessionRequest,
+        ExecutionInspectionState, GenerateRelayPacketRequest, PreviewExecutionRequest,
+        ReadSessionRequest, RelayMode, RespondToApprovalRequest, RunExecutionRequest,
+        StartTurnRequest, SubmitCopilotResponseRequest, TurnArtifactRecord,
         TurnInspectionSourceType, TurnStatus,
     };
     use crate::persistence;
     use serde::{de::DeserializeOwned, Deserialize};
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use uuid::Uuid;
 
     #[derive(Debug, Deserialize)]
@@ -3300,28 +3331,25 @@ mod tests {
             .submit_copilot_response(SubmitCopilotResponseRequest {
                 session_id: session.id.clone(),
                 turn_id: turn.id.clone(),
-                raw_response: format!(
-                    r#"{{
-                  "summary": "Create a normalized output copy.",
-                  "actions": [
-                    {{
-                      "tool": "table.derive_column",
-                      "sheet": "Sheet1",
-                      "args": {{
-                        "column": "normalized_total",
-                        "expression": "amount",
-                        "position": "end"
-                      }}
-                    }},
-                    {{
-                      "tool": "workbook.save_copy",
-                      "args": {{
-                        "outputPath": "{}"
-                      }}
-                    }}
-                  ]
-                }}"#,
-                    output_path
+                raw_response: copilot_response(
+                    "Create a normalized output copy.",
+                    vec![
+                        json!({
+                            "tool": "table.derive_column",
+                            "sheet": "Sheet1",
+                            "args": {
+                                "column": "normalized_total",
+                                "expression": "amount",
+                                "position": "end"
+                            }
+                        }),
+                        json!({
+                            "tool": "workbook.save_copy",
+                            "args": {
+                                "outputPath": output_path.clone()
+                            }
+                        }),
+                    ],
                 ),
             })
             .expect("response should parse");
@@ -3393,7 +3421,8 @@ mod tests {
             .start_turn(StartTurnRequest {
                 session_id: session.id.clone(),
                 title: "Share with Copilot".to_string(),
-                objective: "Review customer identifiers before generating the transform".to_string(),
+                objective: "Review customer identifiers before generating the transform"
+                    .to_string(),
                 mode: RelayMode::Plan,
             })
             .expect("turn should start")
@@ -3461,54 +3490,51 @@ mod tests {
             .submit_copilot_response(SubmitCopilotResponseRequest {
                 session_id: session.id.clone(),
                 turn_id: turn.id.clone(),
-                raw_response: format!(
-                    r#"{{
-                      "summary": "Preview a normalized output copy.",
-                      "actions": [
-                        {{
-                          "tool": "table.rename_columns",
-                          "sheet": "Sheet1",
-                          "args": {{
-                            "renames": [
-                              {{ "from": "amount", "to": "net_amount" }}
-                            ]
-                          }}
-                        }},
-                        {{
-                          "tool": "table.cast_columns",
-                          "sheet": "Sheet1",
-                          "args": {{
-                            "casts": [
-                              {{ "column": "net_amount", "toType": "number" }}
-                            ]
-                          }}
-                        }},
-                        {{
-                          "tool": "table.filter_rows",
-                          "sheet": "Sheet1",
-                          "args": {{
-                            "predicate": "approved = true"
-                          }}
-                        }},
-                        {{
-                          "tool": "table.derive_column",
-                          "sheet": "Sheet1",
-                          "args": {{
-                            "column": "gross_amount",
-                            "expression": "[net_amount] + 10",
-                            "position": "after",
-                            "afterColumn": "net_amount"
-                          }}
-                        }},
-                        {{
-                          "tool": "workbook.save_copy",
-                          "args": {{
-                            "outputPath": "{}"
-                          }}
-                        }}
-                      ]
-                    }}"#,
-                    output_path
+                raw_response: copilot_response(
+                    "Preview a normalized output copy.",
+                    vec![
+                        json!({
+                            "tool": "table.rename_columns",
+                            "sheet": "Sheet1",
+                            "args": {
+                                "renames": [
+                                    { "from": "amount", "to": "net_amount" }
+                                ]
+                            }
+                        }),
+                        json!({
+                            "tool": "table.cast_columns",
+                            "sheet": "Sheet1",
+                            "args": {
+                                "casts": [
+                                    { "column": "net_amount", "toType": "number" }
+                                ]
+                            }
+                        }),
+                        json!({
+                            "tool": "table.filter_rows",
+                            "sheet": "Sheet1",
+                            "args": {
+                                "predicate": "approved = true"
+                            }
+                        }),
+                        json!({
+                            "tool": "table.derive_column",
+                            "sheet": "Sheet1",
+                            "args": {
+                                "column": "gross_amount",
+                                "expression": "[net_amount] + 10",
+                                "position": "after",
+                                "afterColumn": "net_amount"
+                            }
+                        }),
+                        json!({
+                            "tool": "workbook.save_copy",
+                            "args": {
+                                "outputPath": output_path.clone()
+                            }
+                        }),
+                    ],
                 ),
             })
             .expect("response should parse");
@@ -3587,28 +3613,25 @@ mod tests {
             .submit_copilot_response(SubmitCopilotResponseRequest {
                 session_id: session.id.clone(),
                 turn_id: turn.id.clone(),
-                raw_response: format!(
-                    r#"{{
-                      "summary": "Write a sanitized CSV save-copy output.",
-                      "actions": [
-                        {{
-                          "tool": "table.derive_column",
-                          "sheet": "Sheet1",
-                          "args": {{
-                            "column": "review_flag",
-                            "expression": "\"=needs-review\"",
-                            "position": "end"
-                          }}
-                        }},
-                        {{
-                          "tool": "workbook.save_copy",
-                          "args": {{
-                            "outputPath": "{}"
-                          }}
-                        }}
-                      ]
-                    }}"#,
-                    output_path
+                raw_response: copilot_response(
+                    "Write a sanitized CSV save-copy output.",
+                    vec![
+                        json!({
+                            "tool": "table.derive_column",
+                            "sheet": "Sheet1",
+                            "args": {
+                                "column": "review_flag",
+                                "expression": "\"=needs-review\"",
+                                "position": "end"
+                            }
+                        }),
+                        json!({
+                            "tool": "workbook.save_copy",
+                            "args": {
+                                "outputPath": output_path.clone()
+                            }
+                        }),
+                    ],
                 ),
             })
             .expect("response should parse");
@@ -3717,38 +3740,32 @@ mod tests {
                 .submit_copilot_response(SubmitCopilotResponseRequest {
                     session_id: session.id.clone(),
                     turn_id: turn.id.clone(),
-                    raw_response: format!(
-                        r#"{{
-                          "version": "1.0",
-                          "summary": "Keep approved rows, add a review label, and write a sanitized CSV copy.",
-                          "actions": [
-                            {{
-                              "tool": "table.filter_rows",
-                              "sheet": "Sheet1",
-                              "args": {{
-                                "predicate": "approved = true"
-                              }}
-                            }},
-                            {{
-                              "tool": "table.derive_column",
-                              "sheet": "Sheet1",
-                              "args": {{
-                                "column": "review_label",
-                                "expression": "[segment] + \"-approved\"",
-                                "position": "end"
-                              }}
-                            }},
-                            {{
-                              "tool": "workbook.save_copy",
-                              "args": {{
-                                "outputPath": "{}"
-                              }}
-                            }}
-                          ],
-                          "followupQuestions": [],
-                          "warnings": []
-                        }}"#,
-                        output_path
+                    raw_response: copilot_response(
+                        "Keep approved rows, add a review label, and write a sanitized CSV copy.",
+                        vec![
+                            json!({
+                                "tool": "table.filter_rows",
+                                "sheet": "Sheet1",
+                                "args": {
+                                    "predicate": "approved = true"
+                                }
+                            }),
+                            json!({
+                                "tool": "table.derive_column",
+                                "sheet": "Sheet1",
+                                "args": {
+                                    "column": "review_label",
+                                    "expression": "[segment] + \"-approved\"",
+                                    "position": "end"
+                                }
+                            }),
+                            json!({
+                                "tool": "workbook.save_copy",
+                                "args": {
+                                    "outputPath": output_path.clone()
+                                }
+                            }),
+                        ],
                     ),
                 })
                 .expect("README response example should parse");
@@ -4089,28 +4106,25 @@ mod tests {
                 .submit_copilot_response(SubmitCopilotResponseRequest {
                     session_id: session.id.clone(),
                     turn_id: turn.id.clone(),
-                    raw_response: format!(
-                        r#"{{
-                      "summary": "Create a normalized output copy.",
-                      "actions": [
-                        {{
-                          "tool": "table.derive_column",
-                          "sheet": "Sheet1",
-                          "args": {{
-                            "column": "normalized_total",
-                            "expression": "amount",
-                            "position": "end"
-                          }}
-                        }},
-                        {{
-                          "tool": "workbook.save_copy",
-                          "args": {{
-                            "outputPath": "{}"
-                          }}
-                        }}
-                      ]
-                    }}"#,
-                        output_path
+                    raw_response: copilot_response(
+                        "Create a normalized output copy.",
+                        vec![
+                            json!({
+                                "tool": "table.derive_column",
+                                "sheet": "Sheet1",
+                                "args": {
+                                    "column": "normalized_total",
+                                    "expression": "amount",
+                                    "position": "end"
+                                }
+                            }),
+                            json!({
+                                "tool": "workbook.save_copy",
+                                "args": {
+                                    "outputPath": output_path.clone()
+                                }
+                            }),
+                        ],
                     ),
                 })
                 .expect("response should parse");
@@ -4288,53 +4302,50 @@ mod tests {
                 .submit_copilot_response(SubmitCopilotResponseRequest {
                     session_id: session.id.clone(),
                     turn_id: turn.id.clone(),
-                    raw_response: format!(
-                        r#"{{
-                          "summary": "Inspect the workbook and stage a rename preview.",
-                          "actions": [
-                            {{
-                              "tool": "workbook.inspect",
-                              "args": {{}}
-                            }},
-                            {{
-                              "tool": "sheet.preview",
-                              "args": {{
+                    raw_response: copilot_response(
+                        "Inspect the workbook and stage a rename preview.",
+                        vec![
+                            json!({
+                                "tool": "workbook.inspect",
+                                "args": {}
+                            }),
+                            json!({
+                                "tool": "sheet.preview",
+                                "args": {
+                                    "sheet": "Sheet1",
+                                    "limit": 2
+                                }
+                            }),
+                            json!({
+                                "tool": "sheet.profile_columns",
+                                "args": {
+                                    "sheet": "Sheet1",
+                                    "sampleSize": 2
+                                }
+                            }),
+                            json!({
+                                "tool": "session.diff_from_base",
+                                "args": {}
+                            }),
+                            json!({
+                                "tool": "table.rename_columns",
                                 "sheet": "Sheet1",
-                                "limit": 2
-                              }}
-                            }},
-                            {{
-                              "tool": "sheet.profile_columns",
-                              "args": {{
-                                "sheet": "Sheet1",
-                                "sampleSize": 2
-                              }}
-                            }},
-                            {{
-                              "tool": "session.diff_from_base",
-                              "args": {{}}
-                            }},
-                            {{
-                              "tool": "table.rename_columns",
-                              "sheet": "Sheet1",
-                              "args": {{
-                                "renames": [
-                                  {{
-                                    "from": "amount",
-                                    "to": "normalized_amount"
-                                  }}
-                                ]
-                              }}
-                            }},
-                            {{
-                              "tool": "workbook.save_copy",
-                              "args": {{
-                                "outputPath": "{}"
-                              }}
-                            }}
-                          ]
-                        }}"#,
-                        output_path
+                                "args": {
+                                    "renames": [
+                                        {
+                                            "from": "amount",
+                                            "to": "normalized_amount"
+                                        }
+                                    ]
+                                }
+                            }),
+                            json!({
+                                "tool": "workbook.save_copy",
+                                "args": {
+                                    "outputPath": output_path.clone()
+                                }
+                            }),
+                        ],
                     ),
                 })
                 .expect("response should parse");
@@ -4447,22 +4458,22 @@ mod tests {
             artifact_response.artifacts.first(),
             Some(TurnArtifactRecord::WorkbookProfile { .. })
         ));
-        assert!(artifact_response.artifacts.iter().any(|artifact| matches!(
-            artifact,
-            TurnArtifactRecord::SheetPreview { .. }
-        )));
-        assert!(artifact_response.artifacts.iter().any(|artifact| matches!(
-            artifact,
-            TurnArtifactRecord::ColumnProfile { .. }
-        )));
-        assert!(artifact_response.artifacts.iter().any(|artifact| matches!(
-            artifact,
-            TurnArtifactRecord::DiffSummary { .. }
-        )));
-        assert!(artifact_response.artifacts.iter().any(|artifact| matches!(
-            artifact,
-            TurnArtifactRecord::Preview { .. }
-        )));
+        assert!(artifact_response
+            .artifacts
+            .iter()
+            .any(|artifact| matches!(artifact, TurnArtifactRecord::SheetPreview { .. })));
+        assert!(artifact_response
+            .artifacts
+            .iter()
+            .any(|artifact| matches!(artifact, TurnArtifactRecord::ColumnProfile { .. })));
+        assert!(artifact_response
+            .artifacts
+            .iter()
+            .any(|artifact| matches!(artifact, TurnArtifactRecord::DiffSummary { .. })));
+        assert!(artifact_response
+            .artifacts
+            .iter()
+            .any(|artifact| matches!(artifact, TurnArtifactRecord::Preview { .. })));
         assert_eq!(artifact_response.storage_mode, "local-json");
         assert_eq!(
             artifact_response.turn_details.overview.storage_mode,
@@ -4531,9 +4542,8 @@ mod tests {
                 .start_turn(StartTurnRequest {
                     session_id: session.id.clone(),
                     title: "Blocked output path".to_string(),
-                    objective:
-                        "Try to save a reviewed copy into a path that cannot be created."
-                            .to_string(),
+                    objective: "Try to save a reviewed copy into a path that cannot be created."
+                        .to_string(),
                     mode: RelayMode::Plan,
                 })
                 .expect("turn should start")
@@ -4549,31 +4559,28 @@ mod tests {
                 .submit_copilot_response(SubmitCopilotResponseRequest {
                     session_id: session.id.clone(),
                     turn_id: turn.id.clone(),
-                    raw_response: format!(
-                        r#"{{
-                          "summary": "Rename a column and attempt to save a reviewed copy.",
-                          "actions": [
-                            {{
-                              "tool": "table.rename_columns",
-                              "sheet": "Sheet1",
-                              "args": {{
-                                "renames": [
-                                  {{
-                                    "from": "amount",
-                                    "to": "normalized_amount"
-                                  }}
-                                ]
-                              }}
-                            }},
-                            {{
-                              "tool": "workbook.save_copy",
-                              "args": {{
-                                "outputPath": "{}"
-                              }}
-                            }}
-                          ]
-                        }}"#,
-                        output_path
+                    raw_response: copilot_response(
+                        "Rename a column and attempt to save a reviewed copy.",
+                        vec![
+                            json!({
+                                "tool": "table.rename_columns",
+                                "sheet": "Sheet1",
+                                "args": {
+                                    "renames": [
+                                        {
+                                            "from": "amount",
+                                            "to": "normalized_amount"
+                                        }
+                                    ]
+                                }
+                            }),
+                            json!({
+                                "tool": "workbook.save_copy",
+                                "args": {
+                                    "outputPath": output_path.clone()
+                                }
+                            }),
+                        ],
                     ),
                 })
                 .expect("response should parse");
@@ -4630,7 +4637,9 @@ mod tests {
                 .execution
                 .payload
                 .as_ref()
-                .map(|payload| payload.reason_summary.contains("failed to create output directory"))
+                .map(|payload| payload
+                    .reason_summary
+                    .contains("failed to create output directory"))
                 .unwrap_or(false));
 
             let detail = storage
@@ -4688,7 +4697,9 @@ mod tests {
             .execution
             .payload
             .as_ref()
-            .map(|payload| payload.reason_summary.contains("failed to create output directory"))
+            .map(|payload| payload
+                .reason_summary
+                .contains("failed to create output directory"))
             .unwrap_or(false));
 
         fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
@@ -4701,7 +4712,10 @@ mod tests {
             "customer_id,amount,posted_on,approved\n1,42.5,2025-01-01,true\n2,13.0,2025-01-02,false\n",
         );
         let output_path = env::temp_dir()
-            .join(format!("relay-agent-memory-turn-details-{}.csv", Uuid::new_v4()))
+            .join(format!(
+                "relay-agent-memory-turn-details-{}.csv",
+                Uuid::new_v4()
+            ))
             .to_string_lossy()
             .into_owned();
 
@@ -4734,26 +4748,23 @@ mod tests {
             .submit_copilot_response(SubmitCopilotResponseRequest {
                 session_id: session.id.clone(),
                 turn_id: turn.id.clone(),
-                raw_response: format!(
-                    r#"{{
-                      "summary": "Filter approved rows and stage a save-copy preview.",
-                      "actions": [
-                        {{
-                          "tool": "table.filter_rows",
-                          "sheet": "Sheet1",
-                          "args": {{
-                            "predicate": "approved = true"
-                          }}
-                        }},
-                        {{
-                          "tool": "workbook.save_copy",
-                          "args": {{
-                            "outputPath": "{}"
-                          }}
-                        }}
-                      ]
-                    }}"#,
-                    output_path
+                raw_response: copilot_response(
+                    "Filter approved rows and stage a save-copy preview.",
+                    vec![
+                        json!({
+                            "tool": "table.filter_rows",
+                            "sheet": "Sheet1",
+                            "args": {
+                                "predicate": "approved = true"
+                            }
+                        }),
+                        json!({
+                            "tool": "workbook.save_copy",
+                            "args": {
+                                "outputPath": output_path.clone()
+                            }
+                        }),
+                    ],
                 ),
             })
             .expect("response should parse");
@@ -4850,47 +4861,44 @@ mod tests {
                 .submit_copilot_response(SubmitCopilotResponseRequest {
                     session_id: session.id.clone(),
                     turn_id: turn.id.clone(),
-                    raw_response: format!(
-                        r#"{{
-                          "summary": "Inspect the workbook and preview an aggregated save-copy output.",
-                          "actions": [
-                            {{
-                              "tool": "workbook.inspect",
-                              "args": {{}}
-                            }},
-                            {{
-                              "tool": "table.group_aggregate",
-                              "sheet": "Sheet1",
-                              "args": {{
-                                "groupBy": ["region"],
-                                "measures": [
-                                  {{
-                                    "column": "amount",
-                                    "op": "sum",
-                                    "as": "total_amount"
-                                  }},
-                                  {{
-                                    "column": "units",
-                                    "op": "avg",
-                                    "as": "average_units"
-                                  }},
-                                  {{
-                                    "column": "segment",
-                                    "op": "count",
-                                    "as": "row_count"
-                                  }}
-                                ]
-                              }}
-                            }},
-                            {{
-                              "tool": "workbook.save_copy",
-                              "args": {{
-                                "outputPath": "{}"
-                              }}
-                            }}
-                          ]
-                        }}"#,
-                        output_path
+                    raw_response: copilot_response(
+                        "Inspect the workbook and preview an aggregated save-copy output.",
+                        vec![
+                            json!({
+                                "tool": "workbook.inspect",
+                                "args": {}
+                            }),
+                            json!({
+                                "tool": "table.group_aggregate",
+                                "sheet": "Sheet1",
+                                "args": {
+                                    "groupBy": ["region"],
+                                    "measures": [
+                                        {
+                                            "column": "amount",
+                                            "op": "sum",
+                                            "as": "total_amount"
+                                        },
+                                        {
+                                            "column": "units",
+                                            "op": "avg",
+                                            "as": "average_units"
+                                        },
+                                        {
+                                            "column": "segment",
+                                            "op": "count",
+                                            "as": "row_count"
+                                        }
+                                    ]
+                                }
+                            }),
+                            json!({
+                                "tool": "workbook.save_copy",
+                                "args": {
+                                    "outputPath": output_path.clone()
+                                }
+                            }),
+                        ],
                     ),
                 })
                 .expect("response should parse");
@@ -4954,6 +4962,17 @@ mod tests {
         let path = env::temp_dir().join(format!("relay-agent-storage-test-{}.csv", Uuid::new_v4()));
         fs::write(&path, contents).expect("test csv should be written");
         path
+    }
+
+    fn copilot_response(summary: &str, actions: Vec<Value>) -> String {
+        json!({
+            "version": "1.0",
+            "summary": summary,
+            "actions": actions,
+            "followUpQuestions": [],
+            "warnings": []
+        })
+        .to_string()
     }
 
     fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {

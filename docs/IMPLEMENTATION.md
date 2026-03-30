@@ -1907,6 +1907,21 @@ Observed result:
 - After this hotfix, the intended retry path remains `workflow_dispatch` with `release_tag: v0.1.0`, now against the updated `main` branch that includes both the fixed Tauri action ref and the required `.ico` asset.
 - The icon hotfix continues to pass `git diff --check`.
 
+Windows release path portability hotfix verification:
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- The next Windows release retry (`23722255820`) got through toolchain setup and the desktop build, then failed in Rust tests because several storage fixtures embedded `outputPath` strings directly into raw JSON snippets. Windows temp paths contain backslashes, so those fixtures produced invalid or misread JSON and made validation fail before preview.
+- The storage tests now build Copilot response fixtures with `serde_json::json!` via a shared `copilot_response(...)` helper, which keeps `outputPath` values JSON-safe on both Windows and Unix-like runners without changing the actual product contract.
+- `apps/desktop/src-tauri/src/workbook/source.rs` now derives save-copy defaults with `Path::with_file_name(...)`, and the corresponding unit test now asserts on parent/file-name components instead of a POSIX-only string literal. This removes the mixed-separator expectation that only broke on Windows.
+- Local regression coverage now passes again with `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` showing 35 Rust tests green, including the previously failing storage and workbook source cases.
+- The intended next step after this hotfix is another `workflow_dispatch` run for `release_tag: v0.1.0` so the GitHub-hosted Windows job can confirm the release workflow end to end.
+
 ## Known Limitations
 
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.

@@ -3,9 +3,7 @@ use tauri::State;
 
 use crate::startup::{self, InitializeAppResponse};
 use crate::state::DesktopState;
-use crate::workbook::{
-    preflight_workbook as run_workbook_preflight, WorkbookPreflightReport,
-};
+use crate::workbook::{preflight_workbook as run_workbook_preflight, WorkbookPreflightReport};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
