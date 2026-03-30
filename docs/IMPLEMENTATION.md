@@ -1892,6 +1892,21 @@ Observed result:
 - After this hotfix, the intended retry path is `workflow_dispatch` with `release_tag: v0.1.0`, because the original tag-push run has already failed and pushing the same tag again would not retrigger the workflow automatically.
 - The hotfix continues to pass `git diff --check`.
 
+Windows release icon hotfix verification:
+
+```bash
+gh run view 23722159737 --log-failed
+file apps/desktop/src-tauri/icons/icon.ico
+git diff --check
+```
+
+Observed result:
+
+- The first manually dispatched retry for `v0.1.0` got past workflow setup and package checks, then failed in the Windows Rust test build because `tauri-build` requires `apps/desktop/src-tauri/icons/icon.ico` when generating the Windows resource file.
+- `apps/desktop/src-tauri/icons/icon.ico` now exists as a real Windows icon generated from the existing `icon.png`, which closes the missing-resource gap that only surfaced on the Windows runner.
+- After this hotfix, the intended retry path remains `workflow_dispatch` with `release_tag: v0.1.0`, now against the updated `main` branch that includes both the fixed Tauri action ref and the required `.ico` asset.
+- The icon hotfix continues to pass `git diff --check`.
+
 ## Known Limitations
 
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.
