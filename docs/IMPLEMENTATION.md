@@ -1995,6 +1995,21 @@ Observed result:
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 35 Rust tests green after the version bump.
 - `git diff --check` still passes after updating the release metadata.
 
+Session creation contract hotfix verification:
+
+```bash
+pnpm check
+pnpm dlx tsx -e "import { sessionSchema } from './packages/contracts/src/core.ts'; const parsed = sessionSchema.parse({ id: 'session-1', title: 'Bundled sample walkthrough', objective: 'Open the bundled sample CSV.', status: 'draft', primaryWorkbookPath: null, createdAt: '2026-03-30T03:00:00Z', updatedAt: '2026-03-30T03:00:00Z', latestTurnId: null, turnIds: [] }); if (parsed.primaryWorkbookPath !== undefined || parsed.latestTurnId !== undefined) throw new Error('expected null fields to normalize to undefined'); console.log('session schema accepts null optionals');"
+```
+
+Observed result:
+
+- `packages/contracts/src/core.ts` now accepts backend `null` values for `Session.primaryWorkbookPath`, `Session.latestTurnId`, and `Item.turnId`, and normalizes them back to `undefined` for TypeScript consumers.
+- This closes the first-session packaged-app failure where the Rust backend successfully created a session but returned `latestTurnId: null`, causing frontend Zod parsing to fail and surface the generic `Failed to invoke \`create_session\`.` message.
+- `apps/desktop/src/lib/ipc.ts` now includes the underlying invoke or schema error detail in `RelayAgentIpcError`, so future command failures no longer collapse into the same opaque message.
+- `pnpm check` still passes after the contract and IPC error-handling changes.
+- The direct `sessionSchema` runtime check now passes for a backend-shaped payload containing `primaryWorkbookPath: null` and `latestTurnId: null`.
+
 ## Known Limitations
 
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.

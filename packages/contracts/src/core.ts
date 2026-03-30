@@ -8,6 +8,13 @@ import {
   relayModeSchema
 } from "./shared";
 
+const nullishNonEmptyStringSchema = nonEmptyStringSchema
+  .nullish()
+  .transform((value) => value ?? undefined);
+const nullishEntityIdSchema = entityIdSchema
+  .nullish()
+  .transform((value) => value ?? undefined);
+
 export const sessionStatusSchema = z.enum(["draft", "active", "archived", "error"]);
 
 export const turnStatusSchema = z.enum([
@@ -38,10 +45,10 @@ export const sessionSchema = z.object({
   title: nonEmptyStringSchema,
   objective: nonEmptyStringSchema,
   status: sessionStatusSchema,
-  primaryWorkbookPath: z.string().min(1).optional(),
+  primaryWorkbookPath: nullishNonEmptyStringSchema,
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
-  latestTurnId: entityIdSchema.optional(),
+  latestTurnId: nullishEntityIdSchema,
   turnIds: z.array(entityIdSchema).default([])
 });
 
@@ -61,7 +68,7 @@ export const turnSchema = z.object({
 export const itemSchema = z.object({
   id: entityIdSchema,
   sessionId: entityIdSchema,
-  turnId: entityIdSchema.optional(),
+  turnId: nullishEntityIdSchema,
   kind: itemKindSchema,
   label: nonEmptyStringSchema,
   payload: jsonValueSchema,

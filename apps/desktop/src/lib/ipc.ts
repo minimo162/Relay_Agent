@@ -64,6 +64,31 @@ const stringSchema: Schema<string> = {
   }
 };
 
+function describeInvokeError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
+
+  if (error && typeof error === "object") {
+    const maybeMessage = (error as { message?: unknown }).message;
+    if (typeof maybeMessage === "string" && maybeMessage.trim()) {
+      return maybeMessage.trim();
+    }
+
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return "Unknown desktop command error.";
+    }
+  }
+
+  return "Unknown desktop command error.";
+}
+
 export class RelayAgentIpcError extends Error {
   command: string;
   causeValue: unknown;
@@ -85,7 +110,7 @@ async function invokeWithoutPayload<TResponse>(
   } catch (error) {
     throw new RelayAgentIpcError(
       command,
-      `Failed to invoke \`${command}\`.`,
+      `Failed to invoke \`${command}\`: ${describeInvokeError(error)}`,
       error
     );
   }
@@ -103,7 +128,7 @@ async function invokeWithPayload<TRequest, TResponse>(
   } catch (error) {
     throw new RelayAgentIpcError(
       command,
-      `Failed to invoke \`${command}\`.`,
+      `Failed to invoke \`${command}\`: ${describeInvokeError(error)}`,
       error
     );
   }
