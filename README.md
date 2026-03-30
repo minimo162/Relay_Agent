@@ -187,9 +187,6 @@ The matching verification checklist lives in
 - `Try the sample flow` preloads the bundled demo objective and
   `examples/revenue-workflow-demo.csv` when that sample path is discoverable in
   the current build.
-- After the first session exists, Home keeps a smaller bundled-sample switcher
-  inside the create-session panel so you can reopen the sample walkthrough
-  without clearing saved work first.
 - `Use my own file` keeps the flow manual and explains why Windows may later ask
   for access to the chosen workbook or save destination.
 - On first run, the create-session panel stays gated until you choose sample or

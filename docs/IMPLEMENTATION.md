@@ -2041,6 +2041,22 @@ Observed result:
 - `README.md` now documents that the bundled sample walkthrough remains available after first run through the create-session panel.
 - `pnpm check` and `git diff --check` still pass after the Home route and documentation update.
 
+Revert persistent sample-flow entry verification:
+
+```bash
+pnpm check
+pnpm startup:test
+git diff --check
+```
+
+Observed result:
+
+- Removed the post-first-run `Bundled walkthrough` card from `apps/desktop/src/routes/+page.svelte`, so the sample choice is once again limited to the clean-profile first-run welcome.
+- Restored the README startup behavior notes to describe the sample path as a first-run-only entry point instead of a persistent create-session switcher.
+- `pnpm startup:test` still reports a `ready` startup smoke scenario with a discoverable `sample_workbook_path`, which means a clean profile should still enable the first-run `Try the sample flow` CTA.
+- Inference: with `sampleWorkbookPath` still present during startup smoke and `showFirstRunWelcome` still driven by `sessions.length === 0`, a clean install should land on the first-run welcome and expose `Try the sample flow` when the bundled sample ships correctly.
+- `pnpm check`, `pnpm startup:test`, and `git diff --check` pass after removing the persistent sample entry.
+
 ## Known Limitations
 
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.

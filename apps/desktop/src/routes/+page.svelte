@@ -805,44 +805,6 @@
           </div>
         {/if}
 
-        {#if sampleFlowAvailable}
-          <div class="guided-start-card">
-            <p class="panel-eyebrow">Bundled walkthrough</p>
-            <h3>
-              {entryMode === "sample"
-                ? "The bundled sample path is active."
-                : "Need the sample flow again?"}
-            </h3>
-            <p class="guided-start-copy">
-              {entryMode === "sample"
-                ? "Stay on the sample walkthrough, or switch back to your own file before creating the next session."
-                : "You can reopen the bundled sample walkthrough at any time without clearing your saved sessions."}
-            </p>
-
-            <div class="welcome-actions">
-              {#if entryMode !== "sample"}
-                <button
-                  class="route-chip action-chip"
-                  type="button"
-                  on:click={() => void startSampleFlow()}
-                >
-                  Use bundled sample
-                </button>
-              {/if}
-
-              {#if entryMode !== "custom"}
-                <button
-                  class="route-chip action-chip"
-                  type="button"
-                  on:click={() => void startCustomFlow()}
-                >
-                  {entryMode === "sample" ? "Switch to my own file" : "Use my own file"}
-                </button>
-              {/if}
-            </div>
-          </div>
-        {/if}
-
         <section class="help-panel">
           <div class="help-panel-head">
             <div>
