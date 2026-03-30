@@ -343,7 +343,7 @@ The next packaging hardening follow-up is captured in `.taskmaster/docs/prd_wind
 Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `42` through `45`, covering the repo-side Trusted Signing workflow rewrite and Azure/GitHub setup runbook. The first fully signed Windows release remains an operational prerequisite rather than a Task Master task because it depends on external Azure provisioning.
 The guided workflow simplification scope from `.taskmaster/docs/archive/prd_guided_workflow_simplification.txt` is now implementation-complete as tasks `46` through `63`.
 The current active UI follow-up is captured in `.taskmaster/docs/prd_ui_redesign_v2.md`.
-Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `64` through `68`, with task `64` complete and tasks `65` through `68` still pending.
+Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `64` through `68`, with tasks `64` through `67` complete and task `68` still pending.
 
 That UI follow-up preserves the current safety model:
 

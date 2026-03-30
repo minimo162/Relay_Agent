@@ -1746,7 +1746,7 @@
       {
         "id": "66",
         "title": "Recent sessions: clicking an item resumes prior draft (pre-fill Step 1 & 2)",
-        "status": "pending",
+        "status": "done",
         "description": "In the recent sessions panel, clicking a session pre-fills filePath and, if a recoverable draft exists, restores sessionId/turnId/relayPacketText so user can resume from Step 2.",
         "details": "Use listRecoverableStudioDrafts() and loadStudioDraft() from continuity.ts.",
         "testStrategy": "Manual: create session, reload, click recent item, verify Step 2 pre-filled.",
@@ -1758,11 +1758,11 @@
       },
       {
         "id": "67",
-        "title": "Row-level diff detail in SheetDiff cards (blocked on IPC extension)",
-        "status": "pending",
-        "description": "Expand each SheetDiff card to show row-level before/after values. Deferred: requires backend contracts change to emit row samples in diffSummary.",
-        "details": "Currently diffSummary has no row-level data. Blocked on contracts/IPC extension.",
-        "testStrategy": "N/A until IPC extended.",
+        "title": "Row-level diff detail in SheetDiff cards",
+        "status": "done",
+        "description": "Expand each SheetDiff card to show row-level before/after values from previewExecution diffSummary row samples.",
+        "details": "Extended contracts and previewExecution diffSummary to emit rowSamples per SheetDiff, then rendered those before/after samples in the Step 3 SheetDiff cards.",
+        "testStrategy": "Run pnpm check, pnpm typecheck, pnpm --filter @relay-agent/desktop build, and cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml. Visual: Step 3 cards show row-level before/after values.",
         "priority": "low",
         "dependencies": [
           "65"
@@ -1785,9 +1785,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-30T20:56:58Z",
+      "lastModified": "2026-03-30T21:33:08Z",
       "taskCount": 68,
-      "completedCount": 65,
+      "completedCount": 67,
       "tags": [
         "master"
       ]

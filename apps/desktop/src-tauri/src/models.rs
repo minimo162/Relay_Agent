@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -189,6 +191,25 @@ pub enum PreviewTargetKind {
     Table,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum RowDiffKind {
+    Changed,
+    Added,
+    Removed,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowDiffSample {
+    pub kind: RowDiffKind,
+    pub row_number: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<BTreeMap<String, String>>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SheetDiff {
@@ -197,6 +218,7 @@ pub struct SheetDiff {
     pub added_columns: Vec<String>,
     pub changed_columns: Vec<String>,
     pub removed_columns: Vec<String>,
+    pub row_samples: Vec<RowDiffSample>,
     pub warnings: Vec<String>,
 }
 

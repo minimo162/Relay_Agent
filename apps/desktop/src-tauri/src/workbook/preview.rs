@@ -16,11 +16,12 @@ use super::{
     source::WorkbookSource,
 };
 use crate::models::{
-    ColumnType, DiffSummary, PreviewTarget, PreviewTargetKind, SheetDiff, SpreadsheetAction,
-    WorkbookFormat,
+    ColumnType, DiffSummary, PreviewTarget, PreviewTargetKind, RowDiffKind, RowDiffSample,
+    SheetDiff, SpreadsheetAction, WorkbookFormat,
 };
 
 const CSV_SHEET_NAME: &str = "Sheet1";
+const MAX_ROW_DIFF_SAMPLES: usize = 3;
 
 #[derive(Clone, Debug)]
 pub struct PreviewResult {
@@ -88,8 +89,15 @@ pub fn preview_actions(
     } else {
         None
     };
+    let original_table = table.clone();
     let mut sheet_diff = None;
     apply_actions_to_csv_table(actions, &mut table, &mut sheet_diff)?;
+
+    if let (Some(before), Some(after), Some(diff)) =
+        (original_table.as_ref(), table.as_ref(), sheet_diff.as_mut())
+    {
+        diff.row_samples = build_row_diff_samples(before, after);
+    }
 
     let mut sheets = Vec::new();
     if let Some(sheet_diff) = sheet_diff {
@@ -301,9 +309,16 @@ enum AggregateState {
     },
 }
 
+#[derive(Clone, Debug)]
 struct CsvPreviewTable {
     columns: Vec<String>,
     rows: Vec<Vec<String>>,
+}
+
+#[derive(Clone, Debug)]
+struct RowSnapshot {
+    row_number: u32,
+    values: BTreeMap<String, String>,
 }
 
 struct RenderedCsvOutput {
@@ -634,6 +649,116 @@ impl CsvPreviewTable {
     fn find_column_index(&self, column: &str) -> Option<usize> {
         self.columns.iter().position(|existing| existing == column)
     }
+
+    fn row_snapshots(&self) -> Vec<RowSnapshot> {
+        self.rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| RowSnapshot {
+                row_number: index as u32 + 1,
+                values: self
+                    .columns
+                    .iter()
+                    .enumerate()
+                    .map(|(column_index, column)| {
+                        (
+                            column.clone(),
+                            row.get(column_index).cloned().unwrap_or_default(),
+                        )
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+}
+
+fn build_row_diff_samples(before: &CsvPreviewTable, after: &CsvPreviewTable) -> Vec<RowDiffSample> {
+    let before_rows = before.row_snapshots();
+    let after_rows = after.row_snapshots();
+
+    let mut before_matched = vec![false; before_rows.len()];
+    let mut after_matched = vec![false; after_rows.len()];
+    let mut after_by_signature = BTreeMap::<String, Vec<usize>>::new();
+
+    for (index, row) in after_rows.iter().enumerate() {
+        after_by_signature
+            .entry(row_signature(row))
+            .or_default()
+            .push(index);
+    }
+
+    for (before_index, before_row) in before_rows.iter().enumerate() {
+        if let Some(candidate_indexes) = after_by_signature.get(&row_signature(before_row)) {
+            if let Some(after_index) = candidate_indexes
+                .iter()
+                .copied()
+                .find(|after_index| !after_matched[*after_index])
+            {
+                before_matched[before_index] = true;
+                after_matched[after_index] = true;
+            }
+        }
+    }
+
+    let mut samples = Vec::new();
+    for index in 0..before_rows.len().min(after_rows.len()) {
+        if before_matched[index] || after_matched[index] {
+            continue;
+        }
+
+        let before_row = &before_rows[index];
+        let after_row = &after_rows[index];
+        if before_row.values != after_row.values {
+            samples.push(RowDiffSample {
+                kind: RowDiffKind::Changed,
+                row_number: before_row.row_number,
+                before: Some(before_row.values.clone()),
+                after: Some(after_row.values.clone()),
+            });
+            before_matched[index] = true;
+            after_matched[index] = true;
+        }
+    }
+
+    for (index, before_row) in before_rows.iter().enumerate() {
+        if samples.len() >= MAX_ROW_DIFF_SAMPLES {
+            break;
+        }
+        if before_matched[index] {
+            continue;
+        }
+
+        samples.push(RowDiffSample {
+            kind: RowDiffKind::Removed,
+            row_number: before_row.row_number,
+            before: Some(before_row.values.clone()),
+            after: None,
+        });
+        before_matched[index] = true;
+    }
+
+    for (index, after_row) in after_rows.iter().enumerate() {
+        if samples.len() >= MAX_ROW_DIFF_SAMPLES {
+            break;
+        }
+        if after_matched[index] {
+            continue;
+        }
+
+        samples.push(RowDiffSample {
+            kind: RowDiffKind::Added,
+            row_number: after_row.row_number,
+            before: None,
+            after: Some(after_row.values.clone()),
+        });
+        after_matched[index] = true;
+    }
+
+    samples
+}
+
+fn row_signature(row: &RowSnapshot) -> String {
+    serde_json::to_string(&row.values).unwrap_or_default()
 }
 
 impl GroupAccumulator {
@@ -1240,6 +1365,7 @@ fn ensure_sheet_diff(sheet_diff: &mut Option<SheetDiff>, row_count: u32) -> &mut
         added_columns: Vec::new(),
         changed_columns: Vec::new(),
         removed_columns: Vec::new(),
+        row_samples: Vec::new(),
         warnings: Vec::new(),
     })
 }
@@ -1553,7 +1679,7 @@ mod tests {
         preview_actions, AggregateMeasure, AggregateOperation, CsvBackend, CsvPreviewTable,
         GroupAggregateArgs,
     };
-    use crate::models::{PreviewTargetKind, SpreadsheetAction, WorkbookFormat};
+    use crate::models::{PreviewTargetKind, RowDiffKind, SpreadsheetAction, WorkbookFormat};
     use crate::workbook::WorkbookSource;
 
     #[test]
@@ -1631,6 +1757,28 @@ mod tests {
         assert_eq!(
             preview.diff_summary.sheets[0].changed_columns,
             vec!["net_amount".to_string()]
+        );
+        assert_eq!(preview.diff_summary.sheets[0].row_samples.len(), 3);
+        assert_eq!(
+            preview.diff_summary.sheets[0].row_samples[0].kind,
+            RowDiffKind::Changed
+        );
+        assert_eq!(preview.diff_summary.sheets[0].row_samples[0].row_number, 1);
+        assert!(preview.diff_summary.sheets[0].row_samples[0]
+            .before
+            .as_ref()
+            .is_some_and(|values| values.contains_key("amount")));
+        assert!(preview.diff_summary.sheets[0].row_samples[0]
+            .after
+            .as_ref()
+            .is_some_and(|values| values.contains_key("gross_amount")));
+        assert_eq!(
+            preview.diff_summary.sheets[0].row_samples[1].kind,
+            RowDiffKind::Changed
+        );
+        assert_eq!(
+            preview.diff_summary.sheets[0].row_samples[2].kind,
+            RowDiffKind::Removed
         );
         assert!(preview.diff_summary.sheets[0]
             .warnings
@@ -1733,6 +1881,7 @@ mod tests {
                 "row_count".to_string()
             ]
         );
+        assert!(!preview.diff_summary.sheets[0].row_samples.is_empty());
         assert!(preview.diff_summary.sheets[0].changed_columns.is_empty());
         assert_eq!(
             preview.diff_summary.sheets[0].removed_columns,

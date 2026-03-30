@@ -1365,6 +1365,58 @@
                   </div>
                 </div>
               </div>
+
+              {#if sheetDiff.rowSamples.length > 0}
+                <div class="sheet-row-samples">
+                  <p class="sheet-row-samples-title">行サンプル</p>
+                  {#each sheetDiff.rowSamples as rowSample}
+                    <article class="row-sample-card">
+                      <div class="row-sample-header">
+                        <span class="row-sample-kind" data-kind={rowSample.kind}>
+                          {#if rowSample.kind === "changed"}
+                            変更
+                          {:else if rowSample.kind === "added"}
+                            追加
+                          {:else}
+                            削除
+                          {/if}
+                        </span>
+                        <span class="row-sample-number">行 {rowSample.rowNumber}</span>
+                      </div>
+
+                      <div class="row-sample-grid">
+                        {#if rowSample.before}
+                          <div class="row-sample-side">
+                            <p class="row-sample-side-title">変更前</p>
+                            <dl class="row-sample-values">
+                              {#each Object.entries(rowSample.before) as [column, value]}
+                                <div class="row-sample-entry">
+                                  <dt>{column}</dt>
+                                  <dd>{value || "空"}</dd>
+                                </div>
+                              {/each}
+                            </dl>
+                          </div>
+                        {/if}
+
+                        {#if rowSample.after}
+                          <div class="row-sample-side">
+                            <p class="row-sample-side-title">変更後</p>
+                            <dl class="row-sample-values">
+                              {#each Object.entries(rowSample.after) as [column, value]}
+                                <div class="row-sample-entry">
+                                  <dt>{column}</dt>
+                                  <dd>{value || "空"}</dd>
+                                </div>
+                              {/each}
+                            </dl>
+                          </div>
+                        {/if}
+                      </div>
+                    </article>
+                  {/each}
+                </div>
+              {/if}
             </article>
           {/each}
         </div>
@@ -2262,6 +2314,111 @@
     color: var(--ra-text-muted);
   }
 
+  .sheet-row-samples {
+    display: grid;
+    gap: 0.6rem;
+    margin-top: 0.9rem;
+    padding-top: 0.8rem;
+    border-top: 1px solid var(--ra-border);
+  }
+
+  .sheet-row-samples-title {
+    margin: 0;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--ra-text-secondary);
+  }
+
+  .row-sample-card {
+    padding: 0.75rem;
+    border: 1px solid var(--ra-border);
+    border-radius: var(--ra-radius-sm);
+    background: var(--ra-surface);
+  }
+
+  .row-sample-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.55rem;
+  }
+
+  .row-sample-kind {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.18rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 700;
+  }
+
+  .row-sample-kind[data-kind="changed"] {
+    background: var(--ra-accent-light);
+    color: var(--ra-accent);
+    border: 1px solid var(--ra-accent-border);
+  }
+
+  .row-sample-kind[data-kind="added"] {
+    background: var(--ra-success-light);
+    color: var(--ra-success);
+    border: 1px solid var(--ra-success-border);
+  }
+
+  .row-sample-kind[data-kind="removed"] {
+    background: var(--ra-error-light);
+    color: var(--ra-error);
+    border: 1px solid var(--ra-error-border);
+  }
+
+  .row-sample-number {
+    font-size: 0.78rem;
+    color: var(--ra-text-muted);
+  }
+
+  .row-sample-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+
+  .row-sample-side {
+    padding: 0.6rem;
+    border-radius: var(--ra-radius-sm);
+    background: var(--ra-surface-muted);
+  }
+
+  .row-sample-side-title {
+    margin: 0 0 0.45rem;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--ra-text-secondary);
+  }
+
+  .row-sample-values {
+    display: grid;
+    gap: 0.35rem;
+    margin: 0;
+  }
+
+  .row-sample-entry {
+    display: grid;
+    gap: 0.1rem;
+  }
+
+  .row-sample-entry dt {
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: var(--ra-text-muted);
+  }
+
+  .row-sample-entry dd {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--ra-text);
+    word-break: break-word;
+  }
+
   .warnings {
     margin-bottom: 0.75rem;
   }
@@ -2420,7 +2577,8 @@
     .step-banner-grid,
     .change-strip,
     .summary-grid,
-    .expert-grid {
+    .expert-grid,
+    .row-sample-grid {
       grid-template-columns: 1fr;
     }
 

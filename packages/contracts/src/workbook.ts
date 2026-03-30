@@ -19,6 +19,7 @@ export const aggregateOperationSchema = z.enum([
 ]);
 export const deriveColumnPositionSchema = z.enum(["start", "end", "after"]);
 export const previewTargetKindSchema = z.enum(["sheet", "table"]);
+export const rowDiffKindSchema = z.enum(["changed", "added", "removed"]);
 
 export const workbookSheetSchema = z.object({
   name: nonEmptyStringSchema,
@@ -193,12 +194,20 @@ export const previewTargetSchema = z.object({
   label: nonEmptyStringSchema
 });
 
+export const rowDiffSampleSchema = z.object({
+  kind: rowDiffKindSchema,
+  rowNumber: z.number().int().positive(),
+  before: z.record(z.string(), z.string()).optional(),
+  after: z.record(z.string(), z.string()).optional()
+});
+
 export const sheetDiffSchema = z.object({
   target: previewTargetSchema,
   estimatedAffectedRows: z.number().int().nonnegative(),
   addedColumns: z.array(nonEmptyStringSchema).default([]),
   changedColumns: z.array(nonEmptyStringSchema).default([]),
   removedColumns: z.array(nonEmptyStringSchema).default([]),
+  rowSamples: z.array(rowDiffSampleSchema).default([]),
   warnings: z.array(z.string()).default([])
 });
 
@@ -217,6 +226,7 @@ export type ColumnType = z.infer<typeof columnTypeSchema>;
 export type AggregateOperation = z.infer<typeof aggregateOperationSchema>;
 export type DeriveColumnPosition = z.infer<typeof deriveColumnPositionSchema>;
 export type PreviewTargetKind = z.infer<typeof previewTargetKindSchema>;
+export type RowDiffKind = z.infer<typeof rowDiffKindSchema>;
 export type WorkbookSheet = z.infer<typeof workbookSheetSchema>;
 export type WorkbookProfile = z.infer<typeof workbookProfileSchema>;
 export type SheetPreviewRow = z.infer<typeof sheetPreviewRowSchema>;
@@ -225,4 +235,5 @@ export type ColumnProfileSummary = z.infer<typeof columnProfileSummarySchema>;
 export type SheetColumnProfile = z.infer<typeof sheetColumnProfileSchema>;
 export type SpreadsheetAction = z.infer<typeof spreadsheetActionSchema>;
 export type PreviewTarget = z.infer<typeof previewTargetSchema>;
+export type RowDiffSample = z.infer<typeof rowDiffSampleSchema>;
 export type DiffSummary = z.infer<typeof diffSummarySchema>;

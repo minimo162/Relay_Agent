@@ -12,7 +12,7 @@ Relay Agent is a desktop MVP for turning a validated JSON action plan into a saf
 - Copilot handoff now copies natural-language instructions plus a strict JSON template instead of a raw relay packet.
 - Pasted Copilot JSON is auto-fixed for common issues such as markdown fences, BOM, CRLF, trailing commas, and Windows-style path separators before validation.
 - Validation failures now show tiered plain-language guidance plus a ready-to-copy retry prompt.
-- Review and save now pins a three-point summary above the fold and saves through one `コピーを保存する` action while keeping preview-before-write and save-copy-only guardrails.
+- Review and save now pins a three-point summary above the fold, shows per-sheet row-level before/after samples in the SheetDiff cards, and saves through one `コピーを保存する` action while keeping preview-before-write and save-copy-only guardrails.
 - Studio now exposes a read-only reviewer mode plus `Copy review summary` so approvers can inspect a saved turn without editing controls.
 - Studio now exposes an `Inspection details` browser for the selected turn, pairing read-only `Turn details` lifecycle summaries with saved workbook evidence so packet, validation, approval, execution, and workbook artifacts can be reviewed without opening local JSON files by hand.
 - Studio now rewrites validation, preview, and save failures into plain-language guidance with copyable Copilot follow-up prompts.
