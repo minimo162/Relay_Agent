@@ -95,7 +95,7 @@ Acceptance criteria
 
 - `.taskmaster/docs/prd_windows_trusted_signing.txt` exists and describes the
   trusted-signing scope
-- `.taskmaster/tasks/tasks.json` contains tasks `42` through `46`
+- `.taskmaster/tasks/tasks.json` contains tasks `42` through `45`
 - `docs/TRUSTED_SIGNING_SETUP.md` exists and lists the required GitHub secrets,
   repository variables, Azure resources, and role assignments
 - `.github/workflows/release-windows-installer.yml` contains:
@@ -141,5 +141,5 @@ Phase 2: Workflow rewrite
 
 Phase 3: Operational validation
 - Once Azure resources and GitHub OIDC are configured, run the first signed
-  release and confirm the published asset carries a valid Authenticode
-  signature.
+  release as an operational prerequisite outside Task Master and confirm the
+  published asset carries a valid Authenticode signature.
