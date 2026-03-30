@@ -2026,6 +2026,21 @@ Observed result:
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 35 Rust tests green after the version bump.
 - `git diff --check` still passes after updating the release metadata.
 
+Persistent sample-flow entry verification:
+
+```bash
+pnpm check
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src/routes/+page.svelte` still uses the first-run welcome for the initial sample/custom choice, but Home now also shows a smaller bundled-sample switcher inside the create-session panel whenever the packaged sample path is available.
+- This keeps `Use bundled sample` reachable after saved sessions exist, which closes the UX gap where `Try the sample flow` disappeared permanently after the first session was created.
+- When sample mode is active, the same create-session surface now also exposes `Switch to my own file`, so operators can move back to a real workbook path without resetting Home state.
+- `README.md` now documents that the bundled sample walkthrough remains available after first run through the create-session panel.
+- `pnpm check` and `git diff --check` still pass after the Home route and documentation update.
+
 ## Known Limitations
 
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.
