@@ -28,6 +28,18 @@ test("removes trailing commas", () => {
   assert.ok(result.fixes.includes("JSON の末尾カンマを修正しました"));
 });
 
+test("removes markdown-style escaping from underscores and brackets", () => {
+  const result = autoFixCopilotResponse(
+    '{\n"summary":"ok","actions": \\[\n{"tool":"table.group\\_aggregate","sheet":"Sheet1","args":{"groupBy": \\["__all\\_rows"],"measures": \\[{"column":"amount","op":"sum","as":"total\\_amount"}\\]}}\n\\]\n}'
+  );
+
+  assert.match(result.fixed, /"actions": \[/);
+  assert.match(result.fixed, /"tool":"table.group_aggregate"/);
+  assert.match(result.fixed, /"groupBy": \["__all_rows"\]/);
+  assert.match(result.fixed, /"as":"total_amount"/);
+  assert.ok(result.fixes.includes("Markdown 由来の不要なエスケープを除去しました"));
+});
+
 test("converts escaped windows paths after parsing", () => {
   const result = autoFixCopilotResponse(
     '{"summary":"ok","actions":[{"tool":"workbook.save_copy","args":{"outputPath":"C:\\\\temp\\\\out.csv"}}]}'

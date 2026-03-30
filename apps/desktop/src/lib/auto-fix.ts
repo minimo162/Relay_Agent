@@ -36,14 +36,21 @@ export function autoFixCopilotResponse(raw: string): AutoFixResult {
     s = s.replace(/\r\n/g, "\n");
   }
 
-  // 5. Remove trailing commas in arrays and objects
+  // 5. Remove common markdown-style escaping that breaks JSON and tool names
+  const beforeMarkdownEscapes = s;
+  s = s.replace(/\\([\[\]_])/g, "$1");
+  if (s !== beforeMarkdownEscapes) {
+    fixes.push("Markdown 由来の不要なエスケープを除去しました");
+  }
+
+  // 6. Remove trailing commas in arrays and objects
   const beforeTrailingComma = s;
   s = s.replace(/,(\s*[}\]])/g, "$1");
   if (s !== beforeTrailingComma) {
     fixes.push("JSON の末尾カンマを修正しました");
   }
 
-  // 6. Replace \\ with / in JSON string values only
+  // 7. Replace \\ with / in JSON string values only
   try {
     const parsed = JSON.parse(s);
     const didReplace = { value: false };
@@ -59,13 +66,13 @@ export function autoFixCopilotResponse(raw: string): AutoFixResult {
   return {
     fixed: s,
     fixes,
-    originalPreserved: raw,
+    originalPreserved: raw
   };
 }
 
 function replaceBackslashesInStrings(
   value: unknown,
-  didReplace: { value: boolean },
+  didReplace: { value: boolean }
 ): unknown {
   if (typeof value === "string") {
     const replaced = value.replace(/\\/g, "/");
