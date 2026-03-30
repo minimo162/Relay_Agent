@@ -1,1807 +1,1096 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { goto } from "$app/navigation";
   import {
-    projectInfo,
     type PreflightWorkbookResponse,
     type Session,
     type StartupIssue
   } from "@relay-agent/contracts";
   import {
-    listAuditHistory,
     createSession,
-    discardStudioDraft,
+    generateRelayPacket,
     initializeApp,
-    listRecoverableStudioDrafts,
-    listRecentFiles,
     listRecentSessions,
     listSessions,
-    markStudioDraftClean,
     pingDesktop,
     preflightWorkbook,
+    previewExecution,
     rememberRecentFile,
     rememberRecentSession,
+    respondToApproval,
+    runExecution,
     startTurn,
-    type AuditHistoryEntry,
-    type PersistedStudioDraft,
-    type RecentFile,
+    submitCopilotResponse,
     type RecentSession
   } from "$lib";
+  import { autoFixCopilotResponse } from "$lib/auto-fix";
 
-  type ObjectiveStarter = {
-    label: string;
-    objective: string;
-    note: string;
-  };
-  type HelpEntry = {
-    term: string;
-    detail: string;
-    action: string;
-  };
-  type QuickStartTemplate = {
-    label: string;
-    title: string;
-    objective: string;
-    note: string;
-  };
+  /* ── 状態 ── */
+  type Step = 1 | 2 | 3;
+  let currentStep: Step = 1;
+  let busy = false;
+  let errorMsg = "";
+  let settingsOpen = false;
 
-  const objectiveStarters: ObjectiveStarter[] = [
-    {
-      label: "Check my file safely",
-      objective: "Open my workbook, show the planned changes, and save a separate safe copy.",
-      note: "A simple default for first use."
-    },
-    {
-      label: "Filter what I need",
-      objective: "Keep only the rows I need, explain the result, and save a separate copy.",
-      note: "Good for cleanup or review work."
-    },
-    {
-      label: "Rename some columns",
-      objective: "Rename the columns I choose, show the impact, and save a separate copy.",
-      note: "Useful when column names need to be cleaned up."
-    }
-  ];
-  const quickStartTemplates: QuickStartTemplate[] = [
-    {
-      label: "Filter rows",
-      title: "Filtered workbook copy",
-      objective: "Keep only the rows I need, explain the result, and save a separate copy.",
-      note: "Good for reducing a large sheet."
-    },
-    {
-      label: "Rename columns",
-      title: "Column rename cleanup",
-      objective: "Rename the columns I choose, explain the impact, and save a separate copy.",
-      note: "Good when headers need cleanup."
-    },
-    {
-      label: "Change data types",
-      title: "Column type cleanup",
-      objective: "Fix the column types I choose, explain the impact, and save a separate copy.",
-      note: "Useful when dates or numbers are inconsistent."
-    },
-    {
-      label: "Summarize totals",
-      title: "Workbook totals summary",
-      objective: "Summarize the rows I choose into totals, explain the result, and save a separate copy.",
-      note: "Useful for aggregate reports."
-    }
-  ];
-
-  let ping = "loading";
-  let ipcStatus = "loading";
-  let storageMode = "unavailable";
-  let storagePath: string | null = null;
-  let sessionCount = "0";
-  let supportedModes = "loading";
-  let startupStatus = "loading";
+  /* アプリ起動 */
+  let appReady = false;
   let startupIssue: StartupIssue | null = null;
-  let temporaryModeEnabled = false;
+  let storagePath: string | null = null;
   let sampleWorkbookPath: string | null = null;
-  let useBundledSample = false;
-  let startupDiagnosticMessage = "";
-  let startupDiagnosticError = "";
 
-  let sessions: Session[] = [];
-  let recentSessions: RecentSession[] = [];
-  let recentFiles: RecentFile[] = [];
-  let auditHistory: AuditHistoryEntry[] = [];
-  let recoverableDrafts: PersistedStudioDraft[] = [];
-  let sessionsLoading = true;
-  let homeError = "";
-
-  let title = "";
-  let objective = "";
-  let primaryWorkbookPath = "";
-  let workbookPreflight: PreflightWorkbookResponse | null = null;
-  let preflightPending = false;
+  /* ステップ1: ファイルとやりたいこと */
+  let filePath = "";
+  let objectiveText = "";
+  let preflight: PreflightWorkbookResponse | null = null;
   let preflightError = "";
-  let lastPreflightPath = "";
-  let createPending = false;
-  let createError = "";
-  let createSuccess = "";
-  let homeHelpOpen = false;
-  let titleInput: HTMLInputElement | undefined;
-  let workbookPathInput: HTMLInputElement | undefined;
-  let createButton: HTMLButtonElement | undefined;
 
-  function toErrorMessage(error: unknown): string {
-    if (error instanceof Error && error.message) {
-      return error.message;
-    }
+  /* ステップ2: Copilot に聞く */
+  let relayPacketText = "";
+  let relayPacketSummary = "";
+  let copilotResponse = "";
+  let autoFixMessages: string[] = [];
+  let showInstructionPreview = false;
+  let sessionId = "";
+  let turnId = "";
 
-    return "The desktop command failed before the Home route could finish the request.";
+  /* ステップ3: 確認して保存 */
+  let previewSummary = "";
+  let previewTargetCount = 0;
+  let previewAffectedRows = 0;
+  let previewOutputPath = "";
+  let previewWarnings: string[] = [];
+  let previewRequiresApproval = false;
+  let executionDone = false;
+  let executionSummary = "";
+
+  /* 最近の作業 */
+  let recentSessions: RecentSession[] = [];
+  let showRecent = false;
+
+  /* テンプレート */
+  const templates = [
+    { label: "ファイルを安全に確認", objective: "ファイルを開いて、変更予定を表示し、安全なコピーを保存する" },
+    { label: "必要な行だけ抽出", objective: "必要な行だけ残して、結果を説明し、別コピーとして保存する" },
+    { label: "列名を変更", objective: "指定した列名を変更して、影響を表示し、別コピーとして保存する" },
+    { label: "合計を集計", objective: "指定した行の合計を集計して、結果を説明し、別コピーとして保存する" }
+  ];
+
+  /* ── ヘルパー ── */
+  function toError(e: unknown): string {
+    if (e instanceof Error && e.message) return e.message;
+    return "予期しないエラーが発生しました";
   }
 
-  function sortSessions(items: Session[]): Session[] {
-    return [...items].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  }
-
-  function syncSessionCount(): void {
-    sessionCount = String(sessions.length);
-  }
-
-  function loadRecentWork(): void {
-    recentSessions = listRecentSessions();
-    recentFiles = listRecentFiles();
-    auditHistory = listAuditHistory();
-    recoverableDrafts = listRecoverableStudioDrafts();
-  }
-
-  function describeRecoverySession(draft: PersistedStudioDraft): string {
-    return (
-      sessions.find((session) => session.id === draft.sessionId)?.title ??
-      recentSessions.find((session) => session.sessionId === draft.sessionId)?.title ??
-      `Session ${draft.sessionId.slice(0, 8)}`
-    );
-  }
-
-  function acknowledgeRecoveryDraft(sessionId: string): void {
-    markStudioDraftClean(sessionId);
-    loadRecentWork();
-  }
-
-  function discardRecoveryDraft(sessionId: string): void {
-    discardStudioDraft(sessionId);
-    loadRecentWork();
-  }
-
-  function formatDate(value: string): string {
-    return new Intl.DateTimeFormat("en-US", {
-      dateStyle: "medium",
-      timeStyle: "short"
-    }).format(new Date(value));
-  }
-
-  function formatFileSize(value: number): string {
-    const kib = 1024;
-    const mib = kib * 1024;
-
-    if (value >= mib) {
-      return `${(value / mib).toFixed(1)} MB`;
-    }
-
-    if (value >= kib) {
-      return `${(value / kib).toFixed(1)} KB`;
-    }
-
-    return `${value} bytes`;
-  }
-
-  function formatWorkbookFormat(value: PreflightWorkbookResponse["format"]): string {
-    return value === "xlsx" ? "Excel workbook" : "CSV";
-  }
-
-  function preflightTone(
-    status: PreflightWorkbookResponse["status"]
-  ): "ready" | "warning" | "error" {
-    if (status === "blocked") {
-      return "error";
-    }
-
-    if (status === "warning") {
-      return "warning";
-    }
-
-    return "ready";
-  }
-
-  function canRetryStartupChecks(): boolean {
-    return startupIssue?.recoveryActions.includes("retryInit") ?? false;
-  }
-
-  function canContinueTemporaryMode(): boolean {
-    return startupIssue?.recoveryActions.includes("continueTemporaryMode") ?? false;
-  }
-
-  function enableTemporaryMode(): void {
-    temporaryModeEnabled = true;
-  }
-
-  function clearWorkbookPreflight(): void {
-    workbookPreflight = null;
-    preflightPending = false;
+  function resetAll(): void {
+    currentStep = 1;
+    busy = false;
+    errorMsg = "";
+    filePath = "";
+    objectiveText = "";
+    preflight = null;
     preflightError = "";
-    lastPreflightPath = "";
+    relayPacketText = "";
+    relayPacketSummary = "";
+    copilotResponse = "";
+    autoFixMessages = [];
+    showInstructionPreview = false;
+    sessionId = "";
+    turnId = "";
+    previewSummary = "";
+    previewTargetCount = 0;
+    previewAffectedRows = 0;
+    previewOutputPath = "";
+    previewWarnings = [];
+    previewRequiresApproval = false;
+    executionDone = false;
+    executionSummary = "";
   }
 
-  function handleWorkbookPathInput(): void {
-    createError = "";
-    createSuccess = "";
-
-    if (primaryWorkbookPath.trim() !== lastPreflightPath) {
-      workbookPreflight = null;
-      preflightError = "";
-    }
-  }
-
-  async function runWorkbookPreflight(force = false): Promise<PreflightWorkbookResponse | null> {
-    const workbookPath = primaryWorkbookPath.trim();
-
-    if (!workbookPath) {
-      clearWorkbookPreflight();
-      return null;
-    }
-
-    if (!force && workbookPath === lastPreflightPath && workbookPreflight) {
-      return workbookPreflight;
-    }
-
-    preflightPending = true;
-    preflightError = "";
-
-    try {
-      const result = await preflightWorkbook({ workbookPath });
-      workbookPreflight = result;
-      lastPreflightPath = workbookPath;
-      return result;
-    } catch (error) {
-      workbookPreflight = null;
-      preflightError = toErrorMessage(error);
-      return null;
-    } finally {
-      preflightPending = false;
-    }
-  }
-
-  $: createBlockedByStartup = Boolean(startupIssue) && !temporaryModeEnabled;
-  $: showFirstRunWelcome = !sessionsLoading && sessions.length === 0;
-  $: sampleFlowAvailable = Boolean(sampleWorkbookPath);
-  $: workbookPathNeedsRecheck =
-    primaryWorkbookPath.trim().length > 0 && primaryWorkbookPath.trim() !== lastPreflightPath;
-  $: homeHelpEntries = [
-      {
-        term: "Task name",
-        detail: "A short label so you can spot this work later in Home and Studio.",
-        action: "Keep it short and recognizable."
-      },
-      {
-        term: "What do you want done?",
-        detail: "Describe the business result you want in everyday language instead of technical commands.",
-        action: "Say what should change, then let Relay Agent guide the steps."
-      },
-      {
-        term: "Check this file",
-        detail: "Runs a quick readiness check so unreadable or risky files are caught before Studio starts.",
-        action: "Use it after choosing or editing the file path."
-      }
-    ] satisfies HelpEntry[];
-
-  async function selectBundledSample(): Promise<void> {
-    if (!sampleWorkbookPath) {
-      return;
-    }
-
-    useBundledSample = true;
-    createError = "";
-    createSuccess = "";
-    primaryWorkbookPath = sampleWorkbookPath;
-
-    await tick();
-    await runWorkbookPreflight(true);
-  }
-
-  function clearBundledSample(): void {
-    useBundledSample = false;
-    primaryWorkbookPath = "";
-    clearWorkbookPreflight();
-  }
-
-  function deriveTitle(objectiveText: string): string {
-    const trimmed = objectiveText.trim();
-    if (!trimmed) {
-      return "";
-    }
-
+  function deriveTitle(text: string): string {
+    const trimmed = text.trim();
+    if (!trimmed) return "新しい作業";
     const first = trimmed.split(/[,.、。]/)[0].trim();
-    const shortened = first.length > 40 ? first.slice(0, 40).trimEnd() + "…" : first;
-    return shortened || trimmed.slice(0, 40);
+    return first.length > 30 ? first.slice(0, 30) + "…" : first;
   }
 
-  function useObjectiveStarter(starter: ObjectiveStarter): void {
-    objective = starter.objective;
-    if (!title.trim()) {
-      title = deriveTitle(starter.objective);
+  async function copyToClipboard(text: string): Promise<void> {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
     }
-    createError = "";
-    createSuccess = "";
   }
 
-  function applyQuickStartTemplate(template: QuickStartTemplate): void {
-    title = template.title;
-    objective = template.objective;
-    createError = "";
-    createSuccess = "";
-  }
-
-  function buildStartupDiagnosticText(): string {
-    const lines = [
-      "Relay Agent startup summary",
-      `startupStatus: ${startupStatus}`,
-      `storageMode: ${storageMode}`,
-      `sessionCount: ${sessionCount}`,
-      `supportedRelayModes: ${supportedModes}`
-    ];
-
-    if (startupIssue) {
-      lines.push(`problem: ${startupIssue.problem}`);
-      lines.push(`reason: ${startupIssue.reason}`);
-      if (startupIssue.storagePath) {
-        lines.push(`storagePath: ${startupIssue.storagePath}`);
-      }
-      if (startupIssue.nextSteps.length > 0) {
-        lines.push(`nextSteps: ${startupIssue.nextSteps.join(" | ")}`);
-      }
-    }
-
-    return lines.join("\n");
-  }
-
-  async function copyStartupDetails(): Promise<void> {
-    startupDiagnosticMessage = "";
-    startupDiagnosticError = "";
+  /* ── ステップ処理 ── */
+  async function handleStep1(): Promise<void> {
+    errorMsg = "";
+    busy = true;
 
     try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error("Clipboard access is not available in this build.");
+      const path = filePath.trim();
+      if (!path) {
+        errorMsg = "ファイルパスを入力してください";
+        return;
+      }
+      if (!objectiveText.trim()) {
+        errorMsg = "やりたいことを入力してください";
+        return;
       }
 
-      await navigator.clipboard.writeText(buildStartupDiagnosticText());
-      startupDiagnosticMessage = "Startup details copied. Share them with support if the problem continues.";
-    } catch (error) {
-      startupDiagnosticError = toErrorMessage(error);
-    }
-  }
+      // ファイルチェック
+      const result = await preflightWorkbook({ workbookPath: path });
+      preflight = result;
 
-  async function loadHome(): Promise<void> {
-    sessionsLoading = true;
-    homeError = "";
-    createSuccess = "";
-    startupDiagnosticMessage = "";
-    startupDiagnosticError = "";
-
-    const [pingResult, appResult, sessionsResult] = await Promise.allSettled([
-      pingDesktop(),
-      initializeApp(),
-      listSessions()
-    ]);
-
-    ping = pingResult.status === "fulfilled" ? pingResult.value : "tauri-unavailable";
-
-    if (appResult.status === "fulfilled") {
-      ipcStatus = appResult.value.initialized ? "ready" : "pending";
-      storageMode = appResult.value.storageMode;
-      storagePath = appResult.value.storagePath ?? appResult.value.startupIssue?.storagePath ?? null;
-      supportedModes = appResult.value.supportedRelayModes.join(", ");
-      sessionCount = String(appResult.value.sessionCount);
-      startupStatus = appResult.value.startupStatus;
-      startupIssue = appResult.value.startupIssue ?? null;
-      sampleWorkbookPath = appResult.value.sampleWorkbookPath ?? null;
-
-      if (!startupIssue) {
-        temporaryModeEnabled = false;
-      }
-    } else {
-      ipcStatus = "tauri-unavailable";
-      storageMode = "unavailable";
-      storagePath = null;
-      supportedModes = "unavailable";
-      startupStatus = "attention";
-      startupIssue = null;
-      sampleWorkbookPath = null;
-      homeError = toErrorMessage(appResult.reason);
-    }
-
-    if (sessionsResult.status === "fulfilled") {
-      sessions = sortSessions(sessionsResult.value);
-      syncSessionCount();
-    } else {
-      sessions = [];
-      homeError = homeError || toErrorMessage(sessionsResult.reason);
-    }
-
-    sessionsLoading = false;
-  }
-
-  async function handleCreateSession(): Promise<void> {
-    createPending = true;
-    createError = "";
-    createSuccess = "";
-
-    try {
-      const workbookPath = primaryWorkbookPath.trim();
-
-      if (workbookPath) {
-        const preflightResult = await runWorkbookPreflight(true);
-
-        if (!preflightResult) {
-          createError =
-            preflightError || "Relay Agent could not finish the file check for this workbook.";
-          return;
-        }
-
-        if (preflightResult.status === "blocked") {
-          createError = preflightResult.summary;
-          return;
-        }
-      } else {
-        clearWorkbookPreflight();
+      if (result.status === "blocked") {
+        errorMsg = result.summary;
+        return;
       }
 
-      const sessionTitle = title.trim() || deriveTitle(objective);
-      const createdSession = await createSession({
-        title: sessionTitle,
-        objective,
-        primaryWorkbookPath: workbookPath || undefined
+      // セッション作成
+      const title = deriveTitle(objectiveText);
+      const session = await createSession({
+        title,
+        objective: objectiveText,
+        primaryWorkbookPath: path
       });
+      sessionId = session.id;
 
       rememberRecentSession({
-        sessionId: createdSession.id,
-        title: createdSession.title,
-        workbookPath: createdSession.primaryWorkbookPath ?? "",
+        sessionId: session.id,
+        title: session.title,
+        workbookPath: path,
         lastOpenedAt: new Date().toISOString(),
         lastTurnTitle: ""
       });
+      rememberRecentFile({
+        path,
+        lastUsedAt: new Date().toISOString(),
+        sessionId: session.id,
+        source: "session"
+      });
 
-      if (workbookPath) {
-        rememberRecentFile({
-          path: workbookPath,
-          lastUsedAt: new Date().toISOString(),
-          sessionId: createdSession.id,
-          source: "session"
-        });
-      }
-
-      loadRecentWork();
-
-      sessions = sortSessions([
-        createdSession,
-        ...sessions.filter((existingSession) => existingSession.id !== createdSession.id)
-      ]);
-      syncSessionCount();
-
+      // ターン開始
       const turnResponse = await startTurn({
-        sessionId: createdSession.id,
-        title: sessionTitle,
-        objective,
+        sessionId: session.id,
+        title,
+        objective: objectiveText,
         mode: "plan"
       });
+      turnId = turnResponse.turn.id;
 
-      rememberRecentSession({
-        sessionId: createdSession.id,
-        title: createdSession.title,
-        workbookPath: createdSession.primaryWorkbookPath ?? "",
-        lastOpenedAt: new Date().toISOString(),
-        lastTurnTitle: turnResponse.turn.title
+      // 依頼テキスト生成
+      const packet = await generateRelayPacket({
+        sessionId: session.id,
+        turnId: turnResponse.turn.id
       });
+      relayPacketText = typeof packet === "string" ? packet : JSON.stringify(packet, null, 2);
+      relayPacketSummary = `${title} — ${path}`;
 
-      title = "";
-      objective = "";
-      primaryWorkbookPath = "";
-      useBundledSample = false;
-      clearWorkbookPreflight();
-
-      await goto(`/studio?sessionId=${createdSession.id}&turnId=${turnResponse.turn.id}`);
-    } catch (error) {
-      createError = toErrorMessage(error);
+      currentStep = 2;
+    } catch (e) {
+      errorMsg = toError(e);
     } finally {
-      createPending = false;
+      busy = false;
     }
   }
 
+  async function handleStep2(): Promise<void> {
+    errorMsg = "";
+    autoFixMessages = [];
+    busy = true;
+
+    try {
+      if (!copilotResponse.trim()) {
+        errorMsg = "Copilot の返答を貼り付けてください";
+        return;
+      }
+
+      // 自動修正
+      const fixResult = autoFixCopilotResponse(copilotResponse);
+      autoFixMessages = fixResult.fixes;
+      const fixedResponse = fixResult.fixed;
+
+      // 送信
+      const submitResult = await submitCopilotResponse({
+        sessionId,
+        turnId,
+        rawResponse: fixedResponse
+      });
+
+      if (!submitResult.accepted) {
+        const issues = submitResult.validationIssues?.map((i: { message: string }) => i.message).join("; ");
+        errorMsg = issues || "返答の形式が正しくありません";
+        return;
+      }
+
+      // プレビュー
+      const preview = await previewExecution({ sessionId, turnId });
+      const diff = preview.diffSummary;
+      previewSummary = `${diff.targetCount} 件の変更、推定 ${diff.estimatedAffectedRows} 行に影響`;
+      previewTargetCount = diff.targetCount;
+      previewAffectedRows = diff.estimatedAffectedRows;
+      previewOutputPath = diff.outputPath;
+      previewWarnings = preview.warnings;
+      previewRequiresApproval = preview.requiresApproval;
+
+      currentStep = 3;
+    } catch (e) {
+      errorMsg = toError(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function handleStep3(): Promise<void> {
+    errorMsg = "";
+    busy = true;
+
+    try {
+      // 承認が必要なら承認する
+      if (previewRequiresApproval) {
+        await respondToApproval({ sessionId, turnId, decision: "approved" });
+      }
+
+      // 実行
+      const result = await runExecution({ sessionId, turnId });
+      executionSummary = result.executed
+        ? `保存が完了しました${result.outputPath ? ` — ${result.outputPath}` : ""}`
+        : (result.reason || "実行できませんでした");
+      if (result.outputPath) {
+        previewOutputPath = result.outputPath;
+      }
+      executionDone = true;
+    } catch (e) {
+      errorMsg = toError(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  /* ── 初期化 ── */
   onMount(async () => {
-    await loadHome();
-    loadRecentWork();
+    try {
+      await pingDesktop();
+      const app = await initializeApp();
+      appReady = app.initialized;
+      startupIssue = app.startupIssue ?? null;
+      storagePath = app.storagePath ?? null;
+      sampleWorkbookPath = app.sampleWorkbookPath ?? null;
+    } catch (e) {
+      errorMsg = toError(e);
+    }
+
+    recentSessions = listRecentSessions();
   });
 </script>
 
 <svelte:head>
-  <title>Relay Agent | Home</title>
+  <title>Relay Agent</title>
 </svelte:head>
 
-<div class="ra-view">
-  <section class="ra-hero">
-    <p class="ra-eyebrow">Home route</p>
-    <h1 class="ra-headline">Create sessions and reopen the work that already lives on disk.</h1>
-    <p class="ra-lede">
-      Home now fronts the persisted session store. You can create a new session, see the
-      saved list that survived restart, and hand any existing session into Studio for the
-      next relay step.
-    </p>
-  </section>
+<!-- ヘッダー -->
+<header class="header">
+  <div class="header-left">
+    <span class="header-icon">📋</span>
+    <span class="header-title">Relay Agent</span>
+  </div>
+  <button
+    class="header-settings"
+    type="button"
+    on:click={() => (settingsOpen = !settingsOpen)}
+    aria-label="設定を開く"
+  >⚙</button>
+</header>
 
-  <section class="ra-chip-row" aria-label="Primary route links">
-    <a class="route-chip" href="/studio">Open Studio shell</a>
-    <a class="route-chip" href="/settings">Review MVP policies</a>
-    <button class="route-chip action-chip" type="button" on:click={() => void loadHome()}>
-      Refresh sessions
+<!-- 最近の作業 -->
+{#if recentSessions.length > 0 && currentStep === 1 && !executionDone}
+  <button
+    class="recent-toggle"
+    type="button"
+    on:click={() => (showRecent = !showRecent)}
+  >
+    {showRecent ? "最近の作業を閉じる" : `最近の作業（${recentSessions.length}件）`}
+  </button>
+
+  {#if showRecent}
+    <div class="recent-list">
+      {#each recentSessions.slice(0, 5) as rs}
+        <div class="recent-item">
+          <span class="recent-title">{rs.title}</span>
+          {#if rs.workbookPath}
+            <span class="recent-path">{rs.workbookPath}</span>
+          {/if}
+        </div>
+      {/each}
+    </div>
+  {/if}
+{/if}
+
+<!-- ステップインジケーター -->
+<div class="steps-indicator">
+  <div class="step-dot" class:active={currentStep >= 1} class:done={currentStep > 1}>1</div>
+  <div class="step-line" class:active={currentStep >= 2}></div>
+  <div class="step-dot" class:active={currentStep >= 2} class:done={currentStep > 2}>2</div>
+  <div class="step-line" class:active={currentStep >= 3}></div>
+  <div class="step-dot" class:active={currentStep >= 3}>3</div>
+</div>
+
+<!-- 起動エラー -->
+{#if startupIssue}
+  <div class="card card-warn">
+    <strong>{startupIssue.problem}</strong>
+    <p>{startupIssue.reason}</p>
+  </div>
+{/if}
+
+<!-- ステップ 1: ファイルとやりたいこと -->
+{#if currentStep === 1}
+  <section class="card">
+    <h2 class="step-title">ステップ 1: ファイルとやりたいこと</h2>
+
+    <label class="field-label" for="file-path">ファイルパス</label>
+    <div class="file-row">
+      <input
+        id="file-path"
+        type="text"
+        class="input"
+        bind:value={filePath}
+        placeholder="例: C:\Users\you\data.csv"
+        disabled={busy}
+      />
+      {#if sampleWorkbookPath}
+        <button
+          class="chip"
+          type="button"
+          on:click={() => { filePath = sampleWorkbookPath ?? ''; }}
+          disabled={busy}
+        >練習用サンプル</button>
+      {/if}
+    </div>
+
+    {#if preflight && preflight.status === "warning"}
+      <p class="field-warn">⚠ {preflight.summary}</p>
+    {/if}
+    {#if preflightError}
+      <p class="field-error">{preflightError}</p>
+    {/if}
+
+    <label class="field-label" for="objective">やりたいこと</label>
+    <div class="template-row">
+      {#each templates as t}
+        <button
+          class="chip"
+          type="button"
+          on:click={() => { objectiveText = t.objective; }}
+          disabled={busy}
+        >{t.label}</button>
+      {/each}
+    </div>
+    <textarea
+      id="objective"
+      class="textarea"
+      bind:value={objectiveText}
+      placeholder="どんな変更をしたいか、自由に書いてください"
+      rows="3"
+      disabled={busy}
+    ></textarea>
+
+    {#if errorMsg && currentStep === 1}
+      <p class="field-error">{errorMsg}</p>
+    {/if}
+
+    <button
+      class="btn btn-primary"
+      type="button"
+      on:click={handleStep1}
+      disabled={busy || !filePath.trim() || !objectiveText.trim()}
+    >
+      {busy ? "準備中…" : "準備する →"}
     </button>
   </section>
 
-  {#if homeError}
-    <section class="feedback feedback-error" aria-live="polite">
-      <strong>Home load issue</strong>
-      <p>{homeError}</p>
-    </section>
-  {/if}
+<!-- ステップ 2: Copilot に聞く -->
+{:else if currentStep === 2}
+  <section class="card">
+    <h2 class="step-title">ステップ 2: Copilot に聞く</h2>
 
-  {#if startupIssue}
-    <section class="feedback feedback-warning" aria-live="polite">
-      <strong>{startupIssue.problem}</strong>
-      <p>{startupIssue.reason}</p>
+    <!-- 折りたたみサマリー：ステップ1の内容 -->
+    <div class="step-summary">
+      <span class="step-summary-label">ファイル:</span> {filePath}
+      <br />
+      <span class="step-summary-label">やりたいこと:</span> {objectiveText.slice(0, 60)}{objectiveText.length > 60 ? "…" : ""}
+    </div>
 
-      {#if startupIssue.storagePath}
-        <p class="feedback-detail">
-          Storage path: <code>{startupIssue.storagePath}</code>
-        </p>
-      {/if}
+    <p class="instruction-text">
+      下の「依頼をコピー」ボタンを押して、Copilot に貼り付けてください。
+      返ってきた JSON をそのまま下のテキストエリアに貼り付けてください。
+    </p>
 
-      {#if startupIssue.nextSteps.length > 0}
-        <ul class="feedback-list">
-          {#each startupIssue.nextSteps as step}
-            <li>{step}</li>
-          {/each}
-        </ul>
-      {/if}
+    <div class="copy-row">
+      <button
+        class="btn btn-accent"
+        type="button"
+        on:click={() => copyToClipboard(relayPacketText)}
+        disabled={busy}
+      >📋 依頼をコピー</button>
+      <button
+        class="btn-link"
+        type="button"
+        on:click={() => (showInstructionPreview = !showInstructionPreview)}
+      >{showInstructionPreview ? "依頼を閉じる" : "依頼を見る"}</button>
+    </div>
 
-      <div class="feedback-actions">
-        {#if canRetryStartupChecks()}
-          <button class="route-chip action-chip" type="button" on:click={() => void loadHome()}>
-            Retry startup checks
-          </button>
-        {/if}
+    {#if showInstructionPreview}
+      <pre class="preview-block">{relayPacketText}</pre>
+    {/if}
 
-        {#if canContinueTemporaryMode() && !temporaryModeEnabled}
-          <button class="route-chip action-chip" type="button" on:click={enableTemporaryMode}>
-            Continue in temporary mode
-          </button>
-        {/if}
+    <label class="field-label" for="copilot-response">Copilot の返答</label>
+    <textarea
+      id="copilot-response"
+      class="textarea textarea-tall"
+      bind:value={copilotResponse}
+      placeholder="Copilot から返ってきた JSON をここに貼り付け"
+      rows="8"
+      disabled={busy}
+    ></textarea>
 
-        <button class="route-chip action-chip" type="button" on:click={() => void copyStartupDetails()}>
-          Copy startup details
-        </button>
-        <a class="route-chip" href="/settings">Open settings</a>
-      </div>
-
-      {#if startupDiagnosticError}
-        <p class="form-message form-error" aria-live="polite">{startupDiagnosticError}</p>
-      {/if}
-
-      {#if startupDiagnosticMessage}
-        <p class="form-message form-success" aria-live="polite">{startupDiagnosticMessage}</p>
-      {/if}
-    </section>
-  {/if}
-
-  {#if recoverableDrafts.length > 0}
-    <section class="feedback feedback-warning" aria-live="polite">
-      <strong>Recovery available</strong>
-      <p>
-        Relay Agent found locally autosaved work from a previous run that did not close cleanly.
-        Restore it in Studio or discard it here.
-      </p>
-
-      <div class="recovery-list">
-        {#each recoverableDrafts as draft}
-          <article class="recovery-card">
-            <div class="session-card-head">
-              <div>
-                <h3>{describeRecoverySession(draft)}</h3>
-                <p>{draft.selectedTurnTitle || draft.turnTitle || "In-progress draft"}</p>
-              </div>
-              <span class="status-pill status-attention">recovery</span>
-            </div>
-
-            <div class="session-meta">
-              <span>Saved {formatDate(draft.lastUpdatedAt)}</span>
-              {#if draft.workbookPath}
-                <span title={draft.workbookPath}>{draft.workbookPath}</span>
-              {/if}
-            </div>
-
-            <div class="feedback-actions">
-              <a
-                class="session-link"
-                href={`/studio?sessionId=${draft.sessionId}`}
-                on:click={() => acknowledgeRecoveryDraft(draft.sessionId)}
-              >
-                Restore in Studio
-              </a>
-              <button
-                class="route-chip action-chip"
-                type="button"
-                on:click={() => discardRecoveryDraft(draft.sessionId)}
-              >
-                Discard saved draft
-              </button>
-            </div>
-          </article>
+    {#if autoFixMessages.length > 0}
+      <div class="autofix-notice">
+        {#each autoFixMessages as msg}
+          <span class="autofix-chip">✓ {msg}</span>
         {/each}
       </div>
-    </section>
-  {/if}
+    {/if}
 
-  {#if showFirstRunWelcome}
-    <section class="first-run-grid">
-      <article class="ra-panel first-run-panel">
-        <p class="panel-eyebrow">Welcome</p>
-        <h2>Start a workbook task safely.</h2>
-        <p class="panel-copy">
-          Relay Agent always writes a copy. Your original workbook stays unchanged while you
-          review the plan first. Fill in the form below to begin.
-        </p>
+    {#if errorMsg && currentStep === 2}
+      <p class="field-error">{errorMsg}</p>
+    {/if}
 
-        <ul class="welcome-list">
-          <li>Every write stays save-copy only, so the source file is not overwritten.</li>
-          <li>Relay Agent shows the plan before anything is saved.</li>
-          {#if sampleFlowAvailable}
-            <li>Want a low-risk walkthrough? Select the practice sample below.</li>
-          {/if}
-        </ul>
-      </article>
-
-      <article class="ra-panel permission-panel">
-        <p class="panel-eyebrow">Before Windows asks</p>
-        <h2>Why access prompts appear</h2>
-        <ul class="ra-list">
-          <li>Relay Agent needs access to the file you choose so it can inspect it safely.</li>
-          <li>When you save a copy, Windows may also ask for access to the destination you picked.</li>
-          <li>The original workbook is still treated as read-only and is not overwritten.</li>
-        </ul>
-      </article>
-    </section>
-  {/if}
-
-  <section class="home-grid">
-    <article class="ra-panel create-panel">
-      <div class="panel-heading">
-        <div>
-          <p class="panel-eyebrow">Create session</p>
-          <h2>{showFirstRunWelcome ? "Start your first task" : "Start a new task"}</h2>
-        </div>
-        <span class={`status-pill status-${startupStatus}`}>{startupStatus}</span>
-      </div>
-
-      <p class="panel-copy">
-        {#if createBlockedByStartup}
-          Startup checks still need attention before saved work can be created.
-        {:else if temporaryModeEnabled}
-          Temporary mode is active. New sessions will work for this run, but they will not survive restart.
-        {:else}
-          Describe the result you want, choose a file, and Relay Agent will guide the next steps.
-        {/if}
-      </p>
-
-      <section class="feedback feedback-info" aria-live="polite">
-        <strong>File safety</strong>
-        <p>
-          Relay Agent keeps the original workbook read-only. After review, it writes a separate
-          copy instead of overwriting the source file.
-        </p>
-      </section>
-
-        <section class="help-panel">
-          <div class="help-panel-head">
-            <div>
-              <p class="panel-eyebrow">Need help?</p>
-              <h3>Quick help for this step</h3>
-            </div>
-            <button
-              class="route-chip action-chip compact-chip"
-              type="button"
-              on:click={() => (homeHelpOpen = !homeHelpOpen)}
-            >
-              {homeHelpOpen ? "Hide help" : "Show help"}
-            </button>
-          </div>
-
-          {#if homeHelpOpen}
-            <div class="help-list">
-              {#each homeHelpEntries as entry}
-                <article class="help-card">
-                  <strong>{entry.term}</strong>
-                  <p>{entry.detail}</p>
-                  <span>{entry.action}</span>
-                </article>
-              {/each}
-            </div>
-          {/if}
-        </section>
-
-        <div class="guided-start-card">
-          <p class="panel-eyebrow">Describe your goal</p>
-          <h3>What should happen to your file?</h3>
-          <p class="guided-start-copy">
-            Use plain work language. You do not need to mention relay packets, JSON, or tool names.
-          </p>
-
-          <div class="objective-starter-grid">
-            {#each objectiveStarters as starter}
-              <button
-                class="objective-starter"
-                type="button"
-                on:click={() => useObjectiveStarter(starter)}
-              >
-                <strong>{starter.label}</strong>
-                <span>{starter.note}</span>
-              </button>
-            {/each}
-          </div>
-        </div>
-
-        <div class="guided-start-card">
-          <p class="panel-eyebrow">Quick-start templates</p>
-          <h3>Start from a common spreadsheet task.</h3>
-          <p class="guided-start-copy">
-            Templates fill both the task name and the goal. You can still edit the text before
-            creating the session.
-          </p>
-
-          <div class="objective-starter-grid">
-            {#each quickStartTemplates as template}
-              <button
-                class="objective-starter"
-                type="button"
-                on:click={() => applyQuickStartTemplate(template)}
-              >
-                <strong>{template.label}</strong>
-                <span>{template.note}</span>
-              </button>
-            {/each}
-          </div>
-        </div>
-
-        <form class="session-form" on:submit|preventDefault={() => void handleCreateSession()}>
-          <label>
-            <span>Task name</span>
-            <input
-              bind:this={titleInput}
-              bind:value={title}
-              maxlength="120"
-              placeholder="Monthly sales cleanup"
-              required
-            />
-            <p class="field-help">Use a short name so you can find this work again later.</p>
-          </label>
-
-          <label>
-            <span>What do you want done?</span>
-            <textarea
-              bind:value={objective}
-              rows="4"
-              placeholder="Example: Keep approved rows, explain what will change, and save a separate copy."
-              required
-            ></textarea>
-            <p class="field-help">
-              Write the business outcome you want. Relay Agent will guide the technical steps later.
-            </p>
-          </label>
-
-          <label>
-            <span>File to inspect</span>
-            <input
-              bind:this={workbookPathInput}
-              bind:value={primaryWorkbookPath}
-              on:blur={() => void runWorkbookPreflight(true)}
-              on:input={handleWorkbookPathInput}
-              placeholder="/tmp/revenue-q2.csv"
-            />
-            <p class="field-help">
-              {useBundledSample
-                ? "The practice sample path is filled in. Check it once, then continue."
-                : "Add the file Relay Agent should inspect before it prepares a safe copy."}
-            </p>
-          </label>
-
-          {#if sampleFlowAvailable}
-            <div class="inline-action-row">
-              {#if useBundledSample}
-                <button
-                  class="route-chip action-chip compact-chip"
-                  type="button"
-                  on:click={clearBundledSample}
-                >
-                  Use my own file instead
-                </button>
-              {:else}
-                <button
-                  class="route-chip action-chip compact-chip"
-                  type="button"
-                  on:click={() => void selectBundledSample()}
-                >
-                  Use practice sample
-                </button>
-              {/if}
-            </div>
-          {/if}
-
-          <div class="inline-action-row">
-            <button
-              class="route-chip action-chip compact-chip"
-              disabled={preflightPending || !primaryWorkbookPath.trim()}
-              type="button"
-              on:click={() => void runWorkbookPreflight(true)}
-            >
-              {preflightPending ? "Checking file..." : "Check this file"}
-            </button>
-
-            {#if workbookPathNeedsRecheck}
-              <p class="inline-note">Run the file check again after changing the file path.</p>
-            {/if}
-          </div>
-
-          {#if preflightError}
-            <p class="form-message form-error" aria-live="polite">{preflightError}</p>
-          {/if}
-
-          {#if workbookPreflight}
-            <section
-              class={`feedback feedback-${preflightTone(workbookPreflight.status)}`}
-              aria-live="polite"
-            >
-              <strong>{workbookPreflight.headline}</strong>
-              <p>{workbookPreflight.summary}</p>
-
-              <div class="preflight-meta">
-                {#if workbookPreflight.format}
-                  <span>{formatWorkbookFormat(workbookPreflight.format)}</span>
-                {/if}
-
-                {#if workbookPreflight.fileSizeBytes !== undefined}
-                  <span>{formatFileSize(workbookPreflight.fileSizeBytes)}</span>
-                {/if}
-              </div>
-
-              {#if workbookPreflight.checks.length > 0}
-                <ul class="feedback-list">
-                  {#each workbookPreflight.checks as check}
-                    <li>
-                      <strong>{check.title}:</strong> {check.detail}
-                    </li>
-                  {/each}
-                </ul>
-              {/if}
-
-              {#if workbookPreflight.guidance.length > 0}
-                <div class="preflight-guidance">
-                  <p class="preflight-guidance-label">Before you continue</p>
-                  <ul class="feedback-list">
-                    {#each workbookPreflight.guidance as hint}
-                      <li>{hint}</li>
-                    {/each}
-                  </ul>
-                </div>
-              {/if}
-            </section>
-          {/if}
-
-          {#if createBlockedByStartup}
-            <p class="form-message form-warning" aria-live="polite">
-              Resolve the startup issue or choose temporary mode before creating a session.
-            </p>
-          {/if}
-
-          {#if createError}
-            <p class="form-message form-error" aria-live="polite">{createError}</p>
-          {/if}
-
-          {#if createSuccess}
-            <p class="form-message form-success" aria-live="polite">{createSuccess}</p>
-          {/if}
-
-          <div class="safe-defaults-card">
-            <p class="panel-eyebrow">Safe defaults already on</p>
-            <ul class="guided-step-list">
-              <li>Your original file stays unchanged.</li>
-              <li>Relay Agent shows the plan before anything is saved.</li>
-              <li>The result is written as a separate copy instead of overwriting the source file.</li>
-            </ul>
-          </div>
-
-          <button
-            bind:this={createButton}
-            class="primary-button"
-            disabled={createPending || ipcStatus !== "ready" || createBlockedByStartup}
-            type="submit"
-          >
-            {createPending ? "Starting..." : "Start"}
-          </button>
-        </form>
-    </article>
-
-    <article class="ra-panel session-panel">
-      <div class="panel-heading">
-        <div>
-          <p class="panel-eyebrow">Persisted sessions</p>
-          <h2>Session list</h2>
-        </div>
-        <span class="status-pill">{sessionCount} total</span>
-      </div>
-
-      <p class="panel-copy">
-        The list below comes from `list_sessions` against local JSON storage, not from
-        in-page mock state.
-      </p>
-
-      {#if sessionsLoading}
-        <div class="empty-state">
-          <h3>Loading sessions</h3>
-          <p>Reading persisted records from the app-local storage directory.</p>
-        </div>
-      {:else if sessions.length === 0}
-        <div class="empty-state">
-          <h3>No sessions yet</h3>
-          <p>Create the first session here, then continue into Studio.</p>
-        </div>
-      {:else}
-        <div class="session-list">
-          {#each sessions as session}
-            <article class="session-card">
-              <div class="session-card-head">
-                <div>
-                  <h3>{session.title}</h3>
-                  <p>{session.objective}</p>
-                </div>
-                <span class={`status-pill status-${session.status}`}>{session.status}</span>
-              </div>
-
-              <div class="session-meta">
-                <span>{session.turnIds.length} {session.turnIds.length === 1 ? "turn" : "turns"}</span>
-                <span>Updated {formatDate(session.updatedAt)}</span>
-                {#if session.primaryWorkbookPath}
-                  <span title={session.primaryWorkbookPath}>{session.primaryWorkbookPath}</span>
-                {/if}
-              </div>
-
-              <div class="session-actions">
-                <a class="session-link" href={`/studio?sessionId=${session.id}`}>Open in Studio</a>
-                <span class="session-id" title={session.id}>{session.id}</span>
-              </div>
-            </article>
-          {/each}
-        </div>
-      {/if}
-    </article>
+    <div class="btn-row">
+      <button
+        class="btn btn-secondary"
+        type="button"
+        on:click={() => { currentStep = 1; errorMsg = ""; }}
+        disabled={busy}
+      >← 戻る</button>
+      <button
+        class="btn btn-primary"
+        type="button"
+        on:click={handleStep2}
+        disabled={busy || !copilotResponse.trim()}
+      >
+        {busy ? "確認中…" : "確認する →"}
+      </button>
+    </div>
   </section>
 
-  <section class="ra-panel-grid">
-    <article class="ra-panel">
-      <h2>System snapshot</h2>
-      <dl class="metrics">
-        <div>
-          <dt>Stage</dt>
-          <dd>{projectInfo.stage}</dd>
-        </div>
-        <div>
-          <dt>Startup status</dt>
-          <dd>{startupStatus}</dd>
-        </div>
-        <div>
-          <dt>IPC status</dt>
-          <dd>{ipcStatus}</dd>
-        </div>
-        <div>
-          <dt>Desktop ping</dt>
-          <dd>{ping}</dd>
-        </div>
-        <div>
-          <dt>Storage mode</dt>
-          <dd>{storageMode}</dd>
-        </div>
-        <div>
-          <dt>Storage path</dt>
-          <dd>{storagePath ?? "Unavailable"}</dd>
-        </div>
-        <div>
-          <dt>Session count</dt>
-          <dd>{sessionCount}</dd>
-        </div>
-        <div>
-          <dt>Relay modes</dt>
-          <dd>{supportedModes}</dd>
-        </div>
-      </dl>
-    </article>
+<!-- ステップ 3: 確認して保存 -->
+{:else if currentStep === 3 && !executionDone}
+  <section class="card">
+    <h2 class="step-title">ステップ 3: 確認して保存</h2>
 
-    <article class="ra-panel">
-      <h2>Data stays on this device</h2>
-      <ul class="ra-list">
-        <li>Sessions, turn history, preview records, and logs stay in local app storage.</li>
-        <li>Nothing is auto-sent outside the app. Only text you manually paste into Copilot leaves the device.</li>
-        <li>To remove saved work today, close Relay Agent and delete the folder shown below.</li>
-      </ul>
+    <!-- 折りたたみサマリー -->
+    <div class="step-summary">
+      <span class="step-summary-label">ファイル:</span> {filePath}
+    </div>
 
-      {#if storagePath}
-        <p class="path-label">Current local storage folder</p>
-        <code class="path-block">{storagePath}</code>
-      {:else}
-        <p class="path-fallback">
-          Local storage is not ready yet, so there is no stable folder to remove from this run.
-        </p>
-      {/if}
-    </article>
+    <div class="summary-grid">
+      <div class="summary-item">
+        <span class="summary-label">変更対象</span>
+        <span class="summary-value">{previewTargetCount} 件</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">影響行数</span>
+        <span class="summary-value">{previewAffectedRows} 行</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">保存先</span>
+        <span class="summary-value summary-path">{previewOutputPath || "自動決定"}</span>
+      </div>
+    </div>
 
-    <article class="ra-panel">
-      <h2>Recent work</h2>
+    {#if previewSummary}
+      <p class="preview-text">{previewSummary}</p>
+    {/if}
 
-      {#if recentSessions.length === 0 && recentFiles.length === 0}
-        <p class="path-fallback">
-          Open a session in Studio or create one here, and Relay Agent will keep a short recent-work list on this device.
-        </p>
-      {:else}
-        {#if recentSessions.length > 0}
-          <div class="recent-block">
-            <p class="panel-eyebrow">Recent sessions</p>
-            <div class="session-list compact-session-list">
-              {#each recentSessions as recentSession}
-                <article class="session-card compact-session-card">
-                  <div class="session-card-head">
-                    <div>
-                      <h3>{recentSession.title}</h3>
-                      <p>{recentSession.lastTurnTitle || "Ready to resume in Studio."}</p>
-                    </div>
-                    <a class="session-link" href={`/studio?sessionId=${recentSession.sessionId}`}>
-                      Resume
-                    </a>
-                  </div>
+    {#if previewWarnings.length > 0}
+      <div class="warnings">
+        {#each previewWarnings as w}
+          <p class="field-warn">⚠ {w}</p>
+        {/each}
+      </div>
+    {/if}
 
-                  <div class="session-meta">
-                    <span>Opened {formatDate(recentSession.lastOpenedAt)}</span>
-                    {#if recentSession.workbookPath}
-                      <span title={recentSession.workbookPath}>{recentSession.workbookPath}</span>
-                    {/if}
-                  </div>
-                </article>
-              {/each}
-            </div>
-          </div>
-        {/if}
+    <p class="safety-note">
+      元のファイルはそのまま残ります。変更は別のコピーに保存されます。
+    </p>
 
-        {#if recentFiles.length > 0}
-          <div class="recent-block">
-            <p class="panel-eyebrow">Recent files</p>
-            <div class="recent-file-list">
-              {#each recentFiles as recentFile}
-                <article class="recent-file-card">
-                  <code>{recentFile.path}</code>
-                  <div class="session-meta">
-                    <span>{recentFile.source}</span>
-                    <span>{formatDate(recentFile.lastUsedAt)}</span>
-                  </div>
-                </article>
-              {/each}
-            </div>
-          </div>
-        {/if}
-      {/if}
-    </article>
+    {#if errorMsg && currentStep === 3}
+      <p class="field-error">{errorMsg}</p>
+    {/if}
 
-    <article class="ra-panel">
-      <h2>Recent saves</h2>
-
-      {#if auditHistory.length === 0}
-        <p class="path-fallback">
-          When Relay Agent saves a reviewed copy, the latest input, output, and summary will appear here.
-        </p>
-      {:else}
-        <div class="recent-file-list">
-          {#each auditHistory as entry}
-            <article class="recent-file-card audit-card">
-              <div class="session-card-head">
-                <div>
-                  <h3>{entry.turnTitle || entry.sessionTitle}</h3>
-                  <p>{entry.summary}</p>
-                </div>
-                <a class="session-link" href={`/studio?sessionId=${entry.sessionId}${entry.turnId ? `&turnId=${entry.turnId}` : ""}&view=review`}>
-                  Review
-                </a>
-              </div>
-
-              <div class="session-meta">
-                <span>Saved {formatDate(entry.executedAt)}</span>
-                {#if entry.affectedRows > 0}
-                  <span>{entry.affectedRows} row{entry.affectedRows === 1 ? "" : "s"}</span>
-                {/if}
-                {#if entry.targetCount > 0}
-                  <span>{entry.targetCount} target{entry.targetCount === 1 ? "" : "s"}</span>
-                {/if}
-              </div>
-
-              {#if entry.sourcePath}
-                <code>{entry.sourcePath}</code>
-              {/if}
-
-              {#if entry.outputPath}
-                <code>{entry.outputPath}</code>
-              {/if}
-            </article>
-          {/each}
-        </div>
-      {/if}
-    </article>
-
-    <article class="ra-panel">
-      <h2>Current guidance coverage</h2>
-      <ul class="ra-list">
-        <li>File checks now catch unsupported, unreadable, or locale-sensitive inputs before session creation.</li>
-        <li>CSV guidance now calls out delimiter, encoding, date, and number-format issues in plain language.</li>
-        <li>Copy-time sensitivity warnings before Copilot handoff</li>
-      </ul>
-    </article>
+    <div class="btn-row">
+      <button
+        class="btn btn-secondary"
+        type="button"
+        on:click={() => { currentStep = 2; errorMsg = ""; }}
+        disabled={busy}
+      >← 戻る</button>
+      <button
+        class="btn btn-primary btn-save"
+        type="button"
+        on:click={handleStep3}
+        disabled={busy}
+      >
+        {busy ? "保存中…" : "保存する"}
+      </button>
+    </div>
   </section>
-</div>
+
+<!-- 完了画面 -->
+{:else if executionDone}
+  <section class="card card-success">
+    <h2 class="step-title">保存が完了しました</h2>
+
+    {#if executionSummary}
+      <p class="execution-summary">{executionSummary}</p>
+    {/if}
+
+    {#if previewOutputPath}
+      <p class="output-path">保存先: <code>{previewOutputPath}</code></p>
+    {/if}
+
+    <button
+      class="btn btn-primary"
+      type="button"
+      on:click={resetAll}
+    >新しい作業を始める</button>
+  </section>
+{/if}
+
+<!-- 設定モーダル -->
+{#if settingsOpen}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="modal-overlay" on:click|self={() => (settingsOpen = false)}>
+    <div class="modal">
+      <div class="modal-header">
+        <h2>設定</h2>
+        <button class="modal-close" type="button" on:click={() => (settingsOpen = false)}>✕</button>
+      </div>
+
+      <div class="modal-body">
+        <h3>実行ポリシー</h3>
+        <ul class="settings-list">
+          <li>書き込み操作はプレビューと承認を経てから実行されます</li>
+          <li>保存先は常に別コピーです（元ファイルを直接変更しません）</li>
+          <li>元のファイルは読み取り専用として扱われます</li>
+        </ul>
+
+        <h3>データの保存場所</h3>
+        <ul class="settings-list">
+          <li>セッション・ログ・設定はこのデバイスにのみ保存されます</li>
+          <li>アプリの外に自動送信されるデータはありません</li>
+          <li>Copilot に渡すテキストのみ、手動でコピーした場合に外部に出ます</li>
+        </ul>
+
+        {#if storagePath}
+          <h3>ローカルストレージ</h3>
+          <code class="storage-path">{storagePath}</code>
+          <p class="settings-hint">
+            保存データを削除するには、アプリを閉じてからこのフォルダを削除してください。
+          </p>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
-  .route-chip {
-    padding: 0.7rem 1rem;
-    border: 1px solid var(--ra-border-strong);
-    border-radius: 999px;
-    background: var(--ra-surface-strong);
-    color: var(--ra-text);
-    font-weight: 600;
-    font: inherit;
-    transition:
-      transform 160ms ease,
-      border-color 160ms ease;
-  }
-
-  .route-chip:hover {
-    transform: translateY(-0.08rem);
-    border-color: var(--ra-accent);
-  }
-
-  .action-chip {
-    cursor: pointer;
-  }
-
-  .feedback {
-    padding: 1rem 1.1rem;
-    border-radius: 1rem;
-    border: 1px solid transparent;
-  }
-
-  .feedback strong,
-  .feedback p {
-    margin: 0;
-  }
-
-  .feedback p {
-    margin-top: 0.35rem;
-  }
-
-  .feedback-error {
-    border-color: rgba(141, 45, 31, 0.22);
-    background: rgba(141, 45, 31, 0.08);
-    color: #7f2a20;
-  }
-
-  .feedback-warning {
-    border-color: rgba(138, 90, 23, 0.24);
-    background: rgba(138, 90, 23, 0.08);
-    color: #7a5316;
-  }
-
-  .feedback-ready {
-    border-color: rgba(30, 115, 72, 0.22);
-    background: rgba(30, 115, 72, 0.08);
-    color: #1e7348;
-  }
-
-  .feedback-detail {
-    font-size: 0.92rem;
-    word-break: break-word;
-  }
-
-  .feedback-list {
-    margin: 0.75rem 0 0;
-    padding-left: 1.15rem;
-  }
-
-  .inline-action-row {
+  /* ── ヘッダー ── */
+  .header {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 0.75rem;
-  }
-
-  .compact-chip {
-    padding: 0.55rem 0.85rem;
-  }
-
-  .inline-note {
-    margin: 0;
-    color: var(--ra-muted);
-    font-size: 0.92rem;
-  }
-
-  .preflight-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    margin-top: 0.65rem;
-    font-size: 0.92rem;
-  }
-
-  .preflight-guidance {
-    margin-top: 0.9rem;
-  }
-
-  .preflight-guidance-label {
-    margin: 0;
-    font-size: 0.92rem;
-    font-weight: 700;
-  }
-
-  .feedback-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.7rem;
-    margin-top: 0.9rem;
-  }
-
-  .recovery-list {
-    display: grid;
-    gap: 0.8rem;
-    margin-top: 0.9rem;
-  }
-
-  .recovery-card {
-    display: grid;
-    gap: 0.8rem;
-    padding: 0.95rem;
-    border: 1px solid rgba(138, 90, 23, 0.18);
-    border-radius: 1rem;
-    background: rgba(255, 255, 255, 0.68);
-  }
-
-  .first-run-grid {
-    display: grid;
-    gap: 1rem;
-    grid-template-columns: minmax(0, 1.4fr) minmax(18rem, 0.9fr);
-  }
-
-  .first-run-panel,
-  .permission-panel {
-    display: grid;
-    gap: 1rem;
-    align-content: start;
-  }
-
-  .welcome-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.8rem;
-  }
-
-  .welcome-list {
-    margin: 0;
-    padding-left: 1.2rem;
-    color: var(--ra-muted);
-    display: grid;
-    gap: 0.55rem;
-  }
-
-  .home-grid {
-    display: grid;
-    gap: 1rem;
-    grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);
-  }
-
-  .create-panel,
-  .session-panel {
-    display: grid;
-    align-content: start;
-    gap: 1rem;
-  }
-
-  .panel-heading {
-    display: flex;
-    align-items: flex-start;
     justify-content: space-between;
-    gap: 1rem;
+    height: 52px;
+    margin-bottom: 0.5rem;
+    padding-top: 0.75rem;
+  }
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .header-icon {
+    font-size: 1.3rem;
+  }
+  .header-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--ra-text);
+  }
+  .header-settings {
+    background: none;
+    border: none;
+    font-size: 1.3rem;
+    color: var(--ra-text-muted);
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--ra-radius-sm);
+    transition: color 0.15s;
+  }
+  .header-settings:hover {
+    color: var(--ra-text);
+    background: var(--ra-surface);
   }
 
-  .panel-heading h2 {
-    margin: 0.2rem 0 0;
+  /* ── 最近の作業 ── */
+  .recent-toggle {
+    display: block;
+    background: none;
+    border: none;
+    color: var(--ra-text-secondary);
+    font-size: 0.85rem;
+    padding: 0.25rem 0;
+    margin-bottom: 0.5rem;
   }
-
-  .panel-eyebrow {
-    margin: 0;
+  .recent-toggle:hover {
     color: var(--ra-accent);
-    font-size: 0.78rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
   }
-
-  .panel-copy {
-    margin: 0;
-    color: var(--ra-muted);
-  }
-
-  .guided-start-card {
-    display: grid;
-    gap: 0.85rem;
-    padding: 1rem;
-    border: 1px solid rgba(138, 90, 23, 0.18);
-    border-radius: 1rem;
-    background: rgba(255, 249, 240, 0.82);
-  }
-
-  .guided-start-card h3,
-  .guided-start-copy {
-    margin: 0;
-  }
-
-  .guided-start-copy {
-    color: var(--ra-muted);
-  }
-
-  .guided-step-list {
-    margin: 0;
-    padding-left: 1.2rem;
-    display: grid;
-    gap: 0.55rem;
-    color: var(--ra-text);
-  }
-
-  .safe-defaults-card {
-    display: grid;
-    gap: 0.75rem;
-    padding: 0.95rem 1rem;
-    border: 1px solid rgba(91, 125, 56, 0.18);
-    border-radius: 1rem;
-    background: rgba(91, 125, 56, 0.08);
-  }
-
-  .help-panel {
-    display: grid;
-    gap: 0.85rem;
-    padding: 1rem;
-    border: 1px solid rgba(37, 50, 32, 0.12);
-    border-radius: 1rem;
-    background: rgba(255, 255, 255, 0.7);
-  }
-
-  .help-panel-head {
+  .recent-list {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 0.8rem;
-  }
-
-  .help-panel-head h3 {
-    margin: 0.2rem 0 0;
-  }
-
-  .help-list {
-    display: grid;
-    gap: 0.75rem;
-    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-  }
-
-  .help-card {
-    display: grid;
+    flex-direction: column;
     gap: 0.35rem;
-    padding: 0.9rem;
-    border: 1px solid rgba(37, 50, 32, 0.08);
-    border-radius: 0.95rem;
-    background: rgba(255, 255, 255, 0.84);
-  }
-
-  .help-card strong,
-  .help-card p,
-  .help-card span {
-    margin: 0;
-  }
-
-  .help-card p {
-    color: var(--ra-text);
-    line-height: 1.5;
-  }
-
-  .help-card span {
-    color: var(--ra-muted);
-    font-size: 0.9rem;
-    line-height: 1.45;
-  }
-
-  .status-pill {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0.4rem 0.7rem;
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    background: var(--ra-surface);
     border: 1px solid var(--ra-border);
-    border-radius: 999px;
-    background: var(--ra-surface-strong);
-    color: var(--ra-muted);
-    font-size: 0.86rem;
-    font-weight: 700;
-    text-transform: capitalize;
+    border-radius: var(--ra-radius-sm);
+  }
+  .recent-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+  .recent-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--ra-text);
+  }
+  .recent-path {
+    font-size: 0.78rem;
+    color: var(--ra-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .status-ready,
-  .status-active {
-    border-color: rgba(91, 125, 56, 0.28);
-    color: #456626;
-    background: rgba(91, 125, 56, 0.1);
-  }
-
-  .status-draft,
-  .status-pending {
-    border-color: rgba(138, 90, 23, 0.28);
-    color: #8a5a17;
-    background: rgba(138, 90, 23, 0.08);
-  }
-
-  .status-tauri-unavailable {
-    border-color: rgba(141, 45, 31, 0.28);
-    color: #7f2a20;
-    background: rgba(141, 45, 31, 0.08);
-  }
-
-  .status-attention {
-    border-color: rgba(138, 90, 23, 0.28);
-    color: #8a5a17;
-    background: rgba(138, 90, 23, 0.08);
-  }
-
-  .session-form {
-    display: grid;
-    gap: 0.95rem;
-  }
-
-  .permission-inline-note {
-    padding: 0.95rem 1rem;
-    border: 1px solid rgba(138, 90, 23, 0.18);
-    border-radius: 0.95rem;
-    background: rgba(138, 90, 23, 0.06);
-  }
-
-  .permission-inline-note strong,
-  .permission-inline-note p {
-    margin: 0;
-  }
-
-  .permission-inline-note p {
-    margin-top: 0.4rem;
-    color: var(--ra-muted);
-  }
-
-  .session-form label {
-    display: grid;
-    gap: 0.45rem;
-  }
-
-  .session-form span {
-    font-size: 0.92rem;
-    font-weight: 700;
-  }
-
-  .session-form input,
-  .session-form textarea {
-    width: 100%;
-    padding: 0.8rem 0.9rem;
-    border: 1px solid var(--ra-border);
-    border-radius: 0.85rem;
-    background: rgba(255, 255, 255, 0.95);
-    color: var(--ra-text);
-    font: inherit;
-    font-size: 1rem;
-    line-height: 1.5;
-  }
-
-  .session-form textarea {
-    resize: vertical;
-    min-height: 7rem;
-  }
-
-  .field-help {
-    margin: 0;
-    color: var(--ra-muted);
-    font-size: 0.9rem;
-    line-height: 1.5;
-  }
-
-  .objective-starter-grid {
-    display: grid;
-    gap: 0.75rem;
-    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-  }
-
-  .objective-starter {
-    display: grid;
-    gap: 0.35rem;
-    padding: 0.9rem;
-    border: 1px solid rgba(138, 90, 23, 0.18);
-    border-radius: 0.95rem;
-    background: rgba(255, 255, 255, 0.84);
-    color: var(--ra-text);
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-    transition:
-      transform 160ms ease,
-      border-color 160ms ease,
-      box-shadow 160ms ease;
-  }
-
-  .objective-starter strong,
-  .objective-starter span {
-    margin: 0;
-  }
-
-  .objective-starter span {
-    color: var(--ra-muted);
-    font-size: 0.9rem;
-    line-height: 1.45;
-  }
-
-  .objective-starter:hover {
-    transform: translateY(-0.08rem);
-    border-color: var(--ra-accent);
-    box-shadow: 0 1rem 2rem rgba(31, 45, 36, 0.08);
-  }
-
-  .session-form input:focus,
-  .session-form textarea:focus,
-  .objective-starter:focus {
-    outline: 3px solid rgba(138, 90, 23, 0.22);
-    outline-offset: 2px;
-    border-color: var(--ra-accent);
-  }
-
-  .form-message {
-    margin: 0;
-    font-size: 0.92rem;
-  }
-
-  .form-error {
-    color: #7f2a20;
-  }
-
-  .form-warning {
-    color: #8a5a17;
-  }
-
-  .form-success {
-    color: #456626;
-  }
-
-  .primary-button {
-    min-height: 2.75rem;
-    padding: 0.85rem 1rem;
-    border: 0;
-    border-radius: 0.95rem;
-    background: linear-gradient(135deg, #8a5a17 0%, #5b7d38 100%);
-    color: #fffdf7;
-    font: inherit;
-    font-weight: 700;
-    cursor: pointer;
-  }
-
-  .primary-button:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .session-list {
-    display: grid;
-    gap: 0.9rem;
-  }
-
-  .compact-session-list,
-  .recent-file-list {
-    gap: 0.75rem;
-  }
-
-  .session-card {
-    display: grid;
-    gap: 0.9rem;
-    padding: 1rem;
-    border: 1px solid var(--ra-border);
-    border-radius: 1rem;
-    background: rgba(255, 255, 255, 0.76);
-  }
-
-  .compact-session-card,
-  .recent-file-card {
-    padding: 0.9rem;
-  }
-
-  .session-card-head {
+  /* ── ステップインジケーター ── */
+  .steps-indicator {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-  }
-
-  .session-card-head h3 {
-    margin: 0;
-    font-family: var(--ra-font-display);
-    font-size: 1.25rem;
-  }
-
-  .session-card-head p {
-    margin: 0.45rem 0 0;
-    color: var(--ra-muted);
-    line-height: 1.55;
-  }
-
-  .session-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.6rem;
-    color: var(--ra-muted);
-    font-size: 0.92rem;
-  }
-
-  .session-meta span {
-    padding: 0.35rem 0.55rem;
-    border-radius: 999px;
-    background: rgba(31, 45, 36, 0.05);
-  }
-
-  .session-actions {
-    display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
+    justify-content: center;
+    gap: 0;
+    margin: 1rem 0 1.5rem;
+  }
+  .step-dot {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    font-weight: 700;
+    border: 2px solid var(--ra-border-strong);
+    color: var(--ra-text-muted);
+    background: var(--ra-surface);
+    transition: all 0.2s;
+  }
+  .step-dot.active {
+    border-color: var(--ra-accent);
+    color: var(--ra-accent);
+    background: var(--ra-accent-light);
+  }
+  .step-dot.done {
+    border-color: var(--ra-success);
+    color: white;
+    background: var(--ra-success);
+  }
+  .step-line {
+    width: 3rem;
+    height: 2px;
+    background: var(--ra-border-strong);
+    transition: background 0.2s;
+  }
+  .step-line.active {
+    background: var(--ra-accent);
   }
 
-  .session-link {
+  /* ── カード ── */
+  .card {
+    background: var(--ra-surface);
+    border: 1px solid var(--ra-border);
+    border-radius: var(--ra-radius);
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: var(--ra-shadow);
+  }
+  .card-warn {
+    border-color: #f59e0b;
+    background: var(--ra-warn-light);
+  }
+  .card-success {
+    border-color: var(--ra-success-border);
+    background: var(--ra-success-light);
+  }
+  .step-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin: 0 0 1rem;
+    color: var(--ra-text);
+  }
+
+  /* ── フォーム要素 ── */
+  .field-label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--ra-text-secondary);
+    margin-bottom: 0.35rem;
+    margin-top: 1rem;
+  }
+  .field-label:first-of-type {
+    margin-top: 0;
+  }
+  .input {
+    width: 100%;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--ra-border);
+    border-radius: var(--ra-radius-sm);
+    background: var(--ra-surface);
+    color: var(--ra-text);
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .input:focus {
+    border-color: var(--ra-accent);
+  }
+  .textarea {
+    width: 100%;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--ra-border);
+    border-radius: var(--ra-radius-sm);
+    background: var(--ra-surface);
+    color: var(--ra-text);
+    resize: vertical;
+    outline: none;
+    transition: border-color 0.15s;
+    line-height: 1.5;
+  }
+  .textarea:focus {
+    border-color: var(--ra-accent);
+  }
+  .textarea-tall {
+    min-height: 10rem;
+  }
+  .file-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .file-row .input {
+    flex: 1;
+  }
+
+  /* ── チップ ── */
+  .chip {
+    display: inline-block;
+    padding: 0.3rem 0.7rem;
+    font-size: 0.82rem;
+    border: 1px solid var(--ra-border);
+    border-radius: 2rem;
+    background: var(--ra-surface-muted);
+    color: var(--ra-text-secondary);
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .chip:hover:not(:disabled) {
+    border-color: var(--ra-accent-border);
+    color: var(--ra-accent);
+    background: var(--ra-accent-light);
+  }
+  .chip:disabled {
+    opacity: 0.5;
+  }
+  .template-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 0.5rem;
+  }
+
+  /* ── ボタン ── */
+  .btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 0.65rem 0.9rem;
-    border: 1px solid var(--ra-border-strong);
-    border-radius: 999px;
-    background: var(--ra-surface-strong);
-    font-weight: 700;
-  }
-
-  .session-id {
-    color: var(--ra-muted);
-    font-size: 0.84rem;
-  }
-
-  .empty-state {
-    display: grid;
-    gap: 0.45rem;
-    padding: 1.1rem;
-    border: 1px dashed var(--ra-border-strong);
-    border-radius: 1rem;
-    background: rgba(255, 255, 255, 0.54);
-  }
-
-  .empty-state h3,
-  .empty-state p {
-    margin: 0;
-  }
-
-  .empty-state p {
-    color: var(--ra-muted);
-  }
-
-  .metrics {
-    display: grid;
-    gap: 0.9rem;
-    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-  }
-
-  .metrics div {
-    padding: 1rem;
-    border-radius: 1rem;
-    background: rgba(31, 45, 36, 0.05);
-  }
-
-  .metrics dt {
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--ra-muted);
-  }
-
-  .metrics dd {
-    margin: 0.4rem 0 0;
-    font-size: 1.1rem;
+    padding: 0.6rem 1.2rem;
+    border: none;
+    border-radius: var(--ra-radius-sm);
     font-weight: 600;
-    word-break: break-word;
+    font-size: 0.95rem;
+    transition: all 0.15s;
   }
-
-  .path-label {
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .btn-primary {
+    background: var(--ra-accent);
+    color: white;
     margin-top: 1rem;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: var(--ra-accent-hover);
+  }
+  .btn-secondary {
+    background: var(--ra-surface-muted);
+    color: var(--ra-text-secondary);
+    border: 1px solid var(--ra-border);
+    margin-top: 1rem;
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--ra-surface);
+    border-color: var(--ra-border-strong);
+  }
+  .btn-accent {
+    background: var(--ra-accent);
+    color: white;
+  }
+  .btn-accent:hover:not(:disabled) {
+    background: var(--ra-accent-hover);
+  }
+  .btn-save {
+    min-width: 8rem;
+  }
+  .btn-link {
+    background: none;
+    border: none;
+    color: var(--ra-text-muted);
     font-size: 0.85rem;
-    font-weight: 700;
+    padding: 0.25rem 0;
+  }
+  .btn-link:hover {
     color: var(--ra-accent);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
   }
-
-  .path-block {
-    display: block;
-    margin-top: 0.55rem;
-    padding: 0.9rem 1rem;
-    border: 1px solid var(--ra-border);
-    border-radius: 0.95rem;
-    background: rgba(255, 255, 255, 0.88);
-    color: var(--ra-text);
-    font-size: 0.92rem;
-    line-height: 1.5;
-    word-break: break-word;
-  }
-
-  .path-fallback {
-    margin-top: 1rem;
-  }
-
-  .recent-block {
-    display: grid;
+  .btn-row {
+    display: flex;
     gap: 0.75rem;
+    align-items: center;
   }
 
-  .recent-block + .recent-block {
-    margin-top: 1rem;
+  /* ── エラー・警告 ── */
+  .field-error {
+    color: var(--ra-error);
+    font-size: 0.88rem;
+    margin: 0.5rem 0 0;
+  }
+  .field-warn {
+    color: #b45309;
+    font-size: 0.88rem;
+    margin: 0.5rem 0 0;
   }
 
-  .recent-file-card {
-    display: grid;
-    gap: 0.65rem;
+  /* ── ステップ2 固有 ── */
+  .step-summary {
+    padding: 0.6rem 0.75rem;
+    background: var(--ra-surface-muted);
     border: 1px solid var(--ra-border);
-    border-radius: 1rem;
-    background: rgba(255, 255, 255, 0.76);
+    border-radius: var(--ra-radius-sm);
+    font-size: 0.85rem;
+    color: var(--ra-text-secondary);
+    margin-bottom: 1rem;
+    line-height: 1.6;
   }
-
-  .audit-card h3 {
-    font-size: 1.05rem;
+  .step-summary-label {
+    font-weight: 600;
+    color: var(--ra-text);
   }
-
-  .recent-file-card code {
+  .instruction-text {
+    font-size: 0.9rem;
+    color: var(--ra-text-secondary);
+    margin: 0 0 0.75rem;
+    line-height: 1.6;
+  }
+  .copy-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+  }
+  .preview-block {
+    background: var(--ra-surface-muted);
+    border: 1px solid var(--ra-border);
+    border-radius: var(--ra-radius-sm);
+    padding: 0.75rem;
+    font-size: 0.8rem;
+    overflow-x: auto;
+    max-height: 12rem;
+    margin-bottom: 0.75rem;
+    white-space: pre-wrap;
     word-break: break-word;
   }
-
-  @media (max-width: 960px) {
-    .first-run-grid,
-    .home-grid {
-      grid-template-columns: 1fr;
-    }
+  .autofix-notice {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+  }
+  .autofix-chip {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.78rem;
+    background: var(--ra-success-light);
+    border: 1px solid var(--ra-success-border);
+    border-radius: 2rem;
+    color: var(--ra-success);
   }
 
-  @media (max-width: 640px) {
-    .panel-heading,
-    .help-panel-head,
-    .session-card-head,
-    .session-actions {
-      grid-template-columns: 1fr;
-      display: grid;
-      justify-content: stretch;
-    }
+  /* ── ステップ3 固有 ── */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+  .summary-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.6rem;
+    background: var(--ra-surface-muted);
+    border-radius: var(--ra-radius-sm);
+    text-align: center;
+  }
+  .summary-label {
+    font-size: 0.78rem;
+    color: var(--ra-text-muted);
+    font-weight: 600;
+  }
+  .summary-value {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--ra-text);
+  }
+  .summary-path {
+    font-size: 0.78rem;
+    font-weight: 500;
+    word-break: break-all;
+  }
+  .preview-text {
+    font-size: 0.9rem;
+    color: var(--ra-text-secondary);
+    margin: 0 0 0.75rem;
+  }
+  .warnings {
+    margin-bottom: 0.75rem;
+  }
+  .safety-note {
+    font-size: 0.82rem;
+    color: var(--ra-text-muted);
+    background: var(--ra-success-light);
+    border: 1px solid var(--ra-success-border);
+    border-radius: var(--ra-radius-sm);
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.5rem;
+  }
 
-    .session-actions {
-      justify-items: start;
-    }
+  /* ── 完了画面 ── */
+  .execution-summary {
+    font-size: 0.95rem;
+    color: var(--ra-text);
+    margin: 0.5rem 0 1rem;
+  }
+  .output-path {
+    font-size: 0.88rem;
+    color: var(--ra-text-secondary);
+    margin-bottom: 1rem;
+  }
+  .output-path code {
+    background: rgba(0, 0, 0, 0.06);
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.25rem;
+    font-size: 0.85rem;
+  }
+
+  /* ── 設定モーダル ── */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .modal {
+    background: var(--ra-surface);
+    border-radius: var(--ra-radius);
+    width: min(520px, 90vw);
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: var(--ra-shadow-lg);
+  }
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--ra-border);
+  }
+  .modal-header h2 {
+    margin: 0;
+    font-size: 1.1rem;
+  }
+  .modal-close {
+    background: none;
+    border: none;
+    font-size: 1.2rem;
+    color: var(--ra-text-muted);
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--ra-radius-sm);
+  }
+  .modal-close:hover {
+    color: var(--ra-text);
+    background: var(--ra-surface-muted);
+  }
+  .modal-body {
+    padding: 1.25rem;
+  }
+  .modal-body h3 {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--ra-text);
+    margin: 1.25rem 0 0.5rem;
+  }
+  .modal-body h3:first-child {
+    margin-top: 0;
+  }
+  .settings-list {
+    margin: 0;
+    padding-left: 1.2rem;
+    font-size: 0.88rem;
+    color: var(--ra-text-secondary);
+    line-height: 1.7;
+  }
+  .storage-path {
+    display: block;
+    padding: 0.6rem 0.75rem;
+    background: var(--ra-surface-muted);
+    border: 1px solid var(--ra-border);
+    border-radius: var(--ra-radius-sm);
+    font-size: 0.85rem;
+    word-break: break-all;
+  }
+  .settings-hint {
+    font-size: 0.82rem;
+    color: var(--ra-text-muted);
+    margin-top: 0.5rem;
   }
 </style>
