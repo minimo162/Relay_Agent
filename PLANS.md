@@ -341,6 +341,8 @@ Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `
 Windows installer distribution now also has a concrete release channel: `.github/workflows/release-windows-installer.yml` builds the NSIS installer on Windows and publishes it to GitHub Releases instead of committing binary installers into the repository.
 The next packaging hardening follow-up is captured in `.taskmaster/docs/prd_windows_trusted_signing.txt`.
 Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `42` through `45`, covering the repo-side Trusted Signing workflow rewrite and Azure/GitHub setup runbook. The first fully signed Windows release remains an operational prerequisite rather than a Task Master task because it depends on external Azure provisioning.
+The next workflow-UX simplification scope is captured in `.taskmaster/docs/prd_guided_workflow_simplification.txt`.
+It is planning-only for now and intentionally focuses on reducing user-visible steps, clarifying Copilot relay, and collapsing the guided sample/custom flow without weakening the current safety model.
 
 That follow-up preserved the current safety model:
 

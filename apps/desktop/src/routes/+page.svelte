@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
+  import { goto } from "$app/navigation";
   import {
     projectInfo,
     type PreflightWorkbookResponse,
@@ -20,6 +21,7 @@
     preflightWorkbook,
     rememberRecentFile,
     rememberRecentSession,
+    startTurn,
     type AuditHistoryEntry,
     type PersistedStudioDraft,
     type RecentFile,
@@ -43,24 +45,7 @@
     note: string;
   };
 
-  const sampleObjectiveStarters: ObjectiveStarter[] = [
-    {
-      label: "Show changes first",
-      objective: "Open the sample file, show what would change, and save a safe copy.",
-      note: "Good for a first walkthrough."
-    },
-    {
-      label: "Keep approved rows",
-      objective: "Keep approved rows, explain the planned changes, and save a safe copy.",
-      note: "Matches the bundled demo workflow."
-    },
-    {
-      label: "Check for risks",
-      objective: "Inspect the sample file, point out anything risky, and prepare a safe copy plan.",
-      note: "Useful when you want more explanation before saving."
-    }
-  ];
-  const customObjectiveStarters: ObjectiveStarter[] = [
+  const objectiveStarters: ObjectiveStarter[] = [
     {
       label: "Check my file safely",
       objective: "Open my workbook, show the planned changes, and save a separate safe copy.",
@@ -77,32 +62,13 @@
       note: "Useful when column names need to be cleaned up."
     }
   ];
-  const genericObjectiveStarters: ObjectiveStarter[] = [
-    sampleObjectiveStarters[0],
-    customObjectiveStarters[0],
-    customObjectiveStarters[1]
-  ];
-  const sampleQuickStartTemplates: QuickStartTemplate[] = [
+  const quickStartTemplates: QuickStartTemplate[] = [
     {
       label: "Filter rows",
-      title: "Approved sample review",
-      objective: "Keep approved rows from the sample, explain what changed, and save a separate copy.",
-      note: "A safe first walkthrough on the bundled file."
+      title: "Filtered workbook copy",
+      objective: "Keep only the rows I need, explain the result, and save a separate copy.",
+      note: "Good for reducing a large sheet."
     },
-    {
-      label: "Add a new column",
-      title: "Sample review label",
-      objective: "Add a review label to the sample rows, show the impact, and save a separate copy.",
-      note: "Good for learning preview before save."
-    },
-    {
-      label: "Summarize totals",
-      title: "Sample totals summary",
-      objective: "Group the sample data into totals, explain the result, and save a separate copy.",
-      note: "Useful for aggregate-style work."
-    }
-  ];
-  const customQuickStartTemplates: QuickStartTemplate[] = [
     {
       label: "Rename columns",
       title: "Column rename cleanup",
@@ -114,12 +80,6 @@
       title: "Column type cleanup",
       objective: "Fix the column types I choose, explain the impact, and save a separate copy.",
       note: "Useful when dates or numbers are inconsistent."
-    },
-    {
-      label: "Filter rows",
-      title: "Filtered workbook copy",
-      objective: "Keep only the rows I need, explain the result, and save a separate copy.",
-      note: "Good for reducing a large sheet."
     },
     {
       label: "Summarize totals",
@@ -139,7 +99,7 @@
   let startupIssue: StartupIssue | null = null;
   let temporaryModeEnabled = false;
   let sampleWorkbookPath: string | null = null;
-  let entryMode: "sample" | "custom" | null = null;
+  let useBundledSample = false;
   let startupDiagnosticMessage = "";
   let startupDiagnosticError = "";
 
@@ -307,99 +267,63 @@
 
   $: createBlockedByStartup = Boolean(startupIssue) && !temporaryModeEnabled;
   $: showFirstRunWelcome = !sessionsLoading && sessions.length === 0;
-  $: showPermissionRationale = showFirstRunWelcome || entryMode === "custom";
   $: sampleFlowAvailable = Boolean(sampleWorkbookPath);
   $: workbookPathNeedsRecheck =
     primaryWorkbookPath.trim().length > 0 && primaryWorkbookPath.trim() !== lastPreflightPath;
-  $: objectiveStarters =
-    entryMode === "sample"
-      ? sampleObjectiveStarters
-      : entryMode === "custom"
-        ? customObjectiveStarters
-        : genericObjectiveStarters;
-  $: quickStartTemplates =
-    entryMode === "sample"
-      ? sampleQuickStartTemplates
-      : customQuickStartTemplates;
-  $: showGuidedStartGate = showFirstRunWelcome && entryMode === null;
-  $: homeHelpEntries = showGuidedStartGate
-    ? [
-        {
-          term: "Try the sample flow",
-          detail: "Uses the bundled workbook so you can learn the steps without touching your own file first.",
-          action: "Choose this when you want a low-risk walkthrough."
-        },
-        {
-          term: "Use my own file",
-          detail: "Opens the same guided form, but for a workbook path you already know.",
-          action: "Choose this when you want to work on a real file right away."
-        },
-        {
-          term: "Next step",
-          detail: "After you choose one path, Relay Agent opens the form and gives example wording for your goal.",
-          action: "Pick one start option above to continue."
-        }
-      ]
-    : [
-        {
-          term: "Task name",
-          detail: "A short label so you can spot this work later in Home and Studio.",
-          action: "Keep it short and recognizable."
-        },
-        {
-          term: "What do you want done?",
-          detail: "Describe the business result you want in everyday language instead of technical commands.",
-          action: "Say what should change, then let Relay Agent guide the steps."
-        },
-        {
-          term: "Check this file",
-          detail: "Runs a quick readiness check so unreadable or risky files are caught before Studio starts.",
-          action: "Use it after choosing or editing the file path."
-        }
-      ] satisfies HelpEntry[];
+  $: homeHelpEntries = [
+      {
+        term: "Task name",
+        detail: "A short label so you can spot this work later in Home and Studio.",
+        action: "Keep it short and recognizable."
+      },
+      {
+        term: "What do you want done?",
+        detail: "Describe the business result you want in everyday language instead of technical commands.",
+        action: "Say what should change, then let Relay Agent guide the steps."
+      },
+      {
+        term: "Check this file",
+        detail: "Runs a quick readiness check so unreadable or risky files are caught before Studio starts.",
+        action: "Use it after choosing or editing the file path."
+      }
+    ] satisfies HelpEntry[];
 
-  async function startSampleFlow(): Promise<void> {
-    entryMode = "sample";
-    createError = "";
-    createSuccess = "";
-
+  async function selectBundledSample(): Promise<void> {
     if (!sampleWorkbookPath) {
       return;
     }
 
-    title = title.trim() ? title : "Bundled sample walkthrough";
-    objective = objective.trim()
-      ? objective
-      : "Open the bundled sample CSV, review the changes, and prepare a safe save-copy plan.";
+    useBundledSample = true;
+    createError = "";
+    createSuccess = "";
     primaryWorkbookPath = sampleWorkbookPath;
 
     await tick();
     await runWorkbookPreflight(true);
-    createButton?.focus();
   }
 
-  async function startCustomFlow(): Promise<void> {
-    entryMode = "custom";
-    createError = "";
-    createSuccess = "";
+  function clearBundledSample(): void {
+    useBundledSample = false;
+    primaryWorkbookPath = "";
+    clearWorkbookPreflight();
+  }
 
-    title = title.trim() ? title : "My first workbook task";
-    objective = objective.trim()
-      ? objective
-      : "Open my workbook, check the planned changes, and save a safe copy.";
-
-    if (sampleWorkbookPath && primaryWorkbookPath === sampleWorkbookPath) {
-      primaryWorkbookPath = "";
+  function deriveTitle(objectiveText: string): string {
+    const trimmed = objectiveText.trim();
+    if (!trimmed) {
+      return "";
     }
 
-    clearWorkbookPreflight();
-
-    await tick();
-    workbookPathInput?.focus();
+    const first = trimmed.split(/[,.、。]/)[0].trim();
+    const shortened = first.length > 40 ? first.slice(0, 40).trimEnd() + "…" : first;
+    return shortened || trimmed.slice(0, 40);
   }
 
   function useObjectiveStarter(starter: ObjectiveStarter): void {
     objective = starter.objective;
+    if (!title.trim()) {
+      title = deriveTitle(starter.objective);
+    }
     createError = "";
     createSuccess = "";
   }
@@ -525,8 +449,9 @@
         clearWorkbookPreflight();
       }
 
+      const sessionTitle = title.trim() || deriveTitle(objective);
       const createdSession = await createSession({
-        title,
+        title: sessionTitle,
         objective,
         primaryWorkbookPath: workbookPath || undefined
       });
@@ -556,11 +481,28 @@
       ]);
       syncSessionCount();
 
-      createSuccess = `Session "${createdSession.title}" is ready for Studio selection.`;
+      const turnResponse = await startTurn({
+        sessionId: createdSession.id,
+        title: sessionTitle,
+        objective,
+        mode: "plan"
+      });
+
+      rememberRecentSession({
+        sessionId: createdSession.id,
+        title: createdSession.title,
+        workbookPath: createdSession.primaryWorkbookPath ?? "",
+        lastOpenedAt: new Date().toISOString(),
+        lastTurnTitle: turnResponse.turn.title
+      });
+
       title = "";
       objective = "";
       primaryWorkbookPath = "";
+      useBundledSample = false;
       clearWorkbookPreflight();
+
+      await goto(`/studio?sessionId=${createdSession.id}&turnId=${turnResponse.turn.id}`);
     } catch (error) {
       createError = toErrorMessage(error);
     } finally {
@@ -703,38 +645,20 @@
   {#if showFirstRunWelcome}
     <section class="first-run-grid">
       <article class="ra-panel first-run-panel">
-        <p class="panel-eyebrow">First run</p>
-        <h2>Start safely with one clear choice.</h2>
+        <p class="panel-eyebrow">Welcome</p>
+        <h2>Start a workbook task safely.</h2>
         <p class="panel-copy">
           Relay Agent always writes a copy. Your original workbook stays unchanged while you
-          review the plan first.
+          review the plan first. Fill in the form below to begin.
         </p>
 
-        <div class="welcome-actions">
-          <button
-            class="primary-button"
-            disabled={!sampleFlowAvailable}
-            type="button"
-            on:click={() => void startSampleFlow()}
-          >
-            Try the sample flow
-          </button>
-          <button class="route-chip action-chip" type="button" on:click={() => void startCustomFlow()}>
-            Use my own file
-          </button>
-        </div>
-
         <ul class="welcome-list">
-          <li>Start with the bundled sample if you want a low-risk walkthrough.</li>
-          <li>Use your own file if you already know what workbook you want to inspect.</li>
           <li>Every write stays save-copy only, so the source file is not overwritten.</li>
+          <li>Relay Agent shows the plan before anything is saved.</li>
+          {#if sampleFlowAvailable}
+            <li>Want a low-risk walkthrough? Select the practice sample below.</li>
+          {/if}
         </ul>
-
-        {#if !sampleFlowAvailable}
-          <p class="form-message form-warning">
-            This build does not currently expose the bundled sample path, so the custom-file path is the safe starting point.
-          </p>
-        {/if}
       </article>
 
       <article class="ra-panel permission-panel">
@@ -762,17 +686,10 @@
       <p class="panel-copy">
         {#if createBlockedByStartup}
           Startup checks still need attention before saved work can be created.
-        {:else if showGuidedStartGate}
-          Start with one choice above. After that, Relay Agent will guide you
-          through describing the result you want in plain language.
         {:else if temporaryModeEnabled}
           Temporary mode is active. New sessions will work for this run, but they will not survive restart.
-        {:else if entryMode === "sample"}
-          Step 2 of 3: the bundled sample path is loaded. Describe what you want to happen, then create the session.
-        {:else if entryMode === "custom"}
-          Step 2 of 3: describe the result you want, then add the file Relay Agent should inspect.
         {:else}
-          Describe the result you want and Relay Agent will store that task here before Studio begins.
+          Describe the result you want, choose a file, and Relay Agent will guide the next steps.
         {/if}
       </p>
 
@@ -784,32 +701,11 @@
         </p>
       </section>
 
-      {#if showGuidedStartGate}
-        <div class="guided-start-card">
-          <p class="panel-eyebrow">First-time steps</p>
-          <h3>Pick one starting path first.</h3>
-          <ol class="guided-step-list">
-            <li>Choose `Try the sample flow` for a safe walkthrough, or `Use my own file` for real work.</li>
-            <li>Describe the business result you want in everyday language.</li>
-            <li>Check the file path and create the session when the form looks right.</li>
-          </ol>
-        </div>
-      {:else}
-        {#if showPermissionRationale && !showFirstRunWelcome}
-          <div class="permission-inline-note">
-            <strong>Before Windows asks for access</strong>
-            <p>
-              Relay Agent only needs access to inspect the file you choose and to write the save-copy destination later.
-              It does not overwrite the original workbook.
-            </p>
-          </div>
-        {/if}
-
         <section class="help-panel">
           <div class="help-panel-head">
             <div>
               <p class="panel-eyebrow">Need help?</p>
-              <h3>{showGuidedStartGate ? "What these choices mean" : "Quick help for this step"}</h3>
+              <h3>Quick help for this step</h3>
             </div>
             <button
               class="route-chip action-chip compact-chip"
@@ -834,14 +730,8 @@
         </section>
 
         <div class="guided-start-card">
-          <p class="panel-eyebrow">{entryMode ? "Step 2 of 3" : "Describe your goal"}</p>
-          <h3>
-            {entryMode === "sample"
-              ? "What do you want to learn from the sample?"
-              : entryMode === "custom"
-                ? "What should happen to your file?"
-                : "Describe the result you want."}
-          </h3>
+          <p class="panel-eyebrow">Describe your goal</p>
+          <h3>What should happen to your file?</h3>
           <p class="guided-start-copy">
             Use plain work language. You do not need to mention relay packets, JSON, or tool names.
           </p>
@@ -918,11 +808,33 @@
               placeholder="/tmp/revenue-q2.csv"
             />
             <p class="field-help">
-              {entryMode === "sample"
-                ? "The sample path is already filled in. Check it once, then continue."
-                : "Step 3 of 3: add the file Relay Agent should inspect before it prepares a safe copy."}
+              {useBundledSample
+                ? "The practice sample path is filled in. Check it once, then continue."
+                : "Add the file Relay Agent should inspect before it prepares a safe copy."}
             </p>
           </label>
+
+          {#if sampleFlowAvailable}
+            <div class="inline-action-row">
+              {#if useBundledSample}
+                <button
+                  class="route-chip action-chip compact-chip"
+                  type="button"
+                  on:click={clearBundledSample}
+                >
+                  Use my own file instead
+                </button>
+              {:else}
+                <button
+                  class="route-chip action-chip compact-chip"
+                  type="button"
+                  on:click={() => void selectBundledSample()}
+                >
+                  Use practice sample
+                </button>
+              {/if}
+            </div>
+          {/if}
 
           <div class="inline-action-row">
             <button
@@ -1013,14 +925,9 @@
             disabled={createPending || ipcStatus !== "ready" || createBlockedByStartup}
             type="submit"
           >
-            {createPending
-              ? "Creating session..."
-              : showFirstRunWelcome
-                ? "Create first session"
-                : "Create session"}
+            {createPending ? "Starting..." : "Start"}
           </button>
         </form>
-      {/if}
     </article>
 
     <article class="ra-panel session-panel">

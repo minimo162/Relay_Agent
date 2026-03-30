@@ -2093,3 +2093,20 @@ Observed result:
 Next planned work:
 
 - The current shipped queue is complete through task `41`. Any new scope should start from a new PRD and keep packaged installer E2E, cross-platform GUI automation, and arbitrary workflow scripting separate from the current launched-workflow smoke surface.
+
+Guided workflow simplification PRD verification:
+
+```bash
+test -f .taskmaster/docs/prd_guided_workflow_simplification.txt
+test -f docs/GUIDED_WORKFLOW_SIMPLIFICATION_PRD.md
+rg -n '^# Guided Workflow Simplification PRD|^## Summary|^## Problem|^## Goals|^## Non-goals|^## Target Users|^## Success Metrics|^## UX Principles|^## User Stories|^## Key Flows|^## Functional Requirements|^## Acceptance Criteria|^## Risks and Mitigations|^## Suggested Implementation Phases|Guided mode|Copy for Copilot|Use demo response|Confirm and save copy|preview before write|approval before write|save-copy only' .taskmaster/docs/prd_guided_workflow_simplification.txt
+rg -n 'prd_guided_workflow_simplification|workflow-UX simplification scope|planning-only' PLANS.md docs/GUIDED_WORKFLOW_SIMPLIFICATION_PRD.md
+```
+
+Observed result:
+
+- Added `.taskmaster/docs/prd_guided_workflow_simplification.txt` as a new follow-up PRD focused on reducing user-visible steps in the sample/custom flow, clarifying Copilot relay, improving preview visibility, and separating guided mode from expert details.
+- The new PRD is intentionally scoped as a UX simplification layer over the existing safe backend lifecycle rather than a guardrail rollback; it explicitly preserves preview before write, approval before write, save-copy only, and original-workbook read-only behavior.
+- `docs/GUIDED_WORKFLOW_SIMPLIFICATION_PRD.md` now mirrors the planning reference at the repo docs level so future planning references do not imply implementation already ships.
+- `PLANS.md` now names the guided workflow simplification PRD as the next planning-only workflow UX scope instead of silently widening the completed follow-up sets.
+- This PRD was prompted by direct manual walkthrough friction in the current sample flow, especially the number of visible steps, the need to understand `session` / `turn` / `packet`, the hidden preview location, and the fragility of Copilot JSON relay on Windows paths.

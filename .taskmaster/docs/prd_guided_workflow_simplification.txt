@@ -1,0 +1,699 @@
+# Guided Workflow Simplification PRD（Relay Agent 補助PRD）
+
+Date: 2026-03-30
+Revision: 3（Sample flow 廃止・統一フロー）
+
+## Summary
+
+Relay Agent は `session → turn → relay packet → pasted response → preview → approval → save-copy` という安全な内部 lifecycle を持っている。しかし現在の UI はこの内部構造をほぼそのまま表面に出しており、非エンジニアが「次に何をすればよいか」で詰まりやすい。
+
+この PRD の目的は、内部 lifecycle と guardrail を一切変えずに、利用者が意識する操作を **3 ステップの単一フロー** に圧縮することである。
+
+### 利用者が見る 3 ステップ
+
+1. **はじめる** — ファイルとやりたいことを決めて開始
+2. **Copilot に聞く** — 依頼をコピーして Copilot に渡し、返答を貼る
+3. **確認して保存** — 変更内容を見て、別ファイルとして保存
+
+> 内部では session 作成、turn 開始、packet 生成、validation、preview、approval、execution が走るが、guided mode ではこれらを利用者に個別に見せない。
+
+### 「sample flow」の廃止
+
+現行の「サンプルを試す」と「自分のファイルを使う」の分岐を廃止する。Home は **1 つの入口** にまとめ、bundled CSV はテンプレートの 1 選択肢として残す。demo response も廃止する。
+
+**理由:**
+- demo response を廃止した時点で、sample flow は「入力が自動で埋まっている real file flow」に過ぎない
+- Home の初手で「sample？ custom？」と聞くこと自体が分岐であり、判断を強いる
+- 「sample ってなに？」「自分のファイルと何が違うの？」という疑問が消える
+- bundled CSV を使いたい人はテンプレートから選ぶだけでよい
+
+---
+
+## Problem（現状の具体的な問題点）
+
+### 1. Home の初手で分岐判断を強いる
+
+初回ユーザーが最初に見る画面で「サンプルを試す」と「自分のファイルを使う」の選択を求められる。非エンジニアはどちらを選ぶべきか分からず、ここで離脱するリスクがある。
+
+### 2. ボタンが多すぎて迷う
+
+現在の Studio action-row には `Start turn`、`Generate packet`、`Validate response`、`Check changes`、`Reset draft` が同時に並ぶ。どれを押すべきか分からない。
+
+### 3. 内部用語が UI に露出している
+
+`session`、`turn`、`relay packet`、`approval`、`execution` など、利用者にとって意味のない語が主 UI に多数ある。
+
+### 4. Preview がどこに出たか分からない
+
+preview 結果は右ペインの下部にあり、スクロールしないと見えない。
+
+### 5. Copilot が指示に従わず JSON エラーになる
+
+Copilot に渡す relay packet は長い JSON で、Copilot はしばしば markdown fence で囲んだり、コメントを付けたり、不正な形式で返す。現在の UI は expected shape を十分に提示していないため、修正再試行が頻発する。
+
+### 6. Start turn が押せない理由が分からない
+
+Home で入力した title/objective が Studio に引き継がれず、初回 turn で `Start turn` が disabled のまま止まる。
+
+### 7. Validate → Check changes → Confirm → Save の区別が分からない
+
+非エンジニアには全部「保存前の確認」に見える。4 段階を個別に理解させるのは過剰。
+
+---
+
+## Goals
+
+1. 利用者が意識する主要ステップを **3 段階の単一フロー** に圧縮する
+2. Home の初手を **分岐のない 1 つの入口** にする
+3. 各段階で **主ボタンは常に 1 つだけ**。今押すべきボタンを迷わない
+4. Copilot への指示を **Copilot が従いやすい形** に改善し、JSON parse failure を減らす
+5. Preview を **見逃し不可能な位置** に表示する
+6. 内部用語を primary UI から排除する
+7. 安全性 guardrail（preview before write, approval before write, save-copy only）は維持する
+
+## Non-goals
+
+- save-copy only の解除
+- preview / approval guardrail の削除
+- Copilot Chat の自動操作（clipboard 経由の手動貼り付けを維持）
+- shell / VBA / external network の解禁
+- workbook engine の大幅拡張
+- backend lifecycle 自体の変更
+
+---
+
+## Target Users
+
+| ペルソナ | 特徴 | 重視すること |
+|----------|------|-------------|
+| 実務担当者 | CSV/Excel の定型処理をする非エンジニア | 「この順に押せば安全に終わる」こと |
+| 初回ユーザー | 製品を初めて開いた人 | 迷わず 1 回成功すること |
+| 承認者 | 何が変わるかだけ確認したいリーダー | 変更内容と保存先だけ短く見えること |
+
+---
+
+## Success Metrics
+
+- 初回ユーザーが Home を開いてから save-copy 完了まで、主ボタンだけを追って到達できる
+- Home の初期画面で **分岐判断が 0**（選択肢は 1 つの入口のみ）
+- 初回テスト参加者の **90%** が「今押すべきボタン」を迷わず選べる
+- Copilot relay の修正再試行なし通過率が現状の 2 倍以上に改善する
+- JSON parse failure のうち markdown fence 起因が **0** になる（auto-strip 導入）
+- Preview 表示後、利用者の **90%** が変更内容の場所を即座に指差せる
+
+---
+
+## UX Principles
+
+### 1. 「次の 1 手」だけを見せる
+
+各ステップで primary button は **1 つだけ** 表示する。他のボタンは非表示にするか、明確に低優先度にする。ボタンの横に「これを押すと何が起きるか」を 1 文で説明する。
+
+### 2. 内部を隠して安全は守る
+
+backend の lifecycle は維持するが、primary UI では内部語彙を使わない。利用者に伝えるのは「今どの段階か」であり「どの IPC command が走るか」ではない。
+
+### 3. 入口は 1 つ、フローは 1 本
+
+Home に「sample」と「custom」の分岐を作らない。1 つの入口から入り、ファイルとやりたいことを選ぶだけ。bundled CSV はテンプレートの選択肢の 1 つ。
+
+### 4. Preview は画面の中心に出す
+
+preview 結果は右ペインの下部に埋めない。変更サマリー 3 点（何が変わる / 何行 / 保存先）を画面上部に固定表示する。
+
+### 5. Copilot への指示は短く・具体的に
+
+Copilot に渡すプロンプトは、Copilot が間違えにくい形式にする。長い JSON packet をそのまま渡すのではなく、**自然言語の指示 + 回答テンプレート** を組み合わせる。
+
+### 6. エラーは自動修復してから見せる
+
+markdown fence の除去、trailing comma の除去、BOM の除去など、安全に自動修復できるものは自動で直す。直せないエラーだけを利用者に見せる。
+
+---
+
+## Key Flows
+
+### Flow 1: 統一フロー（唯一のメインフロー）
+
+```
+Home
+─────
+  「ファイルの変更作業を始めましょう」
+
+  ファイル: [___________________________] [選択]
+            └─ テンプレート候補 ──────────────────┐
+               ・ 練習用サンプル (revenue-workflow-demo.csv)
+               ・ 自分のファイルを指定
+               └──────────────────────────────────┘
+
+  やりたいこと: テンプレートから選ぶ or 自由入力
+    ┌──────────────────────────────────────────────┐
+    │ [承認済みの行だけ残す]  [列名をきれいにする]     │
+    │ [条件で行を絞り込む]    [集計する]               │
+    │ └ 選ぶと objective が自動入力される              │
+    └──────────────────────────────────────────────┘
+
+  タスク名: [承認済み行の抽出_______] ← objective から自動生成、編集可
+
+  [始める] ← 唯一の主ボタン
+```
+
+```
+Studio
+──────
+  ━━━ ① はじめる ━━━━━ ② Copilot に聞く ━━━━━ ③ 確認して保存 ━━━
+       ✓ 完了          → 今ここ                   待機中
+
+  ステップ 2/3: Copilot に聞く
+
+    ❶ この依頼を Copilot にコピーしてください
+    ┌──────────────────────────────────────────────┐
+    │ 以下は Relay Agent からの依頼です。            │
+    │ 回答は必ず JSON のみで返してください。          │
+    │ ...                                           │
+    │                              [Copilot 用にコピー] │
+    └──────────────────────────────────────────────┘
+
+    ❷ Copilot の回答をここに貼ってください
+    ┌──────────────────────────────────────────────┐
+    │                                              │
+    │  （テキストエリア）                             │
+    │                                              │
+    └──────────────────────────────────────────────┘
+
+    Copilot に期待する形式:
+      { "version": "1.0", "summary": "...", "actions": [...] }
+      ※ JSON のみ。``` 不要。パスは / 区切り。
+
+    [変更を確認する] ← 唯一の主ボタン
+      ──→ 内部: auto-fix → validation → preview
+```
+
+```
+  ステップ 3/3: 確認して保存
+
+    ┌────────────────┬──────────────┬─────────────────────────┐
+    │ 何が変わる       │ 対象行数      │ 保存先                   │
+    │ approved 行のみ  │ 5行 → 3行    │ revenue-demo.copy.csv   │
+    │ 残す             │              │ 元ファイルは変わりません   │
+    └────────────────┴──────────────┴─────────────────────────┘
+
+    [詳細を見る ▼] ← 折りたたみ
+
+    ┌──────────────────────────────────────────────┐
+    │ 保存すると、元のファイルとは別に               │
+    │ 新しいファイルが作成されます。                  │
+    │ 元のファイルは一切変更されません。              │
+    └──────────────────────────────────────────────┘
+
+    [コピーを保存する] ← 唯一の主ボタン
+      ──→ 内部: approval → execution
+```
+
+```
+  完了！
+    「保存しました: revenue-demo.copy.csv」
+    [別のファイルで試す]  [同じファイルで別の作業をする]  [ホームに戻る]
+```
+
+### Flow 2: Copilot JSON エラー時の修復
+
+```
+ステップ 2/3: Copilot に聞く
+
+  ⚠ Copilot の回答を修正中...
+
+  ✓ Markdown の ``` を自動除去しました
+  ✗ JSON の形式が正しくありません
+
+  問題: 3 行目にカンマが余分にあります
+
+  [修正を依頼するテキストをコピー]
+
+  ──→ ボタンを押すと、以下のテキストがクリップボードにコピーされる:
+
+  「さきほどの回答の JSON に構文エラーがあります。
+   3 行目の末尾のカンマを削除して、
+   同じ JSON をもう一度返してください。
+   ※ ``` で囲まず、JSON だけを返してください。」
+```
+
+---
+
+## Functional Requirements
+
+### FR-1: 3 ステップ Guided Mode
+
+#### FR-1.1: ステップバナー
+
+Studio 上部に常に現在のステップを表示する。
+
+```
+━━━ ① はじめる ━━━━━ ② Copilot に聞く ━━━━━ ③ 確認して保存 ━━━
+     ✓ 完了          → 今ここ                   待機中
+```
+
+- 各ステップは `completed` / `current` / `waiting` の 3 状態
+- 現在のステップには 1 文の説明を付ける（例:「Copilot の回答を貼ってください」）
+
+#### FR-1.2: 単一主ボタン
+
+各ステップで表示する主ボタンは **1 つだけ**。
+
+| 場所 | 主ボタンラベル | 内部で実行する処理 |
+|------|---------------|-------------------|
+| Home | `始める` | session 作成 + turn 開始 → Studio へ遷移 |
+| Studio ① | `Copilot への依頼を準備する` | packet 生成 → ステップ 2 へ |
+| Studio ② | `変更を確認する` | auto-fix → validation → preview → ステップ 3 へ |
+| Studio ③ | `コピーを保存する` | approval → execution |
+
+主ボタンの下に **何が起きるかの 1 文説明** を常に表示する。例:
+- 「Copilot に渡す依頼文を作ります」
+- 「元のファイルは変更されず、別ファイルとして保存されます」
+
+#### FR-1.3: 処理中の進捗表示
+
+主ボタンを押した後、内部で複数コマンドが走る間の進捗を表示する。
+
+```
+[始める] を押した後:
+  ✓ 作業を準備しています...
+  ✓ リクエストを登録しています...
+  → Studio を開きます
+```
+
+途中で失敗した場合は、**何が起きたかを平易な日本語で 1 文** にまとめる。内部コマンド名は出さない。
+
+```
+✗ 準備中にエラーが発生しました
+  「ファイルが見つかりませんでした。ファイルパスを確認してください。」
+  [やり直す]
+```
+
+### FR-2: Home の統一入口
+
+#### FR-2.1: 分岐の廃止
+
+- `entryMode: "sample" | "custom"` の概念を **廃止**
+- Home の初期画面に「サンプルを試す」「自分のファイルを使う」の分岐ボタンを **表示しない**
+- 代わりに、1 つのフォームを表示する: ファイル選択 + やりたいこと + タスク名
+
+#### FR-2.2: ファイル選択
+
+- テキスト入力欄 + ファイル選択ボタン
+- テンプレート候補をドロップダウンまたはチップで提示:
+  - `練習用サンプル (revenue-workflow-demo.csv)` — bundled CSV を自動パス入力
+  - 最近使ったファイル（continuity から取得）
+- 練習用サンプルを選ぶと、workbookPath が自動入力される
+- preflight check は従来どおり裏で実行
+
+#### FR-2.3: やりたいことテンプレート
+
+- objective starters をテンプレートチップとして表示（現行の `ObjectiveStarter` を統合）
+- bundled CSV が選ばれている場合は、bundled CSV に最適化されたテンプレートを表示
+- 自分のファイルの場合は、汎用テンプレートを表示
+- テンプレート選択で objective が自動入力される
+- 自由入力も可能
+
+#### FR-2.4: タスク名の自動生成
+
+- objective が入力されると、タスク名（title）を objective から自動生成する
+- 例: objective = `承認済みの行だけ残して安全なコピーを保存する` → title = `承認済み行の抽出`
+- 利用者は編集可能だが、空欄で止まることを防ぐ
+
+#### FR-2.5: Home → Studio の完全な引き継ぎ
+
+- Home で入力した title / objective / workbookPath を Studio にそのまま引き継ぐ
+- `始める` ボタン押下時に session 作成 + 初回 turn 開始を完了し、Studio では即座にステップ ① から始まる
+- Studio に入った時点で主ボタンが disabled になる状態を **完全に排除** する
+
+### FR-3: Copilot Handoff の改善
+
+#### FR-3.1: Copilot への指示テキストの再設計
+
+現在の relay packet（長い JSON）をそのまま Copilot に渡すのではなく、**Copilot が従いやすい自然言語 + テンプレート** 形式にする。
+
+**現在の問題:**
+- relay packet は JSON オブジェクトで、Copilot には構造の意図が伝わりにくい
+- responseContract の notes はパケット内部に埋もれており、Copilot が無視しやすい
+- Windows path の escape 指示が不足
+
+**新しい Copilot 向け指示テキストの構造:**
+
+```
+以下は Relay Agent からの依頼です。回答は必ず JSON のみで返してください。
+
+## 依頼内容
+{objective を自然言語で}
+
+## 対象ファイル
+- パス: {workbookPath}
+- シート: {workbookFocus}
+
+## 使用可能なツール
+{allowedWriteTools を箇条書きで。各ツールの title と description を記載}
+
+## 回答形式（厳守）
+以下の JSON 形式 **のみ** で回答してください。
+- ``` で囲まないでください
+- コメントや説明文を JSON の外に書かないでください
+- ファイルパスでは \ ではなく / を使ってください
+
+{
+  "version": "1.0",
+  "summary": "（何をしたか 1 文で）",
+  "actions": [
+    {
+      "tool": "（ツール名。上記の使用可能なツールから選択）",
+      "sheet": "（シート名）",
+      "args": { ... }
+    }
+  ],
+  "followupQuestions": [],
+  "warnings": []
+}
+
+## 回答例
+{workbook の内容に基づいた具体的な回答例を 1 つ生成}
+```
+
+**設計意図:**
+- 自然言語で依頼内容を伝えることで、Copilot が文脈を理解しやすくする
+- 回答形式を指示の **最後** に置き、テンプレートを直前に見せることで従いやすくする
+- 「``` で囲まないでください」を明示的に書く（最頻出の失敗原因）
+- Windows path の `\` → `/` 指示を含める
+- 具体的な回答例を付けることで、Copilot が形式を真似やすくする
+
+#### FR-3.2: Expected Shape の常時表示
+
+`Copilot 用にコピー` ボタンの近くに、Copilot に期待する回答の shape を短く表示する。
+
+```
+Copilot に期待する回答形式:
+  { "version": "1.0", "summary": "...", "actions": [...], ... }
+  ※ JSON のみ。``` 不要。パスは / 区切り。
+```
+
+これはコピー不要の参考情報として常時表示し、返答を貼り付ける前に利用者が「正しい形式か」を目視確認できるようにする。
+
+#### FR-3.3: Bundled CSV 選択時の Copilot 指示最適化
+
+bundled CSV を選んだ場合、Copilot 指示テキストに **具体的な回答例** を含める。
+
+- revenue-workflow-demo.csv のカラム構造（segment, approved, amount 等）を反映した回答例
+- filter_rows + derive_column + save_copy の具体的な action 例
+- 初回ユーザーでも Copilot の返答をそのまま貼れば通る確率を最大化する
+
+これは sample flow 固有の機能ではなく、**bundled CSV というファイルに対する最適化** として実装する。将来的に、任意のファイルに対して profile 結果から回答例を自動生成する拡張に繋がる。
+
+### FR-4: JSON Auto-fix と Repair Hints
+
+#### FR-4.1: 安全な自動修復
+
+以下のパターンは、validation の前に **自動的に修復** する。修復した場合は小さな通知を出す。
+
+| パターン | 自動修復 | 通知テキスト |
+|----------|---------|-------------|
+| ````json ... ` `` ` で囲まれている | fence を除去 | 「Markdown の記号を除去しました」 |
+| 先頭/末尾の空白行 | trim | （通知なし） |
+| BOM (U+FEFF) | 除去 | （通知なし） |
+| Windows 改行 (CRLF) | LF に変換 | （通知なし） |
+| 末尾カンマ (`[1, 2, 3,]`) | 除去 | 「JSON の末尾カンマを修正しました」 |
+| `\\` → `/` (Windows path) | 変換 | 「ファイルパスの区切りを修正しました」 |
+
+#### FR-4.2: 段階的エラー表示
+
+auto-fix 後も parse に失敗する場合、**段階的に** エラーを表示する。
+
+**レベル 1: JSON 構文エラー**
+```
+Copilot の回答が正しい JSON ではありません。
+問題: 12 行目に余分な文字があります。
+[修正を依頼するテキストをコピー]
+```
+
+**レベル 2: 形式エラー（parse は通るが shape が違う）**
+```
+JSON は読めましたが、期待する形式と違います。
+問題: "actions" フィールドがありません。
+期待する形式: { "version": "1.0", "summary": "...", "actions": [...] }
+[修正を依頼するテキストをコピー]
+```
+
+**レベル 3: ツールエラー（shape は合うが tool が不正）**
+```
+使用されているツール "table.sort_rows" はサポートされていません。
+使用可能なツール: table.filter_rows, table.derive_column, ...
+[修正を依頼するテキストをコピー]
+```
+
+#### FR-4.3: Copilot 再依頼テキストの自動生成
+
+修正が必要な場合、「修正を依頼するテキストをコピー」ボタンで以下の形式をクリップボードに入れる。
+
+```
+さきほどの回答に問題がありました。以下を修正して、同じ JSON をもう一度返してください。
+
+修正点: {具体的なエラー内容}
+
+注意:
+- ``` で囲まず、JSON だけを返してください
+- ファイルパスは / 区切りで書いてください
+- 前回と同じ依頼内容に対する回答です
+
+期待する形式:
+{
+  "version": "1.0",
+  "summary": "...",
+  "actions": [...],
+  "followupQuestions": [],
+  "warnings": []
+}
+```
+
+**設計意図:**
+- エラーの具体的な内容を含めることで、Copilot が何を直せばよいか明確にする
+- 「同じ依頼内容に対する回答です」で、目的がブレることを防ぐ
+- テンプレートを再掲して、形式の遵守を促す
+
+### FR-5: Preview Visibility の強化
+
+#### FR-5.1: 変更サマリー 3 点の固定表示
+
+preview 完了後、以下の 3 点を **Studio 上部のステップバナー直下** に固定表示する。スクロールしても見える位置に置く。
+
+```
+┌────────────────┬──────────────┬─────────────────────────┐
+│ 何が変わる       │ 対象行数      │ 保存先                   │
+│ approved 行のみ  │ 5行 → 3行    │ revenue-demo.copy.csv   │
+│ 残す             │              │ 元ファイルは変わりません   │
+└────────────────┴──────────────┴─────────────────────────┘
+```
+
+#### FR-5.2: 詳細変更は折りたたみ
+
+sheet ごとの diff details（追加列、変更列、削除列、warnings）は **「詳細を見る」で展開** する。初期表示は折りたたみ。
+
+### FR-6: Review / Approval / Save の統合表示
+
+#### FR-6.1: 単一ボタン「コピーを保存する」
+
+guided mode では `Confirm review` と `Save reviewed copy` を 1 つのボタン `コピーを保存する` にまとめる。
+
+ボタン押下後の内部進捗:
+```
+✓ 変更内容を確認しています...
+✓ 新しいファイルを保存しています...
+→ 保存しました: {outputPath}
+```
+
+#### FR-6.2: 保存前の安全確認
+
+ボタンを押す **前** に、以下を常に表示する:
+
+```
+保存すると、元のファイル ({sourcePath}) とは別に
+新しいファイル ({outputPath}) が作成されます。
+元のファイルは一切変更されません。
+```
+
+### FR-7: Terminology Cleanup
+
+| 現在の用語 | 置き換え | 使用場所 |
+|-----------|---------|---------|
+| session | 作業 | guided mode 全般 |
+| turn | リクエスト | guided mode 全般 |
+| relay packet | Copilot への依頼 | ステップ 2 |
+| approval | 確認 | ステップ 3 |
+| execution | 保存 | ステップ 3 |
+| validate response | 回答をチェック | ステップ 2 |
+| check changes | 変更を確認 | ステップ 2→3 の遷移 |
+| Start turn | 始める | Home |
+| Generate packet | Copilot への依頼を準備する | ステップ 1 |
+| preview-ready | 確認できます | ステップ 3 表示 |
+| sample flow | （廃止） | — |
+| entry mode | （廃止） | — |
+
+### FR-8: Expert Detail の保持
+
+- Inspection details、artifact browser、raw packet、validation issue list は **維持**
+- guided mode では `詳細表示` トグルの中に配置
+- トグルはデフォルトで **閉じた状態**
+- Expert mode への切り替えは Settings または Studio header のトグルで行う
+
+### FR-9: 廃止する機能
+
+以下を明示的に廃止する。
+
+| 廃止対象 | 理由 | 代替 |
+|---------|------|------|
+| `entryMode: "sample" \| "custom"` | Home の分岐を排除 | 統一フォーム |
+| `startSampleFlow()` | sample flow 廃止 | `始める` ボタン 1 つ |
+| `startCustomFlow()` | sample/custom 分岐の廃止 | `始める` ボタン 1 つ |
+| `buildDemoResponse()` | demo response 廃止 | Copilot 経由のみ |
+| `loadDemoResponse()` | demo response 廃止 | Copilot 経由のみ |
+| `demoResponseAvailable` | demo response 廃止 | — |
+| `Load demo response` ボタン | demo response 廃止 | — |
+| `sampleObjectiveStarters` | sample/custom 分岐の廃止 | 統一テンプレート |
+| `customObjectiveStarters` | sample/custom 分岐の廃止 | 統一テンプレート |
+| `sampleQuickStartTemplates` | sample/custom 分岐の廃止 | 統一テンプレート |
+| `customQuickStartTemplates` | sample/custom 分岐の廃止 | 統一テンプレート |
+| `showGuidedStartGate` | Home 初期分岐の廃止 | 常にフォームを表示 |
+
+---
+
+## Acceptance Criteria
+
+### Home
+
+- [ ] Home の初期画面に「サンプルを試す」「自分のファイルを使う」の **分岐が存在しない**
+- [ ] Home に表示される主ボタンは `始める` の **1 つだけ**
+- [ ] bundled CSV がテンプレート候補として選択可能
+- [ ] テンプレート選択で objective とタスク名が自動入力される
+- [ ] `始める` 押下後、Studio に遷移した時点で主ボタンが disabled でない
+
+### Studio
+
+- [ ] ステップバナーに 3 段階が表示される
+- [ ] 各ステップで主ボタンが **1 つだけ** 表示される
+- [ ] Copilot への指示テキストに「``` で囲まないでください」「パスは / 区切り」が含まれる
+- [ ] Copilot への指示テキストに具体的な回答例が含まれる
+- [ ] `Load demo response` / `Use demo response` が **存在しない**
+
+### JSON Auto-fix
+
+- [ ] Markdown fence で囲まれた JSON が自動修復される
+- [ ] 末尾カンマが自動修復される
+- [ ] Windows path の `\\` が `/` に自動変換される
+- [ ] 自動修復した場合、何を修復したかの通知が表示される
+
+### エラー表示
+
+- [ ] JSON 構文エラーと形式エラーが **別のメッセージ** で表示される
+- [ ] エラー時に「修正を依頼するテキストをコピー」ボタンがある
+- [ ] コピーされるテキストに具体的なエラー内容と期待する形式が含まれる
+
+### Preview
+
+- [ ] preview サマリー 3 点（何が変わる / 行数 / 保存先）が **スクロールなしで** 見える
+- [ ] 元ファイルが変更されないことが preview 画面で **明記** されている
+
+### Guardrail
+
+- [ ] preview before write の guardrail が維持されている
+- [ ] approval before write の guardrail が維持されている
+- [ ] save-copy only の guardrail が維持されている
+- [ ] original workbook read-only の guardrail が維持されている
+
+### Expert Mode
+
+- [ ] 詳細表示トグルを開けば、現行の inspection surface と **同等以上** の情報にアクセスできる
+
+---
+
+## Risks and Mitigations
+
+### 1. ステップ統合で内部失敗箇所が見えなくなる
+
+**Mitigation:** 主ボタン押下後の進捗表示で「どこで止まったか」を平易に要約する。詳細表示トグル内に内部状態を残す。
+
+### 2. Copilot 指示テキストの変更で既存パケット互換が崩れる
+
+**Mitigation:** 新形式は **追加情報** であり、背後の relay packet JSON 自体は変更しない。新形式は relay packet を **ラップ** する形で提供する。Copilot の返答 schema（CopilotTurnResponse）は変更しない。
+
+### 3. Auto-fix が意図しない変換をする
+
+**Mitigation:** Auto-fix は **可逆的な変換のみ** に限定する。変換前の原文は保持し、auto-fix 通知に「元に戻す」リンクを付ける。パス変換（`\\` → `/`）は JSON value 内の string にのみ適用し、JSON key には触らない。
+
+### 4. Copilot 必須で初回ハードルが上がる
+
+**Mitigation:** Copilot 指示テキストに具体的な回答例を含め、Copilot がほぼそのまま正しい JSON を返せるようにする。指示テキスト自体が「Copilot にこれを貼ってください」という 1 ステップであることを明示し、心理的ハードルを下げる。JSON auto-fix パイプラインにより、Copilot の返答が多少崩れても自動修復される。
+
+### 5. 3 ステップへの圧縮で approval が軽視される
+
+**Mitigation:** 「コピーを保存する」ボタンの直上に変更サマリーと「元ファイルは変わりません」の保証を常時表示し、ワンクリックでも意識的な判断を促す。
+
+### 6. bundled CSV を知らずに実ファイルだけ使うユーザーが練習機会を逃す
+
+**Mitigation:** ファイル選択のテンプレート候補に「練習用サンプル」を目立つ位置に置く。初回ユーザーかつファイル未選択時は、「まず練習用サンプルで試してみませんか？」の 1 文を表示する（分岐ボタンではなく、テキスト提案）。
+
+---
+
+## Implementation Phases
+
+### Phase 1: Home 統一入口 + Guided Shell（2 週間）
+
+**目標:** sample/custom 分岐を廃止し、統一フォームと 3 ステップの骨格を実装する。
+
+- [ ] `entryMode` / `startSampleFlow` / `startCustomFlow` / `showGuidedStartGate` の廃止
+- [ ] 統一 Home フォーム（ファイル選択 + テンプレート + タスク名 + `始める`ボタン）
+- [ ] bundled CSV をファイル選択のテンプレート候補として表示
+- [ ] objective starters の統合（sample/custom 別々のリストを 1 つに）
+- [ ] タスク名の objective からの自動生成
+- [ ] `始める` 押下時の session 作成 + turn 自動開始
+- [ ] Home → Studio の title / objective / workbookPath 引き継ぎ
+- [ ] GuidedStage 型 (`setup` | `copilot` | `review-save`) と状態遷移ロジック
+- [ ] ステップバナーコンポーネント
+- [ ] 単一主ボタンコンポーネント（stage に応じてラベルと handler を切り替え）
+- [ ] 処理中の進捗表示コンポーネント
+- [ ] Expert details トグル（デフォルト閉じ）
+
+### Phase 2: Copilot Handoff 改善（1 週間）
+
+**目標:** Copilot が従いやすい指示テキストと auto-fix を実装する。
+
+- [ ] 自然言語 + テンプレート形式の Copilot 指示テキスト生成
+- [ ] bundled CSV 選択時の具体的な回答例生成
+- [ ] Expected shape の常時表示
+- [ ] JSON auto-fix パイプライン（fence strip, trailing comma, path normalize, BOM, CRLF）
+- [ ] auto-fix 通知 UI
+- [ ] 段階的エラー表示（構文 / 形式 / ツール）
+- [ ] 再依頼テキスト自動生成
+
+### Phase 3: Demo Response 廃止 + Cleanup（1 週間）
+
+**目標:** demo response 関連コードを完全に削除する。
+
+- [ ] `buildDemoResponse` / `loadDemoResponse` / `demoResponseAvailable` の削除
+- [ ] `Load demo response` ボタンの削除
+- [ ] `sampleObjectiveStarters` / `customObjectiveStarters` / `sampleQuickStartTemplates` / `customQuickStartTemplates` の統合・削除
+- [ ] sample flow 固有のヘルプテキスト・分岐ロジックの削除
+- [ ] `entryMode` 依存の条件分岐の削除
+
+### Phase 4: Preview Visibility + Terminology（1 週間）
+
+**目標:** preview の視認性向上と用語統一。
+
+- [ ] 変更サマリー 3 点の固定表示コンポーネント
+- [ ] 詳細変更の折りたたみ
+- [ ] Terminology cleanup（UI テキスト全体の用語置き換え）
+- [ ] 保存前の安全確認テキスト
+
+### Phase 5: Integration Test + UX Verification（1 週間）
+
+- [ ] Clean profile で統一フロー end-to-end テスト（bundled CSV）
+- [ ] Clean profile で統一フロー end-to-end テスト（自分のファイル）
+- [ ] Copilot relay の修正再試行率測定
+- [ ] 初回ユーザーテスト（3 名以上）
+- [ ] Expert mode との互換性確認
+- [ ] 旧 sample flow / entryMode コードが完全に削除されていることの確認

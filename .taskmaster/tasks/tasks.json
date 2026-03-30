@@ -597,8 +597,8 @@
             "updatedAt": "2026-03-29T06:29:36Z"
           }
         ],
-      "updatedAt": "2026-03-29T06:29:36Z"
-    },
+        "updatedAt": "2026-03-29T06:29:36Z"
+      },
       {
         "id": "10",
         "title": "Ship demo assets, README guidance, and implementation log updates",
@@ -1446,6 +1446,257 @@
         "details": "Update `docs/PACKAGING_POLICY.md`, `PLANS.md`, and `docs/IMPLEMENTATION.md` so the repo now documents the Trusted Signing runbook, unsigned fallback behavior, and the remaining real-Azure release work as an operational prerequisite rather than a Task Master task.",
         "testStrategy": "Run documentation greps, Task Master JSON validation, and `git diff --check`, then confirm the same Trusted Signing story appears across planning and implementation docs.",
         "updatedAt": "2026-03-30T08:14:36Z"
+      },
+      {
+        "id": "46",
+        "title": "Abolish sample/custom entry mode split on Home",
+        "description": "Remove the entryMode concept and the 'Try sample' / 'Use my own file' fork from the Home page, replacing them with a single unified form.",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "details": "Delete `entryMode`, `startSampleFlow()`, `startCustomFlow()`, `showGuidedStartGate`, and the conditional rendering that depends on them in `+page.svelte` (Home). Replace the guided-start gate with a single always-visible form containing: file selector, objective template chips, and task-name field. Merge `sampleObjectiveStarters`, `customObjectiveStarters`, `sampleQuickStartTemplates`, and `customQuickStartTemplates` into one unified template list. Bundled CSV becomes a selectable template option in the file selector, not a separate flow. The `始める` button is the single primary CTA. PRD ref: FR-2.1, FR-2.2, FR-2.3, FR-9.",
+        "testStrategy": "Home page loads with no sample/custom fork. Bundled CSV appears as a selectable template. Objective starters are a single merged list. The guided-start gate no longer appears.",
+        "subtasks": []
+      },
+      {
+        "id": "47",
+        "title": "Auto-generate task name from objective and wire Home→Studio handoff",
+        "description": "Generate a short title from the objective text so the title field is never blank, and ensure Home passes title/objective/workbookPath to Studio on session creation.",
+        "status": "pending",
+        "dependencies": [
+          "46"
+        ],
+        "priority": "high",
+        "details": "When the user selects or types an objective, derive a short task name (title) automatically (e.g. 'Keep approved rows' → '承認済み行の抽出'). The title field is editable but never empty. On `始める`, perform `createSession` + `startTurn` in one aggregated call so Studio receives a session with an active turn and can proceed to packet generation immediately. Pass title, objective, relayMode, and workbookPath through the route query or a shared store. PRD ref: FR-2.4, FR-2.5.",
+        "testStrategy": "Selecting an objective template populates the title field. Title is editable. Pressing 始める creates a session AND a turn, navigates to Studio where the turn is already active.",
+        "subtasks": []
+      },
+      {
+        "id": "48",
+        "title": "Delete demo response code and Load demo response button",
+        "description": "Remove all demo-response machinery from the codebase: buildDemoResponse, loadDemoResponse, demoResponseAvailable, and the Load demo response button in Studio.",
+        "status": "pending",
+        "dependencies": [
+          "46"
+        ],
+        "priority": "high",
+        "details": "Delete `buildDemoResponse()`, `loadDemoResponse()`, `buildDemoOutputPath()`, and the `demoResponseAvailable` reactive binding from `studio/+page.svelte`. Remove the `Load demo response` chip-button from the pasted-response subpanel. Remove any conditional logic or help text that references demo responses. This is a pure removal task with no replacement feature. PRD ref: FR-9.",
+        "testStrategy": "Grep for 'demo', 'demoResponse', 'loadDemoResponse', 'buildDemoResponse', 'buildDemoOutputPath' in the frontend source — zero hits. Studio compiles and renders without errors.",
+        "subtasks": []
+      },
+      {
+        "id": "49",
+        "title": "Implement GuidedStage state machine and step banner component",
+        "description": "Add a GuidedStage type (setup | copilot | review-save) with transition logic, and render a 3-step progress banner at the top of Studio.",
+        "status": "pending",
+        "dependencies": [
+          "47"
+        ],
+        "priority": "high",
+        "details": "Create a `GuidedStage` type with three values: `setup`, `copilot`, `review-save`. Each stage has a `completed | current | waiting` display state derived from turn status and command results. Build a `StepBanner.svelte` component that renders: ① はじめる — ② Copilot に聞く — ③ 確認して保存, with the current stage highlighted and a one-line description beneath it. The banner replaces or overlays the existing `stageTimeline` rendering in guided mode. PRD ref: FR-1.1.",
+        "testStrategy": "Banner renders 3 steps. Stage transitions correctly as turn progresses through draft → packet-ready → validated → preview-ready → approved → executed.",
+        "subtasks": []
+      },
+      {
+        "id": "50",
+        "title": "Implement single primary button per stage",
+        "description": "Replace the multi-button action-row with a single primary button that changes label and handler based on the current GuidedStage.",
+        "status": "pending",
+        "dependencies": [
+          "49"
+        ],
+        "priority": "high",
+        "details": "In guided mode, hide the current action-row (Start turn / Generate packet / Validate response / Check changes / Reset draft). Instead show one `PrimaryAction.svelte` component. Stage mapping: setup → 'Copilot への依頼を準備する' (calls generateRelayPacket), copilot → '変更を確認する' (calls auto-fix + submitCopilotResponse + previewExecution), review-save → 'コピーを保存する' (calls respondToApproval + runExecution). Below the button, always show a one-line explanation of what will happen. The setup stage aggregates startTurn + generateRelayPacket if the turn has not started yet. PRD ref: FR-1.2.",
+        "testStrategy": "Only one primary button is visible at a time. Label changes per stage. Each button triggers the correct aggregated backend calls. The one-line explanation is always visible.",
+        "subtasks": []
+      },
+      {
+        "id": "51",
+        "title": "Add multi-command progress indicator for aggregated actions",
+        "description": "Show a step-by-step progress checklist when a single button triggers multiple backend commands in sequence.",
+        "status": "pending",
+        "dependencies": [
+          "50"
+        ],
+        "priority": "medium",
+        "details": "When the primary button fires an aggregated action (e.g. setup: createSession → startTurn → generatePacket), display a progress list with checkmarks. Each step shows ✓ on success, ✗ on failure with a plain-language message. On failure, show a [やり直す] button and hide internal command names. The progress replaces the button while running and yields back to the next stage on success. PRD ref: FR-1.3.",
+        "testStrategy": "During aggregated setup action, progress steps appear in order. On intentional failure (e.g. bad path), error message is non-technical and retry button works.",
+        "subtasks": []
+      },
+      {
+        "id": "52",
+        "title": "Add expert-details toggle and hide advanced controls in guided mode",
+        "description": "Wrap the existing inspection details, artifact browser, turn-details tabs, and multi-button action-row in a collapsible 'Expert details' toggle that is closed by default.",
+        "status": "pending",
+        "dependencies": [
+          "50"
+        ],
+        "priority": "medium",
+        "details": "Add a disclosure widget labeled '詳細表示' to Studio. When closed (default), the inspection-details panel, artifact browser, turn-details tabs, and the raw action-row are hidden. When open, all current controls render as before. The toggle state persists per session via continuity. PRD ref: FR-8.",
+        "testStrategy": "Expert details toggle is present and closed by default. Opening it reveals all inspection surfaces. Closing hides them. Toggle state persists across page reloads.",
+        "subtasks": []
+      },
+      {
+        "id": "53",
+        "title": "Redesign Copilot instruction text as natural-language + template format",
+        "description": "Replace the raw relay-packet JSON copy with a human-readable instruction text that includes objective, allowed tools, response format rules, JSON template, and a concrete example.",
+        "status": "pending",
+        "dependencies": [
+          "50"
+        ],
+        "priority": "high",
+        "details": "After generateRelayPacket, build a Copilot-facing instruction string (not the raw JSON packet). Structure: 1) natural-language objective, 2) target file + sheet, 3) allowed tools as bullet list, 4) strict format rules ('no markdown fence', 'use / not \\\\ for paths', 'JSON only'), 5) JSON template with placeholders, 6) a concrete response example derived from the workbook profile when available. The 'Copilot 用にコピー' button copies this text instead of the raw packet. The raw packet is preserved in expert details. PRD ref: FR-3.1.",
+        "testStrategy": "Copied text contains natural-language objective, tool list, 'do not wrap in ```' instruction, JSON template, and an example. Raw packet is still accessible in expert details.",
+        "subtasks": []
+      },
+      {
+        "id": "54",
+        "title": "Show expected response shape inline near the paste area",
+        "description": "Display the expected Copilot response shape as a small reference block near the response textarea, so users can visually compare before submitting.",
+        "status": "pending",
+        "dependencies": [
+          "53"
+        ],
+        "priority": "medium",
+        "details": "Below or beside the response textarea, render a compact reference: '期待する形式: { \"version\": \"1.0\", \"summary\": \"...\", \"actions\": [...] } — JSON のみ。``` 不要。パスは / 区切り。' This is static, non-copyable reference text. PRD ref: FR-3.2.",
+        "testStrategy": "Reference block is visible whenever the response textarea is shown. Content matches the expected CopilotTurnResponse shape.",
+        "subtasks": []
+      },
+      {
+        "id": "55",
+        "title": "Add bundled-CSV-aware response example in Copilot instructions",
+        "description": "When the workbook is the bundled revenue-workflow-demo.csv, include a concrete response example in the Copilot instruction text that uses the actual column names and a realistic action plan.",
+        "status": "pending",
+        "dependencies": [
+          "53"
+        ],
+        "priority": "medium",
+        "details": "Detect when the session workbook path ends with 'revenue-workflow-demo.csv'. In that case, append a ## 回答例 section to the Copilot instruction text with a realistic filter_rows + derive_column + save_copy example using the known columns (segment, approved, amount, etc.). This maximizes first-try success for users picking the bundled file. PRD ref: FR-3.3.",
+        "testStrategy": "When bundled CSV is selected, Copilot instruction text contains a 回答例 section with concrete actions referencing revenue-workflow-demo columns. When a different file is used, the example section is either absent or generic.",
+        "subtasks": []
+      },
+      {
+        "id": "56",
+        "title": "Implement JSON auto-fix pipeline before validation",
+        "description": "Add a preprocessing step that automatically repairs common Copilot response issues (markdown fences, trailing commas, BOM, CRLF, Windows paths) before submitting to validation.",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "details": "Create a `autoFixCopilotResponse(raw: string): { fixed: string; fixes: string[] }` function. Apply fixes in order: 1) strip markdown fences (```json...```), 2) trim whitespace, 3) remove BOM (U+FEFF), 4) normalize CRLF→LF, 5) remove trailing commas in arrays/objects, 6) replace \\\\ with / in JSON string values only. Return the cleaned string and a list of human-readable fix descriptions. Call this before `submitCopilotResponse`. PRD ref: FR-4.1.",
+        "testStrategy": "Unit tests: fence-wrapped JSON → clean. Trailing comma → clean. BOM → clean. CRLF → LF. Windows paths → forward slashes. Each fix produces the correct description string. Combined input with multiple issues → all fixed.",
+        "subtasks": []
+      },
+      {
+        "id": "57",
+        "title": "Display auto-fix notifications and integrate with validation flow",
+        "description": "Show what was auto-fixed before validation results appear, and wire the auto-fix pipeline into the primary button's aggregated copilot→validation→preview flow.",
+        "status": "pending",
+        "dependencies": [
+          "56",
+          "50"
+        ],
+        "priority": "medium",
+        "details": "When auto-fix produces fixes, display them as small notification chips above the validation result (e.g. '✓ Markdown の記号を除去しました'). The fixed text replaces the raw response in the textarea (with the original preserved for undo). Add an 'Undo auto-fix' link. The `変更を確認する` button calls autoFix → submitCopilotResponse → previewExecution in sequence. PRD ref: FR-4.1, FR-1.2.",
+        "testStrategy": "Pasting a fenced JSON and clicking the primary button shows fix notifications, then validation results. Undo restores original text.",
+        "subtasks": []
+      },
+      {
+        "id": "58",
+        "title": "Implement tiered error display for validation failures",
+        "description": "Distinguish JSON syntax errors, schema shape errors, and unsupported-tool errors with separate, progressively specific messages.",
+        "status": "pending",
+        "dependencies": [
+          "56"
+        ],
+        "priority": "medium",
+        "details": "After auto-fix, classify failures into 3 tiers: Level 1 (JSON syntax — parse failed entirely, show line number), Level 2 (shape mismatch — parsed but missing required fields like actions, show expected shape), Level 3 (tool error — shape ok but tool name not in allowedWriteTools, list valid tools). Each tier gets a distinct UI treatment and message template. PRD ref: FR-4.2.",
+        "testStrategy": "Submit unparseable JSON → Level 1 message with line hint. Submit JSON missing 'actions' → Level 2 with expected shape. Submit JSON with 'table.sort_rows' → Level 3 listing valid tools.",
+        "subtasks": []
+      },
+      {
+        "id": "59",
+        "title": "Auto-generate Copilot retry prompt on validation failure",
+        "description": "When validation fails, generate a ready-to-copy retry prompt that includes the specific error, format rules, and expected JSON template.",
+        "status": "pending",
+        "dependencies": [
+          "58"
+        ],
+        "priority": "medium",
+        "details": "On any validation failure, generate a retry prompt string including: 1) what went wrong (specific error), 2) the three key rules (no fence, / paths, JSON only), 3) the expected JSON template. Render a '修正を依頼するテキストをコピー' button that copies this to clipboard. The existing `buildCopilotRetryPrompt` and repair-prompt logic should be replaced or enhanced to use this new format. PRD ref: FR-4.3.",
+        "testStrategy": "On validation failure, the retry button is visible. Copied text contains the specific error, format rules, and JSON template. Different error types produce different specific error lines.",
+        "subtasks": []
+      },
+      {
+        "id": "60",
+        "title": "Pin the 3-point change summary above the fold after preview",
+        "description": "After preview completes, display 'What changes / How many rows / Where the copy goes' as a fixed summary strip below the step banner, visible without scrolling.",
+        "status": "pending",
+        "dependencies": [
+          "49"
+        ],
+        "priority": "high",
+        "details": "Create a `ChangeSummaryStrip.svelte` that renders three cards: 1) What will change (diffSummary description), 2) Row count (estimatedAffectedRows), 3) Output path + 'Original file is unchanged'. This strip appears below the StepBanner when GuidedStage is `review-save` and a preview result exists. It does NOT scroll away. The existing preview-summary-grid in the right pane becomes the 'detailed changes' section behind a disclosure. PRD ref: FR-5.1, FR-5.2.",
+        "testStrategy": "After preview, the 3-point strip is visible without scrolling. It shows real diff data. Scrolling down does not hide it. Detailed changes are behind a toggle.",
+        "subtasks": []
+      },
+      {
+        "id": "61",
+        "title": "Unify approval + execution into single 'Save copy' button with progress",
+        "description": "In guided mode, replace the separate Confirm-review and Save-copy buttons with a single 'コピーを保存する' button that runs approval then execution with inline progress.",
+        "status": "pending",
+        "dependencies": [
+          "50",
+          "60"
+        ],
+        "priority": "high",
+        "details": "The `コピーを保存する` button in the review-save stage calls `respondToApproval('approved')` then `runExecution()` in sequence. Display progress: '✓ 変更内容を確認しています...' → '✓ 新しいファイルを保存しています...' → '→ 保存しました: {path}'. Show the safety message before the button: 'Original file unchanged, new copy at {path}'. The 'Needs changes' ghost button remains. PRD ref: FR-6.1, FR-6.2.",
+        "testStrategy": "In guided mode, only one save button is visible. Clicking it progresses through approval → execution with inline status. Output path is shown on success. Safety message is visible before clicking.",
+        "subtasks": []
+      },
+      {
+        "id": "62",
+        "title": "Replace internal terminology with user-facing labels in guided mode",
+        "description": "Systematically replace session/turn/packet/approval/execution vocabulary with plain-language equivalents throughout all guided-mode UI text.",
+        "status": "pending",
+        "dependencies": [
+          "49",
+          "50",
+          "60",
+          "61"
+        ],
+        "priority": "medium",
+        "details": "Apply the terminology map from FR-7: session→作業, turn→リクエスト, relay packet→Copilot への依頼, approval→確認, execution→保存, validate response→回答をチェック, check changes→変更を確認, Start turn→始める, Generate packet→Copilot への依頼を準備する, preview-ready→確認できます. Apply to: step banner labels, primary button labels, progress messages, help entries, session notice text, and stage timeline notes. Expert details retain original terminology. Also remove sample flow / entry mode from help text. PRD ref: FR-7.",
+        "testStrategy": "In guided mode, grep the rendered HTML for 'session', 'turn', 'relay packet', 'approval', 'execution' — none appear outside expert details. User-facing text uses the new vocabulary.",
+        "subtasks": []
+      },
+      {
+        "id": "63",
+        "title": "End-to-end verification of the unified guided workflow",
+        "description": "Verify the complete unified flow from Home through save-copy, for both bundled CSV and custom file, confirming all acceptance criteria from the PRD.",
+        "status": "pending",
+        "dependencies": [
+          "46",
+          "47",
+          "48",
+          "49",
+          "50",
+          "51",
+          "52",
+          "53",
+          "54",
+          "55",
+          "56",
+          "57",
+          "58",
+          "59",
+          "60",
+          "61",
+          "62"
+        ],
+        "priority": "high",
+        "details": "Run a full walkthrough on a clean profile: 1) Home → select bundled CSV template → 始める, 2) Studio step 1 → Copilot への依頼を準備する, 3) Copy instruction, paste a response, 変更を確認する, 4) Review 3-point summary, コピーを保存する. Repeat with a custom CSV file. Verify: no sample/custom fork on Home, no demo response button, single primary button per stage, step banner transitions, auto-fix works, tiered errors work, preview is above the fold, terminology is clean, expert details toggle works, all guardrails intact. Document results in `docs/IMPLEMENTATION.md`. PRD ref: all acceptance criteria.",
+        "testStrategy": "Clean-profile end-to-end for bundled CSV and custom file. All acceptance criteria checkboxes pass. No regressions in expert mode. Guardrails (preview-before-write, approval-before-write, save-copy-only, original-read-only) verified.",
+        "subtasks": []
       }
     ],
     "metadata": {

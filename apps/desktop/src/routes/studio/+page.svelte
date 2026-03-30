@@ -42,6 +42,7 @@
     type PersistedPreviewSnapshot
   } from "$lib";
   import { createStudioState, type StudioState } from "$lib/studio-state";
+  import { autoFixCopilotResponse, type AutoFixResult } from "$lib/auto-fix";
 
   type RelayMode = "discover" | "plan" | "repair" | "followup";
   type StudioTimelineTone = "pending" | "active" | "ready";
@@ -68,6 +69,14 @@
     | TurnDetailsViewModel["validation"]
     | TurnDetailsViewModel["approval"]
     | TurnDetailsViewModel["execution"];
+  type GuidedStage = "setup" | "copilot" | "review-save";
+  type GuidedStepDef = {
+    key: GuidedStage;
+    number: number;
+    label: string;
+    tone: "done" | "active" | "upcoming";
+  };
+
   type PendingStudioAction =
     | {
         kind: "route-leave";
@@ -119,6 +128,7 @@
   let pendingStudioAction: PendingStudioAction | null = null;
   let bypassNavigationGuard = false;
   let studioHelpOpen = false;
+  let expertDetailsOpen = false;
 
   let sessionLoading = false;
   let startTurnPending = false;
@@ -164,6 +174,8 @@
 
   let lastLoadToken = 0;
   let lastRawResponse = "";
+  let autoFixResult: AutoFixResult | null = null;
+  let autoFixUndoAvailable = false;
 
   function normalizeWorkbookFocus(value: string): string {
     return value.trim() || "Sheet1";
@@ -374,18 +386,34 @@
 
   function buildCopilotRetryPrompt(reason: string): string {
     const objective =
-      selectedTurn?.objective || $studioState.turnObjective || "Keep the same workbook goal.";
+      selectedTurn?.objective || $studioState.turnObjective || "同じ目標を維持してください。";
 
-    return [
-      "Please revise the previous Relay Agent response.",
-      `Goal: ${objective}`,
-      `Issue to fix: ${reason}`,
-      "Requirements:",
-      "- Return strict JSON only.",
-      "- Stay within the tools Relay Agent listed in the packet.",
-      "- Keep the original workbook read-only.",
-      "- If you save a copy, use a different output path from the source workbook."
-    ].join("\n");
+    const lines = [
+      "前回の回答に問題がありました。修正してください。",
+      "",
+      `## 問題点`,
+      reason,
+      "",
+      `## 目標（変更なし）`,
+      objective,
+      "",
+      `## 回答ルール`,
+      "1. 回答は JSON のみ。\`\`\`（バッククォート）で囲まないでください。",
+      "2. ファイルパスは / 区切り（\\\\は使わない）。",
+      "3. 元のファイルは変更せず、別のパスに保存してください。",
+      "4. 依頼に記載されたツール一覧にないツールは使わないでください。",
+      "",
+      `## 回答テンプレート`,
+      '{',
+      '  "version": "1.0",',
+      '  "summary": "変更内容の要約",',
+      '  "actions": [{ "tool": "...", "description": "...", "parameters": { ... } }],',
+      '  "followupQuestions": [],',
+      '  "warnings": []',
+      '}'
+    ];
+
+    return lines.join("\n");
   }
 
   function suggestNextSteps(
@@ -436,22 +464,6 @@
     return dedupeStrings(steps).slice(0, 3);
   }
 
-  function buildDemoOutputPath(sourcePath: string): string {
-    const normalized = sourcePath.trim();
-
-    if (!normalized) {
-      return "/absolute/path/to/revenue-workflow-demo.guided.csv";
-    }
-
-    const lastSlash = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
-    const directory = lastSlash >= 0 ? normalized.slice(0, lastSlash + 1) : "";
-    const fileName = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
-    const extensionIndex = fileName.lastIndexOf(".");
-    const baseName = extensionIndex > 0 ? fileName.slice(0, extensionIndex) : fileName;
-
-    return `${directory}${baseName}.guided-demo.csv`;
-  }
-
   function fileNameFromPath(path: string): string {
     const normalized = path.trim();
     if (!normalized) {
@@ -470,43 +482,6 @@
 
     const lastSlash = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
     return lastSlash >= 0 ? normalized.slice(0, lastSlash + 1) : "";
-  }
-
-  function buildDemoResponse(sourcePath: string): string {
-    return JSON.stringify(
-      {
-        version: "1.0",
-        summary: "Keep approved rows, add a review label, and write a sanitized CSV copy.",
-        actions: [
-          {
-            tool: "table.filter_rows",
-            sheet: "Sheet1",
-            args: {
-              predicate: "approved = true"
-            }
-          },
-          {
-            tool: "table.derive_column",
-            sheet: "Sheet1",
-            args: {
-              column: "review_label",
-              expression: "[segment] + \"-approved\"",
-              position: "end"
-            }
-          },
-          {
-            tool: "workbook.save_copy",
-            args: {
-              outputPath: buildDemoOutputPath(sourcePath)
-            }
-          }
-        ],
-        followupQuestions: [],
-        warnings: []
-      },
-      null,
-      2
-    );
   }
 
   function buildPreviewSnapshot(
@@ -832,10 +807,11 @@
       throw new Error("Clipboard access is not available in this build.");
     }
 
-    await navigator.clipboard.writeText(relayPacketText);
+    const instructionText = buildCopilotInstructionText();
+    await navigator.clipboard.writeText(instructionText);
     handoffCopyRequiresConfirm = false;
     handoffCopyMessage =
-      "Relay packet copied. Share only the minimum content Copilot needs.";
+      "Copilot への依頼テキストをコピーしました。Copilot に貼り付けてください。";
   }
 
   async function copyFollowupPrompt(prompt: string): Promise<void> {
@@ -852,6 +828,94 @@
     } catch (error) {
       followupCopyError = toErrorMessage(error);
     }
+  }
+
+  function buildCopilotInstructionText(): string {
+    const state = get(studioState);
+    const objective = selectedTurn?.objective || state.turnObjective || "";
+    const mode = selectedTurn?.mode || state.relayMode || "plan";
+    const focus = state.workbookFocus || "Sheet1";
+
+    let packet: { allowedWriteTools?: { title: string }[]; allowedReadTools?: { title: string }[] } | null = null;
+    try {
+      packet = relayPacketText ? JSON.parse(relayPacketText) : null;
+    } catch { /* ignore parse errors */ }
+
+    const writeTools = packet?.allowedWriteTools?.map((t) => t.title) ?? [];
+    const readTools = packet?.allowedReadTools?.map((t) => t.title) ?? [];
+
+    const lines: string[] = [];
+
+    lines.push("## 依頼内容");
+    lines.push("");
+    lines.push(`${objective}`);
+    lines.push("");
+    lines.push(`モード: ${mode}`);
+    lines.push(`対象シート: ${focus}`);
+    lines.push("");
+
+    if (readTools.length > 0 || writeTools.length > 0) {
+      lines.push("## 使えるツール");
+      lines.push("");
+      if (readTools.length > 0) {
+        lines.push(`読み取り: ${readTools.join(", ")}`);
+      }
+      if (writeTools.length > 0) {
+        lines.push(`書き込み: ${writeTools.join(", ")}`);
+      }
+      lines.push("");
+    }
+
+    lines.push("## 回答ルール");
+    lines.push("");
+    lines.push("1. 回答は JSON のみ。```（バッククォート）で囲まないでください。");
+    lines.push("2. ファイルパスは / 区切り（\\\\は使わない）。");
+    lines.push("3. 元のファイルは変更せず、別のパスに保存してください。");
+    lines.push("4. 上記のツール一覧にないツールは使わないでください。");
+    lines.push("");
+
+    lines.push("## 回答テンプレート");
+    lines.push("");
+    lines.push("{");
+    lines.push('  "version": "1.0",');
+    lines.push('  "summary": "ここに変更内容の要約を書く",');
+    lines.push('  "actions": [');
+    lines.push("    {");
+    lines.push('      "tool": "ツール名",');
+    lines.push('      "description": "この操作の説明",');
+    lines.push('      "parameters": { ... }');
+    lines.push("    }");
+    lines.push("  ],");
+    lines.push('  "followupQuestions": [],');
+    lines.push('  "warnings": []');
+    lines.push("}");
+
+    const workbookPath = state.workbookPath || sessionDetail?.session.primaryWorkbookPath || "";
+    if (workbookPath.endsWith("revenue-workflow-demo.csv")) {
+      lines.push("");
+      lines.push("## 回答例（このファイル用）");
+      lines.push("");
+      lines.push("{");
+      lines.push('  "version": "1.0",');
+      lines.push('  "summary": "approved が Yes の行だけ残し、amount を数値に変換して別ファイルに保存する",');
+      lines.push('  "actions": [');
+      lines.push("    {");
+      lines.push('      "tool": "filter_rows",');
+      lines.push('      "description": "approved 列が Yes の行だけ残す",');
+      lines.push('      "parameters": { "sheet": "Sheet1", "column": "approved", "operator": "equals", "value": "Yes" }');
+      lines.push("    },");
+      lines.push("    {");
+      lines.push('      "tool": "save_copy",');
+      lines.push('      "description": "フィルタ結果を別ファイルに保存",');
+      lines.push('      "parameters": { "outputPath": "/tmp/revenue-filtered.csv" }');
+      lines.push("    }");
+      lines.push("  ],");
+      lines.push('  "followupQuestions": [],');
+      lines.push('  "warnings": ["元ファイルは変更しません"]');
+      lines.push("}");
+    }
+
+    return lines.join("\n");
   }
 
   async function handleCopyRelayPacket(): Promise<void> {
@@ -1212,28 +1276,47 @@
     previewError = "";
     previewSummary = "";
     previewResult = null;
+    autoFixResult = null;
+    autoFixUndoAvailable = false;
     clearApprovalAndExecution(true);
 
     try {
+      const fixResult = autoFixCopilotResponse(state.rawResponse);
+      autoFixResult = fixResult;
+
+      if (fixResult.fixed !== state.rawResponse) {
+        studio.updateRawResponse(fixResult.fixed);
+        autoFixUndoAvailable = true;
+      }
+
       const result = await submitCopilotResponse({
         sessionId: sessionDetail.session.id,
         turnId: selectedTurnId,
-        rawResponse: state.rawResponse
+        rawResponse: fixResult.fixed
       });
 
       validationResult = result;
       validationSummary = result.accepted
-        ? `Validation passed with ${result.parsedResponse?.actions.length ?? 0} action${result.parsedResponse?.actions.length === 1 ? "" : "s"}.`
-        : `Validation returned ${result.validationIssues.length} issue${result.validationIssues.length === 1 ? "" : "s"}.`;
+        ? `検証OK — ${result.parsedResponse?.actions.length ?? 0} 件のアクション`
+        : `検証に ${result.validationIssues.length} 件の問題があります。`;
       sessionNotice = result.accepted
-        ? "Response accepted. Preview can be requested next."
-        : "Response was stored, but the parser returned repairable validation issues.";
+        ? "返答を受理しました。変更の確認に進めます。"
+        : "返答に修正が必要な問題があります。";
       await refreshSessionDetail(selectedTurnId);
     } catch (error) {
       validationError = toErrorMessage(error);
     } finally {
       validationPending = false;
     }
+  }
+
+  function undoAutoFix(): void {
+    if (!autoFixResult) return;
+    studio.updateRawResponse(autoFixResult.originalPreserved);
+    autoFixUndoAvailable = false;
+    autoFixResult = null;
+    validationResult = null;
+    validationSummary = "";
   }
 
   async function handlePreview(): Promise<void> {
@@ -1264,15 +1347,6 @@
     } finally {
       previewPending = false;
     }
-  }
-
-  function loadDemoResponse(): void {
-    const sourcePath =
-      get(studioState).workbookPath.trim() || sessionDetail?.session.primaryWorkbookPath || "";
-
-    studio.updateRawResponse(buildDemoResponse(sourcePath));
-    sessionNotice =
-      "A sample Copilot response was loaded for the bundled walkthrough. Validate it next.";
   }
 
   async function handleApproval(decision: ApprovalDecision): Promise<void> {
@@ -1392,6 +1466,105 @@
     await handleExecution();
   }
 
+  let guidedActionPending = false;
+
+  type GuidedProgressStep = {
+    label: string;
+    status: "pending" | "running" | "done" | "failed";
+  };
+
+  let guidedProgressSteps: GuidedProgressStep[] = [];
+  let guidedProgressError = "";
+
+  function resetGuidedProgress(): void {
+    guidedProgressSteps = [];
+    guidedProgressError = "";
+  }
+
+  function setStepStatus(index: number, status: GuidedProgressStep["status"]): void {
+    guidedProgressSteps = guidedProgressSteps.map((step, i) =>
+      i === index ? { ...step, status } : step
+    );
+  }
+
+  async function handleGuidedSetupAction(): Promise<void> {
+    if (!sessionDetail || guidedActionPending) return;
+    guidedActionPending = true;
+    guidedProgressError = "";
+
+    const needsStart = !selectedTurn;
+    const steps: GuidedProgressStep[] = [];
+    if (needsStart) steps.push({ label: "リクエストを作成", status: "pending" });
+    steps.push({ label: "Copilot 向けの依頼を準備", status: "pending" });
+    guidedProgressSteps = steps;
+
+    try {
+      let idx = 0;
+      if (needsStart) {
+        setStepStatus(idx, "running");
+        await handleStartTurn();
+        if (!selectedTurnId) throw new Error("リクエストの作成に失敗しました。");
+        setStepStatus(idx, "done");
+        idx++;
+      }
+      if (selectedTurnId && !relayPacketText) {
+        setStepStatus(idx, "running");
+        await handleGeneratePacket();
+        setStepStatus(idx, "done");
+      }
+    } catch (error) {
+      guidedProgressError = toErrorMessage(error);
+      const failIdx = guidedProgressSteps.findIndex((s) => s.status === "running");
+      if (failIdx >= 0) setStepStatus(failIdx, "failed");
+    } finally {
+      guidedActionPending = false;
+    }
+  }
+
+  async function handleGuidedCopilotAction(): Promise<void> {
+    if (!sessionDetail || !selectedTurnId || guidedActionPending) return;
+    guidedActionPending = true;
+    guidedProgressError = "";
+
+    const steps: GuidedProgressStep[] = [
+      { label: "返答を検証", status: "pending" },
+      { label: "変更内容を確認", status: "pending" }
+    ];
+    guidedProgressSteps = steps;
+
+    try {
+      setStepStatus(0, "running");
+      await handleSubmitResponse();
+      if (!validationResult?.accepted) {
+        setStepStatus(0, "failed");
+        guidedProgressError = "返答の検証に問題がありました。内容を確認してください。";
+        return;
+      }
+      setStepStatus(0, "done");
+
+      setStepStatus(1, "running");
+      await handlePreview();
+      setStepStatus(1, "done");
+    } catch (error) {
+      guidedProgressError = toErrorMessage(error);
+      const failIdx = guidedProgressSteps.findIndex((s) => s.status === "running");
+      if (failIdx >= 0) setStepStatus(failIdx, "failed");
+    } finally {
+      guidedActionPending = false;
+    }
+  }
+
+  async function handleGuidedPrimaryAction(): Promise<void> {
+    switch (guidedStage) {
+      case "setup":
+        return handleGuidedSetupAction();
+      case "copilot":
+        return handleGuidedCopilotAction();
+      case "review-save":
+        return handlePrimaryReviewAction();
+    }
+  }
+
   $: routeSessionId = $page.url.searchParams.get("sessionId");
   $: routeTurnId = $page.url.searchParams.get("turnId");
   $: reviewerMode = $page.url.searchParams.get("view") === "review";
@@ -1436,12 +1609,6 @@
   $: turns = sessionDetail ? sortTurns(sessionDetail.turns) : [];
 
   $: selectedTurn = turns.find((turn) => turn.id === selectedTurnId) ?? null;
-  $: demoResponseAvailable = Boolean(
-    (sessionDetail?.session.primaryWorkbookPath || $studioState.workbookPath).endsWith(
-      "revenue-workflow-demo.csv"
-    )
-  );
-
   $: hasMeaningfulDraft = hasMeaningfulStudioDraftState(
     $studioState,
     selectedTurn,
@@ -1591,6 +1758,62 @@
       tone: reviewAlreadySaved ? "ready" : !validationResult?.accepted ? "pending" : previewResult ? "active" : "active"
     }
   ] satisfies StudioTimelineEntry[];
+
+  $: guidedStage = ((): GuidedStage => {
+    if (validationResult?.accepted) return "review-save";
+    if (relayPacketText || $studioState.rawResponse.trim()) return "copilot";
+    return "setup";
+  })();
+
+  $: guidedSteps = ([
+    { key: "setup", number: 1, label: "はじめる" },
+    { key: "copilot", number: 2, label: "Copilot に聞く" },
+    { key: "review-save", number: 3, label: "確認して保存" }
+  ] as const).map((step): GuidedStepDef => {
+    const stageOrder: GuidedStage[] = ["setup", "copilot", "review-save"];
+    const currentIdx = stageOrder.indexOf(guidedStage);
+    const stepIdx = stageOrder.indexOf(step.key);
+    return {
+      ...step,
+      tone: stepIdx < currentIdx ? "done" : stepIdx === currentIdx ? "active" : "upcoming"
+    };
+  });
+
+  $: guidedPrimaryLabel = ((): string => {
+    if (guidedActionPending) {
+      return guidedStage === "setup" ? "準備中..."
+        : guidedStage === "copilot" ? "確認中..."
+        : "処理中...";
+    }
+    switch (guidedStage) {
+      case "setup": return "Copilot に聞く準備をする";
+      case "copilot": return "変更を確認する";
+      case "review-save": return reviewPrimaryLabel;
+    }
+  })();
+
+  $: guidedPrimaryDisabled = ((): boolean => {
+    if (guidedActionPending || !sessionDetail || reviewerMode) return true;
+    switch (guidedStage) {
+      case "setup":
+        return !$studioState.turnTitle.trim() || !$studioState.turnObjective.trim();
+      case "copilot":
+        return !$studioState.rawResponse.trim() || !selectedTurnId;
+      case "review-save":
+        return reviewPrimaryDisabled;
+    }
+  })();
+
+  $: guidedPrimaryExplanation = ((): string => {
+    switch (guidedStage) {
+      case "setup":
+        return "やりたいことを入力したら、このボタンで Copilot 向けの依頼を作ります。";
+      case "copilot":
+        return "Copilot の返答を貼り付けたら、このボタンで内容を確認します。";
+      case "review-save":
+        return "変更内容を確認して、問題なければ新しいファイルとして保存します。";
+    }
+  })();
 
   $: reloadNote =
     selectedTurn && !relayPacketText && !validationResult && !previewResult && selectedTurn.itemIds.length > 0
@@ -1820,6 +2043,38 @@
           }
         : null;
 
+  $: validationErrorTier = ((): { level: number; label: string; hint: string } | null => {
+    if (!validationResult || validationResult.accepted) return null;
+    const issues = validationResult.validationIssues;
+    const msgs = issues.map((i) => i.message.toLowerCase()).join(" ");
+
+    if (msgs.includes("json") || msgs.includes("parse") || msgs.includes("syntax")) {
+      return {
+        level: 1,
+        label: "JSON の構文エラー",
+        hint: "Copilot の返答が正しい JSON になっていません。括弧の閉じ忘れやカンマの位置を確認してください。"
+      };
+    }
+
+    if (msgs.includes("required") || msgs.includes("missing") || msgs.includes("actions")) {
+      return {
+        level: 2,
+        label: "必須項目が不足",
+        hint: "JSON の形は正しいですが、必要な項目（actions など）が足りません。回答テンプレートの形式に合わせてください。"
+      };
+    }
+
+    if (msgs.includes("tool") || msgs.includes("unsupported")) {
+      return {
+        level: 3,
+        label: "使えないツール",
+        hint: "使用できないツールが含まれています。依頼テキストに記載されたツール一覧を確認してください。"
+      };
+    }
+
+    return null;
+  })();
+
   $: previewGuidance = previewError
     ? {
         problem: "Relay Agent could not check the planned changes yet.",
@@ -2044,18 +2299,42 @@
     <article class="ra-panel pane pane-main">
       <div class="pane-header">
         <div>
-          <p class="pane-label">Workflow</p>
-          <h2>{selectedTurn ? selectedTurn.title : "Start the next turn"}</h2>
+          <p class="pane-label">作業フロー</p>
+          <h2>{selectedTurn ? selectedTurn.title : "次のリクエストを始める"}</h2>
         </div>
         <span class={`status-pill ${selectedTurn ? `status-${selectedTurn.status}` : "status-pending"}`}>
           {selectedTurn ? selectedTurn.status : "draft"}
         </span>
       </div>
 
-      <p class="pane-copy">
-        The center pane captures the request, Copilot handoff, and response checks. Once the
-        response passes validation, the right pane turns into a single review-and-save step.
-      </p>
+      <nav class="guided-banner" aria-label="Guided workflow steps">
+        {#each guidedSteps as step}
+          <div
+            class="guided-step guided-step--{step.tone}"
+            aria-current={step.tone === "active" ? "step" : undefined}
+          >
+            <span class="guided-step-number">{step.tone === "done" ? "✓" : step.number}</span>
+            <span class="guided-step-label">{step.label}</span>
+          </div>
+        {/each}
+      </nav>
+
+      {#if guidedStage === "review-save" && hasReviewSummary}
+        <div class="pinned-summary" aria-label="Change summary">
+          <div class="pinned-summary-item">
+            <span class="pinned-summary-label">変更内容</span>
+            <span>{reviewWhatChanges || "確認中..."}</span>
+          </div>
+          <div class="pinned-summary-item">
+            <span class="pinned-summary-label">影響行数</span>
+            <span>{reviewAffectedRows} 行</span>
+          </div>
+          <div class="pinned-summary-item">
+            <span class="pinned-summary-label">保存先</span>
+            <span>{reviewOutputPath ? fileNameFromPath(reviewOutputPath) : "未定"}</span>
+          </div>
+        </div>
+      {/if}
 
       {#if sessionNotice}
         <section class="feedback feedback-info" aria-live="polite">
@@ -2072,21 +2351,20 @@
       {/if}
 
       <section class="feedback feedback-info" aria-live="polite">
-        <strong>File safety</strong>
+        <strong>ファイルの安全性</strong>
         <p>
-          The original workbook stays read-only in Studio. Relay Agent only writes a separate
-          reviewed copy after the changes are checked and confirmed.
+          元のファイルは変更しません。確認が終わった後、別のファイルとして保存します。
         </p>
       </section>
 
       <section class="subpanel help-subpanel">
         <div class="subpanel-header">
           <div>
-            <h3>Need help with this step?</h3>
-            <p class="support-copy">Open a short glossary without leaving Studio.</p>
+            <h3>このステップのヘルプ</h3>
+            <p class="support-copy">用語の説明を表示します。</p>
           </div>
           <button class="chip-button" type="button" on:click={() => (studioHelpOpen = !studioHelpOpen)}>
-            {studioHelpOpen ? "Hide help" : "Show help"}
+            {studioHelpOpen ? "閉じる" : "ヘルプ"}
           </button>
         </div>
 
@@ -2138,17 +2416,17 @@
       {:else}
         <div class="workflow-grid">
           <label class="field">
-            <span>Turn title</span>
+            <span>タイトル</span>
             <input
               on:input={(event) =>
                 studio.updateTurnTitle((event.currentTarget as HTMLInputElement).value)}
-              placeholder="Profile the inbound ledger"
+              placeholder="台帳のフィルタ処理"
               value={$studioState.turnTitle}
             />
           </label>
 
           <label class="field">
-            <span>Relay mode</span>
+            <span>処理モード</span>
             <select
               on:change={(event) =>
                 studio.updateRelayMode((event.currentTarget as HTMLSelectElement).value as RelayMode)}
@@ -2161,17 +2439,17 @@
           </label>
 
           <label class="field field-wide">
-            <span>Turn objective</span>
+            <span>やりたいこと</span>
             <textarea
               on:input={(event) =>
                 studio.updateTurnObjective((event.currentTarget as HTMLTextAreaElement).value)}
-              placeholder="Inspect columns, shape a clean relay packet, and stage preview notes."
+              placeholder="approved 列が Yes の行だけ残して、安全なコピーを作りたい。"
               rows="4"
             >{$studioState.turnObjective}</textarea>
           </label>
 
           <label class="field">
-            <span>Workbook path</span>
+            <span>ファイルパス</span>
             <input
               on:input={(event) =>
                 studio.updateWorkbookPath((event.currentTarget as HTMLInputElement).value)}
@@ -2181,7 +2459,7 @@
           </label>
 
           <label class="field">
-            <span>Workbook focus</span>
+            <span>対象シート</span>
             <input
               on:input={(event) =>
                 studio.updateWorkbookFocus((event.currentTarget as HTMLInputElement).value)}
@@ -2191,9 +2469,48 @@
           </label>
         </div>
 
-        <div class="action-row">
+        <div class="guided-action">
+          {#if guidedProgressSteps.length > 0 && guidedActionPending}
+            <div class="guided-progress" aria-live="polite">
+              {#each guidedProgressSteps as step}
+                <div class="guided-progress-step guided-progress-step--{step.status}">
+                  <span class="guided-progress-icon">
+                    {step.status === "done" ? "✓" : step.status === "failed" ? "✗" : step.status === "running" ? "…" : "·"}
+                  </span>
+                  <span>{step.label}</span>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <button
+              class="primary-button guided-primary"
+              disabled={guidedPrimaryDisabled}
+              type="button"
+              on:click={() => { resetGuidedProgress(); void handleGuidedPrimaryAction(); }}
+            >
+              {guidedPrimaryLabel}
+            </button>
+            <p class="guided-explanation">{guidedPrimaryExplanation}</p>
+          {/if}
+        </div>
+
+        {#if guidedProgressError}
+          <div class="guided-progress-error" aria-live="polite">
+            <p>{guidedProgressError}</p>
+            <button
+              class="secondary-button"
+              type="button"
+              on:click={() => { resetGuidedProgress(); void handleGuidedPrimaryAction(); }}
+            >
+              やり直す
+            </button>
+          </div>
+        {/if}
+
+        {#if expertDetailsOpen}
+        <div class="action-row action-row-expert-visible" aria-label="Expert actions">
           <button
-            class="primary-button"
+            class="secondary-button"
             disabled={!sessionDetail || startTurnPending || !$studioState.turnTitle.trim() || !$studioState.turnObjective.trim()}
             type="button"
             on:click={() => void handleStartTurn()}
@@ -2232,14 +2549,15 @@
             Reset draft
           </button>
         </div>
+        {/if}
 
         <div class="workflow-panels">
           <section class="subpanel">
             <div class="subpanel-header">
               <div>
-                <h3>Relay packet</h3>
+                <h3>Copilot への依頼</h3>
                 <span class={`status-pill ${relayPacketText ? "status-ready" : "status-pending"}`}>
-                  {relayPacketText ? "generated" : "pending"}
+                  {relayPacketText ? "準備完了" : "未作成"}
                 </span>
               </div>
 
@@ -2307,38 +2625,21 @@
               </section>
             {/if}
 
-            <pre class="packet-preview">{relayPacketText || "Select a turn and generate a relay packet to display the backend JSON payload here."}</pre>
+            <pre class="packet-preview">{relayPacketText ? buildCopilotInstructionText() : "やりたいことを入力して「Copilot に聞く準備をする」を押すと、ここに Copilot への依頼テキストが表示されます。"}</pre>
           </section>
 
           <section class="subpanel">
             <div class="subpanel-header">
               <div>
-                <h3>Pasted response</h3>
-                <p class="support-copy">Paste the full Copilot JSON response here.</p>
+                <h3>Copilot の返答</h3>
+                <p class="support-copy">Copilot の返答をそのまま貼り付けてください。</p>
               </div>
               <div class="action-row action-row-compact">
-                {#if demoResponseAvailable}
-                  <button class="chip-button" type="button" on:click={loadDemoResponse}>
-                    Load demo response
-                  </button>
-                {/if}
                 <span class={`status-pill ${$studioState.rawResponse.trim() ? "status-ready" : "status-pending"}`}>
-                  {$studioState.rawResponse.trim() ? "captured" : "empty"}
+                  {$studioState.rawResponse.trim() ? "入力済み" : "未入力"}
                 </span>
               </div>
             </div>
-
-            <p class="support-copy">
-              Paste the Copilot response JSON here. The validation command checks the schema and
-              tool/action payload shapes before preview is allowed.
-            </p>
-
-            {#if demoResponseAvailable}
-              <p class="support-copy">
-                For the bundled sample walkthrough, `Load demo response` fills a safe example so you
-                can reach preview without opening the README.
-              </p>
-            {/if}
 
             <textarea
               class="response-draft"
@@ -2347,15 +2648,32 @@
               placeholder={`{"summary":"Rename and save a cleaned copy.","actions":[]}`}
               rows="10"
             >{$studioState.rawResponse}</textarea>
+
+            <p class="response-shape-hint">
+              期待する形式: {"{"} "version": "1.0", "summary": "...", "actions": [...] {"}"} — JSON のみ。``` 不要。パスは / 区切り。
+            </p>
           </section>
 
           <section class="subpanel">
             <div class="subpanel-header">
-              <h3>Validation feedback</h3>
+              <h3>検証結果</h3>
               <span class={`status-pill ${validationResult?.accepted ? "status-ready" : validationResult ? "status-awaiting-response" : "status-pending"}`}>
-                {validationResult ? (validationResult.accepted ? "accepted" : "repair needed") : "pending"}
+                {validationResult ? (validationResult.accepted ? "OK" : "要修正") : "未検証"}
               </span>
             </div>
+
+            {#if autoFixResult && autoFixResult.fixes.length > 0}
+              <div class="autofix-notices" aria-live="polite">
+                {#each autoFixResult.fixes as fix}
+                  <span class="autofix-chip">✓ {fix}</span>
+                {/each}
+                {#if autoFixUndoAvailable}
+                  <button class="ghost-button autofix-undo" type="button" on:click={undoAutoFix}>
+                    元に戻す
+                  </button>
+                {/if}
+              </div>
+            {/if}
 
             {#if validationError}
               <p class="subpanel-error">{validationError}</p>
@@ -2381,7 +2699,7 @@
                         type="button"
                         on:click={() => void copyFollowupPrompt(validationGuidance.followupPrompt || "")}
                       >
-                        Copy follow-up prompt
+                        修正を依頼するテキストをコピー
                       </button>
                     </div>
                   </div>
@@ -2422,6 +2740,13 @@
                   </div>
                 {/if}
               {:else}
+                {#if validationErrorTier}
+                  <div class="tiered-error tiered-error--{validationErrorTier.level}">
+                    <strong>レベル {validationErrorTier.level}: {validationErrorTier.label}</strong>
+                    <p>{validationErrorTier.hint}</p>
+                  </div>
+                {/if}
+
                 <div class="issue-list">
                   {#each validationResult.validationIssues as issue}
                     <article class="issue-card">
@@ -2430,7 +2755,6 @@
                     </article>
                   {/each}
                 </div>
-
               {/if}
             {:else}
               <p class="support-copy">
@@ -2443,6 +2767,17 @@
         </div>
       {/if}
 
+      <div class="expert-toggle-row">
+        <button
+          class="chip-button"
+          type="button"
+          on:click={() => (expertDetailsOpen = !expertDetailsOpen)}
+        >
+          {expertDetailsOpen ? "詳細を隠す" : "詳細表示"}
+        </button>
+      </div>
+
+      {#if expertDetailsOpen}
       <section class="subpanel artifact-browser">
         <div class="subpanel-header">
           <div>
@@ -2939,13 +3274,14 @@
           </div>
         {/if}
       </section>
+      {/if}
     </article>
 
     <article class="ra-panel pane pane-preview">
       <div class="pane-header">
         <div>
-          <p class="pane-label">Review and save</p>
-          <h2>Check the plan, then save a new copy</h2>
+          <p class="pane-label">確認して保存</p>
+          <h2>変更を確認して、新しいファイルに保存</h2>
         </div>
         <span class={`status-pill ${hasReviewSummary ? "status-ready" : "status-pending"}`}>
           {#if reviewAlreadySaved}
@@ -2982,7 +3318,7 @@
                   type="button"
                   on:click={() => void copyFollowupPrompt(previewGuidance.followupPrompt || "")}
                 >
-                  Copy follow-up prompt
+                  修正を依頼するテキストをコピー
                 </button>
               </div>
             </div>
@@ -3004,28 +3340,28 @@
       </section>
 
       <div class="preview-stack">
-        <section class="preview-summary-grid" aria-label="Review summary">
+        <section class="preview-summary-grid" aria-label="変更サマリー">
           <article class="preview-card summary-card">
-            <p class="preview-label">What will change</p>
-            <h3>{hasReviewSummary ? `${reviewTargetCount} target${reviewTargetCount === 1 ? "" : "s"} in scope` : "Waiting for change summary"}</h3>
+            <p class="preview-label">何が変わるか</p>
+            <h3>{hasReviewSummary ? `${reviewTargetCount} 箇所の変更` : "確認待ち"}</h3>
             <p>{reviewWhatChanges}</p>
           </article>
 
           <article class="preview-card summary-card">
-            <p class="preview-label">How many rows</p>
-            <h3>{hasReviewSummary ? `${reviewAffectedRows} row${reviewAffectedRows === 1 ? "" : "s"} estimated` : "No row estimate yet"}</h3>
+            <p class="preview-label">影響する行数</p>
+            <h3>{hasReviewSummary ? `${reviewAffectedRows} 行` : "未確定"}</h3>
             <p>{reviewRowsSummary}</p>
           </article>
 
           <article class="preview-card summary-card">
-            <p class="preview-label">Where the new copy goes</p>
-            <h3>{reviewOutputPath || "Waiting for reviewed copy path"}</h3>
+            <p class="preview-label">保存先</p>
+            <h3>{reviewOutputPath || "確認後に表示されます"}</h3>
             <p>{reviewOutputSafety}</p>
           </article>
         </section>
 
         <section class="preview-card review-save-card">
-          <p class="preview-label">Review and save</p>
+          <p class="preview-label">確認して保存</p>
           <h3>{reviewHeadline}</h3>
           <p>{reviewCopy}</p>
 
@@ -3060,7 +3396,7 @@
                       type="button"
                       on:click={() => void copyFollowupPrompt(reviewGuidance.followupPrompt || "")}
                     >
-                      Copy follow-up prompt
+                      修正を依頼するテキストをコピー
                     </button>
                   </div>
                 </div>
@@ -3094,7 +3430,7 @@
                   type="button"
                   on:click={() => void handleApproval("rejected")}
                 >
-                  Needs changes
+                  やり直す
                 </button>
               {/if}
             </div>
@@ -3405,6 +3741,243 @@
 </div>
 
 <style>
+  .guided-banner {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.5rem 0;
+  }
+
+  .guided-step {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 1;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    border: 2px solid transparent;
+  }
+
+  .guided-step-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+    font-size: 0.75rem;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .guided-step--done {
+    background: var(--ra-bg-subtle, #f0fdf4);
+    color: var(--ra-text-success, #166534);
+    border-color: var(--ra-border-success, #bbf7d0);
+  }
+
+  .guided-step--done .guided-step-number {
+    background: var(--ra-text-success, #166534);
+    color: #fff;
+  }
+
+  .guided-step--active {
+    background: var(--ra-bg-accent, #eff6ff);
+    color: var(--ra-text-accent, #1e40af);
+    border-color: var(--ra-border-accent, #bfdbfe);
+  }
+
+  .guided-step--active .guided-step-number {
+    background: var(--ra-text-accent, #1e40af);
+    color: #fff;
+  }
+
+  .guided-step--upcoming {
+    background: var(--ra-bg-muted, #f9fafb);
+    color: var(--ra-text-muted, #9ca3af);
+  }
+
+  .guided-step--upcoming .guided-step-number {
+    background: var(--ra-border-default, #e5e7eb);
+    color: var(--ra-text-muted, #9ca3af);
+  }
+
+  .pinned-summary {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--ra-bg-accent, #eff6ff);
+    border: 1px solid var(--ra-border-accent, #bfdbfe);
+    border-radius: 0.5rem;
+  }
+
+  .pinned-summary-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    font-size: 0.8rem;
+  }
+
+  .pinned-summary-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ra-text-accent, #1e40af);
+  }
+
+  .guided-action {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.5rem 0;
+  }
+
+  .guided-primary {
+    white-space: nowrap;
+    font-size: 0.95rem;
+    padding: 0.6rem 1.5rem;
+  }
+
+  .guided-explanation {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--ra-text-muted, #6b7280);
+    line-height: 1.4;
+  }
+
+  .action-row-expert-visible {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .expert-toggle-row {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0.25rem 0;
+  }
+
+  .guided-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    padding: 0.5rem 0;
+  }
+
+  .guided-progress-step {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+  }
+
+  .guided-progress-icon {
+    width: 1.25rem;
+    text-align: center;
+    font-weight: 700;
+  }
+
+  .guided-progress-step--done {
+    color: var(--ra-text-success, #166534);
+  }
+
+  .guided-progress-step--failed {
+    color: var(--ra-text-error, #dc2626);
+  }
+
+  .guided-progress-step--running {
+    color: var(--ra-text-accent, #1e40af);
+  }
+
+  .guided-progress-step--pending {
+    color: var(--ra-text-muted, #9ca3af);
+  }
+
+  .guided-progress-error {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--ra-bg-error, #fef2f2);
+    border-radius: 0.375rem;
+    font-size: 0.85rem;
+    color: var(--ra-text-error, #dc2626);
+  }
+
+  .guided-progress-error p {
+    margin: 0;
+    flex: 1;
+  }
+
+  .autofix-notices {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 0;
+  }
+
+  .autofix-chip {
+    display: inline-block;
+    padding: 0.2rem 0.5rem;
+    background: var(--ra-bg-subtle, #f0fdf4);
+    color: var(--ra-text-success, #166534);
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+
+  .autofix-undo {
+    font-size: 0.75rem;
+    padding: 0.2rem 0.5rem;
+  }
+
+  .tiered-error {
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.375rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+  }
+
+  .tiered-error strong {
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+
+  .tiered-error p {
+    margin: 0;
+  }
+
+  .tiered-error--1 {
+    background: var(--ra-bg-error, #fef2f2);
+    color: var(--ra-text-error, #dc2626);
+  }
+
+  .tiered-error--2 {
+    background: #fffbeb;
+    color: #92400e;
+  }
+
+  .tiered-error--3 {
+    background: #eff6ff;
+    color: #1e40af;
+  }
+
+  .response-shape-hint {
+    margin: 0.25rem 0 0;
+    padding: 0.5rem 0.75rem;
+    background: var(--ra-bg-muted, #f9fafb);
+    border-radius: 0.375rem;
+    font-size: 0.75rem;
+    color: var(--ra-text-muted, #6b7280);
+    font-family: monospace;
+    line-height: 1.5;
+    user-select: none;
+  }
+
   .studio-grid {
     display: grid;
     gap: 1rem;
