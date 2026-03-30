@@ -10,7 +10,8 @@
     "launch:test": "pnpm --filter @relay-agent/desktop launch:test",
     "workflow:test": "pnpm --filter @relay-agent/desktop workflow:test",
     "typecheck": "pnpm --filter @relay-agent/contracts typecheck && pnpm --filter @relay-agent/desktop typecheck",
-    "startup:test": "pnpm --filter @relay-agent/desktop startup:test"
+    "startup:test": "pnpm --filter @relay-agent/desktop startup:test",
+    "dev": "pnpm --filter @relay-agent/desktop dev"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
