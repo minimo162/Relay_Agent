@@ -1922,6 +1922,21 @@ Observed result:
 - Local regression coverage now passes again with `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` showing 35 Rust tests green, including the previously failing storage and workbook source cases.
 - The intended next step after this hotfix is another `workflow_dispatch` run for `release_tag: v0.1.0` so the GitHub-hosted Windows job can confirm the release workflow end to end.
 
+GitHub Releases publication verification:
+
+```bash
+gh workflow run release-windows-installer.yml -f release_tag=v0.1.0
+gh run view 23722491821 --json status,conclusion,jobs,url
+gh release view v0.1.0 --json tagName,name,assets,url
+```
+
+Observed result:
+
+- The retried Windows release run `23722491821` completed successfully end to end after the portability hotfixes landed on `main`.
+- The `publish-windows-installer` job passed every step, including `Run desktop Rust tests` on Windows and `Build Windows installer and upload to GitHub Releases`.
+- GitHub Releases now contains `v0.1.0` as `Relay Agent v0.1.0` with the uploaded NSIS installer asset `Relay.Agent_0.1.0_x64-setup.exe`.
+- This confirms the repository's intended installer distribution path is now real, verified, and backed by a successful GitHub-hosted Windows publication run.
+
 ## Known Limitations
 
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.
@@ -1931,7 +1946,6 @@ Observed result:
 - `pnpm startup:test` currently covers source-run startup smoke scenarios and shared startup helper tests; it does not replace packaged-installer E2E or screenshot-driven UI automation.
 - `pnpm launch:test` currently targets the Linux headless path with `Xvfb`; it does not yet provide cross-platform GUI automation or packaged-app launch coverage.
 - `pnpm workflow:test` now proves that a launched app can complete the bundled sample flow in a Linux headless environment, but it still uses a test-only autorun runner instead of real GUI click automation or cross-platform packaged-app coverage.
-- The new GitHub Releases workflow is defined in-repo, but it has not been executed from this local environment; the first real installer publication still depends on a GitHub-hosted Windows run succeeding with the repository's release permissions.
 - Reviewer mode currently depends on local audit history and the same device profile; it is a safe local review surface, not a shared remote approval link.
 - Preview predicates and derive expressions intentionally support a narrow grammar for now: bracketed column references for spaced headers, one comparison in `filter_rows`, and basic arithmetic or string concatenation in `derive_column`.
 - Limited xlsx support is still inspect-and-copy oriented; current test coverage still centers on CSV execution plus xlsx preview planning rather than richer xlsx write flows.

@@ -77,10 +77,11 @@ the current verified way to run the app from source.
 - The first packaged end-user target is Windows 10/11 x64 with an NSIS
   installer, as documented in
   [`docs/PACKAGING_POLICY.md`](docs/PACKAGING_POLICY.md).
-- The intended distribution channel for packaged Windows installers is GitHub
-  Releases, not committed binary files inside the repository.
-- The current verified way to run Relay Agent is still the source-run path
-  shown above with `pnpm --filter @relay-agent/desktop tauri:dev`.
+- Packaged Windows installers are published to GitHub Releases for tagged
+  versions instead of being committed into the repository.
+- The source-run path shown above with
+  `pnpm --filter @relay-agent/desktop tauri:dev` remains the verified local
+  development path.
 
 If you want to build a Windows installer yourself on a Windows machine with the
 required Tauri toolchain installed, run:
