@@ -100,6 +100,10 @@ target/release/bundle/nsis/
 Treat that as a locally built packaging artifact. It is not a checked-in
 release file in this repository today.
 
+The shared Tauri bundle config also includes
+`examples/revenue-workflow-demo.csv` as a packaged resource so installed builds
+can discover the bundled walkthrough without requiring a repository checkout.
+
 For maintainers, the repository also includes GitHub Actions release automation
 at [`.github/workflows/release-windows-installer.yml`](.github/workflows/release-windows-installer.yml).
 Pushing a tag such as `v0.1.0` to GitHub is the intended way to build the

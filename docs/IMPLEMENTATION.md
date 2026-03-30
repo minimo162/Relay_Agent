@@ -1960,6 +1960,26 @@ Observed result:
 - Local verification confirms the Task Master JSON still parses, the workflow file contains the intended signing and upload shape, the local Tauri CLI supports the `--config` flag used by the rewritten workflow, GitHub CLI supports the `--clobber` upload mode used for release asset replacement, and the repo still passes `git diff --check`.
 - Full end-to-end signed release verification is still pending because this environment does not have the required Azure Artifact Signing account, identity validation, OIDC app registration, repository secrets, or repository variables configured.
 
+Packaged sample workbook hotfix verification:
+
+```bash
+pnpm check
+pnpm typecheck
+cargo check
+pnpm --filter @relay-agent/desktop build
+pnpm --filter @relay-agent/desktop exec tauri build --debug --no-bundle --ci
+pnpm --filter @relay-agent/desktop exec tauri build --debug --bundles deb --no-sign --ci
+dpkg-deb -c 'target/debug/bundle/deb/Relay Agent_0.1.0_amd64.deb' | rg 'revenue-workflow-demo\.csv|usr/lib/Relay Agent/examples'
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/tauri.conf.json` now bundles `../../../examples/revenue-workflow-demo.csv` into the packaged app as `examples/revenue-workflow-demo.csv`, which matches the Home startup discovery path under `resource_dir/examples/`.
+- `pnpm check`, `pnpm typecheck`, `cargo check`, and `pnpm --filter @relay-agent/desktop build` all still pass after the Tauri bundle configuration change.
+- `pnpm --filter @relay-agent/desktop exec tauri build --debug --no-bundle --ci` passes, confirming the updated Tauri config is accepted by the desktop build path.
+- A real Linux `.deb` bundle now builds successfully, and `dpkg-deb -c` shows the bundled sample workbook at `usr/lib/Relay Agent/examples/revenue-workflow-demo.csv`.
+- Inference: because the resource mapping lives in the shared `apps/desktop/src-tauri/tauri.conf.json` bundle config rather than a Linux-only override, Windows NSIS builds should now ship the same sample workbook resource and re-enable Home's `Try the sample flow` button in newly built installers.
+
 ## Known Limitations
 
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.

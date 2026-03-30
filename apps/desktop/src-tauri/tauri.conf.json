@@ -25,6 +25,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../../../examples/revenue-workflow-demo.csv": "examples/revenue-workflow-demo.csv"
+    },
     "icon": ["icons/icon.png"]
   }
 }
