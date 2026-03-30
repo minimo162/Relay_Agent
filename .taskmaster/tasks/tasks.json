@@ -1451,7 +1451,7 @@
         "id": "46",
         "title": "Abolish sample/custom entry mode split on Home",
         "description": "Remove the entryMode concept and the 'Try sample' / 'Use my own file' fork from the Home page, replacing them with a single unified form.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [],
         "priority": "high",
         "details": "Delete `entryMode`, `startSampleFlow()`, `startCustomFlow()`, `showGuidedStartGate`, and the conditional rendering that depends on them in `+page.svelte` (Home). Replace the guided-start gate with a single always-visible form containing: file selector, objective template chips, and task-name field. Merge `sampleObjectiveStarters`, `customObjectiveStarters`, `sampleQuickStartTemplates`, and `customQuickStartTemplates` into one unified template list. Bundled CSV becomes a selectable template option in the file selector, not a separate flow. The `始める` button is the single primary CTA. PRD ref: FR-2.1, FR-2.2, FR-2.3, FR-9.",
@@ -1462,7 +1462,7 @@
         "id": "47",
         "title": "Auto-generate task name from objective and wire Home→Studio handoff",
         "description": "Generate a short title from the objective text so the title field is never blank, and ensure Home passes title/objective/workbookPath to Studio on session creation.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "46"
         ],
@@ -1475,7 +1475,7 @@
         "id": "48",
         "title": "Delete demo response code and Load demo response button",
         "description": "Remove all demo-response machinery from the codebase: buildDemoResponse, loadDemoResponse, demoResponseAvailable, and the Load demo response button in Studio.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "46"
         ],
@@ -1488,7 +1488,7 @@
         "id": "49",
         "title": "Implement GuidedStage state machine and step banner component",
         "description": "Add a GuidedStage type (setup | copilot | review-save) with transition logic, and render a 3-step progress banner at the top of Studio.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "47"
         ],
@@ -1501,7 +1501,7 @@
         "id": "50",
         "title": "Implement single primary button per stage",
         "description": "Replace the multi-button action-row with a single primary button that changes label and handler based on the current GuidedStage.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "49"
         ],
@@ -1514,7 +1514,7 @@
         "id": "51",
         "title": "Add multi-command progress indicator for aggregated actions",
         "description": "Show a step-by-step progress checklist when a single button triggers multiple backend commands in sequence.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "50"
         ],
@@ -1527,7 +1527,7 @@
         "id": "52",
         "title": "Add expert-details toggle and hide advanced controls in guided mode",
         "description": "Wrap the existing inspection details, artifact browser, turn-details tabs, and multi-button action-row in a collapsible 'Expert details' toggle that is closed by default.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "50"
         ],
@@ -1540,7 +1540,7 @@
         "id": "53",
         "title": "Redesign Copilot instruction text as natural-language + template format",
         "description": "Replace the raw relay-packet JSON copy with a human-readable instruction text that includes objective, allowed tools, response format rules, JSON template, and a concrete example.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "50"
         ],
@@ -1553,7 +1553,7 @@
         "id": "54",
         "title": "Show expected response shape inline near the paste area",
         "description": "Display the expected Copilot response shape as a small reference block near the response textarea, so users can visually compare before submitting.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "53"
         ],
@@ -1566,7 +1566,7 @@
         "id": "55",
         "title": "Add bundled-CSV-aware response example in Copilot instructions",
         "description": "When the workbook is the bundled revenue-workflow-demo.csv, include a concrete response example in the Copilot instruction text that uses the actual column names and a realistic action plan.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "53"
         ],
@@ -1579,7 +1579,7 @@
         "id": "56",
         "title": "Implement JSON auto-fix pipeline before validation",
         "description": "Add a preprocessing step that automatically repairs common Copilot response issues (markdown fences, trailing commas, BOM, CRLF, Windows paths) before submitting to validation.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [],
         "priority": "high",
         "details": "Create a `autoFixCopilotResponse(raw: string): { fixed: string; fixes: string[] }` function. Apply fixes in order: 1) strip markdown fences (```json...```), 2) trim whitespace, 3) remove BOM (U+FEFF), 4) normalize CRLF→LF, 5) remove trailing commas in arrays/objects, 6) replace \\\\ with / in JSON string values only. Return the cleaned string and a list of human-readable fix descriptions. Call this before `submitCopilotResponse`. PRD ref: FR-4.1.",
@@ -1590,7 +1590,7 @@
         "id": "57",
         "title": "Display auto-fix notifications and integrate with validation flow",
         "description": "Show what was auto-fixed before validation results appear, and wire the auto-fix pipeline into the primary button's aggregated copilot→validation→preview flow.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "56",
           "50"
@@ -1604,7 +1604,7 @@
         "id": "58",
         "title": "Implement tiered error display for validation failures",
         "description": "Distinguish JSON syntax errors, schema shape errors, and unsupported-tool errors with separate, progressively specific messages.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "56"
         ],
@@ -1617,7 +1617,7 @@
         "id": "59",
         "title": "Auto-generate Copilot retry prompt on validation failure",
         "description": "When validation fails, generate a ready-to-copy retry prompt that includes the specific error, format rules, and expected JSON template.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "58"
         ],
@@ -1630,7 +1630,7 @@
         "id": "60",
         "title": "Pin the 3-point change summary above the fold after preview",
         "description": "After preview completes, display 'What changes / How many rows / Where the copy goes' as a fixed summary strip below the step banner, visible without scrolling.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "49"
         ],
@@ -1643,7 +1643,7 @@
         "id": "61",
         "title": "Unify approval + execution into single 'Save copy' button with progress",
         "description": "In guided mode, replace the separate Confirm-review and Save-copy buttons with a single 'コピーを保存する' button that runs approval then execution with inline progress.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "50",
           "60"
@@ -1657,7 +1657,7 @@
         "id": "62",
         "title": "Replace internal terminology with user-facing labels in guided mode",
         "description": "Systematically replace session/turn/packet/approval/execution vocabulary with plain-language equivalents throughout all guided-mode UI text.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "49",
           "50",
@@ -1673,7 +1673,7 @@
         "id": "63",
         "title": "End-to-end verification of the unified guided workflow",
         "description": "Verify the complete unified flow from Home through save-copy, for both bundled CSV and custom file, confirming all acceptance criteria from the PRD.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "46",
           "47",
@@ -1696,6 +1696,90 @@
         "priority": "high",
         "details": "Run a full walkthrough on a clean profile: 1) Home → select bundled CSV template → 始める, 2) Studio step 1 → Copilot への依頼を準備する, 3) Copy instruction, paste a response, 変更を確認する, 4) Review 3-point summary, コピーを保存する. Repeat with a custom CSV file. Verify: no sample/custom fork on Home, no demo response button, single primary button per stage, step banner transitions, auto-fix works, tiered errors work, preview is above the fold, terminology is clean, expert details toggle works, all guardrails intact. Document results in `docs/IMPLEMENTATION.md`. PRD ref: all acceptance criteria.",
         "testStrategy": "Clean-profile end-to-end for bundled CSV and custom file. All acceptance criteria checkboxes pass. No regressions in expert mode. Guardrails (preview-before-write, approval-before-write, save-copy-only, original-read-only) verified.",
+        "subtasks": []
+      },
+      {
+        "id": "64",
+        "title": "UI redesign: 1-page Japanese 3-step workflow (complete)",
+        "status": "done",
+        "description": "Replaced Home/Studio/Settings 3-page layout with a single-page 3-step flow. All Japanese. Settings as gear icon modal. studio and settings routes deleted.",
+        "details": "Implemented in apps/desktop/src/routes/+page.svelte and +layout.svelte. Commit d7fcff6.",
+        "testStrategy": "svelte-check 0 errors, vite build success.",
+        "priority": "high",
+        "dependencies": [],
+        "subtasks": []
+      },
+      {
+        "id": "65",
+        "title": "Show SheetDiff cards in Step 3 (added/changed/removed columns per sheet)",
+        "status": "pending",
+        "description": "In Step 3, below the 3-point summary grid, render one card per sheet in diffSummary.sheets. Each card shows: sheet name, addedColumns (green badge), changedColumns (blue badge), removedColumns (red badge), estimatedAffectedRows.",
+        "details": "Use previewExecution response diffSummary.sheets (SheetDiff[]). Each SheetDiff: target.label, addedColumns[], changedColumns[], removedColumns[], estimatedAffectedRows.",
+        "testStrategy": "svelte-check + vite build pass. Visual: cards appear in Step 3 after Copilot response submitted.",
+        "priority": "high",
+        "dependencies": [
+          "64"
+        ],
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Store diffSummary.sheets in component state during handleStep2",
+            "status": "pending"
+          },
+          {
+            "id": 2,
+            "title": "Render SheetDiff cards with column badge groups (green/blue/red)",
+            "status": "pending"
+          },
+          {
+            "id": 3,
+            "title": "Integrate cards below summary grid in Step 3 template",
+            "status": "pending"
+          },
+          {
+            "id": 4,
+            "title": "svelte-check and vite build verification",
+            "status": "pending"
+          }
+        ]
+      },
+      {
+        "id": "66",
+        "title": "Recent sessions: clicking an item resumes prior draft (pre-fill Step 1 & 2)",
+        "status": "pending",
+        "description": "In the recent sessions panel, clicking a session pre-fills filePath and, if a recoverable draft exists, restores sessionId/turnId/relayPacketText so user can resume from Step 2.",
+        "details": "Use listRecoverableStudioDrafts() and loadStudioDraft() from continuity.ts.",
+        "testStrategy": "Manual: create session, reload, click recent item, verify Step 2 pre-filled.",
+        "priority": "medium",
+        "dependencies": [
+          "64"
+        ],
+        "subtasks": []
+      },
+      {
+        "id": "67",
+        "title": "Row-level diff detail in SheetDiff cards (blocked on IPC extension)",
+        "status": "pending",
+        "description": "Expand each SheetDiff card to show row-level before/after values. Deferred: requires backend contracts change to emit row samples in diffSummary.",
+        "details": "Currently diffSummary has no row-level data. Blocked on contracts/IPC extension.",
+        "testStrategy": "N/A until IPC extended.",
+        "priority": "low",
+        "dependencies": [
+          "65"
+        ],
+        "subtasks": []
+      },
+      {
+        "id": "68",
+        "title": "End-to-end verification of new single-page UI on Windows Tauri",
+        "status": "pending",
+        "description": "Full walkthrough on Windows: file select → preflight → packet copy → Copilot paste → preview (SheetDiff cards) → save. Verify all Japanese, error states, success screen.",
+        "details": "Run on Windows with real .xlsx sample via pnpm tauri:dev.",
+        "testStrategy": "Manual E2E on Windows Tauri build.",
+        "priority": "high",
+        "dependencies": [
+          "65"
+        ],
         "subtasks": []
       }
     ],
