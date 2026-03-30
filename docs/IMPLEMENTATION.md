@@ -1980,6 +1980,21 @@ Observed result:
 - A real Linux `.deb` bundle now builds successfully, and `dpkg-deb -c` shows the bundled sample workbook at `usr/lib/Relay Agent/examples/revenue-workflow-demo.csv`.
 - Inference: because the resource mapping lives in the shared `apps/desktop/src-tauri/tauri.conf.json` bundle config rather than a Linux-only override, Windows NSIS builds should now ship the same sample workbook resource and re-enable Home's `Try the sample flow` button in newly built installers.
 
+Release 0.1.1 version alignment verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/Cargo.toml` and `apps/desktop/src-tauri/tauri.conf.json` now both report `0.1.1`, so the Rust package metadata, Tauri bundle metadata, release tag, and generated installer filename can stay aligned for the next Windows release.
+- `pnpm typecheck` still passes after the version bump.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 35 Rust tests green after the version bump.
+- `git diff --check` still passes after updating the release metadata.
+
 ## Known Limitations
 
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.
