@@ -2010,6 +2010,22 @@ Observed result:
 - `pnpm check` still passes after the contract and IPC error-handling changes.
 - The direct `sessionSchema` runtime check now passes for a backend-shaped payload containing `primaryWorkbookPath: null` and `latestTurnId: null`.
 
+Release 0.1.2 version alignment verification:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/Cargo.toml` and `apps/desktop/src-tauri/tauri.conf.json` now both report `0.1.2`, so the next Windows installer can include the session-creation contract hotfix while keeping the bundle metadata, release tag, and installer filename aligned.
+- `Cargo.lock` now tracks `relay-agent-desktop` at `0.1.2`, matching the package metadata used by the release workflow.
+- `pnpm typecheck` still passes after the version bump.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` still passes with 35 Rust tests green after the version bump.
+- `git diff --check` still passes after updating the release metadata.
+
 ## Known Limitations
 
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.
