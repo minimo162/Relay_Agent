@@ -2,17 +2,17 @@
 
 ## Status
 
-- Current phase: Milestone 5 is complete; follow-up tasks `11` through `41` are now implemented, documented, and verification-clean on top of the safe CSV-first preview, approval, and save-copy slice
+- Current phase: Milestone 5 is complete; follow-up tasks `11` through `65` are implemented, documented, and verification-clean, and tasks `66` through `68` remain open for the current UI follow-up
 - Repository state: pnpm workspace, SvelteKit SPA shell, Tauri v2 shell, and shared contracts package are now bootstrapped and verification-clean
 - Active source-of-truth documents:
   - `PLANS.md`
   - `AGENTS.md`
   - `docs/IMPLEMENTATION.md`
   - `.taskmaster/docs/repo_audit.md`
-- Follow-up planning input: `.taskmaster/docs/prd_non_engineer_ux.txt` captures the non-engineer usability follow-up, `.taskmaster/docs/prd_workbook_artifact_browser.txt` captures the read-only Studio artifact-browser follow-up for persisted workbook evidence, `.taskmaster/docs/prd_turn_lifecycle_details.txt` captures the turn-lifecycle inspection follow-up, `.taskmaster/docs/prd_startup_test_harness.txt` captures the dedicated startup-testing follow-up, `.taskmaster/docs/prd_app_launch_execution_test.txt` captures the real app launch-testing follow-up, and `.taskmaster/docs/prd_app_workflow_launch_test.txt` captures the launched-app workflow smoke follow-up
-- Follow-up task graph: `.taskmaster/tasks/tasks.json` now breaks those supplemental PRDs into Task Master follow-up tasks `11` through `41`, covering startup, data trust, continuity, guided onboarding, review/save simplification, cross-cutting recovery plus accessibility work, the Studio workbook inspection artifact browser, turn-lifecycle inspection details, source-run startup test coverage, actual Tauri launch smoke coverage, and launched-app workflow completion smoke coverage
+- Follow-up planning input: `.taskmaster/docs/prd_non_engineer_ux.txt` captures the non-engineer usability follow-up, `.taskmaster/docs/prd_workbook_artifact_browser.txt` captures the read-only Studio artifact-browser follow-up for persisted workbook evidence, `.taskmaster/docs/prd_turn_lifecycle_details.txt` captures the turn-lifecycle inspection follow-up, `.taskmaster/docs/prd_startup_test_harness.txt` captures the dedicated startup-testing follow-up, `.taskmaster/docs/prd_app_launch_execution_test.txt` captures the real app launch-testing follow-up, `.taskmaster/docs/prd_app_workflow_launch_test.txt` captures the launched-app workflow smoke follow-up, `.taskmaster/docs/archive/prd_guided_workflow_simplification.txt` captures the completed guided-flow simplification follow-up, and `.taskmaster/docs/prd_ui_redesign_v2.md` captures the current single-page UI follow-up
+- Follow-up task graph: `.taskmaster/tasks/tasks.json` now covers completed follow-up tasks `11` through `65` plus pending UI follow-up tasks `66` through `68`, spanning startup, data trust, continuity, guided onboarding, review/save simplification, cross-cutting recovery plus accessibility work, the Studio workbook inspection artifact browser, turn-lifecycle inspection details, source-run startup test coverage, actual Tauri launch smoke coverage, launched-app workflow completion smoke coverage, guided workflow simplification, Trusted Signing repo wiring, and the single-page Japanese UI redesign
 - Follow-up packaging policy: `docs/PACKAGING_POLICY.md` now fixes the first packaged end-user release path to Windows 10/11 x64 via NSIS, with manual installer-driven updates and preserved app-local storage across upgrades as the current expectation
-- Follow-up implementation status: Tasks `11` through `41` are now complete; Home and Studio cover the non-engineer startup, trust, continuity, onboarding, review, recovery, accessibility, workbook inspection, turn-lifecycle inspection, startup smoke-test, actual launch-smoke follow-ups, and launched-app workflow smoke coverage, with verification recorded in `docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md`, `docs/WORKBOOK_ARTIFACT_BROWSER_VERIFICATION.md`, `docs/TURN_LIFECYCLE_DETAILS_VERIFICATION.md`, `docs/STARTUP_TEST_VERIFICATION.md`, `docs/APP_LAUNCH_TEST_VERIFICATION.md`, and `docs/APP_WORKFLOW_TEST_VERIFICATION.md`
+- Follow-up implementation status: Tasks `11` through `65` are now complete. Verification artifacts cover the non-engineer startup and continuity work, workbook inspection, turn-lifecycle inspection, startup smoke-test, actual launch-smoke follow-ups, launched-app workflow smoke coverage, guided-flow verification, and the one-page UI redesign plus Step 3 SheetDiff cards. The remaining open follow-up scope is limited to tasks `66` through `68`: recent-session draft resume, row-level diff detail blocked on IPC extension, and Windows Tauri end-to-end verification
 
 ## Milestone Log
 
@@ -2092,7 +2092,9 @@ Observed result:
 
 Next planned work:
 
-- The current shipped queue is complete through task `41`. Any new scope should start from a new PRD and keep packaged installer E2E, cross-platform GUI automation, and arbitrary workflow scripting separate from the current launched-workflow smoke surface.
+- Complete task `66` by wiring recent-session clicks to continuity draft restore for Step 1 and Step 2.
+- Keep task `67` pending until contracts and IPC expose row-level diff samples.
+- Complete task `68` with a real Windows Tauri walkthrough after task `65` and `66` are in place.
 
 Guided workflow simplification PRD verification:
 
@@ -2110,3 +2112,68 @@ Observed result:
 - `docs/GUIDED_WORKFLOW_SIMPLIFICATION_PRD.md` now mirrors the planning reference at the repo docs level so future planning references do not imply implementation already ships.
 - `PLANS.md` now names the guided workflow simplification PRD as the next planning-only workflow UX scope instead of silently widening the completed follow-up sets.
 - This PRD was prompted by direct manual walkthrough friction in the current sample flow, especially the number of visible steps, the need to understand `session` / `turn` / `packet`, the hidden preview location, and the fragility of Copilot JSON relay on Windows paths.
+
+Documentation alignment verification:
+
+```bash
+test -f .taskmaster/docs/repo_audit.md
+rg -n 'tasks `11` through `64`|tasks `65` through `68`|task `64` complete|prd_ui_redesign_v2|archive/prd_guided_workflow_simplification' PLANS.md docs/IMPLEMENTATION.md .taskmaster/docs/INDEX.md
+git diff --check
+```
+
+Observed result:
+
+- Restored `.taskmaster/docs/repo_audit.md` so the baseline path referenced by `AGENTS.md`, `PLANS.md`, and this implementation log exists again.
+- `PLANS.md` now reflects the completed guided-workflow simplification follow-up at tasks `46` through `63` and the active UI redesign follow-up at tasks `64` through `68`.
+- The implementation-log status summary now matches the Task Master graph: tasks `11` through `64` complete, tasks `65` through `68` pending.
+- `git diff --check` passes after the documentation-only synchronization.
+
+Step 3 SheetDiff card verification:
+
+```bash
+pnpm --filter @relay-agent/desktop check
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- `apps/desktop/src/routes/+page.svelte` now keeps `previewExecution().diffSummary.sheets` in component state instead of flattening everything into text-only detail lines.
+- Step 3 now renders one card per sheet below the summary grid, showing the sheet label, estimated affected rows, and colored badge groups for added, changed, and removed columns.
+- `pnpm --filter @relay-agent/desktop check` passes with `svelte-check found 0 errors and 0 warnings`.
+- `pnpm --filter @relay-agent/desktop build` passes after the Step 3 UI change, so task `65` is now complete and the remaining pending tasks start at `66`.
+
+Recent-session resume implementation verification:
+
+```bash
+pnpm --filter @relay-agent/desktop check
+pnpm --filter @relay-agent/desktop build
+rg -n 'handleRecentSessionClick|listRecoverableStudioDrafts|saveStudioDraft|markStudioDraftClean|recent-badge' apps/desktop/src/routes/+page.svelte
+```
+
+Observed result:
+
+- `apps/desktop/src/routes/+page.svelte` now autosaves the current guided-flow state into the existing continuity layer once a session exists, including the workbook path, turn title and objective, relay packet text, pasted Copilot response, and preview snapshot summary.
+- The recent-session list is now clickable, and sessions with an unfinished local draft are labeled `下書きを再開`.
+- Clicking a recent session now restores the file path for Step 1, and when a recoverable continuity draft exists it restores `sessionId`, `turnId`, relay packet text, Copilot response text, and derived instruction text so the user can resume from Step 2.
+- `pnpm --filter @relay-agent/desktop check` and `pnpm --filter @relay-agent/desktop build` both pass after the continuity wiring change.
+- Task `66` remains pending until the requested manual restart-and-resume walkthrough is executed and recorded.
+
+Unified guided-flow verification:
+
+```bash
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+pnpm dlx tsx --test apps/desktop/src/lib/auto-fix.test.ts
+rg -n 'Load demo response|Try the sample flow|Use my own file|entryMode|startSampleFlow|startCustomFlow|showGuidedStartGate' apps/desktop/src
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src/routes/+page.svelte` now presents one guided 3-step flow with a unified start form, auto-generated editable task name, a single primary action per stage, inline multi-command progress, a sticky step banner, a sticky 3-point review summary, and a closed-by-default `詳細表示` surface for raw packet details.
+- The Copilot handoff now copies natural-language instructions plus an inline JSON template, and the bundled `revenue-workflow-demo.csv` path adds a concrete response example using the real sample columns.
+- `apps/desktop/src/lib/auto-fix.ts` now reports whitespace, BOM, CRLF, trailing-comma, and Windows-path repairs, and `apps/desktop/src/lib/auto-fix.test.ts` covers the expected repair cases plus the combined-input path.
+- Validation failures now surface tiered plain-language guidance with a copyable retry prompt instead of relying on the removed demo-response shortcut.
+- `README.md`, `docs/GUIDED_FLOW_VERIFICATION.md`, `docs/STARTUP_TEST_VERIFICATION.md`, and `docs/APP_WORKFLOW_TEST_VERIFICATION.md` now describe the unified guided flow instead of the older sample/custom split and `Load demo response` path.
+- `pnpm check`, `pnpm typecheck`, the desktop production build, the new auto-fix tests, and `git diff --check` all pass after the guided-flow refresh.

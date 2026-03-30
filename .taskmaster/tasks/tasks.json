@@ -1712,7 +1712,7 @@
       {
         "id": "65",
         "title": "Show SheetDiff cards in Step 3 (added/changed/removed columns per sheet)",
-        "status": "pending",
+        "status": "done",
         "description": "In Step 3, below the 3-point summary grid, render one card per sheet in diffSummary.sheets. Each card shows: sheet name, addedColumns (green badge), changedColumns (blue badge), removedColumns (red badge), estimatedAffectedRows.",
         "details": "Use previewExecution response diffSummary.sheets (SheetDiff[]). Each SheetDiff: target.label, addedColumns[], changedColumns[], removedColumns[], estimatedAffectedRows.",
         "testStrategy": "svelte-check + vite build pass. Visual: cards appear in Step 3 after Copilot response submitted.",
@@ -1724,22 +1724,22 @@
           {
             "id": 1,
             "title": "Store diffSummary.sheets in component state during handleStep2",
-            "status": "pending"
+            "status": "done"
           },
           {
             "id": 2,
             "title": "Render SheetDiff cards with column badge groups (green/blue/red)",
-            "status": "pending"
+            "status": "done"
           },
           {
             "id": 3,
             "title": "Integrate cards below summary grid in Step 3 template",
-            "status": "pending"
+            "status": "done"
           },
           {
             "id": 4,
             "title": "svelte-check and vite build verification",
-            "status": "pending"
+            "status": "done"
           }
         ]
       },
@@ -1785,9 +1785,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-30T08:14:36Z",
-      "taskCount": 45,
-      "completedCount": 45,
+      "lastModified": "2026-03-30T20:56:58Z",
+      "taskCount": 68,
+      "completedCount": 65,
       "tags": [
         "master"
       ]

@@ -41,15 +41,15 @@ Expected result:
    pnpm --filter @relay-agent/desktop tauri:dev
    ```
 
-2. On Home, click `Try the sample flow`.
-3. Open the created session in Studio.
-4. Start a `plan` turn using the sample objective.
-5. Click `Generate packet`.
-6. Click `Load demo response`.
-7. Click `Check changes`, then review both `Turn details` and `Workbook evidence`.
-8. Click `Confirm review`, then `Save reviewed copy`.
-9. Confirm the reviewed copy exists at the previewed `outputPath`.
-10. Confirm the original `examples/revenue-workflow-demo.csv` file is unchanged.
+2. In `1. はじめる`, pick the bundled sample shortcut and enter or choose a
+   sample objective.
+3. Click `始める`.
+4. In `2. Copilot に聞く`, click `Copilot 用にコピー`.
+5. Paste a valid JSON response and click `変更を確認する`.
+6. In `3. 確認して保存`, review the pinned summary strip.
+7. Click `コピーを保存する`.
+8. Confirm the reviewed copy exists at the previewed `outputPath`.
+9. Confirm the original `examples/revenue-workflow-demo.csv` file is unchanged.
 
 ## Command Checks
 

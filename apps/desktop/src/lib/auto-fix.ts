@@ -9,21 +9,32 @@ export function autoFixCopilotResponse(raw: string): AutoFixResult {
   let s = raw;
 
   // 1. Strip markdown fences
-  const fencePattern = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/;
+  const fencePattern = /^\s*```(?:json)?\s*\n([\s\S]*?)\n```\s*$/;
   const fenceMatch = s.match(fencePattern);
   if (fenceMatch) {
     s = fenceMatch[1];
     fixes.push("Markdown の記号を除去しました");
   }
 
-  // 2. Trim whitespace (silent)
-  s = s.trim();
+  // 2. Trim whitespace
+  const hadBom = s.startsWith("\uFEFF");
+  const trimmed = s.trim();
+  if (trimmed !== s) {
+    fixes.push("前後の余分な空白を除去しました");
+    s = trimmed;
+  }
 
-  // 3. Remove BOM (silent)
-  s = s.replace(/^\uFEFF/, "");
+  // 3. Remove BOM
+  if (hadBom || s.startsWith("\uFEFF")) {
+    fixes.push("先頭の不要な文字を除去しました");
+    s = s.replace(/^\uFEFF/, "");
+  }
 
-  // 4. Normalize CRLF → LF (silent)
-  s = s.replace(/\r\n/g, "\n");
+  // 4. Normalize CRLF → LF
+  if (s.includes("\r\n")) {
+    fixes.push("改行コードをそろえました");
+    s = s.replace(/\r\n/g, "\n");
+  }
 
   // 5. Remove trailing commas in arrays and objects
   const beforeTrailingComma = s;
@@ -57,7 +68,7 @@ function replaceBackslashesInStrings(
   didReplace: { value: boolean },
 ): unknown {
   if (typeof value === "string") {
-    const replaced = value.replace(/\\\\/g, "/");
+    const replaced = value.replace(/\\/g, "/");
     if (replaced !== value) {
       didReplace.value = true;
     }

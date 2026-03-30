@@ -341,17 +341,18 @@ Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `
 Windows installer distribution now also has a concrete release channel: `.github/workflows/release-windows-installer.yml` builds the NSIS installer on Windows and publishes it to GitHub Releases instead of committing binary installers into the repository.
 The next packaging hardening follow-up is captured in `.taskmaster/docs/prd_windows_trusted_signing.txt`.
 Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `42` through `45`, covering the repo-side Trusted Signing workflow rewrite and Azure/GitHub setup runbook. The first fully signed Windows release remains an operational prerequisite rather than a Task Master task because it depends on external Azure provisioning.
-The next workflow-UX simplification scope is captured in `.taskmaster/docs/prd_guided_workflow_simplification.txt`.
-It is planning-only for now and intentionally focuses on reducing user-visible steps, clarifying Copilot relay, and collapsing the guided sample/custom flow without weakening the current safety model.
+The guided workflow simplification scope from `.taskmaster/docs/archive/prd_guided_workflow_simplification.txt` is now implementation-complete as tasks `46` through `63`.
+The current active UI follow-up is captured in `.taskmaster/docs/prd_ui_redesign_v2.md`.
+Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `64` through `68`, with task `64` complete and tasks `65` through `68` still pending.
 
-That follow-up preserved the current safety model:
+That UI follow-up preserves the current safety model:
 
 - preview before write
 - approval before write
 - save-copy only
 - original workbook read-only
 
-The primary follow-up emphasis should be simplifying app startup for non-engineers, including distribution, installer/update, recovery, diagnostics, data-handling clarity, permission explanations, file preflight, locale and CSV compatibility, early constraint surfacing, resumable work, crash recovery, recent-item access, progress visibility, template-driven starts, output-name safety, duplicate-run prevention, safe defaults, reviewer-friendly summaries, read-only review, inline help, pre-copy sensitivity warnings, local audit history, accessibility baselines, and a clearer completion flow, while also collapsing the user-facing preview, approval, and save-copy stages into a clearer execution flow without relaxing those guardrails.
+The remaining UI follow-up emphasis is on richer Step 3 diff visibility, resumable recent-session drafts, and Windows Tauri walkthrough verification without relaxing those guardrails.
 
 ## Global Scope Exclusions
 

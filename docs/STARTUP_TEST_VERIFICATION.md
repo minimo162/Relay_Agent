@@ -31,11 +31,11 @@ Expected result:
    ```
 
 2. Confirm Home opens without requiring a `.env` file.
-3. Confirm the first-run surface still shows `Try the sample flow` and
-   `Use my own file` on a clean profile.
+3. Confirm the first visible surface is one unified guided form rather than a
+   sample/custom split.
 4. Confirm the status card shows the current startup status and storage mode.
-5. Confirm the sample flow CTA appears when the bundled sample CSV is
-   discoverable in the current source checkout.
+5. Confirm the bundled sample shortcut appears inside the file selector area
+   when the sample CSV is discoverable in the current source checkout.
 6. Open Settings and confirm the storage path is visible when local storage is
    available.
 

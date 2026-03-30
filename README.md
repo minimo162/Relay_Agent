@@ -6,15 +6,13 @@ Relay Agent is a desktop MVP for turning a validated JSON action plan into a saf
 
 - Home can create and reopen persisted sessions from local JSON storage.
 - Home now surfaces a short recent-work list so the last opened sessions and workbook paths are easier to resume.
-- Home now keeps first-run setup focused on one choice at a time and offers plain-language objective starters before the first session is created.
-- Home now also offers quick-start templates for common spreadsheet tasks and reminds first-time users which safe defaults are already on.
-- Home and Studio now expose short in-product help so users can re-check terms and next actions without leaving the app.
-- Home now keeps a local `Recent saves` history so reviewers can reopen a saved turn without retracing the full editing flow.
-- Studio now exposes `Load demo response` for the bundled sample walkthrough so preview can be reached without copying the README example JSON.
-- Studio now collapses the technical preview, approval, and execution steps into a clearer `Review and save` pane with one primary action and a three-point summary.
-- Studio now prevents duplicate save runs for turns that already completed and exposes post-save actions for summary sharing and reviewer handoff.
-- Studio can start turns, generate relay packets, validate pasted Copilot JSON, request execution preview, record approval, and run save-copy execution.
-- Studio now provides a `Copy for Copilot` path that warns first when the workbook path, current objective, or available column names look sensitive.
+- The main workflow is now one guided page with 3 stages: `はじめる`, `Copilot に聞く`, and `確認して保存`.
+- Home now offers one unified start form with a bundled CSV shortcut, objective templates, and an editable task name that auto-fills from the objective.
+- The main action is always a single primary button for the current stage, with inline progress when multiple backend commands run in sequence.
+- Copilot handoff now copies natural-language instructions plus a strict JSON template instead of a raw relay packet.
+- Pasted Copilot JSON is auto-fixed for common issues such as markdown fences, BOM, CRLF, trailing commas, and Windows-style path separators before validation.
+- Validation failures now show tiered plain-language guidance plus a ready-to-copy retry prompt.
+- Review and save now pins a three-point summary above the fold and saves through one `コピーを保存する` action while keeping preview-before-write and save-copy-only guardrails.
 - Studio now exposes a read-only reviewer mode plus `Copy review summary` so approvers can inspect a saved turn without editing controls.
 - Studio now exposes an `Inspection details` browser for the selected turn, pairing read-only `Turn details` lifecycle summaries with saved workbook evidence so packet, validation, approval, execution, and workbook artifacts can be reviewed without opening local JSON files by hand.
 - Studio now rewrites validation, preview, and save failures into plain-language guidance with copyable Copilot follow-up prompts.
@@ -182,21 +180,13 @@ The matching verification checklist lives in
 
 ## Home Startup Behavior
 
-- On a clean profile with no saved sessions, Home shows a first-run welcome with
-  `Try the sample flow` and `Use my own file`.
-- `Try the sample flow` preloads the bundled demo objective and
-  `examples/revenue-workflow-demo.csv` when that sample path is discoverable in
-  the current build.
-- `Use my own file` keeps the flow manual and explains why Windows may later ask
-  for access to the chosen workbook or save destination.
-- On first run, the create-session panel stays gated until you choose sample or
-  custom start, then it shows plain-language example goals instead of requiring
-  technical wording.
-- After that choice, Home also offers quick-start templates such as rename,
-  type cleanup, filtering, and totals so the first draft can start from a
-  familiar spreadsheet task.
-- Home and Studio both expose short `Show help` panels that explain the current
-  step in plain language instead of sending first-time users to the README.
+- On a clean profile, the app opens directly to one guided start form instead of
+  splitting users into sample or custom entry modes.
+- The bundled `examples/revenue-workflow-demo.csv` sample appears as a shortcut
+  inside the file selector area when that sample path is discoverable in the
+  current build.
+- The same form always shows plain-language objective templates plus an editable
+  task name that auto-fills from the objective text.
 - Home now runs a file check before session creation when a workbook path is
   present, surfacing unreadable files, unsupported separators, and locale- or
   CSV-specific compatibility notes in plain language.
@@ -287,26 +277,17 @@ Then use:
 ## Demo Flow
 
 1. Start the app with `pnpm --filter @relay-agent/desktop tauri:dev`.
-2. On a clean profile, either:
-   - click `Try the sample flow` to preload the session draft, or
-   - click `Use my own file` and fill the form manually with the values below.
-3. If you are filling the form manually, create a session with:
-   Title: `Revenue workflow demo`
-   Objective: `Inspect the sample CSV, preview a safe transform, and write a sanitized copy.`
-   Primary workbook path: `<repo-root>/examples/revenue-workflow-demo.csv`
-4. Click `Check this file` and confirm Home reports the sample CSV as ready.
-5. Open that session in Studio.
-6. Start a turn, for example:
-   Title: `Approved revenue cleanup`
-   Objective: `Keep approved rows, add a review label, preview the diff, approve it, and save a copy.`
-   Relay mode: `plan`
-7. Click `Generate packet`.
-8. Either click `Load demo response` for the bundled sample walkthrough, or paste the valid response example below, then click `Validate response`.
-9. Click `Check changes` and review the summary, output path, warnings, plus both `Turn details` and `Workbook evidence` inside `Inspection details`.
-10. If the plan changes the workbook, add an optional review note, click `Confirm review`, then click `Save reviewed copy`.
-11. After save, use `Copy review summary` or `Open reviewer view` if you want a read-only confirmation path with the same inspection details.
-12. Confirm the output file exists at the configured `outputPath`.
-13. Confirm the original file under `examples/` is unchanged.
+2. In `1. はじめる`, set the file path to `<repo-root>/examples/revenue-workflow-demo.csv`
+   or use the bundled sample shortcut when it is shown.
+3. Choose or enter an objective such as:
+   `approved が true の行だけ残して、結果を説明し、別コピーとして保存する`
+4. Confirm the task name auto-fills, then click `始める`.
+5. In `2. Copilot に聞く`, click `Copilot 用にコピー`.
+6. Paste a valid JSON response into the response box, then click `変更を確認する`.
+7. In `3. 確認して保存`, review the pinned summary strip plus any detailed changes.
+8. Click `コピーを保存する`.
+9. Confirm the output file exists at the configured `outputPath`.
+10. Confirm the original file under `examples/` is unchanged.
 
 The full follow-up verification checklist for the non-engineer usability scope is
 tracked in [`docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md`](docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md).
