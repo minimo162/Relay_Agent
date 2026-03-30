@@ -50,10 +50,16 @@ data-retention expectations for non-engineer operators.
   matches the first supported non-engineer distribution story
 - GitHub Actions release automation for Windows installer publication lives in
   `.github/workflows/release-windows-installer.yml`
+- Repo-specific Azure Trusted Signing / Artifact Signing setup now lives in
+  `docs/TRUSTED_SIGNING_SETUP.md`
+- Until Azure signing credentials are fully configured, the release workflow
+  may still publish an unsigned fallback installer to preserve the current
+  GitHub Releases path
 
 ## Deferred
 
 - macOS packaged distribution
 - Linux packaged distribution for end users
 - MSI-based enterprise rollout
-- In-app updater channels, signing automation, and background update UX
+- In-app updater channels and background update UX
+- First fully signed Windows release verification with real Azure credentials

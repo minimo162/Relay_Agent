@@ -1396,13 +1396,76 @@
         "details": "Mark the workflow-launch follow-up complete only after the PRD, autorun runner, Xvfb harness, doc updates, manual verification artifact, and final repo checks all exist and pass.",
         "testStrategy": "Run `pnpm workflow:test`, `pnpm launch:test`, `pnpm startup:test`, relevant typechecks or cargo tests, Task Master JSON validation, and `git diff --check`, then record the observed results before closing the tasks.",
         "updatedAt": "2026-03-29T23:01:54Z"
+      },
+      {
+        "id": "42",
+        "title": "Define the Windows Trusted Signing follow-up",
+        "description": "Capture the repo-specific scope for moving the Windows installer release flow to Azure Trusted Signing / Artifact Signing.",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "details": "Add a follow-up PRD that covers Azure OIDC authentication, Trusted Signing account and certificate profile requirements, signed-vs-unsigned release behavior, Authenticode verification before upload, and the first signed release as a separate operational milestone.",
+        "testStrategy": "Verify the new PRD exists under `.taskmaster/docs/`, Task Master contains tasks `42` through `46`, and planning docs describe the Trusted Signing follow-up scope consistently.",
+        "updatedAt": "2026-03-30T00:45:25Z"
+      },
+      {
+        "id": "43",
+        "title": "Publish the Trusted Signing setup runbook",
+        "description": "Document the GitHub secrets, repository variables, Azure resources, roles, and release-operator checklist needed for Trusted Signing.",
+        "status": "done",
+        "dependencies": [
+          "42"
+        ],
+        "priority": "high",
+        "details": "Create a single repo-specific setup page that lists the required GitHub secrets, GitHub repository variables, Azure Artifact Signing resources, identity validation roles, OIDC expectations, and first signed release checks.",
+        "testStrategy": "Confirm `docs/TRUSTED_SIGNING_SETUP.md` exists and contains the required GitHub secrets, repo variables, Azure role names, and release verification steps.",
+        "updatedAt": "2026-03-30T00:45:25Z"
+      },
+      {
+        "id": "44",
+        "title": "Rewrite the Windows release workflow for build-sign-upload",
+        "description": "Replace the single-step Tauri release upload path with an explicit build, optional sign, verify, and GitHub Release upload flow.",
+        "status": "done",
+        "dependencies": [
+          "43"
+        ],
+        "priority": "high",
+        "details": "Update `.github/workflows/release-windows-installer.yml` so it builds the NSIS installer on the Windows runner, detects Trusted Signing configuration, uses `azure/login` plus `azure/artifact-signing-action` when configured, verifies Authenticode validity, and uploads the resulting installer to GitHub Releases.",
+        "testStrategy": "Verify the workflow contains `id-token: write`, signing-mode preflight, `azure/login`, `azure/artifact-signing-action`, Authenticode verification, and explicit GitHub Release upload logic.",
+        "updatedAt": "2026-03-30T00:45:25Z"
+      },
+      {
+        "id": "45",
+        "title": "Sync packaging docs and verification notes for Trusted Signing",
+        "description": "Keep the packaging policy, planning note, and implementation log aligned with the new Trusted Signing release path.",
+        "status": "done",
+        "dependencies": [
+          "44"
+        ],
+        "priority": "medium",
+        "details": "Update `docs/PACKAGING_POLICY.md`, `PLANS.md`, and `docs/IMPLEMENTATION.md` so the repo now documents the Trusted Signing runbook, unsigned fallback behavior, and the pending first signed release verification milestone.",
+        "testStrategy": "Run documentation greps, Task Master JSON validation, and `git diff --check`, then confirm the same Trusted Signing story appears across planning and implementation docs.",
+        "updatedAt": "2026-03-30T00:45:25Z"
+      },
+      {
+        "id": "46",
+        "title": "Run the first fully signed Windows release",
+        "description": "Complete Azure configuration and verify that a GitHub-hosted Windows run publishes a valid Authenticode-signed installer.",
+        "status": "pending",
+        "dependencies": [
+          "45"
+        ],
+        "priority": "medium",
+        "details": "Provision the Azure Artifact Signing account, identity validation, certificate profile, GitHub OIDC app registration, repository secrets, and repository variables, then rerun the release workflow and confirm the published installer is Authenticode-valid and attached to the GitHub Release.",
+        "testStrategy": "Run the release workflow with real Azure credentials, confirm the summary shows `Signing mode: trusted-signing`, verify `Get-AuthenticodeSignature` reports `Valid`, and confirm the signed asset is attached to the target GitHub Release.",
+        "updatedAt": "2026-03-30T00:45:25Z"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-29T23:01:54Z",
-      "taskCount": 41,
-      "completedCount": 41,
+      "lastModified": "2026-03-30T00:45:25Z",
+      "taskCount": 46,
+      "completedCount": 45,
       "tags": [
         "master"
       ]

@@ -339,6 +339,8 @@ Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `
 The next shipped follow-up scope is captured in `.taskmaster/docs/prd_app_workflow_launch_test.txt`.
 Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `37` through `41`, and that follow-up is now implementation-complete with verification recorded in `docs/APP_WORKFLOW_TEST_VERIFICATION.md`.
 Windows installer distribution now also has a concrete release channel: `.github/workflows/release-windows-installer.yml` builds the NSIS installer on Windows and publishes it to GitHub Releases instead of committing binary installers into the repository.
+The next packaging hardening follow-up is captured in `.taskmaster/docs/prd_windows_trusted_signing.txt`.
+Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `42` through `46`, covering the repo-side Trusted Signing workflow rewrite, Azure/GitHub setup runbook, and the still-pending first fully signed Windows release verification.
 
 That follow-up preserved the current safety model:
 

@@ -1937,6 +1937,29 @@ Observed result:
 - GitHub Releases now contains `v0.1.0` as `Relay Agent v0.1.0` with the uploaded NSIS installer asset `Relay.Agent_0.1.0_x64-setup.exe`.
 - This confirms the repository's intended installer distribution path is now real, verified, and backed by a successful GitHub-hosted Windows publication run.
 
+Trusted Signing follow-up planning and repo wiring verification:
+
+```bash
+test -f .taskmaster/docs/prd_windows_trusted_signing.txt
+test -f docs/TRUSTED_SIGNING_SETUP.md
+rg -n 'id-token: write|Resolve Trusted Signing mode|azure/login@v2|azure/artifact-signing-action@v1|Get-AuthenticodeSignature|gh release upload' .github/workflows/release-windows-installer.yml
+rg -n 'prd_windows_trusted_signing|Trusted Signing|docs/TRUSTED_SIGNING_SETUP.md|tasks `42` through `46`' PLANS.md docs/PACKAGING_POLICY.md docs/IMPLEMENTATION.md .taskmaster/docs/prd_windows_trusted_signing.txt
+pnpm --dir apps/desktop exec tauri build --help | rg -- '--config'
+gh release upload --help | rg -- '--clobber'
+jq empty .taskmaster/tasks/tasks.json
+git diff --check
+```
+
+Observed result:
+
+- `.taskmaster/docs/prd_windows_trusted_signing.txt` now defines the next packaging hardening follow-up around Azure Trusted Signing / Artifact Signing for the Windows NSIS release path.
+- `.taskmaster/tasks/tasks.json` now contains tasks `42` through `46`. The repo-side planning, setup runbook, workflow rewrite, and documentation sync tasks are marked done, while the first fully signed release stays pending until real Azure credentials and identity validation are provisioned.
+- `docs/TRUSTED_SIGNING_SETUP.md` now acts as the single setup page for GitHub secrets, repository variables, Azure resources, required roles, OIDC expectations, and the first signed release checklist.
+- `.github/workflows/release-windows-installer.yml` now uses a build -> locate -> optional sign -> verify -> upload flow. It keeps unsigned fallback when no Trusted Signing settings exist, fails fast on partial configuration, requests `id-token: write`, signs with `azure/artifact-signing-action`, verifies Authenticode status with `Get-AuthenticodeSignature`, and uploads the installer with `gh release upload --clobber`.
+- `docs/PACKAGING_POLICY.md` and `PLANS.md` now point at the Trusted Signing runbook and follow-up task set, while `README.md` was intentionally left unchanged because the signed publication path is not yet testable in this local environment.
+- Local verification confirms the Task Master JSON still parses, the workflow file contains the intended signing and upload shape, the local Tauri CLI supports the `--config` flag used by the rewritten workflow, GitHub CLI supports the `--clobber` upload mode used for release asset replacement, and the repo still passes `git diff --check`.
+- Full end-to-end signed release verification is still pending because this environment does not have the required Azure Artifact Signing account, identity validation, OIDC app registration, repository secrets, or repository variables configured.
+
 ## Known Limitations
 
 - Frontend continuity now restores local draft text and preview summaries across restart, but backend preview, approval, and execution runtime state still have to be regenerated before execution can continue safely.
@@ -1946,6 +1969,7 @@ Observed result:
 - `pnpm startup:test` currently covers source-run startup smoke scenarios and shared startup helper tests; it does not replace packaged-installer E2E or screenshot-driven UI automation.
 - `pnpm launch:test` currently targets the Linux headless path with `Xvfb`; it does not yet provide cross-platform GUI automation or packaged-app launch coverage.
 - `pnpm workflow:test` now proves that a launched app can complete the bundled sample flow in a Linux headless environment, but it still uses a test-only autorun runner instead of real GUI click automation or cross-platform packaged-app coverage.
+- The Windows release workflow now supports Azure Trusted Signing, but the repo has not yet completed the first fully signed publication because the required Azure account, certificate profile, OIDC principal, and GitHub configuration are still operational prerequisites.
 - Reviewer mode currently depends on local audit history and the same device profile; it is a safe local review surface, not a shared remote approval link.
 - Preview predicates and derive expressions intentionally support a narrow grammar for now: bracketed column references for spaced headers, one comparison in `filter_rows`, and basic arithmetic or string concatenation in `derive_column`.
 - Limited xlsx support is still inspect-and-copy oriented; current test coverage still centers on CSV execution plus xlsx preview planning rather than richer xlsx write flows.

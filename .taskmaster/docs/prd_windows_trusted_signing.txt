@@ -1,0 +1,145 @@
+Title: Windows Installer Trusted Signing
+Date: 2026-03-30
+
+Summary
+
+Add repo-level support for Azure Trusted Signing / Artifact Signing so the
+Windows NSIS installer can be signed before it is attached to GitHub Releases.
+Keep the current GitHub Releases publication path, preserve manual
+installer-driven updates, and avoid breaking the existing unsigned release path
+while Azure credentials are still being provisioned.
+
+Problem
+
+Relay Agent can now publish a Windows installer to GitHub Releases, but the
+current asset is unsigned. That causes browser download warnings and Windows
+SmartScreen friction for non-engineer users even when the installer came from
+the official project release page.
+
+The repo also does not yet provide a concrete runbook for:
+
+- which Azure Artifact Signing resources are required
+- which GitHub secrets and repository variables are required
+- how OIDC-based GitHub Actions authentication should be configured
+- how maintainers can tell whether a release was signed or fell back to an
+  unsigned installer
+
+Goals
+
+- Publish Windows installers through a build -> sign -> verify -> upload flow
+- Prefer Azure OIDC over long-lived client secrets for the GitHub workflow
+- Fail fast on partial Trusted Signing configuration instead of silently
+  producing an ambiguous release
+- Preserve a clear unsigned fallback mode while Azure setup is incomplete
+- Provide one repo-specific setup guide that covers GitHub inputs, Azure
+  resources, role assignments, and first-release verification
+
+Non-goals
+
+- Guarantee immediate elimination of all SmartScreen warnings
+- Add macOS notarization or Linux signing
+- Add in-app auto-update channels
+- Add PFX-based signing as the primary repo path
+- Re-sign historical releases automatically
+
+Target users
+
+- Repo maintainers who publish Windows releases
+- Azure administrators who provision Artifact Signing access
+- Non-engineer Windows operators who install Relay Agent from GitHub Releases
+
+User stories
+
+- As a maintainer, I want one workflow that can build and sign the Windows
+  installer before release upload once Azure is configured.
+- As a maintainer, I want the workflow to tell me clearly whether the release
+  was signed or published through unsigned fallback.
+- As an Azure administrator, I want one page that tells me exactly which roles,
+  variables, secrets, and endpoints the repo expects.
+- As a Windows user, I want the installer to present fewer trust warnings than
+  the current unsigned release path.
+
+UX principles
+
+- Trust is explicit: the release pipeline must state whether the asset is
+  signed, unsigned fallback, or misconfigured.
+- OIDC first: prefer short-lived workload identity over long-lived client
+  secrets wherever possible.
+- Preserve momentum: lack of Azure setup must not destroy the existing ability
+  to publish unsigned test releases.
+- Verify before upload: signed builds should prove Authenticode validity before
+  the release asset is attached.
+
+Functional requirements
+
+1. Add a Trusted Signing follow-up PRD to `.taskmaster/docs`.
+2. Add Task Master tasks for repo-side Trusted Signing adoption.
+3. Rewrite `.github/workflows/release-windows-installer.yml` so it no longer
+   depends on `tauri-action` for the final release upload.
+4. The workflow must build the NSIS installer locally on the Windows runner,
+   locate the generated `.exe`, and upload it to GitHub Releases.
+5. The workflow must support Azure OIDC login through `azure/login`.
+6. The workflow must support signing via `azure/artifact-signing-action`.
+7. The workflow must fail early if Trusted Signing configuration is partial.
+8. The workflow must still publish an unsigned installer when none of the
+   Trusted Signing inputs are configured.
+9. Signed mode must verify Authenticode status before release upload.
+10. The workflow summary must show signing mode, asset name, and installer
+    SHA-256 digest.
+11. Add a single runbook document that lists required GitHub secrets,
+    repository variables, Azure resources, role assignments, identity
+    validation steps, and first signed-release verification steps.
+12. Keep the existing packaging policy aligned with the new workflow behavior.
+
+Acceptance criteria
+
+- `.taskmaster/docs/prd_windows_trusted_signing.txt` exists and describes the
+  trusted-signing scope
+- `.taskmaster/tasks/tasks.json` contains tasks `42` through `46`
+- `docs/TRUSTED_SIGNING_SETUP.md` exists and lists the required GitHub secrets,
+  repository variables, Azure resources, and role assignments
+- `.github/workflows/release-windows-installer.yml` contains:
+  - `id-token: write`
+  - a Trusted Signing preflight step
+  - `azure/login`
+  - `azure/artifact-signing-action`
+  - Authenticode verification
+  - explicit GitHub Release upload logic
+- `docs/PACKAGING_POLICY.md`, `PLANS.md`, and `docs/IMPLEMENTATION.md` all
+  mention the Trusted Signing follow-up
+- Local verification covers workflow shape, Task Master JSON validity, and
+  `git diff --check`
+- The first fully signed release remains a tracked pending task until real
+  Azure credentials are configured
+
+Risks and mitigations
+
+1. Azure eligibility or identity validation blocks Public Trust
+   Mitigation: document the eligibility caveat up front and keep unsigned
+   fallback available for repo operators.
+
+2. Workflow changes break the current release pipeline
+   Mitigation: keep unsigned fallback mode and verify the build/upload path
+   without requiring Azure credentials.
+
+3. Partial repo configuration creates confusing failures
+   Mitigation: detect partial config explicitly and fail before the release
+   upload step.
+
+4. SmartScreen reputation still warns after signing
+   Mitigation: document that signing reduces friction but does not guarantee
+   zero warnings on the first release.
+
+Suggested implementation phases
+
+Phase 1: Planning and setup contract
+- Add the PRD, Task Master breakdown, and repo-specific runbook.
+
+Phase 2: Workflow rewrite
+- Move the release pipeline to build -> locate -> optional sign -> verify ->
+  upload, with explicit signed vs unsigned modes.
+
+Phase 3: Operational validation
+- Once Azure resources and GitHub OIDC are configured, run the first signed
+  release and confirm the published asset carries a valid Authenticode
+  signature.

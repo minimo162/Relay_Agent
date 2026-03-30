@@ -20,6 +20,11 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+      id-token: write
+    env:
+      AZURE_CODESIGN_ENDPOINT: ${{ vars.AZURE_CODESIGN_ENDPOINT }}
+      AZURE_CODESIGN_ACCOUNT_NAME: ${{ vars.AZURE_CODESIGN_ACCOUNT_NAME }}
+      AZURE_CODESIGN_CERT_PROFILE_NAME: ${{ vars.AZURE_CODESIGN_CERT_PROFILE_NAME }}
 
     steps:
       - name: Check out repository
@@ -67,6 +72,50 @@ jobs:
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
           printf 'release_name=%s\n' "$release_name" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve Trusted Signing mode
+        id: signing_mode
+        shell: bash
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          required=(
+            AZURE_CLIENT_ID
+            AZURE_TENANT_ID
+            AZURE_SUBSCRIPTION_ID
+            AZURE_CODESIGN_ENDPOINT
+            AZURE_CODESIGN_ACCOUNT_NAME
+            AZURE_CODESIGN_CERT_PROFILE_NAME
+          )
+
+          missing=()
+          present=0
+
+          for var_name in "${required[@]}"; do
+            if [ -n "${!var_name:-}" ]; then
+              present=$((present + 1))
+            else
+              missing+=("$var_name")
+            fi
+          done
+
+          if [ "$present" -eq 0 ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "mode=unsigned-fallback" >> "$GITHUB_OUTPUT"
+            echo "summary=Trusted Signing is not configured, so the workflow will publish an unsigned installer." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Trusted Signing configuration is partial. Missing: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "mode=trusted-signing" >> "$GITHUB_OUTPUT"
+          echo "summary=Trusted Signing is configured, so the workflow will sign the installer before upload." >> "$GITHUB_OUTPUT"
+
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
@@ -76,25 +125,119 @@ jobs:
       - name: Run desktop Rust tests
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 
-      - name: Build Windows installer and upload to GitHub Releases
-        uses: tauri-apps/tauri-action@action-v0.6.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          projectPath: apps/desktop
-          tauriScript: pnpm tauri
-          tagName: ${{ steps.release_meta.outputs.tag }}
-          releaseName: ${{ steps.release_meta.outputs.release_name }}
-          releaseBody: |
-            Windows NSIS installer for Relay Agent.
+      - name: Build Windows installer
+        shell: bash
+        run: pnpm --dir apps/desktop exec tauri build --config src-tauri/tauri.windows.conf.json
 
-            Download the attached installer asset to install or upgrade Relay Agent on Windows 10/11 x64.
-          releaseCommitish: ${{ github.sha }}
-          generateReleaseNotes: true
-          releaseDraft: false
-          prerelease: ${{ contains(steps.release_meta.outputs.tag, '-') }}
-          uploadUpdaterJson: false
-          releaseAssetNamePattern: "relay-agent_[version]_windows_[arch][setup][ext]"
+      - name: Locate installer artifact
+        id: installer
+        shell: pwsh
+        run: |
+          $installerDir = Join-Path $env:GITHUB_WORKSPACE "target\release\bundle\nsis"
+          if (-not (Test-Path $installerDir)) {
+            throw "NSIS bundle directory was not created: $installerDir"
+          }
+
+          $installer = Get-ChildItem -Path $installerDir -Filter "*.exe" -File |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+
+          if (-not $installer) {
+            throw "No NSIS installer `.exe` was found in $installerDir"
+          }
+
+          "path=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "name=$($installer.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Azure login for Trusted Signing
+        if: steps.signing_mode.outputs.enabled == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign installer with Trusted Signing
+        if: steps.signing_mode.outputs.enabled == 'true'
+        uses: azure/artifact-signing-action@v1
+        with:
+          endpoint: ${{ vars.AZURE_CODESIGN_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_CODESIGN_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.AZURE_CODESIGN_CERT_PROFILE_NAME }}
+          files: ${{ steps.installer.outputs.path }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: Relay Agent Windows installer
+          description-url: https://github.com/${{ github.repository }}
+
+      - name: Verify Authenticode signature
+        if: steps.signing_mode.outputs.enabled == 'true'
+        id: signature
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature "${{ steps.installer.outputs.path }}"
+          if ($signature.Status -ne "Valid") {
+            throw "Expected a valid Authenticode signature, got '$($signature.Status)'."
+          }
+
+          "status=$($signature.Status)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "subject=$($signature.SignerCertificate.Subject)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "thumbprint=$($signature.SignerCertificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Collect installer digest
+        id: installer_digest
+        shell: pwsh
+        run: |
+          $hash = Get-FileHash "${{ steps.installer.outputs.path }}" -Algorithm SHA256
+          "sha256=$($hash.Hash.ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Publish installer to GitHub Releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+          RELEASE_NAME: ${{ steps.release_meta.outputs.release_name }}
+          RELEASE_PRERELEASE: ${{ contains(steps.release_meta.outputs.tag, '-') }}
+          INSTALLER_PATH: ${{ steps.installer.outputs.path }}
+          SIGNING_MODE: ${{ steps.signing_mode.outputs.mode }}
+        run: |
+          $releaseNotes = @"
+          Windows NSIS installer for Relay Agent.
+
+          Signing mode: $env:SIGNING_MODE
+
+          Download the attached installer asset to install or upgrade Relay Agent on Windows 10/11 x64.
+          "@
+
+          gh release view $env:RELEASE_TAG *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+
+          if ($releaseExists) {
+            gh release upload $env:RELEASE_TAG $env:INSTALLER_PATH --clobber
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          } else {
+            $args = @(
+              "release",
+              "create",
+              $env:RELEASE_TAG,
+              $env:INSTALLER_PATH,
+              "--title",
+              $env:RELEASE_NAME,
+              "--notes",
+              $releaseNotes
+            )
+            if ($env:RELEASE_PRERELEASE -eq "true") {
+              $args += "--prerelease"
+            }
+
+            gh @args
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
 
       - name: Summarize release publication
         shell: bash
@@ -105,5 +248,15 @@ jobs:
             echo "- Release tag: \`${{ steps.release_meta.outputs.tag }}\`"
             echo "- Release name: \`${{ steps.release_meta.outputs.release_name }}\`"
             echo "- Bundle target: \`nsis\`"
-            echo "- Project path: \`apps/desktop\`"
+            echo "- Installer asset: \`${{ steps.installer.outputs.name }}\`"
+            echo "- Installer SHA256: \`${{ steps.installer_digest.outputs.sha256 }}\`"
+            echo "- Signing mode: \`${{ steps.signing_mode.outputs.mode }}\`"
+            echo "- Signing summary: ${{ steps.signing_mode.outputs.summary }}"
+            if [ "${{ steps.signing_mode.outputs.enabled }}" = "true" ]; then
+              echo "- Authenticode status: \`${{ steps.signature.outputs.status }}\`"
+              echo "- Authenticode subject: \`${{ steps.signature.outputs.subject }}\`"
+            else
+              echo "- Authenticode status: \`not checked (unsigned fallback)\`"
+            fi
+            echo "- Repo setup guide: \`docs/TRUSTED_SIGNING_SETUP.md\`"
           } >> "$GITHUB_STEP_SUMMARY"
