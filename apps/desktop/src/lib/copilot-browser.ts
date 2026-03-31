@@ -99,7 +99,8 @@ async function runBrowserCommand(
     "--cdp-port",
     String(settings.cdpPort),
     "--timeout",
-    String(settings.timeoutMs)
+    String(settings.timeoutMs),
+    ...(payload ? ["--prompt", payload.prompt] : [])
   ];
 
   console.log("[copilot-browser] scriptPath:", scriptPath);
@@ -133,10 +134,7 @@ async function runBrowserCommand(
     });
   });
 
-  const child = await command.spawn();
-  if (payload) {
-    await child.write(`${JSON.stringify(payload)}\n`);
-  }
+  await command.spawn();
 
   return completion;
 }

@@ -42,6 +42,7 @@ type CliOptions = {
   action: "connect" | "send";
   cdpPort: number;
   timeout: number;
+  prompt?: string;
 };
 
 type SendInput = {
@@ -53,7 +54,7 @@ async function main(): Promise<void> {
   const result =
     options.action === "connect"
       ? await handleConnect(options)
-      : await handleSend(options);
+      : await handleSend(options, options.prompt);
 
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
@@ -62,6 +63,7 @@ function parseCliOptions(argv: string[]): CliOptions {
   let action: CliOptions["action"] | null = null;
   let cdpPort = 9222;
   let timeout = 60000;
+  let prompt: string | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -83,6 +85,13 @@ function parseCliOptions(argv: string[]): CliOptions {
         timeout = parseNumberArg(next, "--timeout");
         index += 1;
         break;
+      case "--prompt":
+        if (next === undefined) {
+          throw new Error("`--prompt` requires a value.");
+        }
+        prompt = next;
+        index += 1;
+        break;
       default:
         throw new Error(`Unknown argument: ${arg}`);
     }
@@ -92,7 +101,7 @@ function parseCliOptions(argv: string[]): CliOptions {
     throw new Error("`--action` is required.");
   }
 
-  return { action, cdpPort, timeout };
+  return { action, cdpPort, timeout, prompt };
 }
 
 function parseNumberArg(rawValue: string | undefined, flag: string): number {
@@ -122,11 +131,13 @@ async function handleConnect(options: CliOptions): Promise<ConnectResult> {
   }
 }
 
-async function handleSend(options: CliOptions): Promise<SendResult> {
+async function handleSend(options: CliOptions, promptArg?: string): Promise<SendResult> {
   let browser: Browser | null = null;
 
   try {
-    const input = await readSendInput();
+    const input = promptArg
+      ? { prompt: promptArg }
+      : await readSendInput();
     browser = await connectToBrowser(options);
     const page = await ensureCopilotPage(browser, options.timeout);
     const loginResult = detectLoginPage(page);
