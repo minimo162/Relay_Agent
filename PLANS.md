@@ -342,8 +342,8 @@ Windows installer distribution now also has a concrete release channel: `.github
 The next packaging hardening follow-up is captured in `.taskmaster/docs/prd_windows_trusted_signing.txt`.
 Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `42` through `45`, covering the repo-side Trusted Signing workflow rewrite and Azure/GitHub setup runbook. The first fully signed Windows release remains an operational prerequisite rather than a Task Master task because it depends on external Azure provisioning.
 The guided workflow simplification scope from `.taskmaster/docs/archive/prd_guided_workflow_simplification.txt` is now implementation-complete as tasks `46` through `63`.
-The current active UI follow-up is captured in `.taskmaster/docs/prd_ui_redesign_v2.md`.
-Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `64` through `68`, with tasks `64` through `67` complete and task `68` still pending.
+The current active UI follow-up is captured in `.taskmaster/docs/prd.txt` sections `3` and `4`.
+Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `64` through `75`, with tasks `64` through `67` and `69` through `75` implemented, and task `68` still pending for the manual Windows Tauri walkthrough.
 
 That UI follow-up preserves the current safety model:
 
@@ -352,7 +352,7 @@ That UI follow-up preserves the current safety model:
 - save-copy only
 - original workbook read-only
 
-The remaining UI follow-up emphasis is on richer Step 3 diff visibility, resumable recent-session drafts, and Windows Tauri walkthrough verification without relaxing those guardrails.
+The remaining UI follow-up emphasis is on the Windows Tauri walkthrough verification, while the shipped UI scope now includes always-visible guided steps, compact Step 1 editing, workbook-column-aware Copilot instructions, dynamic save-copy path guidance, template-specific examples, stronger auto-fix handling, and level-specific retry prompts without relaxing those guardrails.
 
 ## Global Scope Exclusions
 

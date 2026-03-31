@@ -4,13 +4,16 @@
     DiffSummary,
     GenerateRelayPacketResponse,
     PreflightWorkbookResponse,
+    SheetColumnProfile,
     StartupIssue,
-    ValidationIssue
+    ValidationIssue,
+    WorkbookProfile
   } from "@relay-agent/contracts";
   import {
     createSession,
     discardStudioDraft,
     generateRelayPacket,
+    inspectWorkbook,
     initializeApp,
     listRecoverableStudioDrafts,
     listRecentSessions,
@@ -46,29 +49,23 @@
     specificError: string;
     details: string[];
   };
+  type TemplateKey =
+    | "inspect_safe_copy"
+    | "filter_rows"
+    | "rename_columns"
+    | "cast_columns"
+    | "derive_column"
+    | "group_aggregate";
+  type TemplateOption = {
+    key: TemplateKey;
+    label: string;
+    objective: string;
+  };
 
   const expertDetailsStoragePrefix = "relay-agent.expert-details";
   const expectedResponseShape =
     '{ "version": "1.0", "summary": "...", "actions": [...] }';
-  const expectedResponseTemplate = `{
-  "version": "1.0",
-  "summary": "何をするかを短く説明する",
-  "actions": [
-    {
-      "tool": "table.filter_rows",
-      "sheet": "Sheet1",
-      "args": {
-        "predicate": "[approved] == true"
-      }
-    },
-    {
-      "tool": "workbook.save_copy",
-      "args": {
-        "outputPath": "/absolute/path/output.copy.csv"
-      }
-    }
-  ]
-}`;
+  const instructionColumnLimit = 20;
   const stepBanner = [
     {
       id: "setup" as const,
@@ -103,13 +100,17 @@
   let objectiveText = "";
   let taskName = "";
   let taskNameEdited = false;
+  let selectedTemplateKey: TemplateKey | null = null;
   let preflight: PreflightWorkbookResponse | null = null;
+  let workbookProfile: WorkbookProfile | null = null;
+  let workbookColumnProfiles: SheetColumnProfile[] = [];
 
   let sessionId = "";
   let turnId = "";
   let relayPacket: GenerateRelayPacketResponse | null = null;
   let relayPacketText = "";
   let copilotInstructionText = "";
+  let expectedResponseTemplate = "";
   let copiedInstructionNotice = "";
   let copilotResponse = "";
   let originalCopilotResponse = "";
@@ -137,25 +138,46 @@
   let expertDetailsOpen = false;
   let hydratingDraft = false;
   let lastSavedDraftSignature = "";
+  let step1Expanded = true;
+  let preparedSetupSignature = "";
+  let currentSetupSignature = "";
+  let setupStepComplete = false;
+  let copilotStepAvailable = false;
+  let reviewStepAvailable = false;
 
-  const templates = [
+  const templates: TemplateOption[] = [
     {
+      key: "inspect_safe_copy",
       label: "ファイルを安全に確認",
       objective: "ファイルを開いて、変更予定を表示し、安全なコピーを保存する"
     },
     {
+      key: "filter_rows",
       label: "必要な行だけ抽出",
       objective: "必要な行だけ残して、結果を説明し、別コピーとして保存する"
     },
     {
+      key: "filter_rows",
       label: "条件で行を絞り込む",
       objective: "条件に合う行だけ残して、変更点を確認できるコピーを保存する"
     },
     {
+      key: "rename_columns",
       label: "列名を変更",
       objective: "指定した列名を変更して、影響を表示し、別コピーとして保存する"
     },
     {
+      key: "cast_columns",
+      label: "列の型を整える",
+      objective: "指定した列の型を整えて、変更点を確認し、別コピーとして保存する"
+    },
+    {
+      key: "derive_column",
+      label: "新しい列を追加",
+      objective: "既存の列から新しい列を作って、結果を確認できるコピーを保存する"
+    },
+    {
+      key: "group_aggregate",
       label: "合計を集計",
       objective: "指定した行の合計を集計して、結果を説明し、別コピーとして保存する"
     }
@@ -179,8 +201,18 @@
     return first.length > 30 ? `${first.slice(0, 30)}…` : first;
   }
 
-  function updateObjective(nextObjective: string): void {
+  function inferTemplateKey(nextObjective: string): TemplateKey | null {
+    return (
+      templates.find((template) => template.objective === nextObjective.trim())?.key ?? null
+    );
+  }
+
+  function updateObjective(
+    nextObjective: string,
+    templateKey: TemplateKey | null = inferTemplateKey(nextObjective)
+  ): void {
     objectiveText = nextObjective;
+    selectedTemplateKey = templateKey;
 
     if (!taskNameEdited || !taskName.trim()) {
       taskName = deriveTitle(nextObjective);
@@ -201,16 +233,107 @@
     return /(^|[\\/])revenue-workflow-demo\.csv$/i.test(path.trim());
   }
 
-  function buildCopilotInstructionText(
-    packet: GenerateRelayPacketResponse,
+  function suggestOutputPath(inputPath: string): string {
+    const normalizedPath = inputPath.trim().replace(/\\/g, "/");
+    if (!normalizedPath) {
+      return "/path/to/output.copy.csv";
+    }
+
+    const lastSlashIndex = normalizedPath.lastIndexOf("/");
+    const directory =
+      lastSlashIndex >= 0 ? normalizedPath.slice(0, lastSlashIndex + 1) : "";
+    const fileName =
+      lastSlashIndex >= 0 ? normalizedPath.slice(lastSlashIndex + 1) : normalizedPath;
+    const extensionIndex = fileName.lastIndexOf(".");
+
+    if (extensionIndex > 0) {
+      return `${directory}${fileName.slice(0, extensionIndex)}.copy${fileName.slice(extensionIndex)}`;
+    }
+
+    return `${directory}${fileName}.copy`;
+  }
+
+  function buildSetupSignature(
     workbookPath: string,
-    title: string
+    title: string,
+    objective: string,
+    templateKey: TemplateKey | null
   ): string {
-    const toolLines = [...packet.allowedReadTools, ...packet.allowedWriteTools].map(
-      (tool) => `- ${tool.id}: ${tool.description}`
-    );
-    const example = isBundledRevenueDemo(workbookPath)
-      ? `{
+    return JSON.stringify({
+      workbookPath: workbookPath.trim(),
+      title: title.trim(),
+      objective: objective.trim(),
+      templateKey
+    });
+  }
+
+  function buildExpectedResponseTemplate(outputPath: string): string {
+    return `{
+  "version": "1.0",
+  "summary": "何をするかを短く説明する",
+  "actions": [
+    {
+      "tool": "table.filter_rows",
+      "sheet": "Sheet1",
+      "args": {
+        "predicate": "[approved] == true"
+      }
+    },
+    {
+      "tool": "workbook.save_copy",
+      "args": {
+        "outputPath": "${outputPath}"
+      }
+    }
+  ]
+}`;
+  }
+
+  function formatWorkbookContextLines(
+    profile: WorkbookProfile | null,
+    columnProfiles: SheetColumnProfile[]
+  ): string[] {
+    if (!profile || profile.sheets.length === 0) {
+      return ["- シート: 情報をまだ取得できていません"];
+    }
+
+    const lines: string[] = [];
+
+    for (const sheet of profile.sheets) {
+      lines.push(`- シート: ${sheet.name}`);
+
+      const matchingProfile = columnProfiles.find(
+        (columnProfile) => columnProfile.sheet === sheet.name
+      );
+      const typedColumns =
+        matchingProfile?.columns.map((column) => `${column.column} (${column.inferredType})`) ??
+        sheet.columns.map((column) => `${column} (string)`);
+
+      if (typedColumns.length === 0) {
+        lines.push("- 列（使える名前をそのまま使うこと）: 取得できませんでした");
+        continue;
+      }
+
+      lines.push("- 列（使える名前をそのまま使うこと）:");
+      const visibleColumns = typedColumns.slice(0, instructionColumnLimit);
+      for (const column of visibleColumns) {
+        lines.push(`  - ${column}`);
+      }
+      if (typedColumns.length > instructionColumnLimit) {
+        lines.push(`  - （他 ${typedColumns.length - instructionColumnLimit} 列）`);
+      }
+    }
+
+    return lines;
+  }
+
+  function buildTemplateExample(
+    templateKey: TemplateKey | null,
+    workbookPath: string,
+    outputPath: string
+  ): string {
+    if (isBundledRevenueDemo(workbookPath)) {
+      return `{
   "version": "1.0",
   "summary": "approved が true の行だけ残し、amount の確認列を追加して別コピーを保存します。",
   "actions": [
@@ -233,12 +356,107 @@
     {
       "tool": "workbook.save_copy",
       "args": {
-        "outputPath": "/absolute/path/revenue-workflow-demo.reviewed.csv"
+        "outputPath": "${outputPath}"
       }
     }
   ]
-}`
-      : `{
+}`;
+    }
+
+    switch (templateKey) {
+      case "rename_columns":
+        return `{
+  "version": "1.0",
+  "summary": "列名を分かりやすい名前に変更して別コピーを保存します。",
+  "actions": [
+    {
+      "tool": "table.rename_columns",
+      "sheet": "Sheet1",
+      "args": {
+        "renames": [
+          { "from": "name", "to": "customer_name" }
+        ]
+      }
+    },
+    {
+      "tool": "workbook.save_copy",
+      "args": {
+        "outputPath": "${outputPath}"
+      }
+    }
+  ]
+}`;
+      case "cast_columns":
+        return `{
+  "version": "1.0",
+  "summary": "amount 列を number 型として扱えるように整えて別コピーを保存します。",
+  "actions": [
+    {
+      "tool": "table.cast_columns",
+      "sheet": "Sheet1",
+      "args": {
+        "casts": [
+          { "column": "amount", "toType": "number" }
+        ]
+      }
+    },
+    {
+      "tool": "workbook.save_copy",
+      "args": {
+        "outputPath": "${outputPath}"
+      }
+    }
+  ]
+}`;
+      case "derive_column":
+        return `{
+  "version": "1.0",
+  "summary": "新しい計算列を追加して別コピーを保存します。",
+  "actions": [
+    {
+      "tool": "table.derive_column",
+      "sheet": "Sheet1",
+      "args": {
+        "column": "amount_with_tax",
+        "expression": "[amount] * 1.1",
+        "position": "end"
+      }
+    },
+    {
+      "tool": "workbook.save_copy",
+      "args": {
+        "outputPath": "${outputPath}"
+      }
+    }
+  ]
+}`;
+      case "group_aggregate":
+        return `{
+  "version": "1.0",
+  "summary": "category ごとの amount 合計を集計して別コピーを保存します。",
+  "actions": [
+    {
+      "tool": "table.group_aggregate",
+      "sheet": "Sheet1",
+      "args": {
+        "groupBy": ["category"],
+        "measures": [
+          { "column": "amount", "op": "sum", "as": "total_amount" }
+        ]
+      }
+    },
+    {
+      "tool": "workbook.save_copy",
+      "args": {
+        "outputPath": "${outputPath}"
+      }
+    }
+  ]
+}`;
+      case "filter_rows":
+      case "inspect_safe_copy":
+      default:
+        return `{
   "version": "1.0",
   "summary": "条件に合う行だけ残して別コピーを保存します。",
   "actions": [
@@ -252,11 +470,27 @@
     {
       "tool": "workbook.save_copy",
       "args": {
-        "outputPath": "/absolute/path/reviewed-output.copy.csv"
+        "outputPath": "${outputPath}"
       }
     }
   ]
 }`;
+    }
+  }
+
+  function buildCopilotInstructionText(
+    packet: GenerateRelayPacketResponse,
+    workbookPath: string,
+    title: string,
+    profile: WorkbookProfile | null,
+    columnProfiles: SheetColumnProfile[],
+    templateKey: TemplateKey | null
+  ): string {
+    const toolLines = [...packet.allowedReadTools, ...packet.allowedWriteTools].map(
+      (tool) => `- ${tool.id}: ${tool.description}`
+    );
+    const outputPath = suggestOutputPath(workbookPath);
+    const example = buildTemplateExample(templateKey, workbookPath, outputPath);
 
     return [
       "Relay Agent からの依頼です。",
@@ -267,6 +501,7 @@
       "",
       "2. 対象ファイル",
       `- ファイル: ${workbookPath}`,
+      ...formatWorkbookContextLines(profile, columnProfiles),
       "",
       "3. 使ってよい操作",
       ...toolLines,
@@ -280,7 +515,7 @@
       "- 上にない tool は使わないでください。",
       "",
       "5. 回答テンプレート",
-      expectedResponseTemplate,
+      buildExpectedResponseTemplate(outputPath),
       "",
       "6. 回答例",
       example
@@ -348,17 +583,50 @@
     feedback: ValidationFeedback,
     allowedTools: string[]
   ): string {
+    const commonRules = [
+      "``` で囲まない",
+      "パスは / 区切りで書く",
+      "JSON 以外の説明文を付けない",
+      "_ や [ ] を \\_ や \\[ \\] にしない"
+    ];
+
+    if (feedback.level === 1) {
+      return [
+        "先ほどの回答は Relay Agent で受け付けられませんでした。",
+        `JSON 構文エラー: ${feedback.specificError}`,
+        "",
+        "同じ内容のまま、JSON の書き方だけを直してください。",
+        ...commonRules.map((rule, index) => `${index + 1}. ${rule}`),
+        "5. カンマ、引用符、{ } と [ ] の閉じ忘れを直す",
+        "",
+        "期待するテンプレート:",
+        expectedResponseTemplate
+      ].join("\n");
+    }
+
+    if (feedback.level === 2) {
+      return [
+        "先ほどの回答は Relay Agent で受け付けられませんでした。",
+        `スキーマエラー: ${feedback.specificError}`,
+        "",
+        "必要な項目をそろえて、同じ意図の JSON を返してください。",
+        ...commonRules.map((rule, index) => `${index + 1}. ${rule}`),
+        "5. version / summary / actions を必ず含める",
+        "6. actions は配列で返す",
+        "",
+        "期待するテンプレート:",
+        expectedResponseTemplate
+      ].join("\n");
+    }
+
     return [
       "先ほどの回答は Relay Agent で受け付けられませんでした。",
-      `問題: ${feedback.specificError}`,
+      `tool 名エラー: ${feedback.specificError}`,
       "",
-      "次の3つを守って、同じ内容を JSON だけで返してください。",
-      "1. ``` で囲まない",
-      "2. パスは / 区切りで書く",
-      "3. JSON 以外の説明文を付けない",
-      "4. _ や [ ] を \\_ や \\[ \\] にしない",
-      "",
-      `使える tool: ${allowedTools.join(", ")}`,
+      "使える tool 名だけに直して、同じ内容の JSON を返してください。",
+      ...commonRules.map((rule, index) => `${index + 1}. ${rule}`),
+      `5. 使える tool: ${allowedTools.join(", ")}`,
+      "6. tool 名は見えている文字をそのまま使う",
       "",
       "期待するテンプレート:",
       expectedResponseTemplate
@@ -452,6 +720,24 @@
     return recoverableDraftSessionIds.includes(sessionId);
   }
 
+  async function refreshWorkbookContext(path: string): Promise<void> {
+    const trimmedPath = path.trim();
+    if (!trimmedPath) {
+      workbookProfile = null;
+      workbookColumnProfiles = [];
+      return;
+    }
+
+    try {
+      const inspection = await inspectWorkbook({ workbookPath: trimmedPath });
+      workbookProfile = inspection.profile;
+      workbookColumnProfiles = inspection.columnProfiles;
+    } catch {
+      workbookProfile = null;
+      workbookColumnProfiles = [];
+    }
+  }
+
   function parseRelayPacket(
     packetText: string
   ): GenerateRelayPacketResponse | null {
@@ -468,6 +754,7 @@
 
   function applyRecentSessionFallback(session: RecentSession): void {
     guidedStage = "setup";
+    step1Expanded = true;
     errorMsg = "";
     copiedInstructionNotice = "";
     validationFeedback = null;
@@ -492,7 +779,11 @@
     showDetailedChanges = false;
     executionDone = false;
     executionSummary = "";
+    workbookProfile = null;
+    workbookColumnProfiles = [];
+    preparedSetupSignature = "";
     filePath = session.workbookPath;
+    selectedTemplateKey = null;
     if (session.lastTurnTitle.trim()) {
       taskNameEdited = true;
       taskName = session.lastTurnTitle;
@@ -507,6 +798,7 @@
     hydratingDraft = true;
 
     guidedStage = "copilot";
+    step1Expanded = false;
     errorMsg = "";
     copiedInstructionNotice = "";
     validationFeedback = null;
@@ -517,14 +809,18 @@
     turnId = draft.selectedTurnId ?? "";
     filePath = draft.workbookPath || session.workbookPath;
     objectiveText = draft.turnObjective;
+    selectedTemplateKey = inferTemplateKey(draft.turnObjective);
     taskName = draft.turnTitle || session.lastTurnTitle || session.title;
     taskNameEdited = Boolean(taskName.trim());
+    preparedSetupSignature = buildSetupSignature(
+      filePath,
+      taskName,
+      objectiveText,
+      selectedTemplateKey
+    );
     relayPacketText = draft.relayPacketText;
     const restoredPacket = parseRelayPacket(draft.relayPacketText);
     relayPacket = restoredPacket;
-    copilotInstructionText = restoredPacket
-      ? buildCopilotInstructionText(restoredPacket, filePath, taskName)
-      : "";
     copilotResponse = draft.rawResponse;
     originalCopilotResponse = "";
     autoFixMessages = [];
@@ -540,6 +836,7 @@
     executionDone = false;
     executionSummary = draft.executionSummary;
     showRecent = false;
+    void refreshWorkbookContext(filePath);
     loadExpertDetails();
     hydratingDraft = false;
   }
@@ -597,12 +894,14 @@
 
   function goToSetup(): void {
     guidedStage = "setup";
+    step1Expanded = true;
     errorMsg = "";
     clearProgress();
   }
 
   function goToCopilot(): void {
     guidedStage = "copilot";
+    step1Expanded = false;
     errorMsg = "";
     clearProgress();
   }
@@ -619,12 +918,16 @@
     objectiveText = "";
     taskName = "";
     taskNameEdited = false;
+    selectedTemplateKey = null;
     preflight = null;
+    workbookProfile = null;
+    workbookColumnProfiles = [];
     sessionId = "";
     turnId = "";
     relayPacket = null;
     relayPacketText = "";
     copilotInstructionText = "";
+    expectedResponseTemplate = "";
     copiedInstructionNotice = "";
     copilotResponse = "";
     originalCopilotResponse = "";
@@ -647,6 +950,8 @@
     loadExpertDetails();
     refreshContinuityState();
     lastSavedDraftSignature = "";
+    step1Expanded = true;
+    preparedSetupSignature = "";
   }
 
   async function handleSetupStage(): Promise<void> {
@@ -657,6 +962,7 @@
     busy = true;
     setProgress([
       "ファイルの状態を確認しています",
+      "列情報を読み取っています",
       "新しい作業を作成しています",
       "Copilot への依頼を開始しています",
       "Copilot への依頼文を準備しています"
@@ -688,6 +994,9 @@
       }
       markProgress(0, "done");
 
+      await refreshWorkbookContext(path);
+      markProgress(1, "done");
+
       const session = await createSession({
         title,
         objective: objectiveText,
@@ -708,7 +1017,7 @@
         source: "session"
       });
       loadExpertDetails();
-      markProgress(1, "done");
+      markProgress(2, "done");
 
       const turnResponse = await startTurn({
         sessionId: session.id,
@@ -717,7 +1026,7 @@
         mode: "plan"
       });
       turnId = turnResponse.turn.id;
-      markProgress(2, "done");
+      markProgress(3, "done");
 
       const packet = await generateRelayPacket({
         sessionId: session.id,
@@ -725,9 +1034,15 @@
       });
       relayPacket = packet;
       relayPacketText = JSON.stringify(packet, null, 2);
-      copilotInstructionText = buildCopilotInstructionText(packet, path, title);
-      markProgress(3, "done");
+      preparedSetupSignature = buildSetupSignature(
+        path,
+        title,
+        objectiveText,
+        selectedTemplateKey
+      );
+      markProgress(4, "done");
       guidedStage = "copilot";
+      step1Expanded = false;
     } catch (error) {
       const failure = toError(error);
       failCurrentProgress(failure);
@@ -888,6 +1203,41 @@
     refreshContinuityState();
   });
 
+  $: expectedResponseTemplate = buildExpectedResponseTemplate(suggestOutputPath(filePath));
+  $: currentSetupSignature = buildSetupSignature(
+    filePath,
+    taskName.trim() || deriveTitle(objectiveText),
+    objectiveText,
+    selectedTemplateKey
+  );
+  $: setupStepComplete = Boolean(
+    sessionId &&
+      turnId &&
+      relayPacket &&
+      preparedSetupSignature &&
+      preparedSetupSignature === currentSetupSignature
+  );
+  $: copilotStepAvailable = setupStepComplete;
+  $: reviewStepAvailable = Boolean(
+    setupStepComplete &&
+      (previewSummary.trim() ||
+        previewSheetDiffs.length > 0 ||
+        previewOutputPath.trim() ||
+        executionDone)
+  );
+
+  $: copilotInstructionText =
+    relayPacket && filePath.trim()
+      ? buildCopilotInstructionText(
+          relayPacket,
+          filePath,
+          taskName.trim() || deriveTitle(objectiveText),
+          workbookProfile,
+          workbookColumnProfiles,
+          selectedTemplateKey
+        )
+      : "";
+
   $: if (sessionId && !hydratingDraft) {
     const previewSnapshotBase = previewOutputPath
       ? {
@@ -1039,10 +1389,28 @@
   </section>
 {/if}
 
-{#if guidedStage === "setup"}
-  <section class="card">
+<section class="card step-panel">
+  <div class="step-panel-header">
     <h2 class="panel-title">1. はじめる</h2>
+    {#if setupStepComplete && !step1Expanded}
+      <button class="btn btn-secondary step-edit-button" type="button" on:click={goToSetup}>
+        編集する
+      </button>
+    {/if}
+  </div>
 
+  {#if setupStepComplete && !step1Expanded}
+    <div class="step-summary step-summary-compact">
+      <div class="step-summary-row">
+        <span class="step-summary-label">ファイル</span>
+        <span>{filePath || "未設定"}</span>
+      </div>
+      <div class="step-summary-row">
+        <span class="step-summary-label">やりたいこと</span>
+        <span>{objectiveText || "未設定"}</span>
+      </div>
+    </div>
+  {:else}
     <label class="field-label" for="file-path">ファイルパス</label>
     <div class="file-row">
       <input
@@ -1075,7 +1443,7 @@
         <button
           class="chip"
           type="button"
-          on:click={() => updateObjective(template.objective)}
+          on:click={() => updateObjective(template.objective, template.key)}
           disabled={busy}
         >{template.label}</button>
       {/each}
@@ -1104,7 +1472,7 @@
     />
     <p class="field-hint">やりたいことを選ぶと自動で入ります。必要なら編集できます。</p>
 
-    {#if progressItems.length > 0}
+    {#if progressItems.length > 0 && guidedStage === "setup"}
       <div class="progress-panel">
         {#each progressItems as item}
           <div class="progress-item" data-status={item.status}>
@@ -1130,7 +1498,7 @@
       </div>
     {/if}
 
-    {#if errorMsg}
+    {#if errorMsg && guidedStage === "setup"}
       <p class="field-error">{errorMsg}</p>
     {/if}
 
@@ -1140,160 +1508,216 @@
       on:click={handleSetupStage}
       disabled={busy || !filePath.trim() || !objectiveText.trim()}
     >
-      {busy ? "開始を準備しています…" : "始める"}
+      {busy && guidedStage === "setup" ? "開始を準備しています…" : "準備する"}
     </button>
-    <p class="action-note">ファイル確認、作業作成、Copilot への依頼準備を続けて行います。</p>
-  </section>
-{:else if guidedStage === "copilot"}
-  <section class="card">
+    <p class="action-note">ファイル確認、列情報の読み取り、作業作成、Copilot への依頼準備を続けて行います。</p>
+  {/if}
+</section>
+
+<section
+  class="card step-panel"
+  role="group"
+  aria-disabled={!copilotStepAvailable}
+  data-disabled={!copilotStepAvailable}
+>
+  <div class="step-panel-header">
     <h2 class="panel-title">2. Copilot に聞く</h2>
+  </div>
 
-    <div class="step-summary">
-      <span class="step-summary-label">タスク名:</span> {taskName}
-      <br />
-      <span class="step-summary-label">ファイル:</span> {filePath}
-      <br />
-      <span class="step-summary-label">やりたいこと:</span> {objectiveText}
+  {#if !copilotStepAvailable}
+    <p class="step-panel-note">ステップ 1 を完了すると、ここで依頼文をコピーして Copilot の返答を確認できます。</p>
+  {/if}
+
+  <div class="step-summary">
+    <span class="step-summary-label">タスク名:</span> {taskName || "未設定"}
+    <br />
+    <span class="step-summary-label">ファイル:</span> {filePath || "未設定"}
+    <br />
+    <span class="step-summary-label">やりたいこと:</span> {objectiveText || "未設定"}
+  </div>
+
+  <p class="instruction-text">
+    下のボタンで Copilot に渡す依頼をコピーしてください。返ってきた JSON をそのまま下の欄に貼り付けるだけで、保存前の確認まで進めます。
+  </p>
+
+  <div class="copy-row">
+    <button
+      class="btn btn-accent"
+      type="button"
+      on:click={copyCopilotInstruction}
+      disabled={busy || !copilotStepAvailable}
+    >
+      依頼をコピー
+    </button>
+    <button
+      class="btn-link"
+      type="button"
+      on:click={() => (showInstructionPreview = !showInstructionPreview)}
+      disabled={!copilotStepAvailable}
+    >
+      {showInstructionPreview ? "依頼文を閉じる" : "依頼文を見る"}
+    </button>
+  </div>
+
+  {#if copiedInstructionNotice}
+    <p class="field-success">{copiedInstructionNotice}</p>
+  {/if}
+
+  {#if showInstructionPreview && copilotStepAvailable}
+    <pre class="preview-block">{copilotInstructionText}</pre>
+  {/if}
+
+  <label class="field-label" for="copilot-response">Copilot の返答</label>
+  <textarea
+    id="copilot-response"
+    class="textarea textarea-tall"
+    bind:value={copilotResponse}
+    placeholder="Copilot から返ってきた JSON をここに貼り付け"
+    rows="8"
+    disabled={busy || !copilotStepAvailable}
+  ></textarea>
+
+  <div class="response-shape">
+    <strong>期待する形式:</strong> {expectedResponseShape}
+    <br />
+    JSON のみ。``` 不要。パスは / 区切り。
+  </div>
+
+  {#if autoFixMessages.length > 0}
+    <div class="autofix-notice">
+      {#each autoFixMessages as message}
+        <span class="autofix-chip">✓ {message}</span>
+      {/each}
+      {#if originalCopilotResponse}
+        <button class="btn-link inline-link" type="button" on:click={undoAutoFix}>
+          Undo auto-fix
+        </button>
+      {/if}
     </div>
+  {/if}
 
-    <p class="instruction-text">
-      下のボタンで Copilot に渡す依頼をコピーしてください。返ってきた JSON をそのまま下の欄に貼り付けるだけで、保存前の確認まで進めます。
-    </p>
-
-    <div class="copy-row">
-      <button class="btn btn-accent" type="button" on:click={copyCopilotInstruction} disabled={busy}>
-        Copilot 用にコピー
-      </button>
+  {#if validationFeedback}
+    <div class="validation-card" data-level={validationFeedback.level}>
+      <p class="validation-kicker">レベル {validationFeedback.level}</p>
+      <h3>{validationFeedback.title}</h3>
+      <p>{validationFeedback.summary}</p>
+      <p class="validation-specific">{validationFeedback.specificError}</p>
+      {#each validationFeedback.details as detail}
+        <p class="validation-detail">{detail}</p>
+      {/each}
       <button
-        class="btn-link"
+        class="btn btn-secondary"
         type="button"
-        on:click={() => (showInstructionPreview = !showInstructionPreview)}
+        on:click={copyRetryPrompt}
+        disabled={!copilotStepAvailable}
       >
-        {showInstructionPreview ? "依頼文を閉じる" : "依頼文を見る"}
+        修正を依頼するテキストをコピー
       </button>
     </div>
+  {/if}
 
-    {#if copiedInstructionNotice}
-      <p class="field-success">{copiedInstructionNotice}</p>
-    {/if}
-
-    {#if showInstructionPreview}
-      <pre class="preview-block">{copilotInstructionText}</pre>
-    {/if}
-
-    <label class="field-label" for="copilot-response">Copilot の返答</label>
-    <textarea
-      id="copilot-response"
-      class="textarea textarea-tall"
-      bind:value={copilotResponse}
-      placeholder="Copilot から返ってきた JSON をここに貼り付け"
-      rows="8"
-      disabled={busy}
-    ></textarea>
-
-    <div class="response-shape">
-      <strong>期待する形式:</strong> {expectedResponseShape}
-      <br />
-      JSON のみ。``` 不要。パスは / 区切り。
+  {#if progressItems.length > 0 && guidedStage === "copilot"}
+    <div class="progress-panel">
+      {#each progressItems as item}
+        <div class="progress-item" data-status={item.status}>
+          <span class="progress-mark">
+            {#if item.status === "done"}
+              ✓
+            {:else if item.status === "running"}
+              …
+            {:else if item.status === "error"}
+              ✗
+            {:else}
+              ・
+            {/if}
+          </span>
+          <div>
+            <p class="progress-label">{item.label}</p>
+            {#if item.message}
+              <p class="progress-message">{item.message}</p>
+            {/if}
+          </div>
+        </div>
+      {/each}
     </div>
+  {/if}
 
-    {#if autoFixMessages.length > 0}
-      <div class="autofix-notice">
-        {#each autoFixMessages as message}
-          <span class="autofix-chip">✓ {message}</span>
-        {/each}
-        {#if originalCopilotResponse}
-          <button class="btn-link inline-link" type="button" on:click={undoAutoFix}>
-            Undo auto-fix
-          </button>
-        {/if}
-      </div>
-    {/if}
+  {#if errorMsg && guidedStage === "copilot"}
+    <p class="field-error">{errorMsg}</p>
+  {/if}
 
-    {#if validationFeedback}
-      <div class="validation-card" data-level={validationFeedback.level}>
-        <p class="validation-kicker">レベル {validationFeedback.level}</p>
-        <h3>{validationFeedback.title}</h3>
-        <p>{validationFeedback.summary}</p>
-        <p class="validation-specific">{validationFeedback.specificError}</p>
-        {#each validationFeedback.details as detail}
-          <p class="validation-detail">{detail}</p>
-        {/each}
-        <button class="btn btn-secondary" type="button" on:click={copyRetryPrompt}>
-          修正を依頼するテキストをコピー
+  <div class="btn-row">
+    <button
+      class="btn btn-secondary"
+      type="button"
+      on:click={goToSetup}
+      disabled={busy || !copilotStepAvailable}
+    >
+      戻る
+    </button>
+    <button
+      class="btn btn-primary"
+      type="button"
+      on:click={handleCopilotStage}
+      disabled={busy || !copilotStepAvailable || !copilotResponse.trim()}
+    >
+      {busy && guidedStage === "copilot" ? "変更を確認しています…" : "確認する"}
+    </button>
+  </div>
+  <p class="action-note">回答を自動補正し、形式を確認して、保存前の変更確認まで進めます。</p>
+  {#if !busy && guidedStage === "copilot" && progressItems.some((item) => item.status === "error")}
+    <button class="btn btn-secondary retry-button" type="button" on:click={retryCurrentStage}>
+      やり直す
+    </button>
+  {/if}
+</section>
+
+<section
+  class="card step-panel"
+  role="group"
+  aria-disabled={!reviewStepAvailable && !executionDone}
+  data-disabled={!reviewStepAvailable && !executionDone}
+>
+  <div class="step-panel-header">
+    <h2 class="panel-title">3. 確認して保存</h2>
+  </div>
+
+  {#if !reviewStepAvailable && !executionDone}
+    <p class="step-panel-note">ステップ 2 の確認が終わると、ここで差分を見て別コピーの保存に進めます。</p>
+  {/if}
+
+  <div class="step-summary">
+    <span class="step-summary-label">タスク名:</span> {taskName || "未設定"}
+    <br />
+    <span class="step-summary-label">ファイル:</span> {filePath || "未設定"}
+  </div>
+
+  {#if executionDone}
+    <div class="card-success-inline">
+      <p class="execution-summary">{executionSummary}</p>
+      {#if previewOutputPath}
+        <p class="output-path">保存先: <code>{previewOutputPath}</code></p>
+      {/if}
+      <div class="btn-row">
+        <button class="btn btn-primary" type="button" on:click={resetAll}>
+          新しい作業を始める
+        </button>
+        <button class="btn btn-secondary" type="button" on:click={goToSetup}>
+          ホームに戻る
         </button>
       </div>
-    {/if}
-
-    {#if progressItems.length > 0}
-      <div class="progress-panel">
-        {#each progressItems as item}
-          <div class="progress-item" data-status={item.status}>
-            <span class="progress-mark">
-              {#if item.status === "done"}
-                ✓
-              {:else if item.status === "running"}
-                …
-              {:else if item.status === "error"}
-                ✗
-              {:else}
-                ・
-              {/if}
-            </span>
-            <div>
-              <p class="progress-label">{item.label}</p>
-              {#if item.message}
-                <p class="progress-message">{item.message}</p>
-              {/if}
-            </div>
-          </div>
-        {/each}
-      </div>
-    {/if}
-
-    {#if errorMsg}
-      <p class="field-error">{errorMsg}</p>
-    {/if}
-
-    <div class="btn-row">
-      <button class="btn btn-secondary" type="button" on:click={goToSetup} disabled={busy}>
-        戻る
-      </button>
-      <button
-        class="btn btn-primary"
-        type="button"
-        on:click={handleCopilotStage}
-        disabled={busy || !copilotResponse.trim()}
-      >
-        {busy ? "変更を確認しています…" : "変更を確認する"}
-      </button>
     </div>
-    <p class="action-note">回答を自動補正し、形式を確認して、保存前の変更確認まで進めます。</p>
-    {#if !busy && progressItems.some((item) => item.status === "error")}
-      <button class="btn btn-secondary retry-button" type="button" on:click={retryCurrentStage}>
-        やり直す
-      </button>
-    {/if}
-  </section>
-{:else if guidedStage === "review-save" && !executionDone}
-  <section class="card">
-    <h2 class="panel-title">3. 確認して保存</h2>
-
-    <div class="step-summary">
-      <span class="step-summary-label">タスク名:</span> {taskName}
-      <br />
-      <span class="step-summary-label">ファイル:</span> {filePath}
-    </div>
-
+  {:else}
     <button
       class="btn-link"
       type="button"
       on:click={() => (showDetailedChanges = !showDetailedChanges)}
+      disabled={!reviewStepAvailable}
     >
       {showDetailedChanges ? "詳細を閉じる" : "詳細を見る"}
     </button>
 
-    {#if showDetailedChanges}
+    {#if showDetailedChanges && reviewStepAvailable}
       <div class="summary-grid">
         <div class="summary-item">
           <span class="summary-label">変更対象</span>
@@ -1438,7 +1862,7 @@
       元のファイルはそのまま残ります。変更は別のコピーに保存されます。
     </p>
 
-    {#if progressItems.length > 0}
+    {#if progressItems.length > 0 && guidedStage === "review-save"}
       <div class="progress-panel">
         {#each progressItems as item}
           <div class="progress-item" data-status={item.status}>
@@ -1464,42 +1888,36 @@
       </div>
     {/if}
 
-    {#if errorMsg}
+    {#if errorMsg && guidedStage === "review-save"}
       <p class="field-error">{errorMsg}</p>
     {/if}
 
     <div class="btn-row">
-      <button class="btn btn-secondary" type="button" on:click={goToCopilot} disabled={busy}>
+      <button
+        class="btn btn-secondary"
+        type="button"
+        on:click={goToCopilot}
+        disabled={busy || !reviewStepAvailable}
+      >
         内容を見直す
       </button>
-      <button class="btn btn-primary btn-save" type="button" on:click={handleReviewSaveStage} disabled={busy}>
-        {busy ? "コピーを保存しています…" : "コピーを保存する"}
+      <button
+        class="btn btn-primary btn-save"
+        type="button"
+        on:click={handleReviewSaveStage}
+        disabled={busy || !reviewStepAvailable}
+      >
+        {busy && guidedStage === "review-save" ? "保存しています…" : "保存する"}
       </button>
     </div>
     <p class="action-note">内容の確認を記録してから、新しいコピーを保存します。</p>
-    {#if !busy && progressItems.some((item) => item.status === "error")}
+    {#if !busy && guidedStage === "review-save" && progressItems.some((item) => item.status === "error")}
       <button class="btn btn-secondary retry-button" type="button" on:click={retryCurrentStage}>
         やり直す
       </button>
     {/if}
-  </section>
-{:else if executionDone}
-  <section class="card card-success">
-    <h2 class="panel-title">保存が完了しました</h2>
-    <p class="execution-summary">{executionSummary}</p>
-    {#if previewOutputPath}
-      <p class="output-path">保存先: <code>{previewOutputPath}</code></p>
-    {/if}
-    <div class="btn-row">
-      <button class="btn btn-primary" type="button" on:click={resetAll}>
-        新しい作業を始める
-      </button>
-      <button class="btn btn-secondary" type="button" on:click={goToSetup}>
-        ホームに戻る
-      </button>
-    </div>
-  </section>
-{/if}
+  {/if}
+</section>
 
 <section class="card expert-card">
   <button class="expert-toggle" type="button" on:click={toggleExpertDetails}>
@@ -1813,8 +2231,42 @@
     background: var(--ra-warn-light);
   }
 
-  .card-success {
-    border-color: var(--ra-success-border);
+  .step-panel {
+    transition: opacity 0.15s ease, filter 0.15s ease;
+  }
+
+  .step-panel[data-disabled="true"] {
+    opacity: 0.58;
+    filter: grayscale(0.18);
+  }
+
+  .step-panel-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .step-edit-button {
+    margin-top: 0;
+    flex-shrink: 0;
+  }
+
+  .step-panel-note {
+    margin: 0 0 1rem;
+    padding: 0.65rem 0.8rem;
+    border: 1px dashed var(--ra-border);
+    border-radius: var(--ra-radius-sm);
+    background: var(--ra-surface-muted);
+    color: var(--ra-text-muted);
+    font-size: 0.84rem;
+    line-height: 1.6;
+  }
+
+  .card-success-inline {
+    padding: 1rem;
+    border: 1px solid var(--ra-success-border);
+    border-radius: var(--ra-radius-sm);
     background: var(--ra-success-light);
   }
 
@@ -1963,6 +2415,11 @@
     color: var(--ra-accent);
   }
 
+  .btn-link:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
   .inline-link {
     padding: 0;
   }
@@ -2013,6 +2470,17 @@
     color: var(--ra-text-secondary);
     margin-bottom: 1rem;
     line-height: 1.6;
+  }
+
+  .step-summary-compact {
+    display: grid;
+    gap: 0.45rem;
+    margin-bottom: 0;
+  }
+
+  .step-summary-row {
+    display: grid;
+    gap: 0.15rem;
   }
 
   .step-summary-label {

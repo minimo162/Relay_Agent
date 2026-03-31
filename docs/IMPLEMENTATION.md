@@ -2,17 +2,17 @@
 
 ## Status
 
-- Current phase: Milestone 5 is complete; follow-up tasks `11` through `67` are implemented, documented, and verification-clean, and task `68` remains open for the current UI follow-up
+- Current phase: Milestone 5 is complete; follow-up tasks `11` through `67` plus `69` through `75` are implemented, documented, and verification-clean, and task `68` remains open for the current UI follow-up
 - Repository state: pnpm workspace, SvelteKit SPA shell, Tauri v2 shell, and shared contracts package are now bootstrapped and verification-clean
 - Active source-of-truth documents:
   - `PLANS.md`
   - `AGENTS.md`
   - `docs/IMPLEMENTATION.md`
   - `.taskmaster/docs/repo_audit.md`
-- Follow-up planning input: `.taskmaster/docs/prd_non_engineer_ux.txt` captures the non-engineer usability follow-up, `.taskmaster/docs/prd_workbook_artifact_browser.txt` captures the read-only Studio artifact-browser follow-up for persisted workbook evidence, `.taskmaster/docs/prd_turn_lifecycle_details.txt` captures the turn-lifecycle inspection follow-up, `.taskmaster/docs/prd_startup_test_harness.txt` captures the dedicated startup-testing follow-up, `.taskmaster/docs/prd_app_launch_execution_test.txt` captures the real app launch-testing follow-up, `.taskmaster/docs/prd_app_workflow_launch_test.txt` captures the launched-app workflow smoke follow-up, `.taskmaster/docs/archive/prd_guided_workflow_simplification.txt` captures the completed guided-flow simplification follow-up, and `.taskmaster/docs/prd_ui_redesign_v2.md` captures the current single-page UI follow-up
-- Follow-up task graph: `.taskmaster/tasks/tasks.json` now covers completed follow-up tasks `11` through `67` plus pending UI follow-up task `68`, spanning startup, data trust, continuity, guided onboarding, review/save simplification, cross-cutting recovery plus accessibility work, the Studio workbook inspection artifact browser, turn-lifecycle inspection details, source-run startup test coverage, actual Tauri launch smoke coverage, launched-app workflow completion smoke coverage, guided workflow simplification, Trusted Signing repo wiring, and the single-page Japanese UI redesign
+- Follow-up planning input: `.taskmaster/docs/prd.txt` now acts as the integrated PRD for the current UI and Copilot JSON reliability follow-up, while `.taskmaster/docs/archive/prd_guided_workflow_simplification.txt` remains the archived guided-flow simplification reference and the startup, launch, workflow, artifact-browser, turn-lifecycle, and signing follow-ups stay preserved under `.taskmaster/docs/archive/`
+- Follow-up task graph: `.taskmaster/tasks/tasks.json` now covers completed follow-up tasks `11` through `67` and `69` through `75` plus pending UI follow-up task `68`, spanning startup, data trust, continuity, guided onboarding, review/save simplification, cross-cutting recovery plus accessibility work, the Studio workbook inspection artifact browser, turn-lifecycle inspection details, source-run startup test coverage, actual Tauri launch smoke coverage, launched-app workflow completion smoke coverage, guided workflow simplification, Trusted Signing repo wiring, and the current single-page Japanese UI plus Copilot JSON reliability refinements
 - Follow-up packaging policy: `docs/PACKAGING_POLICY.md` now fixes the first packaged end-user release path to Windows 10/11 x64 via NSIS, with manual installer-driven updates and preserved app-local storage across upgrades as the current expectation
-- Follow-up implementation status: Tasks `11` through `67` are now complete. Verification artifacts cover the non-engineer startup and continuity work, workbook inspection, turn-lifecycle inspection, startup smoke-test, actual launch-smoke follow-ups, launched-app workflow smoke coverage, guided-flow verification, and the one-page UI redesign plus Step 3 SheetDiff cards, recent-session draft resume, and row-level diff detail. The remaining open follow-up scope is limited to task `68`: Windows Tauri end-to-end verification
+- Follow-up implementation status: Tasks `11` through `67` and `69` through `75` are now complete. Verification artifacts cover the non-engineer startup and continuity work, workbook inspection, turn-lifecycle inspection, startup smoke-test, actual launch-smoke follow-ups, launched-app workflow smoke coverage, guided-flow verification, the one-page UI redesign plus Step 3 SheetDiff cards, recent-session draft resume, row-level diff detail, always-visible guided steps, compact Step 1 editing, workbook-aware Copilot instruction text, dynamic save-copy examples, stronger auto-fix handling, and level-specific retry prompts. The remaining open follow-up scope is limited to task `68`: Windows Tauri end-to-end verification
 
 ## Milestone Log
 
@@ -2087,6 +2087,28 @@ Observed result:
 - Preview predicates and derive expressions intentionally support a narrow grammar for now: bracketed column references for spaced headers, one comparison in `filter_rows`, and basic arithmetic or string concatenation in `derive_column`.
 - Limited xlsx support is still inspect-and-copy oriented; current test coverage still centers on CSV execution plus xlsx preview planning rather than richer xlsx write flows.
 - Task Master native AI PRD parsing is still blocked unless provider API keys are configured.
+
+Single-page UI reliability follow-up verification:
+
+```bash
+pnpm check
+pnpm typecheck
+pnpm --filter @relay-agent/desktop build
+pnpm dlx tsx --test apps/desktop/src/lib/auto-fix.test.ts
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+Observed result:
+
+- `apps/desktop/src/routes/+page.svelte` now renders Steps 1 through 3 at all times, greys out unreached steps with `aria-disabled` plus disabled controls, and collapses Step 1 into an editable compact summary after preparation succeeds.
+- The Step 1 preparation path now calls a new typed `inspect_workbook` IPC surface, captures workbook sheet and typed column context, and injects that metadata into the Copilot instruction text alongside a `.copy`-style suggested `outputPath`.
+- Copilot handoff guidance now switches the example JSON by template intent, and the retry prompt text now varies by validation level so syntax, schema, and tool-name failures no longer get the same generic repair message.
+- `apps/desktop/src/lib/auto-fix.ts` now also normalizes smart quotes, full-width spaces, `~~~json` fences, and prose-wrapped JSON blocks, with nine passing test cases in `apps/desktop/src/lib/auto-fix.test.ts`.
+- `pnpm check` passes.
+- `pnpm typecheck` passes.
+- `pnpm --filter @relay-agent/desktop build` passes.
+- `pnpm dlx tsx --test apps/desktop/src/lib/auto-fix.test.ts` passes with 9 tests green.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passes after adding the new `inspect_workbook` command.
 
 ## Next Step
 

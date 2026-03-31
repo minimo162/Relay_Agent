@@ -4,6 +4,8 @@ import {
   assessCopilotHandoffResponseSchema,
   createSessionRequestSchema,
   generateRelayPacketRequestSchema,
+  inspectWorkbookRequestSchema,
+  inspectWorkbookResponseSchema,
   initializeAppResponseSchema,
   listSessionsResponseSchema,
   preflightWorkbookRequestSchema,
@@ -29,6 +31,8 @@ import {
   type CreateSessionRequest,
   type GenerateRelayPacketRequest,
   type GenerateRelayPacketResponse,
+  type InspectWorkbookRequest,
+  type InspectWorkbookResponse,
   type InitializeAppResponse,
   type ListSessionsResponse,
   type PreflightWorkbookRequest,
@@ -154,6 +158,17 @@ export function preflightWorkbook(
     payload,
     preflightWorkbookRequestSchema,
     preflightWorkbookResponseSchema
+  );
+}
+
+export function inspectWorkbook(
+  payload: InspectWorkbookRequest
+): Promise<InspectWorkbookResponse> {
+  return invokeWithPayload(
+    "inspect_workbook",
+    payload,
+    inspectWorkbookRequestSchema,
+    inspectWorkbookResponseSchema
   );
 }
 

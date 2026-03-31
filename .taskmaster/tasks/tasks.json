@@ -1781,13 +1781,252 @@
           "65"
         ],
         "subtasks": []
+      },
+      {
+        "id": "69",
+        "title": "3ステップを縦に並べて常時表示（ステップ2・3はグレーアウト）",
+        "status": "done",
+        "description": "PRD prd_ui_redesign_v2.md の「ステップ未到達時はグレーアウト」要件を実装する。現状はウィザード形式でステップが1つずつ切り替わるが、PRD は3ステップを縦に並べて常時表示し、未到達のステップをグレーアウトする設計を定めている。",
+        "details": "apps/desktop/src/routes/+page.svelte を修正。guidedStage による {#if}/{:else if} の切り替えを廃止し、3つのセクションを常にレンダリングする。ステップ2・3が未到達の場合は aria-disabled + CSS で操作不能にする。ステップバナー（step-banner）はそのまま流用可。入力フィールドと送信ボタンは disabled 属性で制御する。",
+        "testStrategy": "svelte-check 0 errors, vite build success。ステップ1完了前はステップ2・3のフォームが disabled になっていることを目視確認。ステップ2完了前はステップ3が disabled になっていることを確認。",
+        "priority": "medium",
+        "dependencies": [
+          "64"
+        ],
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "guidedStage 分岐を常時表示構造に変換",
+            "description": "{#if guidedStage === 'setup'} / {:else if} / {:else if} の切り替えを廃止し、3セクションを常にレンダリングする",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 2,
+            "title": "ステップ2・3のグレーアウトスタイルと disabled 制御",
+            "description": "未到達ステップのフィールドと buttons に disabled を付与し、視覚的にグレーアウトする CSS を追加する",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 3,
+            "title": "svelte-check と vite build の通過確認",
+            "status": "done",
+            "dependencies": []
+          }
+        ]
+      },
+      {
+        "id": "70",
+        "title": "ステップ1完了後のコンパクト折りたたみ（編集可能な状態で）",
+        "status": "done",
+        "description": "PRD prd_ui_redesign_v2.md の「ステップ完了後はコンパクトに折りたたまれる（編集可能な状態で）」要件を実装する。現状はステップ2に進むとステップ1のフォームが完全に消えるが、PRD はステップ1が折りたたまれ、ファイルパスとやりたいことのサマリーを表示しながら編集ボタンで再展開できる形を定めている。",
+        "details": "apps/desktop/src/routes/+page.svelte を修正。guidedStage が copilot または review-save のとき、ステップ1エリアをコンパクトな要約表示（ファイルパス・やりたいこと）に切り替える。「編集する」ボタンで goToSetup() を呼ぶ。フォーム全体を非表示にするのではなく、{#if step1Expanded} で展開/折りたたみを切り替える実装が適切。",
+        "testStrategy": "svelte-check 0 errors, vite build success。ステップ2表示中にステップ1エリアがコンパクト表示になることを確認。「編集する」ボタンでステップ1フォームに戻れることを確認。",
+        "priority": "medium",
+        "dependencies": [
+          "69"
+        ],
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "step1Expanded 状態変数と折りたたみ切り替えロジックの追加",
+            "description": "guidedStage が copilot/review-save になったとき step1Expanded = false にし、goToSetup() で true に戻す",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 2,
+            "title": "折りたたみ時のコンパクトサマリー UI",
+            "description": "ファイルパスとやりたいことを1行ずつ表示し、「編集する」ボタンを配置する",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 3,
+            "title": "svelte-check と vite build の通過確認",
+            "status": "done",
+            "dependencies": []
+          }
+        ]
+      },
+      {
+        "id": "71",
+        "title": "依頼テキストにワークブック列情報を埋め込む",
+        "status": "done",
+        "description": "PRD prd_copilot_json_reliability.md 改善A。Copilot に渡す依頼テキストに対象ファイルのシート名とカラム名（型付き）を含める。現状は列情報がないため Copilot が列名を推測して誤った JSON を返す。",
+        "details": "apps/desktop/src/routes/+page.svelte を修正。handleStep1（「準備する」ボタン押下後）でセッション作成・プリフライト完了後に ipc.inspectWorkbook を追加呼び出しし、取得した WorkbookProfile を状態に保持する。buildCopilotInstructionText に WorkbookProfile | null 引数を追加し、「2. 対象ファイル」セクションにシート名と列一覧（列名 + 型）を追加する。列数が20超の場合は先頭20列 + '（他 N 列）' と表示。",
+        "testStrategy": "svelte-check 0 errors、vite build 成功。サンプル CSV でステップ1完了後に「依頼文を見る」でプレビューし、列名一覧が表示されることを確認。列名ゼロ件のファイルでもクラッシュしないことを確認。",
+        "priority": "high",
+        "dependencies": [
+          "64"
+        ],
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "handleStep1 に inspectWorkbook 呼び出しを追加",
+            "description": "セッション作成・プリフライト後に ipc.inspectWorkbook(filePath) を呼び出し、結果を workbookProfile 状態変数に保存する",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 2,
+            "title": "buildCopilotInstructionText の「2. 対象ファイル」セクション拡張",
+            "description": "WorkbookProfile を受け取り、シート名と列名（型付き）を「列（使える名前をそのまま使うこと）:」としてリスト表示する。列数20超は先頭20列 + 残数表記。",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 3,
+            "title": "svelte-check と vite build の通過確認",
+            "status": "done",
+            "dependencies": []
+          }
+        ]
+      },
+      {
+        "id": "72",
+        "title": "依頼テキストの outputPath を実際のパスから自動生成",
+        "status": "done",
+        "description": "PRD prd_copilot_json_reliability.md 改善B。回答テンプレートと回答例の outputPath が '/absolute/path/output.copy.csv' というプレースホルダーのままで、Copilot がこれを文字通り返してしまう問題を修正する。入力ファイルパスから '.copy' を挿入した推奨 outputPath を自動生成して依頼テキストに埋め込む。",
+        "details": "apps/desktop/src/routes/+page.svelte を修正。buildCopilotInstructionText 内に suggestOutputPath(inputPath: string): string ヘルパーを追加する。ロジック: 拡張子の直前に '.copy' を挿入（例: data.csv → data.copy.csv、report.xlsx → report.copy.xlsx）。同一パスを出力先にしないことがバリデーション要件。expectedResponseTemplate と buildCopilotInstructionText 内の全 outputPath プレースホルダーを置き換える。",
+        "testStrategy": "svelte-check 0 errors、vite build 成功。ステップ1完了後の依頼テキストで outputPath が '/Users/you/data.copy.csv' 形式になっていることを確認。拡張子なしファイルでも '.copy' が正しく付くことを確認。",
+        "priority": "high",
+        "dependencies": [
+          "71"
+        ],
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "suggestOutputPath ヘルパー関数の実装",
+            "description": "拡張子直前に '.copy' を挿入するロジックを実装。拡張子なし・ドット始まりファイルのエッジケースも処理する。",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 2,
+            "title": "expectedResponseTemplate と回答例の outputPath 置き換え",
+            "description": "buildCopilotInstructionText 内のテンプレートと例のすべての outputPath プレースホルダーを suggestOutputPath(workbookPath) で置き換える",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 3,
+            "title": "svelte-check と vite build の通過確認",
+            "status": "done",
+            "dependencies": []
+          }
+        ]
+      },
+      {
+        "id": "73",
+        "title": "テンプレート選択に合わせた回答例の切り替え",
+        "status": "done",
+        "description": "PRD prd_copilot_json_reliability.md 改善C。現状は回答例が filter_rows + save_copy 固定のため、rename_columns や cast_columns を選んだ場合に無関係な例が表示される。選択テンプレートに対応した回答例を用意して切り替える。",
+        "details": "apps/desktop/src/routes/+page.svelte を修正。buildCopilotInstructionText にテンプレートキー（objectiveKey: string | undefined）引数を追加。テンプレートキーに応じて以下の回答例を使い分ける: rename_columns（from/to のペア例）、cast_columns（column/toType 例）、filter_rows（predicate 例）、derive_column（column/expression 例）、group_aggregate（groupBy/measures 例）、カスタム or undefined（現状の filter_rows 例）。各例のカラム名は汎用的なダミー値（amount, name, category, date_col など）を使う。サンプル CSV の場合は既存の revenue-workflow-demo 例を維持する。",
+        "testStrategy": "svelte-check 0 errors、vite build 成功。rename_columns テンプレート選択時に table.rename_columns の回答例が表示されることを確認。カスタム入力時は filter_rows 例が表示されることを確認。",
+        "priority": "medium",
+        "dependencies": [
+          "72"
+        ],
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "テンプレートキーごとの回答例オブジェクトを定義",
+            "description": "TEMPLATE_EXAMPLES マップ（objectiveKey → JSON example string）を +page.svelte 内に定義する",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 2,
+            "title": "buildCopilotInstructionText の例選択ロジック切り替え",
+            "description": "isBundledRevenueDemo の分岐と objectiveKey による分岐を組み合わせて例を選択する",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 3,
+            "title": "svelte-check と vite build の通過確認",
+            "status": "done",
+            "dependencies": []
+          }
+        ]
+      },
+      {
+        "id": "74",
+        "title": "auto-fix の強化（スマートクォート・prose 除去・全角スペース）",
+        "status": "done",
+        "description": "PRD prd_copilot_json_reliability.md 改善D。Copilot が返す JSON に含まれるスマートクォート、JSON ブロック前後の説明文（prose）、全角スペースを auto-fix で除去・正規化する。既存の7種類の auto-fix に4種類を追加する。",
+        "details": "apps/desktop/src/lib/auto-fix.ts を修正。以下を追加する: (1) スマートクォート正規化 — Unicode の左右二重引用符（U+201C/201D）と左右一重引用符（U+2018/2019）を標準 ASCII クォートに置換。JSON 全体に対して適用（JSON parse 前）。(2) JSON ブロック抽出 — 文字列が '{' で始まらず '{' を含む場合に最初の '{' から対応する '}' を抽出（ネスト深度追跡）。(3) 全角スペース除去 — U+3000 を半角スペースに変換。(4) ~~~フェンス対応 — 既存の fence 正規表現を ~~~json/~~~ にも対応させる。auto-fix.test.ts にそれぞれのテストケースを追加する。",
+        "testStrategy": "pnpm -F @relay-agent/desktop test（または vitest run）ですべてのテストが通ること。スマートクォートを含む JSON が正しく修正されること。'以下がJSONです:\\n{...}' が JSON ブロック抽出で正しく処理されること。",
+        "priority": "high",
+        "dependencies": [
+          "64"
+        ],
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "スマートクォート正規化の追加",
+            "description": "U+201C/201D/2018/2019 を標準 ASCII クォートに置換する変換を auto-fix パイプラインの先頭に追加する",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 2,
+            "title": "JSON ブロック抽出の追加",
+            "description": "prose に囲まれた JSON を { から } のネストペアを追跡して抽出するロジックを追加する",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 3,
+            "title": "全角スペース除去と ~~~フェンス対応の追加",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 4,
+            "title": "auto-fix.test.ts に新規テストケースを追加",
+            "description": "上記4種類の変換それぞれについて正常系・エッジケースのテストを追加する",
+            "status": "done",
+            "dependencies": []
+          }
+        ]
+      },
+      {
+        "id": "75",
+        "title": "Level 別修正依頼プロンプトの強化",
+        "status": "done",
+        "description": "PRD prd_copilot_json_reliability.md 改善E。バリデーション失敗時の「修正を依頼するテキストをコピー」プロンプトを Level（1/2/3）ごとに異なる内容に改善する。Level 1 は JSON 構文修正に特化、Level 2 はスキーマ修正、Level 3 はツール名修正に特化した指示とテンプレートを含める。",
+        "details": "apps/desktop/src/routes/+page.svelte の buildRetryPrompt 関数を修正。現状は level に関係なく同じ文章を生成しているが、level に応じて分岐する。Level 1: JSON 構文エラーに特化したメッセージ + テンプレート。Level 2: スキーマエラーのパスと修正ヒント + テンプレート。Level 3: 許可ツール一覧を明示 + テンプレート。各レベルとも最後に expectedResponseTemplate（outputPath 推奨値入り）を含める。",
+        "testStrategy": "svelte-check 0 errors、vite build 成功。Level 1 エラーのシミュレーションでコピーされるプロンプトに JSON 構文修正の指示が含まれることを確認。Level 3 でコピーされるプロンプトに allowedTools が含まれることを確認。",
+        "priority": "medium",
+        "dependencies": [
+          "72",
+          "74"
+        ],
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "buildRetryPrompt の Level 別分岐実装",
+            "description": "feedback.level を switch/if で分岐し、Level 1/2/3 のそれぞれに特化したメッセージを生成する",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 2,
+            "title": "svelte-check と vite build の通過確認",
+            "status": "done",
+            "dependencies": []
+          }
+        ]
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-30T21:33:08Z",
-      "taskCount": 68,
-      "completedCount": 67,
+      "lastModified": "2026-03-31T00:00:00Z",
+      "taskCount": 75,
+      "completedCount": 74,
       "tags": [
         "master"
       ]

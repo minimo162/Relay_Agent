@@ -62,6 +62,9 @@ export const workbookPreflightCheckLevelSchema = z.enum([
 export const preflightWorkbookRequestSchema = z.object({
   workbookPath: z.string().trim().min(1)
 });
+export const inspectWorkbookRequestSchema = z.object({
+  workbookPath: z.string().trim().min(1)
+});
 export const workbookPreflightCheckSchema = z.object({
   code: z.string().trim().min(1),
   title: z.string().trim().min(1),
@@ -77,6 +80,10 @@ export const preflightWorkbookResponseSchema = z.object({
   fileSizeBytes: z.number().int().nonnegative().optional(),
   checks: z.array(workbookPreflightCheckSchema).default([]),
   guidance: z.array(z.string().trim().min(1)).default([])
+});
+export const inspectWorkbookResponseSchema = z.object({
+  profile: workbookProfileSchema,
+  columnProfiles: z.array(sheetColumnProfileSchema).default([])
 });
 
 export const createSessionRequestSchema = z.object({
@@ -396,10 +403,12 @@ export type WorkbookPreflightCheckLevel = z.infer<
   typeof workbookPreflightCheckLevelSchema
 >;
 export type PreflightWorkbookRequest = z.infer<typeof preflightWorkbookRequestSchema>;
+export type InspectWorkbookRequest = z.infer<typeof inspectWorkbookRequestSchema>;
 export type WorkbookPreflightCheck = z.infer<typeof workbookPreflightCheckSchema>;
 export type PreflightWorkbookResponse = z.infer<
   typeof preflightWorkbookResponseSchema
 >;
+export type InspectWorkbookResponse = z.infer<typeof inspectWorkbookResponseSchema>;
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 export type ReadSessionRequest = z.infer<typeof readSessionRequestSchema>;
 export type SessionDetail = z.infer<typeof sessionDetailSchema>;

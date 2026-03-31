@@ -30,6 +30,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app::ping,
             app::preflight_workbook,
+            app::inspect_workbook,
             app::initialize_app,
             session::create_session,
             session::list_sessions,
