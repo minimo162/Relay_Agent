@@ -233,6 +233,10 @@ async function runSendAttempt(
 
   await clickSend(page, timeout);
 
+  // Wait for the send button to re-enable — this signals Copilot has finished
+  // generating. We do this before any DOM read to avoid capturing partial text.
+  await waitForGenerationComplete(page, timeout);
+
   let responseText = "";
   try {
     const response = await networkResponsePromise;
@@ -308,6 +312,23 @@ async function clickSend(page: Page, timeout: number): Promise<void> {
   }
 
   await sendButton.click({ timeout });
+}
+
+/**
+ * Wait until the send button becomes enabled again, which signals that Copilot
+ * has finished streaming its response. Falls back silently on timeout so that
+ * DOM polling still has a chance to capture whatever is available.
+ */
+async function waitForGenerationComplete(page: Page, timeout: number): Promise<void> {
+  try {
+    // After clicking send the button briefly becomes enabled then disabled while
+    // Copilot starts generating. Give it 2 s to go disabled first.
+    await page.waitForSelector(".fai-SendButton[disabled]", { timeout: 2_000 }).catch(() => undefined);
+    // Now wait for it to become enabled again (= generation complete).
+    await page.waitForSelector(SEND_READY_SEL, { timeout });
+  } catch {
+    // Timeout — Copilot may still be generating; fall through to DOM polling.
+  }
 }
 
 async function firstVisibleLocator(page: Page, locators: Locator[]): Promise<Locator | null> {
