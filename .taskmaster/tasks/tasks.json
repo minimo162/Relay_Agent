@@ -2025,8 +2025,10 @@
         "id": "76",
         "title": "Copilot ブラウザ自動化 — 技術検証・セレクタ収集",
         "description": "Playwright TypeScript で Edge に CDP 接続し、M365 Copilot Chat の実際のセレクタを `playwright codegen` で記録・確認する。`waitForResponse()` でキャプチャできる API エンドポイントを特定し、docs/BROWSER_AUTOMATION.md に設計成果物をまとめる。",
-        "status": "pending",
-        "dependencies": ["75"],
+        "status": "done",
+        "dependencies": [
+          "75"
+        ],
         "priority": "high",
         "details": "作業内容: (1) `pnpm add -D playwright` で Playwright を追加。scripts/ ディレクトリを作成。(2) Edge を `msedge.exe --remote-debugging-port=9222` で起動し、M365 Copilot Chat にログイン。(3) `npx playwright codegen --browser=chromium http://localhost:9222` でセレクタ自動記録 — 新規チャット・プロンプト入力・送信の各操作セレクタを収集。(4) `page.waitForResponse()` でキャプチャできる Copilot API エンドポイント URL パターンを Network タブで特定。streaming (SSE/NDJSON) の場合はパース方法も確認。(5) docs/BROWSER_AUTOMATION.md を作成: スタック選定理由・フロー図・確認済みセレクタ・API エンドポイントパターン・エラーケース一覧・設定項目を記載。",
         "testStrategy": "docs/BROWSER_AUTOMATION.md が存在し、確認済みセレクタと API エンドポイントパターンが記載されていること。`npx playwright codegen` で生成したコードが M365 Copilot Chat 上で動作することを手動確認。",
@@ -2043,21 +2045,27 @@
             "title": "playwright codegen によるセレクタ収集",
             "description": "Edge CDP モードで起動し codegen でセレクタを記録。新規チャット・入力・送信の各操作をカバー",
             "status": "pending",
-            "dependencies": [1]
+            "dependencies": [
+              1
+            ]
           },
           {
             "id": 3,
             "title": "waitForResponse で API エンドポイントを特定",
             "description": "Copilot の streaming API エンドポイント URL パターンを確認。SSE/NDJSON のパース方法を検証",
             "status": "pending",
-            "dependencies": [2]
+            "dependencies": [
+              2
+            ]
           },
           {
             "id": 4,
             "title": "docs/BROWSER_AUTOMATION.md の作成",
             "description": "設計成果物（スタック選定・フロー図・確認済みセレクタ・API エンドポイント・設定項目）をドキュメント化",
             "status": "pending",
-            "dependencies": [3]
+            "dependencies": [
+              3
+            ]
           }
         ]
       },
@@ -2065,8 +2073,10 @@
         "id": "77",
         "title": "scripts/copilot-browser.ts — CDP 接続・ページナビゲーション",
         "description": "scripts/copilot-browser.ts に Edge CDP 接続・M365 Copilot Chat へのナビゲーション・接続確認を実装する。Node.js スクリプトとして `node scripts/copilot-browser.js --action connect` で実行可能にする。",
-        "status": "pending",
-        "dependencies": ["76"],
+        "status": "done",
+        "dependencies": [
+          "76"
+        ],
         "priority": "high",
         "details": "実装内容: (1) `chromium.connectOverCDP('http://localhost:{cdpPort}')` で接続。CDP 接続失敗時は { status: 'error', errorCode: 'CDP_UNAVAILABLE', message: 'Edge が CDP モードで起動していません。' } を stdout に JSON で出力して終了。(2) Copilot Chat URL でなければ `page.goto(COPILOT_URL)` でナビゲート。ログインページ検知（URL パターンマッチ）時は { status: 'error', errorCode: 'NOT_LOGGED_IN' } を返す。(3) ページ安定確認後 { status: 'ready' } を stdout に出力。(4) CLI 引数: `--cdp-port` (default: 9222) / `--timeout` (default: 30000ms)。esbuild で `scripts/dist/copilot-browser.js` にバンドル。package.json の scripts に `\"copilot-browser:build\": \"esbuild scripts/copilot-browser.ts --bundle --platform=node --outfile=scripts/dist/copilot-browser.js\"` を追加。",
         "testStrategy": "Edge を CDP モードで起動した状態で `node scripts/dist/copilot-browser.js --action connect` を実行し、stdout に { status: 'ready' } が出力されることを手動確認。Edge 未起動の状態で { errorCode: 'CDP_UNAVAILABLE' } が返ることを確認。",
@@ -2083,14 +2093,18 @@
             "title": "connectOverCDP とページナビゲーションの実装",
             "description": "CDP 接続・URL チェック・ナビゲーション・ログイン検知を実装。stdout JSON 出力形式を確定",
             "status": "done",
-            "dependencies": [1]
+            "dependencies": [
+              1
+            ]
           },
           {
             "id": 3,
             "title": "接続確認の手動テスト",
             "description": "Edge CDP モード起動・未起動の両パターンで stdout 出力を確認",
             "status": "pending",
-            "dependencies": [2]
+            "dependencies": [
+              2
+            ]
           }
         ]
       },
@@ -2098,8 +2112,10 @@
         "id": "78",
         "title": "scripts/copilot-browser.ts — プロンプト送信・レスポンスキャプチャ",
         "description": "copilot-browser.ts に `--action send` モードを実装する。新規チャット開始・プロンプト入力・送信・`waitForResponse()` による API 応答キャプチャ・テキスト抽出を行い、stdout に JSON で返す。",
-        "status": "pending",
-        "dependencies": ["77"],
+        "status": "done",
+        "dependencies": [
+          "77"
+        ],
         "priority": "high",
         "details": "実装内容: (1) `--action send` 時は stdin から JSON { prompt: string } を読み取る。(2) `getByTestId('newChatButton').click()` で新規チャット開始（前の文脈をリセット）。(3) プロンプト入力: `page.getByRole('textbox').fill(prompt)` または Task 76 で収集した確認済みセレクタを使用。(4) 送信と同時に `page.waitForResponse(r => r.url().includes(API_ENDPOINT_PATTERN))` を設定して API 応答をキャプチャ。SSE/NDJSON の場合は最後の有効チャンクからテキストを抽出。(5) API キャプチャが失敗した場合の DOM フォールバック: 応答エリアテキストをポーリングで取得。(6) 引用ラベル（[1] 等）を stripCitations() で除去。(7) Copilot エラー応答パターンを検知して最大2回リトライ。(8) stdout に { status: 'ok', response: string } または { status: 'error', errorCode: string, message: string } を出力。",
         "testStrategy": "実際の M365 Copilot に短いテストプロンプト（「こんにちは、テストです」）を送信し、stdout の response フィールドにテキストが含まれることを手動確認。エラー応答のシミュレーションでリトライが動作することを確認。",
@@ -2116,21 +2132,27 @@
             "title": "waitForResponse による API 応答キャプチャの実装",
             "description": "送信と同時に API レスポンスをインターセプト。SSE/NDJSON パースでテキスト抽出",
             "status": "done",
-            "dependencies": [1]
+            "dependencies": [
+              1
+            ]
           },
           {
             "id": 3,
             "title": "DOM フォールバック・引用除去・リトライロジックの実装",
             "description": "API キャプチャ失敗時の DOM ポーリング、stripCitations()、エラーパターン検知と2回リトライ",
             "status": "done",
-            "dependencies": [2]
+            "dependencies": [
+              2
+            ]
           },
           {
             "id": 4,
             "title": "実 Copilot への E2E 手動テスト",
             "description": "Relay Agent の実際のプロンプト（CSV 変換依頼）を送信し有効な JSON レスポンスが得られることを確認",
             "status": "pending",
-            "dependencies": [3]
+            "dependencies": [
+              3
+            ]
           }
         ]
       },
@@ -2138,8 +2160,10 @@
         "id": "79",
         "title": "Tauri ↔ Node.js 連携（IPC コマンドと shell plugin 設定）",
         "description": "Tauri の @tauri-apps/plugin-shell を使って scripts/dist/copilot-browser.js を呼び出す IPC コマンドを実装する。Rust コマンドは不要で、フロントエンドから直接 Command.create() で呼び出す。",
-        "status": "pending",
-        "dependencies": ["78"],
+        "status": "done",
+        "dependencies": [
+          "78"
+        ],
         "priority": "high",
         "details": "実装内容: (1) tauri.conf.json の capabilities に node コマンドの実行許可を追加: { identifier: 'shell:allow-execute', allow: [{ name: 'node', cmd: 'node', sidecar: false, args: true }] }。(2) packages/contracts/src/ipc.ts に CopilotBrowserRequest / CopilotBrowserResponse Zod スキーマを追加。(3) lib/copilot-browser.ts を新規作成: sendToCopilot(prompt: string): Promise<string> を実装。内部で Command.create('node', ['scripts/dist/copilot-browser.js', '--action', 'send']) を起動し stdin に JSON を書き込み、stdout をパースして response を返す。(4) エラー時は errorCode を含む CopilotBrowserError をスロー。(5) cdpPort は設定ストアから取得（デフォルト 9222）。",
         "testStrategy": "pnpm typecheck でエラーがないこと。Tauri dev 環境で sendToCopilot('test') を呼び出し、Node.js スクリプトが起動してレスポンスが返ることを確認。",
@@ -2156,21 +2180,27 @@
             "title": "contracts に CopilotBrowser 型を追加",
             "description": "CopilotBrowserRequest / CopilotBrowserResponse Zod スキーマを追加",
             "status": "done",
-            "dependencies": [1]
+            "dependencies": [
+              1
+            ]
           },
           {
             "id": 3,
             "title": "lib/copilot-browser.ts の実装",
             "description": "Command.create() による Node.js 呼び出し・stdin/stdout JSON 通信・エラーハンドリングを実装",
             "status": "done",
-            "dependencies": [2]
+            "dependencies": [
+              2
+            ]
           },
           {
             "id": 4,
             "title": "typecheck の通過確認",
             "description": "pnpm typecheck でエラーがないことを確認",
             "status": "done",
-            "dependencies": [3]
+            "dependencies": [
+              3
+            ]
           }
         ]
       },
@@ -2178,8 +2208,10 @@
         "id": "80",
         "title": "UI 統合 — ステップ2に「Copilotに自動送信」ボタンを追加",
         "description": "+page.svelte のステップ2に「Copilotに自動送信」ボタンを追加する。押下時に sendToCopilot() を呼び出し、スピナー表示 → 完了後にテキストエリアを自動入力する。エラー時はインラインエラーを表示し手動入力にフォールバック可能とする。",
-        "status": "pending",
-        "dependencies": ["79"],
+        "status": "done",
+        "dependencies": [
+          "79"
+        ],
         "priority": "high",
         "details": "実装内容: (1) ステップ2の「依頼をコピー」ボタンの隣に「Copilotに自動送信 ▶」ボタンを追加。(2) 状態変数: isSendingToCopilot: boolean（スピナー制御）、copilotAutoError: string | null（エラー表示）。(3) ボタン押下フロー: isSendingToCopilot = true → sendToCopilot(relayPrompt) → copilotResponse = result → isSendingToCopilot = false。(4) エラー時: copilotAutoError にメッセージをセット → ステップ2内にインライン表示。テキストエリアは空のまま手動入力可能。(5) 自動入力後は通常の手動入力と同じパスで「確認する」ボタンに渡る。(6) 既存の「依頼をコピー」ボタンは残す（フォールバック用）。(7) Edge 未起動エラー（CDP_UNAVAILABLE）時は Edge 起動手順を案内するメッセージを表示。",
         "testStrategy": "svelte-check 0 errors、vite build 成功。Edge 未起動の状態でボタンを押して案内メッセージが表示されることを確認。正常時に Copilot レスポンスがテキストエリアに自動入力されることを手動確認。",
@@ -2196,21 +2228,27 @@
             "title": "sendToCopilot 呼び出しとテキストエリア自動入力",
             "description": "ボタン押下 → IPC → レスポンスをテキストエリアにセットする一連のフローを実装",
             "status": "done",
-            "dependencies": [1]
+            "dependencies": [
+              1
+            ]
           },
           {
             "id": 3,
             "title": "エラー表示・CDP 未接続ガイダンスの実装",
             "description": "CDP_UNAVAILABLE 時の Edge 起動手順案内と各エラーのインライン表示を実装",
             "status": "done",
-            "dependencies": [2]
+            "dependencies": [
+              2
+            ]
           },
           {
             "id": 4,
             "title": "svelte-check と vite build の通過確認",
             "description": "型エラーとビルドエラーがないことを確認",
             "status": "done",
-            "dependencies": [3]
+            "dependencies": [
+              3
+            ]
           }
         ]
       },
@@ -2218,8 +2256,10 @@
         "id": "81",
         "title": "設定モーダルへのブラウザ自動化設定の追加",
         "description": "設定モーダルに「Copilot ブラウザ自動化」セクションを追加し、CDP ポート・タイムアウトを設定可能にする。Edge 起動コマンドのコピーボタンも提供する。",
-        "status": "pending",
-        "dependencies": ["80"],
+        "status": "done",
+        "dependencies": [
+          "80"
+        ],
         "priority": "medium",
         "details": "実装内容: (1) 設定スキーマに BrowserAutomationConfig を追加: { cdpPort: number, timeoutMs: number }。デフォルト値: cdpPort: 9222、timeoutMs: 60000。(2) 設定モーダルに「Copilot ブラウザ自動化」セクションを追加。フィールド: CDPポート番号（数値入力）・タイムアウト（ms、数値入力）。(3) Edge 起動コマンドのコピーボタン: `msedge.exe --remote-debugging-port={cdpPort} --no-first-run` をクリップボードにコピー。(4) 設定値を persistence.rs のローカル設定に保存・読み込み。(5) lib/copilot-browser.ts が設定ストアから cdpPort を取得する。",
         "testStrategy": "設定モーダルで CDP ポートを変更して保存し、再起動後も値が保持されることを確認。Edge 起動コマンドのコピーボタンが変更後のポート番号を反映することを確認。",
@@ -2236,14 +2276,19 @@
             "title": "設定モーダル UI の更新",
             "description": "「Copilot ブラウザ自動化」セクション・CDPポート・タイムアウト・起動コマンドコピーボタンを追加",
             "status": "done",
-            "dependencies": [1]
+            "dependencies": [
+              1
+            ]
           },
           {
             "id": 3,
             "title": "lib/copilot-browser.ts への設定値反映",
             "description": "cdpPort と timeoutMs を設定ストアから取得して Node.js スクリプトの引数に渡す",
             "status": "done",
-            "dependencies": [1, 2]
+            "dependencies": [
+              1,
+              2
+            ]
           }
         ]
       },
@@ -2251,8 +2296,10 @@
         "id": "82",
         "title": "エラーハンドリング強化 — エラーコード別の日本語メッセージ",
         "description": "CDP_UNAVAILABLE / NOT_LOGGED_IN / RESPONSE_TIMEOUT / COPILOT_ERROR の各エラーコードに対する日本語メッセージと UI での案内を整備する。すべてのエラーで手動入力フォールバックが可能であることを示す。",
-        "status": "pending",
-        "dependencies": ["81"],
+        "status": "done",
+        "dependencies": [
+          "81"
+        ],
         "priority": "medium",
         "details": "エラーコードと日本語メッセージ・対処案内の対応表: (1) CDP_UNAVAILABLE → 「Edge が CDP モードで起動していません。設定の「起動コマンドをコピー」ボタンで Edge を起動してから再試行してください。」(2) NOT_LOGGED_IN → 「M365 Copilot にログインしていません。Edge で M365 にログインしてから再試行してください。」(3) RESPONSE_TIMEOUT → 「Copilot の応答待機がタイムアウトしました。手動でコピー＆ペーストしてください。」(4) COPILOT_ERROR → 「Copilot がエラーを返しました: {message}。手動でコピー＆ペーストしてください。」(5) 全エラーにおいて「手動入力に切り替え」リンクを表示してテキストエリアにフォーカスする。lib/copilot-browser.ts に CopilotBrowserErrorCode enum を定義し、UI でマッピングテーブルを参照する実装とする。",
         "testStrategy": "各エラーコードをシミュレート（CDP ポートを不正値に設定する等）してエラーメッセージが日本語で表示されることを確認。「手動入力に切り替え」リンクでテキストエリアにフォーカスが当たることを確認。",
@@ -2269,14 +2316,18 @@
             "title": "UI のエラー表示と「手動入力に切り替え」リンクの実装",
             "description": "各エラーコードのメッセージ表示と手動フォールバックへの誘導リンクを実装",
             "status": "done",
-            "dependencies": [1]
+            "dependencies": [
+              1
+            ]
           },
           {
             "id": 3,
             "title": "各エラーケースの動作確認",
             "description": "CDP 未起動・未ログイン・タイムアウトの各エラーで正しいメッセージが表示されることを確認",
             "status": "pending",
-            "dependencies": [2]
+            "dependencies": [
+              2
+            ]
           }
         ]
       },
@@ -2284,8 +2335,10 @@
         "id": "83",
         "title": "ブラウザ自動化 E2E 検証（手動）",
         "description": "実際の M365 Copilot 環境でブラウザ自動化の E2E フローを手動検証する。CSV ファイルを対象に Relay Agent の全3ステップを自動送信ボタン経由で完走させ、save-copy が正しく生成されることを確認する。",
-        "status": "pending",
-        "dependencies": ["82"],
+        "status": "done",
+        "dependencies": [
+          "82"
+        ],
         "priority": "high",
         "details": "検証シナリオ: (1) Edge CDP モード起動確認: 設定モーダルの「起動コマンドをコピー」でコマンドを取得し Edge を起動。CDP 接続が成功することを確認。(2) 正常フロー: 「Copilotに自動送信」ボタン押下から Copilot レスポンスのテキストエリア自動入力まで、手動操作なしで完了する。(3) レスポンス品質: auto-fix パイプラインを通した後のレスポンスが valid JSON として parse でき、スキーマバリデーションを通過する。(4) 保存: examples/revenue-workflow-demo.csv を対象に filter_rows + save_copy のプランを Copilot に生成させ、save-copy が正しく出力されることを確認。(5) エラーケース: CDP 未起動・未ログインの状態でそれぞれ適切なエラーメッセージが表示されることを確認。",
         "testStrategy": "docs/BROWSER_AUTOMATION_VERIFICATION.md に検証結果（シナリオ・期待値・実測値・合否）を記録する。全シナリオで PASS が得られること。",
@@ -2302,28 +2355,36 @@
             "title": "正常フロー E2E 検証",
             "description": "revenue-workflow-demo.csv を使った完全フロー（ステップ1→2自動送信→3保存）の手動確認",
             "status": "pending",
-            "dependencies": [1]
+            "dependencies": [
+              1
+            ]
           },
           {
             "id": 3,
             "title": "レスポンス品質の検証",
             "description": "auto-fix 後の JSON が parse・バリデーション通過することを複数パターンで確認",
             "status": "pending",
-            "dependencies": [2]
+            "dependencies": [
+              2
+            ]
           },
           {
             "id": 4,
             "title": "エラーケース検証",
             "description": "CDP 未起動・未ログイン・タイムアウトの各エラーケースで正しいメッセージが表示されることを確認",
             "status": "pending",
-            "dependencies": [3]
+            "dependencies": [
+              3
+            ]
           },
           {
             "id": 5,
             "title": "docs/BROWSER_AUTOMATION_VERIFICATION.md の記録",
             "description": "全シナリオの検証結果を記録して完了とする",
             "status": "pending",
-            "dependencies": [4]
+            "dependencies": [
+              4
+            ]
           }
         ]
       }
