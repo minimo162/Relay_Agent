@@ -898,8 +898,13 @@
   }
 
   async function copyEdgeLaunchCommand(): Promise<void> {
+    const edgePaths = [
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    ];
+    const edgeExe = edgePaths[0];
     await copyToClipboard(
-      `msedge.exe --remote-debugging-port=${cdpPort} --no-first-run`
+      `& "${edgeExe}" --remote-debugging-port=${cdpPort} --no-first-run`
     );
     copiedBrowserCommandNotice = "Edge の起動コマンドをコピーしました。";
   }
@@ -2092,7 +2097,7 @@
           </button>
         </div>
         <p class="settings-hint">
-          `msedge.exe --remote-debugging-port={cdpPort} --no-first-run`
+          `& "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --remote-debugging-port={cdpPort} --no-first-run`
         </p>
         {#if copiedBrowserCommandNotice}
           <p class="field-success">{copiedBrowserCommandNotice}</p>
