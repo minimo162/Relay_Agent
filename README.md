@@ -4,20 +4,18 @@ Relay Agent is a desktop MVP for turning a validated JSON action plan into a saf
 
 ## Current MVP Scope
 
-- Home can create and reopen persisted sessions from local JSON storage.
-- Home now surfaces a short recent-work list so the last opened sessions and workbook paths are easier to resume.
+- The app stores sessions in local JSON and shows a short recent-session list on the main page.
+- Recent sessions with unfinished work can be resumed from the same page through the `下書きを再開` badge.
 - The main workflow is now one guided page with 3 stages: `はじめる`, `Copilot に聞く`, and `確認して保存`.
-- Home now offers one unified start form with a bundled CSV shortcut, objective templates, and an editable task name that auto-fills from the objective.
+- All 3 stages stay visible at once; unreached stages are greyed out, and Step 1 collapses into an editable summary after preparation succeeds.
+- Step 1 offers a bundled CSV shortcut, objective templates, and an editable task name that auto-fills from the objective.
 - The main action is always a single primary button for the current stage, with inline progress when multiple backend commands run in sequence.
+- Preparation now runs workbook preflight and workbook inspection so the Copilot handoff includes sheet names, typed column hints, a suggested output path, and a template-specific JSON example.
 - Copilot handoff now copies natural-language instructions plus a strict JSON template instead of a raw relay packet.
-- Pasted Copilot JSON is auto-fixed for common issues such as markdown fences, BOM, CRLF, trailing commas, and Windows-style path separators before validation.
-- Validation failures now show tiered plain-language guidance plus a ready-to-copy retry prompt.
-- Review and save now pins a three-point summary above the fold, shows per-sheet row-level before/after samples in the SheetDiff cards, and saves through one `コピーを保存する` action while keeping preview-before-write and save-copy-only guardrails.
-- Studio now exposes a read-only reviewer mode plus `Copy review summary` so approvers can inspect a saved turn without editing controls.
-- Studio now exposes an `Inspection details` browser for the selected turn, pairing read-only `Turn details` lifecycle summaries with saved workbook evidence so packet, validation, approval, execution, and workbook artifacts can be reviewed without opening local JSON files by hand.
-- Studio now rewrites validation, preview, and save failures into plain-language guidance with copyable Copilot follow-up prompts.
-- Studio now restores local turn drafts, pasted response text, relay packet text, and the last preview summary snapshot after restart.
-- Studio now warns before leaving, going back, or switching turns when local draft or preview review state would otherwise be thrown away.
+- Pasted Copilot JSON is auto-fixed for common issues such as markdown fences, `~~~json` fences, BOM, CRLF, trailing commas, smart quotes, full-width spaces, prose-wrapped JSON, and Windows-style path separators before validation.
+- Validation failures now show level-specific plain-language guidance plus a ready-to-copy retry prompt.
+- Review and save pins a three-point summary above the fold, shows per-sheet row-level before/after samples in the SheetDiff cards, and saves through one `保存する` action while keeping preview-before-write and save-copy-only guardrails.
+- The page also includes a settings modal for safety and storage notes plus a `詳細表示` drawer for the raw relay packet, response template, and retry prompt.
 - CSV write execution is supported for `table.rename_columns`, `table.cast_columns`, `table.filter_rows`, `table.derive_column`, `table.group_aggregate`, and `workbook.save_copy`.
 - CSV save-copy output is sanitized so cells starting with `=`, `+`, `-`, or `@` are prefixed before the new file is written.
 - Xlsx support is currently limited to inspect-oriented flows and save-copy preview planning, not rich write execution.
@@ -86,7 +84,9 @@ required Tauri toolchain installed, run:
 
 ```bash
 pnpm install
-pnpm --filter @relay-agent/desktop tauri:build
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm --dir apps/desktop exec tauri build --config src-tauri/tauri.windows.conf.json
 ```
 
 When that packaging step succeeds, check the generated bundle output under:
@@ -178,79 +178,38 @@ checks that the original sample CSV stays unchanged.
 The matching verification checklist lives in
 [`docs/APP_WORKFLOW_TEST_VERIFICATION.md`](docs/APP_WORKFLOW_TEST_VERIFICATION.md).
 
-## Home Startup Behavior
+## Guided Workflow Behavior
 
-- On a clean profile, the app opens directly to one guided start form instead of
-  splitting users into sample or custom entry modes.
-- The bundled `examples/revenue-workflow-demo.csv` sample appears as a shortcut
-  inside the file selector area when that sample path is discoverable in the
-  current build.
-- The same form always shows plain-language objective templates plus an editable
-  task name that auto-fills from the objective text.
-- Home now runs a file check before session creation when a workbook path is
-  present, surfacing unreadable files, unsupported separators, and locale- or
-  CSV-specific compatibility notes in plain language.
-- Home now keeps a visible `File safety` note on the create-session path so the
-  original workbook protection is always stated in plain language.
-- Home also surfaces recent sessions and recent workbook paths that were used in
-  the last local runs so the next Studio handoff is quicker.
-- Home now also surfaces recent reviewed saves so approvers can jump directly
-  into reviewer mode for the latest saved turn.
-- If the previous app run ended unexpectedly while a draft was still autosaved,
-  Home shows a recovery prompt so you can restore that work in Studio or discard
-  it.
-- If local storage cannot be opened at startup, Home shows a plain-language
-  startup issue and offers `Retry startup checks` or `Continue in temporary
-  mode`. Temporary mode is for short-lived testing only and does not survive
-  restart.
+- On startup, the app opens to the same one-page guided workflow used for the
+  full session.
+- Step 1 shows the bundled `examples/revenue-workflow-demo.csv` shortcut when
+  that sample path is discoverable in the current build.
+- Step 1 runs a workbook preflight before creating the session and then reads
+  workbook structure so the next Copilot handoff can reference real sheet and
+  column names.
+- After preparation succeeds, Step 1 collapses to a compact summary with an
+  `編集する` button, while Steps 2 and 3 stay visible below it.
+- If local storage cannot be opened at startup, the page shows a plain-language
+  startup issue card instead of failing silently.
 
-## Continuity Behavior
+## Draft Resume Behavior
 
-- Studio keeps a local resumable draft per session, including the turn title,
+- The app keeps a local resumable draft per session, including the turn title,
   turn objective, workbook path, pasted response text, relay packet text, and
   the last preview summary snapshot.
-- When you reopen that session in Studio, the draft is restored automatically
-  and the UI tells you when a preview snapshot came from a previous run.
-- If the app did not close cleanly, Home offers that same draft as recovery
-  work before you even enter Studio.
-- If you try to leave Studio or switch turns while draft or preview review work
-  is still staged, Studio asks whether to keep that draft for later or discard
-  it deliberately before continuing.
+- In the recent-session list, unfinished drafts are marked with
+  `下書きを再開`.
+- Clicking that recent session restores the Step 1 inputs and, when a draft is
+  present, restores the Step 2 Copilot text plus the last preview summary.
 - Preview and approval runtime state are still not executable after restart, so
   request preview again before approval or execution.
-- Recent reviewed saves can be reopened in a read-only reviewer mode that hides
-  editing and save controls while still showing summary, output path, and
-  warnings.
 
-## Review Recovery
+## Error Handling
 
-- When validation, preview, approval, or save cannot continue, Studio now shows
-  plain-language `problem`, `reason`, and `next steps` guidance instead of only
-  backend wording.
-- Those failure states also provide a copyable Copilot follow-up prompt so a
-  non-engineer operator can ask for a safer retry without writing the repair
-  request from scratch.
-
-## Inspection Details
-
-- Studio now keeps a read-only `Inspection details` section for the selected
-  turn so operators and reviewers can inspect lifecycle summaries and workbook
-  evidence without browsing the local storage folder directly.
-- `Turn details` now covers a read-only overview plus `Packet`,
-  `Validation`, `Approval`, and `Execution` tabs for the selected turn.
-- Those lifecycle summaries resolve from live in-memory state for the current
-  turn and from persisted local artifacts after reload, so temporary mode still
-  shows meaningful current-turn details while the app stays open.
-- `Workbook evidence` continues to show persisted `workbook-profile`,
-  `sheet-preview`, `column-profile`, `diff-summary`, and `preview` artifacts.
-- Reviewer mode shows the same `Turn details` and `Workbook evidence` surfaces
-  while still hiding editing, Copilot handoff, approval, and save controls.
-- If save-copy execution fails, the `Execution` tab keeps the failed state, the
-  intended output path, and the plain-language reason summary so the same turn
-  can be reviewed again after reload.
-- If a step has not been reached yet, belongs to an older unsupported turn, or
-  temporary-mode evidence is only live for the current app session, Studio now
-  shows an explicit unavailable-state reason instead of a blank panel.
+- Validation, preview, and save problems are shown inline inside the current
+  step instead of only surfacing raw backend wording.
+- Validation failures provide a copyable retry prompt whose wording changes by
+  error level: JSON syntax, schema shape, or unsupported tool name.
 
 ## Demo Asset
 
@@ -262,7 +221,7 @@ It was chosen to exercise the implemented workflow:
 - `approved` and `posted_on` support filter and inspect scenarios.
 - `comment` includes `=`, `+`, and `@` prefixes so save-copy sanitization can be observed on execution output.
 
-For Studio, prefer an absolute workbook path:
+For the guided page, prefer an absolute workbook path:
 
 ```bash
 pwd
@@ -281,22 +240,21 @@ Then use:
    or use the bundled sample shortcut when it is shown.
 3. Choose or enter an objective such as:
    `approved が true の行だけ残して、結果を説明し、別コピーとして保存する`
-4. Confirm the task name auto-fills, then click `始める`.
-5. In `2. Copilot に聞く`, click `Copilot 用にコピー`.
-6. Paste a valid JSON response into the response box, then click `変更を確認する`.
+4. Confirm the task name auto-fills, then click `準備する`.
+5. In `2. Copilot に聞く`, click `依頼をコピー`.
+6. Paste a valid JSON response into the response box, then click `確認する`.
 7. In `3. 確認して保存`, review the pinned summary strip plus any detailed changes.
-8. Click `コピーを保存する`.
+8. Click `保存する`.
 9. Confirm the output file exists at the configured `outputPath`.
 10. Confirm the original file under `examples/` is unchanged.
 
-The full follow-up verification checklist for the non-engineer usability scope is
-tracked in [`docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md`](docs/NON_ENGINEER_FOLLOWUP_VERIFICATION.md).
-The workbook artifact browser verification checklist is tracked in
-[`docs/WORKBOOK_ARTIFACT_BROWSER_VERIFICATION.md`](docs/WORKBOOK_ARTIFACT_BROWSER_VERIFICATION.md).
-The turn lifecycle inspection verification checklist is tracked in
-[`docs/TURN_LIFECYCLE_DETAILS_VERIFICATION.md`](docs/TURN_LIFECYCLE_DETAILS_VERIFICATION.md).
+The current guided workflow verification checklist is tracked in
+[`docs/GUIDED_FLOW_VERIFICATION.md`](docs/GUIDED_FLOW_VERIFICATION.md).
 
-With the response example below, the output copy should contain only rows where `approved = true`, add a derived `review_label` column, and prefix any dangerous `comment` values before writing the new CSV. On the bundled sample CSV, that produces 3 output rows and sanitizes 3 `comment` cells.
+With the response example below, the output copy should contain only rows where
+`approved == true`, add a derived `review_label` column, and prefix any
+dangerous `comment` values before writing the new CSV. On the bundled sample
+CSV, that produces 3 output rows and sanitizes 3 `comment` cells.
 
 ## Relay Packet Example
 
@@ -402,7 +360,8 @@ The generated relay packet is the payload you would hand to Copilot. The exact `
 
 ## Valid Copilot Response Example
 
-Replace `outputPath` with a writable absolute path for your operating system, then paste strict JSON only into the Studio response box:
+Replace `outputPath` with a writable absolute path for your operating system,
+then paste strict JSON only into the Step 2 response box:
 
 ```json
 {
@@ -413,7 +372,7 @@ Replace `outputPath` with a writable absolute path for your operating system, th
       "tool": "table.filter_rows",
       "sheet": "Sheet1",
       "args": {
-        "predicate": "approved = true"
+        "predicate": "[approved] == true"
       }
     },
     {
@@ -428,7 +387,7 @@ Replace `outputPath` with a writable absolute path for your operating system, th
     {
       "tool": "workbook.save_copy",
       "args": {
-        "outputPath": "/absolute/path/to/revenue-workflow-demo.cleaned.csv"
+        "outputPath": "/absolute/path/to/revenue-workflow-demo.copy.csv"
       }
     }
   ],
@@ -458,8 +417,6 @@ Replace `outputPath` with a writable absolute path for your operating system, th
   - bracketed column references for spaced headers
   - basic arithmetic or string concatenation in `table.derive_column`
 - Runtime preview, approval, and execution work are still not resumable after restart even though sessions, lifecycle summaries, workbook artifacts, and logs persist to disk.
-- `Inspection details` are intentionally read-only. They explain packet, validation, approval, execution, and workbook evidence, but they do not add restart, retry, or guardrail-bypass actions.
-- Temporary mode can show current-turn lifecycle details from live state, but those details disappear when the app closes, and older turns without saved lifecycle artifacts fall back to explicit unavailable-state messaging.
 - The product workflow does not implement shell access, arbitrary code execution, VBA execution, or external network execution.
 
 ## Repository Layout
