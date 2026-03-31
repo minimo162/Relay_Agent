@@ -2406,7 +2406,7 @@
         "id": "85",
         "title": "Contracts 拡張 — CopilotTurnResponse に status フィールド追加",
         "description": "packages/contracts/src/relay.ts の copilotTurnResponseSchema に status（'thinking' | 'ready_to_write' | 'done' | 'error'）フィールドを追加し、型を更新する。",
-        "status": "pending",
+        "status": "done",
         "priority": "high",
         "dependencies": [
           "84"
@@ -2518,12 +2518,12 @@
         "id": "93",
         "title": "Contracts 拡張 — file アクションスキーマ追加（フェーズ3準備）",
         "description": "packages/contracts/src/file.ts を新設し、ファイル操作ツールの Zod スキーマを定義する。",
-        "status": "pending",
+        "status": "done",
         "priority": "medium",
         "dependencies": [
           "84"
         ],
-        "details": "file.list / file.read_text / file.stat（read）と file.copy / file.move / file.delete（write）のスキーマを定義。spreadsheetActionSchema と合わせた relayActionSchema = z.union([...]) を contracts/index.ts でエクスポート。Rustバックエンドの実装はフェーズ3（Task 96以降）で行う。",
+        "details": "file.list / file.read_text / file.stat（read）と file.copy / file.move / file.delete（write）のスキーマを定義し、contracts/index.ts から明示エクスポートする。relayActionSchema への統合はバックエンド実装（Task 94 以降）と合わせて後続で行う。",
         "testStrategy": "file.list / file.copy の Zod パースが成功すること。既存 spreadsheetActionSchema に影響がないこと。",
         "subtasks": [],
         "updatedAt": "2026-04-01T00:00:00.000Z"
