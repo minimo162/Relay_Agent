@@ -70,6 +70,20 @@
   const expectedResponseShape =
     '{ "version": "1.0", "summary": "...", "actions": [...] }';
   const instructionColumnLimit = 20;
+
+  // Exact args structure for each tool. This is embedded verbatim in the Copilot
+  // instruction so the LLM uses the correct field names and nesting.
+  const TOOL_ARGS_REFERENCE = `workbook.inspect   : { "tool": "workbook.inspect", "args": { "sourcePath": "/path/to/file.csv" } }
+sheet.preview      : { "tool": "sheet.preview", "args": { "sheet": "Sheet1", "limit": 25 } }
+sheet.profile_columns: { "tool": "sheet.profile_columns", "args": { "sheet": "Sheet1", "sampleSize": 250 } }
+session.diff_from_base: { "tool": "session.diff_from_base", "args": {} }
+table.filter_rows  : { "tool": "table.filter_rows", "sheet": "Sheet1", "args": { "predicate": "[approved] == true" } }
+table.rename_columns: { "tool": "table.rename_columns", "sheet": "Sheet1", "args": { "renames": [{ "from": "old_name", "to": "new_name" }] } }
+table.cast_columns : { "tool": "table.cast_columns", "sheet": "Sheet1", "args": { "casts": [{ "column": "amount", "toType": "number" }] } }
+table.derive_column: { "tool": "table.derive_column", "sheet": "Sheet1", "args": { "column": "new_col", "expression": "[amount] * 2", "position": "end" } }
+table.group_aggregate: { "tool": "table.group_aggregate", "sheet": "Sheet1", "args": { "groupBy": ["region"], "measures": [{ "column": "amount", "op": "sum", "as": "total_amount" }] } }
+workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/path/to/output.csv" } }
+重要: sheet.preview / sheet.profile_columns / workbook.* / session.* は sheet を args の中に書く。table.* だけ sheet をトップレベルに書く。`;
   const stepBanner = [
     {
       id: "setup" as const,
@@ -516,7 +530,10 @@
       "3. 使ってよい操作",
       ...toolLines,
       "",
-      "4. 回答ルール",
+      "4. 各 tool の正確な args 構造（この通りに書いてください）",
+      TOOL_ARGS_REFERENCE,
+      "",
+      "5. 回答ルール",
       "- JSON のみを返してください。",
       "- ``` で囲まないでください。",
       "- パス区切りは / を使ってください。",
@@ -524,10 +541,10 @@
       "- tool 名、args 名、列名は見えている文字をそのまま使ってください。",
       "- 上にない tool は使わないでください。",
       "",
-      "5. 回答テンプレート",
+      "6. 回答テンプレート",
       buildExpectedResponseTemplate(outputPath),
       "",
-      "6. 回答例",
+      "7. 回答例",
       example
     ].join("\n");
   }
