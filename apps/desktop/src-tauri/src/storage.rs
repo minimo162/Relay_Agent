@@ -1,23 +1,31 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Component, Path, PathBuf},
+};
 
 use chrono::{SecondsFormat, Utc};
+use encoding_rs::SHIFT_JIS;
 use serde::Serialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::models::{
-    ApprovalDecision, ApprovalInspectionPayload, AssessCopilotHandoffRequest,
+    AgentLoopStatus, ApprovalDecision, ApprovalInspectionPayload, AssessCopilotHandoffRequest,
     AssessCopilotHandoffResponse, CopilotHandoffReason, CopilotHandoffReasonSource,
     CopilotHandoffStatus, CopilotTurnResponse, CreateSessionRequest, DiffSummary,
-    ExecutionInspectionPayload, ExecutionInspectionState, GenerateRelayPacketRequest,
-    PacketInspectionPayload, PreviewArtifactPayload, PreviewExecutionRequest,
-    PreviewExecutionResponse, ReadTurnArtifactsResponse, RelayPacket, RelayPacketResponseContract,
-    RespondToApprovalRequest, RespondToApprovalResponse, RunExecutionRequest, RunExecutionResponse,
-    Session, SessionDetail, SessionStatus, SpreadsheetAction, StartTurnRequest, StartTurnResponse,
-    SubmitCopilotResponseRequest, SubmitCopilotResponseResponse, ToolDescriptor, ToolPhase, Turn,
-    TurnArtifactRecord, TurnDetailsViewModel, TurnInspectionSection, TurnInspectionSourceType,
-    TurnInspectionUnavailableReason, TurnOverview, TurnOverviewStep, TurnOverviewStepState,
-    TurnStatus, ValidationInspectionPayload, ValidationIssue, ValidationIssueSummary,
+    ExecuteReadActionsRequest, ExecuteReadActionsResponse, ExecutionInspectionPayload,
+    ExecutionInspectionState, GenerateRelayPacketRequest, PacketInspectionPayload,
+    PreviewArtifactPayload, PreviewExecutionRequest, PreviewExecutionResponse,
+    ReadTurnArtifactsResponse, RelayPacket, RelayPacketResponseContract,
+    RespondToApprovalRequest, RespondToApprovalResponse, RunExecutionRequest,
+    RunExecutionResponse, Session, SessionDetail, SessionStatus, SpreadsheetAction,
+    StartTurnRequest, StartTurnResponse, SubmitCopilotResponseRequest,
+    SubmitCopilotResponseResponse, ToolDescriptor, ToolExecutionResult, ToolPhase, Turn,
+    TurnArtifactRecord, TurnDetailsViewModel, TurnInspectionSection,
+    TurnInspectionSourceType, TurnInspectionUnavailableReason, TurnOverview, TurnOverviewStep,
+    TurnOverviewStepState, TurnStatus, ValidationInspectionPayload, ValidationIssue,
+    ValidationIssueSummary,
 };
 use crate::persistence::{self, PersistedArtifactMeta, StorageManifest};
 use crate::workbook::{SheetColumnProfile, SheetPreview, WorkbookEngine, WorkbookSource};
@@ -640,6 +648,44 @@ impl AppStorage {
             validation_issues,
             parsed_response,
             repair_prompt,
+        })
+    }
+
+    pub fn execute_read_actions(
+        &mut self,
+        request: ExecuteReadActionsRequest,
+    ) -> Result<ExecuteReadActionsResponse, String> {
+        let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
+
+        if request.loop_turn > request.max_turns {
+            return Ok(ExecuteReadActionsResponse {
+                should_continue: false,
+                tool_results: Vec::new(),
+                has_write_actions: request.actions.iter().any(is_write_action),
+                guard_message: Some(format!(
+                    "最大ターン数（{}）に達しました。手動入力に切り替えてください。",
+                    request.max_turns
+                )),
+            });
+        }
+
+        let current_diff = self
+            .previews
+            .get(&turn.id)
+            .map(|preview| preview.diff_summary.clone())
+            .unwrap_or_else(|| baseline_diff_summary(&session));
+        let tool_results = request
+            .actions
+            .iter()
+            .filter(|action| is_read_action(action))
+            .map(|action| self.execute_single_read_action(&session, &turn, action, &current_diff))
+            .collect::<Vec<_>>();
+
+        Ok(ExecuteReadActionsResponse {
+            should_continue: true,
+            tool_results,
+            has_write_actions: request.actions.iter().any(is_write_action),
+            guard_message: None,
         })
     }
 
@@ -1939,6 +1985,93 @@ impl AppStorage {
         Ok(artifacts)
     }
 
+    fn execute_single_read_action(
+        &self,
+        session: &Session,
+        turn: &Turn,
+        action: &SpreadsheetAction,
+        current_diff: &DiffSummary,
+    ) -> ToolExecutionResult {
+        let outcome = match action.tool.as_str() {
+            "workbook.inspect" => {
+                let source = self.resolve_workbook_source(
+                    session,
+                    action.args.get("sourcePath").and_then(Value::as_str),
+                );
+                source.and_then(|source| {
+                    serde_json::to_value(WorkbookEngine::default().inspect_workbook(&source)?)
+                        .map_err(|error| format!("failed to serialize workbook profile: {error}"))
+                })
+            }
+            "sheet.preview" => {
+                let sheet = required_action_arg_string(action, "sheet");
+                sheet.and_then(|sheet| {
+                    let source = self.resolve_workbook_source(session, None)?;
+                    let preview = WorkbookEngine::default().sheet_preview(
+                        &source,
+                        &sheet,
+                        action
+                            .args
+                            .get("limit")
+                            .and_then(Value::as_u64)
+                            .map(|value| value as usize),
+                    )?;
+                    serde_json::to_value(preview)
+                        .map_err(|error| format!("failed to serialize sheet preview: {error}"))
+                })
+            }
+            "sheet.profile_columns" => {
+                let sheet = required_action_arg_string(action, "sheet");
+                sheet.and_then(|sheet| {
+                    let source = self.resolve_workbook_source(session, None)?;
+                    let profile = WorkbookEngine::default().profile_sheet_columns(
+                        &source,
+                        &sheet,
+                        action
+                            .args
+                            .get("sampleSize")
+                            .and_then(Value::as_u64)
+                            .map(|value| value as usize),
+                    )?;
+                    serde_json::to_value(profile)
+                        .map_err(|error| format!("failed to serialize column profile: {error}"))
+                })
+            }
+            "session.diff_from_base" => self
+                .session_diff_from_base(
+                    session,
+                    turn,
+                    action.args.get("artifactId").and_then(Value::as_str),
+                    current_diff,
+                )
+                .and_then(|diff| {
+                    serde_json::to_value(diff)
+                        .map_err(|error| format!("failed to serialize diff summary: {error}"))
+                }),
+            "file.list" => execute_file_list(&action.args),
+            "file.read_text" => execute_file_read_text(&action.args),
+            "file.stat" => execute_file_stat(&action.args),
+            _ => Err(format!("unsupported read tool `{}`", action.tool)),
+        };
+
+        match outcome {
+            Ok(result) => ToolExecutionResult {
+                tool: action.tool.clone(),
+                args: action.args.clone(),
+                ok: true,
+                result: Some(result),
+                error: None,
+            },
+            Err(error) => ToolExecutionResult {
+                tool: action.tool.clone(),
+                args: action.args.clone(),
+                ok: false,
+                result: None,
+                error: Some(error),
+            },
+        }
+    }
+
     fn resolve_workbook_source(
         &self,
         session: &Session,
@@ -2382,6 +2515,13 @@ fn parse_copilot_response(
         &mut validation_issues,
     )
     .unwrap_or_else(|| "1.0".to_string());
+    let status = optional_string(
+        root.get("status"),
+        vec![json!("status")],
+        &mut validation_issues,
+    )
+    .map(|value| parse_agent_loop_status(&value, &mut validation_issues))
+    .unwrap_or(AgentLoopStatus::ReadyToWrite);
     let summary = match required_string(
         root.get("summary"),
         vec![json!("summary")],
@@ -2390,6 +2530,11 @@ fn parse_copilot_response(
         Some(summary) => summary,
         None => String::new(),
     };
+    let message = optional_string(
+        root.get("message"),
+        vec![json!("message")],
+        &mut validation_issues,
+    );
     let follow_up_questions = optional_string_array(
         root.get("followUpQuestions"),
         vec![json!("followUpQuestions")],
@@ -2412,8 +2557,10 @@ fn parse_copilot_response(
         (
             Some(CopilotTurnResponse {
                 version,
+                status,
                 summary,
                 actions,
+                message,
                 follow_up_questions,
                 warnings,
             }),
@@ -2573,6 +2720,28 @@ fn validate_action_shape(
                     validation_issues,
                 );
             }
+        }
+        "file.list" => {
+            require_arg_string(args_object, index, "path", validation_issues);
+            if let Some(pattern) = args_object.get("pattern") {
+                validate_non_empty_string(
+                    pattern,
+                    path(index, "args", "pattern"),
+                    validation_issues,
+                );
+            }
+        }
+        "file.read_text" => {
+            require_arg_string(args_object, index, "path", validation_issues);
+            validate_optional_positive_integer(
+                args_object.get("maxBytes"),
+                index,
+                "maxBytes",
+                validation_issues,
+            );
+        }
+        "file.stat" => {
+            require_arg_string(args_object, index, "path", validation_issues);
         }
         "table.rename_columns" => {
             validate_rename_columns(args_object, index, validation_issues);
@@ -2840,6 +3009,228 @@ fn validate_group_aggregate(
     }
 }
 
+fn required_action_arg_string(action: &SpreadsheetAction, key: &str) -> Result<String, String> {
+    action
+        .args
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| format!("{} requires a non-empty `{key}` argument", action.tool))
+}
+
+fn baseline_diff_summary(session: &Session) -> DiffSummary {
+    let source_path = session.primary_workbook_path.clone().unwrap_or_default();
+
+    DiffSummary {
+        source_path: source_path.clone(),
+        output_path: source_path,
+        mode: "preview".to_string(),
+        target_count: 0,
+        estimated_affected_rows: 0,
+        sheets: Vec::new(),
+        warnings: Vec::new(),
+    }
+}
+
+fn execute_file_list(args: &Value) -> Result<Value, String> {
+    let path = required_value_string(args, "path", "file.list")?;
+    let directory = resolve_safe_read_path(&path)?;
+    let recursive = args
+        .get("recursive")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let pattern = args.get("pattern").and_then(Value::as_str).map(str::trim);
+
+    if !directory.is_dir() {
+        return Err(format!("`{}` is not a readable directory", directory.display()));
+    }
+
+    let mut entries = Vec::new();
+    collect_file_entries(&directory, recursive, pattern, &mut entries)?;
+
+    Ok(json!({
+        "path": directory,
+        "recursive": recursive,
+        "entries": entries,
+    }))
+}
+
+fn execute_file_read_text(args: &Value) -> Result<Value, String> {
+    let path = required_value_string(args, "path", "file.read_text")?;
+    let file_path = resolve_safe_read_path(&path)?;
+    let max_bytes = args
+        .get("maxBytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(65_536) as usize;
+    let metadata = fs::metadata(&file_path)
+        .map_err(|error| format!("failed to read file metadata for `{}`: {error}", file_path.display()))?;
+
+    if !metadata.is_file() {
+        return Err(format!("`{}` is not a readable text file", file_path.display()));
+    }
+
+    if metadata.len() > 1_048_576 {
+        return Err(format!(
+            "`{}` is larger than the 1MB read limit",
+            file_path.display()
+        ));
+    }
+
+    let bytes = fs::read(&file_path)
+        .map_err(|error| format!("failed to read `{}`: {error}", file_path.display()))?;
+    let (content, encoding) = decode_text_file(&bytes)?;
+    let truncated_content = truncate_to_byte_limit(&content, max_bytes);
+    let truncated = truncated_content.len() < content.len();
+
+    Ok(json!({
+        "path": file_path,
+        "encoding": encoding,
+        "truncated": truncated,
+        "content": truncated_content,
+    }))
+}
+
+fn execute_file_stat(args: &Value) -> Result<Value, String> {
+    let path = required_value_string(args, "path", "file.stat")?;
+    let file_path = resolve_safe_read_path(&path)?;
+    let metadata = fs::metadata(&file_path)
+        .map_err(|error| format!("failed to read file metadata for `{}`: {error}", file_path.display()))?;
+    let modified_at = metadata
+        .modified()
+        .ok()
+        .map(format_system_time);
+
+    Ok(json!({
+        "path": file_path,
+        "exists": true,
+        "isDirectory": metadata.is_dir(),
+        "isFile": metadata.is_file(),
+        "sizeBytes": metadata.len(),
+        "modifiedAt": modified_at,
+    }))
+}
+
+fn resolve_safe_read_path(path: &str) -> Result<PathBuf, String> {
+    let candidate = PathBuf::from(path.trim());
+
+    if !candidate.is_absolute() {
+        return Err("file tools require an absolute path".to_string());
+    }
+
+    if candidate
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err("path traversal is blocked for file tools".to_string());
+    }
+
+    Ok(candidate)
+}
+
+fn collect_file_entries(
+    directory: &Path,
+    recursive: bool,
+    pattern: Option<&str>,
+    entries: &mut Vec<Value>,
+) -> Result<(), String> {
+    let read_dir = fs::read_dir(directory)
+        .map_err(|error| format!("failed to read directory `{}`: {error}", directory.display()))?;
+
+    for entry in read_dir {
+        let entry = entry.map_err(|error| {
+            format!(
+                "failed to inspect a directory entry under `{}`: {error}",
+                directory.display()
+            )
+        })?;
+        let path = entry.path();
+        let metadata = entry.metadata().map_err(|error| {
+            format!("failed to read metadata for `{}`: {error}", path.display())
+        })?;
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+
+        if pattern.map(|value| matches_file_pattern(&file_name, value)).unwrap_or(true) {
+            entries.push(json!({
+                "name": file_name,
+                "path": path,
+                "isDirectory": metadata.is_dir(),
+                "isFile": metadata.is_file(),
+                "sizeBytes": metadata.len(),
+                "extension": path.extension().and_then(|value| value.to_str()),
+                "modifiedAt": metadata.modified().ok().map(format_system_time),
+            }));
+        }
+
+        if recursive && metadata.is_dir() {
+            collect_file_entries(&path, true, pattern, entries)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn matches_file_pattern(file_name: &str, pattern: &str) -> bool {
+    let normalized = pattern.trim();
+    if normalized.is_empty() || normalized == "*" {
+        return true;
+    }
+
+    let needle = normalized.trim_matches('*');
+    if needle.is_empty() {
+        return true;
+    }
+
+    file_name.contains(needle)
+}
+
+fn required_value_string(args: &Value, key: &str, tool: &str) -> Result<String, String> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| format!("{tool} requires a non-empty `{key}` argument"))
+}
+
+fn decode_text_file(bytes: &[u8]) -> Result<(String, &'static str), String> {
+    if let Ok(content) = String::from_utf8(bytes.to_vec()) {
+        return Ok((content, "utf-8"));
+    }
+
+    let (decoded, _, had_errors) = SHIFT_JIS.decode(bytes);
+    if had_errors {
+        return Err("file.read_text only supports UTF-8 or Shift_JIS text".to_string());
+    }
+
+    Ok((decoded.into_owned(), "shift_jis"))
+}
+
+fn truncate_to_byte_limit(content: &str, max_bytes: usize) -> String {
+    if content.len() <= max_bytes {
+        return content.to_string();
+    }
+
+    let mut end = 0;
+    for (index, _) in content.char_indices() {
+        if index > max_bytes {
+            break;
+        }
+        end = index;
+    }
+
+    if end == 0 {
+        return String::new();
+    }
+
+    content[..end].to_string()
+}
+
+fn format_system_time(value: std::time::SystemTime) -> String {
+    chrono::DateTime::<Utc>::from(value).to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
 fn build_repair_prompt(validation_issues: &[ValidationIssue]) -> String {
     let mut lines = vec![
         "The pasted JSON did not validate against the expected response contract.".to_string(),
@@ -2857,6 +3248,28 @@ fn build_repair_prompt(validation_issues: &[ValidationIssue]) -> String {
     lines.join("\n")
 }
 
+fn parse_agent_loop_status(
+    value: &str,
+    validation_issues: &mut Vec<ValidationIssue>,
+) -> AgentLoopStatus {
+    match value {
+        "thinking" => AgentLoopStatus::Thinking,
+        "ready_to_write" => AgentLoopStatus::ReadyToWrite,
+        "done" => AgentLoopStatus::Done,
+        "error" => AgentLoopStatus::Error,
+        _ => {
+            validation_issues.push(issue(
+                vec![json!("status")],
+                format!(
+                    "status must be one of thinking, ready_to_write, done, error. Received `{value}`."
+                ),
+                "invalid_status",
+            ));
+            AgentLoopStatus::ReadyToWrite
+        }
+    }
+}
+
 fn is_write_action(action: &SpreadsheetAction) -> bool {
     matches!(
         action.tool.as_str(),
@@ -2866,7 +3279,14 @@ fn is_write_action(action: &SpreadsheetAction) -> bool {
             | "table.derive_column"
             | "table.group_aggregate"
             | "workbook.save_copy"
+            | "file.copy"
+            | "file.move"
+            | "file.delete"
     )
+}
+
+fn is_read_action(action: &SpreadsheetAction) -> bool {
+    !is_write_action(action)
 }
 
 fn is_known_tool(tool: &str) -> bool {
@@ -2876,12 +3296,18 @@ fn is_known_tool(tool: &str) -> bool {
             | "sheet.preview"
             | "sheet.profile_columns"
             | "session.diff_from_base"
+            | "file.list"
+            | "file.read_text"
+            | "file.stat"
             | "table.rename_columns"
             | "table.cast_columns"
             | "table.filter_rows"
             | "table.derive_column"
             | "table.group_aggregate"
             | "workbook.save_copy"
+            | "file.copy"
+            | "file.move"
+            | "file.delete"
     )
 }
 
@@ -2924,6 +3350,28 @@ fn read_tool_registry() -> Vec<ToolDescriptor> {
             id: "session.diff_from_base".to_string(),
             title: "Diff from base".to_string(),
             description: "Compare the current session state to the original workbook input."
+                .to_string(),
+            phase: ToolPhase::Read,
+            requires_approval: false,
+        },
+        ToolDescriptor {
+            id: "file.list".to_string(),
+            title: "List files".to_string(),
+            description: "Read file and directory names plus basic metadata.".to_string(),
+            phase: ToolPhase::Read,
+            requires_approval: false,
+        },
+        ToolDescriptor {
+            id: "file.read_text".to_string(),
+            title: "Read text file".to_string(),
+            description: "Read UTF-8 or Shift_JIS text content up to 1MB.".to_string(),
+            phase: ToolPhase::Read,
+            requires_approval: false,
+        },
+        ToolDescriptor {
+            id: "file.stat".to_string(),
+            title: "Inspect file metadata".to_string(),
+            description: "Read existence, size, and timestamps for a file or directory."
                 .to_string(),
             phase: ToolPhase::Read,
             requires_approval: false,
@@ -3233,10 +3681,10 @@ mod tests {
     use super::AppStorage;
     use crate::models::{
         ApprovalDecision, AssessCopilotHandoffRequest, CopilotHandoffStatus, CreateSessionRequest,
-        ExecutionInspectionState, GenerateRelayPacketRequest, PreviewExecutionRequest,
-        ReadSessionRequest, RelayMode, RespondToApprovalRequest, RunExecutionRequest,
-        StartTurnRequest, SubmitCopilotResponseRequest, TurnArtifactRecord,
-        TurnInspectionSourceType, TurnStatus,
+        ExecuteReadActionsRequest, ExecutionInspectionState, GenerateRelayPacketRequest,
+        PreviewExecutionRequest, ReadSessionRequest, RelayMode, RespondToApprovalRequest,
+        RunExecutionRequest, SpreadsheetAction, StartTurnRequest, SubmitCopilotResponseRequest,
+        TurnArtifactRecord, TurnInspectionSourceType, TurnStatus,
     };
     use crate::persistence;
     use serde::{de::DeserializeOwned, Deserialize};
@@ -3728,7 +4176,11 @@ mod tests {
                 })
                 .expect("packet should generate");
             assert_eq!(packet.mode, RelayMode::Plan);
-            assert_eq!(packet.allowed_read_tools.len(), 4);
+            assert_eq!(packet.allowed_read_tools.len(), 7);
+            assert!(packet
+                .allowed_read_tools
+                .iter()
+                .any(|tool| tool.id == "file.read_text"));
             assert_eq!(packet.allowed_write_tools.len(), 6);
             assert!(packet.context.iter().any(|line| line
                 == &format!(
@@ -4952,6 +5404,219 @@ mod tests {
 
         fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
         fs::remove_file(csv_path).expect("test csv should clean up");
+    }
+
+    #[test]
+    fn execute_read_actions_stops_when_loop_guard_is_hit() {
+        let mut storage = AppStorage::default();
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Guard test".to_string(),
+                objective: "Stop when max turns are exceeded.".to_string(),
+                primary_workbook_path: None,
+            })
+            .expect("session should be created");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Guard turn".to_string(),
+                objective: "Loop guard".to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+
+        let response = storage
+            .execute_read_actions(ExecuteReadActionsRequest {
+                session_id: session.id,
+                turn_id: turn.id,
+                loop_turn: 11,
+                max_turns: 10,
+                actions: vec![],
+            })
+            .expect("guard response should return");
+
+        assert!(!response.should_continue);
+        assert!(response.tool_results.is_empty());
+        assert!(response
+            .guard_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("最大ターン数"));
+    }
+
+    #[test]
+    fn execute_read_actions_flags_write_actions_without_executing_them() {
+        let csv_path = write_test_csv("id,amount\n1,42\n");
+        let mut storage = AppStorage::default();
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Write action gate".to_string(),
+                objective: "Do not auto-run writes.".to_string(),
+                primary_workbook_path: Some(csv_path.to_string_lossy().into_owned()),
+            })
+            .expect("session should be created");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Write turn".to_string(),
+                objective: "Only detect writes".to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+
+        let response = storage
+            .execute_read_actions(ExecuteReadActionsRequest {
+                session_id: session.id,
+                turn_id: turn.id,
+                loop_turn: 1,
+                max_turns: 10,
+                actions: vec![SpreadsheetAction {
+                    id: None,
+                    tool: "workbook.save_copy".to_string(),
+                    rationale: None,
+                    sheet: None,
+                    args: json!({ "outputPath": "/tmp/output.csv" }),
+                }],
+            })
+            .expect("response should return");
+
+        assert!(response.should_continue);
+        assert!(response.has_write_actions);
+        assert!(response.tool_results.is_empty());
+
+        fs::remove_file(csv_path).expect("test csv should clean up");
+    }
+
+    #[test]
+    fn execute_read_actions_supports_file_tools_and_blocks_traversal() {
+        let workspace_dir =
+            env::temp_dir().join(format!("relay-agent-file-tools-{}", Uuid::new_v4()));
+        fs::create_dir_all(&workspace_dir).expect("workspace dir should exist");
+        let text_path = workspace_dir.join("notes.txt");
+        fs::write(&text_path, "hello\nworld\n").expect("text file should be written");
+        let mut storage = AppStorage::default();
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "File tools".to_string(),
+                objective: "Read supporting text files.".to_string(),
+                primary_workbook_path: None,
+            })
+            .expect("session should be created");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "File read turn".to_string(),
+                objective: "Inspect helper files".to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+
+        let response = storage
+            .execute_read_actions(ExecuteReadActionsRequest {
+                session_id: session.id,
+                turn_id: turn.id,
+                loop_turn: 1,
+                max_turns: 10,
+                actions: vec![
+                    SpreadsheetAction {
+                        id: None,
+                        tool: "file.list".to_string(),
+                        rationale: None,
+                        sheet: None,
+                        args: json!({ "path": workspace_dir, "recursive": false }),
+                    },
+                    SpreadsheetAction {
+                        id: None,
+                        tool: "file.read_text".to_string(),
+                        rationale: None,
+                        sheet: None,
+                        args: json!({ "path": text_path, "maxBytes": 1024 }),
+                    },
+                    SpreadsheetAction {
+                        id: None,
+                        tool: "file.stat".to_string(),
+                        rationale: None,
+                        sheet: None,
+                        args: json!({ "path": text_path }),
+                    },
+                    SpreadsheetAction {
+                        id: None,
+                        tool: "file.stat".to_string(),
+                        rationale: None,
+                        sheet: None,
+                        args: json!({
+                            "path": workspace_dir.join("nested").join("..").join("notes.txt")
+                        }),
+                    },
+                ],
+            })
+            .expect("file tool response should return");
+
+        assert_eq!(response.tool_results.len(), 4);
+        assert!(response.tool_results[0].ok);
+        assert!(response.tool_results[1].ok);
+        assert!(response.tool_results[2].ok);
+        assert!(!response.tool_results[3].ok);
+        assert!(response.tool_results[3]
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("traversal"));
+
+        fs::remove_dir_all(workspace_dir).expect("workspace dir should clean up");
+    }
+
+    #[test]
+    fn file_read_text_rejects_files_larger_than_one_megabyte() {
+        let large_path =
+            env::temp_dir().join(format!("relay-agent-large-file-{}.txt", Uuid::new_v4()));
+        fs::write(&large_path, vec![b'a'; 1_048_577]).expect("large file should be written");
+        let mut storage = AppStorage::default();
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Large file".to_string(),
+                objective: "Reject oversized reads.".to_string(),
+                primary_workbook_path: None,
+            })
+            .expect("session should be created");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Large file turn".to_string(),
+                objective: "Read size guard".to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+
+        let response = storage
+            .execute_read_actions(ExecuteReadActionsRequest {
+                session_id: session.id,
+                turn_id: turn.id,
+                loop_turn: 1,
+                max_turns: 10,
+                actions: vec![SpreadsheetAction {
+                    id: None,
+                    tool: "file.read_text".to_string(),
+                    rationale: None,
+                    sheet: None,
+                    args: json!({ "path": large_path, "maxBytes": 1024 }),
+                }],
+            })
+            .expect("oversized read should still return a tool result");
+
+        assert_eq!(response.tool_results.len(), 1);
+        assert!(!response.tool_results[0].ok);
+        assert!(response.tool_results[0]
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("1MB"));
+
+        fs::remove_file(large_path).expect("large file should clean up");
     }
 
     fn unique_test_app_data_dir() -> std::path::PathBuf {

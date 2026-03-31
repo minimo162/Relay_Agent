@@ -3,6 +3,8 @@ import {
   assessCopilotHandoffRequestSchema,
   assessCopilotHandoffResponseSchema,
   createSessionRequestSchema,
+  executeReadActionsRequestSchema,
+  executeReadActionsResponseSchema,
   generateRelayPacketRequestSchema,
   inspectWorkbookRequestSchema,
   inspectWorkbookResponseSchema,
@@ -29,6 +31,8 @@ import {
   type AssessCopilotHandoffRequest,
   type AssessCopilotHandoffResponse,
   type CreateSessionRequest,
+  type ExecuteReadActionsRequest,
+  type ExecuteReadActionsResponse,
   type GenerateRelayPacketRequest,
   type GenerateRelayPacketResponse,
   type InspectWorkbookRequest,
@@ -264,6 +268,17 @@ export function previewExecution(
   );
 }
 
+export function executeReadActions(
+  payload: ExecuteReadActionsRequest
+): Promise<ExecuteReadActionsResponse> {
+  return invokeWithPayload(
+    "execute_read_actions",
+    payload,
+    executeReadActionsRequestSchema,
+    executeReadActionsResponseSchema
+  );
+}
+
 export function respondToApproval(
   payload: RespondToApprovalRequest
 ): Promise<RespondToApprovalResponse> {
@@ -298,6 +313,7 @@ export const relayAgentIpc = {
   generateRelayPacket,
   assessCopilotHandoff,
   submitCopilotResponse,
+  executeReadActions,
   previewExecution,
   respondToApproval,
   runExecution

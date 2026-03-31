@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { fileActionSchema } from "./file";
 import { entityIdSchema, nonEmptyStringSchema, relayModeSchema } from "./shared";
 import { spreadsheetActionSchema } from "./workbook";
 
@@ -42,11 +43,16 @@ export const agentLoopStatusSchema = z.enum([
   "error"
 ]);
 
+export const relayActionSchema = z.union([
+  spreadsheetActionSchema,
+  fileActionSchema
+]);
+
 export const copilotTurnResponseSchema = z.object({
   version: z.literal("1.0").default("1.0"),
   status: agentLoopStatusSchema.default("ready_to_write"),
   summary: nonEmptyStringSchema,
-  actions: z.array(spreadsheetActionSchema).default([]),
+  actions: z.array(relayActionSchema).default([]),
   message: z.string().optional(),
   followupQuestions: z.array(z.string()).default([]),
   warnings: z.array(z.string()).default([])
@@ -57,4 +63,5 @@ export type ToolDescriptor = z.infer<typeof toolDescriptorSchema>;
 export type RelayPacket = z.infer<typeof relayPacketSchema>;
 export type ValidationIssue = z.infer<typeof validationIssueSchema>;
 export type AgentLoopStatus = z.infer<typeof agentLoopStatusSchema>;
+export type RelayAction = z.infer<typeof relayActionSchema>;
 export type CopilotTurnResponse = z.infer<typeof copilotTurnResponseSchema>;

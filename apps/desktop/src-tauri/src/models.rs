@@ -168,10 +168,22 @@ pub struct SpreadsheetAction {
 #[serde(rename_all = "camelCase")]
 pub struct CopilotTurnResponse {
     pub version: String,
+    pub status: AgentLoopStatus,
     pub summary: String,
     pub actions: Vec<SpreadsheetAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
     pub follow_up_questions: Vec<String>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentLoopStatus {
+    Thinking,
+    ReadyToWrite,
+    Done,
+    Error,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -481,6 +493,16 @@ pub struct PreviewExecutionRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExecuteReadActionsRequest {
+    pub session_id: String,
+    pub turn_id: String,
+    pub loop_turn: u32,
+    pub max_turns: u32,
+    pub actions: Vec<SpreadsheetAction>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RespondToApprovalRequest {
     pub session_id: String,
     pub turn_id: String,
@@ -595,6 +617,28 @@ pub struct RespondToApprovalResponse {
     pub turn: Turn,
     pub decision: ApprovalDecision,
     pub ready_for_execution: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolExecutionResult {
+    pub tool: String,
+    pub args: Value,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecuteReadActionsResponse {
+    pub should_continue: bool,
+    pub tool_results: Vec<ToolExecutionResult>,
+    pub has_write_actions: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guard_message: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]

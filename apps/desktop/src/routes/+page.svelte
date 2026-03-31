@@ -1,11 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import type {
+    CopilotTurnResponse,
     DiffSummary,
     GenerateRelayPacketResponse,
     PreflightWorkbookResponse,
     SheetColumnProfile,
     StartupIssue,
+    ToolExecutionResult,
     ValidationIssue,
     WorkbookProfile
   } from "@relay-agent/contracts";
@@ -26,6 +28,7 @@
     previewExecution,
     rememberRecentFile,
     rememberRecentSession,
+    runAgentLoop,
     respondToApproval,
     runExecution,
     saveBrowserAutomationSettings,
@@ -45,6 +48,12 @@
     label: string;
     status: ProgressStatus;
     message?: string;
+  };
+  type AgentLoopLogEntry = {
+    id: string;
+    label: string;
+    status: ProgressStatus;
+    detail?: string;
   };
   type ValidationFeedback = {
     level: 1 | 2 | 3;
@@ -68,7 +77,7 @@
 
   const expertDetailsStoragePrefix = "relay-agent.expert-details";
   const expectedResponseShape =
-    '{ "version": "1.0", "summary": "...", "actions": [...] }';
+    '{ "version": "1.0", "status": "thinking|ready_to_write|done|error", "summary": "...", "actions": [...] }';
   const instructionColumnLimit = 20;
 
   // Exact args structure for each tool. This is embedded verbatim in the Copilot
@@ -142,6 +151,15 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let copilotResponseField: HTMLTextAreaElement | null = null;
   let cdpPort = 9222;
   let timeoutMs = 60000;
+  let agentLoopEnabled = false;
+  let maxTurns = 10;
+  let loopTimeoutMs = 120000;
+  let agentLoopRunning = false;
+  let agentLoopTurn = 0;
+  let agentLoopLog: AgentLoopLogEntry[] = [];
+  let agentLoopSummary = "";
+  let agentLoopFinalStatus: CopilotTurnResponse["status"] | null = null;
+  let agentLoopAbortController: AbortController | null = null;
 
   let previewSummary = "";
   let previewTargetCount = 0;
@@ -294,6 +312,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   function buildExpectedResponseTemplate(outputPath: string): string {
     return `{
   "version": "1.0",
+  "status": "ready_to_write",
   "summary": "何をするかを短く説明する",
   "actions": [
     {
@@ -715,6 +734,62 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     progressItems = [];
   }
 
+  function resetAgentLoopState(clearLog = true): void {
+    agentLoopRunning = false;
+    agentLoopTurn = 0;
+    agentLoopSummary = "";
+    agentLoopFinalStatus = null;
+    agentLoopAbortController = null;
+    if (clearLog) {
+      agentLoopLog = [];
+    }
+  }
+
+  function pushAgentLoopLog(
+    label: string,
+    status: ProgressStatus,
+    detail?: string
+  ): void {
+    agentLoopLog = [
+      ...agentLoopLog,
+      {
+        id: `${Date.now()}-${agentLoopLog.length}`,
+        label,
+        status,
+        detail
+      }
+    ];
+  }
+
+  function summarizeToolResult(result: ToolExecutionResult): string {
+    if (!result.ok) {
+      return result.error ?? "ツール実行に失敗しました。";
+    }
+
+    if (result.tool === "workbook.inspect") {
+      const sheetCount = (result.result as { sheetCount?: number } | undefined)?.sheetCount;
+      return typeof sheetCount === "number"
+        ? `${sheetCount} シートを確認しました。`
+        : "ブック情報を確認しました。";
+    }
+
+    if (result.tool === "sheet.preview") {
+      const rows = (result.result as { rows?: unknown[] } | undefined)?.rows;
+      return Array.isArray(rows) ? `${rows.length} 行をプレビューしました。` : "シートをプレビューしました。";
+    }
+
+    if (result.tool === "sheet.profile_columns") {
+      const columns = (result.result as { columns?: unknown[] } | undefined)?.columns;
+      return Array.isArray(columns) ? `${columns.length} 列を確認しました。` : "列型を確認しました。";
+    }
+
+    return "読み取りツールを実行しました。";
+  }
+
+  function cancelAgentLoop(): void {
+    agentLoopAbortController?.abort();
+  }
+
   function loadExpertDetails(): void {
     if (typeof localStorage === "undefined") {
       return;
@@ -787,6 +862,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     copiedBrowserCommandNotice = "";
     copilotAutoError = null;
     isSendingToCopilot = false;
+    resetAgentLoopState();
     validationFeedback = null;
     retryPrompt = "";
     clearProgress();
@@ -834,6 +910,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     copiedBrowserCommandNotice = "";
     copilotAutoError = null;
     isSendingToCopilot = false;
+    resetAgentLoopState();
     validationFeedback = null;
     retryPrompt = "";
     clearProgress();
@@ -899,9 +976,18 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   function persistBrowserAutomationSettings(): void {
-    const saved = saveBrowserAutomationSettings({ cdpPort, timeoutMs });
+    const saved = saveBrowserAutomationSettings({
+      cdpPort,
+      timeoutMs,
+      agentLoopEnabled,
+      maxTurns,
+      loopTimeoutMs
+    });
     cdpPort = saved.cdpPort;
     timeoutMs = saved.timeoutMs;
+    agentLoopEnabled = saved.agentLoopEnabled;
+    maxTurns = saved.maxTurns;
+    loopTimeoutMs = saved.loopTimeoutMs;
     copiedBrowserCommandNotice = "";
   }
 
@@ -931,7 +1017,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     copilotResponseField?.scrollIntoView({ block: "center" });
   }
 
-  async function handleCopilotAutoSend(): Promise<void> {
+  async function handleSingleShotCopilotAutoSend(): Promise<void> {
     if (!copilotInstructionText.trim()) {
       return;
     }
@@ -939,6 +1025,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     isSendingToCopilot = true;
     copilotAutoError = null;
     copiedInstructionNotice = "";
+    resetAgentLoopState();
 
     try {
       const response = await sendToCopilot(copilotInstructionText);
@@ -957,6 +1044,113 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     } finally {
       isSendingToCopilot = false;
     }
+  }
+
+  async function handleAgentLoopAutoSend(): Promise<void> {
+    if (!copilotInstructionText.trim()) {
+      return;
+    }
+
+    isSendingToCopilot = true;
+    agentLoopRunning = true;
+    agentLoopTurn = 0;
+    agentLoopLog = [];
+    agentLoopSummary = "";
+    agentLoopFinalStatus = null;
+    copilotAutoError = null;
+    copiedInstructionNotice = "";
+    validationFeedback = null;
+    retryPrompt = "";
+
+    const abortController = new AbortController();
+    agentLoopAbortController = abortController;
+
+    try {
+      const result = await runAgentLoop(
+        {
+          sessionId,
+          turnId,
+          initialPrompt: copilotInstructionText,
+          maxTurns,
+          loopTimeoutMs,
+          abortSignal: abortController.signal
+        },
+        {
+          onTurnStart: (turn) => {
+            agentLoopTurn = turn;
+            pushAgentLoopLog(`Turn ${turn}: Copilot に送信`, "running");
+          },
+          onCopilotResponse: (turn, response) => {
+            pushAgentLoopLog(
+              `Turn ${turn}: Copilot が ${response.status} を返しました`,
+              "done",
+              response.message ?? response.summary
+            );
+          },
+          onToolResults: (turn, toolResults) => {
+            if (toolResults.length === 0) {
+              pushAgentLoopLog(
+                `Turn ${turn}: 実行できる read ツールはありません`,
+                "done"
+              );
+              return;
+            }
+
+            for (const toolResult of toolResults) {
+              pushAgentLoopLog(
+                `Turn ${turn}: ${toolResult.tool}`,
+                toolResult.ok ? "done" : "error",
+                summarizeToolResult(toolResult)
+              );
+            }
+          }
+        }
+      );
+
+      agentLoopSummary = result.summary;
+      agentLoopFinalStatus = result.status === "cancelled" ? null : result.status;
+
+      if (result.finalResponse) {
+        copilotResponse = JSON.stringify(result.finalResponse, null, 2);
+        originalCopilotResponse = "";
+        autoFixMessages = [];
+      }
+
+      if (result.status === "ready_to_write" && result.finalResponse) {
+        await handleCopilotStage();
+        return;
+      }
+
+      if (result.status === "error") {
+        copilotAutoError = result.summary;
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        agentLoopSummary = "エージェントループをキャンセルしました。手動入力に切り替えられます。";
+        pushAgentLoopLog("エージェントループをキャンセルしました", "error");
+      } else {
+        console.error("[agent-loop] handleAgentLoopAutoSend error:", error);
+        const friendlyMsg = getCopilotBrowserErrorMessage(error);
+        const rawMsg = error instanceof Error ? error.message.trim() : String(error);
+        copilotAutoError = rawMsg && rawMsg !== friendlyMsg
+          ? `${friendlyMsg}\n[詳細: ${rawMsg}]`
+          : friendlyMsg;
+        pushAgentLoopLog("エージェントループが失敗しました", "error", copilotAutoError);
+      }
+    } finally {
+      isSendingToCopilot = false;
+      agentLoopRunning = false;
+      agentLoopAbortController = null;
+    }
+  }
+
+  async function handleCopilotAutoSend(): Promise<void> {
+    if (agentLoopEnabled) {
+      await handleAgentLoopAutoSend();
+      return;
+    }
+
+    await handleSingleShotCopilotAutoSend();
   }
 
   function undoAutoFix(): void {
@@ -982,6 +1176,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     step1Expanded = true;
     errorMsg = "";
     copilotAutoError = null;
+    resetAgentLoopState();
     clearProgress();
   }
 
@@ -990,6 +1185,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     step1Expanded = false;
     errorMsg = "";
     copilotAutoError = null;
+    resetAgentLoopState(false);
     clearProgress();
   }
 
@@ -1025,6 +1221,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     showInstructionPreview = false;
     isSendingToCopilot = false;
     copilotAutoError = null;
+    resetAgentLoopState();
     previewSummary = "";
     previewTargetCount = 0;
     previewAffectedRows = 0;
@@ -1285,6 +1482,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     const browserAutomationSettings = loadBrowserAutomationSettings();
     cdpPort = browserAutomationSettings.cdpPort;
     timeoutMs = browserAutomationSettings.timeoutMs;
+    agentLoopEnabled = browserAutomationSettings.agentLoopEnabled;
+    maxTurns = browserAutomationSettings.maxTurns;
+    loopTimeoutMs = browserAutomationSettings.loopTimeoutMs;
 
     try {
       await pingDesktop();
@@ -1636,6 +1836,24 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     下のボタンで Copilot に渡す依頼をコピーしてください。返ってきた JSON をそのまま下の欄に貼り付けるだけで、保存前の確認まで進めます。
   </p>
 
+  <div class="loop-toggle-row">
+    <label class="checkbox-row" for="agent-loop-enabled">
+      <input
+        id="agent-loop-enabled"
+        type="checkbox"
+        bind:checked={agentLoopEnabled}
+        disabled={busy || isSendingToCopilot}
+        on:change={persistBrowserAutomationSettings}
+      />
+      <span>エージェントループモード</span>
+    </label>
+    {#if agentLoopEnabled}
+      <span class="loop-settings-summary">
+        最大 {maxTurns} ターン / タイムアウト {Math.round(loopTimeoutMs / 1000)} 秒
+      </span>
+    {/if}
+  </div>
+
   <div class="copy-row">
     <button
       class="btn btn-accent"
@@ -1652,11 +1870,16 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       disabled={busy || isSendingToCopilot || !copilotStepAvailable}
     >
       {#if isSendingToCopilot}
-        Copilot に送信しています…
+        {agentLoopEnabled ? `Turn ${agentLoopTurn || 1} を実行しています…` : "Copilot に送信しています…"}
       {:else}
-        Copilotに自動送信 ▶
+        {agentLoopEnabled ? "Copilotで自動ループ開始 ▶" : "Copilotに自動送信 ▶"}
       {/if}
     </button>
+    {#if agentLoopRunning}
+      <button class="btn btn-secondary" type="button" on:click={cancelAgentLoop}>
+        キャンセル
+      </button>
+    {/if}
     <button
       class="btn-link"
       type="button"
@@ -1669,6 +1892,41 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   {#if copiedInstructionNotice}
     <p class="field-success">{copiedInstructionNotice}</p>
+  {/if}
+
+  {#if agentLoopEnabled && (agentLoopSummary || agentLoopLog.length > 0)}
+    <div class="agent-loop-panel">
+      <p class="agent-loop-summary">
+        <strong>ループ状況:</strong>
+        {agentLoopSummary || `Turn ${agentLoopTurn || 1} を実行中です。`}
+      </p>
+      {#if agentLoopFinalStatus}
+        <p class="settings-hint">最終 status: {agentLoopFinalStatus}</p>
+      {/if}
+      <div class="agent-loop-log">
+        {#each agentLoopLog as entry}
+          <div class="progress-item" data-status={entry.status}>
+            <div class="progress-mark">
+              {#if entry.status === "done"}
+                ✓
+              {:else if entry.status === "running"}
+                …
+              {:else if entry.status === "error"}
+                !
+              {:else}
+                •
+              {/if}
+            </div>
+            <div>
+              <strong>{entry.label}</strong>
+              {#if entry.detail}
+                <div class="progress-message">{entry.detail}</div>
+              {/if}
+            </div>
+          </div>
+        {/each}
+      </div>
+    </div>
   {/if}
 
   {#if copilotAutoError}
@@ -1690,7 +1948,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     bind:this={copilotResponseField}
     placeholder="Copilot から返ってきた JSON をここに貼り付け"
     rows="8"
-    disabled={busy || isSendingToCopilot || !copilotStepAvailable}
+    disabled={busy || isSendingToCopilot || agentLoopRunning || !copilotStepAvailable}
   ></textarea>
 
   <div class="response-shape">
@@ -2110,6 +2368,39 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
           min="1000"
           step="1000"
           bind:value={timeoutMs}
+          on:change={persistBrowserAutomationSettings}
+        />
+
+        <label class="checkbox-row" for="copilot-agent-loop-enabled">
+          <input
+            id="copilot-agent-loop-enabled"
+            type="checkbox"
+            bind:checked={agentLoopEnabled}
+            on:change={persistBrowserAutomationSettings}
+          />
+          <span>エージェントループモードを有効にする</span>
+        </label>
+
+        <label class="field-label" for="copilot-max-turns">最大ターン数</label>
+        <input
+          id="copilot-max-turns"
+          class="input"
+          type="number"
+          min="1"
+          max="20"
+          bind:value={maxTurns}
+          on:change={persistBrowserAutomationSettings}
+        />
+
+        <label class="field-label" for="copilot-loop-timeout">ループタイムアウト (ms)</label>
+        <input
+          id="copilot-loop-timeout"
+          class="input"
+          type="number"
+          min="30000"
+          max="300000"
+          step="1000"
+          bind:value={loopTimeoutMs}
           on:change={persistBrowserAutomationSettings}
         />
 
@@ -2653,6 +2944,52 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     flex-wrap: wrap;
     gap: 1rem;
     margin-bottom: 0.75rem;
+  }
+
+  .loop-toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--ra-border);
+    border-radius: var(--ra-radius-sm);
+    background: var(--ra-surface-muted);
+  }
+
+  .checkbox-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-size: 0.88rem;
+    color: var(--ra-text);
+  }
+
+  .loop-settings-summary {
+    font-size: 0.8rem;
+    color: var(--ra-text-muted);
+  }
+
+  .agent-loop-panel {
+    display: grid;
+    gap: 0.65rem;
+    margin: 0.85rem 0;
+    padding: 0.9rem;
+    border: 1px solid var(--ra-border);
+    border-radius: var(--ra-radius-sm);
+    background: var(--ra-surface-muted);
+  }
+
+  .agent-loop-summary {
+    margin: 0;
+    font-size: 0.88rem;
+    color: var(--ra-text);
+  }
+
+  .agent-loop-log {
+    display: grid;
+    gap: 0.55rem;
   }
 
   .preview-block {
@@ -3203,6 +3540,11 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     .expert-grid,
     .row-sample-grid {
       grid-template-columns: 1fr;
+    }
+
+    .loop-toggle-row {
+      align-items: flex-start;
+      flex-direction: column;
     }
 
     .change-strip {

@@ -2420,7 +2420,7 @@
         "id": "86",
         "title": "バックエンド — 読み取りツール自動実行ループ",
         "description": "Copilotから返ってきたactionsをread/writeに分類し、readアクションを自動実行してループを継続するIPC処理を実装する。",
-        "status": "pending",
+        "status": "done",
         "priority": "high",
         "dependencies": [
           "85"
@@ -2434,7 +2434,7 @@
         "id": "87",
         "title": "フロントエンド — ツール実行結果のプロンプト生成",
         "description": "read ツールの実行結果を次ターンの Copilot プロンプトに埋め込む形にフォーマットする関数を実装する。",
-        "status": "pending",
+        "status": "done",
         "priority": "high",
         "dependencies": [
           "86"
@@ -2448,7 +2448,7 @@
         "id": "88",
         "title": "フロントエンド — エージェントループ UI",
         "description": "ステップ2をエージェントループ進行状態表示に刷新。ターン数・実行中ツール・Copilotメッセージをリアルタイム表示する。",
-        "status": "pending",
+        "status": "done",
         "priority": "high",
         "dependencies": [
           "87"
@@ -2462,7 +2462,7 @@
         "id": "89",
         "title": "フロントエンド — エージェントループ制御（sendToCopilot 多ターン化）",
         "description": "handleCopilotAutoSend を多ターン対応に拡張。ループ開始から完了まで自動で実行する。",
-        "status": "pending",
+        "status": "done",
         "priority": "high",
         "dependencies": [
           "88"
@@ -2476,7 +2476,7 @@
         "id": "90",
         "title": "バックエンド — 書き込みツール承認ゲート強化",
         "description": "エージェントループで返ってきたwrite actionsを承認ゲートに正しく渡し、既存のステップ3（SheetDiffカード + 保存ボタン）で承認できるようにする。",
-        "status": "pending",
+        "status": "done",
         "priority": "high",
         "dependencies": [
           "89"
@@ -2490,7 +2490,7 @@
         "id": "91",
         "title": "バックエンド — ループ安全ガード実装",
         "description": "最大ターン数・タイムアウト・重複実行チェック・無限ループ検出を実装する。",
-        "status": "pending",
+        "status": "done",
         "priority": "medium",
         "dependencies": [
           "86"
@@ -2504,7 +2504,7 @@
         "id": "92",
         "title": "設定モーダル — エージェントループ設定追加",
         "description": "設定モーダルにエージェントループ関連の設定項目を追加する。",
-        "status": "pending",
+        "status": "done",
         "priority": "medium",
         "dependencies": [
           "88"
@@ -2532,7 +2532,7 @@
         "id": "94",
         "title": "バックエンド — file.list / file.read_text / file.stat ツール実装",
         "description": "Rust バックエンドに file 系 read ツールを実装し、エージェントループで自動実行できるようにする。",
-        "status": "pending",
+        "status": "done",
         "priority": "medium",
         "dependencies": [
           "93",
@@ -2554,7 +2554,7 @@
           "91"
         ],
         "details": "検証シナリオ: (1) CSVを開いて内容を確認するだけの作業（read onlyループ）→ 2〜3ターンで 'done' になること。(2) フィルタ + 保存作業 → 2〜3ターン後に write actions が承認ゲートに届き保存できること。(3) 最大ターン数到達時のエラー表示。(4) Copilotがエラーを返した場合の手動フォールバック。",
-        "testStrategy": "Manual E2E on Windows Tauri build with real M365 Copilot.",
+        "testStrategy": "Use docs/AGENT_LOOP_E2E_VERIFICATION.md for the manual Windows Tauri verification run with real M365 Copilot. Keep this task pending until the checklist is executed and recorded.",
         "subtasks": [],
         "updatedAt": "2026-04-01T00:00:00.000Z"
       }
@@ -2563,7 +2563,7 @@
       "version": "1.0.0",
       "lastModified": "2026-03-31T00:00:00Z",
       "taskCount": 83,
-      "completedCount": 74,
+      "completedCount": 82,
       "tags": [
         "master"
       ]

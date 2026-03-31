@@ -2,6 +2,11 @@ import { z } from "zod";
 
 import { sessionSchema, turnSchema, turnStatusSchema } from "./core";
 import {
+  fileListActionSchema,
+  fileReadTextActionSchema,
+  fileStatActionSchema
+} from "./file";
+import {
   copilotTurnResponseSchema,
   relayPacketSchema,
   validationIssueSchema
@@ -356,6 +361,78 @@ export const previewExecutionRequestSchema = z.object({
   turnId: z.string().trim().min(1)
 });
 
+export const toolExecutionResultSchema = z.object({
+  tool: z.string().trim().min(1),
+  args: z.record(z.string(), z.unknown()).default({}),
+  ok: z.boolean(),
+  result: z.unknown().optional(),
+  error: z.string().trim().min(1).optional()
+});
+
+export const executeReadActionsRequestSchema = z.object({
+  sessionId: z.string().trim().min(1),
+  turnId: z.string().trim().min(1),
+  loopTurn: z.number().int().positive(),
+  maxTurns: z.number().int().positive(),
+  actions: z
+    .array(
+      z.union([
+        fileListActionSchema,
+        fileReadTextActionSchema,
+        fileStatActionSchema,
+        z.object({
+          tool: z.literal("workbook.inspect"),
+          args: z.object({
+            sourcePath: z.string().trim().min(1).optional()
+          })
+        }),
+        z.object({
+          tool: z.literal("sheet.preview"),
+          args: z.object({
+            sheet: z.string().trim().min(1),
+            limit: z.number().int().positive().max(200).default(25)
+          })
+        }),
+        z.object({
+          tool: z.literal("sheet.profile_columns"),
+          args: z.object({
+            sheet: z.string().trim().min(1),
+            sampleSize: z.number().int().positive().max(5000).default(250)
+          })
+        }),
+        z.object({
+          tool: z.literal("session.diff_from_base"),
+          args: z.object({
+            artifactId: z.string().trim().min(1).optional()
+          })
+        }),
+        z.object({
+          tool: z.enum([
+            "table.rename_columns",
+            "table.cast_columns",
+            "table.filter_rows",
+            "table.derive_column",
+            "table.group_aggregate",
+            "workbook.save_copy",
+            "file.copy",
+            "file.move",
+            "file.delete"
+          ]),
+          sheet: z.string().trim().min(1).optional(),
+          args: z.record(z.string(), z.unknown()).default({})
+        })
+      ])
+    )
+    .default([])
+});
+
+export const executeReadActionsResponseSchema = z.object({
+  shouldContinue: z.boolean(),
+  toolResults: z.array(toolExecutionResultSchema).default([]),
+  hasWriteActions: z.boolean().default(false),
+  guardMessage: z.string().trim().min(1).optional()
+});
+
 export const previewExecutionResponseSchema = z.object({
   turn: turnSchema,
   ready: z.boolean(),
@@ -484,6 +561,13 @@ export type SubmitCopilotResponseRequest = z.infer<
 >;
 export type SubmitCopilotResponseResponse = z.infer<
   typeof submitCopilotResponseResponseSchema
+>;
+export type ToolExecutionResult = z.infer<typeof toolExecutionResultSchema>;
+export type ExecuteReadActionsRequest = z.infer<
+  typeof executeReadActionsRequestSchema
+>;
+export type ExecuteReadActionsResponse = z.infer<
+  typeof executeReadActionsResponseSchema
 >;
 export type PreviewExecutionRequest = z.infer<typeof previewExecutionRequestSchema>;
 export type PreviewExecutionResponse = z.infer<typeof previewExecutionResponseSchema>;

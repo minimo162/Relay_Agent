@@ -41,6 +41,7 @@ pub fn run() {
             relay::generate_relay_packet,
             relay::assess_copilot_handoff,
             relay::submit_copilot_response,
+            execution::execute_read_actions,
             execution::preview_execution,
             execution::respond_to_approval,
             execution::run_execution

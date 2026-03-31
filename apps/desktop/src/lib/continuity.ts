@@ -8,7 +8,10 @@ const MAX_RECENT_FILES = 6;
 const MAX_AUDIT_HISTORY = 12;
 const DEFAULT_BROWSER_AUTOMATION_SETTINGS = {
   cdpPort: 9222,
-  timeoutMs: 60000
+  timeoutMs: 60000,
+  agentLoopEnabled: false,
+  maxTurns: 10,
+  loopTimeoutMs: 120000
 } as const;
 
 export type PersistedPreviewSnapshot = {
@@ -75,6 +78,9 @@ export type AuditHistoryEntry = {
 export type BrowserAutomationSettings = {
   cdpPort: number;
   timeoutMs: number;
+  agentLoopEnabled: boolean;
+  maxTurns: number;
+  loopTimeoutMs: number;
 };
 
 type ContinuityState = {
@@ -359,7 +365,14 @@ function normalizeBrowserAutomationSettings(value: unknown): BrowserAutomationSe
 
   return sanitizeBrowserAutomationSettings({
     cdpPort: asNumber(record.cdpPort) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.cdpPort,
-    timeoutMs: asNumber(record.timeoutMs) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.timeoutMs
+    timeoutMs: asNumber(record.timeoutMs) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.timeoutMs,
+    agentLoopEnabled:
+      typeof record.agentLoopEnabled === "boolean"
+        ? record.agentLoopEnabled
+        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.agentLoopEnabled,
+    maxTurns: asNumber(record.maxTurns) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.maxTurns,
+    loopTimeoutMs:
+      asNumber(record.loopTimeoutMs) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.loopTimeoutMs
   });
 }
 
@@ -368,6 +381,8 @@ function sanitizeBrowserAutomationSettings(
 ): BrowserAutomationSettings {
   const nextPort = Math.trunc(value.cdpPort);
   const nextTimeout = Math.trunc(value.timeoutMs);
+  const nextMaxTurns = Math.trunc(value.maxTurns);
+  const nextLoopTimeout = Math.trunc(value.loopTimeoutMs);
 
   return {
     cdpPort:
@@ -377,7 +392,18 @@ function sanitizeBrowserAutomationSettings(
     timeoutMs:
       Number.isFinite(nextTimeout) && nextTimeout >= 1000
         ? nextTimeout
-        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.timeoutMs
+        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.timeoutMs,
+    agentLoopEnabled: Boolean(value.agentLoopEnabled),
+    maxTurns:
+      Number.isFinite(nextMaxTurns) && nextMaxTurns >= 1 && nextMaxTurns <= 20
+        ? nextMaxTurns
+        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.maxTurns,
+    loopTimeoutMs:
+      Number.isFinite(nextLoopTimeout) &&
+      nextLoopTimeout >= 30_000 &&
+      nextLoopTimeout <= 300_000
+        ? nextLoopTimeout
+        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.loopTimeoutMs
   };
 }
 

@@ -1,8 +1,9 @@
 use tauri::State;
 
 use crate::models::{
-    PreviewExecutionRequest, PreviewExecutionResponse, RespondToApprovalRequest,
-    RespondToApprovalResponse, RunExecutionRequest, RunExecutionResponse,
+    ExecuteReadActionsRequest, ExecuteReadActionsResponse, PreviewExecutionRequest,
+    PreviewExecutionResponse, RespondToApprovalRequest, RespondToApprovalResponse,
+    RunExecutionRequest, RunExecutionResponse,
 };
 use crate::state::DesktopState;
 
@@ -13,6 +14,15 @@ pub fn preview_execution(
 ) -> Result<PreviewExecutionResponse, String> {
     let mut storage = state.storage.lock().expect("desktop storage poisoned");
     storage.preview_execution(request)
+}
+
+#[tauri::command]
+pub fn execute_read_actions(
+    state: State<'_, DesktopState>,
+    request: ExecuteReadActionsRequest,
+) -> Result<ExecuteReadActionsResponse, String> {
+    let mut storage = state.storage.lock().expect("desktop storage poisoned");
+    storage.execute_read_actions(request)
 }
 
 #[tauri::command]

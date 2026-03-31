@@ -2807,6 +2807,7 @@ dependencies = [
  "calamine",
  "chrono",
  "csv",
+ "encoding_rs",
  "serde",
  "serde_json",
  "tauri",

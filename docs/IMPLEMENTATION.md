@@ -2267,3 +2267,28 @@ Observed result:
 - `pnpm --filter @relay-agent/desktop check` passes with `svelte-check found 0 errors and 0 warnings`, confirming the contracts change does not break the desktop consumer.
 - `pnpm dlx tsx ...` returns `{"status":"ready_to_write","fileListRecursive":false,"fileDeleteRecycle":true}`, confirming the default `status` behavior and representative file-action defaults.
 - Task Master now records tasks `85` and `93` as implemented, and task `93` explicitly notes that `relayActionSchema` integration remains deferred to the later backend-aligned phase.
+
+Agent loop implementation verification:
+
+```bash
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop check
+pnpm --filter @relay-agent/desktop build
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm --filter @relay-agent/desktop tauri:build
+git diff --check
+```
+
+Observed result:
+
+- `packages/contracts/src/relay.ts` now accepts both spreadsheet and file actions in `copilotTurnResponseSchema.actions` via `relayActionSchema`, so multi-turn Copilot responses can carry `file.list`, `file.read_text`, and `file.stat` without schema rejection.
+- `packages/contracts/src/ipc.ts` now defines `executeReadActionsRequestSchema`, `executeReadActionsResponseSchema`, and `toolExecutionResultSchema`, and `apps/desktop/src/lib/ipc.ts` now exposes the typed `executeReadActions()` wrapper to the desktop UI.
+- `apps/desktop/src-tauri/src/models.rs`, `apps/desktop/src-tauri/src/execution.rs`, `apps/desktop/src-tauri/src/lib.rs`, and `apps/desktop/src-tauri/src/storage.rs` now implement the backend agent-loop read path: `execute_read_actions`, max-turn guard handling, read/write classification, `file.list` / `file.read_text` / `file.stat`, Shift_JIS fallback decoding, and path-traversal blocking for file tools.
+- `apps/desktop/src-tauri/src/storage.rs` now parses `CopilotTurnResponse.status` and `message`, and the allowed read-tool registry exposed in relay packets now includes the new file read tools.
+- `apps/desktop/src/lib/agent-loop.ts` now implements `runAgentLoop()` and `buildFollowUpPrompt()`, using `sendToCopilot()` plus `executeReadActions()` to drive multi-turn loop execution until `ready_to_write`, `done`, or `error`.
+- `apps/desktop/src/lib/continuity.ts` now persists `agentLoopEnabled`, `maxTurns`, and `loopTimeoutMs` alongside the existing browser automation settings.
+- `apps/desktop/src/routes/+page.svelte` now supports both the existing one-shot send and the new loop mode, including Step 2 loop toggles, per-turn log rendering, cancellation, automatic handoff into Step 3 when `ready_to_write` is reached, and loop-related settings in the modal.
+- `docs/AGENT_LOOP_E2E_VERIFICATION.md` now records the five manual verification scenarios for task `95`; the task remains pending until those Windows + M365 checks are actually executed and recorded.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` passes with 39 tests green, including new coverage for the loop guard, write-action gating, file read tools, traversal blocking, and the 1MB file-size limit.
+- `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop check`, `pnpm --filter @relay-agent/desktop build`, `pnpm --filter @relay-agent/desktop tauri:build`, and `git diff --check` all pass after the agent-loop implementation.
+- Task Master now records tasks `86`, `87`, `88`, `89`, `90`, `91`, `92`, and `94` as implemented, while task `95` remains open pending manual E2E execution against a real M365 Copilot session.
