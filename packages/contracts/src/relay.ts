@@ -35,10 +35,19 @@ export const validationIssueSchema = z.object({
   code: nonEmptyStringSchema
 });
 
+export const agentLoopStatusSchema = z.enum([
+  "thinking",
+  "ready_to_write",
+  "done",
+  "error"
+]);
+
 export const copilotTurnResponseSchema = z.object({
   version: z.literal("1.0").default("1.0"),
+  status: agentLoopStatusSchema.default("ready_to_write"),
   summary: nonEmptyStringSchema,
   actions: z.array(spreadsheetActionSchema).default([]),
+  message: z.string().optional(),
   followupQuestions: z.array(z.string()).default([]),
   warnings: z.array(z.string()).default([])
 });
@@ -47,4 +56,5 @@ export type ToolPhase = z.infer<typeof toolPhaseSchema>;
 export type ToolDescriptor = z.infer<typeof toolDescriptorSchema>;
 export type RelayPacket = z.infer<typeof relayPacketSchema>;
 export type ValidationIssue = z.infer<typeof validationIssueSchema>;
+export type AgentLoopStatus = z.infer<typeof agentLoopStatusSchema>;
 export type CopilotTurnResponse = z.infer<typeof copilotTurnResponseSchema>;

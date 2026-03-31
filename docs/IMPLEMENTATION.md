@@ -2248,3 +2248,22 @@ Observed result:
 - `pnpm --filter @relay-agent/desktop build` passes.
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passes.
 - Task Master was updated to mark only the implementation-backed subtasks under `77`, `78`, `79`, `80`, `81`, and `82` as done; the parent tasks plus `76` and `83` remain open until the M365-dependent manual verification artifacts exist.
+
+Contracts schema extension verification:
+
+```bash
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop check
+pnpm dlx tsx -e "import { copilotTurnResponseSchema, fileActionSchema } from './packages/contracts/src/index.ts'; const parsed = copilotTurnResponseSchema.parse({ summary: 'ok', actions: [] }); const fileList = fileActionSchema.parse({ tool: 'file.list', args: { path: '/tmp' } }); const fileDelete = fileActionSchema.parse({ tool: 'file.delete', args: { path: '/tmp/test.txt' } }); console.log(JSON.stringify({ status: parsed.status, fileListRecursive: fileList.args.recursive, fileDeleteRecycle: fileDelete.args.toRecycleBin }));"
+```
+
+Observed result:
+
+- `packages/contracts/src/relay.ts` now defines `agentLoopStatusSchema` with `thinking`, `ready_to_write`, `done`, and `error`, and `copilotTurnResponseSchema` now includes `status` plus optional `message`.
+- Omitting `status` from `copilotTurnResponseSchema` still parses successfully and resolves to `ready_to_write`, preserving the existing one-shot response shape.
+- `packages/contracts/src/file.ts` now defines `file.list`, `file.read_text`, `file.stat`, `file.copy`, `file.move`, and `file.delete`, plus `fileActionSchema` as the discriminated union over those tools.
+- `packages/contracts/src/index.ts` now exports the new file schemas and `agentLoopStatusSchema` / `AgentLoopStatus`.
+- `pnpm --filter @relay-agent/contracts typecheck` passes.
+- `pnpm --filter @relay-agent/desktop check` passes with `svelte-check found 0 errors and 0 warnings`, confirming the contracts change does not break the desktop consumer.
+- `pnpm dlx tsx ...` returns `{"status":"ready_to_write","fileListRecursive":false,"fileDeleteRecycle":true}`, confirming the default `status` behavior and representative file-action defaults.
+- Task Master now records tasks `85` and `93` as implemented, and task `93` explicitly notes that `relayActionSchema` integration remains deferred to the later backend-aligned phase.
