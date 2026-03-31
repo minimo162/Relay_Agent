@@ -102,6 +102,9 @@ async function runBrowserCommand(
     String(settings.timeoutMs)
   ];
 
+  console.debug("[copilot-browser] scriptPath:", scriptPath);
+  console.debug("[copilot-browser] args:", args);
+
   const command = Command.create("node", args);
   let stdout = "";
   let stderr = "";
@@ -111,17 +114,16 @@ async function runBrowserCommand(
   });
   command.stderr.on("data", (chunk) => {
     stderr += chunk;
+    console.debug("[copilot-browser] stderr:", chunk);
   });
 
   const completion = new Promise<BrowserCommandOutput>((resolve, reject) => {
     command.on("close", ({ code }) => {
-      resolve({
-        code,
-        stdout,
-        stderr
-      });
+      console.debug("[copilot-browser] close code:", code, "stdout:", stdout, "stderr:", stderr);
+      resolve({ code, stdout, stderr });
     });
     command.on("error", (message) => {
+      console.error("[copilot-browser] spawn error:", message);
       reject(
         new CopilotBrowserError(
           "SEND_FAILED",
@@ -140,14 +142,26 @@ async function runBrowserCommand(
 }
 
 async function resolveBrowserScriptPath(): Promise<string> {
-  if (import.meta.env.DEV) {
-    return __COPILOT_SCRIPT_DEV_PATH__;
+  // __COPILOT_SCRIPT_DEV_PATH__ is injected by Vite define at build time.
+  // Cast to unknown first to safely check for undefined at runtime.
+  const devPath = (__COPILOT_SCRIPT_DEV_PATH__ as unknown) as string | undefined;
+
+  if (import.meta.env.DEV && devPath) {
+    console.debug("[copilot-browser] using dev path:", devPath);
+    return devPath;
   }
 
   try {
-    return await resolveResource(RESOURCE_SCRIPT_PATH);
-  } catch {
-    return __COPILOT_SCRIPT_DEV_PATH__;
+    const resourcePath = await resolveResource(RESOURCE_SCRIPT_PATH);
+    console.debug("[copilot-browser] using resource path:", resourcePath);
+    return resourcePath;
+  } catch (err) {
+    console.warn("[copilot-browser] resolveResource failed:", err);
+    if (devPath) return devPath;
+    throw new CopilotBrowserError(
+      "SEND_FAILED",
+      "Could not resolve the path to copilot-browser.js. Run `pnpm copilot-browser:build` and restart the app."
+    );
   }
 }
 
