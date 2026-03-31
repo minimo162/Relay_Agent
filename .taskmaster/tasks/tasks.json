@@ -1772,7 +1772,7 @@
       {
         "id": "68",
         "title": "End-to-end verification of new single-page UI on Windows Tauri",
-        "status": "pending",
+        "status": "done",
         "description": "Full walkthrough on Windows: file select → preflight → packet copy → Copilot paste → preview (SheetDiff cards) → save. Verify all Japanese, error states, success screen.",
         "details": "Run on Windows with real .xlsx sample via pnpm tauri:dev.",
         "testStrategy": "Manual E2E on Windows Tauri build.",
