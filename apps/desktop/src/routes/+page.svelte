@@ -931,7 +931,12 @@
       validationFeedback = null;
       retryPrompt = "";
     } catch (error) {
-      copilotAutoError = getCopilotBrowserErrorMessage(error);
+      console.error("[copilot-browser] handleCopilotAutoSend error:", error);
+      const friendlyMsg = getCopilotBrowserErrorMessage(error);
+      const rawMsg = error instanceof Error ? error.message.trim() : String(error);
+      copilotAutoError = rawMsg && rawMsg !== friendlyMsg
+        ? `${friendlyMsg}\n[詳細: ${rawMsg}]`
+        : friendlyMsg;
     } finally {
       isSendingToCopilot = false;
     }
@@ -2568,6 +2573,7 @@
     color: var(--ra-error);
     font-size: 0.88rem;
     margin: 0.5rem 0 0;
+    white-space: pre-line;
   }
 
   .field-warn {

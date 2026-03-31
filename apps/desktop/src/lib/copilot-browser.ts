@@ -102,8 +102,8 @@ async function runBrowserCommand(
     String(settings.timeoutMs)
   ];
 
-  console.debug("[copilot-browser] scriptPath:", scriptPath);
-  console.debug("[copilot-browser] args:", args);
+  console.log("[copilot-browser] scriptPath:", scriptPath);
+  console.log("[copilot-browser] args:", args);
 
   const command = Command.create("node", args);
   let stdout = "";
@@ -114,12 +114,12 @@ async function runBrowserCommand(
   });
   command.stderr.on("data", (chunk) => {
     stderr += chunk;
-    console.debug("[copilot-browser] stderr:", chunk);
+    console.warn("[copilot-browser] stderr:", chunk);
   });
 
   const completion = new Promise<BrowserCommandOutput>((resolve, reject) => {
     command.on("close", ({ code }) => {
-      console.debug("[copilot-browser] close code:", code, "stdout:", stdout, "stderr:", stderr);
+      console.log("[copilot-browser] close code:", code, "stdout:", stdout, "stderr:", stderr);
       resolve({ code, stdout, stderr });
     });
     command.on("error", (message) => {
@@ -147,13 +147,13 @@ async function resolveBrowserScriptPath(): Promise<string> {
   const devPath = (__COPILOT_SCRIPT_DEV_PATH__ as unknown) as string | undefined;
 
   if (import.meta.env.DEV && devPath) {
-    console.debug("[copilot-browser] using dev path:", devPath);
+    console.log("[copilot-browser] using dev path:", devPath);
     return devPath;
   }
 
   try {
     const resourcePath = await resolveResource(RESOURCE_SCRIPT_PATH);
-    console.debug("[copilot-browser] using resource path:", resourcePath);
+    console.log("[copilot-browser] using resource path:", resourcePath);
     return resourcePath;
   } catch (err) {
     console.warn("[copilot-browser] resolveResource failed:", err);
