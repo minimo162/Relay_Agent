@@ -12,7 +12,8 @@ import {
 } from "./continuity";
 
 const RESOURCE_SCRIPT_PATH = "../scripts/dist/copilot-browser.js";
-const DEV_SCRIPT_PATH = "scripts/dist/copilot-browser.js";
+
+declare const __COPILOT_SCRIPT_DEV_PATH__: string;
 
 type BrowserCommandAction = "connect" | "send";
 
@@ -140,13 +141,13 @@ async function runBrowserCommand(
 
 async function resolveBrowserScriptPath(): Promise<string> {
   if (import.meta.env.DEV) {
-    return DEV_SCRIPT_PATH;
+    return __COPILOT_SCRIPT_DEV_PATH__;
   }
 
   try {
     return await resolveResource(RESOURCE_SCRIPT_PATH);
   } catch {
-    return DEV_SCRIPT_PATH;
+    return __COPILOT_SCRIPT_DEV_PATH__;
   }
 }
 
