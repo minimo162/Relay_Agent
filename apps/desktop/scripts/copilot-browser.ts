@@ -4,11 +4,24 @@ const COPILOT_URL = "https://m365.cloud.microsoft/chat/";
 const NEW_CHAT_SELECTOR = '[data-testid="newChatButton"]';
 const EDITOR_SELECTOR = "#m365-chat-editor-target-element";
 const SEND_READY_SEL = ".fai-SendButton:not([disabled])";
-const RESPONSE_SEL = '[data-testid="markdown-reply"]';
 const API_URL_PATTERN = "/sydney/conversation";
 const DOM_STABLE_POLLS = 2;
 const DOM_POLL_INTERVAL_MS = 200;
 const MAX_COPILOT_RETRIES = 2;
+const NETWORK_CAPTURE_TIMEOUT_MS = 15_000;
+
+// Candidate selectors tried in order for DOM polling fallback.
+// The first selector that yields non-empty text wins.
+const RESPONSE_SEL_CANDIDATES = [
+  '[data-testid="markdown-reply"]',
+  '[data-testid="chat-message-content"]',
+  '[data-testid="chat-turn-message"]',
+  ".chat-turn-response",
+  "cib-message-group[slot='assistant'] cib-message",
+  "[class*='ResponseText']",
+  "[class*='responseText']",
+  "[class*='chat-bubble']",
+];
 
 type ErrorCode =
   | "CDP_UNAVAILABLE"
@@ -204,7 +217,7 @@ async function runSendAttempt(
 
   const networkResponsePromise = page.waitForResponse(
     (response) => response.url().includes(API_URL_PATTERN),
-    { timeout }
+    { timeout: Math.min(timeout, NETWORK_CAPTURE_TIMEOUT_MS) }
   );
 
   await clickSend(page, timeout);
@@ -307,15 +320,7 @@ async function readResponseFromDom(page: Page, timeout: number): Promise<string>
   let stableCount = 0;
 
   while (Date.now() < deadline) {
-    const nextText = await page
-      .locator(RESPONSE_SEL)
-      .evaluateAll((nodes) =>
-        nodes
-          .map((node) => (node.textContent ?? "").trim())
-          .filter(Boolean)
-          .at(-1) ?? ""
-      )
-      .catch(() => "");
+    const nextText = await pickFirstNonEmptyFromSelectors(page, RESPONSE_SEL_CANDIDATES);
 
     if (nextText && nextText === lastText) {
       stableCount += 1;
@@ -331,6 +336,26 @@ async function readResponseFromDom(page: Page, timeout: number): Promise<string>
   }
 
   return lastText;
+}
+
+async function pickFirstNonEmptyFromSelectors(page: Page, selectors: string[]): Promise<string> {
+  for (const sel of selectors) {
+    const text = await page
+      .locator(sel)
+      .evaluateAll((nodes) =>
+        nodes
+          .map((node) => (node.textContent ?? "").trim())
+          .filter(Boolean)
+          .at(-1) ?? ""
+      )
+      .catch(() => "");
+
+    if (text) {
+      return text;
+    }
+  }
+
+  return "";
 }
 
 async function extractResponseText(response: Response): Promise<string> {
