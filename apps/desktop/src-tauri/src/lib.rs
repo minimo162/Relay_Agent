@@ -17,6 +17,7 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let sample_workbook_path = discover_sample_workbook_path(&app.handle());
             let app_local_data_dir = resolve_app_local_data_dir(&app.handle());

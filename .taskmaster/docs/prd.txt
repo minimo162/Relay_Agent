@@ -392,6 +392,116 @@ Xvfb + tauri:dev でデスクトップ起動を確認:
 
 ---
 
+## 13. Copilot ブラウザ自動化（Tasks 76–83）
+
+### 13.1 背景・目的
+
+現状のステップ2では、ユーザーが手動で以下を行っている：
+
+1. 「依頼をコピー」ボタンでプロンプトをクリップボードにコピー
+2. ブラウザで M365 Copilot Chat を開く
+3. プロンプトを貼り付けて送信
+4. Copilot の返答をコピー
+5. アプリの「Copilot の返答」テキストエリアに貼り付け
+
+この手順を Playwright による Edge ブラウザ自動化で代替し、ステップ2を「送信ボタン1回」で完結させる。
+
+### 13.2 技術スタック選定
+
+| 選択肢 | 判断 | 理由 |
+|---|---|---|
+| **Playwright TypeScript** | ✅ 採用 | 既存スタック（Node.js/pnpm/TS）に完全一致。追加ランタイム不要。`connectOverCDP` でログイン済みEdgeにアタッチ可能。`waitForResponse()` でAPI応答を直接キャプチャできDOMスクレイピングより堅牢。`playwright codegen` でセレクタ自動生成。 |
+| browser-use | ❌ 不採用 | LLM APIキーとトークンコストが毎回発生。推論レイテンシ10〜60秒。Pythonランタイム必須でTauri統合が複雑。確定的タスクにAIエージェントは過剰。 |
+| Puppeteer | ❌ 不採用 | Playwrightのサブセット。`storageState`・`getByRole`等の安定ロケータがない。コードジェネレータなし。 |
+| Python Playwright | ❌ 不採用 | Python 3.11+ランタイムをユーザーに要求する配布負担がある。Node.js版で同等以上のことができる。 |
+
+### 13.3 自動化の対象フロー
+
+```
+[ステップ2 UI]
+  ↓ 「Copilotに自動送信」ボタン押下
+[Tauri @tauri-apps/plugin-shell]
+  ↓ Command.create('node', ['scripts/copilot-browser.js', '--prompt', ...])
+[scripts/copilot-browser.ts (tsx / node)]
+  ↓ playwright.chromium.connectOverCDP('http://localhost:9222')
+  │   ※ ユーザーの Edge がログイン済みで CDP が有効化されていることが前提
+  ↓ page.goto('https://m365.cloud.microsoft/chat/')
+  ↓ 新規チャット開始（getByTestId('newChatButton').click()）
+  ↓ プロンプト入力（getByRole('textbox').fill(prompt)）
+  ↓ 送信（Enter キーまたは送信ボタン）
+  ↓ waitForResponse() で Copilot API の streaming 応答をキャプチャ
+     ※ DOMポーリングではなくネットワークレベルで取得 → セレクタ変更の影響なし
+  ↓ JSON.stringify({ status: 'ok', response }) を stdout に出力
+[ステップ2 UI]
+  ↓ stdout をパース → テキストエリアに自動セット → 「確認する」ボタン有効化
+```
+
+### 13.4 認証・セッション管理
+
+Edge に CDP デバッグポートを付けてユーザーが手動起動することで、既存の M365 ログイン済みセッションをそのまま利用できる。専用プロファイルの作成・ログイン待機・Cookie 管理が不要になる。
+
+**Edge の CDP 有効化手順（初回のみ・ユーザー操作）:**
+```
+Microsoft Edge を以下のショートカットで起動（またはタスクスケジューラに登録）:
+msedge.exe --remote-debugging-port=9222 --no-first-run
+```
+
+設定モーダルでポート番号を変更可能にする。デフォルト: `9222`。
+
+`connectOverCDP` が失敗した場合（Edge が未起動等）はユーザーに起動を促すダイアログを表示する。
+
+### 13.5 レスポンスキャプチャ方式
+
+DOM ポーリングではなく Playwright の `page.waitForResponse()` を使い、Copilot が内部で使う streaming API エンドポイントの応答を直接キャプチャする。
+
+```typescript
+const [response] = await Promise.all([
+  page.waitForResponse(
+    r => r.url().includes('/api/chat') && r.status() === 200,
+    { timeout: 60_000 }
+  ),
+  sendButton.click(),
+]);
+const body = await response.text();
+// streaming JSON (NDJSON / SSE) を parse して最終テキストを抽出
+```
+
+エンドポイントが変更されたときのフォールバックとして DOM 取得も保持するが、こちらは補助的な位置づけとする。
+
+### 13.6 UI 変更（ステップ2）
+
+```
+ステップ 2: Copilot に聞く
+┌──────────────────────────────────────┐
+│ [依頼をコピー]  [Copilotに自動送信 ▶]  │  ← 新ボタン追加
+│ 依頼テキストのプレビュー（折りたたみ）  │
+│ Copilot の返答:                       │
+│ [テキストエリア]  ← 自動入力も可能    │
+│       [確認する →]                   │
+└──────────────────────────────────────┘
+```
+
+自動送信中はスピナーを表示し、完了後テキストエリアを自動入力する。エラー時はインラインエラーメッセージを表示し、手動入力にフォールバック可能とする。
+
+### 13.7 エラーハンドリング
+
+| エラー種別 | 対処 |
+|---|---|
+| CDP 接続失敗（Edge 未起動） | 「Edge を CDP モードで起動してください」ダイアログ + 手動フォールバック |
+| ナビゲーション失敗（ログイン画面） | 「M365 にログインしてから再試行してください」メッセージ |
+| waitForResponse タイムアウト | DOMポーリングにフォールバック → それも失敗なら手動フォールバック |
+| Copilot エラー応答 | エラー内容表示 + 最大2回リトライ |
+| セレクタ変更による DOM 不一致 | 設定でセレクタ変更可能 + フォールバックメッセージ |
+
+### 13.8 非ゴール（自動化スコープ外）
+
+- GPT モード切り替えの自動化（手動設定を前提）
+- ファイル添付の自動化（テキストプロンプトのみ）
+- 複数 Copilot セッションの並列実行
+- Edge 以外のブラウザ対応
+
+---
+
 ## 11. 非ゴール
 
 - Copilot API 直接接続（手動リレー方式を維持）

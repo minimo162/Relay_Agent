@@ -2,5 +2,19 @@
   "identifier": "default",
   "description": "Default desktop capability",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "node",
+          "cmd": "node",
+          "sidecar": false,
+          "args": true
+        }
+      ]
+    },
+    "shell:allow-stdin-write"
+  ]
 }

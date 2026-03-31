@@ -13,11 +13,13 @@
     createSession,
     discardStudioDraft,
     generateRelayPacket,
+    getCopilotBrowserErrorMessage,
     inspectWorkbook,
     initializeApp,
     listRecoverableStudioDrafts,
     listRecentSessions,
     loadStudioDraft,
+    loadBrowserAutomationSettings,
     markStudioDraftClean,
     pingDesktop,
     preflightWorkbook,
@@ -26,6 +28,8 @@
     rememberRecentSession,
     respondToApproval,
     runExecution,
+    saveBrowserAutomationSettings,
+    sendToCopilot,
     saveStudioDraft,
     startTurn,
     submitCopilotResponse,
@@ -112,12 +116,18 @@
   let copilotInstructionText = "";
   let expectedResponseTemplate = "";
   let copiedInstructionNotice = "";
+  let copiedBrowserCommandNotice = "";
   let copilotResponse = "";
   let originalCopilotResponse = "";
   let autoFixMessages: string[] = [];
   let validationFeedback: ValidationFeedback | null = null;
   let retryPrompt = "";
   let showInstructionPreview = false;
+  let isSendingToCopilot = false;
+  let copilotAutoError: string | null = null;
+  let copilotResponseField: HTMLTextAreaElement | null = null;
+  let cdpPort = 9222;
+  let timeoutMs = 60000;
 
   let previewSummary = "";
   let previewTargetCount = 0;
@@ -757,6 +767,9 @@
     step1Expanded = true;
     errorMsg = "";
     copiedInstructionNotice = "";
+    copiedBrowserCommandNotice = "";
+    copilotAutoError = null;
+    isSendingToCopilot = false;
     validationFeedback = null;
     retryPrompt = "";
     clearProgress();
@@ -801,6 +814,9 @@
     step1Expanded = false;
     errorMsg = "";
     copiedInstructionNotice = "";
+    copiedBrowserCommandNotice = "";
+    copilotAutoError = null;
+    isSendingToCopilot = false;
     validationFeedback = null;
     retryPrompt = "";
     clearProgress();
@@ -865,6 +881,13 @@
     }
   }
 
+  function persistBrowserAutomationSettings(): void {
+    const saved = saveBrowserAutomationSettings({ cdpPort, timeoutMs });
+    cdpPort = saved.cdpPort;
+    timeoutMs = saved.timeoutMs;
+    copiedBrowserCommandNotice = "";
+  }
+
   async function copyCopilotInstruction(): Promise<void> {
     if (!copilotInstructionText.trim()) {
       return;
@@ -872,6 +895,41 @@
 
     await copyToClipboard(copilotInstructionText);
     copiedInstructionNotice = "Copilot に渡すテキストをコピーしました。";
+  }
+
+  async function copyEdgeLaunchCommand(): Promise<void> {
+    await copyToClipboard(
+      `msedge.exe --remote-debugging-port=${cdpPort} --no-first-run`
+    );
+    copiedBrowserCommandNotice = "Edge の起動コマンドをコピーしました。";
+  }
+
+  function focusCopilotResponseField(): void {
+    copilotResponseField?.focus();
+    copilotResponseField?.scrollIntoView({ block: "center" });
+  }
+
+  async function handleCopilotAutoSend(): Promise<void> {
+    if (!copilotInstructionText.trim()) {
+      return;
+    }
+
+    isSendingToCopilot = true;
+    copilotAutoError = null;
+    copiedInstructionNotice = "";
+
+    try {
+      const response = await sendToCopilot(copilotInstructionText);
+      copilotResponse = response;
+      originalCopilotResponse = "";
+      autoFixMessages = [];
+      validationFeedback = null;
+      retryPrompt = "";
+    } catch (error) {
+      copilotAutoError = getCopilotBrowserErrorMessage(error);
+    } finally {
+      isSendingToCopilot = false;
+    }
   }
 
   function undoAutoFix(): void {
@@ -896,6 +954,7 @@
     guidedStage = "setup";
     step1Expanded = true;
     errorMsg = "";
+    copilotAutoError = null;
     clearProgress();
   }
 
@@ -903,6 +962,7 @@
     guidedStage = "copilot";
     step1Expanded = false;
     errorMsg = "";
+    copilotAutoError = null;
     clearProgress();
   }
 
@@ -929,12 +989,15 @@
     copilotInstructionText = "";
     expectedResponseTemplate = "";
     copiedInstructionNotice = "";
+    copiedBrowserCommandNotice = "";
     copilotResponse = "";
     originalCopilotResponse = "";
     autoFixMessages = [];
     validationFeedback = null;
     retryPrompt = "";
     showInstructionPreview = false;
+    isSendingToCopilot = false;
+    copilotAutoError = null;
     previewSummary = "";
     previewTargetCount = 0;
     previewAffectedRows = 0;
@@ -957,6 +1020,8 @@
   async function handleSetupStage(): Promise<void> {
     errorMsg = "";
     copiedInstructionNotice = "";
+    copiedBrowserCommandNotice = "";
+    copilotAutoError = null;
     validationFeedback = null;
     retryPrompt = "";
     busy = true;
@@ -1055,6 +1120,7 @@
   async function handleCopilotStage(): Promise<void> {
     errorMsg = "";
     copiedInstructionNotice = "";
+    copilotAutoError = null;
     validationFeedback = null;
     retryPrompt = "";
     busy = true;
@@ -1189,6 +1255,9 @@
 
   onMount(async () => {
     loadExpertDetails();
+    const browserAutomationSettings = loadBrowserAutomationSettings();
+    cdpPort = browserAutomationSettings.cdpPort;
+    timeoutMs = browserAutomationSettings.timeoutMs;
 
     try {
       await pingDesktop();
@@ -1545,9 +1614,21 @@
       class="btn btn-accent"
       type="button"
       on:click={copyCopilotInstruction}
-      disabled={busy || !copilotStepAvailable}
+      disabled={busy || isSendingToCopilot || !copilotStepAvailable}
     >
       依頼をコピー
+    </button>
+    <button
+      class="btn btn-secondary"
+      type="button"
+      on:click={handleCopilotAutoSend}
+      disabled={busy || isSendingToCopilot || !copilotStepAvailable}
+    >
+      {#if isSendingToCopilot}
+        Copilot に送信しています…
+      {:else}
+        Copilotに自動送信 ▶
+      {/if}
     </button>
     <button
       class="btn-link"
@@ -1563,6 +1644,13 @@
     <p class="field-success">{copiedInstructionNotice}</p>
   {/if}
 
+  {#if copilotAutoError}
+    <p class="field-error">{copilotAutoError}</p>
+    <button class="btn-link inline-link" type="button" on:click={focusCopilotResponseField}>
+      手動入力に切り替え
+    </button>
+  {/if}
+
   {#if showInstructionPreview && copilotStepAvailable}
     <pre class="preview-block">{copilotInstructionText}</pre>
   {/if}
@@ -1572,9 +1660,10 @@
     id="copilot-response"
     class="textarea textarea-tall"
     bind:value={copilotResponse}
+    bind:this={copilotResponseField}
     placeholder="Copilot から返ってきた JSON をここに貼り付け"
     rows="8"
-    disabled={busy || !copilotStepAvailable}
+    disabled={busy || isSendingToCopilot || !copilotStepAvailable}
   ></textarea>
 
   <div class="response-shape">
@@ -1651,7 +1740,7 @@
       class="btn btn-secondary"
       type="button"
       on:click={goToSetup}
-      disabled={busy || !copilotStepAvailable}
+      disabled={busy || isSendingToCopilot || !copilotStepAvailable}
     >
       戻る
     </button>
@@ -1659,7 +1748,7 @@
       class="btn btn-primary"
       type="button"
       on:click={handleCopilotStage}
-      disabled={busy || !copilotStepAvailable || !copilotResponse.trim()}
+      disabled={busy || isSendingToCopilot || !copilotStepAvailable || !copilotResponse.trim()}
     >
       {busy && guidedStage === "copilot" ? "変更を確認しています…" : "確認する"}
     </button>
@@ -1973,6 +2062,41 @@
           <li>アプリの外に自動送信されるデータはありません</li>
           <li>Copilot に渡すテキストのみ、手動でコピーした場合に外部へ出ます</li>
         </ul>
+
+        <h3>Copilot ブラウザ自動化</h3>
+        <label class="field-label" for="copilot-cdp-port">CDP ポート</label>
+        <input
+          id="copilot-cdp-port"
+          class="input"
+          type="number"
+          min="1"
+          max="65535"
+          bind:value={cdpPort}
+          on:change={persistBrowserAutomationSettings}
+        />
+
+        <label class="field-label" for="copilot-timeout">タイムアウト (ms)</label>
+        <input
+          id="copilot-timeout"
+          class="input"
+          type="number"
+          min="1000"
+          step="1000"
+          bind:value={timeoutMs}
+          on:change={persistBrowserAutomationSettings}
+        />
+
+        <div class="btn-row">
+          <button class="btn btn-secondary" type="button" on:click={copyEdgeLaunchCommand}>
+            起動コマンドをコピー
+          </button>
+        </div>
+        <p class="settings-hint">
+          `msedge.exe --remote-debugging-port={cdpPort} --no-first-run`
+        </p>
+        {#if copiedBrowserCommandNotice}
+          <p class="field-success">{copiedBrowserCommandNotice}</p>
+        {/if}
 
         {#if storagePath}
           <h3>ローカルストレージ</h3>

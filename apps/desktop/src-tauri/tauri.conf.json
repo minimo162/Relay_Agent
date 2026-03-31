@@ -26,7 +26,8 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "../../../examples/revenue-workflow-demo.csv": "examples/revenue-workflow-demo.csv"
+      "../../../examples/revenue-workflow-demo.csv": "examples/revenue-workflow-demo.csv",
+      "../scripts/dist/copilot-browser.js": "../scripts/dist/copilot-browser.js"
     },
     "icon": ["icons/icon.png"]
   }

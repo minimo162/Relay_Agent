@@ -393,6 +393,23 @@ export const runExecutionResponseSchema = z.object({
   reason: z.string().min(1).optional()
 });
 
+export const copilotBrowserErrorCodeSchema = z.enum([
+  "CDP_UNAVAILABLE",
+  "NOT_LOGGED_IN",
+  "RESPONSE_TIMEOUT",
+  "COPILOT_ERROR",
+  "SEND_FAILED"
+]);
+
+export const copilotBrowserResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("ok"), response: z.string() }),
+  z.object({
+    status: z.literal("error"),
+    errorCode: copilotBrowserErrorCodeSchema,
+    message: z.string()
+  })
+]);
+
 export type StorageMode = z.infer<typeof storageModeSchema>;
 export type StartupStatus = z.infer<typeof startupStatusSchema>;
 export type StartupRecoveryAction = z.infer<typeof startupRecoveryActionSchema>;
@@ -477,3 +494,5 @@ export type RespondToApprovalResponse = z.infer<
 >;
 export type RunExecutionRequest = z.infer<typeof runExecutionRequestSchema>;
 export type RunExecutionResponse = z.infer<typeof runExecutionResponseSchema>;
+export type CopilotBrowserErrorCode = z.infer<typeof copilotBrowserErrorCodeSchema>;
+export type CopilotBrowserResult = z.infer<typeof copilotBrowserResultSchema>;

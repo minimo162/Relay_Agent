@@ -6,6 +6,10 @@ const STORAGE_KEY = "relay-agent.continuity.v1";
 const MAX_RECENT_SESSIONS = 6;
 const MAX_RECENT_FILES = 6;
 const MAX_AUDIT_HISTORY = 12;
+const DEFAULT_BROWSER_AUTOMATION_SETTINGS = {
+  cdpPort: 9222,
+  timeoutMs: 60000
+} as const;
 
 export type PersistedPreviewSnapshot = {
   sourcePath: string;
@@ -68,12 +72,18 @@ export type AuditHistoryEntry = {
   warnings: string[];
 };
 
+export type BrowserAutomationSettings = {
+  cdpPort: number;
+  timeoutMs: number;
+};
+
 type ContinuityState = {
   version: 1;
   studioDrafts: Record<string, PersistedStudioDraft>;
   recentSessions: RecentSession[];
   recentFiles: RecentFile[];
   auditHistory: AuditHistoryEntry[];
+  browserAutomation: BrowserAutomationSettings;
 };
 
 function createDefaultState(): ContinuityState {
@@ -82,7 +92,8 @@ function createDefaultState(): ContinuityState {
     studioDrafts: {},
     recentSessions: [],
     recentFiles: [],
-    auditHistory: []
+    auditHistory: [],
+    browserAutomation: { ...DEFAULT_BROWSER_AUTOMATION_SETTINGS }
   };
 }
 
@@ -104,7 +115,8 @@ function readState(): ContinuityState {
       studioDrafts: normalizeDraftRecord(parsed.studioDrafts),
       recentSessions: normalizeRecentSessions(parsed.recentSessions),
       recentFiles: normalizeRecentFiles(parsed.recentFiles),
-      auditHistory: normalizeAuditHistory(parsed.auditHistory)
+      auditHistory: normalizeAuditHistory(parsed.auditHistory),
+      browserAutomation: normalizeBrowserAutomationSettings(parsed.browserAutomation)
     };
   } catch {
     return createDefaultState();
@@ -338,6 +350,37 @@ function normalizeRelayMode(value: unknown): RelayMode | null {
     : null;
 }
 
+function normalizeBrowserAutomationSettings(value: unknown): BrowserAutomationSettings {
+  if (!value || typeof value !== "object") {
+    return { ...DEFAULT_BROWSER_AUTOMATION_SETTINGS };
+  }
+
+  const record = value as Record<string, unknown>;
+
+  return sanitizeBrowserAutomationSettings({
+    cdpPort: asNumber(record.cdpPort) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.cdpPort,
+    timeoutMs: asNumber(record.timeoutMs) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.timeoutMs
+  });
+}
+
+function sanitizeBrowserAutomationSettings(
+  value: BrowserAutomationSettings
+): BrowserAutomationSettings {
+  const nextPort = Math.trunc(value.cdpPort);
+  const nextTimeout = Math.trunc(value.timeoutMs);
+
+  return {
+    cdpPort:
+      Number.isFinite(nextPort) && nextPort >= 1 && nextPort <= 65535
+        ? nextPort
+        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.cdpPort,
+    timeoutMs:
+      Number.isFinite(nextTimeout) && nextTimeout >= 1000
+        ? nextTimeout
+        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.timeoutMs
+  };
+}
+
 function hasMeaningfulDraft(draft: PersistedStudioDraft): boolean {
   return Boolean(
     draft.turnTitle.trim() ||
@@ -471,4 +514,21 @@ export function rememberAuditHistory(entry: AuditHistoryEntry): void {
 
 export function listAuditHistory(): AuditHistoryEntry[] {
   return readState().auditHistory;
+}
+
+export function loadBrowserAutomationSettings(): BrowserAutomationSettings {
+  return readState().browserAutomation;
+}
+
+export function saveBrowserAutomationSettings(
+  value: BrowserAutomationSettings
+): BrowserAutomationSettings {
+  const nextSettings = sanitizeBrowserAutomationSettings(value);
+
+  updateState((current) => ({
+    ...current,
+    browserAutomation: nextSettings
+  }));
+
+  return nextSettings;
 }

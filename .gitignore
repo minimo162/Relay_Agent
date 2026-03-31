@@ -16,6 +16,7 @@ node_modules/
 .svelte-kit/
 build/
 dist/
+scripts/dist/
 target/
 
 # Editor directories and files

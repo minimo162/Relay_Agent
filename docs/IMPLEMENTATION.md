@@ -2,7 +2,7 @@
 
 ## Status
 
-- Current phase: Milestone 5 is complete; follow-up tasks `11` through `67` plus `69` through `75` are implemented, documented, and verification-clean, and task `68` remains open for the current UI follow-up
+- Current phase: Milestone 5 and the browser automation follow-up implementation slice are in place; tasks `11` through `67` plus `69` through `75` remain complete, task `68` remains open for the Windows Tauri E2E walkthrough, and browser automation tasks `76` through `83` are now partially implemented with manual verification still pending
 - Repository state: pnpm workspace, SvelteKit SPA shell, Tauri v2 shell, and shared contracts package are now bootstrapped and verification-clean
 - Active source-of-truth documents:
   - `PLANS.md`
@@ -10,9 +10,9 @@
   - `docs/IMPLEMENTATION.md`
   - `.taskmaster/docs/repo_audit.md`
 - Follow-up planning input: `.taskmaster/docs/prd.txt` now acts as the integrated PRD for the current UI and Copilot JSON reliability follow-up, while `.taskmaster/docs/archive/prd_guided_workflow_simplification.txt` remains the archived guided-flow simplification reference and the startup, launch, workflow, artifact-browser, turn-lifecycle, and signing follow-ups stay preserved under `.taskmaster/docs/archive/`
-- Follow-up task graph: `.taskmaster/tasks/tasks.json` now covers completed follow-up tasks `11` through `67` and `69` through `75` plus pending UI follow-up task `68`, spanning startup, data trust, continuity, guided onboarding, review/save simplification, cross-cutting recovery plus accessibility work, the Studio workbook inspection artifact browser, turn-lifecycle inspection details, source-run startup test coverage, actual Tauri launch smoke coverage, launched-app workflow completion smoke coverage, guided workflow simplification, Trusted Signing repo wiring, and the current single-page Japanese UI plus Copilot JSON reliability refinements
+- Follow-up task graph: `.taskmaster/tasks/tasks.json` now covers the completed foundation and guided-flow work through task `75`, the still-pending Windows walkthrough task `68`, and the new browser automation follow-up tasks `76` through `83`, with implementation-backed subtasks completed where artifacts now exist and manual M365-dependent verification still left open
 - Follow-up packaging policy: `docs/PACKAGING_POLICY.md` now fixes the first packaged end-user release path to Windows 10/11 x64 via NSIS, with manual installer-driven updates and preserved app-local storage across upgrades as the current expectation
-- Follow-up implementation status: Tasks `11` through `67` and `69` through `75` are now complete. Verification artifacts cover the non-engineer startup and continuity work, workbook inspection, turn-lifecycle inspection, startup smoke-test, actual launch-smoke follow-ups, launched-app workflow smoke coverage, guided-flow verification, the one-page UI redesign plus Step 3 SheetDiff cards, recent-session draft resume, row-level diff detail, always-visible guided steps, compact Step 1 editing, workbook-aware Copilot instruction text, dynamic save-copy examples, stronger auto-fix handling, and level-specific retry prompts. The remaining open follow-up scope is limited to task `68`: Windows Tauri end-to-end verification
+- Follow-up implementation status: Tasks `11` through `67` and `69` through `75` remain complete. Browser automation code now adds the Playwright CDP helper script, Tauri shell integration, Step 2 auto-send UI, persisted CDP settings, and Japanese error mapping, while the real M365 selector confirmation, live Copilot send verification, and end-to-end walkthroughs for tasks `76`, `78`, and `83` still require manual execution in a logged-in Edge session
 
 ## Milestone Log
 
@@ -2222,3 +2222,29 @@ Observed result:
 - Validation failures now surface tiered plain-language guidance with a copyable retry prompt instead of relying on the removed demo-response shortcut.
 - `README.md`, `docs/GUIDED_FLOW_VERIFICATION.md`, `docs/STARTUP_TEST_VERIFICATION.md`, and `docs/APP_WORKFLOW_TEST_VERIFICATION.md` now describe the unified guided flow instead of the older sample/custom split and `Load demo response` path.
 - `pnpm check`, `pnpm typecheck`, the desktop production build, the new auto-fix tests, and `git diff --check` all pass after the guided-flow refresh.
+
+Browser automation implementation verification:
+
+```bash
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop typecheck
+pnpm --filter @relay-agent/desktop copilot-browser:build
+node apps/desktop/scripts/dist/copilot-browser.js --action connect
+pnpm --filter @relay-agent/desktop build
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+Observed result:
+
+- `apps/desktop/scripts/copilot-browser.ts` now implements both `--action connect` and `--action send`, with placeholder Copilot selectors, CDP connection, login detection, network-response capture, DOM fallback polling, citation stripping, and retry handling.
+- `docs/BROWSER_AUTOMATION.md` now records the current placeholder selectors, API pattern, CLI contract, error codes, and the exact live M365 confirmation checklist that still needs to be run.
+- `apps/desktop/package.json` now builds that script with esbuild in ESM mode and externalized Node packages so Playwright can run correctly under the app's `"type": "module"` package boundary.
+- `apps/desktop/src/lib/copilot-browser.ts`, `packages/contracts/src/ipc.ts`, `apps/desktop/src-tauri/src/lib.rs`, `apps/desktop/src-tauri/capabilities/default.json`, and `apps/desktop/src-tauri/tauri.conf.json` now wire the built script into Tauri through `@tauri-apps/plugin-shell`, typed stdout parsing, bundled resource resolution, and persisted CDP settings.
+- `apps/desktop/src/routes/+page.svelte` now adds the Step 2 `Copilotに自動送信 ▶` action, inline Japanese error handling with `手動入力に切り替え`, and a settings-modal section for CDP port, timeout, and Edge launch-command copying.
+- `pnpm --filter @relay-agent/contracts typecheck` passes.
+- `pnpm --filter @relay-agent/desktop typecheck` passes with `svelte-check found 0 errors and 0 warnings`.
+- `pnpm --filter @relay-agent/desktop copilot-browser:build` passes and emits `apps/desktop/scripts/dist/copilot-browser.js`.
+- `node apps/desktop/scripts/dist/copilot-browser.js --action connect` returns structured JSON with `errorCode: "CDP_UNAVAILABLE"` in this environment, confirming the CLI path and error schema.
+- `pnpm --filter @relay-agent/desktop build` passes.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passes.
+- Task Master was updated to mark only the implementation-backed subtasks under `77`, `78`, `79`, `80`, `81`, and `82` as done; the parent tasks plus `76` and `83` remain open until the M365-dependent manual verification artifacts exist.
