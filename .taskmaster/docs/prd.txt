@@ -1,15 +1,21 @@
 # Relay Agent — 統合 PRD
 
-最終更新: 2026-03-31
+最終更新: 2026-04-01
 
 ---
 
 ## 1. 製品概要
 
-Relay Agent は、Copilot が計画した JSON アクションプランを安全にプレビュー・承認・実行するデスクトップアプリ。
-「Copilot は計画、アプリは実行」が基本思想。Copilot API は使わず、ユーザーが Copilot Chat を手動中継する。
+Relay Agent は、M365 Copilot をエージェントとして活用し、PC 作業全般を自動化するデスクトップアプリ。
+ユーザーが目標を伝えると、アプリと Copilot が何度も自動でやりとりしながら処理を進め、
+書き込み・削除など不可逆な操作のみ人間が確認する「Human-in-the-Loop エージェントループ」を実現する。
+
+**フェーズ1（現状）:** スプレッドシートの 1 ショット変換（CSV/XLSX）
+**フェーズ2（次期）:** 読み取りツール自動実行 + 多ターン Copilot ループ
+**フェーズ3（将来）:** ファイル操作・テキスト処理など PC 作業全般への拡張
 
 - **スタック:** SvelteKit SPA + Tauri v2（Rust バックエンド）
+- **ブラウザ自動化:** Playwright TypeScript（Edge CDP 接続）
 - **対象ファイル:** CSV（完全対応）/ XLSX（inspect + save-copy のみ）
 - **対象 OS:** Windows 10/11 x64（NSIS インストーラ）
 - **言語:** UI は全て日本語
@@ -504,7 +510,7 @@ const body = await response.text();
 
 ## 11. 非ゴール
 
-- Copilot API 直接接続（手動リレー方式を維持）
+- Copilot API 直接接続（Edge CDP 経由の Copilot Chat を維持）
 - XLSX write 実行
 - join_lookup ツール（将来拡張候補）
 - raw Excel formula の受け入れ
@@ -524,3 +530,160 @@ const body = await response.text();
 - Contracts（Zod スキーマ）は正本
 - フロントエンド変更のみで Copilot JSON 改善を実現（Rust IPC 変更なし）
 - auto-fix.ts は純粋関数（副作用なし）を維持
+
+---
+
+## 14. エージェントループ（フェーズ2 — Tasks 84–95）
+
+### 14.1 背景・目的
+
+Claude Cowork（Anthropic、2026/01）や Copilot Cowork（Microsoft、2026/03）が示したように、
+「ユーザーが目標を伝えるだけで AI がタスクを完走し、確認が必要な場面のみ人間が介入する」
+アーキテクチャが標準になりつつある。
+
+現状の Relay Agent は「Copilot 1回 → 人間が確認 → 実行」という 1 ショット方式。
+フェーズ2では、読み取りツールの自動実行と Copilot への結果フィードバックを繰り返す
+**多ターン エージェントループ** に進化させる。
+
+### 14.2 ループ設計
+
+```
+ユーザー: 目標を入力して「開始」
+  │
+  ▼
+┌─ ターン N ─────────────────────────────────────────┐
+│ 1. App → Copilot: タスク説明 + ファイル情報 + 前ターン結果 │
+│ 2. Copilot → App: { actions: [...], status: "thinking" } │
+│ 3. App: アクションを read / write に分類             │
+│                                                    │
+│   [read アクション]                                 │
+│   → 自動実行（承認不要）                            │
+│   → 結果を次ターン用コンテキストに追加               │
+│   → ターン N+1 へ（Copilot に結果を返送）            │
+│                                                    │
+│   [write アクション]                                │
+│   → 承認ゲート: SheetDiff カード + 「保存する」ボタン │
+│   → ユーザー承認後に実行                            │
+│   → ループ終了                                      │
+└─────────────────────────────────────────────────────┘
+  │
+  ▼
+完了: 結果表示 + 「新しい作業を始める」
+```
+
+### 14.3 Copilot レスポンス スキーマ拡張
+
+既存の `copilotTurnResponseSchema` に `status` フィールドを追加:
+
+```typescript
+{
+  version: "1.0",
+  status: "thinking" | "ready_to_write" | "done" | "error",
+  summary: string,           // ユーザー向け進捗説明
+  actions: SpreadsheetAction[],
+  message?: string,          // Copilot からの補足（エラー詳細等）
+  followupQuestions?: string[],
+  warnings?: string[]
+}
+```
+
+| status | 意味 | アプリの動作 |
+|---|---|---|
+| `thinking` | まだ情報収集中 | read actions を実行してループ継続 |
+| `ready_to_write` | 書き込み計画が確定 | write actions を承認ゲートに表示 |
+| `done` | 追加アクション不要 | ループ終了・結果表示 |
+| `error` | Copilot がエラー | エラーメッセージ表示・手動フォールバック |
+
+### 14.4 ツール実行結果フォーマット
+
+read ツール実行後、Copilot への次ターンプロンプトに以下を追加:
+
+```
+【前のターンの実行結果】
+
+▶ workbook.inspect
+{シート一覧・行数・列名 JSON}
+
+▶ sheet.preview
+{先頭25行のサンプルデータ}
+
+▶ sheet.profile_columns
+{列ごとの型推論・null数・サンプル値}
+
+---
+上記の結果を踏まえて、次のアクションを JSON で返してください。
+書き込み準備が整った場合は status を "ready_to_write" にしてください。
+```
+
+### 14.5 ループ安全ガード
+
+| ガード | 設定 | 理由 |
+|---|---|---|
+| 最大ターン数 | 10 ターン | 無限ループ防止 |
+| 1 ターン タイムアウト | 120 秒 | Copilot 無応答対策 |
+| read ツール同一引数 重複実行 | 禁止（警告） | 同じ情報を何度も取得するループ検出 |
+| write ツール 自動実行 | 禁止（承認必須） | 安全性の絶対保証 |
+
+### 14.6 UI 変更
+
+**ステップ2の進化:**
+
+```
+ステップ 2: Copilot と作業中
+┌──────────────────────────────────────────┐
+│ [ターン 1 / 最大10]  経過時間: 00:23      │
+│                                          │
+│ ▶ workbook.inspect ... 完了 ✓           │
+│ ▶ sheet.preview ... 完了 ✓              │
+│ ▶ sheet.profile_columns ... 実行中 ⟳    │
+│                                          │
+│ Copilot: 「列型を確認しました。          │
+│            フィルタ計画を立てています…」 │
+│                                          │
+│ [キャンセル]                             │
+└──────────────────────────────────────────┘
+```
+
+write アクションが返ってきたら自動的にステップ3（承認画面）へ遷移。
+
+### 14.7 Copilot への自動送信との連携
+
+セクション13のブラウザ自動化（Playwright + Edge CDP）をループ内で再利用する。
+各ターンで `sendToCopilot(prompt)` を呼び出し、返答を受け取る。
+ユーザー操作はゼロ（「開始」ボタンのみ）。
+
+---
+
+## 15. PC 作業ツール拡張（フェーズ3 — Tasks 96 以降）
+
+### 15.1 ファイル操作ツール
+
+スプレッドシート専用を超え、一般的なファイル操作を Rust バックエンドで実装する。
+
+| ツール | 種別 | 内容 |
+|---|---|---|
+| `file.list` | read | ディレクトリ内のファイル・フォルダ一覧 |
+| `file.read_text` | read | テキストファイルの内容取得（最大 1 MB） |
+| `file.stat` | read | ファイルのサイズ・更新日時・存在確認 |
+| `file.copy` | write | ファイルを別パスにコピー（承認必須） |
+| `file.move` | write | ファイルを移動・リネーム（承認必須） |
+| `file.delete` | write | ファイル削除（承認必須・ゴミ箱へ） |
+
+### 15.2 テキスト処理ツール
+
+| ツール | 種別 | 内容 |
+|---|---|---|
+| `text.search` | read | ファイル内のパターン検索（regex 対応） |
+| `text.replace` | write | 検索＆置換（承認必須・元ファイルはバックアップ） |
+
+### 15.3 安全ポリシー
+
+- read ツール: 自動実行可（ループ内でそのまま使用）
+- write ツール: 常に承認ゲートを経由（エージェントループ §14.2 と同一ルール）
+- 実行可能ファイルの起動・シェルコマンド実行: フェーズ3でも実装しない
+
+### 15.4 Contracts 拡張
+
+`packages/contracts/src/file.ts` を新設し、`fileActionSchema` を定義。
+`spreadsheetActionSchema` と並列に `relayActionSchema = z.union([spreadsheetActionSchema, fileActionSchema])` を導出する。
+

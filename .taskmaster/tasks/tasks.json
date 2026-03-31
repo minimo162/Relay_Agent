@@ -2387,6 +2387,176 @@
             ]
           }
         ]
+      },
+      {
+        "id": "84",
+        "title": "エージェントループ設計 — 多ターン会話プロトコルとループ制御の設計",
+        "description": "フェーズ2の中核となるエージェントループの詳細設計。Copilotレスポンスのstatusフィールド追加、ループ制御フロー、read/write分類ロジック、安全ガードの仕様を確定する。",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": [
+          "83"
+        ],
+        "details": "PRD §14 に基づき設計ドキュメント（docs/AGENT_LOOP_DESIGN.md）を作成。contracts/relay.ts の copilotTurnResponseSchema に status フィールドを追加。ループ制御の状態機械（thinking → ready_to_write → done）を定義。最大ターン数・タイムアウトのデフォルト値を確定。",
+        "testStrategy": "設計ドキュメントが PRD §14 の全要件（ループフロー・安全ガード・UI遷移）をカバーしていることをレビューで確認。",
+        "subtasks": [],
+        "updatedAt": "2026-04-01T00:00:00.000Z"
+      },
+      {
+        "id": "85",
+        "title": "Contracts 拡張 — CopilotTurnResponse に status フィールド追加",
+        "description": "packages/contracts/src/relay.ts の copilotTurnResponseSchema に status（'thinking' | 'ready_to_write' | 'done' | 'error'）フィールドを追加し、型を更新する。",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": [
+          "84"
+        ],
+        "details": "z.enum(['thinking', 'ready_to_write', 'done', 'error']).default('ready_to_write') として追加（既存の1ショット応答は 'ready_to_write' とみなすためデフォルト値で後方互換を保つ）。CopilotTurnResponse 型・エクスポートも更新。",
+        "testStrategy": "既存の単体テストが通ること。status を省略したレスポンスが 'ready_to_write' として扱われることを確認。",
+        "subtasks": [],
+        "updatedAt": "2026-04-01T00:00:00.000Z"
+      },
+      {
+        "id": "86",
+        "title": "バックエンド — 読み取りツール自動実行ループ",
+        "description": "Copilotから返ってきたactionsをread/writeに分類し、readアクションを自動実行してループを継続するIPC処理を実装する。",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": [
+          "85"
+        ],
+        "details": "apps/desktop/src-tauri/src/execution.rs（または新モジュール agent_loop.rs）に execute_read_actions() を実装。workbook.inspect / sheet.preview / sheet.profile_columns / session.diff_from_base / file.list / file.read_text / file.stat を自動実行可能とする。write アクションは実行せず承認ゲートに渡す。最大ターン数（デフォルト10）・重複実行チェックを実装。",
+        "testStrategy": "read actionsのみのレスポンスが自動実行されること。write actionsが承認なしに実行されないこと。最大ターン数到達時にエラーが返ること。",
+        "subtasks": [],
+        "updatedAt": "2026-04-01T00:00:00.000Z"
+      },
+      {
+        "id": "87",
+        "title": "フロントエンド — ツール実行結果のプロンプト生成",
+        "description": "read ツールの実行結果を次ターンの Copilot プロンプトに埋め込む形にフォーマットする関数を実装する。",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": [
+          "86"
+        ],
+        "details": "apps/desktop/src/lib/agent-loop.ts を新設。buildFollowUpPrompt(originalTask, toolResults[]) 関数を実装。PRD §14.4 の形式で前ターン結果を整形し、次のアクションを JSON で返すよう Copilot に指示する文章を生成する。",
+        "testStrategy": "各ツール結果（workbook.inspect / sheet.preview / sheet.profile_columns）が適切な見出しと JSON で埋め込まれることを単体テストで確認。",
+        "subtasks": [],
+        "updatedAt": "2026-04-01T00:00:00.000Z"
+      },
+      {
+        "id": "88",
+        "title": "フロントエンド — エージェントループ UI",
+        "description": "ステップ2をエージェントループ進行状態表示に刷新。ターン数・実行中ツール・Copilotメッセージをリアルタイム表示する。",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": [
+          "87"
+        ],
+        "details": "+page.svelte のステップ2セクションをループ表示に更新。PRD §14.6 のワイヤーフレームを実装。各ツール実行の状態（待機中 / 実行中 ⟳ / 完了 ✓ / エラー ✗）をリスト表示。経過時間カウンタ。Copilotの summary をチャットバブル風に表示。「キャンセル」ボタン（ループ中断）。write actionsが返ってきたら自動的にステップ3へ遷移。",
+        "testStrategy": "各ツール実行状態がUIに反映されること。write actionsでステップ3に遷移すること。キャンセルでループが停止しステップ1に戻ること。",
+        "subtasks": [],
+        "updatedAt": "2026-04-01T00:00:00.000Z"
+      },
+      {
+        "id": "89",
+        "title": "フロントエンド — エージェントループ制御（sendToCopilot 多ターン化）",
+        "description": "handleCopilotAutoSend を多ターン対応に拡張。ループ開始から完了まで自動で実行する。",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": [
+          "88"
+        ],
+        "details": "lib/copilot-browser.ts の sendToCopilot を繰り返し呼び出すループ処理を実装（apps/desktop/src/lib/agent-loop.ts に runAgentLoop() として実装）。ターンごとに: (1) sendToCopilot でCopilotへ送信、(2) レスポンスをパース、(3) readアクションをIPC実行、(4) 結果をプロンプトに追加、(5) statusが'ready_to_write'または'done'になるまで繰り返す。",
+        "testStrategy": "3ターン分のモックレスポンスでループが正常に繰り返されること。'ready_to_write' で停止してwrite actionsが渡されること。",
+        "subtasks": [],
+        "updatedAt": "2026-04-01T00:00:00.000Z"
+      },
+      {
+        "id": "90",
+        "title": "バックエンド — 書き込みツール承認ゲート強化",
+        "description": "エージェントループで返ってきたwrite actionsを承認ゲートに正しく渡し、既存のステップ3（SheetDiffカード + 保存ボタン）で承認できるようにする。",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": [
+          "89"
+        ],
+        "details": "ループ終了時のwrite actionsをcopilotResponseにセットしてステップ3に引き渡す既存フローを維持しつつ、ループ中に収集したread結果（workbook profile等）をステップ3でも参照できるようにstateを引き継ぐ。",
+        "testStrategy": "ループ後にwrite actionsがステップ3に表示されること。元ファイルが変更されていないこと。保存後に出力ファイルが生成されること。",
+        "subtasks": [],
+        "updatedAt": "2026-04-01T00:00:00.000Z"
+      },
+      {
+        "id": "91",
+        "title": "バックエンド — ループ安全ガード実装",
+        "description": "最大ターン数・タイムアウト・重複実行チェック・無限ループ検出を実装する。",
+        "status": "pending",
+        "priority": "medium",
+        "dependencies": [
+          "86"
+        ],
+        "details": "最大ターン数: 設定から取得（デフォルト10）。1ターンタイムアウト: 120秒（設定変更可）。同一引数での同一readツール重複実行を検出して警告（継続は可能）。連続して同じactionsが返ってきた場合にループ検出エラー。",
+        "testStrategy": "11ターン目でエラーが返ること。120秒でタイムアウトエラーが返ること。重複実行時に警告ログが出ること。",
+        "subtasks": [],
+        "updatedAt": "2026-04-01T00:00:00.000Z"
+      },
+      {
+        "id": "92",
+        "title": "設定モーダル — エージェントループ設定追加",
+        "description": "設定モーダルにエージェントループ関連の設定項目を追加する。",
+        "status": "pending",
+        "priority": "medium",
+        "dependencies": [
+          "88"
+        ],
+        "details": "最大ターン数（デフォルト10・1〜20で設定可）。1ターンタイムアウト秒数（デフォルト120秒・30〜300で設定可）。ループモードの有効/無効切り替え（無効時は従来の1ショットモード）。設定値は continuity.ts のloadBrowserAutomationSettings() 拡張で永続化。",
+        "testStrategy": "設定変更後にloopConfig.maxTurnsが更新されること。アプリ再起動後も設定が保持されること。",
+        "subtasks": [],
+        "updatedAt": "2026-04-01T00:00:00.000Z"
+      },
+      {
+        "id": "93",
+        "title": "Contracts 拡張 — file アクションスキーマ追加（フェーズ3準備）",
+        "description": "packages/contracts/src/file.ts を新設し、ファイル操作ツールの Zod スキーマを定義する。",
+        "status": "pending",
+        "priority": "medium",
+        "dependencies": [
+          "84"
+        ],
+        "details": "file.list / file.read_text / file.stat（read）と file.copy / file.move / file.delete（write）のスキーマを定義。spreadsheetActionSchema と合わせた relayActionSchema = z.union([...]) を contracts/index.ts でエクスポート。Rustバックエンドの実装はフェーズ3（Task 96以降）で行う。",
+        "testStrategy": "file.list / file.copy の Zod パースが成功すること。既存 spreadsheetActionSchema に影響がないこと。",
+        "subtasks": [],
+        "updatedAt": "2026-04-01T00:00:00.000Z"
+      },
+      {
+        "id": "94",
+        "title": "バックエンド — file.list / file.read_text / file.stat ツール実装",
+        "description": "Rust バックエンドに file 系 read ツールを実装し、エージェントループで自動実行できるようにする。",
+        "status": "pending",
+        "priority": "medium",
+        "dependencies": [
+          "93",
+          "86"
+        ],
+        "details": "src-tauri/src/workbook/ に file.rs を新設（またはファイル操作専用モジュールを追加）。file.list: 指定ディレクトリのファイル一覧（名前・サイズ・更新日時・拡張子）を返す。file.read_text: テキストファイル内容を返す（最大 1MB・UTF-8/Shift-JIS 自動判定）。file.stat: ファイルの存在確認・サイズ・更新日時。セキュリティ: パストラバーサル対策（ユーザーホーム以外はデフォルト禁止）。",
+        "testStrategy": "存在するディレクトリの一覧が返ること。1MB超のファイルでエラーが返ること。../等のパストラバーサルがブロックされること。",
+        "subtasks": [],
+        "updatedAt": "2026-04-01T00:00:00.000Z"
+      },
+      {
+        "id": "95",
+        "title": "E2E検証 — エージェントループ（手動）",
+        "description": "実際の M365 Copilot を使ったエージェントループの E2E 検証を実施する。",
+        "status": "pending",
+        "priority": "high",
+        "dependencies": [
+          "90",
+          "91"
+        ],
+        "details": "検証シナリオ: (1) CSVを開いて内容を確認するだけの作業（read onlyループ）→ 2〜3ターンで 'done' になること。(2) フィルタ + 保存作業 → 2〜3ターン後に write actions が承認ゲートに届き保存できること。(3) 最大ターン数到達時のエラー表示。(4) Copilotがエラーを返した場合の手動フォールバック。",
+        "testStrategy": "Manual E2E on Windows Tauri build with real M365 Copilot.",
+        "subtasks": [],
+        "updatedAt": "2026-04-01T00:00:00.000Z"
       }
     ],
     "metadata": {
