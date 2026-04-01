@@ -194,7 +194,7 @@ fn extract_tool_names_from_artifact(artifact: &TurnArtifactRecord) -> Vec<String
     }
 }
 
-fn filter_by_category(
+pub(crate) fn filter_by_category(
     templates: Vec<WorkflowTemplate>,
     category: Option<WorkflowTemplateCategory>,
 ) -> Vec<WorkflowTemplate> {
@@ -271,4 +271,114 @@ fn now() -> String {
 #[allow(dead_code)]
 fn _is_template_path(path: &Path) -> bool {
     path.extension().and_then(|value| value.to_str()) == Some("json")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_template(
+        id: &str,
+        category: WorkflowTemplateCategory,
+        is_built_in: bool,
+    ) -> WorkflowTemplate {
+        WorkflowTemplate {
+            id: id.to_string(),
+            title: format!("Template {id}"),
+            category,
+            description: "desc".to_string(),
+            goal: "do something".to_string(),
+            expected_tools: vec!["table.filter_rows".to_string()],
+            example_input_file: None,
+            tags: vec![],
+            is_built_in,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn template_category_serializes_correctly() {
+        assert_eq!(
+            serde_json::to_string(&WorkflowTemplateCategory::Sales).unwrap(),
+            "\"sales\""
+        );
+        assert_eq!(
+            serde_json::to_string(&WorkflowTemplateCategory::Accounting).unwrap(),
+            "\"accounting\""
+        );
+        assert_eq!(
+            serde_json::to_string(&WorkflowTemplateCategory::Hr).unwrap(),
+            "\"hr\""
+        );
+        assert_eq!(
+            serde_json::to_string(&WorkflowTemplateCategory::General).unwrap(),
+            "\"general\""
+        );
+        assert_eq!(
+            serde_json::to_string(&WorkflowTemplateCategory::Custom).unwrap(),
+            "\"custom\""
+        );
+    }
+
+    #[test]
+    fn template_is_built_in_serializes_as_camel_case_key() {
+        let t = make_template("t1", WorkflowTemplateCategory::Sales, true);
+        let v = serde_json::to_value(&t).unwrap();
+        assert!(v.get("isBuiltIn").is_some(), "key must be camelCase 'isBuiltIn'");
+        assert_eq!(v["isBuiltIn"], true);
+    }
+
+    #[test]
+    fn filter_by_category_returns_matching_only() {
+        let templates = vec![
+            make_template("a", WorkflowTemplateCategory::Sales, true),
+            make_template("b", WorkflowTemplateCategory::General, true),
+            make_template("c", WorkflowTemplateCategory::Sales, false),
+        ];
+
+        let sales = filter_by_category(templates.clone(), Some(WorkflowTemplateCategory::Sales));
+        assert_eq!(sales.len(), 2);
+        assert!(sales
+            .iter()
+            .all(|t| matches!(t.category, WorkflowTemplateCategory::Sales)));
+    }
+
+    #[test]
+    fn filter_by_category_none_returns_all() {
+        let templates = vec![
+            make_template("a", WorkflowTemplateCategory::Sales, true),
+            make_template("b", WorkflowTemplateCategory::Hr, false),
+        ];
+        let all = filter_by_category(templates, None);
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn builtin_template_jsons_parse_correctly() {
+        let raws: &[&str] = &[
+            include_str!("../assets/templates/sales_filter.json"),
+            include_str!("../assets/templates/monthly_rollup.json"),
+            include_str!("../assets/templates/normalize_columns.json"),
+            include_str!("../assets/templates/remove_duplicates.json"),
+            include_str!("../assets/templates/invoice_cleanup.json"),
+        ];
+        for raw in raws {
+            let t: WorkflowTemplate =
+                serde_json::from_str(raw).expect("builtin template JSON must be valid");
+            assert!(t.is_built_in, "isBuiltIn must be true for bundled templates");
+            assert!(!t.title.is_empty(), "title must not be empty");
+            assert!(!t.goal.is_empty(), "goal must not be empty");
+            assert!(!t.expected_tools.is_empty(), "expected_tools must not be empty");
+        }
+    }
+
+    #[test]
+    fn template_roundtrips_through_json() {
+        let original = make_template("rt-1", WorkflowTemplateCategory::Custom, false);
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: WorkflowTemplate = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.id, "rt-1");
+        assert!(!restored.is_built_in);
+        assert_eq!(restored.expected_tools, vec!["table.filter_rows".to_string()]);
+    }
 }

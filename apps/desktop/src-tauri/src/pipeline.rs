@@ -424,3 +424,125 @@ fn derive_copy_path(input_path: &str, suffix: &str) -> Result<String, String> {
 fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_step(id: &str, order: i64, source: PipelineInputSource) -> PipelineStep {
+        PipelineStep {
+            id: id.to_string(),
+            order,
+            goal: format!("goal for {id}"),
+            input_source: source,
+            output_artifact_key: None,
+            status: PipelineStepStatus::Pending,
+            error_message: None,
+        }
+    }
+
+    fn make_pipeline(id: &str, steps: Vec<PipelineStep>) -> Pipeline {
+        Pipeline {
+            id: id.to_string(),
+            title: "test pipeline".to_string(),
+            project_id: None,
+            initial_input_path: Some("source.csv".to_string()),
+            steps,
+            status: PipelineStatus::Idle,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn pipeline_registry_stores_and_retrieves_pipeline() {
+        let mut registry = PipelineRegistry::default();
+        let pipeline = make_pipeline(
+            "pipe-1",
+            vec![
+                make_step("s1", 0, PipelineInputSource::User),
+                make_step("s2", 1, PipelineInputSource::PrevStepOutput),
+            ],
+        );
+        registry.pipelines.insert(pipeline.id.clone(), pipeline);
+
+        let stored = registry.pipelines.get("pipe-1").unwrap();
+        assert_eq!(stored.steps.len(), 2);
+        assert_eq!(stored.steps[1].input_source, PipelineInputSource::PrevStepOutput);
+    }
+
+    #[test]
+    fn pipeline_cancel_flag_is_set_and_read() {
+        let mut registry = PipelineRegistry::default();
+        registry.cancelled.insert("pipe-cancel".to_string(), true);
+
+        assert!(*registry.cancelled.get("pipe-cancel").unwrap_or(&false));
+        assert!(!*registry.cancelled.get("other-pipe").unwrap_or(&false));
+    }
+
+    #[test]
+    fn pipeline_steps_sort_by_order() {
+        let mut steps = vec![
+            make_step("s3", 2, PipelineInputSource::PrevStepOutput),
+            make_step("s1", 0, PipelineInputSource::User),
+            make_step("s2", 1, PipelineInputSource::PrevStepOutput),
+        ];
+        steps.sort_by_key(|s| s.order);
+        assert_eq!(steps[0].id, "s1");
+        assert_eq!(steps[1].id, "s2");
+        assert_eq!(steps[2].id, "s3");
+    }
+
+    #[test]
+    fn pipeline_step_status_serializes_as_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&PipelineStepStatus::Pending).unwrap(),
+            "\"pending\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PipelineStepStatus::Running).unwrap(),
+            "\"running\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PipelineStepStatus::WaitingApproval).unwrap(),
+            "\"waiting_approval\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PipelineStepStatus::Done).unwrap(),
+            "\"done\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PipelineStepStatus::Failed).unwrap(),
+            "\"failed\""
+        );
+    }
+
+    #[test]
+    fn pipeline_input_source_serializes_as_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&PipelineInputSource::User).unwrap(),
+            "\"user\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PipelineInputSource::PrevStepOutput).unwrap(),
+            "\"prev_step_output\""
+        );
+    }
+
+    #[test]
+    fn prev_step_output_key_chains_correctly() {
+        let mut steps = vec![
+            make_step("s1", 0, PipelineInputSource::User),
+            make_step("s2", 1, PipelineInputSource::PrevStepOutput),
+        ];
+        steps[0].output_artifact_key = Some("/out/step1.csv".to_string());
+
+        let resolved = match steps[1].input_source {
+            PipelineInputSource::User => steps[1].output_artifact_key.clone().unwrap_or_default(),
+            PipelineInputSource::PrevStepOutput => {
+                steps[0].output_artifact_key.clone().unwrap_or_default()
+            }
+        };
+        assert_eq!(resolved, "/out/step1.csv");
+    }
+}

@@ -382,3 +382,114 @@ fn file_name(path: &str) -> String {
 fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_job(id: &str, paths: &[&str]) -> BatchJob {
+        BatchJob {
+            id: id.to_string(),
+            workflow_goal: "filter rows".to_string(),
+            project_id: None,
+            targets: paths
+                .iter()
+                .map(|p| BatchTarget {
+                    file_path: p.to_string(),
+                    status: BatchTargetStatus::Pending,
+                    output_path: None,
+                    error_message: None,
+                    session_id: None,
+                })
+                .collect(),
+            concurrency: 1,
+            stop_on_first_error: false,
+            status: BatchJobStatus::Idle,
+            output_dir: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn batch_registry_stores_and_retrieves_job() {
+        let mut registry = BatchRegistry::default();
+        let job = make_job("batch-1", &["a.csv", "b.csv"]);
+        registry.jobs.insert(job.id.clone(), job);
+
+        let stored = registry.jobs.get("batch-1").unwrap();
+        assert_eq!(stored.targets.len(), 2);
+        assert_eq!(stored.status, BatchJobStatus::Idle);
+        assert_eq!(stored.targets[0].file_path, "a.csv");
+    }
+
+    #[test]
+    fn batch_skip_target_updates_status_to_skipped() {
+        let mut registry = BatchRegistry::default();
+        let job = make_job("batch-2", &["x.csv", "y.csv"]);
+        registry.jobs.insert(job.id.clone(), job);
+
+        let job = registry.jobs.get_mut("batch-2").unwrap();
+        if let Some(t) = job.targets.iter_mut().find(|t| t.file_path == "x.csv") {
+            t.status = BatchTargetStatus::Skipped;
+        }
+
+        let stored = registry.jobs.get("batch-2").unwrap();
+        assert_eq!(stored.targets[0].status, BatchTargetStatus::Skipped);
+        assert_eq!(stored.targets[1].status, BatchTargetStatus::Pending);
+    }
+
+    #[test]
+    fn batch_target_status_serializes_as_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&BatchTargetStatus::Pending).unwrap(),
+            "\"pending\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BatchTargetStatus::Running).unwrap(),
+            "\"running\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BatchTargetStatus::Done).unwrap(),
+            "\"done\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BatchTargetStatus::Failed).unwrap(),
+            "\"failed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BatchTargetStatus::Skipped).unwrap(),
+            "\"skipped\""
+        );
+    }
+
+    #[test]
+    fn batch_job_status_serializes_as_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&BatchJobStatus::Idle).unwrap(),
+            "\"idle\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BatchJobStatus::Running).unwrap(),
+            "\"running\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BatchJobStatus::Done).unwrap(),
+            "\"done\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BatchJobStatus::Failed).unwrap(),
+            "\"failed\""
+        );
+    }
+
+    #[test]
+    fn batch_job_roundtrips_through_json() {
+        let job = make_job("batch-rt", &["file.csv"]);
+        let json = serde_json::to_string(&job).unwrap();
+        let restored: BatchJob = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.id, "batch-rt");
+        assert_eq!(restored.targets[0].file_path, "file.csv");
+        assert_eq!(restored.stop_on_first_error, false);
+    }
+}

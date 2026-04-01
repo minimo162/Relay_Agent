@@ -95,4 +95,75 @@ mod tests {
     fn evaluate_risk_maps_unknown_tools_to_medium() {
         assert_eq!(evaluate_risk("unknown.tool", &json!({})), OperationRisk::Medium);
     }
+
+    #[test]
+    fn fast_policy_auto_approves_up_to_medium() {
+        assert!(should_auto_approve(ApprovalPolicy::Fast, OperationRisk::Readonly));
+        assert!(should_auto_approve(ApprovalPolicy::Fast, OperationRisk::Low));
+        assert!(should_auto_approve(ApprovalPolicy::Fast, OperationRisk::Medium));
+        assert!(!should_auto_approve(ApprovalPolicy::Fast, OperationRisk::High));
+        assert!(!should_auto_approve(
+            ApprovalPolicy::Fast,
+            OperationRisk::Critical
+        ));
+    }
+
+    #[test]
+    fn safe_policy_never_auto_approves() {
+        assert!(!should_auto_approve(ApprovalPolicy::Safe, OperationRisk::Readonly));
+        assert!(!should_auto_approve(ApprovalPolicy::Safe, OperationRisk::Low));
+        assert!(!should_auto_approve(ApprovalPolicy::Safe, OperationRisk::Medium));
+        assert!(!should_auto_approve(ApprovalPolicy::Safe, OperationRisk::Critical));
+    }
+
+    #[test]
+    fn critical_risk_never_auto_approved_by_any_policy() {
+        for policy in [
+            ApprovalPolicy::Safe,
+            ApprovalPolicy::Standard,
+            ApprovalPolicy::Fast,
+        ] {
+            assert!(
+                !should_auto_approve(policy, OperationRisk::Critical),
+                "{policy:?} must never auto-approve Critical"
+            );
+        }
+    }
+
+    #[test]
+    fn file_delete_evaluates_as_critical() {
+        assert_eq!(
+            evaluate_risk("file.delete", &serde_json::json!({})),
+            OperationRisk::Critical
+        );
+    }
+
+    #[test]
+    fn readonly_tools_evaluate_as_readonly() {
+        for tool in [
+            "file.list",
+            "file.stat",
+            "workbook.inspect",
+            "sheet.preview",
+            "sheet.profile_columns",
+        ] {
+            assert_eq!(
+                evaluate_risk(tool, &serde_json::json!({})),
+                OperationRisk::Readonly,
+                "{tool} should map to Readonly"
+            );
+        }
+    }
+
+    #[test]
+    fn file_copy_and_move_evaluate_as_expected() {
+        assert_eq!(
+            evaluate_risk("file.copy", &serde_json::json!({})),
+            OperationRisk::Medium
+        );
+        assert_eq!(
+            evaluate_risk("file.move", &serde_json::json!({})),
+            OperationRisk::High
+        );
+    }
 }

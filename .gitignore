@@ -18,6 +18,7 @@ build/
 dist/
 scripts/dist/
 target/
+apps/desktop/src-tauri/gen/schemas/windows-schema.json
 
 # Editor directories and files
 .idea
