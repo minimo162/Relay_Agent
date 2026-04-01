@@ -3704,7 +3704,7 @@
         "id": "149",
         "title": "E2E 検証 — 汎用ファイル操作（手動）",
         "description": "実際の M365 Copilot を使った汎用ファイル操作の手動 E2E 検証。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "144",
           "145",
@@ -3713,7 +3713,7 @@
         "priority": "high",
         "details": "ファイルコピー、移動、削除、テキスト検索＆置換の各操作を Copilot 指示経由で検証。",
         "testStrategy": "docs/FILE_OPS_E2E_VERIFICATION.md に記録。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T11:32:21Z",
         "subtasks": []
       },
       {
@@ -3791,70 +3791,70 @@
         "id": "155",
         "title": "設計 — ツールレジストリ & MCP クライアント アーキテクチャ",
         "description": "ビルトインツールと MCP 外部ツールを統一管理する拡張可能なツールレジストリを設計する。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "109"
         ],
         "priority": "high",
         "details": "ツールレジストリインターフェース: register, discover, invoke, listAvailable。MCP クライアント: サーバー URL 登録、ツールディスカバリ、呼び出しプロキシ。docs/TOOL_REGISTRY_DESIGN.md に文書化。",
         "testStrategy": "設計ドキュメントにレジストリ API・MCP 統合フロー・セキュリティモデルが含まれること。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T11:32:21Z",
         "subtasks": []
       },
       {
         "id": "156",
         "title": "バックエンド — ツールレジストリ実装",
         "description": "Rust にツールレジストリを実装する。ビルトインツールは起動時に登録。外部ツールは MCP ディスカバリで登録。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "155"
         ],
         "priority": "high",
         "details": "ToolRegistry trait: register(), discover(), invoke(), list()。ビルトインツール（スプレッドシート、ファイル操作、テキスト処理）を起動時登録。ツールメタデータ（名前、説明、パラメータスキーマ、read/write 分類）を統一管理。",
         "testStrategy": "cargo test でツール登録・ディスカバリ・呼び出し。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T11:32:21Z",
         "subtasks": []
       },
       {
         "id": "157",
         "title": "バックエンド — MCP クライアント実装",
         "description": "MCP サーバーからツールをディスカバリ・呼び出しできる MCP クライアントを実装する。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "156"
         ],
         "priority": "medium",
         "details": "MCP クライアント: サーバー接続、ツールディスカバリ、ツール呼び出しプロキシ。ディスカバリされたツールをツールレジストリに動的追加。エラーハンドリングとタイムアウト。",
         "testStrategy": "モック MCP サーバーでのディスカバリと呼び出しテスト。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T11:32:21Z",
         "subtasks": []
       },
       {
         "id": "158",
         "title": "フロントエンド — ツール管理 UI",
         "description": "利用可能ツールの管理 UI を設定パネルに追加する。ビルトインツールの有効/無効切替、MCP サーバー URL の追加、ツール状態表示。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "157"
         ],
         "priority": "medium",
         "details": "設定モーダルに「ツール」セクション。ビルトインツール一覧（有効/無効トグル）。MCP サーバー URL 入力＋接続テスト。ディスカバリ済みツール一覧。",
         "testStrategy": "手動検証: ツール有効/無効切替、MCP サーバー追加。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T11:32:21Z",
         "subtasks": []
       },
       {
         "id": "159",
         "title": "ブラウザ自動化のツール化",
         "description": "既存の Playwright/CDP ブラウザ自動化をツールレジストリ登録のツールとしてリファクタし、エージェントループから汎用的に利用可能にする。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "156"
         ],
         "priority": "medium",
         "details": "既存 copilot-browser.ts をツールレジストリに登録。Copilot 通信以外のブラウザ操作（情報取得等）もツールとして公開。ツールインターフェースに統一。",
         "testStrategy": "ツールレジストリ経由でブラウザ操作が呼び出せること。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T11:32:21Z",
         "subtasks": []
       },
       {
@@ -3916,9 +3916,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-04-01T06:41:43.214Z",
+      "lastModified": "2026-04-01T11:32:21Z",
       "taskCount": 163,
-      "completedCount": 140,
+      "completedCount": 145,
       "tags": [
         "master"
       ]

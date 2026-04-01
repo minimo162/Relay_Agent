@@ -41,6 +41,13 @@ pub enum ToolPhase {
     Write,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolSource {
+    Builtin,
+    Mcp,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -155,6 +162,31 @@ pub struct ToolDescriptor {
     pub description: String,
     pub phase: ToolPhase,
     pub requires_approval: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRegistration {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub phase: ToolPhase,
+    pub requires_approval: bool,
+    pub source: ToolSource,
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameter_schema: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_server_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_transport: Option<McpTransport>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolSettings {
+    pub disabled_tool_ids: Vec<String>,
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -578,10 +610,136 @@ pub struct SetSessionProjectRequest {
     pub project_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetToolEnabledRequest {
+    pub tool_id: String,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum McpTransport {
+    Sse,
+    Stdio,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerConfig {
+    pub url: String,
+    pub name: String,
+    pub transport: McpTransport,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserAutomationSettings {
+    pub cdp_port: u16,
+    pub auto_launch_edge: bool,
+    pub timeout_ms: u32,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListProjectsResponse {
     pub projects: Vec<Project>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListToolsResponse {
+    pub tools: Vec<ToolRegistration>,
+    pub restore_warnings: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendCopilotPromptRequest {
+    pub prompt: String,
+    pub settings: BrowserAutomationSettings,
+    pub progress_event_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckCopilotConnectionRequest {
+    pub settings: BrowserAutomationSettings,
+    pub progress_event_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CopilotBrowserErrorCode {
+    CdpUnavailable,
+    NotLoggedIn,
+    ResponseTimeout,
+    CopilotError,
+    SendFailed,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase", tag = "status")]
+pub enum CopilotBrowserResult {
+    #[serde(rename = "ok")]
+    Ok {
+        response: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cdp_port: Option<u16>,
+    },
+    #[serde(rename = "error")]
+    Error {
+        error_code: CopilotBrowserErrorCode,
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cdp_port: Option<u16>,
+    },
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase", tag = "status")]
+pub enum CopilotConnectResult {
+    #[serde(rename = "ready")]
+    Ready { cdp_port: u16 },
+    #[serde(rename = "error")]
+    Error {
+        error_code: CopilotBrowserErrorCode,
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cdp_port: Option<u16>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopilotBrowserProgressEvent {
+    pub request_id: String,
+    pub step: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectMcpServerResponse {
+    pub registered_tool_ids: Vec<String>,
+    pub tools: Vec<ToolRegistration>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvokeMcpToolRequest {
+    pub tool_id: String,
+    #[serde(default)]
+    pub args: Value,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InvokeMcpToolResponse {
+    pub tool_id: String,
+    pub result: Value,
+    pub source: ToolSource,
 }
 
 #[derive(Debug, Deserialize)]

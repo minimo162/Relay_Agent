@@ -3,8 +3,13 @@ import {
   addProjectMemoryRequestSchema,
   assessCopilotHandoffRequestSchema,
   assessCopilotHandoffResponseSchema,
+  checkCopilotConnectionRequestSchema,
+  copilotBrowserConnectResultSchema,
+  copilotBrowserResultSchema,
   approvePlanRequestSchema,
   approvePlanResponseSchema,
+  connectMcpServerRequestSchema,
+  connectMcpServerResponseSchema,
   createProjectRequestSchema,
   createSessionRequestSchema,
   executeReadActionsRequestSchema,
@@ -13,8 +18,11 @@ import {
   inspectWorkbookRequestSchema,
   inspectWorkbookResponseSchema,
   initializeAppResponseSchema,
+  invokeMcpToolRequestSchema,
+  invokeMcpToolResponseSchema,
   linkSessionToProjectRequestSchema,
   listProjectsResponseSchema,
+  listToolsResponseSchema,
   listSessionsResponseSchema,
   preflightWorkbookRequestSchema,
   preflightWorkbookResponseSchema,
@@ -35,7 +43,9 @@ import {
   runExecutionRequestSchema,
   runExecutionResponseSchema,
   sessionDetailSchema,
+  sendCopilotPromptRequestSchema,
   sessionSchema,
+  setToolEnabledRequestSchema,
   setSessionProjectRequestSchema,
   startTurnRequestSchema,
   startTurnResponseSchema,
@@ -43,12 +53,18 @@ import {
   submitCopilotResponseResponseSchema,
   planProgressRequestSchema,
   planProgressResponseSchema,
+  toolRegistrationSchema,
   updateProjectRequestSchema,
   type AddProjectMemoryRequest,
   type AssessCopilotHandoffRequest,
   type AssessCopilotHandoffResponse,
+  type CheckCopilotConnectionRequest,
+  type CopilotBrowserResult,
+  type CopilotBrowserConnectResult,
   type ApprovePlanRequest,
   type ApprovePlanResponse,
+  type ConnectMcpServerRequest,
+  type ConnectMcpServerResponse,
   type CreateProjectRequest,
   type CreateSessionRequest,
   type ExecuteReadActionsRequest,
@@ -58,8 +74,11 @@ import {
   type InspectWorkbookRequest,
   type InspectWorkbookResponse,
   type InitializeAppResponse,
+  type InvokeMcpToolRequest,
+  type InvokeMcpToolResponse,
   type LinkSessionToProjectRequest,
   type ListProjectsResponse,
+  type ListToolsResponse,
   type ListSessionsResponse,
   type PreflightWorkbookRequest,
   type PreflightWorkbookResponse,
@@ -78,8 +97,10 @@ import {
   type RespondToApprovalResponse,
   type RunExecutionRequest,
   type RunExecutionResponse,
+  type SendCopilotPromptRequest,
   type Session,
   type SessionDetail,
+  type SetToolEnabledRequest,
   type SetSessionProjectRequest,
   type StartTurnRequest,
   type StartTurnResponse,
@@ -87,6 +108,7 @@ import {
   type SubmitCopilotResponseResponse,
   type PlanProgressRequest,
   type PlanProgressResponse,
+  type ToolRegistration,
   type UpdateProjectRequest
 } from "@relay-agent/contracts";
 
@@ -232,6 +254,65 @@ export function createProject(
 
 export function listProjects(): Promise<ListProjectsResponse> {
   return invokeWithoutPayload("list_projects", listProjectsResponseSchema);
+}
+
+export function listTools(): Promise<ListToolsResponse> {
+  return invokeWithoutPayload("list_tools", listToolsResponseSchema);
+}
+
+export function setToolEnabled(
+  payload: SetToolEnabledRequest
+): Promise<ToolRegistration> {
+  return invokeWithPayload(
+    "set_tool_enabled",
+    payload,
+    setToolEnabledRequestSchema,
+    toolRegistrationSchema
+  );
+}
+
+export function connectMcpServer(
+  payload: ConnectMcpServerRequest
+): Promise<ConnectMcpServerResponse> {
+  return invokeWithPayload(
+    "connect_mcp_server",
+    payload,
+    connectMcpServerRequestSchema,
+    connectMcpServerResponseSchema
+  );
+}
+
+export function invokeMcpTool(
+  payload: InvokeMcpToolRequest
+): Promise<InvokeMcpToolResponse> {
+  return invokeWithPayload(
+    "invoke_mcp_tool",
+    payload,
+    invokeMcpToolRequestSchema,
+    invokeMcpToolResponseSchema
+  );
+}
+
+export function sendCopilotPrompt(
+  payload: SendCopilotPromptRequest
+): Promise<CopilotBrowserResult> {
+  return invokeWithPayload(
+    "send_copilot_prompt",
+    payload,
+    sendCopilotPromptRequestSchema,
+    copilotBrowserResultSchema
+  );
+}
+
+export function checkCopilotConnectionCommand(
+  payload: CheckCopilotConnectionRequest
+): Promise<CopilotBrowserConnectResult> {
+  return invokeWithPayload(
+    "check_copilot_connection",
+    payload,
+    checkCopilotConnectionRequestSchema,
+    copilotBrowserConnectResultSchema
+  );
 }
 
 export function readProject(

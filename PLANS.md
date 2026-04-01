@@ -366,6 +366,9 @@ Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `144`
 The next project-memory and scoped-context follow-up is captured in `docs/CODEX_PROMPT_16_PROJECT_MEMORY.md`.
 Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `150` through `154`. The project model design, contracts and backend CRUD, project selector UI, prompt-context injection, continuity persistence, project/session linkage through `sessionIds`, project-centric session browse/reassign/filter/bulk flows, accepted-response auto-learning of durable output preferences from both structured and free-form response content, project-scope file-access guards, the scope-override approval UI that feeds back into the existing preview/save gate, persisted response-linked scope-override audit artifacts, a dedicated current-turn approval history panel, and a project-scoped cross-session approval report are now implemented in source and documented in `docs/PROJECT_MODEL_DESIGN.md`.
 
+The next tool-integration follow-up is captured in `docs/CODEX_PROMPT_17_TOOL_MCP.md`.
+Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `155` through `159`. The tool registry design, runtime registry-backed Relay packet generation, built-in read-tool invocation through the registry, optional MCP discovery/invocation over HTTP JSON-RPC plus reusable stdio sessions, settings-side tool management UI with transport selection, backend-persisted MCP/tool settings with startup restore, continuity-backed memory-mode fallback, and backend-executed browser automation behind the registry-compatible browser tool runtime are now implemented in source and documented in `docs/TOOL_REGISTRY_DESIGN.md`.
+
 That UI follow-up preserves the current safety model:
 
 - preview before write

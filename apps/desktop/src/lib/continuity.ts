@@ -1,5 +1,5 @@
 import { browser } from "$app/environment";
-import type { ExecutionPlan } from "@relay-agent/contracts";
+import type { ExecutionPlan, McpServerConfig } from "@relay-agent/contracts";
 
 import type {
   ActivityFeedEvent,
@@ -24,6 +24,10 @@ const DEFAULT_BROWSER_AUTOMATION_SETTINGS = {
   planningEnabled: true,
   autoApproveReadSteps: true,
   pauseBetweenSteps: false
+} as const;
+const DEFAULT_TOOL_SETTINGS = {
+  disabledToolIds: [],
+  mcpServers: []
 } as const;
 
 export type PersistedPreviewSnapshot = {
@@ -103,6 +107,11 @@ export type BrowserAutomationSettings = {
   pauseBetweenSteps: boolean;
 };
 
+export type ToolSettings = {
+  disabledToolIds: string[];
+  mcpServers: McpServerConfig[];
+};
+
 export type PersistedDelegationDraft = {
   goal: string;
   attachedFiles: string[];
@@ -124,6 +133,7 @@ type ContinuityState = {
   selectedProjectId: string | null;
   uiMode: UiMode;
   browserAutomation: BrowserAutomationSettings;
+  toolSettings: ToolSettings;
 };
 
 function createDefaultState(): ContinuityState {
@@ -136,7 +146,11 @@ function createDefaultState(): ContinuityState {
     auditHistory: [],
     selectedProjectId: null,
     uiMode: "delegation",
-    browserAutomation: { ...DEFAULT_BROWSER_AUTOMATION_SETTINGS }
+    browserAutomation: { ...DEFAULT_BROWSER_AUTOMATION_SETTINGS },
+    toolSettings: {
+      disabledToolIds: [],
+      mcpServers: []
+    }
   };
 }
 
@@ -162,7 +176,8 @@ function readState(): ContinuityState {
       auditHistory: normalizeAuditHistory(parsed.auditHistory),
       selectedProjectId: asOptionalString(parsed.selectedProjectId),
       uiMode: normalizeUiMode(parsed.uiMode),
-      browserAutomation: normalizeBrowserAutomationSettings(parsed.browserAutomation)
+      browserAutomation: normalizeBrowserAutomationSettings(parsed.browserAutomation),
+      toolSettings: normalizeToolSettings(parsed.toolSettings)
     };
   } catch {
     return createDefaultState();
@@ -634,6 +649,51 @@ function normalizeBrowserAutomationSettings(value: unknown): BrowserAutomationSe
   });
 }
 
+function normalizeToolSettings(value: unknown): ToolSettings {
+  if (!value || typeof value !== "object") {
+    return {
+      disabledToolIds: [...DEFAULT_TOOL_SETTINGS.disabledToolIds],
+      mcpServers: [...DEFAULT_TOOL_SETTINGS.mcpServers]
+    };
+  }
+
+  const record = value as Record<string, unknown>;
+  const disabledToolIds = Array.isArray(record.disabledToolIds)
+    ? record.disabledToolIds.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const mcpServers = Array.isArray(record.mcpServers)
+    ? record.mcpServers
+        .map((entry) => normalizeMcpServer(entry))
+        .filter((entry): entry is McpServerConfig => Boolean(entry))
+    : [];
+
+  return {
+    disabledToolIds: Array.from(new Set(disabledToolIds.map((entry) => entry.trim()).filter(Boolean))),
+    mcpServers
+  };
+}
+
+function normalizeMcpServer(value: unknown): McpServerConfig | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const url = asString(record.url)?.trim();
+  const name = asString(record.name)?.trim();
+  const transport = record.transport === "stdio" ? "stdio" : "sse";
+
+  if (!url || !name) {
+    return null;
+  }
+
+  return {
+    url,
+    name,
+    transport
+  };
+}
+
 function sanitizeBrowserAutomationSettings(
   value: BrowserAutomationSettings
 ): BrowserAutomationSettings {
@@ -854,6 +914,10 @@ export function loadBrowserAutomationSettings(): BrowserAutomationSettings {
   return readState().browserAutomation;
 }
 
+export function loadToolSettings(): ToolSettings {
+  return readState().toolSettings;
+}
+
 export function loadUiMode(): UiMode {
   return readState().uiMode;
 }
@@ -892,6 +956,17 @@ export function saveBrowserAutomationSettings(
   updateState((current) => ({
     ...current,
     browserAutomation: nextSettings
+  }));
+
+  return nextSettings;
+}
+
+export function saveToolSettings(value: ToolSettings): ToolSettings {
+  const nextSettings = normalizeToolSettings(value);
+
+  updateState((current) => ({
+    ...current,
+    toolSettings: nextSettings
   }));
 
   return nextSettings;

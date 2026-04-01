@@ -20,8 +20,11 @@ import {
 import {
   copilotTurnResponseSchema,
   executionPlanSchema,
+  mcpTransportSchema,
   planStepSchema,
   relayPacketSchema,
+  toolRegistrationSchema,
+  toolSourceSchema,
   validationIssueSchema
 } from "./relay";
 import {
@@ -150,6 +153,46 @@ export const setSessionProjectRequestSchema = z.object({
 
 export const listProjectsResponseSchema = z.object({
   projects: z.array(projectSchema).default([])
+});
+
+export const mcpServerConfigSchema = z.object({
+  url: z.string().trim().min(1),
+  name: nonEmptyStringSchema,
+  transport: mcpTransportSchema.default("sse")
+});
+
+export const browserAutomationSettingsSchema = z.object({
+  cdpPort: z.number().int().positive(),
+  autoLaunchEdge: z.boolean(),
+  timeoutMs: z.number().int().positive()
+});
+
+export const listToolsResponseSchema = z.object({
+  tools: z.array(toolRegistrationSchema).default([]),
+  restoreWarnings: z.array(z.string().trim().min(1)).default([])
+});
+
+export const setToolEnabledRequestSchema = z.object({
+  toolId: z.string().trim().min(1),
+  enabled: z.boolean()
+});
+
+export const connectMcpServerRequestSchema = mcpServerConfigSchema;
+
+export const connectMcpServerResponseSchema = z.object({
+  registeredToolIds: z.array(z.string().trim().min(1)).default([]),
+  tools: z.array(toolRegistrationSchema).default([])
+});
+
+export const invokeMcpToolRequestSchema = z.object({
+  toolId: z.string().trim().min(1),
+  args: z.record(z.string(), z.unknown()).default({})
+});
+
+export const invokeMcpToolResponseSchema = z.object({
+  toolId: z.string().trim().min(1),
+  result: z.unknown(),
+  source: toolSourceSchema.default("mcp")
 });
 
 export const readSessionRequestSchema = z.object({
@@ -640,12 +683,42 @@ export const runExecutionResponseSchema = z.object({
   reason: z.string().min(1).optional()
 });
 
+export const copilotBrowserProgressEventSchema = z.object({
+  requestId: z.string().trim().min(1),
+  step: z.string().trim().min(1),
+  detail: z.string().trim().min(1).optional()
+});
+
+export const sendCopilotPromptRequestSchema = z.object({
+  prompt: z.string().trim().min(1),
+  settings: browserAutomationSettingsSchema,
+  progressEventId: z.string().trim().min(1).optional()
+});
+
+export const checkCopilotConnectionRequestSchema = z.object({
+  settings: browserAutomationSettingsSchema,
+  progressEventId: z.string().trim().min(1).optional()
+});
+
 export const copilotBrowserErrorCodeSchema = z.enum([
   "CDP_UNAVAILABLE",
   "NOT_LOGGED_IN",
   "RESPONSE_TIMEOUT",
   "COPILOT_ERROR",
   "SEND_FAILED"
+]);
+
+export const copilotBrowserConnectResultSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("ready"),
+    cdpPort: z.number().int().positive()
+  }),
+  z.object({
+    status: z.literal("error"),
+    errorCode: copilotBrowserErrorCodeSchema,
+    message: z.string(),
+    cdpPort: z.number().int().positive().optional()
+  })
 ]);
 
 export const copilotBrowserResultSchema = z.discriminatedUnion("status", [
@@ -693,6 +766,13 @@ export type SetSessionProjectRequest = z.infer<
   typeof setSessionProjectRequestSchema
 >;
 export type ListProjectsResponse = z.infer<typeof listProjectsResponseSchema>;
+export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
+export type ListToolsResponse = z.infer<typeof listToolsResponseSchema>;
+export type SetToolEnabledRequest = z.infer<typeof setToolEnabledRequestSchema>;
+export type ConnectMcpServerRequest = z.infer<typeof connectMcpServerRequestSchema>;
+export type ConnectMcpServerResponse = z.infer<typeof connectMcpServerResponseSchema>;
+export type InvokeMcpToolRequest = z.infer<typeof invokeMcpToolRequestSchema>;
+export type InvokeMcpToolResponse = z.infer<typeof invokeMcpToolResponseSchema>;
 export type ReadSessionRequest = z.infer<typeof readSessionRequestSchema>;
 export type SessionDetail = z.infer<typeof sessionDetailSchema>;
 export type ReadTurnArtifactsRequest = z.infer<typeof readTurnArtifactsRequestSchema>;
@@ -786,5 +866,20 @@ export type RecordScopeApprovalResponse = z.infer<
 >;
 export type RunExecutionRequest = z.infer<typeof runExecutionRequestSchema>;
 export type RunExecutionResponse = z.infer<typeof runExecutionResponseSchema>;
+export type BrowserAutomationSettings = z.infer<
+  typeof browserAutomationSettingsSchema
+>;
+export type CopilotBrowserProgressEvent = z.infer<
+  typeof copilotBrowserProgressEventSchema
+>;
+export type SendCopilotPromptRequest = z.infer<
+  typeof sendCopilotPromptRequestSchema
+>;
+export type CheckCopilotConnectionRequest = z.infer<
+  typeof checkCopilotConnectionRequestSchema
+>;
 export type CopilotBrowserErrorCode = z.infer<typeof copilotBrowserErrorCodeSchema>;
+export type CopilotBrowserConnectResult = z.infer<
+  typeof copilotBrowserConnectResultSchema
+>;
 export type CopilotBrowserResult = z.infer<typeof copilotBrowserResultSchema>;

@@ -9,31 +9,32 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::file_ops;
+use crate::mcp_client::McpClient;
 use crate::models::{
     AddProjectMemoryRequest, AgentLoopStatus, ApprovalDecision, ApprovalInspectionPayload,
     ApprovePlanRequest, ApprovePlanResponse, AssessCopilotHandoffRequest,
     AssessCopilotHandoffResponse, CopilotHandoffReason, CopilotHandoffReasonSource,
     CopilotHandoffStatus, CopilotTurnResponse, CreateProjectRequest, CreateSessionRequest,
-    DiffSummary, ExecuteReadActionsRequest, ExecuteReadActionsResponse,
-    ExecutionInspectionPayload, ExecutionInspectionState, ExecutionPlan,
-    GenerateRelayPacketRequest, LinkSessionToProjectRequest, ListProjectsResponse,
-    PacketInspectionPayload, RecordScopeApprovalRequest, RecordScopeApprovalResponse,
-    ScopeApprovalArtifactPayload, ScopeApprovalSource, ScopeOverrideInspectionRecord,
-    SetSessionProjectRequest,
+    DiffSummary, ExecuteReadActionsRequest, ExecuteReadActionsResponse, ExecutionInspectionPayload,
+    ExecutionInspectionState, ExecutionPlan, GenerateRelayPacketRequest,
+    LinkSessionToProjectRequest, ListProjectsResponse, PacketInspectionPayload,
     PlanProgressRequest, PlanProgressResponse, PlanStepState, PlanStepStatus, PlanningContext,
     PlanningContextToolGroups, PreviewArtifactPayload, PreviewExecutionRequest,
-    PreviewExecutionResponse, Project, ProjectMemoryEntry, ProjectMemorySource,
-    ReadProjectRequest, ReadTurnArtifactsResponse, RecordPlanProgressRequest, RelayPacket,
-    RelayPacketResponseContract, RemoveProjectMemoryRequest, RespondToApprovalRequest,
-    RespondToApprovalResponse, RunExecutionRequest, RunExecutionResponse, Session,
-    SessionDetail, SessionStatus, SpreadsheetAction, StartTurnRequest, StartTurnResponse,
-    SubmitCopilotResponseRequest, SubmitCopilotResponseResponse, ToolDescriptor,
-    ToolExecutionResult, ToolPhase, Turn, TurnArtifactRecord, TurnDetailsViewModel,
-    TurnInspectionSection, TurnInspectionSourceType, TurnInspectionUnavailableReason,
-    TurnOverview, TurnOverviewStep, TurnOverviewStepState, TurnStatus, UpdateProjectRequest,
-    ValidationInspectionPayload, ValidationIssue, ValidationIssueSummary,
+    PreviewExecutionResponse, Project, ProjectMemoryEntry, ProjectMemorySource, ReadProjectRequest,
+    ReadTurnArtifactsResponse, RecordPlanProgressRequest, RecordScopeApprovalRequest,
+    RecordScopeApprovalResponse, RelayPacket, RelayPacketResponseContract,
+    RemoveProjectMemoryRequest, RespondToApprovalRequest, RespondToApprovalResponse,
+    RunExecutionRequest, RunExecutionResponse, ScopeApprovalArtifactPayload, ScopeApprovalSource,
+    ScopeOverrideInspectionRecord, Session, SessionDetail, SessionStatus, SetSessionProjectRequest,
+    SpreadsheetAction, StartTurnRequest, StartTurnResponse, SubmitCopilotResponseRequest,
+    SubmitCopilotResponseResponse, ToolDescriptor, ToolExecutionResult, ToolPhase, ToolSettings,
+    Turn, TurnArtifactRecord, TurnDetailsViewModel, TurnInspectionSection,
+    TurnInspectionSourceType, TurnInspectionUnavailableReason, TurnOverview, TurnOverviewStep,
+    TurnOverviewStepState, TurnStatus, UpdateProjectRequest, ValidationInspectionPayload,
+    ValidationIssue, ValidationIssueSummary,
 };
 use crate::persistence::{self, PersistedArtifactMeta, StorageManifest};
+use crate::tool_registry::ToolRegistry;
 use crate::workbook::{SheetColumnProfile, SheetPreview, WorkbookEngine, WorkbookSource};
 
 #[derive(Clone, Debug)]
@@ -214,6 +215,9 @@ struct PersistedTurnLifecycleArtifacts {
 pub struct AppStorage {
     app_local_data_dir: Option<PathBuf>,
     manifest: Option<StorageManifest>,
+    tool_registry: ToolRegistry,
+    tool_settings: ToolSettings,
+    tool_restore_warnings: Vec<String>,
     projects: HashMap<String, Project>,
     sessions: HashMap<String, Session>,
     turns: HashMap<String, Turn>,
@@ -231,6 +235,9 @@ impl Default for AppStorage {
         Self {
             app_local_data_dir: None,
             manifest: None,
+            tool_registry: ToolRegistry::new(),
+            tool_settings: ToolSettings::default(),
+            tool_restore_warnings: Vec::new(),
             projects: HashMap::new(),
             sessions: HashMap::new(),
             turns: HashMap::new(),
@@ -326,15 +333,17 @@ impl PersistedTurnLifecycleArtifacts {
 impl AppStorage {
     pub fn open(app_local_data_dir: PathBuf) -> Result<Self, String> {
         let loaded = persistence::initialize_storage(&app_local_data_dir, &timestamp())?;
-
-        Ok(Self {
+        let mut storage = Self {
             app_local_data_dir: Some(app_local_data_dir),
             manifest: Some(loaded.manifest),
+            tool_settings: loaded.tool_settings,
             projects: loaded.projects,
             sessions: loaded.sessions,
             turns: loaded.turns,
             ..Self::default()
-        })
+        };
+        storage.restore_tool_registry_from_persisted_settings();
+        Ok(storage)
     }
 
     pub fn storage_mode(&self) -> &'static str {
@@ -358,6 +367,40 @@ impl AppStorage {
             .as_deref()
             .map(|app_local_data_dir| persistence::storage_root(app_local_data_dir))
             .map(|path| path.display().to_string())
+    }
+
+    pub fn list_tools(&self) -> crate::models::ListToolsResponse {
+        crate::models::ListToolsResponse {
+            tools: self.tool_registry.list(),
+            restore_warnings: self.tool_restore_warnings.clone(),
+        }
+    }
+
+    pub fn set_tool_enabled(
+        &mut self,
+        request: crate::models::SetToolEnabledRequest,
+    ) -> Result<crate::models::ToolRegistration, String> {
+        let updated = self
+            .tool_registry
+            .set_enabled(&request.tool_id, request.enabled)?;
+        self.sync_disabled_tool_settings_from_registry();
+        self.persist_tool_settings_state()?;
+        Ok(updated)
+    }
+
+    pub fn register_mcp_tools(
+        &mut self,
+        server: crate::models::McpServerConfig,
+        tools: Vec<crate::mcp_client::McpToolDefinition>,
+    ) -> Result<crate::models::ConnectMcpServerResponse, String> {
+        self.upsert_mcp_server(server.clone());
+        let registered_tool_ids = self.tool_registry.register_mcp_tools(server, tools);
+        self.apply_saved_disabled_tool_settings();
+        self.persist_tool_settings_state()?;
+        Ok(crate::models::ConnectMcpServerResponse {
+            registered_tool_ids,
+            tools: self.tool_registry.list(),
+        })
     }
 
     pub fn create_project(&mut self, request: CreateProjectRequest) -> Result<Project, String> {
@@ -469,7 +512,11 @@ impl AppStorage {
             .get_mut(&request.project_id)
             .ok_or_else(|| format!("project `{}` was not found", request.project_id))?;
 
-        if !project.session_ids.iter().any(|session_id| session_id == &request.session_id) {
+        if !project
+            .session_ids
+            .iter()
+            .any(|session_id| session_id == &request.session_id)
+        {
             project.session_ids.push(request.session_id);
             project.updated_at = timestamp();
         }
@@ -511,7 +558,11 @@ impl AppStorage {
                 .projects
                 .get_mut(&project_id)
                 .ok_or_else(|| format!("project `{project_id}` was not found"))?;
-            if !project.session_ids.iter().any(|session_id| session_id == &request.session_id) {
+            if !project
+                .session_ids
+                .iter()
+                .any(|session_id| session_id == &request.session_id)
+            {
                 project.session_ids.push(request.session_id);
                 project.updated_at = timestamp();
                 changed = true;
@@ -689,8 +740,12 @@ impl AppStorage {
             mode: turn.mode,
             objective: turn.objective.clone(),
             context,
-            allowed_read_tools: read_tool_registry(),
-            allowed_write_tools: write_tool_registry(),
+            allowed_read_tools: self
+                .tool_registry
+                .list_descriptors_by_phase(ToolPhase::Read),
+            allowed_write_tools: self
+                .tool_registry
+                .list_descriptors_by_phase(ToolPhase::Write),
             response_contract: RelayPacketResponseContract {
                 format: "json",
                 expects_actions: true,
@@ -814,7 +869,12 @@ impl AppStorage {
         let approved_steps = request
             .modified_steps
             .into_iter()
-            .filter(|step| request.approved_step_ids.iter().any(|approved| approved == &step.id))
+            .filter(|step| {
+                request
+                    .approved_step_ids
+                    .iter()
+                    .any(|approved| approved == &step.id)
+            })
             .collect::<Vec<_>>();
 
         if approved_steps.is_empty() {
@@ -1151,7 +1211,12 @@ impl AppStorage {
     fn find_project_id_by_session(&self, session_id: &str) -> Option<String> {
         self.projects
             .values()
-            .find(|project| project.session_ids.iter().any(|existing| existing == session_id))
+            .find(|project| {
+                project
+                    .session_ids
+                    .iter()
+                    .any(|existing| existing == session_id)
+            })
             .map(|project| project.id.clone())
     }
 
@@ -1479,7 +1544,9 @@ impl AppStorage {
                 .approvals
                 .get(&turn.id)
                 .filter(|approval| approval.preview_artifact_id == preview.artifact_id)
-                .ok_or_else(|| "execution approval is required before running execution".to_string())?;
+                .ok_or_else(|| {
+                    "execution approval is required before running execution".to_string()
+                })?;
             if approval.decision != ApprovalDecision::Approved {
                 return Err("execution cannot proceed until the preview is approved".to_string());
             }
@@ -1621,8 +1688,7 @@ impl AppStorage {
                 &turn.id,
                 Some(&execution_artifact.id),
                 "execution-recorded",
-                "Execution completed the approved write actions for the current turn."
-                    .to_string(),
+                "Execution completed the approved write actions for the current turn.".to_string(),
                 Some(json!({
                     "executionArtifactId": execution_artifact.id.clone(),
                     "executed": true,
@@ -1839,6 +1905,71 @@ impl AppStorage {
             &self.projects,
             &timestamp(),
         )
+    }
+
+    fn persist_tool_settings_state(&mut self) -> Result<(), String> {
+        let Some(app_local_data_dir) = self.app_local_data_dir.as_deref() else {
+            return Ok(());
+        };
+        let manifest = self
+            .manifest
+            .as_mut()
+            .ok_or_else(|| "storage manifest was not initialized".to_string())?;
+
+        persistence::persist_tool_settings(
+            app_local_data_dir,
+            manifest,
+            &self.tool_settings,
+            &timestamp(),
+        )
+    }
+
+    fn sync_disabled_tool_settings_from_registry(&mut self) {
+        self.tool_settings.disabled_tool_ids = self
+            .tool_registry
+            .list()
+            .into_iter()
+            .filter(|tool| !tool.enabled)
+            .map(|tool| tool.id)
+            .collect();
+    }
+
+    fn upsert_mcp_server(&mut self, server: crate::models::McpServerConfig) {
+        self.tool_settings.mcp_servers.retain(|entry| {
+            !(entry.name == server.name
+                && entry.url == server.url
+                && entry.transport == server.transport)
+        });
+        self.tool_settings.mcp_servers.push(server);
+        self.tool_settings
+            .mcp_servers
+            .sort_by(|left, right| left.name.cmp(&right.name));
+    }
+
+    fn apply_saved_disabled_tool_settings(&mut self) {
+        for tool_id in self.tool_settings.disabled_tool_ids.clone() {
+            let _ = self.tool_registry.set_enabled(&tool_id, false);
+        }
+    }
+
+    fn restore_tool_registry_from_persisted_settings(&mut self) {
+        self.tool_restore_warnings.clear();
+        for server in self.tool_settings.mcp_servers.clone() {
+            let tools =
+                match tauri::async_runtime::block_on(McpClient::new(server.clone()).list_tools()) {
+                    Ok(tools) => tools,
+                    Err(error) => {
+                        self.tool_restore_warnings.push(format!(
+                            "Saved MCP server `{}` could not be restored: {error}",
+                            server.name
+                        ));
+                        continue;
+                    }
+                };
+            self.tool_registry.register_mcp_tools(server, tools);
+        }
+
+        self.apply_saved_disabled_tool_settings();
     }
 
     fn record_turn_artifact<T: Serialize>(
@@ -2305,11 +2436,18 @@ impl AppStorage {
             .responses
             .get(&turn.id)
             .map(|response| response.artifact_id.clone())
-            .or_else(|| persisted.validation.as_ref().map(|response| response.artifact_id.clone()));
+            .or_else(|| {
+                persisted
+                    .validation
+                    .as_ref()
+                    .map(|response| response.artifact_id.clone())
+            });
         let scope_override = self
             .scope_approvals
             .get(&turn.id)
-            .filter(|scope| Some(scope.response_artifact_id.clone()) == current_response_artifact_id)
+            .filter(|scope| {
+                Some(scope.response_artifact_id.clone()) == current_response_artifact_id
+            })
             .map(|scope| ScopeOverrideInspectionRecord {
                 decision: scope.decision,
                 decided_at: scope.created_at.clone(),
@@ -2346,9 +2484,10 @@ impl AppStorage {
             .approvals
             .get(&turn.id)
             .filter(|approval| Some(approval.preview_artifact_id.clone()) == preview_artifact_id);
-        let persisted_approval = persisted.approval.as_ref().filter(|approval| {
-            approval.payload.preview_artifact_id.clone() == preview_artifact_id
-        });
+        let persisted_approval = persisted
+            .approval
+            .as_ref()
+            .filter(|approval| approval.payload.preview_artifact_id.clone() == preview_artifact_id);
 
         if let Some(approval) = live_approval {
             return self.available_section(
@@ -2809,68 +2948,20 @@ impl AppStorage {
         action: &SpreadsheetAction,
         current_diff: &DiffSummary,
     ) -> ToolExecutionResult {
-        let outcome = match action.tool.as_str() {
-            "workbook.inspect" => {
-                let source = self.resolve_workbook_source(
-                    session,
-                    action.args.get("sourcePath").and_then(Value::as_str),
-                );
-                source.and_then(|source| {
-                    serde_json::to_value(WorkbookEngine::default().inspect_workbook(&source)?)
-                        .map_err(|error| format!("failed to serialize workbook profile: {error}"))
-                })
-            }
-            "sheet.preview" => {
-                let sheet = required_action_arg_string(action, "sheet");
-                sheet.and_then(|sheet| {
-                    let source = self.resolve_workbook_source(session, None)?;
-                    let preview = WorkbookEngine::default().sheet_preview(
-                        &source,
-                        &sheet,
-                        action
-                            .args
-                            .get("limit")
-                            .and_then(Value::as_u64)
-                            .map(|value| value as usize),
-                    )?;
-                    serde_json::to_value(preview)
-                        .map_err(|error| format!("failed to serialize sheet preview: {error}"))
-                })
-            }
-            "sheet.profile_columns" => {
-                let sheet = required_action_arg_string(action, "sheet");
-                sheet.and_then(|sheet| {
-                    let source = self.resolve_workbook_source(session, None)?;
-                    let profile = WorkbookEngine::default().profile_sheet_columns(
-                        &source,
-                        &sheet,
-                        action
-                            .args
-                            .get("sampleSize")
-                            .and_then(Value::as_u64)
-                            .map(|value| value as usize),
-                    )?;
-                    serde_json::to_value(profile)
-                        .map_err(|error| format!("failed to serialize column profile: {error}"))
-                })
-            }
-            "session.diff_from_base" => self
-                .session_diff_from_base(
-                    session,
-                    turn,
-                    action.args.get("artifactId").and_then(Value::as_str),
-                    current_diff,
-                )
-                .and_then(|diff| {
-                    serde_json::to_value(diff)
-                        .map_err(|error| format!("failed to serialize diff summary: {error}"))
-                }),
-            "file.list" => file_ops::execute_file_list(&action.args),
-            "file.read_text" => file_ops::execute_file_read_text(&action.args),
-            "file.stat" => file_ops::execute_file_stat(&action.args),
-            "text.search" => file_ops::execute_text_search(&action.args),
-            "document.read_text" => file_ops::execute_document_read_text(&action.args),
-            _ => Err(format!("unsupported read tool `{}`", action.tool)),
+        let outcome = if is_write_action(action) {
+            Err(format!(
+                "`{}` is a write tool and cannot be executed in read mode",
+                action.tool
+            ))
+        } else {
+            self.tool_registry.invoke(
+                self,
+                session,
+                turn,
+                current_diff,
+                &action.tool,
+                &action.args,
+            )
         };
 
         match outcome {
@@ -2891,7 +2982,7 @@ impl AppStorage {
         }
     }
 
-    fn resolve_workbook_source(
+    pub(crate) fn resolve_workbook_source(
         &self,
         session: &Session,
         override_source_path: Option<&str>,
@@ -2908,7 +2999,7 @@ impl AppStorage {
         WorkbookSource::detect(source_path.to_string())
     }
 
-    fn session_diff_from_base(
+    pub(crate) fn session_diff_from_base(
         &self,
         session: &Session,
         turn: &Turn,
@@ -3119,11 +3210,15 @@ impl AppStorage {
         PlanningContext {
             workbook_summary,
             available_tools: PlanningContextToolGroups {
-                read: read_tool_registry()
+                read: self
+                    .tool_registry
+                    .list_descriptors_by_phase(ToolPhase::Read)
                     .into_iter()
                     .map(|tool| tool.id)
                     .collect(),
-                write: write_tool_registry()
+                write: self
+                    .tool_registry
+                    .list_descriptors_by_phase(ToolPhase::Write)
                     .into_iter()
                     .map(|tool| tool.id)
                     .collect(),
@@ -3358,16 +3453,16 @@ fn build_file_write_diff_summary(
             .iter()
             .try_fold(0_u32, |count, action| -> Result<u32, String> {
                 match action.tool.as_str() {
-            "text.replace" => {
-                let preview = file_ops::preview_text_replace(&action.args)?;
-                Ok(count
-                    + preview
-                        .get("matchCount")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0) as u32)
-            }
-            "file.copy" | "file.move" | "file.delete" => Ok(count + 1),
-            _ => Ok(count),
+                    "text.replace" => {
+                        let preview = file_ops::preview_text_replace(&action.args)?;
+                        Ok(count
+                            + preview
+                                .get("matchCount")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0) as u32)
+                    }
+                    "file.copy" | "file.move" | "file.delete" => Ok(count + 1),
+                    _ => Ok(count),
                 }
             })?;
     diff_summary.warnings = build_file_write_preview_warnings(actions)?;
@@ -3508,7 +3603,9 @@ fn infer_auto_project_memory_entries(
     for action in &response.actions {
         if let Some(output_path) = extract_auto_learning_output_path(action) {
             if is_within_project_scope(output_path, root_folder) {
-                if let Some(parent) = Path::new(output_path).parent().and_then(|value| value.to_str())
+                if let Some(parent) = Path::new(output_path)
+                    .parent()
+                    .and_then(|value| value.to_str())
                 {
                     upsert_project_memory_entry(
                         &mut entries,
@@ -3521,12 +3618,15 @@ fn infer_auto_project_memory_entries(
                     );
                 }
 
-                if let Some(extension) =
-                    Path::new(output_path).extension().and_then(|value| value.to_str())
+                if let Some(extension) = Path::new(output_path)
+                    .extension()
+                    .and_then(|value| value.to_str())
                 {
                     let normalized_extension = extension.trim().to_lowercase();
-                    if matches!(normalized_extension.as_str(), "csv" | "xlsx" | "xlsm" | "xlsb")
-                    {
+                    if matches!(
+                        normalized_extension.as_str(),
+                        "csv" | "xlsx" | "xlsm" | "xlsb"
+                    ) {
                         upsert_project_memory_entry(
                             &mut entries,
                             ProjectMemoryEntry {
@@ -3620,7 +3720,10 @@ fn infer_auto_project_memory_entries_from_text(
             continue;
         }
 
-        if let Some(parent) = Path::new(&path_candidate).parent().and_then(|value| value.to_str()) {
+        if let Some(parent) = Path::new(&path_candidate)
+            .parent()
+            .and_then(|value| value.to_str())
+        {
             upsert_project_memory_entry(
                 entries,
                 ProjectMemoryEntry {
@@ -3632,10 +3735,15 @@ fn infer_auto_project_memory_entries_from_text(
             );
         }
 
-        if let Some(extension) = Path::new(&path_candidate).extension().and_then(|value| value.to_str())
+        if let Some(extension) = Path::new(&path_candidate)
+            .extension()
+            .and_then(|value| value.to_str())
         {
             let normalized_extension = extension.trim().to_lowercase();
-            if matches!(normalized_extension.as_str(), "csv" | "xlsx" | "xlsm" | "xlsb") {
+            if matches!(
+                normalized_extension.as_str(),
+                "csv" | "xlsx" | "xlsm" | "xlsb"
+            ) {
                 upsert_project_memory_entry(
                     entries,
                     ProjectMemoryEntry {
@@ -3650,7 +3758,8 @@ fn infer_auto_project_memory_entries_from_text(
     }
 
     let lowered = normalized_text.to_lowercase();
-    if let Some(output_sheet) = extract_marker_value(normalized_text, &["output sheet", "出力シート"])
+    if let Some(output_sheet) =
+        extract_marker_value(normalized_text, &["output sheet", "出力シート"])
     {
         upsert_project_memory_entry(
             entries,
@@ -3681,7 +3790,13 @@ fn infer_auto_project_memory_entries_from_text(
 
     if let Some(overwrite) = infer_boolean_preference(
         &lowered,
-        &["do not overwrite", "don't overwrite", "no overwrite", "上書きしない", "上書きなし"],
+        &[
+            "do not overwrite",
+            "don't overwrite",
+            "no overwrite",
+            "上書きしない",
+            "上書きなし",
+        ],
         &["overwrite", "上書き"],
     ) {
         upsert_project_memory_entry(
@@ -3695,7 +3810,10 @@ fn infer_auto_project_memory_entries_from_text(
         );
     }
 
-    if !entries.iter().any(|entry| entry.key == "preferred_output_format") {
+    if !entries
+        .iter()
+        .any(|entry| entry.key == "preferred_output_format")
+    {
         for format in ["csv", "xlsx", "xlsm", "xlsb"] {
             if lowered.contains(format) {
                 upsert_project_memory_entry(
@@ -3805,7 +3923,8 @@ fn upsert_project_memory_entry(entries: &mut Vec<ProjectMemoryEntry>, entry: Pro
 fn is_within_project_scope(file_path: &str, root_folder: &str) -> bool {
     let normalized_file = normalize_scope_path(file_path);
     let normalized_root = normalize_scope_path(root_folder);
-    normalized_file == normalized_root || normalized_file.starts_with(&format!("{normalized_root}/"))
+    normalized_file == normalized_root
+        || normalized_file.starts_with(&format!("{normalized_root}/"))
 }
 
 fn normalize_scope_path(path: &str) -> String {
@@ -4544,6 +4663,7 @@ fn tool_requires_sheet(tool: &str) -> bool {
     )
 }
 
+#[allow(dead_code)]
 fn read_tool_registry() -> Vec<ToolDescriptor> {
     vec![
         ToolDescriptor {
@@ -4617,6 +4737,7 @@ fn read_tool_registry() -> Vec<ToolDescriptor> {
     ]
 }
 
+#[allow(dead_code)]
 fn write_tool_registry() -> Vec<ToolDescriptor> {
     vec![
         ToolDescriptor {
@@ -4678,16 +4799,14 @@ fn write_tool_registry() -> Vec<ToolDescriptor> {
         ToolDescriptor {
             id: "file.delete".to_string(),
             title: "Delete file".to_string(),
-            description: "Move a file to the recycle bin or permanently delete it."
-                .to_string(),
+            description: "Move a file to the recycle bin or permanently delete it.".to_string(),
             phase: ToolPhase::Write,
             requires_approval: true,
         },
         ToolDescriptor {
             id: "text.replace".to_string(),
             title: "Replace text".to_string(),
-            description: "Apply a regex replacement to a text file after approval."
-                .to_string(),
+            description: "Apply a regex replacement to a text file after approval.".to_string(),
             phase: ToolPhase::Write,
             requires_approval: true,
         },
@@ -4943,7 +5062,9 @@ fn require_existing_directory(field: &str, value: String) -> Result<String, Stri
     let path = Path::new(&trimmed);
 
     if !path.exists() {
-        return Err(format!("{field} `{trimmed}` must point to an existing directory"));
+        return Err(format!(
+            "{field} `{trimmed}` must point to an existing directory"
+        ));
     }
 
     if !path.is_dir() {
@@ -5463,11 +5584,15 @@ mod tests {
                 })
                 .expect("packet should generate");
             assert_eq!(packet.mode, RelayMode::Plan);
-            assert_eq!(packet.allowed_read_tools.len(), 9);
+            assert_eq!(packet.allowed_read_tools.len(), 10);
             assert!(packet
                 .allowed_read_tools
                 .iter()
                 .any(|tool| tool.id == "file.read_text"));
+            assert!(packet
+                .allowed_read_tools
+                .iter()
+                .any(|tool| tool.id == "browser.send_to_copilot"));
             assert_eq!(packet.allowed_write_tools.len(), 10);
             assert!(packet.context.iter().any(|line| line
                 == &format!(
@@ -5784,6 +5909,76 @@ mod tests {
             Some("/workspace/projects/revenue")
         );
 
+        fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
+    }
+
+    #[test]
+    fn persists_tool_settings_and_restores_mcp_tools_after_reload() {
+        let app_local_data_dir = unique_test_app_data_dir();
+        let script_path = write_stdio_mock_server();
+
+        {
+            let mut storage =
+                AppStorage::open(app_local_data_dir.clone()).expect("storage should initialize");
+
+            let response = storage
+                .register_mcp_tools(
+                    crate::models::McpServerConfig {
+                        url: format!("node {}", script_path.display()),
+                        name: "demo".to_string(),
+                        transport: crate::models::McpTransport::Stdio,
+                    },
+                    vec![crate::mcp_client::McpToolDefinition {
+                        name: "echo".to_string(),
+                        description: "Echo arguments".to_string(),
+                        input_schema: json!({ "type": "object" }),
+                    }],
+                )
+                .expect("mcp tool registration should persist");
+
+            assert_eq!(
+                response.registered_tool_ids,
+                vec!["mcp.demo.echo".to_string()]
+            );
+
+            let updated = storage
+                .set_tool_enabled(crate::models::SetToolEnabledRequest {
+                    tool_id: "mcp.demo.echo".to_string(),
+                    enabled: false,
+                })
+                .expect("tool toggle should persist");
+            assert!(!updated.enabled);
+        }
+
+        let reloaded = AppStorage::open(app_local_data_dir.clone()).expect("storage should reload");
+        let tools = reloaded.list_tools().tools;
+        let restored = tools
+            .iter()
+            .find(|tool| tool.id == "mcp.demo.echo")
+            .expect("persisted mcp tool should be restored");
+        assert!(!restored.enabled);
+        let expected_server_url = format!("node {}", script_path.display());
+        assert_eq!(
+            restored.mcp_server_url.as_deref(),
+            Some(expected_server_url.as_str())
+        );
+        assert_eq!(
+            restored.mcp_transport,
+            Some(crate::models::McpTransport::Stdio)
+        );
+
+        let storage_root = persistence::storage_root(&app_local_data_dir);
+        let persisted_settings: crate::models::ToolSettings =
+            read_json(&storage_root.join("tool-settings.json"))
+                .expect("tool settings should be written");
+        assert_eq!(
+            persisted_settings.disabled_tool_ids,
+            vec!["mcp.demo.echo".to_string()]
+        );
+        assert_eq!(persisted_settings.mcp_servers.len(), 1);
+        assert_eq!(persisted_settings.mcp_servers[0].name, "demo");
+
+        fs::remove_file(script_path).expect("mock stdio script should clean up");
         fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
     }
 
@@ -7010,11 +7205,17 @@ mod tests {
         assert!(response.tool_results[0].ok);
         assert!(response.tool_results[1].ok);
         assert_eq!(
-            response.tool_results[0].result.as_ref().and_then(|value| value.get("matchCount")),
+            response.tool_results[0]
+                .result
+                .as_ref()
+                .and_then(|value| value.get("matchCount")),
             Some(&json!(2))
         );
         assert_eq!(
-            response.tool_results[1].result.as_ref().and_then(|value| value.get("format")),
+            response.tool_results[1]
+                .result
+                .as_ref()
+                .and_then(|value| value.get("format")),
             Some(&json!("txt"))
         );
 
@@ -7104,7 +7305,10 @@ mod tests {
             })
             .expect("execution should succeed");
         assert!(execution.executed);
-        assert_eq!(execution.output_path, Some(text_path.to_string_lossy().into_owned()));
+        assert_eq!(
+            execution.output_path,
+            Some(text_path.to_string_lossy().into_owned())
+        );
         assert_eq!(
             fs::read_to_string(&text_path).expect("updated file should be readable"),
             "hi relay\nhi world\n"
@@ -7176,7 +7380,9 @@ mod tests {
             .create_project(CreateProjectRequest {
                 name: "Revenue Ops".to_string(),
                 root_folder: revenue_root.display().to_string(),
-                custom_instructions: Some("Always keep outputs inside the revenue folder.".to_string()),
+                custom_instructions: Some(
+                    "Always keep outputs inside the revenue folder.".to_string(),
+                ),
             })
             .expect("project should be created");
         assert_eq!(created.name, "Revenue Ops");
@@ -7247,10 +7453,10 @@ mod tests {
                 project_id: None,
             })
             .expect("session should be unassigned");
-        assert!(unassigned
-            .projects
+        assert!(unassigned.projects.iter().all(|project| !project
+            .session_ids
             .iter()
-            .all(|project| !project.session_ids.iter().any(|session_id| session_id == &session.id)));
+            .any(|session_id| session_id == &session.id)));
 
         let reloaded = AppStorage::open(app_local_data_dir.clone()).expect("storage should reload");
         let project = reloaded
@@ -7273,7 +7479,8 @@ mod tests {
     #[test]
     fn create_project_requires_existing_root_folder() {
         let mut storage = AppStorage::default();
-        let missing_root = env::temp_dir().join(format!("relay-agent-missing-root-{}", Uuid::new_v4()));
+        let missing_root =
+            env::temp_dir().join(format!("relay-agent-missing-root-{}", Uuid::new_v4()));
 
         let error = storage
             .create_project(CreateProjectRequest {
@@ -7365,19 +7572,37 @@ mod tests {
 
         assert!(response.accepted);
         assert_eq!(response.auto_learned_memory.len(), 5);
-        assert_eq!(response.auto_learned_memory[0].source, ProjectMemorySource::Auto);
-        assert_eq!(response.auto_learned_memory[0].key, "create_backup_on_replace");
+        assert_eq!(
+            response.auto_learned_memory[0].source,
+            ProjectMemorySource::Auto
+        );
+        assert_eq!(
+            response.auto_learned_memory[0].key,
+            "create_backup_on_replace"
+        );
         assert_eq!(response.auto_learned_memory[0].value, "true");
-        assert_eq!(response.auto_learned_memory[1].key, "overwrite_existing_files");
+        assert_eq!(
+            response.auto_learned_memory[1].key,
+            "overwrite_existing_files"
+        );
         assert_eq!(response.auto_learned_memory[1].value, "true");
-        assert_eq!(response.auto_learned_memory[2].key, "preferred_output_folder");
+        assert_eq!(
+            response.auto_learned_memory[2].key,
+            "preferred_output_folder"
+        );
         assert_eq!(
             response.auto_learned_memory[2].value,
             revenue_root.join("exports").display().to_string()
         );
-        assert_eq!(response.auto_learned_memory[3].key, "preferred_output_format");
+        assert_eq!(
+            response.auto_learned_memory[3].key,
+            "preferred_output_format"
+        );
         assert_eq!(response.auto_learned_memory[3].value, "csv");
-        assert_eq!(response.auto_learned_memory[4].key, "preferred_output_sheet");
+        assert_eq!(
+            response.auto_learned_memory[4].key,
+            "preferred_output_sheet"
+        );
         assert_eq!(response.auto_learned_memory[4].value, "ApprovedRows");
 
         let project = storage
@@ -7455,18 +7680,33 @@ mod tests {
 
         assert!(response.accepted);
         assert_eq!(response.auto_learned_memory.len(), 5);
-        assert_eq!(response.auto_learned_memory[0].key, "create_backup_on_replace");
+        assert_eq!(
+            response.auto_learned_memory[0].key,
+            "create_backup_on_replace"
+        );
         assert_eq!(response.auto_learned_memory[0].value, "true");
-        assert_eq!(response.auto_learned_memory[1].key, "overwrite_existing_files");
+        assert_eq!(
+            response.auto_learned_memory[1].key,
+            "overwrite_existing_files"
+        );
         assert_eq!(response.auto_learned_memory[1].value, "true");
-        assert_eq!(response.auto_learned_memory[2].key, "preferred_output_folder");
+        assert_eq!(
+            response.auto_learned_memory[2].key,
+            "preferred_output_folder"
+        );
         assert_eq!(
             response.auto_learned_memory[2].value,
             revenue_root.join("exports").display().to_string()
         );
-        assert_eq!(response.auto_learned_memory[3].key, "preferred_output_format");
+        assert_eq!(
+            response.auto_learned_memory[3].key,
+            "preferred_output_format"
+        );
         assert_eq!(response.auto_learned_memory[3].value, "csv");
-        assert_eq!(response.auto_learned_memory[4].key, "preferred_output_sheet");
+        assert_eq!(
+            response.auto_learned_memory[4].key,
+            "preferred_output_sheet"
+        );
         assert_eq!(response.auto_learned_memory[4].value, "NaturalRows");
 
         fs::remove_dir_all(revenue_root).expect("revenue root should clean up");
@@ -7485,6 +7725,29 @@ mod tests {
     fn write_test_csv(contents: &str) -> std::path::PathBuf {
         let path = env::temp_dir().join(format!("relay-agent-storage-test-{}.csv", Uuid::new_v4()));
         fs::write(&path, contents).expect("test csv should be written");
+        path
+    }
+
+    fn write_stdio_mock_server() -> std::path::PathBuf {
+        let path = env::temp_dir().join(format!("relay-agent-mcp-{}.cjs", Uuid::new_v4()));
+        fs::write(
+            &path,
+            r#"const readline = require("readline");
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on("line", (line) => {
+  const request = JSON.parse(line.trim());
+  let result = null;
+  if (request.method === "tools/list") {
+    result = {
+      tools: [{ name: "echo", description: "Echo arguments", inputSchema: { type: "object" } }]
+    };
+  } else if (request.method === "tools/call") {
+    result = { ok: true, arguments: request.params.arguments };
+  }
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 1, result }) + "\n");
+});"#,
+        )
+        .expect("mock stdio server should be written");
         path
     }
 

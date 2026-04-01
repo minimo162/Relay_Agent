@@ -8,7 +8,7 @@ use std::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::models::{Project, Session, SessionStatus, Turn};
+use crate::models::{Project, Session, SessionStatus, ToolSettings, Turn};
 
 const STORAGE_ROOT_DIR: &str = "storage-v1";
 
@@ -25,6 +25,7 @@ pub struct StorageManifest {
 #[derive(Debug)]
 pub struct LoadedStorage {
     pub manifest: StorageManifest,
+    pub tool_settings: ToolSettings,
     pub projects: HashMap<String, Project>,
     pub sessions: HashMap<String, Session>,
     pub turns: HashMap<String, Turn>,
@@ -152,9 +153,14 @@ pub fn initialize_storage(app_local_data_dir: &Path, now: &str) -> Result<Loaded
     if !project_index_path.exists() {
         write_json_atomic(&project_index_path, &Vec::<ProjectIndexEntry>::new())?;
     }
+    let tool_settings_path = tool_settings_path(&storage_root);
+    if !tool_settings_path.exists() {
+        write_json_atomic(&tool_settings_path, &ToolSettings::default())?;
+    }
 
     let project_index: Vec<ProjectIndexEntry> = read_json_file(&project_index_path)?;
     let session_index: Vec<SessionIndexEntry> = read_json_file(&index_path)?;
+    let tool_settings: ToolSettings = read_json_file(&tool_settings_path)?;
     let mut projects = HashMap::new();
     let mut sessions = HashMap::new();
     let mut turns = HashMap::new();
@@ -178,10 +184,26 @@ pub fn initialize_storage(app_local_data_dir: &Path, now: &str) -> Result<Loaded
 
     Ok(LoadedStorage {
         manifest,
+        tool_settings,
         projects,
         sessions,
         turns,
     })
+}
+
+pub fn persist_tool_settings(
+    app_local_data_dir: &Path,
+    manifest: &mut StorageManifest,
+    tool_settings: &ToolSettings,
+    now: &str,
+) -> Result<(), String> {
+    let storage_root = storage_root(app_local_data_dir);
+    write_json_atomic(&tool_settings_path(&storage_root), tool_settings)?;
+
+    manifest.updated_at = now.to_string();
+    write_json_atomic(&manifest_path(&storage_root), manifest)?;
+
+    Ok(())
 }
 
 pub fn persist_projects_state(
@@ -323,6 +345,10 @@ fn session_index_path(storage_root: &Path) -> PathBuf {
 
 fn project_index_path(storage_root: &Path) -> PathBuf {
     projects_dir(storage_root).join("index.json")
+}
+
+fn tool_settings_path(storage_root: &Path) -> PathBuf {
+    storage_root.join("tool-settings.json")
 }
 
 fn project_file_path(storage_root: &Path, project_id: &str) -> PathBuf {

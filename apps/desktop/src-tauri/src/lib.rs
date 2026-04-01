@@ -1,6 +1,8 @@
 mod app;
+mod browser_automation;
 mod execution;
 mod file_ops;
+mod mcp_client;
 mod models;
 mod persistence;
 mod project;
@@ -9,6 +11,7 @@ mod session;
 mod startup;
 mod state;
 mod storage;
+mod tool_registry;
 mod workbook;
 mod workflow_smoke;
 
@@ -51,6 +54,12 @@ pub fn run() {
             relay::generate_relay_packet,
             relay::assess_copilot_handoff,
             relay::submit_copilot_response,
+            execution::list_tools,
+            execution::set_tool_enabled,
+            execution::connect_mcp_server,
+            execution::invoke_mcp_tool,
+            browser_automation::send_copilot_prompt,
+            browser_automation::check_copilot_connection,
             execution::execute_read_actions,
             execution::approve_plan,
             execution::get_plan_progress,

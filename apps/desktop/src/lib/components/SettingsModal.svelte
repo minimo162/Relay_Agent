@@ -1,5 +1,6 @@
 <script lang="ts">
   import { slide } from "svelte/transition";
+  import type { McpTransport, ToolRegistration } from "@relay-agent/contracts";
 
   export let open = false;
   export let autoLaunchEdge = true;
@@ -17,11 +18,23 @@
   export let edgeLaunchCommand = "";
   export let autoPortRangeLabel = "";
   export let storagePath: string | null = null;
+  export let tools: ToolRegistration[] = [];
+  export let toolInfoMessage = "";
+  export let toolErrorMessage = "";
+  export let connectingMcp = false;
+  export let mcpServerUrl = "";
+  export let mcpServerName = "";
+  export let mcpTransport: McpTransport = "sse";
   export let onClose: () => void = () => {};
   export let onToggleAutoLaunch: () => void = () => {};
   export let onPersist: () => void = () => {};
   export let onCopyCommand: () => void = () => {};
   export let onTestConnection: () => void = () => {};
+  export let onToggleTool: (toolId: string, enabled: boolean) => void = () => {};
+  export let onConnectMcpServer: () => void = () => {};
+
+  $: builtinTools = tools.filter((tool) => tool.source === "builtin");
+  $: mcpTools = tools.filter((tool) => tool.source === "mcp");
 </script>
 
 {#if open}
@@ -187,6 +200,73 @@
           <p class="field-success">{copiedBrowserCommandNotice}</p>
         {/if}
 
+        <h3>ツール管理</h3>
+        <div class="tool-section">
+          <h4>ビルトインツール</h4>
+          <div class="tool-list">
+            {#each builtinTools as tool}
+              <label class="tool-toggle">
+                <input
+                  type="checkbox"
+                  checked={tool.enabled}
+                  on:change={(event) =>
+                    onToggleTool(tool.id, (event.currentTarget as HTMLInputElement).checked)}
+                />
+                <div class="tool-copy">
+                  <div class="tool-topline">
+                    <strong>{tool.title}</strong>
+                    <span class="tool-phase">{tool.phase}</span>
+                  </div>
+                  <p>{tool.description}</p>
+                  <p class="tool-meta">{tool.id}</p>
+                </div>
+              </label>
+            {/each}
+          </div>
+
+          <h4>MCP サーバー</h4>
+          <div class="mcp-server-input">
+            <input class="input" type="text" bind:value={mcpServerUrl} placeholder="http://localhost:3100/mcp" />
+            <input class="input" type="text" bind:value={mcpServerName} placeholder="サーバー名" />
+            <select class="input" bind:value={mcpTransport}>
+              <option value="sse">SSE / HTTP</option>
+              <option value="stdio">stdio</option>
+            </select>
+            <button class="cdp-test-btn" type="button" on:click={onConnectMcpServer} disabled={connectingMcp}>
+              {connectingMcp ? "接続中…" : "接続"}
+            </button>
+          </div>
+          <p class="tool-meta">
+            {#if mcpTransport === "stdio"}
+              stdio では `URL` 欄に `node ./server.js` のような実行コマンドを入力します。
+            {:else}
+              SSE では `URL` 欄に `http://localhost:3100/mcp` のようなエンドポイントを入力します。
+            {/if}
+          </p>
+
+          {#if toolInfoMessage}
+            <p class="field-success">{toolInfoMessage}</p>
+          {/if}
+          {#if toolErrorMessage}
+            <p class="field-warn">⚠ {toolErrorMessage}</p>
+          {/if}
+
+          {#if mcpTools.length > 0}
+            <div class="tool-list">
+              {#each mcpTools as tool}
+                <div class="mcp-tool-card">
+                  <div class="tool-topline">
+                    <strong>{tool.title}</strong>
+                    <span class="mcp-badge">MCP</span>
+                  </div>
+                  <p>{tool.description}</p>
+                  <p class="tool-meta">{tool.id}</p>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
         {#if storagePath}
           <h3>ローカルストレージ</h3>
           <code class="storage-path">{storagePath}</code>
@@ -195,3 +275,63 @@
     </div>
   </div>
 {/if}
+
+<style>
+  .tool-list {
+    display: grid;
+    gap: 0.75rem;
+    margin: 0.75rem 0 1rem;
+  }
+
+  .tool-toggle,
+  .mcp-tool-card {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.75rem;
+    align-items: start;
+    padding: 0.8rem;
+    border: 1px solid var(--ra-border);
+    border-radius: 12px;
+    background: var(--ra-surface-muted);
+  }
+
+  .mcp-tool-card {
+    grid-template-columns: 1fr;
+  }
+
+  .tool-topline {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .tool-copy p,
+  .mcp-tool-card p {
+    margin: 0.2rem 0 0;
+  }
+
+  .tool-phase,
+  .mcp-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    background: var(--ra-surface);
+    border: 1px solid var(--ra-border);
+  }
+
+  .mcp-server-input {
+    display: grid;
+    grid-template-columns: 1fr 160px 140px auto;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .tool-meta {
+    font-size: 0.8rem;
+    word-break: break-all;
+  }
+</style>

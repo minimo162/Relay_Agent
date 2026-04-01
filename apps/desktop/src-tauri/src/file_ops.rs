@@ -109,10 +109,7 @@ pub fn execute_file_copy(args: &Value) -> Result<Value, String> {
     let dest_path = resolve_safe_path(&dest)?;
 
     if !source_path.is_file() {
-        return Err(format!(
-            "source file not found: {}",
-            source_path.display()
-        ));
+        return Err(format!("source file not found: {}", source_path.display()));
     }
 
     if dest_path.exists() {
@@ -161,10 +158,7 @@ pub fn execute_file_move(args: &Value) -> Result<Value, String> {
     let dest_path = resolve_safe_path(&dest)?;
 
     if !source_path.exists() {
-        return Err(format!(
-            "source path not found: {}",
-            source_path.display()
-        ));
+        return Err(format!("source path not found: {}", source_path.display()));
     }
 
     if dest_path.exists() {
@@ -218,8 +212,9 @@ pub fn execute_file_delete(args: &Value) -> Result<Value, String> {
     }
 
     if to_recycle_bin {
-        trash::delete(&file_path)
-            .map_err(|error| format!("failed to move `{}` to trash: {error}", file_path.display()))?;
+        trash::delete(&file_path).map_err(|error| {
+            format!("failed to move `{}` to trash: {error}", file_path.display())
+        })?;
     } else {
         remove_existing_path(&file_path)?;
     }
@@ -234,10 +229,7 @@ pub fn execute_file_delete(args: &Value) -> Result<Value, String> {
 pub fn execute_text_search(args: &Value) -> Result<Value, String> {
     let path = required_value_string(args, "path", "text.search")?;
     let pattern = required_value_string(args, "pattern", "text.search")?;
-    let max_matches = args
-        .get("maxMatches")
-        .and_then(Value::as_u64)
-        .unwrap_or(50) as usize;
+    let max_matches = args.get("maxMatches").and_then(Value::as_u64).unwrap_or(50) as usize;
     let context_lines = args
         .get("contextLines")
         .and_then(Value::as_u64)
@@ -329,7 +321,9 @@ pub fn execute_text_replace(args: &Value) -> Result<Value, String> {
         })?;
     }
 
-    let next_content = regex.replace_all(&content, replacement.as_str()).into_owned();
+    let next_content = regex
+        .replace_all(&content, replacement.as_str())
+        .into_owned();
     write_text_file(&file_path, &next_content, encoding)?;
 
     Ok(json!({
@@ -579,7 +573,8 @@ fn truncate_to_char_limit(content: &str, max_chars: usize) -> String {
 }
 
 fn format_system_time(value: std::time::SystemTime) -> String {
-    chrono::DateTime::<chrono::Utc>::from(value).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    chrono::DateTime::<chrono::Utc>::from(value)
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 fn extract_docx_text(path: &Path) -> Result<String, String> {
@@ -592,7 +587,12 @@ fn extract_pptx_text(path: &Path) -> Result<String, String> {
     let mut archive =
         ZipArchive::new(file).map_err(|error| format!("failed to read pptx zip: {error}"))?;
     let mut slide_names = (0..archive.len())
-        .filter_map(|index| archive.by_index(index).ok().map(|entry| entry.name().to_string()))
+        .filter_map(|index| {
+            archive
+                .by_index(index)
+                .ok()
+                .map(|entry| entry.name().to_string())
+        })
         .filter(|name| name.starts_with("ppt/slides/slide") && name.ends_with(".xml"))
         .collect::<Vec<_>>();
     slide_names.sort();
@@ -603,7 +603,8 @@ fn extract_pptx_text(path: &Path) -> Result<String, String> {
             .by_name(&name)
             .map_err(|error| format!("failed to read `{name}` from pptx: {error}"))?;
         let mut xml = String::new();
-        entry.read_to_string(&mut xml)
+        entry
+            .read_to_string(&mut xml)
             .map_err(|error| format!("failed to decode `{name}`: {error}"))?;
         let text = strip_xml_to_text(&xml);
         if !text.trim().is_empty() {
@@ -626,7 +627,8 @@ fn extract_text_from_zip_entry(path: &Path, entry_names: &[&str]) -> Result<Stri
             .by_name(entry_name)
             .map_err(|error| format!("failed to read `{entry_name}`: {error}"))?;
         let mut xml = String::new();
-        entry.read_to_string(&mut xml)
+        entry
+            .read_to_string(&mut xml)
             .map_err(|error| format!("failed to decode `{entry_name}`: {error}"))?;
         let text = strip_xml_to_text(&xml);
         if !text.trim().is_empty() {
@@ -656,11 +658,14 @@ fn strip_xml_to_text(xml: &str) -> String {
 }
 
 fn extract_pdf_text(path: &Path) -> Result<String, String> {
-    let document =
-        Document::load(path).map_err(|error| format!("failed to load pdf `{}`: {error}", path.display()))?;
+    let document = Document::load(path)
+        .map_err(|error| format!("failed to load pdf `{}`: {error}", path.display()))?;
     let page_numbers = document.get_pages().keys().copied().collect::<Vec<_>>();
 
-    document
-        .extract_text(&page_numbers)
-        .map_err(|error| format!("failed to extract pdf text from `{}`: {error}", path.display()))
+    document.extract_text(&page_numbers).map_err(|error| {
+        format!(
+            "failed to extract pdf text from `{}`: {error}",
+            path.display()
+        )
+    })
 }

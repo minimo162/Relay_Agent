@@ -23,6 +23,8 @@
     DiffSummary,
     ExecutionPlan,
     GenerateRelayPacketResponse,
+    McpTransport,
+    McpServerConfig,
     PlanProgressResponse,
     PlanStep,
     PlanStepStatus,
@@ -32,6 +34,7 @@
     Session,
     SheetColumnProfile,
     StartupIssue,
+    ToolRegistration,
     ToolExecutionResult,
     TurnDetailsViewModel,
     ValidationIssue,
@@ -42,6 +45,7 @@
     approvePlan,
     assessCopilotHandoff,
     buildPlanningPrompt,
+    connectMcpServer,
     createProject,
     createSession,
     discardDelegationDraft,
@@ -54,6 +58,7 @@
     initializeApp,
     isWithinProjectScope,
     linkSessionToProject,
+    listTools,
     listSessions,
     recordPlanProgress,
     recordScopeApproval,
@@ -65,6 +70,7 @@
     loadSelectedProjectId,
     loadStudioDraft,
     loadBrowserAutomationSettings,
+    loadToolSettings,
     loadUiMode,
     hasSeenWelcome,
     markWelcomeSeen,
@@ -84,10 +90,12 @@
     saveBrowserAutomationSettings,
     saveDelegationDraft,
     saveSelectedProjectId,
+    saveToolSettings,
     saveUiMode,
-    sendToCopilot,
+    sendPromptViaBrowserTool,
     saveStudioDraft,
     setSessionProject,
+    setToolEnabled,
     startTurn,
     submitCopilotResponse,
     validateProjectScopeActions,
@@ -97,6 +105,7 @@
     type PersistedStudioDraft,
     type RecentFile,
     type RecentSession,
+    type ToolSettings,
     type UiMode
   } from "$lib";
   import { autoFixCopilotResponse } from "$lib/auto-fix";
@@ -272,6 +281,13 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let cdpPort = AUTO_CDP_PORT_RANGE_START;
   let autoLaunchEdge = true;
   let timeoutMs = 60000;
+  let tools: ToolRegistration[] = [];
+  let mcpServerUrl = "";
+  let mcpServerName = "";
+  let mcpTransport: McpTransport = "sse";
+  let connectingMcp = false;
+  let toolInfoMessage = "";
+  let toolErrorMessage = "";
   let agentLoopEnabled = false;
   let maxTurns = 10;
   let loopTimeoutMs = 120000;
@@ -2075,6 +2091,122 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     cdpTestMessage = "";
   }
 
+  function currentToolSettings(): ToolSettings {
+    return loadToolSettings();
+  }
+
+  async function refreshTools(): Promise<void> {
+    const response = await listTools();
+    tools = response.tools;
+    if (response.restoreWarnings.length > 0) {
+      toolErrorMessage = response.restoreWarnings.join(" ");
+    }
+  }
+
+  function persistToolSettings(next: ToolSettings): ToolSettings {
+    return saveToolSettings(next);
+  }
+
+  async function applySavedToolSettings(): Promise<void> {
+    const saved = currentToolSettings();
+    let latestTools = tools;
+    const connectedServers: McpServerConfig[] = [];
+
+    for (const server of saved.mcpServers) {
+      try {
+        const response = await connectMcpServer(server);
+        latestTools = response.tools;
+        connectedServers.push(server);
+      } catch (error) {
+        toolErrorMessage = `MCP server \`${server.name}\` を復元できませんでした: ${toError(error)}`;
+      }
+    }
+
+    tools = latestTools;
+
+    for (const toolId of saved.disabledToolIds) {
+      if (!tools.some((tool) => tool.id === toolId && tool.enabled)) {
+        continue;
+      }
+
+      try {
+        const updated = await setToolEnabled({ toolId, enabled: false });
+        tools = tools.map((tool) => (tool.id === updated.id ? updated : tool));
+      } catch (error) {
+        toolErrorMessage = `ツール \`${toolId}\` の設定を復元できませんでした: ${toError(error)}`;
+      }
+    }
+
+    persistToolSettings({
+      disabledToolIds: saved.disabledToolIds.filter((toolId) =>
+        tools.some((tool) => tool.id === toolId && !tool.enabled)
+      ),
+      mcpServers: connectedServers
+    });
+  }
+
+  async function handleToolToggle(toolId: string, enabled: boolean): Promise<void> {
+    toolErrorMessage = "";
+    toolInfoMessage = "";
+
+    try {
+      const updated = await setToolEnabled({ toolId, enabled });
+      tools = tools.map((tool) => (tool.id === updated.id ? updated : tool));
+      const disabledToolIds = tools
+        .filter((tool) => !tool.enabled)
+        .map((tool) => tool.id);
+      persistToolSettings({
+        disabledToolIds,
+        mcpServers: currentToolSettings().mcpServers
+      });
+      toolInfoMessage = enabled
+        ? `ツール \`${updated.title}\` を有効化しました。`
+        : `ツール \`${updated.title}\` を無効化しました。`;
+    } catch (error) {
+      toolErrorMessage = toError(error);
+    }
+  }
+
+  async function handleConnectMcpServer(): Promise<void> {
+    const url = mcpServerUrl.trim();
+    const name = mcpServerName.trim();
+    if (!url || !name) {
+      toolErrorMessage = "MCP サーバー URL とサーバー名を入力してください。";
+      return;
+    }
+
+    connectingMcp = true;
+    toolErrorMessage = "";
+    toolInfoMessage = "";
+    try {
+      const server: McpServerConfig = {
+        url,
+        name,
+        transport: mcpTransport
+      };
+      const response = await connectMcpServer(server);
+      tools = response.tools;
+      const saved = currentToolSettings();
+      persistToolSettings({
+        disabledToolIds: saved.disabledToolIds,
+        mcpServers: [
+          ...saved.mcpServers.filter(
+            (entry) => entry.url !== server.url || entry.name !== server.name
+          ),
+          server
+        ]
+      });
+      toolInfoMessage = `${response.registeredToolIds.length} 件の MCP ツールを登録しました。`;
+      mcpServerUrl = "";
+      mcpServerName = "";
+      mcpTransport = "sse";
+    } catch (error) {
+      toolErrorMessage = toError(error);
+    } finally {
+      connectingMcp = false;
+    }
+  }
+
   async function copyCopilotInstruction(): Promise<void> {
     if (!copilotInstructionText.trim()) {
       return;
@@ -2133,7 +2265,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     resetPlanExecutionState();
 
     try {
-      const response = await sendToCopilot(copilotInstructionText, {
+      const response = await sendPromptViaBrowserTool(copilotInstructionText, {
         onProgress: handleBrowserProgress
       });
       copilotResponse = response;
@@ -3396,6 +3528,10 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         sampleWorkbookPath = app.sampleWorkbookPath ?? null;
         await refreshProjects();
         await refreshSessions();
+        await refreshTools();
+        if (!app.storagePath) {
+          await applySavedToolSettings();
+        }
       } catch (error) {
         errorMsg = toError(error);
       }
@@ -4705,6 +4841,13 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   {cdpTestStatus}
   {cdpTestMessage}
   {copiedBrowserCommandNotice}
+  {tools}
+  {toolInfoMessage}
+  {toolErrorMessage}
+  bind:mcpServerUrl
+  bind:mcpServerName
+  bind:mcpTransport
+  {connectingMcp}
   edgeLaunchCommand={getEdgeLaunchCommand()}
   autoPortRangeLabel={`ポート ${AUTO_CDP_PORT_RANGE_START}-${AUTO_CDP_PORT_RANGE_END} から自動選択されます`}
   {storagePath}
@@ -4716,6 +4859,12 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   onPersist={persistBrowserAutomationSettings}
   onCopyCommand={copyEdgeLaunchCommand}
   onTestConnection={testCdpConnection}
+  onToggleTool={(toolId, enabled) => {
+    void handleToolToggle(toolId, enabled);
+  }}
+  onConnectMcpServer={() => {
+    void handleConnectMcpServer();
+  }}
 />
 
 <style>

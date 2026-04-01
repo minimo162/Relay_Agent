@@ -2673,3 +2673,78 @@ Observed result:
 - `apps/desktop/src/lib/project-scope.ts` now holds the shared path-scope helpers, and `apps/desktop/src/routes/+page.svelte` consumes `validateProjectScopeActions(...)` instead of keeping the check as an untested local closure.
 - `apps/desktop/src/lib/project-scope.test.ts` covers Windows-style path normalization, supported file-path argument extraction, and duplicate out-of-scope path collapse.
 - `pnpm --filter @relay-agent/desktop typecheck`, `cd apps/desktop && pnpm dlx tsx --test src/lib/project-scope.test.ts`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `git diff --check` pass after this follow-up.
+
+Tool registry and MCP integration follow-up:
+
+```bash
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm check
+git diff --check
+```
+
+Observed result:
+
+- `docs/TOOL_REGISTRY_DESIGN.md` now documents the shared tool-registration model, MCP discovery/call flow, security posture, and the desktop-command-backed browser automation path.
+- `packages/contracts/src/relay.ts` and `packages/contracts/src/ipc.ts` now define `ToolRegistration`, MCP server config/request shapes, tool-enable IPC payloads, and MCP connect/invoke responses.
+- `apps/desktop/src-tauri/src/tool_registry.rs` now registers built-in workbook/file/text/browser tool metadata, filters enabled tools into Relay packets, and routes read-tool execution through one registry path instead of hard-coded packet lists.
+- `apps/desktop/src-tauri/src/mcp_client.rs` now discovers and invokes MCP tools over HTTP JSON-RPC and stdio, and `apps/desktop/src-tauri/src/execution.rs` exposes `list_tools`, `set_tool_enabled`, `connect_mcp_server`, and `invoke_mcp_tool`.
+- `apps/desktop/src/lib/components/SettingsModal.svelte`, `apps/desktop/src/routes/+page.svelte`, `apps/desktop/src/lib/ipc.ts`, and `apps/desktop/src/lib/continuity.ts` now provide built-in tool toggles, MCP server transport selection, discovered-tool display, and continuity-backed restoration of disabled tools and known MCP servers.
+- `apps/desktop/src/lib/tool-runtime.ts`, `apps/desktop/src/lib/agent-loop.ts`, and `apps/desktop/src/routes/+page.svelte` now run `browser.send_to_copilot` through a concrete registry-compatible desktop tool runtime instead of treating it as metadata-only.
+- `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop typecheck`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, `pnpm check`, and `git diff --check` pass after this follow-up.
+
+Tool registry persistence follow-up:
+
+```bash
+pnpm --filter @relay-agent/desktop typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm check
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/persistence.rs` now persists `tool-settings.json` alongside the existing manifest/session/project state, and `apps/desktop/src-tauri/src/storage.rs` restores disabled tool ids plus saved MCP server configs during `AppStorage::open(...)`.
+- Saved MCP servers now reconnect on startup with best-effort discovery, while `set_tool_enabled` and `connect_mcp_server` persist their backend state immediately instead of relying only on frontend continuity.
+- `apps/desktop/src/routes/+page.svelte` now treats backend local-json storage as the source of truth for tool restore, surfaces backend restore warnings in the settings area, and keeps the previous continuity-based reapply flow as the fallback for memory mode.
+- `apps/desktop/src-tauri/src/storage.rs` now includes regression coverage for persisting a stdio MCP server plus a disabled MCP tool across reload.
+- `pnpm --filter @relay-agent/desktop typecheck`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, `pnpm check`, and `git diff --check` pass after this follow-up.
+
+Tool registry boundary-removal follow-up:
+
+```bash
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm check
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/browser_automation.rs`, `apps/desktop/src-tauri/src/lib.rs`, `apps/desktop/src-tauri/src/models.rs`, `packages/contracts/src/ipc.ts`, and `apps/desktop/src/lib/ipc.ts` now move Copilot browser execution behind Tauri commands, including progress-event relay from the backend to the frontend UI.
+- `apps/desktop/src/lib/copilot-browser.ts` is now an IPC/event bridge instead of a direct shell/path runner, so `browser.send_to_copilot` no longer keeps its execution engine in the frontend layer.
+- `apps/desktop/src-tauri/src/mcp_client.rs` now keeps reusable stdio MCP sessions alive across multiple requests and reconnects on disconnect, and regression coverage includes a persistent-session test instead of only request-per-process behavior.
+- `docs/TOOL_REGISTRY_DESIGN.md`, `docs/BROWSER_AUTOMATION.md`, and `PLANS.md` now describe browser automation as backend-executed and stdio MCP as session-based instead of command-style-only.
+- `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop typecheck`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, `pnpm check`, and `git diff --check` pass after this follow-up.
+
+Tool registry and MCP safety-fix follow-up:
+
+```bash
+cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm -C packages/contracts build
+pnpm --filter @relay-agent/desktop typecheck
+pnpm dlx tsx --test src/lib/tool-runtime.test.ts
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm check
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/tool_registry.rs` no longer calls `tauri::async_runtime::block_on(...)` for MCP tools from the synchronous registry path, and instead returns an explicit error directing callers to `invoke_mcp_tool`.
+- `apps/desktop/src-tauri/src/execution.rs` now rejects disabled MCP tools, rejects malformed `mcp.{server}.{tool}` ids via `parse_mcp_tool_name(...)`, and covers both failure paths with unit tests.
+- `apps/desktop/src/lib/tool-runtime.ts` now validates MCP registration metadata before IPC, rejects disabled tools on the client side, and wraps MCP invocation with a 30-second timeout.
+- `apps/desktop/src/lib/tool-runtime.test.ts` now covers missing `mcpServerUrl`, disabled MCP tools, unknown builtin ids, propagated MCP errors, and timeout behavior in addition to the existing success-path tests.
+- This follow-up is a correctness fix for the existing task `155–159` surface rather than a new Task Master milestone, so `.taskmaster/tasks/tasks.json` was left unchanged.

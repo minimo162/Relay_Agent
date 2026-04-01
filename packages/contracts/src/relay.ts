@@ -5,6 +5,7 @@ import { entityIdSchema, nonEmptyStringSchema, relayModeSchema } from "./shared"
 import { spreadsheetActionSchema } from "./workbook";
 
 export const toolPhaseSchema = z.enum(["read", "write"]);
+export const mcpTransportSchema = z.enum(["sse", "stdio"]);
 
 export const toolDescriptorSchema = z.object({
   id: entityIdSchema,
@@ -12,6 +13,21 @@ export const toolDescriptorSchema = z.object({
   description: nonEmptyStringSchema,
   phase: toolPhaseSchema,
   requiresApproval: z.boolean().default(false)
+});
+
+export const toolSourceSchema = z.enum(["builtin", "mcp"]);
+
+export const toolRegistrationSchema = z.object({
+  id: z.string().trim().min(1),
+  title: nonEmptyStringSchema,
+  description: nonEmptyStringSchema,
+  phase: toolPhaseSchema,
+  requiresApproval: z.boolean().default(false),
+  source: toolSourceSchema.default("builtin"),
+  enabled: z.boolean().default(true),
+  parameterSchema: z.record(z.string(), z.unknown()).optional(),
+  mcpServerUrl: z.string().trim().min(1).optional(),
+  mcpTransport: mcpTransportSchema.optional()
 });
 
 export const relayPacketSchema = z.object({
@@ -76,7 +92,10 @@ export const copilotTurnResponseSchema = z.object({
 });
 
 export type ToolPhase = z.infer<typeof toolPhaseSchema>;
+export type McpTransport = z.infer<typeof mcpTransportSchema>;
 export type ToolDescriptor = z.infer<typeof toolDescriptorSchema>;
+export type ToolSource = z.infer<typeof toolSourceSchema>;
+export type ToolRegistration = z.infer<typeof toolRegistrationSchema>;
 export type RelayPacket = z.infer<typeof relayPacketSchema>;
 export type ValidationIssue = z.infer<typeof validationIssueSchema>;
 export type AgentLoopStatus = z.infer<typeof agentLoopStatusSchema>;

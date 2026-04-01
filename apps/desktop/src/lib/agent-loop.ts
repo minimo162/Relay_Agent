@@ -5,10 +5,11 @@ import {
   type ToolExecutionResult
 } from "@relay-agent/contracts";
 
-import { sendToCopilot, type BrowserCommandProgress } from "./copilot-browser";
+import { type BrowserCommandProgress } from "./copilot-browser";
 import { executeReadActions } from "./ipc";
 import { buildStepExecutionPrompt } from "./agent-loop-prompts";
 import { extractActionFilePaths, isWithinProjectScope } from "./project-scope";
+import { sendPromptViaBrowserTool } from "./tool-runtime";
 import {
   requestCopilotTurn,
   throwIfAborted,
@@ -26,7 +27,7 @@ export { buildPlanningPrompt } from "./agent-loop-prompts";
 export type { CopilotConversationTurn } from "./prompt-templates";
 
 type AgentLoopRuntime = {
-  sendToCopilot?: typeof sendToCopilot;
+  sendToCopilot?: typeof sendPromptViaBrowserTool;
   executeReadActions?: typeof executeReadActions;
   now?: () => number;
 };
@@ -133,7 +134,7 @@ function enforceProjectScope(
 
 function resolveRuntime(runtime?: AgentLoopRuntime): Required<AgentLoopRuntime> {
   return {
-    sendToCopilot: runtime?.sendToCopilot ?? sendToCopilot,
+    sendToCopilot: runtime?.sendToCopilot ?? sendPromptViaBrowserTool,
     executeReadActions: runtime?.executeReadActions ?? executeReadActions,
     now: runtime?.now ?? Date.now
   };
