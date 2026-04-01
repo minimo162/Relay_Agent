@@ -1,5 +1,7 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
+    env,
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -12,11 +14,12 @@ use crate::file_ops;
 use crate::mcp_client::McpClient;
 use crate::models::{
     AddProjectMemoryRequest, AgentLoopStatus, ApprovalDecision, ApprovalInspectionPayload,
-    ApprovePlanRequest, ApprovePlanResponse, AssessCopilotHandoffRequest,
+    ApprovePlanRequest, ApprovePlanResponse, ArtifactType, AssessCopilotHandoffRequest,
     AssessCopilotHandoffResponse, CopilotHandoffReason, CopilotHandoffReasonSource,
     CopilotHandoffStatus, CopilotTurnResponse, CreateProjectRequest, CreateSessionRequest,
     DiffSummary, ExecuteReadActionsRequest, ExecuteReadActionsResponse, ExecutionInspectionPayload,
-    ExecutionInspectionState, ExecutionPlan, GenerateRelayPacketRequest,
+    ExecutionInspectionState, ExecutionPlan, GenerateRelayPacketRequest, OutputArtifact,
+    OutputFormat, OutputSpec,
     LinkSessionToProjectRequest, ListProjectsResponse, PacketInspectionPayload,
     PlanProgressRequest, PlanProgressResponse, PlanStepState, PlanStepStatus, PlanningContext,
     PlanningContextToolGroups, PreviewArtifactPayload, PreviewExecutionRequest,
@@ -24,9 +27,10 @@ use crate::models::{
     ReadTurnArtifactsResponse, RecordPlanProgressRequest, RecordScopeApprovalRequest,
     RecordScopeApprovalResponse, RelayPacket, RelayPacketResponseContract,
     RemoveProjectMemoryRequest, RespondToApprovalRequest, RespondToApprovalResponse,
-    RunExecutionRequest, RunExecutionResponse, ScopeApprovalArtifactPayload, ScopeApprovalSource,
-    ScopeOverrideInspectionRecord, Session, SessionDetail, SessionStatus, SetSessionProjectRequest,
-    SpreadsheetAction, StartTurnRequest, StartTurnResponse, SubmitCopilotResponseRequest,
+    RunExecutionMultiRequest, RunExecutionRequest, RunExecutionResponse,
+    ScopeApprovalArtifactPayload, ScopeApprovalSource, ScopeOverrideInspectionRecord, Session,
+    SessionDetail, SessionStatus, SetSessionProjectRequest, SpreadsheetAction,
+    StartTurnRequest, StartTurnResponse, SubmitCopilotResponseRequest,
     SubmitCopilotResponseResponse, ToolDescriptor, ToolExecutionResult, ToolPhase, ToolSettings,
     Turn, TurnArtifactRecord, TurnDetailsViewModel, TurnInspectionSection,
     TurnInspectionSourceType, TurnInspectionUnavailableReason, TurnOverview, TurnOverviewStep,
@@ -56,6 +60,7 @@ struct StoredResponse {
 #[derive(Clone, Debug)]
 struct StoredPreview {
     diff_summary: DiffSummary,
+    artifacts: Vec<OutputArtifact>,
     requires_approval: bool,
     warnings: Vec<String>,
     created_at: String,
@@ -84,10 +89,13 @@ struct StoredScopeApproval {
     artifact_id: String,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct StoredExecution {
     executed: bool,
     output_path: Option<String>,
+    output_paths: Vec<String>,
+    artifacts: Vec<OutputArtifact>,
     warnings: Vec<String>,
     reason: Option<String>,
     created_at: String,
@@ -170,11 +178,16 @@ struct ScopeApprovalArtifactRecordPayload {
     response_artifact_id: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExecutionArtifactPayload {
     executed: bool,
     output_path: Option<String>,
+    #[serde(default)]
+    output_paths: Vec<String>,
+    #[serde(default)]
+    artifacts: Vec<OutputArtifact>,
     warnings: Vec<String>,
     reason: Option<String>,
 }
@@ -1335,6 +1348,7 @@ impl AppStorage {
                 .push(read_tool_artifact.warning.clone());
             warnings.push(read_tool_artifact.warning);
         }
+        let artifacts = build_preview_artifacts(&diff_summary, &file_write_actions)?;
         let preview_artifact = self.record_turn_artifact(
             &session.id,
             &turn.id,
@@ -1344,6 +1358,7 @@ impl AppStorage {
                 "requiresApproval": requires_approval,
                 "warnings": warnings.clone(),
                 "fileWriteActions": file_write_actions.clone(),
+                "artifacts": artifacts.clone(),
             }),
             None,
         )?;
@@ -1352,6 +1367,7 @@ impl AppStorage {
             turn.id.clone(),
             StoredPreview {
                 diff_summary: diff_summary.clone(),
+                artifacts: artifacts.clone(),
                 requires_approval,
                 warnings: warnings.clone(),
                 created_at: preview_artifact.created_at.clone(),
@@ -1380,6 +1396,7 @@ impl AppStorage {
             requires_approval,
             can_execute: !requires_approval,
             diff_summary,
+            artifacts,
             warnings,
             file_write_actions,
         })
@@ -1599,6 +1616,7 @@ impl AppStorage {
                 );
             }
             let mut output_path = None;
+            let mut output_paths = Vec::new();
 
             if !workbook_write_actions.is_empty() {
                 let source = session
@@ -1654,6 +1672,15 @@ impl AppStorage {
                     output_path = file_execution.output_path;
                 }
             }
+            if let Some(path) = output_path.clone() {
+                output_paths.push(path);
+            }
+            let artifacts = build_execution_artifacts(
+                &session,
+                &preview.diff_summary,
+                &file_write_actions,
+                &output_paths,
+            )?;
 
             let next_turn = self.update_turn_status(
                 &turn.id,
@@ -1667,6 +1694,8 @@ impl AppStorage {
                 &json!({
                     "executed": true,
                     "outputPath": output_path.clone(),
+                    "outputPaths": output_paths.clone(),
+                    "artifacts": artifacts.clone(),
                     "warnings": warnings.clone(),
                 }),
                 output_path.clone(),
@@ -1676,6 +1705,8 @@ impl AppStorage {
                 StoredExecution {
                     executed: true,
                     output_path: output_path.clone(),
+                    output_paths: output_paths.clone(),
+                    artifacts: artifacts.clone(),
                     warnings: warnings.clone(),
                     reason: None,
                     created_at: execution_artifact.created_at.clone(),
@@ -1700,6 +1731,8 @@ impl AppStorage {
                 turn: next_turn,
                 executed: true,
                 output_path,
+                output_paths,
+                artifacts,
                 warnings,
                 reason: None,
             });
@@ -1713,6 +1746,8 @@ impl AppStorage {
             "execution",
             &json!({
                 "executed": true,
+                "outputPaths": [],
+                "artifacts": [],
                 "warnings": ["No write actions were present, so execution completed as a no-op."],
             }),
             None,
@@ -1722,6 +1757,8 @@ impl AppStorage {
             StoredExecution {
                 executed: true,
                 output_path: None,
+                output_paths: Vec::new(),
+                artifacts: Vec::new(),
                 warnings: vec![
                     "No write actions were present, so execution completed as a no-op.".to_string(),
                 ],
@@ -1747,11 +1784,184 @@ impl AppStorage {
             turn: next_turn,
             executed: true,
             output_path: None,
+            output_paths: Vec::new(),
+            artifacts: Vec::new(),
             warnings: vec![
                 "No write actions were present, so execution completed as a no-op.".to_string(),
             ],
             reason: None,
         })
+    }
+
+    pub fn run_execution_multi(
+        &mut self,
+        request: RunExecutionMultiRequest,
+    ) -> Result<Vec<RunExecutionResponse>, String> {
+        if request.output_specs.is_empty() {
+            return Err("run_execution_multi requires at least one output spec".to_string());
+        }
+        let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
+        let preview =
+            self.previews.get(&turn.id).cloned().ok_or_else(|| {
+                "execution preview must exist before running execution".to_string()
+            })?;
+
+        if preview.requires_approval {
+            let approval = self
+                .approvals
+                .get(&turn.id)
+                .filter(|approval| approval.preview_artifact_id == preview.artifact_id)
+                .ok_or_else(|| {
+                    "execution approval is required before running execution".to_string()
+                })?;
+            if approval.decision != ApprovalDecision::Approved {
+                return Err("execution cannot proceed until the preview is approved".to_string());
+            }
+        }
+
+        let stored_response = self
+            .responses
+            .get(&turn.id)
+            .ok_or_else(|| "no validated response is available for execution".to_string())?;
+        let parsed_response = stored_response
+            .parsed_response
+            .clone()
+            .ok_or_else(|| "no parsed response is available for execution".to_string())?;
+
+        let workbook_write_actions = parsed_response
+            .actions
+            .iter()
+            .filter(|action| is_spreadsheet_write_action(action))
+            .cloned()
+            .collect::<Vec<_>>();
+        let file_write_actions = parsed_response
+            .actions
+            .iter()
+            .filter(|action| is_file_write_action(action))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if !file_write_actions.is_empty() {
+            return Err(
+                "run_execution_multi currently supports workbook save-copy responses only"
+                    .to_string(),
+            );
+        }
+
+        if workbook_write_actions.is_empty() {
+            return Ok(vec![RunExecutionResponse {
+                turn: turn.clone(),
+                executed: true,
+                output_path: None,
+                output_paths: Vec::new(),
+                artifacts: Vec::new(),
+                warnings: vec![
+                    "No workbook write actions were present, so multi-output execution completed as a no-op."
+                        .to_string(),
+                ],
+                reason: None,
+            }]);
+        }
+
+        ensure_unique_output_specs(&request.output_specs)?;
+
+        let source = session
+            .primary_workbook_path
+            .as_deref()
+            .ok_or_else(|| {
+                format!(
+                    "session `{}` does not have a workbook source path for execution",
+                    session.id
+                )
+            })
+            .and_then(|path| WorkbookSource::detect(path.to_string()))?;
+
+        let mut results = Vec::new();
+        let base_warnings = collect_execution_warnings(&preview);
+        let mut aggregate_warnings = base_warnings.clone();
+        let mut aggregate_artifacts = Vec::new();
+        let mut aggregate_output_paths = Vec::new();
+
+        for spec in &request.output_specs {
+            let (output_path, spec_warnings) =
+                execute_output_spec(&source, &workbook_write_actions, spec).map_err(|error| {
+                    self.record_execution_failure(&session, &turn, &preview, error.clone())
+                        .unwrap_or_else(|record_error| {
+                            format!(
+                                "{error} (also failed to record execution failure: {record_error})"
+                            )
+                        })
+                })?;
+            let artifacts =
+                build_output_path_artifacts(&session, std::slice::from_ref(&output_path))?;
+            let warnings = merge_string_lists(base_warnings.clone(), spec_warnings);
+            aggregate_output_paths.push(output_path.clone());
+            aggregate_artifacts.extend(artifacts.clone());
+            aggregate_warnings = merge_string_lists(aggregate_warnings, warnings.clone());
+
+            results.push(RunExecutionResponse {
+                turn: turn.clone(),
+                executed: true,
+                output_path: Some(output_path.clone()),
+                output_paths: vec![output_path],
+                artifacts,
+                warnings,
+                reason: None,
+            });
+        }
+
+        dedupe_artifacts(&mut aggregate_artifacts);
+        let next_turn =
+            self.update_turn_status(&turn.id, TurnStatus::Executed, turn.validation_error_count)?;
+        let primary_output_path = aggregate_output_paths.first().cloned();
+        let execution_artifact = self.record_turn_artifact(
+            &session.id,
+            &turn.id,
+            "execution",
+            &json!({
+                "executed": true,
+                "outputPath": primary_output_path.clone(),
+                "outputPaths": aggregate_output_paths.clone(),
+                "artifacts": aggregate_artifacts.clone(),
+                "warnings": aggregate_warnings.clone(),
+            }),
+            primary_output_path.clone(),
+        )?;
+        self.executions.insert(
+            turn.id.clone(),
+            StoredExecution {
+                executed: true,
+                output_path: primary_output_path.clone(),
+                output_paths: aggregate_output_paths.clone(),
+                artifacts: aggregate_artifacts.clone(),
+                warnings: aggregate_warnings.clone(),
+                reason: None,
+                created_at: execution_artifact.created_at.clone(),
+                artifact_id: execution_artifact.id.clone(),
+            },
+        );
+        self.touch_session(&session.id)?;
+        self.append_turn_log(
+            &session.id,
+            &turn.id,
+            Some(&execution_artifact.id),
+            "execution-recorded",
+            format!(
+                "Execution completed {} requested output(s) for the current turn.",
+                aggregate_output_paths.len()
+            ),
+            Some(json!({
+                "executionArtifactId": execution_artifact.id.clone(),
+                "executed": true,
+                "outputPaths": aggregate_output_paths,
+            })),
+        )?;
+
+        for result in &mut results {
+            result.turn = next_turn.clone();
+        }
+
+        Ok(results)
     }
 
     fn record_execution_failure(
@@ -1788,6 +1998,7 @@ impl AppStorage {
         let next_turn =
             self.update_turn_status(&turn.id, TurnStatus::Failed, turn.validation_error_count)?;
         let output_path = Some(preview.diff_summary.output_path.clone());
+        let output_paths = output_path.clone().into_iter().collect::<Vec<_>>();
         let execution_artifact = self.record_turn_artifact(
             &session.id,
             &turn.id,
@@ -1795,6 +2006,8 @@ impl AppStorage {
             &json!({
                 "executed": false,
                 "outputPath": output_path.clone(),
+                "outputPaths": output_paths.clone(),
+                "artifacts": preview.artifacts.clone(),
                 "warnings": warnings.clone(),
                 "reason": reason.clone(),
             }),
@@ -1805,6 +2018,8 @@ impl AppStorage {
             StoredExecution {
                 executed: false,
                 output_path: output_path.clone(),
+                output_paths,
+                artifacts: preview.artifacts.clone(),
                 warnings: warnings.clone(),
                 reason: Some(reason.clone()),
                 created_at: execution_artifact.created_at.clone(),
@@ -3435,6 +3650,538 @@ fn collect_execution_warnings(preview: &StoredPreview) -> Vec<String> {
     }
 
     warnings
+}
+
+fn build_preview_artifacts(
+    diff_summary: &DiffSummary,
+    actions: &[SpreadsheetAction],
+) -> Result<Vec<OutputArtifact>, String> {
+    let mut artifacts = Vec::new();
+
+    if !diff_summary.sheets.is_empty() {
+        artifacts.push(OutputArtifact {
+            id: Uuid::new_v4().to_string(),
+            r#type: ArtifactType::SpreadsheetDiff,
+            label: format!(
+                "{} -> {}",
+                display_file_name(&diff_summary.source_path),
+                display_file_name(&diff_summary.output_path)
+            ),
+            source_path: diff_summary.source_path.clone(),
+            output_path: diff_summary.output_path.clone(),
+            warnings: diff_summary.warnings.clone(),
+            content: json!({
+                "type": "spreadsheet_diff",
+                "diffSummary": diff_summary,
+            }),
+        });
+    }
+
+    if !actions.is_empty() {
+        artifacts.push(OutputArtifact {
+            id: Uuid::new_v4().to_string(),
+            r#type: ArtifactType::FileOperation,
+            label: format!("{} file operation(s)", actions.len()),
+            source_path: diff_summary.source_path.clone(),
+            output_path: diff_summary.output_path.clone(),
+            warnings: build_file_write_preview_warnings(actions)?,
+            content: json!({
+                "type": "file_operation",
+                "operations": actions,
+            }),
+        });
+
+        for action in actions.iter().filter(|action| action.tool == "text.replace") {
+            let preview = file_ops::preview_text_replace_detail(&action.args)?;
+            let path = preview
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or(&diff_summary.output_path)
+                .to_string();
+            let match_count = preview
+                .get("matchCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let mut warnings = Vec::new();
+            if preview
+                .get("truncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                warnings.push("Text diff preview was truncated to keep the review UI compact.".to_string());
+            }
+            artifacts.push(OutputArtifact {
+                id: Uuid::new_v4().to_string(),
+                r#type: ArtifactType::TextDiff,
+                label: format!("Text diff: {}", display_file_name(&path)),
+                source_path: path.clone(),
+                output_path: path,
+                warnings,
+                content: json!({
+                    "type": "text_diff",
+                    "before": preview.get("before").cloned().unwrap_or_else(|| json!("")),
+                    "after": preview.get("after").cloned().unwrap_or_else(|| json!("")),
+                    "changeCount": match_count,
+                }),
+            });
+        }
+    }
+
+    Ok(artifacts)
+}
+
+fn build_execution_artifacts(
+    session: &Session,
+    diff_summary: &DiffSummary,
+    actions: &[SpreadsheetAction],
+    output_paths: &[String],
+) -> Result<Vec<OutputArtifact>, String> {
+    let mut artifacts = build_preview_artifacts(diff_summary, actions)?;
+    let mut post_execution = build_output_path_artifacts(session, output_paths)?;
+    artifacts.append(&mut post_execution);
+    dedupe_artifacts(&mut artifacts);
+    Ok(artifacts)
+}
+
+fn build_output_path_artifacts(
+    session: &Session,
+    output_paths: &[String],
+) -> Result<Vec<OutputArtifact>, String> {
+    let mut artifacts = Vec::new();
+
+    for output_path in output_paths {
+        let path = Path::new(output_path);
+        if !path.is_file() {
+            continue;
+        }
+
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if extension == "csv" {
+            if let Some(artifact) = build_csv_table_artifact(output_path)? {
+                artifacts.push(artifact);
+            }
+            continue;
+        }
+
+        if let Some(artifact) = build_raw_text_artifact(output_path)? {
+            artifacts.push(artifact);
+            continue;
+        }
+
+        artifacts.push(OutputArtifact {
+            id: Uuid::new_v4().to_string(),
+            r#type: ArtifactType::RawText,
+            label: format!("Output file: {}", display_file_name(output_path)),
+            source_path: session
+                .primary_workbook_path
+                .clone()
+                .unwrap_or_else(|| output_path.clone()),
+            output_path: output_path.clone(),
+            warnings: vec!["Binary output cannot be previewed inline.".to_string()],
+            content: json!({
+                "type": "raw_text",
+                "text": format!("Saved output at {}", output_path),
+            }),
+        });
+    }
+
+    Ok(artifacts)
+}
+
+fn build_csv_table_artifact(output_path: &str) -> Result<Option<OutputArtifact>, String> {
+    let mut reader = match csv::Reader::from_path(output_path) {
+        Ok(reader) => reader,
+        Err(_) => return Ok(None),
+    };
+    let headers = reader
+        .headers()
+        .map_err(|error| format!("failed to read CSV headers from `{output_path}`: {error}"))?
+        .iter()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let mut rows = Vec::new();
+    let mut total_rows = 0_u64;
+    for record in reader.records() {
+        let record = record
+            .map_err(|error| format!("failed to read CSV rows from `{output_path}`: {error}"))?;
+        total_rows += 1;
+        if rows.len() < 100 {
+            rows.push(record.iter().map(ToOwned::to_owned).collect::<Vec<_>>());
+        }
+    }
+
+    Ok(Some(OutputArtifact {
+        id: Uuid::new_v4().to_string(),
+        r#type: ArtifactType::CsvTable,
+        label: format!("CSV preview: {}", display_file_name(output_path)),
+        source_path: output_path.to_string(),
+        output_path: output_path.to_string(),
+        warnings: if total_rows > 100 {
+            vec!["Showing the first 100 rows of the CSV output.".to_string()]
+        } else {
+            Vec::new()
+        },
+        content: json!({
+            "type": "csv_table",
+            "columns": headers,
+            "rows": rows,
+            "totalRows": total_rows,
+        }),
+    }))
+}
+
+fn build_raw_text_artifact(output_path: &str) -> Result<Option<OutputArtifact>, String> {
+    let text = match fs::read_to_string(output_path) {
+        Ok(text) => text,
+        Err(_) => return Ok(None),
+    };
+    let char_count = text.chars().count();
+    let truncated = if char_count > 8_000 {
+        let head = text.chars().take(8_000).collect::<String>();
+        format!("{head}\n\n...[truncated]")
+    } else {
+        text
+    };
+
+    Ok(Some(OutputArtifact {
+        id: Uuid::new_v4().to_string(),
+        r#type: ArtifactType::RawText,
+        label: format!("Text output: {}", display_file_name(output_path)),
+        source_path: output_path.to_string(),
+        output_path: output_path.to_string(),
+        warnings: if char_count > 8_000 {
+            vec!["Showing the first 8,000 characters of the output.".to_string()]
+        } else {
+            Vec::new()
+        },
+        content: json!({
+            "type": "raw_text",
+            "text": truncated,
+        }),
+    }))
+}
+
+fn dedupe_artifacts(artifacts: &mut Vec<OutputArtifact>) {
+    let mut seen = Vec::<(ArtifactType, String, String)>::new();
+    artifacts.retain(|artifact| {
+        let key = (
+            artifact.r#type,
+            artifact.label.clone(),
+            artifact.output_path.clone(),
+        );
+        if seen.iter().any(|existing| existing == &key) {
+            return false;
+        }
+        seen.push(key);
+        true
+    });
+}
+
+fn display_file_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| path.to_string())
+}
+
+fn output_format_label(format: OutputFormat) -> &'static str {
+    match format {
+        OutputFormat::Csv => "CSV",
+        OutputFormat::Xlsx => "XLSX",
+        OutputFormat::Text => "text",
+        OutputFormat::Json => "JSON",
+    }
+}
+
+fn ensure_unique_output_specs(specs: &[OutputSpec]) -> Result<(), String> {
+    let mut seen = BTreeSet::new();
+    for spec in specs {
+        if !seen.insert(spec.output_path.clone()) {
+            return Err(format!(
+                "run_execution_multi received duplicate outputPath values: `{}`",
+                spec.output_path
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn execute_output_spec(
+    source: &WorkbookSource,
+    workbook_actions: &[SpreadsheetAction],
+    spec: &OutputSpec,
+) -> Result<(String, Vec<String>), String> {
+    match spec.format {
+        OutputFormat::Csv => execute_native_workbook_output(source, workbook_actions, spec),
+        OutputFormat::Xlsx => execute_native_workbook_output(source, workbook_actions, spec),
+        OutputFormat::Json => execute_derived_csv_output(source, workbook_actions, spec, "json"),
+        OutputFormat::Text => execute_derived_csv_output(source, workbook_actions, spec, "text"),
+    }
+}
+
+fn execute_native_workbook_output(
+    source: &WorkbookSource,
+    workbook_actions: &[SpreadsheetAction],
+    spec: &OutputSpec,
+) -> Result<(String, Vec<String>), String> {
+    match spec.format {
+        OutputFormat::Csv => {
+            if source.format() != crate::models::WorkbookFormat::Csv {
+                return Err(
+                    "CSV multi-output currently requires a CSV workbook source".to_string(),
+                );
+            }
+        }
+        OutputFormat::Xlsx => {
+            if source.format() != crate::models::WorkbookFormat::Xlsx {
+                return Err(
+                    "XLSX multi-output currently requires an XLSX workbook source".to_string(),
+                );
+            }
+            if workbook_actions_require_csv_replay(workbook_actions) {
+                return Err(
+                    "XLSX multi-output is only supported for copy-only workbook responses"
+                        .to_string(),
+                );
+            }
+        }
+        OutputFormat::Text | OutputFormat::Json => {}
+    }
+
+    let actions = override_save_copy_output_path(workbook_actions, &spec.output_path);
+    let execution = WorkbookEngine::default().execute_actions(source, &actions)?;
+    Ok((execution.output_path, execution.warnings))
+}
+
+fn execute_derived_csv_output(
+    source: &WorkbookSource,
+    workbook_actions: &[SpreadsheetAction],
+    spec: &OutputSpec,
+    target_kind: &str,
+) -> Result<(String, Vec<String>), String> {
+    if source.format() != crate::models::WorkbookFormat::Csv {
+        return Err(format!(
+            "{} multi-output currently requires a CSV workbook source",
+            output_format_label(spec.format)
+        ));
+    }
+
+    let temp_csv_path = env_temp_output_path("relay-agent-multi-output", "csv");
+    let actions = override_save_copy_output_path(workbook_actions, &temp_csv_path);
+    let execution = WorkbookEngine::default().execute_actions(source, &actions)?;
+    let render_result = match target_kind {
+        "json" => render_csv_as_json(&temp_csv_path, &spec.output_path),
+        "text" => render_csv_as_text_report(&temp_csv_path, &spec.output_path),
+        _ => Err(format!("unsupported derived output kind `{target_kind}`")),
+    };
+    let cleanup_result = fs::remove_file(&temp_csv_path);
+
+    render_result?;
+    if let Err(error) = cleanup_result {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(format!(
+                "derived output succeeded but failed to clean up `{temp_csv_path}`: {error}"
+            ));
+        }
+    }
+
+    Ok((spec.output_path.clone(), execution.warnings))
+}
+
+fn override_save_copy_output_path(
+    workbook_actions: &[SpreadsheetAction],
+    output_path: &str,
+) -> Vec<SpreadsheetAction> {
+    let mut saw_save_copy = false;
+    let mut actions = workbook_actions
+        .iter()
+        .cloned()
+        .map(|mut action| {
+            if action.tool == "workbook.save_copy" {
+                action.args = json!({ "outputPath": output_path });
+                saw_save_copy = true;
+            }
+            action
+        })
+        .collect::<Vec<_>>();
+
+    if !saw_save_copy {
+        actions.push(SpreadsheetAction {
+            id: None,
+            tool: "workbook.save_copy".to_string(),
+            rationale: Some("Derived by run_execution_multi".to_string()),
+            sheet: None,
+            args: json!({ "outputPath": output_path }),
+        });
+    }
+
+    actions
+}
+
+fn workbook_actions_require_csv_replay(actions: &[SpreadsheetAction]) -> bool {
+    actions.iter().any(|action| {
+        matches!(
+            action.tool.as_str(),
+            "table.rename_columns"
+                | "table.cast_columns"
+                | "table.filter_rows"
+                | "table.derive_column"
+                | "table.group_aggregate"
+        )
+    })
+}
+
+fn render_csv_as_json(csv_path: &str, output_path: &str) -> Result<(), String> {
+    let source_path = Path::new(csv_path);
+    if !source_path.is_file() {
+        return Err(format!(
+            "derived CSV `{}` does not exist for JSON export",
+            source_path.display()
+        ));
+    }
+    let destination = Path::new(output_path);
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create JSON output directory `{}`: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let mut reader = csv::Reader::from_path(source_path).map_err(|error| {
+        format!(
+            "JSON multi-output currently expects CSV-compatible input `{}`: {error}",
+            source_path.display()
+        )
+    })?;
+    let headers = reader
+        .headers()
+        .map_err(|error| {
+            format!(
+                "failed to read CSV headers from `{}`: {error}",
+                source_path.display()
+            )
+        })?
+        .iter()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let mut rows = Vec::new();
+    for record in reader.records() {
+        let record = record.map_err(|error| {
+            format!(
+                "failed to read CSV rows from `{}`: {error}",
+                source_path.display()
+            )
+        })?;
+        let mut object = serde_json::Map::new();
+        for (index, value) in record.iter().enumerate() {
+            let key = headers
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| format!("column{}", index + 1));
+            object.insert(key, json!(value));
+        }
+        rows.push(Value::Object(object));
+    }
+    let rendered = serde_json::to_string_pretty(&rows)
+        .map_err(|error| format!("failed to render JSON output: {error}"))?;
+    fs::write(destination, rendered).map_err(|error| {
+        format!(
+            "failed to write JSON output `{}`: {error}",
+            destination.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+fn render_csv_as_text_report(csv_path: &str, output_path: &str) -> Result<(), String> {
+    let source_path = Path::new(csv_path);
+    let destination = Path::new(output_path);
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "failed to create text output directory `{}`: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let mut reader = csv::Reader::from_path(source_path).map_err(|error| {
+        format!(
+            "text multi-output currently expects CSV-compatible input `{}`: {error}",
+            source_path.display()
+        )
+    })?;
+    let headers = reader
+        .headers()
+        .map_err(|error| {
+            format!(
+                "failed to read CSV headers from `{}`: {error}",
+                source_path.display()
+            )
+        })?
+        .iter()
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let mut row_count = 0_u64;
+    let mut sample_rows = Vec::new();
+    for record in reader.records() {
+        let record = record.map_err(|error| {
+            format!(
+                "failed to read CSV rows from `{}`: {error}",
+                source_path.display()
+            )
+        })?;
+        row_count += 1;
+        if sample_rows.len() < 5 {
+            let summary = headers
+                .iter()
+                .zip(record.iter())
+                .map(|(column, value)| format!("{column}={value}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            sample_rows.push(format!("- row {}: {}", row_count, summary));
+        }
+    }
+
+    let rendered = format!(
+        "Relay Agent Output Report\n\nRows: {row_count}\nColumns: {}\n\nSample rows:\n{}\n",
+        headers.join(", "),
+        if sample_rows.is_empty() {
+            "- no rows".to_string()
+        } else {
+            sample_rows.join("\n")
+        }
+    );
+    fs::write(destination, rendered).map_err(|error| {
+        format!(
+            "failed to write text output `{}`: {error}",
+            destination.display()
+        )
+    })?;
+
+    Ok(())
+}
+
+fn env_temp_output_path(prefix: &str, extension: &str) -> String {
+    env::temp_dir()
+        .join(format!("{prefix}-{}.{}", Uuid::new_v4(), extension))
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn merge_string_lists(mut left: Vec<String>, right: Vec<String>) -> Vec<String> {
+    for value in right {
+        push_unique_string(&mut left, value);
+    }
+    left
 }
 
 fn build_file_write_diff_summary(
@@ -5085,12 +5832,13 @@ mod tests {
     use super::AppStorage;
     use crate::models::{
         AddProjectMemoryRequest, ApprovalDecision, AssessCopilotHandoffRequest,
-        CopilotHandoffStatus, CreateProjectRequest, CreateSessionRequest,
+        CopilotHandoffStatus, CreateProjectRequest, CreateSessionRequest, OutputFormat,
+        OutputSpec,
         ExecuteReadActionsRequest, ExecutionInspectionState, GenerateRelayPacketRequest,
         LinkSessionToProjectRequest, PreviewExecutionRequest, ProjectMemorySource,
         ReadProjectRequest, ReadSessionRequest, RecordScopeApprovalRequest, RelayMode,
-        RespondToApprovalRequest, RunExecutionRequest, ScopeApprovalSource,
-        SetSessionProjectRequest, SpreadsheetAction, StartTurnRequest,
+        RespondToApprovalRequest, RunExecutionMultiRequest, RunExecutionRequest,
+        ScopeApprovalSource, SetSessionProjectRequest, SpreadsheetAction, StartTurnRequest,
         SubmitCopilotResponseRequest, TurnArtifactRecord, TurnInspectionSourceType, TurnStatus,
         UpdateProjectRequest,
     };
@@ -7316,6 +8064,123 @@ mod tests {
         assert!(text_path.with_file_name("draft.txt.bak").exists());
 
         fs::remove_dir_all(workspace_dir).expect("workspace dir should clean up");
+    }
+
+    #[test]
+    fn run_execution_multi_uses_requested_output_specs_without_creating_default_output() {
+        let csv_path =
+            write_test_csv("customer_id,amount,approved\n1,42.5,true\n2,13.0,false\n3,77.0,true\n");
+        let default_output_path = env::temp_dir()
+            .join(format!("relay-agent-multi-default-{}.csv", Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
+        let json_output_path = env::temp_dir()
+            .join(format!("relay-agent-multi-{}.json", Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
+        let text_output_path = env::temp_dir()
+            .join(format!("relay-agent-multi-{}.txt", Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
+
+        let mut storage = AppStorage::default();
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Multi output".to_string(),
+                objective: "Filter approved rows and emit JSON plus text".to_string(),
+                primary_workbook_path: Some(csv_path.to_string_lossy().into_owned()),
+            })
+            .expect("session should be created");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "JSON and text outputs".to_string(),
+                objective: "Generate multiple artifact outputs".to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+
+        storage
+            .generate_relay_packet(GenerateRelayPacketRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+            })
+            .expect("packet should generate");
+        storage
+            .submit_copilot_response(SubmitCopilotResponseRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+                raw_response: copilot_response(
+                    "Filter approved rows and prepare multiple outputs.",
+                    vec![
+                        json!({
+                            "tool": "table.filter_rows",
+                            "sheet": "Sheet1",
+                            "args": {
+                                "predicate": "approved = true"
+                            }
+                        }),
+                        json!({
+                            "tool": "workbook.save_copy",
+                            "args": {
+                                "outputPath": default_output_path.clone()
+                            }
+                        }),
+                    ],
+                ),
+            })
+            .expect("response should parse");
+        storage
+            .preview_execution(PreviewExecutionRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+            })
+            .expect("preview should succeed");
+        storage
+            .respond_to_approval(RespondToApprovalRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+                decision: ApprovalDecision::Approved,
+                note: None,
+            })
+            .expect("approval should succeed");
+
+        let results = storage
+            .run_execution_multi(RunExecutionMultiRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+                output_specs: vec![
+                    OutputSpec {
+                        format: OutputFormat::Json,
+                        output_path: json_output_path.clone(),
+                    },
+                    OutputSpec {
+                        format: OutputFormat::Text,
+                        output_path: text_output_path.clone(),
+                    },
+                ],
+            })
+            .expect("multi-output execution should succeed");
+
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|result| result.executed));
+        assert!(!Path::new(&default_output_path).exists());
+
+        let json_output: Vec<Value> =
+            read_json(Path::new(&json_output_path)).expect("json output should parse");
+        assert_eq!(json_output.len(), 2);
+        assert_eq!(json_output[0]["customer_id"], "1");
+        assert_eq!(json_output[1]["customer_id"], "3");
+
+        let text_output =
+            fs::read_to_string(&text_output_path).expect("text report should be readable");
+        assert!(text_output.contains("Rows: 2"));
+        assert!(text_output.contains("customer_id, amount, approved"));
+
+        fs::remove_file(csv_path).expect("source csv should clean up");
+        fs::remove_file(json_output_path).expect("json output should clean up");
+        fs::remove_file(text_output_path).expect("text output should clean up");
     }
 
     #[test]

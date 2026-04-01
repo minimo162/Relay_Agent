@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { fileActionSchema } from "./file";
 import { entityIdSchema, nonEmptyStringSchema, relayModeSchema } from "./shared";
-import { spreadsheetActionSchema } from "./workbook";
+import { diffSummarySchema, spreadsheetActionSchema } from "./workbook";
 
 export const toolPhaseSchema = z.enum(["read", "write"]);
 export const mcpTransportSchema = z.enum(["sse", "stdio"]);
@@ -16,6 +16,15 @@ export const toolDescriptorSchema = z.object({
 });
 
 export const toolSourceSchema = z.enum(["builtin", "mcp"]);
+export const artifactTypeSchema = z.enum([
+  "spreadsheet_diff",
+  "file_operation",
+  "text_diff",
+  "text_extraction",
+  "csv_table",
+  "raw_text"
+]);
+export const outputFormatSchema = z.enum(["csv", "xlsx", "text", "json"]);
 
 export const toolRegistrationSchema = z.object({
   id: z.string().trim().min(1),
@@ -80,6 +89,41 @@ export const relayActionSchema = z.union([
   fileActionSchema
 ]);
 
+export const outputSpecSchema = z.object({
+  format: outputFormatSchema,
+  outputPath: nonEmptyStringSchema
+});
+
+export const outputArtifactSchema = z.object({
+  id: entityIdSchema,
+  type: artifactTypeSchema,
+  label: nonEmptyStringSchema,
+  sourcePath: z.string().default(""),
+  outputPath: z.string().default(""),
+  warnings: z.array(z.string()).default([]),
+  content: z.record(z.string(), z.unknown())
+});
+
+export const spreadsheetDiffArtifactSchema = outputArtifactSchema.extend({
+  type: z.literal("spreadsheet_diff"),
+  content: z.object({
+    type: z.literal("spreadsheet_diff"),
+    diffSummary: diffSummarySchema
+  })
+});
+
+export const qualityCheckSchema = z.object({
+  name: nonEmptyStringSchema,
+  passed: z.boolean(),
+  detail: z.string()
+});
+
+export const qualityCheckResultSchema = z.object({
+  passed: z.boolean(),
+  checks: z.array(qualityCheckSchema).default([]),
+  warnings: z.array(z.string()).default([])
+});
+
 export const copilotTurnResponseSchema = z.object({
   version: z.literal("1.0").default("1.0"),
   status: agentLoopStatusSchema.default("ready_to_write"),
@@ -95,6 +139,8 @@ export type ToolPhase = z.infer<typeof toolPhaseSchema>;
 export type McpTransport = z.infer<typeof mcpTransportSchema>;
 export type ToolDescriptor = z.infer<typeof toolDescriptorSchema>;
 export type ToolSource = z.infer<typeof toolSourceSchema>;
+export type ArtifactType = z.infer<typeof artifactTypeSchema>;
+export type OutputFormat = z.infer<typeof outputFormatSchema>;
 export type ToolRegistration = z.infer<typeof toolRegistrationSchema>;
 export type RelayPacket = z.infer<typeof relayPacketSchema>;
 export type ValidationIssue = z.infer<typeof validationIssueSchema>;
@@ -102,4 +148,9 @@ export type AgentLoopStatus = z.infer<typeof agentLoopStatusSchema>;
 export type PlanStep = z.infer<typeof planStepSchema>;
 export type ExecutionPlan = z.infer<typeof executionPlanSchema>;
 export type RelayAction = z.infer<typeof relayActionSchema>;
+export type OutputSpec = z.infer<typeof outputSpecSchema>;
+export type OutputArtifact = z.infer<typeof outputArtifactSchema>;
+export type SpreadsheetDiffArtifact = z.infer<typeof spreadsheetDiffArtifactSchema>;
+export type QualityCheck = z.infer<typeof qualityCheckSchema>;
+export type QualityCheckResult = z.infer<typeof qualityCheckResultSchema>;
 export type CopilotTurnResponse = z.infer<typeof copilotTurnResponseSchema>;

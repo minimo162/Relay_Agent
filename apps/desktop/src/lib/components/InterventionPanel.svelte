@@ -1,14 +1,8 @@
 <script lang="ts">
-  import type { DiffSummary, PlanStep } from "@relay-agent/contracts";
+  import type { OutputArtifact, PlanStep } from "@relay-agent/contracts";
 
+  import ArtifactPreview from "./ArtifactPreview.svelte";
   import ApprovalGate from "./ApprovalGate.svelte";
-  import FileOpPreview from "./FileOpPreview.svelte";
-  import SheetDiffCard from "./SheetDiffCard.svelte";
-
-  type FileOpPreviewAction = {
-    tool: string;
-    args: Record<string, unknown>;
-  };
 
   export let statusLabel = "";
   export let planReviewVisible = false;
@@ -25,8 +19,7 @@
   export let previewAffectedRows = 0;
   export let previewOutputPath = "";
   export let previewWarnings: string[] = [];
-  export let previewSheetDiffs: DiffSummary["sheets"] = [];
-  export let fileWriteActions: FileOpPreviewAction[] = [];
+  export let artifacts: OutputArtifact[] = [];
   export let reviewStepAvailable = false;
   export let busy = false;
   export let errorMessage = "";
@@ -42,6 +35,13 @@
   export let onBackFromApproval: () => void = () => {};
   export let onApproveWrite: () => void = () => {};
   export let onRetry: () => void = () => {};
+
+  $: fileOperationCount = artifacts.filter(
+    (artifact) => artifact.type === "file_operation"
+  ).length;
+  $: spreadsheetDiffCount = artifacts.filter(
+    (artifact) => artifact.type === "spreadsheet_diff"
+  ).length;
 </script>
 
 <aside class="intervention-panel">
@@ -148,8 +148,8 @@
       <h4>書き込み前の確認</h4>
       <p>{previewSummary}</p>
       <p class="intervention-meta">
-        {#if fileWriteActions.length > 0 && previewSheetDiffs.length === 0}
-          対象操作: {fileWriteActions.length} / 保存先: {previewOutputPath || "該当なし"}
+        {#if fileOperationCount > 0 && spreadsheetDiffCount === 0}
+          対象アーティファクト: {artifacts.length} / 保存先: {previewOutputPath || "該当なし"}
         {:else}
           影響行数: {previewAffectedRows} / 保存先: {previewOutputPath || "自動決定"}
         {/if}
@@ -161,16 +161,9 @@
           {/each}
         </div>
       {/if}
-      {#if fileWriteActions.length > 0}
-        <div class="sheet-diff-grid">
-          <FileOpPreview actions={fileWriteActions} />
-        </div>
+      {#if artifacts.length > 0}
+        <ArtifactPreview {artifacts} />
       {/if}
-      <div class="sheet-diff-grid">
-        {#each previewSheetDiffs as sheetDiff}
-          <SheetDiffCard {sheetDiff} />
-        {/each}
-      </div>
       <ApprovalGate
         {busy}
         {reviewStepAvailable}
@@ -220,8 +213,7 @@
     background: #fff8eb;
   }
 
-  .plan-step-list,
-  .sheet-diff-grid {
+  .plan-step-list {
     display: grid;
     gap: 0.75rem;
     margin-top: 0.85rem;

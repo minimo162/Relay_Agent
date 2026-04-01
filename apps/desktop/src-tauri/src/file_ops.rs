@@ -351,6 +351,31 @@ pub fn preview_text_replace(args: &Value) -> Result<Value, String> {
     }))
 }
 
+pub fn preview_text_replace_detail(args: &Value) -> Result<Value, String> {
+    let path = required_value_string(args, "path", "text.replace")?;
+    let pattern = required_value_string(args, "pattern", "text.replace")?;
+    let replacement = args
+        .get("replacement")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let file_path = resolve_safe_path(&path)?;
+    let bytes = fs::read(&file_path)
+        .map_err(|error| format!("failed to read `{}`: {error}", file_path.display()))?;
+    let (content, _) = decode_text_file(&bytes)?;
+    let regex = Regex::new(&pattern).map_err(|error| format!("invalid regex: {error}"))?;
+    let next_content = regex.replace_all(&content, replacement.as_str()).into_owned();
+    let change_count = regex.find_iter(&content).count();
+
+    Ok(json!({
+        "path": file_path,
+        "matchCount": change_count,
+        "before": truncate_preview_text(&content),
+        "after": truncate_preview_text(&next_content),
+        "truncated": content.chars().count() > 4_000 || next_content.chars().count() > 4_000,
+    }))
+}
+
 pub fn execute_document_read_text(args: &Value) -> Result<Value, String> {
     let path = required_value_string(args, "path", "document.read_text")?;
     let max_chars = args
@@ -509,6 +534,17 @@ fn backup_path_for(path: &Path) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("failed to create backup path for `{}`", path.display()))?;
 
     Ok(path.with_file_name(format!("{file_name}.bak")))
+}
+
+fn truncate_preview_text(value: &str) -> String {
+    const MAX_CHARS: usize = 4_000;
+    let char_count = value.chars().count();
+    if char_count <= MAX_CHARS {
+        return value.to_string();
+    }
+
+    let truncated = value.chars().take(MAX_CHARS).collect::<String>();
+    format!("{truncated}\n\n...[truncated]")
 }
 
 fn decode_text_file(bytes: &[u8]) -> Result<(String, &'static str), String> {

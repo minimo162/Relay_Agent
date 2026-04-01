@@ -20,8 +20,11 @@ import {
 import {
   copilotTurnResponseSchema,
   executionPlanSchema,
+  outputArtifactSchema,
+  outputSpecSchema,
   mcpTransportSchema,
   planStepSchema,
+  qualityCheckResultSchema,
   relayPacketSchema,
   toolRegistrationSchema,
   toolSourceSchema,
@@ -625,6 +628,7 @@ export const previewExecutionResponseSchema = z.object({
   requiresApproval: z.boolean(),
   canExecute: z.boolean(),
   diffSummary: diffSummarySchema,
+  artifacts: z.array(outputArtifactSchema).default([]),
   warnings: z.array(z.string()).default([]),
   fileWriteActions: z
     .array(
@@ -679,9 +683,26 @@ export const runExecutionResponseSchema = z.object({
   turn: turnSchema,
   executed: z.boolean(),
   outputPath: z.string().min(1).optional(),
+  outputPaths: z.array(z.string().min(1)).default([]),
+  artifacts: z.array(outputArtifactSchema).default([]),
   warnings: z.array(z.string()).default([]),
   reason: z.string().min(1).optional()
 });
+
+export const runExecutionMultiRequestSchema = z.object({
+  sessionId: entityIdSchema,
+  turnId: entityIdSchema,
+  outputSpecs: z.array(outputSpecSchema).min(1)
+});
+
+export const runExecutionMultiResponseSchema = z.array(runExecutionResponseSchema);
+
+export const validateOutputQualityRequestSchema = z.object({
+  sourcePath: nonEmptyStringSchema,
+  outputPath: nonEmptyStringSchema
+});
+
+export const validateOutputQualityResponseSchema = qualityCheckResultSchema;
 
 export const copilotBrowserProgressEventSchema = z.object({
   requestId: z.string().trim().min(1),
@@ -866,6 +887,14 @@ export type RecordScopeApprovalResponse = z.infer<
 >;
 export type RunExecutionRequest = z.infer<typeof runExecutionRequestSchema>;
 export type RunExecutionResponse = z.infer<typeof runExecutionResponseSchema>;
+export type RunExecutionMultiRequest = z.infer<typeof runExecutionMultiRequestSchema>;
+export type RunExecutionMultiResponse = z.infer<typeof runExecutionMultiResponseSchema>;
+export type ValidateOutputQualityRequest = z.infer<
+  typeof validateOutputQualityRequestSchema
+>;
+export type ValidateOutputQualityResponse = z.infer<
+  typeof validateOutputQualityResponseSchema
+>;
 export type BrowserAutomationSettings = z.infer<
   typeof browserAutomationSettingsSchema
 >;

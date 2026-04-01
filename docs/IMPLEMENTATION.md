@@ -2748,3 +2748,38 @@ Observed result:
 - `apps/desktop/src/lib/tool-runtime.ts` now validates MCP registration metadata before IPC, rejects disabled tools on the client side, and wraps MCP invocation with a 30-second timeout.
 - `apps/desktop/src/lib/tool-runtime.test.ts` now covers missing `mcpServerUrl`, disabled MCP tools, unknown builtin ids, propagated MCP errors, and timeout behavior in addition to the existing success-path tests.
 - This follow-up is a correctness fix for the existing task `155–159` surface rather than a new Task Master milestone, so `.taskmaster/tasks/tasks.json` was left unchanged.
+
+Artifact-first output follow-up:
+
+```bash
+pnpm -C packages/contracts build
+pnpm --filter @relay-agent/desktop typecheck
+cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm check
+git diff --check
+```
+
+Observed result:
+
+- `docs/ARTIFACT_OUTPUT_DESIGN.md` now documents the artifact-first preview/save pipeline, output artifact model, quality-validation boundary, and the compatibility rule that keeps `diffSummary` alive while the UI migrates to `artifacts`.
+- `packages/contracts/src/relay.ts` and `packages/contracts/src/ipc.ts` now define `artifactType`, `outputArtifact`, `outputSpec`, `qualityCheckResult`, preview/execution artifact payloads, `run_execution_multi`, and `validate_output_quality`.
+- `apps/desktop/src-tauri/src/models.rs`, `apps/desktop/src-tauri/src/storage.rs`, `apps/desktop/src-tauri/src/execution.rs`, and `apps/desktop/src-tauri/src/quality_validator.rs` now emit artifact arrays for preview/execution, support derived multi-output exports, and validate saved output quality with row-count, empty-value, encoding, and CSV-injection checks.
+- `apps/desktop/src/lib/components/ArtifactPreview.svelte`, `apps/desktop/src/lib/components/InterventionPanel.svelte`, `apps/desktop/src/routes/+page.svelte`, `apps/desktop/src/lib/ipc.ts`, and `apps/desktop/src/lib/continuity.ts` now render generic artifacts in the approval flow, persist artifact snapshots across draft restore, and push post-save quality results into the activity feed.
+- `pnpm -C packages/contracts build`, `pnpm --filter @relay-agent/desktop typecheck`, `cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, `pnpm check`, and `git diff --check` all pass after this milestone.
+
+Artifact multi-output follow-up:
+
+```bash
+pnpm --filter @relay-agent/desktop typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/storage.rs` no longer makes `run_execution_multi` depend on an implicit default `run_execution` save-copy side effect. Requested `outputSpecs` now drive workbook execution directly.
+- Multi-output workbook execution now refuses fake format conversions: native `csv` and copy-only `xlsx` stay format-correct, while derived `json` and `text` outputs are rendered from a temporary transformed CSV and cleaned up afterward.
+- Text multi-output is now a summary report instead of a raw file copy, which makes the `text` format match the “filtered CSV + text report” intent from the artifact-output prompt.
+- Regression coverage now includes `run_execution_multi_uses_requested_output_specs_without_creating_default_output`, proving that custom JSON and text outputs are produced without leaving behind the Copilot-proposed default save-copy path.
+- `pnpm --filter @relay-agent/desktop typecheck`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `git diff --check` pass after this refinement.

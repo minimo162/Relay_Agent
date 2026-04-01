@@ -369,6 +369,9 @@ Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `150`
 The next tool-integration follow-up is captured in `docs/CODEX_PROMPT_17_TOOL_MCP.md`.
 Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `155` through `159`. The tool registry design, runtime registry-backed Relay packet generation, built-in read-tool invocation through the registry, optional MCP discovery/invocation over HTTP JSON-RPC plus reusable stdio sessions, settings-side tool management UI with transport selection, backend-persisted MCP/tool settings with startup restore, continuity-backed memory-mode fallback, and backend-executed browser automation behind the registry-compatible browser tool runtime are now implemented in source and documented in `docs/TOOL_REGISTRY_DESIGN.md`.
 
+The next artifact-first output follow-up is captured in `docs/CODEX_PROMPT_18_ARTIFACT_OUTPUT.md`.
+Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `160` through `163`. The artifact output design, contract and IPC extensions for `OutputArtifact` and quality checks, generic `ArtifactPreview` UI, preview/execution artifact emission, multi-output execution command support, and post-save output quality validation are now implemented in source and documented in `docs/ARTIFACT_OUTPUT_DESIGN.md`.
+
 That UI follow-up preserves the current safety model:
 
 - preview before write

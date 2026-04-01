@@ -1,5 +1,9 @@
 import { browser } from "$app/environment";
-import type { ExecutionPlan, McpServerConfig } from "@relay-agent/contracts";
+import type {
+  ExecutionPlan,
+  McpServerConfig,
+  OutputArtifact
+} from "@relay-agent/contracts";
 
 import type {
   ActivityFeedEvent,
@@ -37,6 +41,7 @@ export type PersistedPreviewSnapshot = {
   estimatedAffectedRows: number;
   warnings: string[];
   requiresApproval: boolean;
+  artifacts: OutputArtifact[];
   fileWriteActions: Array<{
     tool: string;
     args: Record<string, unknown>;
@@ -278,6 +283,7 @@ function normalizePreviewSnapshot(value: unknown): PersistedPreviewSnapshot | nu
     estimatedAffectedRows: asNumber(record.estimatedAffectedRows) ?? 0,
     warnings: asStringArray(record.warnings),
     requiresApproval: Boolean(record.requiresApproval),
+    artifacts: normalizeOutputArtifacts(record.artifacts),
     fileWriteActions: normalizePreviewActions(record.fileWriteActions),
     lastGeneratedAt: asString(record.lastGeneratedAt) ?? new Date().toISOString()
   };
@@ -312,6 +318,41 @@ function normalizePreviewActions(
     .filter(
       (entry): entry is { tool: string; args: Record<string, unknown> } => Boolean(entry)
     );
+}
+
+function normalizeOutputArtifacts(value: unknown): OutputArtifact[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => normalizeOutputArtifact(entry))
+    .filter((entry): entry is OutputArtifact => Boolean(entry));
+}
+
+function normalizeOutputArtifact(value: unknown): OutputArtifact | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const id = asString(record.id);
+  const type = asString(record.type);
+  const label = asString(record.label);
+  const content = record.content;
+  if (!id || !type || !label || !content || typeof content !== "object" || Array.isArray(content)) {
+    return null;
+  }
+
+  return {
+    id,
+    type: type as OutputArtifact["type"],
+    label,
+    sourcePath: asString(record.sourcePath) ?? "",
+    outputPath: asString(record.outputPath) ?? "",
+    warnings: asStringArray(record.warnings),
+    content: { ...(content as Record<string, unknown>) }
+  };
 }
 
 function normalizeDelegationDraft(value: unknown): PersistedDelegationDraft | null {

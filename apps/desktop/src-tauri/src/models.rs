@@ -345,6 +345,61 @@ pub struct DiffSummary {
     pub warnings: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactType {
+    SpreadsheetDiff,
+    FileOperation,
+    TextDiff,
+    TextExtraction,
+    CsvTable,
+    RawText,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputArtifact {
+    pub id: String,
+    pub r#type: ArtifactType,
+    pub label: String,
+    pub source_path: String,
+    pub output_path: String,
+    pub warnings: Vec<String>,
+    pub content: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QualityCheck {
+    pub name: String,
+    pub passed: bool,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QualityCheckResult {
+    pub passed: bool,
+    pub checks: Vec<QualityCheck>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputFormat {
+    Csv,
+    Xlsx,
+    Text,
+    Json,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputSpec {
+    pub format: OutputFormat,
+    pub output_path: String,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -373,6 +428,8 @@ pub struct PreviewArtifactPayload {
     pub requires_approval: bool,
     pub warnings: Vec<String>,
     pub file_write_actions: Vec<SpreadsheetAction>,
+    #[serde(default)]
+    pub artifacts: Vec<OutputArtifact>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -795,6 +852,13 @@ pub struct PreviewExecutionRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ValidateOutputQualityRequest {
+    pub source_path: String,
+    pub output_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExecuteReadActionsRequest {
     pub session_id: String,
     pub turn_id: String,
@@ -829,6 +893,14 @@ pub struct RecordScopeApprovalRequest {
 pub struct RunExecutionRequest {
     pub session_id: String,
     pub turn_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunExecutionMultiRequest {
+    pub session_id: String,
+    pub turn_id: String,
+    pub output_specs: Vec<OutputSpec>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -993,6 +1065,7 @@ pub struct PreviewExecutionResponse {
     pub requires_approval: bool,
     pub can_execute: bool,
     pub diff_summary: DiffSummary,
+    pub artifacts: Vec<OutputArtifact>,
     pub warnings: Vec<String>,
     pub file_write_actions: Vec<SpreadsheetAction>,
 }
@@ -1071,6 +1144,8 @@ pub struct RunExecutionResponse {
     pub executed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_path: Option<String>,
+    pub output_paths: Vec<String>,
+    pub artifacts: Vec<OutputArtifact>,
     pub warnings: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,

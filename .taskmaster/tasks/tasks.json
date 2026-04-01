@@ -3861,56 +3861,56 @@
         "id": "160",
         "title": "設計 — アーティファクト出力パイプライン",
         "description": "任意の出力タイプの preview → approve → save パイプラインを設計する。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "148"
         ],
         "priority": "high",
         "details": "汎用アーティファクトプレビュー（CSV テーブル、テキスト差分、ファイル操作要約、ドキュメント抽出）の統一プレビューペイン。docs/ARTIFACT_OUTPUT_DESIGN.md に文書化。",
         "testStrategy": "設計ドキュメントにパイプライン・サポート型・UI モックが含まれること。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T14:16:45Z",
         "subtasks": []
       },
       {
         "id": "161",
         "title": "フロントエンド — 汎用アーティファクトプレビュー",
         "description": "CSV テーブル、テキスト差分、ファイル操作要約、ドキュメント抽出を統一プレビューペインで表示する汎用アーティファクトプレビューコンポーネントを構築する。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "160"
         ],
         "priority": "medium",
         "details": "ArtifactPreview.svelte: ファイル種類に応じたレンダラー自動選択。CSV はテーブル、テキストは差分ビュー、ファイル操作はサマリーカード。",
         "testStrategy": "手動検証: 各アーティファクトタイプでの適切なプレビュー表示。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T14:16:45Z",
         "subtasks": []
       },
       {
         "id": "162",
         "title": "バックエンド — 複数出力フォーマットサポート",
         "description": "同一変換から複数フォーマット（CSV + XLSX、フィルタ済み CSV + サマリーテキストレポート等）の出力をサポートする。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "161"
         ],
         "priority": "low",
         "details": "変換実行時に複数出力先を指定可能にする。各出力のプレビュー生成。承認ゲートで全出力を一括確認。",
         "testStrategy": "CSV + テキストサマリーの同時出力テスト。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T14:16:45Z",
         "subtasks": []
       },
       {
         "id": "163",
         "title": "バックエンド — 出力品質バリデーション",
         "description": "実行後の出力品質を検証する: 行数確認、データ損失チェック、エンコーディング確認、CSV インジェクションチェック。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "162"
         ],
         "priority": "medium",
         "details": "PostExecutionValidator: 行数一致確認、null/空値の異常増加検出、エンコーディング検証、CSV インジェクション対策通過確認。結果をアクティビティフィードに表示。",
         "testStrategy": "品質チェック異常時に警告が表示されること。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T14:16:45Z",
         "subtasks": []
       }
     ],

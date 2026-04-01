@@ -41,6 +41,8 @@ import {
   respondToApprovalRequestSchema,
   respondToApprovalResponseSchema,
   runExecutionRequestSchema,
+  runExecutionMultiRequestSchema,
+  runExecutionMultiResponseSchema,
   runExecutionResponseSchema,
   sessionDetailSchema,
   sendCopilotPromptRequestSchema,
@@ -55,6 +57,8 @@ import {
   planProgressResponseSchema,
   toolRegistrationSchema,
   updateProjectRequestSchema,
+  validateOutputQualityRequestSchema,
+  validateOutputQualityResponseSchema,
   type AddProjectMemoryRequest,
   type AssessCopilotHandoffRequest,
   type AssessCopilotHandoffResponse,
@@ -96,6 +100,8 @@ import {
   type RespondToApprovalRequest,
   type RespondToApprovalResponse,
   type RunExecutionRequest,
+  type RunExecutionMultiRequest,
+  type RunExecutionMultiResponse,
   type RunExecutionResponse,
   type SendCopilotPromptRequest,
   type Session,
@@ -109,7 +115,9 @@ import {
   type PlanProgressRequest,
   type PlanProgressResponse,
   type ToolRegistration,
-  type UpdateProjectRequest
+  type UpdateProjectRequest,
+  type ValidateOutputQualityRequest,
+  type ValidateOutputQualityResponse
 } from "@relay-agent/contracts";
 
 type Schema<T> = {
@@ -539,6 +547,28 @@ export function runExecution(
   );
 }
 
+export function runExecutionMulti(
+  payload: RunExecutionMultiRequest
+): Promise<RunExecutionMultiResponse> {
+  return invokeWithPayload(
+    "run_execution_multi",
+    payload,
+    runExecutionMultiRequestSchema,
+    runExecutionMultiResponseSchema
+  );
+}
+
+export function validateOutputQuality(
+  payload: ValidateOutputQualityRequest
+): Promise<ValidateOutputQualityResponse> {
+  return invokeWithPayload(
+    "validate_output_quality",
+    payload,
+    validateOutputQualityRequestSchema,
+    validateOutputQualityResponseSchema
+  );
+}
+
 export const relayAgentIpc = {
   pingDesktop,
   initializeApp,
@@ -566,7 +596,9 @@ export const relayAgentIpc = {
   previewExecution,
   recordScopeApproval,
   respondToApproval,
-  runExecution
+  runExecution,
+  runExecutionMulti,
+  validateOutputQuality
 };
 
 export type RelayAgentIpc = typeof relayAgentIpc;

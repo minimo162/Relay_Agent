@@ -6,8 +6,9 @@ use crate::models::{
     InvokeMcpToolRequest, InvokeMcpToolResponse, ListToolsResponse, McpServerConfig,
     PlanProgressRequest, PlanProgressResponse, PreviewExecutionRequest, PreviewExecutionResponse,
     RecordPlanProgressRequest, RecordScopeApprovalRequest, RecordScopeApprovalResponse,
-    RespondToApprovalRequest, RespondToApprovalResponse, RunExecutionRequest, RunExecutionResponse,
-    SetToolEnabledRequest, ToolRegistration, ToolSource,
+    RespondToApprovalRequest, RespondToApprovalResponse, RunExecutionMultiRequest,
+    RunExecutionRequest, RunExecutionResponse, SetToolEnabledRequest, ToolRegistration,
+    ToolSource, ValidateOutputQualityRequest,
 };
 use crate::state::DesktopState;
 
@@ -174,6 +175,22 @@ pub fn run_execution(
 ) -> Result<RunExecutionResponse, String> {
     let mut storage = state.storage.lock().expect("desktop storage poisoned");
     storage.run_execution(request)
+}
+
+#[tauri::command]
+pub fn run_execution_multi(
+    state: State<'_, DesktopState>,
+    request: RunExecutionMultiRequest,
+) -> Result<Vec<RunExecutionResponse>, String> {
+    let mut storage = state.storage.lock().expect("desktop storage poisoned");
+    storage.run_execution_multi(request)
+}
+
+#[tauri::command]
+pub fn validate_output_quality(
+    request: ValidateOutputQualityRequest,
+) -> Result<crate::models::QualityCheckResult, String> {
+    crate::quality_validator::validate_output_quality(&request.source_path, &request.output_path)
 }
 
 #[cfg(test)]

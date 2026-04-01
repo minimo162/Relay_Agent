@@ -6,6 +6,7 @@ mod mcp_client;
 mod models;
 mod persistence;
 mod project;
+mod quality_validator;
 mod relay;
 mod session;
 mod startup;
@@ -67,7 +68,9 @@ pub fn run() {
             execution::preview_execution,
             execution::respond_to_approval,
             execution::record_scope_approval,
-            execution::run_execution
+            execution::run_execution,
+            execution::run_execution_multi,
+            execution::validate_output_quality
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

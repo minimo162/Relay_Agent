@@ -3,16 +3,15 @@
   import { open } from "@tauri-apps/plugin-shell";
   import ActivityFeed from "$lib/components/ActivityFeed.svelte";
   import AgentActivityFeed from "$lib/components/AgentActivityFeed.svelte";
+  import ArtifactPreview from "$lib/components/ArtifactPreview.svelte";
   import ApprovalGate from "$lib/components/ApprovalGate.svelte";
   import ChatComposer from "$lib/components/ChatComposer.svelte";
   import CompletionTimeline from "$lib/components/CompletionTimeline.svelte";
-  import FileOpPreview from "$lib/components/FileOpPreview.svelte";
   import GoalInput from "$lib/components/GoalInput.svelte";
   import InterventionPanel from "$lib/components/InterventionPanel.svelte";
   import ProjectSelector from "$lib/components/ProjectSelector.svelte";
   import RecentSessions from "$lib/components/RecentSessions.svelte";
   import SettingsModal from "$lib/components/SettingsModal.svelte";
-  import SheetDiffCard from "$lib/components/SheetDiffCard.svelte";
   import {
     activityFeedStore,
     delegationStore,
@@ -25,6 +24,7 @@
     GenerateRelayPacketResponse,
     McpTransport,
     McpServerConfig,
+    OutputArtifact,
     PlanProgressResponse,
     PlanStep,
     PlanStepStatus,
@@ -87,6 +87,7 @@
     runAgentLoop,
     respondToApproval,
     runExecution,
+    validateOutputQuality,
     saveBrowserAutomationSettings,
     saveDelegationDraft,
     saveSelectedProjectId,
@@ -201,6 +202,45 @@
     "amount 列の合計を新しい列として追加してください",
     "重複行を削除してシートを整理してください"
   ] as const;
+
+  function wrapLegacyPreviewArtifacts(
+    diffSummary: DiffSummary,
+    fileWriteActions: FileWritePreviewAction[]
+  ): OutputArtifact[] {
+    const artifacts: OutputArtifact[] = [];
+
+    if (diffSummary.sheets.length > 0) {
+      artifacts.push({
+        id: `artifact-diff-${Date.now()}`,
+        type: "spreadsheet_diff",
+        label: `${diffSummary.sourcePath.split(/[\\/]/).pop() ?? diffSummary.sourcePath} -> ${diffSummary.outputPath.split(/[\\/]/).pop() ?? diffSummary.outputPath}`,
+        sourcePath: diffSummary.sourcePath,
+        outputPath: diffSummary.outputPath,
+        warnings: diffSummary.warnings,
+        content: {
+          type: "spreadsheet_diff",
+          diffSummary
+        }
+      });
+    }
+
+    if (fileWriteActions.length > 0) {
+      artifacts.push({
+        id: `artifact-file-${Date.now()}`,
+        type: "file_operation",
+        label: `${fileWriteActions.length} file operation(s)`,
+        sourcePath: diffSummary.sourcePath,
+        outputPath: diffSummary.outputPath,
+        warnings: [],
+        content: {
+          type: "file_operation",
+          operations: fileWriteActions
+        }
+      });
+    }
+
+    return artifacts;
+  }
 
   // Exact args structure for each tool. This is embedded verbatim in the Copilot
   // instruction so the LLM uses the correct field names and nesting.
@@ -328,6 +368,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let previewChangeDetails: string[] = [];
   let previewSheetDiffs: DiffSummary["sheets"] = [];
   let previewFileWriteActions: FileWritePreviewAction[] = [];
+  let previewArtifacts: OutputArtifact[] = [];
   let scopeApprovalVisible = false;
   let scopeApprovalSource: ScopeApprovalSource | null = null;
   let scopeApprovalSummary = "";
@@ -828,6 +869,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     previewChangeDetails = [];
     previewSheetDiffs = [];
     previewFileWriteActions = [];
+    previewArtifacts = [];
     showDetailedChanges = false;
   }
 
@@ -2024,6 +2066,20 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     previewChangeDetails = [];
     previewSheetDiffs = [];
     previewFileWriteActions = draft.previewSnapshot?.fileWriteActions ?? [];
+    previewArtifacts =
+      draft.previewSnapshot?.artifacts ??
+      wrapLegacyPreviewArtifacts(
+        {
+          sourcePath: draft.previewSnapshot?.sourcePath ?? filePath,
+          outputPath: draft.previewSnapshot?.outputPath ?? "",
+          mode: "preview",
+          targetCount: draft.previewSnapshot?.targetCount ?? 0,
+          estimatedAffectedRows: draft.previewSnapshot?.estimatedAffectedRows ?? 0,
+          sheets: [],
+          warnings: draft.previewSnapshot?.warnings ?? []
+        },
+        draft.previewSnapshot?.fileWriteActions ?? []
+      );
     showDetailedChanges = false;
     resetTurnInspectionState();
     executionDone = false;
@@ -3291,6 +3347,13 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       ];
       previewSheetDiffs = diff.sheets;
       previewFileWriteActions = preview.fileWriteActions as FileWritePreviewAction[];
+      previewArtifacts =
+        preview.artifacts.length > 0
+          ? preview.artifacts
+          : wrapLegacyPreviewArtifacts(
+              diff,
+              preview.fileWriteActions as FileWritePreviewAction[]
+            );
       previewRequiresApproval = preview.requiresApproval;
       previewChangeDetails = diff.sheets.map((sheet) => {
         const changedColumns =
@@ -3342,6 +3405,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       if (result.outputPath) {
         previewOutputPath = result.outputPath;
       }
+      if (result.artifacts.length > 0) {
+        previewArtifacts = result.artifacts;
+      }
 
       executionSummary = result.executed
         ? result.outputPath
@@ -3367,6 +3433,49 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         }
         errorMsg = executionSummary;
         return;
+      }
+
+      const qualitySourcePath =
+        previewArtifacts.find((artifact) => artifact.sourcePath.trim())?.sourcePath ||
+        filePath;
+      const qualityOutputPath =
+        result.outputPath ||
+        result.outputPaths[0] ||
+        previewArtifacts.find((artifact) => artifact.outputPath.trim())?.outputPath ||
+        previewOutputPath;
+      if (qualitySourcePath.trim() && qualityOutputPath.trim()) {
+        try {
+          const qualityResult = await validateOutputQuality({
+            sourcePath: qualitySourcePath,
+            outputPath: qualityOutputPath
+          });
+          if (qualityResult.passed) {
+            activityFeedStore.push({
+              type: "completed",
+              message: `品質チェック通過（${qualityResult.checks.length} 項目）`,
+              icon: "✅"
+            });
+          } else {
+            activityFeedStore.push({
+              type: "error",
+              message: `品質チェック警告: ${qualityResult.warnings.join(" / ") || "失敗項目があります。"}`,
+              icon: "⚠",
+              detail: qualityResult.checks
+                .filter((check) => !check.passed)
+                .map((check) => `${check.name}: ${check.detail}`)
+                .join("\n"),
+              expandable: true
+            });
+          }
+        } catch (error) {
+          activityFeedStore.push({
+            type: "error",
+            message: "品質チェックを完了できませんでした。",
+            icon: "⚠",
+            detail: toError(error),
+            expandable: true
+          });
+        }
       }
 
       if (currentPlanStepId) {
@@ -3637,6 +3746,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   $: reviewStepAvailable = Boolean(
     setupStepComplete &&
       (previewSummary.trim() ||
+        previewArtifacts.length > 0 ||
         previewSheetDiffs.length > 0 ||
         previewOutputPath.trim() ||
         executionDone)
@@ -3672,6 +3782,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
           estimatedAffectedRows: previewAffectedRows,
           warnings: previewWarnings,
           requiresApproval: previewRequiresApproval,
+          artifacts: previewArtifacts,
           fileWriteActions: previewFileWriteActions
         }
       : null;
@@ -3966,8 +4077,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         {previewAffectedRows}
         {previewOutputPath}
         {previewWarnings}
-        {previewSheetDiffs}
-        fileWriteActions={previewFileWriteActions}
+        artifacts={previewArtifacts}
         {reviewStepAvailable}
         {busy}
         errorMessage={scopeApprovalVisible ? "" : copilotAutoError || ($delegationStore.state === "error" ? $delegationStore.error ?? "" : "")}
@@ -4642,16 +4752,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         </div>
       {/if}
 
-      {#if previewSheetDiffs.length > 0}
-        <div class="sheet-diff-grid">
-          {#each previewSheetDiffs as sheetDiff}
-            <SheetDiffCard {sheetDiff} />
-          {/each}
-        </div>
-      {/if}
-
-      {#if previewFileWriteActions.length > 0}
-        <FileOpPreview actions={previewFileWriteActions} />
+      {#if previewArtifacts.length > 0}
+        <ArtifactPreview artifacts={previewArtifacts} />
       {/if}
     {/if}
 
@@ -5757,12 +5859,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     color: var(--ra-text-secondary);
     font-size: 0.84rem;
     line-height: 1.6;
-  }
-
-  .sheet-diff-grid {
-    display: grid;
-    gap: 0.75rem;
-    margin-bottom: 1rem;
   }
 
   .warnings {
