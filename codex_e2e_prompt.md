@@ -717,6 +717,99 @@ node apps\desktop\scripts\e2e_windows_smoke.mjs
 
 ---
 
+---
+
+## Task 6: `docs/E2E_COWORK_MANUAL_CHECKLIST.md` の手動チェックを実施して結果を記録する
+
+**前提条件:**
+- Tasks 1–5 が完了済みであること
+- Windows 10/11 上で実行すること
+- Microsoft Edge に M365 Copilot がログイン済みで CDP が有効であること
+- テスト用ファイルを準備する:
+  ```powershell
+  New-Item -ItemType Directory -Force -Path C:\relay-test
+  Copy-Item examples\revenue-workflow-demo.csv C:\relay-test\data_a.csv
+  Copy-Item examples\revenue-workflow-demo.csv C:\relay-test\data_b.csv
+  Copy-Item examples\revenue-workflow-demo.csv C:\relay-test\data_c.csv
+  ```
+
+### Step 1: 自動テストを実行して結果を確認する
+
+以下のコマンドを順番に実行し、出力を記録する:
+
+```powershell
+# Rust 単体テスト
+cargo test --manifest-path apps\desktop\src-tauri\Cargo.toml 2>&1
+
+# TypeScript 型チェック
+pnpm --filter desktop typecheck
+```
+
+両方がエラーなしで完了することを確認する。失敗した場合はエラーメッセージを記録してから次に進む。
+
+### Step 2: アプリをビルドして起動する
+
+```powershell
+# 開発ビルドで起動（Edge CDP ポートに接続可能な状態にしておくこと）
+pnpm tauri:dev
+```
+
+アプリウィンドウが正常に開いたことを確認してから、以下のシナリオを順番に実施する。
+
+### Step 3: 各シナリオを実施してチェックリストを更新する
+
+`docs/E2E_COWORK_MANUAL_CHECKLIST.md` の各チェックボックスを実際に操作して確認し、以下のルールで更新する:
+
+- 確認できた項目: `- [ ]` → `- [x]`
+- 確認できなかった / 失敗した項目: `- [ ]` のまま残し、直後に `  > ❌ <失敗理由>` を追記する
+- スキップした項目: `- [ ]` → `- [~]` に変更し、直後に `  > スキップ: <理由>` を追記する
+
+### Step 4: 確認結果メモテーブルを埋める
+
+ファイル末尾の「確認結果メモ」テーブルの各行を以下のように埋める:
+
+| 列 | 書き方 |
+|---|---|
+| 結果 | `○`（全項目 pass）/ `△`（一部失敗）/ `×`（全体失敗）/ `スキップ` |
+| メモ | 失敗・気になった点を簡潔に（正常なら空欄可） |
+
+例:
+```markdown
+| 1-1 パイプライン正常実行 | ○ | |
+| 1-3 ステップ失敗停止 | △ | ステップ2が停止せずに続行してしまった |
+```
+
+### Step 5: 最終サマリーをファイル末尾に追記する
+
+すべてのシナリオ実施後、ファイルの一番末尾に以下のブロックを追加する:
+
+```markdown
+---
+
+## 実施結果サマリー
+
+実施日: YYYY-MM-DD
+実施者: Codex (Windows)
+アプリバージョン: <!-- pnpm tauri info の出力から -->
+
+### 総合判定
+
+<!-- 合格 / 要対応 / 未完了 のいずれかを記載 -->
+
+### パス率
+
+- 全チェック項目数: N
+- [x] 合格: N
+- [~] スキップ: N
+- [ ] 未合格: N
+
+### 未合格・要確認事項
+
+<!-- 対応が必要な項目を箇条書きで列挙。なければ「なし」 -->
+```
+
+---
+
 ## 実装順序
 
 1. `risk_evaluator.rs` の既存 `tests` モジュール末尾に Task 4 を追記
@@ -724,6 +817,7 @@ node apps\desktop\scripts\e2e_windows_smoke.mjs
 3. `pipeline.rs` 末尾に Task 2 を追記
 4. `template.rs` の `filter_by_category` を `pub(crate)` に昇格させてから Task 3 を末尾に追記
 5. `docs/E2E_COWORK_MANUAL_CHECKLIST.md` を新規作成（Task 5）
+6. Task 6 の手順で手動チェックを実施して結果を `docs/E2E_COWORK_MANUAL_CHECKLIST.md` に反映する
 
 ## Codex 完了確認チェックリスト
 
@@ -732,3 +826,6 @@ node apps\desktop\scripts\e2e_windows_smoke.mjs
 - [ ] `pnpm typecheck` がエラーなしであること
 - [ ] 既存テスト（`startup_smoke` 等）がリグレッションしないこと
 - [ ] `docs/E2E_COWORK_MANUAL_CHECKLIST.md` が作成されていること
+- [ ] `docs/E2E_COWORK_MANUAL_CHECKLIST.md` の全チェックボックスが `[x]` / `[~]` / `[ ]+コメント` で埋まっていること
+- [ ] 確認結果メモテーブルの全行に結果が記入されていること
+- [ ] 実施結果サマリーブロックが追記されていること
