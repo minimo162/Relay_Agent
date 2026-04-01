@@ -22,6 +22,8 @@ Copilot が実行計画を立案し、読み取り操作を自動実行、書き
 
 ### 対応ツール
 
+ツールはすべて ToolRegistry で一元管理され、設定画面から有効/無効を切り替えられます。
+
 **スプレッドシート操作（CSV / XLSX）**
 - `workbook.inspect` — シート構成・列情報の読み取り
 - `sheet.preview` — 行サンプルの読み取り
@@ -48,6 +50,18 @@ Copilot が実行計画を立案し、読み取り操作を自動実行、書き
 
 **ドキュメント読み取り**
 - `document.read_text` — Word（.docx）・PowerPoint（.pptx）・PDF からのテキスト抽出
+
+**ブラウザ自動化**
+- `browser.send_to_copilot` — Edge CDP 経由で M365 Copilot にプロンプト送信
+
+### MCP（Model Context Protocol）外部ツール
+
+設定画面の「ツール」タブから MCP サーバーを登録できます。
+
+- JSON-RPC 2.0 準拠（HTTP/SSE・stdio トランスポート対応）
+- 接続時にサーバーのツール一覧を自動発見・登録
+- MCP ツールはすべて承認ゲート経由で実行（`requiresApproval: true`）
+- MCP ツール呼び出しには 30 秒タイムアウトを適用
 
 ### プロジェクト管理
 
@@ -131,6 +145,8 @@ pnpm -C apps/desktop exec tsx --test \
   src/lib/agent-loop-core.test.ts \
   src/lib/agent-loop-prompts.test.ts \
   src/lib/prompt-templates.test.ts \
+  src/lib/project-scope.test.ts \
+  src/lib/tool-runtime.test.ts \
   src/lib/stores/delegation.test.ts
 ```
 
@@ -200,24 +216,29 @@ apps/
       lib/
         components/    # UI コンポーネント（12 個）
         stores/        # Svelte ストア（delegation.ts）
-        agent-loop.ts  # エージェントループ
+        agent-loop.ts        # エージェントループ
         agent-loop-core.ts
         agent-loop-prompts.ts
         prompt-templates.ts
-        continuity.ts  # ドラフト永続化
-        copilot-browser.ts  # Edge CDP / Playwright
-        ipc.ts         # Tauri IPC ラッパー
+        continuity.ts        # ドラフト永続化
+        copilot-browser.ts   # Edge CDP / Playwright
+        ipc.ts               # Tauri IPC ラッパー
+        project-scope.ts     # プロジェクトスコープ検証
+        tool-runtime.ts      # ToolRuntime ディスパッチャー
     src-tauri/
       src/
-        file_ops.rs    # ファイル操作実装
-        storage.rs     # セッション・プロジェクト・プラン管理
-        models.rs      # Rust 型定義
-        project.rs     # プロジェクト Tauri コマンド
-        execution.rs   # 実行系 Tauri コマンド
+        file_ops.rs          # ファイル操作実装
+        storage.rs           # セッション・プロジェクト・プラン管理
+        models.rs            # Rust 型定義
+        project.rs           # プロジェクト Tauri コマンド
+        execution.rs         # 実行系 Tauri コマンド
+        tool_registry.rs     # ToolRegistry（21 ビルトインツール + MCP）
+        mcp_client.rs        # MCP JSON-RPC クライアント（HTTP/Stdio）
+        browser_automation.rs # ブラウザ自動化 Tauri コマンド
 packages/
   contracts/
     src/
-      relay.ts         # RelayPacket・ExecutionPlan スキーマ
+      relay.ts         # RelayPacket・ExecutionPlan・ToolRegistration スキーマ
       ipc.ts           # IPC リクエスト/レスポンススキーマ
       file.ts          # ファイル操作スキーマ
       project.ts       # プロジェクトスキーマ
@@ -240,7 +261,7 @@ docs/
 - エンコーディングは UTF-8 と Shift_JIS のみ対応
 - `text.search` は行単位マッチのみ（複数行にまたがるパターン非対応）
 - プロジェクトとセッションの自動紐付けは未実装
-- MCP（Model Context Protocol）外部ツール統合は未実装（CODEX_PROMPT_17 で計画中）
+- MCP stdio トランスポートは接続時にサーバープロセスを都度起動（永続デーモン未対応）
 - アーティファクトファースト出力パイプラインは未実装（CODEX_PROMPT_18 で計画中）
 - シェル実行・任意コード実行・VBA 実行・外部ネットワーク呼び出しは意図的に対象外
 
