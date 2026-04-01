@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   assessCopilotHandoffRequestSchema,
   assessCopilotHandoffResponseSchema,
+  approvePlanRequestSchema,
+  approvePlanResponseSchema,
   createSessionRequestSchema,
   executeReadActionsRequestSchema,
   executeReadActionsResponseSchema,
@@ -17,6 +19,7 @@ import {
   readSessionRequestSchema,
   readTurnArtifactsRequestSchema,
   readTurnArtifactsResponseSchema,
+  recordPlanProgressRequestSchema,
   relayPacketSchema,
   respondToApprovalRequestSchema,
   respondToApprovalResponseSchema,
@@ -28,8 +31,12 @@ import {
   startTurnResponseSchema,
   submitCopilotResponseRequestSchema,
   submitCopilotResponseResponseSchema,
+  planProgressRequestSchema,
+  planProgressResponseSchema,
   type AssessCopilotHandoffRequest,
   type AssessCopilotHandoffResponse,
+  type ApprovePlanRequest,
+  type ApprovePlanResponse,
   type CreateSessionRequest,
   type ExecuteReadActionsRequest,
   type ExecuteReadActionsResponse,
@@ -46,6 +53,7 @@ import {
   type ReadSessionRequest,
   type ReadTurnArtifactsRequest,
   type ReadTurnArtifactsResponse,
+  type RecordPlanProgressRequest,
   type RespondToApprovalRequest,
   type RespondToApprovalResponse,
   type RunExecutionRequest,
@@ -55,7 +63,9 @@ import {
   type StartTurnRequest,
   type StartTurnResponse,
   type SubmitCopilotResponseRequest,
-  type SubmitCopilotResponseResponse
+  type SubmitCopilotResponseResponse,
+  type PlanProgressRequest,
+  type PlanProgressResponse
 } from "@relay-agent/contracts";
 
 type Schema<T> = {
@@ -279,6 +289,39 @@ export function executeReadActions(
   );
 }
 
+export function approvePlan(
+  payload: ApprovePlanRequest
+): Promise<ApprovePlanResponse> {
+  return invokeWithPayload(
+    "approve_plan",
+    payload,
+    approvePlanRequestSchema,
+    approvePlanResponseSchema
+  );
+}
+
+export function getPlanProgress(
+  payload: PlanProgressRequest
+): Promise<PlanProgressResponse> {
+  return invokeWithPayload(
+    "get_plan_progress",
+    payload,
+    planProgressRequestSchema,
+    planProgressResponseSchema
+  );
+}
+
+export function recordPlanProgress(
+  payload: RecordPlanProgressRequest
+): Promise<PlanProgressResponse> {
+  return invokeWithPayload(
+    "record_plan_progress",
+    payload,
+    recordPlanProgressRequestSchema,
+    planProgressResponseSchema
+  );
+}
+
 export function respondToApproval(
   payload: RespondToApprovalRequest
 ): Promise<RespondToApprovalResponse> {
@@ -314,6 +357,9 @@ export const relayAgentIpc = {
   assessCopilotHandoff,
   submitCopilotResponse,
   executeReadActions,
+  approvePlan,
+  getPlanProgress,
+  recordPlanProgress,
   previewExecution,
   respondToApproval,
   runExecution

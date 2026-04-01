@@ -11,12 +11,12 @@
 | Node.js バージョン | 22 以上 | | |
 | Playwright インストール済み | `pnpm --filter @relay-agent/desktop typecheck` が通る | | |
 | `scripts/dist/copilot-browser.js` が存在する | ファイル存在 | | |
-| Edge が CDP モードで起動できる | `{ "status": "ready" }` が返る | | |
+| Edge 自動接続または自動起動が動く | `{ "status": "ready", "cdpPort": ... }` が返る | | |
 
 確認コマンド:
 
 ```bash
-node apps/desktop/scripts/dist/copilot-browser.js --action connect --cdp-port 9222
+node apps/desktop/scripts/dist/copilot-browser.js --action connect --auto-launch
 ```
 
 ## 2. 正常フロー検証
@@ -50,8 +50,9 @@ node apps/desktop/scripts/dist/copilot-browser.js --action connect --cdp-port 92
 
 | シナリオ | 手順 | 期待メッセージ | 実測メッセージ | 合否 |
 |---|---|---|---|---|
-| CDP 未起動 | Edge を起動せずに送信ボタンを押す | 「Edge が CDP モードで起動していません…」 | | |
+| CDP 未起動 | Edge を起動せずに送信ボタンを押す | Edge が自動起動される、または接続エラーがわかりやすく表示される | | |
 | 未ログイン | Edge でログアウト後に送信ボタンを押す | 「M365 Copilot にログインしていません…」 | | |
+| 全ポート使用中 | 9333-9342 を別プロセスで占有して送信ボタンを押す | 「ポート 9333-9342 がすべて使用中です。」 | | |
 | 手動フォールバック | エラー後に「手動入力に切り替え」リンクを押す | テキストエリアにフォーカスが当たる | | |
 
 ## 4. セレクタ確認結果

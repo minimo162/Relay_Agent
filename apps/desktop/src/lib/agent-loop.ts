@@ -1,11 +1,34 @@
 import {
-  copilotTurnResponseSchema,
   type CopilotTurnResponse,
+  type ExecutionPlan,
+  type PlanStep,
   type ToolExecutionResult
 } from "@relay-agent/contracts";
 
-import { sendToCopilot } from "./copilot-browser";
+import { sendToCopilot, type BrowserCommandProgress } from "./copilot-browser";
 import { executeReadActions } from "./ipc";
+import { buildStepExecutionPrompt } from "./agent-loop-prompts";
+import {
+  requestCopilotTurn,
+  throwIfAborted,
+  type CopilotRetryCallbacks
+} from "./agent-loop-core";
+import {
+  buildCompressedContext,
+  buildLoopContinuationPrompt,
+  summarizeTurn,
+  type CopilotConversationTurn,
+  type TurnSummary
+} from "./prompt-templates";
+
+export { buildPlanningPrompt } from "./agent-loop-prompts";
+export type { CopilotConversationTurn } from "./prompt-templates";
+
+type AgentLoopRuntime = {
+  sendToCopilot?: typeof sendToCopilot;
+  executeReadActions?: typeof executeReadActions;
+  now?: () => number;
+};
 
 export type AgentLoopConfig = {
   sessionId: string;
@@ -14,6 +37,11 @@ export type AgentLoopConfig = {
   maxTurns: number;
   loopTimeoutMs: number;
   abortSignal?: AbortSignal;
+  planningEnabled?: boolean;
+  maxRetries?: number;
+  maxFullTurns?: number;
+  initialConversationHistory?: CopilotConversationTurn[];
+  runtime?: AgentLoopRuntime;
 };
 
 export type LoopTurnResult = {
@@ -23,16 +51,23 @@ export type LoopTurnResult = {
   parsedResponse: CopilotTurnResponse;
   toolResults: ToolExecutionResult[];
   hasWriteActions: boolean;
+  retryCount: number;
 };
 
 export type AgentLoopResult = {
-  status: CopilotTurnResponse["status"] | "cancelled";
+  status:
+    | CopilotTurnResponse["status"]
+    | "cancelled"
+    | "awaiting_plan_approval";
   finalResponse: CopilotTurnResponse | null;
   turns: LoopTurnResult[];
   summary: string;
+  proposedPlan?: ExecutionPlan;
+  conversationHistory: CopilotConversationTurn[];
 };
 
 export type AgentLoopCallbacks = {
+  onBrowserProgress?: (event: BrowserCommandProgress) => void;
   onTurnStart?: (turn: number, prompt: string) => void;
   onCopilotResponse?: (
     turn: number,
@@ -41,32 +76,111 @@ export type AgentLoopCallbacks = {
   ) => void;
   onToolResults?: (turn: number, toolResults: ToolExecutionResult[]) => void;
   onComplete?: (result: AgentLoopResult) => void;
+  onPlanProposed?: (plan: ExecutionPlan) => void;
+  onRetry?: CopilotRetryCallbacks["onRetry"];
+  onManualFallback?: CopilotRetryCallbacks["onManualFallback"];
 };
+
+function resolveRuntime(runtime?: AgentLoopRuntime): Required<AgentLoopRuntime> {
+  return {
+    sendToCopilot: runtime?.sendToCopilot ?? sendToCopilot,
+    executeReadActions: runtime?.executeReadActions ?? executeReadActions,
+    now: runtime?.now ?? Date.now
+  };
+}
+
+function cloneConversationHistory(
+  conversationHistory: CopilotConversationTurn[]
+): CopilotConversationTurn[] {
+  return [...conversationHistory];
+}
+
+function createAgentLoopResult(
+  value: Omit<AgentLoopResult, "conversationHistory"> & {
+    conversationHistory: CopilotConversationTurn[];
+  }
+): AgentLoopResult {
+  return {
+    ...value,
+    conversationHistory: cloneConversationHistory(value.conversationHistory)
+  };
+}
 
 export async function runAgentLoop(
   config: AgentLoopConfig,
   callbacks: AgentLoopCallbacks = {}
 ): Promise<AgentLoopResult> {
-  const startedAt = Date.now();
+  const runtime = resolveRuntime(config.runtime);
+  const startedAt = runtime.now();
   const turns: LoopTurnResult[] = [];
+  const conversationHistory = [...(config.initialConversationHistory ?? [])];
+  const turnSummaries: TurnSummary[] = [];
   let prompt = config.initialPrompt;
 
   for (let turn = 1; turn <= config.maxTurns; turn += 1) {
     throwIfAborted(config.abortSignal);
     callbacks.onTurnStart?.(turn, prompt);
 
-    const rawResponse = await raceWithAbort(
-      withTimeout(
-        sendToCopilot(prompt),
-        config.loopTimeoutMs,
-        `ターン ${turn} の Copilot 応答がタイムアウトしました（${Math.round(config.loopTimeoutMs / 1000)}秒）。`
-      ),
-      config.abortSignal
-    );
-    const parsedResponse = copilotTurnResponseSchema.parse(JSON.parse(rawResponse));
+    const copilotResult = await requestCopilotTurn({
+      turn,
+      prompt,
+      originalTask: config.initialPrompt,
+      loopTimeoutMs: config.loopTimeoutMs,
+      abortSignal: config.abortSignal,
+      maxRetries: config.maxRetries ?? 2,
+      callbacks,
+      sendToCopilot: runtime.sendToCopilot,
+      conversationHistory,
+      timeoutMessage: `ターン ${turn} の Copilot 応答がタイムアウトしました（${Math.round(config.loopTimeoutMs / 1000)}秒）。`
+    });
+
+    if ("manualFallback" in copilotResult) {
+      const result = createAgentLoopResult({
+        status: "error",
+        finalResponse: null,
+        turns,
+        summary: copilotResult.summary,
+        conversationHistory
+      });
+      callbacks.onComplete?.(result);
+      return result;
+    }
+
+    const { rawResponse, parsedResponse, retryCount } = copilotResult;
     callbacks.onCopilotResponse?.(turn, parsedResponse, rawResponse);
 
-    const readOutcome = await executeReadActions({
+    if (config.planningEnabled && parsedResponse.status === "plan_proposed") {
+      if (!parsedResponse.executionPlan) {
+        throw new Error(
+          "Copilot returned `plan_proposed` without an executionPlan payload."
+        );
+      }
+
+      callbacks.onPlanProposed?.(parsedResponse.executionPlan);
+
+      turns.push({
+        turn,
+        prompt,
+        rawResponse,
+        parsedResponse,
+        toolResults: [],
+        hasWriteActions: false,
+        retryCount
+      });
+
+      const result = createAgentLoopResult({
+        status: "awaiting_plan_approval",
+        finalResponse: parsedResponse,
+        turns,
+        summary: parsedResponse.executionPlan.summary,
+        proposedPlan: parsedResponse.executionPlan,
+        conversationHistory
+      });
+      callbacks.onComplete?.(result);
+      return result;
+    }
+
+    const readOutcome = await runtime.executeReadActions({
       sessionId: config.sessionId,
       turnId: config.turnId,
       loopTurn: turn,
@@ -75,29 +189,29 @@ export async function runAgentLoop(
     });
     callbacks.onToolResults?.(turn, readOutcome.toolResults);
 
-    const turnResult: LoopTurnResult = {
+    turns.push({
       turn,
       prompt,
       rawResponse,
       parsedResponse,
       toolResults: readOutcome.toolResults,
-      hasWriteActions: readOutcome.hasWriteActions
-    };
-    turns.push(turnResult);
+      hasWriteActions: readOutcome.hasWriteActions,
+      retryCount
+    });
+    turnSummaries.push(summarizeTurn(turn, parsedResponse.status, readOutcome.toolResults));
 
-    if (Date.now() - startedAt > config.loopTimeoutMs * config.maxTurns) {
+    if (runtime.now() - startedAt > config.loopTimeoutMs * config.maxTurns) {
       throw new Error("エージェントループ全体がタイムアウトしました。");
     }
 
     if (!readOutcome.shouldContinue) {
-      const result: AgentLoopResult = {
+      const result = createAgentLoopResult({
         status: parsedResponse.status,
         finalResponse: parsedResponse,
         turns,
-        summary:
-          readOutcome.guardMessage ??
-          `Agent loop stopped at turn ${turn}.`
-      };
+        summary: readOutcome.guardMessage ?? `Agent loop stopped at turn ${turn}.`,
+        conversationHistory
+      });
       callbacks.onComplete?.(result);
       return result;
     }
@@ -108,12 +222,13 @@ export async function runAgentLoop(
       parsedResponse.status === "error" ||
       readOutcome.hasWriteActions
     ) {
-      const result: AgentLoopResult = {
+      const result = createAgentLoopResult({
         status: parsedResponse.status,
         finalResponse: parsedResponse,
         turns,
-        summary: parsedResponse.message ?? parsedResponse.summary
-      };
+        summary: parsedResponse.message ?? parsedResponse.summary,
+        conversationHistory
+      });
       callbacks.onComplete?.(result);
       return result;
     }
@@ -122,125 +237,186 @@ export async function runAgentLoop(
       throw new Error("Copilot requested another turn without any executable read tools.");
     }
 
-    prompt = buildFollowUpPrompt(config.initialPrompt, readOutcome.toolResults, {
+    prompt = buildLoopContinuationPrompt({
+      originalTask: config.initialPrompt,
+      toolResults: readOutcome.toolResults,
       turn,
       priorSummary: parsedResponse.summary,
-      priorMessage: parsedResponse.message
+      priorMessage: parsedResponse.message,
+      compressedHistory: buildCompressedContext(
+        turnSummaries,
+        config.maxFullTurns ?? 2
+      ),
+      conversationHistory
     });
   }
 
   throw new Error(`最大ターン数（${config.maxTurns}）に達しました。`);
 }
 
-export function buildFollowUpPrompt(
-  originalTask: string,
-  toolResults: ToolExecutionResult[],
-  context?: {
-    turn?: number;
-    priorSummary?: string;
-    priorMessage?: string;
-  }
-): string {
-  const sections = [
-    "You are continuing the same Relay Agent task.",
-    "Return strict JSON only. Do not include markdown fences.",
-    `Original task:\n${originalTask.trim()}`
-  ];
+export async function resumeAgentLoopWithPlan(
+  config: AgentLoopConfig,
+  plan: ExecutionPlan,
+  callbacks: AgentLoopCallbacks & {
+    onStepStart?: (step: PlanStep, index: number) => void;
+    onStepComplete?: (
+      step: PlanStep,
+      index: number,
+      result: ToolExecutionResult
+    ) => void;
+    onWriteStepReached?: (step: PlanStep, index: number) => void;
+    waitForStepContinuation?: (step: PlanStep, index: number) => Promise<void>;
+  } = {}
+): Promise<AgentLoopResult> {
+  const runtime = resolveRuntime(config.runtime);
+  const turns: LoopTurnResult[] = [];
+  const completedResults: ToolExecutionResult[] = [];
+  const conversationHistory = [...(config.initialConversationHistory ?? [])];
+  const turnSummaries: TurnSummary[] = [];
 
-  if (context?.turn) {
-    sections.push(`Current turn: ${context.turn + 1}`);
-  }
+  for (let index = 0; index < plan.steps.length; index += 1) {
+    throwIfAborted(config.abortSignal);
+    const step = plan.steps[index];
+    await callbacks.waitForStepContinuation?.(step, index);
+    throwIfAborted(config.abortSignal);
+    callbacks.onStepStart?.(step, index);
 
-  if (context?.priorSummary) {
-    sections.push(`Previous summary:\n${context.priorSummary}`);
-  }
-
-  if (context?.priorMessage) {
-    sections.push(`Previous message:\n${context.priorMessage}`);
-  }
-
-  sections.push(
-    [
-      "Tool results:",
-      ...toolResults.map((result, index) =>
-        [
-          `### Result ${index + 1}: ${result.tool}`,
-          `ok: ${result.ok}`,
-          "```json",
-          JSON.stringify(result.ok ? result.result ?? {} : { error: result.error }, null, 2),
-          "```"
-        ].join("\n")
-      )
-    ].join("\n\n")
-  );
-
-  sections.push(
-    [
-      "Decide the next step:",
-      '- If more read tools are needed, return `status: "thinking"` with those read actions.',
-      '- If you are ready to propose write actions, return `status: "ready_to_write"`.',
-      '- If the task is complete without writes, return `status: "done"` and no actions.',
-      '- If the task cannot continue, return `status: "error"` with a short `message`.'
-    ].join("\n")
-  );
-
-  return sections.join("\n\n");
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) {
-    const error = new Error("Agent loop cancelled.");
-    error.name = "AbortError";
-    throw error;
-  }
-}
-
-function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  message: string
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-
-  return new Promise<T>((resolve, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error(message));
-    }, timeoutMs);
-
-    promise.then(
-      (value) => {
-        if (timer) clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        if (timer) clearTimeout(timer);
-        reject(error);
+    const turn = index + 1;
+    const stepPrompt = buildStepExecutionPrompt(
+      config.initialPrompt,
+      step,
+      completedResults,
+      {
+        turn,
+        compressedHistory: buildCompressedContext(
+          turnSummaries,
+          config.maxFullTurns ?? 2
+        ),
+        conversationHistory
       }
     );
-  });
-}
+    callbacks.onTurnStart?.(turn, stepPrompt);
 
-function raceWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return promise;
-  }
+    const copilotResult = await requestCopilotTurn({
+      turn,
+      prompt: stepPrompt,
+      originalTask: config.initialPrompt,
+      loopTimeoutMs: config.loopTimeoutMs,
+      abortSignal: config.abortSignal,
+      maxRetries: config.maxRetries ?? 2,
+      callbacks,
+      sendToCopilot: runtime.sendToCopilot,
+      conversationHistory,
+      timeoutMessage: `ステップ ${turn} がタイムアウトしました。`
+    });
 
-  if (signal.aborted) {
-    throwIfAborted(signal);
-  }
-
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      signal.addEventListener(
-        "abort",
-        () => {
-          const error = new Error("Agent loop cancelled.");
-          error.name = "AbortError";
-          reject(error);
+    if ("manualFallback" in copilotResult) {
+      const result = createAgentLoopResult({
+        status: "error",
+        finalResponse: null,
+        turns,
+        summary: copilotResult.summary,
+        proposedPlan: {
+          ...plan,
+          steps: plan.steps.slice(index)
         },
-        { once: true }
-      );
-    })
-  ]);
+        conversationHistory
+      });
+      callbacks.onComplete?.(result);
+      return result;
+    }
+
+    const { rawResponse, parsedResponse, retryCount } = copilotResult;
+    callbacks.onCopilotResponse?.(turn, parsedResponse, rawResponse);
+
+    if (step.phase === "write") {
+      callbacks.onWriteStepReached?.(step, index);
+
+      turns.push({
+        turn,
+        prompt: stepPrompt,
+        rawResponse,
+        parsedResponse,
+        toolResults: [],
+        hasWriteActions: parsedResponse.actions.length > 0,
+        retryCount
+      });
+
+      const result = createAgentLoopResult({
+        status: "ready_to_write",
+        finalResponse: parsedResponse,
+        turns,
+        summary: parsedResponse.message ?? parsedResponse.summary,
+        proposedPlan:
+          index + 1 < plan.steps.length
+            ? {
+                ...plan,
+                totalEstimatedSteps: plan.steps.length - (index + 1),
+                steps: plan.steps.slice(index + 1)
+              }
+            : undefined,
+        conversationHistory
+      });
+      callbacks.onComplete?.(result);
+      return result;
+    }
+
+    const readOutcome = await runtime.executeReadActions({
+      sessionId: config.sessionId,
+      turnId: config.turnId,
+      loopTurn: turn,
+      maxTurns: plan.steps.length,
+      actions: parsedResponse.actions
+    });
+    callbacks.onToolResults?.(turn, readOutcome.toolResults);
+
+    const stepResult =
+      readOutcome.toolResults[0] ??
+      ({
+        tool: step.tool,
+        args: step.args ?? {},
+        ok: true,
+        result: null,
+        error: undefined
+      } satisfies ToolExecutionResult);
+    completedResults.push(...readOutcome.toolResults);
+    callbacks.onStepComplete?.(step, index, stepResult);
+
+    turns.push({
+      turn,
+      prompt: stepPrompt,
+      rawResponse,
+      parsedResponse,
+      toolResults: readOutcome.toolResults,
+      hasWriteActions: readOutcome.hasWriteActions,
+      retryCount
+    });
+    turnSummaries.push(summarizeTurn(turn, parsedResponse.status, readOutcome.toolResults));
+
+    if (!readOutcome.shouldContinue) {
+      const result = createAgentLoopResult({
+        status: parsedResponse.status,
+        finalResponse: parsedResponse,
+        turns,
+        summary: readOutcome.guardMessage ?? `Plan execution stopped at step ${turn}.`,
+        proposedPlan: {
+          ...plan,
+          steps: plan.steps.slice(index + 1)
+        },
+        conversationHistory
+      });
+      callbacks.onComplete?.(result);
+      return result;
+    }
+  }
+
+  const result = createAgentLoopResult({
+    status: "done",
+    finalResponse: turns[turns.length - 1]?.parsedResponse ?? null,
+    turns,
+    summary: `全 ${plan.steps.length} ステップが完了しました。`,
+    conversationHistory
+  });
+  callbacks.onComplete?.(result);
+  return result;
 }

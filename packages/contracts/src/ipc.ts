@@ -8,6 +8,8 @@ import {
 } from "./file";
 import {
   copilotTurnResponseSchema,
+  executionPlanSchema,
+  planStepSchema,
   relayPacketSchema,
   validationIssueSchema
 } from "./relay";
@@ -334,12 +336,22 @@ export const copilotHandoffReasonSchema = z.object({
   label: z.string().trim().min(1),
   detail: z.string().trim().min(1)
 });
+export const planningContextToolGroupsSchema = z.object({
+  read: z.array(z.string().trim().min(1)).default([]),
+  write: z.array(z.string().trim().min(1)).default([])
+});
+export const planningContextSchema = z.object({
+  workbookSummary: z.string().trim().min(1),
+  availableTools: planningContextToolGroupsSchema,
+  suggestedApproach: z.array(z.string().trim().min(1)).default([])
+});
 export const assessCopilotHandoffResponseSchema = z.object({
   status: copilotHandoffStatusSchema,
   headline: z.string().trim().min(1),
   summary: z.string().trim().min(1),
   reasons: z.array(copilotHandoffReasonSchema).default([]),
-  suggestedActions: z.array(z.string().trim().min(1)).default([])
+  suggestedActions: z.array(z.string().trim().min(1)).default([]),
+  planningContext: planningContextSchema.optional()
 });
 
 export const submitCopilotResponseRequestSchema = z.object({
@@ -433,6 +445,45 @@ export const executeReadActionsResponseSchema = z.object({
   guardMessage: z.string().trim().min(1).optional()
 });
 
+export const planStepStatusSchema = z.object({
+  stepId: z.string().trim().min(1),
+  state: z.enum(["pending", "running", "completed", "skipped", "failed"]),
+  result: z.unknown().optional(),
+  error: z.string().trim().min(1).optional()
+});
+
+export const approvePlanRequestSchema = z.object({
+  sessionId: entityIdSchema,
+  turnId: entityIdSchema,
+  approvedStepIds: z.array(z.string().trim().min(1)).default([]),
+  modifiedSteps: z.array(planStepSchema).default([])
+});
+
+export const approvePlanResponseSchema = z.object({
+  approved: z.boolean(),
+  plan: executionPlanSchema
+});
+
+export const planProgressRequestSchema = z.object({
+  sessionId: entityIdSchema,
+  turnId: entityIdSchema
+});
+
+export const planProgressResponseSchema = z.object({
+  currentStepId: z.string().trim().min(1).nullable(),
+  completedCount: z.number().int().min(0),
+  totalCount: z.number().int().min(0),
+  stepStatuses: z.array(planStepStatusSchema).default([])
+});
+export const recordPlanProgressRequestSchema = z.object({
+  sessionId: entityIdSchema,
+  turnId: entityIdSchema,
+  currentStepId: z.string().trim().min(1).nullable(),
+  completedCount: z.number().int().min(0),
+  totalCount: z.number().int().min(0),
+  stepStatuses: z.array(planStepStatusSchema).default([])
+});
+
 export const previewExecutionResponseSchema = z.object({
   turn: turnSchema,
   ready: z.boolean(),
@@ -479,11 +530,16 @@ export const copilotBrowserErrorCodeSchema = z.enum([
 ]);
 
 export const copilotBrowserResultSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("ok"), response: z.string() }),
+  z.object({
+    status: z.literal("ok"),
+    response: z.string(),
+    cdpPort: z.number().int().positive().optional()
+  }),
   z.object({
     status: z.literal("error"),
     errorCode: copilotBrowserErrorCodeSchema,
-    message: z.string()
+    message: z.string(),
+    cdpPort: z.number().int().positive().optional()
   })
 ]);
 
@@ -553,6 +609,10 @@ export type AssessCopilotHandoffRequest = z.infer<
   typeof assessCopilotHandoffRequestSchema
 >;
 export type CopilotHandoffReason = z.infer<typeof copilotHandoffReasonSchema>;
+export type PlanningContextToolGroups = z.infer<
+  typeof planningContextToolGroupsSchema
+>;
+export type PlanningContext = z.infer<typeof planningContextSchema>;
 export type AssessCopilotHandoffResponse = z.infer<
   typeof assessCopilotHandoffResponseSchema
 >;
@@ -568,6 +628,14 @@ export type ExecuteReadActionsRequest = z.infer<
 >;
 export type ExecuteReadActionsResponse = z.infer<
   typeof executeReadActionsResponseSchema
+>;
+export type PlanStepStatus = z.infer<typeof planStepStatusSchema>;
+export type ApprovePlanRequest = z.infer<typeof approvePlanRequestSchema>;
+export type ApprovePlanResponse = z.infer<typeof approvePlanResponseSchema>;
+export type PlanProgressRequest = z.infer<typeof planProgressRequestSchema>;
+export type PlanProgressResponse = z.infer<typeof planProgressResponseSchema>;
+export type RecordPlanProgressRequest = z.infer<
+  typeof recordPlanProgressRequestSchema
 >;
 export type PreviewExecutionRequest = z.infer<typeof previewExecutionRequestSchema>;
 export type PreviewExecutionResponse = z.infer<typeof previewExecutionResponseSchema>;

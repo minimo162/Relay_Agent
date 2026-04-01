@@ -39,7 +39,9 @@ pub fn preflight_workbook(request: PreflightWorkbookRequest) -> WorkbookPrefligh
 }
 
 #[tauri::command]
-pub fn inspect_workbook(request: InspectWorkbookRequest) -> Result<InspectWorkbookResponse, String> {
+pub fn inspect_workbook(
+    request: InspectWorkbookRequest,
+) -> Result<InspectWorkbookResponse, String> {
     let source = WorkbookSource::detect(&request.workbook_path)?;
     let engine = WorkbookEngine::default();
     let profile = engine.inspect_workbook(&source)?;

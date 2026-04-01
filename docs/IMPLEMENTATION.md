@@ -2,17 +2,17 @@
 
 ## Status
 
-- Current phase: Milestone 5 and the browser automation follow-up implementation slice are in place; tasks `11` through `67` plus `69` through `75` remain complete, task `68` remains open for the Windows Tauri E2E walkthrough, and browser automation tasks `76` through `83` are now partially implemented with manual verification still pending
+- Current phase: the browser automation, agent loop, CDP auto-launch, and autonomous-planning slices through plan approval, plan execution UI, persistence, and settings are implemented in source; the remaining open work is the manual Windows + M365 verification backlog
 - Repository state: pnpm workspace, SvelteKit SPA shell, Tauri v2 shell, and shared contracts package are now bootstrapped and verification-clean
 - Active source-of-truth documents:
   - `PLANS.md`
   - `AGENTS.md`
   - `docs/IMPLEMENTATION.md`
   - `.taskmaster/docs/repo_audit.md`
-- Follow-up planning input: `.taskmaster/docs/prd.txt` now acts as the integrated PRD for the current UI and Copilot JSON reliability follow-up, while `.taskmaster/docs/archive/prd_guided_workflow_simplification.txt` remains the archived guided-flow simplification reference and the startup, launch, workflow, artifact-browser, turn-lifecycle, and signing follow-ups stay preserved under `.taskmaster/docs/archive/`
-- Follow-up task graph: `.taskmaster/tasks/tasks.json` now covers the completed foundation and guided-flow work through task `75`, the still-pending Windows walkthrough task `68`, and the new browser automation follow-up tasks `76` through `83`, with implementation-backed subtasks completed where artifacts now exist and manual M365-dependent verification still left open
+- Follow-up planning input: `.taskmaster/docs/prd.txt` now acts as the integrated PRD for the UI, browser automation, agent loop, CDP auto-launch, and autonomous-planning follow-ups, while the earlier simplification, startup, launch, workflow, artifact-browser, turn-lifecycle, and signing references remain preserved under `.taskmaster/docs/archive/`
+- Follow-up task graph: `.taskmaster/tasks/tasks.json` now covers the completed guided-flow work, the browser automation follow-up (`76` through `83`), the agent-loop follow-up (`84` through `95`), the CDP auto-launch follow-up (`104` through `108`), and the autonomous-planning follow-up (`109` through `123`), with implementation-backed work closed where artifacts exist and manual Windows/M365 verification left pending
 - Follow-up packaging policy: `docs/PACKAGING_POLICY.md` now fixes the first packaged end-user release path to Windows 10/11 x64 via NSIS, with manual installer-driven updates and preserved app-local storage across upgrades as the current expectation
-- Follow-up implementation status: Tasks `11` through `67` and `69` through `75` remain complete. Browser automation code now adds the Playwright CDP helper script, Tauri shell integration, Step 2 auto-send UI, persisted CDP settings, and Japanese error mapping, while the real M365 selector confirmation, live Copilot send verification, and end-to-end walkthroughs for tasks `76`, `78`, and `83` still require manual execution in a logged-in Edge session
+- Follow-up implementation status: browser automation source, multi-turn agent-loop source, CDP auto-launch source, and the autonomous execution flow through plan approval, progress tracking, write-step gating, persistence, replan, and settings are in place. Task `84` is backed by `docs/AGENT_LOOP_DESIGN.md`, task `109` is backed by `docs/AUTONOMOUS_EXECUTION_DESIGN.md`, and task `123` is now backed by `docs/AUTONOMOUS_EXECUTION_E2E_VERIFICATION.md` as the remaining manual checklist. The remaining open items are the live selector checks and the Windows/M365 manual walkthroughs.
 
 ## Milestone Log
 
@@ -2293,6 +2293,19 @@ Observed result:
 - `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop check`, `pnpm --filter @relay-agent/desktop build`, `pnpm --filter @relay-agent/desktop tauri:build`, and `git diff --check` all pass after the agent-loop implementation.
 - Task Master now records tasks `86`, `87`, `88`, `89`, `90`, `91`, `92`, and `94` as implemented, while task `95` remains open pending manual E2E execution against a real M365 Copilot session.
 
+Agent loop design artifact verification:
+
+```bash
+test -f docs/AGENT_LOOP_DESIGN.md
+node -e "const fs=require('fs'); const data=JSON.parse(fs.readFileSync('.taskmaster/tasks/tasks.json','utf8')); const task84=data.master.tasks.find((task)=>task.id==='84'); const task95=data.master.tasks.find((task)=>task.id==='95'); console.log(JSON.stringify({task84: task84?.status, task95: task95?.status}, null, 2));"
+```
+
+Observed result:
+
+- `docs/AGENT_LOOP_DESIGN.md` now captures the PRD section `14` loop contract, state machine, read/write classification, safety guards, UI transitions, and the manual-verification boundary for task `95`.
+- `.taskmaster/tasks/tasks.json` now marks task `84` as done and keeps task `95` pending.
+- The design note explicitly documents the current guard baseline and calls out that duplicate read-action warnings are still weaker than the aspirational PRD wording, so the manual verification task stays meaningful.
+
 UI / UX milestone verification:
 
 ```bash
@@ -2317,3 +2330,145 @@ Observed result:
 - `git diff --check` passes.
 - `pnpm --filter @relay-agent/desktop tauri:build` reaches the release build and bundle steps successfully, but fails at the final Linux packaging stage with `failed to bundle project 'failed to run linuxdeploy'`. The app binary and intermediate bundles are still produced; the remaining failure is packaging-environment-specific rather than a TypeScript or Rust compile regression.
 - Task Master now records tasks `96` through `103` as implemented based on the new welcome helper, error helper, updated Step 1/2/3 UI, and successful desktop `check` / `build` verification.
+
+CDP auto-launch / port-scan verification:
+
+```bash
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop check
+pnpm --filter @relay-agent/desktop copilot-browser:build
+pnpm --filter @relay-agent/desktop build
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+node apps/desktop/scripts/dist/copilot-browser.js --action connect --auto-launch
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/scripts/copilot-browser.ts` now scans `9333-9342`, detects an already-running CDP Edge, auto-launches `msedge.exe` on a free port when needed, waits for `/json/version`, and emits stdout progress events plus the resolved `cdpPort` in the final JSON result.
+- `apps/desktop/src/lib/copilot-browser.ts` now passes `--auto-launch` when `autoLaunchEdge` is enabled, filters progress JSON lines from stdout, forwards progress callbacks to the UI, and logs the resolved CDP port from the script result.
+- `apps/desktop/src/lib/continuity.ts` now persists `autoLaunchEdge: true` by default and keeps manual-port mode available with the new `9333` default port.
+- `apps/desktop/src/lib/agent-loop.ts` and `apps/desktop/src/routes/+page.svelte` now surface browser progress messages during both one-shot sends and agent-loop sends, add the new auto-launch toggle in settings, hide the manual port input when auto-launch is enabled, and update the in-app Edge launch guide to the current command.
+- `apps/desktop/src/lib/error-messages.ts` now adds friendly messages for the all-ports-in-use case, Edge launch timeout, and missing `msedge.exe`, while keeping the generic CDP-unavailable path aligned with the new auto-launch flow.
+- `docs/BROWSER_AUTOMATION.md` and `docs/BROWSER_AUTOMATION_VERIFICATION.md` now describe the `--auto-launch` workflow, the `9333-9342` scan range, and the revised manual verification expectations.
+- `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop check`, `pnpm --filter @relay-agent/desktop copilot-browser:build`, `pnpm --filter @relay-agent/desktop build`, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `git diff --check` all pass after the CDP auto-launch changes.
+- `node apps/desktop/scripts/dist/copilot-browser.js --action connect --auto-launch` now emits progress JSON lines and then returns `{"status":"error","errorCode":"CDP_UNAVAILABLE","message":"Failed to launch Edge: spawn msedge.exe ENOENT"}` in this Linux environment, which confirms the new auto-launch path and the missing-Edge error handling without requiring a Windows Edge install.
+- Task Master now records tasks `104` through `108` as implemented; the remaining browser-automation manual M365 verification tasks stay open separately.
+
+Autonomous planning contracts and frontend foundation verification:
+
+```bash
+test -f docs/AUTONOMOUS_EXECUTION_DESIGN.md
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop typecheck
+cd apps/desktop && pnpm dlx tsx --test src/lib/agent-loop-prompts.test.ts
+pnpm dlx tsx -e "import { copilotTurnResponseSchema, executionPlanSchema, approvePlanRequestSchema, planProgressResponseSchema } from './packages/contracts/src/index.ts'; const legacy = copilotTurnResponseSchema.parse({ summary: 'ok', actions: [] }); const planned = copilotTurnResponseSchema.parse({ status: 'plan_proposed', summary: 'plan', actions: [], executionPlan: { summary: '3 steps', totalEstimatedSteps: 3, steps: [{ id: 'step-1', description: 'inspect', tool: 'workbook.inspect', phase: 'read' }] } }); const approve = approvePlanRequestSchema.parse({ sessionId: 'session-1', turnId: 'turn-1', approvedStepIds: ['step-1'] }); const progress = planProgressResponseSchema.parse({ currentStepId: null, completedCount: 0, totalCount: 1, stepStatuses: [{ stepId: 'step-1', state: 'pending' }] }); console.log(JSON.stringify({ legacyStatus: legacy.status, plannedStatus: planned.status, planSteps: executionPlanSchema.parse(planned.executionPlan).steps.length, approvedCount: approve.approvedStepIds.length, progressCount: progress.stepStatuses.length }));"
+git diff --check -- docs/AUTONOMOUS_EXECUTION_DESIGN.md packages/contracts/src/relay.ts packages/contracts/src/ipc.ts apps/desktop/src/lib/agent-loop.ts apps/desktop/src/lib/agent-loop-prompts.ts apps/desktop/src/lib/agent-loop-prompts.test.ts apps/desktop/src/routes/+page.svelte .taskmaster/tasks/tasks.json PLANS.md docs/IMPLEMENTATION.md
+```
+
+Observed result:
+
+- `docs/AUTONOMOUS_EXECUTION_DESIGN.md` now captures the planning-first state machine, planning prompt contract, `ExecutionPlan` schema, approval semantics, and guardrails for tasks `109` through `113`.
+- `packages/contracts/src/relay.ts` now adds `plan_proposed`, `planStepSchema`, `executionPlanSchema`, and optional `executionPlan` on `copilotTurnResponseSchema` while preserving backward compatibility for legacy one-shot responses.
+- `packages/contracts/src/ipc.ts` now defines the plan approval and plan progress schemas needed by later backend/UI tasks: `planStepStatusSchema`, `approvePlanRequestSchema`, `approvePlanResponseSchema`, `planProgressRequestSchema`, and `planProgressResponseSchema`.
+- `apps/desktop/src/lib/agent-loop.ts` now supports `planningEnabled`, stops with `awaiting_plan_approval` when a `plan_proposed` response is returned, and adds `resumeAgentLoopWithPlan()` for stepwise execution until a write step is reached.
+- `apps/desktop/src/lib/agent-loop-prompts.ts` now holds the pure planning and step-execution prompt builders, and `apps/desktop/src/lib/agent-loop-prompts.test.ts` passes under `node:test`.
+- The schema probe returns `{"legacyStatus":"ready_to_write","plannedStatus":"plan_proposed","planSteps":1,"approvedCount":1,"progressCount":1}`, confirming backward compatibility plus the new planning payload shapes.
+- `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop typecheck`, the prompt unit test, and `git diff --check` all pass after the autonomous-planning changes.
+- Task Master now records tasks `109` through `113` as implemented. Tasks `114` and later remain open because backend approval IPC commands, plan review UI, progress UI, and execution-state persistence are not part of this slice yet.
+
+Autonomous execution approval / UI / persistence verification:
+
+```bash
+test -f docs/AUTONOMOUS_EXECUTION_E2E_VERIFICATION.md
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop typecheck
+pnpm check
+cd apps/desktop && pnpm dlx tsx --test src/lib/agent-loop-prompts.test.ts
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `packages/contracts/src/ipc.ts` now extends the autonomous-planning contract with `planningContext`, the plan approval / progress request-response schemas, and the persisted plan-progress write schema used by the desktop UI.
+- `apps/desktop/src-tauri/src/models.rs`, `apps/desktop/src-tauri/src/execution.rs`, `apps/desktop/src-tauri/src/lib.rs`, and `apps/desktop/src-tauri/src/storage.rs` now implement `approve_plan`, `get_plan_progress`, and `record_plan_progress`, persist `execution-plan` plus `plan-progress` artifacts, and expose planning context from `assess_copilot_handoff`.
+- `apps/desktop/src/lib/ipc.ts`, `apps/desktop/src/lib/continuity.ts`, `apps/desktop/src/lib/agent-loop.ts`, and `apps/desktop/src/lib/agent-loop-prompts.ts` now wire the new IPC commands, persist autonomous settings, support write-step handoff inside `resumeAgentLoopWithPlan()`, and allow step-by-step pausing before the next plan step.
+- `apps/desktop/src/routes/+page.svelte` now shows a plan review panel with step deletion and reorder controls, supports feedback-driven replanning, renders autonomous execution progress and pause/resume controls, routes write steps into the existing preview/save gate, and resumes the remaining approved plan after save-copy execution.
+- `docs/AUTONOMOUS_EXECUTION_E2E_VERIFICATION.md` now captures the manual Windows + M365 validation checklist for task `123`.
+- `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop typecheck`, `pnpm check`, the prompt unit test, `cargo check`, `cargo test`, and `git diff --check` all pass after the autonomous execution follow-up.
+- Task Master now records tasks `114` through `122` as implemented. Task `123` remains pending because the manual Windows + M365 E2E checklist has not been executed in this environment.
+
+Delegation UI implementation verification:
+
+```bash
+test -f docs/DELEGATION_UI_DESIGN.md
+test -f docs/DELEGATION_UI_E2E_VERIFICATION.md
+pnpm check
+pnpm typecheck
+pnpm workflow:test
+cd apps/desktop && pnpm dlx tsx --test src/lib/stores/delegation.test.ts
+cd apps/desktop && pnpm dlx tsx --test src/lib/agent-loop-prompts.test.ts
+git diff --check
+```
+
+Observed result:
+
+- `docs/DELEGATION_UI_DESIGN.md` now defines the delegation-first component tree, state model, activity event contract, coexistence strategy with manual mode, responsive layout rules, and migration boundaries for tasks `124` through `136`.
+- `apps/desktop/src/lib/components/` now contains extracted UI primitives for the existing manual flow and the new delegation flow: `RecentSessions`, `GoalInput`, `AgentActivityFeed`, `SheetDiffCard`, `ApprovalGate`, `SettingsModal`, `ChatComposer`, `ActivityFeed`, `InterventionPanel`, and `CompletionTimeline`.
+- `apps/desktop/src/lib/stores/delegation.ts` now implements the delegation state machine plus timestamped activity-feed storage, and `apps/desktop/src/lib/stores/delegation.test.ts` covers the goal-to-approval lifecycle and feed append behavior.
+- `apps/desktop/src/lib/continuity.ts` now persists `uiMode` plus delegation drafts, including the goal, attached files, activity feed snapshot, plan snapshot, and normalized execution state for restoration.
+- `apps/desktop/src/routes/+page.svelte` now defaults to delegation mode, keeps the existing three-step workflow intact behind a manual-mode toggle, auto-starts the agent loop from the delegation composer, emits live activity-feed entries during planning/execution, routes plan/write interventions into the delegation sidebar, persists drafts, and adds the delegation keyboard shortcuts.
+- `docs/DELEGATION_UI_E2E_VERIFICATION.md` now captures the Windows + M365 manual checklist for task `137`, covering goal-first execution, plan/write interventions, automation fallback, keyboard shortcuts, persistence, and responsive layout.
+- `pnpm check`, `pnpm typecheck`, `pnpm workflow:test`, both `tsx --test` runs, and `git diff --check` all pass after the delegation UI follow-up.
+- Task Master now records tasks `124` through `136` as implemented. Task `137` remains pending because the manual Windows + M365 E2E checklist has not been executed in this environment.
+
+Copilot integration enhancement verification:
+
+```bash
+test -f docs/MULTI_SESSION_COPILOT.md
+test -f docs/COPILOT_INTEGRATION_E2E_VERIFICATION.md
+pnpm --filter @relay-agent/desktop typecheck
+cd apps/desktop && pnpm dlx tsx --test src/lib/agent-loop-prompts.test.ts
+cd apps/desktop && pnpm dlx tsx --test src/lib/prompt-templates.test.ts
+cd apps/desktop && pnpm dlx tsx --test src/lib/agent-loop-core.test.ts
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src/lib/prompt-templates.ts` now provides the stronger planning prompt, compressed-context builder, turn summarizer, step follow-up prompt, and structured error-recovery prompts required by tasks `138` through `140`.
+- `apps/desktop/src/lib/agent-loop.ts` now applies those templates during both direct loop execution and approved-plan execution, carries `conversationHistory` through the result contract, retries malformed/timeout Copilot turns before falling back, and preserves compressed turn summaries for longer loops.
+- `apps/desktop/src/lib/agent-loop-core.ts` now isolates the retry/manual-fallback request path so the malformed-JSON recovery flow can be unit-tested without the full desktop runtime.
+- `apps/desktop/src/lib/continuity.ts` and `apps/desktop/src/routes/+page.svelte` now persist and restore delegation conversation history snapshots, and reuse that history when resuming post-plan execution.
+- `docs/MULTI_SESSION_COPILOT.md` now records the feasibility assessment for multiple Copilot sessions and explicitly keeps the shipped workflow single-session.
+- `docs/COPILOT_INTEGRATION_E2E_VERIFICATION.md` now captures the Windows + M365 manual checklist for task `143`, covering prompt quality, context compression, retry/fallback behavior, persisted history, and the single-session safety boundary.
+- `pnpm --filter @relay-agent/desktop typecheck`, the three `tsx --test` runs, and `git diff --check` all pass after the Copilot enhancement follow-up.
+- Task Master now records tasks `138` through `142` as implemented. Task `143` remains pending because the manual Windows + M365 E2E checklist has not been executed in this environment.
+
+Implementation quality fixes verification:
+
+```bash
+pnpm -C packages/contracts build
+pnpm check
+pnpm typecheck
+cd apps/desktop && pnpm dlx tsx --test src/lib/agent-loop-core.test.ts
+cd apps/desktop && pnpm dlx tsx --test src/lib/prompt-templates.test.ts
+cd apps/desktop && pnpm dlx tsx --test src/lib/agent-loop-prompts.test.ts
+cd apps/desktop && pnpm dlx tsx --test src/lib/stores/delegation.test.ts
+cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/models.rs` now defines typed `ExecutionPlan`, `PlanStep`, `PlanStepPhase`, and `PlanStepState`, so the backend no longer treats autonomous plan payloads as unvalidated raw JSON blobs during approval/progress handling.
+- `apps/desktop/src-tauri/src/storage.rs` now filters approved steps and reconstructs default plan progress from typed Rust structs instead of `Value::get(...)` access, while preserving the existing camelCase IPC JSON shape.
+- `apps/desktop/src/lib/agent-loop-core.ts` now trims `conversationHistory` to a bounded size and removes abort listeners when the wrapped promise settles, avoiding unbounded history growth and per-turn abort-listener accumulation.
+- `apps/desktop/src/lib/prompt-templates.ts` now returns an explicit manual-fallback message for retry level `3`, which keeps the fallback prompt self-contained instead of relying on an empty-string sentinel.
+- `apps/desktop/src/lib/components/ChatComposer.svelte` now extracts file basenames from both `/` and `\\` path separators, so Windows-native Tauri file paths render correctly in the delegation composer.
+- `apps/desktop/src/lib/stores/delegation.ts` now caps the activity feed to the most recent `200` events, and the refreshed store tests cover lifecycle, hydrate/error handling, and feed trimming.
+- `pnpm -C packages/contracts build`, `pnpm check`, `pnpm typecheck`, the updated `tsx --test` suites, `cargo build`, `cargo test`, and `git diff --check` all pass after these implementation fixes.
+- This prompt did not correspond to a separate Task Master milestone, so `.taskmaster/tasks/tasks.json` was left unchanged.

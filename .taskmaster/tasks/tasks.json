@@ -2037,7 +2037,7 @@
             "id": 1,
             "title": "Playwright の追加と scripts/ ディレクトリ作成",
             "description": "pnpm add -D playwright。scripts/copilot-browser.ts の雛形作成",
-            "status": "pending",
+            "status": "done",
             "dependencies": []
           },
           {
@@ -2062,7 +2062,7 @@
             "id": 4,
             "title": "docs/BROWSER_AUTOMATION.md の作成",
             "description": "設計成果物（スタック選定・フロー図・確認済みセレクタ・API エンドポイント・設定項目）をドキュメント化",
-            "status": "pending",
+            "status": "done",
             "dependencies": [
               3
             ]
@@ -2392,7 +2392,7 @@
         "id": "84",
         "title": "エージェントループ設計 — 多ターン会話プロトコルとループ制御の設計",
         "description": "フェーズ2の中核となるエージェントループの詳細設計。Copilotレスポンスのstatusフィールド追加、ループ制御フロー、read/write分類ロジック、安全ガードの仕様を確定する。",
-        "status": "pending",
+        "status": "done",
         "priority": "high",
         "dependencies": [
           "83"
@@ -2400,7 +2400,7 @@
         "details": "PRD §14 に基づき設計ドキュメント（docs/AGENT_LOOP_DESIGN.md）を作成。contracts/relay.ts の copilotTurnResponseSchema に status フィールドを追加。ループ制御の状態機械（thinking → ready_to_write → done）を定義。最大ターン数・タイムアウトのデフォルト値を確定。",
         "testStrategy": "設計ドキュメントが PRD §14 の全要件（ループフロー・安全ガード・UI遷移）をカバーしていることをレビューで確認。",
         "subtasks": [],
-        "updatedAt": "2026-04-01T00:00:00.000Z"
+        "updatedAt": "2026-04-01T12:00:00.000Z"
       },
       {
         "id": "85",
@@ -2547,7 +2547,7 @@
         "id": "95",
         "title": "E2E検証 — エージェントループ（手動）",
         "description": "実際の M365 Copilot を使ったエージェントループの E2E 検証を実施する。",
-        "status": "pending",
+        "status": "done",
         "priority": "high",
         "dependencies": [
           "90",
@@ -2648,13 +2648,1277 @@
         "details": "ステップ1のドロップゾーンを画面中央に大きく配置し、ドラッグ&ドロップと対応拡張子を明示。ステップ2の目的欄プレースホルダーに具体例（\"approved が true の行だけ残し...\"）を設定。「例を使う」クイックインサートボタン（3種類のプリセット）を入力欄下部に追加。PRD §16.9 参照。",
         "testStrategy": "ドロップゾーンにファイルをドラッグしたときのホバー状態を確認。プリセット例ボタンで目的欄にテキストが挿入されることを確認。",
         "subtasks": []
+      },
+      {
+        "id": "104",
+        "title": "CDP — ポート空き判定ユーティリティ",
+        "description": "TCP ソケット接続でポート 9333–9342 の空き/占有を判定する isPortFree() と findAvailableCdpPort() を実装する。",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "details": "scripts/copilot-browser.ts に net.createConnection を使ったポート判定関数を追加。CDP_PORT_RANGE_START=9333, CDP_PORT_RANGE_END=9342（10ポート）。isPortFree(port) は Promise<boolean> を返す（接続成功=占有=false、ECONNREFUSED=空き=true）。findAvailableCdpPort() は 9333 から順にスキャンし最初の空きポートを返す。全ポート占有時は CDP_UNAVAILABLE エラー。PRD §17.3 参照。",
+        "testStrategy": "ローカルで HTTP サーバーを立てたポートに対して isPortFree が false を返すことを確認。未使用ポートに対して true を返すことを確認。全ポート占有時にエラーがスローされることを確認。",
+        "subtasks": []
+      },
+      {
+        "id": "105",
+        "title": "CDP — 既存 Edge 検出 & Edge 自動起動",
+        "description": "CDP モードで既に起動済みの Edge を探索範囲内で検出し、なければ空きポートで Edge を自動起動する。",
+        "status": "done",
+        "dependencies": [
+          "104"
+        ],
+        "priority": "high",
+        "details": "findExistingCdpEdge(): ポート 9333–9342 を順に fetch('http://127.0.0.1:{port}/json/version') で確認し、応答があればそのポートを返す。なければ null。launchEdgeWithCdp(port): child_process.execFile で msedge.exe --remote-debugging-port={port} --no-first-run を detached 起動。waitForCdpReady(port, {maxWaitMs:5000, intervalMs:500}): /json/version が ok を返すまでポーリング。統合フロー: findExistingCdpEdge() → 見つかればそのポートで接続、なければ findAvailableCdpPort() → launchEdgeWithCdp() → 接続。PRD §17.4, §17.6 参照。",
+        "testStrategy": "Edge 未起動状態で launchEdgeWithCdp が Edge プロセスを起動し /json/version が応答することを確認。既に CDP Edge が起動中なら findExistingCdpEdge がそのポートを返すことを確認。",
+        "subtasks": []
+      },
+      {
+        "id": "106",
+        "title": "CDP — connectToBrowser 拡張（自動/手動モード）",
+        "description": "connectToBrowser() を拡張し、autoLaunchEdge フラグに応じて自動ポート探索+起動モードと従来の手動モードを切り替える。",
+        "status": "done",
+        "dependencies": [
+          "105"
+        ],
+        "priority": "high",
+        "details": "CliOptions に autoLaunchEdge: boolean を追加。connectToBrowser 内で autoLaunchEdge=true の場合: (1) findExistingCdpEdge() (2) なければ findAvailableCdpPort() + launchEdgeWithCdp() (3) connectOverCDP。autoLaunchEdge=false の場合: 従来どおり options.cdpPort に直接 connectOverCDP。フロントエンド側 copilot-browser.ts の runBrowserCommand() で --auto-launch フラグを渡す。接続成功時に実際に使用したポート番号を結果に含める。PRD §17.5 参照。",
+        "testStrategy": "autoLaunchEdge=true で Edge 未起動時に自動起動されることを確認。autoLaunchEdge=false で従来の単一ポート接続が維持されることを確認。",
+        "subtasks": []
+      },
+      {
+        "id": "107",
+        "title": "CDP — 設定スキーマ & UI 更新",
+        "description": "BrowserAutomationSettings に autoLaunchEdge フラグを追加し、設定モーダルの UI を更新する。",
+        "status": "done",
+        "dependencies": [
+          "106"
+        ],
+        "priority": "medium",
+        "details": "continuity.ts: BrowserAutomationSettings に autoLaunchEdge: boolean（デフォルト true）を追加。cdpPort デフォルトを 9222 → 9333 に変更。設定モーダル: autoLaunchEdge トグル「Edge を自動で起動する（推奨）」を追加。ON 時はポート入力欄をグレーアウトし「自動選択（9333–9342）」と表示。OFF 時は従来どおりポート番号手動入力。CDP セットアップガイドのコマンド例も 9333 に更新。PRD §17.7, §17.8 参照。",
+        "testStrategy": "autoLaunchEdge トグル ON/OFF でポート入力欄の有効/無効が切り替わることを確認。設定を保存して再読み込み後に値が維持されることを確認。",
+        "subtasks": []
+      },
+      {
+        "id": "108",
+        "title": "CDP — 送信中ステータス表示 & エラーメッセージ拡充",
+        "description": "ポート探索・Edge 起動・接続の各段階をステータスメッセージで表示し、新規エラーパターンのユーザーフレンドリーメッセージを追加する。",
+        "status": "done",
+        "dependencies": [
+          "106",
+          "102"
+        ],
+        "priority": "medium",
+        "details": "送信中ステータス: 「空きポートを探索中…」→「Edge を起動中（ポート 9335）…」→「接続しました」を段階的に +page.svelte のステータス表示に反映。copilot-browser.ts の stdout に progress イベントを追加（JSON lines 形式）。エラーメッセージ拡充: error-messages.ts に全ポート占有（9333–9342 がすべて使用中）、Edge 起動失敗（Edge がインストールされているか確認）、CDP 待機タイムアウト（Edge は起動したが CDP 未応答）を追加。PRD §17.7 参照。",
+        "testStrategy": "自動起動時に段階的なステータスメッセージが表示されることを確認。全ポート占有時にユーザーフレンドリーなエラーが表示されることを確認。",
+        "subtasks": []
+      },
+      {
+        "id": "109",
+        "title": "設計 — 自律実行プランニングプロトコル",
+        "description": "Copilot がまず実行計画（ExecutionPlan）を提案し、ユーザーが承認してから自律実行するプランニングプロトコルを設計する。",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "details": "agentLoopStatusSchema に plan_proposed を追加。PlanStep / ExecutionPlan スキーマを設計。プラン承認・修正・拒否の契約を定義。docs/AUTONOMOUS_EXECUTION_DESIGN.md にプロトコル全体を文書化。プランニングフェーズは既存エージェントループの最初のターンで Copilot に計画を要求する形式。",
+        "testStrategy": "設計ドキュメントが存在し、プロトコル全体・状態遷移・影響するスキーマをカバーしていること。",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "プランニングプロトコルと状態遷移の設計ドキュメント作成",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 2,
+            "title": "プランニングフェーズ用プロンプトテンプレートの設計",
+            "status": "done",
+            "dependencies": [
+              1
+            ]
+          },
+          {
+            "id": 3,
+            "title": "プラン修正・承認・キャンセルセマンティクスの定義",
+            "status": "done",
+            "dependencies": [
+              1
+            ]
+          }
+        ],
+        "updatedAt": "2026-04-01T13:00:00Z"
+      },
+      {
+        "id": "110",
+        "title": "Contracts 拡張 — ExecutionPlan & PlanStep スキーマ",
+        "description": "packages/contracts/src/relay.ts に executionPlanSchema, planStepSchema を追加し、agentLoopStatusSchema に plan_proposed を追加する。",
+        "status": "done",
+        "dependencies": [
+          "109"
+        ],
+        "priority": "high",
+        "details": "PlanStep: id, description, tool, phase (read|write), args (optional), estimatedEffect。ExecutionPlan: steps[], summary, totalEstimatedSteps。CopilotTurnResponse に optional executionPlan フィールドを追加。後方互換性を維持。",
+        "testStrategy": "pnpm typecheck 通過。既存 relay スキーマテスト通過。新スキーマでサンプルプラン JSON をパース。",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "planStepSchema と executionPlanSchema を relay.ts に追加",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 2,
+            "title": "agentLoopStatusSchema に plan_proposed を追加",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 3,
+            "title": "copilotTurnResponseSchema に executionPlan を追加",
+            "status": "done",
+            "dependencies": [
+              1,
+              2
+            ]
+          },
+          {
+            "id": 4,
+            "title": "index.ts からエクスポートし typecheck 通過確認",
+            "status": "done",
+            "dependencies": [
+              3
+            ]
+          }
+        ],
+        "updatedAt": "2026-04-01T13:00:00Z"
+      },
+      {
+        "id": "111",
+        "title": "Contracts 拡張 — プラン承認 IPC スキーマ",
+        "description": "プラン承認・修正・進行状態追跡の IPC リクエスト/レスポンススキーマを追加する。",
+        "status": "done",
+        "dependencies": [
+          "110"
+        ],
+        "priority": "high",
+        "details": "ApprovePlanRequest (sessionId, turnId, approvedStepIds[], modifiedSteps[])。ApprovePlanResponse (approved, plan)。PlanStepStatus (stepId, state, result?, error?)。PlanProgressEvent (currentStepId, completedCount, totalCount, stepStatuses[])。",
+        "testStrategy": "pnpm typecheck 通過。新スキーマでサンプルペイロードをパース。",
+        "updatedAt": "2026-04-01T13:00:00Z",
+        "subtasks": []
+      },
+      {
+        "id": "112",
+        "title": "フロントエンド — プランニングプロンプト生成",
+        "description": "Copilot に構造化実行計画を返すよう指示するプランニングモードプロンプトビルダーを作成する。",
+        "status": "done",
+        "dependencies": [
+          "110"
+        ],
+        "priority": "high",
+        "details": "buildPlanningPrompt(objective, workbookContext, availableTools) を agent-loop.ts または新規 plan-prompt.ts に作成。プロンプトは status: plan_proposed と executionPlan を含むレスポンスを要求。各ステップを read/write に分類する指示を含める。",
+        "testStrategy": "ユニットテスト: プロンプトに目標・ツール一覧・計画応答指示が含まれること。",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "buildPlanningPrompt() 関数の作成",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 2,
+            "title": "計画応答スキーマ指示付きプロンプトテンプレートの作成",
+            "status": "done",
+            "dependencies": [
+              1
+            ]
+          },
+          {
+            "id": 3,
+            "title": "プロンプト生成のユニットテスト追加",
+            "status": "done",
+            "dependencies": [
+              2
+            ]
+          }
+        ],
+        "updatedAt": "2026-04-01T13:00:00Z"
+      },
+      {
+        "id": "113",
+        "title": "フロントエンド — エージェントループ拡張（プランニングフェーズ）",
+        "description": "runAgentLoop にプランニングフェーズを追加。最初のターンで計画を要求し、plan_proposed が返ったらユーザーレビュー用に一時停止する。",
+        "status": "done",
+        "dependencies": [
+          "112",
+          "111"
+        ],
+        "priority": "high",
+        "details": "AgentLoopConfig に planningEnabled: boolean を追加。AgentLoopCallbacks に onPlanProposed?: (plan) => void を追加。plan_proposed 検出時は awaiting_plan_approval を返す。resumeAgentLoopWithPlan(config, approvedPlan, callbacks) で承認済み計画を逐次実行。",
+        "testStrategy": "モック sendToCopilot で最初のターンに計画を返すユニットテスト。",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "プランニング設定とコールバック型の追加",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 2,
+            "title": "メインループでのプラン検出と一時停止の実装",
+            "status": "done",
+            "dependencies": [
+              1
+            ]
+          },
+          {
+            "id": 3,
+            "title": "resumeAgentLoopWithPlan() の実装",
+            "status": "done",
+            "dependencies": [
+              2
+            ]
+          },
+          {
+            "id": 4,
+            "title": "プラン実行中のキャンセル/中断サポート追加",
+            "status": "done",
+            "dependencies": [
+              3
+            ]
+          }
+        ],
+        "updatedAt": "2026-04-01T13:00:00Z"
+      },
+      {
+        "id": "114",
+        "title": "バックエンド — プラン承認 IPC コマンド",
+        "description": "Tauri コマンド approve_plan と get_plan_progress を追加し、プラン承認と進行状態の保存・取得を行う。",
+        "status": "done",
+        "dependencies": [
+          "111"
+        ],
+        "priority": "high",
+        "details": "approve_plan はセッション状態に承認済みプランを保存。get_plan_progress はステップレベルの実行進捗を返す。既存の invokeWithPayload パターンに従う。",
+        "testStrategy": "cargo check 通過。サンプルプランペイロードでの IPC ラウンドトリップ。",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "approve_plan Tauri コマンドの実装",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 2,
+            "title": "get_plan_progress Tauri コマンドの実装",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 3,
+            "title": "フロントエンド IPC ラッパーを ipc.ts に追加",
+            "status": "done",
+            "dependencies": [
+              1,
+              2
+            ]
+          }
+        ],
+        "updatedAt": "2026-04-01T05:41:17Z"
+      },
+      {
+        "id": "115",
+        "title": "フロントエンド — プラン承認 UI",
+        "description": "提案されたステップ一覧を表示し、並べ替え・削除・修正・承認を行うプランレビュー UI コンポーネントを構築する。",
+        "status": "done",
+        "dependencies": [
+          "113",
+          "114"
+        ],
+        "priority": "high",
+        "details": "PlanStep をカード表示（ツール名・説明・推定効果・read/write バッジ）。write ステップは承認アイコンでハイライト。承認 / ステップ削除 / 並べ替え / 拒否（フィードバック付き）の操作。承認で resumeAgentLoopWithPlan() を起動。",
+        "testStrategy": "手動検証: プランカード表示、並べ替え動作、承認で実行開始。",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "PlanReview Svelte コンポーネントのステップカード作成",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 2,
+            "title": "ステップ削除・並べ替えインタラクションの実装",
+            "status": "done",
+            "dependencies": [
+              1
+            ]
+          },
+          {
+            "id": 3,
+            "title": "承認/拒否ボタンとエージェントループ連携",
+            "status": "done",
+            "dependencies": [
+              2
+            ]
+          },
+          {
+            "id": 4,
+            "title": "フィードバック付き拒否テキストエリアの追加",
+            "status": "done",
+            "dependencies": [
+              3
+            ]
+          }
+        ],
+        "updatedAt": "2026-04-01T05:41:17Z"
+      },
+      {
+        "id": "116",
+        "title": "フロントエンド — 自律実行の進行状態表示",
+        "description": "自律プラン実行中のリアルタイム進行状態を、ステップ別のチェックリスト/タイムラインとして表示する。",
+        "status": "done",
+        "dependencies": [
+          "115"
+        ],
+        "priority": "high",
+        "details": "既存エージェントループ進行パネルを拡張し、プランステップをタイムライン表示。実行中はスピナー、完了は結果サマリー、失敗はリトライ/スキップオプション。write ステップは「承認待ち」バッジで一時停止。",
+        "testStrategy": "手動検証: マルチステッププラン実行中の進行状態表示。",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "PlanProgress Svelte コンポーネント（ステップタイムライン）の作成",
+            "status": "done",
+            "dependencies": []
+          },
+          {
+            "id": 2,
+            "title": "onTurnStart / onToolResults コールバックでステップ状態更新",
+            "status": "done",
+            "dependencies": [
+              1
+            ]
+          },
+          {
+            "id": 3,
+            "title": "write ステップ承認ゲートの進行ビュー内インライン表示",
+            "status": "done",
+            "dependencies": [
+              2
+            ]
+          },
+          {
+            "id": 4,
+            "title": "キャンセル/一時停止コントロールの追加",
+            "status": "done",
+            "dependencies": [
+              3
+            ]
+          }
+        ],
+        "updatedAt": "2026-04-01T05:41:17Z"
+      },
+      {
+        "id": "117",
+        "title": "フロントエンド — 書き込みステップ承認ゲート",
+        "description": "プラン実行が write ステップに到達したら一時停止し、そのステップ固有のプレビュー（差分・影響行数・出力先）を表示する承認ゲートを実装する。",
+        "status": "done",
+        "dependencies": [
+          "116"
+        ],
+        "priority": "high",
+        "details": "エージェントループが write アクション検出時に一時停止。ステップ固有のプレビュー（SheetDiff 再利用）を表示。承認→次ステップへ、拒否→スキップまたはキャンセル。preview-before-write と approval-before-write の安全モデルを維持。",
+        "testStrategy": "手動検証: write ステップで一時停止、プレビュー表示、承認で実行継続。",
+        "updatedAt": "2026-04-01T05:41:17Z",
+        "subtasks": []
+      },
+      {
+        "id": "118",
+        "title": "バックエンド — プラン実行状態永続化",
+        "description": "プラン実行状態（完了ステップ、失敗ステップ、現在ステップ）をセッション/ターンモデルに永続化する。",
+        "status": "done",
+        "dependencies": [
+          "114"
+        ],
+        "priority": "medium",
+        "details": "storage.rs の Item 永続化パターンを再利用。新 ItemKind: execution-plan, plan-step-result。ページリフレッシュ後も状態を復元可能にする。",
+        "testStrategy": "cargo check, cargo test 通過。シミュレートされた再起動後もプラン状態が復元されること。",
+        "updatedAt": "2026-04-01T05:41:17Z",
+        "subtasks": []
+      },
+      {
+        "id": "119",
+        "title": "フロントエンド — プラン実行のキャンセル・一時停止",
+        "description": "自律プラン実行中のキャンセルと一時停止コントロールを実装する。",
+        "status": "done",
+        "dependencies": [
+          "116"
+        ],
+        "priority": "medium",
+        "details": "キャンセル: 現在ステップを中断し計画を停止。一時停止: 現在ステップ完了後に待機。再開: 次の保留ステップから継続。既存の AbortSignal パターンを再利用。ステップ間の paused 状態を追加。",
+        "testStrategy": "手動検証: 実行中に一時停止、再開で継続。",
+        "updatedAt": "2026-04-01T05:41:17Z",
+        "subtasks": []
+      },
+      {
+        "id": "120",
+        "title": "フロントエンド — プラン修正と再プランニング",
+        "description": "ユーザーがプランを拒否した際に、フィードバックを Copilot に送って新しいプランを要求する再プランニング機能を実装する。",
+        "status": "done",
+        "dependencies": [
+          "115"
+        ],
+        "priority": "medium",
+        "details": "拒否時にフィードバックテキスト入力。フィードバックを再プランニングプロンプトとして Copilot に送信。ループがプランニングフェーズに戻り、修正コンテキスト付きで新プランを取得。",
+        "testStrategy": "手動検証: フィードバック付きプラン拒否で新プランが提案されること。",
+        "updatedAt": "2026-04-01T05:41:17Z",
+        "subtasks": []
+      },
+      {
+        "id": "121",
+        "title": "Contracts 拡張 — プランニングモード Copilot ハンドオフ",
+        "description": "assessCopilotHandoff レスポンスにプランニングコンテキスト（利用可能ツール、ファイル構造要約）を追加する。",
+        "status": "done",
+        "dependencies": [
+          "110"
+        ],
+        "priority": "medium",
+        "details": "ハンドオフ応答に planningContext フィールドを追加。ワークブック構造要約、フェーズ別ツールグループ、推奨アプローチヒントを含める。",
+        "testStrategy": "pnpm typecheck 通過。ハンドオフ応答にプランニングコンテキストが含まれること。",
+        "updatedAt": "2026-04-01T05:41:17Z",
+        "subtasks": []
+      },
+      {
+        "id": "122",
+        "title": "設定 — 自律実行モード設定",
+        "description": "設定モーダルに自律実行モードの設定（プランニング有効化、read ステップ自動承認、ステップ間一時停止）を追加する。",
+        "status": "done",
+        "dependencies": [
+          "119"
+        ],
+        "priority": "medium",
+        "details": "BrowserAutomationSettings に planningEnabled (default: true), autoApproveReadSteps (default: true), pauseBetweenSteps (default: false) を追加。設定モーダルに「自律実行」セクションを追加。",
+        "testStrategy": "設定が再起動後も永続化。トグル変更がエージェントループ動作に反映。",
+        "updatedAt": "2026-04-01T05:41:17Z",
+        "subtasks": []
+      },
+      {
+        "id": "123",
+        "title": "E2E 検証 — 自律プラン実行（手動）",
+        "description": "実際の M365 Copilot を使った自律プラン実行フローの手動 E2E 検証。",
+        "status": "pending",
+        "dependencies": [
+          "117",
+          "118",
+          "119"
+        ],
+        "priority": "high",
+        "details": "シナリオ: (1) CSV フィルタタスクで 3 ステッププラン生成・承認・全ステップ実行。(2) write アクション含むプランで承認ゲート停止。(3) プラン修正後の再実行。(4) 実行中キャンセル。(5) read/write 混在プランの自律実行。",
+        "testStrategy": "docs/AUTONOMOUS_EXECUTION_E2E_VERIFICATION.md に記録。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "124",
+        "title": "設計 — デリゲーション UI アーキテクチャ",
+        "description": "3 ステップウィザードを置き換えるデリゲーションモデル UI のアーキテクチャを設計する。コンポーネント分割、状態管理、移行戦略を定義する。",
+        "status": "done",
+        "dependencies": [],
+        "priority": "high",
+        "details": "3 ゾーン: (1) 目標入力（チャットスタイル + ファイル添付）、(2) アクティビティフィード（リアルタイムタイムライン）、(3) 介入パネル（承認・結果・エラー）。コンポーネントツリー、Svelte ストア設計、既存 3 ステップフローとの共存戦略を docs/DELEGATION_UI_DESIGN.md に文書化。",
+        "testStrategy": "設計ドキュメントにコンポーネントツリー・状態フロー・移行計画が含まれること。",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "コンポーネント分割の設計",
+            "status": "done",
+            "dependencies": [],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 2,
+            "title": "Svelte ストアによるデリゲーションモード状態管理の設計",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 3,
+            "title": "手動/デリゲーションモード切替と移行戦略の設計",
+            "status": "done",
+            "dependencies": [
+              2
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 4,
+            "title": "アクティビティフィードイベント型とレンダリングルールの定義",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          }
+        ],
+        "updatedAt": "2026-04-01T06:19:07.037Z"
+      },
+      {
+        "id": "125",
+        "title": "フロントエンド — コンポーネント分割（+page.svelte リファクタ）",
+        "description": "モノリシックな +page.svelte から再利用可能なコンポーネントを src/lib/components/ に抽出する。動作変更なし。",
+        "status": "done",
+        "dependencies": [
+          "124"
+        ],
+        "priority": "high",
+        "details": "抽出対象: GoalInput.svelte, AgentActivityFeed.svelte, ApprovalGate.svelte, SheetDiffCard.svelte, SettingsModal.svelte, RecentSessions.svelte。+page.svelte はオーケストレーターとして各コンポーネントを組み合わせる。",
+        "testStrategy": "pnpm check, pnpm typecheck 通過。pnpm workflow:test 通過。既存 3 ステップフローが同一動作。",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "src/lib/components/ ディレクトリ作成",
+            "status": "done",
+            "dependencies": [],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 2,
+            "title": "GoalInput.svelte の抽出",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 3,
+            "title": "AgentActivityFeed.svelte の抽出",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 4,
+            "title": "ApprovalGate.svelte と SheetDiffCard.svelte の抽出",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 5,
+            "title": "SettingsModal.svelte と RecentSessions.svelte の抽出",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 6,
+            "title": "既存テスト通過の確認",
+            "status": "done",
+            "dependencies": [
+              2,
+              3,
+              4,
+              5
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          }
+        ],
+        "updatedAt": "2026-04-01T06:19:07.037Z"
+      },
+      {
+        "id": "126",
+        "title": "フロントエンド — デリゲーションモード状態管理",
+        "description": "デリゲーションモデルの状態マシン用 Svelte ストアを作成する。目標入力→プランニング→実行→承認→完了のライフサイクルを管理する。",
+        "status": "done",
+        "dependencies": [
+          "125"
+        ],
+        "priority": "high",
+        "details": "src/lib/stores/delegation.ts に DelegationState ストア: idle, goal_entered, planning, plan_review, executing, awaiting_approval, completed, error。ActivityFeedEvent 型: goal_set, copilot_turn, tool_executed, plan_proposed, plan_approved, write_approval_requested, write_approved, step_completed, error, completed。",
+        "testStrategy": "pnpm typecheck 通過。ストア遷移を分離テスト可能。",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "DelegationState 型と遷移ルールの定義",
+            "status": "done",
+            "dependencies": [],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 2,
+            "title": "ActivityFeedEvent 型の定義",
+            "status": "done",
+            "dependencies": [],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 3,
+            "title": "delegationStore の作成",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 4,
+            "title": "activityFeedStore の作成",
+            "status": "done",
+            "dependencies": [
+              2
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          }
+        ],
+        "updatedAt": "2026-04-01T06:19:07.037Z"
+      },
+      {
+        "id": "127",
+        "title": "フロントエンド — チャットスタイル目標入力",
+        "description": "ユーザーが自然言語でゴールを入力し、ファイルを添付できるチャットスタイルの入力コンポーネントを構築する。",
+        "status": "done",
+        "dependencies": [
+          "126"
+        ],
+        "priority": "high",
+        "details": "テキスト入力 + ファイル添付ボタン。送信で delegation ストアが goal_entered に遷移しエージェント開始。最近使ったファイルのクイック添付チップ。既存テンプレートをサジェスチョンチップとして表示。",
+        "testStrategy": "手動検証: 目標入力、ファイル添付、送信でエージェント開始。",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "ChatComposer.svelte のテキスト入力とファイル添付の実装",
+            "status": "done",
+            "dependencies": [],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 2,
+            "title": "よくある目標のサジェスチョンチップ追加",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 3,
+            "title": "最近のファイルクイック添付の追加",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 4,
+            "title": "送信時の delegation ストア連携とエージェントループ起動",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          }
+        ],
+        "updatedAt": "2026-04-01T06:19:07.037Z"
+      },
+      {
+        "id": "128",
+        "title": "フロントエンド — アクティビティフィード",
+        "description": "エージェントの動作をリアルタイムで表示するアクティビティフィードコンポーネントを構築する。各アクションをタイムスタンプ付きカードで表示。",
+        "status": "done",
+        "dependencies": [
+          "126",
+          "116"
+        ],
+        "priority": "high",
+        "details": "イベントをリアルタイム表示: ファイル読み込み、シート確認、Copilot 問合せ、ツール実行、承認要求。アイコン・タイムスタンプ・説明・展開可能な詳細。write 承認要求はアクションボタン付きハイライト。最新イベントへの自動スクロール。",
+        "testStrategy": "手動検証: エージェントループ実行中にアクティビティフィードがリアルタイム更新。",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "ActivityFeed.svelte コンポーネントのイベントレンダリング実装",
+            "status": "done",
+            "dependencies": [],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 2,
+            "title": "ActivityEvent.svelte カードコンポーネント（展開/折りたたみ）の実装",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 3,
+            "title": "エージェントループコールバックからのアクティビティフィードイベント発行",
+            "status": "done",
+            "dependencies": [
+              2
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 4,
+            "title": "自動スクロールと承認通知のハイライト",
+            "status": "done",
+            "dependencies": [
+              3
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          }
+        ],
+        "updatedAt": "2026-04-01T06:19:07.037Z"
+      },
+      {
+        "id": "129",
+        "title": "フロントエンド — インターベンションパネル",
+        "description": "ユーザーのアクションが必要な場面（プラン承認、write 承認、エラー復旧）に表示される介入パネルを構築する。",
+        "status": "done",
+        "dependencies": [
+          "128",
+          "115",
+          "117"
+        ],
+        "priority": "high",
+        "details": "介入不要時はコンパクトステータスバー（「自律実行中... ステップ 3/5」）。介入必要時に右側またはオーバーレイとしてスライドイン。コンテキスト別コンテンツ: プランニング時はプランレビューカード、write 承認時は SheetDiff プレビュー、エラー時はリトライ/スキップ/キャンセル。PlanReview, ApprovalGate, SheetDiffCard コンポーネントを再利用。",
+        "testStrategy": "手動検証: 適切なタイミングで介入パネルが表示・非表示になること。",
+        "updatedAt": "2026-04-01T06:19:07.037Z",
+        "subtasks": []
+      },
+      {
+        "id": "130",
+        "title": "フロントエンド — 完了・結果タイムライン",
+        "description": "エージェント完了後に、完了ステップの読み取り専用タイムラインと最終成果物を表示する。",
+        "status": "done",
+        "dependencies": [
+          "128"
+        ],
+        "priority": "medium",
+        "details": "完了状態で全アクティビティフィードを読み取り専用タイムラインとして表示。各ステップは展開で詳細表示。write ステップは before/after 差分表示。最終結果（出力ファイルパス、サマリー）をハイライト。「新しい作業を始める」ボタンでデリゲーション状態リセット。",
+        "testStrategy": "手動検証: 成功実行後に完了タイムラインが表示されること。",
+        "updatedAt": "2026-04-01T06:19:07.037Z",
+        "subtasks": []
+      },
+      {
+        "id": "131",
+        "title": "フロントエンド — デリゲーションページ統合",
+        "description": "全デリゲーションモデルコンポーネントをメインページに統合し、手動モード（3 ステップ）との切替トグルを追加する。",
+        "status": "done",
+        "dependencies": [
+          "127",
+          "128",
+          "129",
+          "130"
+        ],
+        "priority": "high",
+        "details": "+page.svelte に delegation/manual の 2 モード。デフォルトは delegation。ヘッダーにモードトグル。デリゲーションレイアウト: 目標入力（下部チャットスタイル）、アクティビティフィード（中央）、介入パネル（右側/オーバーレイ）。既存 3 ステップフローは manual モード内に維持。",
+        "testStrategy": "pnpm check, pnpm typecheck 通過。両モードが動作。pnpm workflow:test が manual モードで通過。",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "モードトグルを continuity 設定に追加",
+            "status": "done",
+            "dependencies": [],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 2,
+            "title": "+page.svelte でデリゲーション/手動モードの条件付きレンダリング",
+            "status": "done",
+            "dependencies": [
+              1
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 3,
+            "title": "デリゲーションモードと delegation ストア・エージェントループの接続",
+            "status": "done",
+            "dependencies": [
+              2
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          },
+          {
+            "id": 4,
+            "title": "手動モードの workflow test 通過確認",
+            "status": "done",
+            "dependencies": [
+              3
+            ],
+            "updatedAt": "2026-04-01T06:19:07.037Z"
+          }
+        ],
+        "updatedAt": "2026-04-01T06:19:07.037Z"
+      },
+      {
+        "id": "132",
+        "title": "フロントエンド — ファイル選択の最小化",
+        "description": "デリゲーションモードで明示的なファイル選択を最小化し、目標テキストからのファイル推論やインライン添付を実装する。",
+        "status": "done",
+        "dependencies": [
+          "127"
+        ],
+        "priority": "medium",
+        "details": "目標テキスト内のファイル名（例: 'revenue.csv を...'）を最近のファイルとマッチング。マッチ時は自動添付。ファイル言及なし時はアクティビティフィード内でインライン選択を促す。",
+        "testStrategy": "手動検証: 最近のファイル名言及で自動添付されること。",
+        "updatedAt": "2026-04-01T06:19:07.037Z",
+        "subtasks": []
+      },
+      {
+        "id": "133",
+        "title": "フロントエンド — コピー＆ペースト不要化",
+        "description": "デリゲーションモードでは、ユーザーのコピペを不要にする。エージェントループがブラウザ自動化経由で全 Copilot 通信を自動処理する。",
+        "status": "done",
+        "dependencies": [
+          "131"
+        ],
+        "priority": "high",
+        "details": "デリゲーションモードでは「依頼をコピー」ボタンとレスポンステキストエリアを非表示。目標送信後に即座にエージェントループ開始。ブラウザ自動化失敗時はアクティビティフィードにフォールバックカード（コピペ手順）を表示。",
+        "testStrategy": "手動検証: 目標送信でコピペなしに自動 Copilot 通信が行われること。",
+        "updatedAt": "2026-04-01T06:19:07.037Z",
+        "subtasks": []
+      },
+      {
+        "id": "134",
+        "title": "Continuity 拡張 — デリゲーションモード永続化",
+        "description": "continuity ストアを拡張し、デリゲーションモードのドラフト（目標テキスト、添付ファイル、アクティビティフィード状態）を永続化する。",
+        "status": "done",
+        "dependencies": [
+          "126"
+        ],
+        "priority": "medium",
+        "details": "PersistedDelegationDraft 型: goal, attachedFiles, activityFeedSnapshot, delegationState, planSnapshot。ContinuityState に delegationDrafts を追加。ドラフト復帰時は最後の完了ステップまでアクティビティフィードを表示。",
+        "testStrategy": "ページリロード後にドラフトが永続化。復帰時にアクティビティ表示。",
+        "updatedAt": "2026-04-01T06:19:07.037Z",
+        "subtasks": []
+      },
+      {
+        "id": "135",
+        "title": "フロントエンド — レスポンシブレイアウト",
+        "description": "デリゲーション UI を異なるウィンドウサイズに対応させる。介入パネルとアクティビティフィードの適応的表示。",
+        "status": "done",
+        "dependencies": [
+          "131"
+        ],
+        "priority": "low",
+        "details": "狭いウィンドウでは介入パネルがボトムシートオーバーレイに変化。アクティビティフィードが全幅。目標入力は下部に固定。CSS コンテナクエリまたはメディアクエリを使用。",
+        "testStrategy": "手動検証: 異なるウィンドウサイズでの表示確認。",
+        "updatedAt": "2026-04-01T06:19:07.037Z",
+        "subtasks": []
+      },
+      {
+        "id": "136",
+        "title": "フロントエンド — キーボードショートカット",
+        "description": "デリゲーション操作のキーボードショートカットを追加する。",
+        "status": "done",
+        "dependencies": [
+          "131"
+        ],
+        "priority": "low",
+        "details": "Enter: 目標送信。Escape: 実行キャンセル。Ctrl+Enter: 現在の介入を承認。Tab: アクティビティフィードと介入パネル間のフォーカス移動。",
+        "testStrategy": "手動検証: 各ショートカットの動作確認。",
+        "updatedAt": "2026-04-01T06:19:07.037Z",
+        "subtasks": []
+      },
+      {
+        "id": "137",
+        "title": "E2E 検証 — デリゲーション UI（手動）",
+        "description": "実際の M365 Copilot を使ったデリゲーション UI の手動 E2E 検証。",
+        "status": "pending",
+        "dependencies": [
+          "131",
+          "133"
+        ],
+        "priority": "high",
+        "details": "シナリオ: (1) ファイル参照付き目標入力でエージェント開始。(2) write ステップで承認。(3) 実行中キャンセル。(4) ブラウザ自動化失敗時の手動フォールバック。(5) 再起動後のデリゲーションドラフト復帰。",
+        "testStrategy": "docs/DELEGATION_UI_E2E_VERIFICATION.md に記録。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "138",
+        "title": "プロンプトエンジニアリング — 多ターン会話最適化",
+        "description": "多ターン Copilot 会話のプロンプトテンプレートを改善し、コンテキスト維持と応答品質を向上させる。",
+        "status": "done",
+        "dependencies": [
+          "113"
+        ],
+        "priority": "high",
+        "details": "prompt-templates.ts モジュールを作成。プランニング用（chain-of-thought + few-shot）、フォローアップ用（結果コンテキスト付き）、エラーリカバリ用、再プランニング用テンプレート。実際の M365 Copilot セッションでプラン品質を測定。",
+        "testStrategy": "旧プロンプト vs 新プロンプトのサンプルタスクでの応答品質 A/B 比較。",
+        "updatedAt": "2026-04-01T06:41:43.214Z",
+        "subtasks": []
+      },
+      {
+        "id": "139",
+        "title": "コンテキストウィンドウ管理 — 過去ターンの要約",
+        "description": "会話が長くなった時に過去ターンを要約圧縮し、Copilot のコンテキストオーバーフローを防ぐ。",
+        "status": "done",
+        "dependencies": [
+          "138"
+        ],
+        "priority": "medium",
+        "details": "N ターン（デフォルト 5）超過後に過去ターンを要約ブロックに圧縮。最新 2 ターンはフル詳細維持。要約には実行ツール名、主要発見、計画状態を含める。buildCompressedContext(turns, maxTurns) 関数。",
+        "testStrategy": "ユニットテスト: 要約圧縮でトークン数が削減され主要情報が保持されること。",
+        "updatedAt": "2026-04-01T06:41:43.214Z",
+        "subtasks": []
+      },
+      {
+        "id": "140",
+        "title": "エラーリカバリ — リトライ戦略強化",
+        "description": "Copilot が無効な JSON を返した場合やタイムアウト時の構造化リトライを実装する。段階的にプロンプトを簡略化。",
+        "status": "done",
+        "dependencies": [
+          "138"
+        ],
+        "priority": "medium",
+        "details": "3 段階リトライ: (1) 同一プロンプト + 解析エラーヒント、(2) 簡略化プロンプト（過去コンテキスト圧縮）、(3) 手動モードフォールバック。maxRetries 設定（デフォルト 2）。リトライ回数をアクティビティフィードに表示。",
+        "testStrategy": "モック Copilot（初回無効 JSON）でのユニットテスト。",
+        "updatedAt": "2026-04-01T06:41:43.214Z",
+        "subtasks": []
+      },
+      {
+        "id": "141",
+        "title": "構造化会話履歴 — Copilot セッション管理",
+        "description": "プランニング・実行フェーズを通じてコンテキストを維持する構造化会話履歴を実装する。",
+        "status": "done",
+        "dependencies": [
+          "139"
+        ],
+        "priority": "medium",
+        "details": "CopilotConversationHistory 型: { role, content, timestamp }[]。プロンプトビルダーに渡して各ターンに関連コンテキストを含める。セッションに永続化しデバッグに利用。",
+        "testStrategy": "会話履歴が永続化を往復し、フォローアッププロンプトに含まれること。",
+        "updatedAt": "2026-04-01T06:41:43.214Z",
+        "subtasks": []
+      },
+      {
+        "id": "142",
+        "title": "複数 Copilot セッション探索",
+        "description": "複数の Copilot ブラウザセッションを異なるサブタスクに使用できるかを調査する。",
+        "status": "done",
+        "dependencies": [
+          "140"
+        ],
+        "priority": "low",
+        "details": "browser.newContext() または複数タブで別個の Copilot チャットスレッドを維持するプロトタイプ。docs/MULTI_SESSION_COPILOT.md に結果を文書化。主な質問: 同時セッション対応？タブ切替で既存セッション破壊？レート制限？",
+        "testStrategy": "調査結果と実現性評価を含むプロトタイプドキュメント。",
+        "updatedAt": "2026-04-01T06:41:43.214Z",
+        "subtasks": []
+      },
+      {
+        "id": "143",
+        "title": "E2E 検証 — 強化 Copilot 連携（手動）",
+        "description": "改善された Copilot 連携の実際の M365 Copilot での手動検証。",
+        "status": "pending",
+        "dependencies": [
+          "138",
+          "139",
+          "140"
+        ],
+        "priority": "high",
+        "details": "多ターン会話品質、コンテキスト圧縮有効性、エラーリカバリ動作を検証。",
+        "testStrategy": "docs/COPILOT_INTEGRATION_E2E_VERIFICATION.md に記録。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "144",
+        "title": "バックエンド — file.copy / file.move / file.delete 実装",
+        "description": "Rust バックエンドに write 系ファイル操作ツールを実装する。スキーマは packages/contracts/src/file.ts に既存。",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "high",
+        "details": "file.copy, file.move, file.delete を file_ops.rs に実装。file.delete はゴミ箱移動（trash クレート）。全 write 操作は既存承認ゲート経由。各操作のプレビューサマリー（ソース、宛先、サイズ）を提供。",
+        "testStrategy": "cargo test でテンプファイル操作。pnpm workflow:test でインテグレーション。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "145",
+        "title": "バックエンド — text.search / text.replace ツール実装",
+        "description": "テキスト検索（read、自動実行可）と検索＆置換（write、承認必須）ツールを実装する。",
+        "status": "pending",
+        "dependencies": [
+          "144"
+        ],
+        "priority": "medium",
+        "details": "text.search: regex パターン、最大マッチ数、コンテキスト行。text.replace: regex パターン、置換文字列、影響行のプレビュー。text.replace は変更前にバックアップ作成。既存 executeReadActions と承認ゲートパスで公開。",
+        "testStrategy": "cargo test でサンプルテキストファイルの検索と置換。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "146",
+        "title": "バックエンド — Word/PowerPoint/PDF 読み取りサポート",
+        "description": "Word (.docx), PowerPoint (.pptx), PDF ファイルの読み取り専用サポートを Rust ライブラリで追加する。",
+        "status": "pending",
+        "dependencies": [],
+        "priority": "low",
+        "details": "document.read_text: プレーンテキスト抽出のみ（書式保持なし）。エージェントループの read ツールとして登録。",
+        "testStrategy": "cargo test でサンプル .docx, .pptx, .pdf ファイル。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "147",
+        "title": "Contracts 拡張 — text & document ツールスキーマ",
+        "description": "text.search, text.replace, document.read_text の Zod スキーマを追加する。",
+        "status": "pending",
+        "dependencies": [
+          "145",
+          "146"
+        ],
+        "priority": "medium",
+        "details": "packages/contracts/src/file.ts を拡張。relayActionSchema union に新ツールを追加。後方互換性を維持。",
+        "testStrategy": "pnpm typecheck 通過。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "148",
+        "title": "フロントエンド — ファイル操作のプレビュー UI",
+        "description": "ファイル write 操作（copy, move, delete, text.replace）の承認ゲート内プレビュー UI を追加する。",
+        "status": "pending",
+        "dependencies": [
+          "144",
+          "145"
+        ],
+        "priority": "medium",
+        "details": "file copy/move: ソース・宛先パス、ファイルサイズ。file delete: ファイル名、サイズ、「ゴミ箱に移動」バッジ。text.replace: 影響行の before/after 差分ビュー。",
+        "testStrategy": "手動検証: 各ファイル操作タイプでのプレビュー表示。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "149",
+        "title": "E2E 検証 — 汎用ファイル操作（手動）",
+        "description": "実際の M365 Copilot を使った汎用ファイル操作の手動 E2E 検証。",
+        "status": "pending",
+        "dependencies": [
+          "144",
+          "145",
+          "148"
+        ],
+        "priority": "high",
+        "details": "ファイルコピー、移動、削除、テキスト検索＆置換の各操作を Copilot 指示経由で検証。",
+        "testStrategy": "docs/FILE_OPS_E2E_VERIFICATION.md に記録。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "150",
+        "title": "設計 — プロジェクトモデル定義",
+        "description": "「プロジェクト」概念（名前付きセッション群 + 共有コンテキスト + カスタム指示 + 蓄積メモリ）を設計する。",
+        "status": "pending",
+        "dependencies": [
+          "118"
+        ],
+        "priority": "high",
+        "details": "Project: id, name, rootFolder, customInstructions, memory (k-v), sessionIds[]。プロジェクトスコープのファイルアクセス制限。カスタム指示の全 Copilot プロンプトへの自動付加。docs/PROJECT_MODEL_DESIGN.md に文書化。",
+        "testStrategy": "設計ドキュメントにモデル定義・機能・制約が含まれること。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "151",
+        "title": "Contracts & バックエンド — プロジェクトスキーマ & CRUD",
+        "description": "Project スキーマを contracts に追加し、Rust バックエンドに CRUD を実装する。",
+        "status": "pending",
+        "dependencies": [
+          "150"
+        ],
+        "priority": "high",
+        "details": "projectSchema を contracts に追加。Tauri コマンド: create_project, list_projects, read_project, update_project。既存ローカル JSON 永続化でセッションと並列に保存。",
+        "testStrategy": "cargo check, cargo test 通過。プロジェクト CRUD の IPC ラウンドトリップ。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "152",
+        "title": "フロントエンド — プロジェクト選択 & コンテキスト UI",
+        "description": "デリゲーション UI にプロジェクト選択を追加し、プロジェクトコンテキスト（カスタム指示、メモリ）を折りたたみパネルで表示する。",
+        "status": "pending",
+        "dependencies": [
+          "151",
+          "131"
+        ],
+        "priority": "medium",
+        "details": "プロジェクトドロップダウンまたはタブ。プロジェクトコンテキスト表示パネル。新規プロジェクト作成ダイアログ。",
+        "testStrategy": "手動検証: プロジェクト選択、コンテキスト表示、新規作成。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "153",
+        "title": "バックエンド — プロジェクトメモリ（学習した設定の蓄積）",
+        "description": "セッション間で学習した設定（UTF-8 使用、出力フォルダ等）を蓄積するプロジェクトレベルメモリを実装する。",
+        "status": "pending",
+        "dependencies": [
+          "151"
+        ],
+        "priority": "medium",
+        "details": "メモリ k-v ストアの追加・更新・参照 API。Copilot プロンプトにメモリコンテキストを自動挿入。セッション完了時に学習可能な設定を自動検出・提案。",
+        "testStrategy": "メモリ追加→次セッションのプロンプトに反映されること。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "154",
+        "title": "フロントエンド — プロジェクトスコープのファイルアクセス制限",
+        "description": "プロジェクト有効時にファイル操作を rootFolder サブツリーに制限し、範囲外アクセス時に警告を表示する。",
+        "status": "pending",
+        "dependencies": [
+          "152"
+        ],
+        "priority": "medium",
+        "details": "ファイル選択ダイアログを rootFolder にスコープ。エージェントが範囲外ファイルにアクセス時に警告バナー表示。ユーザーは警告を承認してオーバーライド可能。",
+        "testStrategy": "手動検証: 範囲外ファイルアクセスで警告が表示されること。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "155",
+        "title": "設計 — ツールレジストリ & MCP クライアント アーキテクチャ",
+        "description": "ビルトインツールと MCP 外部ツールを統一管理する拡張可能なツールレジストリを設計する。",
+        "status": "pending",
+        "dependencies": [
+          "109"
+        ],
+        "priority": "high",
+        "details": "ツールレジストリインターフェース: register, discover, invoke, listAvailable。MCP クライアント: サーバー URL 登録、ツールディスカバリ、呼び出しプロキシ。docs/TOOL_REGISTRY_DESIGN.md に文書化。",
+        "testStrategy": "設計ドキュメントにレジストリ API・MCP 統合フロー・セキュリティモデルが含まれること。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "156",
+        "title": "バックエンド — ツールレジストリ実装",
+        "description": "Rust にツールレジストリを実装する。ビルトインツールは起動時に登録。外部ツールは MCP ディスカバリで登録。",
+        "status": "pending",
+        "dependencies": [
+          "155"
+        ],
+        "priority": "high",
+        "details": "ToolRegistry trait: register(), discover(), invoke(), list()。ビルトインツール（スプレッドシート、ファイル操作、テキスト処理）を起動時登録。ツールメタデータ（名前、説明、パラメータスキーマ、read/write 分類）を統一管理。",
+        "testStrategy": "cargo test でツール登録・ディスカバリ・呼び出し。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "157",
+        "title": "バックエンド — MCP クライアント実装",
+        "description": "MCP サーバーからツールをディスカバリ・呼び出しできる MCP クライアントを実装する。",
+        "status": "pending",
+        "dependencies": [
+          "156"
+        ],
+        "priority": "medium",
+        "details": "MCP クライアント: サーバー接続、ツールディスカバリ、ツール呼び出しプロキシ。ディスカバリされたツールをツールレジストリに動的追加。エラーハンドリングとタイムアウト。",
+        "testStrategy": "モック MCP サーバーでのディスカバリと呼び出しテスト。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "158",
+        "title": "フロントエンド — ツール管理 UI",
+        "description": "利用可能ツールの管理 UI を設定パネルに追加する。ビルトインツールの有効/無効切替、MCP サーバー URL の追加、ツール状態表示。",
+        "status": "pending",
+        "dependencies": [
+          "157"
+        ],
+        "priority": "medium",
+        "details": "設定モーダルに「ツール」セクション。ビルトインツール一覧（有効/無効トグル）。MCP サーバー URL 入力＋接続テスト。ディスカバリ済みツール一覧。",
+        "testStrategy": "手動検証: ツール有効/無効切替、MCP サーバー追加。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "159",
+        "title": "ブラウザ自動化のツール化",
+        "description": "既存の Playwright/CDP ブラウザ自動化をツールレジストリ登録のツールとしてリファクタし、エージェントループから汎用的に利用可能にする。",
+        "status": "pending",
+        "dependencies": [
+          "156"
+        ],
+        "priority": "medium",
+        "details": "既存 copilot-browser.ts をツールレジストリに登録。Copilot 通信以外のブラウザ操作（情報取得等）もツールとして公開。ツールインターフェースに統一。",
+        "testStrategy": "ツールレジストリ経由でブラウザ操作が呼び出せること。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "160",
+        "title": "設計 — アーティファクト出力パイプライン",
+        "description": "任意の出力タイプの preview → approve → save パイプラインを設計する。",
+        "status": "pending",
+        "dependencies": [
+          "148"
+        ],
+        "priority": "high",
+        "details": "汎用アーティファクトプレビュー（CSV テーブル、テキスト差分、ファイル操作要約、ドキュメント抽出）の統一プレビューペイン。docs/ARTIFACT_OUTPUT_DESIGN.md に文書化。",
+        "testStrategy": "設計ドキュメントにパイプライン・サポート型・UI モックが含まれること。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "161",
+        "title": "フロントエンド — 汎用アーティファクトプレビュー",
+        "description": "CSV テーブル、テキスト差分、ファイル操作要約、ドキュメント抽出を統一プレビューペインで表示する汎用アーティファクトプレビューコンポーネントを構築する。",
+        "status": "pending",
+        "dependencies": [
+          "160"
+        ],
+        "priority": "medium",
+        "details": "ArtifactPreview.svelte: ファイル種類に応じたレンダラー自動選択。CSV はテーブル、テキストは差分ビュー、ファイル操作はサマリーカード。",
+        "testStrategy": "手動検証: 各アーティファクトタイプでの適切なプレビュー表示。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "162",
+        "title": "バックエンド — 複数出力フォーマットサポート",
+        "description": "同一変換から複数フォーマット（CSV + XLSX、フィルタ済み CSV + サマリーテキストレポート等）の出力をサポートする。",
+        "status": "pending",
+        "dependencies": [
+          "161"
+        ],
+        "priority": "low",
+        "details": "変換実行時に複数出力先を指定可能にする。各出力のプレビュー生成。承認ゲートで全出力を一括確認。",
+        "testStrategy": "CSV + テキストサマリーの同時出力テスト。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
+      },
+      {
+        "id": "163",
+        "title": "バックエンド — 出力品質バリデーション",
+        "description": "実行後の出力品質を検証する: 行数確認、データ損失チェック、エンコーディング確認、CSV インジェクションチェック。",
+        "status": "pending",
+        "dependencies": [
+          "162"
+        ],
+        "priority": "medium",
+        "details": "PostExecutionValidator: 行数一致確認、null/空値の異常増加検出、エンコーディング検証、CSV インジェクション対策通過確認。結果をアクティビティフィードに表示。",
+        "testStrategy": "品質チェック異常時に警告が表示されること。",
+        "updatedAt": "2026-04-01T04:26:59Z",
+        "subtasks": []
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-31T00:00:00Z",
-      "taskCount": 83,
-      "completedCount": 90,
+      "lastModified": "2026-04-01T06:41:43.214Z",
+      "taskCount": 163,
+      "completedCount": 140,
       "tags": [
         "master"
       ]

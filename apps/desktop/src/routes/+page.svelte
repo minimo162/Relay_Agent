@@ -1,11 +1,29 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { slide } from "svelte/transition";
   import { open } from "@tauri-apps/plugin-shell";
+  import ActivityFeed from "$lib/components/ActivityFeed.svelte";
+  import AgentActivityFeed from "$lib/components/AgentActivityFeed.svelte";
+  import ApprovalGate from "$lib/components/ApprovalGate.svelte";
+  import ChatComposer from "$lib/components/ChatComposer.svelte";
+  import CompletionTimeline from "$lib/components/CompletionTimeline.svelte";
+  import GoalInput from "$lib/components/GoalInput.svelte";
+  import InterventionPanel from "$lib/components/InterventionPanel.svelte";
+  import RecentSessions from "$lib/components/RecentSessions.svelte";
+  import SettingsModal from "$lib/components/SettingsModal.svelte";
+  import SheetDiffCard from "$lib/components/SheetDiffCard.svelte";
+  import {
+    activityFeedStore,
+    delegationStore,
+    type ActivityFeedEvent
+  } from "$lib/stores/delegation";
   import type {
     CopilotTurnResponse,
     DiffSummary,
+    ExecutionPlan,
     GenerateRelayPacketResponse,
+    PlanProgressResponse,
+    PlanStep,
+    PlanStepStatus,
     PreflightWorkbookResponse,
     SheetColumnProfile,
     StartupIssue,
@@ -14,17 +32,26 @@
     WorkbookProfile
   } from "@relay-agent/contracts";
   import {
+    approvePlan,
+    assessCopilotHandoff,
+    buildPlanningPrompt,
     createSession,
+    discardDelegationDraft,
     discardStudioDraft,
     generateRelayPacket,
+    getPlanProgress,
     getCopilotBrowserErrorMessage,
     getFriendlyError,
     inspectWorkbook,
     initializeApp,
+    recordPlanProgress,
+    listRecentFiles,
     listRecoverableStudioDrafts,
     listRecentSessions,
+    loadDelegationDraft,
     loadStudioDraft,
     loadBrowserAutomationSettings,
+    loadUiMode,
     hasSeenWelcome,
     markWelcomeSeen,
     markStudioDraftClean,
@@ -33,16 +60,24 @@
     previewExecution,
     rememberRecentFile,
     rememberRecentSession,
+    resumeAgentLoopWithPlan,
     runAgentLoop,
     respondToApproval,
     runExecution,
     saveBrowserAutomationSettings,
+    saveDelegationDraft,
+    saveUiMode,
     sendToCopilot,
     saveStudioDraft,
     startTurn,
     submitCopilotResponse,
+    type AgentLoopResult,
+    type BrowserCommandProgress,
+    type CopilotConversationTurn,
     type PersistedStudioDraft,
-    type RecentSession
+    type RecentFile,
+    type RecentSession,
+    type UiMode
   } from "$lib";
   import { autoFixCopilotResponse } from "$lib/auto-fix";
 
@@ -66,6 +101,12 @@
     rawResult?: unknown;
     showDetail?: boolean;
   };
+  type PlanExecutionStepState = PlanStepStatus["state"];
+  type PlanExecutionStep = PlanStep & {
+    state: PlanExecutionStepState;
+    result?: unknown;
+    error?: string;
+  };
   type ValidationFeedback = {
     level: 1 | 2 | 3;
     title: string;
@@ -87,6 +128,8 @@
   };
 
   const expertDetailsStoragePrefix = "relay-agent.expert-details";
+  const AUTO_CDP_PORT_RANGE_START = 9333;
+  const AUTO_CDP_PORT_RANGE_END = 9342;
   const expectedResponseShape =
     '{ "version": "1.0", "status": "thinking|ready_to_write|done|error", "summary": "...", "actions": [...] }';
   const instructionColumnLimit = 20;
@@ -135,6 +178,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let errorMsg = "";
   let settingsOpen = false;
   let showWelcome = false;
+  let uiMode: UiMode = "delegation";
   let isDragOver = false;
   let cdpTestStatus: "idle" | "testing" | "ok" | "fail" = "idle";
   let cdpTestMessage = "";
@@ -168,20 +212,42 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let retryPrompt = "";
   let showInstructionPreview = false;
   let isSendingToCopilot = false;
+  let sendStatusMessage = "";
   let copilotAutoError: string | null = null;
   let copilotResponseField: HTMLTextAreaElement | null = null;
-  let cdpPort = 9222;
+  let cdpPort = AUTO_CDP_PORT_RANGE_START;
+  let autoLaunchEdge = true;
   let timeoutMs = 60000;
   let agentLoopEnabled = false;
   let maxTurns = 10;
   let loopTimeoutMs = 120000;
+  let planningEnabled = true;
+  let autoApproveReadSteps = true;
+  let pauseBetweenSteps = false;
   let agentLoopRunning = false;
   let agentLoopTurn = 0;
   let agentLoopLog: AgentLoopLogEntry[] = [];
   let agentLoopSummary = "";
-  let agentLoopFinalStatus: CopilotTurnResponse["status"] | null = null;
+  let agentLoopFinalStatus:
+    | CopilotTurnResponse["status"]
+    | "awaiting_plan_approval"
+    | null = null;
+  let agentLoopResult: AgentLoopResult | null = null;
+  let agentLoopConversationHistory: CopilotConversationTurn[] = [];
   let agentLoopAbortController: AbortController | null = null;
   let activeAgentLoopEntryId: string | null = null;
+  let planSteps: PlanStep[] = [];
+  let showReplanFeedback = false;
+  let replanFeedback = "";
+  let approvedPlan: ExecutionPlan | null = null;
+  let pendingPlan: ExecutionPlan | null = null;
+  let executionStepStatuses: PlanExecutionStep[] = [];
+  let currentPlanStepId: string | null = null;
+  let isPlanExecuting = false;
+  let isPlanPaused = false;
+  let planPauseRequested = false;
+  let planPauseReason = "";
+  let planPauseResolver: (() => void) | null = null;
 
   let previewSummary = "";
   let previewTargetCount = 0;
@@ -196,6 +262,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let executionSummary = "";
 
   let recentSessions: RecentSession[] = [];
+  let recentFiles: RecentFile[] = [];
   let recoverableDraftSessionIds: string[] = [];
   let showRecent = false;
   let progressItems: ProgressItem[] = [];
@@ -248,6 +315,25 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       objective: "指定した行の合計を集計して、結果を説明し、別コピーとして保存する"
     }
   ];
+
+  const delegationSuggestions = templates.map((template) => ({
+    label: template.label,
+    value: template.objective
+  }));
+
+  const delegationEventIcons: Record<ActivityFeedEvent["type"], string> = {
+    goal_set: "💬",
+    file_attached: "📎",
+    copilot_turn: "🤖",
+    tool_executed: "🔧",
+    plan_proposed: "📋",
+    plan_approved: "✅",
+    write_approval_requested: "⚠️",
+    write_approved: "✓",
+    step_completed: "✓",
+    error: "❌",
+    completed: "🎉"
+  };
 
   function toError(error: unknown): string {
     if (error instanceof Error && error.message.trim()) {
@@ -774,16 +860,184 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     progressItems = [];
   }
 
+  function pushDelegationEvent(
+    type: ActivityFeedEvent["type"],
+    message: string,
+    options?: {
+      detail?: string;
+      expandable?: boolean;
+      actionRequired?: boolean;
+    }
+  ): void {
+    activityFeedStore.push({
+      type,
+      message,
+      icon: delegationEventIcons[type],
+      detail: options?.detail,
+      expandable: options?.expandable,
+      actionRequired: options?.actionRequired
+    });
+  }
+
+  function setUiMode(nextMode: UiMode): void {
+    uiMode = saveUiMode(nextMode);
+  }
+
+  function refreshContinuityState(): void {
+    recentSessions = listRecentSessions();
+    recentFiles = listRecentFiles();
+    recoverableDraftSessionIds = listRecoverableStudioDrafts().map((draft) => draft.sessionId);
+  }
+
   function resetAgentLoopState(clearLog = true): void {
     agentLoopRunning = false;
     agentLoopTurn = 0;
     agentLoopSummary = "";
     agentLoopFinalStatus = null;
+    agentLoopResult = null;
+    agentLoopConversationHistory = [];
     agentLoopAbortController = null;
     activeAgentLoopEntryId = null;
     if (clearLog) {
       agentLoopLog = [];
     }
+  }
+
+  function resetPlanExecutionState(clearPlanReview = true): void {
+    approvedPlan = null;
+    pendingPlan = null;
+    executionStepStatuses = [];
+    currentPlanStepId = null;
+    isPlanExecuting = false;
+    isPlanPaused = false;
+    planPauseRequested = false;
+    planPauseReason = "";
+    planPauseResolver = null;
+    if (clearPlanReview) {
+      planSteps = [];
+      showReplanFeedback = false;
+      replanFeedback = "";
+    }
+  }
+
+  function buildFallbackPlanningContext(): {
+    workbookSummary: string;
+    availableTools: { read: string[]; write: string[] };
+  } {
+    const workbookSummary = [
+      filePath.trim() ? `File: ${filePath.trim()}` : "File: not selected",
+      ...formatWorkbookContextLines(workbookProfile, workbookColumnProfiles)
+    ].join("\n");
+
+    return {
+      workbookSummary,
+      availableTools: {
+        read: relayPacket?.allowedReadTools.map((tool) => tool.id) ?? [],
+        write: relayPacket?.allowedWriteTools.map((tool) => tool.id) ?? []
+      }
+    };
+  }
+
+  function initializePlanExecution(plan: ExecutionPlan): void {
+    approvedPlan = plan;
+    executionStepStatuses = plan.steps.map((step) => ({
+      ...step,
+      state: "pending"
+    }));
+    currentPlanStepId = null;
+  }
+
+  function applyPlanProgressSnapshot(progress: PlanProgressResponse): void {
+    currentPlanStepId = progress.currentStepId;
+    executionStepStatuses = executionStepStatuses.map((step) => {
+      const persisted = progress.stepStatuses.find(
+        (candidate) => candidate.stepId === step.id
+      );
+
+      return persisted
+        ? {
+            ...step,
+            state: persisted.state,
+            result: persisted.result,
+            error: persisted.error
+          }
+        : step;
+    });
+  }
+
+  function updatePlanStepState(
+    stepId: string,
+    patch: Partial<Pick<PlanExecutionStep, "state" | "result" | "error">>
+  ): void {
+    executionStepStatuses = executionStepStatuses.map((step) =>
+      step.id === stepId ? { ...step, ...patch } : step
+    );
+  }
+
+  function buildPlanProgressPayload() {
+    return {
+      sessionId,
+      turnId,
+      currentStepId: currentPlanStepId,
+      completedCount: executionStepStatuses.filter((step) => step.state === "completed")
+        .length,
+      totalCount: executionStepStatuses.length,
+      stepStatuses: executionStepStatuses.map((step) => ({
+        stepId: step.id,
+        state: step.state,
+        result: step.result,
+        error: step.error
+      }))
+    };
+  }
+
+  async function persistPlanProgressSnapshot(): Promise<void> {
+    if (!sessionId || !turnId || executionStepStatuses.length === 0) {
+      return;
+    }
+
+    await recordPlanProgress(buildPlanProgressPayload());
+  }
+
+  function releasePlanPause(): void {
+    const resolver = planPauseResolver;
+    planPauseResolver = null;
+    isPlanPaused = false;
+    planPauseReason = "";
+    resolver?.();
+  }
+
+  async function waitForPlanContinuation(step: PlanStep): Promise<void> {
+    const needsManualReadApproval = step.phase === "read" && !autoApproveReadSteps;
+    const shouldPauseNow =
+      pauseBetweenSteps || planPauseRequested || needsManualReadApproval;
+
+    if (!shouldPauseNow) {
+      return;
+    }
+
+    planPauseRequested = false;
+    isPlanPaused = true;
+    planPauseReason = needsManualReadApproval
+      ? "読み取りステップの実行待ちです。"
+      : "次のステップの開始前で一時停止しています。";
+
+    await new Promise<void>((resolve) => {
+      planPauseResolver = resolve;
+    });
+  }
+
+  function requestPlanPause(): void {
+    if (!isPlanExecuting) {
+      return;
+    }
+
+    planPauseRequested = true;
+    planPauseReason = "現在のステップ完了後に一時停止します。";
+  }
+
+  function resumePlanExecution(): void {
+    releasePlanPause();
   }
 
   function pushAgentLoopLog(
@@ -861,6 +1115,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   function cancelAgentLoop(): void {
     agentLoopAbortController?.abort();
+    releasePlanPause();
   }
 
   function startFromWelcome(): void {
@@ -896,17 +1151,44 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     cdpTestMessage = "";
 
     try {
-      const response = await fetch(`http://127.0.0.1:${cdpPort}/json/version`);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+      const ports = autoLaunchEdge
+        ? Array.from(
+            { length: AUTO_CDP_PORT_RANGE_END - AUTO_CDP_PORT_RANGE_START + 1 },
+            (_, index) => AUTO_CDP_PORT_RANGE_START + index
+          )
+        : [cdpPort];
+
+      let detectedPort: number | null = null;
+      let payload: { Browser?: string } | null = null;
+
+      for (const port of ports) {
+        try {
+          const response = await fetch(`http://127.0.0.1:${port}/json/version`);
+          if (!response.ok) {
+            continue;
+          }
+
+          detectedPort = port;
+          payload = (await response.json()) as { Browser?: string };
+          break;
+        } catch {
+          continue;
+        }
       }
 
-      const payload = (await response.json()) as { Browser?: string };
+      if (detectedPort === null || payload === null) {
+        throw new Error("not found");
+      }
+
       const version = payload.Browser?.split("/")[1]?.split(".")[0] ?? "";
-      cdpTestMessage = version ? `接続済み（Edge ${version}）` : "接続済み";
+      cdpTestMessage = version
+        ? `接続済み（Edge ${version} / ポート ${detectedPort}）`
+        : `接続済み（ポート ${detectedPort}）`;
       cdpTestStatus = "ok";
     } catch {
-      cdpTestMessage = "Edge が起動しているか、ポート番号を確認してください。";
+      cdpTestMessage = autoLaunchEdge
+        ? "起動済みの Edge は見つかりませんでした。送信時に自動起動されます。"
+        : "Edge が起動しているか、ポート番号を確認してください。";
       cdpTestStatus = "fail";
     }
   }
@@ -947,11 +1229,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     persistExpertDetails();
   }
 
-  function refreshContinuityState(): void {
-    recentSessions = listRecentSessions();
-    recoverableDraftSessionIds = listRecoverableStudioDrafts().map((draft) => draft.sessionId);
-  }
-
   function hasRecoverableDraft(sessionId: string): boolean {
     return recoverableDraftSessionIds.includes(sessionId);
   }
@@ -972,6 +1249,81 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       workbookProfile = null;
       workbookColumnProfiles = [];
     }
+  }
+
+  function inferDelegationFiles(goal: string, files: string[]): string[] {
+    if (files.length > 0) {
+      return files;
+    }
+
+    const normalizedGoal = goal.toLowerCase();
+    const matched = recentFiles.find((file) => {
+      const fileName = file.path.split(/[\\/]/).pop()?.toLowerCase();
+      return fileName ? normalizedGoal.includes(fileName) : false;
+    });
+
+    return matched ? [matched.path] : [];
+  }
+
+  function persistDelegationDraft(): void {
+    if (uiMode !== "delegation") {
+      return;
+    }
+
+    saveDelegationDraft({
+      goal: $delegationStore.goal,
+      attachedFiles: $delegationStore.attachedFiles,
+      activityFeedSnapshot: $activityFeedStore,
+      delegationState: $delegationStore.state,
+      planSnapshot: $delegationStore.plan,
+      conversationHistorySnapshot: agentLoopConversationHistory,
+      currentStepIndex: $delegationStore.currentStepIndex,
+      lastUpdatedAt: new Date().toISOString()
+    });
+  }
+
+  async function handleDelegationSubmit(
+    event: CustomEvent<{ goal: string; files: string[] }>
+  ): Promise<void> {
+    const goal = event.detail.goal.trim();
+    const attachedFiles = inferDelegationFiles(goal, event.detail.files);
+
+    delegationStore.reset();
+    activityFeedStore.clear();
+    delegationStore.setGoal(goal, attachedFiles);
+    pushDelegationEvent("goal_set", `目標を設定しました: ${goal}`);
+
+    for (const file of attachedFiles) {
+      pushDelegationEvent("file_attached", `ファイルを関連付けました: ${file.split(/[\\/]/).pop()}`, {
+        detail: file
+      });
+    }
+
+    if (attachedFiles.length === 0) {
+      delegationStore.setError("ファイルを添付するか、最近使ったファイル名を目標文に含めてください。");
+      pushDelegationEvent("error", "対象ファイルがまだ選択されていません。", {
+        actionRequired: true
+      });
+      return;
+    }
+
+    filePath = attachedFiles[0] ?? "";
+    updateObjective(goal);
+    taskName = deriveTitle(goal);
+    taskNameEdited = false;
+    guidedStage = "setup";
+    clearProgress();
+    delegationStore.startPlanning();
+    pushDelegationEvent("copilot_turn", "作業の準備とプランニングを開始します。");
+
+    await handleSetupStage();
+    if (errorMsg) {
+      delegationStore.setError(errorMsg);
+      pushDelegationEvent("error", errorMsg, { actionRequired: true });
+      return;
+    }
+
+    await handleAgentLoopAutoSend(undefined, true);
   }
 
   function parseRelayPacket(
@@ -997,6 +1349,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     copilotAutoError = null;
     isSendingToCopilot = false;
     resetAgentLoopState();
+    resetPlanExecutionState();
     validationFeedback = null;
     retryPrompt = "";
     clearProgress();
@@ -1045,6 +1398,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     copilotAutoError = null;
     isSendingToCopilot = false;
     resetAgentLoopState();
+    resetPlanExecutionState();
     validationFeedback = null;
     retryPrompt = "";
     clearProgress();
@@ -1103,6 +1457,13 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     refreshContinuityState();
   }
 
+  function handleRecentSessionSelectById(sessionIdToOpen: string): void {
+    const session = recentSessions.find((candidate) => candidate.sessionId === sessionIdToOpen);
+    if (session) {
+      handleRecentSessionClick(session);
+    }
+  }
+
   async function copyToClipboard(text: string): Promise<void> {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
@@ -1112,17 +1473,27 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   function persistBrowserAutomationSettings(): void {
     const saved = saveBrowserAutomationSettings({
       cdpPort,
+      autoLaunchEdge,
       timeoutMs,
       agentLoopEnabled,
       maxTurns,
-      loopTimeoutMs
+      loopTimeoutMs,
+      planningEnabled,
+      autoApproveReadSteps,
+      pauseBetweenSteps
     });
     cdpPort = saved.cdpPort;
+    autoLaunchEdge = saved.autoLaunchEdge;
     timeoutMs = saved.timeoutMs;
     agentLoopEnabled = saved.agentLoopEnabled;
     maxTurns = saved.maxTurns;
     loopTimeoutMs = saved.loopTimeoutMs;
+    planningEnabled = saved.planningEnabled;
+    autoApproveReadSteps = saved.autoApproveReadSteps;
+    pauseBetweenSteps = saved.pauseBetweenSteps;
     copiedBrowserCommandNotice = "";
+    cdpTestStatus = "idle";
+    cdpTestMessage = "";
   }
 
   async function copyCopilotInstruction(): Promise<void> {
@@ -1135,8 +1506,33 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   async function copyEdgeLaunchCommand(): Promise<void> {
-    await copyToClipboard(`msedge.exe --remote-debugging-port=${cdpPort}`);
+    await copyToClipboard(getEdgeLaunchCommand());
     copiedBrowserCommandNotice = "Edge の起動コマンドをコピーしました。";
+  }
+
+  function getGuidePort(): number {
+    return autoLaunchEdge ? AUTO_CDP_PORT_RANGE_START : cdpPort;
+  }
+
+  function getEdgeLaunchCommand(): string {
+    return `msedge.exe --remote-debugging-port=${getGuidePort()} --no-first-run`;
+  }
+
+  function describeBrowserProgressStep(step: string): string {
+    switch (step) {
+      case "port_scan":
+        return "空きポートを探索中…";
+      case "edge_launch":
+        return "Edge を起動中…";
+      case "cdp_connect":
+        return "接続しています…";
+      default:
+        return "Copilot に送信中…";
+    }
+  }
+
+  function handleBrowserProgress(event: BrowserCommandProgress): void {
+    sendStatusMessage = event.detail?.trim() || describeBrowserProgressStep(event.step);
   }
 
   function focusCopilotResponseField(): void {
@@ -1150,12 +1546,16 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     }
 
     isSendingToCopilot = true;
+    sendStatusMessage = "Copilot に送信中…";
     copilotAutoError = null;
     copiedInstructionNotice = "";
     resetAgentLoopState();
+    resetPlanExecutionState();
 
     try {
-      const response = await sendToCopilot(copilotInstructionText);
+      const response = await sendToCopilot(copilotInstructionText, {
+        onProgress: handleBrowserProgress
+      });
       copilotResponse = response;
       originalCopilotResponse = "";
       autoFixMessages = [];
@@ -1170,39 +1570,393 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         : friendlyMsg;
     } finally {
       isSendingToCopilot = false;
+      sendStatusMessage = "";
     }
   }
 
-  async function handleAgentLoopAutoSend(): Promise<void> {
-    if (!copilotInstructionText.trim()) {
+  async function buildPlanningInstruction(extraFeedback = ""): Promise<string> {
+    const fallback = buildFallbackPlanningContext();
+    let planningContext = {
+      workbookSummary: fallback.workbookSummary,
+      availableTools: fallback.availableTools
+    };
+
+    try {
+      const handoff = await assessCopilotHandoff({ sessionId, turnId });
+      planningContext = handoff.planningContext ?? {
+        workbookSummary: fallback.workbookSummary,
+        availableTools: fallback.availableTools,
+        suggestedApproach: handoff.suggestedActions
+      };
+    } catch {
+      planningContext = fallback;
+    }
+    return buildPlanningPrompt(
+      objectiveText.trim(),
+      planningContext.workbookSummary,
+      planningContext.availableTools,
+      extraFeedback.trim() || undefined
+    );
+  }
+
+  async function executeApprovedPlan(
+    planToExecute: ExecutionPlan,
+    options: { resetProgress?: boolean } = {}
+  ): Promise<void> {
+    if (planToExecute.steps.length === 0) {
+      executionDone = true;
+      executionSummary = executionSummary || "すべてのステップが完了しました。";
+      completedAt = Date.now();
       return;
     }
 
+    if (options.resetProgress ?? true) {
+      initializePlanExecution(planToExecute);
+      delegationStore.approvePlan();
+      pushDelegationEvent("plan_approved", "承認した計画の実行を開始しました。");
+      const persisted = await getPlanProgress({ sessionId, turnId });
+      if (persisted.totalCount > 0) {
+        applyPlanProgressSnapshot(persisted);
+      }
+    }
+
+    pendingPlan = planToExecute;
+    isPlanExecuting = true;
     isSendingToCopilot = true;
+    sendStatusMessage = "計画を実行しています…";
     agentLoopRunning = true;
     agentLoopTurn = 0;
-    agentLoopLog = [];
     agentLoopSummary = "";
     agentLoopFinalStatus = null;
     copilotAutoError = null;
-    copiedInstructionNotice = "";
-    validationFeedback = null;
-    retryPrompt = "";
 
     const abortController = new AbortController();
     agentLoopAbortController = abortController;
 
     try {
-      const result = await runAgentLoop(
+      const result = await resumeAgentLoopWithPlan(
         {
           sessionId,
           turnId,
           initialPrompt: copilotInstructionText,
+          maxTurns: Math.max(maxTurns, planToExecute.steps.length),
+          loopTimeoutMs,
+          abortSignal: abortController.signal,
+          planningEnabled: false,
+          initialConversationHistory: agentLoopConversationHistory
+        },
+        planToExecute,
+        {
+          onBrowserProgress: handleBrowserProgress,
+          onTurnStart: (turn) => {
+            agentLoopTurn = turn;
+          },
+          onStepStart: (step, index) => {
+            agentLoopTurn = index + 1;
+            currentPlanStepId = step.id;
+            updatePlanStepState(step.id, {
+              state: step.phase === "write" ? "pending" : "running",
+              error: undefined
+            });
+            activeAgentLoopEntryId = pushAgentLoopLog(
+              step.tool,
+              `Step ${index + 1}: ${step.description}`,
+              "running"
+            );
+            if (uiMode === "delegation") {
+              pushDelegationEvent("copilot_turn", `ステップ ${index + 1} を開始しました: ${step.description}`, {
+                detail: `${step.tool} / ${step.phase}`
+              });
+            }
+            void persistPlanProgressSnapshot();
+          },
+          onCopilotResponse: (_turn, response) => {
+            agentLoopSummary = response.summary;
+            if (activeAgentLoopEntryId) {
+              updateAgentLoopLog(activeAgentLoopEntryId, {
+                status: "done",
+                endTime: Date.now(),
+                detail: response.message ?? response.summary,
+                rawResult: response
+              });
+              activeAgentLoopEntryId = null;
+            }
+          },
+          onRetry: (turn, retryLevel, error, retryPromptText) => {
+            pushAgentLoopLog(
+              `copilot.retry.${turn}.${retryLevel}`,
+              `Step ${turn}: 再試行 ${retryLevel}`,
+              "error",
+              {
+                detail: retryPromptText,
+                errorMessage: error,
+                endTime: Date.now()
+              }
+            );
+            if (uiMode === "delegation") {
+              pushDelegationEvent("error", `Copilot 応答の再試行 ${retryLevel}`, {
+                detail: error,
+                expandable: false
+              });
+            }
+          },
+          onManualFallback: (_turn, fallbackPrompt, error) => {
+            retryPrompt = fallbackPrompt;
+            if (uiMode === "delegation") {
+              pushDelegationEvent("error", "手動フォールバックが必要です。", {
+                detail: `${error}\n\n${fallbackPrompt}`,
+                expandable: true,
+                actionRequired: true
+              });
+            }
+          },
+          onToolResults: (_turn, toolResults) => {
+            for (const toolResult of toolResults) {
+              pushAgentLoopLog(
+                toolResult.tool,
+                toolResult.tool,
+                toolResult.ok ? "done" : "error",
+                {
+                  detail: summarizeToolResult(toolResult),
+                  errorMessage: toolResult.error,
+                  rawResult: toolResult.ok ? toolResult.result : { error: toolResult.error },
+                  endTime: Date.now()
+                }
+              );
+              if (uiMode === "delegation") {
+                pushDelegationEvent(
+                  "tool_executed",
+                  `${toolResult.tool} を実行しました`,
+                  {
+                    detail: summarizeToolResult(toolResult),
+                    expandable: false
+                  }
+                );
+              }
+            }
+          },
+          onStepComplete: (step, _index, result) => {
+            updatePlanStepState(step.id, {
+              state: result.ok ? "completed" : "failed",
+              result: result.result,
+              error: result.error
+            });
+            if (currentPlanStepId === step.id) {
+              currentPlanStepId = null;
+            }
+            delegationStore.advanceStep();
+            if (uiMode === "delegation") {
+              pushDelegationEvent(
+                result.ok ? "step_completed" : "error",
+                result.ok
+                  ? `ステップが完了しました: ${step.description}`
+                  : `ステップが失敗しました: ${step.description}`,
+                {
+                  detail: result.ok ? summarizeToolResult(result) : result.error,
+                  actionRequired: !result.ok
+                }
+              );
+            }
+            void persistPlanProgressSnapshot();
+          },
+          onWriteStepReached: (step) => {
+            currentPlanStepId = step.id;
+            updatePlanStepState(step.id, { state: "pending" });
+            delegationStore.requestApproval();
+            if (uiMode === "delegation") {
+              pushDelegationEvent("write_approval_requested", `書き込み前の承認が必要です: ${step.description}`, {
+                detail: step.tool,
+                actionRequired: true
+              });
+            }
+            void persistPlanProgressSnapshot();
+          },
+          waitForStepContinuation: waitForPlanContinuation
+        }
+      );
+
+      agentLoopResult = result;
+      agentLoopConversationHistory = result.conversationHistory;
+      agentLoopSummary = result.summary;
+      agentLoopFinalStatus = result.status === "cancelled" ? null : result.status;
+      pendingPlan = result.proposedPlan ?? null;
+
+      if (result.status === "ready_to_write" && result.finalResponse) {
+        copilotResponse = JSON.stringify(result.finalResponse, null, 2);
+        originalCopilotResponse = "";
+        autoFixMessages = [];
+        isPlanExecuting = false;
+        await handleCopilotStage();
+        return;
+      }
+
+      if (result.status === "done") {
+        currentPlanStepId = null;
+        await persistPlanProgressSnapshot();
+        executionSummary = result.summary;
+        executionDone = true;
+        completedAt = Date.now();
+        delegationStore.complete();
+        if (uiMode === "delegation") {
+          pushDelegationEvent("completed", "自律実行が完了しました。", {
+            detail: result.summary
+          });
+        }
+        return;
+      }
+
+      if (result.status === "error") {
+        copilotAutoError = result.summary;
+        delegationStore.setError(result.summary);
+        if (uiMode === "delegation") {
+          pushDelegationEvent("error", result.summary, { actionRequired: true });
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        agentLoopSummary = "自律実行をキャンセルしました。";
+      } else {
+        const friendlyMsg = getCopilotBrowserErrorMessage(error);
+        const rawMsg = error instanceof Error ? error.message.trim() : String(error);
+        copilotAutoError = rawMsg && rawMsg !== friendlyMsg
+          ? `${friendlyMsg}\n[詳細: ${rawMsg}]`
+          : friendlyMsg;
+        if (currentPlanStepId) {
+          updatePlanStepState(currentPlanStepId, {
+            state: "failed",
+            error: copilotAutoError
+          });
+          void persistPlanProgressSnapshot();
+        }
+        delegationStore.setError(copilotAutoError);
+        if (uiMode === "delegation") {
+          pushDelegationEvent("error", copilotAutoError, { actionRequired: true });
+        }
+      }
+    } finally {
+      isSendingToCopilot = false;
+      sendStatusMessage = "";
+      agentLoopRunning = false;
+      agentLoopAbortController = null;
+      isPlanExecuting = false;
+    }
+  }
+
+  async function handleApprovePlan(): Promise<void> {
+    if (!agentLoopResult?.proposedPlan || planSteps.length === 0) {
+      return;
+    }
+
+    const response = await approvePlan({
+      sessionId,
+      turnId,
+      approvedStepIds: planSteps.map((step) => step.id),
+      modifiedSteps: planSteps
+    });
+    const approved = response.plan;
+    agentLoopResult = null;
+    showReplanFeedback = false;
+    replanFeedback = "";
+    initializePlanExecution(approved);
+    delegationStore.proposePlan(approved);
+    await executeApprovedPlan(approved);
+  }
+
+  function removePlanStep(index: number): void {
+    planSteps = planSteps.filter((_, candidateIndex) => candidateIndex !== index);
+  }
+
+  function movePlanStep(index: number, direction: -1 | 1): void {
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= planSteps.length) {
+      return;
+    }
+
+    const nextSteps = [...planSteps];
+    const [step] = nextSteps.splice(index, 1);
+    nextSteps.splice(nextIndex, 0, step);
+    planSteps = nextSteps;
+  }
+
+  async function handleReplan(): Promise<void> {
+    if (!sessionId || !turnId) {
+      return;
+    }
+
+    showReplanFeedback = false;
+    const planningPrompt = await buildPlanningInstruction(replanFeedback);
+    pushDelegationEvent("copilot_turn", "フィードバック付きで再計画します。", {
+      detail: replanFeedback
+    });
+    replanFeedback = "";
+    resetPlanExecutionState(false);
+    agentLoopResult = null;
+    planSteps = [];
+    await handleAgentLoopAutoSend(planningPrompt, true);
+  }
+
+  function handleCancelPlan(): void {
+    cancelAgentLoop();
+    releasePlanPause();
+    resetPlanExecutionState();
+    agentLoopResult = null;
+    if (uiMode === "delegation") {
+      delegationStore.setError("自律実行をキャンセルしました。");
+      pushDelegationEvent("error", "自律実行をキャンセルしました。", {
+        actionRequired: true
+      });
+    }
+  }
+
+  async function handleAgentLoopAutoSend(
+    initialPromptOverride?: string,
+    forcePlanning = false
+  ): Promise<void> {
+    if (!copilotInstructionText.trim() && !initialPromptOverride?.trim()) {
+      return;
+    }
+
+    const planningMode = forcePlanning || planningEnabled;
+    isSendingToCopilot = true;
+    sendStatusMessage = "Copilot に送信中…";
+    agentLoopRunning = true;
+    agentLoopTurn = 0;
+    agentLoopLog = [];
+    agentLoopSummary = "";
+    agentLoopFinalStatus = null;
+    agentLoopResult = null;
+    agentLoopConversationHistory = [];
+    copilotAutoError = null;
+    copiedInstructionNotice = "";
+    validationFeedback = null;
+    retryPrompt = "";
+    if (planningMode) {
+      resetPlanExecutionState();
+      delegationStore.startPlanning();
+    }
+
+    const abortController = new AbortController();
+    agentLoopAbortController = abortController;
+
+    try {
+      const initialPrompt =
+        initialPromptOverride ??
+        (planningMode
+          ? await buildPlanningInstruction()
+          : copilotInstructionText);
+      const result = await runAgentLoop(
+        {
+          sessionId,
+          turnId,
+          initialPrompt,
           maxTurns,
           loopTimeoutMs,
-          abortSignal: abortController.signal
+          abortSignal: abortController.signal,
+          planningEnabled: planningMode,
+          initialConversationHistory: agentLoopConversationHistory
         },
         {
+          onBrowserProgress: handleBrowserProgress,
           onTurnStart: (turn) => {
             agentLoopTurn = turn;
             activeAgentLoopEntryId = pushAgentLoopLog(
@@ -1210,6 +1964,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
               `Turn ${turn}: Copilot に送信`,
               "running"
             );
+            if (uiMode === "delegation") {
+              pushDelegationEvent("copilot_turn", `Copilot へ問い合わせています (turn ${turn})`);
+            }
           },
           onCopilotResponse: (turn, response) => {
             agentLoopSummary = response.summary;
@@ -1232,6 +1989,12 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
                   endTime: Date.now()
                 }
               );
+            }
+            if (uiMode === "delegation") {
+              pushDelegationEvent("copilot_turn", `Copilot が応答しました (turn ${turn})`, {
+                detail: response.summary,
+                expandable: false
+              });
             }
           },
           onToolResults: (turn, toolResults) => {
@@ -1257,13 +2020,78 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
                   endTime: Date.now()
                 }
               );
+              if (uiMode === "delegation") {
+                pushDelegationEvent("tool_executed", `Turn ${turn}: ${toolResult.tool}`, {
+                  detail: summarizeToolResult(toolResult)
+                });
+              }
+            }
+          },
+          onPlanProposed: (plan) => {
+            agentLoopResult = null;
+            planSteps = [...plan.steps];
+            delegationStore.proposePlan(plan);
+            if (uiMode === "delegation") {
+              pushDelegationEvent("plan_proposed", "実行計画が提案されました。", {
+                detail: plan.summary,
+                actionRequired: true
+              });
+            }
+          },
+          onRetry: (turn, retryLevel, error, retryPromptText) => {
+            pushAgentLoopLog(
+              `copilot.retry.${turn}.${retryLevel}`,
+              `Turn ${turn}: 再試行 ${retryLevel}`,
+              "error",
+              {
+                detail: retryPromptText,
+                errorMessage: error,
+                endTime: Date.now()
+              }
+            );
+            if (uiMode === "delegation") {
+              pushDelegationEvent("error", `Copilot 応答の再試行 ${retryLevel}`, {
+                detail: error,
+                expandable: false
+              });
+            }
+          },
+          onManualFallback: (turn, fallbackPrompt, error) => {
+            retryPrompt = fallbackPrompt;
+            pushAgentLoopLog(
+              `copilot.manual-fallback.${turn}`,
+              `Turn ${turn}: 手動フォールバック`,
+              "error",
+              {
+                detail: fallbackPrompt,
+                errorMessage: error,
+                endTime: Date.now()
+              }
+            );
+            if (uiMode === "delegation") {
+              pushDelegationEvent("error", "手動フォールバックが必要です。", {
+                detail: `${error}\n\n${fallbackPrompt}`,
+                expandable: true,
+                actionRequired: true
+              });
             }
           }
         }
       );
 
+      agentLoopResult = result;
+      agentLoopConversationHistory = result.conversationHistory;
       agentLoopSummary = result.summary;
       agentLoopFinalStatus = result.status === "cancelled" ? null : result.status;
+
+      if (result.proposedPlan) {
+        planSteps = [...result.proposedPlan.steps];
+      }
+
+      if (result.status === "awaiting_plan_approval") {
+        guidedStage = "copilot";
+        return;
+      }
 
       if (result.finalResponse) {
         copilotResponse = JSON.stringify(result.finalResponse, null, 2);
@@ -1278,6 +2106,10 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
       if (result.status === "error") {
         copilotAutoError = result.summary;
+        delegationStore.setError(result.summary);
+        if (uiMode === "delegation") {
+          pushDelegationEvent("error", result.summary, { actionRequired: true });
+        }
       }
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
@@ -1296,6 +2128,10 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
             errorMessage: agentLoopSummary,
             endTime: Date.now()
           });
+        }
+        if (uiMode === "delegation") {
+          delegationStore.setError(agentLoopSummary);
+          pushDelegationEvent("error", agentLoopSummary, { actionRequired: true });
         }
       } else {
         console.error("[agent-loop] handleAgentLoopAutoSend error:", error);
@@ -1318,9 +2154,14 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
           errorMessage: copilotAutoError,
           endTime: Date.now()
         });
+        if (uiMode === "delegation") {
+          delegationStore.setError(copilotAutoError);
+          pushDelegationEvent("error", copilotAutoError, { actionRequired: true });
+        }
       }
     } finally {
       isSendingToCopilot = false;
+      sendStatusMessage = "";
       agentLoopRunning = false;
       agentLoopAbortController = null;
     }
@@ -1359,6 +2200,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     errorMsg = "";
     copilotAutoError = null;
     resetAgentLoopState();
+    resetPlanExecutionState();
     clearProgress();
   }
 
@@ -1368,6 +2210,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     errorMsg = "";
     copilotAutoError = null;
     resetAgentLoopState(false);
+    resetPlanExecutionState(false);
     clearProgress();
   }
 
@@ -1375,6 +2218,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     if (sessionId) {
       discardStudioDraft(sessionId);
     }
+    discardDelegationDraft();
+    delegationStore.reset();
+    activityFeedStore.clear();
 
     guidedStage = "setup";
     busy = false;
@@ -1404,6 +2250,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     isSendingToCopilot = false;
     copilotAutoError = null;
     resetAgentLoopState();
+    resetPlanExecutionState();
     previewSummary = "";
     previewTargetCount = 0;
     previewAffectedRows = 0;
@@ -1596,6 +2443,13 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       showDetailedChanges = false;
       markProgress(2, "done");
       guidedStage = "review-save";
+      if (uiMode === "delegation") {
+        delegationStore.requestApproval();
+        pushDelegationEvent("write_approval_requested", "保存前の確認が必要です。", {
+          detail: previewSummary,
+          actionRequired: true
+        });
+      }
     } catch (error) {
       const failure = toError(error);
       failCurrentProgress(failure);
@@ -1618,6 +2472,10 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         await respondToApproval({ sessionId, turnId, decision: "approved" });
       }
       markProgress(0, "done");
+      if (uiMode === "delegation") {
+        delegationStore.resumeExecution();
+        pushDelegationEvent("write_approved", "書き込みを承認しました。");
+      }
 
       const result = await runExecution({ sessionId, turnId });
       if (result.outputPath) {
@@ -1635,15 +2493,47 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       );
 
       if (!result.executed) {
+        if (currentPlanStepId) {
+          updatePlanStepState(currentPlanStepId, {
+            state: "failed",
+            error: executionSummary
+          });
+          await persistPlanProgressSnapshot();
+        }
         errorMsg = executionSummary;
+        return;
+      }
+
+      if (currentPlanStepId) {
+        updatePlanStepState(currentPlanStepId, { state: "completed" });
+        currentPlanStepId = null;
+        await persistPlanProgressSnapshot();
+      }
+
+      if (pendingPlan?.steps.length) {
+        executionSummary = "保存が完了したため、残りのステップを続けます。";
+        await executeApprovedPlan(pendingPlan, { resetProgress: false });
         return;
       }
 
       executionDone = true;
       completedAt = Date.now();
+      if (uiMode === "delegation") {
+        delegationStore.complete();
+        pushDelegationEvent("completed", "保存と自律実行が完了しました。", {
+          detail: executionSummary
+        });
+      }
     } catch (error) {
       const failure = toError(error);
       failCurrentProgress(failure);
+      if (currentPlanStepId) {
+        updatePlanStepState(currentPlanStepId, {
+          state: "failed",
+          error: failure
+        });
+        await persistPlanProgressSnapshot();
+      }
       errorMsg = failure;
     } finally {
       busy = false;
@@ -1664,30 +2554,89 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     void handleReviewSaveStage();
   }
 
-  onMount(async () => {
-    loadExpertDetails();
-    showWelcome = !hasSeenWelcome();
-    const browserAutomationSettings = loadBrowserAutomationSettings();
-    cdpPort = browserAutomationSettings.cdpPort;
-    timeoutMs = browserAutomationSettings.timeoutMs;
-    agentLoopEnabled = browserAutomationSettings.agentLoopEnabled;
-    maxTurns = browserAutomationSettings.maxTurns;
-    loopTimeoutMs = browserAutomationSettings.loopTimeoutMs;
-
-    try {
-      await pingDesktop();
-      const app = await initializeApp();
-      startupIssue = app.startupIssue ?? null;
-      storagePath = app.storagePath ?? null;
-      sampleWorkbookPath = app.sampleWorkbookPath ?? null;
-    } catch (error) {
-      errorMsg = toError(error);
+  function handleGlobalKeydown(event: KeyboardEvent): void {
+    if (uiMode !== "delegation") {
+      return;
     }
 
-    refreshContinuityState();
+    if (event.key === "Escape") {
+      event.preventDefault();
+      handleCancelPlan();
+      return;
+    }
+
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      if (agentLoopResult?.status === "awaiting_plan_approval" && planSteps.length > 0) {
+        void handleApprovePlan();
+        return;
+      }
+
+      if (guidedStage === "review-save" && reviewStepAvailable) {
+        void handleReviewSaveStage();
+      }
+    }
+  }
+
+  onMount(() => {
+    window.addEventListener("keydown", handleGlobalKeydown);
+
+    void (async () => {
+      loadExpertDetails();
+      showWelcome = !hasSeenWelcome();
+      uiMode = loadUiMode();
+      const browserAutomationSettings = loadBrowserAutomationSettings();
+      cdpPort = browserAutomationSettings.cdpPort;
+      autoLaunchEdge = browserAutomationSettings.autoLaunchEdge;
+      timeoutMs = browserAutomationSettings.timeoutMs;
+      agentLoopEnabled = browserAutomationSettings.agentLoopEnabled;
+      maxTurns = browserAutomationSettings.maxTurns;
+      loopTimeoutMs = browserAutomationSettings.loopTimeoutMs;
+      planningEnabled = browserAutomationSettings.planningEnabled;
+      autoApproveReadSteps = browserAutomationSettings.autoApproveReadSteps;
+      pauseBetweenSteps = browserAutomationSettings.pauseBetweenSteps;
+
+      try {
+        await pingDesktop();
+        const app = await initializeApp();
+        startupIssue = app.startupIssue ?? null;
+        storagePath = app.storagePath ?? null;
+        sampleWorkbookPath = app.sampleWorkbookPath ?? null;
+      } catch (error) {
+        errorMsg = toError(error);
+      }
+
+      refreshContinuityState();
+
+      const delegationDraft = loadDelegationDraft();
+      if (uiMode === "delegation" && delegationDraft) {
+        delegationStore.hydrate({
+          state: delegationDraft.delegationState,
+          goal: delegationDraft.goal,
+          attachedFiles: delegationDraft.attachedFiles,
+          plan: delegationDraft.planSnapshot,
+          currentStepIndex: delegationDraft.currentStepIndex
+        });
+        activityFeedStore.hydrate(delegationDraft.activityFeedSnapshot);
+        agentLoopConversationHistory = delegationDraft.conversationHistorySnapshot;
+        if (delegationDraft.attachedFiles[0]) {
+          filePath = delegationDraft.attachedFiles[0];
+        }
+        if (delegationDraft.goal) {
+          updateObjective(delegationDraft.goal);
+        }
+      }
+    })();
+
+    return () => {
+      window.removeEventListener("keydown", handleGlobalKeydown);
+    };
   });
 
   $: expectedResponseTemplate = buildExpectedResponseTemplate(suggestOutputPath(filePath));
+  $: if (uiMode === "delegation") {
+    persistDelegationDraft();
+  }
   $: currentSetupSignature = buildSetupSignature(
     filePath,
     taskName.trim() || deriveTitle(objectiveText),
@@ -1818,41 +2767,123 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     <span class="header-icon">📋</span>
     <span class="header-title">Relay Agent</span>
   </div>
-  <button
-    class="header-settings"
-    type="button"
-    on:click={() => (settingsOpen = !settingsOpen)}
-    aria-label="設定を開く"
-  >⚙</button>
+  <div class="header-actions">
+    <div class="mode-toggle-group" role="tablist" aria-label="ui mode">
+      <button
+        class="mode-toggle-btn"
+        class:mode-toggle-active={uiMode === "delegation"}
+        type="button"
+        on:click={() => setUiMode("delegation")}
+      >
+        Delegation
+      </button>
+      <button
+        class="mode-toggle-btn"
+        class:mode-toggle-active={uiMode === "manual"}
+        type="button"
+        on:click={() => setUiMode("manual")}
+      >
+        Manual
+      </button>
+    </div>
+    <button
+      class="header-settings"
+      type="button"
+      on:click={() => (settingsOpen = !settingsOpen)}
+      aria-label="設定を開く"
+    >⚙</button>
+  </div>
 </header>
 
-{#if recentSessions.length > 0 && guidedStage === "setup" && !executionDone}
-  <button
-    class="recent-toggle"
-    type="button"
-    on:click={() => (showRecent = !showRecent)}
-  >
-    {showRecent ? "最近の作業を閉じる" : `最近の作業（${recentSessions.length}件）`}
-  </button>
-
-    {#if showRecent}
-      <div class="recent-list">
-        {#each recentSessions.slice(0, 5) as rs}
-          <button class="recent-item" type="button" on:click={() => handleRecentSessionClick(rs)}>
-            <div class="recent-copy">
-              <span class="recent-title">{rs.title}</span>
-              {#if rs.workbookPath}
-                <span class="recent-path">{rs.workbookPath}</span>
-              {/if}
-            </div>
-            {#if hasRecoverableDraft(rs.sessionId)}
-              <span class="recent-badge">下書きを再開</span>
-            {/if}
-          </button>
-        {/each}
+{#if uiMode === "delegation"}
+  <section class="delegation-shell">
+    <aside class="delegation-sidebar card">
+      <RecentSessions
+        recentSessions={recentSessions}
+        {showRecent}
+        hasRecoverableDraft={hasRecoverableDraft}
+        onToggle={() => (showRecent = !showRecent)}
+        onSelect={handleRecentSessionSelectById}
+      />
+      <div class="delegation-sidebar-note">
+        <h3>最近のファイル</h3>
+        {#if recentFiles.length === 0}
+          <p>まだ履歴がありません。</p>
+        {:else}
+          {#each recentFiles.slice(0, 4) as file}
+            <p>{file.path.split(/[\\/]/).pop()}</p>
+          {/each}
+        {/if}
       </div>
-    {/if}
-{/if}
+    </aside>
+
+    <section class="delegation-main card">
+      {#if executionDone && $activityFeedStore.length > 0}
+        <CompletionTimeline
+          events={$activityFeedStore}
+          summary={executionSummary || previewSummary}
+          outputPath={previewOutputPath}
+          onOpenOutput={openOutputFile}
+          onReset={resetAll}
+        />
+      {:else}
+        <ActivityFeed events={$activityFeedStore} />
+      {/if}
+    </section>
+
+    <div class="delegation-intervention">
+      <InterventionPanel
+        statusLabel={$delegationStore.state}
+        planReviewVisible={agentLoopResult?.status === "awaiting_plan_approval" && planSteps.length > 0}
+        {planSteps}
+        planSummary={agentLoopResult?.proposedPlan?.summary || agentLoopSummary}
+        {showReplanFeedback}
+        {replanFeedback}
+        writeApprovalVisible={guidedStage === "review-save" && reviewStepAvailable && !executionDone}
+        {previewSummary}
+        {previewAffectedRows}
+        {previewOutputPath}
+        {previewWarnings}
+        {previewSheetDiffs}
+        {reviewStepAvailable}
+        {busy}
+        errorMessage={copilotAutoError || ($delegationStore.state === "error" ? $delegationStore.error ?? "" : "")}
+        onApprovePlan={handleApprovePlan}
+        onCancelPlan={handleCancelPlan}
+        onToggleReplan={() => (showReplanFeedback = !showReplanFeedback)}
+        onReplan={handleReplan}
+        onMoveStep={movePlanStep}
+        onRemoveStep={removePlanStep}
+        onReplanFeedbackInput={(value) => (replanFeedback = value)}
+        onBackFromApproval={() => {
+          guidedStage = "copilot";
+        }}
+        onApproveWrite={handleReviewSaveStage}
+        onRetry={retryCurrentStage}
+      />
+    </div>
+  </section>
+
+  <div class="delegation-composer-wrap">
+    <ChatComposer
+      recentFiles={recentFiles}
+      suggestions={delegationSuggestions}
+      disabled={busy || isSendingToCopilot}
+      initialGoal={$delegationStore.goal}
+      initialFiles={$delegationStore.attachedFiles}
+      on:submit={handleDelegationSubmit}
+    />
+  </div>
+{:else}
+
+<RecentSessions
+  recentSessions={recentSessions}
+  {showRecent}
+  visible={guidedStage === "setup" && !executionDone}
+  hasRecoverableDraft={hasRecoverableDraft}
+  onToggle={() => (showRecent = !showRecent)}
+  onSelect={handleRecentSessionSelectById}
+/>
 
 <section class="step-progress-bar" aria-label="guided workflow">
   <div class="step-progress-row">
@@ -1918,181 +2949,38 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 {/if}
 
 <section class="card step-panel">
-  <div class="step-panel-header">
-    <h2 class="panel-title">1. はじめる</h2>
-    {#if setupStepComplete && !step1Expanded}
-      <button class="btn btn-secondary step-edit-button" type="button" on:click={goToSetup}>
-        編集する
-      </button>
-    {/if}
-  </div>
-
-  {#if setupStepComplete && !step1Expanded}
-    <div class="step-summary step-summary-compact">
-      <div class="step-summary-row">
-        <span class="step-summary-label">ファイル</span>
-        <span>{filePath || "未設定"}</span>
-      </div>
-      <div class="step-summary-row">
-        <span class="step-summary-label">やりたいこと</span>
-        <span>{objectiveText || "未設定"}</span>
-      </div>
-    </div>
-  {:else}
-    {#if !filePath.trim()}
-      <div
-        class="dropzone-large"
-        class:dropzone-hover={isDragOver}
-        on:dragover|preventDefault={() => {
-          isDragOver = true;
-        }}
-        on:dragleave={() => {
-          isDragOver = false;
-        }}
-        on:drop|preventDefault={handleDrop}
-        on:click={openFilePicker}
-        on:keydown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            openFilePicker();
-          }
-        }}
-        role="button"
-        tabindex="0"
-      >
-        <div class="dropzone-icon">📊</div>
-        <div class="dropzone-primary">CSV または XLSX ファイルをドロップ</div>
-        <div class="dropzone-secondary">またはクリックして選択</div>
-        <div class="dropzone-badges">
-          <span class="ext-badge">.csv</span>
-          <span class="ext-badge">.xlsx</span>
-        </div>
-      </div>
-    {/if}
-
-    <label class="field-label" for="file-path">ファイルパス</label>
-    <div class="file-row">
-      <input
-        id="file-path"
-        type="text"
-        class="input"
-        bind:value={filePath}
-        placeholder="例: C:/Users/you/Documents/data.csv"
-        disabled={busy}
-      />
-      {#if sampleWorkbookPath}
-        <button
-          class="chip"
-          type="button"
-          on:click={() => {
-            filePath = sampleWorkbookPath ?? "";
-          }}
-          disabled={busy}
-        >練習用サンプル</button>
-      {/if}
-    </div>
-
-    {#if preflight && preflight.status === "warning"}
-      <p class="field-warn">⚠ {preflight.summary}</p>
-    {/if}
-
-    <label class="field-label" for="objective">やりたいこと</label>
-    <div class="template-row">
-      {#each templates as template}
-        <button
-          class="chip"
-          type="button"
-          on:click={() => updateObjective(template.objective, template.key)}
-          disabled={busy}
-        >{template.label}</button>
-      {/each}
-    </div>
-    <textarea
-      id="objective"
-      class="textarea"
-      value={objectiveText}
-      on:input={(event) =>
-        updateObjective((event.currentTarget as HTMLTextAreaElement).value)}
-      placeholder="例: approved が true の行だけ残して、amount の確認列を追加してください"
-      rows="3"
-      disabled={busy}
-    ></textarea>
-    <div class="objective-presets">
-      <span class="preset-label">例:</span>
-      {#each objectivePresets as preset}
-        <button
-          class="preset-btn"
-          type="button"
-          on:click={() => updateObjective(preset)}
-          disabled={busy}
-        >
-          {preset}
-        </button>
-      {/each}
-    </div>
-
-    <label class="field-label" for="task-name">タスク名</label>
-    <input
-      id="task-name"
-      type="text"
-      class="input"
-      value={taskName}
-      on:input={(event) =>
-        handleTaskNameInput((event.currentTarget as HTMLInputElement).value)}
-      placeholder="やりたいことから自動で入ります"
-      disabled={busy}
-    />
-    <p class="field-hint">やりたいことを選ぶと自動で入ります。必要なら編集できます。</p>
-
-    {#if progressItems.length > 0 && guidedStage === "setup"}
-      <div class="progress-panel">
-        {#each progressItems as item}
-          <div class="progress-item" data-status={item.status}>
-            <span class="progress-mark">
-              {#if item.status === "done"}
-                ✓
-              {:else if item.status === "running"}
-                …
-              {:else if item.status === "error"}
-                ✗
-              {:else}
-                ・
-              {/if}
-            </span>
-            <div>
-              <p class="progress-label">{item.label}</p>
-              {#if item.message}
-                <p class="progress-message">{item.message}</p>
-              {/if}
-            </div>
-          </div>
-        {/each}
-      </div>
-    {/if}
-
-    {#if errorMsg && guidedStage === "setup"}
-      {@const fe = getFriendlyError(errorMsg)}
-      <div class="friendly-error">
-        <span class="fe-icon">{fe.icon}</span>
-        <div class="fe-body">
-          <div class="fe-message">{fe.message}</div>
-          {#if fe.hint}
-            <div class="fe-hint">{fe.hint}</div>
-          {/if}
-        </div>
-      </div>
-    {/if}
-
-    <button
-      class="btn btn-primary"
-      type="button"
-      on:click={handleSetupStage}
-      disabled={busy || !filePath.trim() || !objectiveText.trim()}
-    >
-      {busy && guidedStage === "setup" ? "開始を準備しています…" : "準備する"}
-    </button>
-    <p class="action-note">ファイル確認、列情報の読み取り、作業作成、Copilot への依頼準備を続けて行います。</p>
-  {/if}
+  <GoalInput
+    {busy}
+    {filePath}
+    {sampleWorkbookPath}
+    preflightWarning={preflight?.status === "warning" ? preflight.summary : ""}
+    {objectiveText}
+    templates={templates}
+    objectivePresets={[...objectivePresets]}
+    {taskName}
+    {setupStepComplete}
+    stepExpanded={step1Expanded}
+    progressItems={guidedStage === "setup" ? progressItems : []}
+    errorMessage={errorMsg && guidedStage === "setup" ? getFriendlyError(errorMsg).message : ""}
+    errorHint={errorMsg && guidedStage === "setup" ? getFriendlyError(errorMsg).hint ?? "" : ""}
+    onEdit={goToSetup}
+    onOpenFilePicker={openFilePicker}
+    onFileDrop={handleDrop}
+    onFileDragOver={() => {
+      isDragOver = true;
+    }}
+    onFileDragLeave={() => {
+      isDragOver = false;
+    }}
+    onObjectiveChange={(value, templateKey) =>
+      updateObjective(value, (templateKey as TemplateKey | null | undefined) ?? inferTemplateKey(value))}
+    onTaskNameChange={handleTaskNameInput}
+    onFilePathChange={(value) => {
+      filePath = value;
+    }}
+    onStart={handleSetupStage}
+    {isDragOver}
+  />
 </section>
 
 <section
@@ -2134,7 +3022,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     </label>
     {#if agentLoopEnabled}
       <span class="loop-settings-summary">
-        最大 {maxTurns} ターン / タイムアウト {Math.round(loopTimeoutMs / 1000)} 秒
+        最大 {maxTurns} ターン / タイムアウト {Math.round(loopTimeoutMs / 1000)} 秒 / {planningEnabled ? "計画あり" : "直接実行"}
       </span>
     {/if}
   </div>
@@ -2155,7 +3043,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       disabled={busy || isSendingToCopilot || !copilotStepAvailable}
     >
       {#if isSendingToCopilot}
-        {agentLoopEnabled ? `Turn ${agentLoopTurn || 1} を実行しています…` : "Copilot に送信しています…"}
+        {agentLoopEnabled ? `Turn ${agentLoopTurn || 1} を実行しています…` : "送信しています…"}
       {:else}
         {agentLoopEnabled ? "Copilotで自動ループ開始 ▶" : "Copilotに自動送信 ▶"}
       {/if}
@@ -2175,77 +3063,203 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     </button>
   </div>
 
+  {#if isSendingToCopilot}
+    <div class="send-status" aria-live="polite">
+      <span class="spinner send-status-spinner">⟳</span>
+      <span class="send-status-text">{sendStatusMessage || "Copilot に送信中…"}</span>
+    </div>
+  {/if}
+
   {#if copiedInstructionNotice}
     <p class="field-success">{copiedInstructionNotice}</p>
   {/if}
 
-  {#if agentLoopEnabled && (agentLoopSummary || agentLoopLog.length > 0)}
-    <div class="agent-loop-panel">
-      <div class="loop-timeline">
-        <div class="loop-turn-bar">
-          <span class="loop-turn-label">ターン {agentLoopTurn || 1} / {maxTurns}</span>
-          <div class="loop-turn-track">
-            <div class="loop-turn-fill" style={`width: ${((agentLoopTurn || 1) / maxTurns) * 100}%`}></div>
+  <AgentActivityFeed
+    visible={agentLoopEnabled}
+    {agentLoopEnabled}
+    {agentLoopTurn}
+    {maxTurns}
+    entries={agentLoopLog}
+    summary={agentLoopSummary}
+    finalStatus={agentLoopFinalStatus}
+    onToggleDetail={toggleAgentLoopDetail}
+  />
+
+  {#if agentLoopResult?.status === "awaiting_plan_approval" && planSteps.length > 0}
+    <div class="plan-review-panel">
+      <div class="plan-review-header">
+        <div>
+          <h3 class="plan-review-title">実行計画の確認</h3>
+          <p class="plan-review-summary">
+            {agentLoopResult.proposedPlan?.summary || agentLoopSummary}
+          </p>
+        </div>
+      </div>
+
+      <div class="plan-step-list">
+        {#each planSteps as step, index (step.id)}
+          <article class="plan-step-card" data-phase={step.phase}>
+            <div class="plan-step-index">{index + 1}</div>
+            <div class="plan-step-body">
+              <div class="plan-step-topline">
+                <span class="plan-step-phase">{step.phase === "read" ? "read" : "write"}</span>
+                <span class="plan-step-tool">{step.tool}</span>
+              </div>
+              <p class="plan-step-description">{step.description}</p>
+              {#if step.estimatedEffect}
+                <p class="plan-step-effect">{step.estimatedEffect}</p>
+              {/if}
+            </div>
+            <div class="plan-step-actions">
+              <button
+                class="btn btn-secondary"
+                type="button"
+                on:click={() => movePlanStep(index, -1)}
+                disabled={index === 0 || isSendingToCopilot || busy}
+              >
+                ↑
+              </button>
+              <button
+                class="btn btn-secondary"
+                type="button"
+                on:click={() => movePlanStep(index, 1)}
+                disabled={index === planSteps.length - 1 || isSendingToCopilot || busy}
+              >
+                ↓
+              </button>
+              <button
+                class="plan-step-remove"
+                type="button"
+                on:click={() => removePlanStep(index)}
+                disabled={isSendingToCopilot || busy}
+              >
+                削除
+              </button>
+            </div>
+          </article>
+        {/each}
+      </div>
+
+      <div class="btn-row">
+        <button
+          class="btn btn-primary"
+          type="button"
+          on:click={handleApprovePlan}
+          disabled={busy || isSendingToCopilot || planSteps.length === 0}
+        >
+          計画を承認して実行する
+        </button>
+        <button
+          class="btn btn-secondary"
+          type="button"
+          on:click={() => (showReplanFeedback = !showReplanFeedback)}
+          disabled={busy || isSendingToCopilot}
+        >
+          再計画する
+        </button>
+        <button
+          class="btn btn-secondary"
+          type="button"
+          on:click={handleCancelPlan}
+          disabled={busy || isSendingToCopilot}
+        >
+          キャンセル
+        </button>
+      </div>
+
+      {#if showReplanFeedback}
+        <label class="field-label" for="replan-feedback">再計画フィードバック</label>
+        <textarea
+          id="replan-feedback"
+          class="textarea"
+          bind:value={replanFeedback}
+          rows="4"
+          placeholder="例: 先に列名を確認してください / ステップを減らしてください"
+        ></textarea>
+        <div class="btn-row">
+          <button
+            class="btn btn-secondary"
+            type="button"
+            on:click={handleReplan}
+            disabled={busy || isSendingToCopilot}
+          >
+            フィードバック付きで再計画
+          </button>
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  {#if executionStepStatuses.length > 0}
+    <div class="plan-progress-panel">
+      <div class="plan-progress-header">
+        <div>
+          <strong>自律実行の進行状況</strong>
+          <div class="plan-progress-summary">
+            {executionStepStatuses.filter((step) => step.state === "completed").length} / {executionStepStatuses.length} 完了
+            {#if currentPlanStepId}
+              ・ 現在: {executionStepStatuses.find((step) => step.id === currentPlanStepId)?.description}
+            {/if}
           </div>
         </div>
-
-        {#each agentLoopLog as entry}
-          <div
-            class="timeline-item"
-            class:timeline-running={entry.status === "running"}
-            class:timeline-done={entry.status === "done"}
-            class:timeline-error={entry.status === "error"}
+        <div class="plan-progress-actions">
+          {#if isPlanPaused}
+            <button class="btn btn-secondary" type="button" on:click={resumePlanExecution}>
+              再開
+            </button>
+          {:else}
+            <button
+              class="btn btn-secondary"
+              type="button"
+              on:click={requestPlanPause}
+              disabled={!isPlanExecuting}
+            >
+              一時停止
+            </button>
+          {/if}
+          <button
+            class="btn btn-secondary"
+            type="button"
+            on:click={handleCancelPlan}
+            disabled={!isPlanExecuting && !isPlanPaused}
           >
-            <div class="timeline-icon">
-              {#if entry.status === "running"}
-                <span class="spinner">⟳</span>
-              {:else if entry.status === "done"}
-                <span>✓</span>
+            キャンセル
+          </button>
+        </div>
+      </div>
+
+      {#if planPauseReason}
+        <p class="plan-progress-note">{planPauseReason}</p>
+      {/if}
+
+      <div class="plan-progress-list">
+        {#each executionStepStatuses as step (step.id)}
+          <article class="plan-progress-step" data-state={step.state} data-phase={step.phase}>
+            <div class="plan-progress-mark">
+              {#if step.state === "completed"}
+                ✓
+              {:else if step.state === "running"}
+                …
+              {:else if step.state === "failed"}
+                ✗
               {:else}
-                <span>✗</span>
+                ○
               {/if}
             </div>
-            <div class="timeline-body">
-              <div class="timeline-tool-row">
-                <span class="timeline-tool-name">{entry.label}</span>
-                {#if entry.endTime}
-                  <span class="timeline-duration">
-                    {((entry.endTime - entry.startTime) / 1000).toFixed(1)}s
-                  </span>
-                {/if}
+            <div class="plan-progress-body">
+              <div class="plan-progress-topline">
+                <span>{step.description}</span>
+                <span class="plan-progress-phase">{step.phase}</span>
               </div>
-              {#if entry.status === "error" && entry.errorMessage}
-                <div class="timeline-error-msg">{entry.errorMessage}</div>
-              {/if}
-              {#if entry.detail}
-                <div class="progress-message">{entry.detail}</div>
-              {/if}
-              {#if entry.rawResult}
-                <button
-                  class="timeline-detail-btn"
-                  type="button"
-                  on:click={() => toggleAgentLoopDetail(entry.id)}
-                >
-                  {entry.showDetail ? "詳細を隠す" : "詳細を見る"}
-                </button>
-                {#if entry.showDetail}
-                  <pre class="timeline-detail-json">{JSON.stringify(entry.rawResult, null, 2)}</pre>
-                {/if}
+              <div class="plan-progress-tool">{step.tool}</div>
+              {#if step.error}
+                <div class="timeline-error-msg">{step.error}</div>
+              {:else if step.phase === "write" && currentPlanStepId === step.id && guidedStage === "review-save"}
+                <div class="progress-message">書き込み内容の確認待ちです。</div>
               {/if}
             </div>
-          </div>
+          </article>
         {/each}
-        {#if agentLoopSummary}
-          <div class="copilot-bubble">
-            <span class="copilot-bubble-icon">🤖</span>
-            <div class="copilot-bubble-text">
-              {agentLoopSummary}
-              {#if agentLoopFinalStatus}
-                <div class="copilot-bubble-status">status: {agentLoopFinalStatus}</div>
-              {/if}
-            </div>
-          </div>
-        {/if}
       </div>
     </div>
   {/if}
@@ -2278,7 +3292,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     bind:this={copilotResponseField}
     placeholder="Copilot から返ってきた JSON をここに貼り付け"
     rows="8"
-    disabled={busy || isSendingToCopilot || agentLoopRunning || !copilotStepAvailable}
+    disabled={busy || isSendingToCopilot || agentLoopRunning || !copilotStepAvailable || agentLoopResult?.status === "awaiting_plan_approval"}
   ></textarea>
 
   <div class="response-shape">
@@ -2372,7 +3386,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       class="btn btn-primary"
       type="button"
       on:click={handleCopilotStage}
-      disabled={busy || isSendingToCopilot || !copilotStepAvailable || !copilotResponse.trim()}
+      disabled={busy || isSendingToCopilot || !copilotStepAvailable || !copilotResponse.trim() || agentLoopResult?.status === "awaiting_plan_approval"}
     >
       {busy && guidedStage === "copilot" ? "変更を確認しています…" : "確認する"}
     </button>
@@ -2476,107 +3490,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       {#if previewSheetDiffs.length > 0}
         <div class="sheet-diff-grid">
           {#each previewSheetDiffs as sheetDiff}
-            <article class="sheet-diff-card">
-              <div class="sheet-diff-header">
-                <div>
-                  <p class="sheet-diff-title">{sheetDiff.target.label}</p>
-                  <p class="sheet-diff-meta">{sheetDiff.estimatedAffectedRows} 行に影響</p>
-                </div>
-              </div>
-
-              <div class="sheet-diff-groups">
-                <div class="sheet-diff-group">
-                  <span class="sheet-diff-label">追加された列</span>
-                  <div class="sheet-diff-badges">
-                    {#if sheetDiff.addedColumns.length > 0}
-                      {#each sheetDiff.addedColumns as column}
-                        <span class="sheet-diff-badge" data-kind="added">{column}</span>
-                      {/each}
-                    {:else}
-                      <span class="sheet-diff-empty">なし</span>
-                    {/if}
-                  </div>
-                </div>
-
-                <div class="sheet-diff-group">
-                  <span class="sheet-diff-label">変わる列</span>
-                  <div class="sheet-diff-badges">
-                    {#if sheetDiff.changedColumns.length > 0}
-                      {#each sheetDiff.changedColumns as column}
-                        <span class="sheet-diff-badge" data-kind="changed">{column}</span>
-                      {/each}
-                    {:else}
-                      <span class="sheet-diff-empty">なし</span>
-                    {/if}
-                  </div>
-                </div>
-
-                <div class="sheet-diff-group">
-                  <span class="sheet-diff-label">消える列</span>
-                  <div class="sheet-diff-badges">
-                    {#if sheetDiff.removedColumns.length > 0}
-                      {#each sheetDiff.removedColumns as column}
-                        <span class="sheet-diff-badge" data-kind="removed">{column}</span>
-                      {/each}
-                    {:else}
-                      <span class="sheet-diff-empty">なし</span>
-                    {/if}
-                  </div>
-                </div>
-              </div>
-
-              {#if sheetDiff.rowSamples.length > 0}
-                <div class="sheet-row-samples">
-                  <p class="sheet-row-samples-title">行サンプル</p>
-                  {#each sheetDiff.rowSamples as rowSample}
-                    <article class="row-sample-card">
-                      <div class="row-sample-header">
-                        <span class="row-sample-kind" data-kind={rowSample.kind}>
-                          {#if rowSample.kind === "changed"}
-                            変更
-                          {:else if rowSample.kind === "added"}
-                            追加
-                          {:else}
-                            削除
-                          {/if}
-                        </span>
-                        <span class="row-sample-number">行 {rowSample.rowNumber}</span>
-                      </div>
-
-                      <div class="row-sample-grid">
-                        {#if rowSample.before}
-                          <div class="row-sample-side">
-                            <p class="row-sample-side-title">変更前</p>
-                            <dl class="row-sample-values">
-                              {#each Object.entries(rowSample.before) as [column, value]}
-                                <div class="row-sample-entry">
-                                  <dt>{column}</dt>
-                                  <dd>{value || "空"}</dd>
-                                </div>
-                              {/each}
-                            </dl>
-                          </div>
-                        {/if}
-
-                        {#if rowSample.after}
-                          <div class="row-sample-side">
-                            <p class="row-sample-side-title">変更後</p>
-                            <dl class="row-sample-values">
-                              {#each Object.entries(rowSample.after) as [column, value]}
-                                <div class="row-sample-entry">
-                                  <dt>{column}</dt>
-                                  <dd>{value || "空"}</dd>
-                                </div>
-                              {/each}
-                            </dl>
-                          </div>
-                        {/if}
-                      </div>
-                    </article>
-                  {/each}
-                </div>
-              {/if}
-            </article>
+            <SheetDiffCard {sheetDiff} />
           {/each}
         </div>
       {/if}
@@ -2589,10 +3503,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         {/each}
       </div>
     {/if}
-
-    <p class="safety-note">
-      元のファイルはそのまま残ります。変更は別のコピーに保存されます。
-    </p>
 
     {#if progressItems.length > 0 && guidedStage === "review-save"}
       <div class="progress-panel">
@@ -2633,30 +3543,14 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       </div>
     {/if}
 
-    <div class="btn-row">
-      <button
-        class="btn btn-secondary"
-        type="button"
-        on:click={goToCopilot}
-        disabled={busy || !reviewStepAvailable}
-      >
-        内容を見直す
-      </button>
-      <button
-        class="btn btn-primary btn-save"
-        type="button"
-        on:click={handleReviewSaveStage}
-        disabled={busy || !reviewStepAvailable}
-      >
-        {busy && guidedStage === "review-save" ? "保存しています…" : "保存する"}
-      </button>
-    </div>
-    <p class="action-note">内容の確認を記録してから、新しいコピーを保存します。</p>
-    {#if !busy && guidedStage === "review-save" && progressItems.some((item) => item.status === "error")}
-      <button class="btn btn-secondary retry-button" type="button" on:click={retryCurrentStage}>
-        やり直す
-      </button>
-    {/if}
+    <ApprovalGate
+      {busy}
+      {reviewStepAvailable}
+      showRetry={!busy && guidedStage === "review-save" && progressItems.some((item) => item.status === "error")}
+      onBack={goToCopilot}
+      onApprove={handleReviewSaveStage}
+      onRetry={retryCurrentStage}
+    />
   {/if}
 </section>
 
@@ -2691,168 +3585,34 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   {/if}
 </section>
 
-{#if settingsOpen}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="modal-overlay" on:click|self={() => (settingsOpen = false)}>
-    <div class="modal">
-      <div class="modal-header">
-        <h2>設定</h2>
-        <button class="modal-close" type="button" on:click={() => (settingsOpen = false)}>✕</button>
-      </div>
-
-      <div class="modal-body">
-        <h3>実行ポリシー</h3>
-        <ul class="settings-list">
-          <li>書き込み操作はプレビューと確認を経てから実行されます</li>
-          <li>保存先は常に別コピーです（元ファイルを直接変更しません）</li>
-          <li>元のファイルは読み取り専用として扱われます</li>
-        </ul>
-
-        <h3>データの保存場所</h3>
-        <ul class="settings-list">
-          <li>作業・ログ・設定はこのデバイスにのみ保存されます</li>
-          <li>アプリの外に自動送信されるデータはありません</li>
-          <li>Copilot に渡すテキストのみ、手動でコピーした場合に外部へ出ます</li>
-        </ul>
-
-        <h3>Copilot ブラウザ自動化</h3>
-        <label class="field-label" for="copilot-cdp-port">CDP ポート</label>
-        <input
-          id="copilot-cdp-port"
-          class="input"
-          type="number"
-          min="1"
-          max="65535"
-          bind:value={cdpPort}
-          on:change={persistBrowserAutomationSettings}
-        />
-        <div class="cdp-guide">
-          <details open>
-            <summary class="cdp-guide-title">Edge を CDP モードで起動するには</summary>
-            <div class="cdp-guide-body">
-              <p class="cdp-guide-note">以下のコマンドで Edge を起動してください。</p>
-              <div class="cdp-command-row">
-                <code class="cdp-command">msedge.exe --remote-debugging-port={cdpPort}</code>
-                <button class="cdp-copy-btn" type="button" on:click={copyEdgeLaunchCommand}>
-                  コピー
-                </button>
-              </div>
-            </div>
-          </details>
-          <div class="cdp-test-row">
-            <button
-              class="cdp-test-btn"
-              type="button"
-              disabled={cdpTestStatus === "testing"}
-              on:click={testCdpConnection}
-            >
-              {cdpTestStatus === "testing" ? "確認中…" : "接続テスト"}
-            </button>
-            {#if cdpTestStatus === "ok"}
-              <span class="cdp-test-result cdp-test-ok">✓ {cdpTestMessage}</span>
-            {:else if cdpTestStatus === "fail"}
-              <span class="cdp-test-result cdp-test-fail">✗ {cdpTestMessage}</span>
-            {/if}
-          </div>
-        </div>
-
-        <label class="field-label" for="copilot-timeout">タイムアウト (ms)</label>
-        <input
-          id="copilot-timeout"
-          class="input"
-          type="number"
-          min="1000"
-          step="1000"
-          bind:value={timeoutMs}
-          on:change={persistBrowserAutomationSettings}
-        />
-
-        <div class="loop-toggle-card" class:loop-toggle-on={agentLoopEnabled}>
-          <div class="loop-toggle-header">
-            <div class="loop-toggle-info">
-              <span class="loop-toggle-icon">{agentLoopEnabled ? "🤖" : "💬"}</span>
-              <div>
-                <div class="loop-toggle-title">エージェントループ</div>
-                <div class="loop-toggle-desc">
-                  {#if agentLoopEnabled}
-                    Copilot が自動で情報収集し、最適な処理を計画します
-                  {:else}
-                    1 回だけ Copilot に送信します
-                  {/if}
-                </div>
-              </div>
-            </div>
-            <button
-              class="loop-toggle-switch"
-              class:loop-switch-on={agentLoopEnabled}
-              type="button"
-              role="switch"
-              aria-label="エージェントループを切り替える"
-              aria-checked={agentLoopEnabled}
-              on:click={() => {
-                agentLoopEnabled = !agentLoopEnabled;
-                persistBrowserAutomationSettings();
-              }}
-            >
-              <span class="loop-switch-thumb"></span>
-            </button>
-          </div>
-
-          {#if agentLoopEnabled}
-            <div class="loop-options" transition:slide={{ duration: 200 }}>
-              <label class="field-label loop-option-label" for="copilot-max-turns">
-                最大ターン数: {maxTurns}
-              </label>
-              <input
-                id="copilot-max-turns"
-                class="loop-turns-slider"
-                type="range"
-                min="1"
-                max="20"
-                bind:value={maxTurns}
-                on:input={persistBrowserAutomationSettings}
-              />
-
-              <label class="field-label loop-option-label" for="copilot-loop-timeout">
-                ループタイムアウト (ms)
-              </label>
-              <input
-                id="copilot-loop-timeout"
-                class="input"
-                type="number"
-                min="30000"
-                max="300000"
-                step="1000"
-                bind:value={loopTimeoutMs}
-                on:change={persistBrowserAutomationSettings}
-              />
-            </div>
-          {/if}
-        </div>
-
-        <div class="btn-row">
-          <button class="btn btn-secondary" type="button" on:click={copyEdgeLaunchCommand}>
-            起動コマンドをコピー
-          </button>
-        </div>
-        <p class="settings-hint">
-          `msedge.exe --remote-debugging-port={cdpPort}`
-        </p>
-        {#if copiedBrowserCommandNotice}
-          <p class="field-success">{copiedBrowserCommandNotice}</p>
-        {/if}
-
-        {#if storagePath}
-          <h3>ローカルストレージ</h3>
-          <code class="storage-path">{storagePath}</code>
-          <p class="settings-hint">
-            保存データを削除するには、アプリを閉じてからこのフォルダを削除してください。
-          </p>
-        {/if}
-      </div>
-    </div>
-  </div>
 {/if}
+
+<SettingsModal
+  open={settingsOpen}
+  bind:autoLaunchEdge
+  bind:cdpPort
+  bind:timeoutMs
+  bind:maxTurns
+  bind:loopTimeoutMs
+  bind:agentLoopEnabled
+  bind:planningEnabled
+  bind:autoApproveReadSteps
+  bind:pauseBetweenSteps
+  {cdpTestStatus}
+  {cdpTestMessage}
+  {copiedBrowserCommandNotice}
+  edgeLaunchCommand={getEdgeLaunchCommand()}
+  autoPortRangeLabel={`ポート ${AUTO_CDP_PORT_RANGE_START}-${AUTO_CDP_PORT_RANGE_END} から自動選択されます`}
+  {storagePath}
+  onClose={() => (settingsOpen = false)}
+  onToggleAutoLaunch={() => {
+    autoLaunchEdge = !autoLaunchEdge;
+    persistBrowserAutomationSettings();
+  }}
+  onPersist={persistBrowserAutomationSettings}
+  onCopyCommand={copyEdgeLaunchCommand}
+  onTestConnection={testCdpConnection}
+/>
 
 <style>
   .welcome-overlay {
@@ -2951,6 +3711,12 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     gap: 0.5rem;
   }
 
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
   .header-icon {
     font-size: 1.3rem;
   }
@@ -2976,79 +3742,53 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     background: var(--ra-surface);
   }
 
-  .recent-toggle {
-    display: block;
-    background: none;
-    border: none;
-    color: var(--ra-text-secondary);
-    font-size: 0.85rem;
-    padding: 0.25rem 0;
-    margin-bottom: 0.5rem;
-  }
-
-  .recent-toggle:hover {
-    color: var(--ra-accent);
-  }
-
-  .recent-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    margin-bottom: 1rem;
-    padding: 0.75rem;
-    background: var(--ra-surface);
+  .mode-toggle-group {
+    display: inline-flex;
+    padding: 0.2rem;
     border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius-sm);
-  }
-
-  .recent-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    width: 100%;
-    padding: 0.55rem 0.65rem;
-    border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius-sm);
-    background: var(--ra-surface);
-    text-align: left;
-  }
-
-  .recent-item:hover {
-    border-color: var(--ra-accent-border);
-    background: var(--ra-accent-light);
-  }
-
-  .recent-copy {
-    display: flex;
-    flex-direction: column;
-    gap: 0.1rem;
-    min-width: 0;
-  }
-
-  .recent-title {
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: var(--ra-text);
-  }
-
-  .recent-path {
-    font-size: 0.78rem;
-    color: var(--ra-text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .recent-badge {
-    flex-shrink: 0;
-    padding: 0.2rem 0.55rem;
-    border: 1px solid var(--ra-accent-border);
     border-radius: 999px;
-    background: var(--ra-accent-light);
-    color: var(--ra-accent);
-    font-size: 0.76rem;
-    font-weight: 700;
+    background: var(--ra-surface);
+  }
+
+  .mode-toggle-btn {
+    border: none;
+    background: transparent;
+    color: var(--ra-text-muted);
+    padding: 0.45rem 0.85rem;
+    border-radius: 999px;
+  }
+
+  .mode-toggle-active {
+    background: color-mix(in srgb, var(--ra-accent) 12%, var(--ra-surface));
+    color: var(--ra-text);
+    font-weight: 600;
+  }
+
+  .delegation-shell {
+    display: grid;
+    grid-template-columns: minmax(220px, 260px) minmax(0, 1fr) minmax(280px, 360px);
+    gap: 1rem;
+    min-height: calc(100vh - 14rem);
+  }
+
+  .delegation-sidebar,
+  .delegation-main {
+    min-height: 0;
+  }
+
+  .delegation-sidebar-note {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--ra-border);
+    color: var(--ra-text-muted);
+    font-size: 0.86rem;
+  }
+
+  .delegation-composer-wrap {
+    position: sticky;
+    bottom: 0;
+    margin-top: 1rem;
+    z-index: 10;
   }
 
   .step-progress-bar {
@@ -3222,11 +3962,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     gap: 0.75rem;
   }
 
-  .step-edit-button {
-    margin-top: 0;
-    flex-shrink: 0;
-  }
-
   .step-panel-note {
     margin: 0 0 1rem;
     padding: 0.65rem 0.8rem;
@@ -3258,7 +3993,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     margin-top: 0;
   }
 
-  .input,
   .textarea {
     width: 100%;
     padding: 0.6rem 0.75rem;
@@ -3270,7 +4004,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     transition: border-color 0.15s;
   }
 
-  .input:focus,
   .textarea:focus {
     border-color: var(--ra-accent);
   }
@@ -3282,125 +4015,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   .textarea-tall {
     min-height: 10rem;
-  }
-
-  .file-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .file-row .input {
-    flex: 1;
-  }
-
-  .dropzone-large {
-    margin-bottom: 1rem;
-    border: 2px dashed var(--ra-border);
-    border-radius: 14px;
-    padding: 3.5rem 2rem;
-    text-align: center;
-    cursor: pointer;
-    transition: border-color 0.2s, background 0.2s;
-  }
-
-  .dropzone-large:hover,
-  .dropzone-hover {
-    border-color: var(--ra-accent);
-    background: color-mix(in srgb, var(--ra-accent) 4%, var(--ra-surface));
-  }
-
-  .dropzone-icon {
-    font-size: 3rem;
-    margin-bottom: 0.75rem;
-  }
-
-  .dropzone-primary {
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--ra-text);
-    margin-bottom: 0.3rem;
-  }
-
-  .dropzone-secondary {
-    font-size: 0.85rem;
-    color: var(--ra-text-muted);
-    margin-bottom: 1rem;
-  }
-
-  .dropzone-badges {
-    display: flex;
-    gap: 0.5rem;
-    justify-content: center;
-  }
-
-  .ext-badge {
-    font-size: 0.75rem;
-    font-family: monospace;
-    background: var(--ra-surface);
-    border: 1px solid var(--ra-border);
-    border-radius: 4px;
-    padding: 0.15rem 0.5rem;
-    color: var(--ra-text-muted);
-  }
-
-  .chip {
-    display: inline-block;
-    padding: 0.3rem 0.7rem;
-    font-size: 0.82rem;
-    border: 1px solid var(--ra-border);
-    border-radius: 2rem;
-    background: var(--ra-surface-muted);
-    color: var(--ra-text-secondary);
-    transition: all 0.15s;
-    white-space: nowrap;
-  }
-
-  .chip:hover:not(:disabled) {
-    border-color: var(--ra-accent-border);
-    color: var(--ra-accent);
-    background: var(--ra-accent-light);
-  }
-
-  .chip:disabled {
-    opacity: 0.5;
-  }
-
-  .template-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-    margin-bottom: 0.5rem;
-  }
-
-  .objective-presets {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-    align-items: center;
-    margin-top: 0.5rem;
-  }
-
-  .preset-label {
-    font-size: 0.78rem;
-    color: var(--ra-text-muted);
-    flex-shrink: 0;
-  }
-
-  .preset-btn {
-    font-size: 0.78rem;
-    padding: 0.25rem 0.65rem;
-    border: 1px solid var(--ra-border);
-    background: var(--ra-surface);
-    border-radius: 999px;
-    cursor: pointer;
-    color: var(--ra-text);
-    transition: border-color 0.15s, background 0.15s;
-  }
-
-  .preset-btn:hover {
-    border-color: var(--ra-accent);
-    background: color-mix(in srgb, var(--ra-accent) 6%, var(--ra-surface));
   }
 
   .btn {
@@ -3479,10 +4093,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     flex-wrap: wrap;
   }
 
-  .btn-save {
-    min-width: 10rem;
-  }
-
   .friendly-error {
     display: flex;
     gap: 0.75rem;
@@ -3528,7 +4138,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     margin: 0.5rem 0 0;
   }
 
-  .field-hint,
   .action-note {
     color: var(--ra-text-muted);
     font-size: 0.82rem;
@@ -3545,17 +4154,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     color: var(--ra-text-secondary);
     margin-bottom: 1rem;
     line-height: 1.6;
-  }
-
-  .step-summary-compact {
-    display: grid;
-    gap: 0.45rem;
-    margin-bottom: 0;
-  }
-
-  .step-summary-row {
-    display: grid;
-    gap: 0.15rem;
   }
 
   .step-summary-label {
@@ -3603,89 +4201,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     color: var(--ra-text-muted);
   }
 
-  .agent-loop-panel {
-    display: grid;
-    gap: 0.65rem;
-    margin: 0.85rem 0;
-    padding: 0.9rem;
-    border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius-sm);
-    background: var(--ra-surface-muted);
-  }
-
-  .loop-timeline {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .loop-turn-bar {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    margin-bottom: 0.5rem;
-  }
-
-  .loop-turn-label {
-    font-size: 0.78rem;
-    color: var(--ra-text-muted);
-    white-space: nowrap;
-  }
-
-  .loop-turn-track {
-    flex: 1;
-    height: 4px;
-    background: var(--ra-border);
-    border-radius: 2px;
-  }
-
-  .loop-turn-fill {
-    height: 100%;
-    background: var(--ra-accent);
-    border-radius: 2px;
-    transition: width 0.4s;
-  }
-
-  .timeline-item {
-    display: flex;
-    gap: 0.75rem;
-    align-items: flex-start;
-    padding: 0.5rem 0.75rem;
-    border-radius: 6px;
-    background: var(--ra-bg);
-  }
-
-  .timeline-running {
-    border-left: 3px solid var(--ra-accent);
-  }
-
-  .timeline-done {
-    border-left: 3px solid var(--ra-success);
-  }
-
-  .timeline-error {
-    border-left: 3px solid var(--ra-error);
-  }
-
-  .timeline-icon {
-    font-size: 1rem;
-    width: 1.2rem;
-    text-align: center;
-    flex-shrink: 0;
-  }
-
-  .timeline-running .timeline-icon {
-    color: var(--ra-accent);
-  }
-
-  .timeline-done .timeline-icon {
-    color: var(--ra-success);
-  }
-
-  .timeline-error .timeline-icon {
-    color: var(--ra-error);
-  }
-
   @keyframes spin {
     to {
       transform: rotate(360deg);
@@ -3697,79 +4212,10 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     animation: spin 1s linear infinite;
   }
 
-  .timeline-body {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .timeline-tool-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .timeline-tool-name {
-    font-size: 0.85rem;
-    font-weight: 500;
-  }
-
-  .timeline-duration {
-    font-size: 0.75rem;
-    color: var(--ra-text-muted);
-    white-space: nowrap;
-  }
-
   .timeline-error-msg {
     font-size: 0.78rem;
     color: var(--ra-error);
     margin-top: 0.2rem;
-  }
-
-  .timeline-detail-btn {
-    font-size: 0.75rem;
-    color: var(--ra-accent);
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 0;
-    margin-top: 0.25rem;
-  }
-
-  .timeline-detail-json {
-    font-size: 0.7rem;
-    background: var(--ra-surface);
-    padding: 0.5rem;
-    border-radius: 4px;
-    overflow-x: auto;
-    max-height: 200px;
-    margin-top: 0.25rem;
-  }
-
-  .copilot-bubble {
-    display: flex;
-    gap: 0.6rem;
-    align-items: flex-start;
-    background: color-mix(in srgb, var(--ra-accent) 8%, var(--ra-surface));
-    border-radius: 10px;
-    padding: 0.75rem 1rem;
-    margin-top: 0.25rem;
-  }
-
-  .copilot-bubble-icon {
-    font-size: 1.2rem;
-    flex-shrink: 0;
-  }
-
-  .copilot-bubble-text {
-    font-size: 0.85rem;
-    line-height: 1.5;
-  }
-
-  .copilot-bubble-status {
-    margin-top: 0.35rem;
-    font-size: 0.75rem;
-    color: var(--ra-text-muted);
   }
 
   .preview-block {
@@ -3970,207 +4416,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     margin-bottom: 1rem;
   }
 
-  .sheet-diff-card {
-    padding: 0.9rem;
-    border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius-sm);
-    background: var(--ra-surface-muted);
-  }
-
-  .sheet-diff-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 0.75rem;
-    margin-bottom: 0.85rem;
-  }
-
-  .sheet-diff-title {
-    margin: 0;
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: var(--ra-text);
-  }
-
-  .sheet-diff-meta {
-    margin: 0.2rem 0 0;
-    font-size: 0.8rem;
-    color: var(--ra-text-muted);
-  }
-
-  .sheet-diff-groups {
-    display: grid;
-    gap: 0.7rem;
-  }
-
-  .sheet-diff-group {
-    display: grid;
-    gap: 0.35rem;
-  }
-
-  .sheet-diff-label {
-    font-size: 0.78rem;
-    font-weight: 700;
-    color: var(--ra-text-secondary);
-  }
-
-  .sheet-diff-badges {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-  }
-
-  .sheet-diff-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.22rem 0.6rem;
-    border: 1px solid var(--ra-border);
-    border-radius: 999px;
-    font-size: 0.78rem;
-    font-weight: 600;
-    line-height: 1.4;
-  }
-
-  .sheet-diff-badge[data-kind="added"] {
-    border-color: var(--ra-success-border);
-    background: var(--ra-success-light);
-    color: var(--ra-success);
-  }
-
-  .sheet-diff-badge[data-kind="changed"] {
-    border-color: var(--ra-accent-border);
-    background: var(--ra-accent-light);
-    color: var(--ra-accent);
-  }
-
-  .sheet-diff-badge[data-kind="removed"] {
-    border-color: var(--ra-error-border);
-    background: var(--ra-error-light);
-    color: var(--ra-error);
-  }
-
-  .sheet-diff-empty {
-    font-size: 0.8rem;
-    color: var(--ra-text-muted);
-  }
-
-  .sheet-row-samples {
-    display: grid;
-    gap: 0.6rem;
-    margin-top: 0.9rem;
-    padding-top: 0.8rem;
-    border-top: 1px solid var(--ra-border);
-  }
-
-  .sheet-row-samples-title {
-    margin: 0;
-    font-size: 0.82rem;
-    font-weight: 700;
-    color: var(--ra-text-secondary);
-  }
-
-  .row-sample-card {
-    padding: 0.75rem;
-    border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius-sm);
-    background: var(--ra-surface);
-  }
-
-  .row-sample-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    margin-bottom: 0.55rem;
-  }
-
-  .row-sample-kind {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.18rem 0.5rem;
-    border-radius: 999px;
-    font-size: 0.75rem;
-    font-weight: 700;
-  }
-
-  .row-sample-kind[data-kind="changed"] {
-    background: var(--ra-accent-light);
-    color: var(--ra-accent);
-    border: 1px solid var(--ra-accent-border);
-  }
-
-  .row-sample-kind[data-kind="added"] {
-    background: var(--ra-success-light);
-    color: var(--ra-success);
-    border: 1px solid var(--ra-success-border);
-  }
-
-  .row-sample-kind[data-kind="removed"] {
-    background: var(--ra-error-light);
-    color: var(--ra-error);
-    border: 1px solid var(--ra-error-border);
-  }
-
-  .row-sample-number {
-    font-size: 0.78rem;
-    color: var(--ra-text-muted);
-  }
-
-  .row-sample-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.65rem;
-  }
-
-  .row-sample-side {
-    padding: 0.6rem;
-    border-radius: var(--ra-radius-sm);
-    background: var(--ra-surface-muted);
-  }
-
-  .row-sample-side-title {
-    margin: 0 0 0.45rem;
-    font-size: 0.78rem;
-    font-weight: 700;
-    color: var(--ra-text-secondary);
-  }
-
-  .row-sample-values {
-    display: grid;
-    gap: 0.35rem;
-    margin: 0;
-  }
-
-  .row-sample-entry {
-    display: grid;
-    gap: 0.1rem;
-  }
-
-  .row-sample-entry dt {
-    font-size: 0.74rem;
-    font-weight: 700;
-    color: var(--ra-text-muted);
-  }
-
-  .row-sample-entry dd {
-    margin: 0;
-    font-size: 0.8rem;
-    color: var(--ra-text);
-    word-break: break-word;
-  }
-
   .warnings {
     margin-bottom: 0.75rem;
-  }
-
-  .safety-note {
-    font-size: 0.82rem;
-    color: var(--ra-text-muted);
-    background: var(--ra-success-light);
-    border: 1px solid var(--ra-success-border);
-    border-radius: var(--ra-radius-sm);
-    padding: 0.5rem 0.75rem;
-    margin-bottom: 0.5rem;
   }
 
   .completion-screen {
@@ -4309,276 +4556,162 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     margin-top: 0.5rem;
   }
 
-  .modal-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.35);
-    display: flex;
+  .send-status {
+    display: inline-flex;
     align-items: center;
-    justify-content: center;
-    z-index: 100;
-  }
-
-  .modal {
-    background: var(--ra-surface);
-    border-radius: var(--ra-radius);
-    width: min(520px, 90vw);
-    max-height: 80vh;
-    overflow-y: auto;
-    box-shadow: var(--ra-shadow-lg);
-  }
-
-  .modal-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1rem 1.25rem;
-    border-bottom: 1px solid var(--ra-border);
-  }
-
-  .modal-header h2 {
-    margin: 0;
-    font-size: 1.1rem;
-  }
-
-  .modal-close {
-    background: none;
-    border: none;
-    font-size: 1.2rem;
-    color: var(--ra-text-muted);
-    padding: 0.25rem 0.5rem;
-    border-radius: var(--ra-radius-sm);
-  }
-
-  .modal-close:hover {
-    color: var(--ra-text);
-    background: var(--ra-surface-muted);
-  }
-
-  .modal-body {
-    padding: 1.25rem;
-  }
-
-  .modal-body h3 {
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: var(--ra-text);
-    margin: 1.25rem 0 0.5rem;
-  }
-
-  .modal-body h3:first-child {
-    margin-top: 0;
-  }
-
-  .settings-list {
-    margin: 0;
-    padding-left: 1.2rem;
+    gap: 0.55rem;
+    margin-top: 0.75rem;
     font-size: 0.88rem;
     color: var(--ra-text-secondary);
-    line-height: 1.7;
   }
 
-  .storage-path {
-    display: block;
-    padding: 0.6rem 0.75rem;
-    background: var(--ra-surface-muted);
-    border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius-sm);
-    font-size: 0.85rem;
-    word-break: break-all;
+  .send-status-spinner {
+    color: var(--ra-accent);
   }
 
-  .settings-hint {
-    font-size: 0.82rem;
-    color: var(--ra-text-muted);
-    margin-top: 0.5rem;
+  .send-status-text {
+    line-height: 1.4;
   }
 
-  .cdp-guide {
-    margin-top: 0.75rem;
-    background: var(--ra-bg);
-    border: 1px solid var(--ra-border);
-    border-radius: 6px;
-    padding: 0.75rem 1rem;
-  }
-
-  .cdp-guide-title {
-    font-size: 0.82rem;
-    font-weight: 600;
-    cursor: pointer;
-    color: var(--ra-text-muted);
-  }
-
-  .cdp-guide-body {
-    margin-top: 0.5rem;
-  }
-
-  .cdp-guide-note {
-    font-size: 0.8rem;
-    color: var(--ra-text-muted);
-    margin-bottom: 0.4rem;
-  }
-
-  .cdp-command-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .cdp-command {
-    font-family: monospace;
-    font-size: 0.8rem;
-    background: var(--ra-surface);
-    padding: 0.3rem 0.6rem;
-    border-radius: 4px;
-    flex: 1;
-    overflow-x: auto;
-  }
-
-  .cdp-copy-btn {
-    font-size: 0.78rem;
-    padding: 0.25rem 0.6rem;
-    border: 1px solid var(--ra-border);
-    background: var(--ra-surface);
-    border-radius: 4px;
-    cursor: pointer;
-  }
-
-  .cdp-test-row {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    margin-top: 0.75rem;
-    flex-wrap: wrap;
-  }
-
-  .cdp-test-btn {
-    font-size: 0.82rem;
-    padding: 0.3rem 0.9rem;
-    background: var(--ra-accent);
-    color: white;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-  }
-
-  .cdp-test-btn:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .cdp-test-result {
-    font-size: 0.82rem;
-  }
-
-  .cdp-test-ok {
-    color: var(--ra-success);
-  }
-
-  .cdp-test-fail {
-    color: var(--ra-error);
-  }
-
-  .loop-toggle-card {
-    border: 2px solid var(--ra-border);
-    border-radius: 10px;
-    padding: 1rem;
-    transition: border-color 0.2s, background 0.2s;
+  .plan-review-panel,
+  .plan-progress-panel {
     margin-top: 1rem;
+    padding: 1rem;
+    border: 1px solid var(--ra-border);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--ra-surface) 88%, white);
   }
 
-  .loop-toggle-card.loop-toggle-on {
-    border-color: var(--ra-accent);
-    background: color-mix(in srgb, var(--ra-accent) 5%, var(--ra-surface));
-  }
-
-  .loop-toggle-header {
+  .plan-review-header,
+  .plan-progress-header {
     display: flex;
-    align-items: center;
     justify-content: space-between;
     gap: 1rem;
+    align-items: flex-start;
   }
 
-  .loop-toggle-info {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
+  .plan-review-title {
+    margin: 0;
+    font-size: 1rem;
   }
 
-  .loop-toggle-icon {
-    font-size: 1.5rem;
-  }
-
-  .loop-toggle-title {
-    font-weight: 600;
+  .plan-review-summary,
+  .plan-progress-summary,
+  .plan-progress-note {
+    margin: 0.35rem 0 0;
+    color: var(--ra-text-muted);
     font-size: 0.9rem;
   }
 
-  .loop-toggle-desc {
+  .plan-step-list,
+  .plan-progress-list {
+    display: grid;
+    gap: 0.75rem;
+    margin-top: 0.85rem;
+  }
+
+  .plan-step-card,
+  .plan-progress-step {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 0.75rem;
+    align-items: start;
+    padding: 0.85rem;
+    border-radius: 10px;
+    border: 1px solid var(--ra-border);
+    background: var(--ra-surface);
+  }
+
+  .plan-progress-step {
+    grid-template-columns: auto 1fr;
+  }
+
+  .plan-step-card[data-phase="write"],
+  .plan-progress-step[data-phase="write"] {
+    border-color: color-mix(in srgb, var(--ra-accent) 45%, var(--ra-border));
+  }
+
+  .plan-step-index,
+  .plan-progress-mark {
+    width: 1.75rem;
+    height: 1.75rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--ra-accent) 12%, var(--ra-surface));
+    color: var(--ra-accent);
+    font-weight: 700;
+    font-size: 0.85rem;
+  }
+
+  .plan-step-topline,
+  .plan-progress-topline,
+  .plan-progress-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .plan-step-phase,
+  .plan-progress-phase,
+  .plan-step-tool,
+  .plan-progress-tool {
     font-size: 0.8rem;
     color: var(--ra-text-muted);
-    margin-top: 0.1rem;
   }
 
-  .loop-toggle-switch {
-    width: 3rem;
-    height: 1.6rem;
-    border-radius: 999px;
-    background: var(--ra-border);
-    border: none;
-    position: relative;
-    cursor: pointer;
-    transition: background 0.2s;
-    flex-shrink: 0;
+  .plan-step-description,
+  .plan-step-effect {
+    margin: 0.35rem 0 0;
   }
 
-  .loop-toggle-switch.loop-switch-on {
-    background: var(--ra-accent);
+  .plan-step-effect {
+    color: var(--ra-text-muted);
+    font-size: 0.88rem;
   }
 
-  .loop-switch-thumb {
-    position: absolute;
-    top: 0.2rem;
-    left: 0.2rem;
-    width: 1.2rem;
-    height: 1.2rem;
-    border-radius: 50%;
-    background: white;
-    transition: transform 0.2s;
-    display: block;
+  .plan-step-remove {
+    align-self: center;
   }
 
-  .loop-switch-on .loop-switch-thumb {
-    transform: translateX(1.4rem);
+  .plan-step-actions {
+    display: grid;
+    gap: 0.4rem;
   }
 
-  .loop-options {
-    margin-top: 0.75rem;
-    padding-top: 0.75rem;
-    border-top: 1px solid var(--ra-border);
+  .plan-progress-step[data-state="running"] {
+    border-color: var(--ra-accent);
   }
 
-  .loop-option-label {
-    margin-top: 0;
+  .plan-progress-step[data-state="completed"] .plan-progress-mark {
+    background: color-mix(in srgb, #3dbb7a 18%, var(--ra-surface));
+    color: #238a55;
   }
 
-  .loop-turns-slider {
-    width: 100%;
-    margin-top: 0.3rem;
+  .plan-progress-step[data-state="failed"] .plan-progress-mark {
+    background: color-mix(in srgb, #d05a4b 15%, var(--ra-surface));
+    color: #b43d30;
   }
 
   @media (max-width: 720px) {
+    .delegation-shell {
+      grid-template-columns: 1fr;
+    }
+
     .change-strip,
     .summary-grid,
-    .expert-grid,
-    .row-sample-grid {
+    .expert-grid {
       grid-template-columns: 1fr;
     }
 
     .welcome-steps,
     .step-progress-row,
-    .cdp-command-row,
-    .completion-actions {
+    .completion-actions,
+    .plan-review-header,
+    .plan-progress-header,
+    .header-actions {
       flex-direction: column;
     }
 

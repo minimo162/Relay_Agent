@@ -1,6 +1,10 @@
-import { chromium, errors, type Browser, type BrowserContext, type Locator, type Page, type Response } from "playwright";
+import { execFile } from "child_process";
+import net from "net";
+import { chromium, errors, type Browser, type Locator, type Page, type Response } from "playwright";
 
 const COPILOT_URL = "https://m365.cloud.microsoft/chat/";
+const CDP_PORT_RANGE_START = 9333;
+const CDP_PORT_RANGE_END = 9342;
 const NEW_CHAT_SELECTOR = '[data-testid="newChatButton"]';
 const EDITOR_SELECTOR = "#m365-chat-editor-target-element";
 const SEND_READY_SEL = ".fai-SendButton:not([disabled])";
@@ -30,17 +34,20 @@ type ErrorCode =
   | "COPILOT_ERROR"
   | "SEND_FAILED";
 
+type ErrorResult = { status: "error"; errorCode: ErrorCode; message: string };
+
 type ConnectResult =
-  | { status: "ready" }
-  | { status: "error"; errorCode: ErrorCode; message: string };
+  | { status: "ready"; cdpPort: number }
+  | ErrorResult;
 
 type SendResult =
-  | { status: "ok"; response: string }
-  | { status: "error"; errorCode: ErrorCode; message: string };
+  | { status: "ok"; response: string; cdpPort: number }
+  | ErrorResult;
 
 type CliOptions = {
   action: "connect" | "send";
   cdpPort: number;
+  autoLaunch: boolean;
   timeout: number;
   prompt?: string;
 };
@@ -61,7 +68,8 @@ async function main(): Promise<void> {
 
 function parseCliOptions(argv: string[]): CliOptions {
   let action: CliOptions["action"] | null = null;
-  let cdpPort = 9222;
+  let cdpPort = CDP_PORT_RANGE_START;
+  let autoLaunch = false;
   let timeout = 60000;
   let prompt: string | undefined;
 
@@ -80,6 +88,9 @@ function parseCliOptions(argv: string[]): CliOptions {
       case "--cdp-port":
         cdpPort = parseNumberArg(next, "--cdp-port");
         index += 1;
+        break;
+      case "--auto-launch":
+        autoLaunch = true;
         break;
       case "--timeout":
         timeout = parseNumberArg(next, "--timeout");
@@ -101,7 +112,7 @@ function parseCliOptions(argv: string[]): CliOptions {
     throw new Error("`--action` is required.");
   }
 
-  return { action, cdpPort, timeout, prompt };
+  return { action, cdpPort, autoLaunch, timeout, prompt };
 }
 
 function parseNumberArg(rawValue: string | undefined, flag: string): number {
@@ -116,14 +127,18 @@ async function handleConnect(options: CliOptions): Promise<ConnectResult> {
   let browser: Browser | null = null;
 
   try {
-    browser = await connectToBrowser(options);
+    const connection = await connectToBrowser(options);
+    browser = connection.browser;
     const page = await ensureCopilotPage(browser, options.timeout);
     const loginResult = detectLoginPage(page);
     if (loginResult) {
       return loginResult;
     }
 
-    return { status: "ready" };
+    return {
+      status: "ready",
+      cdpPort: connection.port
+    };
   } catch (error) {
     return toErrorResult(error, "connect");
   } finally {
@@ -138,7 +153,8 @@ async function handleSend(options: CliOptions, promptArg?: string): Promise<Send
     const input = promptArg
       ? { prompt: promptArg }
       : await readSendInput();
-    browser = await connectToBrowser(options);
+    const connection = await connectToBrowser(options);
+    browser = connection.browser;
     const page = await ensureCopilotPage(browser, options.timeout);
     const loginResult = detectLoginPage(page);
     if (loginResult) {
@@ -160,7 +176,8 @@ async function handleSend(options: CliOptions, promptArg?: string): Promise<Send
 
       return {
         status: "ok",
-        response: stripCitations(responseText)
+        response: stripCitations(responseText),
+        cdpPort: connection.port
       };
     }
 
@@ -176,15 +193,147 @@ async function handleSend(options: CliOptions, promptArg?: string): Promise<Send
   }
 }
 
-async function connectToBrowser(options: Pick<CliOptions, "cdpPort">): Promise<Browser> {
+async function connectToBrowser(
+  options: Pick<CliOptions, "cdpPort" | "autoLaunch">
+): Promise<{ browser: Browser; port: number }> {
+  let port = options.cdpPort;
+
+  if (options.autoLaunch) {
+    const existing = await findExistingCdpEdge();
+    if (existing !== null) {
+      port = existing;
+      emitProgress("cdp_connect", `既存の Edge に接続中（ポート ${port}）…`);
+    } else {
+      emitProgress("port_scan", "空きポートを探索中…");
+      port = await findAvailableCdpPort();
+      emitProgress("edge_launch", `Edge を起動中（ポート ${port}）…`);
+      await launchEdgeWithCdp(port);
+    }
+  }
+
   try {
-    return await chromium.connectOverCDP(`http://localhost:${options.cdpPort}`);
+    const browser = await chromium.connectOverCDP(`http://localhost:${port}`);
+    if (options.autoLaunch) {
+      emitProgress("cdp_connect", "接続しました");
+    }
+    return { browser, port };
   } catch (error) {
     throw createError(
       "CDP_UNAVAILABLE",
-      `Failed to connect to Edge on CDP port ${options.cdpPort}: ${describeError(error)}`
+      `Failed to connect to Edge on CDP port ${port}: ${describeError(error)}`
     );
   }
+}
+
+function emitProgress(step: string, detail?: string): void {
+  process.stdout.write(`${JSON.stringify({ type: "progress", step, detail })}\n`);
+}
+
+function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ port, host: "127.0.0.1" });
+    let settled = false;
+
+    const finish = (isFree: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(isFree);
+    };
+
+    socket.once("connect", () => {
+      finish(false);
+    });
+    socket.once("error", () => {
+      finish(true);
+    });
+  });
+}
+
+async function findAvailableCdpPort(): Promise<number> {
+  for (let port = CDP_PORT_RANGE_START; port <= CDP_PORT_RANGE_END; port += 1) {
+    if (await isPortFree(port)) {
+      return port;
+    }
+  }
+
+  throw createError(
+    "CDP_UNAVAILABLE",
+    `All CDP ports ${CDP_PORT_RANGE_START}-${CDP_PORT_RANGE_END} are in use.`
+  );
+}
+
+async function findExistingCdpEdge(): Promise<number | null> {
+  for (let port = CDP_PORT_RANGE_START; port <= CDP_PORT_RANGE_END; port += 1) {
+    if (await isCdpListening(port)) {
+      return port;
+    }
+  }
+
+  return null;
+}
+
+async function launchEdgeWithCdp(port: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = execFile(
+      "msedge.exe",
+      [`--remote-debugging-port=${port}`, "--no-first-run"],
+      { detached: true, stdio: "ignore" }
+    );
+
+    const handleError = (error: Error) => {
+      reject(
+        createError("CDP_UNAVAILABLE", `Failed to launch Edge: ${describeError(error)}`)
+      );
+    };
+
+    child.once("error", handleError);
+    child.once("spawn", () => {
+      child.off("error", handleError);
+      child.unref();
+      resolve();
+    });
+  });
+
+  await waitForCdpReady(port, { maxWaitMs: 5000, intervalMs: 500 });
+}
+
+async function waitForCdpReady(
+  port: number,
+  opts: { maxWaitMs: number; intervalMs: number }
+): Promise<void> {
+  const deadline = Date.now() + opts.maxWaitMs;
+
+  while (Date.now() < deadline) {
+    if (await isCdpListening(port)) {
+      return;
+    }
+
+    await sleep(opts.intervalMs);
+  }
+
+  throw createError(
+    "CDP_UNAVAILABLE",
+    `Edge launched but CDP did not respond on port ${port} within ${opts.maxWaitMs}ms.`
+  );
+}
+
+async function isCdpListening(port: number): Promise<boolean> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/json/version`);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function ensureCopilotPage(browser: Browser, timeout: number): Promise<Page> {
@@ -199,7 +348,7 @@ async function ensureCopilotPage(browser: Browser, timeout: number): Promise<Pag
   return page;
 }
 
-function detectLoginPage(page: Page): ConnectResult | null {
+function detectLoginPage(page: Page): ErrorResult | null {
   const url = page.url();
   if (/(login|signin)/i.test(url)) {
     return {
@@ -573,7 +722,7 @@ function createError(errorCode: ErrorCode, message: string): Error & { errorCode
   return error;
 }
 
-function toErrorResult(error: unknown, action: "connect" | "send"): ConnectResult | SendResult {
+function toErrorResult(error: unknown, action: "connect" | "send"): ErrorResult {
   const errorCode = extractErrorCode(error) ?? (action === "connect" ? "CDP_UNAVAILABLE" : "SEND_FAILED");
   return {
     status: "error",

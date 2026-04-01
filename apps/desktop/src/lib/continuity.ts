@@ -1,17 +1,29 @@
 import { browser } from "$app/environment";
+import type { ExecutionPlan } from "@relay-agent/contracts";
+
+import type {
+  ActivityFeedEvent,
+  DelegationState
+} from "./stores/delegation";
+import type { CopilotConversationTurn } from "./prompt-templates";
 
 type RelayMode = "discover" | "plan" | "repair" | "followup";
+export type UiMode = "delegation" | "manual";
 
 const STORAGE_KEY = "relay-agent.continuity.v1";
 const MAX_RECENT_SESSIONS = 6;
 const MAX_RECENT_FILES = 6;
 const MAX_AUDIT_HISTORY = 12;
 const DEFAULT_BROWSER_AUTOMATION_SETTINGS = {
-  cdpPort: 9222,
+  cdpPort: 9333,
+  autoLaunchEdge: true,
   timeoutMs: 60000,
   agentLoopEnabled: false,
   maxTurns: 10,
-  loopTimeoutMs: 120000
+  loopTimeoutMs: 120000,
+  planningEnabled: true,
+  autoApproveReadSteps: true,
+  pauseBetweenSteps: false
 } as const;
 
 export type PersistedPreviewSnapshot = {
@@ -77,18 +89,35 @@ export type AuditHistoryEntry = {
 
 export type BrowserAutomationSettings = {
   cdpPort: number;
+  autoLaunchEdge: boolean;
   timeoutMs: number;
   agentLoopEnabled: boolean;
   maxTurns: number;
   loopTimeoutMs: number;
+  planningEnabled: boolean;
+  autoApproveReadSteps: boolean;
+  pauseBetweenSteps: boolean;
+};
+
+export type PersistedDelegationDraft = {
+  goal: string;
+  attachedFiles: string[];
+  activityFeedSnapshot: ActivityFeedEvent[];
+  delegationState: DelegationState;
+  planSnapshot: ExecutionPlan | null;
+  conversationHistorySnapshot: CopilotConversationTurn[];
+  currentStepIndex: number;
+  lastUpdatedAt: string;
 };
 
 type ContinuityState = {
   version: 1;
   studioDrafts: Record<string, PersistedStudioDraft>;
+  delegationDrafts: Record<string, PersistedDelegationDraft>;
   recentSessions: RecentSession[];
   recentFiles: RecentFile[];
   auditHistory: AuditHistoryEntry[];
+  uiMode: UiMode;
   browserAutomation: BrowserAutomationSettings;
 };
 
@@ -96,9 +125,11 @@ function createDefaultState(): ContinuityState {
   return {
     version: 1,
     studioDrafts: {},
+    delegationDrafts: {},
     recentSessions: [],
     recentFiles: [],
     auditHistory: [],
+    uiMode: "delegation",
     browserAutomation: { ...DEFAULT_BROWSER_AUTOMATION_SETTINGS }
   };
 }
@@ -119,9 +150,11 @@ function readState(): ContinuityState {
     return {
       version: 1,
       studioDrafts: normalizeDraftRecord(parsed.studioDrafts),
+      delegationDrafts: normalizeDelegationDraftRecord(parsed.delegationDrafts),
       recentSessions: normalizeRecentSessions(parsed.recentSessions),
       recentFiles: normalizeRecentFiles(parsed.recentFiles),
       auditHistory: normalizeAuditHistory(parsed.auditHistory),
+      uiMode: normalizeUiMode(parsed.uiMode),
       browserAutomation: normalizeBrowserAutomationSettings(parsed.browserAutomation)
     };
   } catch {
@@ -150,6 +183,20 @@ function normalizeDraftRecord(value: unknown): Record<string, PersistedStudioDra
   const entries = Object.entries(value as Record<string, unknown>)
     .map(([sessionId, draft]) => [sessionId, normalizeDraft(draft)] as const)
     .filter((entry): entry is [string, PersistedStudioDraft] => Boolean(entry[1]));
+
+  return Object.fromEntries(entries);
+}
+
+function normalizeDelegationDraftRecord(
+  value: unknown
+): Record<string, PersistedDelegationDraft> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .map(([key, draft]) => [key, normalizeDelegationDraft(draft)] as const)
+    .filter((entry): entry is [string, PersistedDelegationDraft] => Boolean(entry[1]));
 
   return Object.fromEntries(entries);
 }
@@ -210,6 +257,33 @@ function normalizePreviewSnapshot(value: unknown): PersistedPreviewSnapshot | nu
     warnings: asStringArray(record.warnings),
     requiresApproval: Boolean(record.requiresApproval),
     lastGeneratedAt: asString(record.lastGeneratedAt) ?? new Date().toISOString()
+  };
+}
+
+function normalizeDelegationDraft(value: unknown): PersistedDelegationDraft | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const delegationState = normalizeDelegationState(record.delegationState);
+  const lastUpdatedAt = asString(record.lastUpdatedAt);
+
+  if (!delegationState || !lastUpdatedAt) {
+    return null;
+  }
+
+  return {
+    goal: asString(record.goal) ?? "",
+    attachedFiles: asStringArray(record.attachedFiles),
+    activityFeedSnapshot: normalizeActivityFeedSnapshot(record.activityFeedSnapshot),
+    delegationState,
+    planSnapshot: normalizeExecutionPlan(record.planSnapshot),
+    conversationHistorySnapshot: normalizeConversationHistorySnapshot(
+      record.conversationHistorySnapshot
+    ),
+    currentStepIndex: asNumber(record.currentStepIndex) ?? -1,
+    lastUpdatedAt
   };
 }
 
@@ -347,6 +421,82 @@ function asStringArray(value: unknown): string[] {
   return value.filter((entry): entry is string => typeof entry === "string");
 }
 
+function normalizeActivityFeedSnapshot(value: unknown): ActivityFeedEvent[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => normalizeActivityFeedEvent(entry))
+    .filter((entry): entry is ActivityFeedEvent => Boolean(entry));
+}
+
+function normalizeActivityFeedEvent(value: unknown): ActivityFeedEvent | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const id = asString(record.id);
+  const timestamp = asString(record.timestamp);
+  const type = normalizeActivityEventType(record.type);
+  const message = asString(record.message);
+  const icon = asString(record.icon);
+
+  if (!id || !timestamp || !type || !message || !icon) {
+    return null;
+  }
+
+  return {
+    id,
+    timestamp,
+    type,
+    message,
+    icon,
+    detail: asOptionalString(record.detail) ?? undefined,
+    expandable: typeof record.expandable === "boolean" ? record.expandable : undefined,
+    actionRequired:
+      typeof record.actionRequired === "boolean" ? record.actionRequired : undefined
+  };
+}
+
+function normalizeConversationHistorySnapshot(
+  value: unknown
+): CopilotConversationTurn[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => normalizeConversationTurn(entry))
+    .filter((entry): entry is CopilotConversationTurn => Boolean(entry));
+}
+
+function normalizeConversationTurn(value: unknown): CopilotConversationTurn | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const role = record.role;
+  const content = asString(record.content);
+  const timestamp = asString(record.timestamp);
+
+  if (
+    (role !== "user" && role !== "assistant") ||
+    !content ||
+    !timestamp
+  ) {
+    return null;
+  }
+
+  return {
+    role,
+    content,
+    timestamp
+  };
+}
+
 function normalizeRelayMode(value: unknown): RelayMode | null {
   return value === "discover" ||
     value === "plan" ||
@@ -354,6 +504,59 @@ function normalizeRelayMode(value: unknown): RelayMode | null {
     value === "followup"
     ? value
     : null;
+}
+
+function normalizeUiMode(value: unknown): UiMode {
+  return value === "manual" ? "manual" : "delegation";
+}
+
+function normalizeDelegationState(value: unknown): DelegationState | null {
+  return value === "idle" ||
+    value === "goal_entered" ||
+    value === "planning" ||
+    value === "plan_review" ||
+    value === "executing" ||
+    value === "awaiting_approval" ||
+    value === "completed" ||
+    value === "error"
+    ? value
+    : null;
+}
+
+function normalizeActivityEventType(value: unknown): ActivityFeedEvent["type"] | null {
+  return value === "goal_set" ||
+    value === "file_attached" ||
+    value === "copilot_turn" ||
+    value === "tool_executed" ||
+    value === "plan_proposed" ||
+    value === "plan_approved" ||
+    value === "write_approval_requested" ||
+    value === "write_approved" ||
+    value === "step_completed" ||
+    value === "error" ||
+    value === "completed"
+    ? value
+    : null;
+}
+
+function normalizeExecutionPlan(value: unknown): ExecutionPlan | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.steps) || typeof record.summary !== "string") {
+    return null;
+  }
+
+  return {
+    steps: record.steps as ExecutionPlan["steps"],
+    summary: record.summary,
+    totalEstimatedSteps:
+      typeof record.totalEstimatedSteps === "number"
+        ? record.totalEstimatedSteps
+        : record.steps.length
+  };
 }
 
 function normalizeBrowserAutomationSettings(value: unknown): BrowserAutomationSettings {
@@ -365,6 +568,10 @@ function normalizeBrowserAutomationSettings(value: unknown): BrowserAutomationSe
 
   return sanitizeBrowserAutomationSettings({
     cdpPort: asNumber(record.cdpPort) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.cdpPort,
+    autoLaunchEdge:
+      typeof record.autoLaunchEdge === "boolean"
+        ? record.autoLaunchEdge
+        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.autoLaunchEdge,
     timeoutMs: asNumber(record.timeoutMs) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.timeoutMs,
     agentLoopEnabled:
       typeof record.agentLoopEnabled === "boolean"
@@ -372,7 +579,19 @@ function normalizeBrowserAutomationSettings(value: unknown): BrowserAutomationSe
         : DEFAULT_BROWSER_AUTOMATION_SETTINGS.agentLoopEnabled,
     maxTurns: asNumber(record.maxTurns) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.maxTurns,
     loopTimeoutMs:
-      asNumber(record.loopTimeoutMs) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.loopTimeoutMs
+      asNumber(record.loopTimeoutMs) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.loopTimeoutMs,
+    planningEnabled:
+      typeof record.planningEnabled === "boolean"
+        ? record.planningEnabled
+        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.planningEnabled,
+    autoApproveReadSteps:
+      typeof record.autoApproveReadSteps === "boolean"
+        ? record.autoApproveReadSteps
+        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.autoApproveReadSteps,
+    pauseBetweenSteps:
+      typeof record.pauseBetweenSteps === "boolean"
+        ? record.pauseBetweenSteps
+        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.pauseBetweenSteps
   });
 }
 
@@ -389,6 +608,7 @@ function sanitizeBrowserAutomationSettings(
       Number.isFinite(nextPort) && nextPort >= 1 && nextPort <= 65535
         ? nextPort
         : DEFAULT_BROWSER_AUTOMATION_SETTINGS.cdpPort,
+    autoLaunchEdge: Boolean(value.autoLaunchEdge),
     timeoutMs:
       Number.isFinite(nextTimeout) && nextTimeout >= 1000
         ? nextTimeout
@@ -403,7 +623,10 @@ function sanitizeBrowserAutomationSettings(
       nextLoopTimeout >= 30_000 &&
       nextLoopTimeout <= 300_000
         ? nextLoopTimeout
-        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.loopTimeoutMs
+        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.loopTimeoutMs,
+    planningEnabled: Boolean(value.planningEnabled),
+    autoApproveReadSteps: Boolean(value.autoApproveReadSteps),
+    pauseBetweenSteps: Boolean(value.pauseBetweenSteps)
   };
 }
 
@@ -419,6 +642,16 @@ function hasMeaningfulDraft(draft: PersistedStudioDraft): boolean {
       draft.approvalSummary.trim() ||
       draft.executionSummary.trim() ||
       draft.previewSnapshot
+  );
+}
+
+function hasMeaningfulDelegationDraft(draft: PersistedDelegationDraft): boolean {
+  return Boolean(
+    draft.goal.trim() ||
+      draft.attachedFiles.length > 0 ||
+      draft.activityFeedSnapshot.length > 0 ||
+      draft.planSnapshot ||
+      draft.conversationHistorySnapshot.length > 0
   );
 }
 
@@ -466,6 +699,42 @@ export function saveStudioDraft(draft: PersistedStudioDraft): void {
     return {
       ...current,
       studioDrafts: nextDrafts
+    };
+  });
+}
+
+export function loadDelegationDraft(key = "global"): PersistedDelegationDraft | null {
+  return readState().delegationDrafts[key] ?? null;
+}
+
+export function saveDelegationDraft(
+  draft: PersistedDelegationDraft,
+  key = "global"
+): void {
+  updateState((current) => {
+    const nextDrafts = { ...current.delegationDrafts };
+
+    if (hasMeaningfulDelegationDraft(draft)) {
+      nextDrafts[key] = draft;
+    } else {
+      delete nextDrafts[key];
+    }
+
+    return {
+      ...current,
+      delegationDrafts: nextDrafts
+    };
+  });
+}
+
+export function discardDelegationDraft(key = "global"): void {
+  updateState((current) => {
+    const nextDrafts = { ...current.delegationDrafts };
+    delete nextDrafts[key];
+
+    return {
+      ...current,
+      delegationDrafts: nextDrafts
     };
   });
 }
@@ -544,6 +813,21 @@ export function listAuditHistory(): AuditHistoryEntry[] {
 
 export function loadBrowserAutomationSettings(): BrowserAutomationSettings {
   return readState().browserAutomation;
+}
+
+export function loadUiMode(): UiMode {
+  return readState().uiMode;
+}
+
+export function saveUiMode(mode: UiMode): UiMode {
+  const nextMode = normalizeUiMode(mode);
+
+  updateState((current) => ({
+    ...current,
+    uiMode: nextMode
+  }));
+
+  return nextMode;
 }
 
 export function saveBrowserAutomationSettings(

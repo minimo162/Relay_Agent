@@ -11,21 +11,22 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::models::{
-    AgentLoopStatus, ApprovalDecision, ApprovalInspectionPayload, AssessCopilotHandoffRequest,
-    AssessCopilotHandoffResponse, CopilotHandoffReason, CopilotHandoffReasonSource,
-    CopilotHandoffStatus, CopilotTurnResponse, CreateSessionRequest, DiffSummary,
-    ExecuteReadActionsRequest, ExecuteReadActionsResponse, ExecutionInspectionPayload,
-    ExecutionInspectionState, GenerateRelayPacketRequest, PacketInspectionPayload,
-    PreviewArtifactPayload, PreviewExecutionRequest, PreviewExecutionResponse,
-    ReadTurnArtifactsResponse, RelayPacket, RelayPacketResponseContract,
-    RespondToApprovalRequest, RespondToApprovalResponse, RunExecutionRequest,
-    RunExecutionResponse, Session, SessionDetail, SessionStatus, SpreadsheetAction,
-    StartTurnRequest, StartTurnResponse, SubmitCopilotResponseRequest,
+    AgentLoopStatus, ApprovalDecision, ApprovalInspectionPayload, ApprovePlanRequest,
+    ApprovePlanResponse, AssessCopilotHandoffRequest, AssessCopilotHandoffResponse,
+    CopilotHandoffReason, CopilotHandoffReasonSource, CopilotHandoffStatus, CopilotTurnResponse,
+    CreateSessionRequest, DiffSummary, ExecuteReadActionsRequest, ExecuteReadActionsResponse,
+    ExecutionInspectionPayload, ExecutionInspectionState, ExecutionPlan,
+    GenerateRelayPacketRequest, PacketInspectionPayload, PlanProgressRequest,
+    PlanProgressResponse, PlanStepState, PlanStepStatus, PlanningContext,
+    PlanningContextToolGroups, PreviewArtifactPayload, PreviewExecutionRequest,
+    PreviewExecutionResponse, ReadTurnArtifactsResponse, RecordPlanProgressRequest, RelayPacket,
+    RelayPacketResponseContract, RespondToApprovalRequest, RespondToApprovalResponse,
+    RunExecutionRequest, RunExecutionResponse, Session, SessionDetail, SessionStatus,
+    SpreadsheetAction, StartTurnRequest, StartTurnResponse, SubmitCopilotResponseRequest,
     SubmitCopilotResponseResponse, ToolDescriptor, ToolExecutionResult, ToolPhase, Turn,
-    TurnArtifactRecord, TurnDetailsViewModel, TurnInspectionSection,
-    TurnInspectionSourceType, TurnInspectionUnavailableReason, TurnOverview, TurnOverviewStep,
-    TurnOverviewStepState, TurnStatus, ValidationInspectionPayload, ValidationIssue,
-    ValidationIssueSummary,
+    TurnArtifactRecord, TurnDetailsViewModel, TurnInspectionSection, TurnInspectionSourceType,
+    TurnInspectionUnavailableReason, TurnOverview, TurnOverviewStep, TurnOverviewStepState,
+    TurnStatus, ValidationInspectionPayload, ValidationIssue, ValidationIssueSummary,
 };
 use crate::persistence::{self, PersistedArtifactMeta, StorageManifest};
 use crate::workbook::{SheetColumnProfile, SheetPreview, WorkbookEngine, WorkbookSource};
@@ -72,6 +73,11 @@ struct StoredExecution {
     reason: Option<String>,
     created_at: String,
     artifact_id: String,
+}
+
+#[derive(Clone, Debug)]
+struct StoredPlanProgress {
+    progress: PlanProgressResponse,
 }
 
 #[derive(Clone, Debug)]
@@ -137,6 +143,21 @@ struct ExecutionArtifactPayload {
     reason: Option<String>,
 }
 
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExecutionPlanArtifactPayload {
+    plan: ExecutionPlan,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlanProgressArtifactPayload {
+    current_step_id: Option<String>,
+    completed_count: u32,
+    total_count: u32,
+    step_statuses: Vec<PlanStepStatus>,
+}
+
 #[derive(Clone, Debug)]
 struct PersistedLifecycleArtifact<T> {
     artifact_id: String,
@@ -164,6 +185,7 @@ pub struct AppStorage {
     previews: HashMap<String, StoredPreview>,
     approvals: HashMap<String, StoredApproval>,
     executions: HashMap<String, StoredExecution>,
+    plan_progress: HashMap<String, StoredPlanProgress>,
 }
 
 impl Default for AppStorage {
@@ -178,6 +200,7 @@ impl Default for AppStorage {
             previews: HashMap::new(),
             approvals: HashMap::new(),
             executions: HashMap::new(),
+            plan_progress: HashMap::new(),
         }
     }
 }
@@ -550,6 +573,7 @@ impl AppStorage {
                 suggested_actions: vec![
                     "Share only the minimum schema, prompt text, or sample rows that Copilot needs.".to_string(),
                 ],
+                planning_context: Some(self.build_planning_context(&session)),
             });
         }
 
@@ -563,7 +587,202 @@ impl AppStorage {
                 "If you only need structural help, share column names and the intended transform instead of raw rows.".to_string(),
                 "Keep the copied content to the minimum sample that still explains the task.".to_string(),
             ],
+            planning_context: Some(self.build_planning_context(&session)),
         })
+    }
+
+    pub fn approve_plan(
+        &mut self,
+        request: ApprovePlanRequest,
+    ) -> Result<ApprovePlanResponse, String> {
+        let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
+        let approved_steps = request
+            .modified_steps
+            .into_iter()
+            .filter(|step| request.approved_step_ids.iter().any(|approved| approved == &step.id))
+            .collect::<Vec<_>>();
+
+        if approved_steps.is_empty() {
+            return Err("at least one approved plan step is required".to_string());
+        }
+
+        let plan = ExecutionPlan {
+            summary: format!("Approved plan for `{}`", turn.title),
+            total_estimated_steps: approved_steps.len() as u32,
+            steps: approved_steps,
+        };
+        let step_statuses = plan
+            .steps
+            .iter()
+            .map(|step| PlanStepStatus {
+                step_id: step.id.clone(),
+                state: PlanStepState::Pending,
+                result: None,
+                error: None,
+            })
+            .collect::<Vec<_>>();
+        let plan_artifact = self.record_turn_artifact(
+            &session.id,
+            &turn.id,
+            "execution-plan",
+            &ExecutionPlanArtifactPayload { plan: plan.clone() },
+            None,
+        )?;
+        let initial_progress = PlanProgressResponse {
+            current_step_id: None,
+            completed_count: 0,
+            total_count: step_statuses.len() as u32,
+            step_statuses,
+        };
+        let progress_artifact = self.record_turn_artifact(
+            &session.id,
+            &turn.id,
+            "plan-progress",
+            &PlanProgressArtifactPayload {
+                current_step_id: initial_progress.current_step_id.clone(),
+                completed_count: initial_progress.completed_count,
+                total_count: initial_progress.total_count,
+                step_statuses: initial_progress.step_statuses.clone(),
+            },
+            None,
+        )?;
+
+        self.plan_progress.insert(
+            turn.id.clone(),
+            StoredPlanProgress {
+                progress: initial_progress.clone(),
+            },
+        );
+        self.touch_session(&session.id)?;
+        self.append_turn_log(
+            &session.id,
+            &turn.id,
+            Some(&plan_artifact.id),
+            "execution-plan-approved",
+            "Approved autonomous execution plan recorded for the turn.".to_string(),
+            Some(json!({
+                "planArtifactId": plan_artifact.id,
+                "progressArtifactId": progress_artifact.id,
+                "approvedStepCount": initial_progress.total_count,
+            })),
+        )?;
+
+        Ok(ApprovePlanResponse {
+            approved: true,
+            plan,
+        })
+    }
+
+    pub fn get_plan_progress(
+        &self,
+        request: PlanProgressRequest,
+    ) -> Result<PlanProgressResponse, String> {
+        let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
+
+        if let Some(progress) = self.plan_progress.get(&turn.id) {
+            return Ok(progress.progress.clone());
+        }
+
+        if let Some(app_local_data_dir) = self.app_local_data_dir.as_deref() {
+            let mut persisted_progress: Option<PlanProgressResponse> = None;
+            let mut persisted_plan: Option<ExecutionPlan> = None;
+
+            for artifact_id in turn.item_ids.iter().rev() {
+                let meta =
+                    persistence::read_artifact_meta(app_local_data_dir, &session.id, artifact_id)?;
+                match meta.artifact_type.as_str() {
+                    "plan-progress" if persisted_progress.is_none() => {
+                        let payload: PlanProgressArtifactPayload =
+                            persistence::read_artifact_payload(
+                                app_local_data_dir,
+                                &session.id,
+                                &meta.id,
+                            )?;
+                        persisted_progress = Some(PlanProgressResponse {
+                            current_step_id: payload.current_step_id,
+                            completed_count: payload.completed_count,
+                            total_count: payload.total_count,
+                            step_statuses: payload.step_statuses,
+                        });
+                    }
+                    "execution-plan" if persisted_plan.is_none() => {
+                        let payload: ExecutionPlanArtifactPayload =
+                            persistence::read_artifact_payload(
+                                app_local_data_dir,
+                                &session.id,
+                                &meta.id,
+                            )?;
+                        persisted_plan = Some(payload.plan);
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(progress) = persisted_progress {
+                return Ok(progress);
+            }
+
+            if let Some(plan) = persisted_plan {
+                let step_statuses = plan
+                    .steps
+                    .iter()
+                    .map(|step| PlanStepStatus {
+                        step_id: step.id.clone(),
+                        state: PlanStepState::Pending,
+                        result: None,
+                        error: None,
+                    })
+                    .collect::<Vec<_>>();
+
+                return Ok(PlanProgressResponse {
+                    current_step_id: None,
+                    completed_count: 0,
+                    total_count: step_statuses.len() as u32,
+                    step_statuses,
+                });
+            }
+        }
+
+        Ok(PlanProgressResponse {
+            current_step_id: None,
+            completed_count: 0,
+            total_count: 0,
+            step_statuses: Vec::new(),
+        })
+    }
+
+    pub fn record_plan_progress(
+        &mut self,
+        request: RecordPlanProgressRequest,
+    ) -> Result<PlanProgressResponse, String> {
+        let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
+        let response = PlanProgressResponse {
+            current_step_id: request.current_step_id,
+            completed_count: request.completed_count,
+            total_count: request.total_count,
+            step_statuses: request.step_statuses,
+        };
+        self.record_turn_artifact(
+            &session.id,
+            &turn.id,
+            "plan-progress",
+            &PlanProgressArtifactPayload {
+                current_step_id: response.current_step_id.clone(),
+                completed_count: response.completed_count,
+                total_count: response.total_count,
+                step_statuses: response.step_statuses.clone(),
+            },
+            None,
+        )?;
+        self.plan_progress.insert(
+            turn.id.clone(),
+            StoredPlanProgress {
+                progress: response.clone(),
+            },
+        );
+        self.touch_session(&session.id)?;
+
+        Ok(response)
     }
 
     pub fn submit_copilot_response(
@@ -2261,6 +2480,52 @@ impl AppStorage {
         session.updated_at = timestamp();
         self.persist_session_state(session_id)
     }
+
+    fn build_planning_context(&self, session: &Session) -> PlanningContext {
+        let workbook_summary = if let Some(path) = session.primary_workbook_path.as_deref() {
+            match WorkbookSource::detect(path.to_string())
+                .and_then(|source| WorkbookEngine::default().inspect_workbook(&source))
+            {
+                Ok(profile) => {
+                    let sheets = profile
+                        .sheets
+                        .iter()
+                        .map(|sheet| {
+                            format!(
+                                "{} ({} rows; columns: {})",
+                                sheet.name,
+                                sheet.row_count,
+                                sheet.columns.join(", ")
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    format!("File: {path}\n{}", sheets.join("\n"))
+                }
+                Err(_) => format!("File: {path}\nWorkbook summary is not available yet."),
+            }
+        } else {
+            "Workbook path is not available yet.".to_string()
+        };
+
+        PlanningContext {
+            workbook_summary,
+            available_tools: PlanningContextToolGroups {
+                read: read_tool_registry()
+                    .into_iter()
+                    .map(|tool| tool.id)
+                    .collect(),
+                write: write_tool_registry()
+                    .into_iter()
+                    .map(|tool| tool.id)
+                    .collect(),
+            },
+            suggested_approach: vec![
+                "Start with read tools to confirm workbook structure and column names.".to_string(),
+                "Only propose write steps after the necessary context is collected.".to_string(),
+                "Keep all output in a separate save-copy destination.".to_string(),
+            ],
+        }
+    }
 }
 
 fn humanize_turn_status(status: TurnStatus) -> String {
@@ -2560,6 +2825,7 @@ fn parse_copilot_response(
                 status,
                 summary,
                 actions,
+                execution_plan: None,
                 message,
                 follow_up_questions,
                 warnings,
@@ -3044,7 +3310,10 @@ fn execute_file_list(args: &Value) -> Result<Value, String> {
     let pattern = args.get("pattern").and_then(Value::as_str).map(str::trim);
 
     if !directory.is_dir() {
-        return Err(format!("`{}` is not a readable directory", directory.display()));
+        return Err(format!(
+            "`{}` is not a readable directory",
+            directory.display()
+        ));
     }
 
     let mut entries = Vec::new();
@@ -3064,11 +3333,18 @@ fn execute_file_read_text(args: &Value) -> Result<Value, String> {
         .get("maxBytes")
         .and_then(Value::as_u64)
         .unwrap_or(65_536) as usize;
-    let metadata = fs::metadata(&file_path)
-        .map_err(|error| format!("failed to read file metadata for `{}`: {error}", file_path.display()))?;
+    let metadata = fs::metadata(&file_path).map_err(|error| {
+        format!(
+            "failed to read file metadata for `{}`: {error}",
+            file_path.display()
+        )
+    })?;
 
     if !metadata.is_file() {
-        return Err(format!("`{}` is not a readable text file", file_path.display()));
+        return Err(format!(
+            "`{}` is not a readable text file",
+            file_path.display()
+        ));
     }
 
     if metadata.len() > 1_048_576 {
@@ -3095,12 +3371,13 @@ fn execute_file_read_text(args: &Value) -> Result<Value, String> {
 fn execute_file_stat(args: &Value) -> Result<Value, String> {
     let path = required_value_string(args, "path", "file.stat")?;
     let file_path = resolve_safe_read_path(&path)?;
-    let metadata = fs::metadata(&file_path)
-        .map_err(|error| format!("failed to read file metadata for `{}`: {error}", file_path.display()))?;
-    let modified_at = metadata
-        .modified()
-        .ok()
-        .map(format_system_time);
+    let metadata = fs::metadata(&file_path).map_err(|error| {
+        format!(
+            "failed to read file metadata for `{}`: {error}",
+            file_path.display()
+        )
+    })?;
+    let modified_at = metadata.modified().ok().map(format_system_time);
 
     Ok(json!({
         "path": file_path,
@@ -3135,8 +3412,12 @@ fn collect_file_entries(
     pattern: Option<&str>,
     entries: &mut Vec<Value>,
 ) -> Result<(), String> {
-    let read_dir = fs::read_dir(directory)
-        .map_err(|error| format!("failed to read directory `{}`: {error}", directory.display()))?;
+    let read_dir = fs::read_dir(directory).map_err(|error| {
+        format!(
+            "failed to read directory `{}`: {error}",
+            directory.display()
+        )
+    })?;
 
     for entry in read_dir {
         let entry = entry.map_err(|error| {
@@ -3151,7 +3432,10 @@ fn collect_file_entries(
         })?;
         let file_name = entry.file_name().to_string_lossy().into_owned();
 
-        if pattern.map(|value| matches_file_pattern(&file_name, value)).unwrap_or(true) {
+        if pattern
+            .map(|value| matches_file_pattern(&file_name, value))
+            .unwrap_or(true)
+        {
             entries.push(json!({
                 "name": file_name,
                 "path": path,
@@ -3257,11 +3541,12 @@ fn parse_agent_loop_status(
         "ready_to_write" => AgentLoopStatus::ReadyToWrite,
         "done" => AgentLoopStatus::Done,
         "error" => AgentLoopStatus::Error,
+        "plan_proposed" => AgentLoopStatus::PlanProposed,
         _ => {
             validation_issues.push(issue(
                 vec![json!("status")],
                 format!(
-                    "status must be one of thinking, ready_to_write, done, error. Received `{value}`."
+                    "status must be one of thinking, ready_to_write, done, error, plan_proposed. Received `{value}`."
                 ),
                 "invalid_status",
             ));

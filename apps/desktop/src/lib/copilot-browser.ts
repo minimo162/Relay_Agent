@@ -17,14 +17,24 @@ declare const __COPILOT_SCRIPT_DEV_PATH__: string;
 
 type BrowserCommandAction = "connect" | "send";
 
+export type BrowserCommandProgress = {
+  step: string;
+  detail?: string;
+};
+
+type RunBrowserCommandOptions = {
+  onProgress?: (event: BrowserCommandProgress) => void;
+};
+
 type BrowserCommandOutput = {
   code: number | null;
   stdout: string;
   stderr: string;
+  cdpPort: number | null;
 };
 
 type ConnectResult =
-  | { status: "ready" }
+  | { status: "ready"; cdpPort?: number }
   | {
       status: "error";
       errorCode: CopilotBrowserErrorCode;
@@ -33,7 +43,7 @@ type ConnectResult =
 
 export const COPILOT_ERROR_MESSAGES: Record<CopilotBrowserErrorCode, string> = {
   CDP_UNAVAILABLE:
-    "Edge が CDP モードで起動していません。設定の「起動コマンドをコピー」で Edge を起動してから再試行してください。",
+    "Edge に接続できませんでした。設定で自動起動を有効にするか、手動で起動してから再試行してください。",
   NOT_LOGGED_IN:
     "M365 Copilot にログインしていません。Edge で M365 にログインしてから再試行してください。",
   RESPONSE_TIMEOUT:
@@ -54,24 +64,32 @@ export class CopilotBrowserError extends Error {
   }
 }
 
-export async function sendToCopilot(prompt: string): Promise<string> {
-  const output = await runBrowserCommand("send", { prompt });
+export async function sendToCopilot(
+  prompt: string,
+  options: RunBrowserCommandOptions = {}
+): Promise<string> {
+  const output = await runBrowserCommand("send", { prompt }, options);
   const result = parseSendResult(output);
 
   if (result.status === "error") {
     throw new CopilotBrowserError(result.errorCode, result.message);
   }
 
+  logResolvedCdpPort(output.cdpPort);
   return result.response;
 }
 
-export async function checkCopilotConnection(): Promise<void> {
-  const output = await runBrowserCommand("connect");
+export async function checkCopilotConnection(
+  options: RunBrowserCommandOptions = {}
+): Promise<void> {
+  const output = await runBrowserCommand("connect", undefined, options);
   const result = parseConnectResult(output);
 
   if (result.status === "error") {
     throw new CopilotBrowserError(result.errorCode, result.message);
   }
+
+  logResolvedCdpPort(result.cdpPort ?? output.cdpPort);
 }
 
 export function getCopilotBrowserErrorMessage(error: unknown): string {
@@ -88,7 +106,8 @@ export function getCopilotBrowserErrorMessage(error: unknown): string {
 
 async function runBrowserCommand(
   action: BrowserCommandAction,
-  payload?: { prompt: string }
+  payload?: { prompt: string },
+  options: RunBrowserCommandOptions = {}
 ): Promise<BrowserCommandOutput> {
   const settings = loadBrowserAutomationSettings();
   const scriptPath = await resolveBrowserScriptPath();
@@ -96,8 +115,9 @@ async function runBrowserCommand(
     scriptPath,
     "--action",
     action,
-    "--cdp-port",
-    String(settings.cdpPort),
+    ...(settings.autoLaunchEdge
+      ? ["--auto-launch"]
+      : ["--cdp-port", String(settings.cdpPort)]),
     "--timeout",
     String(settings.timeoutMs),
     ...(payload ? ["--prompt", payload.prompt] : [])
@@ -109,9 +129,54 @@ async function runBrowserCommand(
   const command = Command.create("node", args);
   let stdout = "";
   let stderr = "";
+  let stdoutBuffer = "";
+  let resolvedCdpPort: number | null = null;
+
+  const consumeStdoutLine = (rawLine: string) => {
+    const line = rawLine.trim();
+    if (!line) {
+      return;
+    }
+
+    const parsed = parseJsonLine(line);
+    if (parsed && typeof parsed === "object") {
+      const record = parsed as Record<string, unknown>;
+      if (record.type === "progress" && typeof record.step === "string") {
+        options.onProgress?.({
+          step: record.step,
+          detail:
+            typeof record.detail === "string" && record.detail.trim()
+              ? record.detail
+              : undefined
+        });
+        return;
+      }
+
+      if (typeof record.cdpPort === "number" && Number.isFinite(record.cdpPort)) {
+        resolvedCdpPort = Math.trunc(record.cdpPort);
+      }
+    }
+
+    stdout += `${line}\n`;
+  };
+
+  const flushStdoutBuffer = () => {
+    const tail = stdoutBuffer.trim();
+    if (tail) {
+      consumeStdoutLine(tail);
+    }
+    stdoutBuffer = "";
+  };
 
   command.stdout.on("data", (chunk) => {
-    stdout += chunk;
+    stdoutBuffer += chunk;
+
+    let newlineIndex = stdoutBuffer.indexOf("\n");
+    while (newlineIndex >= 0) {
+      consumeStdoutLine(stdoutBuffer.slice(0, newlineIndex));
+      stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+      newlineIndex = stdoutBuffer.indexOf("\n");
+    }
   });
   command.stderr.on("data", (chunk) => {
     stderr += chunk;
@@ -120,8 +185,9 @@ async function runBrowserCommand(
 
   const completion = new Promise<BrowserCommandOutput>((resolve, reject) => {
     command.on("close", ({ code }) => {
+      flushStdoutBuffer();
       console.log("[copilot-browser] close code:", code, "stdout:", stdout, "stderr:", stderr);
-      resolve({ code, stdout, stderr });
+      resolve({ code, stdout, stderr, cdpPort: resolvedCdpPort });
     });
     command.on("error", (message) => {
       console.error("[copilot-browser] spawn error:", message);
@@ -189,7 +255,13 @@ function parseConnectResult(output: BrowserCommandOutput): ConnectResult {
   if (parsed && typeof parsed === "object") {
     const record = parsed as Record<string, unknown>;
     if (record.status === "ready") {
-      return { status: "ready" };
+      return {
+        status: "ready",
+        cdpPort:
+          typeof record.cdpPort === "number" && Number.isFinite(record.cdpPort)
+            ? Math.trunc(record.cdpPort)
+            : undefined
+      };
     }
 
     if (record.status === "error") {
@@ -240,4 +312,10 @@ function buildParseErrorMessage(output: BrowserCommandOutput, reason: string): s
   }
 
   return reason;
+}
+
+function logResolvedCdpPort(port: number | null | undefined): void {
+  if (typeof port === "number" && Number.isFinite(port)) {
+    console.log("[copilot-browser] connected cdpPort:", port);
+  }
 }

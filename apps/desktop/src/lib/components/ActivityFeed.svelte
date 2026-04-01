@@ -1,0 +1,102 @@
+<script lang="ts">
+  import { afterUpdate, tick } from "svelte";
+
+  import type { ActivityFeedEvent } from "$lib/stores/delegation";
+
+  export let events: ActivityFeedEvent[] = [];
+  export let emptyLabel = "やりたいことを入力して、エージェントを開始してください。";
+
+  let feedContainer: HTMLDivElement | null = null;
+
+  afterUpdate(async () => {
+    await tick();
+    if (feedContainer) {
+      feedContainer.scrollTop = feedContainer.scrollHeight;
+    }
+  });
+</script>
+
+<div class="activity-feed" bind:this={feedContainer}>
+  {#if events.length === 0}
+    <div class="feed-empty">{emptyLabel}</div>
+  {:else}
+    {#each events as event (event.id)}
+      <div class="feed-event" class:event-action-required={event.actionRequired} class:event-error={event.type === "error"}>
+        <span class="event-icon">{event.icon}</span>
+        <div class="event-content">
+          <div class="event-message">{event.message}</div>
+          {#if event.detail && event.expandable}
+            <details class="event-detail">
+              <summary>詳細を見る</summary>
+              <pre>{event.detail}</pre>
+            </details>
+          {:else if event.detail}
+            <div class="event-detail-inline">{event.detail}</div>
+          {/if}
+          <time class="event-time">
+            {new Date(event.timestamp).toLocaleTimeString("ja-JP")}
+          </time>
+        </div>
+      </div>
+    {/each}
+  {/if}
+</div>
+
+<style>
+  .activity-feed {
+    display: grid;
+    gap: 0.75rem;
+    overflow-y: auto;
+    padding: 1rem;
+  }
+
+  .feed-empty {
+    color: var(--ra-text-muted);
+  }
+
+  .feed-event {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.85rem;
+    border-radius: 12px;
+    border: 1px solid var(--ra-border);
+    background: var(--ra-surface);
+  }
+
+  .event-action-required {
+    border-color: #e2b15d;
+    background: #fff9ef;
+  }
+
+  .event-error {
+    border-color: #cf786c;
+    background: #fff3f1;
+  }
+
+  .event-icon {
+    font-size: 1.1rem;
+    line-height: 1;
+  }
+
+  .event-content {
+    min-width: 0;
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  .event-message {
+    font-weight: 600;
+  }
+
+  .event-detail-inline,
+  .event-time,
+  .event-detail {
+    color: var(--ra-text-muted);
+    font-size: 0.82rem;
+  }
+
+  pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+</style>

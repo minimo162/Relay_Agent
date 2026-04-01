@@ -6,11 +6,35 @@ export type FriendlyError = {
 
 const ERROR_MAP: Array<{ pattern: RegExp; result: FriendlyError }> = [
   {
-    pattern: /ECONNREFUSED.*922[0-9]|CDP_UNAVAILABLE/i,
+    pattern: /All CDP ports.*in use|9333.*9342.*使用中/i,
     result: {
       icon: "🔌",
-      message: "Edge が CDP モードで起動していません。",
-      hint: "設定モーダルの CDP ガイドを開いて、Edge を 9222 ポートで起動してください。"
+      message: "ポート 9333-9342 がすべて使用中です。",
+      hint: "他のアプリケーションを終了してから再試行してください。"
+    }
+  },
+  {
+    pattern: /Edge launched but CDP did not respond/i,
+    result: {
+      icon: "⏱",
+      message: "Edge は起動しましたが CDP 接続が確立できませんでした。",
+      hint: "少し待ってから再試行してください。"
+    }
+  },
+  {
+    pattern: /ENOENT.*msedge|msedge.*not found|Failed to launch Edge/i,
+    result: {
+      icon: "🌐",
+      message: "Edge が見つかりません。",
+      hint: "Microsoft Edge がインストールされているか確認してください。"
+    }
+  },
+  {
+    pattern: /ECONNREFUSED.*(922[0-9]|933[3-9]|934[0-2])|CDP_UNAVAILABLE/i,
+    result: {
+      icon: "🔌",
+      message: "Edge の CDP 接続を確認できませんでした。",
+      hint: "設定モーダルで自動起動を有効にするか、CDP ガイドのコマンドで Edge を起動してください。"
     }
   },
   {

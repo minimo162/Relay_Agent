@@ -172,6 +172,8 @@ pub struct CopilotTurnResponse {
     pub summary: String,
     pub actions: Vec<SpreadsheetAction>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_plan: Option<ExecutionPlan>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     pub follow_up_questions: Vec<String>,
     pub warnings: Vec<String>,
@@ -184,6 +186,35 @@ pub enum AgentLoopStatus {
     ReadyToWrite,
     Done,
     Error,
+    PlanProposed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanStepPhase {
+    Read,
+    Write,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanStep {
+    pub id: String,
+    pub tool: String,
+    pub description: String,
+    pub phase: PlanStepPhase,
+    #[serde(default)]
+    pub args: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_effect: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionPlan {
+    pub summary: String,
+    pub total_estimated_steps: u32,
+    pub steps: Vec<PlanStep>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -517,6 +548,54 @@ pub struct RunExecutionRequest {
     pub turn_id: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanStepStatus {
+    pub step_id: String,
+    pub state: PlanStepState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanStepState {
+    Pending,
+    Running,
+    Completed,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovePlanRequest {
+    pub session_id: String,
+    pub turn_id: String,
+    pub approved_step_ids: Vec<String>,
+    pub modified_steps: Vec<PlanStep>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanProgressRequest {
+    pub session_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordPlanProgressRequest {
+    pub session_id: String,
+    pub turn_id: String,
+    pub current_step_id: Option<String>,
+    pub completed_count: u32,
+    pub total_count: u32,
+    pub step_statuses: Vec<PlanStepStatus>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionDetail {
@@ -598,6 +677,23 @@ pub struct AssessCopilotHandoffResponse {
     pub summary: String,
     pub reasons: Vec<CopilotHandoffReason>,
     pub suggested_actions: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub planning_context: Option<PlanningContext>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanningContextToolGroups {
+    pub read: Vec<String>,
+    pub write: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanningContext {
+    pub workbook_summary: String,
+    pub available_tools: PlanningContextToolGroups,
+    pub suggested_approach: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -621,6 +717,13 @@ pub struct RespondToApprovalResponse {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ApprovePlanResponse {
+    pub approved: bool,
+    pub plan: ExecutionPlan,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolExecutionResult {
     pub tool: String,
     pub args: Value,
@@ -639,6 +742,15 @@ pub struct ExecuteReadActionsResponse {
     pub has_write_actions: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guard_message: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanProgressResponse {
+    pub current_step_id: Option<String>,
+    pub completed_count: u32,
+    pub total_count: u32,
+    pub step_statuses: Vec<PlanStepStatus>,
 }
 
 #[derive(Clone, Debug, Serialize)]

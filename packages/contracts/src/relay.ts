@@ -40,8 +40,24 @@ export const agentLoopStatusSchema = z.enum([
   "thinking",
   "ready_to_write",
   "done",
-  "error"
+  "error",
+  "plan_proposed"
 ]);
+
+export const planStepSchema = z.object({
+  id: z.string().trim().min(1),
+  description: nonEmptyStringSchema,
+  tool: z.string().trim().min(1),
+  phase: toolPhaseSchema,
+  args: z.record(z.string(), z.unknown()).optional(),
+  estimatedEffect: z.string().default("")
+});
+
+export const executionPlanSchema = z.object({
+  steps: z.array(planStepSchema).min(1),
+  summary: nonEmptyStringSchema,
+  totalEstimatedSteps: z.number().int().positive()
+});
 
 export const relayActionSchema = z.union([
   spreadsheetActionSchema,
@@ -53,6 +69,7 @@ export const copilotTurnResponseSchema = z.object({
   status: agentLoopStatusSchema.default("ready_to_write"),
   summary: nonEmptyStringSchema,
   actions: z.array(relayActionSchema).default([]),
+  executionPlan: executionPlanSchema.optional(),
   message: z.string().optional(),
   followupQuestions: z.array(z.string()).default([]),
   warnings: z.array(z.string()).default([])
@@ -63,5 +80,7 @@ export type ToolDescriptor = z.infer<typeof toolDescriptorSchema>;
 export type RelayPacket = z.infer<typeof relayPacketSchema>;
 export type ValidationIssue = z.infer<typeof validationIssueSchema>;
 export type AgentLoopStatus = z.infer<typeof agentLoopStatusSchema>;
+export type PlanStep = z.infer<typeof planStepSchema>;
+export type ExecutionPlan = z.infer<typeof executionPlanSchema>;
 export type RelayAction = z.infer<typeof relayActionSchema>;
 export type CopilotTurnResponse = z.infer<typeof copilotTurnResponseSchema>;

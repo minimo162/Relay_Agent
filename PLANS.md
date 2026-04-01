@@ -345,6 +345,21 @@ The guided workflow simplification scope from `.taskmaster/docs/archive/prd_guid
 The current active UI follow-up is captured in `.taskmaster/docs/prd.txt` sections `3` and `4`.
 Its Task Master breakdown now lives in `.taskmaster/tasks/tasks.json` as tasks `64` through `75`, with tasks `64` through `67` and `69` through `75` implemented, and task `68` still pending for the manual Windows Tauri walkthrough.
 
+The next follow-up scope is captured in `.taskmaster/docs/prd.txt` section `14`.
+Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `84` through `95`. The implementation-backed work for tasks `85` through `94` is in place, task `84` is satisfied by `docs/AGENT_LOOP_DESIGN.md`, and task `95` remains pending until the Windows + M365 manual checklist in `docs/AGENT_LOOP_E2E_VERIFICATION.md` is executed and recorded.
+
+The latest browser-automation hardening scope is captured in `.taskmaster/docs/prd.txt` section `17`.
+Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `104` through `108`, which are implementation-complete in source. The earlier browser-automation verification backlog under tasks `76` through `83` still requires live selector confirmation and Windows/M365 manual validation before it should be treated as fully closed.
+
+The next planning-first autonomous execution scope is captured in `.taskmaster/docs/prd.txt` section `18`.
+Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `109` through `123`. The design and frontend/contracts foundation in tasks `109` through `113` plus the plan approval / execution UI, persistence, and settings work in tasks `114` through `122` are now implemented in source. The remaining closure item is task `123`, which still depends on the Windows + M365 manual checklist in `docs/AUTONOMOUS_EXECUTION_E2E_VERIFICATION.md`.
+
+The next delegation-first UI scope is captured in `.taskmaster/docs/prd.txt` section `19`.
+Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `124` through `137`. The delegation design, component extraction, delegation state store, goal-first composer, activity feed, intervention panel, completion timeline, mode persistence, responsive layout, and keyboard shortcuts in tasks `124` through `136` are now implemented in source. The remaining closure item is task `137`, which still depends on the Windows + M365 manual checklist in `docs/DELEGATION_UI_E2E_VERIFICATION.md`.
+
+The next Copilot-integration hardening scope is captured in `.taskmaster/docs/prd.txt` section `20`.
+Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `138` through `143`. The prompt-template refresh, context compression, structured retry/manual fallback behavior, conversation-history persistence, and multi-session feasibility write-up in tasks `138` through `142` are now implemented in source or documentation. The remaining closure item is task `143`, which still depends on the Windows + M365 manual checklist in `docs/COPILOT_INTEGRATION_E2E_VERIFICATION.md`.
+
 That UI follow-up preserves the current safety model:
 
 - preview before write
