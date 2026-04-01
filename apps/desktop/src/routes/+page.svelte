@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { slide } from "svelte/transition";
+  import { open } from "@tauri-apps/plugin-shell";
   import type {
     CopilotTurnResponse,
     DiffSummary,
@@ -16,12 +18,15 @@
     discardStudioDraft,
     generateRelayPacket,
     getCopilotBrowserErrorMessage,
+    getFriendlyError,
     inspectWorkbook,
     initializeApp,
     listRecoverableStudioDrafts,
     listRecentSessions,
     loadStudioDraft,
     loadBrowserAutomationSettings,
+    hasSeenWelcome,
+    markWelcomeSeen,
     markStudioDraftClean,
     pingDesktop,
     preflightWorkbook,
@@ -51,9 +56,15 @@
   };
   type AgentLoopLogEntry = {
     id: string;
+    tool: string;
     label: string;
     status: ProgressStatus;
+    startTime: number;
+    endTime?: number;
     detail?: string;
+    errorMessage?: string;
+    rawResult?: unknown;
+    showDetail?: boolean;
   };
   type ValidationFeedback = {
     level: 1 | 2 | 3;
@@ -79,6 +90,11 @@
   const expectedResponseShape =
     '{ "version": "1.0", "status": "thinking|ready_to_write|done|error", "summary": "...", "actions": [...] }';
   const instructionColumnLimit = 20;
+  const objectivePresets = [
+    "approved が true の行だけ残してください",
+    "amount 列の合計を新しい列として追加してください",
+    "重複行を削除してシートを整理してください"
+  ] as const;
 
   // Exact args structure for each tool. This is embedded verbatim in the Copilot
   // instruction so the LLM uses the correct field names and nesting.
@@ -118,6 +134,11 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let busy = false;
   let errorMsg = "";
   let settingsOpen = false;
+  let showWelcome = false;
+  let isDragOver = false;
+  let cdpTestStatus: "idle" | "testing" | "ok" | "fail" = "idle";
+  let cdpTestMessage = "";
+  let hiddenFilePicker: HTMLInputElement | null = null;
 
   let startupIssue: StartupIssue | null = null;
   let storagePath: string | null = null;
@@ -160,6 +181,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let agentLoopSummary = "";
   let agentLoopFinalStatus: CopilotTurnResponse["status"] | null = null;
   let agentLoopAbortController: AbortController | null = null;
+  let activeAgentLoopEntryId: string | null = null;
 
   let previewSummary = "";
   let previewTargetCount = 0;
@@ -186,6 +208,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let setupStepComplete = false;
   let copilotStepAvailable = false;
   let reviewStepAvailable = false;
+  let workflowStartedAt: number | null = null;
+  let completedAt: number | null = null;
 
   const templates: TemplateOption[] = [
     {
@@ -695,6 +719,22 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     return "waiting";
   }
 
+  function currentStepNumber(): number {
+    if (executionDone) {
+      return 3;
+    }
+
+    if (guidedStage === "review-save") {
+      return 3;
+    }
+
+    if (guidedStage === "copilot") {
+      return 2;
+    }
+
+    return 1;
+  }
+
   function setProgress(labels: string[]): void {
     progressItems = labels.map((label, index) => ({
       id: `${index}-${label}`,
@@ -740,25 +780,58 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     agentLoopSummary = "";
     agentLoopFinalStatus = null;
     agentLoopAbortController = null;
+    activeAgentLoopEntryId = null;
     if (clearLog) {
       agentLoopLog = [];
     }
   }
 
   function pushAgentLoopLog(
+    tool: string,
     label: string,
     status: ProgressStatus,
-    detail?: string
-  ): void {
+    options?: {
+      detail?: string;
+      errorMessage?: string;
+      rawResult?: unknown;
+      startTime?: number;
+      endTime?: number;
+      showDetail?: boolean;
+    }
+  ): string {
+    const id = `${Date.now()}-${agentLoopLog.length}`;
     agentLoopLog = [
       ...agentLoopLog,
       {
-        id: `${Date.now()}-${agentLoopLog.length}`,
+        id,
+        tool,
         label,
         status,
-        detail
+        startTime: options?.startTime ?? Date.now(),
+        endTime: options?.endTime,
+        detail: options?.detail,
+        errorMessage: options?.errorMessage,
+        rawResult: options?.rawResult,
+        showDetail: options?.showDetail ?? false
       }
     ];
+
+    return id;
+  }
+
+  function updateAgentLoopLog(
+    id: string,
+    patch: Partial<Omit<AgentLoopLogEntry, "id">>
+  ): void {
+    agentLoopLog = agentLoopLog.map((entry) =>
+      entry.id === id ? { ...entry, ...patch } : entry
+    );
+  }
+
+  function toggleAgentLoopDetail(id: string): void {
+    agentLoopLog = agentLoopLog.map((entry) =>
+      entry.id === id ? { ...entry, showDetail: !entry.showDetail } : entry
+    );
   }
 
   function summarizeToolResult(result: ToolExecutionResult): string {
@@ -788,6 +861,67 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   function cancelAgentLoop(): void {
     agentLoopAbortController?.abort();
+  }
+
+  function startFromWelcome(): void {
+    markWelcomeSeen();
+    showWelcome = false;
+  }
+
+  function openFilePicker(): void {
+    hiddenFilePicker?.click();
+  }
+
+  function applyPickedFile(file: File | null): void {
+    if (!file) {
+      return;
+    }
+
+    const fileWithPath = file as File & { path?: string };
+    filePath = fileWithPath.path?.trim() || file.name;
+  }
+
+  function handleFilePickerChange(event: Event): void {
+    const target = event.currentTarget as HTMLInputElement;
+    applyPickedFile(target.files?.[0] ?? null);
+  }
+
+  function handleDrop(event: DragEvent): void {
+    isDragOver = false;
+    applyPickedFile(event.dataTransfer?.files?.[0] ?? null);
+  }
+
+  async function testCdpConnection(): Promise<void> {
+    cdpTestStatus = "testing";
+    cdpTestMessage = "";
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${cdpPort}/json/version`);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const payload = (await response.json()) as { Browser?: string };
+      const version = payload.Browser?.split("/")[1]?.split(".")[0] ?? "";
+      cdpTestMessage = version ? `接続済み（Edge ${version}）` : "接続済み";
+      cdpTestStatus = "ok";
+    } catch {
+      cdpTestMessage = "Edge が起動しているか、ポート番号を確認してください。";
+      cdpTestStatus = "fail";
+    }
+  }
+
+  async function openOutputFile(): Promise<void> {
+    if (!previewOutputPath.trim()) {
+      return;
+    }
+
+    try {
+      await open(previewOutputPath);
+    } catch (error) {
+      await copyToClipboard(previewOutputPath);
+      errorMsg = toError(error);
+    }
   }
 
   function loadExpertDetails(): void {
@@ -1001,14 +1135,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   async function copyEdgeLaunchCommand(): Promise<void> {
-    const edgePaths = [
-      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-      "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-    ];
-    const edgeExe = edgePaths[0];
-    await copyToClipboard(
-      `& "${edgeExe}" --remote-debugging-port=${cdpPort} --no-first-run`
-    );
+    await copyToClipboard(`msedge.exe --remote-debugging-port=${cdpPort}`);
     copiedBrowserCommandNotice = "Edge の起動コマンドをコピーしました。";
   }
 
@@ -1078,29 +1205,57 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         {
           onTurnStart: (turn) => {
             agentLoopTurn = turn;
-            pushAgentLoopLog(`Turn ${turn}: Copilot に送信`, "running");
+            activeAgentLoopEntryId = pushAgentLoopLog(
+              `copilot.turn.${turn}`,
+              `Turn ${turn}: Copilot に送信`,
+              "running"
+            );
           },
           onCopilotResponse: (turn, response) => {
-            pushAgentLoopLog(
-              `Turn ${turn}: Copilot が ${response.status} を返しました`,
-              "done",
-              response.message ?? response.summary
-            );
+            agentLoopSummary = response.summary;
+            if (activeAgentLoopEntryId) {
+              updateAgentLoopLog(activeAgentLoopEntryId, {
+                status: "done",
+                endTime: Date.now(),
+                detail: response.message ?? response.summary,
+                rawResult: response
+              });
+              activeAgentLoopEntryId = null;
+            } else {
+              pushAgentLoopLog(
+                `copilot.turn.${turn}`,
+                `Turn ${turn}: Copilot が ${response.status} を返しました`,
+                "done",
+                {
+                  detail: response.message ?? response.summary,
+                  rawResult: response,
+                  endTime: Date.now()
+                }
+              );
+            }
           },
           onToolResults: (turn, toolResults) => {
             if (toolResults.length === 0) {
               pushAgentLoopLog(
+                `turn.${turn}.tools`,
                 `Turn ${turn}: 実行できる read ツールはありません`,
-                "done"
+                "done",
+                { endTime: Date.now() }
               );
               return;
             }
 
             for (const toolResult of toolResults) {
               pushAgentLoopLog(
+                toolResult.tool,
                 `Turn ${turn}: ${toolResult.tool}`,
                 toolResult.ok ? "done" : "error",
-                summarizeToolResult(toolResult)
+                {
+                  detail: summarizeToolResult(toolResult),
+                  errorMessage: toolResult.error,
+                  rawResult: toolResult.ok ? toolResult.result : { error: toolResult.error },
+                  endTime: Date.now()
+                }
               );
             }
           }
@@ -1127,7 +1282,21 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         agentLoopSummary = "エージェントループをキャンセルしました。手動入力に切り替えられます。";
-        pushAgentLoopLog("エージェントループをキャンセルしました", "error");
+        if (activeAgentLoopEntryId) {
+          updateAgentLoopLog(activeAgentLoopEntryId, {
+            status: "error",
+            endTime: Date.now(),
+            detail: agentLoopSummary,
+            errorMessage: agentLoopSummary
+          });
+          activeAgentLoopEntryId = null;
+        } else {
+          pushAgentLoopLog("agent-loop", "エージェントループをキャンセルしました", "error", {
+            detail: agentLoopSummary,
+            errorMessage: agentLoopSummary,
+            endTime: Date.now()
+          });
+        }
       } else {
         console.error("[agent-loop] handleAgentLoopAutoSend error:", error);
         const friendlyMsg = getCopilotBrowserErrorMessage(error);
@@ -1135,7 +1304,20 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         copilotAutoError = rawMsg && rawMsg !== friendlyMsg
           ? `${friendlyMsg}\n[詳細: ${rawMsg}]`
           : friendlyMsg;
-        pushAgentLoopLog("エージェントループが失敗しました", "error", copilotAutoError);
+        if (activeAgentLoopEntryId) {
+          updateAgentLoopLog(activeAgentLoopEntryId, {
+            status: "error",
+            endTime: Date.now(),
+            detail: copilotAutoError,
+            errorMessage: copilotAutoError
+          });
+          activeAgentLoopEntryId = null;
+        }
+        pushAgentLoopLog("agent-loop", "エージェントループが失敗しました", "error", {
+          detail: copilotAutoError,
+          errorMessage: copilotAutoError,
+          endTime: Date.now()
+        });
       }
     } finally {
       isSendingToCopilot = false;
@@ -1239,6 +1421,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     lastSavedDraftSignature = "";
     step1Expanded = true;
     preparedSetupSignature = "";
+    workflowStartedAt = null;
+    completedAt = null;
   }
 
   async function handleSetupStage(): Promise<void> {
@@ -1248,6 +1432,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     copilotAutoError = null;
     validationFeedback = null;
     retryPrompt = "";
+    workflowStartedAt = Date.now();
+    completedAt = null;
     busy = true;
     setProgress([
       "ファイルの状態を確認しています",
@@ -1454,6 +1640,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       }
 
       executionDone = true;
+      completedAt = Date.now();
     } catch (error) {
       const failure = toError(error);
       failCurrentProgress(failure);
@@ -1479,6 +1666,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   onMount(async () => {
     loadExpertDetails();
+    showWelcome = !hasSeenWelcome();
     const browserAutomationSettings = loadBrowserAutomationSettings();
     cdpPort = browserAutomationSettings.cdpPort;
     timeoutMs = browserAutomationSettings.timeoutMs;
@@ -1594,6 +1782,37 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   <title>Relay Agent</title>
 </svelte:head>
 
+{#if showWelcome}
+  <div class="welcome-overlay">
+    <div class="welcome-card">
+      <div class="welcome-logo">🤖</div>
+      <h1 class="welcome-title">Relay Agent</h1>
+      <p class="welcome-subtitle">
+        Copilot があなたの代わりに、<br />表計算を自動化します
+      </p>
+      <div class="welcome-steps">
+        <div class="welcome-step">
+          <span class="welcome-step-icon">📁</span>
+          <span class="welcome-step-label">ファイルを選ぶ</span>
+        </div>
+        <div class="welcome-step-arrow">→</div>
+        <div class="welcome-step">
+          <span class="welcome-step-icon">🤖</span>
+          <span class="welcome-step-label">Copilot が処理</span>
+        </div>
+        <div class="welcome-step-arrow">→</div>
+        <div class="welcome-step">
+          <span class="welcome-step-icon">✅</span>
+          <span class="welcome-step-label">確認して保存</span>
+        </div>
+      </div>
+      <button class="welcome-btn" type="button" on:click={startFromWelcome}>
+        始める →
+      </button>
+    </div>
+  </div>
+{/if}
+
 <header class="header">
   <div class="header-left">
     <span class="header-icon">📋</span>
@@ -1635,29 +1854,42 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     {/if}
 {/if}
 
-<section class="step-banner" aria-label="guided workflow">
-  <div class="step-banner-grid">
-    {#each stepBanner as step}
-      <article class="step-card" data-state={stepState(step.id)}>
-        <div class="step-pill">
-          <span class="step-number">{step.number}</span>
-          <span class="step-title">{step.title}</span>
-        </div>
-        <p class="step-state">
-          {#if stepState(step.id) === "completed"}
-            完了
-          {:else if stepState(step.id) === "current"}
-            今ここ
+<section class="step-progress-bar" aria-label="guided workflow">
+  <div class="step-progress-row">
+    {#each [
+      { num: 1, icon: "📁", label: "ファイル選択" },
+      { num: 2, icon: "🤖", label: "Copilot 処理" },
+      { num: 3, icon: "✅", label: "確認・保存" }
+    ] as step, index}
+      <div
+        class="step-node"
+        class:current={currentStepNumber() === step.num}
+        class:completed={currentStepNumber() > step.num}
+      >
+        <div class="step-circle">
+          {#if currentStepNumber() > step.num}
+            <span class="step-check">✓</span>
           {:else}
-            待機中
+            <span class="step-icon">{step.icon}</span>
           {/if}
-        </p>
-      </article>
+        </div>
+        <span class="step-node-label">{step.label}</span>
+      </div>
+      {#if index < 2}
+        <div class="step-connector" class:filled={currentStepNumber() > step.num}></div>
+      {/if}
     {/each}
   </div>
   <p class="step-description">
     {stepBanner.find((step) => step.id === guidedStage)?.description}
   </p>
+  <input
+    bind:this={hiddenFilePicker}
+    type="file"
+    accept=".csv,.xlsx,.xlsm,.xls"
+    class="hidden-file-input"
+    on:change={handleFilePickerChange}
+  />
 </section>
 
 {#if guidedStage === "review-save" && previewSummary && !executionDone}
@@ -1707,6 +1939,37 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       </div>
     </div>
   {:else}
+    {#if !filePath.trim()}
+      <div
+        class="dropzone-large"
+        class:dropzone-hover={isDragOver}
+        on:dragover|preventDefault={() => {
+          isDragOver = true;
+        }}
+        on:dragleave={() => {
+          isDragOver = false;
+        }}
+        on:drop|preventDefault={handleDrop}
+        on:click={openFilePicker}
+        on:keydown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openFilePicker();
+          }
+        }}
+        role="button"
+        tabindex="0"
+      >
+        <div class="dropzone-icon">📊</div>
+        <div class="dropzone-primary">CSV または XLSX ファイルをドロップ</div>
+        <div class="dropzone-secondary">またはクリックして選択</div>
+        <div class="dropzone-badges">
+          <span class="ext-badge">.csv</span>
+          <span class="ext-badge">.xlsx</span>
+        </div>
+      </div>
+    {/if}
+
     <label class="field-label" for="file-path">ファイルパス</label>
     <div class="file-row">
       <input
@@ -1714,7 +1977,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         type="text"
         class="input"
         bind:value={filePath}
-        placeholder="例: /Users/you/data.csv"
+        placeholder="例: C:/Users/you/Documents/data.csv"
         disabled={busy}
       />
       {#if sampleWorkbookPath}
@@ -1750,10 +2013,23 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       value={objectiveText}
       on:input={(event) =>
         updateObjective((event.currentTarget as HTMLTextAreaElement).value)}
-      placeholder="どんな変更をしたいか、自由に書いてください"
+      placeholder="例: approved が true の行だけ残して、amount の確認列を追加してください"
       rows="3"
       disabled={busy}
     ></textarea>
+    <div class="objective-presets">
+      <span class="preset-label">例:</span>
+      {#each objectivePresets as preset}
+        <button
+          class="preset-btn"
+          type="button"
+          on:click={() => updateObjective(preset)}
+          disabled={busy}
+        >
+          {preset}
+        </button>
+      {/each}
+    </div>
 
     <label class="field-label" for="task-name">タスク名</label>
     <input
@@ -1795,7 +2071,16 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     {/if}
 
     {#if errorMsg && guidedStage === "setup"}
-      <p class="field-error">{errorMsg}</p>
+      {@const fe = getFriendlyError(errorMsg)}
+      <div class="friendly-error">
+        <span class="fe-icon">{fe.icon}</span>
+        <div class="fe-body">
+          <div class="fe-message">{fe.message}</div>
+          {#if fe.hint}
+            <div class="fe-hint">{fe.hint}</div>
+          {/if}
+        </div>
+      </div>
     {/if}
 
     <button
@@ -1896,41 +2181,86 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   {#if agentLoopEnabled && (agentLoopSummary || agentLoopLog.length > 0)}
     <div class="agent-loop-panel">
-      <p class="agent-loop-summary">
-        <strong>ループ状況:</strong>
-        {agentLoopSummary || `Turn ${agentLoopTurn || 1} を実行中です。`}
-      </p>
-      {#if agentLoopFinalStatus}
-        <p class="settings-hint">最終 status: {agentLoopFinalStatus}</p>
-      {/if}
-      <div class="agent-loop-log">
+      <div class="loop-timeline">
+        <div class="loop-turn-bar">
+          <span class="loop-turn-label">ターン {agentLoopTurn || 1} / {maxTurns}</span>
+          <div class="loop-turn-track">
+            <div class="loop-turn-fill" style={`width: ${((agentLoopTurn || 1) / maxTurns) * 100}%`}></div>
+          </div>
+        </div>
+
         {#each agentLoopLog as entry}
-          <div class="progress-item" data-status={entry.status}>
-            <div class="progress-mark">
-              {#if entry.status === "done"}
-                ✓
-              {:else if entry.status === "running"}
-                …
-              {:else if entry.status === "error"}
-                !
+          <div
+            class="timeline-item"
+            class:timeline-running={entry.status === "running"}
+            class:timeline-done={entry.status === "done"}
+            class:timeline-error={entry.status === "error"}
+          >
+            <div class="timeline-icon">
+              {#if entry.status === "running"}
+                <span class="spinner">⟳</span>
+              {:else if entry.status === "done"}
+                <span>✓</span>
               {:else}
-                •
+                <span>✗</span>
               {/if}
             </div>
-            <div>
-              <strong>{entry.label}</strong>
+            <div class="timeline-body">
+              <div class="timeline-tool-row">
+                <span class="timeline-tool-name">{entry.label}</span>
+                {#if entry.endTime}
+                  <span class="timeline-duration">
+                    {((entry.endTime - entry.startTime) / 1000).toFixed(1)}s
+                  </span>
+                {/if}
+              </div>
+              {#if entry.status === "error" && entry.errorMessage}
+                <div class="timeline-error-msg">{entry.errorMessage}</div>
+              {/if}
               {#if entry.detail}
                 <div class="progress-message">{entry.detail}</div>
+              {/if}
+              {#if entry.rawResult}
+                <button
+                  class="timeline-detail-btn"
+                  type="button"
+                  on:click={() => toggleAgentLoopDetail(entry.id)}
+                >
+                  {entry.showDetail ? "詳細を隠す" : "詳細を見る"}
+                </button>
+                {#if entry.showDetail}
+                  <pre class="timeline-detail-json">{JSON.stringify(entry.rawResult, null, 2)}</pre>
+                {/if}
               {/if}
             </div>
           </div>
         {/each}
+        {#if agentLoopSummary}
+          <div class="copilot-bubble">
+            <span class="copilot-bubble-icon">🤖</span>
+            <div class="copilot-bubble-text">
+              {agentLoopSummary}
+              {#if agentLoopFinalStatus}
+                <div class="copilot-bubble-status">status: {agentLoopFinalStatus}</div>
+              {/if}
+            </div>
+          </div>
+        {/if}
       </div>
     </div>
   {/if}
 
   {#if copilotAutoError}
-    <p class="field-error">{copilotAutoError}</p>
+    {@const fe = getFriendlyError(copilotAutoError)}
+    <div class="friendly-error">
+      <span class="fe-icon">{fe.icon}</span>
+      <div class="fe-body">
+        <div class="fe-message">{fe.message}</div>
+        {#if fe.hint}
+          <div class="fe-hint">{fe.hint}</div>
+        {/if}
+      </div>
+    </div>
     <button class="btn-link inline-link" type="button" on:click={focusCopilotResponseField}>
       手動入力に切り替え
     </button>
@@ -2017,7 +2347,16 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   {/if}
 
   {#if errorMsg && guidedStage === "copilot"}
-    <p class="field-error">{errorMsg}</p>
+    {@const fe = getFriendlyError(errorMsg)}
+    <div class="friendly-error">
+      <span class="fe-icon">{fe.icon}</span>
+      <div class="fe-body">
+        <div class="fe-message">{fe.message}</div>
+        {#if fe.hint}
+          <div class="fe-hint">{fe.hint}</div>
+        {/if}
+      </div>
+    </div>
   {/if}
 
   <div class="btn-row">
@@ -2067,17 +2406,36 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   </div>
 
   {#if executionDone}
-    <div class="card-success-inline">
-      <p class="execution-summary">{executionSummary}</p>
-      {#if previewOutputPath}
-        <p class="output-path">保存先: <code>{previewOutputPath}</code></p>
-      {/if}
-      <div class="btn-row">
-        <button class="btn btn-primary" type="button" on:click={resetAll}>
-          新しい作業を始める
-        </button>
-        <button class="btn btn-secondary" type="button" on:click={goToSetup}>
-          ホームに戻る
+    <div class="completion-screen">
+      <div class="completion-icon">✅</div>
+      <h2 class="completion-title">完了しました！</h2>
+      <p class="completion-summary">{executionSummary || previewSummary}</p>
+
+      <div class="completion-stats">
+        {#if previewOutputPath}
+          <div class="stat-item">
+            <span class="stat-icon">📄</span>
+            <span class="stat-label">出力ファイル</span>
+            <span class="stat-value">{previewOutputPath.split(/[\\/]/).pop()}</span>
+          </div>
+        {/if}
+        {#if workflowStartedAt && completedAt}
+          <div class="stat-item">
+            <span class="stat-icon">⏱</span>
+            <span class="stat-label">所要時間</span>
+            <span class="stat-value">{Math.max(1, Math.round((completedAt - workflowStartedAt) / 1000))} 秒</span>
+          </div>
+        {/if}
+      </div>
+
+      <div class="completion-actions">
+        {#if previewOutputPath}
+          <button class="completion-open-btn" type="button" on:click={openOutputFile}>
+            📂 出力ファイルを開く
+          </button>
+        {/if}
+        <button class="completion-reset-btn" type="button" on:click={resetAll}>
+          もう一度
         </button>
       </div>
     </div>
@@ -2263,7 +2621,16 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     {/if}
 
     {#if errorMsg && guidedStage === "review-save"}
-      <p class="field-error">{errorMsg}</p>
+      {@const fe = getFriendlyError(errorMsg)}
+      <div class="friendly-error">
+        <span class="fe-icon">{fe.icon}</span>
+        <div class="fe-body">
+          <div class="fe-message">{fe.message}</div>
+          {#if fe.hint}
+            <div class="fe-hint">{fe.hint}</div>
+          {/if}
+        </div>
+      </div>
     {/if}
 
     <div class="btn-row">
@@ -2359,6 +2726,35 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
           bind:value={cdpPort}
           on:change={persistBrowserAutomationSettings}
         />
+        <div class="cdp-guide">
+          <details open>
+            <summary class="cdp-guide-title">Edge を CDP モードで起動するには</summary>
+            <div class="cdp-guide-body">
+              <p class="cdp-guide-note">以下のコマンドで Edge を起動してください。</p>
+              <div class="cdp-command-row">
+                <code class="cdp-command">msedge.exe --remote-debugging-port={cdpPort}</code>
+                <button class="cdp-copy-btn" type="button" on:click={copyEdgeLaunchCommand}>
+                  コピー
+                </button>
+              </div>
+            </div>
+          </details>
+          <div class="cdp-test-row">
+            <button
+              class="cdp-test-btn"
+              type="button"
+              disabled={cdpTestStatus === "testing"}
+              on:click={testCdpConnection}
+            >
+              {cdpTestStatus === "testing" ? "確認中…" : "接続テスト"}
+            </button>
+            {#if cdpTestStatus === "ok"}
+              <span class="cdp-test-result cdp-test-ok">✓ {cdpTestMessage}</span>
+            {:else if cdpTestStatus === "fail"}
+              <span class="cdp-test-result cdp-test-fail">✗ {cdpTestMessage}</span>
+            {/if}
+          </div>
+        </div>
 
         <label class="field-label" for="copilot-timeout">タイムアウト (ms)</label>
         <input
@@ -2371,38 +2767,68 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
           on:change={persistBrowserAutomationSettings}
         />
 
-        <label class="checkbox-row" for="copilot-agent-loop-enabled">
-          <input
-            id="copilot-agent-loop-enabled"
-            type="checkbox"
-            bind:checked={agentLoopEnabled}
-            on:change={persistBrowserAutomationSettings}
-          />
-          <span>エージェントループモードを有効にする</span>
-        </label>
+        <div class="loop-toggle-card" class:loop-toggle-on={agentLoopEnabled}>
+          <div class="loop-toggle-header">
+            <div class="loop-toggle-info">
+              <span class="loop-toggle-icon">{agentLoopEnabled ? "🤖" : "💬"}</span>
+              <div>
+                <div class="loop-toggle-title">エージェントループ</div>
+                <div class="loop-toggle-desc">
+                  {#if agentLoopEnabled}
+                    Copilot が自動で情報収集し、最適な処理を計画します
+                  {:else}
+                    1 回だけ Copilot に送信します
+                  {/if}
+                </div>
+              </div>
+            </div>
+            <button
+              class="loop-toggle-switch"
+              class:loop-switch-on={agentLoopEnabled}
+              type="button"
+              role="switch"
+              aria-label="エージェントループを切り替える"
+              aria-checked={agentLoopEnabled}
+              on:click={() => {
+                agentLoopEnabled = !agentLoopEnabled;
+                persistBrowserAutomationSettings();
+              }}
+            >
+              <span class="loop-switch-thumb"></span>
+            </button>
+          </div>
 
-        <label class="field-label" for="copilot-max-turns">最大ターン数</label>
-        <input
-          id="copilot-max-turns"
-          class="input"
-          type="number"
-          min="1"
-          max="20"
-          bind:value={maxTurns}
-          on:change={persistBrowserAutomationSettings}
-        />
+          {#if agentLoopEnabled}
+            <div class="loop-options" transition:slide={{ duration: 200 }}>
+              <label class="field-label loop-option-label" for="copilot-max-turns">
+                最大ターン数: {maxTurns}
+              </label>
+              <input
+                id="copilot-max-turns"
+                class="loop-turns-slider"
+                type="range"
+                min="1"
+                max="20"
+                bind:value={maxTurns}
+                on:input={persistBrowserAutomationSettings}
+              />
 
-        <label class="field-label" for="copilot-loop-timeout">ループタイムアウト (ms)</label>
-        <input
-          id="copilot-loop-timeout"
-          class="input"
-          type="number"
-          min="30000"
-          max="300000"
-          step="1000"
-          bind:value={loopTimeoutMs}
-          on:change={persistBrowserAutomationSettings}
-        />
+              <label class="field-label loop-option-label" for="copilot-loop-timeout">
+                ループタイムアウト (ms)
+              </label>
+              <input
+                id="copilot-loop-timeout"
+                class="input"
+                type="number"
+                min="30000"
+                max="300000"
+                step="1000"
+                bind:value={loopTimeoutMs}
+                on:change={persistBrowserAutomationSettings}
+              />
+            </div>
+          {/if}
+        </div>
 
         <div class="btn-row">
           <button class="btn btn-secondary" type="button" on:click={copyEdgeLaunchCommand}>
@@ -2410,7 +2836,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
           </button>
         </div>
         <p class="settings-hint">
-          `& "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --remote-debugging-port={cdpPort} --no-first-run`
+          `msedge.exe --remote-debugging-port={cdpPort}`
         </p>
         {#if copiedBrowserCommandNotice}
           <p class="field-success">{copiedBrowserCommandNotice}</p>
@@ -2429,6 +2855,87 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 {/if}
 
 <style>
+  .welcome-overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--ra-bg);
+    z-index: 120;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .welcome-card {
+    width: min(480px, calc(100vw - 2rem));
+    padding: 3rem 2rem;
+    text-align: center;
+  }
+
+  .welcome-logo {
+    font-size: 4rem;
+    margin-bottom: 1rem;
+  }
+
+  .welcome-title {
+    margin: 0 0 0.5rem;
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: var(--ra-text);
+  }
+
+  .welcome-subtitle {
+    margin: 0 0 2.5rem;
+    font-size: 1.1rem;
+    line-height: 1.7;
+    color: var(--ra-text-muted);
+  }
+
+  .welcome-steps {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-bottom: 2.5rem;
+  }
+
+  .welcome-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .welcome-step-icon {
+    font-size: 1.8rem;
+  }
+
+  .welcome-step-label {
+    font-size: 0.78rem;
+    color: var(--ra-text-muted);
+    white-space: nowrap;
+  }
+
+  .welcome-step-arrow {
+    color: var(--ra-accent);
+    font-size: 1.2rem;
+  }
+
+  .welcome-btn {
+    background: var(--ra-accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 0.85rem 2.5rem;
+    font-size: 1.05rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .welcome-btn:hover {
+    opacity: 0.88;
+  }
+
   .header {
     display: flex;
     align-items: center;
@@ -2544,76 +3051,102 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     font-weight: 700;
   }
 
-  .step-banner {
+  .step-progress-bar {
     position: sticky;
     top: 0;
     z-index: 20;
     margin: 1rem 0 1.25rem;
-    padding: 1rem;
+    padding: 1rem 1.25rem;
     border: 1px solid var(--ra-border);
     border-radius: var(--ra-radius);
-    background: color-mix(in srgb, var(--ra-surface) 92%, white 8%);
+    background: var(--ra-surface);
     box-shadow: var(--ra-shadow);
-    backdrop-filter: blur(8px);
   }
 
-  .step-banner-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.75rem;
-  }
-
-  .step-card {
-    padding: 0.85rem;
-    border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius-sm);
-    background: var(--ra-surface-muted);
-  }
-
-  .step-card[data-state="completed"] {
-    border-color: var(--ra-success-border);
-    background: var(--ra-success-light);
-  }
-
-  .step-card[data-state="current"] {
-    border-color: var(--ra-accent-border);
-    background: var(--ra-accent-light);
-  }
-
-  .step-pill {
+  .step-progress-row {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    font-weight: 700;
-    color: var(--ra-text);
+    justify-content: center;
+    gap: 0;
   }
 
-  .step-number {
-    display: inline-flex;
-    width: 1.7rem;
-    height: 1.7rem;
+  .step-node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    opacity: 0.4;
+    transition: opacity 0.3s;
+  }
+
+  .step-node.current,
+  .step-node.completed {
+    opacity: 1;
+  }
+
+  .step-circle {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 50%;
+    background: var(--ra-bg);
+    border: 2px solid var(--ra-border);
+    display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 999px;
-    background: white;
-    border: 1px solid currentColor;
-    font-size: 0.82rem;
+    font-size: 1.1rem;
+    transition: background 0.3s, border-color 0.3s;
   }
 
-  .step-title {
-    font-size: 0.95rem;
+  .step-node.current .step-circle {
+    border-color: var(--ra-accent);
+    background: var(--ra-accent);
+    color: white;
   }
 
-  .step-state {
-    margin: 0.45rem 0 0;
-    font-size: 0.82rem;
-    color: var(--ra-text-secondary);
+  .step-node.completed .step-circle {
+    border-color: var(--ra-success);
+    background: var(--ra-success);
+    color: white;
+  }
+
+  .step-check {
+    font-size: 1rem;
+    font-weight: 700;
+  }
+
+  .step-node-label {
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--ra-text-muted);
+  }
+
+  .step-node.current .step-node-label {
+    color: var(--ra-accent);
+    font-weight: 600;
+  }
+
+  .step-connector {
+    flex: 1;
+    height: 2px;
+    background: var(--ra-border);
+    min-width: 2rem;
+    max-width: 4rem;
+    transition: background 0.4s;
+  }
+
+  .step-connector.filled {
+    background: var(--ra-success);
   }
 
   .step-description {
     margin: 0.85rem 0 0;
+    text-align: center;
     font-size: 0.9rem;
     color: var(--ra-text-secondary);
+  }
+
+  .hidden-file-input {
+    display: none;
   }
 
   .change-strip {
@@ -2705,13 +3238,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     line-height: 1.6;
   }
 
-  .card-success-inline {
-    padding: 1rem;
-    border: 1px solid var(--ra-success-border);
-    border-radius: var(--ra-radius-sm);
-    background: var(--ra-success-light);
-  }
-
   .panel-title {
     font-size: 1.1rem;
     font-weight: 700;
@@ -2768,6 +3294,56 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     flex: 1;
   }
 
+  .dropzone-large {
+    margin-bottom: 1rem;
+    border: 2px dashed var(--ra-border);
+    border-radius: 14px;
+    padding: 3.5rem 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+  }
+
+  .dropzone-large:hover,
+  .dropzone-hover {
+    border-color: var(--ra-accent);
+    background: color-mix(in srgb, var(--ra-accent) 4%, var(--ra-surface));
+  }
+
+  .dropzone-icon {
+    font-size: 3rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .dropzone-primary {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--ra-text);
+    margin-bottom: 0.3rem;
+  }
+
+  .dropzone-secondary {
+    font-size: 0.85rem;
+    color: var(--ra-text-muted);
+    margin-bottom: 1rem;
+  }
+
+  .dropzone-badges {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: center;
+  }
+
+  .ext-badge {
+    font-size: 0.75rem;
+    font-family: monospace;
+    background: var(--ra-surface);
+    border: 1px solid var(--ra-border);
+    border-radius: 4px;
+    padding: 0.15rem 0.5rem;
+    color: var(--ra-text-muted);
+  }
+
   .chip {
     display: inline-block;
     padding: 0.3rem 0.7rem;
@@ -2795,6 +3371,36 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     flex-wrap: wrap;
     gap: 0.4rem;
     margin-bottom: 0.5rem;
+  }
+
+  .objective-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    align-items: center;
+    margin-top: 0.5rem;
+  }
+
+  .preset-label {
+    font-size: 0.78rem;
+    color: var(--ra-text-muted);
+    flex-shrink: 0;
+  }
+
+  .preset-btn {
+    font-size: 0.78rem;
+    padding: 0.25rem 0.65rem;
+    border: 1px solid var(--ra-border);
+    background: var(--ra-surface);
+    border-radius: 999px;
+    cursor: pointer;
+    color: var(--ra-text);
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .preset-btn:hover {
+    border-color: var(--ra-accent);
+    background: color-mix(in srgb, var(--ra-accent) 6%, var(--ra-surface));
   }
 
   .btn {
@@ -2877,11 +3483,37 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     min-width: 10rem;
   }
 
-  .field-error {
-    color: var(--ra-error);
+  .friendly-error {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    margin-top: 0.75rem;
+    background: color-mix(in srgb, var(--ra-error) 8%, var(--ra-surface));
+    border: 1px solid color-mix(in srgb, var(--ra-error) 30%, transparent);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+  }
+
+  .fe-icon {
+    font-size: 1.3rem;
+    flex-shrink: 0;
+  }
+
+  .fe-body {
+    flex: 1;
+  }
+
+  .fe-message {
     font-size: 0.88rem;
-    margin: 0.5rem 0 0;
-    white-space: pre-line;
+    font-weight: 600;
+    color: var(--ra-error);
+  }
+
+  .fe-hint {
+    font-size: 0.8rem;
+    color: var(--ra-text-muted);
+    margin-top: 0.2rem;
+    line-height: 1.5;
   }
 
   .field-warn {
@@ -2981,15 +3613,163 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     background: var(--ra-surface-muted);
   }
 
-  .agent-loop-summary {
-    margin: 0;
-    font-size: 0.88rem;
-    color: var(--ra-text);
+  .loop-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
   }
 
-  .agent-loop-log {
-    display: grid;
-    gap: 0.55rem;
+  .loop-turn-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .loop-turn-label {
+    font-size: 0.78rem;
+    color: var(--ra-text-muted);
+    white-space: nowrap;
+  }
+
+  .loop-turn-track {
+    flex: 1;
+    height: 4px;
+    background: var(--ra-border);
+    border-radius: 2px;
+  }
+
+  .loop-turn-fill {
+    height: 100%;
+    background: var(--ra-accent);
+    border-radius: 2px;
+    transition: width 0.4s;
+  }
+
+  .timeline-item {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+    background: var(--ra-bg);
+  }
+
+  .timeline-running {
+    border-left: 3px solid var(--ra-accent);
+  }
+
+  .timeline-done {
+    border-left: 3px solid var(--ra-success);
+  }
+
+  .timeline-error {
+    border-left: 3px solid var(--ra-error);
+  }
+
+  .timeline-icon {
+    font-size: 1rem;
+    width: 1.2rem;
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  .timeline-running .timeline-icon {
+    color: var(--ra-accent);
+  }
+
+  .timeline-done .timeline-icon {
+    color: var(--ra-success);
+  }
+
+  .timeline-error .timeline-icon {
+    color: var(--ra-error);
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .spinner {
+    display: inline-block;
+    animation: spin 1s linear infinite;
+  }
+
+  .timeline-body {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .timeline-tool-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .timeline-tool-name {
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+
+  .timeline-duration {
+    font-size: 0.75rem;
+    color: var(--ra-text-muted);
+    white-space: nowrap;
+  }
+
+  .timeline-error-msg {
+    font-size: 0.78rem;
+    color: var(--ra-error);
+    margin-top: 0.2rem;
+  }
+
+  .timeline-detail-btn {
+    font-size: 0.75rem;
+    color: var(--ra-accent);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    margin-top: 0.25rem;
+  }
+
+  .timeline-detail-json {
+    font-size: 0.7rem;
+    background: var(--ra-surface);
+    padding: 0.5rem;
+    border-radius: 4px;
+    overflow-x: auto;
+    max-height: 200px;
+    margin-top: 0.25rem;
+  }
+
+  .copilot-bubble {
+    display: flex;
+    gap: 0.6rem;
+    align-items: flex-start;
+    background: color-mix(in srgb, var(--ra-accent) 8%, var(--ra-surface));
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+    margin-top: 0.25rem;
+  }
+
+  .copilot-bubble-icon {
+    font-size: 1.2rem;
+    flex-shrink: 0;
+  }
+
+  .copilot-bubble-text {
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+
+  .copilot-bubble-status {
+    margin-top: 0.35rem;
+    font-size: 0.75rem;
+    color: var(--ra-text-muted);
   }
 
   .preview-block {
@@ -3393,23 +4173,104 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     margin-bottom: 0.5rem;
   }
 
-  .execution-summary {
+  .completion-screen {
+    text-align: center;
+    padding: 3rem 2rem;
+  }
+
+  .completion-icon {
+    font-size: 4rem;
+    animation: pulse 0.6s ease-out;
+  }
+
+  @keyframes pulse {
+    0% {
+      transform: scale(0.5);
+      opacity: 0;
+    }
+
+    70% {
+      transform: scale(1.15);
+    }
+
+    100% {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+
+  .completion-title {
+    font-size: 1.8rem;
+    font-weight: 700;
+    margin: 0.75rem 0 0.5rem;
+  }
+
+  .completion-summary {
     font-size: 0.95rem;
-    color: var(--ra-text);
-    margin: 0.5rem 0 1rem;
+    color: var(--ra-text-muted);
+    max-width: 400px;
+    margin: 0 auto 1.5rem;
+    line-height: 1.6;
   }
 
-  .output-path {
-    font-size: 0.88rem;
-    color: var(--ra-text-secondary);
-    margin-bottom: 1rem;
+  .completion-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    background: var(--ra-surface);
+    border-radius: 10px;
+    padding: 1rem 1.5rem;
+    max-width: 380px;
+    margin: 0 auto 2rem;
+    border: 1px solid var(--ra-border);
   }
 
-  .output-path code {
-    background: rgba(0, 0, 0, 0.06);
-    padding: 0.15rem 0.4rem;
-    border-radius: 0.25rem;
+  .stat-item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
     font-size: 0.85rem;
+  }
+
+  .stat-icon {
+    font-size: 1rem;
+  }
+
+  .stat-label {
+    color: var(--ra-text-muted);
+    flex: 1;
+    text-align: left;
+  }
+
+  .stat-value {
+    font-weight: 600;
+  }
+
+  .completion-actions {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .completion-open-btn {
+    background: var(--ra-accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 0.7rem 1.5rem;
+    font-size: 0.9rem;
+    cursor: pointer;
+  }
+
+  .completion-reset-btn {
+    background: var(--ra-surface);
+    color: var(--ra-text);
+    border: 1px solid var(--ra-border);
+    border-radius: 8px;
+    padding: 0.7rem 1.5rem;
+    font-size: 0.9rem;
+    cursor: pointer;
   }
 
   .expert-card {
@@ -3533,13 +4394,202 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     margin-top: 0.5rem;
   }
 
+  .cdp-guide {
+    margin-top: 0.75rem;
+    background: var(--ra-bg);
+    border: 1px solid var(--ra-border);
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+  }
+
+  .cdp-guide-title {
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    color: var(--ra-text-muted);
+  }
+
+  .cdp-guide-body {
+    margin-top: 0.5rem;
+  }
+
+  .cdp-guide-note {
+    font-size: 0.8rem;
+    color: var(--ra-text-muted);
+    margin-bottom: 0.4rem;
+  }
+
+  .cdp-command-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .cdp-command {
+    font-family: monospace;
+    font-size: 0.8rem;
+    background: var(--ra-surface);
+    padding: 0.3rem 0.6rem;
+    border-radius: 4px;
+    flex: 1;
+    overflow-x: auto;
+  }
+
+  .cdp-copy-btn {
+    font-size: 0.78rem;
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--ra-border);
+    background: var(--ra-surface);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .cdp-test-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .cdp-test-btn {
+    font-size: 0.82rem;
+    padding: 0.3rem 0.9rem;
+    background: var(--ra-accent);
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+
+  .cdp-test-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .cdp-test-result {
+    font-size: 0.82rem;
+  }
+
+  .cdp-test-ok {
+    color: var(--ra-success);
+  }
+
+  .cdp-test-fail {
+    color: var(--ra-error);
+  }
+
+  .loop-toggle-card {
+    border: 2px solid var(--ra-border);
+    border-radius: 10px;
+    padding: 1rem;
+    transition: border-color 0.2s, background 0.2s;
+    margin-top: 1rem;
+  }
+
+  .loop-toggle-card.loop-toggle-on {
+    border-color: var(--ra-accent);
+    background: color-mix(in srgb, var(--ra-accent) 5%, var(--ra-surface));
+  }
+
+  .loop-toggle-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .loop-toggle-info {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .loop-toggle-icon {
+    font-size: 1.5rem;
+  }
+
+  .loop-toggle-title {
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+
+  .loop-toggle-desc {
+    font-size: 0.8rem;
+    color: var(--ra-text-muted);
+    margin-top: 0.1rem;
+  }
+
+  .loop-toggle-switch {
+    width: 3rem;
+    height: 1.6rem;
+    border-radius: 999px;
+    background: var(--ra-border);
+    border: none;
+    position: relative;
+    cursor: pointer;
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+
+  .loop-toggle-switch.loop-switch-on {
+    background: var(--ra-accent);
+  }
+
+  .loop-switch-thumb {
+    position: absolute;
+    top: 0.2rem;
+    left: 0.2rem;
+    width: 1.2rem;
+    height: 1.2rem;
+    border-radius: 50%;
+    background: white;
+    transition: transform 0.2s;
+    display: block;
+  }
+
+  .loop-switch-on .loop-switch-thumb {
+    transform: translateX(1.4rem);
+  }
+
+  .loop-options {
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--ra-border);
+  }
+
+  .loop-option-label {
+    margin-top: 0;
+  }
+
+  .loop-turns-slider {
+    width: 100%;
+    margin-top: 0.3rem;
+  }
+
   @media (max-width: 720px) {
-    .step-banner-grid,
     .change-strip,
     .summary-grid,
     .expert-grid,
     .row-sample-grid {
       grid-template-columns: 1fr;
+    }
+
+    .welcome-steps,
+    .step-progress-row,
+    .cdp-command-row,
+    .completion-actions {
+      flex-direction: column;
+    }
+
+    .step-progress-row {
+      gap: 0.75rem;
+    }
+
+    .step-connector {
+      width: 2px;
+      height: 1.5rem;
+      min-width: 0;
     }
 
     .loop-toggle-row {

@@ -2292,3 +2292,28 @@ Observed result:
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` passes with 39 tests green, including new coverage for the loop guard, write-action gating, file read tools, traversal blocking, and the 1MB file-size limit.
 - `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop check`, `pnpm --filter @relay-agent/desktop build`, `pnpm --filter @relay-agent/desktop tauri:build`, and `git diff --check` all pass after the agent-loop implementation.
 - Task Master now records tasks `86`, `87`, `88`, `89`, `90`, `91`, `92`, and `94` as implemented, while task `95` remains open pending manual E2E execution against a real M365 Copilot session.
+
+UI / UX milestone verification:
+
+```bash
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop check
+pnpm --filter @relay-agent/desktop build
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm --filter @relay-agent/desktop tauri:build
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src/lib/welcome.ts` now persists a first-run welcome flag, and `apps/desktop/src/routes/+page.svelte` now renders a first-launch welcome overlay with the 3-step flow before exposing the main UI.
+- `apps/desktop/src/lib/error-messages.ts` now maps common runtime failures such as CDP connection refusal, timeout, max-turn guard hits, schema failures, and cancellation into Japanese user-facing error copy with hints, and `+page.svelte` now uses that presentation across setup, loop, and save errors.
+- `apps/desktop/src/routes/+page.svelte` now replaces the old step cards with a compact progress bar, adds a large Step 1 dropzone + preset objective chips, adds a CDP setup guide and localhost connection test inside the settings modal, converts the loop-mode settings into a toggle card with animated options, converts the loop progress panel into a timeline with durations and expandable JSON detail, and replaces the inline success state with a completion screen that includes file stats and an open-output action.
+- `apps/desktop/src-tauri/capabilities/default.json` now includes `shell:allow-open` so the completion screen can request opening the generated output file through the existing shell plugin.
+- `pnpm --filter @relay-agent/contracts typecheck` passes.
+- `pnpm --filter @relay-agent/desktop check` passes with `svelte-check found 0 errors and 0 warnings`.
+- `pnpm --filter @relay-agent/desktop build` passes after the UI refresh.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passes after the capability update.
+- `git diff --check` passes.
+- `pnpm --filter @relay-agent/desktop tauri:build` reaches the release build and bundle steps successfully, but fails at the final Linux packaging stage with `failed to bundle project 'failed to run linuxdeploy'`. The app binary and intermediate bundles are still produced; the remaining failure is packaging-environment-specific rather than a TypeScript or Rust compile regression.
+- Task Master now records tasks `96` through `103` as implemented based on the new welcome helper, error helper, updated Step 1/2/3 UI, and successful desktop `check` / `build` verification.
