@@ -3,8 +3,9 @@ use tauri::State;
 use crate::models::{
     ApprovePlanRequest, ApprovePlanResponse, ExecuteReadActionsRequest, ExecuteReadActionsResponse,
     PlanProgressRequest, PlanProgressResponse, PreviewExecutionRequest, PreviewExecutionResponse,
-    RecordPlanProgressRequest, RespondToApprovalRequest, RespondToApprovalResponse,
-    RunExecutionRequest, RunExecutionResponse,
+    RecordPlanProgressRequest, RecordScopeApprovalRequest, RecordScopeApprovalResponse,
+    RespondToApprovalRequest, RespondToApprovalResponse, RunExecutionRequest,
+    RunExecutionResponse,
 };
 use crate::state::DesktopState;
 
@@ -60,6 +61,15 @@ pub fn respond_to_approval(
 ) -> Result<RespondToApprovalResponse, String> {
     let mut storage = state.storage.lock().expect("desktop storage poisoned");
     storage.respond_to_approval(request)
+}
+
+#[tauri::command]
+pub fn record_scope_approval(
+    state: State<'_, DesktopState>,
+    request: RecordScopeApprovalRequest,
+) -> Result<RecordScopeApprovalResponse, String> {
+    let mut storage = state.storage.lock().expect("desktop storage poisoned");
+    storage.record_scope_approval(request)
 }
 
 #[tauri::command]

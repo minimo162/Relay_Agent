@@ -9,6 +9,7 @@
   import FileOpPreview from "$lib/components/FileOpPreview.svelte";
   import GoalInput from "$lib/components/GoalInput.svelte";
   import InterventionPanel from "$lib/components/InterventionPanel.svelte";
+  import ProjectSelector from "$lib/components/ProjectSelector.svelte";
   import RecentSessions from "$lib/components/RecentSessions.svelte";
   import SettingsModal from "$lib/components/SettingsModal.svelte";
   import SheetDiffCard from "$lib/components/SheetDiffCard.svelte";
@@ -26,16 +27,22 @@
     PlanStep,
     PlanStepStatus,
     PreflightWorkbookResponse,
+    Project,
+    ReadTurnArtifactsResponse,
+    Session,
     SheetColumnProfile,
     StartupIssue,
     ToolExecutionResult,
+    TurnDetailsViewModel,
     ValidationIssue,
     WorkbookProfile
   } from "@relay-agent/contracts";
   import {
+    addProjectMemory,
     approvePlan,
     assessCopilotHandoff,
     buildPlanningPrompt,
+    createProject,
     createSession,
     discardDelegationDraft,
     discardStudioDraft,
@@ -45,11 +52,17 @@
     getFriendlyError,
     inspectWorkbook,
     initializeApp,
+    isWithinProjectScope,
+    linkSessionToProject,
+    listSessions,
     recordPlanProgress,
+    recordScopeApproval,
     listRecentFiles,
+    listProjects,
     listRecoverableStudioDrafts,
     listRecentSessions,
     loadDelegationDraft,
+    loadSelectedProjectId,
     loadStudioDraft,
     loadBrowserAutomationSettings,
     loadUiMode,
@@ -59,6 +72,9 @@
     pingDesktop,
     preflightWorkbook,
     previewExecution,
+    readTurnArtifacts,
+    readSession,
+    removeProjectMemory,
     rememberRecentFile,
     rememberRecentSession,
     resumeAgentLoopWithPlan,
@@ -67,11 +83,14 @@
     runExecution,
     saveBrowserAutomationSettings,
     saveDelegationDraft,
+    saveSelectedProjectId,
     saveUiMode,
     sendToCopilot,
     saveStudioDraft,
+    setSessionProject,
     startTurn,
     submitCopilotResponse,
+    validateProjectScopeActions,
     type AgentLoopResult,
     type BrowserCommandProgress,
     type CopilotConversationTurn,
@@ -81,6 +100,7 @@
     type UiMode
   } from "$lib";
   import { autoFixCopilotResponse } from "$lib/auto-fix";
+  import { buildProjectContext } from "$lib/prompt-templates";
 
   type GuidedStage = "setup" | "copilot" | "review-save";
   type ProgressStatus = "waiting" | "running" | "done" | "error";
@@ -108,6 +128,13 @@
     result?: unknown;
     error?: string;
   };
+  type ProjectSessionSummary = {
+    id: string;
+    title: string;
+    updatedAt: string;
+    workbookPath?: string | null;
+    assignedProjectName?: string | null;
+  };
   type ValidationFeedback = {
     level: 1 | 2 | 3;
     title: string;
@@ -118,6 +145,28 @@
   type FileWritePreviewAction = {
     tool: string;
     args: Record<string, unknown>;
+  };
+  type ScopeApprovalSource = "manual" | "agent-loop";
+  type ScopeApprovalArtifactRecord = Extract<
+    ReadTurnArtifactsResponse["artifacts"][number],
+    { artifactType: "scope-approval" }
+  >;
+  type ProjectApprovalAuditRow = {
+    sessionId: string;
+    sessionTitle: string;
+    workbookPath: string | null;
+    turnId: string | null;
+    turnTitle: string;
+    turnUpdatedAt: string | null;
+    turnStatus: string;
+    approvalSummary: string;
+    writeApprovalDecision: "approved" | "rejected" | "pending" | "not-required" | "none";
+    readyForExecution: boolean;
+    scopeOverrideCount: number;
+    latestScopeDecision: "approved" | "rejected" | null;
+    latestScopeSource: ScopeApprovalSource | null;
+    latestScopeAt: string | null;
+    outputPath: string | null;
   };
   type TemplateKey =
     | "inspect_safe_copy"
@@ -263,9 +312,39 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let previewChangeDetails: string[] = [];
   let previewSheetDiffs: DiffSummary["sheets"] = [];
   let previewFileWriteActions: FileWritePreviewAction[] = [];
+  let scopeApprovalVisible = false;
+  let scopeApprovalSource: ScopeApprovalSource | null = null;
+  let scopeApprovalSummary = "";
+  let scopeApprovalRootFolder = "";
+  let scopeApprovalViolations: string[] = [];
   let showDetailedChanges = false;
   let executionDone = false;
   let executionSummary = "";
+  let projects: Project[] = [];
+  let allSessions: Session[] = [];
+  let linkedProjectSessions: ProjectSessionSummary[] = [];
+  let availableProjectSessions: ProjectSessionSummary[] = [];
+  let filteredLinkedProjectSessions: ProjectSessionSummary[] = [];
+  let filteredAvailableProjectSessions: ProjectSessionSummary[] = [];
+  let selectedProjectId: string | null = null;
+  let selectedProject: Project | null = null;
+  let projectContextText = "";
+  let projectErrorMsg = "";
+  let projectInfoMsg = "";
+  let projectApprovalAuditRows: ProjectApprovalAuditRow[] = [];
+  let filteredProjectApprovalAuditRows: ProjectApprovalAuditRow[] = [];
+  let projectApprovalAuditLoading = false;
+  let projectApprovalAuditError = "";
+  let projectApprovalAuditRefreshNonce = 0;
+  let projectApprovalAuditRequestKey = "";
+  let creatingProject = false;
+  let newProjectName = "";
+  let newProjectRootFolder = "";
+  let newProjectInstructions = "";
+  let projectSessionQuery = "";
+  let memoryDraftKey = "";
+  let memoryDraftValue = "";
+  let sessionToAssignId = "";
 
   let recentSessions: RecentSession[] = [];
   let recentFiles: RecentFile[] = [];
@@ -273,6 +352,13 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let showRecent = false;
   let progressItems: ProgressItem[] = [];
   let expertDetailsOpen = false;
+  let turnInspectionDetails: TurnDetailsViewModel | null = null;
+  let turnInspectionArtifacts: ReadTurnArtifactsResponse["artifacts"] = [];
+  let scopeApprovalArtifacts: ScopeApprovalArtifactRecord[] = [];
+  let turnInspectionStorageMode = "";
+  let turnInspectionLoading = false;
+  let turnInspectionError = "";
+  let turnInspectionRefreshNonce = 0;
   let hydratingDraft = false;
   let lastSavedDraftSignature = "";
   let step1Expanded = true;
@@ -374,6 +460,491 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
     if (!taskNameEdited || !taskName.trim()) {
       taskName = deriveTitle(nextObjective);
+    }
+  }
+
+  async function refreshProjects(): Promise<void> {
+    const response = await listProjects();
+    projects = response.projects;
+    if (selectedProjectId && !projects.some((project) => project.id === selectedProjectId)) {
+      selectedProjectId = saveSelectedProjectId(null);
+    }
+  }
+
+  async function refreshSessions(): Promise<void> {
+    allSessions = await listSessions();
+  }
+
+  async function handleCreateProject(): Promise<void> {
+    projectErrorMsg = "";
+    projectInfoMsg = "";
+
+    try {
+      const project = await createProject({
+        name: newProjectName,
+        rootFolder: newProjectRootFolder,
+        customInstructions: newProjectInstructions
+      });
+      await refreshProjects();
+      selectedProjectId = saveSelectedProjectId(project.id);
+      creatingProject = false;
+      newProjectName = "";
+      newProjectRootFolder = "";
+      newProjectInstructions = "";
+      requestProjectApprovalAuditRefresh();
+    } catch (error) {
+      projectErrorMsg = toError(error);
+    }
+  }
+
+  async function handleAddProjectMemory(): Promise<void> {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    projectErrorMsg = "";
+    projectInfoMsg = "";
+    try {
+      await addProjectMemory({
+        projectId: selectedProjectId,
+        key: memoryDraftKey,
+        value: memoryDraftValue,
+        source: "user"
+      });
+      memoryDraftKey = "";
+      memoryDraftValue = "";
+      await refreshProjects();
+    } catch (error) {
+      projectErrorMsg = toError(error);
+    }
+  }
+
+  async function handleRemoveProjectMemory(key: string): Promise<void> {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    projectErrorMsg = "";
+    projectInfoMsg = "";
+    try {
+      await removeProjectMemory({
+        projectId: selectedProjectId,
+        key
+      });
+      await refreshProjects();
+    } catch (error) {
+      projectErrorMsg = toError(error);
+    }
+  }
+
+  async function handleAssignSessionToProject(): Promise<void> {
+    if (!selectedProjectId || !sessionToAssignId) {
+      return;
+    }
+
+    projectErrorMsg = "";
+    projectInfoMsg = "";
+    try {
+      const response = await setSessionProject({
+        sessionId: sessionToAssignId,
+        projectId: selectedProjectId
+      });
+      projects = response.projects;
+      await refreshSessions();
+      const assignedSession = allSessions.find((session) => session.id === sessionToAssignId);
+      sessionToAssignId = "";
+      projectInfoMsg = assignedSession
+        ? `セッションをプロジェクトへ割り当てました: ${assignedSession.title}`
+        : "セッションをプロジェクトへ割り当てました。";
+      requestProjectApprovalAuditRefresh();
+    } catch (error) {
+      projectErrorMsg = toError(error);
+    }
+  }
+
+  async function handleDetachSessionFromProject(sessionIdToDetach: string): Promise<void> {
+    projectErrorMsg = "";
+    projectInfoMsg = "";
+    try {
+      const response = await setSessionProject({
+        sessionId: sessionIdToDetach,
+        projectId: null
+      });
+      projects = response.projects;
+      await refreshSessions();
+      const detachedSession = allSessions.find((session) => session.id === sessionIdToDetach);
+      projectInfoMsg = detachedSession
+        ? `セッションをプロジェクトから外しました: ${detachedSession.title}`
+        : "セッションをプロジェクトから外しました。";
+      requestProjectApprovalAuditRefresh();
+    } catch (error) {
+      projectErrorMsg = toError(error);
+    }
+  }
+
+  function openProjectSession(sessionIdToOpen: string): void {
+    const recentSession = recentSessions.find((session) => session.sessionId === sessionIdToOpen);
+    if (recentSession) {
+      handleRecentSessionClick(recentSession);
+      return;
+    }
+
+    const session = allSessions.find((candidate) => candidate.id === sessionIdToOpen);
+    if (!session) {
+      projectErrorMsg = `session が見つかりません: ${sessionIdToOpen}`;
+      return;
+    }
+
+    applyRecentSessionFallback({
+      sessionId: session.id,
+      title: session.title,
+      workbookPath: session.primaryWorkbookPath ?? "",
+      lastOpenedAt: new Date().toISOString(),
+      lastTurnTitle: session.title
+    });
+  }
+
+  function findAssignedProjectName(sessionId: string): string | null {
+    return (
+      projects.find((project) => project.sessionIds.includes(sessionId))?.name ?? null
+    );
+  }
+
+  function matchesProjectSessionQuery(
+    session: ProjectSessionSummary,
+    query: string
+  ): boolean {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return true;
+    }
+
+    return [
+      session.title,
+      session.workbookPath ?? "",
+      session.assignedProjectName ?? ""
+    ].some((value) => value.toLowerCase().includes(normalizedQuery));
+  }
+
+  async function handleAssignFilteredSessions(): Promise<void> {
+    if (!selectedProjectId || filteredAvailableProjectSessions.length === 0) {
+      return;
+    }
+
+    projectErrorMsg = "";
+    projectInfoMsg = "";
+    try {
+      const targetCount = filteredAvailableProjectSessions.length;
+      for (const session of filteredAvailableProjectSessions) {
+        const response = await setSessionProject({
+          sessionId: session.id,
+          projectId: selectedProjectId
+        });
+        projects = response.projects;
+      }
+      await refreshSessions();
+      projectInfoMsg = `${targetCount} 件のセッションをプロジェクトへ割り当てました。`;
+      requestProjectApprovalAuditRefresh();
+    } catch (error) {
+      projectErrorMsg = toError(error);
+    }
+  }
+
+  async function handleDetachFilteredSessions(): Promise<void> {
+    if (filteredLinkedProjectSessions.length === 0) {
+      return;
+    }
+
+    projectErrorMsg = "";
+    projectInfoMsg = "";
+    try {
+      const targetCount = filteredLinkedProjectSessions.length;
+      for (const session of filteredLinkedProjectSessions) {
+        const response = await setSessionProject({
+          sessionId: session.id,
+          projectId: null
+        });
+        projects = response.projects;
+      }
+      await refreshSessions();
+      projectInfoMsg = `${targetCount} 件のセッションをプロジェクトから外しました。`;
+      requestProjectApprovalAuditRefresh();
+    } catch (error) {
+      projectErrorMsg = toError(error);
+    }
+  }
+
+  function requestProjectApprovalAuditRefresh(): void {
+    projectApprovalAuditRefreshNonce += 1;
+  }
+
+  function matchesProjectApprovalAuditQuery(
+    row: ProjectApprovalAuditRow,
+    query: string
+  ): boolean {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return true;
+    }
+
+    return [
+      row.sessionTitle,
+      row.turnTitle,
+      row.workbookPath ?? "",
+      row.turnStatus,
+      row.approvalSummary,
+      row.outputPath ?? ""
+    ].some((value) => value.toLowerCase().includes(normalizedQuery));
+  }
+
+  async function refreshProjectApprovalAudit(): Promise<void> {
+    if (!selectedProject || linkedProjectSessions.length === 0) {
+      projectApprovalAuditRows = [];
+      projectApprovalAuditError = "";
+      projectApprovalAuditLoading = false;
+      return;
+    }
+
+    const targetProjectId = selectedProjectId;
+    const sessionIdsSnapshot = linkedProjectSessions.map((session) => session.id);
+    projectApprovalAuditLoading = true;
+    projectApprovalAuditError = "";
+
+    try {
+      const rows = await Promise.all(
+        linkedProjectSessions.map(async (sessionSummary) => {
+          const detail = await readSession({ sessionId: sessionSummary.id });
+          const latestTurnId = detail.session.latestTurnId;
+          const latestTurn = latestTurnId
+            ? detail.turns.find((turn) => turn.id === latestTurnId)
+            : [...detail.turns].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+
+          if (!latestTurn) {
+            return {
+              sessionId: sessionSummary.id,
+              sessionTitle: sessionSummary.title,
+              workbookPath: sessionSummary.workbookPath ?? null,
+              turnId: null,
+              turnTitle: "turn 未作成",
+              turnUpdatedAt: null,
+              turnStatus: "draft",
+              approvalSummary: "まだ turn が作成されていません。",
+              writeApprovalDecision: "none",
+              readyForExecution: false,
+              scopeOverrideCount: 0,
+              latestScopeDecision: null,
+              latestScopeSource: null,
+              latestScopeAt: null,
+              outputPath: null
+            } satisfies ProjectApprovalAuditRow;
+          }
+
+          const inspection = await readTurnArtifacts({
+            sessionId: sessionSummary.id,
+            turnId: latestTurn.id
+          });
+          const approvalPayload = inspection.turnDetails.approval.payload;
+          const scopeArtifacts = inspection.artifacts
+            .filter(
+              (
+                artifact: ReadTurnArtifactsResponse["artifacts"][number]
+              ): artifact is ScopeApprovalArtifactRecord =>
+                artifact.artifactType === "scope-approval"
+            )
+            .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+          const latestScope = scopeArtifacts[0];
+
+          const writeApprovalDecision = !approvalPayload
+            ? "none"
+            : approvalPayload.decision
+              ? approvalPayload.decision
+              : approvalPayload.requiresApproval
+                ? "pending"
+                : "not-required";
+
+          return {
+            sessionId: sessionSummary.id,
+            sessionTitle: sessionSummary.title,
+            workbookPath: sessionSummary.workbookPath ?? null,
+            turnId: latestTurn.id,
+            turnTitle: latestTurn.title,
+            turnUpdatedAt: latestTurn.updatedAt,
+            turnStatus: latestTurn.status,
+            approvalSummary:
+              inspection.turnDetails.approval.summary || "承認情報はまだありません。",
+            writeApprovalDecision,
+            readyForExecution: approvalPayload?.readyForExecution ?? false,
+            scopeOverrideCount: scopeArtifacts.length,
+            latestScopeDecision: latestScope?.payload.decision ?? null,
+            latestScopeSource: latestScope?.payload.source ?? null,
+            latestScopeAt: latestScope?.createdAt ?? null,
+            outputPath: inspection.turnDetails.execution.payload?.outputPath ?? null
+          } satisfies ProjectApprovalAuditRow;
+        })
+      );
+
+      if (
+        targetProjectId !== selectedProjectId ||
+        JSON.stringify(sessionIdsSnapshot) !==
+          JSON.stringify(linkedProjectSessions.map((session) => session.id))
+      ) {
+        return;
+      }
+
+      projectApprovalAuditRows = rows.sort((left, right) =>
+        (right.turnUpdatedAt ?? "").localeCompare(left.turnUpdatedAt ?? "")
+      );
+    } catch (error) {
+      projectApprovalAuditRows = [];
+      projectApprovalAuditError = toError(error);
+    } finally {
+      projectApprovalAuditLoading = false;
+    }
+  }
+
+  function clearPreviewState(): void {
+    previewSummary = "";
+    previewTargetCount = 0;
+    previewAffectedRows = 0;
+    previewOutputPath = "";
+    previewWarnings = [];
+    previewRequiresApproval = false;
+    previewChangeDetails = [];
+    previewSheetDiffs = [];
+    previewFileWriteActions = [];
+    showDetailedChanges = false;
+  }
+
+  function clearScopeApproval(): void {
+    scopeApprovalVisible = false;
+    scopeApprovalSource = null;
+    scopeApprovalSummary = "";
+    scopeApprovalRootFolder = "";
+    scopeApprovalViolations = [];
+  }
+
+  function resetTurnInspectionState(): void {
+    turnInspectionDetails = null;
+    turnInspectionArtifacts = [];
+    turnInspectionStorageMode = "";
+    turnInspectionLoading = false;
+    turnInspectionError = "";
+  }
+
+  function requestTurnInspectionRefresh(): void {
+    turnInspectionRefreshNonce += 1;
+  }
+
+  async function refreshTurnInspection(): Promise<void> {
+    if (!sessionId || !turnId) {
+      resetTurnInspectionState();
+      return;
+    }
+
+    turnInspectionLoading = true;
+    turnInspectionError = "";
+
+    try {
+      const inspection = await readTurnArtifacts({ sessionId, turnId });
+      if (inspection.turn.id !== turnId) {
+        return;
+      }
+
+      turnInspectionDetails = inspection.turnDetails;
+      turnInspectionArtifacts = inspection.artifacts;
+      turnInspectionStorageMode = inspection.storageMode;
+    } catch (error) {
+      turnInspectionError = toError(error);
+    } finally {
+      turnInspectionLoading = false;
+    }
+  }
+
+  function formatAuditTime(value?: string): string {
+    if (!value) {
+      return "未記録";
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+
+    return parsed.toLocaleString("ja-JP");
+  }
+
+  function formatApprovalDecision(decision?: "approved" | "rejected"): string {
+    if (decision === "approved") {
+      return "承認済み";
+    }
+    if (decision === "rejected") {
+      return "却下";
+    }
+    return "未承認";
+  }
+
+  function formatWriteApprovalStatus(
+    decision: ProjectApprovalAuditRow["writeApprovalDecision"]
+  ): string {
+    if (decision === "pending") {
+      return "待ち";
+    }
+    if (decision === "not-required") {
+      return "不要";
+    }
+    if (decision === "none") {
+      return "未記録";
+    }
+    return formatApprovalDecision(decision);
+  }
+
+  function formatScopeApprovalSource(
+    source?: ScopeApprovalSource | "manual" | "agent-loop"
+  ): string {
+    return source === "agent-loop" ? "自律実行" : "手動貼り付け";
+  }
+
+  function getRemainingPlanAfterCurrentStep(): ExecutionPlan | null {
+    if (!approvedPlan || !currentPlanStepId) {
+      return pendingPlan;
+    }
+
+    const currentIndex = approvedPlan.steps.findIndex((step) => step.id === currentPlanStepId);
+    if (currentIndex < 0 || currentIndex >= approvedPlan.steps.length - 1) {
+      return null;
+    }
+
+    const remainingSteps = approvedPlan.steps.slice(currentIndex + 1);
+    return {
+      ...approvedPlan,
+      totalEstimatedSteps: remainingSteps.length,
+      steps: remainingSteps
+    };
+  }
+
+  function openScopeApproval(options: {
+    source: ScopeApprovalSource;
+    rootFolder: string;
+    violations: string[];
+    responseSummary: string;
+    rawResponse?: string;
+  }): void {
+    const uniqueViolations = [...new Set(options.violations.filter((value) => value.trim()))];
+    if (uniqueViolations.length === 0) {
+      return;
+    }
+
+    scopeApprovalVisible = true;
+    scopeApprovalSource = options.source;
+    scopeApprovalSummary = options.responseSummary;
+    scopeApprovalRootFolder = options.rootFolder;
+    scopeApprovalViolations = uniqueViolations;
+    guidedStage = "copilot";
+    step1Expanded = false;
+    if (options.rawResponse?.trim()) {
+      copilotResponse = options.rawResponse;
+      originalCopilotResponse = "";
+      autoFixMessages = [];
     }
   }
 
@@ -643,7 +1214,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     title: string,
     profile: WorkbookProfile | null,
     columnProfiles: SheetColumnProfile[],
-    templateKey: TemplateKey | null
+    templateKey: TemplateKey | null,
+    projectContext = ""
   ): string {
     const toolLines = [...packet.allowedReadTools, ...packet.allowedWriteTools].map(
       (tool) => `- ${tool.id}: ${tool.description}`
@@ -654,6 +1226,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     return [
       "Relay Agent からの依頼です。",
       "",
+      ...(projectContext.trim() ? [projectContext.trim(), ""] : []),
       "1. やりたいこと",
       `- 作業名: ${title}`,
       `- 目的: ${packet.objective}`,
@@ -1233,6 +1806,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   function toggleExpertDetails(): void {
     expertDetailsOpen = !expertDetailsOpen;
     persistExpertDetails();
+    if (expertDetailsOpen) {
+      requestTurnInspectionRefresh();
+    }
   }
 
   function hasRecoverableDraft(sessionId: string): boolean {
@@ -1354,6 +1930,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     copiedBrowserCommandNotice = "";
     copilotAutoError = null;
     isSendingToCopilot = false;
+    clearScopeApproval();
     resetAgentLoopState();
     resetPlanExecutionState();
     validationFeedback = null;
@@ -1367,16 +1944,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     copilotResponse = "";
     originalCopilotResponse = "";
     autoFixMessages = [];
-    previewSummary = "";
-    previewTargetCount = 0;
-    previewAffectedRows = 0;
-    previewOutputPath = "";
-    previewWarnings = [];
-    previewRequiresApproval = false;
-    previewChangeDetails = [];
-    previewSheetDiffs = [];
-    previewFileWriteActions = [];
-    showDetailedChanges = false;
+    clearPreviewState();
+    resetTurnInspectionState();
     executionDone = false;
     executionSummary = "";
     workbookProfile = null;
@@ -1404,6 +1973,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     copiedBrowserCommandNotice = "";
     copilotAutoError = null;
     isSendingToCopilot = false;
+    clearScopeApproval();
     resetAgentLoopState();
     resetPlanExecutionState();
     validationFeedback = null;
@@ -1439,6 +2009,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     previewSheetDiffs = [];
     previewFileWriteActions = draft.previewSnapshot?.fileWriteActions ?? [];
     showDetailedChanges = false;
+    resetTurnInspectionState();
     executionDone = false;
     executionSummary = draft.executionSummary;
     showRecent = false;
@@ -1557,6 +2128,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     sendStatusMessage = "Copilot に送信中…";
     copilotAutoError = null;
     copiedInstructionNotice = "";
+    clearScopeApproval();
     resetAgentLoopState();
     resetPlanExecutionState();
 
@@ -1603,7 +2175,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       objectiveText.trim(),
       planningContext.workbookSummary,
       planningContext.availableTools,
-      extraFeedback.trim() || undefined
+      extraFeedback.trim() || undefined,
+      projectContextText || undefined
     );
   }
 
@@ -1629,6 +2202,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     }
 
     pendingPlan = planToExecute;
+    clearScopeApproval();
     isPlanExecuting = true;
     isSendingToCopilot = true;
     sendStatusMessage = "計画を実行しています…";
@@ -1651,7 +2225,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
           loopTimeoutMs,
           abortSignal: abortController.signal,
           planningEnabled: false,
-          initialConversationHistory: agentLoopConversationHistory
+          initialConversationHistory: agentLoopConversationHistory,
+          projectContext: projectContextText || undefined,
+          projectRootFolder: selectedProject?.rootFolder || undefined
         },
         planToExecute,
         {
@@ -1713,6 +2289,28 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
             if (uiMode === "delegation") {
               pushDelegationEvent("error", "手動フォールバックが必要です。", {
                 detail: `${error}\n\n${fallbackPrompt}`,
+                expandable: true,
+                actionRequired: true
+              });
+            }
+          },
+          onScopeWarning: ({ violations, rootFolder, tool, rawResponse, parsedResponse }) => {
+            const firstViolation = violations[0] ?? "";
+            copilotAutoError = `プロジェクトスコープ外のファイルアクセスが検出されました: ${firstViolation}`;
+            openScopeApproval({
+              source: "agent-loop",
+              rootFolder,
+              violations,
+              responseSummary:
+                parsedResponse.message ??
+                parsedResponse.summary ??
+                "Copilot がプロジェクトルート外へのファイル操作を提案しました。",
+              rawResponse
+            });
+            if (uiMode === "delegation") {
+              delegationStore.requestApproval();
+              pushDelegationEvent("write_approval_requested", "プロジェクト範囲外アクセスの承認が必要です。", {
+                detail: `${tool}\n許可されたルート: ${rootFolder}\n${violations.join("\n")}`,
                 expandable: true,
                 actionRequired: true
               });
@@ -1823,6 +2421,14 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         agentLoopSummary = "自律実行をキャンセルしました。";
+      } else if (scopeApprovalVisible) {
+        if (currentPlanStepId) {
+          updatePlanStepState(currentPlanStepId, {
+            state: "pending",
+            error: undefined
+          });
+          void persistPlanProgressSnapshot();
+        }
       } else {
         const friendlyMsg = getCopilotBrowserErrorMessage(error);
         const rawMsg = error instanceof Error ? error.message.trim() : String(error);
@@ -1938,6 +2544,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     copiedInstructionNotice = "";
     validationFeedback = null;
     retryPrompt = "";
+    clearScopeApproval();
     if (planningMode) {
       resetPlanExecutionState();
       delegationStore.startPlanning();
@@ -1961,7 +2568,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
           loopTimeoutMs,
           abortSignal: abortController.signal,
           planningEnabled: planningMode,
-          initialConversationHistory: agentLoopConversationHistory
+          initialConversationHistory: agentLoopConversationHistory,
+          projectContext: projectContextText || undefined,
+          projectRootFolder: selectedProject?.rootFolder || undefined
         },
         {
           onBrowserProgress: handleBrowserProgress,
@@ -2083,6 +2692,38 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
                 actionRequired: true
               });
             }
+          },
+          onScopeWarning: ({ violations, rootFolder, tool, rawResponse, parsedResponse }) => {
+            const firstViolation = violations[0] ?? "";
+            copilotAutoError = `プロジェクトスコープ外のファイルアクセスが検出されました: ${firstViolation}`;
+            openScopeApproval({
+              source: "agent-loop",
+              rootFolder,
+              violations,
+              responseSummary:
+                parsedResponse.message ??
+                parsedResponse.summary ??
+                "Copilot がプロジェクトルート外へのファイル操作を提案しました。",
+              rawResponse
+            });
+            pushAgentLoopLog(
+              `project-scope.${tool}`,
+              "プロジェクトスコープ外アクセスを停止",
+              "error",
+              {
+                detail: `${tool}\n許可されたルート: ${rootFolder}\n${violations.join("\n")}`,
+                errorMessage: copilotAutoError,
+                endTime: Date.now()
+              }
+            );
+            if (uiMode === "delegation") {
+              delegationStore.requestApproval();
+              pushDelegationEvent("write_approval_requested", "プロジェクト範囲外アクセスの承認が必要です。", {
+                detail: `${tool}\n許可されたルート: ${rootFolder}\n${violations.join("\n")}`,
+                expandable: true,
+                actionRequired: true
+              });
+            }
           }
         }
       );
@@ -2140,6 +2781,15 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         if (uiMode === "delegation") {
           delegationStore.setError(agentLoopSummary);
           pushDelegationEvent("error", agentLoopSummary, { actionRequired: true });
+        }
+      } else if (scopeApprovalVisible) {
+        if (activeAgentLoopEntryId) {
+          updateAgentLoopLog(activeAgentLoopEntryId, {
+            status: "error",
+            endTime: Date.now(),
+            detail: "プロジェクト範囲外アクセスの承認待ちです。"
+          });
+          activeAgentLoopEntryId = null;
         }
       } else {
         console.error("[agent-loop] handleAgentLoopAutoSend error:", error);
@@ -2207,6 +2857,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     step1Expanded = true;
     errorMsg = "";
     copilotAutoError = null;
+    clearScopeApproval();
     resetAgentLoopState();
     resetPlanExecutionState();
     clearProgress();
@@ -2217,6 +2868,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     step1Expanded = false;
     errorMsg = "";
     copilotAutoError = null;
+    clearScopeApproval();
     resetAgentLoopState(false);
     resetPlanExecutionState(false);
     clearProgress();
@@ -2257,18 +2909,11 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     showInstructionPreview = false;
     isSendingToCopilot = false;
     copilotAutoError = null;
+    clearScopeApproval();
     resetAgentLoopState();
     resetPlanExecutionState();
-    previewSummary = "";
-    previewTargetCount = 0;
-    previewAffectedRows = 0;
-    previewOutputPath = "";
-    previewWarnings = [];
-    previewRequiresApproval = false;
-    previewChangeDetails = [];
-    previewSheetDiffs = [];
-    previewFileWriteActions = [];
-    showDetailedChanges = false;
+    clearPreviewState();
+    resetTurnInspectionState();
     executionDone = false;
     executionSummary = "";
     clearProgress();
@@ -2312,6 +2957,11 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         errorMsg = "やりたいことを入力してください";
         return;
       }
+      if (selectedProject && !isWithinProjectScope(path, selectedProject.rootFolder)) {
+        failCurrentProgress("選択したファイルはプロジェクトのルート外です。");
+        errorMsg = `選択したファイルはプロジェクトルート外です: ${selectedProject.rootFolder}`;
+        return;
+      }
 
       const title = taskName.trim() || deriveTitle(objectiveText);
       taskName = title;
@@ -2333,6 +2983,14 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         objective: objectiveText,
         primaryWorkbookPath: path
       });
+      if (selectedProjectId) {
+        await linkSessionToProject({
+          projectId: selectedProjectId,
+          sessionId: session.id
+        });
+        await refreshProjects();
+        projectInfoMsg = "新しいセッションを現在のプロジェクトに紐付けました。";
+      }
       sessionId = session.id;
       rememberRecentSession({
         sessionId: session.id,
@@ -2374,21 +3032,28 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       markProgress(4, "done");
       guidedStage = "copilot";
       step1Expanded = false;
+      requestTurnInspectionRefresh();
     } catch (error) {
       const failure = toError(error);
       failCurrentProgress(failure);
       errorMsg = failure;
     } finally {
+      requestTurnInspectionRefresh();
+      requestProjectApprovalAuditRefresh();
       busy = false;
     }
   }
 
-  async function handleCopilotStage(): Promise<void> {
+  async function handleCopilotStage(options: { allowScopeOverride?: boolean } = {}): Promise<void> {
     errorMsg = "";
     copiedInstructionNotice = "";
     copilotAutoError = null;
     validationFeedback = null;
     retryPrompt = "";
+    clearPreviewState();
+    if (!options.allowScopeOverride) {
+      clearScopeApproval();
+    }
     busy = true;
     setProgress([
       "回答の書式を自動で整えています",
@@ -2415,6 +3080,19 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         turnId,
         rawResponse: fixResult.fixed
       });
+      if (submitResult.autoLearnedMemory.length > 0) {
+        await refreshProjects();
+        projectInfoMsg = `プロジェクト設定を自動学習しました: ${submitResult.autoLearnedMemory
+          .map((entry) => entry.key)
+          .join("、")}`;
+        if (uiMode === "delegation") {
+          pushDelegationEvent("tool_executed", "プロジェクト設定を自動学習しました。", {
+            detail: submitResult.autoLearnedMemory
+              .map((entry) => `${entry.key}: ${entry.value}`)
+              .join("\n")
+          });
+        }
+      }
 
       if (!submitResult.accepted) {
         const feedback = classifyValidationIssues(
@@ -2430,6 +3108,39 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
       markProgress(1, "done");
 
+      const scopeViolations = validateProjectScopeActions(
+        (submitResult.parsedResponse?.actions ?? []) as Array<{
+          tool: string;
+          args: Record<string, unknown>;
+        }>,
+        selectedProject?.rootFolder ?? ""
+      );
+      if (scopeViolations.length > 0 && !options.allowScopeOverride) {
+        const firstViolation = scopeViolations[0];
+        const message = `プロジェクトスコープ外のファイルアクセスが含まれています: ${firstViolation}`;
+        markProgress(2, "error", message);
+        errorMsg = message;
+        openScopeApproval({
+          source: "manual",
+          rootFolder: selectedProject?.rootFolder ?? "",
+          violations: scopeViolations,
+          responseSummary:
+            submitResult.parsedResponse?.message ??
+            submitResult.parsedResponse?.summary ??
+            "Copilot がプロジェクトルート外へのファイル操作を提案しました。",
+          rawResponse: fixResult.fixed
+        });
+        if (uiMode === "delegation") {
+          delegationStore.requestApproval();
+          pushDelegationEvent("write_approval_requested", "プロジェクト範囲外アクセスの承認が必要です。", {
+            detail: `許可ルート: ${selectedProject?.rootFolder ?? "未設定"}\n${scopeViolations.join("\n")}`,
+            expandable: true,
+            actionRequired: true
+          });
+        }
+        return;
+      }
+
       const preview = await previewExecution({ sessionId, turnId });
       const diff = preview.diffSummary;
       previewSummary =
@@ -2439,7 +3150,13 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       previewTargetCount = diff.targetCount;
       previewAffectedRows = diff.estimatedAffectedRows;
       previewOutputPath = diff.outputPath;
-      previewWarnings = [...diff.warnings, ...preview.warnings];
+      previewWarnings = [
+        ...(scopeViolations.length > 0
+          ? [`プロジェクト範囲外アクセスを承認しました: ${scopeViolations.join(" / ")}`]
+          : []),
+        ...diff.warnings,
+        ...preview.warnings
+      ];
       previewSheetDiffs = diff.sheets;
       previewFileWriteActions = preview.fileWriteActions as FileWritePreviewAction[];
       previewRequiresApproval = preview.requiresApproval;
@@ -2465,6 +3182,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       failCurrentProgress(failure);
       errorMsg = failure;
     } finally {
+      requestTurnInspectionRefresh();
+      requestProjectApprovalAuditRefresh();
       busy = false;
     }
   }
@@ -2550,7 +3269,60 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       }
       errorMsg = failure;
     } finally {
+      requestTurnInspectionRefresh();
+      requestProjectApprovalAuditRefresh();
       busy = false;
+    }
+  }
+
+  async function handleApproveScopeOverride(): Promise<void> {
+    if (!scopeApprovalVisible) {
+      return;
+    }
+
+    if (currentPlanStepId) {
+      pendingPlan = getRemainingPlanAfterCurrentStep();
+    }
+
+    if (uiMode === "delegation") {
+      pushDelegationEvent("write_approved", "プロジェクト範囲外アクセスを承認しました。");
+    }
+
+    try {
+      await recordScopeApproval({
+        sessionId,
+        turnId,
+        decision: "approved",
+        rootFolder: scopeApprovalRootFolder,
+        violations: scopeApprovalViolations,
+        source: scopeApprovalSource ?? "manual",
+        note: scopeApprovalSummary.trim() || undefined
+      });
+    } catch (error) {
+      const failure = toError(error);
+      errorMsg = failure;
+      copilotAutoError = failure;
+      return;
+    }
+
+    errorMsg = "";
+    copilotAutoError = null;
+    clearScopeApproval();
+    requestTurnInspectionRefresh();
+    requestProjectApprovalAuditRefresh();
+    await handleCopilotStage({ allowScopeOverride: true });
+  }
+
+  function handleBackFromScopeApproval(): void {
+    errorMsg = "";
+    copilotAutoError = null;
+    clearScopeApproval();
+    guidedStage = "copilot";
+    step1Expanded = false;
+    if (uiMode === "delegation") {
+      pushDelegationEvent("error", "プロジェクト範囲外アクセスの承認を保留しました。", {
+        actionRequired: true
+      });
     }
   }
 
@@ -2586,6 +3358,11 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         return;
       }
 
+      if (scopeApprovalVisible) {
+        void handleApproveScopeOverride();
+        return;
+      }
+
       if (guidedStage === "review-save" && reviewStepAvailable) {
         void handleReviewSaveStage();
       }
@@ -2599,6 +3376,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       loadExpertDetails();
       showWelcome = !hasSeenWelcome();
       uiMode = loadUiMode();
+      selectedProjectId = loadSelectedProjectId();
       const browserAutomationSettings = loadBrowserAutomationSettings();
       cdpPort = browserAutomationSettings.cdpPort;
       autoLaunchEdge = browserAutomationSettings.autoLaunchEdge;
@@ -2616,6 +3394,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         startupIssue = app.startupIssue ?? null;
         storagePath = app.storagePath ?? null;
         sampleWorkbookPath = app.sampleWorkbookPath ?? null;
+        await refreshProjects();
+        await refreshSessions();
       } catch (error) {
         errorMsg = toError(error);
       }
@@ -2648,6 +3428,59 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   });
 
   $: expectedResponseTemplate = buildExpectedResponseTemplate(suggestOutputPath(filePath));
+  $: selectedProject =
+    projects.find((project) => project.id === selectedProjectId) ?? null;
+  $: linkedProjectSessions = selectedProject
+    ? selectedProject.sessionIds
+        .map((sessionId) => allSessions.find((session) => session.id === sessionId))
+        .filter((session): session is Session => Boolean(session))
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+        .map((session) => ({
+          id: session.id,
+          title: session.title,
+          updatedAt: session.updatedAt,
+          workbookPath: session.primaryWorkbookPath ?? null,
+          assignedProjectName: selectedProject.name
+        }))
+    : [];
+  $: availableProjectSessions = selectedProject
+    ? allSessions
+        .filter((session) => !selectedProject.sessionIds.includes(session.id))
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+        .map((session) => ({
+          id: session.id,
+          title: session.title,
+          updatedAt: session.updatedAt,
+          workbookPath: session.primaryWorkbookPath ?? null,
+          assignedProjectName: findAssignedProjectName(session.id)
+        }))
+    : [];
+  $: filteredLinkedProjectSessions = linkedProjectSessions.filter((session) =>
+    matchesProjectSessionQuery(session, projectSessionQuery)
+  );
+  $: filteredAvailableProjectSessions = availableProjectSessions.filter((session) =>
+    matchesProjectSessionQuery(session, projectSessionQuery)
+  );
+  $: filteredProjectApprovalAuditRows = projectApprovalAuditRows.filter((row) =>
+    matchesProjectApprovalAuditQuery(row, projectSessionQuery)
+  );
+  $: projectContextText = selectedProject
+    ? buildProjectContext(
+        selectedProject.customInstructions,
+        selectedProject.memory.map((entry) => ({ key: entry.key, value: entry.value }))
+      )
+    : "";
+  $: {
+    const nextAuditRequestKey = JSON.stringify({
+      projectId: selectedProjectId,
+      sessionIds: linkedProjectSessions.map((session) => session.id),
+      refreshNonce: projectApprovalAuditRefreshNonce
+    });
+    if (nextAuditRequestKey !== projectApprovalAuditRequestKey) {
+      projectApprovalAuditRequestKey = nextAuditRequestKey;
+      void refreshProjectApprovalAudit();
+    }
+  }
   $: if (uiMode === "delegation") {
     persistDelegationDraft();
   }
@@ -2672,6 +3505,14 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         previewOutputPath.trim() ||
         executionDone)
   );
+  $: scopeApprovalArtifacts = turnInspectionArtifacts.filter(
+    (
+      artifact: ReadTurnArtifactsResponse["artifacts"][number]
+    ): artifact is ScopeApprovalArtifactRecord => artifact.artifactType === "scope-approval"
+  );
+  $: if (expertDetailsOpen && sessionId && turnId && turnInspectionRefreshNonce >= 0) {
+    void refreshTurnInspection();
+  }
 
   $: copilotInstructionText =
     relayPacket && filePath.trim()
@@ -2681,7 +3522,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
           taskName.trim() || deriveTitle(objectiveText),
           workbookProfile,
           workbookColumnProfiles,
-          selectedTemplateKey
+          selectedTemplateKey,
+          projectContextText
         )
       : "";
 
@@ -2712,7 +3554,11 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       rawResponse: copilotResponse,
       validationSummary: validationFeedback?.summary ?? "",
       previewSummary,
-      approvalSummary: previewRequiresApproval ? "保存前確認が必要です" : "",
+      approvalSummary: scopeApprovalVisible
+        ? "プロジェクト範囲外アクセスの承認が必要です"
+        : previewRequiresApproval
+          ? "保存前確認が必要です"
+          : "",
       executionSummary,
       previewSnapshot: previewSnapshotBase,
       cleanShutdown: executionDone
@@ -2810,6 +3656,127 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   </div>
 </header>
 
+<section class="project-strip card">
+  <ProjectSelector
+    {projects}
+    {selectedProjectId}
+    linkedSessions={linkedProjectSessions}
+    filteredLinkedSessions={filteredLinkedProjectSessions}
+    filteredAvailableSessions={filteredAvailableProjectSessions}
+    sessionQuery={projectSessionQuery}
+    {sessionToAssignId}
+    creating={creatingProject}
+    createName={newProjectName}
+    createRootFolder={newProjectRootFolder}
+    createInstructions={newProjectInstructions}
+    memoryKey={memoryDraftKey}
+    memoryValue={memoryDraftValue}
+    errorMessage={projectErrorMsg}
+    infoMessage={projectInfoMsg}
+    onSelect={(projectId) => {
+      selectedProjectId = saveSelectedProjectId(projectId);
+      projectErrorMsg = "";
+      projectInfoMsg = "";
+      projectSessionQuery = "";
+      sessionToAssignId = "";
+    }}
+    onToggleCreate={() => {
+      creatingProject = !creatingProject;
+      projectErrorMsg = "";
+      projectInfoMsg = "";
+    }}
+    onCreateNameInput={(value) => (newProjectName = value)}
+    onCreateRootFolderInput={(value) => (newProjectRootFolder = value)}
+    onCreateInstructionsInput={(value) => (newProjectInstructions = value)}
+    onCreateProject={handleCreateProject}
+    onMemoryKeyInput={(value) => (memoryDraftKey = value)}
+    onMemoryValueInput={(value) => (memoryDraftValue = value)}
+    onAddMemory={handleAddProjectMemory}
+    onRemoveMemory={handleRemoveProjectMemory}
+    onSessionQueryInput={(value) => (projectSessionQuery = value)}
+    onSessionToAssignInput={(value) => (sessionToAssignId = value)}
+    onAssignSession={handleAssignSessionToProject}
+    onDetachSession={handleDetachSessionFromProject}
+    onAssignFilteredSessions={handleAssignFilteredSessions}
+    onDetachFilteredSessions={handleDetachFilteredSessions}
+    onOpenSession={openProjectSession}
+  />
+
+  {#if selectedProject}
+    <div class="project-audit-card">
+      <div class="project-audit-header">
+        <div>
+          <h3 class="project-audit-title">横断承認レポート</h3>
+          <p class="project-audit-copy">
+            選択中プロジェクトに紐付く各セッションの最新 turn から、保存前承認と project scope override を横断表示します。
+          </p>
+        </div>
+        <button class="btn btn-secondary" type="button" on:click={requestProjectApprovalAuditRefresh}>
+          再読込
+        </button>
+      </div>
+
+      {#if projectApprovalAuditLoading}
+        <p class="project-audit-copy">レポートを読み込んでいます…</p>
+      {:else if projectApprovalAuditError}
+        <p class="field-warn">⚠ {projectApprovalAuditError}</p>
+      {:else if filteredProjectApprovalAuditRows.length === 0}
+        <p class="project-audit-copy">
+          {projectSessionQuery.trim()
+            ? "現在の検索条件に一致する承認履歴はありません。"
+            : "承認レポートの対象になる turn がまだありません。"}
+        </p>
+      {:else}
+        <div class="project-audit-grid">
+          {#each filteredProjectApprovalAuditRows as row}
+            <article class="project-audit-row">
+              <div class="project-audit-topline">
+                <div>
+                  <strong>{row.sessionTitle}</strong>
+                  <p class="project-audit-copy">{row.turnTitle}</p>
+                </div>
+                <div class="project-audit-badges">
+                  <span class="project-audit-badge" data-tone={row.writeApprovalDecision}>
+                    保存前承認: {formatWriteApprovalStatus(row.writeApprovalDecision)}
+                  </span>
+                  <span class="project-audit-badge" data-tone={row.latestScopeDecision ?? "none"}>
+                    scope override: {row.scopeOverrideCount === 0 ? "なし" : formatApprovalDecision(row.latestScopeDecision ?? undefined)}
+                  </span>
+                </div>
+              </div>
+              <p class="project-audit-copy">status: {row.turnStatus}</p>
+              <p class="project-audit-copy">更新: {formatAuditTime(row.turnUpdatedAt ?? undefined)}</p>
+              {#if row.workbookPath}
+                <p class="project-audit-copy">file: {row.workbookPath}</p>
+              {/if}
+              <p class="project-audit-copy">{row.approvalSummary}</p>
+              <p class="project-audit-copy">
+                scope override 件数: {row.scopeOverrideCount}
+                {#if row.latestScopeAt}
+                  / 最新: {formatAuditTime(row.latestScopeAt)}
+                {/if}
+              </p>
+              {#if row.latestScopeSource}
+                <p class="project-audit-copy">
+                  最新 source: {formatScopeApprovalSource(row.latestScopeSource)}
+                </p>
+              {/if}
+              {#if row.outputPath}
+                <p class="project-audit-copy">output: {row.outputPath}</p>
+              {/if}
+              <div class="project-audit-actions">
+                <button class="btn btn-secondary" type="button" on:click={() => openProjectSession(row.sessionId)}>
+                  セッションを開く
+                </button>
+              </div>
+            </article>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/if}
+</section>
+
 {#if uiMode === "delegation"}
   <section class="delegation-shell">
     <aside class="delegation-sidebar card">
@@ -2854,6 +3821,10 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         planSummary={agentLoopResult?.proposedPlan?.summary || agentLoopSummary}
         {showReplanFeedback}
         {replanFeedback}
+        {scopeApprovalVisible}
+        scopeApprovalSummary={scopeApprovalSummary}
+        scopeApprovalRootFolder={scopeApprovalRootFolder}
+        scopeApprovalViolations={scopeApprovalViolations}
         writeApprovalVisible={guidedStage === "review-save" && reviewStepAvailable && !executionDone}
         {previewSummary}
         {previewAffectedRows}
@@ -2863,7 +3834,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         fileWriteActions={previewFileWriteActions}
         {reviewStepAvailable}
         {busy}
-        errorMessage={copilotAutoError || ($delegationStore.state === "error" ? $delegationStore.error ?? "" : "")}
+        errorMessage={scopeApprovalVisible ? "" : copilotAutoError || ($delegationStore.state === "error" ? $delegationStore.error ?? "" : "")}
         onApprovePlan={handleApprovePlan}
         onCancelPlan={handleCancelPlan}
         onToggleReplan={() => (showReplanFeedback = !showReplanFeedback)}
@@ -2871,6 +3842,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         onMoveStep={movePlanStep}
         onRemoveStep={removePlanStep}
         onReplanFeedbackInput={(value) => (replanFeedback = value)}
+        onBackFromScopeApproval={handleBackFromScopeApproval}
+        onApproveScopeOverride={handleApproveScopeOverride}
         onBackFromApproval={() => {
           guidedStage = "copilot";
         }}
@@ -3280,7 +4253,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     </div>
   {/if}
 
-  {#if copilotAutoError}
+  {#if copilotAutoError && !scopeApprovalVisible}
     {@const fe = getFriendlyError(copilotAutoError)}
     <div class="friendly-error">
       <span class="fe-icon">{fe.icon}</span>
@@ -3294,6 +4267,34 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     <button class="btn-link inline-link" type="button" on:click={focusCopilotResponseField}>
       手動入力に切り替え
     </button>
+  {/if}
+
+  {#if scopeApprovalVisible}
+    <div class="validation-card scope-approval-card" data-level="2">
+      <p class="validation-kicker">追加承認</p>
+      <h3>プロジェクト範囲外アクセスの承認</h3>
+      <p class="validation-detail">
+        {scopeApprovalSource === "agent-loop"
+          ? "自律実行がプロジェクト範囲外のファイル操作を提案しました。"
+          : "貼り付けた Copilot 回答がプロジェクト範囲外のファイル操作を含んでいます。"}
+      </p>
+      <p>{scopeApprovalSummary}</p>
+      <p class="validation-specific">許可ルート: {scopeApprovalRootFolder}</p>
+      {#each scopeApprovalViolations as violation}
+        <p class="validation-detail">{violation}</p>
+      {/each}
+      <p class="validation-detail">
+        承認すると、選択中プロジェクトのルート外に対するファイル操作を許可したうえで確認画面へ進みます。
+      </p>
+      <ApprovalGate
+        busy={busy}
+        approvalEnabled={scopeApprovalVisible}
+        backLabel="回答を見直す"
+        approveLabel="このアクセスを許可して続行"
+        onBack={handleBackFromScopeApproval}
+        onApprove={handleApproveScopeOverride}
+      />
+    </div>
   {/if}
 
   {#if showInstructionPreview && copilotStepAvailable}
@@ -3376,7 +4377,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     </div>
   {/if}
 
-  {#if errorMsg && guidedStage === "copilot"}
+  {#if errorMsg && guidedStage === "copilot" && !scopeApprovalVisible}
     {@const fe = getFriendlyError(errorMsg)}
     <div class="friendly-error">
       <span class="fe-icon">{fe.icon}</span>
@@ -3401,7 +4402,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     <button
       class="btn btn-primary"
       type="button"
-      on:click={handleCopilotStage}
+      on:click={() => {
+        void handleCopilotStage();
+      }}
       disabled={busy || isSendingToCopilot || !copilotStepAvailable || !copilotResponse.trim() || agentLoopResult?.status === "awaiting_plan_approval"}
     >
       {busy && guidedStage === "copilot" ? "変更を確認しています…" : "確認する"}
@@ -3593,6 +4596,87 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       </div>
     </div>
 
+    <div class="expert-section">
+      <div class="expert-section-header">
+        <h3 class="expert-title">承認履歴</h3>
+        {#if sessionId && turnId}
+          <button
+            class="btn-link"
+            type="button"
+            on:click={() => {
+              requestTurnInspectionRefresh();
+            }}
+          >
+            再読込
+          </button>
+        {/if}
+      </div>
+
+      {#if !sessionId || !turnId}
+        <p class="expert-copy">turn が作成されると、ここに保存前承認と project scope override の履歴を表示します。</p>
+      {:else if turnInspectionLoading}
+        <p class="expert-copy">承認履歴を読み込んでいます…</p>
+      {:else if turnInspectionError}
+        <p class="field-warn">⚠ {turnInspectionError}</p>
+      {:else if turnInspectionDetails?.approval.payload}
+        <div class="approval-history-grid">
+          <article class="approval-history-card">
+            <div class="approval-history-topline">
+              <strong>保存前承認</strong>
+              <span>{formatApprovalDecision(turnInspectionDetails.approval.payload.decision)}</span>
+            </div>
+            <p class="expert-copy">{turnInspectionDetails.approval.summary}</p>
+            <p class="expert-copy">
+              保存前承認: {turnInspectionDetails.approval.payload.requiresApproval ? "必要" : "不要"}
+            </p>
+            <p class="expert-copy">
+              実行可否: {turnInspectionDetails.approval.payload.readyForExecution ? "実行可能" : "未解放"}
+            </p>
+            <p class="expert-copy">
+              記録時刻: {formatAuditTime(turnInspectionDetails.approval.payload.approvedAt)}
+            </p>
+            {#if turnInspectionDetails.approval.payload.note}
+              <p class="expert-copy">メモ: {turnInspectionDetails.approval.payload.note}</p>
+            {/if}
+            {#if turnInspectionDetails.approval.artifactId}
+              <p class="expert-copy">artifact: {turnInspectionDetails.approval.artifactId}</p>
+            {/if}
+            <p class="expert-copy">storage: {turnInspectionStorageMode || "unknown"}</p>
+          </article>
+
+          <article class="approval-history-card">
+            <div class="approval-history-topline">
+              <strong>Project Scope Override</strong>
+              <span>{scopeApprovalArtifacts.length} 件</span>
+            </div>
+            {#if scopeApprovalArtifacts.length === 0}
+              <p class="expert-copy">この turn ではまだ project scope override の記録はありません。</p>
+            {:else}
+              <div class="approval-history-list">
+                {#each scopeApprovalArtifacts as artifact}
+                  <div class="approval-history-item">
+                    <div class="approval-history-topline">
+                      <span>{formatApprovalDecision(artifact.payload.decision)}</span>
+                      <span>{formatAuditTime(artifact.createdAt)}</span>
+                    </div>
+                    <p class="expert-copy">source: {formatScopeApprovalSource(artifact.payload.source)}</p>
+                    <p class="expert-copy">root: {artifact.payload.rootFolder}</p>
+                    <p class="expert-copy">paths: {artifact.payload.violations.join(" / ")}</p>
+                    {#if artifact.payload.note}
+                      <p class="expert-copy">note: {artifact.payload.note}</p>
+                    {/if}
+                    <p class="expert-copy">artifact: {artifact.artifactId}</p>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </article>
+        </div>
+      {:else}
+        <p class="expert-copy">承認履歴はまだありません。</p>
+      {/if}
+    </div>
+
     {#if relayPacketText}
       <h3 class="expert-title">Raw relay packet</h3>
       <pre class="preview-block expert-block">{relayPacketText}</pre>
@@ -3782,6 +4866,98 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     background: color-mix(in srgb, var(--ra-accent) 12%, var(--ra-surface));
     color: var(--ra-text);
     font-weight: 600;
+  }
+
+  .project-strip {
+    margin-bottom: 1rem;
+  }
+
+  .project-audit-card {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--ra-border);
+  }
+
+  .project-audit-header,
+  .project-audit-topline,
+  .project-audit-badges,
+  .project-audit-actions {
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .project-audit-header,
+  .project-audit-topline {
+    align-items: start;
+    justify-content: space-between;
+  }
+
+  .project-audit-badges {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .project-audit-title {
+    margin: 0;
+    font-size: 0.96rem;
+  }
+
+  .project-audit-copy {
+    margin: 0.25rem 0 0;
+    color: var(--ra-text-muted);
+    font-size: 0.84rem;
+    word-break: break-word;
+  }
+
+  .project-audit-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.85rem;
+    margin-top: 0.85rem;
+  }
+
+  .project-audit-row {
+    padding: 0.9rem;
+    border: 1px solid var(--ra-border);
+    border-radius: 14px;
+    background: var(--ra-surface);
+  }
+
+  .project-audit-badge {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.76rem;
+    font-weight: 700;
+    border: 1px solid var(--ra-border);
+    background: var(--ra-surface-muted);
+    color: var(--ra-text-secondary);
+  }
+
+  .project-audit-badge[data-tone="approved"] {
+    border-color: #77b98f;
+    background: #edf8f0;
+    color: #216842;
+  }
+
+  .project-audit-badge[data-tone="rejected"] {
+    border-color: #cf786c;
+    background: #fff3f1;
+    color: #9b3e33;
+  }
+
+  .project-audit-badge[data-tone="pending"] {
+    border-color: #d2a55d;
+    background: #fff8eb;
+    color: #8a5c12;
+  }
+
+  .project-audit-badge[data-tone="not-required"],
+  .project-audit-badge[data-tone="none"] {
+    border-color: var(--ra-border);
+    background: var(--ra-surface-muted);
+    color: var(--ra-text-secondary);
   }
 
   .delegation-shell {
@@ -4308,6 +5484,10 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     font-size: 1rem;
   }
 
+  .scope-approval-card :global(.safety-note) {
+    margin-top: 0.8rem;
+  }
+
   .validation-kicker {
     margin: 0;
     font-size: 0.76rem;
@@ -4576,6 +5756,39 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     margin-top: 0.5rem;
   }
 
+  .expert-section {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--ra-border);
+  }
+
+  .expert-section-header,
+  .approval-history-topline {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .approval-history-grid,
+  .approval-history-list {
+    display: grid;
+    gap: 0.9rem;
+    margin-top: 0.75rem;
+  }
+
+  .approval-history-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .approval-history-card,
+  .approval-history-item {
+    border: 1px solid var(--ra-border);
+    border-radius: 12px;
+    background: var(--ra-surface-muted);
+    padding: 0.85rem;
+  }
+
   .send-status {
     display: inline-flex;
     align-items: center;
@@ -4722,7 +5935,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
     .change-strip,
     .summary-grid,
-    .expert-grid {
+    .expert-grid,
+    .approval-history-grid,
+    .project-audit-grid {
       grid-template-columns: 1fr;
     }
 

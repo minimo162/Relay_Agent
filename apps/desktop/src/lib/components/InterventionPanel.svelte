@@ -16,6 +16,10 @@
   export let planSummary = "";
   export let showReplanFeedback = false;
   export let replanFeedback = "";
+  export let scopeApprovalVisible = false;
+  export let scopeApprovalSummary = "";
+  export let scopeApprovalRootFolder = "";
+  export let scopeApprovalViolations: string[] = [];
   export let writeApprovalVisible = false;
   export let previewSummary = "";
   export let previewAffectedRows = 0;
@@ -33,6 +37,8 @@
   export let onMoveStep: (index: number, direction: -1 | 1) => void = () => {};
   export let onRemoveStep: (index: number) => void = () => {};
   export let onReplanFeedbackInput: (value: string) => void = () => {};
+  export let onBackFromScopeApproval: () => void = () => {};
+  export let onApproveScopeOverride: () => void = () => {};
   export let onBackFromApproval: () => void = () => {};
   export let onApproveWrite: () => void = () => {};
   export let onRetry: () => void = () => {};
@@ -113,6 +119,30 @@
     </div>
   {/if}
 
+  {#if scopeApprovalVisible}
+    <div class="intervention-card intervention-warning">
+      <h4>プロジェクト範囲外アクセスの承認</h4>
+      <p>{scopeApprovalSummary}</p>
+      <p class="intervention-meta">許可ルート: {scopeApprovalRootFolder}</p>
+      <div class="warnings">
+        {#each scopeApprovalViolations as violation}
+          <p class="field-warn">⚠ {violation}</p>
+        {/each}
+      </div>
+      <p class="intervention-meta">
+        このまま続行すると、選択中プロジェクトのルート外に対するファイル操作を許可します。
+      </p>
+      <ApprovalGate
+        {busy}
+        approvalEnabled={scopeApprovalVisible}
+        backLabel="回答を見直す"
+        approveLabel="このアクセスを許可して続行"
+        onBack={onBackFromScopeApproval}
+        onApprove={onApproveScopeOverride}
+      />
+    </div>
+  {/if}
+
   {#if writeApprovalVisible}
     <div class="intervention-card">
       <h4>書き込み前の確認</h4>
@@ -154,7 +184,7 @@
     </div>
   {/if}
 
-  {#if !planReviewVisible && !writeApprovalVisible && !errorMessage}
+  {#if !planReviewVisible && !scopeApprovalVisible && !writeApprovalVisible && !errorMessage}
     <div class="intervention-card intervention-compact">
       <p>承認が必要になったら、ここに内容を表示します。</p>
     </div>
@@ -183,6 +213,11 @@
   .intervention-error {
     border-color: #cf786c;
     background: #fff3f1;
+  }
+
+  .intervention-warning {
+    border-color: #d2a55d;
+    background: #fff8eb;
   }
 
   .plan-step-list,

@@ -13,6 +13,11 @@ import {
   textSearchActionSchema
 } from "./file";
 import {
+  projectMemoryEntrySchema,
+  projectMemorySourceSchema,
+  projectSchema
+} from "./project";
+import {
   copilotTurnResponseSchema,
   executionPlanSchema,
   planStepSchema,
@@ -105,6 +110,48 @@ export const createSessionRequestSchema = z.object({
   primaryWorkbookPath: z.string().trim().min(1).optional()
 });
 
+export const createProjectRequestSchema = z.object({
+  name: nonEmptyStringSchema,
+  rootFolder: nonEmptyStringSchema,
+  customInstructions: z.string().default("")
+});
+
+export const readProjectRequestSchema = z.object({
+  projectId: entityIdSchema
+});
+
+export const updateProjectRequestSchema = z.object({
+  projectId: entityIdSchema,
+  name: nonEmptyStringSchema.optional(),
+  customInstructions: z.string().optional()
+});
+
+export const addProjectMemoryRequestSchema = z.object({
+  projectId: entityIdSchema,
+  key: nonEmptyStringSchema,
+  value: z.string(),
+  source: projectMemorySourceSchema.default("user")
+});
+
+export const removeProjectMemoryRequestSchema = z.object({
+  projectId: entityIdSchema,
+  key: nonEmptyStringSchema
+});
+
+export const linkSessionToProjectRequestSchema = z.object({
+  projectId: entityIdSchema,
+  sessionId: entityIdSchema
+});
+
+export const setSessionProjectRequestSchema = z.object({
+  sessionId: entityIdSchema,
+  projectId: entityIdSchema.nullable().optional()
+});
+
+export const listProjectsResponseSchema = z.object({
+  projects: z.array(projectSchema).default([])
+});
+
 export const readSessionRequestSchema = z.object({
   sessionId: z.string().trim().min(1)
 });
@@ -133,6 +180,15 @@ export const previewArtifactPayloadSchema = z.object({
       ])
     )
     .default([])
+});
+
+export const scopeApprovalArtifactPayloadSchema = z.object({
+  decision: z.enum(["approved", "rejected"]),
+  rootFolder: nonEmptyStringSchema,
+  violations: z.array(nonEmptyStringSchema).default([]),
+  source: z.enum(["manual", "agent-loop"]),
+  note: z.string().trim().min(1).optional(),
+  responseArtifactId: entityIdSchema.optional()
 });
 
 export const turnInspectionSourceTypeSchema = z.enum([
@@ -215,6 +271,18 @@ export const approvalInspectionPayloadSchema = z.object({
   approvedAt: isoDateTimeSchema.optional(),
   note: z.string().trim().min(1).optional(),
   previewArtifactId: entityIdSchema.optional(),
+  scopeOverride: z
+    .object({
+      decision: z.enum(["approved", "rejected"]),
+      decidedAt: isoDateTimeSchema,
+      rootFolder: nonEmptyStringSchema,
+      violations: z.array(nonEmptyStringSchema).default([]),
+      source: z.enum(["manual", "agent-loop"]),
+      note: z.string().trim().min(1).optional(),
+      responseArtifactId: entityIdSchema.optional(),
+      artifactId: entityIdSchema.optional()
+    })
+    .optional(),
   originalFileGuardrail: nonEmptyStringSchema,
   saveCopyGuardrail: nonEmptyStringSchema,
   temporaryModeNote: z.string().trim().min(1).optional()
@@ -308,6 +376,10 @@ export const turnArtifactSchema = z.discriminatedUnion("artifactType", [
   turnArtifactBaseSchema.extend({
     artifactType: z.literal("preview"),
     payload: previewArtifactPayloadSchema
+  }),
+  turnArtifactBaseSchema.extend({
+    artifactType: z.literal("scope-approval"),
+    payload: scopeApprovalArtifactPayloadSchema
   })
 ]);
 
@@ -381,7 +453,8 @@ export const submitCopilotResponseResponseSchema = z.object({
   accepted: z.boolean(),
   validationIssues: z.array(validationIssueSchema),
   parsedResponse: copilotTurnResponseSchema.optional(),
-  repairPrompt: z.string().optional()
+  repairPrompt: z.string().optional(),
+  autoLearnedMemory: z.array(projectMemoryEntrySchema).default([])
 });
 
 export const previewExecutionRequestSchema = z.object({
@@ -523,6 +596,7 @@ export const previewExecutionResponseSchema = z.object({
 });
 
 export const approvalDecisionSchema = z.enum(["approved", "rejected"]);
+export const scopeApprovalSourceSchema = z.enum(["manual", "agent-loop"]);
 
 export const respondToApprovalRequestSchema = z.object({
   sessionId: z.string().trim().min(1),
@@ -535,6 +609,22 @@ export const respondToApprovalResponseSchema = z.object({
   turn: turnSchema,
   decision: approvalDecisionSchema,
   readyForExecution: z.boolean()
+});
+
+export const recordScopeApprovalRequestSchema = z.object({
+  sessionId: z.string().trim().min(1),
+  turnId: z.string().trim().min(1),
+  decision: approvalDecisionSchema,
+  rootFolder: nonEmptyStringSchema,
+  violations: z.array(nonEmptyStringSchema).min(1),
+  source: scopeApprovalSourceSchema,
+  note: z.string().trim().min(1).optional()
+});
+
+export const recordScopeApprovalResponseSchema = z.object({
+  turn: turnSchema,
+  decision: approvalDecisionSchema,
+  recordedAt: isoDateTimeSchema
 });
 
 export const runExecutionRequestSchema = z.object({
@@ -589,6 +679,20 @@ export type PreflightWorkbookResponse = z.infer<
 >;
 export type InspectWorkbookResponse = z.infer<typeof inspectWorkbookResponseSchema>;
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
+export type CreateProjectRequest = z.infer<typeof createProjectRequestSchema>;
+export type ReadProjectRequest = z.infer<typeof readProjectRequestSchema>;
+export type UpdateProjectRequest = z.infer<typeof updateProjectRequestSchema>;
+export type AddProjectMemoryRequest = z.infer<typeof addProjectMemoryRequestSchema>;
+export type RemoveProjectMemoryRequest = z.infer<
+  typeof removeProjectMemoryRequestSchema
+>;
+export type LinkSessionToProjectRequest = z.infer<
+  typeof linkSessionToProjectRequestSchema
+>;
+export type SetSessionProjectRequest = z.infer<
+  typeof setSessionProjectRequestSchema
+>;
+export type ListProjectsResponse = z.infer<typeof listProjectsResponseSchema>;
 export type ReadSessionRequest = z.infer<typeof readSessionRequestSchema>;
 export type SessionDetail = z.infer<typeof sessionDetailSchema>;
 export type ReadTurnArtifactsRequest = z.infer<typeof readTurnArtifactsRequestSchema>;
@@ -669,9 +773,16 @@ export type RecordPlanProgressRequest = z.infer<
 export type PreviewExecutionRequest = z.infer<typeof previewExecutionRequestSchema>;
 export type PreviewExecutionResponse = z.infer<typeof previewExecutionResponseSchema>;
 export type ApprovalDecision = z.infer<typeof approvalDecisionSchema>;
+export type ScopeApprovalSource = z.infer<typeof scopeApprovalSourceSchema>;
 export type RespondToApprovalRequest = z.infer<typeof respondToApprovalRequestSchema>;
 export type RespondToApprovalResponse = z.infer<
   typeof respondToApprovalResponseSchema
+>;
+export type RecordScopeApprovalRequest = z.infer<
+  typeof recordScopeApprovalRequestSchema
+>;
+export type RecordScopeApprovalResponse = z.infer<
+  typeof recordScopeApprovalResponseSchema
 >;
 export type RunExecutionRequest = z.infer<typeof runExecutionRequestSchema>;
 export type RunExecutionResponse = z.infer<typeof runExecutionResponseSchema>;

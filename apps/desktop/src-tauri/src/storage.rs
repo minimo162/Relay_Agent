@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use chrono::{SecondsFormat, Utc};
@@ -10,22 +10,28 @@ use uuid::Uuid;
 
 use crate::file_ops;
 use crate::models::{
-    AgentLoopStatus, ApprovalDecision, ApprovalInspectionPayload, ApprovePlanRequest,
-    ApprovePlanResponse, AssessCopilotHandoffRequest, AssessCopilotHandoffResponse,
-    CopilotHandoffReason, CopilotHandoffReasonSource, CopilotHandoffStatus, CopilotTurnResponse,
-    CreateSessionRequest, DiffSummary, ExecuteReadActionsRequest, ExecuteReadActionsResponse,
+    AddProjectMemoryRequest, AgentLoopStatus, ApprovalDecision, ApprovalInspectionPayload,
+    ApprovePlanRequest, ApprovePlanResponse, AssessCopilotHandoffRequest,
+    AssessCopilotHandoffResponse, CopilotHandoffReason, CopilotHandoffReasonSource,
+    CopilotHandoffStatus, CopilotTurnResponse, CreateProjectRequest, CreateSessionRequest,
+    DiffSummary, ExecuteReadActionsRequest, ExecuteReadActionsResponse,
     ExecutionInspectionPayload, ExecutionInspectionState, ExecutionPlan,
-    GenerateRelayPacketRequest, PacketInspectionPayload, PlanProgressRequest,
-    PlanProgressResponse, PlanStepState, PlanStepStatus, PlanningContext,
+    GenerateRelayPacketRequest, LinkSessionToProjectRequest, ListProjectsResponse,
+    PacketInspectionPayload, RecordScopeApprovalRequest, RecordScopeApprovalResponse,
+    ScopeApprovalArtifactPayload, ScopeApprovalSource, ScopeOverrideInspectionRecord,
+    SetSessionProjectRequest,
+    PlanProgressRequest, PlanProgressResponse, PlanStepState, PlanStepStatus, PlanningContext,
     PlanningContextToolGroups, PreviewArtifactPayload, PreviewExecutionRequest,
-    PreviewExecutionResponse, ReadTurnArtifactsResponse, RecordPlanProgressRequest, RelayPacket,
-    RelayPacketResponseContract, RespondToApprovalRequest, RespondToApprovalResponse,
-    RunExecutionRequest, RunExecutionResponse, Session, SessionDetail, SessionStatus,
-    SpreadsheetAction, StartTurnRequest, StartTurnResponse, SubmitCopilotResponseRequest,
-    SubmitCopilotResponseResponse, ToolDescriptor, ToolExecutionResult, ToolPhase, Turn,
-    TurnArtifactRecord, TurnDetailsViewModel, TurnInspectionSection, TurnInspectionSourceType,
-    TurnInspectionUnavailableReason, TurnOverview, TurnOverviewStep, TurnOverviewStepState,
-    TurnStatus, ValidationInspectionPayload, ValidationIssue, ValidationIssueSummary,
+    PreviewExecutionResponse, Project, ProjectMemoryEntry, ProjectMemorySource,
+    ReadProjectRequest, ReadTurnArtifactsResponse, RecordPlanProgressRequest, RelayPacket,
+    RelayPacketResponseContract, RemoveProjectMemoryRequest, RespondToApprovalRequest,
+    RespondToApprovalResponse, RunExecutionRequest, RunExecutionResponse, Session,
+    SessionDetail, SessionStatus, SpreadsheetAction, StartTurnRequest, StartTurnResponse,
+    SubmitCopilotResponseRequest, SubmitCopilotResponseResponse, ToolDescriptor,
+    ToolExecutionResult, ToolPhase, Turn, TurnArtifactRecord, TurnDetailsViewModel,
+    TurnInspectionSection, TurnInspectionSourceType, TurnInspectionUnavailableReason,
+    TurnOverview, TurnOverviewStep, TurnOverviewStepState, TurnStatus, UpdateProjectRequest,
+    ValidationInspectionPayload, ValidationIssue, ValidationIssueSummary,
 };
 use crate::persistence::{self, PersistedArtifactMeta, StorageManifest};
 use crate::workbook::{SheetColumnProfile, SheetPreview, WorkbookEngine, WorkbookSource};
@@ -60,6 +66,19 @@ struct StoredApproval {
     decision: ApprovalDecision,
     note: Option<String>,
     ready_for_execution: bool,
+    preview_artifact_id: String,
+    created_at: String,
+    artifact_id: String,
+}
+
+#[derive(Clone, Debug)]
+struct StoredScopeApproval {
+    decision: ApprovalDecision,
+    root_folder: String,
+    violations: Vec<String>,
+    source: ScopeApprovalSource,
+    note: Option<String>,
+    response_artifact_id: String,
     created_at: String,
     artifact_id: String,
 }
@@ -136,6 +155,18 @@ struct ApprovalArtifactPayload {
     decision: ApprovalDecision,
     note: Option<String>,
     ready_for_execution: bool,
+    preview_artifact_id: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScopeApprovalArtifactRecordPayload {
+    decision: ApprovalDecision,
+    root_folder: String,
+    violations: Vec<String>,
+    source: ScopeApprovalSource,
+    note: Option<String>,
+    response_artifact_id: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -176,18 +207,21 @@ struct PersistedTurnLifecycleArtifacts {
     validation: Option<PersistedLifecycleArtifact<ValidationArtifactPayload>>,
     preview: Option<PersistedLifecycleArtifact<PreviewArtifactPayload>>,
     approval: Option<PersistedLifecycleArtifact<ApprovalArtifactPayload>>,
+    scope_approval: Option<PersistedLifecycleArtifact<ScopeApprovalArtifactRecordPayload>>,
     execution: Option<PersistedLifecycleArtifact<ExecutionArtifactPayload>>,
 }
 
 pub struct AppStorage {
     app_local_data_dir: Option<PathBuf>,
     manifest: Option<StorageManifest>,
+    projects: HashMap<String, Project>,
     sessions: HashMap<String, Session>,
     turns: HashMap<String, Turn>,
     relay_packets: HashMap<String, StoredRelayPacket>,
     responses: HashMap<String, StoredResponse>,
     previews: HashMap<String, StoredPreview>,
     approvals: HashMap<String, StoredApproval>,
+    scope_approvals: HashMap<String, StoredScopeApproval>,
     executions: HashMap<String, StoredExecution>,
     plan_progress: HashMap<String, StoredPlanProgress>,
 }
@@ -197,12 +231,14 @@ impl Default for AppStorage {
         Self {
             app_local_data_dir: None,
             manifest: None,
+            projects: HashMap::new(),
             sessions: HashMap::new(),
             turns: HashMap::new(),
             relay_packets: HashMap::new(),
             responses: HashMap::new(),
             previews: HashMap::new(),
             approvals: HashMap::new(),
+            scope_approvals: HashMap::new(),
             executions: HashMap::new(),
             plan_progress: HashMap::new(),
         }
@@ -262,6 +298,15 @@ impl PersistedTurnLifecycleArtifacts {
                     payload,
                 });
             }
+            "scope-approval" => {
+                let payload: ScopeApprovalArtifactRecordPayload =
+                    persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
+                self.scope_approval = Some(PersistedLifecycleArtifact {
+                    artifact_id: meta.id.clone(),
+                    created_at: meta.created_at.clone(),
+                    payload,
+                });
+            }
             "execution" => {
                 let payload: ExecutionArtifactPayload =
                     persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
@@ -285,6 +330,7 @@ impl AppStorage {
         Ok(Self {
             app_local_data_dir: Some(app_local_data_dir),
             manifest: Some(loaded.manifest),
+            projects: loaded.projects,
             sessions: loaded.sessions,
             turns: loaded.turns,
             ..Self::default()
@@ -312,6 +358,171 @@ impl AppStorage {
             .as_deref()
             .map(|app_local_data_dir| persistence::storage_root(app_local_data_dir))
             .map(|path| path.display().to_string())
+    }
+
+    pub fn create_project(&mut self, request: CreateProjectRequest) -> Result<Project, String> {
+        let name = require_text("name", request.name)?;
+        let root_folder = require_existing_directory("rootFolder", request.root_folder)?;
+        let custom_instructions = request.custom_instructions.unwrap_or_default();
+        let now = timestamp();
+
+        let project = Project {
+            id: Uuid::new_v4().to_string(),
+            name,
+            root_folder,
+            custom_instructions,
+            memory: Vec::new(),
+            session_ids: Vec::new(),
+            created_at: now.clone(),
+            updated_at: now,
+        };
+
+        self.projects.insert(project.id.clone(), project.clone());
+        self.persist_projects_state()?;
+        Ok(project)
+    }
+
+    pub fn list_projects(&self) -> ListProjectsResponse {
+        let mut projects = self.projects.values().cloned().collect::<Vec<_>>();
+        projects.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        ListProjectsResponse { projects }
+    }
+
+    pub fn read_project(&self, request: ReadProjectRequest) -> Result<Project, String> {
+        self.projects
+            .get(&request.project_id)
+            .cloned()
+            .ok_or_else(|| format!("project `{}` was not found", request.project_id))
+    }
+
+    pub fn update_project(&mut self, request: UpdateProjectRequest) -> Result<Project, String> {
+        let project = self
+            .projects
+            .get_mut(&request.project_id)
+            .ok_or_else(|| format!("project `{}` was not found", request.project_id))?;
+
+        if let Some(name) = request.name {
+            project.name = require_text("name", name)?;
+        }
+        if let Some(custom_instructions) = request.custom_instructions {
+            project.custom_instructions = custom_instructions;
+        }
+        project.updated_at = timestamp();
+
+        let updated = project.clone();
+        self.persist_projects_state()?;
+        Ok(updated)
+    }
+
+    pub fn add_project_memory(
+        &mut self,
+        request: AddProjectMemoryRequest,
+    ) -> Result<Project, String> {
+        let key = require_text("key", request.key)?;
+        let project = self
+            .projects
+            .get_mut(&request.project_id)
+            .ok_or_else(|| format!("project `{}` was not found", request.project_id))?;
+        project.memory.retain(|entry| entry.key != key);
+        project.memory.push(ProjectMemoryEntry {
+            key,
+            value: request.value,
+            learned_at: timestamp(),
+            source: request.source.unwrap_or(ProjectMemorySource::User),
+        });
+        project
+            .memory
+            .sort_by(|left, right| left.key.to_lowercase().cmp(&right.key.to_lowercase()));
+        project.updated_at = timestamp();
+
+        let updated = project.clone();
+        self.persist_projects_state()?;
+        Ok(updated)
+    }
+
+    pub fn remove_project_memory(
+        &mut self,
+        request: RemoveProjectMemoryRequest,
+    ) -> Result<Project, String> {
+        let project = self
+            .projects
+            .get_mut(&request.project_id)
+            .ok_or_else(|| format!("project `{}` was not found", request.project_id))?;
+        project.memory.retain(|entry| entry.key != request.key);
+        project.updated_at = timestamp();
+
+        let updated = project.clone();
+        self.persist_projects_state()?;
+        Ok(updated)
+    }
+
+    pub fn link_session_to_project(
+        &mut self,
+        request: LinkSessionToProjectRequest,
+    ) -> Result<Project, String> {
+        if !self.sessions.contains_key(&request.session_id) {
+            return Err(format!("session `{}` was not found", request.session_id));
+        }
+
+        let project = self
+            .projects
+            .get_mut(&request.project_id)
+            .ok_or_else(|| format!("project `{}` was not found", request.project_id))?;
+
+        if !project.session_ids.iter().any(|session_id| session_id == &request.session_id) {
+            project.session_ids.push(request.session_id);
+            project.updated_at = timestamp();
+        }
+
+        let updated = project.clone();
+        self.persist_projects_state()?;
+        Ok(updated)
+    }
+
+    pub fn set_session_project(
+        &mut self,
+        request: SetSessionProjectRequest,
+    ) -> Result<ListProjectsResponse, String> {
+        if !self.sessions.contains_key(&request.session_id) {
+            return Err(format!("session `{}` was not found", request.session_id));
+        }
+
+        let target_project_id = request.project_id.clone();
+        if let Some(project_id) = target_project_id.as_deref() {
+            if !self.projects.contains_key(project_id) {
+                return Err(format!("project `{project_id}` was not found"));
+            }
+        }
+
+        let mut changed = false;
+        for project in self.projects.values_mut() {
+            let before = project.session_ids.len();
+            project
+                .session_ids
+                .retain(|session_id| session_id != &request.session_id);
+            if project.session_ids.len() != before {
+                project.updated_at = timestamp();
+                changed = true;
+            }
+        }
+
+        if let Some(project_id) = target_project_id {
+            let project = self
+                .projects
+                .get_mut(&project_id)
+                .ok_or_else(|| format!("project `{project_id}` was not found"))?;
+            if !project.session_ids.iter().any(|session_id| session_id == &request.session_id) {
+                project.session_ids.push(request.session_id);
+                project.updated_at = timestamp();
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.persist_projects_state()?;
+        }
+
+        Ok(self.list_projects())
     }
 
     pub fn create_session(&mut self, request: CreateSessionRequest) -> Result<Session, String> {
@@ -806,6 +1017,11 @@ impl AppStorage {
         } else {
             Some(build_repair_prompt(&validation_issues))
         };
+        let auto_learned_memory = if accepted {
+            self.learn_project_memory_from_response(&session.id, parsed_response.as_ref())?
+        } else {
+            Vec::new()
+        };
         let response_artifact = self.record_turn_artifact(
             &session.id,
             &turn.id,
@@ -849,6 +1065,7 @@ impl AppStorage {
         );
         self.previews.remove(&turn.id);
         self.approvals.remove(&turn.id);
+        self.scope_approvals.remove(&turn.id);
         self.executions.remove(&turn.id);
         self.touch_session(&session.id)?;
         self.append_turn_log(
@@ -864,6 +1081,21 @@ impl AppStorage {
                 "validationIssueCount": validation_issues.len(),
             })),
         )?;
+        if !auto_learned_memory.is_empty() {
+            self.append_turn_log(
+                &session.id,
+                &turn.id,
+                Some(&validation_artifact.id),
+                "project-memory-learned",
+                format!(
+                    "Learned {} project preference(s) from the accepted model response.",
+                    auto_learned_memory.len()
+                ),
+                Some(json!({
+                    "projectMemory": auto_learned_memory.clone(),
+                })),
+            )?;
+        }
 
         Ok(SubmitCopilotResponseResponse {
             turn: next_turn,
@@ -871,7 +1103,56 @@ impl AppStorage {
             validation_issues,
             parsed_response,
             repair_prompt,
+            auto_learned_memory,
         })
+    }
+
+    fn learn_project_memory_from_response(
+        &mut self,
+        session_id: &str,
+        parsed_response: Option<&CopilotTurnResponse>,
+    ) -> Result<Vec<ProjectMemoryEntry>, String> {
+        let Some(parsed_response) = parsed_response else {
+            return Ok(Vec::new());
+        };
+
+        let Some(project_id) = self.find_project_id_by_session(session_id) else {
+            return Ok(Vec::new());
+        };
+
+        let root_folder = self
+            .projects
+            .get(&project_id)
+            .map(|project| project.root_folder.clone())
+            .ok_or_else(|| format!("project `{project_id}` was not found"))?;
+        let learned_entries = infer_auto_project_memory_entries(parsed_response, &root_folder);
+
+        if learned_entries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let project = self
+            .projects
+            .get_mut(&project_id)
+            .ok_or_else(|| format!("project `{project_id}` was not found"))?;
+        for entry in &learned_entries {
+            project.memory.retain(|existing| existing.key != entry.key);
+            project.memory.push(entry.clone());
+        }
+        project
+            .memory
+            .sort_by(|left, right| left.key.to_lowercase().cmp(&right.key.to_lowercase()));
+        project.updated_at = timestamp();
+        self.persist_projects_state()?;
+
+        Ok(learned_entries)
+    }
+
+    fn find_project_id_by_session(&self, session_id: &str) -> Option<String> {
+        self.projects
+            .values()
+            .find(|project| project.session_ids.iter().any(|existing| existing == session_id))
+            .map(|project| project.id.clone())
     }
 
     pub fn execute_read_actions(
@@ -1047,6 +1328,7 @@ impl AppStorage {
         let preview = self.previews.get(&turn.id).ok_or_else(|| {
             "execution preview must exist before approval can be recorded".to_string()
         })?;
+        let preview_artifact_id = preview.artifact_id.clone();
 
         let next_status = match request.decision {
             ApprovalDecision::Approved if preview.requires_approval => TurnStatus::Approved,
@@ -1062,6 +1344,7 @@ impl AppStorage {
                 "decision": request.decision,
                 "note": request.note.clone(),
                 "readyForExecution": ready_for_execution,
+                "previewArtifactId": preview_artifact_id.clone(),
             }),
             None,
         )?;
@@ -1074,6 +1357,7 @@ impl AppStorage {
                 decision: request.decision,
                 note: request.note.clone(),
                 ready_for_execution,
+                preview_artifact_id,
                 created_at: approval_artifact.created_at.clone(),
                 artifact_id: approval_artifact.id.clone(),
             },
@@ -1099,6 +1383,87 @@ impl AppStorage {
         })
     }
 
+    pub fn record_scope_approval(
+        &mut self,
+        request: RecordScopeApprovalRequest,
+    ) -> Result<RecordScopeApprovalResponse, String> {
+        let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
+        let response = self.responses.get(&turn.id).ok_or_else(|| {
+            "a validated Copilot response must exist before scope approval can be recorded"
+                .to_string()
+        })?;
+        let response_artifact_id = response.artifact_id.clone();
+        let root_folder = require_text("rootFolder", request.root_folder)?;
+        let violations = request
+            .violations
+            .into_iter()
+            .map(|value| require_text("violations[]", value))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if violations.is_empty() {
+            return Err("at least one project-scope violation is required".to_string());
+        }
+
+        let scope_artifact = self.record_turn_artifact(
+            &session.id,
+            &turn.id,
+            "scope-approval",
+            &ScopeApprovalArtifactPayload {
+                decision: request.decision,
+                root_folder: root_folder.clone(),
+                violations: violations.clone(),
+                source: request.source,
+                note: request.note.clone(),
+                response_artifact_id: Some(response_artifact_id.clone()),
+            },
+            None,
+        )?;
+        self.scope_approvals.insert(
+            turn.id.clone(),
+            StoredScopeApproval {
+                decision: request.decision,
+                root_folder: root_folder.clone(),
+                violations: violations.clone(),
+                source: request.source,
+                note: request.note.clone(),
+                response_artifact_id: response_artifact_id.clone(),
+                created_at: scope_artifact.created_at.clone(),
+                artifact_id: scope_artifact.id.clone(),
+            },
+        );
+        self.touch_session(&session.id)?;
+        self.append_turn_log(
+            &session.id,
+            &turn.id,
+            Some(&scope_artifact.id),
+            "project-scope-approval-recorded",
+            match request.decision {
+                ApprovalDecision::Approved => {
+                    "Project-scope override approval was recorded for the current response."
+                        .to_string()
+                }
+                ApprovalDecision::Rejected => {
+                    "Project-scope override rejection was recorded for the current response."
+                        .to_string()
+                }
+            },
+            Some(json!({
+                "scopeApprovalArtifactId": scope_artifact.id.clone(),
+                "decision": request.decision,
+                "rootFolder": root_folder,
+                "violationCount": violations.len(),
+                "responseArtifactId": response_artifact_id,
+                "source": request.source,
+            })),
+        )?;
+
+        Ok(RecordScopeApprovalResponse {
+            turn: turn.clone(),
+            decision: request.decision,
+            recorded_at: scope_artifact.created_at,
+        })
+    }
+
     pub fn run_execution(
         &mut self,
         request: RunExecutionRequest,
@@ -1110,9 +1475,11 @@ impl AppStorage {
             })?;
 
         if preview.requires_approval {
-            let approval = self.approvals.get(&turn.id).ok_or_else(|| {
-                "execution approval is required before running execution".to_string()
-            })?;
+            let approval = self
+                .approvals
+                .get(&turn.id)
+                .filter(|approval| approval.preview_artifact_id == preview.artifact_id)
+                .ok_or_else(|| "execution approval is required before running execution".to_string())?;
             if approval.decision != ApprovalDecision::Approved {
                 return Err("execution cannot proceed until the preview is approved".to_string());
             }
@@ -1142,10 +1509,27 @@ impl AppStorage {
 
         if !workbook_write_actions.is_empty() || !file_write_actions.is_empty() {
             let mut warnings = collect_execution_warnings(&preview);
-            if let Some(approval) = self.approvals.get(&turn.id) {
+            if let Some(approval) = self
+                .approvals
+                .get(&turn.id)
+                .filter(|approval| approval.preview_artifact_id == preview.artifact_id)
+            {
                 if let Some(note) = &approval.note {
                     push_unique_string(&mut warnings, format!("Approval note: {note}"));
                 }
+            }
+            if let Some(scope_approval) = self.scope_approvals.get(&turn.id) {
+                push_unique_string(
+                    &mut warnings,
+                    format!(
+                        "Project scope override {} for {} path(s).",
+                        match scope_approval.decision {
+                            ApprovalDecision::Approved => "was approved",
+                            ApprovalDecision::Rejected => "was rejected",
+                        },
+                        scope_approval.violations.len()
+                    ),
+                );
             }
             let mut output_path = None;
 
@@ -1312,10 +1696,27 @@ impl AppStorage {
         reason: String,
     ) -> Result<String, String> {
         let mut warnings = collect_execution_warnings(preview);
-        if let Some(approval) = self.approvals.get(&turn.id) {
+        if let Some(approval) = self
+            .approvals
+            .get(&turn.id)
+            .filter(|approval| approval.preview_artifact_id == preview.artifact_id)
+        {
             if let Some(note) = &approval.note {
                 push_unique_string(&mut warnings, format!("Approval note: {note}"));
             }
+        }
+        if let Some(scope_approval) = self.scope_approvals.get(&turn.id) {
+            push_unique_string(
+                &mut warnings,
+                format!(
+                    "Project scope override {} for {} path(s).",
+                    match scope_approval.decision {
+                        ApprovalDecision::Approved => "was approved",
+                        ApprovalDecision::Rejected => "was rejected",
+                    },
+                    scope_approval.violations.len()
+                ),
+            );
         }
 
         let next_turn =
@@ -1419,6 +1820,23 @@ impl AppStorage {
             &self.sessions,
             &self.turns,
             session_id,
+            &timestamp(),
+        )
+    }
+
+    fn persist_projects_state(&mut self) -> Result<(), String> {
+        let Some(app_local_data_dir) = self.app_local_data_dir.as_deref() else {
+            return Ok(());
+        };
+        let manifest = self
+            .manifest
+            .as_mut()
+            .ok_or_else(|| "storage manifest was not initialized".to_string())?;
+
+        persistence::persist_projects_state(
+            app_local_data_dir,
+            manifest,
+            &self.projects,
             &timestamp(),
         )
     }
@@ -1883,12 +2301,56 @@ impl AppStorage {
         let preview_artifact_id = live_preview
             .map(|preview| preview.artifact_id.clone())
             .or_else(|| persisted_preview.map(|preview| preview.artifact_id.clone()));
+        let current_response_artifact_id = self
+            .responses
+            .get(&turn.id)
+            .map(|response| response.artifact_id.clone())
+            .or_else(|| persisted.validation.as_ref().map(|response| response.artifact_id.clone()));
+        let scope_override = self
+            .scope_approvals
+            .get(&turn.id)
+            .filter(|scope| Some(scope.response_artifact_id.clone()) == current_response_artifact_id)
+            .map(|scope| ScopeOverrideInspectionRecord {
+                decision: scope.decision,
+                decided_at: scope.created_at.clone(),
+                root_folder: scope.root_folder.clone(),
+                violations: scope.violations.clone(),
+                source: scope.source,
+                note: scope.note.clone(),
+                response_artifact_id: Some(scope.response_artifact_id.clone()),
+                artifact_id: Some(scope.artifact_id.clone()),
+            })
+            .or_else(|| {
+                persisted
+                    .scope_approval
+                    .as_ref()
+                    .filter(|scope| {
+                        scope.payload.response_artifact_id.clone() == current_response_artifact_id
+                    })
+                    .map(|scope| ScopeOverrideInspectionRecord {
+                        decision: scope.payload.decision,
+                        decided_at: scope.created_at.clone(),
+                        root_folder: scope.payload.root_folder.clone(),
+                        violations: scope.payload.violations.clone(),
+                        source: scope.payload.source,
+                        note: scope.payload.note.clone(),
+                        response_artifact_id: scope.payload.response_artifact_id.clone(),
+                        artifact_id: Some(scope.artifact_id.clone()),
+                    })
+            });
         let temporary_mode_note = (self.storage_mode() == "memory").then(|| {
             "Temporary mode keeps this approval detail only for the current app session."
                 .to_string()
         });
+        let live_approval = self
+            .approvals
+            .get(&turn.id)
+            .filter(|approval| Some(approval.preview_artifact_id.clone()) == preview_artifact_id);
+        let persisted_approval = persisted.approval.as_ref().filter(|approval| {
+            approval.payload.preview_artifact_id.clone() == preview_artifact_id
+        });
 
-        if let Some(approval) = self.approvals.get(&turn.id) {
+        if let Some(approval) = live_approval {
             return self.available_section(
                 if approval.ready_for_execution {
                     "Approval is recorded and execution is allowed.".to_string()
@@ -1905,6 +2367,7 @@ impl AppStorage {
                     approved_at: Some(approval.created_at.clone()),
                     note: approval.note.clone(),
                     preview_artifact_id,
+                    scope_override: scope_override.clone(),
                     original_file_guardrail:
                         "The original workbook stays read-only even after approval.".to_string(),
                     save_copy_guardrail:
@@ -1915,7 +2378,7 @@ impl AppStorage {
             );
         }
 
-        if let Some(approval) = persisted.approval.as_ref() {
+        if let Some(approval) = persisted_approval {
             return self.available_section(
                 if approval.payload.ready_for_execution {
                     "A saved approval is available for this turn.".to_string()
@@ -1933,6 +2396,7 @@ impl AppStorage {
                     approved_at: Some(approval.created_at.clone()),
                     note: approval.payload.note.clone(),
                     preview_artifact_id,
+                    scope_override: scope_override.clone(),
                     original_file_guardrail:
                         "The original workbook stays read-only even after approval.".to_string(),
                     save_copy_guardrail:
@@ -1947,7 +2411,15 @@ impl AppStorage {
             let summary = if requires_approval {
                 "Approval has not been recorded yet for the current preview.".to_string()
             } else {
-                "This preview is read-only, so no approval step is required.".to_string()
+                match scope_override.as_ref() {
+                    Some(scope) if scope.decision == ApprovalDecision::Approved => {
+                        "Project-scope override was approved for the current response. No save approval is required for this preview.".to_string()
+                    }
+                    Some(_) => {
+                        "Project-scope override was reviewed for the current response. No save approval is required for this preview.".to_string()
+                    }
+                    None => "This preview is read-only, so no approval step is required.".to_string()
+                }
             };
 
             return self.available_section(
@@ -1969,11 +2441,49 @@ impl AppStorage {
                     approved_at: None,
                     note: None,
                     preview_artifact_id,
+                    scope_override: scope_override.clone(),
                     original_file_guardrail:
                         "The original workbook stays read-only even when review is complete."
                             .to_string(),
                     save_copy_guardrail:
                         "Only a separate reviewed copy can be written after the required review."
+                            .to_string(),
+                    temporary_mode_note,
+                },
+            );
+        }
+
+        if let Some(scope_override) = scope_override {
+            return self.available_section(
+                match scope_override.decision {
+                    ApprovalDecision::Approved => {
+                        "Project-scope override approval is recorded for the current response."
+                            .to_string()
+                    }
+                    ApprovalDecision::Rejected => {
+                        "Project-scope override rejection is recorded for the current response."
+                            .to_string()
+                    }
+                },
+                if self.scope_approvals.contains_key(&turn.id) {
+                    TurnInspectionSourceType::Live
+                } else {
+                    TurnInspectionSourceType::Persisted
+                },
+                scope_override.decided_at.clone(),
+                scope_override.artifact_id.clone(),
+                ApprovalInspectionPayload {
+                    decision: None,
+                    ready_for_execution: false,
+                    requires_approval: false,
+                    approved_at: None,
+                    note: None,
+                    preview_artifact_id: None,
+                    scope_override: Some(scope_override),
+                    original_file_guardrail:
+                        "The original workbook stays read-only even when project-scope access is approved.".to_string(),
+                    save_copy_guardrail:
+                        "A scope override never bypasses the later save-copy preview and approval flow."
                             .to_string(),
                     temporary_mode_note,
                 },
@@ -2078,11 +2588,37 @@ impl AppStorage {
             } else if self
                 .approvals
                 .get(&turn.id)
+                .filter(|approval| {
+                    self.previews
+                        .get(&turn.id)
+                        .map(|preview| preview.artifact_id.clone())
+                        .or_else(|| {
+                            persisted
+                                .preview
+                                .as_ref()
+                                .map(|preview| preview.artifact_id.clone())
+                        })
+                        .as_ref()
+                        == Some(&approval.preview_artifact_id)
+                })
                 .map(|approval| approval.ready_for_execution)
                 .or_else(|| {
                     persisted
                         .approval
                         .as_ref()
+                        .filter(|approval| {
+                            approval.payload.preview_artifact_id.clone()
+                                == self
+                                    .previews
+                                    .get(&turn.id)
+                                    .map(|preview| preview.artifact_id.clone())
+                                    .or_else(|| {
+                                        persisted
+                                            .preview
+                                            .as_ref()
+                                            .map(|preview| preview.artifact_id.clone())
+                                    })
+                        })
                         .map(|approval| approval.payload.ready_for_execution)
                 })
                 .unwrap_or(false)
@@ -2439,6 +2975,15 @@ impl AppStorage {
                 let payload: PreviewArtifactPayload =
                     persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
                 Ok(Some(TurnArtifactRecord::Preview {
+                    artifact_id: meta.id.clone(),
+                    created_at: meta.created_at.clone(),
+                    payload,
+                }))
+            }
+            "scope-approval" => {
+                let payload: ScopeApprovalArtifactPayload =
+                    persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
+                Ok(Some(TurnArtifactRecord::ScopeApproval {
                     artifact_id: meta.id.clone(),
                     created_at: meta.created_at.clone(),
                     payload,
@@ -2951,6 +3496,323 @@ fn push_unique_string(values: &mut Vec<String>, value: String) {
     }
 
     values.push(value);
+}
+
+fn infer_auto_project_memory_entries(
+    response: &CopilotTurnResponse,
+    root_folder: &str,
+) -> Vec<ProjectMemoryEntry> {
+    let learned_at = timestamp();
+    let mut entries = Vec::new();
+
+    for action in &response.actions {
+        if let Some(output_path) = extract_auto_learning_output_path(action) {
+            if is_within_project_scope(output_path, root_folder) {
+                if let Some(parent) = Path::new(output_path).parent().and_then(|value| value.to_str())
+                {
+                    upsert_project_memory_entry(
+                        &mut entries,
+                        ProjectMemoryEntry {
+                            key: "preferred_output_folder".to_string(),
+                            value: parent.to_string(),
+                            learned_at: learned_at.clone(),
+                            source: ProjectMemorySource::Auto,
+                        },
+                    );
+                }
+
+                if let Some(extension) =
+                    Path::new(output_path).extension().and_then(|value| value.to_str())
+                {
+                    let normalized_extension = extension.trim().to_lowercase();
+                    if matches!(normalized_extension.as_str(), "csv" | "xlsx" | "xlsm" | "xlsb")
+                    {
+                        upsert_project_memory_entry(
+                            &mut entries,
+                            ProjectMemoryEntry {
+                                key: "preferred_output_format".to_string(),
+                                value: normalized_extension,
+                                learned_at: learned_at.clone(),
+                                source: ProjectMemorySource::Auto,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
+        if let Some(output_sheet) = action.args.get("outputSheet").and_then(Value::as_str) {
+            let normalized_output_sheet = output_sheet.trim();
+            if !normalized_output_sheet.is_empty() {
+                upsert_project_memory_entry(
+                    &mut entries,
+                    ProjectMemoryEntry {
+                        key: "preferred_output_sheet".to_string(),
+                        value: normalized_output_sheet.to_string(),
+                        learned_at: learned_at.clone(),
+                        source: ProjectMemorySource::Auto,
+                    },
+                );
+            }
+        }
+
+        if let Some(create_backup) = action.args.get("createBackup").and_then(Value::as_bool) {
+            upsert_project_memory_entry(
+                &mut entries,
+                ProjectMemoryEntry {
+                    key: "create_backup_on_replace".to_string(),
+                    value: create_backup.to_string(),
+                    learned_at: learned_at.clone(),
+                    source: ProjectMemorySource::Auto,
+                },
+            );
+        }
+
+        if let Some(overwrite) = action.args.get("overwrite").and_then(Value::as_bool) {
+            upsert_project_memory_entry(
+                &mut entries,
+                ProjectMemoryEntry {
+                    key: "overwrite_existing_files".to_string(),
+                    value: overwrite.to_string(),
+                    learned_at: learned_at.clone(),
+                    source: ProjectMemorySource::Auto,
+                },
+            );
+        }
+    }
+
+    let natural_language_context = collect_natural_language_learning_context(response);
+    infer_auto_project_memory_entries_from_text(
+        &natural_language_context,
+        root_folder,
+        &learned_at,
+        &mut entries,
+    );
+
+    entries
+}
+
+fn collect_natural_language_learning_context(response: &CopilotTurnResponse) -> String {
+    let mut lines = vec![response.summary.clone()];
+
+    if let Some(message) = response.message.as_ref() {
+        lines.push(message.clone());
+    }
+    lines.extend(response.warnings.iter().cloned());
+    lines.extend(response.follow_up_questions.iter().cloned());
+
+    lines.join("\n")
+}
+
+fn infer_auto_project_memory_entries_from_text(
+    text: &str,
+    root_folder: &str,
+    learned_at: &str,
+    entries: &mut Vec<ProjectMemoryEntry>,
+) {
+    let normalized_text = text.trim();
+    if normalized_text.is_empty() {
+        return;
+    }
+
+    for path_candidate in extract_path_candidates(normalized_text) {
+        if !is_within_project_scope(&path_candidate, root_folder) {
+            continue;
+        }
+
+        if let Some(parent) = Path::new(&path_candidate).parent().and_then(|value| value.to_str()) {
+            upsert_project_memory_entry(
+                entries,
+                ProjectMemoryEntry {
+                    key: "preferred_output_folder".to_string(),
+                    value: parent.to_string(),
+                    learned_at: learned_at.to_string(),
+                    source: ProjectMemorySource::Auto,
+                },
+            );
+        }
+
+        if let Some(extension) = Path::new(&path_candidate).extension().and_then(|value| value.to_str())
+        {
+            let normalized_extension = extension.trim().to_lowercase();
+            if matches!(normalized_extension.as_str(), "csv" | "xlsx" | "xlsm" | "xlsb") {
+                upsert_project_memory_entry(
+                    entries,
+                    ProjectMemoryEntry {
+                        key: "preferred_output_format".to_string(),
+                        value: normalized_extension,
+                        learned_at: learned_at.to_string(),
+                        source: ProjectMemorySource::Auto,
+                    },
+                );
+            }
+        }
+    }
+
+    let lowered = normalized_text.to_lowercase();
+    if let Some(output_sheet) = extract_marker_value(normalized_text, &["output sheet", "出力シート"])
+    {
+        upsert_project_memory_entry(
+            entries,
+            ProjectMemoryEntry {
+                key: "preferred_output_sheet".to_string(),
+                value: output_sheet,
+                learned_at: learned_at.to_string(),
+                source: ProjectMemorySource::Auto,
+            },
+        );
+    }
+
+    if let Some(create_backup) = infer_boolean_preference(
+        &lowered,
+        &["without backup", "no backup", "バックアップなし"],
+        &["backup", "バックアップ"],
+    ) {
+        upsert_project_memory_entry(
+            entries,
+            ProjectMemoryEntry {
+                key: "create_backup_on_replace".to_string(),
+                value: create_backup.to_string(),
+                learned_at: learned_at.to_string(),
+                source: ProjectMemorySource::Auto,
+            },
+        );
+    }
+
+    if let Some(overwrite) = infer_boolean_preference(
+        &lowered,
+        &["do not overwrite", "don't overwrite", "no overwrite", "上書きしない", "上書きなし"],
+        &["overwrite", "上書き"],
+    ) {
+        upsert_project_memory_entry(
+            entries,
+            ProjectMemoryEntry {
+                key: "overwrite_existing_files".to_string(),
+                value: overwrite.to_string(),
+                learned_at: learned_at.to_string(),
+                source: ProjectMemorySource::Auto,
+            },
+        );
+    }
+
+    if !entries.iter().any(|entry| entry.key == "preferred_output_format") {
+        for format in ["csv", "xlsx", "xlsm", "xlsb"] {
+            if lowered.contains(format) {
+                upsert_project_memory_entry(
+                    entries,
+                    ProjectMemoryEntry {
+                        key: "preferred_output_format".to_string(),
+                        value: format.to_string(),
+                        learned_at: learned_at.to_string(),
+                        source: ProjectMemorySource::Auto,
+                    },
+                );
+                break;
+            }
+        }
+    }
+}
+
+fn extract_path_candidates(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .map(|segment| {
+            segment
+                .trim_matches(|character: char| {
+                    matches!(
+                        character,
+                        '`' | '"' | '\'' | ',' | '.' | ';' | ':' | '(' | ')' | '[' | ']'
+                    )
+                })
+                .to_string()
+        })
+        .filter(|segment| {
+            segment.starts_with('/')
+                || (segment.len() > 2
+                    && segment.as_bytes()[1] == b':'
+                    && segment
+                        .chars()
+                        .next()
+                        .map(|character| character.is_ascii_alphabetic())
+                        .unwrap_or(false))
+        })
+        .collect()
+}
+
+fn extract_marker_value(text: &str, markers: &[&str]) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let lowered = trimmed.to_lowercase();
+        for marker in markers {
+            let marker_lower = marker.to_lowercase();
+            if let Some(index) = lowered.find(&marker_lower) {
+                let remainder = trimmed[index + marker_lower.len()..]
+                    .trim_start_matches([' ', ':', '-', '='])
+                    .trim();
+                let candidate = remainder
+                    .split([' ', ',', ';'])
+                    .next()
+                    .unwrap_or_default()
+                    .trim_matches(['`', '"', '\'']);
+                if !candidate.is_empty() {
+                    return Some(candidate.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn infer_boolean_preference(
+    lowered_text: &str,
+    negative_markers: &[&str],
+    positive_markers: &[&str],
+) -> Option<bool> {
+    if negative_markers
+        .iter()
+        .any(|marker| lowered_text.contains(marker))
+    {
+        return Some(false);
+    }
+    if positive_markers
+        .iter()
+        .any(|marker| lowered_text.contains(marker))
+    {
+        return Some(true);
+    }
+
+    None
+}
+
+fn extract_auto_learning_output_path(action: &SpreadsheetAction) -> Option<&str> {
+    match action.tool.as_str() {
+        "workbook.save_copy" => action
+            .args
+            .get("path")
+            .or_else(|| action.args.get("outputPath"))
+            .and_then(Value::as_str),
+        "file.copy" | "file.move" => action.args.get("destPath").and_then(Value::as_str),
+        _ => None,
+    }
+}
+
+fn upsert_project_memory_entry(entries: &mut Vec<ProjectMemoryEntry>, entry: ProjectMemoryEntry) {
+    entries.retain(|existing| existing.key != entry.key);
+    entries.push(entry);
+    entries.sort_by(|left, right| left.key.to_lowercase().cmp(&right.key.to_lowercase()));
+}
+
+fn is_within_project_scope(file_path: &str, root_folder: &str) -> bool {
+    let normalized_file = normalize_scope_path(file_path);
+    let normalized_root = normalize_scope_path(root_folder);
+    normalized_file == normalized_root || normalized_file.starts_with(&format!("{normalized_root}/"))
+}
+
+fn normalize_scope_path(path: &str) -> String {
+    path.replace('\\', "/")
+        .trim()
+        .trim_end_matches('/')
+        .to_lowercase()
 }
 
 fn parse_copilot_response(
@@ -4076,6 +4938,21 @@ fn require_text(field: &str, value: String) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
+fn require_existing_directory(field: &str, value: String) -> Result<String, String> {
+    let trimmed = require_text(field, value)?;
+    let path = Path::new(&trimmed);
+
+    if !path.exists() {
+        return Err(format!("{field} `{trimmed}` must point to an existing directory"));
+    }
+
+    if !path.is_dir() {
+        return Err(format!("{field} `{trimmed}` must point to a directory"));
+    }
+
+    Ok(trimmed)
+}
+
 fn timestamp() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
@@ -4086,11 +4963,15 @@ mod tests {
 
     use super::AppStorage;
     use crate::models::{
-        ApprovalDecision, AssessCopilotHandoffRequest, CopilotHandoffStatus, CreateSessionRequest,
+        AddProjectMemoryRequest, ApprovalDecision, AssessCopilotHandoffRequest,
+        CopilotHandoffStatus, CreateProjectRequest, CreateSessionRequest,
         ExecuteReadActionsRequest, ExecutionInspectionState, GenerateRelayPacketRequest,
-        PreviewExecutionRequest, ReadSessionRequest, RelayMode, RespondToApprovalRequest,
-        RunExecutionRequest, SpreadsheetAction, StartTurnRequest, SubmitCopilotResponseRequest,
-        TurnArtifactRecord, TurnInspectionSourceType, TurnStatus,
+        LinkSessionToProjectRequest, PreviewExecutionRequest, ProjectMemorySource,
+        ReadProjectRequest, ReadSessionRequest, RecordScopeApprovalRequest, RelayMode,
+        RespondToApprovalRequest, RunExecutionRequest, ScopeApprovalSource,
+        SetSessionProjectRequest, SpreadsheetAction, StartTurnRequest,
+        SubmitCopilotResponseRequest, TurnArtifactRecord, TurnInspectionSourceType, TurnStatus,
+        UpdateProjectRequest,
     };
     use crate::persistence;
     use serde::{de::DeserializeOwned, Deserialize};
@@ -4807,6 +5688,101 @@ mod tests {
         assert_eq!(detail.turns.len(), 1);
         assert_eq!(detail.turns[0].title, "Reload me");
         assert_eq!(detail.turns[0].session_id, session_id);
+
+        fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
+    }
+
+    #[test]
+    fn persists_scope_override_approval_as_a_turn_artifact() {
+        let app_local_data_dir = unique_test_app_data_dir();
+
+        let (session_id, turn_id) = {
+            let mut storage =
+                AppStorage::open(app_local_data_dir.clone()).expect("storage should initialize");
+
+            let session = storage
+                .create_session(CreateSessionRequest {
+                    title: "Scope approval".to_string(),
+                    objective: "Persist scope override decisions".to_string(),
+                    primary_workbook_path: Some("/tmp/source.csv".to_string()),
+                })
+                .expect("session should be created");
+            let turn = storage
+                .start_turn(StartTurnRequest {
+                    session_id: session.id.clone(),
+                    title: "Record scope override".to_string(),
+                    objective: "Keep the scope override as an auditable artifact.".to_string(),
+                    mode: RelayMode::Plan,
+                })
+                .expect("turn should start")
+                .turn;
+
+            storage
+                .generate_relay_packet(GenerateRelayPacketRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                })
+                .expect("packet should generate");
+            storage
+                .submit_copilot_response(SubmitCopilotResponseRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                    raw_response: copilot_response(
+                        "Write a reviewed copy outside the default project root.",
+                        vec![json!({
+                            "tool": "workbook.save_copy",
+                            "args": {
+                                "outputPath": "/tmp/outside-reviewed-copy.csv"
+                            }
+                        })],
+                    ),
+                })
+                .expect("response should parse");
+            storage
+                .record_scope_approval(RecordScopeApprovalRequest {
+                    session_id: session.id.clone(),
+                    turn_id: turn.id.clone(),
+                    decision: ApprovalDecision::Approved,
+                    root_folder: "/workspace/projects/revenue".to_string(),
+                    violations: vec!["/tmp/outside-reviewed-copy.csv".to_string()],
+                    source: ScopeApprovalSource::Manual,
+                    note: Some("Allow the export path for this turn.".to_string()),
+                })
+                .expect("scope approval should be recorded");
+
+            (session.id, turn.id)
+        };
+
+        let reloaded = AppStorage::open(app_local_data_dir.clone()).expect("storage should reload");
+        let artifact_response = reloaded
+            .read_turn_artifacts(&session_id, &turn_id)
+            .expect("turn artifacts should be readable");
+
+        assert!(artifact_response
+            .artifacts
+            .iter()
+            .any(|artifact| matches!(artifact, TurnArtifactRecord::ScopeApproval { .. })));
+        assert!(artifact_response.turn_details.approval.available);
+        assert_eq!(
+            artifact_response
+                .turn_details
+                .approval
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.scope_override.as_ref())
+                .map(|scope| scope.decision),
+            Some(ApprovalDecision::Approved)
+        );
+        assert_eq!(
+            artifact_response
+                .turn_details
+                .approval
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.scope_override.as_ref())
+                .map(|scope| scope.root_folder.as_str()),
+            Some("/workspace/projects/revenue")
+        );
 
         fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
     }
@@ -6188,8 +7164,322 @@ mod tests {
         fs::remove_file(large_path).expect("large file should clean up");
     }
 
+    #[test]
+    fn project_crud_and_memory_persist_across_reload() {
+        let app_local_data_dir = unique_test_app_data_dir();
+        let revenue_root = create_test_directory("revenue");
+        let finance_root = create_test_directory("finance");
+        let mut storage =
+            AppStorage::open(app_local_data_dir.clone()).expect("storage should initialize");
+
+        let created = storage
+            .create_project(CreateProjectRequest {
+                name: "Revenue Ops".to_string(),
+                root_folder: revenue_root.display().to_string(),
+                custom_instructions: Some("Always keep outputs inside the revenue folder.".to_string()),
+            })
+            .expect("project should be created");
+        assert_eq!(created.name, "Revenue Ops");
+
+        let updated = storage
+            .update_project(UpdateProjectRequest {
+                project_id: created.id.clone(),
+                name: None,
+                custom_instructions: Some("Prefer sanitized CSV outputs.".to_string()),
+            })
+            .expect("project should update");
+        assert_eq!(updated.custom_instructions, "Prefer sanitized CSV outputs.");
+
+        let with_memory = storage
+            .add_project_memory(AddProjectMemoryRequest {
+                project_id: created.id.clone(),
+                key: "preferred_output".to_string(),
+                value: "CSV".to_string(),
+                source: Some(ProjectMemorySource::User),
+            })
+            .expect("memory should be added");
+        assert_eq!(with_memory.memory.len(), 1);
+
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Revenue cleanup".to_string(),
+                objective: "Prepare a safe output".to_string(),
+                primary_workbook_path: Some(revenue_root.join("input.csv").display().to_string()),
+            })
+            .expect("session should be created");
+        let linked = storage
+            .link_session_to_project(LinkSessionToProjectRequest {
+                project_id: created.id.clone(),
+                session_id: session.id.clone(),
+            })
+            .expect("session should be linked");
+        assert_eq!(linked.session_ids, vec![session.id.clone()]);
+
+        let second_project = storage
+            .create_project(CreateProjectRequest {
+                name: "Finance Ops".to_string(),
+                root_folder: finance_root.display().to_string(),
+                custom_instructions: None,
+            })
+            .expect("second project should be created");
+        let reassigned = storage
+            .set_session_project(SetSessionProjectRequest {
+                session_id: session.id.clone(),
+                project_id: Some(second_project.id.clone()),
+            })
+            .expect("session should be reassigned");
+        let revenue_project = reassigned
+            .projects
+            .iter()
+            .find(|project| project.id == created.id)
+            .expect("revenue project should still exist");
+        assert!(revenue_project.session_ids.is_empty());
+        let finance_project = reassigned
+            .projects
+            .iter()
+            .find(|project| project.id == second_project.id)
+            .expect("finance project should exist");
+        assert_eq!(finance_project.session_ids, vec![session.id.clone()]);
+
+        let unassigned = storage
+            .set_session_project(SetSessionProjectRequest {
+                session_id: session.id.clone(),
+                project_id: None,
+            })
+            .expect("session should be unassigned");
+        assert!(unassigned
+            .projects
+            .iter()
+            .all(|project| !project.session_ids.iter().any(|session_id| session_id == &session.id)));
+
+        let reloaded = AppStorage::open(app_local_data_dir.clone()).expect("storage should reload");
+        let project = reloaded
+            .read_project(ReadProjectRequest {
+                project_id: created.id.clone(),
+            })
+            .expect("project should reload");
+        assert_eq!(project.memory.len(), 1);
+        assert_eq!(project.memory[0].key, "preferred_output");
+        assert!(project.session_ids.is_empty());
+
+        let list = reloaded.list_projects();
+        assert_eq!(list.projects.len(), 2);
+
+        fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
+        fs::remove_dir_all(revenue_root).expect("revenue root should clean up");
+        fs::remove_dir_all(finance_root).expect("finance root should clean up");
+    }
+
+    #[test]
+    fn create_project_requires_existing_root_folder() {
+        let mut storage = AppStorage::default();
+        let missing_root = env::temp_dir().join(format!("relay-agent-missing-root-{}", Uuid::new_v4()));
+
+        let error = storage
+            .create_project(CreateProjectRequest {
+                name: "Missing Root".to_string(),
+                root_folder: missing_root.display().to_string(),
+                custom_instructions: None,
+            })
+            .expect_err("missing root folder should be rejected");
+
+        assert!(error.contains("must point to an existing directory"));
+    }
+
+    #[test]
+    fn accepted_response_auto_learns_project_preferences() {
+        let mut storage = AppStorage::default();
+        let revenue_root = create_test_directory("revenue");
+        let project = storage
+            .create_project(CreateProjectRequest {
+                name: "Revenue Ops".to_string(),
+                root_folder: revenue_root.display().to_string(),
+                custom_instructions: None,
+            })
+            .expect("project should be created");
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Revenue cleanup".to_string(),
+                objective: "Prepare a safe output".to_string(),
+                primary_workbook_path: Some(revenue_root.join("input.csv").display().to_string()),
+            })
+            .expect("session should be created");
+        storage
+            .link_session_to_project(LinkSessionToProjectRequest {
+                project_id: project.id.clone(),
+                session_id: session.id.clone(),
+            })
+            .expect("session should be linked");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Draft response".to_string(),
+                objective: "Preview the output".to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+        storage
+            .generate_relay_packet(GenerateRelayPacketRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+            })
+            .expect("relay packet should be created");
+
+        let response = storage
+            .submit_copilot_response(SubmitCopilotResponseRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+                raw_response: copilot_response(
+                    "Prepare a save-copy output.",
+                    vec![
+                        json!({
+                            "tool": "table.filter_rows",
+                            "sheet": "Sheet1",
+                            "args": {
+                                "predicate": "[approved] == true",
+                                "outputSheet": "ApprovedRows"
+                            }
+                        }),
+                        json!({
+                            "tool": "text.replace",
+                            "args": {
+                                "path": revenue_root.join("exports/notes.txt").display().to_string(),
+                                "pattern": "draft",
+                                "replacement": "approved",
+                                "createBackup": true
+                            }
+                        }),
+                        json!({
+                            "tool": "file.copy",
+                            "args": {
+                                "sourcePath": revenue_root.join("source.csv").display().to_string(),
+                                "destPath": revenue_root.join("exports/revenue.cleaned.csv").display().to_string(),
+                                "overwrite": true
+                            }
+                        })
+                    ],
+                ),
+            })
+            .expect("response should be accepted");
+
+        assert!(response.accepted);
+        assert_eq!(response.auto_learned_memory.len(), 5);
+        assert_eq!(response.auto_learned_memory[0].source, ProjectMemorySource::Auto);
+        assert_eq!(response.auto_learned_memory[0].key, "create_backup_on_replace");
+        assert_eq!(response.auto_learned_memory[0].value, "true");
+        assert_eq!(response.auto_learned_memory[1].key, "overwrite_existing_files");
+        assert_eq!(response.auto_learned_memory[1].value, "true");
+        assert_eq!(response.auto_learned_memory[2].key, "preferred_output_folder");
+        assert_eq!(
+            response.auto_learned_memory[2].value,
+            revenue_root.join("exports").display().to_string()
+        );
+        assert_eq!(response.auto_learned_memory[3].key, "preferred_output_format");
+        assert_eq!(response.auto_learned_memory[3].value, "csv");
+        assert_eq!(response.auto_learned_memory[4].key, "preferred_output_sheet");
+        assert_eq!(response.auto_learned_memory[4].value, "ApprovedRows");
+
+        let project = storage
+            .read_project(ReadProjectRequest {
+                project_id: project.id,
+            })
+            .expect("project should be readable");
+        assert_eq!(project.memory.len(), 5);
+        assert!(project
+            .memory
+            .iter()
+            .all(|entry| entry.source == ProjectMemorySource::Auto));
+
+        fs::remove_dir_all(revenue_root).expect("revenue root should clean up");
+    }
+
+    #[test]
+    fn accepted_response_auto_learns_from_free_form_text() {
+        let mut storage = AppStorage::default();
+        let revenue_root = create_test_directory("revenue");
+        let project = storage
+            .create_project(CreateProjectRequest {
+                name: "Revenue Ops".to_string(),
+                root_folder: revenue_root.display().to_string(),
+                custom_instructions: None,
+            })
+            .expect("project should be created");
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Revenue cleanup".to_string(),
+                objective: "Prepare a safe output".to_string(),
+                primary_workbook_path: Some(revenue_root.join("input.csv").display().to_string()),
+            })
+            .expect("session should be created");
+        storage
+            .link_session_to_project(LinkSessionToProjectRequest {
+                project_id: project.id.clone(),
+                session_id: session.id.clone(),
+            })
+            .expect("session should be linked");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Draft response".to_string(),
+                objective: "Preview the output".to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+        storage
+            .generate_relay_packet(GenerateRelayPacketRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+            })
+            .expect("relay packet should be created");
+
+        let response = storage
+            .submit_copilot_response(SubmitCopilotResponseRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+                raw_response: json!({
+                    "version": "1.0",
+                    "summary": format!(
+                        "Save a CSV copy to {} and overwrite existing files.",
+                        revenue_root.join("exports/natural.cleaned.csv").display()
+                    ),
+                    "message": "Use output sheet: NaturalRows and create a backup.",
+                    "actions": [],
+                    "warnings": ["Keep a backup before replacing the original notes."],
+                    "followUpQuestions": []
+                })
+                .to_string(),
+            })
+            .expect("response should be accepted");
+
+        assert!(response.accepted);
+        assert_eq!(response.auto_learned_memory.len(), 5);
+        assert_eq!(response.auto_learned_memory[0].key, "create_backup_on_replace");
+        assert_eq!(response.auto_learned_memory[0].value, "true");
+        assert_eq!(response.auto_learned_memory[1].key, "overwrite_existing_files");
+        assert_eq!(response.auto_learned_memory[1].value, "true");
+        assert_eq!(response.auto_learned_memory[2].key, "preferred_output_folder");
+        assert_eq!(
+            response.auto_learned_memory[2].value,
+            revenue_root.join("exports").display().to_string()
+        );
+        assert_eq!(response.auto_learned_memory[3].key, "preferred_output_format");
+        assert_eq!(response.auto_learned_memory[3].value, "csv");
+        assert_eq!(response.auto_learned_memory[4].key, "preferred_output_sheet");
+        assert_eq!(response.auto_learned_memory[4].value, "NaturalRows");
+
+        fs::remove_dir_all(revenue_root).expect("revenue root should clean up");
+    }
+
     fn unique_test_app_data_dir() -> std::path::PathBuf {
         env::temp_dir().join(format!("relay-agent-storage-test-{}", Uuid::new_v4()))
+    }
+
+    fn create_test_directory(prefix: &str) -> std::path::PathBuf {
+        let path = env::temp_dir().join(format!("relay-agent-{prefix}-{}", Uuid::new_v4()));
+        fs::create_dir_all(&path).expect("test directory should be created");
+        path
     }
 
     fn write_test_csv(contents: &str) -> std::path::PathBuf {

@@ -1,9 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
+  addProjectMemoryRequestSchema,
   assessCopilotHandoffRequestSchema,
   assessCopilotHandoffResponseSchema,
   approvePlanRequestSchema,
   approvePlanResponseSchema,
+  createProjectRequestSchema,
   createSessionRequestSchema,
   executeReadActionsRequestSchema,
   executeReadActionsResponseSchema,
@@ -11,32 +13,43 @@ import {
   inspectWorkbookRequestSchema,
   inspectWorkbookResponseSchema,
   initializeAppResponseSchema,
+  linkSessionToProjectRequestSchema,
+  listProjectsResponseSchema,
   listSessionsResponseSchema,
   preflightWorkbookRequestSchema,
   preflightWorkbookResponseSchema,
   previewExecutionRequestSchema,
   previewExecutionResponseSchema,
+  recordScopeApprovalRequestSchema,
+  recordScopeApprovalResponseSchema,
+  projectSchema,
+  readProjectRequestSchema,
   readSessionRequestSchema,
   readTurnArtifactsRequestSchema,
   readTurnArtifactsResponseSchema,
   recordPlanProgressRequestSchema,
   relayPacketSchema,
+  removeProjectMemoryRequestSchema,
   respondToApprovalRequestSchema,
   respondToApprovalResponseSchema,
   runExecutionRequestSchema,
   runExecutionResponseSchema,
   sessionDetailSchema,
   sessionSchema,
+  setSessionProjectRequestSchema,
   startTurnRequestSchema,
   startTurnResponseSchema,
   submitCopilotResponseRequestSchema,
   submitCopilotResponseResponseSchema,
   planProgressRequestSchema,
   planProgressResponseSchema,
+  updateProjectRequestSchema,
+  type AddProjectMemoryRequest,
   type AssessCopilotHandoffRequest,
   type AssessCopilotHandoffResponse,
   type ApprovePlanRequest,
   type ApprovePlanResponse,
+  type CreateProjectRequest,
   type CreateSessionRequest,
   type ExecuteReadActionsRequest,
   type ExecuteReadActionsResponse,
@@ -45,27 +58,36 @@ import {
   type InspectWorkbookRequest,
   type InspectWorkbookResponse,
   type InitializeAppResponse,
+  type LinkSessionToProjectRequest,
+  type ListProjectsResponse,
   type ListSessionsResponse,
   type PreflightWorkbookRequest,
   type PreflightWorkbookResponse,
   type PreviewExecutionRequest,
   type PreviewExecutionResponse,
+  type RecordScopeApprovalRequest,
+  type RecordScopeApprovalResponse,
+  type Project,
+  type ReadProjectRequest,
   type ReadSessionRequest,
   type ReadTurnArtifactsRequest,
   type ReadTurnArtifactsResponse,
   type RecordPlanProgressRequest,
+  type RemoveProjectMemoryRequest,
   type RespondToApprovalRequest,
   type RespondToApprovalResponse,
   type RunExecutionRequest,
   type RunExecutionResponse,
   type Session,
   type SessionDetail,
+  type SetSessionProjectRequest,
   type StartTurnRequest,
   type StartTurnResponse,
   type SubmitCopilotResponseRequest,
   type SubmitCopilotResponseResponse,
   type PlanProgressRequest,
-  type PlanProgressResponse
+  type PlanProgressResponse,
+  type UpdateProjectRequest
 } from "@relay-agent/contracts";
 
 type Schema<T> = {
@@ -194,6 +216,87 @@ export function createSession(
     payload,
     createSessionRequestSchema,
     sessionSchema
+  );
+}
+
+export function createProject(
+  payload: CreateProjectRequest
+): Promise<Project> {
+  return invokeWithPayload(
+    "create_project",
+    payload,
+    createProjectRequestSchema,
+    projectSchema
+  );
+}
+
+export function listProjects(): Promise<ListProjectsResponse> {
+  return invokeWithoutPayload("list_projects", listProjectsResponseSchema);
+}
+
+export function readProject(
+  payload: ReadProjectRequest
+): Promise<Project> {
+  return invokeWithPayload(
+    "read_project",
+    payload,
+    readProjectRequestSchema,
+    projectSchema
+  );
+}
+
+export function updateProject(
+  payload: UpdateProjectRequest
+): Promise<Project> {
+  return invokeWithPayload(
+    "update_project",
+    payload,
+    updateProjectRequestSchema,
+    projectSchema
+  );
+}
+
+export function addProjectMemory(
+  payload: AddProjectMemoryRequest
+): Promise<Project> {
+  return invokeWithPayload(
+    "add_project_memory",
+    payload,
+    addProjectMemoryRequestSchema,
+    projectSchema
+  );
+}
+
+export function removeProjectMemory(
+  payload: RemoveProjectMemoryRequest
+): Promise<Project> {
+  return invokeWithPayload(
+    "remove_project_memory",
+    payload,
+    removeProjectMemoryRequestSchema,
+    projectSchema
+  );
+}
+
+export function linkSessionToProject(
+  payload: LinkSessionToProjectRequest
+): Promise<Project> {
+  return invokeWithPayload(
+    "link_session_to_project",
+    payload,
+    linkSessionToProjectRequestSchema,
+    projectSchema
+  );
+}
+
+export function setSessionProject(
+  payload: SetSessionProjectRequest
+): Promise<ListProjectsResponse> {
+  return invokeWithPayload(
+    "set_session_project",
+    payload,
+    setSessionProjectRequestSchema,
+    listProjectsResponseSchema
   );
 }
 
@@ -333,6 +436,17 @@ export function respondToApproval(
   );
 }
 
+export function recordScopeApproval(
+  payload: RecordScopeApprovalRequest
+): Promise<RecordScopeApprovalResponse> {
+  return invokeWithPayload(
+    "record_scope_approval",
+    payload,
+    recordScopeApprovalRequestSchema,
+    recordScopeApprovalResponseSchema
+  );
+}
+
 export function runExecution(
   payload: RunExecutionRequest
 ): Promise<RunExecutionResponse> {
@@ -348,7 +462,15 @@ export const relayAgentIpc = {
   pingDesktop,
   initializeApp,
   preflightWorkbook,
+  createProject,
   createSession,
+  listProjects,
+  readProject,
+  updateProject,
+  addProjectMemory,
+  removeProjectMemory,
+  linkSessionToProject,
+  setSessionProject,
   listSessions,
   readSession,
   readTurnArtifacts,
@@ -361,6 +483,7 @@ export const relayAgentIpc = {
   getPlanProgress,
   recordPlanProgress,
   previewExecution,
+  recordScopeApproval,
   respondToApproval,
   runExecution
 };

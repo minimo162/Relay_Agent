@@ -8,7 +8,7 @@ use std::{
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::models::{Session, SessionStatus, Turn};
+use crate::models::{Project, Session, SessionStatus, Turn};
 
 const STORAGE_ROOT_DIR: &str = "storage-v1";
 
@@ -25,6 +25,7 @@ pub struct StorageManifest {
 #[derive(Debug)]
 pub struct LoadedStorage {
     pub manifest: StorageManifest,
+    pub projects: HashMap<String, Project>,
     pub sessions: HashMap<String, Session>,
     pub turns: HashMap<String, Turn>,
 }
@@ -71,6 +72,28 @@ struct SessionIndexEntry {
     primary_workbook_path: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectIndexEntry {
+    id: String,
+    name: String,
+    root_folder: String,
+    created_at: String,
+    updated_at: String,
+}
+
+impl From<&Project> for ProjectIndexEntry {
+    fn from(project: &Project) -> Self {
+        Self {
+            id: project.id.clone(),
+            name: project.name.clone(),
+            root_folder: project.root_folder.clone(),
+            created_at: project.created_at.clone(),
+            updated_at: project.updated_at.clone(),
+        }
+    }
+}
+
 impl From<&Session> for SessionIndexEntry {
     fn from(session: &Session) -> Self {
         Self {
@@ -92,11 +115,18 @@ pub fn storage_root(app_local_data_dir: &Path) -> PathBuf {
 pub fn initialize_storage(app_local_data_dir: &Path, now: &str) -> Result<LoadedStorage, String> {
     let storage_root = storage_root(app_local_data_dir);
     let sessions_dir = sessions_dir(&storage_root);
+    let projects_dir = projects_dir(&storage_root);
 
     fs::create_dir_all(&sessions_dir).map_err(|error| {
         format!(
             "failed to create storage directory `{}`: {error}",
             sessions_dir.display()
+        )
+    })?;
+    fs::create_dir_all(&projects_dir).map_err(|error| {
+        format!(
+            "failed to create storage directory `{}`: {error}",
+            projects_dir.display()
         )
     })?;
 
@@ -118,10 +148,22 @@ pub fn initialize_storage(app_local_data_dir: &Path, now: &str) -> Result<Loaded
     if !index_path.exists() {
         write_json_atomic(&index_path, &Vec::<SessionIndexEntry>::new())?;
     }
+    let project_index_path = project_index_path(&storage_root);
+    if !project_index_path.exists() {
+        write_json_atomic(&project_index_path, &Vec::<ProjectIndexEntry>::new())?;
+    }
 
+    let project_index: Vec<ProjectIndexEntry> = read_json_file(&project_index_path)?;
     let session_index: Vec<SessionIndexEntry> = read_json_file(&index_path)?;
+    let mut projects = HashMap::new();
     let mut sessions = HashMap::new();
     let mut turns = HashMap::new();
+
+    for entry in project_index {
+        let project_path = project_file_path(&storage_root, &entry.id);
+        let project: Project = read_json_file(&project_path)?;
+        projects.insert(project.id.clone(), project);
+    }
 
     for entry in session_index {
         let session_path = session_file_path(&storage_root, &entry.id);
@@ -136,9 +178,35 @@ pub fn initialize_storage(app_local_data_dir: &Path, now: &str) -> Result<Loaded
 
     Ok(LoadedStorage {
         manifest,
+        projects,
         sessions,
         turns,
     })
+}
+
+pub fn persist_projects_state(
+    app_local_data_dir: &Path,
+    manifest: &mut StorageManifest,
+    projects: &HashMap<String, Project>,
+    now: &str,
+) -> Result<(), String> {
+    let storage_root = storage_root(app_local_data_dir);
+
+    for project in projects.values() {
+        write_json_atomic(&project_file_path(&storage_root, &project.id), project)?;
+    }
+
+    let mut project_index = projects
+        .values()
+        .map(ProjectIndexEntry::from)
+        .collect::<Vec<_>>();
+    project_index.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    write_json_atomic(&project_index_path(&storage_root), &project_index)?;
+
+    manifest.updated_at = now.to_string();
+    write_json_atomic(&manifest_path(&storage_root), manifest)?;
+
+    Ok(())
 }
 
 pub fn persist_session_state(
@@ -245,8 +313,20 @@ fn sessions_dir(storage_root: &Path) -> PathBuf {
     storage_root.join("sessions")
 }
 
+fn projects_dir(storage_root: &Path) -> PathBuf {
+    storage_root.join("projects")
+}
+
 fn session_index_path(storage_root: &Path) -> PathBuf {
     sessions_dir(storage_root).join("index.json")
+}
+
+fn project_index_path(storage_root: &Path) -> PathBuf {
+    projects_dir(storage_root).join("index.json")
+}
+
+fn project_file_path(storage_root: &Path, project_id: &str) -> PathBuf {
+    projects_dir(storage_root).join(format!("{project_id}.json"))
 }
 
 fn session_dir(storage_root: &Path, session_id: &str) -> PathBuf {

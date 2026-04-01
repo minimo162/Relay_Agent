@@ -1,6 +1,7 @@
 import type { PlanStep, ToolExecutionResult } from "@relay-agent/contracts";
 
 import {
+  buildProjectContext,
   buildCompressedContext,
   buildErrorRecoveryPrompt,
   buildFollowUpPromptV2,
@@ -13,6 +14,7 @@ import {
 } from "./prompt-templates";
 
 export {
+  buildProjectContext,
   buildCompressedContext,
   buildErrorRecoveryPrompt,
   buildFollowUpPromptV2,
@@ -31,6 +33,7 @@ export function buildStepExecutionPrompt(
     turn?: number;
     compressedHistory?: string;
     conversationHistory?: CopilotConversationTurn[];
+    projectContext?: string;
   }
 ): string {
   return buildStepExecutionPromptTemplate(originalTask, step, priorResults, options);

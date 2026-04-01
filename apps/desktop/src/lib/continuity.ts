@@ -121,6 +121,7 @@ type ContinuityState = {
   recentSessions: RecentSession[];
   recentFiles: RecentFile[];
   auditHistory: AuditHistoryEntry[];
+  selectedProjectId: string | null;
   uiMode: UiMode;
   browserAutomation: BrowserAutomationSettings;
 };
@@ -133,6 +134,7 @@ function createDefaultState(): ContinuityState {
     recentSessions: [],
     recentFiles: [],
     auditHistory: [],
+    selectedProjectId: null,
     uiMode: "delegation",
     browserAutomation: { ...DEFAULT_BROWSER_AUTOMATION_SETTINGS }
   };
@@ -158,6 +160,7 @@ function readState(): ContinuityState {
       recentSessions: normalizeRecentSessions(parsed.recentSessions),
       recentFiles: normalizeRecentFiles(parsed.recentFiles),
       auditHistory: normalizeAuditHistory(parsed.auditHistory),
+      selectedProjectId: asOptionalString(parsed.selectedProjectId),
       uiMode: normalizeUiMode(parsed.uiMode),
       browserAutomation: normalizeBrowserAutomationSettings(parsed.browserAutomation)
     };
@@ -855,6 +858,10 @@ export function loadUiMode(): UiMode {
   return readState().uiMode;
 }
 
+export function loadSelectedProjectId(): string | null {
+  return readState().selectedProjectId;
+}
+
 export function saveUiMode(mode: UiMode): UiMode {
   const nextMode = normalizeUiMode(mode);
 
@@ -864,6 +871,17 @@ export function saveUiMode(mode: UiMode): UiMode {
   }));
 
   return nextMode;
+}
+
+export function saveSelectedProjectId(projectId: string | null): string | null {
+  const nextProjectId = projectId?.trim() || null;
+
+  updateState((current) => ({
+    ...current,
+    selectedProjectId: nextProjectId
+  }));
+
+  return nextProjectId;
 }
 
 export function saveBrowserAutomationSettings(

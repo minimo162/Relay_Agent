@@ -24,6 +24,26 @@ type FollowUpResultSummary = {
   summary: string;
 };
 
+export function buildProjectContext(
+  customInstructions = "",
+  memory: Array<{ key: string; value: string }> = []
+): string {
+  const sections: string[] = [];
+
+  if (customInstructions.trim()) {
+    sections.push("## プロジェクト指示", customInstructions.trim());
+  }
+
+  if (memory.length > 0) {
+    sections.push(
+      "## 学習済み設定",
+      memory.map((entry) => `- ${entry.key}: ${entry.value}`).join("\n")
+    );
+  }
+
+  return sections.join("\n");
+}
+
 function truncate(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
     return value;
@@ -60,6 +80,7 @@ export function buildPlanningPromptV2(params: {
   readTools: string[];
   writeTools: string[];
   priorAttemptFeedback?: string;
+  projectContext?: string;
 }): string {
   const sections = [
     "# Relay Agent — 実行計画の作成",
@@ -74,6 +95,9 @@ export function buildPlanningPromptV2(params: {
     "3. 計画を立てる — どの順序で操作すればよいか？",
     "4. 安全を確認する — 書き込み操作は最小限か？",
     "",
+    ...(params.projectContext?.trim()
+      ? [params.projectContext.trim(), ""]
+      : []),
     "## ユーザーの目標",
     params.objective.trim(),
     "",
@@ -154,14 +178,16 @@ export function buildPlanningPrompt(
   objective: string,
   workbookContext: string,
   availableTools: ToolGroups,
-  priorAttemptFeedback?: string
+  priorAttemptFeedback?: string,
+  projectContext?: string
 ): string {
   return buildPlanningPromptV2({
     objective,
     workbookContext,
     readTools: availableTools.read,
     writeTools: availableTools.write,
-    priorAttemptFeedback
+    priorAttemptFeedback,
+    projectContext
   });
 }
 
@@ -226,8 +252,13 @@ export function buildFollowUpPromptV2(params: {
   turn: number;
   compressedHistory?: string;
   conversationHistory?: CopilotConversationTurn[];
+  projectContext?: string;
 }): string {
   const sections = ["Relay Agent task continuation. Return strict JSON only.", ""];
+
+  if (params.projectContext?.trim()) {
+    sections.push(params.projectContext.trim(), "");
+  }
 
   if (params.compressedHistory) {
     sections.push("## これまでの経緯（要約）", params.compressedHistory, "");
@@ -273,12 +304,17 @@ export function buildLoopContinuationPrompt(params: {
   priorMessage?: string;
   compressedHistory?: string;
   conversationHistory?: CopilotConversationTurn[];
+  projectContext?: string;
 }): string {
   const sections = [
     "You are continuing the same Relay Agent task.",
     "Return strict JSON only. Do not include markdown fences.",
     `Original task:\n${params.originalTask.trim()}`
   ];
+
+  if (params.projectContext?.trim()) {
+    sections.push(params.projectContext.trim());
+  }
 
   if (params.compressedHistory) {
     sections.push(`Compressed history:\n${params.compressedHistory}`);
@@ -335,6 +371,7 @@ export function buildStepExecutionPrompt(
     turn?: number;
     compressedHistory?: string;
     conversationHistory?: CopilotConversationTurn[];
+    projectContext?: string;
   } = {}
 ): string {
   return buildFollowUpPromptV2({
@@ -349,7 +386,8 @@ export function buildStepExecutionPrompt(
     })),
     turn: options.turn ?? 1,
     compressedHistory: options.compressedHistory,
-    conversationHistory: options.conversationHistory
+    conversationHistory: options.conversationHistory,
+    projectContext: options.projectContext
   });
 }
 

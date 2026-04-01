@@ -3720,35 +3720,35 @@
         "id": "150",
         "title": "設計 — プロジェクトモデル定義",
         "description": "「プロジェクト」概念（名前付きセッション群 + 共有コンテキスト + カスタム指示 + 蓄積メモリ）を設計する。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "118"
         ],
         "priority": "high",
         "details": "Project: id, name, rootFolder, customInstructions, memory (k-v), sessionIds[]。プロジェクトスコープのファイルアクセス制限。カスタム指示の全 Copilot プロンプトへの自動付加。docs/PROJECT_MODEL_DESIGN.md に文書化。",
         "testStrategy": "設計ドキュメントにモデル定義・機能・制約が含まれること。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T09:48:31Z",
         "subtasks": []
       },
       {
         "id": "151",
         "title": "Contracts & バックエンド — プロジェクトスキーマ & CRUD",
         "description": "Project スキーマを contracts に追加し、Rust バックエンドに CRUD を実装する。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "150"
         ],
         "priority": "high",
         "details": "projectSchema を contracts に追加。Tauri コマンド: create_project, list_projects, read_project, update_project。既存ローカル JSON 永続化でセッションと並列に保存。",
         "testStrategy": "cargo check, cargo test 通過。プロジェクト CRUD の IPC ラウンドトリップ。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T09:48:31Z",
         "subtasks": []
       },
       {
         "id": "152",
         "title": "フロントエンド — プロジェクト選択 & コンテキスト UI",
         "description": "デリゲーション UI にプロジェクト選択を追加し、プロジェクトコンテキスト（カスタム指示、メモリ）を折りたたみパネルで表示する。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "151",
           "131"
@@ -3756,35 +3756,35 @@
         "priority": "medium",
         "details": "プロジェクトドロップダウンまたはタブ。プロジェクトコンテキスト表示パネル。新規プロジェクト作成ダイアログ。",
         "testStrategy": "手動検証: プロジェクト選択、コンテキスト表示、新規作成。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T09:48:31Z",
         "subtasks": []
       },
       {
         "id": "153",
         "title": "バックエンド — プロジェクトメモリ（学習した設定の蓄積）",
         "description": "セッション間で学習した設定（UTF-8 使用、出力フォルダ等）を蓄積するプロジェクトレベルメモリを実装する。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "151"
         ],
         "priority": "medium",
         "details": "メモリ k-v ストアの追加・更新・参照 API。Copilot プロンプトにメモリコンテキストを自動挿入。セッション完了時に学習可能な設定を自動検出・提案。",
         "testStrategy": "メモリ追加→次セッションのプロンプトに反映されること。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T09:48:31Z",
         "subtasks": []
       },
       {
         "id": "154",
         "title": "フロントエンド — プロジェクトスコープのファイルアクセス制限",
         "description": "プロジェクト有効時にファイル操作を rootFolder サブツリーに制限し、範囲外アクセス時に警告を表示する。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "152"
         ],
         "priority": "medium",
         "details": "ファイル選択ダイアログを rootFolder にスコープ。エージェントが範囲外ファイルにアクセス時に警告バナー表示。ユーザーは警告を承認してオーバーライド可能。",
         "testStrategy": "手動検証: 範囲外ファイルアクセスで警告が表示されること。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T09:48:31Z",
         "subtasks": []
       },
       {

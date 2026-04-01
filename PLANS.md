@@ -363,6 +363,9 @@ Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `138`
 The next generic file-operations scope is captured in `docs/CODEX_PROMPT_15_FILE_OPERATIONS.md`.
 Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `144` through `149`. The contracts, Rust backend file/text/document tools, approval-preview UI, and regression coverage in tasks `144` through `148` are now implemented in source. The remaining closure item is task `149`, which still depends on the Windows + M365 manual checklist in `docs/FILE_OPS_E2E_VERIFICATION.md`.
 
+The next project-memory and scoped-context follow-up is captured in `docs/CODEX_PROMPT_16_PROJECT_MEMORY.md`.
+Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `150` through `154`. The project model design, contracts and backend CRUD, project selector UI, prompt-context injection, continuity persistence, project/session linkage through `sessionIds`, project-centric session browse/reassign/filter/bulk flows, accepted-response auto-learning of durable output preferences from both structured and free-form response content, project-scope file-access guards, the scope-override approval UI that feeds back into the existing preview/save gate, persisted response-linked scope-override audit artifacts, a dedicated current-turn approval history panel, and a project-scoped cross-session approval report are now implemented in source and documented in `docs/PROJECT_MODEL_DESIGN.md`.
+
 That UI follow-up preserves the current safety model:
 
 - preview before write

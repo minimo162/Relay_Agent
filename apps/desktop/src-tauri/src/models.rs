@@ -68,6 +68,13 @@ pub enum ApprovalDecision {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScopeApprovalSource {
+    Manual,
+    AgentLoop,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum CopilotHandoffStatus {
     Clear,
@@ -80,6 +87,35 @@ pub enum CopilotHandoffReasonSource {
     Path,
     Column,
     Objective,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ProjectMemorySource {
+    User,
+    Auto,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectMemoryEntry {
+    pub key: String,
+    pub value: String,
+    pub learned_at: String,
+    pub source: ProjectMemorySource,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    pub root_folder: String,
+    pub custom_instructions: String,
+    pub memory: Vec<ProjectMemoryEntry>,
+    pub session_ids: Vec<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -405,6 +441,22 @@ pub struct ValidationInspectionPayload {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ScopeOverrideInspectionRecord {
+    pub decision: ApprovalDecision,
+    pub decided_at: String,
+    pub root_folder: String,
+    pub violations: Vec<String>,
+    pub source: ScopeApprovalSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_artifact_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApprovalInspectionPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decision: Option<ApprovalDecision>,
@@ -416,6 +468,8 @@ pub struct ApprovalInspectionPayload {
     pub note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_artifact_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_override: Option<ScopeOverrideInspectionRecord>,
     pub original_file_guardrail: String,
     pub save_copy_guardrail: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -470,6 +524,64 @@ pub struct CreateSessionRequest {
     pub title: String,
     pub objective: String,
     pub primary_workbook_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateProjectRequest {
+    pub name: String,
+    pub root_folder: String,
+    pub custom_instructions: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadProjectRequest {
+    pub project_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProjectRequest {
+    pub project_id: String,
+    pub name: Option<String>,
+    pub custom_instructions: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddProjectMemoryRequest {
+    pub project_id: String,
+    pub key: String,
+    pub value: String,
+    pub source: Option<ProjectMemorySource>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveProjectMemoryRequest {
+    pub project_id: String,
+    pub key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkSessionToProjectRequest {
+    pub project_id: String,
+    pub session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSessionProjectRequest {
+    pub session_id: String,
+    pub project_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListProjectsResponse {
+    pub projects: Vec<Project>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -539,6 +651,18 @@ pub struct RespondToApprovalRequest {
     pub session_id: String,
     pub turn_id: String,
     pub decision: ApprovalDecision,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordScopeApprovalRequest {
+    pub session_id: String,
+    pub turn_id: String,
+    pub decision: ApprovalDecision,
+    pub root_folder: String,
+    pub violations: Vec<String>,
+    pub source: ScopeApprovalSource,
     pub note: Option<String>,
 }
 
@@ -632,6 +756,11 @@ pub enum TurnArtifactRecord {
         created_at: String,
         payload: PreviewArtifactPayload,
     },
+    ScopeApproval {
+        artifact_id: String,
+        created_at: String,
+        payload: ScopeApprovalArtifactPayload,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -660,6 +789,7 @@ pub struct SubmitCopilotResponseResponse {
     pub parsed_response: Option<CopilotTurnResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repair_prompt: Option<String>,
+    pub auto_learned_memory: Vec<ProjectMemoryEntry>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -715,6 +845,27 @@ pub struct RespondToApprovalResponse {
     pub turn: Turn,
     pub decision: ApprovalDecision,
     pub ready_for_execution: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScopeApprovalArtifactPayload {
+    pub decision: ApprovalDecision,
+    pub root_folder: String,
+    pub violations: Vec<String>,
+    pub source: ScopeApprovalSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_artifact_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordScopeApprovalResponse {
+    pub turn: Turn,
+    pub decision: ApprovalDecision,
+    pub recorded_at: String,
 }
 
 #[derive(Clone, Debug, Serialize)]

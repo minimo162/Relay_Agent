@@ -2500,3 +2500,176 @@ Observed result:
 - `docs/FILE_OPS_E2E_VERIFICATION.md` now captures the manual Windows + M365 validation checklist for task `149`.
 - `pnpm -C packages/contracts build`, `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop typecheck`, `pnpm check`, the four `tsx --test` suites, `cargo build`, `cargo test`, and `git diff --check` all pass after the file-operations follow-up.
 - Task Master now records tasks `144` through `148` as implemented. Task `149` remains pending because the manual Windows + M365 E2E checklist has not been executed in this environment.
+
+Project model and memory verification:
+
+```bash
+test -f docs/PROJECT_MODEL_DESIGN.md
+pnpm -C packages/contracts build
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop typecheck
+pnpm check
+cd apps/desktop && pnpm dlx tsx --test src/lib/prompt-templates.test.ts
+cd apps/desktop && pnpm dlx tsx --test src/lib/agent-loop-prompts.test.ts
+cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `docs/PROJECT_MODEL_DESIGN.md` now defines the project object model, persistence layout, prompt-injection rules, selector UX, and scope-guard behavior for tasks `150` through `154`.
+- `packages/contracts/src/project.ts`, `packages/contracts/src/index.ts`, and `packages/contracts/src/ipc.ts` now expose typed `Project` / `ProjectMemoryEntry` contracts plus the create/read/update/list and memory CRUD IPC request schemas.
+- `apps/desktop/src-tauri/src/models.rs`, `apps/desktop/src-tauri/src/persistence.rs`, `apps/desktop/src-tauri/src/storage.rs`, and `apps/desktop/src-tauri/src/project.rs` now persist project records in local JSON storage and serve project CRUD through registered Tauri commands.
+- `apps/desktop/src/lib/ipc.ts` and `apps/desktop/src/lib/continuity.ts` now provide frontend project IPC wrappers and persisted `selectedProjectId` continuity.
+- `apps/desktop/src/lib/prompt-templates.ts`, `apps/desktop/src/lib/agent-loop-prompts.ts`, and `apps/desktop/src/lib/agent-loop.ts` now inject project instructions/memory into planning and execution prompts, and block out-of-scope file actions during manual preview or autonomous execution.
+- `apps/desktop/src/lib/components/ProjectSelector.svelte` and `apps/desktop/src/routes/+page.svelte` now add project creation, selection, memory editing, and active-project context display to the desktop UI.
+- The updated prompt-template tests plus backend storage test coverage pass, including the new project persistence regression in `storage.rs`.
+- `pnpm -C packages/contracts build`, both typecheck runs, `pnpm check`, the prompt-template tests, `cargo build`, `cargo test`, and `git diff --check` all pass after the project-memory follow-up.
+- Task Master now records tasks `150` through `154` as implemented.
+
+Project linkage and auto-learning follow-up verification:
+
+```bash
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop typecheck
+pnpm check
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/project.rs`, `apps/desktop/src-tauri/src/storage.rs`, and `apps/desktop/src/lib/ipc.ts` now expose `link_session_to_project`, so `sessionIds` is persisted as a real project/session association instead of remaining unused.
+- `apps/desktop/src/routes/+page.svelte` now links a newly created session into the active project and refreshes the project strip so the association is visible immediately.
+- `apps/desktop/src-tauri/src/storage.rs` now auto-learns `preferred_output_folder` and `preferred_output_format` from accepted manual Copilot responses when the session is linked to a project, and returns those learned entries through `submit_copilot_response`.
+- `apps/desktop/src/lib/components/ProjectSelector.svelte` now shows linked session counts and project-level informational feedback when a session link or auto-learning event occurs.
+- Backend regression coverage now includes persisted `sessionIds` linkage and `source: auto` project memory extraction.
+- `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop typecheck`, `pnpm check`, `cargo test`, and `git diff --check` all pass after closing these Prompt 16 implementation gaps.
+
+Project session-management and broader auto-learning verification:
+
+```bash
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop typecheck
+pnpm check
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `packages/contracts/src/ipc.ts`, `apps/desktop/src-tauri/src/models.rs`, `apps/desktop/src-tauri/src/project.rs`, and `apps/desktop/src/lib/ipc.ts` now expose `set_session_project`, which removes a session from prior projects before attaching it to a new one or leaving it unassigned.
+- `apps/desktop/src/routes/+page.svelte` now loads `listSessions()` into project UI state and derives linked vs. available sessions for the selected project.
+- `apps/desktop/src/lib/components/ProjectSelector.svelte` now renders a project-centric session panel with linked-session browsing, open/detach actions, and an assign-existing-session control that also works as reassignment when the session already belongs to another project.
+- `apps/desktop/src-tauri/src/storage.rs` now broadens `source: auto` learning beyond output path/format to also infer `preferred_output_sheet`, `create_backup_on_replace`, and `overwrite_existing_files` from accepted structured actions.
+- Rust regression coverage now verifies project reassignment/unassignment persistence and the expanded auto-learned memory set.
+- `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop typecheck`, `pnpm check`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `git diff --check` all pass after this follow-up.
+
+Project filtering, bulk actions, and free-form auto-learning verification:
+
+```bash
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop typecheck
+pnpm check
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src/lib/components/ProjectSelector.svelte` now adds session search plus bulk attach/detach actions that operate on the currently filtered project session lists.
+- `apps/desktop/src/routes/+page.svelte` now derives filtered linked/available session sets from the search query and reuses `set_session_project` for bulk reassignment without introducing a separate project screen.
+- `apps/desktop/src-tauri/src/storage.rs` now learns project preferences from free-form accepted Copilot text in addition to structured action args, using `summary`, `message`, `warnings`, and `followUpQuestions` as heuristic signals.
+- Rust regression coverage now includes `accepted_response_auto_learns_from_free_form_text`, which verifies output path, output format, output sheet, backup preference, and overwrite preference extraction from natural-language response content.
+- `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop typecheck`, `pnpm check`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `git diff --check` all pass after this follow-up.
+
+Project scope approval UI verification:
+
+```bash
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop typecheck
+pnpm check
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src/lib/agent-loop.ts` now surfaces project-scope warnings as structured approval payloads that include the raw Copilot response and all violating paths, so the UI can continue from the blocked turn instead of only failing.
+- `apps/desktop/src/routes/+page.svelte` now opens a dedicated scope-override approval state for both pasted/manual responses and autonomous Copilot turns, and an approved override flows into the existing preview/save approval path instead of bypassing it.
+- Plan execution no longer marks the current write step failed when the only issue is a pending scope override; approving the override prepares the current response for preview and then resumes the remaining plan steps after save.
+- `apps/desktop/src/lib/components/InterventionPanel.svelte` and `apps/desktop/src/lib/components/ApprovalGate.svelte` now render a dedicated project-scope approval card in delegation mode while reusing the same approval control for the manual Studio flow.
+- `docs/PROJECT_MODEL_DESIGN.md` and `PLANS.md` now reflect that the previously missing scope-override approval UI is implemented, with the remaining limitation reduced to persistence/audit depth rather than the absence of the approval step itself.
+- `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop typecheck`, `pnpm check`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `git diff --check` all pass after this follow-up.
+
+Persisted scope approval audit verification:
+
+```bash
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop typecheck
+pnpm check
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `packages/contracts/src/ipc.ts`, `apps/desktop/src/lib/ipc.ts`, `apps/desktop/src-tauri/src/models.rs`, `apps/desktop/src-tauri/src/execution.rs`, and `apps/desktop/src-tauri/src/lib.rs` now expose `record_scope_approval`, a dedicated IPC path for persisting project-scope override decisions.
+- `apps/desktop/src-tauri/src/storage.rs` now writes `scope-approval` artifacts, records matching turn-log events, and ties each scope override to the current response artifact so stale approvals are not reused after a later response submission.
+- The approval inspection payload now includes an optional `scopeOverride` record, and write approvals are also tied to the current preview artifact so persisted turn details stay aligned with the latest preview/response pair.
+- `apps/desktop/src/routes/+page.svelte` now records the approved project-scope override before continuing into preview generation, so the override is no longer a frontend-only state transition.
+- Rust regression coverage now includes `persists_scope_override_approval_as_a_turn_artifact`, which verifies that the saved artifact and turn-inspection payload survive reload.
+- `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop typecheck`, `pnpm check`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `git diff --check` all pass after this follow-up.
+
+Dedicated approval history panel verification:
+
+```bash
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop typecheck
+pnpm check
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src/routes/+page.svelte` now loads `read_turn_artifacts` into a dedicated expert-side approval history panel for the current turn instead of leaving scope-override records visible only through indirect inspection payloads.
+- The new panel shows the latest write-approval state plus the full list of persisted `scope-approval` artifacts for the current turn, including decision, source, root folder, violating paths, timestamp, note, and artifact id.
+- The inspection view refreshes after setup, response submission, preview generation, scope-override approval, and save execution so the audit panel tracks the latest persisted turn state without a restart.
+- `docs/PROJECT_MODEL_DESIGN.md` and `PLANS.md` now describe the dedicated current-turn approval history panel as implemented, leaving only the cross-session reporting view out of scope.
+- `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop typecheck`, `pnpm check`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `git diff --check` all pass after this follow-up.
+
+Cross-session approval reporting verification:
+
+```bash
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop typecheck
+pnpm check
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src/routes/+page.svelte` now builds a project-scoped cross-session approval report by combining `read_session` and `read_turn_artifacts` for the linked sessions of the selected project, without widening the backend command surface.
+- The project strip now renders a dedicated `横断承認レポート` card that shows the latest turn per linked session, including write-approval state, scope-override count, latest scope decision and source, turn status, timestamps, output path, and a direct jump back into the session.
+- The report respects the existing session search query, refreshes after project/session linkage changes and after turn lifecycle changes in the active session, and guards against stale async results when the selected project changes mid-load.
+- `docs/PROJECT_MODEL_DESIGN.md` and `PLANS.md` now reflect that both current-turn and cross-session approval audit views are implemented, reducing the remaining limitation to local-only reporting rather than missing visibility.
+- `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop typecheck`, `pnpm check`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `git diff --check` all pass after this follow-up.
+
+Project scope hardening follow-up:
+
+```bash
+pnpm --filter @relay-agent/desktop typecheck
+cd apps/desktop && pnpm dlx tsx --test src/lib/project-scope.test.ts
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/storage.rs` now requires `create_project.rootFolder` to point to an existing directory, which keeps project-scope guards anchored to a real local root without adding a custom length cap to `customInstructions`.
+- `apps/desktop/src/lib/project-scope.ts` now holds the shared path-scope helpers, and `apps/desktop/src/routes/+page.svelte` consumes `validateProjectScopeActions(...)` instead of keeping the check as an untested local closure.
+- `apps/desktop/src/lib/project-scope.test.ts` covers Windows-style path normalization, supported file-path argument extraction, and duplicate out-of-scope path collapse.
+- `pnpm --filter @relay-agent/desktop typecheck`, `cd apps/desktop && pnpm dlx tsx --test src/lib/project-scope.test.ts`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `git diff --check` pass after this follow-up.

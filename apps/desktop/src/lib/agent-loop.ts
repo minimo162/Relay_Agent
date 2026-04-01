@@ -8,6 +8,7 @@ import {
 import { sendToCopilot, type BrowserCommandProgress } from "./copilot-browser";
 import { executeReadActions } from "./ipc";
 import { buildStepExecutionPrompt } from "./agent-loop-prompts";
+import { extractActionFilePaths, isWithinProjectScope } from "./project-scope";
 import {
   requestCopilotTurn,
   throwIfAborted,
@@ -41,6 +42,8 @@ export type AgentLoopConfig = {
   maxRetries?: number;
   maxFullTurns?: number;
   initialConversationHistory?: CopilotConversationTurn[];
+  projectContext?: string;
+  projectRootFolder?: string;
   runtime?: AgentLoopRuntime;
 };
 
@@ -79,7 +82,54 @@ export type AgentLoopCallbacks = {
   onPlanProposed?: (plan: ExecutionPlan) => void;
   onRetry?: CopilotRetryCallbacks["onRetry"];
   onManualFallback?: CopilotRetryCallbacks["onManualFallback"];
+  onScopeWarning?: (details: {
+    violations: string[];
+    rootFolder: string;
+    tool: string;
+    rawResponse: string;
+    parsedResponse: CopilotTurnResponse;
+  }) => void;
 };
+
+function enforceProjectScope(
+  actions: CopilotTurnResponse["actions"],
+  rootFolder: string,
+  callbacks: AgentLoopCallbacks,
+  rawResponse: string,
+  parsedResponse: CopilotTurnResponse
+): void {
+  const violations: Array<{ filePath: string; tool: string }> = [];
+
+  for (const action of actions) {
+    for (const filePath of extractActionFilePaths(action as {
+      tool: string;
+      args: Record<string, unknown>;
+    })) {
+      if (isWithinProjectScope(filePath, rootFolder)) {
+        continue;
+      }
+
+      if (!violations.some((candidate) => candidate.filePath === filePath)) {
+        violations.push({ filePath, tool: action.tool });
+      }
+    }
+  }
+
+  if (violations.length === 0) {
+    return;
+  }
+
+  callbacks.onScopeWarning?.({
+    violations: violations.map((violation) => violation.filePath),
+    rootFolder,
+    tool: violations[0]?.tool ?? "unknown",
+    rawResponse,
+    parsedResponse
+  });
+  throw new Error(
+    `プロジェクトスコープ外のファイルアクセスを検出しました: ${violations[0]?.filePath ?? "unknown"}`
+  );
+}
 
 function resolveRuntime(runtime?: AgentLoopRuntime): Required<AgentLoopRuntime> {
   return {
@@ -148,6 +198,15 @@ export async function runAgentLoop(
 
     const { rawResponse, parsedResponse, retryCount } = copilotResult;
     callbacks.onCopilotResponse?.(turn, parsedResponse, rawResponse);
+    if (config.projectRootFolder?.trim()) {
+      enforceProjectScope(
+        parsedResponse.actions,
+        config.projectRootFolder,
+        callbacks,
+        rawResponse,
+        parsedResponse
+      );
+    }
 
     if (config.planningEnabled && parsedResponse.status === "plan_proposed") {
       if (!parsedResponse.executionPlan) {
@@ -247,7 +306,8 @@ export async function runAgentLoop(
         turnSummaries,
         config.maxFullTurns ?? 2
       ),
-      conversationHistory
+      conversationHistory,
+      projectContext: config.projectContext
     });
   }
 
@@ -292,7 +352,8 @@ export async function resumeAgentLoopWithPlan(
           turnSummaries,
           config.maxFullTurns ?? 2
         ),
-        conversationHistory
+        conversationHistory,
+        projectContext: config.projectContext
       }
     );
     callbacks.onTurnStart?.(turn, stepPrompt);
@@ -328,6 +389,15 @@ export async function resumeAgentLoopWithPlan(
 
     const { rawResponse, parsedResponse, retryCount } = copilotResult;
     callbacks.onCopilotResponse?.(turn, parsedResponse, rawResponse);
+    if (config.projectRootFolder?.trim()) {
+      enforceProjectScope(
+        parsedResponse.actions,
+        config.projectRootFolder,
+        callbacks,
+        rawResponse,
+        parsedResponse
+      );
+    }
 
     if (step.phase === "write") {
       callbacks.onWriteStepReached?.(step, index);

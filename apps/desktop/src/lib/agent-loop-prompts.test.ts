@@ -13,10 +13,13 @@ test("buildPlanningPrompt includes objective, tools, and plan template", () => {
     {
       read: ["workbook.inspect", "sheet.preview"],
       write: ["table.filter_rows", "workbook.save_copy"]
-    }
+    },
+    undefined,
+    "## プロジェクト指示\n出力は /tmp/project 配下に限定"
   );
 
   assert.match(prompt, /approved が true の行だけ残してください/);
+  assert.match(prompt, /プロジェクト指示/);
   assert.match(prompt, /workbook\.inspect/);
   assert.match(prompt, /table\.filter_rows/);
   assert.match(prompt, /"status": "plan_proposed"/);

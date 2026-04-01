@@ -3,6 +3,7 @@ mod execution;
 mod file_ops;
 mod models;
 mod persistence;
+mod project;
 mod relay;
 mod session;
 mod startup;
@@ -35,6 +36,14 @@ pub fn run() {
             app::inspect_workbook,
             app::initialize_app,
             session::create_session,
+            project::create_project,
+            project::list_projects,
+            project::read_project,
+            project::update_project,
+            project::add_project_memory,
+            project::link_session_to_project,
+            project::remove_project_memory,
+            project::set_session_project,
             session::list_sessions,
             session::read_session,
             session::read_turn_artifacts,
@@ -48,6 +57,7 @@ pub fn run() {
             execution::record_plan_progress,
             execution::preview_execution,
             execution::respond_to_approval,
+            execution::record_scope_approval,
             execution::run_execution
         ])
         .run(tauri::generate_context!())

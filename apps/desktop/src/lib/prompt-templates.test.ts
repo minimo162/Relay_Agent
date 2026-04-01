@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildProjectContext,
   buildCompressedContext,
   buildErrorRecoveryPrompt,
   buildFollowUpPromptV2,
@@ -22,6 +23,16 @@ test("buildPlanningPromptV2 includes reasoning instructions and JSON example", (
   assert.match(prompt, /workbook\.inspect/);
   assert.match(prompt, /"status": "plan_proposed"/);
   assert.match(prompt, /"executionPlan"/);
+});
+
+test("buildProjectContext formats instructions and memory entries", () => {
+  const context = buildProjectContext("CSV を優先する", [
+    { key: "delimiter", value: "comma" }
+  ]);
+
+  assert.match(context, /プロジェクト指示/);
+  assert.match(context, /CSV を優先する/);
+  assert.match(context, /delimiter: comma/);
 });
 
 test("buildCompressedContext compresses older turns and keeps latest turns out of summary", () => {
@@ -73,6 +84,7 @@ test("buildFollowUpPromptV2 includes compressed history and prior results", () =
     priorResults: [{ tool: "workbook.inspect", ok: true, summary: "列: approved, amount" }],
     turn: 3,
     compressedHistory: "これまでの経緯:\n- ターン 1: workbook.inspect → 列を確認",
+    projectContext: "## プロジェクト指示\n出力はルート配下に限定する",
     conversationHistory: [
       {
         role: "user",
@@ -83,6 +95,7 @@ test("buildFollowUpPromptV2 includes compressed history and prior results", () =
   });
 
   assert.match(prompt, /これまでの経緯/);
+  assert.match(prompt, /プロジェクト指示/);
   assert.match(prompt, /直近の会話履歴/);
   assert.match(prompt, /workbook\.inspect/);
   assert.match(prompt, /sheet\.preview を使って/);
