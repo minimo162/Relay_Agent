@@ -216,6 +216,7 @@ export const previewArtifactPayloadSchema = z.object({
   diffSummary: diffSummarySchema,
   requiresApproval: z.boolean(),
   warnings: z.array(z.string()).default([]),
+  artifacts: z.array(outputArtifactSchema).default([]),
   fileWriteActions: z
     .array(
       z.union([
@@ -226,6 +227,15 @@ export const previewArtifactPayloadSchema = z.object({
       ])
     )
     .default([])
+});
+
+export const executionArtifactPayloadSchema = z.object({
+  executed: z.boolean(),
+  outputPath: z.string().trim().min(1).optional(),
+  outputPaths: z.array(z.string().trim().min(1)).default([]),
+  artifacts: z.array(outputArtifactSchema).default([]),
+  warnings: z.array(z.string()).default([]),
+  reason: z.string().trim().min(1).optional()
 });
 
 export const scopeApprovalArtifactPayloadSchema = z.object({
@@ -422,6 +432,10 @@ export const turnArtifactSchema = z.discriminatedUnion("artifactType", [
   turnArtifactBaseSchema.extend({
     artifactType: z.literal("preview"),
     payload: previewArtifactPayloadSchema
+  }),
+  turnArtifactBaseSchema.extend({
+    artifactType: z.literal("execution"),
+    payload: executionArtifactPayloadSchema
   }),
   turnArtifactBaseSchema.extend({
     artifactType: z.literal("scope-approval"),
@@ -798,6 +812,7 @@ export type ReadSessionRequest = z.infer<typeof readSessionRequestSchema>;
 export type SessionDetail = z.infer<typeof sessionDetailSchema>;
 export type ReadTurnArtifactsRequest = z.infer<typeof readTurnArtifactsRequestSchema>;
 export type PreviewArtifactPayload = z.infer<typeof previewArtifactPayloadSchema>;
+export type ExecutionArtifactPayload = z.infer<typeof executionArtifactPayloadSchema>;
 export type TurnInspectionSourceType = z.infer<typeof turnInspectionSourceTypeSchema>;
 export type TurnInspectionUnavailableReason = z.infer<
   typeof turnInspectionUnavailableReasonSchema

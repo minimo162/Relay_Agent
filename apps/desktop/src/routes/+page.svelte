@@ -161,6 +161,14 @@
     ReadTurnArtifactsResponse["artifacts"][number],
     { artifactType: "scope-approval" }
   >;
+  type PreviewArtifactRecord = Extract<
+    ReadTurnArtifactsResponse["artifacts"][number],
+    { artifactType: "preview" }
+  >;
+  type ExecutionArtifactRecord = Extract<
+    ReadTurnArtifactsResponse["artifacts"][number],
+    { artifactType: "execution" }
+  >;
   type ProjectApprovalAuditRow = {
     sessionId: string;
     sessionTitle: string;
@@ -240,6 +248,32 @@
     }
 
     return artifacts;
+  }
+
+  function collectInspectionOutputArtifacts(
+    artifacts: ReadTurnArtifactsResponse["artifacts"]
+  ): OutputArtifact[] {
+    const executionArtifact = [...artifacts]
+      .reverse()
+      .find(
+        (artifact): artifact is ExecutionArtifactRecord =>
+          artifact.artifactType === "execution"
+      );
+    if (executionArtifact?.payload.artifacts?.length) {
+      return executionArtifact.payload.artifacts;
+    }
+
+    const previewArtifact = [...artifacts]
+      .reverse()
+      .find(
+        (artifact): artifact is PreviewArtifactRecord =>
+          artifact.artifactType === "preview"
+      );
+    if (previewArtifact?.payload.artifacts?.length) {
+      return previewArtifact.payload.artifacts;
+    }
+
+    return [];
   }
 
   // Exact args structure for each tool. This is embedded verbatim in the Copilot
@@ -411,6 +445,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let expertDetailsOpen = false;
   let turnInspectionDetails: TurnDetailsViewModel | null = null;
   let turnInspectionArtifacts: ReadTurnArtifactsResponse["artifacts"] = [];
+  let inspectionOutputArtifacts: OutputArtifact[] = [];
   let scopeApprovalArtifacts: ScopeApprovalArtifactRecord[] = [];
   let turnInspectionStorageMode = "";
   let turnInspectionLoading = false;
@@ -3756,6 +3791,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       artifact: ReadTurnArtifactsResponse["artifacts"][number]
     ): artifact is ScopeApprovalArtifactRecord => artifact.artifactType === "scope-approval"
   );
+  $: inspectionOutputArtifacts = collectInspectionOutputArtifacts(turnInspectionArtifacts);
   $: if (expertDetailsOpen && sessionId && turnId && turnInspectionRefreshNonce >= 0) {
     void refreshTurnInspection();
   }
@@ -4912,6 +4948,30 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         </div>
       {:else}
         <p class="expert-copy">承認履歴はまだありません。</p>
+      {/if}
+    </div>
+
+    <div class="expert-section">
+      <div class="expert-section-header">
+        <h3 class="expert-title">出力アーティファクト</h3>
+      </div>
+
+      {#if !sessionId || !turnId}
+        <p class="expert-copy">turn が作成されると、ここに preview / execution のアーティファクトを表示します。</p>
+      {:else if turnInspectionLoading}
+        <p class="expert-copy">出力アーティファクトを読み込んでいます…</p>
+      {:else if turnInspectionError}
+        <p class="field-warn">⚠ {turnInspectionError}</p>
+      {:else if inspectionOutputArtifacts.length > 0}
+        <div class="inspection-artifacts">
+          <ArtifactPreview artifacts={inspectionOutputArtifacts} />
+        </div>
+      {:else if turnInspectionDetails?.execution.payload?.outputArtifactId}
+        <p class="expert-copy">
+          アーティファクト ID: {turnInspectionDetails.execution.payload.outputArtifactId}
+        </p>
+      {:else}
+        <p class="expert-copy">この turn ではまだ出力アーティファクトは記録されていません。</p>
       {/if}
     </div>
 

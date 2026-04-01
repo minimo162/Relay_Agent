@@ -2783,3 +2783,21 @@ Observed result:
 - Text multi-output is now a summary report instead of a raw file copy, which makes the `text` format match the “filtered CSV + text report” intent from the artifact-output prompt.
 - Regression coverage now includes `run_execution_multi_uses_requested_output_specs_without_creating_default_output`, proving that custom JSON and text outputs are produced without leaving behind the Copilot-proposed default save-copy path.
 - `pnpm --filter @relay-agent/desktop typecheck`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `git diff --check` pass after this refinement.
+
+Artifact output fix follow-up:
+
+```bash
+pnpm -C packages/contracts build
+pnpm --filter @relay-agent/desktop typecheck
+cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/quality_validator.rs` now parses sampled CSV rows with a quoted-field-aware `split_csv_line(...)` helper instead of naive `split(',')`, so empty-value checks and CSV-injection detection no longer mis-handle `"a,b"` style fields.
+- The quality validator now samples up to 10 MB per file, adds a warning when only the leading sample was inspected, and includes regression coverage for quoted commas and large-file sampling.
+- `packages/contracts/src/ipc.ts`, `apps/desktop/src-tauri/src/models.rs`, and `apps/desktop/src-tauri/src/storage.rs` now expose persisted `execution` artifacts through `read_turn_artifacts`, including their `OutputArtifact[]` payload.
+- `apps/desktop/src/routes/+page.svelte` now renders a dedicated expert-side `出力アーティファクト` inspection section that uses `ArtifactPreview` for the latest execution artifacts and falls back to the stored artifact id only when content is unavailable.
+- This follow-up is a correctness fix for the existing task `160–163` surface rather than a new Task Master milestone, so `.taskmaster/tasks/tasks.json` was left unchanged.

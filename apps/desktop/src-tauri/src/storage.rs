@@ -17,9 +17,9 @@ use crate::models::{
     ApprovePlanRequest, ApprovePlanResponse, ArtifactType, AssessCopilotHandoffRequest,
     AssessCopilotHandoffResponse, CopilotHandoffReason, CopilotHandoffReasonSource,
     CopilotHandoffStatus, CopilotTurnResponse, CreateProjectRequest, CreateSessionRequest,
-    DiffSummary, ExecuteReadActionsRequest, ExecuteReadActionsResponse, ExecutionInspectionPayload,
-    ExecutionInspectionState, ExecutionPlan, GenerateRelayPacketRequest, OutputArtifact,
-    OutputFormat, OutputSpec,
+    DiffSummary, ExecuteReadActionsRequest, ExecuteReadActionsResponse,
+    ExecutionArtifactPayload, ExecutionInspectionPayload, ExecutionInspectionState,
+    ExecutionPlan, GenerateRelayPacketRequest, OutputArtifact, OutputFormat, OutputSpec,
     LinkSessionToProjectRequest, ListProjectsResponse, PacketInspectionPayload,
     PlanProgressRequest, PlanProgressResponse, PlanStepState, PlanStepStatus, PlanningContext,
     PlanningContextToolGroups, PreviewArtifactPayload, PreviewExecutionRequest,
@@ -176,20 +176,6 @@ struct ScopeApprovalArtifactRecordPayload {
     source: ScopeApprovalSource,
     note: Option<String>,
     response_artifact_id: Option<String>,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ExecutionArtifactPayload {
-    executed: bool,
-    output_path: Option<String>,
-    #[serde(default)]
-    output_paths: Vec<String>,
-    #[serde(default)]
-    artifacts: Vec<OutputArtifact>,
-    warnings: Vec<String>,
-    reason: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -3281,6 +3267,15 @@ impl AppStorage {
                 let payload: PreviewArtifactPayload =
                     persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
                 Ok(Some(TurnArtifactRecord::Preview {
+                    artifact_id: meta.id.clone(),
+                    created_at: meta.created_at.clone(),
+                    payload,
+                }))
+            }
+            "execution" => {
+                let payload: ExecutionArtifactPayload =
+                    persistence::read_artifact_payload(app_local_data_dir, session_id, &meta.id)?;
+                Ok(Some(TurnArtifactRecord::Execution {
                     artifact_id: meta.id.clone(),
                     created_at: meta.created_at.clone(),
                     payload,
@@ -6987,6 +6982,28 @@ mod tests {
             ])
         );
         assert_eq!(execution_output_path.as_deref(), Some(output_path.as_str()));
+
+        let artifact_response = reloaded
+            .read_turn_artifacts(&session_id, &turn_id)
+            .expect("turn artifacts should be readable");
+        assert!(artifact_response
+            .artifacts
+            .iter()
+            .any(|artifact| matches!(artifact, TurnArtifactRecord::Execution { .. })));
+        let execution_artifact = artifact_response
+            .artifacts
+            .iter()
+            .find_map(|artifact| match artifact {
+                TurnArtifactRecord::Execution { payload, .. } => Some(payload),
+                _ => None,
+            })
+            .expect("execution artifact payload should exist");
+        assert!(execution_artifact.executed);
+        assert_eq!(
+            execution_artifact.output_path.as_deref(),
+            Some(output_path.as_str())
+        );
+        assert!(!execution_artifact.artifacts.is_empty());
 
         let session_log = storage_root
             .join("sessions")

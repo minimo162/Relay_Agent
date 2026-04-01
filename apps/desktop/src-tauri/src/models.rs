@@ -432,6 +432,22 @@ pub struct PreviewArtifactPayload {
     pub artifacts: Vec<OutputArtifact>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionArtifactPayload {
+    pub executed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_path: Option<String>,
+    #[serde(default)]
+    pub output_paths: Vec<String>,
+    #[serde(default)]
+    pub artifacts: Vec<OutputArtifact>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum TurnInspectionSourceType {
@@ -985,6 +1001,11 @@ pub enum TurnArtifactRecord {
         artifact_id: String,
         created_at: String,
         payload: PreviewArtifactPayload,
+    },
+    Execution {
+        artifact_id: String,
+        created_at: String,
+        payload: ExecutionArtifactPayload,
     },
     ScopeApproval {
         artifact_id: String,
