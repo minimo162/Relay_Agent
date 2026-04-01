@@ -2,7 +2,13 @@
   import type { DiffSummary, PlanStep } from "@relay-agent/contracts";
 
   import ApprovalGate from "./ApprovalGate.svelte";
+  import FileOpPreview from "./FileOpPreview.svelte";
   import SheetDiffCard from "./SheetDiffCard.svelte";
+
+  type FileOpPreviewAction = {
+    tool: string;
+    args: Record<string, unknown>;
+  };
 
   export let statusLabel = "";
   export let planReviewVisible = false;
@@ -16,6 +22,7 @@
   export let previewOutputPath = "";
   export let previewWarnings: string[] = [];
   export let previewSheetDiffs: DiffSummary["sheets"] = [];
+  export let fileWriteActions: FileOpPreviewAction[] = [];
   export let reviewStepAvailable = false;
   export let busy = false;
   export let errorMessage = "";
@@ -110,12 +117,23 @@
     <div class="intervention-card">
       <h4>書き込み前の確認</h4>
       <p>{previewSummary}</p>
-      <p class="intervention-meta">影響行数: {previewAffectedRows} / 保存先: {previewOutputPath || "自動決定"}</p>
+      <p class="intervention-meta">
+        {#if fileWriteActions.length > 0 && previewSheetDiffs.length === 0}
+          対象操作: {fileWriteActions.length} / 保存先: {previewOutputPath || "該当なし"}
+        {:else}
+          影響行数: {previewAffectedRows} / 保存先: {previewOutputPath || "自動決定"}
+        {/if}
+      </p>
       {#if previewWarnings.length > 0}
         <div class="warnings">
           {#each previewWarnings as warning}
             <p class="field-warn">⚠ {warning}</p>
           {/each}
+        </div>
+      {/if}
+      {#if fileWriteActions.length > 0}
+        <div class="sheet-diff-grid">
+          <FileOpPreview actions={fileWriteActions} />
         </div>
       {/if}
       <div class="sheet-diff-grid">

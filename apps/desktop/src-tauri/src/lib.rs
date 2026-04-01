@@ -1,5 +1,6 @@
 mod app;
 mod execution;
+mod file_ops;
 mod models;
 mod persistence;
 mod relay;

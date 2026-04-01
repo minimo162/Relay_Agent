@@ -3104,7 +3104,7 @@
         "id": "123",
         "title": "E2E 検証 — 自律プラン実行（手動）",
         "description": "実際の M365 Copilot を使った自律プラン実行フローの手動 E2E 検証。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "117",
           "118",
@@ -3113,7 +3113,7 @@
         "priority": "high",
         "details": "シナリオ: (1) CSV フィルタタスクで 3 ステッププラン生成・承認・全ステップ実行。(2) write アクション含むプランで承認ゲート停止。(3) プラン修正後の再実行。(4) 実行中キャンセル。(5) read/write 混在プランの自律実行。",
         "testStrategy": "docs/AUTONOMOUS_EXECUTION_E2E_VERIFICATION.md に記録。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T05:05:00Z",
         "subtasks": []
       },
       {
@@ -3535,7 +3535,7 @@
         "id": "137",
         "title": "E2E 検証 — デリゲーション UI（手動）",
         "description": "実際の M365 Copilot を使ったデリゲーション UI の手動 E2E 検証。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "131",
           "133"
@@ -3543,7 +3543,7 @@
         "priority": "high",
         "details": "シナリオ: (1) ファイル参照付き目標入力でエージェント開始。(2) write ステップで承認。(3) 実行中キャンセル。(4) ブラウザ自動化失敗時の手動フォールバック。(5) 再起動後のデリゲーションドラフト復帰。",
         "testStrategy": "docs/DELEGATION_UI_E2E_VERIFICATION.md に記録。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T05:05:00Z",
         "subtasks": []
       },
       {
@@ -3620,7 +3620,7 @@
         "id": "143",
         "title": "E2E 検証 — 強化 Copilot 連携（手動）",
         "description": "改善された Copilot 連携の実際の M365 Copilot での手動検証。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "138",
           "139",
@@ -3629,52 +3629,52 @@
         "priority": "high",
         "details": "多ターン会話品質、コンテキスト圧縮有効性、エラーリカバリ動作を検証。",
         "testStrategy": "docs/COPILOT_INTEGRATION_E2E_VERIFICATION.md に記録。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T05:05:00Z",
         "subtasks": []
       },
       {
         "id": "144",
         "title": "バックエンド — file.copy / file.move / file.delete 実装",
         "description": "Rust バックエンドに write 系ファイル操作ツールを実装する。スキーマは packages/contracts/src/file.ts に既存。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [],
         "priority": "high",
         "details": "file.copy, file.move, file.delete を file_ops.rs に実装。file.delete はゴミ箱移動（trash クレート）。全 write 操作は既存承認ゲート経由。各操作のプレビューサマリー（ソース、宛先、サイズ）を提供。",
         "testStrategy": "cargo test でテンプファイル操作。pnpm workflow:test でインテグレーション。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T05:05:00Z",
         "subtasks": []
       },
       {
         "id": "145",
         "title": "バックエンド — text.search / text.replace ツール実装",
         "description": "テキスト検索（read、自動実行可）と検索＆置換（write、承認必須）ツールを実装する。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "144"
         ],
         "priority": "medium",
         "details": "text.search: regex パターン、最大マッチ数、コンテキスト行。text.replace: regex パターン、置換文字列、影響行のプレビュー。text.replace は変更前にバックアップ作成。既存 executeReadActions と承認ゲートパスで公開。",
         "testStrategy": "cargo test でサンプルテキストファイルの検索と置換。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T05:05:00Z",
         "subtasks": []
       },
       {
         "id": "146",
         "title": "バックエンド — Word/PowerPoint/PDF 読み取りサポート",
         "description": "Word (.docx), PowerPoint (.pptx), PDF ファイルの読み取り専用サポートを Rust ライブラリで追加する。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [],
         "priority": "low",
         "details": "document.read_text: プレーンテキスト抽出のみ（書式保持なし）。エージェントループの read ツールとして登録。",
         "testStrategy": "cargo test でサンプル .docx, .pptx, .pdf ファイル。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T05:05:00Z",
         "subtasks": []
       },
       {
         "id": "147",
         "title": "Contracts 拡張 — text & document ツールスキーマ",
         "description": "text.search, text.replace, document.read_text の Zod スキーマを追加する。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "145",
           "146"
@@ -3682,14 +3682,14 @@
         "priority": "medium",
         "details": "packages/contracts/src/file.ts を拡張。relayActionSchema union に新ツールを追加。後方互換性を維持。",
         "testStrategy": "pnpm typecheck 通過。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T05:05:00Z",
         "subtasks": []
       },
       {
         "id": "148",
         "title": "フロントエンド — ファイル操作のプレビュー UI",
         "description": "ファイル write 操作（copy, move, delete, text.replace）の承認ゲート内プレビュー UI を追加する。",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "144",
           "145"
@@ -3697,7 +3697,7 @@
         "priority": "medium",
         "details": "file copy/move: ソース・宛先パス、ファイルサイズ。file delete: ファイル名、サイズ、「ゴミ箱に移動」バッジ。text.replace: 影響行の before/after 差分ビュー。",
         "testStrategy": "手動検証: 各ファイル操作タイプでのプレビュー表示。",
-        "updatedAt": "2026-04-01T04:26:59Z",
+        "updatedAt": "2026-04-01T05:05:00Z",
         "subtasks": []
       },
       {

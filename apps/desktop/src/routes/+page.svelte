@@ -6,6 +6,7 @@
   import ApprovalGate from "$lib/components/ApprovalGate.svelte";
   import ChatComposer from "$lib/components/ChatComposer.svelte";
   import CompletionTimeline from "$lib/components/CompletionTimeline.svelte";
+  import FileOpPreview from "$lib/components/FileOpPreview.svelte";
   import GoalInput from "$lib/components/GoalInput.svelte";
   import InterventionPanel from "$lib/components/InterventionPanel.svelte";
   import RecentSessions from "$lib/components/RecentSessions.svelte";
@@ -113,6 +114,10 @@
     summary: string;
     specificError: string;
     details: string[];
+  };
+  type FileWritePreviewAction = {
+    tool: string;
+    args: Record<string, unknown>;
   };
   type TemplateKey =
     | "inspect_safe_copy"
@@ -257,6 +262,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let previewRequiresApproval = false;
   let previewChangeDetails: string[] = [];
   let previewSheetDiffs: DiffSummary["sheets"] = [];
+  let previewFileWriteActions: FileWritePreviewAction[] = [];
   let showDetailedChanges = false;
   let executionDone = false;
   let executionSummary = "";
@@ -1369,6 +1375,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     previewRequiresApproval = false;
     previewChangeDetails = [];
     previewSheetDiffs = [];
+    previewFileWriteActions = [];
     showDetailedChanges = false;
     executionDone = false;
     executionSummary = "";
@@ -1430,6 +1437,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     previewRequiresApproval = draft.previewSnapshot?.requiresApproval ?? false;
     previewChangeDetails = [];
     previewSheetDiffs = [];
+    previewFileWriteActions = draft.previewSnapshot?.fileWriteActions ?? [];
     showDetailedChanges = false;
     executionDone = false;
     executionSummary = draft.executionSummary;
@@ -2259,6 +2267,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     previewRequiresApproval = false;
     previewChangeDetails = [];
     previewSheetDiffs = [];
+    previewFileWriteActions = [];
     showDetailedChanges = false;
     executionDone = false;
     executionSummary = "";
@@ -2432,6 +2441,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       previewOutputPath = diff.outputPath;
       previewWarnings = [...diff.warnings, ...preview.warnings];
       previewSheetDiffs = diff.sheets;
+      previewFileWriteActions = preview.fileWriteActions as FileWritePreviewAction[];
       previewRequiresApproval = preview.requiresApproval;
       previewChangeDetails = diff.sheets.map((sheet) => {
         const changedColumns =
@@ -2483,7 +2493,11 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       }
 
       executionSummary = result.executed
-        ? `保存しました: ${result.outputPath ?? "保存先を確認してください"}`
+        ? result.outputPath
+          ? `保存しました: ${result.outputPath}`
+          : previewFileWriteActions.length > 0
+            ? "承認したファイル操作を実行しました。"
+            : "保存しました。"
         : result.reason || "保存できませんでした";
 
       markProgress(
@@ -2679,7 +2693,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
           targetCount: previewTargetCount,
           estimatedAffectedRows: previewAffectedRows,
           warnings: previewWarnings,
-          requiresApproval: previewRequiresApproval
+          requiresApproval: previewRequiresApproval,
+          fileWriteActions: previewFileWriteActions
         }
       : null;
 
@@ -2845,6 +2860,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         {previewOutputPath}
         {previewWarnings}
         {previewSheetDiffs}
+        fileWriteActions={previewFileWriteActions}
         {reviewStepAvailable}
         {busy}
         errorMessage={copilotAutoError || ($delegationStore.state === "error" ? $delegationStore.error ?? "" : "")}
@@ -3493,6 +3509,10 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
             <SheetDiffCard {sheetDiff} />
           {/each}
         </div>
+      {/if}
+
+      {#if previewFileWriteActions.length > 0}
+        <FileOpPreview actions={previewFileWriteActions} />
       {/if}
     {/if}
 

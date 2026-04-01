@@ -33,6 +33,10 @@ export type PersistedPreviewSnapshot = {
   estimatedAffectedRows: number;
   warnings: string[];
   requiresApproval: boolean;
+  fileWriteActions: Array<{
+    tool: string;
+    args: Record<string, unknown>;
+  }>;
   lastGeneratedAt: string;
 };
 
@@ -256,8 +260,40 @@ function normalizePreviewSnapshot(value: unknown): PersistedPreviewSnapshot | nu
     estimatedAffectedRows: asNumber(record.estimatedAffectedRows) ?? 0,
     warnings: asStringArray(record.warnings),
     requiresApproval: Boolean(record.requiresApproval),
+    fileWriteActions: normalizePreviewActions(record.fileWriteActions),
     lastGeneratedAt: asString(record.lastGeneratedAt) ?? new Date().toISOString()
   };
+}
+
+function normalizePreviewActions(
+  value: unknown
+): Array<{ tool: string; args: Record<string, unknown> }> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+
+      const record = entry as Record<string, unknown>;
+      const tool = asString(record.tool);
+      const args = record.args;
+
+      if (!tool || !args || typeof args !== "object" || Array.isArray(args)) {
+        return null;
+      }
+
+      return {
+        tool,
+        args: { ...(args as Record<string, unknown>) }
+      };
+    })
+    .filter(
+      (entry): entry is { tool: string; args: Record<string, unknown> } => Boolean(entry)
+    );
 }
 
 function normalizeDelegationDraft(value: unknown): PersistedDelegationDraft | null {

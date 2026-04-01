@@ -2472,3 +2472,31 @@ Observed result:
 - `apps/desktop/src/lib/stores/delegation.ts` now caps the activity feed to the most recent `200` events, and the refreshed store tests cover lifecycle, hydrate/error handling, and feed trimming.
 - `pnpm -C packages/contracts build`, `pnpm check`, `pnpm typecheck`, the updated `tsx --test` suites, `cargo build`, `cargo test`, and `git diff --check` all pass after these implementation fixes.
 - This prompt did not correspond to a separate Task Master milestone, so `.taskmaster/tasks/tasks.json` was left unchanged.
+
+Generic file operations verification:
+
+```bash
+test -f docs/FILE_OPS_E2E_VERIFICATION.md
+pnpm -C packages/contracts build
+pnpm --filter @relay-agent/contracts typecheck
+pnpm --filter @relay-agent/desktop typecheck
+pnpm check
+cd apps/desktop && pnpm dlx tsx --test src/lib/agent-loop-core.test.ts
+cd apps/desktop && pnpm dlx tsx --test src/lib/prompt-templates.test.ts
+cd apps/desktop && pnpm dlx tsx --test src/lib/agent-loop-prompts.test.ts
+cd apps/desktop && pnpm dlx tsx --test src/lib/stores/delegation.test.ts
+cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- `packages/contracts/src/file.ts` now defines `text.search`, `text.replace`, and `document.read_text`, and `packages/contracts/src/ipc.ts` now exposes them through the relay and preview IPC contracts, including persisted `fileWriteActions` for approval UI rendering.
+- `apps/desktop/src-tauri/src/file_ops.rs` now implements safe absolute-path file reads, copy/move/delete writes, regex search/replace with backup support, and plain-text extraction for DOCX, PPTX, PDF, and common text formats.
+- `apps/desktop/src-tauri/src/storage.rs` now routes the new read tools through `execute_read_actions`, previews non-spreadsheet write actions without forcing them through the workbook engine, records file-write previews in the preview artifact, and executes approved file/text writes in `run_execution`.
+- `apps/desktop/src-tauri/src/storage.rs` test coverage now includes `text.search`, `document.read_text`, and `text.replace` preview-to-execution flow, while existing packet/approval tests were updated for the expanded tool registry.
+- `apps/desktop/src/lib/components/FileOpPreview.svelte`, `apps/desktop/src/lib/components/InterventionPanel.svelte`, `apps/desktop/src/routes/+page.svelte`, and `apps/desktop/src/lib/continuity.ts` now render and persist file-operation approval previews alongside the existing sheet diff experience.
+- `docs/FILE_OPS_E2E_VERIFICATION.md` now captures the manual Windows + M365 validation checklist for task `149`.
+- `pnpm -C packages/contracts build`, `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop typecheck`, `pnpm check`, the four `tsx --test` suites, `cargo build`, `cargo test`, and `git diff --check` all pass after the file-operations follow-up.
+- Task Master now records tasks `144` through `148` as implemented. Task `149` remains pending because the manual Windows + M365 E2E checklist has not been executed in this environment.

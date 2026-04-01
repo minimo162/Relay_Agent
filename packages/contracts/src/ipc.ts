@@ -2,9 +2,15 @@ import { z } from "zod";
 
 import { sessionSchema, turnSchema, turnStatusSchema } from "./core";
 import {
+  documentReadTextActionSchema,
   fileListActionSchema,
+  fileCopyActionSchema,
+  fileDeleteActionSchema,
+  fileMoveActionSchema,
   fileReadTextActionSchema,
-  fileStatActionSchema
+  fileStatActionSchema,
+  textReplaceActionSchema,
+  textSearchActionSchema
 } from "./file";
 import {
   copilotTurnResponseSchema,
@@ -116,7 +122,17 @@ export const readTurnArtifactsRequestSchema = z.object({
 export const previewArtifactPayloadSchema = z.object({
   diffSummary: diffSummarySchema,
   requiresApproval: z.boolean(),
-  warnings: z.array(z.string()).default([])
+  warnings: z.array(z.string()).default([]),
+  fileWriteActions: z
+    .array(
+      z.union([
+        fileCopyActionSchema,
+        fileMoveActionSchema,
+        fileDeleteActionSchema,
+        textReplaceActionSchema
+      ])
+    )
+    .default([])
 });
 
 export const turnInspectionSourceTypeSchema = z.enum([
@@ -392,6 +408,8 @@ export const executeReadActionsRequestSchema = z.object({
         fileListActionSchema,
         fileReadTextActionSchema,
         fileStatActionSchema,
+        textSearchActionSchema,
+        documentReadTextActionSchema,
         z.object({
           tool: z.literal("workbook.inspect"),
           args: z.object({
@@ -428,7 +446,8 @@ export const executeReadActionsRequestSchema = z.object({
             "workbook.save_copy",
             "file.copy",
             "file.move",
-            "file.delete"
+            "file.delete",
+            "text.replace"
           ]),
           sheet: z.string().trim().min(1).optional(),
           args: z.record(z.string(), z.unknown()).default({})
@@ -490,7 +509,17 @@ export const previewExecutionResponseSchema = z.object({
   requiresApproval: z.boolean(),
   canExecute: z.boolean(),
   diffSummary: diffSummarySchema,
-  warnings: z.array(z.string()).default([])
+  warnings: z.array(z.string()).default([]),
+  fileWriteActions: z
+    .array(
+      z.union([
+        fileCopyActionSchema,
+        fileMoveActionSchema,
+        fileDeleteActionSchema,
+        textReplaceActionSchema
+      ])
+    )
+    .default([])
 });
 
 export const approvalDecisionSchema = z.enum(["approved", "rejected"]);

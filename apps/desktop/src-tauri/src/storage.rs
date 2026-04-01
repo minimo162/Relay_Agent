@@ -1,15 +1,14 @@
 use std::{
     collections::HashMap,
-    fs,
-    path::{Component, Path, PathBuf},
+    path::PathBuf,
 };
 
 use chrono::{SecondsFormat, Utc};
-use encoding_rs::SHIFT_JIS;
 use serde::Serialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::file_ops;
 use crate::models::{
     AgentLoopStatus, ApprovalDecision, ApprovalInspectionPayload, ApprovePlanRequest,
     ApprovePlanResponse, AssessCopilotHandoffRequest, AssessCopilotHandoffResponse,
@@ -87,6 +86,11 @@ struct ReadToolArtifact {
     event_type: &'static str,
     message: String,
     warning: String,
+}
+
+struct FileWriteExecutionResult {
+    output_path: Option<String>,
+    warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -927,16 +931,35 @@ impl AppStorage {
             .clone()
             .ok_or_else(|| "no parsed Copilot response is available for preview".to_string())?;
 
-        let engine = WorkbookEngine::default();
+        let workbook_write_actions = parsed_response
+            .actions
+            .iter()
+            .filter(|action| is_spreadsheet_write_action(action))
+            .cloned()
+            .collect::<Vec<_>>();
+        let file_write_actions = parsed_response
+            .actions
+            .iter()
+            .filter(|action| is_file_write_action(action))
+            .cloned()
+            .collect::<Vec<_>>();
         let source = session
             .primary_workbook_path
             .as_deref()
             .map(WorkbookSource::detect)
             .transpose()?;
-        let preview = engine.preview_actions(source.as_ref(), &parsed_response.actions)?;
-        let mut diff_summary = preview.diff_summary;
-        let requires_approval = preview.requires_approval;
-        let mut warnings = preview.warnings;
+        let (mut diff_summary, mut warnings) = if workbook_write_actions.is_empty() {
+            (
+                build_file_write_diff_summary(&session, &file_write_actions)?,
+                build_file_write_preview_warnings(&file_write_actions)?,
+            )
+        } else {
+            let preview = WorkbookEngine::default()
+                .preview_actions(source.as_ref(), &workbook_write_actions)?;
+            (preview.diff_summary, preview.warnings)
+        };
+        let requires_approval =
+            !file_write_actions.is_empty() || parsed_response.actions.iter().any(is_write_action);
         let read_tool_artifacts = self.collect_read_tool_artifacts(
             &session,
             &turn,
@@ -974,6 +997,7 @@ impl AppStorage {
                 "diffSummary": diff_summary.clone(),
                 "requiresApproval": requires_approval,
                 "warnings": warnings.clone(),
+                "fileWriteActions": file_write_actions.clone(),
             }),
             None,
         )?;
@@ -1011,6 +1035,7 @@ impl AppStorage {
             can_execute: !requires_approval,
             diff_summary,
             warnings,
+            file_write_actions,
         })
     }
 
@@ -1102,47 +1127,83 @@ impl AppStorage {
             .clone()
             .ok_or_else(|| "no parsed response is available for execution".to_string())?;
 
-        if parsed_response.actions.iter().any(is_write_action) {
-            let source = session
-                .primary_workbook_path
-                .as_deref()
-                .ok_or_else(|| {
-                    format!(
-                        "session `{}` does not have a workbook source path for execution",
-                        session.id
-                    )
-                })
-                .and_then(|path| WorkbookSource::detect(path.to_string()))
-                .map_err(|error| {
-                    self.record_execution_failure(&session, &turn, &preview, error.clone())
-                        .unwrap_or_else(|record_error| {
-                            format!(
-                                "{error} (also failed to record execution failure: {record_error})"
-                            )
-                        })
-                })?;
-            let engine = WorkbookEngine::default();
-            let execution = engine
-                .execute_actions(&source, &parsed_response.actions)
-                .map_err(|error| {
-                    self.record_execution_failure(&session, &turn, &preview, error.clone())
-                        .unwrap_or_else(|record_error| {
-                            format!(
-                                "{error} (also failed to record execution failure: {record_error})"
-                            )
-                        })
-                })?;
+        let workbook_write_actions = parsed_response
+            .actions
+            .iter()
+            .filter(|action| is_spreadsheet_write_action(action))
+            .cloned()
+            .collect::<Vec<_>>();
+        let file_write_actions = parsed_response
+            .actions
+            .iter()
+            .filter(|action| is_file_write_action(action))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if !workbook_write_actions.is_empty() || !file_write_actions.is_empty() {
             let mut warnings = collect_execution_warnings(&preview);
             if let Some(approval) = self.approvals.get(&turn.id) {
                 if let Some(note) = &approval.note {
                     push_unique_string(&mut warnings, format!("Approval note: {note}"));
                 }
             }
-            for warning in execution.warnings {
-                push_unique_string(&mut warnings, warning);
+            let mut output_path = None;
+
+            if !workbook_write_actions.is_empty() {
+                let source = session
+                    .primary_workbook_path
+                    .as_deref()
+                    .ok_or_else(|| {
+                        format!(
+                            "session `{}` does not have a workbook source path for execution",
+                            session.id
+                        )
+                    })
+                    .and_then(|path| WorkbookSource::detect(path.to_string()))
+                    .map_err(|error| {
+                        self.record_execution_failure(&session, &turn, &preview, error.clone())
+                            .unwrap_or_else(|record_error| {
+                                format!(
+                                    "{error} (also failed to record execution failure: {record_error})"
+                                )
+                            })
+                    })?;
+                let execution = WorkbookEngine::default()
+                    .execute_actions(&source, &workbook_write_actions)
+                    .map_err(|error| {
+                        self.record_execution_failure(&session, &turn, &preview, error.clone())
+                            .unwrap_or_else(|record_error| {
+                                format!(
+                                    "{error} (also failed to record execution failure: {record_error})"
+                                )
+                            })
+                    })?;
+
+                for warning in execution.warnings {
+                    push_unique_string(&mut warnings, warning);
+                }
+                output_path = Some(execution.output_path);
             }
 
-            let output_path = execution.output_path;
+            if !file_write_actions.is_empty() {
+                let file_execution = execute_file_write_actions(&file_write_actions).map_err(
+                    |error| {
+                        self.record_execution_failure(&session, &turn, &preview, error.clone())
+                            .unwrap_or_else(|record_error| {
+                                format!(
+                                    "{error} (also failed to record execution failure: {record_error})"
+                                )
+                            })
+                    },
+                )?;
+                for warning in file_execution.warnings {
+                    push_unique_string(&mut warnings, warning);
+                }
+                if output_path.is_none() {
+                    output_path = file_execution.output_path;
+                }
+            }
+
             let next_turn = self.update_turn_status(
                 &turn.id,
                 TurnStatus::Executed,
@@ -1157,13 +1218,13 @@ impl AppStorage {
                     "outputPath": output_path.clone(),
                     "warnings": warnings.clone(),
                 }),
-                Some(output_path.clone()),
+                output_path.clone(),
             )?;
             self.executions.insert(
                 turn.id.clone(),
                 StoredExecution {
                     executed: true,
-                    output_path: Some(output_path.clone()),
+                    output_path: output_path.clone(),
                     warnings: warnings.clone(),
                     reason: None,
                     created_at: execution_artifact.created_at.clone(),
@@ -1176,7 +1237,8 @@ impl AppStorage {
                 &turn.id,
                 Some(&execution_artifact.id),
                 "execution-recorded",
-                "Execution wrote a save-copy output for the current turn.".to_string(),
+                "Execution completed the approved write actions for the current turn."
+                    .to_string(),
                 Some(json!({
                     "executionArtifactId": execution_artifact.id.clone(),
                     "executed": true,
@@ -1187,7 +1249,7 @@ impl AppStorage {
             return Ok(RunExecutionResponse {
                 turn: next_turn,
                 executed: true,
-                output_path: Some(output_path),
+                output_path,
                 warnings,
                 reason: None,
             });
@@ -2267,9 +2329,11 @@ impl AppStorage {
                     serde_json::to_value(diff)
                         .map_err(|error| format!("failed to serialize diff summary: {error}"))
                 }),
-            "file.list" => execute_file_list(&action.args),
-            "file.read_text" => execute_file_read_text(&action.args),
-            "file.stat" => execute_file_stat(&action.args),
+            "file.list" => file_ops::execute_file_list(&action.args),
+            "file.read_text" => file_ops::execute_file_read_text(&action.args),
+            "file.stat" => file_ops::execute_file_stat(&action.args),
+            "text.search" => file_ops::execute_text_search(&action.args),
+            "document.read_text" => file_ops::execute_document_read_text(&action.args),
             _ => Err(format!("unsupported read tool `{}`", action.tool)),
         };
 
@@ -2733,6 +2797,154 @@ fn collect_execution_warnings(preview: &StoredPreview) -> Vec<String> {
     warnings
 }
 
+fn build_file_write_diff_summary(
+    session: &Session,
+    actions: &[SpreadsheetAction],
+) -> Result<DiffSummary, String> {
+    let mut diff_summary = baseline_diff_summary(session);
+    diff_summary.target_count = actions.len() as u32;
+    diff_summary.output_path = actions
+        .iter()
+        .rev()
+        .find_map(preview_output_path_for_action)
+        .unwrap_or_else(|| diff_summary.output_path.clone());
+    diff_summary.estimated_affected_rows =
+        actions
+            .iter()
+            .try_fold(0_u32, |count, action| -> Result<u32, String> {
+                match action.tool.as_str() {
+            "text.replace" => {
+                let preview = file_ops::preview_text_replace(&action.args)?;
+                Ok(count
+                    + preview
+                        .get("matchCount")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0) as u32)
+            }
+            "file.copy" | "file.move" | "file.delete" => Ok(count + 1),
+            _ => Ok(count),
+                }
+            })?;
+    diff_summary.warnings = build_file_write_preview_warnings(actions)?;
+    Ok(diff_summary)
+}
+
+fn build_file_write_preview_warnings(actions: &[SpreadsheetAction]) -> Result<Vec<String>, String> {
+    let mut warnings = Vec::new();
+
+    for action in actions {
+        match action.tool.as_str() {
+            "file.delete" => {
+                let path = required_action_arg_string(action, "path")?;
+                if action
+                    .args
+                    .get("toRecycleBin")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true)
+                {
+                    push_unique_string(
+                        &mut warnings,
+                        format!("`{path}` will be moved to the recycle bin."),
+                    );
+                } else {
+                    push_unique_string(
+                        &mut warnings,
+                        format!("`{path}` will be permanently deleted."),
+                    );
+                }
+            }
+            "text.replace" => {
+                let path = required_action_arg_string(action, "path")?;
+                let preview = file_ops::preview_text_replace(&action.args)?;
+                let match_count = preview
+                    .get("matchCount")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let backup_enabled = action
+                    .args
+                    .get("createBackup")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                let backup_note = if backup_enabled {
+                    "A .bak backup will be created."
+                } else {
+                    "No backup will be created."
+                };
+                push_unique_string(
+                    &mut warnings,
+                    format!(
+                        "`{path}` will apply {match_count} regex replacement(s). {backup_note}"
+                    ),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    Ok(warnings)
+}
+
+fn preview_output_path_for_action(action: &SpreadsheetAction) -> Option<String> {
+    match action.tool.as_str() {
+        "file.copy" | "file.move" => action
+            .args
+            .get("destPath")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        "text.replace" => action
+            .args
+            .get("path")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        _ => None,
+    }
+}
+
+fn execute_file_write_actions(
+    actions: &[SpreadsheetAction],
+) -> Result<FileWriteExecutionResult, String> {
+    let mut output_path = None;
+    let mut warnings = Vec::new();
+
+    for action in actions {
+        let result = match action.tool.as_str() {
+            "file.copy" => file_ops::execute_file_copy(&action.args)?,
+            "file.move" => file_ops::execute_file_move(&action.args)?,
+            "file.delete" => file_ops::execute_file_delete(&action.args)?,
+            "text.replace" => file_ops::execute_text_replace(&action.args)?,
+            _ => continue,
+        };
+
+        if let Some(path) = result
+            .get("destPath")
+            .or_else(|| result.get("path"))
+            .and_then(Value::as_str)
+        {
+            output_path = Some(path.to_string());
+        }
+
+        if action.tool == "text.replace" {
+            let change_count = result
+                .get("changeCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let target_path = result
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            push_unique_string(
+                &mut warnings,
+                format!("Updated {change_count} match(es) in `{target_path}`."),
+            );
+        }
+    }
+
+    Ok(FileWriteExecutionResult {
+        output_path,
+        warnings,
+    })
+}
+
 fn push_unique_string(values: &mut Vec<String>, value: String) {
     if values.iter().any(|existing| existing == &value) {
         return;
@@ -3008,6 +3220,58 @@ fn validate_action_shape(
         }
         "file.stat" => {
             require_arg_string(args_object, index, "path", validation_issues);
+        }
+        "file.copy" | "file.move" => {
+            require_arg_string(args_object, index, "sourcePath", validation_issues);
+            require_arg_string(args_object, index, "destPath", validation_issues);
+        }
+        "file.delete" => {
+            require_arg_string(args_object, index, "path", validation_issues);
+        }
+        "text.search" => {
+            require_arg_string(args_object, index, "path", validation_issues);
+            require_arg_string(args_object, index, "pattern", validation_issues);
+            validate_optional_positive_integer(
+                args_object.get("maxMatches"),
+                index,
+                "maxMatches",
+                validation_issues,
+            );
+            if let Some(context_lines) = args_object.get("contextLines") {
+                validate_nonnegative_integer(
+                    context_lines,
+                    path(index, "args", "contextLines"),
+                    validation_issues,
+                );
+            }
+        }
+        "text.replace" => {
+            require_arg_string(args_object, index, "path", validation_issues);
+            require_arg_string(args_object, index, "pattern", validation_issues);
+            if let Some(replacement) = args_object.get("replacement") {
+                if !replacement.is_string() {
+                    validation_issues.push(issue(
+                        path(index, "args", "replacement"),
+                        "replacement must be a string.".to_string(),
+                        "invalid_replacement",
+                    ));
+                }
+            } else {
+                validation_issues.push(issue(
+                    path(index, "args", "replacement"),
+                    "replacement is required.".to_string(),
+                    "missing_replacement",
+                ));
+            }
+        }
+        "document.read_text" => {
+            require_arg_string(args_object, index, "path", validation_issues);
+            validate_optional_positive_integer(
+                args_object.get("maxChars"),
+                index,
+                "maxChars",
+                validation_issues,
+            );
         }
         "table.rename_columns" => {
             validate_rename_columns(args_object, index, validation_issues);
@@ -3286,6 +3550,21 @@ fn required_action_arg_string(action: &SpreadsheetAction, key: &str) -> Result<S
         .ok_or_else(|| format!("{} requires a non-empty `{key}` argument", action.tool))
 }
 
+fn validate_nonnegative_integer(
+    value: &Value,
+    path: Vec<Value>,
+    validation_issues: &mut Vec<ValidationIssue>,
+) {
+    match value.as_i64() {
+        Some(number) if number >= 0 => {}
+        _ => validation_issues.push(issue(
+            path,
+            "Expected a non-negative integer.".to_string(),
+            "invalid_integer",
+        )),
+    }
+}
+
 fn baseline_diff_summary(session: &Session) -> DiffSummary {
     let source_path = session.primary_workbook_path.clone().unwrap_or_default();
 
@@ -3298,221 +3577,6 @@ fn baseline_diff_summary(session: &Session) -> DiffSummary {
         sheets: Vec::new(),
         warnings: Vec::new(),
     }
-}
-
-fn execute_file_list(args: &Value) -> Result<Value, String> {
-    let path = required_value_string(args, "path", "file.list")?;
-    let directory = resolve_safe_read_path(&path)?;
-    let recursive = args
-        .get("recursive")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let pattern = args.get("pattern").and_then(Value::as_str).map(str::trim);
-
-    if !directory.is_dir() {
-        return Err(format!(
-            "`{}` is not a readable directory",
-            directory.display()
-        ));
-    }
-
-    let mut entries = Vec::new();
-    collect_file_entries(&directory, recursive, pattern, &mut entries)?;
-
-    Ok(json!({
-        "path": directory,
-        "recursive": recursive,
-        "entries": entries,
-    }))
-}
-
-fn execute_file_read_text(args: &Value) -> Result<Value, String> {
-    let path = required_value_string(args, "path", "file.read_text")?;
-    let file_path = resolve_safe_read_path(&path)?;
-    let max_bytes = args
-        .get("maxBytes")
-        .and_then(Value::as_u64)
-        .unwrap_or(65_536) as usize;
-    let metadata = fs::metadata(&file_path).map_err(|error| {
-        format!(
-            "failed to read file metadata for `{}`: {error}",
-            file_path.display()
-        )
-    })?;
-
-    if !metadata.is_file() {
-        return Err(format!(
-            "`{}` is not a readable text file",
-            file_path.display()
-        ));
-    }
-
-    if metadata.len() > 1_048_576 {
-        return Err(format!(
-            "`{}` is larger than the 1MB read limit",
-            file_path.display()
-        ));
-    }
-
-    let bytes = fs::read(&file_path)
-        .map_err(|error| format!("failed to read `{}`: {error}", file_path.display()))?;
-    let (content, encoding) = decode_text_file(&bytes)?;
-    let truncated_content = truncate_to_byte_limit(&content, max_bytes);
-    let truncated = truncated_content.len() < content.len();
-
-    Ok(json!({
-        "path": file_path,
-        "encoding": encoding,
-        "truncated": truncated,
-        "content": truncated_content,
-    }))
-}
-
-fn execute_file_stat(args: &Value) -> Result<Value, String> {
-    let path = required_value_string(args, "path", "file.stat")?;
-    let file_path = resolve_safe_read_path(&path)?;
-    let metadata = fs::metadata(&file_path).map_err(|error| {
-        format!(
-            "failed to read file metadata for `{}`: {error}",
-            file_path.display()
-        )
-    })?;
-    let modified_at = metadata.modified().ok().map(format_system_time);
-
-    Ok(json!({
-        "path": file_path,
-        "exists": true,
-        "isDirectory": metadata.is_dir(),
-        "isFile": metadata.is_file(),
-        "sizeBytes": metadata.len(),
-        "modifiedAt": modified_at,
-    }))
-}
-
-fn resolve_safe_read_path(path: &str) -> Result<PathBuf, String> {
-    let candidate = PathBuf::from(path.trim());
-
-    if !candidate.is_absolute() {
-        return Err("file tools require an absolute path".to_string());
-    }
-
-    if candidate
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err("path traversal is blocked for file tools".to_string());
-    }
-
-    Ok(candidate)
-}
-
-fn collect_file_entries(
-    directory: &Path,
-    recursive: bool,
-    pattern: Option<&str>,
-    entries: &mut Vec<Value>,
-) -> Result<(), String> {
-    let read_dir = fs::read_dir(directory).map_err(|error| {
-        format!(
-            "failed to read directory `{}`: {error}",
-            directory.display()
-        )
-    })?;
-
-    for entry in read_dir {
-        let entry = entry.map_err(|error| {
-            format!(
-                "failed to inspect a directory entry under `{}`: {error}",
-                directory.display()
-            )
-        })?;
-        let path = entry.path();
-        let metadata = entry.metadata().map_err(|error| {
-            format!("failed to read metadata for `{}`: {error}", path.display())
-        })?;
-        let file_name = entry.file_name().to_string_lossy().into_owned();
-
-        if pattern
-            .map(|value| matches_file_pattern(&file_name, value))
-            .unwrap_or(true)
-        {
-            entries.push(json!({
-                "name": file_name,
-                "path": path,
-                "isDirectory": metadata.is_dir(),
-                "isFile": metadata.is_file(),
-                "sizeBytes": metadata.len(),
-                "extension": path.extension().and_then(|value| value.to_str()),
-                "modifiedAt": metadata.modified().ok().map(format_system_time),
-            }));
-        }
-
-        if recursive && metadata.is_dir() {
-            collect_file_entries(&path, true, pattern, entries)?;
-        }
-    }
-
-    Ok(())
-}
-
-fn matches_file_pattern(file_name: &str, pattern: &str) -> bool {
-    let normalized = pattern.trim();
-    if normalized.is_empty() || normalized == "*" {
-        return true;
-    }
-
-    let needle = normalized.trim_matches('*');
-    if needle.is_empty() {
-        return true;
-    }
-
-    file_name.contains(needle)
-}
-
-fn required_value_string(args: &Value, key: &str, tool: &str) -> Result<String, String> {
-    args.get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| format!("{tool} requires a non-empty `{key}` argument"))
-}
-
-fn decode_text_file(bytes: &[u8]) -> Result<(String, &'static str), String> {
-    if let Ok(content) = String::from_utf8(bytes.to_vec()) {
-        return Ok((content, "utf-8"));
-    }
-
-    let (decoded, _, had_errors) = SHIFT_JIS.decode(bytes);
-    if had_errors {
-        return Err("file.read_text only supports UTF-8 or Shift_JIS text".to_string());
-    }
-
-    Ok((decoded.into_owned(), "shift_jis"))
-}
-
-fn truncate_to_byte_limit(content: &str, max_bytes: usize) -> String {
-    if content.len() <= max_bytes {
-        return content.to_string();
-    }
-
-    let mut end = 0;
-    for (index, _) in content.char_indices() {
-        if index > max_bytes {
-            break;
-        }
-        end = index;
-    }
-
-    if end == 0 {
-        return String::new();
-    }
-
-    content[..end].to_string()
-}
-
-fn format_system_time(value: std::time::SystemTime) -> String {
-    chrono::DateTime::<Utc>::from(value).to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn build_repair_prompt(validation_issues: &[ValidationIssue]) -> String {
@@ -3556,6 +3620,10 @@ fn parse_agent_loop_status(
 }
 
 fn is_write_action(action: &SpreadsheetAction) -> bool {
+    is_spreadsheet_write_action(action) || is_file_write_action(action)
+}
+
+fn is_spreadsheet_write_action(action: &SpreadsheetAction) -> bool {
     matches!(
         action.tool.as_str(),
         "table.rename_columns"
@@ -3564,9 +3632,13 @@ fn is_write_action(action: &SpreadsheetAction) -> bool {
             | "table.derive_column"
             | "table.group_aggregate"
             | "workbook.save_copy"
-            | "file.copy"
-            | "file.move"
-            | "file.delete"
+    )
+}
+
+fn is_file_write_action(action: &SpreadsheetAction) -> bool {
+    matches!(
+        action.tool.as_str(),
+        "file.copy" | "file.move" | "file.delete" | "text.replace"
     )
 }
 
@@ -3584,6 +3656,9 @@ fn is_known_tool(tool: &str) -> bool {
             | "file.list"
             | "file.read_text"
             | "file.stat"
+            | "text.search"
+            | "text.replace"
+            | "document.read_text"
             | "table.rename_columns"
             | "table.cast_columns"
             | "table.filter_rows"
@@ -3661,6 +3736,22 @@ fn read_tool_registry() -> Vec<ToolDescriptor> {
             phase: ToolPhase::Read,
             requires_approval: false,
         },
+        ToolDescriptor {
+            id: "text.search".to_string(),
+            title: "Search text".to_string(),
+            description: "Search a text file with a regular expression and return context lines."
+                .to_string(),
+            phase: ToolPhase::Read,
+            requires_approval: false,
+        },
+        ToolDescriptor {
+            id: "document.read_text".to_string(),
+            title: "Read document text".to_string(),
+            description: "Extract text from DOCX, PPTX, PDF, and common plain-text files."
+                .to_string(),
+            phase: ToolPhase::Read,
+            requires_approval: false,
+        },
     ]
 }
 
@@ -3705,6 +3796,36 @@ fn write_tool_registry() -> Vec<ToolDescriptor> {
             id: "workbook.save_copy".to_string(),
             title: "Save copy".to_string(),
             description: "Write the output to a new workbook or CSV copy.".to_string(),
+            phase: ToolPhase::Write,
+            requires_approval: true,
+        },
+        ToolDescriptor {
+            id: "file.copy".to_string(),
+            title: "Copy file".to_string(),
+            description: "Copy a file to a new absolute destination path.".to_string(),
+            phase: ToolPhase::Write,
+            requires_approval: true,
+        },
+        ToolDescriptor {
+            id: "file.move".to_string(),
+            title: "Move file".to_string(),
+            description: "Move or rename a file to a new absolute destination path.".to_string(),
+            phase: ToolPhase::Write,
+            requires_approval: true,
+        },
+        ToolDescriptor {
+            id: "file.delete".to_string(),
+            title: "Delete file".to_string(),
+            description: "Move a file to the recycle bin or permanently delete it."
+                .to_string(),
+            phase: ToolPhase::Write,
+            requires_approval: true,
+        },
+        ToolDescriptor {
+            id: "text.replace".to_string(),
+            title: "Replace text".to_string(),
+            description: "Apply a regex replacement to a text file after approval."
+                .to_string(),
             phase: ToolPhase::Write,
             requires_approval: true,
         },
@@ -4058,7 +4179,7 @@ mod tests {
                 turn_id: turn.id.clone(),
             })
             .expect("packet should generate");
-        assert_eq!(packet.allowed_write_tools.len(), 6);
+        assert_eq!(packet.allowed_write_tools.len(), 10);
 
         let submitted = storage
             .submit_copilot_response(SubmitCopilotResponseRequest {
@@ -4461,12 +4582,12 @@ mod tests {
                 })
                 .expect("packet should generate");
             assert_eq!(packet.mode, RelayMode::Plan);
-            assert_eq!(packet.allowed_read_tools.len(), 7);
+            assert_eq!(packet.allowed_read_tools.len(), 9);
             assert!(packet
                 .allowed_read_tools
                 .iter()
                 .any(|tool| tool.id == "file.read_text"));
-            assert_eq!(packet.allowed_write_tools.len(), 6);
+            assert_eq!(packet.allowed_write_tools.len(), 10);
             assert!(packet.context.iter().any(|line| line
                 == &format!(
                     "Primary workbook path: {}",
@@ -5850,6 +5971,169 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("traversal"));
+
+        fs::remove_dir_all(workspace_dir).expect("workspace dir should clean up");
+    }
+
+    #[test]
+    fn execute_read_actions_supports_text_search_and_document_read_text() {
+        let workspace_dir =
+            env::temp_dir().join(format!("relay-agent-text-tools-{}", Uuid::new_v4()));
+        fs::create_dir_all(&workspace_dir).expect("workspace dir should exist");
+        let text_path = workspace_dir.join("notes.txt");
+        fs::write(&text_path, "alpha\nbeta\nalpha beta\n").expect("text file should be written");
+        let mut storage = AppStorage::default();
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Text tools".to_string(),
+                objective: "Search and extract text.".to_string(),
+                primary_workbook_path: None,
+            })
+            .expect("session should be created");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Text read turn".to_string(),
+                objective: "Search helper files".to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+
+        let response = storage
+            .execute_read_actions(ExecuteReadActionsRequest {
+                session_id: session.id,
+                turn_id: turn.id,
+                loop_turn: 1,
+                max_turns: 10,
+                actions: vec![
+                    SpreadsheetAction {
+                        id: None,
+                        tool: "text.search".to_string(),
+                        rationale: None,
+                        sheet: None,
+                        args: json!({
+                            "path": text_path,
+                            "pattern": "alpha",
+                            "maxMatches": 10,
+                            "contextLines": 1
+                        }),
+                    },
+                    SpreadsheetAction {
+                        id: None,
+                        tool: "document.read_text".to_string(),
+                        rationale: None,
+                        sheet: None,
+                        args: json!({ "path": text_path, "maxChars": 500 }),
+                    },
+                ],
+            })
+            .expect("text tool response should return");
+
+        assert_eq!(response.tool_results.len(), 2);
+        assert!(response.tool_results[0].ok);
+        assert!(response.tool_results[1].ok);
+        assert_eq!(
+            response.tool_results[0].result.as_ref().and_then(|value| value.get("matchCount")),
+            Some(&json!(2))
+        );
+        assert_eq!(
+            response.tool_results[1].result.as_ref().and_then(|value| value.get("format")),
+            Some(&json!("txt"))
+        );
+
+        fs::remove_dir_all(workspace_dir).expect("workspace dir should clean up");
+    }
+
+    #[test]
+    fn preview_and_run_execution_support_text_replace_actions() {
+        let workspace_dir =
+            env::temp_dir().join(format!("relay-agent-write-tools-{}", Uuid::new_v4()));
+        fs::create_dir_all(&workspace_dir).expect("workspace dir should exist");
+        let text_path = workspace_dir.join("draft.txt");
+        fs::write(&text_path, "hello relay\nhello world\n").expect("text file should be written");
+        let mut storage = AppStorage::default();
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Write tools".to_string(),
+                objective: "Replace text after approval.".to_string(),
+                primary_workbook_path: None,
+            })
+            .expect("session should be created");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Write turn".to_string(),
+                objective: "Run regex replace".to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+
+        storage
+            .generate_relay_packet(GenerateRelayPacketRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+            })
+            .expect("packet should generate");
+
+        storage
+            .submit_copilot_response(SubmitCopilotResponseRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+                raw_response: json!({
+                    "version": "1.0",
+                    "status": "ready_to_write",
+                    "summary": "Replace hello with hi.",
+                    "actions": [
+                        {
+                            "tool": "text.replace",
+                            "args": {
+                                "path": text_path,
+                                "pattern": "hello",
+                                "replacement": "hi",
+                                "createBackup": true
+                            }
+                        }
+                    ]
+                })
+                .to_string(),
+            })
+            .expect("response should parse");
+
+        let preview = storage
+            .preview_execution(PreviewExecutionRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+            })
+            .expect("preview should succeed");
+        assert!(preview.requires_approval);
+        assert_eq!(preview.file_write_actions.len(), 1);
+        assert_eq!(preview.diff_summary.target_count, 1);
+        assert_eq!(preview.diff_summary.estimated_affected_rows, 2);
+
+        storage
+            .respond_to_approval(RespondToApprovalRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+                decision: ApprovalDecision::Approved,
+                note: None,
+            })
+            .expect("approval should succeed");
+
+        let execution = storage
+            .run_execution(RunExecutionRequest {
+                session_id: session.id,
+                turn_id: turn.id,
+            })
+            .expect("execution should succeed");
+        assert!(execution.executed);
+        assert_eq!(execution.output_path, Some(text_path.to_string_lossy().into_owned()));
+        assert_eq!(
+            fs::read_to_string(&text_path).expect("updated file should be readable"),
+            "hi relay\nhi world\n"
+        );
+        assert!(text_path.with_file_name("draft.txt.bak").exists());
 
         fs::remove_dir_all(workspace_dir).expect("workspace dir should clean up");
     }

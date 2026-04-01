@@ -360,6 +360,9 @@ Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `124`
 The next Copilot-integration hardening scope is captured in `.taskmaster/docs/prd.txt` section `20`.
 Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `138` through `143`. The prompt-template refresh, context compression, structured retry/manual fallback behavior, conversation-history persistence, and multi-session feasibility write-up in tasks `138` through `142` are now implemented in source or documentation. The remaining closure item is task `143`, which still depends on the Windows + M365 manual checklist in `docs/COPILOT_INTEGRATION_E2E_VERIFICATION.md`.
 
+The next generic file-operations scope is captured in `docs/CODEX_PROMPT_15_FILE_OPERATIONS.md`.
+Its Task Master breakdown lives in `.taskmaster/tasks/tasks.json` as tasks `144` through `149`. The contracts, Rust backend file/text/document tools, approval-preview UI, and regression coverage in tasks `144` through `148` are now implemented in source. The remaining closure item is task `149`, which still depends on the Windows + M365 manual checklist in `docs/FILE_OPS_E2E_VERIFICATION.md`.
+
 That UI follow-up preserves the current safety model:
 
 - preview before write

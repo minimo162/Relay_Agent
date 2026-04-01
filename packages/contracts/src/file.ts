@@ -56,6 +56,34 @@ export const fileDeleteActionSchema = z.object({
   })
 });
 
+export const textSearchActionSchema = z.object({
+  tool: z.literal("text.search"),
+  args: z.object({
+    path: nonEmptyStringSchema,
+    pattern: nonEmptyStringSchema,
+    maxMatches: z.number().int().positive().max(500).default(50),
+    contextLines: z.number().int().nonnegative().max(10).default(2)
+  })
+});
+
+export const textReplaceActionSchema = z.object({
+  tool: z.literal("text.replace"),
+  args: z.object({
+    path: nonEmptyStringSchema,
+    pattern: nonEmptyStringSchema,
+    replacement: z.string(),
+    createBackup: z.boolean().default(true)
+  })
+});
+
+export const documentReadTextActionSchema = z.object({
+  tool: z.literal("document.read_text"),
+  args: z.object({
+    path: nonEmptyStringSchema,
+    maxChars: z.number().int().positive().max(500_000).default(50_000)
+  })
+});
+
 // Union
 
 export const fileActionSchema = z.discriminatedUnion("tool", [
@@ -64,7 +92,10 @@ export const fileActionSchema = z.discriminatedUnion("tool", [
   fileStatActionSchema,
   fileCopyActionSchema,
   fileMoveActionSchema,
-  fileDeleteActionSchema
+  fileDeleteActionSchema,
+  textSearchActionSchema,
+  textReplaceActionSchema,
+  documentReadTextActionSchema
 ]);
 
 export type FileListAction = z.infer<typeof fileListActionSchema>;
@@ -73,4 +104,7 @@ export type FileStatAction = z.infer<typeof fileStatActionSchema>;
 export type FileCopyAction = z.infer<typeof fileCopyActionSchema>;
 export type FileMoveAction = z.infer<typeof fileMoveActionSchema>;
 export type FileDeleteAction = z.infer<typeof fileDeleteActionSchema>;
+export type TextSearchAction = z.infer<typeof textSearchActionSchema>;
+export type TextReplaceAction = z.infer<typeof textReplaceActionSchema>;
+export type DocumentReadTextAction = z.infer<typeof documentReadTextActionSchema>;
 export type FileAction = z.infer<typeof fileActionSchema>;

@@ -304,6 +304,7 @@ pub struct PreviewArtifactPayload {
     pub diff_summary: DiffSummary,
     pub requires_approval: bool,
     pub warnings: Vec<String>,
+    pub file_write_actions: Vec<SpreadsheetAction>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -705,6 +706,7 @@ pub struct PreviewExecutionResponse {
     pub can_execute: bool,
     pub diff_summary: DiffSummary,
     pub warnings: Vec<String>,
+    pub file_write_actions: Vec<SpreadsheetAction>,
 }
 
 #[derive(Clone, Debug, Serialize)]
