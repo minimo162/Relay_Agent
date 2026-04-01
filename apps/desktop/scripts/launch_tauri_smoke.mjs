@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import os from "node:os";
 import process from "node:process";
 
 import {
@@ -10,9 +11,11 @@ import {
 
 const launchTimeoutMs = 120_000;
 const stabilityWindowMs = 5_000;
+const isWindows = os.platform() === "win32";
+const pnpmCommand = isWindows ? "pnpm.cmd" : "pnpm";
 
 async function main() {
-  const display = findAvailableDisplay();
+  const display = isWindows ? null : findAvailableDisplay();
   const summary = {
     scenario: "tauri-dev-launch",
     status: "failed",
@@ -24,24 +27,30 @@ async function main() {
     launchCommand: "pnpm tauri:dev"
   };
 
-  const xvfb = startProcess("Xvfb", [display, "-screen", "0", "1280x840x24", "-ac"], {
-    cwd: process.cwd()
-  });
+  const xvfb = isWindows
+    ? null
+    : startProcess("Xvfb", [display, "-screen", "0", "1280x840x24", "-ac"], {
+        cwd: process.cwd()
+      });
 
   try {
-    await delay(1_500);
+    if (!isWindows && xvfb) {
+      await delay(1_500);
 
-    if (xvfb.child.exitCode !== null) {
-      summary.reason = `Xvfb exited early: ${xvfb.readLogs().trim() || "unknown error"}`;
-      console.log(JSON.stringify(summary));
-      process.exit(1);
+      if (xvfb.child.exitCode !== null) {
+        summary.reason = `Xvfb exited early: ${xvfb.readLogs().trim() || "unknown error"}`;
+        console.log(JSON.stringify(summary));
+        process.exit(1);
+      }
     }
 
-    const tauri = startProcess("pnpm", ["tauri:dev"], {
-      env: {
-        ...process.env,
-        DISPLAY: display
-      }
+    const tauriEnv = { ...process.env };
+    if (!isWindows && display) {
+      tauriEnv.DISPLAY = display;
+    }
+
+    const tauri = startProcess(pnpmCommand, ["tauri:dev"], {
+      env: tauriEnv
     });
 
     const deadline = Date.now() + launchTimeoutMs;
@@ -73,7 +82,7 @@ async function main() {
       }
 
       if (!summary.frontendReady) {
-        summary.reason = "Frontend dev server never became ready on http://127.0.0.1:1420.";
+        summary.reason = "Frontend dev server never became ready on http://127.0.0.1:1421.";
         console.log(JSON.stringify(summary));
         process.exit(1);
       }
@@ -98,7 +107,9 @@ async function main() {
       await stopProcess(tauri.child);
     }
   } finally {
-    await stopProcess(xvfb.child);
+    if (xvfb) {
+      await stopProcess(xvfb.child);
+    }
   }
 }
 

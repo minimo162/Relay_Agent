@@ -69,7 +69,7 @@ pub async fn invoke_mcp_tool(
     })
 }
 
-fn parse_mcp_tool_name(tool_id: &str) -> Result<String, String> {
+pub(crate) fn parse_mcp_tool_name(tool_id: &str) -> Result<String, String> {
     let parts = tool_id.splitn(3, '.').collect::<Vec<_>>();
     if parts.len() != 3 || parts[0] != "mcp" {
         return Err(format!(

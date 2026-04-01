@@ -15,6 +15,8 @@ mod storage;
 mod tool_registry;
 mod workbook;
 mod workflow_smoke;
+#[cfg(test)]
+mod integration_tests;
 
 use std::{env, path::PathBuf};
 

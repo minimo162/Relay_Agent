@@ -1,11 +1,11 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
 export const desktopDir = path.resolve(import.meta.dirname, "..");
-export const frontendUrl = "http://127.0.0.1:1420";
+export const frontendUrl = "http://127.0.0.1:1421";
 
 function stripAnsi(value) {
   return value.replace(/\u001b\[[0-9;]*m/g, "");
@@ -16,7 +16,9 @@ export function startProcess(command, args, options = {}) {
     cwd: desktopDir,
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
+    detached: process.platform !== "win32",
+    shell: process.platform === "win32",
+    windowsHide: true,
     ...options
   });
 
@@ -50,6 +52,19 @@ export function findAvailableDisplay() {
 
 function killProcessGroup(child, signal = "SIGTERM") {
   if (!child || child.exitCode !== null || child.killed) {
+    return;
+  }
+
+  if (process.platform === "win32") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    try {
+      spawnSync("taskkill", args, { stdio: "ignore" });
+    } catch {
+      // Ignore cleanup races.
+    }
     return;
   }
 

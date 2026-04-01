@@ -2801,3 +2801,21 @@ Observed result:
 - `packages/contracts/src/ipc.ts`, `apps/desktop/src-tauri/src/models.rs`, and `apps/desktop/src-tauri/src/storage.rs` now expose persisted `execution` artifacts through `read_turn_artifacts`, including their `OutputArtifact[]` payload.
 - `apps/desktop/src/routes/+page.svelte` now renders a dedicated expert-side `出力アーティファクト` inspection section that uses `ArtifactPreview` for the latest execution artifacts and falls back to the stored artifact id only when content is unavailable.
 - This follow-up is a correctness fix for the existing task `160–163` surface rather than a new Task Master milestone, so `.taskmaster/tasks/tasks.json` was left unchanged.
+
+Windows E2E fixes follow-up:
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm -C packages/contracts build
+pnpm -C apps/desktop exec node scripts/e2e_windows_smoke.mjs
+pnpm -C apps/desktop launch:test
+pnpm -C apps/desktop workflow:test
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/mcp_client.rs` no longer runs Windows stdio MCP commands through POSIX-style backslash parsing. Windows command lines are now split without consuming path separators, and the stdio MCP regression tests plus persisted MCP tool reload test pass again on Windows.
+- `apps/desktop/scripts/tauri_smoke_shared.mjs`, `apps/desktop/scripts/launch_tauri_smoke.mjs`, and `apps/desktop/scripts/launch_workflow_smoke.mjs` now branch correctly for Windows: they skip `Xvfb`, use the real Vite dev URL `http://127.0.0.1:1421`, and stop spawned processes with Windows-compatible cleanup.
+- `apps/desktop/scripts/e2e_windows_smoke.mjs`, `apps/desktop/src-tauri/src/integration_tests.rs`, and `docs/E2E_WINDOWS_MANUAL_CHECKLIST.md` were added to satisfy the missing Windows E2E artifacts from `docs/CODEX_PROMPT_E2E_WINDOWS.md`, and `apps/desktop/package.json` plus `apps/desktop/src-tauri/Cargo.toml` were updated to wire them in.
+- The fix prompt expected a ToolRegistry count of 21 built-ins, but the current product implementation exposes 10 built-in tools. The new integration coverage therefore locks to the current registry surface instead of inventing 11 new tools outside this milestone.
+- All listed verification commands now pass on this Windows workspace, including `cargo test` with 79 passing tests, the contracts build, the new Windows smoke script, and the existing `launch:test` / `workflow:test` smoke flows.

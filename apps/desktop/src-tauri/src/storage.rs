@@ -4662,7 +4662,7 @@ fn upsert_project_memory_entry(entries: &mut Vec<ProjectMemoryEntry>, entry: Pro
     entries.sort_by(|left, right| left.key.to_lowercase().cmp(&right.key.to_lowercase()));
 }
 
-fn is_within_project_scope(file_path: &str, root_folder: &str) -> bool {
+pub(crate) fn is_within_project_scope(file_path: &str, root_folder: &str) -> bool {
     let normalized_file = normalize_scope_path(file_path);
     let normalized_root = normalize_scope_path(root_folder);
     normalized_file == normalized_root
@@ -6659,6 +6659,10 @@ mod tests {
     fn persists_tool_settings_and_restores_mcp_tools_after_reload() {
         let app_local_data_dir = unique_test_app_data_dir();
         let script_path = write_stdio_mock_server();
+        #[cfg(target_os = "windows")]
+        let server_url = format!("node \"{}\"", script_path.display());
+        #[cfg(not(target_os = "windows"))]
+        let server_url = format!("node {}", script_path.display());
 
         {
             let mut storage =
@@ -6667,7 +6671,7 @@ mod tests {
             let response = storage
                 .register_mcp_tools(
                     crate::models::McpServerConfig {
-                        url: format!("node {}", script_path.display()),
+                        url: server_url.clone(),
                         name: "demo".to_string(),
                         transport: crate::models::McpTransport::Stdio,
                     },
@@ -6700,10 +6704,9 @@ mod tests {
             .find(|tool| tool.id == "mcp.demo.echo")
             .expect("persisted mcp tool should be restored");
         assert!(!restored.enabled);
-        let expected_server_url = format!("node {}", script_path.display());
         assert_eq!(
             restored.mcp_server_url.as_deref(),
-            Some(expected_server_url.as_str())
+            Some(server_url.as_str())
         );
         assert_eq!(
             restored.mcp_transport,

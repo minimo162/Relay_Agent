@@ -9,6 +9,7 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "copilot-browser:build": "npx esbuild scripts/copilot-browser.ts --bundle --platform=node --format=esm --packages=external --outfile=scripts/dist/copilot-browser.js",
+    "e2e:windows": "node ./scripts/e2e_windows_smoke.mjs",
     "launch:test": "node ./scripts/launch_tauri_smoke.mjs",
     "workflow:test": "node ./scripts/launch_workflow_smoke.mjs",
     "startup:smoke": "cargo run --manifest-path src-tauri/Cargo.toml --bin startup_smoke",

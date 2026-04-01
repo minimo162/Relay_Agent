@@ -14,6 +14,8 @@ import {
 
 const launchTimeoutMs = 120_000;
 const workflowTimeoutMs = 120_000;
+const isWindows = os.platform() === "win32";
+const pnpmCommand = isWindows ? "pnpm.cmd" : "pnpm";
 
 function makeTempDir(label) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `${label}-`));
@@ -44,7 +46,7 @@ function safeRemoveDir(dirPath) {
 }
 
 async function main() {
-  const display = findAvailableDisplay();
+  const display = isWindows ? null : findAvailableDisplay();
   const appDataDir = makeTempDir("relay-agent-workflow-app-data");
   const summaryDir = makeTempDir("relay-agent-workflow-summary");
   const summaryPath = path.join(summaryDir, "workflow-summary.json");
@@ -63,29 +65,37 @@ async function main() {
     reason: ""
   };
 
-  const xvfb = startProcess("Xvfb", [display, "-screen", "0", "1280x840x24", "-ac"], {
-    cwd: process.cwd()
-  });
+  const xvfb = isWindows
+    ? null
+    : startProcess("Xvfb", [display, "-screen", "0", "1280x840x24", "-ac"], {
+        cwd: process.cwd()
+      });
 
   let workflowOutputPath = null;
 
   try {
-    await delay(1_500);
+    if (!isWindows && xvfb) {
+      await delay(1_500);
 
-    if (xvfb.child.exitCode !== null) {
-      summary.reason = `Xvfb exited early: ${xvfb.readLogs().trim() || "unknown error"}`;
-      console.log(JSON.stringify(summary));
-      process.exit(1);
+      if (xvfb.child.exitCode !== null) {
+        summary.reason = `Xvfb exited early: ${xvfb.readLogs().trim() || "unknown error"}`;
+        console.log(JSON.stringify(summary));
+        process.exit(1);
+      }
     }
 
-    const tauri = startProcess("pnpm", ["tauri:dev"], {
-      env: {
-        ...process.env,
-        DISPLAY: display,
-        RELAY_AGENT_AUTORUN_WORKFLOW_SMOKE: "1",
-        RELAY_AGENT_WORKFLOW_SMOKE_SUMMARY_PATH: summaryPath,
-        RELAY_AGENT_TEST_APP_LOCAL_DATA_DIR: appDataDir
-      }
+    const tauriEnv = {
+      ...process.env,
+      RELAY_AGENT_AUTORUN_WORKFLOW_SMOKE: "1",
+      RELAY_AGENT_WORKFLOW_SMOKE_SUMMARY_PATH: summaryPath,
+      RELAY_AGENT_TEST_APP_LOCAL_DATA_DIR: appDataDir
+    };
+    if (!isWindows && display) {
+      tauriEnv.DISPLAY = display;
+    }
+
+    const tauri = startProcess(pnpmCommand, ["tauri:dev"], {
+      env: tauriEnv
     });
 
     try {
@@ -117,7 +127,7 @@ async function main() {
       }
 
       if (!summary.frontendReady) {
-        summary.reason = "Frontend dev server never became ready on http://127.0.0.1:1420.";
+        summary.reason = "Frontend dev server never became ready on http://127.0.0.1:1421.";
         console.log(JSON.stringify(summary));
         process.exit(1);
       }
@@ -197,7 +207,9 @@ async function main() {
       await stopProcess(tauri.child);
     }
   } finally {
-    await stopProcess(xvfb.child);
+    if (xvfb) {
+      await stopProcess(xvfb.child);
+    }
     safeRemoveFile(workflowOutputPath);
     safeRemoveFile(summaryPath);
     safeRemoveDir(summaryDir);

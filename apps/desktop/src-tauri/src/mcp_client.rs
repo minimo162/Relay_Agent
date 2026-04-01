@@ -229,28 +229,36 @@ fn drop_stdio_session(key: &str) {
 }
 
 fn spawn_stdio_session(config: &McpServerConfig) -> Result<StdioSession, String> {
-    let argv = shell_words::split(&config.url)
-        .map_err(|error| format!("failed to parse MCP stdio command: {error}"))?;
-    let (program, args) = argv
-        .split_first()
-        .ok_or_else(|| "MCP stdio command was empty".to_string())?;
+    #[cfg(target_os = "windows")]
+    let (program, args) = split_windows_command(&config.url)?;
 
-    let mut child = Command::new(program)
-        .args(args)
+    #[cfg(not(target_os = "windows"))]
+    let (program, args) = {
+        let argv = shell_words::split(&config.url)
+            .map_err(|error| format!("failed to parse MCP stdio command: {error}"))?;
+        let mut iter = argv.into_iter();
+        let program = iter
+            .next()
+            .ok_or_else(|| "MCP stdio command was empty".to_string())?;
+        (program, iter.collect::<Vec<_>>())
+    };
+
+    let mut child = Command::new(&program)
+        .args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| format!("failed to spawn MCP stdio command `{program}`: {error}"))?;
+        .map_err(|error| format!("failed to spawn MCP stdio command `{}`: {error}", program))?;
 
     let stdin = child
         .stdin
         .take()
-        .ok_or_else(|| format!("failed to open stdin for MCP stdio command `{program}`"))?;
+        .ok_or_else(|| format!("failed to open stdin for MCP stdio command `{}`", program))?;
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| format!("failed to open stdout for MCP stdio command `{program}`"))?;
+        .ok_or_else(|| format!("failed to open stdout for MCP stdio command `{}`", program))?;
 
     Ok(StdioSession {
         stdin,
@@ -258,6 +266,39 @@ fn spawn_stdio_session(config: &McpServerConfig) -> Result<StdioSession, String>
         child,
         program: program.to_string(),
     })
+}
+
+#[cfg(target_os = "windows")]
+fn split_windows_command(command: &str) -> Result<(String, Vec<String>), String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+
+    for ch in command.trim().chars() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            ' ' | '\t' if !in_quotes => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if in_quotes {
+        return Err("failed to parse MCP stdio command: unterminated quote".to_string());
+    }
+
+    if !current.is_empty() {
+        args.push(current);
+    }
+
+    let mut iter = args.into_iter();
+    let program = iter
+        .next()
+        .ok_or_else(|| "MCP stdio command was empty".to_string())?;
+    Ok((program, iter.collect()))
 }
 
 fn stdio_session_key(config: &McpServerConfig) -> String {
@@ -418,8 +459,12 @@ rl.on("line", (line) => {
     #[test]
     fn discovers_and_calls_mcp_tools_over_stdio() {
         let script_path = write_stdio_mock_server();
+        #[cfg(target_os = "windows")]
+        let url = format!("node \"{}\"", script_path.display());
+        #[cfg(not(target_os = "windows"))]
+        let url = format!("node {}", script_path.display());
         let config = McpServerConfig {
-            url: format!("node {}", script_path.display()),
+            url,
             name: "demo-stdio".to_string(),
             transport: McpTransport::Stdio,
         };
@@ -444,8 +489,12 @@ rl.on("line", (line) => {
     #[test]
     fn reuses_stdio_session_for_multiple_requests() {
         let script_path = write_persistent_stdio_mock_server();
+        #[cfg(target_os = "windows")]
+        let url = format!("node \"{}\"", script_path.display());
+        #[cfg(not(target_os = "windows"))]
+        let url = format!("node {}", script_path.display());
         let config = McpServerConfig {
-            url: format!("node {}", script_path.display()),
+            url,
             name: "demo-stdio-persistent".to_string(),
             transport: McpTransport::Stdio,
         };
