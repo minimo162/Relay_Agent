@@ -38,6 +38,7 @@ use crate::models::{
     ValidationIssue, ValidationIssueSummary,
 };
 use crate::persistence::{self, PersistedArtifactMeta, StorageManifest};
+use crate::risk_evaluator::{evaluate_risk, should_auto_approve, ApprovalPolicy, OperationRisk};
 use crate::tool_registry::ToolRegistry;
 use crate::workbook::{SheetColumnProfile, SheetPreview, WorkbookEngine, WorkbookSource};
 
@@ -62,6 +63,9 @@ struct StoredPreview {
     diff_summary: DiffSummary,
     artifacts: Vec<OutputArtifact>,
     requires_approval: bool,
+    auto_approved: bool,
+    highest_risk: OperationRisk,
+    approval_policy: ApprovalPolicy,
     warnings: Vec<String>,
     created_at: String,
     artifact_id: String,
@@ -72,6 +76,7 @@ struct StoredApproval {
     decision: ApprovalDecision,
     note: Option<String>,
     ready_for_execution: bool,
+    auto_approved: bool,
     preview_artifact_id: String,
     created_at: String,
     artifact_id: String,
@@ -1261,6 +1266,14 @@ impl AppStorage {
         &mut self,
         request: PreviewExecutionRequest,
     ) -> Result<PreviewExecutionResponse, String> {
+        self.preview_execution_with_policy(request, ApprovalPolicy::Safe)
+    }
+
+    pub fn preview_execution_with_policy(
+        &mut self,
+        request: PreviewExecutionRequest,
+        approval_policy: ApprovalPolicy,
+    ) -> Result<PreviewExecutionResponse, String> {
         let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
         let stored_response = self
             .responses
@@ -1303,8 +1316,16 @@ impl AppStorage {
                 .preview_actions(source.as_ref(), &workbook_write_actions)?;
             (preview.diff_summary, preview.warnings)
         };
-        let requires_approval =
+        let highest_risk = parsed_response
+            .actions
+            .iter()
+            .map(|action| evaluate_risk(&action.tool, &action.args))
+            .max()
+            .unwrap_or(OperationRisk::Readonly);
+        let has_write_actions =
             !file_write_actions.is_empty() || parsed_response.actions.iter().any(is_write_action);
+        let auto_approved = has_write_actions && should_auto_approve(approval_policy, highest_risk);
+        let requires_approval = has_write_actions && !auto_approved;
         let read_tool_artifacts = self.collect_read_tool_artifacts(
             &session,
             &turn,
@@ -1342,6 +1363,9 @@ impl AppStorage {
             &json!({
                 "diffSummary": diff_summary.clone(),
                 "requiresApproval": requires_approval,
+                "autoApproved": auto_approved,
+                "highestRisk": highest_risk,
+                "approvalPolicy": approval_policy,
                 "warnings": warnings.clone(),
                 "fileWriteActions": file_write_actions.clone(),
                 "artifacts": artifacts.clone(),
@@ -1355,6 +1379,9 @@ impl AppStorage {
                 diff_summary: diff_summary.clone(),
                 artifacts: artifacts.clone(),
                 requires_approval,
+                auto_approved,
+                highest_risk,
+                approval_policy,
                 warnings: warnings.clone(),
                 created_at: preview_artifact.created_at.clone(),
                 artifact_id: preview_artifact.id.clone(),
@@ -1372,14 +1399,63 @@ impl AppStorage {
             Some(json!({
                 "previewArtifactId": preview_artifact.id.clone(),
                 "requiresApproval": requires_approval,
+                "autoApproved": auto_approved,
+                "highestRisk": highest_risk,
+                "approvalPolicy": approval_policy,
                 "warningCount": warnings.len(),
             })),
         )?;
+
+        if auto_approved {
+            let approval_artifact = self.record_turn_artifact(
+                &session.id,
+                &turn.id,
+                "approval",
+                &json!({
+                    "decision": ApprovalDecision::Approved,
+                    "note": format!("Auto-approved by {:?} policy at {:?} risk.", approval_policy, highest_risk),
+                    "readyForExecution": true,
+                    "autoApproved": true,
+                    "previewArtifactId": preview_artifact.id.clone(),
+                }),
+                None,
+            )?;
+            self.approvals.insert(
+                turn.id.clone(),
+                StoredApproval {
+                    decision: ApprovalDecision::Approved,
+                    note: Some(format!(
+                        "Auto-approved by {:?} policy.",
+                        approval_policy
+                    )),
+                    ready_for_execution: true,
+                    auto_approved: true,
+                    preview_artifact_id: preview_artifact.id.clone(),
+                    created_at: approval_artifact.created_at.clone(),
+                    artifact_id: approval_artifact.id.clone(),
+                },
+            );
+            self.append_turn_log(
+                &session.id,
+                &turn.id,
+                Some(&approval_artifact.id),
+                "approval-auto-approved",
+                "Preview was auto-approved by the current approval policy.".to_string(),
+                Some(json!({
+                    "approvalArtifactId": approval_artifact.id,
+                    "approvalPolicy": approval_policy,
+                    "highestRisk": highest_risk,
+                })),
+            )?;
+        }
 
         Ok(PreviewExecutionResponse {
             turn: next_turn,
             ready: true,
             requires_approval,
+            auto_approved,
+            highest_risk,
+            approval_policy,
             can_execute: !requires_approval,
             diff_summary,
             artifacts,
@@ -1425,6 +1501,7 @@ impl AppStorage {
                 decision: request.decision,
                 note: request.note.clone(),
                 ready_for_execution,
+                auto_approved: false,
                 preview_artifact_id,
                 created_at: approval_artifact.created_at.clone(),
                 artifact_id: approval_artifact.id.clone(),
@@ -2630,6 +2707,18 @@ impl AppStorage {
         let requires_approval = live_preview
             .map(|preview| preview.requires_approval)
             .or_else(|| persisted_preview.map(|preview| preview.payload.requires_approval));
+        let auto_approved = live_preview
+            .map(|preview| preview.auto_approved)
+            .or_else(|| persisted_preview.map(|preview| preview.payload.auto_approved))
+            .unwrap_or(false);
+        let highest_risk = live_preview
+            .map(|preview| preview.highest_risk)
+            .or_else(|| persisted_preview.map(|preview| preview.payload.highest_risk))
+            .unwrap_or_default();
+        let approval_policy = live_preview
+            .map(|preview| preview.approval_policy)
+            .or_else(|| persisted_preview.map(|preview| preview.payload.approval_policy))
+            .unwrap_or_default();
         let preview_artifact_id = live_preview
             .map(|preview| preview.artifact_id.clone())
             .or_else(|| persisted_preview.map(|preview| preview.artifact_id.clone()));
@@ -2704,6 +2793,9 @@ impl AppStorage {
                     decision: Some(approval.decision),
                     ready_for_execution: approval.ready_for_execution,
                     requires_approval: requires_approval.unwrap_or(true),
+                    auto_approved: approval.auto_approved || auto_approved,
+                    highest_risk,
+                    approval_policy,
                     approved_at: Some(approval.created_at.clone()),
                     note: approval.note.clone(),
                     preview_artifact_id,
@@ -2733,6 +2825,9 @@ impl AppStorage {
                     decision: Some(approval.payload.decision),
                     ready_for_execution: approval.payload.ready_for_execution,
                     requires_approval: requires_approval.unwrap_or(true),
+                    auto_approved,
+                    highest_risk,
+                    approval_policy,
                     approved_at: Some(approval.created_at.clone()),
                     note: approval.payload.note.clone(),
                     preview_artifact_id,
@@ -2778,6 +2873,9 @@ impl AppStorage {
                     decision: None,
                     ready_for_execution: false,
                     requires_approval,
+                    auto_approved,
+                    highest_risk,
+                    approval_policy,
                     approved_at: None,
                     note: None,
                     preview_artifact_id,
@@ -2816,6 +2914,9 @@ impl AppStorage {
                     decision: None,
                     ready_for_execution: false,
                     requires_approval: false,
+                    auto_approved: false,
+                    highest_risk,
+                    approval_policy,
                     approved_at: None,
                     note: None,
                     preview_artifact_id: None,

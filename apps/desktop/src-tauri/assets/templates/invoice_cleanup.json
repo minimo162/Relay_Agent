@@ -1,0 +1,12 @@
+{
+  "id": "builtin-invoice-cleanup",
+  "title": "請求書データ整形",
+  "category": "accounting",
+  "description": "請求書データの列を整え、経理確認向けのコピーを作成します。",
+  "goal": "請求書データの列名と型を整えて、保存用の別コピーを作成する",
+  "expectedTools": ["table.rename_columns", "table.cast_columns", "workbook.save_copy"],
+  "exampleInputFile": "invoice-export.csv",
+  "tags": ["経理", "請求書", "整形"],
+  "isBuiltIn": true,
+  "createdAt": "2026-04-02T00:00:00Z"
+}

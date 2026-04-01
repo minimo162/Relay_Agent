@@ -1,6 +1,10 @@
 <script lang="ts">
   import { slide } from "svelte/transition";
-  import type { McpTransport, ToolRegistration } from "@relay-agent/contracts";
+  import type {
+    ApprovalPolicy,
+    McpTransport,
+    ToolRegistration
+  } from "@relay-agent/contracts";
 
   export let open = false;
   export let autoLaunchEdge = true;
@@ -12,6 +16,7 @@
   export let planningEnabled = true;
   export let autoApproveReadSteps = true;
   export let pauseBetweenSteps = false;
+  export let approvalPolicy: ApprovalPolicy = "safe";
   export let cdpTestStatus: "idle" | "testing" | "ok" | "fail" = "idle";
   export let cdpTestMessage = "";
   export let copiedBrowserCommandNotice = "";
@@ -53,6 +58,18 @@
           <li>保存先は常に別コピーです（元ファイルを直接変更しません）</li>
           <li>元のファイルは読み取り専用として扱われます</li>
         </ul>
+
+        <label class="field-label" for="settings-approval-policy">承認ポリシー</label>
+        <select
+          id="settings-approval-policy"
+          class="input"
+          bind:value={approvalPolicy}
+          on:change={onPersist}
+        >
+          <option value="safe">安全: すべて手動確認</option>
+          <option value="standard">標準: readonly / low を自動承認</option>
+          <option value="fast">高速: readonly / low / medium を自動承認</option>
+        </select>
 
         <h3>Copilot ブラウザ自動化</h3>
         <div class="auto-launch-toggle" class:auto-launch-on={autoLaunchEdge}>

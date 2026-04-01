@@ -1,0 +1,12 @@
+{
+  "id": "builtin-remove-duplicates",
+  "title": "重複行除去",
+  "category": "general",
+  "description": "重複候補を取り除き、後続処理しやすいコピーを生成します。",
+  "goal": "重複行を整理し、確認できる別コピーとして保存する",
+  "expectedTools": ["table.group_aggregate", "workbook.save_copy"],
+  "exampleInputFile": "customers.csv",
+  "tags": ["汎用", "重複", "整形"],
+  "isBuiltIn": true,
+  "createdAt": "2026-04-02T00:00:00Z"
+}

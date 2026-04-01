@@ -1,5 +1,8 @@
 use std::{path::PathBuf, sync::Mutex};
 
+use crate::batch::BatchRegistry;
+use crate::pipeline::PipelineRegistry;
+use crate::risk_evaluator::ApprovalPolicy;
 use crate::storage::AppStorage;
 
 #[derive(Clone, Debug)]
@@ -88,6 +91,9 @@ pub struct DesktopState {
     pub initialized: Mutex<bool>,
     pub storage: Mutex<AppStorage>,
     pub startup_preflight: Mutex<StartupPreflight>,
+    pub pipeline_registry: Mutex<PipelineRegistry>,
+    pub batch_registry: Mutex<BatchRegistry>,
+    pub approval_policy: Mutex<ApprovalPolicy>,
     pub sample_workbook_path: Option<PathBuf>,
 }
 
@@ -101,6 +107,9 @@ impl DesktopState {
             initialized: Mutex::new(false),
             storage: Mutex::new(storage),
             startup_preflight: Mutex::new(startup_preflight),
+            pipeline_registry: Mutex::new(PipelineRegistry::default()),
+            batch_registry: Mutex::new(BatchRegistry::default()),
+            approval_policy: Mutex::new(ApprovalPolicy::default()),
             sample_workbook_path,
         }
     }

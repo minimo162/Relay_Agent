@@ -1,17 +1,21 @@
 mod app;
+mod batch;
 mod browser_automation;
 mod execution;
 mod file_ops;
 mod mcp_client;
 mod models;
+mod pipeline;
 mod persistence;
 mod project;
 mod quality_validator;
 mod relay;
+mod risk_evaluator;
 mod session;
 mod startup;
 mod state;
 mod storage;
+mod template;
 mod tool_registry;
 mod workbook;
 mod workflow_smoke;
@@ -72,7 +76,22 @@ pub fn run() {
             execution::record_scope_approval,
             execution::run_execution,
             execution::run_execution_multi,
-            execution::validate_output_quality
+            execution::validate_output_quality,
+            pipeline::pipeline_create,
+            pipeline::pipeline_run,
+            pipeline::pipeline_get_status,
+            pipeline::pipeline_cancel,
+            batch::batch_create,
+            batch::batch_run,
+            batch::batch_get_status,
+            batch::batch_skip_target,
+            template::template_list,
+            template::template_get,
+            template::template_create,
+            template::template_delete,
+            template::template_from_session,
+            execution::get_approval_policy,
+            execution::set_approval_policy
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { approvalPolicyEnum, operationRiskEnum } from "./approval";
 import { sessionSchema, turnSchema, turnStatusSchema } from "./core";
 import {
   documentReadTextActionSchema,
@@ -215,6 +216,9 @@ export const readTurnArtifactsRequestSchema = z.object({
 export const previewArtifactPayloadSchema = z.object({
   diffSummary: diffSummarySchema,
   requiresApproval: z.boolean(),
+  autoApproved: z.boolean().default(false),
+  highestRisk: operationRiskEnum.default("medium"),
+  approvalPolicy: approvalPolicyEnum.default("safe"),
   warnings: z.array(z.string()).default([]),
   artifacts: z.array(outputArtifactSchema).default([]),
   fileWriteActions: z
@@ -324,6 +328,9 @@ export const approvalInspectionPayloadSchema = z.object({
   decision: z.enum(["approved", "rejected"]).optional(),
   readyForExecution: z.boolean(),
   requiresApproval: z.boolean(),
+  autoApproved: z.boolean().default(false),
+  highestRisk: operationRiskEnum.default("medium"),
+  approvalPolicy: approvalPolicyEnum.default("safe"),
   approvedAt: isoDateTimeSchema.optional(),
   note: z.string().trim().min(1).optional(),
   previewArtifactId: entityIdSchema.optional(),
@@ -640,6 +647,9 @@ export const previewExecutionResponseSchema = z.object({
   turn: turnSchema,
   ready: z.boolean(),
   requiresApproval: z.boolean(),
+  autoApproved: z.boolean().default(false),
+  highestRisk: operationRiskEnum.default("medium"),
+  approvalPolicy: approvalPolicyEnum.default("safe"),
   canExecute: z.boolean(),
   diffSummary: diffSummarySchema,
   artifacts: z.array(outputArtifactSchema).default([]),

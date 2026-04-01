@@ -31,6 +31,7 @@ export type ActivityFeedEvent = {
   timestamp: string;
   message: string;
   icon: string;
+  badgeLabel?: string;
   detail?: string;
   expandable?: boolean;
   actionRequired?: boolean;

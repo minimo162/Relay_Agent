@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::risk_evaluator::{ApprovalPolicy, OperationRisk};
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum RelayMode {
@@ -426,6 +428,12 @@ pub struct WorkbookProfile {
 pub struct PreviewArtifactPayload {
     pub diff_summary: DiffSummary,
     pub requires_approval: bool,
+    #[serde(default)]
+    pub auto_approved: bool,
+    #[serde(default)]
+    pub highest_risk: OperationRisk,
+    #[serde(default)]
+    pub approval_policy: ApprovalPolicy,
     pub warnings: Vec<String>,
     pub file_write_actions: Vec<SpreadsheetAction>,
     #[serde(default)]
@@ -567,6 +575,12 @@ pub struct ApprovalInspectionPayload {
     pub decision: Option<ApprovalDecision>,
     pub ready_for_execution: bool,
     pub requires_approval: bool,
+    #[serde(default)]
+    pub auto_approved: bool,
+    #[serde(default)]
+    pub highest_risk: OperationRisk,
+    #[serde(default)]
+    pub approval_policy: ApprovalPolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approved_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1084,6 +1098,12 @@ pub struct PreviewExecutionResponse {
     pub turn: Turn,
     pub ready: bool,
     pub requires_approval: bool,
+    #[serde(default)]
+    pub auto_approved: bool,
+    #[serde(default)]
+    pub highest_risk: OperationRisk,
+    #[serde(default)]
+    pub approval_policy: ApprovalPolicy,
     pub can_execute: bool,
     pub diff_summary: DiffSummary,
     pub artifacts: Vec<OutputArtifact>,

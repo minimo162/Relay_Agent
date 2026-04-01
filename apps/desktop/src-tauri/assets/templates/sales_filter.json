@@ -1,0 +1,12 @@
+{
+  "id": "builtin-sales-filter",
+  "title": "売上データフィルタ",
+  "category": "sales",
+  "description": "営業向けに対象条件の売上行だけを残し、確認用コピーを作成します。",
+  "goal": "売上 CSV から対象条件に合う行だけを残し、結果を確認できる別コピーを保存する",
+  "expectedTools": ["table.filter_rows", "workbook.save_copy"],
+  "exampleInputFile": "sales.csv",
+  "tags": ["営業", "フィルタ", "CSV"],
+  "isBuiltIn": true,
+  "createdAt": "2026-04-02T00:00:00Z"
+}

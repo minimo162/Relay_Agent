@@ -16,6 +16,97 @@
 
 ## Milestone Log
 
+### Cowork Follow-up
+
+#### Tasks 164-169 Pipeline workflow slice
+
+Completed.
+
+Artifacts:
+
+- `docs/PIPELINE_DESIGN.md`
+- `docs/PIPELINE_VERIFICATION.md`
+- `packages/contracts/src/pipeline.ts`
+- `apps/desktop/src-tauri/src/pipeline.rs`
+- `apps/desktop/src/lib/components/PipelineBuilder.svelte`
+- `apps/desktop/src/lib/components/PipelineProgress.svelte`
+
+Outcome:
+
+- Added shared pipeline contracts plus backend orchestration state and `pipeline:step_update` events.
+- Added a delegation-mode pipeline workbench with step editing, execution start, progress rendering, and stop action.
+- Implemented save-copy handoff between sequential step outputs without mutating the original workbook.
+
+#### Tasks 170-174 Batch processing slice
+
+Completed.
+
+Artifacts:
+
+- `docs/BATCH_DESIGN.md`
+- `docs/BATCH_VERIFICATION.md`
+- `packages/contracts/src/batch.ts`
+- `apps/desktop/src-tauri/src/batch.rs`
+- `apps/desktop/src/lib/components/BatchTargetSelector.svelte`
+- `apps/desktop/src/lib/components/BatchDashboard.svelte`
+
+Outcome:
+
+- Added sequential batch job contracts and backend job runner with `batch:target_update` events.
+- Added folder or multi-file target selection, per-target status rendering, output-folder open action, and manual skip control.
+- Kept batch outputs in a derived `relay-batch-output` directory using save-copy only semantics.
+
+#### Tasks 175-179 Template library slice
+
+Completed.
+
+Artifacts:
+
+- `docs/TEMPLATE_LIBRARY_DESIGN.md`
+- `docs/TEMPLATE_LIBRARY_VERIFICATION.md`
+- `packages/contracts/src/template.ts`
+- `apps/desktop/src-tauri/src/template.rs`
+- `apps/desktop/src-tauri/assets/templates/*.json`
+- `apps/desktop/src/lib/components/TemplateBrowser.svelte`
+
+Outcome:
+
+- Added bundled and custom workflow template storage with CRUD commands.
+- Added a template browser tab with category filtering, keyword search, apply-to-goal behavior, and custom delete support.
+- Added completion-time template capture through `template_from_session`.
+
+#### Tasks 180-183 Smart approval slice
+
+Completed.
+
+Artifacts:
+
+- `docs/SMART_APPROVAL_DESIGN.md`
+- `docs/SMART_APPROVAL_VERIFICATION.md`
+- `packages/contracts/src/approval.ts`
+- `apps/desktop/src-tauri/src/risk_evaluator.rs`
+- `apps/desktop/src/lib/components/SettingsModal.svelte`
+- `apps/desktop/src/lib/components/ActivityFeed.svelte`
+
+Outcome:
+
+- Added approval policy contracts and backend risk evaluation.
+- Extended preview responses with `autoApproved`, `highestRisk`, and `approvalPolicy`.
+- Added approval policy persistence in frontend continuity storage and surfaced auto-approved operations in the activity feed.
+
+#### Verification
+
+Commands run:
+
+- `pnpm check`
+- `pnpm typecheck`
+- `pnpm --filter @relay-agent/desktop build`
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`
+
+Result:
+
+- Passed on 2026-04-02 in the current environment.
+
 ### Milestone 0
 
 #### 1.1 Repository audit

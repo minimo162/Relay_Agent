@@ -4,7 +4,9 @@
   export let events: ActivityFeedEvent[] = [];
   export let summary = "";
   export let outputPath = "";
+  export let canSaveTemplate = false;
   export let onOpenOutput: () => void = () => {};
+  export let onSaveTemplate: () => void = () => {};
   export let onReset: () => void = () => {};
 </script>
 
@@ -24,6 +26,11 @@
     {#if outputPath}
       <button class="btn btn-secondary" type="button" on:click={onOpenOutput}>
         出力ファイルを開く
+      </button>
+    {/if}
+    {#if canSaveTemplate}
+      <button class="btn btn-secondary" type="button" on:click={onSaveTemplate}>
+        テンプレートとして保存
       </button>
     {/if}
     <button class="btn btn-primary" type="button" on:click={onReset}>

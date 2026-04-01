@@ -1,23 +1,32 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-shell";
   import ActivityFeed from "$lib/components/ActivityFeed.svelte";
   import AgentActivityFeed from "$lib/components/AgentActivityFeed.svelte";
   import ArtifactPreview from "$lib/components/ArtifactPreview.svelte";
   import ApprovalGate from "$lib/components/ApprovalGate.svelte";
+  import BatchDashboard from "$lib/components/BatchDashboard.svelte";
+  import BatchTargetSelector from "$lib/components/BatchTargetSelector.svelte";
   import ChatComposer from "$lib/components/ChatComposer.svelte";
   import CompletionTimeline from "$lib/components/CompletionTimeline.svelte";
   import GoalInput from "$lib/components/GoalInput.svelte";
   import InterventionPanel from "$lib/components/InterventionPanel.svelte";
+  import PipelineBuilder from "$lib/components/PipelineBuilder.svelte";
+  import PipelineProgress from "$lib/components/PipelineProgress.svelte";
   import ProjectSelector from "$lib/components/ProjectSelector.svelte";
   import RecentSessions from "$lib/components/RecentSessions.svelte";
   import SettingsModal from "$lib/components/SettingsModal.svelte";
+  import TemplateBrowser from "$lib/components/TemplateBrowser.svelte";
   import {
     activityFeedStore,
     delegationStore,
     type ActivityFeedEvent
   } from "$lib/stores/delegation";
   import type {
+    ApprovalPolicy,
+    BatchJob,
+    BatchTargetUpdateEvent,
     CopilotTurnResponse,
     DiffSummary,
     ExecutionPlan,
@@ -28,6 +37,10 @@
     PlanProgressResponse,
     PlanStep,
     PlanStepStatus,
+    Pipeline,
+    PipelineInputSource,
+    PipelineStep,
+    PipelineStepUpdateEvent,
     PreflightWorkbookResponse,
     Project,
     ReadTurnArtifactsResponse,
@@ -38,12 +51,18 @@
     ToolExecutionResult,
     TurnDetailsViewModel,
     ValidationIssue,
-    WorkbookProfile
+    WorkbookProfile,
+    WorkflowTemplate,
+    WorkflowTemplateCategory
   } from "@relay-agent/contracts";
   import {
     addProjectMemory,
     approvePlan,
     assessCopilotHandoff,
+    batchCreate,
+    batchGetStatus,
+    batchRun,
+    batchSkipTarget,
     buildPlanningPrompt,
     connectMcpServer,
     createProject,
@@ -51,6 +70,7 @@
     discardDelegationDraft,
     discardStudioDraft,
     generateRelayPacket,
+    getApprovalPolicy,
     getPlanProgress,
     getCopilotBrowserErrorMessage,
     getFriendlyError,
@@ -66,6 +86,7 @@
     listProjects,
     listRecoverableStudioDrafts,
     listRecentSessions,
+    loadApprovalPolicy,
     loadDelegationDraft,
     loadSelectedProjectId,
     loadStudioDraft,
@@ -76,6 +97,10 @@
     markWelcomeSeen,
     markStudioDraftClean,
     pingDesktop,
+    pipelineCancel,
+    pipelineCreate,
+    pipelineGetStatus,
+    pipelineRun,
     preflightWorkbook,
     previewExecution,
     readTurnArtifacts,
@@ -88,6 +113,7 @@
     respondToApproval,
     runExecution,
     validateOutputQuality,
+    saveApprovalPolicy,
     saveBrowserAutomationSettings,
     saveDelegationDraft,
     saveSelectedProjectId,
@@ -96,9 +122,13 @@
     sendPromptViaBrowserTool,
     saveStudioDraft,
     setSessionProject,
+    setApprovalPolicy,
     setToolEnabled,
     startTurn,
     submitCopilotResponse,
+    templateDelete,
+    templateFromSession,
+    templateList,
     validateProjectScopeActions,
     type AgentLoopResult,
     type BrowserCommandProgress,
@@ -113,6 +143,12 @@
   import { buildProjectContext } from "$lib/prompt-templates";
 
   type GuidedStage = "setup" | "copilot" | "review-save";
+  type AutomationTab = "pipeline" | "batch" | "template";
+  type BatchTargetDraft = {
+    path: string;
+    name: string;
+    size: number;
+  };
   type ProgressStatus = "waiting" | "running" | "done" | "error";
   type ProgressItem = {
     id: string;
@@ -368,6 +404,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let planningEnabled = true;
   let autoApproveReadSteps = true;
   let pauseBetweenSteps = false;
+  let approvalPolicy: ApprovalPolicy = "safe";
   let agentLoopRunning = false;
   let agentLoopTurn = 0;
   let agentLoopLog: AgentLoopLogEntry[] = [];
@@ -461,6 +498,33 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let reviewStepAvailable = false;
   let workflowStartedAt: number | null = null;
   let completedAt: number | null = null;
+  let automationTab: AutomationTab = "pipeline";
+  let pipelineTitle = "連続ワークフロー";
+  let pipelineInitialInputPath = "";
+  let pipelineDraftSteps: PipelineStep[] = [
+    {
+      id: crypto.randomUUID(),
+      order: 0,
+      goal: "最初の確認用コピーを作成する",
+      inputSource: "user",
+      status: "pending"
+    },
+    {
+      id: crypto.randomUUID(),
+      order: 1,
+      goal: "前ステップの出力を次の作業へ引き継ぐ",
+      inputSource: "prev_step_output",
+      status: "pending"
+    }
+  ];
+  let activePipeline: Pipeline | null = null;
+  let batchGoal = "";
+  let batchTargets: BatchTargetDraft[] = [];
+  let activeBatchJob: BatchJob | null = null;
+  let workflowTemplates: WorkflowTemplate[] = [];
+  let filteredTemplates: WorkflowTemplate[] = [];
+  let templateSearchQuery = "";
+  let templateCategory: WorkflowTemplateCategory | "all" = "all";
 
   const templates: TemplateOption[] = [
     {
@@ -1536,6 +1600,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     type: ActivityFeedEvent["type"],
     message: string,
     options?: {
+      badgeLabel?: string;
       detail?: string;
       expandable?: boolean;
       actionRequired?: boolean;
@@ -1545,6 +1610,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       type,
       message,
       icon: delegationEventIcons[type],
+      badgeLabel: options?.badgeLabel,
       detail: options?.detail,
       expandable: options?.expandable,
       actionRequired: options?.actionRequired
@@ -1559,6 +1625,159 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     recentSessions = listRecentSessions();
     recentFiles = listRecentFiles();
     recoverableDraftSessionIds = listRecoverableStudioDrafts().map((draft) => draft.sessionId);
+  }
+
+  async function refreshWorkflowTemplates(): Promise<void> {
+    workflowTemplates = await templateList(
+      templateCategory === "all" ? {} : { category: templateCategory }
+    );
+  }
+
+  async function syncApprovalPolicy(): Promise<void> {
+    const savedPolicy = saveApprovalPolicy(approvalPolicy);
+    approvalPolicy = savedPolicy;
+    await setApprovalPolicy({ policy: savedPolicy });
+  }
+
+  function refilterTemplates(): void {
+    const query = templateSearchQuery.trim().toLowerCase();
+    filteredTemplates = workflowTemplates.filter((template) => {
+      const categoryMatches =
+        templateCategory === "all" || template.category === templateCategory;
+      if (!categoryMatches) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      const haystack = [
+        template.title,
+        template.description,
+        template.goal,
+        ...template.tags,
+        ...template.expectedTools
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }
+
+  function normalizePipelineSteps(steps: PipelineStep[]): PipelineStep[] {
+    return steps.map((step, index) => ({
+      ...step,
+      order: index
+    }));
+  }
+
+  function addPipelineStep(): void {
+    pipelineDraftSteps = normalizePipelineSteps([
+      ...pipelineDraftSteps,
+      {
+        id: crypto.randomUUID(),
+        order: pipelineDraftSteps.length,
+        goal: "",
+        inputSource: pipelineDraftSteps.length === 0 ? "user" : "prev_step_output",
+        status: "pending"
+      }
+    ]);
+  }
+
+  function movePipelineDraftStep(index: number, direction: -1 | 1): void {
+    const nextIndex = index + direction;
+    if (nextIndex < 0 || nextIndex >= pipelineDraftSteps.length) {
+      return;
+    }
+    const nextSteps = [...pipelineDraftSteps];
+    const [step] = nextSteps.splice(index, 1);
+    nextSteps.splice(nextIndex, 0, step);
+    pipelineDraftSteps = normalizePipelineSteps(nextSteps);
+  }
+
+  function removePipelineDraftStep(index: number): void {
+    pipelineDraftSteps = normalizePipelineSteps(
+      pipelineDraftSteps.filter((_, candidate) => candidate !== index)
+    );
+  }
+
+  async function handlePipelineStart(): Promise<void> {
+    try {
+      const pipeline = await pipelineCreate({
+        title: pipelineTitle,
+        initialInputPath: pipelineInitialInputPath || filePath,
+        projectId: selectedProjectId ?? undefined,
+        steps: pipelineDraftSteps.map((step) => ({
+          goal: step.goal,
+          inputSource: step.inputSource
+        }))
+      });
+      activePipeline = pipeline;
+      await pipelineRun({ pipelineId: pipeline.id });
+      activePipeline = await pipelineGetStatus({ pipelineId: pipeline.id });
+    } catch (error) {
+      errorMsg = toError(error);
+    }
+  }
+
+  async function handleBatchStart(): Promise<void> {
+    try {
+      const job = await batchCreate({
+        workflowGoal: batchGoal,
+        projectId: selectedProjectId ?? undefined,
+        targetPaths: batchTargets.map((target) => target.path),
+        stopOnFirstError: false
+      });
+      activeBatchJob = job;
+      await batchRun({ batchId: job.id });
+    } catch (error) {
+      errorMsg = toError(error);
+    }
+  }
+
+  async function handleBatchSkip(path: string): Promise<void> {
+    if (!activeBatchJob) {
+      return;
+    }
+    try {
+      await batchSkipTarget({ batchId: activeBatchJob.id, targetPath: path });
+      activeBatchJob = await batchGetStatus({ batchId: activeBatchJob.id });
+    } catch (error) {
+      errorMsg = toError(error);
+    }
+  }
+
+  async function handleSaveCurrentSessionAsTemplate(): Promise<void> {
+    if (!sessionId) {
+      return;
+    }
+    try {
+      await templateFromSession({
+        sessionId,
+        title: taskName.trim() || undefined,
+        category: "custom",
+        description: previewSummary
+      });
+      await refreshWorkflowTemplates();
+      refilterTemplates();
+      automationTab = "template";
+    } catch (error) {
+      errorMsg = toError(error);
+    }
+  }
+
+  async function handleTemplateDelete(template: WorkflowTemplate): Promise<void> {
+    try {
+      await templateDelete({ id: template.id });
+      await refreshWorkflowTemplates();
+      refilterTemplates();
+    } catch (error) {
+      errorMsg = toError(error);
+    }
+  }
+
+  function handleTemplateSelect(template: WorkflowTemplate): void {
+    updateObjective(template.goal, null);
+    automationTab = "pipeline";
   }
 
   function resetAgentLoopState(clearLog = true): void {
@@ -2180,6 +2399,11 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     copiedBrowserCommandNotice = "";
     cdpTestStatus = "idle";
     cdpTestMessage = "";
+  }
+
+  async function persistSettings(): Promise<void> {
+    persistBrowserAutomationSettings();
+    await syncApprovalPolicy();
   }
 
   function currentToolSettings(): ToolSettings {
@@ -3401,11 +3625,21 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       markProgress(2, "done");
       guidedStage = "review-save";
       if (uiMode === "delegation") {
-        delegationStore.requestApproval();
-        pushDelegationEvent("write_approval_requested", "保存前の確認が必要です。", {
-          detail: previewSummary,
-          actionRequired: true
-        });
+        if (preview.autoApproved) {
+          delegationStore.resumeExecution();
+          pushDelegationEvent("write_approved", "現在の承認ポリシーで自動承認されました。", {
+            detail: `${preview.approvalPolicy} / ${preview.highestRisk}`,
+            badgeLabel: "自動承認済み"
+          });
+          await handleReviewSaveStage();
+          return;
+        } else {
+          delegationStore.requestApproval();
+          pushDelegationEvent("write_approval_requested", "保存前の確認が必要です。", {
+            detail: previewSummary,
+            actionRequired: true
+          });
+        }
       }
     } catch (error) {
       const failure = toError(error);
@@ -3647,8 +3881,20 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   onMount(() => {
     window.addEventListener("keydown", handleGlobalKeydown);
+    const unlistenFns: Array<() => void> = [];
 
     void (async () => {
+      unlistenFns.push(
+        await listen<PipelineStepUpdateEvent>("pipeline:step_update", (event) => {
+          activePipeline = event.payload.pipeline;
+        })
+      );
+      unlistenFns.push(
+        await listen<BatchTargetUpdateEvent>("batch:target_update", (event) => {
+          activeBatchJob = event.payload.batchJob;
+        })
+      );
+
       loadExpertDetails();
       showWelcome = !hasSeenWelcome();
       uiMode = loadUiMode();
@@ -3663,6 +3909,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       planningEnabled = browserAutomationSettings.planningEnabled;
       autoApproveReadSteps = browserAutomationSettings.autoApproveReadSteps;
       pauseBetweenSteps = browserAutomationSettings.pauseBetweenSteps;
+      approvalPolicy = saveApprovalPolicy(loadApprovalPolicy());
 
       try {
         await pingDesktop();
@@ -3673,6 +3920,10 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         await refreshProjects();
         await refreshSessions();
         await refreshTools();
+        await getApprovalPolicy();
+        await syncApprovalPolicy();
+        await refreshWorkflowTemplates();
+        refilterTemplates();
         if (!app.storagePath) {
           await applySavedToolSettings();
         }
@@ -3695,6 +3946,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         agentLoopConversationHistory = delegationDraft.conversationHistorySnapshot;
         if (delegationDraft.attachedFiles[0]) {
           filePath = delegationDraft.attachedFiles[0];
+          pipelineInitialInputPath = delegationDraft.attachedFiles[0];
         }
         if (delegationDraft.goal) {
           updateObjective(delegationDraft.goal);
@@ -3704,10 +3956,22 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
     return () => {
       window.removeEventListener("keydown", handleGlobalKeydown);
+      for (const unlisten of unlistenFns) {
+        unlisten();
+      }
     };
   });
 
   $: expectedResponseTemplate = buildExpectedResponseTemplate(suggestOutputPath(filePath));
+  $: if (!pipelineInitialInputPath && filePath) {
+    pipelineInitialInputPath = filePath;
+  }
+  $: {
+    workflowTemplates;
+    templateSearchQuery;
+    templateCategory;
+    refilterTemplates();
+  }
   $: selectedProject =
     projects.find((project) => project.id === selectedProjectId) ?? null;
   $: linkedProjectSessions = selectedProject
@@ -4088,7 +4352,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
           events={$activityFeedStore}
           summary={executionSummary || previewSummary}
           outputPath={previewOutputPath}
+          canSaveTemplate={Boolean(sessionId)}
           onOpenOutput={openOutputFile}
+          onSaveTemplate={handleSaveCurrentSessionAsTemplate}
           onReset={resetAll}
         />
       {:else}
@@ -4133,6 +4399,100 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         onRetry={retryCurrentStage}
       />
     </div>
+  </section>
+
+  <section class="automation-workbench card">
+    <div class="automation-tabs">
+      <button class:is-active={automationTab === "pipeline"} type="button" on:click={() => (automationTab = "pipeline")}>
+        パイプライン
+      </button>
+      <button class:is-active={automationTab === "batch"} type="button" on:click={() => (automationTab = "batch")}>
+        バッチ
+      </button>
+      <button class:is-active={automationTab === "template"} type="button" on:click={() => (automationTab = "template")}>
+        テンプレート
+      </button>
+    </div>
+
+    {#if automationTab === "pipeline"}
+      <PipelineBuilder
+        pipelineTitle={pipelineTitle}
+        initialInputPath={pipelineInitialInputPath || filePath}
+        steps={pipelineDraftSteps}
+        busy={busy}
+        onPipelineTitleChange={(value) => (pipelineTitle = value)}
+        onInitialInputPathChange={(value) => (pipelineInitialInputPath = value)}
+        onAddStep={addPipelineStep}
+        onUpdateStepGoal={(index, value) =>
+          (pipelineDraftSteps = normalizePipelineSteps(
+            pipelineDraftSteps.map((step, candidate) =>
+              candidate === index ? { ...step, goal: value } : step
+            )
+          ))}
+        onUpdateStepInputSource={(index, value) =>
+          (pipelineDraftSteps = normalizePipelineSteps(
+            pipelineDraftSteps.map((step, candidate) =>
+              candidate === index ? { ...step, inputSource: value } : step
+            )
+          ))}
+        onMoveStep={movePipelineDraftStep}
+        onRemoveStep={removePipelineDraftStep}
+        onStart={() => {
+          void handlePipelineStart();
+        }}
+      />
+      <PipelineProgress pipeline={activePipeline} events={$activityFeedStore} />
+      {#if activePipeline?.status === "running"}
+        <button
+          class="btn btn-secondary"
+          type="button"
+          on:click={() => {
+            if (activePipeline) {
+              void pipelineCancel({ pipelineId: activePipeline.id });
+            }
+          }}
+        >
+          パイプライン停止
+        </button>
+      {/if}
+    {:else if automationTab === "batch"}
+      <BatchTargetSelector
+        goal={batchGoal}
+        targets={batchTargets}
+        busy={busy}
+        onGoalChange={(value) => (batchGoal = value)}
+        onTargetsChange={(value) => (batchTargets = value)}
+        onStart={() => {
+          void handleBatchStart();
+        }}
+      />
+      <BatchDashboard
+        batchJob={activeBatchJob}
+        onOpenOutputDir={() => {
+          if (activeBatchJob?.outputDir) {
+            void open(activeBatchJob.outputDir);
+          }
+        }}
+        onSkipTarget={(path) => {
+          void handleBatchSkip(path);
+        }}
+      />
+    {:else}
+      <TemplateBrowser
+        templates={filteredTemplates}
+        activeCategory={templateCategory}
+        searchQuery={templateSearchQuery}
+        onCategoryChange={(value) => {
+          templateCategory = value;
+          void refreshWorkflowTemplates();
+        }}
+        onSearchChange={(value) => (templateSearchQuery = value)}
+        onSelect={handleTemplateSelect}
+        onDelete={(template) => {
+          void handleTemplateDelete(template);
+        }}
+      />
+    {/if}
   </section>
 
   <div class="delegation-composer-wrap">
@@ -5000,6 +5360,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   bind:planningEnabled
   bind:autoApproveReadSteps
   bind:pauseBetweenSteps
+  bind:approvalPolicy
   {cdpTestStatus}
   {cdpTestMessage}
   {copiedBrowserCommandNotice}
@@ -5016,9 +5377,11 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   onClose={() => (settingsOpen = false)}
   onToggleAutoLaunch={() => {
     autoLaunchEdge = !autoLaunchEdge;
-    persistBrowserAutomationSettings();
+    void persistSettings();
   }}
-  onPersist={persistBrowserAutomationSettings}
+  onPersist={() => {
+    void persistSettings();
+  }}
   onCopyCommand={copyEdgeLaunchCommand}
   onTestConnection={testCdpConnection}
   onToggleTool={(toolId, enabled) => {
@@ -5296,6 +5659,30 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     bottom: 0;
     margin-top: 1rem;
     z-index: 10;
+  }
+
+  .automation-workbench {
+    display: grid;
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+
+  .automation-tabs {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .automation-tabs button {
+    padding: 0.45rem 0.9rem;
+    border-radius: 999px;
+    border: 1px solid var(--ra-border);
+    background: var(--ra-surface);
+  }
+
+  .automation-tabs button.is-active {
+    border-color: var(--ra-accent);
+    color: var(--ra-accent);
   }
 
   .step-progress-bar {

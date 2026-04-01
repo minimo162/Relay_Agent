@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::mcp_client::McpClient;
@@ -10,7 +11,21 @@ use crate::models::{
     RunExecutionRequest, RunExecutionResponse, SetToolEnabledRequest, ToolRegistration,
     ToolSource, ValidateOutputQualityRequest,
 };
+use crate::risk_evaluator::ApprovalPolicy;
 use crate::state::DesktopState;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetApprovalPolicyRequest {
+    pub policy: ApprovalPolicy,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalPolicyConfig {
+    pub policy: ApprovalPolicy,
+    pub updated_at: String,
+}
 
 #[tauri::command]
 pub fn list_tools(state: State<'_, DesktopState>) -> Result<ListToolsResponse, String> {
@@ -111,7 +126,11 @@ pub fn preview_execution(
     request: PreviewExecutionRequest,
 ) -> Result<PreviewExecutionResponse, String> {
     let mut storage = state.storage.lock().expect("desktop storage poisoned");
-    storage.preview_execution(request)
+    let approval_policy = *state
+        .approval_policy
+        .lock()
+        .expect("approval policy poisoned");
+    storage.preview_execution_with_policy(request, approval_policy)
 }
 
 #[tauri::command]
@@ -191,6 +210,34 @@ pub fn validate_output_quality(
     request: ValidateOutputQualityRequest,
 ) -> Result<crate::models::QualityCheckResult, String> {
     crate::quality_validator::validate_output_quality(&request.source_path, &request.output_path)
+}
+
+#[tauri::command]
+pub fn get_approval_policy(state: State<'_, DesktopState>) -> ApprovalPolicyConfig {
+    let policy = *state
+        .approval_policy
+        .lock()
+        .expect("approval policy poisoned");
+    ApprovalPolicyConfig {
+        policy,
+        updated_at: chrono::Utc::now().to_rfc3339(),
+    }
+}
+
+#[tauri::command]
+pub fn set_approval_policy(
+    state: State<'_, DesktopState>,
+    request: SetApprovalPolicyRequest,
+) -> ApprovalPolicyConfig {
+    let mut approval_policy = state
+        .approval_policy
+        .lock()
+        .expect("approval policy poisoned");
+    *approval_policy = request.policy;
+    ApprovalPolicyConfig {
+        policy: *approval_policy,
+        updated_at: chrono::Utc::now().to_rfc3339(),
+    }
 }
 
 #[cfg(test)]

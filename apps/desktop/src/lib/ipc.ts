@@ -1,8 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
+  approvalPolicyConfigSchema,
   addProjectMemoryRequestSchema,
   assessCopilotHandoffRequestSchema,
   assessCopilotHandoffResponseSchema,
+  batchCreateRequestSchema,
+  batchJobSchema,
+  batchSkipTargetRequestSchema,
+  batchStatusRequestSchema,
   checkCopilotConnectionRequestSchema,
   copilotBrowserConnectResultSchema,
   copilotBrowserResultSchema,
@@ -55,13 +60,28 @@ import {
   submitCopilotResponseResponseSchema,
   planProgressRequestSchema,
   planProgressResponseSchema,
+  pipelineCreateRequestSchema,
+  pipelineSchema,
+  pipelineStatusRequestSchema,
   toolRegistrationSchema,
+  templateCreateRequestSchema,
+  templateDeleteRequestSchema,
+  templateFromSessionRequestSchema,
+  templateGetRequestSchema,
+  templateListRequestSchema,
+  workflowTemplateSchema,
+  setApprovalPolicyRequestSchema,
   updateProjectRequestSchema,
   validateOutputQualityRequestSchema,
   validateOutputQualityResponseSchema,
+  type ApprovalPolicyConfig,
   type AddProjectMemoryRequest,
   type AssessCopilotHandoffRequest,
   type AssessCopilotHandoffResponse,
+  type BatchCreateRequest,
+  type BatchJob,
+  type BatchSkipTargetRequest,
+  type BatchStatusRequest,
   type CheckCopilotConnectionRequest,
   type CopilotBrowserResult,
   type CopilotBrowserConnectResult,
@@ -114,10 +134,20 @@ import {
   type SubmitCopilotResponseResponse,
   type PlanProgressRequest,
   type PlanProgressResponse,
+  type Pipeline,
+  type PipelineCreateRequest,
+  type PipelineStatusRequest,
   type ToolRegistration,
+  type TemplateCreateRequest,
+  type TemplateDeleteRequest,
+  type TemplateFromSessionRequest,
+  type TemplateGetRequest,
+  type TemplateListRequest,
   type UpdateProjectRequest,
   type ValidateOutputQualityRequest,
-  type ValidateOutputQualityResponse
+  type ValidateOutputQualityResponse,
+  type WorkflowTemplate,
+  type SetApprovalPolicyRequest
 } from "@relay-agent/contracts";
 
 type Schema<T> = {
@@ -131,6 +161,16 @@ const stringSchema: Schema<string> = {
     }
 
     return value;
+  }
+};
+
+const emptyResponseSchema: Schema<null> = {
+  parse(value: unknown): null {
+    if (value === null || typeof value === "undefined") {
+      return null;
+    }
+
+    throw new TypeError("Expected an empty response.");
   }
 };
 
@@ -569,6 +609,164 @@ export function validateOutputQuality(
   );
 }
 
+export function pipelineCreate(
+  payload: PipelineCreateRequest
+): Promise<Pipeline> {
+  return invokeWithPayload(
+    "pipeline_create",
+    payload,
+    pipelineCreateRequestSchema,
+    pipelineSchema
+  );
+}
+
+export function pipelineGetStatus(
+  payload: PipelineStatusRequest
+): Promise<Pipeline> {
+  return invokeWithPayload(
+    "pipeline_get_status",
+    payload,
+    pipelineStatusRequestSchema,
+    pipelineSchema
+  );
+}
+
+export async function pipelineRun(
+  payload: PipelineStatusRequest
+): Promise<void> {
+  await invokeWithPayload(
+    "pipeline_run",
+    payload,
+    pipelineStatusRequestSchema,
+    emptyResponseSchema
+  );
+}
+
+export async function pipelineCancel(
+  payload: PipelineStatusRequest
+): Promise<void> {
+  await invokeWithPayload(
+    "pipeline_cancel",
+    payload,
+    pipelineStatusRequestSchema,
+    emptyResponseSchema
+  );
+}
+
+export function batchCreate(
+  payload: BatchCreateRequest
+): Promise<BatchJob> {
+  return invokeWithPayload(
+    "batch_create",
+    payload,
+    batchCreateRequestSchema,
+    batchJobSchema
+  );
+}
+
+export function batchGetStatus(
+  payload: BatchStatusRequest
+): Promise<BatchJob> {
+  return invokeWithPayload(
+    "batch_get_status",
+    payload,
+    batchStatusRequestSchema,
+    batchJobSchema
+  );
+}
+
+export async function batchRun(
+  payload: BatchStatusRequest
+): Promise<void> {
+  await invokeWithPayload(
+    "batch_run",
+    payload,
+    batchStatusRequestSchema,
+    emptyResponseSchema
+  );
+}
+
+export async function batchSkipTarget(
+  payload: BatchSkipTargetRequest
+): Promise<void> {
+  await invokeWithPayload(
+    "batch_skip_target",
+    payload,
+    batchSkipTargetRequestSchema,
+    emptyResponseSchema
+  );
+}
+
+export function templateList(
+  payload: TemplateListRequest = {}
+): Promise<WorkflowTemplate[]> {
+  return invokeWithPayload(
+    "template_list",
+    payload,
+    templateListRequestSchema,
+    workflowTemplateSchema.array()
+  );
+}
+
+export function templateGet(
+  payload: TemplateGetRequest
+): Promise<WorkflowTemplate> {
+  return invokeWithPayload(
+    "template_get",
+    payload,
+    templateGetRequestSchema,
+    workflowTemplateSchema
+  );
+}
+
+export function templateCreate(
+  payload: TemplateCreateRequest
+): Promise<WorkflowTemplate> {
+  return invokeWithPayload(
+    "template_create",
+    payload,
+    templateCreateRequestSchema,
+    workflowTemplateSchema
+  );
+}
+
+export async function templateDelete(
+  payload: TemplateDeleteRequest
+): Promise<void> {
+  await invokeWithPayload(
+    "template_delete",
+    payload,
+    templateDeleteRequestSchema,
+    emptyResponseSchema
+  );
+}
+
+export function templateFromSession(
+  payload: TemplateFromSessionRequest
+): Promise<WorkflowTemplate> {
+  return invokeWithPayload(
+    "template_from_session",
+    payload,
+    templateFromSessionRequestSchema,
+    workflowTemplateSchema
+  );
+}
+
+export function getApprovalPolicy(): Promise<ApprovalPolicyConfig> {
+  return invokeWithoutPayload("get_approval_policy", approvalPolicyConfigSchema);
+}
+
+export function setApprovalPolicy(
+  payload: SetApprovalPolicyRequest
+): Promise<ApprovalPolicyConfig> {
+  return invokeWithPayload(
+    "set_approval_policy",
+    payload,
+    setApprovalPolicyRequestSchema,
+    approvalPolicyConfigSchema
+  );
+}
+
 export const relayAgentIpc = {
   pingDesktop,
   initializeApp,
@@ -598,7 +796,22 @@ export const relayAgentIpc = {
   respondToApproval,
   runExecution,
   runExecutionMulti,
-  validateOutputQuality
+  validateOutputQuality,
+  pipelineCreate,
+  pipelineGetStatus,
+  pipelineRun,
+  pipelineCancel,
+  batchCreate,
+  batchGetStatus,
+  batchRun,
+  batchSkipTarget,
+  templateList,
+  templateGet,
+  templateCreate,
+  templateDelete,
+  templateFromSession,
+  getApprovalPolicy,
+  setApprovalPolicy
 };
 
 export type RelayAgentIpc = typeof relayAgentIpc;

@@ -1,5 +1,6 @@
 import { browser } from "$app/environment";
 import type {
+  ApprovalPolicy,
   ExecutionPlan,
   McpServerConfig,
   OutputArtifact
@@ -33,6 +34,7 @@ const DEFAULT_TOOL_SETTINGS = {
   disabledToolIds: [],
   mcpServers: []
 } as const;
+const DEFAULT_APPROVAL_POLICY: ApprovalPolicy = "safe";
 
 export type PersistedPreviewSnapshot = {
   sourcePath: string;
@@ -139,6 +141,7 @@ type ContinuityState = {
   uiMode: UiMode;
   browserAutomation: BrowserAutomationSettings;
   toolSettings: ToolSettings;
+  approvalPolicy: ApprovalPolicy;
 };
 
 function createDefaultState(): ContinuityState {
@@ -155,7 +158,8 @@ function createDefaultState(): ContinuityState {
     toolSettings: {
       disabledToolIds: [],
       mcpServers: []
-    }
+    },
+    approvalPolicy: DEFAULT_APPROVAL_POLICY
   };
 }
 
@@ -182,7 +186,8 @@ function readState(): ContinuityState {
       selectedProjectId: asOptionalString(parsed.selectedProjectId),
       uiMode: normalizeUiMode(parsed.uiMode),
       browserAutomation: normalizeBrowserAutomationSettings(parsed.browserAutomation),
-      toolSettings: normalizeToolSettings(parsed.toolSettings)
+      toolSettings: normalizeToolSettings(parsed.toolSettings),
+      approvalPolicy: normalizeApprovalPolicy(parsed.approvalPolicy)
     };
   } catch {
     return createDefaultState();
@@ -735,6 +740,10 @@ function normalizeMcpServer(value: unknown): McpServerConfig | null {
   };
 }
 
+function normalizeApprovalPolicy(value: unknown): ApprovalPolicy {
+  return value === "standard" || value === "fast" ? value : DEFAULT_APPROVAL_POLICY;
+}
+
 function sanitizeBrowserAutomationSettings(
   value: BrowserAutomationSettings
 ): BrowserAutomationSettings {
@@ -959,6 +968,10 @@ export function loadToolSettings(): ToolSettings {
   return readState().toolSettings;
 }
 
+export function loadApprovalPolicy(): ApprovalPolicy {
+  return readState().approvalPolicy;
+}
+
 export function loadUiMode(): UiMode {
   return readState().uiMode;
 }
@@ -1011,4 +1024,15 @@ export function saveToolSettings(value: ToolSettings): ToolSettings {
   }));
 
   return nextSettings;
+}
+
+export function saveApprovalPolicy(value: ApprovalPolicy): ApprovalPolicy {
+  const nextPolicy = normalizeApprovalPolicy(value);
+
+  updateState((current) => ({
+    ...current,
+    approvalPolicy: nextPolicy
+  }));
+
+  return nextPolicy;
 }
