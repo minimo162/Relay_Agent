@@ -8,7 +8,7 @@ Copilot が実行計画を立案し、読み取り操作を自動実行、書き
 
 ### エージェントループ（自律実行）
 
-- M365 Copilot（Edge CDP / Playwright 経由）に自然言語でタスクを指示
+- M365 Copilot（Edge CDP 経由）に自然言語でタスクを指示
 - Copilot が read ツールを自律実行しながらデータを調査
 - 書き込み操作は必ずプレビュー確認 → ユーザー承認を経てから実行
 - 最大ターン数・タイムアウトを設定可能、途中キャンセルに対応
@@ -18,11 +18,11 @@ Copilot が実行計画を立案し、読み取り操作を自動実行、書き
 - 実行前に Copilot がステップごとの実行計画（ExecutionPlan）を提案
 - 計画をユーザーが確認・編集・承認してから自律実行
 - 書き込みステップに到達したら自動停止し、再度承認を要求
-- 計画の進捗をリアルタイムに ActivityFeed に表示
+- 計画の進捗をリアルタイムに UnifiedFeed に表示
 
 ### 対応ツール
 
-ツールはすべて ToolRegistry で一元管理され、設定画面から有効/無効を切り替えられます。
+ツールはすべて ToolCatalog で一元管理され、設定画面から有効/無効を切り替えられます。
 
 **スプレッドシート操作（CSV / XLSX）**
 - `workbook.inspect` — シート構成・列情報の読み取り
@@ -62,6 +62,7 @@ Copilot が実行計画を立案し、読み取り操作を自動実行、書き
 - 接続時にサーバーのツール一覧を自動発見・登録
 - MCP ツールはすべて承認ゲート経由で実行（`requiresApproval: true`）
 - MCP ツール呼び出しには 30 秒タイムアウトを適用
+- ContextPanel の「Servers」タブで接続状態をリアルタイム確認
 
 ### プロジェクト管理
 
@@ -70,10 +71,26 @@ Copilot が実行計画を立案し、読み取り操作を自動実行、書き
 - 学習済み設定（メモリ）で繰り返しタスクの文脈を維持
 - プロジェクトのルートフォルダ外へのファイルアクセスを警告
 
-### UI
+### UI（openwork インスパイアドデザインシステム）
 
-- **委任モード** — ChatComposer でゴール入力 → ActivityFeed でリアルタイム進捗表示 → InterventionPanel で計画承認・書き込み承認
-- **マニュアルモード** — 従来の 3 ステップガイドフロー（はじめる → Copilot に聞く → 確認して保存）
+**3 ペインワークスペース**
+- **左: AppSidebar** — ピル型セッション行・グループラベル・三点メニュー、ナビゲーション
+- **中央: UnifiedFeed + TaskInput** — Step Cluster フィード（折りたたみ可能なラウンド）＋常時下部固定のコンポーザー
+- **右: ContextPanel** — Files / Servers / Policy タブ、ドラッグ＆ドロップ受信ボックス、MCP 接続 ping ドット
+
+**主要 UI コンポーネント**
+- `UnifiedFeed` — ✓/⟳/○/✗ アイコン付きステップクラスター、コンパクション区切り線
+- `TaskInput` — auto-grow テキストエリア、Stop ボタン、アイドルヒントチップ
+- `ApprovalCard` — 折りたたみヘッダー、アクセントバー、3 択アクション（拒否 / 今回のみ / 常に許可）
+- `StatusStrip` — 接続状態に応じたリアクティブ ping ドット（connected / connecting / disconnected）
+- `CommandPalette` — ⌘K / Ctrl+K でオープン、ナビゲーション・テーマ切り替え等のアクション
+- `AgentActivityFeed` — エージェント動作のリアルタイムアクティビティ表示
+- `ApprovalGate` — 書き込み前の承認ゲートUI
+- `BatchDashboard` / `PipelineBuilder` — バッチ・パイプライン管理
+- `TemplateBrowser` — ワークフローテンプレート一覧
+
+**その他機能**
+- ダークモード対応（`data-theme` 属性切り替え、LocalStorage 永続化）
 - ドラフト自動保存・ページリロード後の再開に対応
 
 ### 安全設計
@@ -129,11 +146,12 @@ pnpm --dir apps/desktop exec tauri build --config src-tauri/tauri.windows.conf.j
 ## 動作確認コマンド
 
 ```bash
-pnpm check          # Svelte チェック
-pnpm typecheck      # TypeScript 型チェック
-pnpm startup:test   # 起動スモークテスト（ウィンドウ非表示）
-pnpm launch:test    # アプリ起動テスト（Xvfb）
-pnpm workflow:test  # ワークフロースモークテスト（E2E）
+pnpm check                  # Svelte チェック
+pnpm typecheck              # TypeScript 型チェック
+pnpm startup:test           # 起動スモークテスト（ウィンドウ非表示）
+pnpm launch:test            # アプリ起動テスト（Xvfb）
+pnpm workflow:test          # ワークフロースモークテスト（E2E）
+pnpm agent-loop:test        # エージェントループスモークテスト
 . "$HOME/.cargo/env" && cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 ```
 
@@ -142,11 +160,10 @@ pnpm workflow:test  # ワークフロースモークテスト（E2E）
 ```bash
 # TypeScript ユニットテスト
 pnpm -C apps/desktop exec tsx --test \
-  src/lib/agent-loop-core.test.ts \
-  src/lib/agent-loop-prompts.test.ts \
+  src/lib/agent-ui.test.ts \
+  src/lib/copilot-turn.test.ts \
   src/lib/prompt-templates.test.ts \
   src/lib/project-scope.test.ts \
-  src/lib/tool-runtime.test.ts \
   src/lib/stores/delegation.test.ts
 ```
 
@@ -158,14 +175,14 @@ pnpm -C apps/desktop exec tsx --test \
 
 1. `pnpm --filter @relay-agent/desktop tauri:dev` で起動
 2. 設定でエージェントループを有効化（CDP ポート設定）
-3. ChatComposer にゴールを入力:
+3. TaskInput にゴールを入力:
    ```
    revenue-workflow-demo.csv の approved が true の行だけ残して、
    review_label 列を追加し、別コピーとして保存して
    ```
-4. ファイルを添付して「送信」
-5. ActivityFeed で Copilot の実行過程を確認
-6. 書き込み確認が来たら内容を確認して「承認」
+4. ContextPanel の「Files」タブにファイルをドラッグ＆ドロップ（または直接入力）
+5. UnifiedFeed で Copilot の実行過程をステップクラスターとして確認
+6. ApprovalCard で書き込み確認が来たら内容を確認して「今回のみ」または「常に許可」を選択
 7. 出力ファイルを確認
 
 ### マニュアルモードでの実行例
@@ -214,27 +231,59 @@ apps/
   desktop/
     src/               # SvelteKit フロントエンド
       lib/
-        components/    # UI コンポーネント（12 個）
-        stores/        # Svelte ストア（delegation.ts）
-        agent-loop.ts        # エージェントループ
-        agent-loop-core.ts
-        agent-loop-prompts.ts
-        prompt-templates.ts
-        continuity.ts        # ドラフト永続化
-        copilot-browser.ts   # Edge CDP / Playwright
-        ipc.ts               # Tauri IPC ラッパー
-        project-scope.ts     # プロジェクトスコープ検証
-        tool-runtime.ts      # ToolRuntime ディスパッチャー
+        components/    # UI コンポーネント（32 個）
+          AppSidebar.svelte      # 左ペイン：セッション・ナビゲーション
+          ContextPanel.svelte    # 右ペイン：Files / Servers / Policy タブ
+          UnifiedFeed.svelte     # ステップクラスターフィード
+          TaskInput.svelte       # 下部固定コンポーザー
+          ApprovalCard.svelte    # 3 択承認カード
+          ApprovalGate.svelte    # 承認ゲートUI
+          AgentActivityFeed.svelte  # エージェント動作フィード
+          ActivityFeed.svelte    # 汎用アクティビティフィード
+          CommandPalette.svelte  # ⌘K コマンドパレット
+          StatusStrip.svelte     # 接続状態 ping ドット
+          SegmentedControl.svelte # ピル型セグメントコントロール
+          BatchDashboard.svelte  # バッチジョブ管理
+          PipelineBuilder.svelte # パイプライン構築
+          TemplateBrowser.svelte # テンプレート一覧
+          # ... その他 18 コンポーネント
+        stores/
+          delegation.ts          # 委任モードストア
+        agent-ui.ts              # エージェント UI オーケストレーター
+        agent-ui.test.ts
+        copilot-agent.ts         # Copilot エージェントループ
+        copilot-turn.ts          # 単一ターン実行・応答パース
+        copilot-turn.test.ts
+        browser-automation-ui.ts # Edge CDP 接続管理
+        continuity.ts            # ドラフト永続化（IndexedDB）
+        ipc.ts                   # Tauri IPC ラッパー（Zod 型付き）
+        project-scope.ts         # プロジェクトスコープ検証
+        prompt-templates.ts      # プロンプトテンプレート
     src-tauri/
       src/
-        file_ops.rs          # ファイル操作実装
-        storage.rs           # セッション・プロジェクト・プラン管理
-        models.rs            # Rust 型定義
-        project.rs           # プロジェクト Tauri コマンド
-        execution.rs         # 実行系 Tauri コマンド
-        tool_registry.rs     # ToolRegistry（21 ビルトインツール + MCP）
-        mcp_client.rs        # MCP JSON-RPC クライアント（HTTP/Stdio）
-        browser_automation.rs # ブラウザ自動化 Tauri コマンド
+        tauri_bridge.rs          # Tauri コマンドエントリーポイント（50+ コマンド）
+        copilot_provider.rs      # Copilot プロバイダー実装
+        relay_tools.rs           # ビルトインツールレジストリ（21 ツール）
+        tool_catalog.rs          # ツールカタログ管理
+        storage.rs               # セッション・プロジェクト・プラン統合ストレージ
+        session_store.rs         # セッション CRUD
+        state.rs                 # アプリ状態管理
+        execution.rs             # ツール実行ディスパッチャー
+        read_action_executor.rs  # 読み取りフェーズ実行
+        approval_store.rs        # 承認ポリシー永続化
+        workbook_state.rs        # ワークブック状態管理
+        relay.rs                 # RelayPacket 生成
+        mcp_client.rs            # MCP JSON-RPC クライアント（HTTP/Stdio）
+        browser_automation.rs    # ブラウザ自動化コマンド
+        pipeline.rs              # パイプライン管理
+        batch.rs                 # バッチジョブ管理
+        file_support.rs          # ファイル操作実装
+        models.rs                # Rust 型定義
+        persistence.rs           # JSON ローカルストレージ
+        risk_evaluator.rs        # 操作リスク評価
+        quality_validator.rs     # 出力品質チェック
+        startup.rs               # 起動・リカバリー処理
+        agent_loop_smoke.rs      # エージェントループスモークテスト
 packages/
   contracts/
     src/
@@ -243,16 +292,15 @@ packages/
       file.ts          # ファイル操作スキーマ
       project.ts       # プロジェクトスキーマ
       workbook.ts      # スプレッドシートスキーマ
+      approval.ts      # 承認ポリシースキーマ
+      pipeline.ts      # パイプラインスキーマ
+      batch.ts         # バッチ処理スキーマ
+      template.ts      # ワークフローテンプレートスキーマ
+      core.ts          # セッション・ターン・アーティファクト共通型
 examples/
   revenue-workflow-demo.csv
 docs/
-  IMPLEMENTATION.md    # 実装ログ
-  AGENT_LOOP_DESIGN.md
-  AUTONOMOUS_EXECUTION_DESIGN.md
-  DELEGATION_UI_DESIGN.md
-  PROJECT_MODEL_DESIGN.md
-  FILE_OPS_E2E_VERIFICATION.md
-  CODEX_PROMPT_*.md    # Codex 委任プロンプト（01–18）
+  # 設計ドキュメント・実装ログ・Codex 委任プロンプト（60+ ファイル）
 ```
 
 ## 現在の制限事項
@@ -262,7 +310,6 @@ docs/
 - `text.search` は行単位マッチのみ（複数行にまたがるパターン非対応）
 - プロジェクトとセッションの自動紐付けは未実装
 - MCP stdio トランスポートは接続時にサーバープロセスを都度起動（永続デーモン未対応）
-- アーティファクトファースト出力パイプラインは未実装（CODEX_PROMPT_18 で計画中）
 - シェル実行・任意コード実行・VBA 実行・外部ネットワーク呼び出しは意図的に対象外
 
 ## 環境変数
