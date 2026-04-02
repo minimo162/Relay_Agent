@@ -177,16 +177,18 @@ Additional live probes:
 ## Phase E: Pipeline + Copilot
 
 ### E-1 Two-step pipeline happy path
-- Status: `[~]`
+- Status: `[ ]`
 - Notes:
-  - Not executed
-  - Reason: requires in-app pipeline editing and live Copilot confirmations
+  - Executed in the packaged Tauri app through WebDriver with an isolated `RELAY_AGENT_TEST_APP_LOCAL_DATA_DIR`
+  - The pipeline workbench accepted a title, input path, and two step goals; the start button became enabled
+  - Clicking `実行開始` did not change `PipelineProgress`, create any `data_a.pipeline-step-*.csv` output, or surface a user-visible error
+  - Result: the current packaged-app pipeline start path is a no-op under this UI-driven flow
 
 ### E-2 Pipeline error handling
 - Status: `[~]`
 - Notes:
   - Not executed
-  - Reason: same as E-1
+  - Reason: E-1 never advanced into a running pipeline, so a step-failure scenario could not be reached
 
 ### E-3 Pipeline cancellation during Copilot interaction
 - Status: `[~]`
@@ -199,16 +201,18 @@ Additional live probes:
 ## Phase F: Batch + Copilot
 
 ### F-1 Three-file batch happy path
-- Status: `[~]`
+- Status: `[ ]`
 - Notes:
-  - Not executed
-  - Reason: requires in-app batch dashboard plus live Copilot integration
+  - Executed in the packaged Tauri app through WebDriver with three target files: `data_a.csv`, `empty.csv`, and `data_c.csv`
+  - The batch goal field accepted input, but the hidden file input did not populate any target cards in the UI
+  - `バッチ進行ダッシュボード` stayed at `まだジョブがありません。`, and `C:\relay-test\relay-batch-output` was never created
+  - Result: the current packaged-app batch file-selection path is not automatable through this WebDriver flow
 
 ### F-2 Batch partial failure
 - Status: `[~]`
 - Notes:
   - Not executed
-  - Reason: same as F-1
+  - Reason: F-1 never produced an in-app batch target list, so a partial-failure scenario could not be reached
 
 ### F-3 Batch cancellation during Copilot interaction
 - Status: `[~]`
@@ -221,16 +225,18 @@ Additional live probes:
 ## Phase G: Template Library + Copilot
 
 ### G-1 Load template and run with Copilot
-- Status: `[~]`
+- Status: `[ ]`
 - Notes:
-  - Not executed
-  - Reason: requires in-app template selection flow
+  - Executed in Delegation mode through the packaged Tauri app
+  - Selecting the built-in `売上データフィルタ` template successfully switched the automation workbench from `テンプレート` to `パイプライン`
+  - The scenario still could not reach a Copilot-backed execution because the downstream pipeline start path stayed blocked as in E-1
+  - Result: template selection works, but the template-to-execution flow does not complete end to end
 
 ### G-2 Save and reuse custom template
 - Status: `[~]`
 - Notes:
   - Not executed
-  - Reason: same as G-1
+  - Reason: G-1 never reached a completed template-backed execution, so no custom template could be saved and reused
 
 ---
 
@@ -274,10 +280,12 @@ Additional live probes:
 ## Phase I: PII Detection
 
 ### I-1 PII handoff detection
-- Status: `[~]`
+- Status: `[ ]`
 - Notes:
-  - Not executed
-  - Reason: requires in-app handoff assessment flow using `pii_test.csv`
+  - Executed in Manual mode with `C:\relay-test\pii_test.csv` containing `name,email,phone,amount`
+  - Step 1 completed and advanced into `2. Copilot に聞く`
+  - No warning banner, friendly error, or caution text was surfaced before copy even though the workbook and objective clearly referenced direct identifiers
+  - Result: no visible PII handoff warning was shown in this user-facing flow
 
 ---
 
@@ -290,16 +298,21 @@ Additional live probes:
   - Reason: full cross-feature manual walkthrough was not run
 
 ### J-2 Session recovery
-- Status: `[~]`
+- Status: `[ ]`
 - Notes:
-  - Not executed
-  - Reason: session restart/recovery walkthrough was not run
+  - Executed with the same isolated app-local-data directory across two packaged-app launches
+  - First run: Manual mode Step 1 completed and advanced to `2. Copilot`
+  - The app was then terminated and relaunched with the same `RELAY_AGENT_TEST_APP_LOCAL_DATA_DIR`
+  - Second run: the startup view still showed `最近のファイル / まだ履歴がありません。`, no recent-session toggle appeared, and no prior session details were restored
+  - Result: session/recent recovery did not surface in this packaged-app restart path
 
 ### J-3 Project memory persistence
-- Status: `[~]`
+- Status: `[x]`
 - Notes:
-  - Not executed
-  - Reason: project-switch persistence walkthrough was not run
+  - Executed with a new project `Memory Test` rooted at `C:/relay-test`
+  - Added project memory entry `delimiter = comma`, then relaunched the app with the same isolated app-local-data directory
+  - After restart, the project option still existed and selecting it showed the persisted `delimiter / comma` memory entry
+  - Result: project memory persistence worked in this packaged-app restart path
 
 ---
 
@@ -321,31 +334,31 @@ Additional live probes:
 | D-1 | Planned agent loop | Fail | Plan proposal rendered, but approving the plan did not advance into execution |
 | D-2 | No-planning agent loop | Skip | In-app delegation flow not executed |
 | D-3 | Agent loop cancellation | Skip | In-app delegation flow not executed |
-| E-1 | Pipeline happy path | Skip | In-app pipeline flow not executed |
-| E-2 | Pipeline error handling | Skip | In-app pipeline flow not executed |
+| E-1 | Pipeline happy path | Fail | Pipeline inputs were accepted, but `実行開始` was a no-op: no progress update, no outputs, no error |
+| E-2 | Pipeline error handling | Skip | E-1 never entered a running pipeline, so the failure path could not be exercised |
 | E-3 | Pipeline cancellation | Skip | In-app pipeline flow not executed |
-| F-1 | Batch happy path | Skip | In-app batch flow not executed |
-| F-2 | Batch partial failure | Skip | In-app batch flow not executed |
+| F-1 | Batch happy path | Fail | Batch goal entry worked, but file selection never populated targets or created any output directory |
+| F-2 | Batch partial failure | Skip | F-1 never produced a runnable batch target list |
 | F-3 | Batch cancellation | Skip | In-app batch flow not executed |
-| G-1 | Template load and run | Skip | In-app template flow not executed |
+| G-1 | Template load and run | Fail | Built-in template selection worked, but the template-backed run was blocked by the same pipeline no-op as E-1 |
 | G-2 | Custom template reuse | Skip | In-app template flow not executed |
 | H-1 | Read-only mode | Skip | Read-only approval scenario not yet executed |
 | H-2 | Standard mode | Pass | Manual approval gate remained visible and no output was written before approval |
 | H-3 | Fast mode | Fail | `fast` still required manual save approval for a medium-risk write flow |
 | H-4 | Policy persistence | Fail | Policy reverted from `fast` to `safe` after restart |
-| I-1 | PII detection | Skip | In-app assessment flow not executed |
+| I-1 | PII detection | Fail | `pii_test.csv` reached Step 2 with no visible warning despite `name/email/phone` identifiers |
 | J-1 | Cross-feature basic flow | Skip | Final regression sweep not executed |
-| J-2 | Session recovery | Skip | Restart/recovery flow not executed |
-| J-3 | Project memory persistence | Skip | Persistence sweep not executed |
+| J-2 | Session recovery | Fail | Restarted packaged app showed no recent sessions/files and did not restore the prior in-progress session |
+| J-3 | Project memory persistence | Pass | Project `Memory Test` and `delimiter = comma` memory entry persisted across restart |
 
 ---
 
 ## Findings Summary
 
 - Total scenarios: `30`
-- Passed: `10`
-- Failed: `4`
-- Skipped: `16`
+- Passed: `11`
+- Failed: `9`
+- Skipped: `10`
 
 Key findings:
 
@@ -354,14 +367,21 @@ Key findings:
 - Guided mode happy-path execution still works end to end for the tested `approved == true` flow, including save-copy output creation.
 - Standard approval mode behaves as expected for the tested write response: the preview is prepared, but execution stays blocked until explicit approval.
 - Delegation planning now reaches a concrete proposed plan in-app, but the visible approval control did not transition into execution under packaged-app automation.
+- The automation workbench has multiple packaged-app blockers:
+  - Pipeline start accepted inputs but did not launch any run or surface an error.
+  - Batch file selection did not populate any targets through the current WebDriver path.
+  - Template selection works, but the end-to-end template execution is blocked by the same pipeline start failure.
 - Two approval-policy issues remain:
   - `fast` did not auto-approve a medium-risk `workbook.save_copy` flow even though `risk_evaluator.rs` says it should.
   - Approval policy did not persist across restart in the packaged-app path.
 - In-app auto-send timeout behavior is still inconsistent and needs its own fix before C-2 can pass.
+- PII handoff assessment is not visibly surfaced in the tested Manual flow: a file containing `name/email/phone` advanced to Step 2 without any user-facing warning.
+- Session continuity is still broken in the tested packaged-app restart path: no recent session or file history reappeared after relaunch.
+- Project-scoped memory persistence does work across restart, which narrows the restart problem to session/continuity state rather than all local persistence.
 
 Next actions:
 
-1. Fix in-app auto-send timeout handling so C-2 reliably surfaces a timeout error instead of partial output or a CDP error.
-2. Fix the `fast` approval-policy path so medium-risk save-copy flows auto-approve as intended by `risk_evaluator.rs`.
-3. Fix approval-policy persistence so a restarted packaged app keeps the user-selected mode.
-4. Continue later live phases: delegation, pipeline, batch, template reuse, PII, and regression sweep.
+1. Fix the packaged-app pipeline workbench so `実行開始` actually launches a run or surfaces a concrete error.
+2. Fix batch target selection under the packaged-app WebDriver path so the file list and dashboard can be exercised.
+3. Surface visible PII handoff warnings in Manual mode before the user copies a relay packet into Copilot.
+4. Restore session continuity across packaged-app restarts, then resume the remaining delegation / pipeline / batch / template regression scenarios.

@@ -3019,3 +3019,22 @@ Observed result:
 - The packaged app rendered a four-step proposed plan with editable steps and visible `計画を承認する / 再計画する / キャンセル` controls, which is enough to mark the planning half of `D-1` as exercised.
 - The current blocker is the approval transition itself: under packaged-app WebDriver, clicking the visible `計画を承認する` control did not move the app into execution, write approval, or completion.
 - `docs/E2E_COPILOT_LIVE_REPORT.md` was updated again to mark `D-1` as a concrete failure instead of an unexecuted scenario.
+
+Copilot live E2E follow-up 4:
+
+```bash
+# plus inline selenium-webdriver packaged-app probes with isolated
+# RELAY_AGENT_TEST_APP_LOCAL_DATA_DIR values under C:\relay-test\
+# for pipeline, batch, template, PII, session recovery, and project-memory persistence
+```
+
+Observed result:
+
+- The automation-workbench blockers are now explicit in the packaged app:
+  - `E-1`: the pipeline builder accepted a title, input path, and two goals, and `実行開始` became enabled, but clicking it did not update `PipelineProgress`, create any `data_a.pipeline-step-*.csv` outputs, or surface a visible error.
+  - `F-1`: the batch goal field accepted input, but the file-selection path did not populate any target cards in the UI, `バッチ進行ダッシュボード` stayed at `まだジョブがありません。`, and no `relay-batch-output` directory was created.
+  - `G-1`: built-in template selection did work and switched the workbench from `テンプレート` to `パイプライン`, but the end-to-end template execution remained blocked by the same pipeline no-op as `E-1`.
+- `I-1` is now exercised and failing: a `pii_test.csv` containing `name,email,phone,amount` advanced from Step 1 into `2. Copilot に聞く` without any visible warning banner, friendly error, or caution text before copy.
+- `J-2` is now exercised and failing in the packaged-app restart path: after completing Manual-mode Step 1 and relaunching with the same isolated app-local-data directory, the startup view still showed `最近のファイル / まだ履歴がありません。` and did not expose any recent-session recovery UI.
+- `J-3` is now exercised and passing: a project named `Memory Test` plus project-memory entry `delimiter = comma` persisted across a packaged-app restart and remained visible after reselecting the project.
+- `docs/E2E_COPILOT_LIVE_REPORT.md` was updated again to record the new `E-1`, `F-1`, `G-1`, `I-1`, `J-2`, and `J-3` results.
