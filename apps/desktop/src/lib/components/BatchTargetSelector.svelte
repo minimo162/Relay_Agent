@@ -112,34 +112,78 @@
   .target-list,
   label {
     display: grid;
-    gap: 1rem;
+    gap: var(--sp-4);
   }
 
   .section-head {
     display: grid;
     grid-template-columns: 1fr auto;
-    gap: 1rem;
+    gap: var(--sp-4);
+    align-items: start;
+  }
+
+  .section-head h3 {
+    font-size: var(--sz-lg);
+    font-weight: 700;
+    color: var(--c-text);
+    letter-spacing: -0.01em;
+  }
+
+  .section-head p {
+    font-size: var(--sz-sm);
+    color: var(--c-text-2);
+    margin-top: var(--sp-1);
+  }
+
+  label span {
+    font-size: var(--sz-xs);
+    font-weight: 500;
+    color: var(--c-text-2);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .selector-actions {
     display: flex;
-    gap: 0.5rem;
+    gap: var(--sp-2);
     flex-wrap: wrap;
   }
 
   .target-card {
     display: flex;
     justify-content: space-between;
-    gap: 0.75rem;
-    padding: 0.8rem 0.9rem;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
     border-radius: 12px;
-    border: 1px solid var(--ra-border);
-    background: var(--ra-surface);
-    font-size: 0.86rem;
+    border: 1px solid var(--c-border-strong);
+    background: var(--c-surface);
+    box-shadow: var(--shadow-sm);
+    font-size: var(--sz-sm);
+    transition: border-color var(--duration-fast) var(--ease),
+                transform var(--duration-fast) var(--ease);
+  }
+
+  .target-card:hover {
+    border-color: var(--c-border-strong);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+  }
+
+  .target-card strong {
+    font-weight: 500;
+    color: var(--c-text);
+  }
+
+  .target-card span {
+    font-size: var(--sz-xs);
+    color: var(--c-text-3);
+    font-family: var(--font-mono);
   }
 
   .muted {
-    color: var(--ra-text-muted);
+    color: var(--c-text-3);
+    font-size: var(--sz-sm);
   }
 
   .hidden {

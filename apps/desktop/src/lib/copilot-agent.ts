@@ -5,16 +5,16 @@ import {
   type ToolExecutionResult
 } from "@relay-agent/contracts";
 
-import { type BrowserCommandProgress } from "./copilot-browser";
+import { type BrowserCommandProgress } from "./browser-automation-ui";
 import { executeReadActions } from "./ipc";
-import { buildStepExecutionPrompt } from "./agent-loop-prompts";
+import { buildPlanningPrompt, buildStepExecutionPrompt } from "./prompt-templates";
 import { extractActionFilePaths, isWithinProjectScope } from "./project-scope";
-import { sendPromptViaBrowserTool } from "./tool-runtime";
+import { sendPromptViaBrowserTool } from "./browser-automation-ui";
 import {
   requestCopilotTurn,
   throwIfAborted,
   type CopilotRetryCallbacks
-} from "./agent-loop-core";
+} from "./copilot-turn";
 import {
   buildCompressedContext,
   buildLoopContinuationPrompt,
@@ -23,7 +23,7 @@ import {
   type TurnSummary
 } from "./prompt-templates";
 
-export { buildPlanningPrompt } from "./agent-loop-prompts";
+export { buildPlanningPrompt } from "./prompt-templates";
 export type { CopilotConversationTurn } from "./prompt-templates";
 
 type AgentLoopRuntime = {

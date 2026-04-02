@@ -727,6 +727,40 @@ pub struct BrowserAutomationSettings {
     pub timeout_ms: u32,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartAgentRequest {
+    pub goal: String,
+    #[serde(default)]
+    pub files: Vec<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub browser_settings: Option<BrowserAutomationSettings>,
+    #[serde(default)]
+    pub max_turns: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RespondAgentApprovalRequest {
+    pub session_id: String,
+    pub approval_id: String,
+    pub approved: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelAgentRequest {
+    pub session_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAgentSessionHistoryRequest {
+    pub session_id: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListProjectsResponse {
@@ -811,6 +845,26 @@ pub struct CopilotBrowserProgressEvent {
 pub struct ConnectMcpServerResponse {
     pub registered_tool_ids: Vec<String>,
     pub tools: Vec<ToolRegistration>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecuteClawToolRequest {
+    pub tool_name: String,
+    #[serde(default)]
+    pub input: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecuteClawToolResponse {
+    pub tool_name: String,
+    pub content: String,
+    pub is_error: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]

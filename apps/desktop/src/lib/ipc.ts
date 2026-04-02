@@ -23,8 +23,6 @@ import {
   inspectWorkbookRequestSchema,
   inspectWorkbookResponseSchema,
   initializeAppResponseSchema,
-  invokeMcpToolRequestSchema,
-  invokeMcpToolResponseSchema,
   linkSessionToProjectRequestSchema,
   listProjectsResponseSchema,
   listToolsResponseSchema,
@@ -98,8 +96,6 @@ import {
   type InspectWorkbookRequest,
   type InspectWorkbookResponse,
   type InitializeAppResponse,
-  type InvokeMcpToolRequest,
-  type InvokeMcpToolResponse,
   type LinkSessionToProjectRequest,
   type ListProjectsResponse,
   type ListToolsResponse,
@@ -327,17 +323,6 @@ export function connectMcpServer(
     payload,
     connectMcpServerRequestSchema,
     connectMcpServerResponseSchema
-  );
-}
-
-export function invokeMcpTool(
-  payload: InvokeMcpToolRequest
-): Promise<InvokeMcpToolResponse> {
-  return invokeWithPayload(
-    "invoke_mcp_tool",
-    payload,
-    invokeMcpToolRequestSchema,
-    invokeMcpToolResponseSchema
   );
 }
 

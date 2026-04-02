@@ -208,7 +208,15 @@ pub async fn pipeline_run(
 
     let pipeline_id = request.pipeline_id;
     tauri::async_runtime::spawn(async move {
-        let _ = run_pipeline(app, &pipeline_id).await;
+        if let Err(error) = run_pipeline(app.clone(), &pipeline_id).await {
+            let _ = app.emit(
+                PIPELINE_STEP_UPDATE_EVENT,
+                serde_json::json!({
+                    "pipelineId": pipeline_id,
+                    "error": error.to_string(),
+                }),
+            );
+        }
     });
     Ok(())
 }
@@ -274,7 +282,12 @@ async fn run_pipeline(app: AppHandle, pipeline_id: &str) -> Result<(), String> {
                 pipeline.clone(),
             )
         };
-        emit_pipeline_update(&app, pipeline_snapshot, step_id.clone(), PipelineStepStatus::Running);
+        emit_pipeline_update(
+            &app,
+            pipeline_snapshot,
+            step_id.clone(),
+            PipelineStepStatus::Running,
+        );
 
         let input_path = match input_path {
             Some(path) if !path.trim().is_empty() => path,
@@ -413,7 +426,10 @@ fn derive_copy_path(input_path: &str, suffix: &str) -> Result<String, String> {
         .file_stem()
         .and_then(|value| value.to_str())
         .ok_or_else(|| format!("failed to derive output name from `{input_path}`"))?;
-    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("csv");
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("csv");
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     Ok(parent
         .join(format!("{stem}.{suffix}.{extension}"))
@@ -468,7 +484,10 @@ mod tests {
 
         let stored = registry.pipelines.get("pipe-1").unwrap();
         assert_eq!(stored.steps.len(), 2);
-        assert_eq!(stored.steps[1].input_source, PipelineInputSource::PrevStepOutput);
+        assert_eq!(
+            stored.steps[1].input_source,
+            PipelineInputSource::PrevStepOutput
+        );
     }
 
     #[test]

@@ -112,7 +112,10 @@ pub fn batch_create(
         .target_paths
         .first()
         .map(PathBuf::from)
-        .and_then(|path| path.parent().map(|parent| parent.join("relay-batch-output")))
+        .and_then(|path| {
+            path.parent()
+                .map(|parent| parent.join("relay-batch-output"))
+        })
         .map(|path| path.to_string_lossy().to_string());
     let job = BatchJob {
         id: format!("batch-{}", Uuid::new_v4()),
@@ -137,7 +140,10 @@ pub fn batch_create(
         updated_at: timestamp,
     };
 
-    let mut registry = state.batch_registry.lock().expect("batch registry poisoned");
+    let mut registry = state
+        .batch_registry
+        .lock()
+        .expect("batch registry poisoned");
     registry.jobs.insert(job.id.clone(), job.clone());
     Ok(job)
 }
@@ -147,7 +153,10 @@ pub fn batch_get_status(
     state: State<'_, DesktopState>,
     request: BatchStatusRequest,
 ) -> Result<BatchJob, String> {
-    let registry = state.batch_registry.lock().expect("batch registry poisoned");
+    let registry = state
+        .batch_registry
+        .lock()
+        .expect("batch registry poisoned");
     registry
         .jobs
         .get(&request.batch_id)
@@ -162,7 +171,10 @@ pub async fn batch_run(
     request: BatchStatusRequest,
 ) -> Result<(), String> {
     {
-        let registry = state.batch_registry.lock().expect("batch registry poisoned");
+        let registry = state
+            .batch_registry
+            .lock()
+            .expect("batch registry poisoned");
         if !registry.jobs.contains_key(&request.batch_id) {
             return Err(format!("unknown batch `{}`", request.batch_id));
         }
@@ -170,7 +182,15 @@ pub async fn batch_run(
 
     let batch_id = request.batch_id;
     tauri::async_runtime::spawn(async move {
-        let _ = run_batch(app, &batch_id).await;
+        if let Err(error) = run_batch(app.clone(), &batch_id).await {
+            let _ = app.emit(
+                BATCH_TARGET_UPDATE_EVENT,
+                serde_json::json!({
+                    "batchId": batch_id,
+                    "error": error.to_string(),
+                }),
+            );
+        }
     });
     Ok(())
 }
@@ -180,7 +200,10 @@ pub fn batch_skip_target(
     state: State<'_, DesktopState>,
     request: BatchSkipTargetRequest,
 ) -> Result<(), String> {
-    let mut registry = state.batch_registry.lock().expect("batch registry poisoned");
+    let mut registry = state
+        .batch_registry
+        .lock()
+        .expect("batch registry poisoned");
     let job = registry
         .jobs
         .get_mut(&request.batch_id)
@@ -199,7 +222,10 @@ pub fn batch_skip_target(
 async fn run_batch(app: AppHandle, batch_id: &str) -> Result<(), String> {
     let target_count = {
         let state = app.state::<DesktopState>();
-        let mut registry = state.batch_registry.lock().expect("batch registry poisoned");
+        let mut registry = state
+            .batch_registry
+            .lock()
+            .expect("batch registry poisoned");
         let job = registry
             .jobs
             .get_mut(batch_id)
@@ -212,7 +238,10 @@ async fn run_batch(app: AppHandle, batch_id: &str) -> Result<(), String> {
     for index in 0..target_count {
         let (target_path, workflow_goal, stop_on_first_error) = {
             let state = app.state::<DesktopState>();
-            let mut registry = state.batch_registry.lock().expect("batch registry poisoned");
+            let mut registry = state
+                .batch_registry
+                .lock()
+                .expect("batch registry poisoned");
             let job = registry
                 .jobs
                 .get_mut(batch_id)
@@ -231,7 +260,12 @@ async fn run_batch(app: AppHandle, batch_id: &str) -> Result<(), String> {
             };
             job.updated_at = now();
             let job_snapshot = job.clone();
-            emit_batch_update(&app, job_snapshot, target_path.clone(), BatchTargetStatus::Running);
+            emit_batch_update(
+                &app,
+                job_snapshot,
+                target_path.clone(),
+                BatchTargetStatus::Running,
+            );
             (
                 target_path,
                 job.workflow_goal.clone(),
@@ -279,7 +313,10 @@ async fn run_batch(app: AppHandle, batch_id: &str) -> Result<(), String> {
 
         let job_snapshot = {
             let state = app.state::<DesktopState>();
-            let mut registry = state.batch_registry.lock().expect("batch registry poisoned");
+            let mut registry = state
+                .batch_registry
+                .lock()
+                .expect("batch registry poisoned");
             let job = registry
                 .jobs
                 .get_mut(batch_id)
@@ -292,11 +329,14 @@ async fn run_batch(app: AppHandle, batch_id: &str) -> Result<(), String> {
             target.output_path = Some(output_path.clone());
             target.session_id = Some(session_id);
             job.updated_at = now();
-            if job
-                .targets
-                .iter()
-                .all(|target| matches!(target.status, BatchTargetStatus::Done | BatchTargetStatus::Failed | BatchTargetStatus::Skipped))
-            {
+            if job.targets.iter().all(|target| {
+                matches!(
+                    target.status,
+                    BatchTargetStatus::Done
+                        | BatchTargetStatus::Failed
+                        | BatchTargetStatus::Skipped
+                )
+            }) {
                 job.status = BatchJobStatus::Done;
             }
             job.clone()
@@ -315,7 +355,10 @@ fn mark_batch_target_failed(
 ) -> Result<(), String> {
     let (job, target_path) = {
         let state = app.state::<DesktopState>();
-        let mut registry = state.batch_registry.lock().expect("batch registry poisoned");
+        let mut registry = state
+            .batch_registry
+            .lock()
+            .expect("batch registry poisoned");
         let job = registry
             .jobs
             .get_mut(batch_id)
@@ -337,7 +380,12 @@ fn mark_batch_target_failed(
     Ok(())
 }
 
-fn emit_batch_update(app: &AppHandle, batch_job: BatchJob, target_path: String, status: BatchTargetStatus) {
+fn emit_batch_update(
+    app: &AppHandle,
+    batch_job: BatchJob,
+    target_path: String,
+    status: BatchTargetStatus,
+) {
     let _ = app.emit(
         BATCH_TARGET_UPDATE_EVENT,
         BatchTargetUpdateEvent {
@@ -348,9 +396,16 @@ fn emit_batch_update(app: &AppHandle, batch_job: BatchJob, target_path: String, 
     );
 }
 
-fn derive_batch_output_path(app: &AppHandle, batch_id: &str, input_path: &str) -> Result<String, String> {
+fn derive_batch_output_path(
+    app: &AppHandle,
+    batch_id: &str,
+    input_path: &str,
+) -> Result<String, String> {
     let state = app.state::<DesktopState>();
-    let registry = state.batch_registry.lock().expect("batch registry poisoned");
+    let registry = state
+        .batch_registry
+        .lock()
+        .expect("batch registry poisoned");
     let job = registry
         .jobs
         .get(batch_id)
@@ -364,7 +419,10 @@ fn derive_batch_output_path(app: &AppHandle, batch_id: &str, input_path: &str) -
         .file_stem()
         .and_then(|value| value.to_str())
         .ok_or_else(|| format!("failed to derive output name from `{input_path}`"))?;
-    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("csv");
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("csv");
     Ok(PathBuf::from(output_dir)
         .join(format!("{stem}.batch-copy.{extension}"))
         .to_string_lossy()

@@ -5,51 +5,17 @@ use tempfile::tempdir;
 
 use crate::{
     execution::parse_mcp_tool_name,
-    file_ops,
+    file_support,
     mcp_client::McpToolDefinition,
     models::{
-        ApprovalDecision, CreateProjectRequest, CreateSessionRequest, DiffSummary,
-        McpServerConfig, McpTransport, OutputFormat, OutputSpec, PreviewExecutionRequest,
-        ReadProjectRequest, RelayMode, RespondToApprovalRequest, RunExecutionMultiRequest,
-        StartTurnRequest, SubmitCopilotResponseRequest, UpdateProjectRequest,
+        ApprovalDecision, CreateProjectRequest, CreateSessionRequest, McpServerConfig,
+        McpTransport, OutputFormat, OutputSpec, PreviewExecutionRequest, ReadProjectRequest,
+        RelayMode, RespondToApprovalRequest, RunExecutionMultiRequest, StartTurnRequest,
+        SubmitCopilotResponseRequest, UpdateProjectRequest,
     },
     storage::{is_within_project_scope, AppStorage},
-    tool_registry::ToolRegistry,
+    tool_catalog::ToolCatalog,
 };
-
-fn empty_diff_summary() -> DiffSummary {
-    DiffSummary {
-        source_path: String::new(),
-        output_path: String::new(),
-        mode: "preview".to_string(),
-        target_count: 0,
-        estimated_affected_rows: 0,
-        sheets: Vec::new(),
-        warnings: Vec::new(),
-    }
-}
-
-fn create_session_and_turn(
-    storage: &mut AppStorage,
-) -> (crate::models::Session, crate::models::Turn) {
-    let session = storage
-        .create_session(CreateSessionRequest {
-            title: "Integration test".to_string(),
-            objective: "Exercise registry behaviour".to_string(),
-            primary_workbook_path: None,
-        })
-        .expect("session should be created");
-    let turn = storage
-        .start_turn(StartTurnRequest {
-            session_id: session.id.clone(),
-            title: "Integration turn".to_string(),
-            objective: "Exercise registry behaviour".to_string(),
-            mode: RelayMode::Plan,
-        })
-        .expect("turn should be created")
-        .turn;
-    (session, turn)
-}
 
 fn copilot_response(summary: &str, actions: Vec<serde_json::Value>) -> String {
     json!({
@@ -130,7 +96,7 @@ fn file_copy_creates_destination_and_keeps_source() {
     let dest_path = workspace.path().join("copies").join("dest.txt");
     fs::write(&source_path, "copy me").expect("source file should be written");
 
-    file_ops::execute_file_copy(&json!({
+    file_support::execute_file_copy(&json!({
         "sourcePath": source_path.display().to_string(),
         "destPath": dest_path.display().to_string(),
         "overwrite": true
@@ -151,7 +117,7 @@ fn file_move_removes_source() {
     let dest_path = workspace.path().join("archive").join("dest.txt");
     fs::write(&source_path, "move me").expect("source file should be written");
 
-    file_ops::execute_file_move(&json!({
+    file_support::execute_file_move(&json!({
         "sourcePath": source_path.display().to_string(),
         "destPath": dest_path.display().to_string(),
         "overwrite": true
@@ -171,7 +137,7 @@ fn file_delete_removes_target() {
     let target_path = workspace.path().join("delete-me.txt");
     fs::write(&target_path, "delete me").expect("target file should be written");
 
-    file_ops::execute_file_delete(&json!({
+    file_support::execute_file_delete(&json!({
         "path": target_path.display().to_string(),
         "toRecycleBin": false
     }))
@@ -186,7 +152,7 @@ fn text_search_returns_matching_lines() {
     let target_path = workspace.path().join("notes.txt");
     fs::write(&target_path, "alpha\nTODO item\nomega\n").expect("notes should be written");
 
-    let result = file_ops::execute_text_search(&json!({
+    let result = file_support::execute_text_search(&json!({
         "path": target_path.display().to_string(),
         "pattern": "TODO"
     }))
@@ -204,7 +170,7 @@ fn text_replace_modifies_content_and_creates_backup() {
     let backup_path = workspace.path().join("notes.txt.bak");
     fs::write(&target_path, "TODO first\nTODO second\n").expect("notes should be written");
 
-    let result = file_ops::execute_text_replace(&json!({
+    let result = file_support::execute_text_replace(&json!({
         "path": target_path.display().to_string(),
         "pattern": "TODO",
         "replacement": "DONE",
@@ -299,7 +265,7 @@ fn project_memory_add_then_remove() {
 
 #[test]
 fn tool_registry_lists_current_builtin_tools() {
-    let tool_ids = ToolRegistry::new()
+    let tool_ids = ToolCatalog::new()
         .list()
         .into_iter()
         .map(|tool| tool.id)
@@ -313,32 +279,20 @@ fn tool_registry_lists_current_builtin_tools() {
 
 #[test]
 fn disabled_tool_returns_error() {
-    let mut registry = ToolRegistry::new();
-    let mut storage = AppStorage::default();
-    let (session, turn) = create_session_and_turn(&mut storage);
+    let mut registry = ToolCatalog::new();
     registry
         .set_enabled("workbook.inspect", false)
         .expect("tool should toggle");
 
-    let error = registry
-        .invoke(
-            &storage,
-            &session,
-            &turn,
-            &empty_diff_summary(),
-            "workbook.inspect",
-            &json!({}),
-        )
-        .expect_err("disabled tool should be rejected");
-
-    assert!(error.contains("disabled"));
+    assert!(!registry
+        .list_descriptors_by_phase(crate::models::ToolPhase::Read)
+        .iter()
+        .any(|tool| tool.id == "workbook.inspect"));
 }
 
 #[test]
 fn mcp_tool_returns_delegation_error() {
-    let mut registry = ToolRegistry::new();
-    let mut storage = AppStorage::default();
-    let (session, turn) = create_session_and_turn(&mut storage);
+    let mut registry = ToolCatalog::new();
     registry.register_mcp_tools(
         McpServerConfig {
             url: "http://localhost:3100/mcp".to_string(),
@@ -352,18 +306,11 @@ fn mcp_tool_returns_delegation_error() {
         }],
     );
 
-    let error = registry
-        .invoke(
-            &storage,
-            &session,
-            &turn,
-            &empty_diff_summary(),
-            "mcp.demo.echo",
-            &json!({ "message": "hello" }),
-        )
-        .expect_err("mcp tools should require delegation");
-
-    assert!(error.contains("invoke_mcp_tool"));
+    let registration = registry
+        .get("mcp.demo.echo")
+        .expect("mcp tool should be registered");
+    assert_eq!(registration.source, crate::models::ToolSource::Mcp);
+    assert_eq!(registration.mcp_server_url.as_deref(), Some("http://localhost:3100/mcp"));
 }
 
 #[test]

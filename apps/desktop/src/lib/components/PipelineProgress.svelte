@@ -79,68 +79,166 @@
   .pipeline-progress,
   .timeline {
     display: grid;
-    gap: 1rem;
+    gap: var(--sp-4);
+  }
+
+  .section-head h3 {
+    font-size: var(--sz-lg);
+    font-weight: 700;
+    color: var(--c-text);
+    letter-spacing: -0.01em;
+  }
+
+  .section-head p {
+    font-size: var(--sz-sm);
+    color: var(--c-text-2);
+    margin-top: var(--sp-1);
+  }
+
+  .timeline {
+    position: relative;
   }
 
   .timeline-step {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
-    gap: 0.75rem;
-    padding: 0.9rem;
-    border-radius: 14px;
-    border: 1px solid var(--ra-border);
-    background: var(--ra-surface);
+    gap: var(--sp-3);
+    padding: var(--sp-4);
+    border-radius: var(--r-xl);
+    border: 1px solid var(--c-border-strong);
+    background: var(--c-surface);
+    box-shadow: var(--shadow-sm);
+    transition: border-color var(--duration-fast) var(--ease),
+                box-shadow var(--duration-fast) var(--ease);
+  }
+
+  .timeline-step[data-status="pending"] {
+    opacity: 0.65;
   }
 
   .timeline-step[data-status="running"] {
-    border-color: var(--ra-accent);
+    border-color: var(--c-accent);
+    border-left: 3px solid var(--c-accent);
+    background: var(--c-accent-subtle);
+    box-shadow: var(--shadow-md);
+  }
+
+  .timeline-step[data-status="done"] {
+    border-left: 3px solid var(--c-success);
   }
 
   .timeline-step[data-status="failed"] {
-    border-color: #cf786c;
-    background: #fff3f1;
+    border-left: 3px solid var(--c-error);
+    border-color: var(--c-error-subtle);
+    background: var(--c-error-subtle);
+  }
+
+  .timeline-step[data-status="waiting_approval"] {
+    border-left: 3px solid var(--c-warning);
+    border-color: var(--c-warning-subtle);
+    background: var(--c-warning-subtle);
   }
 
   .timeline-marker {
     width: 2rem;
     height: 2rem;
-    border-radius: 999px;
+    border-radius: var(--r-full);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: color-mix(in srgb, var(--ra-accent) 12%, white);
-    color: var(--ra-accent);
+    background: var(--c-accent-subtle);
+    color: var(--c-accent);
+    font-size: var(--sz-sm);
     font-weight: 700;
+    border: 2px solid rgba(13,148,136,0.20);
+    flex-shrink: 0;
+  }
+
+  .timeline-step[data-status="done"] .timeline-marker {
+    background: var(--c-success-subtle);
+    color: var(--c-success);
+    border-color: var(--c-success-subtle);
+  }
+
+  .timeline-step[data-status="failed"] .timeline-marker {
+    background: var(--c-error-subtle);
+    color: var(--c-error);
+    border-color: var(--c-error-subtle);
+  }
+
+  .timeline-step[data-status="waiting_approval"] .timeline-marker {
+    background: var(--c-warning-subtle);
+    color: var(--c-warning);
+    border-color: var(--c-warning-subtle);
   }
 
   .timeline-copy,
   .timeline-events {
     display: grid;
-    gap: 0.45rem;
+    gap: var(--sp-2);
   }
 
   .timeline-topline {
     display: flex;
-    gap: 0.5rem;
+    gap: var(--sp-2);
     justify-content: space-between;
+    align-items: center;
     flex-wrap: wrap;
   }
 
-  .status-badge,
+  .timeline-topline strong {
+    font-size: var(--sz-sm);
+    font-weight: 500;
+    color: var(--c-text);
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: var(--sp-1) var(--sp-2);
+    border-radius: var(--r-full);
+    font-size: var(--sz-xs);
+    font-weight: 500;
+    background: #f0eeea;
+    color: var(--c-text-2);
+  }
+
+  .timeline-step[data-status="running"] .status-badge {
+    background: var(--c-accent-subtle);
+    color: var(--c-accent);
+  }
+
+  .timeline-step[data-status="done"] .status-badge {
+    background: var(--c-success-subtle);
+    color: var(--c-success);
+  }
+
+  .timeline-step[data-status="failed"] .status-badge {
+    background: var(--c-error-subtle);
+    color: var(--c-error);
+  }
+
+  .timeline-step[data-status="waiting_approval"] .status-badge {
+    background: var(--c-warning-subtle);
+    color: var(--c-warning);
+  }
+
   .timeline-meta {
-    color: var(--ra-text-muted);
-    font-size: 0.82rem;
+    color: var(--c-text-3);
+    font-size: var(--sz-xs);
   }
 
   .timeline-error {
-    color: #b04b43;
-    font-size: 0.85rem;
+    color: var(--c-error);
+    font-size: var(--sz-xs);
+    font-weight: 500;
   }
 
   .timeline-event {
     display: flex;
-    gap: 0.5rem;
-    font-size: 0.84rem;
-    color: var(--ra-text-muted);
+    gap: var(--sp-2);
+    font-size: var(--sz-xs);
+    color: var(--c-text-3);
+    font-family: var(--font-mono);
   }
 </style>

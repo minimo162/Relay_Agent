@@ -741,7 +741,15 @@ function normalizeMcpServer(value: unknown): McpServerConfig | null {
 }
 
 function normalizeApprovalPolicy(value: unknown): ApprovalPolicy {
-  return value === "standard" || value === "fast" ? value : DEFAULT_APPROVAL_POLICY;
+  if (value === "standard" || value === "fast") {
+    return value;
+  }
+  if (value !== undefined && value !== null && value !== DEFAULT_APPROVAL_POLICY) {
+    console.warn(
+      `[continuity] unexpected approvalPolicy value: ${JSON.stringify(value)}, falling back to "${DEFAULT_APPROVAL_POLICY}"`
+    );
+  }
+  return DEFAULT_APPROVAL_POLICY;
 }
 
 function sanitizeBrowserAutomationSettings(

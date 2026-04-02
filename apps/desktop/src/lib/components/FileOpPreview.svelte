@@ -113,50 +113,75 @@
 <style>
   .file-op-list {
     display: grid;
-    gap: 0.75rem;
+    gap: var(--sp-3);
   }
 
   .file-op-card {
-    border: 1px solid var(--ra-border);
+    border: 1px solid var(--c-border-strong);
     border-radius: 12px;
-    padding: 0.85rem;
-    background: color-mix(in srgb, var(--ra-accent) 4%, var(--ra-surface));
+    padding: var(--sp-4);
+    background: var(--c-surface);
+    box-shadow: var(--shadow-sm);
+    transition: border-color var(--duration-fast) var(--ease),
+                box-shadow var(--duration-fast) var(--ease);
+  }
+
+  .file-op-card:hover {
+    border-color: var(--c-border-strong);
+    box-shadow: var(--shadow-md);
   }
 
   .file-op-header {
     display: flex;
-    gap: 0.65rem;
+    gap: var(--sp-3);
     align-items: center;
   }
 
   .file-op-icon {
-    min-width: 2.4rem;
-    height: 2.4rem;
-    border-radius: 999px;
+    min-width: 2.25rem;
+    height: 2.25rem;
+    border-radius: var(--r-full);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.76rem;
+    font-size: var(--sz-xs);
     font-weight: 700;
-    color: var(--ra-accent);
-    background: color-mix(in srgb, var(--ra-accent) 12%, var(--ra-surface));
+    color: var(--c-accent);
+    background: var(--c-accent-subtle);
+    border: 2px solid rgba(13,148,136,0.20);
+    flex-shrink: 0;
   }
 
   .file-op-title {
     display: grid;
-    gap: 0.1rem;
+    gap: var(--sp-1);
+  }
+
+  .file-op-title strong {
+    font-size: var(--sz-sm);
+    font-weight: 500;
+    color: var(--c-text);
   }
 
   .file-op-tool {
-    color: var(--ra-text-muted);
-    font-family: monospace;
-    font-size: 0.76rem;
+    color: var(--c-text-3);
+    font-family: var(--font-mono);
+    font-size: var(--sz-xs);
   }
 
   .file-op-details {
-    margin: 0.75rem 0 0;
-    padding-left: 1.2rem;
-    color: var(--ra-text-muted);
-    font-size: 0.88rem;
+    margin: var(--sp-3) 0 0;
+    padding-left: var(--sp-5);
+    color: var(--c-text-2);
+    font-size: var(--sz-sm);
+    line-height: 1.5;
+  }
+
+  .file-op-details li {
+    padding: var(--sp-1) 0;
+  }
+
+  .file-op-details li::marker {
+    color: var(--c-text-3);
   }
 </style>

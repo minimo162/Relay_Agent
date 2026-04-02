@@ -7,7 +7,7 @@ import {
   throwIfAborted,
   trimConversationHistory,
   withTimeout
-} from "./agent-loop-core";
+} from "./copilot-turn";
 
 test("requestCopilotTurn retries invalid JSON and preserves conversation history", async () => {
   const prompts: string[] = [];

@@ -84,7 +84,10 @@ mod tests {
             ApprovalPolicy::Standard,
             OperationRisk::Readonly
         ));
-        assert!(should_auto_approve(ApprovalPolicy::Standard, OperationRisk::Low));
+        assert!(should_auto_approve(
+            ApprovalPolicy::Standard,
+            OperationRisk::Low
+        ));
         assert!(!should_auto_approve(
             ApprovalPolicy::Standard,
             OperationRisk::Medium
@@ -93,15 +96,30 @@ mod tests {
 
     #[test]
     fn evaluate_risk_maps_unknown_tools_to_medium() {
-        assert_eq!(evaluate_risk("unknown.tool", &json!({})), OperationRisk::Medium);
+        assert_eq!(
+            evaluate_risk("unknown.tool", &json!({})),
+            OperationRisk::Medium
+        );
     }
 
     #[test]
     fn fast_policy_auto_approves_up_to_medium() {
-        assert!(should_auto_approve(ApprovalPolicy::Fast, OperationRisk::Readonly));
-        assert!(should_auto_approve(ApprovalPolicy::Fast, OperationRisk::Low));
-        assert!(should_auto_approve(ApprovalPolicy::Fast, OperationRisk::Medium));
-        assert!(!should_auto_approve(ApprovalPolicy::Fast, OperationRisk::High));
+        assert!(should_auto_approve(
+            ApprovalPolicy::Fast,
+            OperationRisk::Readonly
+        ));
+        assert!(should_auto_approve(
+            ApprovalPolicy::Fast,
+            OperationRisk::Low
+        ));
+        assert!(should_auto_approve(
+            ApprovalPolicy::Fast,
+            OperationRisk::Medium
+        ));
+        assert!(!should_auto_approve(
+            ApprovalPolicy::Fast,
+            OperationRisk::High
+        ));
         assert!(!should_auto_approve(
             ApprovalPolicy::Fast,
             OperationRisk::Critical
@@ -110,10 +128,22 @@ mod tests {
 
     #[test]
     fn safe_policy_never_auto_approves() {
-        assert!(!should_auto_approve(ApprovalPolicy::Safe, OperationRisk::Readonly));
-        assert!(!should_auto_approve(ApprovalPolicy::Safe, OperationRisk::Low));
-        assert!(!should_auto_approve(ApprovalPolicy::Safe, OperationRisk::Medium));
-        assert!(!should_auto_approve(ApprovalPolicy::Safe, OperationRisk::Critical));
+        assert!(!should_auto_approve(
+            ApprovalPolicy::Safe,
+            OperationRisk::Readonly
+        ));
+        assert!(!should_auto_approve(
+            ApprovalPolicy::Safe,
+            OperationRisk::Low
+        ));
+        assert!(!should_auto_approve(
+            ApprovalPolicy::Safe,
+            OperationRisk::Medium
+        ));
+        assert!(!should_auto_approve(
+            ApprovalPolicy::Safe,
+            OperationRisk::Critical
+        ));
     }
 
     #[test]

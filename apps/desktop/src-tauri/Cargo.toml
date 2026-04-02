@@ -12,10 +12,18 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.0.0", features = [] }
 
 [dependencies]
+anyhow = "1"
+async-trait = "0.1"
 calamine = "0.34.0"
 chrono = { version = "0.4", features = ["clock"] }
+claw-compact = { git = "https://github.com/claw-cli/claw-code-rust.git", rev = "33e5883d7909afd0c55b00b49c3034e21e33f440", package = "claw-compact" }
+claw-core = { git = "https://github.com/claw-cli/claw-code-rust.git", rev = "33e5883d7909afd0c55b00b49c3034e21e33f440", package = "claw-core" }
+claw-permissions = { git = "https://github.com/claw-cli/claw-code-rust.git", rev = "33e5883d7909afd0c55b00b49c3034e21e33f440", package = "claw-permissions" }
+claw-provider = { git = "https://github.com/claw-cli/claw-code-rust.git", rev = "33e5883d7909afd0c55b00b49c3034e21e33f440", package = "claw-provider" }
+claw-tools = { git = "https://github.com/claw-cli/claw-code-rust.git", rev = "33e5883d7909afd0c55b00b49c3034e21e33f440", package = "claw-tools" }
 csv = "1.4.0"
 encoding_rs = "0.8"
+futures = "0.3"
 lopdf = "0.34"
 quick-xml = "0.36"
 regex = "1"
@@ -25,6 +33,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tauri = { version = "2.0.0", features = [] }
 tauri-plugin-shell = "2.0.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 trash = "5"
 uuid = { version = "1.18.1", features = ["v4"] }
 zip = "2"

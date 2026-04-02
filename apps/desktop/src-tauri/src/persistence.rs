@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use claw_core::Message;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 
@@ -29,6 +30,7 @@ pub struct LoadedStorage {
     pub projects: HashMap<String, Project>,
     pub sessions: HashMap<String, Session>,
     pub turns: HashMap<String, Turn>,
+    pub session_messages: HashMap<String, Vec<Message>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -164,6 +166,7 @@ pub fn initialize_storage(app_local_data_dir: &Path, now: &str) -> Result<Loaded
     let mut projects = HashMap::new();
     let mut sessions = HashMap::new();
     let mut turns = HashMap::new();
+    let mut session_messages = HashMap::new();
 
     for entry in project_index {
         let project_path = project_file_path(&storage_root, &entry.id);
@@ -174,11 +177,17 @@ pub fn initialize_storage(app_local_data_dir: &Path, now: &str) -> Result<Loaded
     for entry in session_index {
         let session_path = session_file_path(&storage_root, &entry.id);
         let session: Session = read_json_file(&session_path)?;
+        let messages = if session_history_path(&storage_root, &entry.id).is_file() {
+            read_json_file(&session_history_path(&storage_root, &entry.id))?
+        } else {
+            Vec::new()
+        };
         for turn_id in &session.turn_ids {
             let turn_path = turn_file_path(&storage_root, &session.id, turn_id);
             let turn: Turn = read_json_file(&turn_path)?;
             turns.insert(turn.id.clone(), turn);
         }
+        session_messages.insert(session.id.clone(), messages);
         sessions.insert(session.id.clone(), session);
     }
 
@@ -188,6 +197,7 @@ pub fn initialize_storage(app_local_data_dir: &Path, now: &str) -> Result<Loaded
         projects,
         sessions,
         turns,
+        session_messages,
     })
 }
 
@@ -237,6 +247,7 @@ pub fn persist_session_state(
     sessions: &HashMap<String, Session>,
     turns: &HashMap<String, Turn>,
     session_id: &str,
+    session_messages: &[Message],
     now: &str,
 ) -> Result<(), String> {
     let storage_root = storage_root(app_local_data_dir);
@@ -253,6 +264,10 @@ pub fn persist_session_state(
     })?;
 
     write_json_atomic(&session_file_path(&storage_root, &session.id), session)?;
+    write_json_atomic(
+        &session_history_path(&storage_root, &session.id),
+        &session_messages,
+    )?;
     for turn_id in &session.turn_ids {
         let turn = turns
             .get(turn_id)
@@ -373,6 +388,10 @@ fn logs_dir(storage_root: &Path, session_id: &str) -> PathBuf {
 
 fn session_file_path(storage_root: &Path, session_id: &str) -> PathBuf {
     session_dir(storage_root, session_id).join("session.json")
+}
+
+fn session_history_path(storage_root: &Path, session_id: &str) -> PathBuf {
+    session_dir(storage_root, session_id).join("history.json")
 }
 
 fn turn_file_path(storage_root: &Path, session_id: &str, turn_id: &str) -> PathBuf {

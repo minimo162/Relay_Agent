@@ -165,29 +165,55 @@
 {/if}
 
 <style>
+  /* ── Shizuka: ArtifactPreview ── */
+
+  /* Tab bar with underline style */
   .artifact-tabs {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.35rem;
-    margin-bottom: 0.85rem;
+    gap: 0;
+    margin-bottom: var(--sp-4);
+    border-bottom: 2px solid var(--c-border-strong);
   }
 
   .artifact-tab {
-    border: 1px solid var(--ra-border);
-    background: var(--ra-surface);
-    color: inherit;
-    border-radius: 999px;
-    padding: 0.45rem 0.85rem;
+    border: none;
+    background: transparent;
+    color: var(--c-text-3);
+    border-radius: 0;
+    padding: var(--sp-2) var(--sp-4);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--sz-sm);
+    font-weight: 500;
+    position: relative;
+    transition: color var(--duration-fast) var(--ease);
+  }
+
+  .artifact-tab::after {
+    content: "";
+    position: absolute;
+    bottom: -2px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: transparent;
+    transition: background var(--duration-fast) var(--ease);
+  }
+
+  .artifact-tab:hover {
+    color: var(--c-text);
   }
 
   .artifact-tab.active {
-    border-color: var(--ra-accent);
-    background: color-mix(in srgb, var(--ra-accent) 12%, var(--ra-surface));
-    font-weight: 600;
+    color: var(--c-accent);
+    font-weight: 700;
   }
 
+  .artifact-tab.active::after {
+    background: var(--c-accent);
+  }
+
+  /* Grid containers */
   .artifact-preview,
   .sheet-diff-grid,
   .text-diff-preview,
@@ -196,53 +222,78 @@
   .unknown-preview,
   .artifact-warnings {
     display: grid;
-    gap: 0.75rem;
+    gap: var(--sp-3);
   }
 
+  .artifact-preview h4 {
+    font-size: var(--sz-sm);
+    font-weight: 700;
+    color: var(--c-text);
+    margin: 0;
+  }
+
+  .artifact-preview h5 {
+    font-size: var(--sz-xs);
+    font-weight: 500;
+    color: var(--c-text-2);
+    margin: 0 0 var(--sp-2);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* Text diff: before/after columns */
   .diff-columns {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 0.75rem;
+    gap: var(--sp-3);
   }
 
   .diff-panel,
   .text-block-preview pre,
   .unknown-preview pre {
-    border: 1px solid var(--ra-border);
-    border-radius: 12px;
-    padding: 0.75rem;
+    border: 1px solid var(--c-border-strong);
+    border-radius: 8px;
+    padding: var(--sp-3);
     margin: 0;
     max-height: 22rem;
     overflow: auto;
     white-space: pre-wrap;
     word-break: break-word;
+    font-family: var(--font-mono);
+    font-size: var(--sz-xs);
+    line-height: 1.7;
   }
 
   .diff-before {
-    background: #fff4f1;
+    background: var(--c-error-subtle);
+    border-color: var(--c-error-subtle);
   }
 
   .diff-after {
-    background: #f3fff4;
+    background: var(--c-success-subtle);
+    border-color: var(--c-success-subtle);
   }
 
+  /* CSV Table: zebra stripes + hover */
   .table-scroll {
     overflow: auto;
     max-height: 24rem;
-    border: 1px solid var(--ra-border);
-    border-radius: 12px;
+    border: 1px solid var(--c-border-strong);
+    border-radius: 8px;
+    box-shadow: var(--shadow-sm);
   }
 
   table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.84rem;
+    font-size: var(--sz-xs);
+    font-family: var(--font-mono);
   }
 
   th,
   td {
-    padding: 0.45rem 0.6rem;
-    border-bottom: 1px solid var(--ra-border);
+    padding: var(--sp-2) var(--sp-3);
+    border-bottom: 1px solid var(--c-border-strong);
     text-align: left;
     white-space: nowrap;
   }
@@ -250,13 +301,42 @@
   th {
     position: sticky;
     top: 0;
-    background: var(--ra-surface);
+    background: var(--c-surface);
     z-index: 1;
+    font-weight: 700;
+    color: var(--c-text-2);
+    font-size: var(--sz-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 2px solid var(--c-border-strong);
   }
 
-  .artifact-note,
+  tbody tr:nth-child(even) {
+    background: #f0eeea;
+  }
+
+  tbody tr:hover {
+    background: var(--c-accent-subtle);
+  }
+
+  /* Notes and warnings */
+  .artifact-note {
+    font-size: var(--sz-xs);
+    color: var(--c-text-3);
+    margin: 0;
+  }
+
+  .artifact-warnings {
+    margin-top: var(--sp-2);
+  }
+
   .warning-text {
-    font-size: 0.84rem;
-    color: var(--ra-text-muted);
+    font-size: var(--sz-xs);
+    color: var(--c-warning);
+    background: var(--c-warning-subtle);
+    border: 1px solid var(--c-warning-subtle);
+    border-radius: var(--r-sm);
+    padding: var(--sp-2) var(--sp-3);
+    margin: 0;
   }
 </style>

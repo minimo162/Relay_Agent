@@ -128,14 +128,14 @@
   .pipeline-builder,
   .step-list {
     display: grid;
-    gap: 1rem;
+    gap: var(--sp-4);
   }
 
   .builder-header,
   .builder-grid,
   .step-card {
     display: grid;
-    gap: 0.75rem;
+    gap: var(--sp-3);
   }
 
   .builder-header {
@@ -143,39 +143,93 @@
     align-items: start;
   }
 
+  .builder-header h3 {
+    font-size: var(--sz-lg);
+    font-weight: 700;
+    color: var(--c-text);
+    letter-spacing: -0.01em;
+  }
+
+  .builder-header p {
+    font-size: var(--sz-sm);
+    color: var(--c-text-2);
+    margin-top: var(--sp-1);
+  }
+
   .builder-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .step-list {
+    position: relative;
+  }
+
+  /* Connection line between steps */
+  .step-list::before {
+    content: "";
+    position: absolute;
+    left: calc(var(--sp-4) + 1rem);
+    top: var(--sp-6);
+    bottom: var(--sp-6);
+    width: 2px;
+    background: var(--c-border-strong);
+    z-index: 0;
+  }
+
   .step-card {
+    position: relative;
+    z-index: 1;
     grid-template-columns: auto minmax(0, 1fr) auto;
-    padding: 0.9rem;
-    border-radius: 14px;
-    border: 1px solid var(--ra-border);
-    background: var(--ra-surface);
+    padding: var(--sp-4);
+    border-radius: 16px;
+    border: 1px solid var(--c-border-strong);
+    background: var(--c-surface);
+    box-shadow: var(--shadow-sm);
+    transition: border-color var(--duration-fast) var(--ease),
+                box-shadow var(--duration-fast) var(--ease);
+  }
+
+  .step-card:hover {
+    border-color: var(--c-border-strong);
+    box-shadow: var(--shadow-md);
   }
 
   .step-number {
     width: 2rem;
     height: 2rem;
-    border-radius: 999px;
+    border-radius: var(--r-full);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: color-mix(in srgb, var(--ra-accent) 12%, white);
-    color: var(--ra-accent);
+    background: var(--c-accent-subtle);
+    color: var(--c-accent);
+    font-size: var(--sz-sm);
     font-weight: 700;
+    border: 2px solid rgba(13,148,136,0.20);
+    flex-shrink: 0;
   }
 
   .step-form,
   .step-actions {
     display: grid;
-    gap: 0.6rem;
+    gap: var(--sp-3);
+  }
+
+  .step-actions {
+    align-content: start;
   }
 
   label {
     display: grid;
-    gap: 0.35rem;
+    gap: var(--sp-1);
+  }
+
+  label span {
+    font-size: var(--sz-xs);
+    font-weight: 500;
+    color: var(--c-text-2);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   @media (max-width: 760px) {
@@ -183,6 +237,10 @@
     .builder-grid,
     .step-card {
       grid-template-columns: 1fr;
+    }
+
+    .step-list::before {
+      display: none;
     }
   }
 </style>

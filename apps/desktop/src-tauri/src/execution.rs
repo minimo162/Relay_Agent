@@ -1,15 +1,19 @@
+use std::{path::PathBuf, sync::Arc};
+
+use claw_permissions::{PermissionMode, RuleBasedPolicy};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::mcp_client::McpClient;
 use crate::models::{
-    ApprovePlanRequest, ApprovePlanResponse, ExecuteReadActionsRequest, ExecuteReadActionsResponse,
-    InvokeMcpToolRequest, InvokeMcpToolResponse, ListToolsResponse, McpServerConfig,
-    PlanProgressRequest, PlanProgressResponse, PreviewExecutionRequest, PreviewExecutionResponse,
+    ApprovePlanRequest, ApprovePlanResponse, ExecuteClawToolRequest, ExecuteClawToolResponse,
+    ExecuteReadActionsRequest, ExecuteReadActionsResponse, InvokeMcpToolRequest,
+    InvokeMcpToolResponse, ListToolsResponse, McpServerConfig, PlanProgressRequest,
+    PlanProgressResponse, PreviewExecutionRequest, PreviewExecutionResponse,
     RecordPlanProgressRequest, RecordScopeApprovalRequest, RecordScopeApprovalResponse,
     RespondToApprovalRequest, RespondToApprovalResponse, RunExecutionMultiRequest,
-    RunExecutionRequest, RunExecutionResponse, SetToolEnabledRequest, ToolRegistration,
-    ToolSource, ValidateOutputQualityRequest,
+    RunExecutionRequest, RunExecutionResponse, SetToolEnabledRequest, ToolRegistration, ToolSource,
+    ValidateOutputQualityRequest,
 };
 use crate::risk_evaluator::ApprovalPolicy;
 use crate::state::DesktopState;
@@ -40,6 +44,14 @@ pub fn set_tool_enabled(
 ) -> Result<crate::models::ToolRegistration, String> {
     let mut storage = state.storage.lock().expect("desktop storage poisoned");
     storage.set_tool_enabled(request)
+}
+
+#[tauri::command]
+pub async fn execute_claw_tool(
+    state: State<'_, DesktopState>,
+    request: ExecuteClawToolRequest,
+) -> Result<ExecuteClawToolResponse, String> {
+    execute_claw_tool_with_registry(Arc::clone(&state.claw_tool_registry), request).await
 }
 
 #[tauri::command]
@@ -118,6 +130,43 @@ fn resolve_mcp_invocation_parts(
     let tool_name = parse_mcp_tool_name(tool_id)?;
 
     Ok((server_url, transport, tool_name))
+}
+
+async fn execute_claw_tool_with_registry(
+    registry: Arc<claw_tools::ToolRegistry>,
+    request: ExecuteClawToolRequest,
+) -> Result<ExecuteClawToolResponse, String> {
+    let tool = registry
+        .get(&request.tool_name)
+        .cloned()
+        .ok_or_else(|| format!("unknown claw tool: {}", request.tool_name))?;
+    let cwd = resolve_claw_tool_cwd(request.cwd)?;
+    let output = tool
+        .execute(
+            &claw_tools::ToolContext {
+                cwd,
+                permissions: Arc::new(RuleBasedPolicy::new(PermissionMode::AutoApprove)),
+                session_id: "tauri-command".to_string(),
+            },
+            request.input,
+        )
+        .await
+        .map_err(|error| format!("claw tool execution failed: {error}"))?;
+
+    Ok(ExecuteClawToolResponse {
+        tool_name: request.tool_name,
+        content: output.content,
+        is_error: output.is_error,
+        metadata: output.metadata,
+    })
+}
+
+fn resolve_claw_tool_cwd(cwd: Option<String>) -> Result<PathBuf, String> {
+    match cwd {
+        Some(path) if !path.trim().is_empty() => Ok(PathBuf::from(path)),
+        Some(_) => Err("cwd must not be empty when provided".to_string()),
+        None => std::env::current_dir().map_err(|error| error.to_string()),
+    }
 }
 
 #[tauri::command]
@@ -242,8 +291,15 @@ pub fn set_approval_policy(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_mcp_tool_name, resolve_mcp_invocation_parts};
+    use tempfile::tempdir;
+
+    use super::{
+        execute_claw_tool_with_registry, parse_mcp_tool_name, resolve_claw_tool_cwd,
+        resolve_mcp_invocation_parts,
+    };
     use crate::models::{McpTransport, ToolPhase, ToolRegistration, ToolSource};
+    use crate::state::DesktopState;
+    use serde_json::json;
 
     #[test]
     fn parse_mcp_tool_name_accepts_expected_format() {
@@ -257,6 +313,12 @@ mod tests {
     fn parse_mcp_tool_name_rejects_invalid_format() {
         let error = parse_mcp_tool_name("demo.echo").expect_err("tool id should be rejected");
         assert!(error.contains("invalid MCP tool_id"));
+    }
+
+    #[test]
+    fn resolve_claw_tool_cwd_rejects_blank_value() {
+        let error = resolve_claw_tool_cwd(Some("  ".to_string())).expect_err("blank cwd");
+        assert!(error.contains("cwd must not be empty"));
     }
 
     #[test]
@@ -301,5 +363,31 @@ mod tests {
         .expect_err("invalid tool id should be rejected");
 
         assert!(error.contains("invalid MCP tool_id"));
+    }
+
+    #[tokio::test]
+    async fn execute_claw_tool_reads_file_from_registered_builtin_registry() {
+        let temp_dir = tempdir().expect("temp dir should exist");
+        let file_path = temp_dir.path().join("sample.txt");
+        std::fs::write(&file_path, "alpha\nbeta\n").expect("sample file should be written");
+
+        let state = DesktopState::default();
+        let response = execute_claw_tool_with_registry(
+            state.claw_tool_registry,
+            crate::models::ExecuteClawToolRequest {
+                tool_name: "file_read".to_string(),
+                input: json!({
+                    "path": file_path.to_string_lossy().to_string()
+                }),
+                cwd: Some(temp_dir.path().to_string_lossy().to_string()),
+            },
+        )
+        .await
+        .expect("file_read should execute");
+
+        assert_eq!(response.tool_name, "file_read");
+        assert!(!response.is_error);
+        assert!(response.content.contains("alpha"));
+        assert!(response.content.contains("beta"));
     }
 }

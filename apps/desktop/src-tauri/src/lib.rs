@@ -1,26 +1,34 @@
+mod approval_store;
+mod agent_loop_smoke;
 mod app;
 mod batch;
 mod browser_automation;
+mod copilot_provider;
 mod execution;
-mod file_ops;
+mod file_support;
+#[cfg(test)]
+mod integration_tests;
 mod mcp_client;
 mod models;
-mod pipeline;
 mod persistence;
+mod pipeline;
 mod project;
 mod quality_validator;
 mod relay;
+mod relay_tools;
 mod risk_evaluator;
 mod session;
+mod session_store;
 mod startup;
 mod state;
 mod storage;
+mod tauri_bridge;
 mod template;
-mod tool_registry;
+mod tool_catalog;
+mod read_action_executor;
 mod workbook;
+mod workbook_state;
 mod workflow_smoke;
-#[cfg(test)]
-mod integration_tests;
 
 use std::{env, path::PathBuf};
 
@@ -37,6 +45,7 @@ pub fn run() {
                 startup::bootstrap_desktop_state(app_local_data_dir, sample_workbook_path);
 
             app.manage(desktop_state);
+            agent_loop_smoke::spawn_if_configured(app.handle().clone());
             workflow_smoke::spawn_if_configured(app.handle().clone());
             Ok(())
         })
@@ -63,6 +72,7 @@ pub fn run() {
             relay::submit_copilot_response,
             execution::list_tools,
             execution::set_tool_enabled,
+            execution::execute_claw_tool,
             execution::connect_mcp_server,
             execution::invoke_mcp_tool,
             browser_automation::send_copilot_prompt,
@@ -91,7 +101,11 @@ pub fn run() {
             template::template_delete,
             template::template_from_session,
             execution::get_approval_policy,
-            execution::set_approval_policy
+            execution::set_approval_policy,
+            tauri_bridge::start_agent,
+            tauri_bridge::respond_approval,
+            tauri_bridge::cancel_agent,
+            tauri_bridge::get_session_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -142,6 +156,7 @@ fn resolve_app_local_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String>
     }
 }
 
+pub use copilot_provider::CopilotChatProvider;
 pub use startup::{
     bootstrap_desktop_state, bootstrap_retry_recovery_state, build_initialize_app_response,
     discover_sample_workbook_path_from_candidates, InitializeAppResponse,

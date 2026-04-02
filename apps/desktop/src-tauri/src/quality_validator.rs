@@ -20,7 +20,10 @@ pub fn validate_output_quality(
         QualityCheck {
             name: "行数チェック".to_string(),
             passed: false,
-            detail: format!("入力: {}行 -> 出力: {}行（全行消失）", source_rows, output_rows),
+            detail: format!(
+                "入力: {}行 -> 出力: {}行（全行消失）",
+                source_rows, output_rows
+            ),
         }
     } else {
         QualityCheck {
@@ -263,7 +266,10 @@ mod tests {
         .expect("quality validation should succeed");
 
         assert!(!result.passed);
-        assert!(result.warnings.iter().any(|warning| warning.contains("空です")));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("空です")));
 
         fs::remove_file(source_path).expect("source file should clean up");
         fs::remove_file(output_path).expect("output file should clean up");
@@ -290,8 +296,10 @@ mod tests {
     fn quoted_commas_do_not_break_quality_checks() {
         let source_path = env::temp_dir().join("relay-quality-quoted-source.csv");
         let output_path = env::temp_dir().join("relay-quality-quoted-output.csv");
-        fs::write(&source_path, "name,notes\nalpha,\"hello,world\"\n").expect("source csv should write");
-        fs::write(&output_path, "name,notes\nalpha,\"hello,world\"\n").expect("output csv should write");
+        fs::write(&source_path, "name,notes\nalpha,\"hello,world\"\n")
+            .expect("source csv should write");
+        fs::write(&output_path, "name,notes\nalpha,\"hello,world\"\n")
+            .expect("output csv should write");
 
         let result = validate_output_quality(
             source_path.to_str().expect("source path should render"),
@@ -300,7 +308,10 @@ mod tests {
         .expect("quality validation should succeed");
 
         assert!(result.passed);
-        assert!(!result.warnings.iter().any(|warning| warning.contains("CSV インジェクション")));
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("CSV インジェクション")));
 
         fs::remove_file(source_path).expect("source file should clean up");
         fs::remove_file(output_path).expect("output file should clean up");
@@ -311,7 +322,8 @@ mod tests {
         let source_path = env::temp_dir().join("relay-quality-large-source.csv");
         let output_path = env::temp_dir().join("relay-quality-large-output.csv");
         let repeated_line = "name,value\nalpha,1\n";
-        let large_content = repeated_line.repeat((MAX_QUALITY_CHECK_BYTES as usize / repeated_line.len()) + 1024);
+        let large_content =
+            repeated_line.repeat((MAX_QUALITY_CHECK_BYTES as usize / repeated_line.len()) + 1024);
         fs::write(&source_path, &large_content).expect("source csv should write");
         fs::write(&output_path, &large_content).expect("output csv should write");
 

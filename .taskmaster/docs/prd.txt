@@ -1,1454 +1,1164 @@
-# Relay Agent — 統合 PRD
+================================================================================
+  RELAY AGENT — claw-code ベース アーキテクチャ再設計 PRD
+  方針: 自作ツールを捨て、claw-code (Rust) を薄くラップする
+  制約: Claude API 不可 → Copilot Chat で代替
+  UI参考: openwork (different-ai/openwork) のデザイン言語
+  Created: 2026-04-02  Updated: 2026-04-03
+================================================================================
 
-最終更新: 2026-04-01
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. 背景と動機
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
----
+■ 現状の問題
 
-## 1. 製品概要
+  Relay Agent は以下を全て自前で実装している:
+  - 21個のビルトインツール (tool_registry.rs)
+  - セッション/ターン管理 (storage.rs: 328KB の巨大モノリス)
+  - コンテキスト管理 (relay.rs: RelayPacket 生成)
+  - ファイル操作 (file_ops.rs: 22KB)
+  - ワークブック処理 (workbook/: 5モジュール)
+  - MCP クライアント (mcp_client.rs)
+  - パーミッション管理 (risk_evaluator.rs)
 
-Relay Agent は、M365 Copilot をエージェントとして活用し、PC 作業全般を自動化するデスクトップアプリ。
-ユーザーが目標を伝えると、アプリと Copilot が何度も自動でやりとりしながら処理を進め、
-書き込み・削除など不可逆な操作のみ人間が確認する「Human-in-the-Loop エージェントループ」を実現する。
+  これらの多くは claw-code が既に高品質で実装済み。車輪の再発明をやめる。
 
-**フェーズ1（現状）:** スプレッドシートの 1 ショット変換（CSV/XLSX）
-**フェーズ2（次期）:** 読み取りツール自動実行 + 多ターン Copilot ループ
-**フェーズ3（将来）:** ファイル操作・テキスト処理など PC 作業全般への拡張
+■ claw-code とは
 
-- **スタック:** SvelteKit SPA + Tauri v2（Rust バックエンド）
-- **ブラウザ自動化:** Playwright TypeScript（Edge CDP 接続）
-- **対象ファイル:** CSV（完全対応）/ XLSX（inspect + save-copy のみ）
-- **対象 OS:** Windows 10/11 x64（NSIS インストーラ）
-- **言語:** UI は全て日本語
+  GitHub: https://github.com/ultraworkers/claw-code.git
+  (実体: claw-cli/claw-code-rust)
 
----
+  Claude Code の設計パターンを Rust でクリーンルーム再実装した
+  オープンソースの AI コーディングエージェントフレームワーク。
 
-## 2. アーキテクチャ
+  8 crate の Cargo ワークスペース:
+  ┌──────────────────┬────────────────────────────────────┐
+  │ claw-cli         │ バイナリエントリ、REPL/単発モード     │
+  │ claw-core        │ メッセージモデル、セッション、エージェントループ │
+  │ claw-tools       │ Tool trait + 6ビルトイン (bash, file_read/write/edit, glob, grep) │
+  │ claw-provider    │ ModelProvider trait + Anthropic/OpenAI実装 │
+  │ claw-permissions │ PermissionPolicy trait, ルールベース   │
+  │ claw-compact     │ トークン予算管理、コンテキスト圧縮      │
+  │ claw-tasks       │ バックグラウンドタスク (scaffold)       │
+  │ claw-mcp         │ MCP クライアント (scaffold)           │
+  └──────────────────┴────────────────────────────────────┘
 
-### モノレポ構成
+■ 方針: 薄いラッパー
 
-```
-apps/desktop/          SvelteKit SPA + Tauri v2 デスクトップシェル
-packages/contracts/    Zod スキーマ + TypeScript 型（正本）
-examples/              デモ CSV
-docs/                  実装ログ・検証チェックリスト
-```
+  claw-code の crate を Cargo 依存として取り込み、
+  Relay Agent 固有のロジックだけを薄く上に被せる。
 
-### Rust バックエンド（apps/desktop/src-tauri/src/）
+  具体的には:
+  1. claw-tools → ファイル操作・bash・glob・grep をそのまま使う
+  2. claw-core → エージェントループ・セッション管理を使う
+  3. claw-compact → コンテキスト圧縮を使う
+  4. claw-permissions → パーミッション管理を使う
+  5. claw-provider → 使わない (Claude API 不可のため)
+     → 代わりに CopilotChatProvider を自前実装
 
-| モジュール | 役割 |
-|---|---|
-| app.rs | アプリ初期化・ライフサイクル |
-| session.rs | セッション・ターン管理 |
-| relay.rs | リレーパケット生成・レスポンスバリデーション |
-| execution.rs | プレビュー・承認・save-copy 実行 |
-| persistence.rs | ローカル JSON ストレージ |
-| startup.rs | 起動状態回復・一時モードフォールバック |
-| workbook/ | CSV/XLSX エンジン（inspect, preview, transform, preflight） |
+■ 制約: Claude API が使えない
 
-### フロントエンド（apps/desktop/src/）
+  claw-code は Anthropic API / OpenAI API を前提としているが、
+  この環境では Claude API キーがない。
 
-| ファイル | 役割 |
-|---|---|
-| routes/+page.svelte | メイン1ページ UI（3ステップフロー） |
-| lib/ipc.ts | Tauri コマンド型付き IPC ラッパー |
-| lib/auto-fix.ts | Copilot JSON 自動補正（7種 → 11種に拡張予定） |
-| lib/continuity.ts | セッション下書き永続化・復旧 |
+  解決策: claw-provider の ModelProvider trait を実装した
+  CopilotChatProvider を作成。内部で既存の browser_automation.rs
+  (Edge + Playwright 経由の M365 Copilot Chat) を呼び出す。
 
-### Contracts（packages/contracts/src/）
+  ModelProvider trait:
+    async fn complete(&self, messages, tools) -> Result<Response>
+    async fn stream(&self, messages, tools) -> Result<Stream<Event>>
 
-Session / Turn / Item / RelayPacket / CopilotTurnResponse / ToolDescriptor /
-SpreadsheetAction / WorkbookProfile / DiffSummary を Zod スキーマで定義。
+  CopilotChatProvider は complete() のみ実装し、
+  stream() は complete() の結果を1チャンクで返す擬似ストリーム。
 
----
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. アーキテクチャ変更概要
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## 3. UI 仕様
+■ Before (現行)
 
-### 3.1 1ページ完結レイアウト
+  ┌─────────────────────────────────────────────┐
+  │  Svelte Frontend (SvelteKit)                 │
+  │  ┌─ agent-loop.ts ─────────────────────────┐ │
+  │  │  プロンプト組立 → Copilot → レスポンス解析  │ │
+  │  │  → ツール呼び出し (IPC) → ループ           │ │
+  │  └─────────────────────────────────────────┘ │
+  ├─────────────────────────────────────────────┤
+  │  Tauri Backend (Rust)                        │
+  │  ┌─ storage.rs (328KB) ────────────────────┐ │
+  │  │  セッション・ターン・承認・全状態管理       │ │
+  │  ├─ tool_registry.rs ─────────────────────┐ │
+  │  │  21 ビルトインツール (自前実装)            │ │
+  │  ├─ file_ops.rs (22KB) ───────────────────┐ │
+  │  │  ファイル操作 (自前実装)                  │ │
+  │  ├─ workbook/ ────────────────────────────┐ │
+  │  │  CSV/XLSX 処理 (自前実装)               │ │
+  │  ├─ browser_automation.rs ────────────────┐ │
+  │  │  Edge Copilot 連携                      │ │
+  │  ├─ mcp_client.rs ───────────────────────┐ │
+  │  │  MCP JSON-RPC (自前実装)                │ │
+  │  └─────────────────────────────────────────┘ │
+  └─────────────────────────────────────────────┘
 
-Home/Studio/Settings の3ページ構成を廃止し、1つのメインページに統合。
+■ After (claw-code ベース)
 
-```
-┌─────────────────────────────────────┐
-│ ヘッダー（アプリ名 + ⚙ アイコン）    │
-├─────────────────────────────────────┤
-│ 最近の作業（クリックで再開）          │
-├─────────────────────────────────────┤
-│                                     │
-│  ステップ 1: ファイルとやりたいこと    │
-│  ┌─────────────────────────────┐    │
-│  │ ファイル: [____________] [選択] │    │
-│  │ やりたいこと: [テンプレート選択]  │    │
-│  │              [自由入力エリア]   │    │
-│  │       [準備する →]            │    │
-│  └─────────────────────────────┘    │
-│                                     │
-│  ステップ 2: Copilot に聞く          │
-│  ┌─────────────────────────────┐    │
-│  │ [依頼をコピー]               │    │
-│  │ Copilot の返答:              │    │
-│  │ [テキストエリア]              │    │
-│  │       [確認する →]            │    │
-│  └─────────────────────────────┘    │
-│                                     │
-│  ステップ 3: 確認して保存            │
-│  ┌─────────────────────────────┐    │
-│  │ 変更: ○○  行数: ○○  保存先: ○○ │    │
-│  │ [SheetDiff カード]            │    │
-│  │       [保存する]              │    │
-│  └─────────────────────────────┘    │
-│                                     │
-└─────────────────────────────────────┘
-```
+  ┌─────────────────────────────────────────────┐
+  │  Svelte Frontend (SvelteKit)                 │
+  │  ┌─ agent-ui.ts ──────────────────────────┐ │
+  │  │  Tauri IPC 経由で Rust 側ループを制御      │ │
+  │  │  フィード表示・承認 UI のみ担当            │ │
+  │  └─────────────────────────────────────────┘ │
+  ├─────────────────────────────────────────────┤
+  │  Tauri Backend (Rust) — 薄いラッパー          │
+  │                                              │
+  │  ┌─ claw-core (依存) ────────────────────┐  │
+  │  │  エージェントループ、セッション管理         │  │
+  │  │  マルチターン会話、auto-continue          │  │
+  │  └──────────────────────────────────────┘  │
+  │  ┌─ claw-tools (依存) ───────────────────┐  │
+  │  │  bash, file_read, file_write, file_edit │  │
+  │  │  glob, grep                             │  │
+  │  │  + Tool trait で自作ツール追加:           │  │
+  │  │    workbook.inspect, sheet.preview, etc. │  │
+  │  └──────────────────────────────────────┘  │
+  │  ┌─ claw-compact (依存) ─────────────────┐  │
+  │  │  トークン予算、コンテキスト圧縮             │  │
+  │  └──────────────────────────────────────┘  │
+  │  ┌─ claw-permissions (依存) ─────────────┐  │
+  │  │  パーミッションポリシー                    │  │
+  │  │  + Relay 固有の承認ゲート統合              │  │
+  │  └──────────────────────────────────────┘  │
+  │  ┌─ copilot_provider.rs (自前) ──────────┐  │
+  │  │  ModelProvider trait 実装               │  │
+  │  │  browser_automation.rs を内部利用        │  │
+  │  │  Copilot Chat → claw-core 形式に変換     │  │
+  │  └──────────────────────────────────────┘  │
+  │  ┌─ relay_tools.rs (自前) ───────────────┐  │
+  │  │  Relay 固有ツール (Tool trait 実装):      │  │
+  │  │  workbook.*, document.read_text         │  │
+  │  │  既存 workbook/ モジュールを再利用         │  │
+  │  └──────────────────────────────────────┘  │
+  │  ┌─ tauri_bridge.rs (自前) ──────────────┐  │
+  │  │  Tauri コマンド ↔ claw-core 間の橋渡し   │  │
+  │  │  フロントエンドへのイベント emit           │  │
+  │  └──────────────────────────────────────┘  │
+  └─────────────────────────────────────────────┘
 
-### 3.2 ステップ動作仕様
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. 削除するもの
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**ステップ 1: はじめる**
-- ファイル選択（パス入力 + 練習用サンプルチップ）
-- やりたいこと（テンプレートチップ + 自由入力テキストエリア）
-- ボタン:「準備する」
-- **完了後はコンパクトに折りたたまれる（編集可能な状態で）** ← Task 70
+  claw-code で代替されるため削除:
 
-**ステップ 2: Copilot に聞く**
-- 「依頼テキストをコピー」ボタン（目立つ）
-- 依頼テキストのプレビュー（折りたたみ可能）
-- 「Copilot の返答」テキストエリア
-- 期待する形式のヒント表示
-- ボタン:「確認する」
-- **ステップ未到達時はグレーアウト** ← Task 69
+  ■ Rust 側
+    - tool_registry.rs → claw-tools の ToolRegistry に置換
+    - file_ops.rs (22KB) → claw-tools の file_read/write/edit + bash
+    - mcp_client.rs → claw-mcp (将来的に)
+    - risk_evaluator.rs → claw-permissions に統合
+    - relay.rs (RelayPacket 生成) → claw-core のメッセージモデル
+    - storage.rs の大部分 → claw-core のセッション管理
+      ※ ワークブック固有の状態管理は残す
 
-**ステップ 3: 確認して保存**
-- 変更差分の事前確認を常に表示する（必須）
-- 「変更前 → 変更後」の差分を行単位で表示（SheetDiff カード）
-- 3点サマリー（何が変わる / 行数 / 保存先）
-- ボタン:「保存する」（内容確認後に有効化）
-- 保存完了後: 結果表示 +「新しい作業を始める」リンク
-- **ステップ未到達時はグレーアウト** ← Task 69
+  ■ TypeScript 側
+    - agent-loop.ts → Rust 側の claw-core ループに移行
+    - agent-loop-core.ts → 同上
+    - agent-loop-prompts.ts → claw-core のシステムプロンプト + CLAUDE.md
+    - tool-runtime.ts → claw-tools が担当
+    - copilot-browser.ts → copilot_provider.rs に統合
 
-### 3.3 設定モーダル
+  ■ 削除によるコード量削減 (推定)
+    - Rust: ~400KB → ~80KB (storage.rs 328KB の大部分が不要に)
+    - TypeScript: agent-loop 関連 ~30KB → ~5KB (UI 制御のみ)
 
-ヘッダー右端の⚙アイコンから開く。
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. 残すもの (Relay 固有)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-- 実行ポリシー（読み取り専用、プレビュー必須など）
-- データの保存場所
-- ローカルデータの削除手順
+  claw-code にない Relay Agent 固有の機能:
 
-### 3.4 エラー表示
+  ■ ワークブック処理 (workbook/ モジュール)
+    - CSV/XLSX の inspect, preview, profile_columns
+    - table.rename_columns, table.cast_columns, table.filter_rows,
+      table.derive_column, table.group_aggregate
+    - workbook.save_copy
+    - session.diff_from_base
+    → claw-tools の Tool trait で登録
 
-- 各ステップ内にインライン表示
-- 自動修正の通知チップ
-- 段階的エラー（Level 1: JSON構文 / Level 2: スキーマ / Level 3: ツール）
+  ■ ドキュメント読取 (document.read_text)
+    - .docx, .pptx, PDF からテキスト抽出
+    → claw-tools の Tool trait で登録
 
-### 3.5 色とフォント
+  ■ ブラウザ自動化 (browser_automation.rs)
+    - Edge + Playwright 経由の Copilot Chat
+    → copilot_provider.rs の内部実装として利用
 
-既存の CSS 変数（暖色系ベージュ + グリーンアクセント）をベースに維持。
+  ■ 承認ワークフロー
+    - 書込前の承認ゲート UI
+    - プラン確認フロー
+    → claw-permissions にフックを追加
 
----
+  ■ バッチ/パイプライン/テンプレート
+    - batch.rs, pipeline.rs, template.rs
+    → そのまま残す (claw-code にない機能)
 
-## 4. Copilot JSON やりとり
+  ■ プロジェクト管理
+    - project.rs
+    → そのまま残す
 
-### 4.1 依頼テキスト（ステップ2でコピーする文章）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. CopilotChatProvider 設計
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-以下の構成で Copilot に渡す依頼テキストを生成する:
+■ 概要
 
-```
-Relay Agent からの依頼です。
+  claw-provider の ModelProvider trait を実装する。
+  内部で browser_automation.rs を使い、M365 Copilot Chat に
+  プロンプトを送信し、レスポンスを claw-core の形式に変換する。
 
-1. やりたいこと
-- 作業名: {タスク名}
-- 目的: {目的テキスト}
+■ ModelProvider trait (claw-provider が定義)
 
-2. 対象ファイル
-- ファイル: {ファイルパス}
-- シート: {シート名}
-- 列（使える名前をそのまま使うこと）:        ← Task 71 で追加
-  - id (integer)
-  - name (string)
-  - amount (number)
-  ...
+  pub trait ModelProvider: Send + Sync {
+      async fn complete(
+          &self,
+          messages: &[Message],
+          tools: &[ToolDefinition],
+          config: &CompletionConfig,
+      ) -> Result<CompletionResponse>;
 
-3. 使ってよい操作
-- table.filter_rows: 条件に合う行だけ残す
-- table.rename_columns: 列名を変更する
-- ...
+      async fn stream(
+          &self,
+          messages: &[Message],
+          tools: &[ToolDefinition],
+          config: &CompletionConfig,
+      ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent>>>>;
+  }
 
-4. 回答ルール
-- JSON のみを返してください。
-- ``` で囲まないでください。
-- パス区切りは / を使ってください。
-- _ や [ ] を \_ や \[ \] にしないでください。
-- tool 名、args 名、列名は見えている文字をそのまま使ってください。
-- 上にない tool は使わないでください。
+■ CopilotChatProvider 実装
 
-5. 回答テンプレート
-{expectedResponseTemplate}
+  pub struct CopilotChatProvider {
+      browser: BrowserAutomation,  // 既存の browser_automation.rs
+  }
 
-6. 回答例
-{テンプレートに合わせた例}                   ← Task 73 で切り替え
-```
+  impl ModelProvider for CopilotChatProvider {
+      async fn complete(&self, messages, tools, config) -> Result<CompletionResponse> {
+          // 1. messages + tools を Copilot 向けプロンプトに変換
+          //    - システムプロンプト: ツール定義を JSON Schema で埋め込み
+          //    - ユーザーメッセージ: 直近のコンテキストを連結
+          //    - レスポンス形式: JSON で tool_use を返すよう指示
+          let prompt = self.format_for_copilot(messages, tools)?;
 
-### 4.2 期待する JSON レスポンス
+          // 2. Copilot Chat に送信
+          let raw_response = self.browser.send_to_copilot(&prompt).await?;
 
-```json
-{
-  "version": "1.0",
-  "summary": "何をするかを短く説明する",
-  "actions": [
-    {
-      "tool": "table.filter_rows",
-      "sheet": "Sheet1",
-      "args": {
-        "predicate": "[approved] == true"
+          // 3. Copilot のレスポンスを CompletionResponse に変換
+          //    - テキスト部分 → TextContent
+          //    - JSON tool_use ブロック → ToolUseContent
+          self.parse_copilot_response(&raw_response)
       }
-    },
-    {
-      "tool": "workbook.save_copy",
-      "args": {
-        "outputPath": "/actual/path/data.copy.csv"    ← Task 72 で自動生成
+
+      async fn stream(&self, messages, tools, config) -> Result<Stream> {
+          // Copilot Chat はストリーミング不可なので
+          // complete() の結果を1チャンクで返す
+          let response = self.complete(messages, tools, config).await?;
+          Ok(once(StreamEvent::Complete(response)))
       }
-    }
-  ]
-}
-```
-
-### 4.3 使えるツール
-
-**read-only:**
-- workbook.inspect — ワークブック構造の取得
-- sheet.preview — シートのサンプル行表示
-- sheet.profile_columns — カラム型とサンプル値の取得
-- session.diff_from_base — 差分サマリーの取得
-
-**write:**
-- table.rename_columns — 列名変更（args: renames [{from, to}]）
-- table.cast_columns — 型変換（args: casts [{column, toType}]）
-- table.filter_rows — 行フィルタ（args: predicate）
-- table.derive_column — 派生列追加（args: column, expression）
-- table.group_aggregate — グループ集計（args: groupBy, measures）
-- workbook.save_copy — 別コピー保存（args: outputPath）
-
-**未実装:** join_lookup（将来拡張候補）
-
-### 4.4 auto-fix（自動補正）
-
-Copilot レスポンスの一般的な変形を自動修正するパイプライン。
-
-**実装済み（7種）:**
-1. Markdown コードフェンス除去（````json`...````）
-2. 前後の空白トリム
-3. BOM 除去（U+FEFF）
-4. CRLF → LF 正規化
-5. Markdown エスケープ除去（`\_`, `\[`, `\]`）
-6. 末尾カンマ除去
-7. Windows パス変換（`\\` → `/`）
-
-**追加予定（Task 74）:**
-8. スマートクォート正規化（`"` `"` → `"` / `'` `'` → `'`）
-9. JSON ブロック抽出（prose 前後の除去）
-10. 全角スペース除去（U+3000 → 半角スペース）
-11. `~~~` フェンス対応
-
-### 4.5 バリデーション段階
-
-| Level | 種類 | 内容 |
-|---|---|---|
-| 1 | JSON 構文エラー | JSON として parse できない |
-| 2 | スキーマエラー | version/summary/actions の不備 |
-| 3 | ツールエラー | 許可外の tool 名を使用 |
-
-### 4.6 修正依頼プロンプト（Task 75 で Level 別に強化予定）
-
-バリデーション失敗時に「修正を依頼するテキストをコピー」ボタンで Copilot に送る
-修正依頼テキストを生成する。Level ごとに異なる指示を含める。
-
-### 4.7 outputPath 自動生成（Task 72）
-
-入力ファイルパスから推奨 outputPath を自動生成して依頼テキストに埋め込む。
-
-- `/Users/you/data.csv` → `/Users/you/data.copy.csv`
-- `/Users/you/report.xlsx` → `/Users/you/report.copy.xlsx`
-
-### 4.8 テンプレート対応の回答例（Task 73）
-
-| テンプレートキー | 回答例に使うツール |
-|---|---|
-| rename_columns | table.rename_columns + workbook.save_copy |
-| cast_columns | table.cast_columns + workbook.save_copy |
-| filter_rows | table.filter_rows + workbook.save_copy |
-| derive_column | table.derive_column + workbook.save_copy |
-| group_aggregate | table.group_aggregate + workbook.save_copy |
-| (カスタム) | table.filter_rows + workbook.save_copy |
-| (サンプルCSV) | revenue-workflow-demo 専用例 |
-
----
-
-## 5. 安全性
-
-- **save-copy only** — 元ファイルは読み取り専用。書き込みは常に別コピーへ。
-- **preview 必須** — 実際の write 前に変更予定の差分を必ず表示。
-- **approval 必須** — ユーザーが確認してから実行。
-- **任意コード実行禁止** — shell、VBA、外部ネットワークアクセスは実装しない。
-- **raw Excel formula 拒否** — derive_column は Expr AST 評価 → values_only で書き込み。
-- **CSV injection 対策** — 出力時に先頭 `= + - @` の文字列セルを安全化。
-
----
-
-## 6. ワークブックエンジン
-
-### CSV（完全対応）
-- read / transform / write の全フロー
-- 全 write ツール対応
-
-### XLSX（制限付き）
-- inspect + save-copy のみ
-- write ツールによる変換は未対応
-- ワークブック fidelity（マクロ・書式・グラフ）は保証しない
-
----
-
-## 7. Inspection Details
-
-### ワークブックアーティファクトブラウザ
-選択されたターンの read-only アーティファクトを表示:
-- workbook-profile（シート構造・列情報）
-- sheet-preview（サンプル行テーブル）
-- column-profile（型推論・null 数・サンプル値）
-- diff-summary / preview（変更列・影響行数）
-
-### ターンライフサイクル詳細
-ターンの各ステップを read-only で閲覧:
-- Packet（依頼内容・スコープ要約）
-- Validation（pass/fail/warning と理由）
-- Approval（承認時刻・対象プレビュー）
-- Execution（成功/失敗・出力先・時刻）
-
-temporary mode でも current turn は live state から表示。
-reviewer mode では同じ内容を read-only で閲覧可能。
-
----
-
-## 8. テスト基盤
-
-### startup smoke（pnpm startup:test）
-GUI なしで startup 状態を確認:
-- ready startup
-- retry-recovery startup
-- attention startup
-
-### launch smoke（pnpm launch:test）
-Xvfb + tauri:dev でデスクトップ起動を確認:
-- frontend dev server ready
-- desktop binary launch
-- stability window 生存
-
-### workflow smoke（pnpm workflow:test）
-起動した app 上でサンプルワークフローを完走:
-- session create → turn start → packet → validation → preview → approval → execution
-- output copy 存在確認
-- source CSV 未変更確認
-
----
-
-## 11. Cowork フェーズ — チーム作業・自動化拡張
-
-最終更新: 2026-04-02
-
-### 背景
-
-Relay Agent は M365 Copilot を活用したデスクトップエージェントとして成熟した。
-次のフェーズでは「一人が1ファイルを1回変換する」から「繰り返し・一括・連鎖で業務フローを回す」へ進化させる。
-Claude API は使わず、M365 Copilot との既存 CDP 連携をベースに拡張する。
-
----
-
-### 11.1 ワークフローパイプライン（Tasks 164–169）
-
-複数のエージェントターンを**順次チェーン**して、前のステップの出力を次のステップの入力に自動接続する。
-
-**ユースケース:**
-- ステップ1「売上 CSV をフィルタ」→ ステップ2「フィルタ済み CSV を月別に集計」→ ステップ3「集計結果をレポート形式に変換」
-
-**モデル:**
-```
-Pipeline
-  id, title, projectId
-  steps: PipelineStep[]
-
-PipelineStep
-  id, order, goal (自然言語)
-  inputSource: "user" | "prev_step_output"
-  outputArtifactKey: string
-  status: pending | running | waiting_approval | done | failed
-```
-
-**実行フロー:**
-1. ユーザーがパイプラインを定義（ステップ追加・順序変更）
-2. 実行開始 → ステップ1のエージェントループ起動
-3. ステップ1完了後、出力ファイルをステップ2の入力に自動セット
-4. 書き込み操作の承認ゲートはステップ単位で保持
-5. 全ステップ完了後にサマリー表示
-
----
-
-### 11.2 バッチ処理（Tasks 170–174）
-
-同一ワークフロー定義を**複数ファイルに一括適用**する。
-
-**ユースケース:**
-- 月次レポート10ファイルに同じ列追加を一括適用
-- フォルダ内全 CSV に同じフィルタ条件を適用
-
-**モデル:**
-```
-BatchJob
-  id, workflowGoal, projectId
-  targets: BatchTarget[]
-  concurrency: 1  // 順次実行（CDP セッション競合回避）
-  status: queued | running | done | partial_failure
-
-BatchTarget
-  filePath, status, outputPath?, errorMessage?
-```
-
-**実行フロー:**
-1. ユーザーが対象ファイルをフォルダ選択または複数選択
-2. 共通ゴールを入力して実行開始
-3. ターゲット毎に順次エージェントループ実行
-4. 各ファイルの承認ゲートを連続表示（スキップオプション付き）
-5. 完了ダッシュボードで成功/失敗一覧表示
-
----
-
-### 11.3 テンプレートライブラリ（Tasks 175–179）
-
-業務別ワークフローを**テンプレートとして保存・再利用**できるライブラリ。
-
-**テンプレート構造:**
-```
-WorkflowTemplate
-  id, title, category, description
-  goal: string          // Copilot に渡すゴールテキスト
-  expectedTools: string[]  // 使用想定ツール
-  exampleInputFile?: string
-  tags: string[]
-```
-
-**組み込みカテゴリ（初期セット）:**
-| カテゴリ | テンプレート例 |
-|---|---|
-| 営業 | 売上フィルタ・月次集計・顧客リスト整形 |
-| 経理 | 請求書データ変換・支払い一覧集計 |
-| HR | 勤怠データ集計・名簿クリーニング |
-| 汎用 | 重複除去・列名統一・型変換 |
-
-**機能:**
-- カテゴリフィルタ・キーワード検索
-- テンプレートプレビュー（ゴールと期待ツール表示）
-- ワンクリックでデリゲーションモードのゴール入力にセット
-- カスタムテンプレートの保存（完了セッションから「テンプレート化」）
-
----
-
-### 11.4 スマート承認ゲート（Tasks 180–183）
-
-操作のリスクレベルを評価し、**低リスク操作の承認フロー**を簡略化する。
-
-**リスク評価基準:**
-| 操作 | リスクレベル | デフォルト承認 |
-|---|---|---|
-| file.list / file.stat / workbook.inspect | 読み取り専用 | 自動承認 |
-| sheet.preview / sheet.profile_columns | 読み取り専用 | 自動承認 |
-| table.filter_rows（行数減少なし）| 低 | 自動承認（設定依存） |
-| table.rename_columns | 低 | 自動承認（設定依存） |
-| table.derive_column（既存列変更なし）| 中 | 手動承認 |
-| workbook.save_copy | 中 | 手動承認 |
-| file.copy / file.move | 高 | 手動承認 |
-| file.delete | 最高 | 常に手動承認 |
-
-**設定オプション:**
-- 「安全モード」: 全操作手動承認（現行動作）
-- 「標準モード」: 読み取り専用 + 低リスク書き込みは自動承認
-- 「高速モード」: 中リスクまで自動承認（上級者向け）
-
----
-
-## 9. Windows 配布
-
-### NSIS インストーラ
-- Windows 10/11 x64 対象
-- GitHub Actions release 自動化
-- GitHub Releases にアップロード
-
-### Trusted Signing（Azure）
-- build → sign → verify → upload フロー
-- Azure OIDC 認証（azure/login + azure/artifact-signing-action）
-- 未設定時は unsigned fallback で公開
-- 部分設定は早期失敗
-- runbook: docs/TRUSTED_SIGNING_SETUP.md
-
----
-
-## 10. 実装状況
-
-### 実装済み（Tasks 1–67）
-- モノレポ・ビルド基盤（pnpm workspace + SvelteKit + Tauri v2）
-- Contracts（Zod スキーマ + TypeScript 型）
-- 1ページ完結 UI（3ステップフロー・全日本語）
-- Rust バックエンド（セッション・ターン・リレー・実行）
-- ローカル JSON 永続化・復旧
-- CSV ワークブックエンジン（read/transform/write）
-- XLSX inspect + save-copy
-- auto-fix 7種
-- 段階的バリデーション（Level 1/2/3）
-- SheetDiff カード（行単位の before/after）
-- ワークブックアーティファクトブラウザ
-- ターンライフサイクル詳細 UI
-- startup / launch / workflow smoke テスト
-- Windows Trusted Signing ワークフロー
-- ドラフト永続化・セッション再開
-
-### 未実装（Tasks 68–75）
-
-| Task | 内容 | 優先度 |
-|---|---|---|
-| 68 | Windows E2E 検証（手動） | high |
-| 69 | 3ステップ常時表示 + グレーアウト | medium |
-| 70 | ステップ1完了後の折りたたみ | medium |
-| 71 | 依頼テキストへの列情報埋め込み | high |
-| 72 | outputPath 自動生成 | high |
-| 73 | テンプレート対応の回答例切り替え | medium |
-| 74 | auto-fix 強化（スマートクォート・prose 除去等） | high |
-| 75 | Level 別修正依頼プロンプト強化 | medium |
-
----
-
-## 13. Copilot ブラウザ自動化（Tasks 76–83）
-
-### 13.1 背景・目的
-
-現状のステップ2では、ユーザーが手動で以下を行っている：
-
-1. 「依頼をコピー」ボタンでプロンプトをクリップボードにコピー
-2. ブラウザで M365 Copilot Chat を開く
-3. プロンプトを貼り付けて送信
-4. Copilot の返答をコピー
-5. アプリの「Copilot の返答」テキストエリアに貼り付け
-
-この手順を Playwright による Edge ブラウザ自動化で代替し、ステップ2を「送信ボタン1回」で完結させる。
-
-### 13.2 技術スタック選定
-
-| 選択肢 | 判断 | 理由 |
-|---|---|---|
-| **Playwright TypeScript** | ✅ 採用 | 既存スタック（Node.js/pnpm/TS）に完全一致。追加ランタイム不要。`connectOverCDP` でログイン済みEdgeにアタッチ可能。`waitForResponse()` でAPI応答を直接キャプチャできDOMスクレイピングより堅牢。`playwright codegen` でセレクタ自動生成。 |
-| browser-use | ❌ 不採用 | LLM APIキーとトークンコストが毎回発生。推論レイテンシ10〜60秒。Pythonランタイム必須でTauri統合が複雑。確定的タスクにAIエージェントは過剰。 |
-| Puppeteer | ❌ 不採用 | Playwrightのサブセット。`storageState`・`getByRole`等の安定ロケータがない。コードジェネレータなし。 |
-| Python Playwright | ❌ 不採用 | Python 3.11+ランタイムをユーザーに要求する配布負担がある。Node.js版で同等以上のことができる。 |
-
-### 13.3 自動化の対象フロー
-
-```
-[ステップ2 UI]
-  ↓ 「Copilotに自動送信」ボタン押下
-[Tauri @tauri-apps/plugin-shell]
-  ↓ Command.create('node', ['scripts/copilot-browser.js', '--prompt', ...])
-[scripts/copilot-browser.ts (tsx / node)]
-  ↓ playwright.chromium.connectOverCDP('http://localhost:9222')
-  │   ※ ユーザーの Edge がログイン済みで CDP が有効化されていることが前提
-  ↓ page.goto('https://m365.cloud.microsoft/chat/')
-  ↓ 新規チャット開始（getByTestId('newChatButton').click()）
-  ↓ プロンプト入力（getByRole('textbox').fill(prompt)）
-  ↓ 送信（Enter キーまたは送信ボタン）
-  ↓ waitForResponse() で Copilot API の streaming 応答をキャプチャ
-     ※ DOMポーリングではなくネットワークレベルで取得 → セレクタ変更の影響なし
-  ↓ JSON.stringify({ status: 'ok', response }) を stdout に出力
-[ステップ2 UI]
-  ↓ stdout をパース → テキストエリアに自動セット → 「確認する」ボタン有効化
-```
-
-### 13.4 認証・セッション管理
-
-Edge に CDP デバッグポートを付けてユーザーが手動起動することで、既存の M365 ログイン済みセッションをそのまま利用できる。専用プロファイルの作成・ログイン待機・Cookie 管理が不要になる。
-
-**Edge の CDP 有効化手順（初回のみ・ユーザー操作）:**
-```
-Microsoft Edge を以下のショートカットで起動（またはタスクスケジューラに登録）:
-msedge.exe --remote-debugging-port=9222 --no-first-run
-```
-
-設定モーダルでポート番号を変更可能にする。デフォルト: `9222`。
-
-`connectOverCDP` が失敗した場合（Edge が未起動等）はユーザーに起動を促すダイアログを表示する。
-
-### 13.5 レスポンスキャプチャ方式
-
-DOM ポーリングではなく Playwright の `page.waitForResponse()` を使い、Copilot が内部で使う streaming API エンドポイントの応答を直接キャプチャする。
-
-```typescript
-const [response] = await Promise.all([
-  page.waitForResponse(
-    r => r.url().includes('/api/chat') && r.status() === 200,
-    { timeout: 60_000 }
-  ),
-  sendButton.click(),
-]);
-const body = await response.text();
-// streaming JSON (NDJSON / SSE) を parse して最終テキストを抽出
-```
-
-エンドポイントが変更されたときのフォールバックとして DOM 取得も保持するが、こちらは補助的な位置づけとする。
-
-### 13.6 UI 変更（ステップ2）
-
-```
-ステップ 2: Copilot に聞く
-┌──────────────────────────────────────┐
-│ [依頼をコピー]  [Copilotに自動送信 ▶]  │  ← 新ボタン追加
-│ 依頼テキストのプレビュー（折りたたみ）  │
-│ Copilot の返答:                       │
-│ [テキストエリア]  ← 自動入力も可能    │
-│       [確認する →]                   │
-└──────────────────────────────────────┘
-```
-
-自動送信中はスピナーを表示し、完了後テキストエリアを自動入力する。エラー時はインラインエラーメッセージを表示し、手動入力にフォールバック可能とする。
-
-### 13.7 エラーハンドリング
-
-| エラー種別 | 対処 |
-|---|---|
-| CDP 接続失敗（Edge 未起動） | 「Edge を CDP モードで起動してください」ダイアログ + 手動フォールバック |
-| ナビゲーション失敗（ログイン画面） | 「M365 にログインしてから再試行してください」メッセージ |
-| waitForResponse タイムアウト | DOMポーリングにフォールバック → それも失敗なら手動フォールバック |
-| Copilot エラー応答 | エラー内容表示 + 最大2回リトライ |
-| セレクタ変更による DOM 不一致 | 設定でセレクタ変更可能 + フォールバックメッセージ |
-
-### 13.8 非ゴール（自動化スコープ外）
-
-- GPT モード切り替えの自動化（手動設定を前提）
-- ファイル添付の自動化（テキストプロンプトのみ）
-- 複数 Copilot セッションの並列実行
-- Edge 以外のブラウザ対応
-
----
-
-## 11. 非ゴール
-
-- Copilot API 直接接続（Edge CDP 経由の Copilot Chat を維持）
-- XLSX write 実行
-- join_lookup ツール（将来拡張候補）
-- raw Excel formula の受け入れ
-- shell / VBA / 外部ネットワーク実行
-- macOS / Linux 対応
-- in-app 自動アップデート
-- リモートデータ共有・クラウド同期
-- GUI pixel-level E2E テスト
-- restart 後の preview/approval/execution 再開
-
----
-
-## 12. 技術的制約
-
-- SvelteKit + Tauri 2.0 構成を維持
-- ルーティングは `/` のみ
-- Contracts（Zod スキーマ）は正本
-- フロントエンド変更のみで Copilot JSON 改善を実現（Rust IPC 変更なし）
-- auto-fix.ts は純粋関数（副作用なし）を維持
-
----
-
-## 14. エージェントループ（フェーズ2 — Tasks 84–95）
-
-### 14.1 背景・目的
-
-Claude Cowork（Anthropic、2026/01）や Copilot Cowork（Microsoft、2026/03）が示したように、
-「ユーザーが目標を伝えるだけで AI がタスクを完走し、確認が必要な場面のみ人間が介入する」
-アーキテクチャが標準になりつつある。
-
-現状の Relay Agent は「Copilot 1回 → 人間が確認 → 実行」という 1 ショット方式。
-フェーズ2では、読み取りツールの自動実行と Copilot への結果フィードバックを繰り返す
-**多ターン エージェントループ** に進化させる。
-
-### 14.2 ループ設計
-
-```
-ユーザー: 目標を入力して「開始」
-  │
-  ▼
-┌─ ターン N ─────────────────────────────────────────┐
-│ 1. App → Copilot: タスク説明 + ファイル情報 + 前ターン結果 │
-│ 2. Copilot → App: { actions: [...], status: "thinking" } │
-│ 3. App: アクションを read / write に分類             │
-│                                                    │
-│   [read アクション]                                 │
-│   → 自動実行（承認不要）                            │
-│   → 結果を次ターン用コンテキストに追加               │
-│   → ターン N+1 へ（Copilot に結果を返送）            │
-│                                                    │
-│   [write アクション]                                │
-│   → 承認ゲート: SheetDiff カード + 「保存する」ボタン │
-│   → ユーザー承認後に実行                            │
-│   → ループ終了                                      │
-└─────────────────────────────────────────────────────┘
-  │
-  ▼
-完了: 結果表示 + 「新しい作業を始める」
-```
-
-### 14.3 Copilot レスポンス スキーマ拡張
-
-既存の `copilotTurnResponseSchema` に `status` フィールドを追加:
-
-```typescript
-{
-  version: "1.0",
-  status: "thinking" | "ready_to_write" | "done" | "error",
-  summary: string,           // ユーザー向け進捗説明
-  actions: SpreadsheetAction[],
-  message?: string,          // Copilot からの補足（エラー詳細等）
-  followupQuestions?: string[],
-  warnings?: string[]
-}
-```
-
-| status | 意味 | アプリの動作 |
-|---|---|---|
-| `thinking` | まだ情報収集中 | read actions を実行してループ継続 |
-| `ready_to_write` | 書き込み計画が確定 | write actions を承認ゲートに表示 |
-| `done` | 追加アクション不要 | ループ終了・結果表示 |
-| `error` | Copilot がエラー | エラーメッセージ表示・手動フォールバック |
-
-### 14.4 ツール実行結果フォーマット
-
-read ツール実行後、Copilot への次ターンプロンプトに以下を追加:
-
-```
-【前のターンの実行結果】
-
-▶ workbook.inspect
-{シート一覧・行数・列名 JSON}
-
-▶ sheet.preview
-{先頭25行のサンプルデータ}
-
-▶ sheet.profile_columns
-{列ごとの型推論・null数・サンプル値}
-
----
-上記の結果を踏まえて、次のアクションを JSON で返してください。
-書き込み準備が整った場合は status を "ready_to_write" にしてください。
-```
-
-### 14.5 ループ安全ガード
-
-| ガード | 設定 | 理由 |
-|---|---|---|
-| 最大ターン数 | 10 ターン | 無限ループ防止 |
-| 1 ターン タイムアウト | 120 秒 | Copilot 無応答対策 |
-| read ツール同一引数 重複実行 | 禁止（警告） | 同じ情報を何度も取得するループ検出 |
-| write ツール 自動実行 | 禁止（承認必須） | 安全性の絶対保証 |
-
-### 14.6 UI 変更
-
-**ステップ2の進化:**
-
-```
-ステップ 2: Copilot と作業中
-┌──────────────────────────────────────────┐
-│ [ターン 1 / 最大10]  経過時間: 00:23      │
-│                                          │
-│ ▶ workbook.inspect ... 完了 ✓           │
-│ ▶ sheet.preview ... 完了 ✓              │
-│ ▶ sheet.profile_columns ... 実行中 ⟳    │
-│                                          │
-│ Copilot: 「列型を確認しました。          │
-│            フィルタ計画を立てています…」 │
-│                                          │
-│ [キャンセル]                             │
-└──────────────────────────────────────────┘
-```
-
-write アクションが返ってきたら自動的にステップ3（承認画面）へ遷移。
-
-### 14.7 Copilot への自動送信との連携
-
-セクション13のブラウザ自動化（Playwright + Edge CDP）をループ内で再利用する。
-各ターンで `sendToCopilot(prompt)` を呼び出し、返答を受け取る。
-ユーザー操作はゼロ（「開始」ボタンのみ）。
-
----
-
-## 15. PC 作業ツール拡張（フェーズ3 — Tasks 96 以降）
-
-### 15.1 ファイル操作ツール
-
-スプレッドシート専用を超え、一般的なファイル操作を Rust バックエンドで実装する。
-
-| ツール | 種別 | 内容 |
-|---|---|---|
-| `file.list` | read | ディレクトリ内のファイル・フォルダ一覧 |
-| `file.read_text` | read | テキストファイルの内容取得（最大 1 MB） |
-| `file.stat` | read | ファイルのサイズ・更新日時・存在確認 |
-| `file.copy` | write | ファイルを別パスにコピー（承認必須） |
-| `file.move` | write | ファイルを移動・リネーム（承認必須） |
-| `file.delete` | write | ファイル削除（承認必須・ゴミ箱へ） |
-
-### 15.2 テキスト処理ツール
-
-| ツール | 種別 | 内容 |
-|---|---|---|
-| `text.search` | read | ファイル内のパターン検索（regex 対応） |
-| `text.replace` | write | 検索＆置換（承認必須・元ファイルはバックアップ） |
-
-### 15.3 安全ポリシー
-
-- read ツール: 自動実行可（ループ内でそのまま使用）
-- write ツール: 常に承認ゲートを経由（エージェントループ §14.2 と同一ルール）
-- 実行可能ファイルの起動・シェルコマンド実行: フェーズ3でも実装しない
-
-### 15.4 Contracts 拡張
-
-`packages/contracts/src/file.ts` を新設し、`fileActionSchema` を定義。
-`spreadsheetActionSchema` と並列に `relayActionSchema = z.union([spreadsheetActionSchema, fileActionSchema])` を導出する。
-
----
-
-## 16. UI/UX 改善（Tasks 96〜103）
-
-### 16.1 設計方針
-
-Relay Agent は初見ユーザーが「何をするアプリか」を 10 秒で理解し、迷わず使い始められることを目標とする。
-特に以下の 3 点を最優先とする:
-
-1. **文脈ゼロでも操作できる** — 用語の説明なしに次のアクションが自明
-2. **進行状態が常に見える** — 「いま何が起きているか」を画面から読み取れる
-3. **エラーは人間の言葉で** — 技術的なメッセージをそのまま見せない
-
-### 16.2 ウェルカム画面（初回起動）
-
-アプリ初回起動時（ローカルストレージ未設定）にウェルカム画面を表示する。
-
-**構成:**
-- キャッチコピー（例: 「Copilot があなたの代わりに、表計算を自動化します」）
-- 3 ステップの概要アニメーション（ファイル選択 → Copilot が処理 → 確認して保存）
-- 「始める →」ボタンでステップ1へ遷移
-- 以降は表示しない（`hasSeenWelcome` フラグをローカルストレージに保存）
-
-### 16.3 ステップインジケーター リデザイン
-
-現状の横並びテキストラベルを、視覚的に強い **3 段階プログレスバー** に変更する。
-
-**要件:**
-- 各ステップにアイコン（📁 / 🤖 / ✅）と短い説明テキスト
-- 現在ステップは大きく・明るく表示、完了ステップはチェックマーク
-- ステップ間を結ぶ線が進行に応じて色変わり（waiting: グレー → 完了: blue）
-- スティッキーヘッダーに常時表示（スクロールしても見える）
-
-### 16.4 Edge CDP セットアップガイド
-
-ブラウザ自動化設定モーダルの CDP ポート入力欄の下に、インラインのセットアップガイドを追加する。
-
-**構成:**
-- 「Edge を CDP モードで起動するには」という折り畳みセクション（デフォルト展開）
-- コピー可能なコマンド例: `msedge.exe --remote-debugging-port=9222`
-- 「接続テスト」ボタン: クリックで実際に CDP 接続を確認し、成功/失敗を即座に表示
-- 成功時: 緑色のチェック「接続済み（Edge XX.X）」
-- 失敗時: 赤色「接続できません。Edgeが起動しているか確認してください」
-
-### 16.5 エージェントループ モード説明
-
-`agentLoopEnabled` チェックボックスをただのチェックボックスから、説明付きのトグルカードに変更する。
-
-**構成:**
-- トグルカード形式: ON/OFF スイッチ + アイコン + 2 行の説明
-- OFF 説明: 「1 回だけ Copilot に送信します（シンプルモード）」
-- ON 説明: 「Copilot が自動で情報収集し、最適な処理を計画します（推奨）」
-- ON にすると最大ターン数スライダーがアニメーションで展開
-- ツールチップ: 「エージェントモードとは？」リンクでモーダル説明
-
-### 16.6 エージェントループ進行パネル 改善
-
-現在の `agent-loop-panel` のツールログを、より視覚的なタイムライン形式に変更する。
-
-**構成:**
-- 各ツール実行をタイムラインアイテムとして表示（アイコン + ツール名 + 所要時間）
-- 実行中: スピナーアニメーション
-- 完了: ✓ アイコン + グリーン
-- エラー: ✗ アイコン + レッド + エラーメッセージ折り畳み
-- Copilot の発言（summary）をチャットバブルとして表示
-- ターン番号と進行バー（1/10 → 2/10 ...）
-- 「詳細を見る」で生の JSON レスポンスを展開可能
-
-### 16.7 完了画面 リデザイン
-
-処理完了後（`status: "done"` または保存完了後）の画面を改善する。
-
-**構成:**
-- 大きな ✅ アイコンとアニメーション（confetti または pulse）
-- 「完了しました！」見出し + Copilot の summary テキスト
-- 処理サマリーカード: 変更したシート名、変更行数、所要時間
-- 「出力ファイルを開く」ボタン（Tauri shell.open）
-- 「もう一度」ボタンでリセット
-- フォローアップ質問があれば表示
-
-### 16.8 エラーメッセージ ユーザーフレンドリー化
-
-技術的なエラーメッセージをユーザーが理解できる言語に変換するマッピングを実装する。
-
-**対象エラーと変換例:**
-
-| 技術メッセージ（現在） | ユーザー向けメッセージ（改善後） |
-|---|---|
-| `ECONNREFUSED 127.0.0.1:9222` | 「Edge が CDP モードで起動していません。ポート 9222 で起動してください」 |
-| `Timeout waiting for generation` | 「Copilot の応答がタイムアウトしました。接続を確認してください」 |
-| `ValidationError: status is required` | 「Copilot の返答形式が想定外でした。もう一度試してください」 |
-| `Maximum turns reached` | 「最大ターン数（X）に達しました。より具体的な目的を入力するか、手動モードをお試しください」 |
-
-エラー表示コンポーネントを共通化し、アイコン（⚠️/🔌/⏱）+ 人間語メッセージ + 推奨アクションボタンのセットで表示する。
-
-### 16.9 空状態・プレースホルダー改善
-
-**ファイル未選択時（ステップ1）:**
-- ドロップゾーンを画面中央に大きく配置
-- 「CSV または XLSX ファイルをドラッグ＆ドロップ、またはクリックして選択」
-- サポートアイコン（📊）と対応拡張子バッジ
-
-**目的欄（ステップ2）:**
-- プレースホルダーに具体例: 「例: "approved が true の行だけ残し、amount 列の合計を追加してください"」
-- 入力欄の下に「例を使う」クイックインサートボタン（3 種類のプリセット）
-
----
-
-## 17. CDP ポート自動探索 & Edge 自動起動（Tasks 104–108）
-
-### 17.1 背景・課題
-
-現状ではユーザーが手動で `msedge.exe --remote-debugging-port=9222` を実行し、アプリ側は設定された単一ポートに `connectOverCDP` で接続を試みる。しかし以下の問題がある：
-
-1. **ポート衝突**: 開発者ツール（VS Code、DevTools など）が同一ポートを既に使用している場合、Edge の CDP 起動自体が失敗する
-2. **手動起動の手間**: ユーザーが毎回コマンドラインで Edge を起動する必要がある
-3. **エラーの原因特定が困難**: `CDP_UNAVAILABLE` エラーが「Edge 未起動」なのか「ポート競合」なのか区別できない
-
-### 17.2 ソリューション概要
-
-アプリからワンクリックで Edge を CDP モード起動できるようにし、指定ポートが占有されている場合は自動的に次の空きポートを探索する。
-
-**ポート探索範囲**: `9333` → `9334` → ... → `9342`（10 ポート）
-
-```
-ユーザー: 「Copilot に自動送信」ボタン押下
-  │
-  ▼
-[ポート探索] 9333 から順にTCP接続を試行
-  │ 接続成功（= 占有済み）→ 次のポートへ
-  │ 接続失敗（= 空き）→ そのポートを採用
-  ▼
-[Edge 起動] msedge.exe --remote-debugging-port=<空きポート> --no-first-run
-  │
-  ▼
-[CDP 接続待機] 最大 5 秒間、500ms 間隔でリトライ
-  │
-  ▼
-[Playwright 接続] connectOverCDP(`http://localhost:<ポート>`)
-  │
-  ▼
-[送信処理] 従来フローと同じ
-```
-
-### 17.3 ポート探索ロジック
-
-```typescript
-const CDP_PORT_RANGE_START = 9333;
-const CDP_PORT_RANGE_END = 9342;   // inclusive, 10 ports
-
-async function findAvailableCdpPort(): Promise<number> {
-  for (let port = CDP_PORT_RANGE_START; port <= CDP_PORT_RANGE_END; port++) {
-    if (await isPortFree(port)) return port;
   }
-  throw createError(
-    "CDP_UNAVAILABLE",
-    `ポート ${CDP_PORT_RANGE_START}–${CDP_PORT_RANGE_END} がすべて使用中です`
-  );
-}
-
-function isPortFree(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const sock = net.createConnection({ port, host: "127.0.0.1" });
-    sock.once("connect", () => { sock.destroy(); resolve(false); }); // 占有
-    sock.once("error", () => { resolve(true); });                    // 空き
-  });
-}
-```
-
-### 17.4 Edge 自動起動
-
-```typescript
-import { execFile } from "child_process";
-
-async function launchEdgeWithCdp(port: number): Promise<void> {
-  execFile("msedge.exe", [
-    `--remote-debugging-port=${port}`,
-    "--no-first-run"
-  ], { detached: true, stdio: "ignore" });
-  // Edge の CDP リスナーが起動するまでポーリング待機
-  await waitForCdpReady(port, { maxWaitMs: 5000, intervalMs: 500 });
-}
-
-async function waitForCdpReady(port: number, opts: { maxWaitMs: number; intervalMs: number }): Promise<void> {
-  const deadline = Date.now() + opts.maxWaitMs;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/json/version`);
-      if (res.ok) return;
-    } catch { /* not ready yet */ }
-    await sleep(opts.intervalMs);
-  }
-  throw createError("CDP_UNAVAILABLE", `Edge CDP がポート ${port} で応答しません（${opts.maxWaitMs}ms 超過）`);
-}
-```
-
-### 17.5 接続フロー統合
-
-`connectToBrowser()` を拡張し、以下の 2 モードをサポートする：
-
-| モード | 動作 | トリガー |
-|---|---|---|
-| **手動モード（既存）** | 設定の `cdpPort` に直接接続 | 従来と同じ |
-| **自動モード（新規）** | 空きポート探索 → Edge 起動 → 接続 | 設定の `autoLaunchEdge: true` |
-
-設定に `autoLaunchEdge` フラグ（デフォルト: `true`）を追加。`true` の場合は自動モード、`false` の場合は従来の手動モードを使用する。
-
-自動モードでも、既に CDP モードで起動済みの Edge が探索範囲内のポートにある場合はそれに接続する（二重起動しない）。
-
-### 17.6 既存 Edge の検出
-
-自動モード時、新規に Edge を起動する前に、既に CDP モードで動いている Edge がないかを確認する：
-
-```typescript
-async function findExistingCdpEdge(): Promise<number | null> {
-  for (let port = CDP_PORT_RANGE_START; port <= CDP_PORT_RANGE_END; port++) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/json/version`);
-      if (res.ok) return port;
-    } catch { /* not listening */ }
-  }
-  return null;
-}
-```
-
-統合フロー:
-1. `findExistingCdpEdge()` → ポートが見つかればそのまま接続
-2. 見つからなければ `findAvailableCdpPort()` → `launchEdgeWithCdp(port)` → 接続
-
-### 17.7 UI 変更
-
-**設定モーダル:**
-- `autoLaunchEdge` トグルを追加: 「Edge を自動で起動する（推奨）」
-- ON の場合: ポート入力欄をグレーアウトし「自動選択（9333–9342）」と表示
-- OFF の場合: 従来どおりポート番号を手動入力
-
-**送信中のステータス表示:**
-- 「空きポートを探索中...」→「Edge を起動中（ポート 9335）...」→「接続しました」のように段階的に表示
-- 使用中のポート番号をステータスバーに表示
-
-**エラーメッセージ:**
-- 全ポート占有時: 「ポート 9333–9342 がすべて使用中です。他のアプリケーションを終了してから再試行してください」
-- Edge 起動失敗時: 「Edge の起動に失敗しました。Edge がインストールされているか確認してください」
-- CDP 待機タイムアウト時: 「Edge は起動しましたが CDP 接続が確立できませんでした。しばらく待ってから再試行してください」
-
-### 17.8 設定スキーマ変更
-
-```typescript
-// continuity.ts
-const DEFAULT_BROWSER_AUTOMATION_SETTINGS = {
-  cdpPort: 9333,           // デフォルトを 9222 → 9333 に変更
-  autoLaunchEdge: true,    // 新規追加
-  timeoutMs: 60000,
-  agentLoopEnabled: false,
-  maxTurns: 10,
-  loopTimeoutMs: 120000,
-} as const;
-```
-
-### 17.9 非ゴール
-
-- Edge 以外のブラウザ（Chrome、Brave 等）の自動起動
-- ポート範囲のユーザーカスタマイズ（固定 9333–9342）
-- Edge のインストール検出・インストーラー連携
-- Linux / macOS 対応（Windows の `msedge.exe` のみ）
-
----
-
-## 18. 自律マルチステップ実行（フェーズ4 — Tasks 109–123）
-
-### 18.1 背景・目的
-
-フェーズ2のエージェントループは「read ツール自動実行 → write 発見で停止」というリアクティブ型。
-フェーズ4では、**Copilot にまず実行計画（ExecutionPlan）を立てさせ**、ユーザーが計画を承認してから
-自律的にステップを実行する「プランニング→承認→自律実行」モデルに進化させる。
-
-目標: ユーザーはゴールを伝えるだけ。書き込みステップのみ承認。残りは自動。
-
-### 18.2 プランニングプロトコル
-
-```
-ユーザー: 目標を入力して「開始」
-  │
-  ▼
-[プランニングフェーズ]
-  App → Copilot: 「まず実行計画を JSON で返してください」
-  Copilot → App: { status: "plan_proposed", executionPlan: { steps: [...] } }
-  │
-  ▼
-[プラン承認]
-  ユーザーに計画を提示（ステップ一覧・read/write 分類）
-  ユーザーは承認 / 修正 / 拒否（フィードバック付き再プランニング）
-  │
-  ▼
-[自律実行フェーズ]
-  ┌─ ステップ N ────────────────────────────────┐
-  │ [read ステップ] → 自動実行 → 結果を蓄積     │
-  │ [write ステップ] → 承認ゲート → 承認後実行   │
-  │ → 次のステップへ                             │
-  └──────────────────────────────────────────────┘
-  │
-  ▼
-完了: 結果タイムライン + 最終成果物
-```
-
-### 18.3 ExecutionPlan スキーマ
-
-```typescript
-const planStepSchema = z.object({
-  id: z.string(),
-  description: z.string(),
-  tool: z.string(),
-  phase: z.enum(["read", "write"]),
-  args: z.record(z.unknown()).optional(),
-  estimatedEffect: z.string(),
-});
-
-const executionPlanSchema = z.object({
-  steps: z.array(planStepSchema),
-  summary: z.string(),
-  totalEstimatedSteps: z.number(),
-});
-```
-
-`CopilotTurnResponse` に `executionPlan?: ExecutionPlan` を追加。
-`status` に `"plan_proposed"` を追加。
-
-### 18.4 プラン承認 IPC
-
-| コマンド | リクエスト | レスポンス |
-|---|---|---|
-| `approve_plan` | sessionId, turnId, approvedStepIds[], modifiedSteps[] | approved, plan |
-| `get_plan_progress` | sessionId, turnId | currentStepId, completedCount, totalCount, stepStatuses[] |
-
-### 18.5 プラン承認 UI
-
-```
-┌─ 実行計画の確認 ──────────────────────────────┐
-│ Copilot の提案: 「3 ステップで完了できます」     │
-│                                                │
-│ ① 📖 ファイル構造を確認する [read]              │
-│ ② 📖 approved 列の値を確認する [read]           │
-│ ③ ✏️ approved=true の行を抽出して保存 [write]   │
-│                                                │
-│ [ステップの並び替え]  [ステップの削除]           │
-│                                                │
-│ [計画を承認する ▶]   [やり直しを依頼する]        │
-│                     └─ フィードバック入力欄      │
-└────────────────────────────────────────────────┘
-```
-
-### 18.6 自律実行の進行表示
-
-```
-┌─ 実行中 (ステップ 2 / 3) ─────────────────────┐
-│                                                │
-│ ✓ ① ファイル構造を確認する         00:03  完了  │
-│ ⟳ ② approved 列の値を確認する      実行中...   │
-│ ○ ③ 抽出して保存する              [承認待ち]    │
-│                                                │
-│ [一時停止]  [キャンセル]                        │
-└────────────────────────────────────────────────┘
-```
-
-write ステップに到達すると、既存の SheetDiff / プレビュー表示で承認ゲートを表示。
-
-### 18.7 安全ガード（フェーズ2を継承 + 拡張）
-
-| ガード | 設定 | 理由 |
-|---|---|---|
-| プラン承認必須 | デフォルト ON | 計画段階で人間がレビュー |
-| write ステップ承認必須 | 常に ON（変更不可） | 書き込みの安全性保証 |
-| read ステップ自動実行 | デフォルト ON | 読み取りは安全 |
-| 最大ステップ数 | 20 | 無限実行防止 |
-| ステップ間一時停止 | デフォルト OFF | デバッグ・慎重モード用 |
-
-### 18.8 設定
-
-```typescript
-const DEFAULT_AUTONOMOUS_SETTINGS = {
-  planningEnabled: true,
-  autoApproveReadSteps: true,
-  pauseBetweenSteps: false,
-  maxPlanSteps: 20,
-} as const;
-```
-
----
-
-## 19. デリゲーション UI パラダイム（フェーズ5 — Tasks 124–137）
-
-### 19.1 背景・目的
-
-現状の 3 ステップウィザード型 UI は、ユーザーが各ステップを手動で進める必要がある。
-フェーズ5では、**チャット/デリゲーション型 UI** に転換し、
-ユーザーがゴールを伝えるだけでエージェントが自律的に作業する UX を実現する。
-
-### 19.2 UI レイアウト
-
-```
-┌──────────────────────────────────────────────────┐
-│ ヘッダー（アプリ名 + ⚙ + [手動モード] トグル）    │
-├──────────────────────────────────────────────────┤
-│ 最近の作業（クリックで再開）                       │
-├──────────────────────────────┬────────────────────┤
-│                              │                    │
-│  アクティビティフィード       │  介入パネル         │
-│  ┌──────────────────────┐   │  （承認ゲート /      │
-│  │ 🔍 ファイル読み込み ✓ │   │   プランレビュー /   │
-│  │ 📊 シート構造確認 ✓   │   │   エラー復旧 /       │
-│  │ 🤖 Copilot 問合中... │   │   結果プレビュー）    │
-│  │                      │   │                    │
-│  │ 💬 Copilot: 「列型を  │   │  ┌──────────────┐  │
-│  │   確認しました。      │   │  │ SheetDiff     │  │
-│  │   フィルタ計画中...」 │   │  │ プレビュー    │  │
-│  │                      │   │  │              │  │
-│  │ ⚠️ 承認が必要です     │   │  │ [保存する]   │  │
-│  └──────────────────────┘   │  └──────────────┘  │
-│                              │                    │
-├──────────────────────────────┴────────────────────┤
-│  ┌──────────────────────────────────────────────┐ │
-│  │ 💬 やりたいことを入力...          [📎] [送信] │ │
-│  └──────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────┘
-```
-
-### 19.3 コンポーネント構成
-
-| コンポーネント | ファイル | 役割 |
-|---|---|---|
-| ChatComposer | `lib/components/ChatComposer.svelte` | チャットスタイル入力 + ファイル添付 |
-| ActivityFeed | `lib/components/ActivityFeed.svelte` | リアルタイムタイムライン |
-| ActivityEvent | `lib/components/ActivityEvent.svelte` | 個別イベントカード |
-| InterventionPanel | `lib/components/InterventionPanel.svelte` | 承認・プレビュー・エラー |
-| PlanReview | `lib/components/PlanReview.svelte` | 計画レビュー・修正 |
-| GoalInput | `lib/components/GoalInput.svelte` | 目標入力（手動モード兼用） |
-| ApprovalGate | `lib/components/ApprovalGate.svelte` | write 承認 UI |
-| SheetDiffCard | `lib/components/SheetDiffCard.svelte` | 差分表示カード |
-
-### 19.4 デリゲーション状態マシン
-
-```
-idle → goal_entered → planning → plan_review → executing
-  ↑                                    ↓            ↓
-  └──────── completed ◀──────── awaiting_approval ──┘
-                                       ↓
-                                     error
-```
-
-### 19.5 アクティビティフィードイベント型
-
-| イベント型 | アイコン | 表示 |
-|---|---|---|
-| `goal_set` | 💬 | ユーザーの目標テキスト |
-| `file_attached` | 📎 | 添付ファイルパス |
-| `copilot_turn` | 🤖 | Copilot ターン開始 / summary 表示 |
-| `tool_executed` | 🔧 | ツール名 + 結果サマリー |
-| `plan_proposed` | 📋 | 計画提案（介入パネルに詳細） |
-| `plan_approved` | ✅ | 計画承認 |
-| `write_approval_requested` | ⚠️ | 書き込み承認要求 |
-| `write_approved` | ✓ | 書き込み承認完了 |
-| `step_completed` | ✓ | ステップ完了 |
-| `error` | ❌ | エラー + リトライ選択肢 |
-| `completed` | 🎉 | 全体完了 + 成果物リンク |
-
-### 19.6 手動モードとの共存
-
-- ヘッダーに「手動モード / 自動モード」トグル
-- 手動モード = 既存の 3 ステップウィザード（コードはそのまま維持）
-- デフォルトは自動（デリゲーション）モード
-- 設定は `continuity.ts` に永続化
-
-### 19.7 コピー＆ペースト不要化
-
-デリゲーションモードでは、ユーザーのコピペは一切不要。
-ブラウザ自動化（Playwright + Edge CDP）経由で Copilot と自動通信。
-ブラウザ自動化失敗時は、アクティビティフィード内にフォールバックカード
-（「手動でコピペしてください」+ テキスト）を表示。
-
-### 19.8 +page.svelte リファクタリング
-
-現在の 4000 行超のモノリシック `+page.svelte` を、§19.3 のコンポーネント構成に分割。
-`+page.svelte` はオーケストレーターとして各コンポーネントを組み合わせる。
-既存の 3 ステップフローコードは手動モード内に残す。
-
----
-
-## 20. M365 Copilot 統合強化（フェーズ6 — Tasks 138–143）
-
-### 20.1 背景・目的
-
-M365 Copilot は API アクセスが利用できず、Edge CDP 経由のブラウザ自動化で対話している。
-この制約の中で、プロンプトエンジニアリング・コンテキスト管理・エラーリカバリを改善し、
-Copilot の応答品質と信頼性を最大化する。
-
-### 20.2 多ターン会話最適化
-
-- プランニング用プロンプトテンプレート（chain-of-thought + few-shot 例）
-- フォローアップ用テンプレート（前ターン結果 + 次のアクション指示）
-- エラーリカバリ用テンプレート（具体的なエラー内容 + 修正ガイダンス）
-
-### 20.3 コンテキストウィンドウ管理
-
-- N ターン（デフォルト5）を超えたら過去ターンを要約圧縮
-- 最新 2 ターンはフル詳細を維持
-- 要約には: 実行ツール名、主要発見、現在の計画状態を含める
-- `buildCompressedContext(turns, maxTurns)` 関数
-
-### 20.4 エラーリカバリ戦略
-
-3 段階リトライ:
-1. 同一プロンプト + 「前回の返答は解析できませんでした」ヒント
-2. 簡略化プロンプト（過去コンテキストを圧縮）
-3. 手動モードへフォールバック（最後の有効状態を保持）
-
-### 20.5 構造化会話履歴
-
-```typescript
-type CopilotConversationTurn = {
-  role: "user" | "assistant";
-  content: string;
-  timestamp: string;
-};
-type CopilotConversationHistory = CopilotConversationTurn[];
-```
-
-セッションに永続化し、デバッグ・分析に利用。
-
----
-
-## 21. 汎用ファイル操作（フェーズ7 — Tasks 144–149）
-
-### 21.1 背景
-
-フェーズ1–3はスプレッドシート専用。フェーズ7で任意のファイルに拡張する。
-read ツールは自動実行。write ツールは承認ゲート経由。
-
-### 21.2 新規ツール
-
-| ツール | 種別 | 内容 |
-|---|---|---|
-| `file.copy` | write | ファイルコピー（承認必須） |
-| `file.move` | write | ファイル移動/リネーム（承認必須） |
-| `file.delete` | write | ファイル削除（ゴミ箱へ、承認必須） |
-| `text.search` | read | regex パターン検索 |
-| `text.replace` | write | 検索＆置換（バックアップ作成、承認必須） |
-| `document.read_text` | read | Word/PowerPoint/PDF のプレーンテキスト抽出 |
-
-### 21.3 安全ポリシー
-
-- `file.delete` はゴミ箱移動（`trash` クレート使用）
-- `text.replace` は元ファイルの `.bak` バックアップ作成
-- 実行可能ファイルの起動・シェルコマンドは引き続き禁止
-
----
-
-## 22. プロジェクト & 永続メモリ（フェーズ8 — Tasks 150–154）
-
-### 22.1 プロジェクトモデル
-
-```typescript
-const projectSchema = z.object({
-  id: entityIdSchema,
-  name: z.string(),
-  rootFolder: z.string(),
-  customInstructions: z.string().default(""),
-  memory: z.record(z.string()).default({}),
-  sessionIds: z.array(z.string()).default([]),
-  createdAt: iso8601Schema,
-  updatedAt: iso8601Schema,
-});
-```
-
-### 22.2 機能
-
-- プロジェクト = フォルダ + カスタム指示 + 蓄積メモリ
-- カスタム指示は全 Copilot プロンプトに自動付加
-- メモリは学習した設定（「UTF-8 を使う」「出力先は ./output」等）
-- ファイルアクセスは `rootFolder` サブツリーにスコープ
-
----
-
-## 23. ツール/MCP 統合（フェーズ9 — Tasks 155–159）
-
-### 23.1 ツールレジストリ
-
-ビルトインツール（スプレッドシート、ファイル操作、テキスト処理）と
-MCP（Model Context Protocol）外部ツールを統一的に管理するレジストリ。
-
-### 23.2 MCP クライアント
-
-- MCP サーバー URL を設定で追加
-- ツールディスカバリ → 利用可能ツール一覧に動的追加
-- エージェントループから MCP ツールを呼び出し可能
-
-### 23.3 ブラウザ自動化のツール化
-
-既存の Playwright/CDP ブラウザ自動化を、ツールレジストリ登録のツールとしてリファクタ。
-エージェントループから「ブラウザでXを確認して」のようなタスクに利用可能にする。
-
----
-
-## 24. アーティファクトファースト出力（フェーズ10 — Tasks 160–163）
-
-### 24.1 出力パイプライン
-
-```
-変換実行 → 出力生成 → プレビュー → 承認 → 保存 → 品質検証
-```
-
-### 24.2 機能
-
-- 汎用アーティファクトプレビュー（CSV テーブル、テキスト差分、ファイル操作要約）
-- 複数フォーマット出力（同一変換から CSV + XLSX 等）
-- 出力品質バリデーション（行数確認、データ損失チェック、エンコーディング確認）
-
----
-
-## 25. 実装状況（更新）
-
-### フェーズ1（完了）: スプレッドシート 1 ショット変換 — Tasks 1–75
-### フェーズ2（完了）: エージェントループ — Tasks 84–95
-### フェーズ3（完了）: UI/UX 改善 + CDP 自動探索 — Tasks 96–108
-### フェーズ4（計画）: 自律マルチステップ実行 — Tasks 109–123
-### フェーズ5（計画）: デリゲーション UI — Tasks 124–137
-### フェーズ6（計画）: M365 Copilot 統合強化 — Tasks 138–143
-### フェーズ7（計画）: 汎用ファイル操作 — Tasks 144–149
-### フェーズ8（計画）: プロジェクト & 永続メモリ — Tasks 150–154
-### フェーズ9（計画）: ツール/MCP 統合 — Tasks 155–159
-### フェーズ10（計画）: アーティファクトファースト出力 — Tasks 160–163
-
----
-
-## 26. 非ゴール（更新）
-
-- Claude API / LLM API 直接接続（M365 Copilot + Edge CDP を維持）
-- 並列ワークストリーム（フェーズ4 では逐次実行のみ）
-- スケジュール/定期実行（将来検討）
-- macOS / Linux 対応
-- in-app 自動アップデート
-- リモートデータ共有・クラウド同期
 
+■ プロンプト変換の要点
+
+  Copilot Chat は Claude API とは異なり、
+  tool_use プロトコルをネイティブサポートしていない。
+
+  そのため、プロンプト内で以下を明示:
+  1. 利用可能なツールを JSON Schema で記述
+  2. ツール呼び出し時は特定の JSON 形式で返すよう指示
+  3. レスポンスから JSON ブロックを抽出して ToolUseContent に変換
+
+  既存の agent-loop-prompts.ts のロジックを Rust に移植。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. ツール統合設計
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+■ claw-tools のビルトイン (そのまま使う)
+
+  | ツール      | 用途                        | Relay での扱い      |
+  |------------|----------------------------|-------------------|
+  | bash       | シェルコマンド実行             | 有効 (許可制)       |
+  | file_read  | ファイル読取                  | 有効               |
+  | file_write | ファイル書込                  | 承認ゲート経由      |
+  | file_edit  | ファイル編集 (search/replace) | 承認ゲート経由      |
+  | glob       | ファイル検索                  | 有効               |
+  | grep       | コンテンツ検索                | 有効               |
+
+■ Relay 固有ツール (Tool trait で追加登録)
+
+  claw-tools の Tool trait を実装して ToolRegistry に追加:
+
+  | ツール                  | 元のソース          | 変更点           |
+  |------------------------|-------------------|-----------------|
+  | workbook.inspect       | workbook/inspect  | trait 実装に変更  |
+  | sheet.preview          | workbook/preview  | trait 実装に変更  |
+  | sheet.profile_columns  | workbook/inspect  | trait 実装に変更  |
+  | session.diff_from_base | workbook/engine   | trait 実装に変更  |
+  | table.rename_columns   | workbook/preview  | trait 実装に変更  |
+  | table.cast_columns     | workbook/preview  | trait 実装に変更  |
+  | table.filter_rows      | workbook/preview  | trait 実装に変更  |
+  | table.derive_column    | workbook/preview  | trait 実装に変更  |
+  | table.group_aggregate  | workbook/preview  | trait 実装に変更  |
+  | workbook.save_copy     | workbook/engine   | trait 実装に変更  |
+  | document.read_text     | file_ops.rs       | trait 実装に変更  |
+
+■ 削除するツール (claw-tools で代替)
+
+  | 旧ツール       | 代替                    |
+  |---------------|------------------------|
+  | file.list     | claw-tools: glob       |
+  | file.read_text| claw-tools: file_read  |
+  | file.stat     | claw-tools: bash (stat)|
+  | file.copy     | claw-tools: bash (cp)  |
+  | file.move     | claw-tools: bash (mv)  |
+  | file.delete   | claw-tools: bash (rm)  |
+  | text.search   | claw-tools: grep       |
+  | text.replace  | claw-tools: file_edit  |
+
+■ 承認ゲートの統合
+
+  claw-permissions の PermissionPolicy trait を拡張:
+  - file_write, file_edit → Interactive (承認必要)
+  - bash の write 系コマンド → Interactive
+  - workbook write ツール → Interactive
+  - read 系ツール → AutoApprove
+
+  フロントエンドへのイベント emit で承認 UI を表示。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. エージェントループの移行
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+■ 現行 (TypeScript 側でループ)
+
+  agent-loop.ts → Copilot に送信 → レスポンス解析
+  → tool-runtime.ts → Tauri IPC でツール実行 → 結果を次のターンに
+
+  問題:
+  - TS ↔ Rust 間の IPC が往復するたびにオーバーヘッド
+  - ループロジックが TypeScript に分散 (3ファイル、~30KB)
+  - コンテキスト管理が手動 (RelayPacket で毎回組み立て)
+
+■ After (Rust 側でループ)
+
+  claw-core の query() 関数がエージェントループを担当:
+  1. メッセージ履歴 + ツール定義を CopilotChatProvider に送信
+  2. レスポンスから tool_use を抽出
+  3. ToolRegistry (claw-tools) でツール実行
+  4. 結果をメッセージ履歴に追加
+  5. コンテキスト超過時は claw-compact で圧縮
+  6. end_turn or エラーまで繰り返し
+
+  フロントエンドは Tauri イベントを listen するだけ:
+  - "agent:tool_start" → UnifiedFeed にエントリ追加
+  - "agent:tool_result" → エントリ更新
+  - "agent:approval_needed" → ApprovalCard 表示
+  - "agent:turn_complete" → CompletionCard 表示
+  - "agent:error" → エラー表示
+
+■ Tauri コマンド (新)
+
+  // ループ開始
+  #[tauri::command]
+  async fn start_agent(goal: String, files: Vec<String>) -> Result<String>
+
+  // 承認応答
+  #[tauri::command]
+  async fn respond_approval(turn_id: String, approved: bool) -> Result<()>
+
+  // ループ中断
+  #[tauri::command]
+  async fn cancel_agent(session_id: String) -> Result<()>
+
+  // セッション履歴取得
+  #[tauri::command]
+  async fn get_session_history(session_id: String) -> Result<Vec<Message>>
+
+  既存の 94 コマンドの大部分は不要になる。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. Cargo 依存の追加方法
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+■ Cargo.toml (apps/desktop/src-tauri/Cargo.toml)
+
+  [dependencies]
+  # claw-code crates (git 依存)
+  claw-core = { git = "https://github.com/claw-cli/claw-code-rust.git", branch = "main" }
+  claw-tools = { git = "https://github.com/claw-cli/claw-code-rust.git", branch = "main" }
+  claw-provider = { git = "https://github.com/claw-cli/claw-code-rust.git", branch = "main" }
+  claw-permissions = { git = "https://github.com/claw-cli/claw-code-rust.git", branch = "main" }
+  claw-compact = { git = "https://github.com/claw-cli/claw-code-rust.git", branch = "main" }
+
+  # claw-cli, claw-tasks は不要 (CLI バイナリとスキャフォールド)
+
+  注意: ultraworkers/claw-code は GitHub で disabled 状態。
+  実体は claw-cli/claw-code-rust にある。
+  ミラーが必要な場合は fork を作成する。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. 移行戦略 — 段階的置換
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  一気に書き換えるのではなく、段階的に claw-code に移行する。
+  各フェーズで動作するアプリを維持する。
+
+  Phase 1: 依存追加 & CopilotChatProvider
+    - claw crates を Cargo.toml に追加
+    - CopilotChatProvider (ModelProvider trait) を実装
+    - 既存の browser_automation.rs を内部利用
+    - テスト: Copilot Chat 経由で claw-core の query() が動くことを確認
+
+  Phase 2: ツール移行
+    - claw-tools のビルトイン (bash, file_*, glob, grep) を有効化
+    - Relay 固有ツール (workbook.*, document.*) を Tool trait で登録
+    - 旧 tool_registry.rs, file_ops.rs を削除
+    - テスト: 全ツールが claw-tools 経由で動くことを確認
+
+  Phase 3: エージェントループ移行
+    - TypeScript の agent-loop を Rust の claw-core ループに置換
+    - Tauri イベント emit でフロントエンドに通知
+    - 旧 agent-loop.ts, agent-loop-core.ts, agent-loop-prompts.ts を削除
+    - IPC コマンドを大幅削減 (94 → ~20)
+    - テスト: E2E でタスク実行が動くことを確認
+
+  Phase 4: ストレージ簡素化
+    - storage.rs の大部分を claw-core のセッション管理に移行
+    - ワークブック状態管理のみ残す
+    - 旧 relay.rs, risk_evaluator.rs を削除
+    - テスト: セッション管理が正常に動くことを確認
+
+  Phase 5: クリーンアップ
+    - 未使用コード・依存の削除
+    - IPC 型定義 (contracts/) の簡素化
+    - ドキュメント更新
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. リスクと対策
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ■ リスク 1: claw-code のリポジトリが消える/非互換変更
+    対策: fork を作成して固定コミットで依存する
+
+  ■ リスク 2: Copilot Chat の応答形式が不安定
+    対策: パース失敗時のリトライ + 修復プロンプト (既存ロジック流用)
+
+  ■ リスク 3: claw-core の trait が Relay の要件に合わない
+    対策: 必要なら trait を newtype パターンでラップ
+
+  ■ リスク 4: ストリーミング非対応による UX 劣化
+    対策: ツール実行中はフロントエンドにリアルタイムイベントを送る
+          Copilot 応答待ち中はスピナー表示
+
+  ■ リスク 5: claw-code の依存 (async-anthropic 等) が重い
+    対策: feature flag で Anthropic/OpenAI provider を無効化
+          CopilotChatProvider のみコンパイル
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+11. 成功基準
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. 自前の Rust コードが 328KB (storage.rs) → 合計 80KB 以下に削減
+  2. TypeScript のエージェントループコードが 0 に (Rust 側に移行)
+  3. claw-code の 6 ビルトインツールが全て動作
+  4. Relay 固有の 11 ツール (workbook.*, document.*) が Tool trait 経由で動作
+  5. Copilot Chat 経由でマルチターンのエージェントループが動作
+  6. 承認ゲート (書込前の確認) が従来通り機能
+  7. バッチ/パイプライン/テンプレートが従来通り機能
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12. UI/UX 設計 — openwork インスパイア
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  参考: https://github.com/different-ai/openwork
+  設計キーワード: "quiet, premium, operational, flat-first"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12.1 レイアウト — 3ペイン構造
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  openwork の3列レイアウトを採用する。
+  旧 Shizuka PRD の「左サイドバーのみ」から変更。
+
+  ┌──────────────┬──────────────────────────┬────────────────┐
+  │ 左 180px      │  中央 (flex-grow)          │  右 260px       │
+  │              │                           │                │
+  │ + 新規タスク   │  Step Cluster フィード      │  対象ファイル    │
+  │              │                           │                │
+  │ ─ 今日 ─     │  [ツールグループ 1] ▶       │  📄 report.csv  │
+  │  report.csv  │  [ツールグループ 2] ▼       │  📄 sales.xlsx  │
+  │  sales.xlsx  │    ✓ workbook.inspect      │                │
+  │              │    ✓ sheet.preview         │  ─────────────  │
+  │ ─ 昨日 ─    │    ⟳ table.filter_rows     │  MCP ツール     │
+  │  …           │                           │  ● filesystem   │
+  │              │  [承認カード — インライン]   │  ● browser      │
+  │              │                           │                │
+  │              ├───────────────────────────┤  ─────────────  │
+  │              │  TaskInput (bottom fixed)  │  承認ポリシー    │
+  │              │  [@ ファイル] [/ コマンド]  │  書込: 確認あり  │
+  │              │  [指示を入力...     [送信]] │  読取: 自動      │
+  └──────────────┴──────────────────────────┴────────────────┘
+  │ StatusStrip 28px — ● 接続済み Copilot Chat      プロジェクト名 │
+  └────────────────────────────────────────────────────────────┘
+
+  ■ 各ペインの役割
+
+    左ペイン (180px):
+      - 「+ 新規タスク」ボタン (上部, accent 背景)
+      - セッション一覧 (日付グループ: 今日/昨日/過去7日)
+      - 各セッション行: flat rounded-xl、選択時は soft gray fill + bold
+
+    中央ペイン (flex-grow, max-width 720px, 中央寄せ):
+      - Step Cluster フィード (12.3 節で詳細)
+      - ApprovalCard インライン (12.5 節で詳細)
+      - CompletionCard (タスク完了時)
+      - TaskInput ボトム固定 (12.4 節で詳細)
+
+    右ペイン (260px):
+      - 対象ファイル: 選択中のファイルチップ
+      - MCP ツール: 接続済みサーバー一覧 + 接続ドット
+      - 承認ポリシー: 書込/読取の設定 (インラインで変更可)
+      - ⌘\ で右ペインを表示/非表示
+      - デフォルト: 表示 (コンテキストを常に見せる)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12.2 デザイントークン — openwork 準拠
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  旧 Shizuka の warm stone パレットを cool neutral に変更。
+
+  ■ カラー — Light Mode
+
+    Page BG:        #f6f9fc   (cool blue-gray, openwork と同じ)
+    Surface:        #ffffff
+    Surface-raised: #ffffff   (shadow のみで区別)
+    Sidebar BG:     #f9fafb   (gray-50)
+    Border:         #f3f4f6   (gray-100 — ほぼ見えない)
+    Border-strong:  #e5e7eb   (gray-200)
+    Divider:        #f3f4f6
+
+    Text-primary:   #111827   (gray-900)
+    Text-secondary: #6b7280   (gray-500)
+    Text-tertiary:  #9ca3af   (gray-400)
+
+    Accent:         #0d9488   (teal-600 — Relay のブランドカラーを維持)
+    Accent-hover:   #0f766e
+    Accent-subtle:  rgba(13,148,136, 0.06)
+
+    Success:        #16a34a
+    Warning:        #ca8a04
+    Error:          #dc2626
+
+  ■ カラー — Dark Mode
+
+    Page BG:        #0f172a   (slate-900)
+    Surface:        #1e293b   (slate-800)
+    Surface-raised: #334155   (slate-700)
+    Border:         rgba(255,255,255, 0.06)
+
+    Text-primary:   #f1f5f9
+    Text-secondary: #94a3b8
+    Text-tertiary:  #64748b
+
+    Accent:         #2dd4bf   (teal-400)
+
+  ■ タイポグラフィ
+
+    Font stack: "IBM Plex Sans", "Noto Sans JP", system-ui, sans-serif
+    ※ IBM Plex Sans を第一候補に (openwork 準拠)。日本語は Noto Sans JP にフォールバック。
+
+    Weights: 400 (body), 500 (label/emphasis), 600 (heading)
+
+    Scale (openwork に合わせ 14px ベースに統一):
+      --sz-2xs:  0.6875rem (11px) — uppercase セクションラベル
+      --sz-xs:   0.75rem   (12px) — タイムスタンプ、キャプション
+      --sz-sm:   0.875rem  (14px) — 本文 (ベース)
+      --sz-base: 1rem      (16px) — 入力テキスト
+      --sz-lg:   1.125rem  (18px) — セクション見出し
+      --sz-xl:   1.5rem    (24px) — ページタイトル
+
+    セクションラベルスタイル (openwork の特徴):
+      font-size: var(--sz-2xs)
+      font-weight: 500
+      letter-spacing: 0.08em
+      text-transform: uppercase
+      color: var(--c-text-3)
+
+  ■ 角丸 — pill ファースト
+
+    旧 Shizuka の 6-20px から、openwork 準拠で大きく引き上げる。
+    「角丸が大きい = 素材感がある = 触りたくなる」。
+
+    --r-sm:   8px    (小さいインライン要素のみ)
+    --r-md:   16px   (カード、入力フィールド)  ← 旧 10px から大幅拡大
+    --r-lg:   24px   (モーダル、大きなカード)
+    --r-xl:   32px   (TaskInput、サイドバー外枠)  ← ウィンドウシェル感
+    --r-full: 9999px (ボタン、ピル、バッジ、ステータスドット)
+
+    原則:
+    - ボタンは全て --r-full (pill 形状)
+    - 行要素 (セッション行、ツールステップ行) は --r-md (16px)
+    - セクション枠、コンポーザーは --r-xl (32px)
+    - インプット単体は --r-md (16px)
+
+  ■ Shadow (openwork 準拠でさらに薄く)
+
+    --shadow-xs: 0 1px 2px rgba(15,23,42, 0.04)
+    --shadow-sm: 0 4px 12px rgba(15,23,42, 0.05)
+    --shadow-md: 0 8px 24px rgba(15,23,42, 0.05)
+    ※ 3段階のみ。shadow-lg は不要。
+
+  ■ スペーシング (変更なし、4px ベース)
+
+    --sp-1: 4px  --sp-2: 8px   --sp-3: 12px  --sp-4: 16px
+    --sp-5: 20px --sp-6: 24px  --sp-8: 32px  --sp-10: 40px
+
+  ■ アニメーション (変更なし)
+
+    --ease: cubic-bezier(0.25, 0.1, 0.25, 1)
+    --duration-fast:   150ms
+    --duration-normal: 250ms
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12.3 セッション行スタイル — ホバー / 選択
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  openwork 準拠。outline や border は使わず、
+  背景色 + font-weight の変化だけで状態を表現する。
+
+  ■ 通常状態
+
+    height: 36px
+    padding: 6px 12px
+    border-radius: var(--r-md)  /* 16px */
+    background: transparent
+    color: var(--c-text-2)      /* gray-500 */
+    font-size: var(--sz-sm)     /* 14px */
+    font-weight: 400
+    white-space: nowrap
+    overflow: hidden
+    text-overflow: ellipsis
+    cursor: pointer
+    transition: background var(--duration-fast) var(--ease),
+                color var(--duration-fast) var(--ease)
+
+  ■ ホバー状態
+
+    background: var(--c-border)   /* gray-100, #f3f4f6 */
+    color: var(--c-text)          /* gray-900 */
+
+  ■ 選択 (アクティブ) 状態
+
+    background: #eef2f7           /* gray-200 相当, 少し強め */
+    color: var(--c-text)          /* gray-900 */
+    font-weight: 500              /* medium — openwork の特徴 */
+    /* outline なし、border なし、shadow なし */
+
+  ■ セッション行の構成
+
+    ┌──────────────────────────────────────┐
+    │ [ファイルアイコン]  タスク名             │  ← 通常時
+    │                   report.csv を集計   │
+    └──────────────────────────────────────┘
+
+    ┌──────────────────────────────────────┐
+    │ [ファイルアイコン]  タスク名       [⋯] │  ← ホバー時: 三点メニュー出現
+    │                   report.csv を集計   │
+    └──────────────────────────────────────┘
+
+    三点メニュー [⋯]: 右クリック or ホバー時に表示
+      → 削除、リネーム (将来対応)
+
+  ■ 日付グループラベル
+
+    TODAY / YESTERDAY / PAST 7 DAYS
+    font-size: var(--sz-2xs)   /* 11px */
+    font-weight: 500
+    letter-spacing: 0.08em
+    text-transform: uppercase
+    color: var(--c-text-3)
+    padding: 12px 12px 4px
+    /* セパレーター線なし — ラベルだけで十分 */
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12.4 Segmented Control — white pill スタイル
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  CommandPalette のカテゴリ切替、右パネルのセクション切替等で使用。
+  openwork の "soft pill track" パターンを採用。
+
+  ■ 構造
+
+    [トラック]
+      background: var(--c-border)        /* #f3f4f6 */
+      border: 1px solid var(--c-border-strong)
+      border-radius: var(--r-full)
+      padding: 3px
+      display: inline-flex
+      gap: 2px
+
+    [アイテム — 非アクティブ]
+      background: transparent
+      color: var(--c-text-2)
+      font-size: var(--sz-sm)
+      font-weight: 400
+      padding: 4px 12px
+      border-radius: var(--r-full)
+      cursor: pointer
+      transition: background var(--duration-fast) var(--ease)
+
+    [アイテム — アクティブ]
+      background: #ffffff                /* 白いピル */
+      color: var(--c-text)
+      font-weight: 500
+      box-shadow: 0 1px 3px rgba(15,23,42, 0.08)  /* 浮いて見える */
+      border-radius: var(--r-full)
+
+  ■ 使用箇所
+
+    - CommandPalette: ナビ / 自動化 / 設定 の3タブ
+    - ArtifactPreview: プレビュー / 差分 / JSON の切替
+    - 右コンテキストパネル: ファイル / MCP / ポリシー の切替
+    - BatchDashboard: ファイル選択 / 実行中 / 完了 の切替
+
+  ■ アニメーション
+
+    アクティブピルの位置移動は translate でスライド:
+    transition: transform var(--duration-fast) var(--ease)
+    ※ 背景を動かすのではなく、アクティブ item の白背景が出現するアプローチ
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12.5 Step Cluster フィード — UnifiedFeed 刷新
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  openwork の最大の特徴: ツール呼び出しをグループ化してコラプシブルに。
+  旧 UnifiedFeed の「1行1エントリ」から変更。
+
+  ■ Step Cluster 構造
+
+    エージェントループの1ラウンドを1つの「クラスター」としてまとめる。
+
+    [クラスター 1] ファイル読込  (3ステップ)  1.2s  ▶ (折りたたみ)
+    ─────────────────────────────────────────────────────
+    [クラスター 2] データ処理    (2ステップ)  0.8s  ▶
+    ─────────────────────────────────────────────────────
+    [クラスター 3] 保存準備中...              ▼ (展開中)
+      ┌──────────────────────────────────────┐
+      │  ✓  workbook.inspect   report.csv  0.3s │
+      │  ✓  sheet.preview      32行        0.1s │
+      │  ⟳  table.filter_rows  実行中...        │
+      │  ○  workbook.save_copy 待機中            │
+      └──────────────────────────────────────┘
+
+  ■ クラスターヘッダー
+
+    左:  ラウンド番号 + ラベル (最初のツール名から自動生成)
+    中:  ステップ数バッジ (rounded-full, gray-100)
+    右:  経過時間 (--sz-xs, --c-text-3) + 展開アイコン (▶/▼)
+    高さ: 36px (行)
+    背景: 通常は透明。ホバーで --c-surface。実行中は accent-subtle の左ボーダー 2px。
+
+  ■ ステップ行 (展開時)
+
+    インデント: 16px
+    左: ステータスアイコン
+      ✓ (green)  — 完了
+      ⟳ (accent) — 実行中 (回転アニメーション)
+      ○ (gray)   — 待機
+      ✗ (red)    — エラー
+    中: ツール名 (mono, --sz-sm) + 引数サマリ (--c-text-2)
+    右: 所要時間 (--sz-xs, --c-text-3)
+    詳細: クリックでアコーディオン展開 → JSON 表示 (gray-50 背景)
+
+  ■ セクションラベル (openwork 特徴)
+
+    クラスター一覧の上部に uppercase ラベル:
+
+    EXECUTION LOG                    ← 11px uppercase tracked
+      [クラスター 1] ...
+      [クラスター 2] ...
+
+  ■ UnifiedFeed コンポーネント仕様
+
+    Props:
+      clusters: StepCluster[]
+      isRunning: boolean
+
+    StepCluster:
+      id: string
+      roundIndex: number
+      label: string          (自動生成: 最初のツール名から)
+      steps: StepEntry[]
+      status: "running" | "done" | "error"
+      startTime: number
+      endTime?: number
+      expanded: boolean      (ローカル状態)
+
+    StepEntry:
+      toolName: string
+      argsSummary: string
+      status: "pending" | "running" | "done" | "error"
+      durationMs?: number
+      detail?: string        (JSON レスポンス)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12.6 TaskInput — ボトム固定 Composer
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  旧 Shizuka PRD の「空状態は中央、実行中は上部 sticky」から
+  openwork 方式の「常にボトム固定」に変更。シンプルで一貫性がある。
+
+  ■ 初期状態 (セッション未開始)
+
+    中央フィードエリアに空状態メッセージ:
+    ┌──────────────────────────────────────────┐
+    │                                          │
+    │   最近: report.csv  sales_q1.xlsx         │
+    │                                          │
+    │   フィルターして集計  列名を変換             │
+    │   テキストを検索      ドキュメントを読む      │
+    │                                          │
+    └──────────────────────────────────────────┘
+
+    (サジェストチップをクリックするとコンポーザーに入力)
+
+  ■ コンポーザー本体 (常時ボトム固定)
+
+    ┌──────────────────────────────────────────┐
+    │  [@ ファイル]  [/ コマンド]  [Copilot ▾]  │  ← ツールバー
+    ├──────────────────────────────────────────┤
+    │  指示を入力...                              │  ← textarea
+    │                                            │
+    │                              [停止 ■ / 送信 ↵]│
+    └──────────────────────────────────────────┘
+
+    高さ: textarea は auto-grow (最小 56px、最大 200px)
+    背景: --c-surface, --shadow-sm, --r-xl, border: --c-border
+    ツールバー:
+      [@ ファイル]   — ファイルドロップ / ピッカー
+      [/ コマンド]   — コマンドパレット呼び出し (Pipeline, Batch, Template)
+      [Copilot ▾]   — 将来の AI プロバイダー切替用 (現在は固定)
+    ファイル添付時: コンポーザー上部にファイルチップ表示
+    実行中: [送信] ボタンが [停止 ■] に変化
+    キーボード: Enter 送信、Shift+Enter 改行
+
+  ■ コンポーザーのコンテキスト表示
+
+    ファイル選択済みの場合、textarea の上にチップを表示:
+    [📄 report.csv ×]  [📄 sales.xlsx ×]
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12.7 ApprovalCard — インライン承認ゲート (3択)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  openwork の Permission Card パターンを採用。
+  フィードの流れの中にインラインで表示し、モーダルは使わない。
+  「今回のみ / 常に許可 / 拒否」の3択 (旧「承認 / キャンセル」2択から変更)。
+
+  ■ 書込承認カード
+
+    ┌─────────────────────────────────────────┐
+    │  🔒  書き込みの許可をリクエスト             │  ← ヘッダー (accent 左ボーダー 3px)
+    │                                         │
+    │  workbook.save_copy                     │  ← mono フォント
+    │  → output/filtered_report.csv           │
+    │                                         │
+    │  変更プレビュー:                          │
+    │  ┌─────────────────────────────────┐   │
+    │  │  ArtifactPreview (差分表示)       │   │
+    │  └─────────────────────────────────┘   │
+    │                                         │
+    │  ⓘ 元のファイルは変更されません             │
+    │                                         │
+    │  [拒否]  [今回のみ許可]  [常に許可 ✓]     │  ← 3択ボタン
+    └─────────────────────────────────────────┘
+
+  ■ プラン確認カード
+
+    ┌─────────────────────────────────────────┐
+    │  📋  実行計画を確認してください              │
+    │                                         │
+    │  EXECUTION PLAN         (3ステップ)      │  ← uppercase ラベル
+    │                                         │
+    │  1. report.csv を読み込む          読取   │
+    │  2. approved 列でフィルタ           読取   │
+    │  3. 新しいコピーとして保存          書込 ⚠  │
+    │                                         │
+    │         [修正を依頼]  [実行する ✓]         │
+    └─────────────────────────────────────────┘
+
+  ■ 3択ボタンの意味
+
+    [拒否]         — この操作をスキップ、ループは継続
+    [今回のみ許可]  — この1回だけ承認
+    [常に許可]     — このツールを AutoApprove に設定 (ポリシー更新)
+    ※ 「常に許可」を選ぶと右ペインの承認ポリシーも更新される
+
+  ■ スコープ警告
+
+    プロジェクト外のパスへのアクセス時はカード内インラインアラート:
+    ┌─────────────────────────────────┐
+    │  ⚠ プロジェクトフォルダ外のファイルです │
+    │  /Users/... 続行しますか？          │
+    └─────────────────────────────────┘
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12.8 右コンテキストパネル
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  設定モーダルを廃止し、コンテキストパネルとして常時表示する。
+  セッションに関連する情報をすぐに確認・変更できる。
+
+  ┌─────────────────────────┐
+  │  FILES                   │  ← uppercase 11px
+  │  📄 report.csv      ×    │
+  │  📄 sales.xlsx      ×    │
+  │  [+ ファイルを追加]        │
+  ├─────────────────────────┤
+  │  MCP SERVERS             │  ← uppercase 11px
+  │  ● filesystem  接続済     │
+  │  ● browser     接続済     │
+  │  ○ database    未接続     │
+  │  [+ サーバーを追加]        │
+  ├─────────────────────────┤
+  │  APPROVAL POLICY         │  ← uppercase 11px
+  │  書込操作   [確認あり ▾]  │
+  │  読取操作   [自動      ]  │
+  │  bash      [確認あり ▾]  │
+  ├─────────────────────────┤
+  │  PROJECT                 │  ← uppercase 11px
+  │  my-reports              │
+  │  [切替]                   │
+  └─────────────────────────┘
+
+  ■ 接続ドット — ping アニメーション付き
+
+    ドットは 8px の circle。状態に応じてアニメーション:
+
+    接続済 (緑):
+      <span class="dot dot-success dot-ping">
+      CSS: 2重リング ping アニメーション (Tailwind の animate-ping と同等)
+        .dot-ping::before {
+          content: '';
+          position: absolute;
+          inset: -3px;
+          border-radius: 50%;
+          background: inherit;
+          opacity: 0.4;
+          animation: ping 2s ease-out infinite;
+        }
+        @keyframes ping {
+          0%   { transform: scale(1); opacity: 0.4; }
+          70%  { transform: scale(2.2); opacity: 0; }
+          100% { transform: scale(2.2); opacity: 0; }
+        }
+
+    接続中 (黄):
+      ping アニメーション、amber カラー、周期 1s (速め)
+
+    未接続 (灰):
+      アニメーションなし、--c-border の点線ボーダー circle
+
+    StatusStrip の Copilot 接続ドットにも同じ ping を適用。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12.9 Inbox パネル — ファイル共有エリア
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  openwork の "Inbox" パターンを採用。
+  エージェントと共有するファイルを一元管理するエリア。
+  右コンテキストパネルの FILES セクションを拡張した独立パネル。
+
+  ■ 概要
+
+    Inbox はユーザーがエージェントに「渡す」ファイルの置き場所。
+    - ドラッグ & ドロップでファイルを追加
+    - セッションをまたいで参照可能
+    - エージェントは Inbox ファイルを優先的に参照する
+
+  ■ UI 構成
+
+    右パネルの FILES セクションが Inbox を兼ねる:
+
+    ┌──────────────────────────────┐
+    │  FILES                       │  ← uppercase 11px
+    │                              │
+    │  ┌──────────────────────┐   │
+    │  │  ここにファイルをドロップ  │   │  ← ドロップゾーン
+    │  │  または [ファイルを選択]  │   │    (点線ボーダー, --r-lg)
+    │  └──────────────────────┘   │
+    │                              │
+    │  📄 report.csv          ×   │  ← 追加済みファイル
+    │     32KB · 2分前             │    (サイズ + 追加時刻)
+    │  📊 sales_q1.xlsx       ×   │
+    │     156KB · 昨日             │
+    │                              │
+    │  [+ ファイルを追加]           │
+    └──────────────────────────────┘
+
+  ■ ファイル行のスタイル
+
+    height: 40px
+    padding: 6px 8px
+    border-radius: var(--r-md)  /* 16px */
+    display: flex, align-items: center, gap: 8px
+
+    左: ファイルタイプアイコン (16px)
+    中: ファイル名 (--sz-sm, font-weight 500) +
+        サイズ・時刻 (--sz-xs, --c-text-3, 改行)
+    右: × ボタン (ghost, 16px, ホバーで出現)
+
+  ■ ドロップゾーン
+
+    通常:
+      border: 1.5px dashed var(--c-border-strong)
+      border-radius: var(--r-lg)
+      background: transparent
+      padding: 16px
+      text-align: center
+      color: var(--c-text-3)
+      font-size: var(--sz-sm)
+
+    ドラッグオーバー時:
+      border-color: var(--c-accent)
+      background: var(--c-accent-subtle)
+      color: var(--c-accent)
+
+  ■ エージェントとの連携
+
+    Inbox に追加されたファイルは:
+    1. Tauri IPC で session_store に記録
+    2. claw-core のシステムプロンプトに自動追記
+       "以下のファイルが共有されています: [パス一覧]"
+    3. workbook.inspect が初回自動実行される (オプション)
+
+  ■ コンポーネント
+
+    InboxPanel.svelte (右パネル内のサブコンポーネント)
+      Props:
+        files: InboxFile[]
+      Events:
+        add: { paths: string[] }
+        remove: { path: string }
+
+    InboxFile:
+      path: string
+      name: string
+      sizeBytes: number
+      addedAt: number
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12.10 コンポーネント一覧 (最終版)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  旧 Shizuka PRD の 16コンポーネントを以下に更新:
+
+  シェル (3):
+    AppSidebar.svelte       — 左ペイン (セッション一覧)
+    ContextPanel.svelte     — 右ペイン (Inbox/MCP/ポリシー) ★新規
+    StatusStrip.svelte      — ボトムバー 28px (ping ドット付き)
+
+  入力 (1):
+    TaskInput.svelte        — ボトム固定コンポーザー (旧 ChatComposer + GoalInput)
+
+  フィード (1):
+    UnifiedFeed.svelte      — Step Cluster フィード (刷新)
+
+  承認 (1):
+    ApprovalCard.svelte     — インライン承認カード (3択)
+
+  プレビュー (3):
+    ArtifactPreview.svelte  — タブ付きプレビュー
+    SheetDiffCard.svelte    — スプレッドシート差分
+    FileOpPreview.svelte    — ファイル操作プレビュー
+
+  完了 (1):
+    CompletionCard.svelte   — タスク完了サマリ
+
+  自動化 (3, ⌘K 経由):
+    PipelineBuilder.svelte
+    BatchDashboard.svelte
+    TemplateBrowser.svelte
+
+  Inbox (1): ★新規
+    InboxPanel.svelte       — ContextPanel 内のファイル共有エリア
+
+  管理 (2):
+    SessionList.svelte      — セッション一覧 (AppSidebar 内サブコンポーネント)
+    CommandPalette.svelte   — ⌘K パレット (Segmented Control タブ)
+
+  ユーティリティ (1):
+    Toast.svelte
+
+  合計: 18コンポーネント
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12.11 インタラクションパターン (更新)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ■ 起動フロー
+
+    1. 3ペインレイアウトで起動
+    2. 中央: 空状態 (サジェストチップ + 最近ファイル)
+    3. 右パネル: ファイルなし、MCP 接続状態表示
+    4. 左: セッション履歴 (初回は空 → 「最初のタスクを始めましょう」)
+
+  ■ タスク実行フロー
+
+    1. コンポーザーにファイルドロップ or テキスト入力 → Enter
+    2. 右パネルのファイルセクションにチップが追加される
+    3. プラン確認が必要なら ApprovalCard がフィード内に出現
+    4. 承認 → Step Cluster が順次表示される
+    5. 書込操作に到達 → ApprovalCard (3択) が出現
+    6. 「今回のみ許可」選択 → 実行継続
+    7. 完了 → CompletionCard
+
+  ■ キーボードショートカット (更新)
+
+    ⌘K:     コマンドパレット (Pipeline / Batch / Template / 設定)
+    ⌘\:     左サイドバー表示切替
+    ⌘/:     右コンテキストパネル表示切替  ★追加
+    ⌘N:     新規タスク (コンポーザーをクリア)
+    Enter:   送信
+    Shift+Enter: 改行
+    Escape:  パレット/承認カードをキャンセル
+
+  ■ コンパクション状態の表示
+
+    claw-compact によるコンテキスト圧縮が発生した際:
+    フィード内に薄いインジケーター表示:
+    ─── コンテキストを圧縮しました (古い履歴を要約) ───
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12.12 旧 Shizuka PRD からの変更点まとめ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  | 項目                  | 旧 Shizuka            | 新 openwork ベース           |
+  |-----------------------|----------------------|------------------------------|
+  | レイアウト             | 左サイドバー + 中央      | 3ペイン (左/中央/右)           |
+  | ベースカラー           | warm stone (#fafaf9)   | cool neutral (#f6f9fc)        |
+  | フォント               | Noto Sans JP          | IBM Plex Sans + Noto JP       |
+  | 角丸                  | 6-20px                | pill/16px/32px (大幅拡大)      |
+  | ボタン形状             | --r-sm (6px)          | --r-full (pill 形状)           |
+  | フィードUI             | 1行1エントリ            | Step Cluster (グループ化)       |
+  | 承認ボタン             | 承認/キャンセル (2択)    | 今回/常に/拒否 (3択)            |
+  | 承認UI表示位置         | モーダル / 別カード      | フィード内インライン             |
+  | 入力エリア             | 空:中央 → 実行中:上部   | 常時ボトム固定                  |
+  | 設定                  | SettingsPage (ページ)   | 右パネルにインライン表示          |
+  | セクションラベル        | なし                   | uppercase 11px tracked        |
+  | セッション行            | 旧スタイル              | hover:gray-100 / active:500w  |
+  | ステータスドット        | 静止                   | ping アニメーション (2重リング)   |
+  | セグメントコントロール   | なし                   | white pill スタイル            |
+  | Inbox                | なし                   | 右パネルにファイル共有エリア       |
+
+================================================================================
+  END OF PRD
+================================================================================

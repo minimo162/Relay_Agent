@@ -55,8 +55,53 @@ type SendResult =
   | { status: "ok"; response: string; cdpPort: number }
   | ErrorResult;
 
+type SelectorProbe = {
+  name: string;
+  selector: string;
+  count: number;
+  visible: boolean;
+  sampleText: string | null;
+};
+
+type ObservedResponse = {
+  url: string;
+  status: number;
+  contentType: string | null;
+  matchedConfiguredPattern: boolean;
+};
+
+type InspectResult =
+  | {
+      status: "ok";
+      cdpPort: number;
+      page: {
+        url: string;
+        title: string;
+      };
+      promptAvailable: boolean;
+      selectorProbes: SelectorProbe[];
+      responseSelectorProbes: SelectorProbe[];
+      suggestedApiPatterns: string[];
+      sendProbe:
+        | {
+            promptPreview: string;
+            responseSource: "network" | "dom" | "none";
+            matchedConfiguredPattern: boolean;
+            responseExcerpt: string | null;
+            observedResponses: ObservedResponse[];
+            usedSelectors: {
+              newChatSelector: string | null;
+              editorSelector: string | null;
+              sendSelector: string | null;
+              responseSelector: string | null;
+            };
+          }
+        | null;
+    }
+  | ErrorResult;
+
 type CliOptions = {
-  action: "connect" | "send";
+  action: "connect" | "send" | "inspect";
   cdpPort: number;
   autoLaunch: boolean;
   timeout: number;
@@ -67,12 +112,34 @@ type SendInput = {
   prompt: string;
 };
 
+type CandidateLocator = {
+  label: string;
+  locator: Locator;
+};
+
+type SendAttemptDiagnostics = {
+  observedResponses: ObservedResponse[];
+  newChatSelector: string | null;
+  editorSelector: string | null;
+  sendSelector: string | null;
+  responseSelector: string | null;
+  responseSource: "network" | "dom" | "none";
+  matchedConfiguredPattern: boolean;
+};
+
+type SendAttemptResult = {
+  responseText: string;
+  diagnostics: SendAttemptDiagnostics;
+};
+
 async function main(): Promise<void> {
   const options = parseCliOptions(process.argv.slice(2));
   const result =
     options.action === "connect"
       ? await handleConnect(options)
-      : await handleSend(options, options.prompt);
+      : options.action === "inspect"
+        ? await handleInspect(options, options.prompt)
+        : await handleSend(options, options.prompt);
 
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
@@ -90,8 +157,8 @@ function parseCliOptions(argv: string[]): CliOptions {
 
     switch (arg) {
       case "--action":
-        if (next !== "connect" && next !== "send") {
-          throw new Error("`--action` must be `connect` or `send`.");
+        if (next !== "connect" && next !== "send" && next !== "inspect") {
+          throw new Error("`--action` must be `connect`, `send`, or `inspect`.");
         }
         action = next;
         index += 1;
@@ -173,7 +240,8 @@ async function handleSend(options: CliOptions, promptArg?: string): Promise<Send
     }
 
     for (let attempt = 0; attempt <= MAX_COPILOT_RETRIES; attempt += 1) {
-      const responseText = await runSendAttempt(page, input.prompt, options.timeout);
+      const response = await runSendAttempt(page, input.prompt, options.timeout);
+      const responseText = response.responseText;
       if (isKnownCopilotError(responseText)) {
         if (attempt === MAX_COPILOT_RETRIES) {
           return {
@@ -199,6 +267,73 @@ async function handleSend(options: CliOptions, promptArg?: string): Promise<Send
     };
   } catch (error) {
     return toErrorResult(error, "send");
+  } finally {
+    await browser?.close().catch(() => undefined);
+  }
+}
+
+async function handleInspect(options: CliOptions, promptArg?: string): Promise<InspectResult> {
+  let browser: Browser | null = null;
+
+  try {
+    const connection = await connectToBrowser(options);
+    browser = connection.browser;
+    const page = await ensureCopilotPage(browser, options.timeout);
+    const availabilityResult = await detectCopilotAvailability(page, options.timeout);
+    if (availabilityResult) {
+      return availabilityResult;
+    }
+
+    const selectorProbes = await probeSelectors(page, [
+      { name: "newChatButton", selector: NEW_CHAT_SELECTOR },
+      { name: "editor", selector: EDITOR_SELECTOR },
+      { name: "sendReady", selector: SEND_READY_SEL },
+      { name: "textboxRole", selector: "role=textbox" }
+    ]);
+    const responseSelectorProbes = await probeSelectors(
+      page,
+      RESPONSE_SEL_CANDIDATES.map((selector, index) => ({
+        name: `responseCandidate${index + 1}`,
+        selector
+      }))
+    );
+
+    let sendProbe: InspectResult["sendProbe"] = null;
+    let suggestedApiPatterns: string[] = [API_URL_PATTERN];
+
+    if (promptArg?.trim()) {
+      const sendResult = await runSendAttempt(page, promptArg, options.timeout);
+      suggestedApiPatterns = buildSuggestedApiPatterns(sendResult.diagnostics.observedResponses);
+      sendProbe = {
+        promptPreview: buildPromptPreview(promptArg),
+        responseSource: sendResult.diagnostics.responseSource,
+        matchedConfiguredPattern: sendResult.diagnostics.matchedConfiguredPattern,
+        responseExcerpt: buildResponseExcerpt(sendResult.responseText),
+        observedResponses: sendResult.diagnostics.observedResponses,
+        usedSelectors: {
+          newChatSelector: sendResult.diagnostics.newChatSelector,
+          editorSelector: sendResult.diagnostics.editorSelector,
+          sendSelector: sendResult.diagnostics.sendSelector,
+          responseSelector: sendResult.diagnostics.responseSelector
+        }
+      };
+    }
+
+    return {
+      status: "ok",
+      cdpPort: connection.port,
+      page: {
+        url: page.url(),
+        title: await page.title().catch(() => "")
+      },
+      promptAvailable: await hasUsableCopilotPrompt(page),
+      selectorProbes,
+      responseSelectorProbes,
+      suggestedApiPatterns,
+      sendProbe
+    };
+  } catch (error) {
+    return toErrorResult(error, "connect");
   } finally {
     await browser?.close().catch(() => undefined);
   }
@@ -504,94 +639,143 @@ async function runSendAttempt(
   page: Page,
   prompt: string,
   timeout: number
-): Promise<string> {
-  await startNewChat(page, timeout);
-  await enterPrompt(page, prompt, timeout);
+): Promise<SendAttemptResult> {
+  const diagnostics: SendAttemptDiagnostics = {
+    observedResponses: [],
+    newChatSelector: null,
+    editorSelector: null,
+    sendSelector: null,
+    responseSelector: null,
+    responseSource: "none",
+    matchedConfiguredPattern: false
+  };
+  const onResponse = (response: Response) => {
+    const url = response.url();
+    if (!isRelevantObservedResponse(url)) {
+      return;
+    }
 
-  const networkResponsePromise = page.waitForResponse(
-    (response) => response.url().includes(API_URL_PATTERN),
-    { timeout: Math.min(timeout, NETWORK_CAPTURE_TIMEOUT_MS) }
-  );
+    const observed: ObservedResponse = {
+      url,
+      status: response.status(),
+      contentType: response.headers()["content-type"] ?? null,
+      matchedConfiguredPattern: url.includes(API_URL_PATTERN)
+    };
+    if (observed.matchedConfiguredPattern) {
+      diagnostics.matchedConfiguredPattern = true;
+    }
+    diagnostics.observedResponses.push(observed);
+  };
 
-  await clickSend(page, timeout);
+  page.on("response", onResponse);
 
-  // Wait for the send button to re-enable — this signals Copilot has finished
-  // generating. We do this before any DOM read to avoid capturing partial text.
-  await waitForGenerationComplete(page, timeout);
-
-  let responseText = "";
   try {
-    const response = await networkResponsePromise;
-    responseText = await extractResponseText(response);
-  } catch {
-    // Network capture is opportunistic. If it fails, fall back to DOM polling.
-  }
+    diagnostics.newChatSelector = await startNewChat(page, timeout);
+    diagnostics.editorSelector = await enterPrompt(page, prompt, timeout);
 
-  if (!responseText.trim()) {
-    responseText = await readResponseFromDom(page, timeout);
-  }
-
-  if (!responseText.trim()) {
-    throw createError(
-      "RESPONSE_TIMEOUT",
-      "Timed out while waiting for Copilot to produce a response."
+    const networkResponsePromise = page.waitForResponse(
+      (response) => response.url().includes(API_URL_PATTERN),
+      { timeout: Math.min(timeout, NETWORK_CAPTURE_TIMEOUT_MS) }
     );
-  }
 
-  return responseText;
+    diagnostics.sendSelector = await clickSend(page, timeout);
+
+    // Wait for the send button to re-enable — this signals Copilot has finished
+    // generating. We do this before any DOM read to avoid capturing partial text.
+    await waitForGenerationComplete(page, timeout);
+
+    let responseText = "";
+    try {
+      const response = await networkResponsePromise;
+      responseText = await extractResponseText(response);
+      if (responseText.trim()) {
+        diagnostics.responseSource = "network";
+        diagnostics.matchedConfiguredPattern = true;
+      }
+    } catch {
+      // Network capture is opportunistic. If it fails, fall back to DOM polling.
+    }
+
+    if (!responseText.trim()) {
+      const domResult = await readResponseFromDom(page, timeout);
+      responseText = domResult.text;
+      if (responseText.trim()) {
+        diagnostics.responseSource = "dom";
+        diagnostics.responseSelector = domResult.selector;
+      }
+    }
+
+    if (!responseText.trim()) {
+      throw createError(
+        "RESPONSE_TIMEOUT",
+        "Timed out while waiting for Copilot to produce a response."
+      );
+    }
+
+    return {
+      responseText,
+      diagnostics
+    };
+  } finally {
+    page.off("response", onResponse);
+    diagnostics.observedResponses = dedupeObservedResponses(diagnostics.observedResponses);
+  }
 }
 
-async function startNewChat(page: Page, timeout: number): Promise<void> {
-  const button = firstVisibleLocator(page, [
-    page.getByTestId("newChatButton"),
-    page.locator(NEW_CHAT_SELECTOR)
+async function startNewChat(page: Page, timeout: number): Promise<string | null> {
+  const button = await firstVisibleLocator([
+    { label: 'getByTestId("newChatButton")', locator: page.getByTestId("newChatButton") },
+    { label: NEW_CHAT_SELECTOR, locator: page.locator(NEW_CHAT_SELECTOR) }
   ]);
-  const locator = await button;
-  if (!locator) {
-    return;
+  if (!button) {
+    return null;
   }
 
-  await locator.click({ timeout });
+  await button.locator.click({ timeout });
+  return button.label;
 }
 
-async function enterPrompt(page: Page, prompt: string, timeout: number): Promise<void> {
-  const candidates = [
-    page.locator(EDITOR_SELECTOR),
-    page.getByRole("textbox")
+async function enterPrompt(page: Page, prompt: string, timeout: number): Promise<string> {
+  const candidates: CandidateLocator[] = [
+    { label: EDITOR_SELECTOR, locator: page.locator(EDITOR_SELECTOR) },
+    { label: 'getByRole("textbox")', locator: page.getByRole("textbox") }
   ];
 
-  for (const locator of candidates) {
-    if (!(await locator.count())) {
+  for (const candidate of candidates) {
+    if (!(await candidate.locator.count())) {
       continue;
     }
 
-    const handle = locator.first();
+    const handle = candidate.locator.first();
     if (!(await handle.isVisible().catch(() => false))) {
       continue;
     }
 
     try {
       await handle.fill(prompt, { timeout });
-      return;
+      return candidate.label;
     } catch {
       await handle.click({ timeout });
       await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
       await page.keyboard.press("Backspace");
       await page.keyboard.insertText(prompt);
-      return;
+      return candidate.label;
     }
   }
 
   throw createError("SEND_FAILED", "Could not find a Copilot prompt editor.");
 }
 
-async function clickSend(page: Page, timeout: number): Promise<void> {
-  const sendButton = await firstVisibleLocator(page, [page.locator(SEND_READY_SEL)]);
+async function clickSend(page: Page, timeout: number): Promise<string> {
+  const sendButton = await firstVisibleLocator([
+    { label: SEND_READY_SEL, locator: page.locator(SEND_READY_SEL) }
+  ]);
   if (!sendButton) {
     throw createError("SEND_FAILED", "Could not find an enabled send button.");
   }
 
-  await sendButton.click({ timeout });
+  await sendButton.locator.click({ timeout });
+  return sendButton.label;
 }
 
 /**
@@ -611,46 +795,63 @@ async function waitForGenerationComplete(page: Page, timeout: number): Promise<v
   }
 }
 
-async function firstVisibleLocator(page: Page, locators: Locator[]): Promise<Locator | null> {
-  for (const locator of locators) {
-    if (!(await locator.count().catch(() => 0))) {
+async function firstVisibleLocator(candidates: CandidateLocator[]): Promise<CandidateLocator | null> {
+  for (const candidate of candidates) {
+    if (!(await candidate.locator.count().catch(() => 0))) {
       continue;
     }
 
-    const handle = locator.first();
+    const handle = candidate.locator.first();
     if (await handle.isVisible().catch(() => false)) {
-      return handle;
+      return {
+        label: candidate.label,
+        locator: handle
+      };
     }
   }
 
   return null;
 }
 
-async function readResponseFromDom(page: Page, timeout: number): Promise<string> {
+async function readResponseFromDom(
+  page: Page,
+  timeout: number
+): Promise<{ text: string; selector: string | null }> {
   const deadline = Date.now() + timeout;
   let lastText = "";
   let stableCount = 0;
+  let lastSelector: string | null = null;
 
   while (Date.now() < deadline) {
-    const nextText = await pickFirstNonEmptyFromSelectors(page, RESPONSE_SEL_CANDIDATES);
+    const { text: nextText, selector } = await pickFirstNonEmptyFromSelectors(page, RESPONSE_SEL_CANDIDATES);
 
     if (nextText && nextText === lastText) {
       stableCount += 1;
       if (stableCount >= DOM_STABLE_POLLS) {
-        return nextText;
+        return {
+          text: nextText,
+          selector: selector ?? lastSelector
+        };
       }
     } else if (nextText) {
       lastText = nextText;
+      lastSelector = selector;
       stableCount = 1;
     }
 
     await page.waitForTimeout(DOM_POLL_INTERVAL_MS);
   }
 
-  return lastText;
+  return {
+    text: lastText,
+    selector: lastSelector
+  };
 }
 
-async function pickFirstNonEmptyFromSelectors(page: Page, selectors: string[]): Promise<string> {
+async function pickFirstNonEmptyFromSelectors(
+  page: Page,
+  selectors: string[]
+): Promise<{ text: string; selector: string | null }> {
   for (const sel of selectors) {
     const text = await page
       .locator(sel)
@@ -663,11 +864,17 @@ async function pickFirstNonEmptyFromSelectors(page: Page, selectors: string[]): 
       .catch(() => "");
 
     if (text) {
-      return text;
+      return {
+        text,
+        selector: sel
+      };
     }
   }
 
-  return "";
+  return {
+    text: "",
+    selector: null
+  };
 }
 
 async function extractResponseText(response: Response): Promise<string> {
@@ -894,6 +1101,103 @@ function describeError(error: unknown): string {
   }
 
   return "Unexpected browser automation error.";
+}
+
+async function probeSelectors(
+  page: Page,
+  probes: Array<{ name: string; selector: string }>
+): Promise<SelectorProbe[]> {
+  const results: SelectorProbe[] = [];
+
+  for (const probe of probes) {
+    if (probe.selector === "role=textbox") {
+      const locator = page.getByRole("textbox");
+      const handle = locator.first();
+      results.push({
+        name: probe.name,
+        selector: probe.selector,
+        count: await locator.count().catch(() => 0),
+        visible: await handle.isVisible().catch(() => false),
+        sampleText: await readLocatorSampleText(handle)
+      });
+      continue;
+    }
+
+    const locator = page.locator(probe.selector);
+    const handle = locator.first();
+    results.push({
+      name: probe.name,
+      selector: probe.selector,
+      count: await locator.count().catch(() => 0),
+      visible: await handle.isVisible().catch(() => false),
+      sampleText: await readLocatorSampleText(handle)
+    });
+  }
+
+  return results;
+}
+
+async function readLocatorSampleText(locator: Locator): Promise<string | null> {
+  const text = await locator
+    .evaluate((node) => (node.textContent ?? "").trim().slice(0, 160))
+    .catch(() => "");
+
+  return text || null;
+}
+
+function dedupeObservedResponses(observedResponses: ObservedResponse[]): ObservedResponse[] {
+  const seen = new Set<string>();
+  const results: ObservedResponse[] = [];
+
+  for (const item of observedResponses) {
+    const key = `${item.url}|${item.status}|${item.contentType ?? ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    results.push(item);
+  }
+
+  return results;
+}
+
+function isRelevantObservedResponse(url: string): boolean {
+  return /(copilot|sydney|conversation|chat|m365\.cloud\.microsoft)/i.test(url);
+}
+
+function buildSuggestedApiPatterns(observedResponses: ObservedResponse[]): string[] {
+  const candidates = observedResponses
+    .map((item) => {
+      try {
+        const parsed = new URL(item.url);
+        return parsed.pathname;
+      } catch {
+        return item.url;
+      }
+    })
+    .filter((value) => /(conversation|chat|copilot|sydney)/i.test(value));
+
+  const prioritized = [
+    ...candidates.filter((value) => value.includes(API_URL_PATTERN)),
+    ...candidates.filter((value) => !value.includes(API_URL_PATTERN))
+  ];
+
+  return Array.from(new Set(prioritized)).slice(0, 8);
+}
+
+function buildPromptPreview(prompt: string): string {
+  const trimmed = prompt.trim().replace(/\s+/g, " ");
+  return trimmed.length <= 120 ? trimmed : `${trimmed.slice(0, 117)}...`;
+}
+
+function buildResponseExcerpt(responseText: string): string | null {
+  const trimmed = responseText.trim().replace(/\s+/g, " ");
+  if (!trimmed) {
+    return null;
+  }
+
+  return trimmed.length <= 200 ? trimmed : `${trimmed.slice(0, 197)}...`;
 }
 
 main().catch((error) => {

@@ -2,22 +2,30 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-shell";
-  import ActivityFeed from "$lib/components/ActivityFeed.svelte";
   import AgentActivityFeed from "$lib/components/AgentActivityFeed.svelte";
+  import ApprovalCard from "$lib/components/ApprovalCard.svelte";
   import ArtifactPreview from "$lib/components/ArtifactPreview.svelte";
   import ApprovalGate from "$lib/components/ApprovalGate.svelte";
   import BatchDashboard from "$lib/components/BatchDashboard.svelte";
   import BatchTargetSelector from "$lib/components/BatchTargetSelector.svelte";
-  import ChatComposer from "$lib/components/ChatComposer.svelte";
+  import CommandPalette from "$lib/components/CommandPalette.svelte";
+  import CompletionCard from "$lib/components/CompletionCard.svelte";
   import CompletionTimeline from "$lib/components/CompletionTimeline.svelte";
   import GoalInput from "$lib/components/GoalInput.svelte";
-  import InterventionPanel from "$lib/components/InterventionPanel.svelte";
   import PipelineBuilder from "$lib/components/PipelineBuilder.svelte";
   import PipelineProgress from "$lib/components/PipelineProgress.svelte";
   import ProjectSelector from "$lib/components/ProjectSelector.svelte";
   import RecentSessions from "$lib/components/RecentSessions.svelte";
   import SettingsModal from "$lib/components/SettingsModal.svelte";
+  import AppSidebar from "$lib/components/AppSidebar.svelte";
+  import ContextPanel from "$lib/components/ContextPanel.svelte";
+  import Sidebar from "$lib/components/Sidebar.svelte";
+  import StatusBar from "$lib/components/StatusBar.svelte";
+  import StatusStrip from "$lib/components/StatusStrip.svelte";
+  import TaskInput from "$lib/components/TaskInput.svelte";
   import TemplateBrowser from "$lib/components/TemplateBrowser.svelte";
+  import Toast from "$lib/components/Toast.svelte";
+  import UnifiedFeed from "$lib/components/UnifiedFeed.svelte";
   import {
     activityFeedStore,
     delegationStore,
@@ -63,16 +71,20 @@
     batchGetStatus,
     batchRun,
     batchSkipTarget,
+    bindAgentUi,
     buildPlanningPrompt,
+    cancelAgent as cancelDesktopAgent,
     connectMcpServer,
     createProject,
     createSession,
     discardDelegationDraft,
     discardStudioDraft,
+    disposeAgentUi,
+    feedStore,
     generateRelayPacket,
-    getApprovalPolicy,
     getPlanProgress,
     getCopilotBrowserErrorMessage,
+    getActiveSessionState,
     getFriendlyError,
     inspectWorkbook,
     initializeApp,
@@ -121,16 +133,23 @@
     saveUiMode,
     sendPromptViaBrowserTool,
     saveStudioDraft,
+    sessionStore,
     setSessionProject,
     setApprovalPolicy,
     setToolEnabled,
+    startAgent as startDesktopAgent,
     startTurn,
     submitCopilotResponse,
     templateDelete,
     templateFromSession,
     templateList,
+    approvalStore,
+    refreshSessionHistory as refreshDesktopAgentSessionHistory,
+    resetAgentUi,
+    respondApproval as respondDesktopAgentApproval,
     validateProjectScopeActions,
     type AgentLoopResult,
+    type AgentFeedEntry,
     type BrowserCommandProgress,
     type CopilotConversationTurn,
     type PersistedStudioDraft,
@@ -205,6 +224,16 @@
     ReadTurnArtifactsResponse["artifacts"][number],
     { artifactType: "execution" }
   >;
+  type UnifiedFeedEntry = {
+    id: string;
+    type: "tool" | "thinking" | "error";
+    label: string;
+    status: "running" | "done" | "error";
+    startTime: number;
+    endTime?: number;
+    detail?: string;
+    rawResult?: unknown;
+  };
   type ProjectApprovalAuditRow = {
     sessionId: string;
     sessionTitle: string;
@@ -353,6 +382,58 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let showWelcome = false;
   let uiMode: UiMode = "delegation";
   let isDragOver = false;
+
+  // Ink & Steel UI state
+  let sidebarCollapsed = false;
+  let showContextPanel = true;
+  let inboxFiles: { path: string; size: number; addedAt: string }[] = [];
+  let darkMode = false;
+  let commandPaletteOpen = false;
+  type NavView = "home" | "pipeline" | "batch" | "template" | "sessions" | "settings";
+  let activeNavView: NavView = "home";
+  type ToastItem = { id: string; message: string; type: "success" | "error" | "info" };
+  let toasts: ToastItem[] = [];
+
+  function addToast(message: string, type: ToastItem["type"] = "info") {
+    const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    toasts = [...toasts, { id, message, type }];
+    setTimeout(() => {
+      toasts = toasts.filter((t) => t.id !== id);
+    }, 3000);
+  }
+
+  function toggleDarkMode() {
+    darkMode = !darkMode;
+    document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
+    localStorage.setItem("ra-theme", darkMode ? "dark" : "light");
+  }
+
+  function handleNavigation(event: CustomEvent<{ view: string }>) {
+    const view = event.detail.view as NavView;
+    activeNavView = view;
+    if (view === "settings") {
+      settingsOpen = true;
+    } else {
+      settingsOpen = false;
+    }
+  }
+
+  function handleCommandPaletteAction(event: CustomEvent<{ id: string; category: string }>) {
+    const actionId = event.detail.id;
+    if (actionId.startsWith("nav:")) {
+      const view = actionId.replace("nav:", "") as NavView;
+      activeNavView = view;
+      if (view === "settings") settingsOpen = true;
+      else settingsOpen = false;
+    } else if (actionId === "action:toggle-theme") {
+      toggleDarkMode();
+    } else if (actionId === "action:toggle-sidebar") {
+      sidebarCollapsed = !sidebarCollapsed;
+    } else if (actionId === "action:new-session") {
+      activeNavView = "home";
+      // Reset to new session state
+    }
+  }
   let cdpTestStatus: "idle" | "testing" | "ok" | "fail" = "idle";
   let cdpTestMessage = "";
   let hiddenFilePicker: HTMLInputElement | null = null;
@@ -360,6 +441,10 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let startupIssue: StartupIssue | null = null;
   let storagePath: string | null = null;
   let sampleWorkbookPath: string | null = null;
+  let handoffCaution: {
+    headline: string;
+    reasons: Array<{ text: string; source: string }>;
+  } | null = null;
 
   let filePath = "";
   let objectiveText = "";
@@ -476,6 +561,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   let recentSessions: RecentSession[] = [];
   let recentFiles: RecentFile[] = [];
+  let agentFeedEntries: UnifiedFeedEntry[] = [];
   let recoverableDraftSessionIds: string[] = [];
   let showRecent = false;
   let progressItems: ProgressItem[] = [];
@@ -2272,6 +2358,145 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     loadExpertDetails();
   }
 
+  function mapAgentFeedEntry(entry: AgentFeedEntry): UnifiedFeedEntry {
+    const timestamp = Date.parse(entry.timestamp);
+    const startTime = Number.isFinite(timestamp) ? timestamp : Date.now();
+    const status =
+      entry.type === "error"
+        ? "error"
+        : entry.type === "tool_start"
+          ? "running"
+          : entry.isError
+            ? "error"
+            : "done";
+
+    return {
+      id: entry.id,
+      type: entry.type === "error" ? "error" : entry.type === "tool_start" ? "tool" : "thinking",
+      label: entry.title,
+      status,
+      startTime,
+      endTime: status === "running" ? undefined : startTime,
+      detail: entry.detail,
+      rawResult: entry.detail
+    };
+  }
+
+  function extractLatestAssistantText(
+    messages: Array<{ role: string; content: Array<Record<string, unknown>> }>
+  ): string {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message?.role !== "assistant") {
+        continue;
+      }
+
+      const textBlocks = message.content
+        .filter((block) => block?.type === "text")
+        .map((block) => (typeof block.text === "string" ? block.text.trim() : ""))
+        .filter(Boolean);
+
+      if (textBlocks.length > 0) {
+        return textBlocks.join("\n\n");
+      }
+    }
+
+    return "";
+  }
+
+  function currentAgentOutputPath(): string {
+    if (previewOutputPath.trim()) {
+      return previewOutputPath.trim();
+    }
+
+    return recentFiles[0]?.path?.trim() ?? "";
+  }
+
+  async function handleAgentTaskSubmit(
+    event: CustomEvent<{ goal: string; files: string[] }>
+  ): Promise<void> {
+    const goal = event.detail.goal.trim();
+    if (!goal) {
+      return;
+    }
+
+    const attachedFiles = inferDelegationFiles(goal, event.detail.files);
+    const primaryFile = attachedFiles[0] ?? "";
+
+    copilotAutoError = null;
+    executionDone = false;
+    executionSummary = "";
+    previewOutputPath = "";
+    previewSummary = "";
+    previewWarnings = [];
+    previewArtifacts = [];
+    discardDelegationDraft();
+    resetAgentUi();
+
+    updateObjective(goal);
+    taskName = deriveTitle(goal);
+    taskNameEdited = false;
+    filePath = primaryFile;
+    pipelineInitialInputPath = primaryFile;
+
+    if (primaryFile) {
+      rememberRecentFile({
+        path: primaryFile,
+        lastUsedAt: new Date().toISOString(),
+        sessionId: sessionId || null,
+        source: "draft"
+      });
+      recentFiles = listRecentFiles();
+      await refreshWorkbookContext(primaryFile);
+    }
+
+    try {
+      await startDesktopAgent({
+        goal,
+        files: attachedFiles,
+        cwd: selectedProject?.rootFolder || undefined,
+        browserSettings: {
+          cdpPort,
+          autoLaunchEdge,
+          timeoutMs
+        },
+        maxTurns
+      });
+    } catch (error) {
+      copilotAutoError = toError(error);
+      addToast(copilotAutoError, "error");
+    }
+  }
+
+  async function handleAgentApprovalDecision(approved: boolean): Promise<void> {
+    const pending = $approvalStore.pending;
+    if (!pending) {
+      return;
+    }
+
+    try {
+      await respondDesktopAgentApproval(pending.approvalId, approved);
+      await refreshDesktopAgentSessionHistory();
+    } catch (error) {
+      copilotAutoError = toError(error);
+      addToast(copilotAutoError, "error");
+    }
+  }
+
+  async function handleAgentReset(): Promise<void> {
+    const activeSession = getActiveSessionState();
+    if (activeSession.running) {
+      try {
+        await cancelDesktopAgent();
+      } catch (error) {
+        copilotAutoError = toError(error);
+      }
+    }
+
+    resetAgentUi();
+    discardDelegationDraft();
+  }
+
   function applyRecoverableDraft(
     draft: PersistedStudioDraft,
     session: RecentSession
@@ -3304,6 +3529,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     step1Expanded = true;
     errorMsg = "";
     copilotAutoError = null;
+    handoffCaution = null;
     clearScopeApproval();
     resetAgentLoopState();
     resetPlanExecutionState();
@@ -3351,6 +3577,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     copilotResponse = "";
     originalCopilotResponse = "";
     autoFixMessages = [];
+    handoffCaution = null;
     validationFeedback = null;
     retryPrompt = "";
     showInstructionPreview = false;
@@ -3378,6 +3605,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     copiedInstructionNotice = "";
     copiedBrowserCommandNotice = "";
     copilotAutoError = null;
+    handoffCaution = null;
     validationFeedback = null;
     retryPrompt = "";
     workflowStartedAt = Date.now();
@@ -3470,6 +3698,25 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       });
       relayPacket = packet;
       relayPacketText = JSON.stringify(packet, null, 2);
+      try {
+        const handoff = await assessCopilotHandoff({
+          sessionId: session.id,
+          turnId: turnResponse.turn.id
+        });
+        if (handoff.status === "caution") {
+          handoffCaution = {
+            headline: handoff.headline,
+            reasons: handoff.reasons.map((reason) => ({
+              text: `${reason.label}: ${reason.detail}`,
+              source: reason.source
+            }))
+          };
+        } else {
+          handoffCaution = null;
+        }
+      } catch {
+        handoffCaution = null;
+      }
       preparedSetupSignature = buildSetupSignature(
         path,
         title,
@@ -3624,6 +3871,10 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       showDetailedChanges = false;
       markProgress(2, "done");
       guidedStage = "review-save";
+      if (uiMode !== "delegation" && preview.autoApproved) {
+        await handleReviewSaveStage();
+        return;
+      }
       if (uiMode === "delegation") {
         if (preview.autoApproved) {
           delegationStore.resumeExecution();
@@ -3880,19 +4131,64 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   onMount(() => {
+    // Initialize theme from storage or OS preference
+    const savedTheme = localStorage.getItem("ra-theme");
+    if (savedTheme === "dark" || (!savedTheme && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+      darkMode = true;
+      document.documentElement.setAttribute("data-theme", "dark");
+    } else {
+      document.documentElement.setAttribute("data-theme", "light");
+    }
+
+    // Panel shortcuts
+    function handleCommandPaletteShortcut(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+        e.preventDefault();
+        commandPaletteOpen = !commandPaletteOpen;
+      }
+      // ⌘\ — toggle sidebar
+      if ((e.ctrlKey || e.metaKey) && e.key === "\\") {
+        e.preventDefault();
+        sidebarCollapsed = !sidebarCollapsed;
+      }
+      // ⌘/ — toggle context panel
+      if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+        e.preventDefault();
+        showContextPanel = !showContextPanel;
+      }
+    }
+    window.addEventListener("keydown", handleCommandPaletteShortcut);
+
     window.addEventListener("keydown", handleGlobalKeydown);
     const unlistenFns: Array<() => void> = [];
 
     void (async () => {
+      await bindAgentUi();
       unlistenFns.push(
-        await listen<PipelineStepUpdateEvent>("pipeline:step_update", (event) => {
-          activePipeline = event.payload.pipeline;
-        })
+        await listen<PipelineStepUpdateEvent & { pipelineId?: string; error?: string }>(
+          "pipeline:step_update",
+          (event) => {
+            if (event.payload.error) {
+              errorMsg = event.payload.error;
+              return;
+            }
+
+            activePipeline = event.payload.pipeline;
+          }
+        )
       );
       unlistenFns.push(
-        await listen<BatchTargetUpdateEvent>("batch:target_update", (event) => {
-          activeBatchJob = event.payload.batchJob;
-        })
+        await listen<BatchTargetUpdateEvent & { batchId?: string; error?: string }>(
+          "batch:target_update",
+          (event) => {
+            if (event.payload.error) {
+              errorMsg = event.payload.error;
+              return;
+            }
+
+            activeBatchJob = event.payload.batchJob;
+          }
+        )
       );
 
       loadExpertDetails();
@@ -3920,7 +4216,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         await refreshProjects();
         await refreshSessions();
         await refreshTools();
-        await getApprovalPolicy();
         await syncApprovalPolicy();
         await refreshWorkflowTemplates();
         refilterTemplates();
@@ -3956,12 +4251,14 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
     return () => {
       window.removeEventListener("keydown", handleGlobalKeydown);
+      disposeAgentUi();
       for (const unlisten of unlistenFns) {
         unlisten();
       }
     };
   });
 
+  $: agentFeedEntries = $feedStore.map(mapAgentFeedEntry);
   $: expectedResponseTemplate = buildExpectedResponseTemplate(suggestOutputPath(filePath));
   $: if (!pipelineInitialInputPath && filePath) {
     pipelineInitialInputPath = filePath;
@@ -4139,41 +4436,91 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   <title>Relay Agent</title>
 </svelte:head>
 
+<!-- Command Palette -->
+<CommandPalette
+  open={commandPaletteOpen}
+  recentSessions={recentSessions.map((s) => ({ id: s.sessionId, title: s.title ?? s.sessionId }))}
+  on:close={() => (commandPaletteOpen = false)}
+  on:action={handleCommandPaletteAction}
+/>
+
+<!-- Toast Notifications -->
+<Toast {toasts} onDismiss={(id) => { toasts = toasts.filter(t => t.id !== id); }} />
+
 {#if showWelcome}
   <div class="welcome-overlay">
     <div class="welcome-card">
-      <div class="welcome-logo">🤖</div>
+      <div class="welcome-logo">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="var(--c-accent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2 L22 8.5 L22 15.5 L12 22 L2 15.5 L2 8.5 Z" />
+          <path d="M12 22 L12 15.5" />
+          <path d="M22 8.5 L12 15.5 L2 8.5" />
+        </svg>
+      </div>
       <h1 class="welcome-title">Relay Agent</h1>
       <p class="welcome-subtitle">
         Copilot があなたの代わりに、<br />表計算を自動化します
       </p>
       <div class="welcome-steps">
         <div class="welcome-step">
-          <span class="welcome-step-icon">📁</span>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--c-accent)" stroke-width="1.5"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6"/><path d="M9 13h6"/></svg>
           <span class="welcome-step-label">ファイルを選ぶ</span>
         </div>
-        <div class="welcome-step-arrow">→</div>
+        <div class="welcome-step-arrow">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--c-text-3)" stroke-width="2"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+        </div>
         <div class="welcome-step">
-          <span class="welcome-step-icon">🤖</span>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--c-accent)" stroke-width="1.5"><path d="M12 2 L22 8.5 L22 15.5 L12 22 L2 15.5 L2 8.5 Z"/><path d="M12 22 L12 15.5"/><path d="M22 8.5 L12 15.5 L2 8.5"/></svg>
           <span class="welcome-step-label">Copilot が処理</span>
         </div>
-        <div class="welcome-step-arrow">→</div>
+        <div class="welcome-step-arrow">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--c-text-3)" stroke-width="2"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+        </div>
         <div class="welcome-step">
-          <span class="welcome-step-icon">✅</span>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--c-success)" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
           <span class="welcome-step-label">確認して保存</span>
         </div>
       </div>
-      <button class="welcome-btn" type="button" on:click={startFromWelcome}>
-        始める →
+      <button class="welcome-btn btn btn-primary btn-lg" type="button" on:click={startFromWelcome}>
+        始める
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
       </button>
     </div>
   </div>
 {/if}
 
+<!-- 3-pane workspace -->
+<div
+  class="workspace"
+  class:show-context={showContextPanel}
+  class:hide-sidebar={sidebarCollapsed}
+>
+
+<!-- Sidebar Navigation -->
+<div class="sidebar-wrap">
+  <AppSidebar
+    sessions={recentSessions.map(s => ({ id: s.sessionId, title: s.title || s.lastTurnTitle || "無題", updatedAt: s.lastOpenedAt }))}
+    currentSessionId={sessionId ?? ""}
+    currentProjectName={selectedProjectId ? (projects.find(p => p.id === selectedProjectId)?.name ?? "") : ""}
+    on:selectSession={(e) => handleRecentSessionSelectById(e.detail.id)}
+    on:newTask={() => void handleAgentReset()}
+  />
+</div>
+
+<!-- Main Content Area -->
+<main class="main-content main-col">
+
 <header class="header">
   <div class="header-left">
-    <span class="header-icon">📋</span>
-    <span class="header-title">Relay Agent</span>
+    <span class="header-title">
+      {#if activeNavView === "home"}ホーム
+      {:else if activeNavView === "pipeline"}パイプライン
+      {:else if activeNavView === "batch"}バッチ
+      {:else if activeNavView === "template"}テンプレート
+      {:else if activeNavView === "sessions"}セッション履歴
+      {:else if activeNavView === "settings"}設定
+      {/if}
+    </span>
   </div>
   <div class="header-actions">
     <div class="mode-toggle-group" role="tablist" aria-label="ui mode">
@@ -4195,11 +4542,28 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       </button>
     </div>
     <button
-      class="header-settings"
+      class="header-cmd-palette btn btn-ghost btn-sm"
       type="button"
-      on:click={() => (settingsOpen = !settingsOpen)}
+      on:click={() => (commandPaletteOpen = true)}
+      aria-label="コマンドパレット"
+      data-tooltip="Ctrl+K"
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="8" />
+        <path d="m21 21-4.3-4.3" />
+      </svg>
+    </button>
+    <button
+      class="header-settings btn btn-ghost btn-sm"
+      type="button"
+      on:click={() => { settingsOpen = !settingsOpen; if (settingsOpen) activeNavView = "settings"; }}
       aria-label="設定を開く"
-    >⚙</button>
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
+    </button>
   </div>
 </header>
 
@@ -4347,57 +4711,61 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     </aside>
 
     <section class="delegation-main card">
-      {#if executionDone && $activityFeedStore.length > 0}
-        <CompletionTimeline
-          events={$activityFeedStore}
-          summary={executionSummary || previewSummary}
-          outputPath={previewOutputPath}
+      {#if $sessionStore.status === "completed"}
+        <CompletionCard
+          summary={extractLatestAssistantText($sessionStore.messages) || executionSummary || previewSummary}
+          outputPath={currentAgentOutputPath()}
           canSaveTemplate={Boolean(sessionId)}
-          onOpenOutput={openOutputFile}
-          onSaveTemplate={handleSaveCurrentSessionAsTemplate}
-          onReset={resetAll}
+          on:openOutput={() => {
+            void openOutputFile();
+          }}
+          on:saveTemplate={() => {
+            void handleSaveCurrentSessionAsTemplate();
+          }}
+          on:reset={() => {
+            void handleAgentReset();
+          }}
         />
       {:else}
-        <ActivityFeed events={$activityFeedStore} />
+        <UnifiedFeed entries={agentFeedEntries} isRunning={$sessionStore.running} />
       {/if}
     </section>
 
     <div class="delegation-intervention">
-      <InterventionPanel
-        statusLabel={$delegationStore.state}
-        planReviewVisible={agentLoopResult?.status === "awaiting_plan_approval" && planSteps.length > 0}
-        {planSteps}
-        planSummary={agentLoopResult?.proposedPlan?.summary || agentLoopSummary}
-        {showReplanFeedback}
-        {replanFeedback}
-        {scopeApprovalVisible}
-        scopeApprovalSummary={scopeApprovalSummary}
-        scopeApprovalRootFolder={scopeApprovalRootFolder}
-        scopeApprovalViolations={scopeApprovalViolations}
-        writeApprovalVisible={guidedStage === "review-save" && reviewStepAvailable && !executionDone}
-        {previewSummary}
-        {previewAffectedRows}
-        {previewOutputPath}
-        {previewWarnings}
-        artifacts={previewArtifacts}
-        {reviewStepAvailable}
-        {busy}
-        errorMessage={scopeApprovalVisible ? "" : copilotAutoError || ($delegationStore.state === "error" ? $delegationStore.error ?? "" : "")}
-        onApprovePlan={handleApprovePlan}
-        onCancelPlan={handleCancelPlan}
-        onToggleReplan={() => (showReplanFeedback = !showReplanFeedback)}
-        onReplan={handleReplan}
-        onMoveStep={movePlanStep}
-        onRemoveStep={removePlanStep}
-        onReplanFeedbackInput={(value) => (replanFeedback = value)}
-        onBackFromScopeApproval={handleBackFromScopeApproval}
-        onApproveScopeOverride={handleApproveScopeOverride}
-        onBackFromApproval={() => {
-          guidedStage = "copilot";
-        }}
-        onApproveWrite={handleReviewSaveStage}
-        onRetry={retryCurrentStage}
-      />
+      {#if $approvalStore.pending}
+        <ApprovalCard
+          phase="write"
+          previewSummary={`ツール ${$approvalStore.pending.toolName} の実行許可を待っています。`}
+          previewOutputPath={$approvalStore.pending.target ?? ""}
+          previewWarnings={[
+            $approvalStore.pending.description,
+            ...($approvalStore.pending.target ? [`target: ${$approvalStore.pending.target}`] : [])
+          ]}
+          reviewStepAvailable={true}
+          on:approve={() => {
+            void handleAgentApprovalDecision(true);
+          }}
+          on:back={() => {
+            void handleAgentApprovalDecision(false);
+          }}
+        />
+      {:else if $sessionStore.status === "error" || $sessionStore.status === "cancelled"}
+        <section class="card card-warn">
+          <strong>{$sessionStore.status === "cancelled" ? "エージェントをキャンセルしました" : "エージェントでエラーが発生しました"}</strong>
+          <p>{$sessionStore.lastError || "実行結果を Unified Feed で確認してください。"}</p>
+          {#if $sessionStore.lastStopReason}
+            <p>stop: {$sessionStore.lastStopReason}</p>
+          {/if}
+          <div class="inline-actions">
+            <button class="btn btn-secondary" type="button" on:click={() => resetAgentUi()}>
+              閉じる
+            </button>
+            <button class="btn btn-primary" type="button" on:click={() => { void handleAgentReset(); }}>
+              最初からやり直す
+            </button>
+          </div>
+        </section>
+      {/if}
     </div>
   </section>
 
@@ -4496,13 +4864,17 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   </section>
 
   <div class="delegation-composer-wrap">
-    <ChatComposer
+    <TaskInput
       recentFiles={recentFiles}
       suggestions={delegationSuggestions}
-      disabled={busy || isSendingToCopilot}
-      initialGoal={$delegationStore.goal}
-      initialFiles={$delegationStore.attachedFiles}
-      on:submit={handleDelegationSubmit}
+      disabled={busy}
+      mode={$sessionStore.running ? "busy" : $sessionStore.sessionId ? "active" : "idle"}
+      initialGoal={objectiveText}
+      initialFiles={filePath ? [filePath] : []}
+      on:submit={handleAgentTaskSubmit}
+      on:reset={() => {
+        void handleAgentReset();
+      }}
     />
   </div>
 {:else}
@@ -4623,6 +4995,20 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   <div class="step-panel-header">
     <h2 class="panel-title">2. Copilot に聞く</h2>
   </div>
+
+  {#if handoffCaution}
+    <div class="caution-card" role="alert">
+      <span class="caution-icon">⚠️</span>
+      <div class="caution-content">
+        <div class="caution-headline">{handoffCaution.headline}</div>
+        <ul class="caution-reasons">
+          {#each handoffCaution.reasons as reason}
+            <li>{reason.text}（{reason.source}）</li>
+          {/each}
+        </ul>
+      </div>
+    </div>
+  {/if}
 
   {#if !copilotStepAvailable}
     <p class="step-panel-note">ステップ 1 を完了すると、ここで依頼文をコピーして Copilot の返答を確認できます。</p>
@@ -5392,11 +5778,49 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }}
 />
 
+</main>
+
+<!-- Context Panel (right pane) -->
+{#if showContextPanel}
+  <div class="context-panel-wrap">
+    <ContextPanel
+      {inboxFiles}
+      mcpServers={[]}
+      approvalPolicy={{ scope: approvalPolicy === "safe" ? "ask" : "always", patterns: [] }}
+      projectName={selectedProjectId ? (projects.find(p => p.id === selectedProjectId)?.name ?? "") : ""}
+      on:addFile={(e) => { inboxFiles = [...inboxFiles, { path: e.detail.path, size: 0, addedAt: new Date().toISOString() }]; }}
+      on:removeFile={(e) => { inboxFiles = inboxFiles.filter(f => f.path !== e.detail.path); }}
+    />
+  </div>
+{/if}
+
+</div><!-- end .workspace -->
+
+<!-- Status Bar -->
+<StatusBar
+  copilotConnected={cdpTestStatus === "ok"}
+  sessionName={taskName || (sessionId ? `Session ${sessionId.slice(0, 8)}` : "")}
+  projectName={selectedProjectId
+    ? (projects.find(p => p.id === selectedProjectId)?.name ?? "")
+    : ""}
+  agentTurn={agentLoopLog.length}
+  agentMaxTurns={maxTurns}
+  agentRunning={agentLoopRunning}
+/>
+
 <style>
+  .main-content {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--c-canvas);
+    min-width: 0;
+  }
+
   .welcome-overlay {
     position: fixed;
     inset: 0;
-    background: var(--ra-bg);
+    background: var(--c-canvas);
     z-index: 120;
     display: flex;
     align-items: center;
@@ -5404,74 +5828,60 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   .welcome-card {
-    width: min(480px, calc(100vw - 2rem));
-    padding: 3rem 2rem;
+    width: min(480px, calc(100vw - var(--sp-8)));
+    padding: var(--sp-12) var(--sp-8);
     text-align: center;
+    background: var(--c-surface);
+    border: 1px solid var(--c-border-strong);
+    border-radius: 16px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04);
   }
 
   .welcome-logo {
-    font-size: 4rem;
-    margin-bottom: 1rem;
+    font-size: var(--sz-xl);
+    margin-bottom: var(--sp-4);
+    line-height: 1;
   }
 
   .welcome-title {
-    margin: 0 0 0.5rem;
-    font-size: 2.2rem;
+    margin: 0 0 var(--sp-2);
+    font-size: var(--sz-xl);
     font-weight: 700;
-    color: var(--ra-text);
+    font-family: var(--font-sans);
+    color: var(--c-text);
   }
 
   .welcome-subtitle {
-    margin: 0 0 2.5rem;
-    font-size: 1.1rem;
-    line-height: 1.7;
-    color: var(--ra-text-muted);
+    margin: 0 0 var(--sp-10);
+    font-size: var(--sz-lg);
+    line-height: 1.45;
+    color: var(--c-text-3);
   }
 
   .welcome-steps {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 0.75rem;
-    margin-bottom: 2.5rem;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-10);
   }
 
   .welcome-step {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.4rem;
-  }
-
-  .welcome-step-icon {
-    font-size: 1.8rem;
+    gap: var(--sp-1);
   }
 
   .welcome-step-label {
-    font-size: 0.78rem;
-    color: var(--ra-text-muted);
+    font-size: var(--sz-xs);
+    color: var(--c-text-3);
     white-space: nowrap;
   }
 
   .welcome-step-arrow {
-    color: var(--ra-accent);
-    font-size: 1.2rem;
-  }
-
-  .welcome-btn {
-    background: var(--ra-accent);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    padding: 0.85rem 2.5rem;
-    font-size: 1.05rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: opacity 0.15s;
-  }
-
-  .welcome-btn:hover {
-    opacity: 0.88;
+    color: var(--c-accent);
+    font-size: var(--sz-lg);
   }
 
   .header {
@@ -5479,77 +5889,65 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     align-items: center;
     justify-content: space-between;
     min-height: 52px;
-    padding-top: 0.75rem;
-    margin-bottom: 0.5rem;
+    padding-top: var(--sp-3);
+    margin-bottom: var(--sp-2);
   }
 
   .header-left {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--sp-2);
   }
 
   .header-actions {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
-  }
-
-  .header-icon {
-    font-size: 1.3rem;
+    gap: var(--sp-2);
   }
 
   .header-title {
-    font-size: 1.1rem;
+    font-size: 1.25rem;
     font-weight: 700;
-    color: var(--ra-text);
-  }
-
-  .header-settings {
-    background: none;
-    border: none;
-    font-size: 1.3rem;
-    color: var(--ra-text-muted);
-    padding: 0.25rem 0.5rem;
-    border-radius: var(--ra-radius-sm);
-    transition: color 0.15s;
-  }
-
-  .header-settings:hover {
-    color: var(--ra-text);
-    background: var(--ra-surface);
+    font-family: var(--font-sans);
+    color: var(--c-text);
   }
 
   .mode-toggle-group {
     display: inline-flex;
-    padding: 0.2rem;
-    border: 1px solid var(--ra-border);
-    border-radius: 999px;
-    background: var(--ra-surface);
+    padding: var(--sp-1);
+    border: 1px solid var(--c-border-strong);
+    border-radius: var(--r-full);
+    background: var(--c-surface);
   }
 
   .mode-toggle-btn {
     border: none;
     background: transparent;
-    color: var(--ra-text-muted);
-    padding: 0.45rem 0.85rem;
-    border-radius: 999px;
+    color: var(--c-text-3);
+    padding: var(--sp-2) var(--sp-3);
+    border-radius: var(--r-full);
+    font-size: var(--sz-sm);
+    font-weight: 500;
+    transition: all var(--duration-fast) var(--ease);
+    cursor: pointer;
   }
 
   .mode-toggle-active {
-    background: color-mix(in srgb, var(--ra-accent) 12%, var(--ra-surface));
-    color: var(--ra-text);
-    font-weight: 600;
+    background: color-mix(in srgb, var(--c-accent) 12%, var(--c-surface));
+    color: var(--c-text);
+    font-weight: 700;
   }
 
   .project-strip {
-    margin-bottom: 1rem;
+    margin-bottom: var(--sp-4);
+    padding-bottom: var(--sp-4);
+    border-bottom: 1px solid var(--c-border-strong);
   }
 
   .project-audit-card {
-    margin-top: 1rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--ra-border);
+    margin-top: var(--sp-4);
+    padding-top: var(--sp-4);
+    border-top: 1px solid var(--c-border-strong);
   }
 
   .project-audit-header,
@@ -5557,7 +5955,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   .project-audit-badges,
   .project-audit-actions {
     display: flex;
-    gap: 0.75rem;
+    gap: var(--sp-3);
   }
 
   .project-audit-header,
@@ -5573,71 +5971,72 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   .project-audit-title {
     margin: 0;
-    font-size: 0.96rem;
+    font-size: var(--sz-base);
+    font-weight: 700;
   }
 
   .project-audit-copy {
-    margin: 0.25rem 0 0;
-    color: var(--ra-text-muted);
-    font-size: 0.84rem;
+    margin: var(--sp-1) 0 0;
+    color: var(--c-text-3);
+    font-size: var(--sz-sm);
     word-break: break-word;
   }
 
   .project-audit-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.85rem;
-    margin-top: 0.85rem;
+    gap: var(--sp-3);
+    margin-top: var(--sp-3);
   }
 
   .project-audit-row {
-    padding: 0.9rem;
-    border: 1px solid var(--ra-border);
-    border-radius: 14px;
-    background: var(--ra-surface);
+    padding: var(--sp-3);
+    border: 1px solid var(--c-border-strong);
+    border-radius: 16px;
+    background: var(--c-surface);
   }
 
   .project-audit-badge {
     display: inline-flex;
     align-items: center;
-    border-radius: 999px;
-    padding: 0.2rem 0.6rem;
-    font-size: 0.76rem;
+    border-radius: var(--r-full);
+    padding: var(--sp-1) var(--sp-2);
+    font-size: var(--sz-xs);
     font-weight: 700;
-    border: 1px solid var(--ra-border);
-    background: var(--ra-surface-muted);
-    color: var(--ra-text-secondary);
+    border: 1px solid var(--c-border-strong);
+    background: #f0eeea;
+    color: var(--c-text-2);
   }
 
   .project-audit-badge[data-tone="approved"] {
-    border-color: #77b98f;
-    background: #edf8f0;
-    color: #216842;
+    border-color: var(--c-success-subtle);
+    background: var(--c-success-subtle);
+    color: var(--c-success);
   }
 
   .project-audit-badge[data-tone="rejected"] {
-    border-color: #cf786c;
-    background: #fff3f1;
-    color: #9b3e33;
+    border-color: var(--c-error-subtle);
+    background: var(--c-error-subtle);
+    color: var(--c-error);
   }
 
   .project-audit-badge[data-tone="pending"] {
-    border-color: #d2a55d;
-    background: #fff8eb;
-    color: #8a5c12;
+    border-color: var(--c-warning-subtle);
+    background: var(--c-warning-subtle);
+    color: var(--c-warning);
   }
 
   .project-audit-badge[data-tone="not-required"],
   .project-audit-badge[data-tone="none"] {
-    border-color: var(--ra-border);
-    background: var(--ra-surface-muted);
-    color: var(--ra-text-secondary);
+    border-color: var(--c-border-strong);
+    background: #f0eeea;
+    color: var(--c-text-2);
   }
 
   .delegation-shell {
     display: grid;
     grid-template-columns: minmax(220px, 260px) minmax(0, 1fr) minmax(280px, 360px);
-    gap: 1rem;
+    gap: var(--sp-4);
     min-height: calc(100vh - 14rem);
   }
 
@@ -5647,54 +6046,90 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   .delegation-sidebar-note {
-    margin-top: 1rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--ra-border);
-    color: var(--ra-text-muted);
-    font-size: 0.86rem;
+    margin-top: var(--sp-4);
+    padding-top: var(--sp-4);
+    border-top: 1px solid var(--c-border-strong);
+    color: var(--c-text-3);
+    font-size: var(--sz-sm);
   }
 
   .delegation-composer-wrap {
     position: sticky;
     bottom: 0;
-    margin-top: 1rem;
+    padding: var(--sp-2) var(--sp-4) var(--sp-4);
+    background: var(--c-canvas);
     z-index: 10;
+    flex-shrink: 0;
+  }
+
+  .caution-card {
+    display: flex;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-4);
+    padding: var(--sp-3) var(--sp-4);
+    border-radius: 16px;
+    border: 1px solid var(--c-warning-subtle);
+    background: var(--c-warning-subtle);
+  }
+
+  .caution-icon {
+    font-size: var(--sz-lg);
+    line-height: 1;
+  }
+
+  .caution-content {
+    display: grid;
+    gap: var(--sp-1);
+  }
+
+  .caution-headline {
+    font-weight: 700;
+  }
+
+  .caution-reasons {
+    margin: 0;
+    padding-left: var(--sp-4);
+    color: var(--c-text-3);
+    font-size: var(--sz-base);
   }
 
   .automation-workbench {
     display: grid;
-    gap: 1rem;
-    margin-top: 1rem;
+    gap: var(--sp-4);
+    margin-top: var(--sp-4);
   }
 
   .automation-tabs {
     display: flex;
-    gap: 0.5rem;
+    gap: var(--sp-2);
     flex-wrap: wrap;
   }
 
   .automation-tabs button {
-    padding: 0.45rem 0.9rem;
-    border-radius: 999px;
-    border: 1px solid var(--ra-border);
-    background: var(--ra-surface);
+    padding: var(--sp-2) var(--sp-3);
+    border-radius: var(--r-full);
+    border: 1px solid var(--c-border-strong);
+    background: var(--c-surface);
+    font-size: var(--sz-sm);
+    transition: all var(--duration-fast) var(--ease);
+    cursor: pointer;
   }
 
   .automation-tabs button.is-active {
-    border-color: var(--ra-accent);
-    color: var(--ra-accent);
+    border-color: var(--c-accent);
+    color: var(--c-accent);
   }
 
   .step-progress-bar {
     position: sticky;
     top: 0;
     z-index: 20;
-    margin: 1rem 0 1.25rem;
-    padding: 1rem 1.25rem;
-    border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius);
-    background: var(--ra-surface);
-    box-shadow: var(--ra-shadow);
+    margin: var(--sp-4) 0 var(--sp-5);
+    padding: var(--sp-4) var(--sp-5);
+    border: 1px solid var(--c-border-strong);
+    border-radius: 12px;
+    background: var(--c-surface);
+    box-shadow: var(--shadow-md);
   }
 
   .step-progress-row {
@@ -5708,9 +6143,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.3rem;
+    gap: var(--sp-1);
     opacity: 0.4;
-    transition: opacity 0.3s;
+    transition: opacity 400ms var(--ease);
   }
 
   .step-node.current,
@@ -5719,64 +6154,65 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   .step-circle {
-    width: 2.5rem;
-    height: 2.5rem;
+    width: var(--sp-10);
+    height: var(--sp-10);
     border-radius: 50%;
-    background: var(--ra-bg);
-    border: 2px solid var(--ra-border);
+    background: var(--c-canvas);
+    border: 2px solid var(--c-border-strong);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.1rem;
-    transition: background 0.3s, border-color 0.3s;
+    font-size: var(--sz-lg);
+    transition: background 400ms var(--ease),
+                border-color 400ms var(--ease);
   }
 
   .step-node.current .step-circle {
-    border-color: var(--ra-accent);
-    background: var(--ra-accent);
-    color: white;
+    border-color: var(--c-accent);
+    background: var(--c-accent);
+    color: var(--c-text-inverse);
   }
 
   .step-node.completed .step-circle {
-    border-color: var(--ra-success);
-    background: var(--ra-success);
-    color: white;
+    border-color: var(--c-success);
+    background: var(--c-success);
+    color: var(--c-text-inverse);
   }
 
   .step-check {
-    font-size: 1rem;
+    font-size: var(--sz-lg);
     font-weight: 700;
   }
 
   .step-node-label {
-    font-size: 0.72rem;
+    font-size: var(--sz-xs);
     font-weight: 500;
-    color: var(--ra-text-muted);
+    color: var(--c-text-3);
   }
 
   .step-node.current .step-node-label {
-    color: var(--ra-accent);
-    font-weight: 600;
+    color: var(--c-accent);
+    font-weight: 700;
   }
 
   .step-connector {
     flex: 1;
     height: 2px;
-    background: var(--ra-border);
-    min-width: 2rem;
-    max-width: 4rem;
-    transition: background 0.4s;
+    background: var(--c-border-strong);
+    min-width: var(--sp-8);
+    max-width: var(--sp-12);
+    transition: background 400ms var(--ease);
   }
 
   .step-connector.filled {
-    background: var(--ra-success);
+    background: var(--c-success);
   }
 
   .step-description {
-    margin: 0.85rem 0 0;
+    margin: var(--sp-3) 0 0;
     text-align: center;
-    font-size: 0.9rem;
-    color: var(--ra-text-secondary);
+    font-size: var(--sz-base);
+    color: var(--c-text-2);
   }
 
   .hidden-file-input {
@@ -5789,30 +6225,32 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     z-index: 15;
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.75rem;
-    margin-bottom: 1rem;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-4);
   }
 
   .change-card {
-    padding: 0.9rem;
-    border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius-sm);
-    background: var(--ra-surface);
-    box-shadow: var(--ra-shadow);
+    padding: var(--sp-3);
+    border: 1px solid var(--c-border-strong);
+    border-radius: var(--r-sm);
+    background: var(--c-surface);
+    box-shadow: var(--shadow-md);
   }
 
   .change-label {
     display: block;
-    margin-bottom: 0.4rem;
-    font-size: 0.78rem;
+    margin-bottom: var(--sp-1);
+    font-size: var(--sz-xs);
     font-weight: 700;
-    color: var(--ra-text-muted);
+    color: var(--c-text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .change-value {
     display: block;
-    color: var(--ra-text);
-    line-height: 1.5;
+    color: var(--c-text);
+    line-height: 1.6;
   }
 
   .path {
@@ -5821,27 +6259,28 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   .change-note {
     display: block;
-    margin-top: 0.45rem;
-    font-size: 0.78rem;
-    color: var(--ra-success);
+    margin-top: var(--sp-2);
+    font-size: var(--sz-xs);
+    color: var(--c-success);
   }
 
   .card {
-    background: var(--ra-surface);
-    border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius);
-    padding: 1.5rem;
-    margin-bottom: 1.25rem;
-    box-shadow: var(--ra-shadow);
+    background: var(--c-surface);
+    border: 1px solid var(--c-border-strong);
+    border-radius: 12px;
+    padding: var(--sp-6);
+    margin-bottom: var(--sp-5);
+    box-shadow: var(--shadow-md);
   }
 
   .card-warn {
-    border-color: #f59e0b;
-    background: var(--ra-warn-light);
+    border-color: var(--c-warning);
+    background: var(--c-warning-subtle);
   }
 
   .step-panel {
-    transition: opacity 0.15s ease, filter 0.15s ease;
+    transition: opacity var(--duration-fast) var(--ease),
+                filter var(--duration-fast) var(--ease);
   }
 
   .step-panel[data-disabled="true"] {
@@ -5853,34 +6292,35 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 0.75rem;
+    gap: var(--sp-3);
   }
 
   .step-panel-note {
-    margin: 0 0 1rem;
-    padding: 0.65rem 0.8rem;
-    border: 1px dashed var(--ra-border);
-    border-radius: var(--ra-radius-sm);
-    background: var(--ra-surface-muted);
-    color: var(--ra-text-muted);
-    font-size: 0.84rem;
+    margin: 0 0 var(--sp-4);
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px dashed var(--c-border-strong);
+    border-radius: var(--r-sm);
+    background: #f0eeea;
+    color: var(--c-text-3);
+    font-size: var(--sz-sm);
     line-height: 1.6;
   }
 
   .panel-title {
-    font-size: 1.1rem;
+    font-size: var(--sz-lg);
     font-weight: 700;
-    margin: 0 0 1rem;
-    color: var(--ra-text);
+    font-family: var(--font-sans);
+    margin: 0 0 var(--sp-4);
+    color: var(--c-text);
   }
 
   .field-label {
     display: block;
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--ra-text-secondary);
-    margin-bottom: 0.35rem;
-    margin-top: 1rem;
+    font-size: var(--sz-sm);
+    font-weight: 700;
+    color: var(--c-text-2);
+    margin-bottom: var(--sp-1);
+    margin-top: var(--sp-4);
   }
 
   .field-label:first-of-type {
@@ -5889,22 +6329,26 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   .textarea {
     width: 100%;
-    padding: 0.6rem 0.75rem;
-    border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius-sm);
-    background: var(--ra-surface);
-    color: var(--ra-text);
+    padding: var(--sp-2) var(--sp-3);
+    border: 1px solid var(--c-border-strong);
+    border-radius: 8px;
+    background: var(--c-surface);
+    color: var(--c-text);
+    font-family: var(--font-sans);
+    font-size: var(--sz-base);
     outline: none;
-    transition: border-color 0.15s;
+    transition: border-color var(--duration-fast) var(--ease),
+                box-shadow var(--duration-fast) var(--ease);
   }
 
   .textarea:focus {
-    border-color: var(--ra-accent);
+    border-color: var(--c-accent);
+    box-shadow: 0 0 0 3px rgba(13,148,136,0.20);
   }
 
   .textarea {
     resize: vertical;
-    line-height: 1.5;
+    line-height: 1.6;
   }
 
   .textarea-tall {
@@ -5915,12 +6359,14 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 0.6rem 1.2rem;
+    padding: var(--sp-2) var(--sp-5);
     border: none;
-    border-radius: var(--ra-radius-sm);
-    font-weight: 600;
-    font-size: 0.95rem;
-    transition: all 0.15s;
+    border-radius: var(--r-sm);
+    font-weight: 700;
+    font-size: var(--sz-base);
+    font-family: var(--font-sans);
+    cursor: pointer;
+    transition: all var(--duration-fast) var(--ease);
   }
 
   .btn:disabled {
@@ -5929,46 +6375,47 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   .btn-primary {
-    background: var(--ra-accent);
-    color: white;
-    margin-top: 1rem;
+    background: var(--c-accent);
+    color: var(--c-text-inverse);
+    margin-top: var(--sp-4);
   }
 
   .btn-primary:hover:not(:disabled) {
-    background: var(--ra-accent-hover);
+    background: var(--c-accent-hover);
   }
 
   .btn-secondary {
-    background: var(--ra-surface-muted);
-    color: var(--ra-text-secondary);
-    border: 1px solid var(--ra-border);
-    margin-top: 1rem;
+    background: #f0eeea;
+    color: var(--c-text-2);
+    border: 1px solid var(--c-border-strong);
+    margin-top: var(--sp-4);
   }
 
   .btn-secondary:hover:not(:disabled) {
-    background: var(--ra-surface);
-    border-color: var(--ra-border-strong);
+    background: var(--c-surface);
+    border-color: var(--c-border-strong);
   }
 
   .btn-accent {
-    background: var(--ra-accent);
-    color: white;
+    background: var(--c-accent);
+    color: var(--c-text-inverse);
   }
 
   .btn-accent:hover:not(:disabled) {
-    background: var(--ra-accent-hover);
+    background: var(--c-accent-hover);
   }
 
   .btn-link {
     background: none;
     border: none;
-    color: var(--ra-text-muted);
-    font-size: 0.85rem;
-    padding: 0.25rem 0;
+    color: var(--c-text-3);
+    font-size: var(--sz-sm);
+    padding: var(--sp-1) 0;
+    transition: color var(--duration-fast) var(--ease);
   }
 
   .btn-link:hover {
-    color: var(--ra-accent);
+    color: var(--c-accent);
   }
 
   .btn-link:disabled {
@@ -5982,24 +6429,24 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   .btn-row {
     display: flex;
-    gap: 0.75rem;
+    gap: var(--sp-3);
     align-items: center;
     flex-wrap: wrap;
   }
 
   .friendly-error {
     display: flex;
-    gap: 0.75rem;
+    gap: var(--sp-3);
     align-items: flex-start;
-    margin-top: 0.75rem;
-    background: color-mix(in srgb, var(--ra-error) 8%, var(--ra-surface));
-    border: 1px solid color-mix(in srgb, var(--ra-error) 30%, transparent);
+    margin-top: var(--sp-3);
+    background: var(--c-error-subtle);
+    border: 1px solid var(--c-error-subtle);
     border-radius: 8px;
-    padding: 0.75rem 1rem;
+    padding: var(--sp-3) var(--sp-4);
   }
 
   .fe-icon {
-    font-size: 1.3rem;
+    font-size: 1.25rem;
     flex-shrink: 0;
   }
 
@@ -6008,57 +6455,57 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   .fe-message {
-    font-size: 0.88rem;
-    font-weight: 600;
-    color: var(--ra-error);
+    font-size: var(--sz-base);
+    font-weight: 700;
+    color: var(--c-error);
   }
 
   .fe-hint {
-    font-size: 0.8rem;
-    color: var(--ra-text-muted);
-    margin-top: 0.2rem;
-    line-height: 1.5;
+    font-size: var(--sz-sm);
+    color: var(--c-text-3);
+    margin-top: var(--sp-1);
+    line-height: 1.6;
   }
 
   .field-warn {
-    color: #b45309;
-    font-size: 0.88rem;
-    margin: 0.5rem 0 0;
+    color: var(--c-warning);
+    font-size: var(--sz-base);
+    margin: var(--sp-2) 0 0;
   }
 
   .field-success {
-    color: var(--ra-success);
-    font-size: 0.88rem;
-    margin: 0.5rem 0 0;
+    color: var(--c-success);
+    font-size: var(--sz-base);
+    margin: var(--sp-2) 0 0;
   }
 
   .action-note {
-    color: var(--ra-text-muted);
-    font-size: 0.82rem;
-    line-height: 1.5;
-    margin: 0.4rem 0 0;
+    color: var(--c-text-3);
+    font-size: var(--sz-sm);
+    line-height: 1.6;
+    margin: var(--sp-1) 0 0;
   }
 
   .step-summary {
-    padding: 0.6rem 0.75rem;
-    background: var(--ra-surface-muted);
-    border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius-sm);
-    font-size: 0.85rem;
-    color: var(--ra-text-secondary);
-    margin-bottom: 1rem;
+    padding: var(--sp-2) var(--sp-3);
+    background: #f0eeea;
+    border: 1px solid var(--c-border-strong);
+    border-radius: var(--r-sm);
+    font-size: var(--sz-sm);
+    color: var(--c-text-2);
+    margin-bottom: var(--sp-4);
     line-height: 1.6;
   }
 
   .step-summary-label {
-    font-weight: 600;
-    color: var(--ra-text);
+    font-weight: 700;
+    color: var(--c-text);
   }
 
   .instruction-text {
-    font-size: 0.9rem;
-    color: var(--ra-text-secondary);
-    margin: 0 0 0.75rem;
+    font-size: var(--sz-base);
+    color: var(--c-text-2);
+    margin: 0 0 var(--sp-3);
     line-height: 1.6;
   }
 
@@ -6066,33 +6513,33 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 1rem;
-    margin-bottom: 0.75rem;
+    gap: var(--sp-4);
+    margin-bottom: var(--sp-3);
   }
 
   .loop-toggle-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 0.75rem;
-    padding: 0.75rem 0.9rem;
-    border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius-sm);
-    background: var(--ra-surface-muted);
+    gap: var(--sp-4);
+    margin-bottom: var(--sp-3);
+    padding: var(--sp-3);
+    border: 1px solid var(--c-border-strong);
+    border-radius: var(--r-sm);
+    background: #f0eeea;
   }
 
   .checkbox-row {
     display: inline-flex;
     align-items: center;
-    gap: 0.55rem;
-    font-size: 0.88rem;
-    color: var(--ra-text);
+    gap: var(--sp-2);
+    font-size: var(--sz-base);
+    color: var(--c-text);
   }
 
   .loop-settings-summary {
-    font-size: 0.8rem;
-    color: var(--ra-text-muted);
+    font-size: var(--sz-sm);
+    color: var(--c-text-3);
   }
 
   @keyframes spin {
@@ -6107,132 +6554,133 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   .timeline-error-msg {
-    font-size: 0.78rem;
-    color: var(--ra-error);
-    margin-top: 0.2rem;
+    font-size: var(--sz-xs);
+    color: var(--c-error);
+    margin-top: var(--sp-1);
   }
 
   .preview-block {
-    background: var(--ra-surface-muted);
-    border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius-sm);
-    padding: 0.75rem;
-    font-size: 0.8rem;
+    background: #f0eeea;
+    border: 1px solid var(--c-border-strong);
+    border-radius: var(--r-sm);
+    padding: var(--sp-3);
+    font-size: var(--sz-sm);
+    font-family: var(--font-mono);
     overflow-x: auto;
     max-height: 16rem;
-    margin-bottom: 0.75rem;
+    margin-bottom: var(--sp-3);
     white-space: pre-wrap;
     word-break: break-word;
   }
 
   .response-shape {
-    margin-top: 0.75rem;
-    padding: 0.75rem;
-    border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius-sm);
-    background: var(--ra-surface-muted);
-    font-size: 0.84rem;
-    color: var(--ra-text-secondary);
+    margin-top: var(--sp-3);
+    padding: var(--sp-3);
+    border: 1px solid var(--c-border-strong);
+    border-radius: var(--r-sm);
+    background: #f0eeea;
+    font-size: var(--sz-sm);
+    color: var(--c-text-2);
     line-height: 1.6;
   }
 
   .autofix-notice {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.4rem;
+    gap: var(--sp-1);
     align-items: center;
-    margin-top: 0.6rem;
+    margin-top: var(--sp-2);
   }
 
   .autofix-chip {
     display: inline-block;
-    padding: 0.2rem 0.6rem;
-    font-size: 0.78rem;
-    background: var(--ra-success-light);
-    border: 1px solid var(--ra-success-border);
-    border-radius: 2rem;
-    color: var(--ra-success);
+    padding: var(--sp-1) var(--sp-2);
+    font-size: var(--sz-xs);
+    background: var(--c-success-subtle);
+    border: 1px solid var(--c-success-subtle);
+    border-radius: var(--r-full);
+    color: var(--c-success);
   }
 
   .validation-card {
-    margin-top: 0.85rem;
-    padding: 1rem;
-    border-radius: var(--ra-radius-sm);
-    border: 1px solid var(--ra-border);
-    background: var(--ra-surface-muted);
+    margin-top: var(--sp-3);
+    padding: var(--sp-4);
+    border-radius: var(--r-sm);
+    border: 1px solid var(--c-border-strong);
+    background: #f0eeea;
   }
 
   .validation-card[data-level="1"] {
-    border-color: var(--ra-error-border);
-    background: var(--ra-error-light);
+    border-color: var(--c-error-subtle);
+    background: var(--c-error-subtle);
   }
 
   .validation-card[data-level="2"] {
-    border-color: #e6b870;
-    background: #fff8ea;
+    border-color: var(--c-warning-subtle);
+    background: var(--c-warning-subtle);
   }
 
   .validation-card[data-level="3"] {
-    border-color: var(--ra-accent-border);
-    background: var(--ra-accent-light);
+    border-color: rgba(13,148,136,0.20);
+    background: rgba(13,148,136,0.04);
   }
 
   .validation-card h3 {
-    margin: 0.2rem 0 0.35rem;
-    font-size: 1rem;
+    margin: var(--sp-1) 0 var(--sp-1);
+    font-size: var(--sz-lg);
   }
 
   .scope-approval-card :global(.safety-note) {
-    margin-top: 0.8rem;
+    margin-top: var(--sp-3);
   }
 
   .validation-kicker {
     margin: 0;
-    font-size: 0.76rem;
+    font-size: var(--sz-xs);
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--ra-text-muted);
+    color: var(--c-text-3);
   }
 
   .validation-specific {
-    font-weight: 600;
-    color: var(--ra-text);
+    font-weight: 700;
+    color: var(--c-text);
   }
 
   .validation-detail {
-    margin: 0.35rem 0 0;
-    font-size: 0.84rem;
-    color: var(--ra-text-secondary);
+    margin: var(--sp-1) 0 0;
+    font-size: var(--sz-sm);
+    color: var(--c-text-2);
   }
 
   .progress-panel {
     display: grid;
-    gap: 0.65rem;
-    margin-top: 1rem;
-    padding: 0.9rem;
-    border: 1px solid var(--ra-border);
-    border-radius: var(--ra-radius-sm);
-    background: var(--ra-surface-muted);
+    gap: var(--sp-2);
+    margin-top: var(--sp-4);
+    padding: var(--sp-3);
+    border: 1px solid var(--c-border-strong);
+    border-radius: var(--r-sm);
+    background: #f0eeea;
   }
 
   .progress-item {
     display: grid;
-    grid-template-columns: 1.25rem 1fr;
-    gap: 0.65rem;
+    grid-template-columns: var(--sp-5) 1fr;
+    gap: var(--sp-2);
     align-items: start;
   }
 
   .progress-item[data-status="error"] .progress-mark {
-    color: var(--ra-error);
+    color: var(--c-error);
   }
 
   .progress-item[data-status="done"] .progress-mark {
-    color: var(--ra-success);
+    color: var(--c-success);
   }
 
   .progress-item[data-status="running"] .progress-mark {
-    color: var(--ra-accent);
+    color: var(--c-accent);
   }
 
   .progress-mark {
@@ -6242,84 +6690,84 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   .progress-label {
     margin: 0;
-    font-size: 0.88rem;
-    color: var(--ra-text);
+    font-size: var(--sz-base);
+    color: var(--c-text);
   }
 
   .progress-message {
-    margin: 0.18rem 0 0;
-    font-size: 0.8rem;
-    color: var(--ra-text-muted);
-    line-height: 1.5;
+    margin: var(--sp-1) 0 0;
+    font-size: var(--sz-sm);
+    color: var(--c-text-3);
+    line-height: 1.6;
   }
 
   .retry-button {
-    margin-top: 0.75rem;
+    margin-top: var(--sp-3);
   }
 
   .summary-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.75rem;
-    margin: 1rem 0;
+    gap: var(--sp-3);
+    margin: var(--sp-4) 0;
   }
 
   .summary-item {
     display: flex;
     flex-direction: column;
-    gap: 0.2rem;
-    padding: 0.6rem;
-    background: var(--ra-surface-muted);
-    border-radius: var(--ra-radius-sm);
+    gap: var(--sp-1);
+    padding: var(--sp-2);
+    background: #f0eeea;
+    border-radius: var(--r-sm);
     text-align: center;
   }
 
   .summary-label {
-    font-size: 0.78rem;
-    color: var(--ra-text-muted);
-    font-weight: 600;
+    font-size: var(--sz-xs);
+    color: var(--c-text-3);
+    font-weight: 700;
   }
 
   .summary-value {
-    font-size: 1rem;
+    font-size: var(--sz-lg);
     font-weight: 700;
-    color: var(--ra-text);
+    color: var(--c-text);
   }
 
   .summary-path {
-    font-size: 0.78rem;
+    font-size: var(--sz-xs);
     font-weight: 500;
     word-break: break-all;
   }
 
   .detail-list {
     display: grid;
-    gap: 0.45rem;
-    margin-bottom: 1rem;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-4);
   }
 
   .detail-item {
     margin: 0;
-    padding: 0.75rem;
-    border-radius: var(--ra-radius-sm);
-    background: var(--ra-surface-muted);
-    color: var(--ra-text-secondary);
-    font-size: 0.84rem;
+    padding: var(--sp-3);
+    border-radius: var(--r-sm);
+    background: #f0eeea;
+    color: var(--c-text-2);
+    font-size: var(--sz-sm);
     line-height: 1.6;
   }
 
   .warnings {
-    margin-bottom: 0.75rem;
+    margin-bottom: var(--sp-3);
   }
 
   .completion-screen {
     text-align: center;
-    padding: 3rem 2rem;
+    padding: var(--sp-12) var(--sp-8);
   }
 
   .completion-icon {
-    font-size: 4rem;
-    animation: pulse 0.6s ease-out;
+    font-size: var(--sz-xl);
+    animation: pulse 0.6s var(--ease);
   }
 
   @keyframes pulse {
@@ -6339,119 +6787,149 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   .completion-title {
-    font-size: 1.8rem;
+    font-size: var(--sz-xl);
     font-weight: 700;
-    margin: 0.75rem 0 0.5rem;
+    font-family: var(--font-sans);
+    margin: var(--sp-3) 0 var(--sp-2);
+    color: var(--c-text);
   }
 
   .completion-summary {
-    font-size: 0.95rem;
-    color: var(--ra-text-muted);
+    font-size: var(--sz-base);
+    color: var(--c-text-3);
     max-width: 400px;
-    margin: 0 auto 1.5rem;
+    margin: 0 auto var(--sp-6);
     line-height: 1.6;
   }
 
   .completion-stats {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    background: var(--ra-surface);
-    border-radius: 10px;
-    padding: 1rem 1.5rem;
+    gap: var(--sp-2);
+    background: var(--c-surface);
+    border-radius: 12px;
+    padding: var(--sp-4) var(--sp-6);
     max-width: 380px;
-    margin: 0 auto 2rem;
-    border: 1px solid var(--ra-border);
+    margin: 0 auto var(--sp-8);
+    border: 1px solid var(--c-border-strong);
+    box-shadow: var(--shadow-sm);
   }
 
   .stat-item {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
-    font-size: 0.85rem;
+    gap: var(--sp-2);
+    font-size: var(--sz-sm);
   }
 
   .stat-icon {
-    font-size: 1rem;
+    font-size: var(--sz-lg);
   }
 
   .stat-label {
-    color: var(--ra-text-muted);
+    color: var(--c-text-3);
     flex: 1;
     text-align: left;
   }
 
   .stat-value {
-    font-weight: 600;
+    font-weight: 700;
+    color: var(--c-text);
   }
 
   .completion-actions {
     display: flex;
-    gap: 0.75rem;
+    gap: var(--sp-3);
     justify-content: center;
     flex-wrap: wrap;
   }
 
   .completion-open-btn {
-    background: var(--ra-accent);
-    color: white;
+    background: var(--c-accent);
+    color: var(--c-text-inverse);
     border: none;
     border-radius: 8px;
-    padding: 0.7rem 1.5rem;
-    font-size: 0.9rem;
+    padding: var(--sp-3) var(--sp-6);
+    font-size: var(--sz-base);
+    font-weight: 700;
+    font-family: var(--font-sans);
     cursor: pointer;
+    transition: background var(--duration-fast) var(--ease);
+  }
+
+  .completion-open-btn:hover {
+    background: var(--c-accent-hover);
   }
 
   .completion-reset-btn {
-    background: var(--ra-surface);
-    color: var(--ra-text);
-    border: 1px solid var(--ra-border);
+    background: var(--c-surface);
+    color: var(--c-text);
+    border: 1px solid var(--c-border-strong);
     border-radius: 8px;
-    padding: 0.7rem 1.5rem;
-    font-size: 0.9rem;
+    padding: var(--sp-3) var(--sp-6);
+    font-size: var(--sz-base);
+    font-weight: 700;
+    font-family: var(--font-sans);
     cursor: pointer;
+    transition: all var(--duration-fast) var(--ease);
+  }
+
+  .completion-reset-btn:hover {
+    border-color: var(--c-border-strong);
+    background: #f0eeea;
   }
 
   .expert-card {
-    margin-top: 1rem;
+    margin-top: var(--sp-4);
+    background: #f0eeea;
+    border: 1px solid var(--c-border-strong);
+    border-radius: 12px;
+    padding: var(--sp-4);
   }
 
   .expert-toggle {
     background: none;
     border: none;
-    color: var(--ra-text-secondary);
-    font-size: 0.9rem;
-    font-weight: 600;
+    color: var(--c-text-2);
+    font-size: var(--sz-base);
+    font-weight: 700;
     padding: 0;
+    cursor: pointer;
+    transition: color var(--duration-fast) var(--ease);
+  }
+
+  .expert-toggle:hover {
+    color: var(--c-text);
   }
 
   .expert-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 1rem;
-    margin-top: 1rem;
+    gap: var(--sp-4);
+    margin-top: var(--sp-4);
   }
 
   .expert-title {
-    margin: 0 0 0.5rem;
-    font-size: 0.92rem;
+    margin: 0 0 var(--sp-2);
+    font-size: var(--sz-base);
+    font-weight: 700;
   }
 
   .expert-copy {
-    margin: 0.25rem 0;
-    color: var(--ra-text-secondary);
-    font-size: 0.84rem;
+    margin: var(--sp-1) 0;
+    color: var(--c-text-2);
+    font-size: var(--sz-sm);
     word-break: break-all;
   }
 
   .expert-block {
-    margin-top: 0.5rem;
+    margin-top: var(--sp-2);
   }
 
   .expert-section {
-    margin-top: 1rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--ra-border);
+    margin-top: var(--sp-4);
+    padding-top: var(--sp-4);
+    border-top: 1px solid var(--c-border-strong);
   }
 
   .expert-section-header,
@@ -6459,14 +6937,14 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
+    gap: var(--sp-3);
   }
 
   .approval-history-grid,
   .approval-history-list {
     display: grid;
-    gap: 0.9rem;
-    margin-top: 0.75rem;
+    gap: var(--sp-3);
+    margin-top: var(--sp-3);
   }
 
   .approval-history-grid {
@@ -6475,23 +6953,23 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   .approval-history-card,
   .approval-history-item {
-    border: 1px solid var(--ra-border);
+    border: 1px solid var(--c-border-strong);
     border-radius: 12px;
-    background: var(--ra-surface-muted);
-    padding: 0.85rem;
+    background: #f0eeea;
+    padding: var(--sp-3);
   }
 
   .send-status {
     display: inline-flex;
     align-items: center;
-    gap: 0.55rem;
-    margin-top: 0.75rem;
-    font-size: 0.88rem;
-    color: var(--ra-text-secondary);
+    gap: var(--sp-2);
+    margin-top: var(--sp-3);
+    font-size: var(--sz-base);
+    color: var(--c-text-2);
   }
 
   .send-status-spinner {
-    color: var(--ra-accent);
+    color: var(--c-accent);
   }
 
   .send-status-text {
@@ -6500,51 +6978,52 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   .plan-review-panel,
   .plan-progress-panel {
-    margin-top: 1rem;
-    padding: 1rem;
-    border: 1px solid var(--ra-border);
+    margin-top: var(--sp-4);
+    padding: var(--sp-4);
+    border: 1px solid var(--c-border-strong);
     border-radius: 12px;
-    background: color-mix(in srgb, var(--ra-surface) 88%, white);
+    background: var(--c-surface-raised);
   }
 
   .plan-review-header,
   .plan-progress-header {
     display: flex;
     justify-content: space-between;
-    gap: 1rem;
+    gap: var(--sp-4);
     align-items: flex-start;
   }
 
   .plan-review-title {
     margin: 0;
-    font-size: 1rem;
+    font-size: var(--sz-lg);
+    font-weight: 700;
   }
 
   .plan-review-summary,
   .plan-progress-summary,
   .plan-progress-note {
-    margin: 0.35rem 0 0;
-    color: var(--ra-text-muted);
-    font-size: 0.9rem;
+    margin: var(--sp-1) 0 0;
+    color: var(--c-text-3);
+    font-size: var(--sz-base);
   }
 
   .plan-step-list,
   .plan-progress-list {
     display: grid;
-    gap: 0.75rem;
-    margin-top: 0.85rem;
+    gap: var(--sp-3);
+    margin-top: var(--sp-3);
   }
 
   .plan-step-card,
   .plan-progress-step {
     display: grid;
     grid-template-columns: auto 1fr auto;
-    gap: 0.75rem;
+    gap: var(--sp-3);
     align-items: start;
-    padding: 0.85rem;
-    border-radius: 10px;
-    border: 1px solid var(--ra-border);
-    background: var(--ra-surface);
+    padding: var(--sp-3);
+    border-radius: 12px;
+    border: 1px solid var(--c-border-strong);
+    background: var(--c-surface);
   }
 
   .plan-progress-step {
@@ -6553,7 +7032,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   .plan-step-card[data-phase="write"],
   .plan-progress-step[data-phase="write"] {
-    border-color: color-mix(in srgb, var(--ra-accent) 45%, var(--ra-border));
+    border-color: color-mix(in srgb, var(--c-accent) 45%, var(--c-border-strong));
   }
 
   .plan-step-index,
@@ -6563,11 +7042,11 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--ra-accent) 12%, var(--ra-surface));
-    color: var(--ra-accent);
+    border-radius: var(--r-full);
+    background: rgba(13,148,136,0.20);
+    color: var(--c-accent);
     font-weight: 700;
-    font-size: 0.85rem;
+    font-size: var(--sz-sm);
   }
 
   .plan-step-topline,
@@ -6575,7 +7054,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   .plan-progress-actions {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--sp-2);
     flex-wrap: wrap;
   }
 
@@ -6583,18 +7062,18 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   .plan-progress-phase,
   .plan-step-tool,
   .plan-progress-tool {
-    font-size: 0.8rem;
-    color: var(--ra-text-muted);
+    font-size: var(--sz-sm);
+    color: var(--c-text-3);
   }
 
   .plan-step-description,
   .plan-step-effect {
-    margin: 0.35rem 0 0;
+    margin: var(--sp-1) 0 0;
   }
 
   .plan-step-effect {
-    color: var(--ra-text-muted);
-    font-size: 0.88rem;
+    color: var(--c-text-3);
+    font-size: var(--sz-base);
   }
 
   .plan-step-remove {
@@ -6603,21 +7082,21 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   .plan-step-actions {
     display: grid;
-    gap: 0.4rem;
+    gap: var(--sp-1);
   }
 
   .plan-progress-step[data-state="running"] {
-    border-color: var(--ra-accent);
+    border-color: var(--c-accent);
   }
 
   .plan-progress-step[data-state="completed"] .plan-progress-mark {
-    background: color-mix(in srgb, #3dbb7a 18%, var(--ra-surface));
-    color: #238a55;
+    background: var(--c-success-subtle);
+    color: var(--c-success);
   }
 
   .plan-progress-step[data-state="failed"] .plan-progress-mark {
-    background: color-mix(in srgb, #d05a4b 15%, var(--ra-surface));
-    color: #b43d30;
+    background: var(--c-error-subtle);
+    color: var(--c-error);
   }
 
   @media (max-width: 720px) {
@@ -6643,12 +7122,12 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     }
 
     .step-progress-row {
-      gap: 0.75rem;
+      gap: var(--sp-3);
     }
 
     .step-connector {
       width: 2px;
-      height: 1.5rem;
+      height: var(--sp-6);
       min-width: 0;
     }
 

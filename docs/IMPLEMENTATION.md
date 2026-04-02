@@ -3020,6 +3020,21 @@ Observed result:
 - The current blocker is the approval transition itself: under packaged-app WebDriver, clicking the visible `計画を承認する` control did not move the app into execution, write approval, or completion.
 - `docs/E2E_COPILOT_LIVE_REPORT.md` was updated again to mark `D-1` as a concrete failure instead of an unexecuted scenario.
 
+Browser automation inspect mode follow-up:
+
+```bash
+pnpm -C apps/desktop copilot-browser:build
+node apps/desktop/scripts/dist/copilot-browser.js --action inspect --timeout 1000
+```
+
+Observed result:
+
+- `apps/desktop/scripts/copilot-browser.ts` now supports `--action inspect`, which collects selector probes, DOM fallback candidate probes, and observed response URL metadata in one JSON payload.
+- The send path now records which selector actually drove new-chat, editor, send-button, and DOM-response capture, so task `76` no longer depends entirely on ad hoc DevTools notes before a source update can be prepared.
+- `docs/BROWSER_AUTOMATION.md` and `docs/BROWSER_AUTOMATION_VERIFICATION.md` now document the inspect workflow and how to transfer its output into the remaining manual verification checklist.
+- `pnpm -C apps/desktop copilot-browser:build` passes after the change.
+- `node apps/desktop/scripts/dist/copilot-browser.js --action inspect --timeout 1000` returns a structured `CDP_UNAVAILABLE` error in this Linux environment, which confirms the new action is wired into the CLI even though live Edge/M365 validation still requires Windows.
+
 Copilot live E2E follow-up 4:
 
 ```bash
@@ -3038,3 +3053,289 @@ Observed result:
 - `J-2` is now exercised and failing in the packaged-app restart path: after completing Manual-mode Step 1 and relaunching with the same isolated app-local-data directory, the startup view still showed `最近のファイル / まだ履歴がありません。` and did not expose any recent-session recovery UI.
 - `J-3` is now exercised and passing: a project named `Memory Test` plus project-memory entry `delimiter = comma` persisted across a packaged-app restart and remained visible after reselecting the project.
 - `docs/E2E_COPILOT_LIVE_REPORT.md` was updated again to record the new `E-1`, `F-1`, `G-1`, `I-1`, `J-2`, and `J-3` results.
+
+Phase 1 claw-code integration follow-up:
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml copilot_provider
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/Cargo.toml` now pins `claw-core`, `claw-tools`, `claw-provider`, `claw-permissions`, and `claw-compact` to `claw-cli/claw-code-rust` commit `33e5883d7909afd0c55b00b49c3034e21e33f440`.
+- `apps/desktop/src-tauri/src/copilot_provider.rs` now implements `CopilotChatProvider` for `claw_provider::ModelProvider`, including prompt formatting, Copilot browser script execution, response parsing into `ModelResponse`, fenced `tool_use` JSON extraction, parse-retry handling, and pseudo-stream conversion for `claw_core::query()`.
+- `apps/desktop/src-tauri/src/lib.rs` now exports `CopilotChatProvider` so later Tauri bridge work can compose it without another module refactor.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml copilot_provider` passed with 4 tests covering JSON envelope parsing, fenced tool-use extraction, pseudo-stream emission, and `claw_core::query()` integration.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after adding the claw crates.
+- Task note: `T01` remains pending because no repository fork was created in this workspace. The implementation used the currently reachable upstream `claw-cli/claw-code-rust` directly so Phase 1 code work could proceed without blocking on GitHub ownership operations.
+
+Phase 2 claw-tools builtins follow-up:
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml execute_claw_tool_reads_file_from_registered_builtin_registry
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml claw_tool_registry_registers_expected_builtins
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/state.rs` now constructs a dedicated `claw_tools::ToolRegistry`, registers the 6 built-in tools (`bash`, `file_read`, `file_write`, `file_edit`, `glob`, `grep`), and stores it on `DesktopState`.
+- `apps/desktop/src-tauri/src/execution.rs` now exposes `execute_claw_tool` as a Tauri command and routes a single built-in invocation through the shared claw registry with an auto-approve permission policy.
+- `apps/desktop/src-tauri/src/models.rs` now includes `ExecuteClawToolRequest` and `ExecuteClawToolResponse` for the new command surface.
+- `apps/desktop/src-tauri/src/lib.rs` now registers `execution::execute_claw_tool` in the Tauri invoke handler.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml execute_claw_tool_reads_file_from_registered_builtin_registry` passed, verifying that `file_read` can be executed through the registered claw built-ins.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml claw_tool_registry_registers_expected_builtins` passed, confirming that all 6 built-ins are present in the stored registry.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after wiring the new registry and command.
+
+Phase 2 relay tool wrappers follow-up:
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml registers_all_relay_tools
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml workbook_inspect_tool_reads_session_workbook
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml table_filter_rows_tool_writes_save_copy_output
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/relay_tools.rs` now registers thin `claw_tools::Tool` wrappers for `workbook.inspect`, `sheet.preview`, `sheet.profile_columns`, `session.diff_from_base`, `table.rename_columns`, `table.cast_columns`, `table.filter_rows`, `table.derive_column`, `table.group_aggregate`, `workbook.save_copy`, and `document.read_text`.
+- The Relay wrappers reuse the existing workbook engine and file/document readers instead of reimplementing transform logic. Write-side wrappers execute through `WorkbookEngine::execute_actions`, which preserves the existing save-copy-only behavior and derives an output path when one is not supplied.
+- `apps/desktop/src-tauri/src/state.rs` now builds the claw registry with both the 6 built-ins and the Relay-specific tools, and `DesktopState.storage` is shared as `Arc<Mutex<AppStorage>>` so relay wrappers can resolve session workbook paths and diff artifacts.
+- `apps/desktop/src-tauri/src/storage.rs` now exposes helper methods for reading the current session model, latest turn, resolving a workbook source from session context, and reading the latest diff summary for `session.diff_from_base`.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml registers_all_relay_tools` passed, confirming all 11 Relay tools are present in the claw registry.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml workbook_inspect_tool_reads_session_workbook` passed, confirming `workbook.inspect` can resolve the workbook source from `session_id` context.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml table_filter_rows_tool_writes_save_copy_output` passed, confirming a Relay write tool can execute through the claw wrapper and still produce a filtered save-copy CSV.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after the Relay tool integration.
+
+Phase 2 legacy tool module removal follow-up:
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_catalog
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml execute_read_actions_supports_file_tools_and_blocks_traversal
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml execute_read_actions_supports_text_search_and_document_read_text
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml preview_and_run_execution_support_text_replace_actions
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_registry_lists_current_builtin_tools
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml disabled_tool_returns_error
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml mcp_tool_returns_delegation_error
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/tool_registry.rs` was removed and replaced with `apps/desktop/src-tauri/src/tool_catalog.rs`, which keeps tool metadata, enable/disable state, and MCP registration without owning execution logic.
+- `apps/desktop/src-tauri/src/file_ops.rs` was removed and replaced with `apps/desktop/src-tauri/src/file_support.rs`, preserving the file/document helper behavior needed by the current preview and execution flow while eliminating the old module dependency.
+- `apps/desktop/src-tauri/src/read_action_executor.rs` now owns read-tool dispatch for `storage.rs`, so read execution no longer routes through the deleted custom registry implementation.
+- `apps/desktop/src-tauri/src/storage.rs`, `apps/desktop/src-tauri/src/relay_tools.rs`, `apps/desktop/src-tauri/src/integration_tests.rs`, and `apps/desktop/src-tauri/src/lib.rs` were updated to reference the new modules and keep MCP restore, tool settings persistence, and text/file preview flows intact.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` passed with 114 tests after the module removal, confirming the replacement wiring preserved the existing backend behavior.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after deleting the legacy module filenames and updating the import graph.
+
+Phase 2 tool migration E2E follow-up:
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml claw_tool_registry_executes_builtin_tools_end_to_end
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml claw_tool_registry_executes_relay_tools_end_to_end
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml claw_tool_registry_supports_csv_inspect_filter_save_copy_flow
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/state.rs` now includes claw-registry-backed integration tests that execute all 6 built-in tools (`bash`, `file_read`, `file_write`, `file_edit`, `glob`, `grep`) through the shared `DesktopState.claw_tool_registry` instead of via direct module calls.
+- The same test module now executes all 11 Relay tools through the shared claw registry, covering workbook inspection, sheet preview, column profiling, session diff reads, the 6 save-copy workbook writes, and `document.read_text`.
+- A dedicated registry-flow regression now drives a CSV file through `workbook.inspect` -> `table.filter_rows` -> `workbook.save_copy`, then asserts the reviewed copy contains only filtered rows and the original CSV input remains unchanged.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` passed with 117 tests after adding the three registry E2E regressions.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after the new E2E coverage was added.
+
+Phase 3 Tauri bridge follow-up:
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/tauri_bridge.rs` now implements the Rust-side agent bridge for the Tauri frontend, including `start_agent`, `respond_approval`, `cancel_agent`, and `get_session_history`.
+- The bridge runs a thin `claw-core` session loop around `SessionState`, `ModelProvider`, and the shared `claw_tools::ToolRegistry`, emits `agent:tool_start`, `agent:tool_result`, `agent:approval_needed`, `agent:turn_complete`, and `agent:error`, and maintains in-memory session history for later fetches.
+- Write-capable tools now pass through a bridge-owned approval gate that emits `approval_needed` and waits on `respond_approval` before execution continues. Cancellation interrupts the loop, releases pending approvals, and surfaces a cancellation error event.
+- `apps/desktop/src-tauri/src/state.rs` now stores shared `AgentRuntimeState`, and `apps/desktop/src-tauri/src/lib.rs` now registers the new bridge module and commands in the Tauri invoke handler.
+- `apps/desktop/src-tauri/src/models.rs` now exposes the request types needed by the bridge command surface, and `apps/desktop/src-tauri/Cargo.toml` now promotes `tokio` to a normal dependency because the bridge uses runtime synchronization primitives in library code.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture` passed with 3 targeted tests covering tool-event emission, approval-wait behavior for mutating tools, and runtime cancellation state.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` passed with 120 tests after the bridge module was wired into the crate.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after the Tauri bridge integration.
+
+Phase 3 frontend agent-ui follow-up:
+
+```bash
+pnpm -C apps/desktop exec tsx --test src/lib/agent-ui.test.ts
+pnpm -C apps/desktop check
+```
+
+Observed result:
+
+- `apps/desktop/src/lib/agent-ui.ts` now provides the frontend bridge layer for the new Rust agent loop, with `feedStore`, `approvalStore`, and `sessionStore` backed by Tauri `agent:*` event listeners.
+- The module now exposes `startAgent`, `respondApproval`, `cancelAgent`, `refreshSessionHistory`, `bindAgentUi`, `disposeAgentUi`, and `resetAgentUi`, and invokes the new Rust commands `start_agent`, `respond_approval`, `cancel_agent`, and `get_session_history`.
+- Store updates are event-driven: `tool_start` and `tool_result` append feed entries, `approval_needed` populates the pending-approval store, `turn_complete` marks the session completed, and `agent:error` marks the session failed or cancelled.
+- `apps/desktop/src/lib/index.ts` now exports `agent-ui` so later UI wiring can consume the new API without deep relative imports.
+- `apps/desktop/src/lib/agent-ui.test.ts` now covers session bootstrap/history hydration and approval/completion event handling using injected mock `listen` and `invoke` dependencies.
+- `pnpm -C apps/desktop exec tsx --test src/lib/agent-ui.test.ts` passed with 2 tests.
+- `pnpm -C apps/desktop check` passed with 0 errors and 0 warnings after adding the new frontend bridge module.
+
+Phase 3 legacy agent-loop module removal follow-up:
+
+```bash
+pnpm -C apps/desktop exec tsx --test src/lib/copilot-turn.test.ts src/lib/agent-ui.test.ts
+pnpm -C apps/desktop check
+```
+
+Observed result:
+
+- The legacy frontend module filenames are now gone: `apps/desktop/src/lib/agent-loop.ts`, `apps/desktop/src/lib/agent-loop-core.ts`, `apps/desktop/src/lib/agent-loop-prompts.ts`, `apps/desktop/src/lib/tool-runtime.ts`, and `apps/desktop/src/lib/copilot-browser.ts` were removed.
+- Their remaining responsibilities were moved under non-legacy module names: `apps/desktop/src/lib/copilot-agent.ts` now holds the pre-existing loop orchestration API used by the current page, `apps/desktop/src/lib/copilot-turn.ts` now holds turn retry/timeout helpers, and `apps/desktop/src/lib/browser-automation-ui.ts` now holds the browser automation helper exports including `sendPromptViaBrowserTool`.
+- `apps/desktop/src/lib/index.ts` now re-exports the renamed modules, so the current route can keep importing from `$lib` without depending on the deleted legacy file names.
+- `apps/desktop/src/lib/ipc.ts` no longer exports the unused `invokeMcpTool` helper after `tool-runtime.ts` removal; the remaining browser automation IPC helpers stay in place because the current frontend still uses them through `browser-automation-ui.ts`.
+- The deleted legacy tests `agent-loop-prompts.test.ts` and `tool-runtime.test.ts` were dropped with their modules, and the reusable loop-helper coverage was preserved by moving `agent-loop-core.test.ts` to `apps/desktop/src/lib/copilot-turn.test.ts`.
+- `pnpm -C apps/desktop exec tsx --test src/lib/copilot-turn.test.ts src/lib/agent-ui.test.ts` passed with 13 tests.
+- `pnpm -C apps/desktop check` passed with 0 errors and 0 warnings after the legacy module removal.
+
+Phase 3 Svelte delegation UI rewiring follow-up:
+
+```bash
+pnpm -C apps/desktop exec tsx --test src/lib/agent-ui.test.ts src/lib/copilot-turn.test.ts
+pnpm -C apps/desktop check
+```
+
+Observed result:
+
+- `apps/desktop/src/routes/+page.svelte` now binds the new Rust-backed `agent-ui` module on mount and disposes its listeners on teardown.
+- The delegation-mode shell in `+page.svelte` now uses `TaskInput`, `UnifiedFeed`, `ApprovalCard`, and `CompletionCard` with the new `feedStore`, `approvalStore`, and `sessionStore` instead of the old delegation activity/intervention composer stack.
+- Delegation submissions now call the Rust bridge through `startAgent`, approval actions now call `respondApproval`, and reset/cancel flows now call `cancelAgent` plus `resetAgentUi`.
+- The existing manual-mode workbook/Copilot flow remains in place, so this change narrows the new event-driven UI wiring to delegation mode without widening scope into the manual workflow.
+- `pnpm -C apps/desktop exec tsx --test src/lib/agent-ui.test.ts src/lib/copilot-turn.test.ts` passed with 13 tests.
+- `pnpm -C apps/desktop check` passed with 0 errors and 0 warnings after wiring the new delegation UI components.
+
+Phase 3 agent-loop migration E2E follow-up:
+
+```bash
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture
+pnpm -C apps/desktop agent-loop:test
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/tauri_bridge.rs` now creates a backing Relay storage session and turn before the Rust agent loop starts, so Relay workbook tools invoked through the claw registry resolve the same `session_id` context that the rest of the app expects.
+- `apps/desktop/src-tauri/src/agent_loop_smoke.rs` now adds a launched-app smoke runner that starts the real Tauri desktop shell, injects a deterministic mock provider sequence (`workbook.inspect` -> `table.filter_rows` -> final text), waits for a write approval, responds through the bridge, and verifies both emitted `agent:*` events and save-copy output behavior.
+- `apps/desktop/scripts/launch_agent_loop_smoke.mjs` now launches `pnpm tauri:dev`, waits for frontend and desktop readiness, polls the smoke summary JSON, and fails unless approval, completion, filtered output, and source immutability checks all succeed.
+- `apps/desktop/package.json` now exposes that launched-app flow as `pnpm -C apps/desktop agent-loop:test`.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after wiring the smoke runner and bridge session fix.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture` passed with 3 targeted bridge tests.
+- `pnpm -C apps/desktop agent-loop:test` passed. The smoke summary reported `approvalSeen: true`, `completionSeen: true`, the expected `agent:tool_start` / `agent:tool_result` / `agent:approval_needed` / `agent:turn_complete` events, an existing filtered output file, and an unchanged bundled sample source workbook.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` passed with 120 tests after the agent-loop launched-app smoke flow was added.
+
+Phase 4 storage split groundwork:
+
+```bash
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/approval_store.rs` now holds the live approval record types that `storage.rs` was previously defining inline.
+- `apps/desktop/src-tauri/src/workbook_state.rs` now holds the live preview / execution / plan-progress record types that back workbook save-copy and execution inspection flows.
+- `apps/desktop/src-tauri/src/storage.rs` now imports those state record types instead of defining them inline, reducing the first layer of storage-specific responsibility before the larger `claw-core` session migration.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after the record-type split.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture` passed with 3 targeted tests after the split, confirming the Rust agent bridge still behaves the same.
+
+Phase 4 session-store extraction follow-up:
+
+```bash
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml creates_reads_and_starts_turns -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/session_store.rs` now owns session and turn CRUD concerns, including session creation, turn start, latest-turn lookup, session detail reads, turn-status updates, and turn artifact linkage.
+- `apps/desktop/src-tauri/src/storage.rs` now delegates its session-facing helpers to `SessionStore` instead of mutating `sessions` and `turns` maps directly, which narrows the next `claw-core` migration surface to one internal store boundary.
+- Persistence behavior stays unchanged in this step: `storage.rs` still persists the same session and turn JSON payloads through `persistence::persist_session_state`, but now reads those maps from the extracted store.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after the session-store extraction.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml creates_reads_and_starts_turns -- --nocapture` passed with the targeted storage CRUD regression.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture` passed with 3 targeted bridge tests after the extraction.
+
+Phase 4 claw-core history sync groundwork:
+
+```bash
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml session_store::tests -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/session_store.rs` now keeps a companion `claw_core::SessionState` per Relay session, seeded from the current session metadata and primary workbook path.
+- The extracted session store now exposes `sync_session_messages` and `read_session_messages`, so `claw-core` message history can be updated independently of the UI runtime state.
+- `apps/desktop/src-tauri/src/tauri_bridge.rs` now syncs the initial user goal and every subsequent assistant/tool-result history update back into `AppStorage`, which means the Rust agent loop no longer keeps the only copy of message history in its in-memory runtime wrapper.
+- `get_session_history` now falls back to storage-backed `claw-core` history when the live agent runtime entry is unavailable.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after the history-sync wiring.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml session_store::tests -- --nocapture` passed with the new `SessionStore` history roundtrip test.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture` passed with 3 targeted bridge regressions after the storage sync changes.
+
+Phase 4 agent-runtime history deduplication follow-up:
+
+```bash
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml session_store::tests -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/tauri_bridge.rs` no longer keeps a second copy of message history inside `AgentSessionRuntime`; the runtime now only tracks running/cancel/pending-approval state.
+- Agent-loop history reads now come from storage-backed `SessionStore` / `claw-core::SessionState`, both for live-turn updates during the loop and for `get_session_history` responses.
+- The bridge tests now assert history through `AppStorage::read_session_messages`, which confirms the shared storage-backed history is the only message source after a turn executes.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after removing the runtime-owned history copy.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml session_store::tests -- --nocapture` passed with the `SessionStore` core-history roundtrip regression.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture` passed with 3 targeted bridge regressions after the history deduplication change.
+
+Phase 4 persisted session-history follow-up:
+
+```bash
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml persists_sessions_and_turns_across_reloads -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/persistence.rs` now loads and saves a per-session `history.json` file alongside `session.json`, so the `claw-core` message history attached to each Relay session survives reloads.
+- `apps/desktop/src-tauri/src/session_store.rs` now hydrates `claw_core::SessionState` from those persisted messages when storage is reopened instead of recreating empty history-only shells.
+- `apps/desktop/src-tauri/src/storage.rs` now flushes session-history updates through `persist_session_state`, which means `sync_session_messages` updates both in-memory `SessionStore` state and local-json storage.
+- The existing reload regression now verifies `history.json` exists and that a persisted assistant message is readable after reopening storage.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after adding persisted session history.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml persists_sessions_and_turns_across_reloads -- --nocapture` passed with the extended reload/history regression.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture` passed with 3 targeted bridge regressions after the persisted-history change.
+
+Phase 4 session-store persistence boundary follow-up:
+
+```bash
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml persists_sessions_and_turns_across_reloads -- --nocapture
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/session_store.rs` now exposes a `PersistedSessionView` so `storage.rs` no longer needs to separately pull session maps, turn maps, and message history when persisting session state.
+- `apps/desktop/src-tauri/src/tauri_bridge.rs` now removes finished agent runtimes from `AgentRuntimeState`, which avoids keeping stale in-memory runtime entries after storage-backed history has already been persisted.
+- A targeted bridge regression now confirms `AgentRuntimeState::remove_session` drops the runtime entry as expected.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after the persistence-boundary cleanup and runtime removal change.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture` passed with 4 targeted bridge regressions after adding runtime removal coverage.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml persists_sessions_and_turns_across_reloads -- --nocapture` passed after the persistence-boundary cleanup, confirming reload behavior still works.

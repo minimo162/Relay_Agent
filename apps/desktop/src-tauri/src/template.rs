@@ -93,7 +93,10 @@ pub fn template_list(
 }
 
 #[tauri::command]
-pub fn template_get(app: AppHandle, request: TemplateGetRequest) -> Result<WorkflowTemplate, String> {
+pub fn template_get(
+    app: AppHandle,
+    request: TemplateGetRequest,
+) -> Result<WorkflowTemplate, String> {
     load_all_templates(&app)?
         .into_iter()
         .find(|template| template.id == request.id)
@@ -259,7 +262,10 @@ fn custom_templates_dir(app: &AppHandle) -> Result<PathBuf, String> {
                     .to_string(),
             )
         }
-        Err(_) => app.path().app_local_data_dir().map_err(|error| error.to_string())?,
+        Err(_) => app
+            .path()
+            .app_local_data_dir()
+            .map_err(|error| error.to_string())?,
     };
     Ok(base.join("storage-v1").join("templates"))
 }
@@ -324,7 +330,10 @@ mod tests {
     fn template_is_built_in_serializes_as_camel_case_key() {
         let t = make_template("t1", WorkflowTemplateCategory::Sales, true);
         let v = serde_json::to_value(&t).unwrap();
-        assert!(v.get("isBuiltIn").is_some(), "key must be camelCase 'isBuiltIn'");
+        assert!(
+            v.get("isBuiltIn").is_some(),
+            "key must be camelCase 'isBuiltIn'"
+        );
         assert_eq!(v["isBuiltIn"], true);
     }
 
@@ -365,10 +374,16 @@ mod tests {
         for raw in raws {
             let t: WorkflowTemplate =
                 serde_json::from_str(raw).expect("builtin template JSON must be valid");
-            assert!(t.is_built_in, "isBuiltIn must be true for bundled templates");
+            assert!(
+                t.is_built_in,
+                "isBuiltIn must be true for bundled templates"
+            );
             assert!(!t.title.is_empty(), "title must not be empty");
             assert!(!t.goal.is_empty(), "goal must not be empty");
-            assert!(!t.expected_tools.is_empty(), "expected_tools must not be empty");
+            assert!(
+                !t.expected_tools.is_empty(),
+                "expected_tools must not be empty"
+            );
         }
     }
 
@@ -379,6 +394,9 @@ mod tests {
         let restored: WorkflowTemplate = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.id, "rt-1");
         assert!(!restored.is_built_in);
-        assert_eq!(restored.expected_tools, vec!["table.filter_rows".to_string()]);
+        assert_eq!(
+            restored.expected_tools,
+            vec!["table.filter_rows".to_string()]
+        );
     }
 }

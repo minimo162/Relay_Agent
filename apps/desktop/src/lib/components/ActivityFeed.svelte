@@ -61,78 +61,165 @@
 </div>
 
 <style>
+  /* ── Shizuka: ActivityFeed ── */
+
   .activity-feed {
-    display: grid;
-    gap: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
     overflow-y: auto;
-    padding: 1rem;
+    padding: var(--sp-4) var(--sp-4) var(--sp-4) var(--sp-6);
+    position: relative;
+  }
+
+  /* Vertical timeline line */
+  .activity-feed::before {
+    content: "";
+    position: absolute;
+    top: var(--sp-4);
+    bottom: var(--sp-4);
+    left: calc(var(--sp-6) + 0.5rem - 1px);
+    width: 2px;
+    background: var(--c-border-strong);
+    border-radius: var(--r-full);
   }
 
   .feed-empty {
-    color: var(--ra-text-muted);
+    color: var(--c-text-3);
+    font-size: var(--sz-sm);
+    padding: var(--sp-4);
+    text-align: center;
   }
 
   .feed-event {
     display: flex;
-    gap: 0.75rem;
-    padding: 0.85rem;
-    border-radius: 12px;
-    border: 1px solid var(--ra-border);
-    background: var(--ra-surface);
+    gap: var(--sp-3);
+    padding: var(--sp-3) var(--sp-3) var(--sp-3) 0;
+    position: relative;
+    transition: background var(--duration-fast) var(--ease);
   }
 
+  .feed-event:hover {
+    background: #f0eeea;
+    border-radius: 8px;
+  }
+
+  /* Timeline dot */
+  .event-icon {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 1.1rem;
+    height: 1.1rem;
+    font-size: var(--sz-sm);
+    line-height: 1;
+    background: var(--c-surface);
+    border: 2px solid var(--c-border-strong);
+    border-radius: var(--r-full);
+    margin-top: var(--sp-1);
+  }
+
+  .event-action-required .event-icon {
+    border-color: var(--c-warning);
+    background: var(--c-warning-subtle);
+  }
+
+  .event-error .event-icon {
+    border-color: var(--c-error);
+    background: var(--c-error-subtle);
+  }
+
+  /* Action-required & error states */
   .event-action-required {
-    border-color: #e2b15d;
-    background: #fff9ef;
+    background: var(--c-warning-subtle);
+    border-left: 3px solid var(--c-warning);
+    border-radius: 8px;
+    padding-left: var(--sp-3);
   }
 
   .event-error {
-    border-color: #cf786c;
-    background: #fff3f1;
-  }
-
-  .event-icon {
-    font-size: 1.1rem;
-    line-height: 1;
+    background: var(--c-error-subtle);
+    border-left: 3px solid var(--c-error);
+    border-radius: 8px;
+    padding-left: var(--sp-3);
   }
 
   .event-content {
     min-width: 0;
     display: grid;
-    gap: 0.35rem;
+    gap: var(--sp-1);
+    flex: 1;
   }
 
   .event-headline {
     display: flex;
-    gap: 0.5rem;
+    gap: var(--sp-2);
     align-items: center;
     flex-wrap: wrap;
   }
 
   .event-message {
-    font-weight: 600;
+    font-weight: 500;
+    font-size: var(--sz-sm);
+    color: var(--c-text);
   }
 
   .event-badge {
     display: inline-flex;
     align-items: center;
-    padding: 0.15rem 0.5rem;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--ra-text-muted) 12%, white);
-    color: var(--ra-text-muted);
-    font-size: 0.72rem;
-    font-weight: 600;
+    padding: 0.125rem var(--sp-2);
+    border-radius: var(--r-full);
+    background: #f0eeea;
+    color: var(--c-text-2);
+    font-size: var(--sz-xs);
+    font-weight: 500;
   }
 
   .event-detail-inline,
   .event-time,
   .event-detail {
-    color: var(--ra-text-muted);
-    font-size: 0.82rem;
+    color: var(--c-text-3);
+    font-size: var(--sz-xs);
+  }
+
+  .event-detail {
+    margin-top: var(--sp-1);
+  }
+
+  .event-detail summary {
+    cursor: pointer;
+    user-select: none;
+    color: var(--c-accent);
+    font-size: var(--sz-xs);
+    font-weight: 500;
+    transition: color var(--duration-fast);
+  }
+
+  .event-detail summary:hover {
+    color: var(--c-accent-hover);
+  }
+
+  .event-detail[open] summary {
+    margin-bottom: var(--sp-1);
+  }
+
+  .event-time {
+    font-family: var(--font-mono);
+    letter-spacing: 0.02em;
   }
 
   pre {
     white-space: pre-wrap;
     word-break: break-word;
+    font-family: var(--font-mono);
+    font-size: var(--sz-xs);
+    background: #f0eeea;
+    padding: var(--sp-2) var(--sp-3);
+    border-radius: var(--r-sm);
+    border: 1px solid var(--c-border-strong);
+    margin: 0;
   }
 </style>

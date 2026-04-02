@@ -238,110 +238,256 @@
 <style>
   .project-selector {
     display: grid;
-    gap: 0.75rem;
+    gap: var(--sp-3);
   }
 
+  /* --- Dropdown row --- */
   .project-row {
     display: grid;
-    gap: 0.35rem;
+    gap: var(--sp-2);
+  }
+
+  .project-row > label {
+    font-size: var(--sz-sm);
+    font-weight: 500;
+    color: var(--c-text-2);
+    letter-spacing: 0.01em;
   }
 
   .project-select-row {
     display: grid;
     grid-template-columns: 1fr auto;
-    gap: 0.5rem;
+    gap: var(--sp-2);
   }
 
   .project-select {
     min-height: 2.75rem;
-    border-radius: 12px;
-    border: 1px solid var(--ra-border);
-    background: var(--ra-surface);
-    padding: 0 0.8rem;
+    border-radius: var(--r-md);
+    border: 1px solid var(--c-border-strong);
+    background: var(--c-surface);
+    color: var(--c-text);
+    padding: 0 var(--sp-8) 0 var(--sp-3);
+    font-size: var(--sz-base);
+    font-family: inherit;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2378716c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right var(--sp-3) center;
+    cursor: pointer;
+    transition: border-color var(--duration-fast),
+                box-shadow var(--duration-fast);
   }
 
+  .project-select:focus {
+    outline: none;
+    border-color: var(--c-accent);
+    box-shadow: 0 0 0 3px var(--c-accent-subtle);
+  }
+
+  /* --- Project creation / detail card --- */
   .project-card {
     display: grid;
-    gap: 0.7rem;
-    padding: 0.9rem;
-    border: 1px solid var(--ra-border);
-    border-radius: 14px;
-    background: var(--ra-surface);
+    gap: var(--sp-3);
+    padding: var(--sp-5);
+    border: 1px solid var(--c-border-strong);
+    border-radius: var(--r-lg);
+    background: var(--c-surface);
+    box-shadow: var(--shadow-sm);
   }
 
-  .project-meta,
+  .project-meta {
+    color: var(--c-text-3);
+    font-size: var(--sz-sm);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+  }
+
+  .project-meta::before {
+    content: "";
+    width: 4px;
+    height: 4px;
+    border-radius: var(--r-full);
+    background: var(--c-border-strong);
+    flex-shrink: 0;
+  }
+
   .project-empty {
-    color: var(--ra-text-muted);
-    font-size: 0.88rem;
-  }
-
-  .field-success {
-    color: var(--ra-success, #0f7b48);
-    font-size: 0.88rem;
+    color: var(--c-text-3);
+    font-size: var(--sz-sm);
+    font-style: italic;
     margin: 0;
   }
 
+  .field-success {
+    color: var(--c-success);
+    font-size: var(--sz-sm);
+    font-weight: 500;
+    margin: 0;
+  }
+
+  .field-warn {
+    color: var(--c-warning);
+    font-size: var(--sz-sm);
+    font-weight: 500;
+    margin: 0;
+  }
+
+  /* --- Details / accordion --- */
   .project-details {
     display: grid;
-    gap: 0.5rem;
+    gap: var(--sp-3);
+    border: 1px solid var(--c-border-strong);
+    border-radius: var(--r-md);
+    overflow: hidden;
+  }
+
+  .project-details > summary {
+    padding: var(--sp-3) var(--sp-4);
+    font-weight: 500;
+    font-size: var(--sz-sm);
+    color: var(--c-text);
+    background: #f0eeea;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    transition: background var(--duration-fast);
+  }
+
+  .project-details > summary:hover {
+    background: #f0eeea;
+  }
+
+  .project-details > summary::before {
+    content: "";
+    width: 0;
+    height: 0;
+    border-left: 5px solid var(--c-text-3);
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    flex-shrink: 0;
+    transition: transform var(--duration-fast) var(--ease);
+  }
+
+  .project-details[open] > summary::before {
+    transform: rotate(90deg);
+  }
+
+  .project-details > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .project-details > :not(summary) {
+    padding: 0 var(--sp-4) var(--sp-3);
   }
 
   .project-details pre {
     white-space: pre-wrap;
     margin: 0;
+    padding: var(--sp-3);
+    background: #f0eeea;
+    border-radius: var(--r-sm);
+    font-family: var(--font-mono);
+    font-size: var(--sz-xs);
+    color: var(--c-text-2);
+    line-height: 1.6;
+    border: 1px solid var(--c-border-strong);
   }
 
+  /* --- Memory list --- */
   .memory-list {
     list-style: none;
     margin: 0;
     padding: 0;
     display: grid;
-    gap: 0.55rem;
+    gap: var(--sp-2);
   }
 
   .memory-list li {
     display: flex;
     justify-content: space-between;
-    gap: 0.75rem;
-    align-items: start;
-    padding: 0.65rem 0.75rem;
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--ra-accent) 5%, var(--ra-surface));
+    gap: var(--sp-3);
+    align-items: center;
+    padding: var(--sp-3) var(--sp-4);
+    border-radius: var(--r-md);
+    background: var(--c-surface);
+    border: 1px solid var(--c-border-strong);
+    transition: all var(--duration-fast) var(--ease);
+  }
+
+  .memory-list li:hover {
+    border-color: var(--c-border-strong);
+    box-shadow: var(--shadow-sm);
   }
 
   .memory-list li div {
     display: grid;
-    gap: 0.15rem;
+    gap: var(--sp-1);
+    min-width: 0;
   }
 
+  .memory-list li strong {
+    font-size: var(--sz-sm);
+    font-weight: 500;
+    color: var(--c-text);
+  }
+
+  .memory-list li span {
+    font-size: var(--sz-xs);
+    color: var(--c-text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* --- Memory form --- */
   .memory-form {
     display: grid;
     grid-template-columns: 1fr 1fr auto;
-    gap: 0.5rem;
+    gap: var(--sp-2);
+    padding: var(--sp-3);
+    background: #f0eeea;
+    border-radius: var(--r-md);
+    border: 1px solid var(--c-border-strong);
   }
 
+  /* --- Session actions --- */
   .session-actions {
     display: flex;
-    gap: 0.5rem;
+    gap: var(--sp-2);
+    flex-shrink: 0;
   }
 
   .session-bulk-actions {
     display: flex;
-    gap: 0.5rem;
+    gap: var(--sp-2);
     flex-wrap: wrap;
   }
 
   .session-assign-row {
     display: grid;
     grid-template-columns: 1fr auto;
-    gap: 0.5rem;
+    gap: var(--sp-2);
   }
 
+  /* --- Responsive --- */
   @media (max-width: 720px) {
     .memory-form,
     .project-select-row,
     .session-assign-row {
       grid-template-columns: 1fr;
+    }
+
+    .memory-list li {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .session-actions {
+      justify-content: flex-end;
     }
   }
 </style>

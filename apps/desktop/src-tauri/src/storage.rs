@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeSet, HashMap},
-    env,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
 };
 
@@ -10,37 +9,39 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::file_ops;
+use crate::approval_store::{StoredApproval, StoredScopeApproval};
+use crate::file_support;
 use crate::mcp_client::McpClient;
 use crate::models::{
     AddProjectMemoryRequest, AgentLoopStatus, ApprovalDecision, ApprovalInspectionPayload,
     ApprovePlanRequest, ApprovePlanResponse, ArtifactType, AssessCopilotHandoffRequest,
     AssessCopilotHandoffResponse, CopilotHandoffReason, CopilotHandoffReasonSource,
     CopilotHandoffStatus, CopilotTurnResponse, CreateProjectRequest, CreateSessionRequest,
-    DiffSummary, ExecuteReadActionsRequest, ExecuteReadActionsResponse,
-    ExecutionArtifactPayload, ExecutionInspectionPayload, ExecutionInspectionState,
-    ExecutionPlan, GenerateRelayPacketRequest, OutputArtifact, OutputFormat, OutputSpec,
-    LinkSessionToProjectRequest, ListProjectsResponse, PacketInspectionPayload,
-    PlanProgressRequest, PlanProgressResponse, PlanStepState, PlanStepStatus, PlanningContext,
-    PlanningContextToolGroups, PreviewArtifactPayload, PreviewExecutionRequest,
-    PreviewExecutionResponse, Project, ProjectMemoryEntry, ProjectMemorySource, ReadProjectRequest,
-    ReadTurnArtifactsResponse, RecordPlanProgressRequest, RecordScopeApprovalRequest,
-    RecordScopeApprovalResponse, RelayPacket, RelayPacketResponseContract,
-    RemoveProjectMemoryRequest, RespondToApprovalRequest, RespondToApprovalResponse,
-    RunExecutionMultiRequest, RunExecutionRequest, RunExecutionResponse,
+    DiffSummary, ExecuteReadActionsRequest, ExecuteReadActionsResponse, ExecutionArtifactPayload,
+    ExecutionInspectionPayload, ExecutionInspectionState, ExecutionPlan,
+    GenerateRelayPacketRequest, LinkSessionToProjectRequest, ListProjectsResponse, OutputArtifact,
+    OutputFormat, OutputSpec, PacketInspectionPayload, PlanProgressRequest, PlanProgressResponse,
+    PlanStepState, PlanStepStatus, PlanningContext, PlanningContextToolGroups,
+    PreviewArtifactPayload, PreviewExecutionRequest, PreviewExecutionResponse, Project,
+    ProjectMemoryEntry, ProjectMemorySource, ReadProjectRequest, ReadTurnArtifactsResponse,
+    RecordPlanProgressRequest, RecordScopeApprovalRequest, RecordScopeApprovalResponse,
+    RelayPacket, RelayPacketResponseContract, RemoveProjectMemoryRequest, RespondToApprovalRequest,
+    RespondToApprovalResponse, RunExecutionMultiRequest, RunExecutionRequest, RunExecutionResponse,
     ScopeApprovalArtifactPayload, ScopeApprovalSource, ScopeOverrideInspectionRecord, Session,
-    SessionDetail, SessionStatus, SetSessionProjectRequest, SpreadsheetAction,
-    StartTurnRequest, StartTurnResponse, SubmitCopilotResponseRequest,
-    SubmitCopilotResponseResponse, ToolDescriptor, ToolExecutionResult, ToolPhase, ToolSettings,
-    Turn, TurnArtifactRecord, TurnDetailsViewModel, TurnInspectionSection,
-    TurnInspectionSourceType, TurnInspectionUnavailableReason, TurnOverview, TurnOverviewStep,
-    TurnOverviewStepState, TurnStatus, UpdateProjectRequest, ValidationInspectionPayload,
-    ValidationIssue, ValidationIssueSummary,
+    SessionDetail, SetSessionProjectRequest, SpreadsheetAction, StartTurnRequest, StartTurnResponse,
+    SubmitCopilotResponseRequest, SubmitCopilotResponseResponse, ToolDescriptor,
+    ToolExecutionResult, ToolPhase, ToolSettings, Turn, TurnArtifactRecord, TurnDetailsViewModel,
+    TurnInspectionSection, TurnInspectionSourceType, TurnInspectionUnavailableReason, TurnOverview,
+    TurnOverviewStep, TurnOverviewStepState, TurnStatus, UpdateProjectRequest,
+    ValidationInspectionPayload, ValidationIssue, ValidationIssueSummary,
 };
 use crate::persistence::{self, PersistedArtifactMeta, StorageManifest};
+use crate::read_action_executor;
 use crate::risk_evaluator::{evaluate_risk, should_auto_approve, ApprovalPolicy, OperationRisk};
-use crate::tool_registry::ToolRegistry;
+use crate::session_store::SessionStore;
+use crate::tool_catalog::ToolCatalog;
 use crate::workbook::{SheetColumnProfile, SheetPreview, WorkbookEngine, WorkbookSource};
+use crate::workbook_state::{StoredExecution, StoredPlanProgress, StoredPreview};
 
 #[derive(Clone, Debug)]
 struct StoredRelayPacket {
@@ -56,60 +57,6 @@ struct StoredResponse {
     repair_prompt: Option<String>,
     created_at: String,
     artifact_id: String,
-}
-
-#[derive(Clone, Debug)]
-struct StoredPreview {
-    diff_summary: DiffSummary,
-    artifacts: Vec<OutputArtifact>,
-    requires_approval: bool,
-    auto_approved: bool,
-    highest_risk: OperationRisk,
-    approval_policy: ApprovalPolicy,
-    warnings: Vec<String>,
-    created_at: String,
-    artifact_id: String,
-}
-
-#[derive(Clone, Debug)]
-struct StoredApproval {
-    decision: ApprovalDecision,
-    note: Option<String>,
-    ready_for_execution: bool,
-    auto_approved: bool,
-    preview_artifact_id: String,
-    created_at: String,
-    artifact_id: String,
-}
-
-#[derive(Clone, Debug)]
-struct StoredScopeApproval {
-    decision: ApprovalDecision,
-    root_folder: String,
-    violations: Vec<String>,
-    source: ScopeApprovalSource,
-    note: Option<String>,
-    response_artifact_id: String,
-    created_at: String,
-    artifact_id: String,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-struct StoredExecution {
-    executed: bool,
-    output_path: Option<String>,
-    output_paths: Vec<String>,
-    artifacts: Vec<OutputArtifact>,
-    warnings: Vec<String>,
-    reason: Option<String>,
-    created_at: String,
-    artifact_id: String,
-}
-
-#[derive(Clone, Debug)]
-struct StoredPlanProgress {
-    progress: PlanProgressResponse,
 }
 
 #[derive(Clone, Debug)]
@@ -219,12 +166,11 @@ struct PersistedTurnLifecycleArtifacts {
 pub struct AppStorage {
     app_local_data_dir: Option<PathBuf>,
     manifest: Option<StorageManifest>,
-    tool_registry: ToolRegistry,
+    tool_catalog: ToolCatalog,
     tool_settings: ToolSettings,
     tool_restore_warnings: Vec<String>,
     projects: HashMap<String, Project>,
-    sessions: HashMap<String, Session>,
-    turns: HashMap<String, Turn>,
+    session_store: SessionStore,
     relay_packets: HashMap<String, StoredRelayPacket>,
     responses: HashMap<String, StoredResponse>,
     previews: HashMap<String, StoredPreview>,
@@ -239,12 +185,11 @@ impl Default for AppStorage {
         Self {
             app_local_data_dir: None,
             manifest: None,
-            tool_registry: ToolRegistry::new(),
+            tool_catalog: ToolCatalog::new(),
             tool_settings: ToolSettings::default(),
             tool_restore_warnings: Vec::new(),
             projects: HashMap::new(),
-            sessions: HashMap::new(),
-            turns: HashMap::new(),
+            session_store: SessionStore::default(),
             relay_packets: HashMap::new(),
             responses: HashMap::new(),
             previews: HashMap::new(),
@@ -342,11 +287,14 @@ impl AppStorage {
             manifest: Some(loaded.manifest),
             tool_settings: loaded.tool_settings,
             projects: loaded.projects,
-            sessions: loaded.sessions,
-            turns: loaded.turns,
+            session_store: SessionStore::from_maps(
+                loaded.sessions,
+                loaded.turns,
+                loaded.session_messages,
+            ),
             ..Self::default()
         };
-        storage.restore_tool_registry_from_persisted_settings();
+        storage.restore_tool_catalog_from_persisted_settings();
         Ok(storage)
     }
 
@@ -363,7 +311,7 @@ impl AppStorage {
     }
 
     pub fn session_count(&self) -> usize {
-        self.sessions.len()
+        self.session_store.session_count()
     }
 
     pub fn storage_path(&self) -> Option<String> {
@@ -375,7 +323,7 @@ impl AppStorage {
 
     pub fn list_tools(&self) -> crate::models::ListToolsResponse {
         crate::models::ListToolsResponse {
-            tools: self.tool_registry.list(),
+            tools: self.tool_catalog.list(),
             restore_warnings: self.tool_restore_warnings.clone(),
         }
     }
@@ -385,9 +333,9 @@ impl AppStorage {
         request: crate::models::SetToolEnabledRequest,
     ) -> Result<crate::models::ToolRegistration, String> {
         let updated = self
-            .tool_registry
+            .tool_catalog
             .set_enabled(&request.tool_id, request.enabled)?;
-        self.sync_disabled_tool_settings_from_registry();
+        self.sync_disabled_tool_settings_from_catalog();
         self.persist_tool_settings_state()?;
         Ok(updated)
     }
@@ -398,12 +346,12 @@ impl AppStorage {
         tools: Vec<crate::mcp_client::McpToolDefinition>,
     ) -> Result<crate::models::ConnectMcpServerResponse, String> {
         self.upsert_mcp_server(server.clone());
-        let registered_tool_ids = self.tool_registry.register_mcp_tools(server, tools);
+        let registered_tool_ids = self.tool_catalog.register_mcp_tools(server, tools);
         self.apply_saved_disabled_tool_settings();
         self.persist_tool_settings_state()?;
         Ok(crate::models::ConnectMcpServerResponse {
             registered_tool_ids,
-            tools: self.tool_registry.list(),
+            tools: self.tool_catalog.list(),
         })
     }
 
@@ -507,7 +455,7 @@ impl AppStorage {
         &mut self,
         request: LinkSessionToProjectRequest,
     ) -> Result<Project, String> {
-        if !self.sessions.contains_key(&request.session_id) {
+        if !self.session_store.contains_session(&request.session_id) {
             return Err(format!("session `{}` was not found", request.session_id));
         }
 
@@ -534,7 +482,7 @@ impl AppStorage {
         &mut self,
         request: SetSessionProjectRequest,
     ) -> Result<ListProjectsResponse, String> {
-        if !self.sessions.contains_key(&request.session_id) {
+        if !self.session_store.contains_session(&request.session_id) {
             return Err(format!("session `{}` was not found", request.session_id));
         }
 
@@ -581,27 +529,7 @@ impl AppStorage {
     }
 
     pub fn create_session(&mut self, request: CreateSessionRequest) -> Result<Session, String> {
-        let title = require_text("title", request.title)?;
-        let objective = require_text("objective", request.objective)?;
-        let primary_workbook_path = request
-            .primary_workbook_path
-            .map(|path| require_text("primaryWorkbookPath", path))
-            .transpose()?;
-        let now = timestamp();
-
-        let session = Session {
-            id: Uuid::new_v4().to_string(),
-            title,
-            objective,
-            status: SessionStatus::Draft,
-            primary_workbook_path,
-            created_at: now.clone(),
-            updated_at: now,
-            latest_turn_id: None,
-            turn_ids: Vec::new(),
-        };
-
-        self.sessions.insert(session.id.clone(), session.clone());
+        let session = self.session_store.create_session(request, timestamp())?;
         self.persist_session_state(&session.id)?;
         self.append_session_log(
             &session.id,
@@ -618,26 +546,67 @@ impl AppStorage {
     }
 
     pub fn list_sessions(&self) -> Vec<Session> {
-        let mut sessions = self.sessions.values().cloned().collect::<Vec<_>>();
-        sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-        sessions
+        self.session_store.list_sessions()
     }
 
     pub fn read_session(&self, session_id: &str) -> Result<SessionDetail, String> {
-        let session = self
-            .sessions
-            .get(session_id)
-            .cloned()
-            .ok_or_else(|| format!("session `{session_id}` was not found"))?;
+        self.session_store.read_session(session_id)
+    }
 
-        let mut turns = session
-            .turn_ids
-            .iter()
-            .filter_map(|turn_id| self.turns.get(turn_id).cloned())
-            .collect::<Vec<_>>();
-        turns.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+    pub(crate) fn sync_session_messages(
+        &mut self,
+        session_id: &str,
+        messages: Vec<claw_core::Message>,
+    ) -> Result<(), String> {
+        self.session_store.sync_session_messages(session_id, messages)?;
+        self.persist_session_state(session_id)
+    }
 
-        Ok(SessionDetail { session, turns })
+    pub(crate) fn read_session_messages(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<claw_core::Message>, String> {
+        self.session_store.read_session_messages(session_id)
+    }
+
+    pub(crate) fn read_session_model(&self, session_id: &str) -> Result<Session, String> {
+        self.session_store.read_session_model(session_id)
+    }
+
+    pub(crate) fn read_latest_turn_model(&self, session_id: &str) -> Result<Turn, String> {
+        self.session_store.read_latest_turn_model(session_id)
+    }
+
+    pub(crate) fn resolve_workbook_source_for_session(
+        &self,
+        session_id: &str,
+        source_path: Option<&str>,
+    ) -> Result<WorkbookSource, String> {
+        let session = self.read_session_model(session_id)?;
+        self.resolve_workbook_source(&session, source_path)
+    }
+
+    pub(crate) fn session_diff_from_base_for_session(
+        &self,
+        session_id: &str,
+        artifact_id: Option<&str>,
+    ) -> Result<DiffSummary, String> {
+        let session = self.read_session_model(session_id)?;
+        let turn = self.read_latest_turn_model(session_id)?;
+        self.session_diff_from_base(
+            &session,
+            &turn,
+            artifact_id,
+            &DiffSummary {
+                source_path: session.primary_workbook_path.clone().unwrap_or_default(),
+                output_path: String::new(),
+                mode: "preview".to_string(),
+                target_count: 0,
+                estimated_affected_rows: 0,
+                sheets: Vec::new(),
+                warnings: Vec::new(),
+            },
+        )
     }
 
     pub fn read_turn_artifacts(
@@ -672,35 +641,9 @@ impl AppStorage {
     }
 
     pub fn start_turn(&mut self, request: StartTurnRequest) -> Result<StartTurnResponse, String> {
-        let title = require_text("title", request.title)?;
-        let objective = require_text("objective", request.objective)?;
-        let now = timestamp();
-
-        let session = self
-            .sessions
-            .get_mut(&request.session_id)
-            .ok_or_else(|| format!("session `{}` was not found", request.session_id))?;
-
-        let turn = Turn {
-            id: Uuid::new_v4().to_string(),
-            session_id: session.id.clone(),
-            title,
-            objective,
-            mode: request.mode,
-            status: TurnStatus::Draft,
-            created_at: now.clone(),
-            updated_at: now.clone(),
-            item_ids: Vec::new(),
-            validation_error_count: 0,
-        };
-
-        session.status = SessionStatus::Active;
-        session.updated_at = now;
-        session.latest_turn_id = Some(turn.id.clone());
-        session.turn_ids.push(turn.id.clone());
-
-        let session_snapshot = session.clone();
-        self.turns.insert(turn.id.clone(), turn.clone());
+        let response = self.session_store.start_turn(request, timestamp())?;
+        let session_snapshot = response.session.clone();
+        let turn = response.turn.clone();
         self.persist_session_state(&session_snapshot.id)?;
         self.append_session_log(
             &session_snapshot.id,
@@ -725,10 +668,7 @@ impl AppStorage {
             })),
         )?;
 
-        Ok(StartTurnResponse {
-            session: session_snapshot,
-            turn,
-        })
+        Ok(response)
     }
 
     pub fn generate_relay_packet(
@@ -745,10 +685,10 @@ impl AppStorage {
             objective: turn.objective.clone(),
             context,
             allowed_read_tools: self
-                .tool_registry
+                .tool_catalog
                 .list_descriptors_by_phase(ToolPhase::Read),
             allowed_write_tools: self
-                .tool_registry
+                .tool_catalog
                 .list_descriptors_by_phase(ToolPhase::Write),
             response_contract: RelayPacketResponseContract {
                 format: "json",
@@ -1424,10 +1364,7 @@ impl AppStorage {
                 turn.id.clone(),
                 StoredApproval {
                     decision: ApprovalDecision::Approved,
-                    note: Some(format!(
-                        "Auto-approved by {:?} policy.",
-                        approval_policy
-                    )),
+                    note: Some(format!("Auto-approved by {:?} policy.", approval_policy)),
                     ready_for_execution: true,
                     auto_approved: true,
                     preview_artifact_id: preview_artifact.id.clone(),
@@ -2113,23 +2050,7 @@ impl AppStorage {
         session_id: &str,
         turn_id: &str,
     ) -> Result<(Session, Turn), String> {
-        let session = self
-            .sessions
-            .get(session_id)
-            .cloned()
-            .ok_or_else(|| format!("session `{session_id}` was not found"))?;
-        if !session.turn_ids.iter().any(|id| id == turn_id) {
-            return Err(format!(
-                "turn `{turn_id}` does not belong to session `{session_id}`"
-            ));
-        }
-        let turn = self
-            .turns
-            .get(turn_id)
-            .cloned()
-            .ok_or_else(|| format!("turn `{turn_id}` was not found"))?;
-
-        Ok((session, turn))
+        self.session_store.get_session_and_turn(session_id, turn_id)
     }
 
     fn update_turn_status(
@@ -2138,15 +2059,8 @@ impl AppStorage {
         status: TurnStatus,
         validation_error_count: u32,
     ) -> Result<Turn, String> {
-        let turn = self
-            .turns
-            .get_mut(turn_id)
-            .ok_or_else(|| format!("turn `{turn_id}` was not found"))?;
-        turn.status = status;
-        turn.validation_error_count = validation_error_count;
-        turn.updated_at = timestamp();
-
-        Ok(turn.clone())
+        self.session_store
+            .update_turn_status(turn_id, status, validation_error_count, timestamp())
     }
 
     fn persist_session_state(&mut self, session_id: &str) -> Result<(), String> {
@@ -2157,13 +2071,15 @@ impl AppStorage {
             .manifest
             .as_mut()
             .ok_or_else(|| "storage manifest was not initialized".to_string())?;
+        let view = self.session_store.persisted_session_view(session_id)?;
 
         persistence::persist_session_state(
             app_local_data_dir,
             manifest,
-            &self.sessions,
-            &self.turns,
+            view.sessions,
+            view.turns,
             session_id,
+            view.messages,
             &timestamp(),
         )
     }
@@ -2202,9 +2118,9 @@ impl AppStorage {
         )
     }
 
-    fn sync_disabled_tool_settings_from_registry(&mut self) {
+    fn sync_disabled_tool_settings_from_catalog(&mut self) {
         self.tool_settings.disabled_tool_ids = self
-            .tool_registry
+            .tool_catalog
             .list()
             .into_iter()
             .filter(|tool| !tool.enabled)
@@ -2226,11 +2142,11 @@ impl AppStorage {
 
     fn apply_saved_disabled_tool_settings(&mut self) {
         for tool_id in self.tool_settings.disabled_tool_ids.clone() {
-            let _ = self.tool_registry.set_enabled(&tool_id, false);
+            let _ = self.tool_catalog.set_enabled(&tool_id, false);
         }
     }
 
-    fn restore_tool_registry_from_persisted_settings(&mut self) {
+    fn restore_tool_catalog_from_persisted_settings(&mut self) {
         self.tool_restore_warnings.clear();
         for server in self.tool_settings.mcp_servers.clone() {
             let tools =
@@ -2244,7 +2160,7 @@ impl AppStorage {
                         continue;
                     }
                 };
-            self.tool_registry.register_mcp_tools(server, tools);
+            self.tool_catalog.register_mcp_tools(server, tools);
         }
 
         self.apply_saved_disabled_tool_settings();
@@ -2274,11 +2190,8 @@ impl AppStorage {
             persistence::persist_artifact(app_local_data_dir, &meta, payload)?;
         }
 
-        let turn = self
-            .turns
-            .get_mut(turn_id)
-            .ok_or_else(|| format!("turn `{turn_id}` was not found"))?;
-        turn.item_ids.push(artifact_id.clone());
+        self.session_store
+            .push_turn_item(turn_id, artifact_id.clone())?;
 
         Ok(RecordedArtifact {
             id: artifact_id,
@@ -3250,36 +3163,36 @@ impl AppStorage {
         action: &SpreadsheetAction,
         current_diff: &DiffSummary,
     ) -> ToolExecutionResult {
-        let outcome = if is_write_action(action) {
-            Err(format!(
-                "`{}` is a write tool and cannot be executed in read mode",
-                action.tool
-            ))
-        } else {
-            self.tool_registry.invoke(
-                self,
-                session,
-                turn,
-                current_diff,
-                &action.tool,
-                &action.args,
-            )
-        };
-
-        match outcome {
-            Ok(result) => ToolExecutionResult {
-                tool: action.tool.clone(),
-                args: action.args.clone(),
-                ok: true,
-                result: Some(result),
-                error: None,
-            },
-            Err(error) => ToolExecutionResult {
+        if is_write_action(action) {
+            return ToolExecutionResult {
                 tool: action.tool.clone(),
                 args: action.args.clone(),
                 ok: false,
                 result: None,
-                error: Some(error),
+                error: Some(format!(
+                    "`{}` is a write tool and cannot be executed in read mode",
+                    action.tool
+                )),
+            };
+        }
+
+        match self.tool_catalog.get(&action.tool) {
+            Some(tool) if !tool.enabled => ToolExecutionResult {
+                tool: action.tool.clone(),
+                args: action.args.clone(),
+                ok: false,
+                result: None,
+                error: Some(format!("tool `{}` is disabled", action.tool)),
+            },
+            Some(_) => {
+                read_action_executor::execute_read_action(self, session, turn, action, current_diff)
+            }
+            None => ToolExecutionResult {
+                tool: action.tool.clone(),
+                args: action.args.clone(),
+                ok: false,
+                result: None,
+                error: Some(format!("unknown tool: {}", action.tool)),
             },
         }
     }
@@ -3484,11 +3397,7 @@ impl AppStorage {
     }
 
     fn touch_session(&mut self, session_id: &str) -> Result<(), String> {
-        let session = self
-            .sessions
-            .get_mut(session_id)
-            .ok_or_else(|| format!("session `{session_id}` was not found"))?;
-        session.updated_at = timestamp();
+        self.session_store.touch_session(session_id, timestamp())?;
         self.persist_session_state(session_id)
     }
 
@@ -3522,13 +3431,13 @@ impl AppStorage {
             workbook_summary,
             available_tools: PlanningContextToolGroups {
                 read: self
-                    .tool_registry
+                    .tool_catalog
                     .list_descriptors_by_phase(ToolPhase::Read)
                     .into_iter()
                     .map(|tool| tool.id)
                     .collect(),
                 write: self
-                    .tool_registry
+                    .tool_catalog
                     .list_descriptors_by_phase(ToolPhase::Write)
                     .into_iter()
                     .map(|tool| tool.id)
@@ -3787,8 +3696,11 @@ fn build_preview_artifacts(
             }),
         });
 
-        for action in actions.iter().filter(|action| action.tool == "text.replace") {
-            let preview = file_ops::preview_text_replace_detail(&action.args)?;
+        for action in actions
+            .iter()
+            .filter(|action| action.tool == "text.replace")
+        {
+            let preview = file_support::preview_text_replace_detail(&action.args)?;
             let path = preview
                 .get("path")
                 .and_then(Value::as_str)
@@ -3804,7 +3716,9 @@ fn build_preview_artifacts(
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
-                warnings.push("Text diff preview was truncated to keep the review UI compact.".to_string());
+                warnings.push(
+                    "Text diff preview was truncated to keep the review UI compact.".to_string(),
+                );
             }
             artifacts.push(OutputArtifact {
                 id: Uuid::new_v4().to_string(),
@@ -4029,9 +3943,7 @@ fn execute_native_workbook_output(
     match spec.format {
         OutputFormat::Csv => {
             if source.format() != crate::models::WorkbookFormat::Csv {
-                return Err(
-                    "CSV multi-output currently requires a CSV workbook source".to_string(),
-                );
+                return Err("CSV multi-output currently requires a CSV workbook source".to_string());
             }
         }
         OutputFormat::Xlsx => {
@@ -4297,7 +4209,7 @@ fn build_file_write_diff_summary(
             .try_fold(0_u32, |count, action| -> Result<u32, String> {
                 match action.tool.as_str() {
                     "text.replace" => {
-                        let preview = file_ops::preview_text_replace(&action.args)?;
+                        let preview = file_support::preview_text_replace(&action.args)?;
                         Ok(count
                             + preview
                                 .get("matchCount")
@@ -4338,7 +4250,7 @@ fn build_file_write_preview_warnings(actions: &[SpreadsheetAction]) -> Result<Ve
             }
             "text.replace" => {
                 let path = required_action_arg_string(action, "path")?;
-                let preview = file_ops::preview_text_replace(&action.args)?;
+                let preview = file_support::preview_text_replace(&action.args)?;
                 let match_count = preview
                     .get("matchCount")
                     .and_then(Value::as_u64)
@@ -4391,10 +4303,10 @@ fn execute_file_write_actions(
 
     for action in actions {
         let result = match action.tool.as_str() {
-            "file.copy" => file_ops::execute_file_copy(&action.args)?,
-            "file.move" => file_ops::execute_file_move(&action.args)?,
-            "file.delete" => file_ops::execute_file_delete(&action.args)?,
-            "text.replace" => file_ops::execute_text_replace(&action.args)?,
+            "file.copy" => file_support::execute_file_copy(&action.args)?,
+            "file.move" => file_support::execute_file_move(&action.args)?,
+            "file.delete" => file_support::execute_file_delete(&action.args)?,
+            "text.replace" => file_support::execute_text_replace(&action.args)?,
             _ => continue,
         };
 
@@ -5928,12 +5840,11 @@ mod tests {
     use super::AppStorage;
     use crate::models::{
         AddProjectMemoryRequest, ApprovalDecision, AssessCopilotHandoffRequest,
-        CopilotHandoffStatus, CreateProjectRequest, CreateSessionRequest, OutputFormat,
-        OutputSpec,
+        CopilotHandoffStatus, CreateProjectRequest, CreateSessionRequest,
         ExecuteReadActionsRequest, ExecutionInspectionState, GenerateRelayPacketRequest,
-        LinkSessionToProjectRequest, PreviewExecutionRequest, ProjectMemorySource,
-        ReadProjectRequest, ReadSessionRequest, RecordScopeApprovalRequest, RelayMode,
-        RespondToApprovalRequest, RunExecutionMultiRequest, RunExecutionRequest,
+        LinkSessionToProjectRequest, OutputFormat, OutputSpec, PreviewExecutionRequest,
+        ProjectMemorySource, ReadProjectRequest, ReadSessionRequest, RecordScopeApprovalRequest,
+        RelayMode, RespondToApprovalRequest, RunExecutionMultiRequest, RunExecutionRequest,
         ScopeApprovalSource, SetSessionProjectRequest, SpreadsheetAction, StartTurnRequest,
         SubmitCopilotResponseRequest, TurnArtifactRecord, TurnInspectionSourceType, TurnStatus,
         UpdateProjectRequest,
@@ -6623,6 +6534,15 @@ mod tests {
                     mode: RelayMode::Plan,
                 })
                 .expect("turn should start");
+            storage
+                .sync_session_messages(
+                    &session.id,
+                    vec![
+                        claw_core::Message::user("Persist relay history"),
+                        claw_core::Message::assistant_text("History saved"),
+                    ],
+                )
+                .expect("session history should sync");
 
             let storage_root = persistence::storage_root(&app_local_data_dir);
             assert!(storage_root.join("manifest.json").is_file());
@@ -6637,6 +6557,11 @@ mod tests {
                 .join(&session.id)
                 .join("turns")
                 .join(format!("{}.json", started.turn.id))
+                .is_file());
+            assert!(storage_root
+                .join("sessions")
+                .join(&session.id)
+                .join("history.json")
                 .is_file());
 
             session.id
@@ -6657,6 +6582,14 @@ mod tests {
         assert_eq!(detail.turns.len(), 1);
         assert_eq!(detail.turns[0].title, "Reload me");
         assert_eq!(detail.turns[0].session_id, session_id);
+        let history = reloaded
+            .read_session_messages(&session_id)
+            .expect("persisted session history should be readable");
+        assert_eq!(history.len(), 2);
+        assert!(matches!(
+            history[1].content.first(),
+            Some(claw_core::ContentBlock::Text { text }) if text == "History saved"
+        ));
 
         fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
     }

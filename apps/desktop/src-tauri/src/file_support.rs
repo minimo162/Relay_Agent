@@ -364,7 +364,9 @@ pub fn preview_text_replace_detail(args: &Value) -> Result<Value, String> {
         .map_err(|error| format!("failed to read `{}`: {error}", file_path.display()))?;
     let (content, _) = decode_text_file(&bytes)?;
     let regex = Regex::new(&pattern).map_err(|error| format!("invalid regex: {error}"))?;
-    let next_content = regex.replace_all(&content, replacement.as_str()).into_owned();
+    let next_content = regex
+        .replace_all(&content, replacement.as_str())
+        .into_owned();
     let change_count = regex.find_iter(&content).count();
 
     Ok(json!({

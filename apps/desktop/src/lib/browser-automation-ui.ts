@@ -68,6 +68,13 @@ export async function sendToCopilot(
   }
 }
 
+export async function sendPromptViaBrowserTool(
+  prompt: string,
+  options: RunBrowserCommandOptions = {}
+): Promise<string> {
+  return sendToCopilot(prompt, options);
+}
+
 export async function checkCopilotConnection(
   options: RunBrowserCommandOptions = {}
 ): Promise<void> {

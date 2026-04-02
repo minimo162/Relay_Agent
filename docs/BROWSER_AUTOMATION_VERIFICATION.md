@@ -17,7 +17,10 @@
 
 ```bash
 node apps/desktop/scripts/dist/copilot-browser.js --action connect --auto-launch
+node apps/desktop/scripts/dist/copilot-browser.js --action inspect --auto-launch --prompt "Reply with exactly OK and nothing else."
 ```
+
+`inspect` の JSON 出力から `selectorProbes`、`responseSelectorProbes`、`suggestedApiPatterns`、`sendProbe.usedSelectors` をこのシートへ転記する。
 
 ## 2. 正常フロー検証
 
@@ -57,7 +60,16 @@ node apps/desktop/scripts/dist/copilot-browser.js --action connect --auto-launch
 
 ## 4. セレクタ確認結果
 
-playwright codegen または DevTools で確認した実際の値を記録する:
+まず `--action inspect` の JSON を記録し、必要に応じて playwright codegen / DevTools で裏取りする:
+
+| 項目 | `inspect` 出力 | 裏取り結果 |
+|---|---|---|
+| `selectorProbes` | | |
+| `responseSelectorProbes` | | |
+| `sendProbe.usedSelectors` | | |
+| `suggestedApiPatterns` | | |
+
+最終的に採用する実際の値:
 
 | 定数名 | 確認した実際の値 | 更新要否 |
 |---|---|---|

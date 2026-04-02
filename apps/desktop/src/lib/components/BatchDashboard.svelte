@@ -70,13 +70,13 @@
   .batch-dashboard,
   .target-table {
     display: grid;
-    gap: 1rem;
+    gap: var(--sp-4);
   }
 
   .dashboard-head,
   .dashboard-row {
     display: grid;
-    gap: 0.75rem;
+    gap: var(--sp-3);
   }
 
   .dashboard-head {
@@ -84,33 +84,83 @@
     align-items: start;
   }
 
+  .dashboard-head h3 {
+    font-size: var(--sz-lg);
+    font-weight: 700;
+    color: var(--c-text);
+    letter-spacing: -0.01em;
+  }
+
+  .dashboard-head p {
+    font-size: var(--sz-sm);
+    color: var(--c-text-2);
+    margin-top: var(--sp-1);
+  }
+
   .dashboard-row {
     grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) auto;
-    padding: 0.85rem;
+    padding: var(--sp-3) var(--sp-4);
     border-radius: 12px;
-    border: 1px solid var(--ra-border);
-    background: var(--ra-surface);
+    border: 1px solid var(--c-border-strong);
+    background: var(--c-surface);
+    box-shadow: var(--shadow-sm);
+    transition: border-color var(--duration-fast) var(--ease),
+                box-shadow var(--duration-fast) var(--ease);
+  }
+
+  .dashboard-row:hover {
+    border-color: var(--c-border-strong);
+  }
+
+  .dashboard-row strong {
+    font-size: var(--sz-sm);
+    font-weight: 500;
+    color: var(--c-text);
+  }
+
+  .dashboard-row p {
+    font-size: var(--sz-xs);
+    color: var(--c-text-3);
+  }
+
+  .dashboard-row[data-status="done"] {
+    border-left: 3px solid var(--c-success);
+  }
+
+  .dashboard-row[data-status="running"] {
+    border-left: 3px solid var(--c-accent);
+    background: var(--c-accent-subtle);
   }
 
   .dashboard-row[data-status="failed"] {
-    border-color: #cf786c;
-    background: #fff3f1;
+    border-left: 3px solid var(--c-error);
+    border-color: var(--c-error-subtle);
+    background: var(--c-error-subtle);
+  }
+
+  .dashboard-row[data-status="skipped"] {
+    border-left: 3px solid var(--c-text-3);
+    opacity: 0.7;
   }
 
   .progress-bar {
-    height: 0.75rem;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--ra-border) 70%, white);
+    height: 0.5rem;
+    border-radius: var(--r-full);
+    background: #f0eeea;
     overflow: hidden;
   }
 
   .progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--ra-accent), #89b07a);
+    border-radius: var(--r-full);
+    background: linear-gradient(90deg, var(--c-accent), var(--c-success));
+    transition: width 400ms var(--ease);
   }
 
   .error {
-    color: #b04b43;
+    color: var(--c-error);
+    font-size: var(--sz-xs);
+    font-weight: 500;
   }
 
   @media (max-width: 760px) {

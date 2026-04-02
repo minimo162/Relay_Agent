@@ -11,6 +11,7 @@
     "copilot-browser:build": "npx esbuild scripts/copilot-browser.ts --bundle --platform=node --format=esm --packages=external --outfile=scripts/dist/copilot-browser.js",
     "e2e:windows": "node ./scripts/e2e_windows_smoke.mjs",
     "e2e:webdriver": "mocha \"e2e-tests/**/*.mjs\" --timeout 360000",
+    "agent-loop:test": "node ./scripts/launch_agent_loop_smoke.mjs",
     "launch:test": "node ./scripts/launch_tauri_smoke.mjs",
     "workflow:test": "node ./scripts/launch_workflow_smoke.mjs",
     "startup:smoke": "cargo run --manifest-path src-tauri/Cargo.toml --bin startup_smoke",
