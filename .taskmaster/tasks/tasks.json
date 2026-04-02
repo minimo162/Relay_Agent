@@ -287,7 +287,94 @@
     },
     {
       "id": "P5",
-      "name": "Phase 5: クリーンアップ",
+      "name": "Phase 5: マニュアルモード廃止",
+      "description": "全ユーザーが Edge CDP 環境を持つことが確認されたため、手動コピペ方式のガイドワークフローを完全廃止し、委任モード (Edge CDP + 自律実行) のみに一本化する。",
+      "tasks": [
+        {
+          "id": "T31",
+          "title": "マニュアルモード UI セクション削除 (+page.svelte)",
+          "description": "+page.svelte の {:else} ブロック (マニュアルモード UI, ~857 行) を削除。guidedStage 型・変数宣言、stepBanner 定数、handleSetupStage / handleCopilotStage / handleReviewSaveStage 関数 (マニュアル専用のもの)、buildSetupSignature / stepState / currentStepNumber ヘルパー、$: リアクティブ宣言 (currentSetupSignature / setupStepComplete / copilotStepAvailable / reviewStepAvailable)、step1Expanded / preparedSetupSignature 等の変数を削除。",
+          "files": ["apps/desktop/src/routes/+page.svelte"],
+          "subtasks": [
+            "{:else} ブロック全体 (lines ~4879-5735) 削除",
+            "type GuidedStage と let guidedStage 変数削除",
+            "const stepBanner 定数削除",
+            "handleSetupStage / handleCopilotStage / handleReviewSaveStage 関数削除",
+            "buildSetupSignature / stepState / currentStepNumber 関数削除",
+            "$: currentSetupSignature / setupStepComplete / copilotStepAvailable / reviewStepAvailable 削除",
+            "let step1Expanded / preparedSetupSignature / workflowStartedAt / completedAt 削除",
+            "applyRecoverableDraft() 内の guidedStage / step1Expanded 設定行削除",
+            "resetAll() / handleDelegationSubmit() 内の guidedStage 参照削除"
+          ],
+          "effort": "L",
+          "priority": "critical",
+          "blockedBy": [],
+          "status": "pending"
+        },
+        {
+          "id": "T32",
+          "title": "uiMode 変数・セグメントコントロール UI 削除",
+          "description": "uiMode 変数と setUiMode 関数を削除し、モード切替セグメントコントロール UI を削除する。if (uiMode === 'delegation') ガードを全て unwrap (無条件化)、if (uiMode !== 'delegation') early return を削除。UiMode / loadUiMode / saveUiMode を import から除去。pnpm typecheck で型エラーがないことを確認。",
+          "files": ["apps/desktop/src/routes/+page.svelte"],
+          "subtasks": [
+            "let uiMode: UiMode = 'delegation' 変数削除",
+            "setUiMode 関数削除",
+            "セグメントコントロール UI (モード切替ボタン行) 削除",
+            "if (uiMode === 'delegation') ガードを全てアンラップ (29箇所)",
+            "if (uiMode !== 'delegation') early return 削除 (2箇所)",
+            "UiMode / loadUiMode / saveUiMode を from '$lib' import から削除",
+            "goToSetup / goToCopilot 関数削除",
+            "$: persistDelegationDraft() の条件分岐削除 (無条件化)",
+            "onMount 内の if (uiMode === 'delegation') 条件削除"
+          ],
+          "effort": "M",
+          "priority": "critical",
+          "blockedBy": ["T31"],
+          "status": "pending"
+        },
+        {
+          "id": "T33",
+          "title": "continuity.ts UiMode 関連削除",
+          "description": "continuity.ts から UiMode 型の 'manual' 値、ContinuityState.uiMode フィールド、normalizeUiMode / loadUiMode / saveUiMode 関数を削除。LocalStorage の 'ra-ui-mode' キーは次回起動時に無視されるため追加対応不要。",
+          "files": ["apps/desktop/src/lib/continuity.ts"],
+          "subtasks": [
+            "UiMode 型を 'delegation' のみに変更、または型ごと削除",
+            "ContinuityState.uiMode フィールド削除",
+            "createDefaultState() から uiMode: 'delegation' 削除",
+            "readState() から normalizeUiMode 呼び出し削除",
+            "normalizeUiMode 関数削除",
+            "loadUiMode export 関数削除",
+            "saveUiMode export 関数削除"
+          ],
+          "effort": "S",
+          "priority": "high",
+          "blockedBy": ["T32"],
+          "status": "pending"
+        },
+        {
+          "id": "T34",
+          "title": "マニュアルモード廃止の確認テスト & README 更新",
+          "description": "pnpm typecheck / pnpm check が全て通ることを確認。委任モードでのタスク実行 E2E テスト (TaskInput 入力 → UnifiedFeed 表示 → ApprovalCard 3択 → 完了)。セグメントコントロール消去の目視確認。README.md のマニュアルモード記述を削除・更新。",
+          "files": [
+            "README.md"
+          ],
+          "subtasks": [
+            "pnpm typecheck 通過確認",
+            "pnpm check 通過確認",
+            "委任モード E2E: タスク入力 → エージェント実行 → ApprovalCard → 完了",
+            "セグメントコントロールが UI 上に存在しないことを目視確認",
+            "README.md のマニュアルモード実行例・説明を削除または委任モードに統合"
+          ],
+          "effort": "M",
+          "priority": "critical",
+          "blockedBy": ["T33"],
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "P6",
+      "name": "Phase 6: クリーンアップ",
       "description": "未使用コード・依存の削除、IPC 型定義の簡素化、ドキュメント更新。",
       "tasks": [
         {
@@ -343,8 +430,8 @@
       ]
     },
     {
-      "id": "P6",
-      "name": "Phase 6: UI/UX — openwork インスパイア",
+      "id": "P7",
+      "name": "Phase 7: UI/UX — openwork インスパイア",
       "description": "different-ai/openwork のデザイン言語を全面採用。pill radius / cool neutral / ping ドット / Segmented Control / 3ペイン / Step Cluster / インライン承認 / Inbox パネル。P3完了後に並行着手可能。",
       "tasks": [
         {
@@ -575,19 +662,25 @@
     "T27": ["T22", "T25"],
     "T28": ["T22"],
     "T29": ["T21"],
-    "T30": ["T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29"]
+    "T30": ["T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29"],
+    "T31": [],
+    "T32": ["T31"],
+    "T33": ["T32"],
+    "T34": ["T33"]
   },
   "parallelizableGroups": [
     { "group": "P1-parallel", "tasks": ["T03", "T05"], "note": "T02 完了後に並行可能" },
     { "group": "P3-parallel", "tasks": ["T11", "T12"], "note": "T10 完了後に並行可能" },
     { "group": "P4-parallel", "tasks": ["T14", "T15"], "note": "ストレージ移行とパーミッション移行は並行可能" },
-    { "group": "P5-parallel", "tasks": ["T17", "T18"], "note": "Rust クリーンアップと TS 型定義簡素化は並行可能" },
-    { "group": "P6-wave1", "tasks": ["T21"], "note": "UI の起点。これが全 UI タスクの前提" },
-    { "group": "P6-wave2", "tasks": ["T22", "T23", "T24", "T26", "T29"], "note": "T21 完了後に全て並行可能" },
-    { "group": "P6-wave3", "tasks": ["T25", "T27", "T28"], "note": "T22 + T10 完了後に並行可能 (T25 は T10 待ち)" },
-    { "group": "P6-wave4", "tasks": ["T30"], "note": "全 UI タスク完了後" }
+    { "group": "P5-manual", "tasks": ["T31", "T32", "T33", "T34"], "note": "T13 完了済のため即着手可能。T31→T32→T33→T34 の順次実行" },
+    { "group": "P6-parallel", "tasks": ["T17", "T18"], "note": "Rust クリーンアップと TS 型定義簡素化は並行可能" },
+    { "group": "P7-wave1", "tasks": ["T21"], "note": "UI の起点。これが全 UI タスクの前提" },
+    { "group": "P7-wave2", "tasks": ["T22", "T23", "T24", "T26", "T29"], "note": "T21 完了後に全て並行可能" },
+    { "group": "P7-wave3", "tasks": ["T25", "T27", "T28"], "note": "T22 + T10 完了後に並行可能 (T25 は T10 待ち)" },
+    { "group": "P7-wave4", "tasks": ["T30"], "note": "全 UI タスク完了後" }
   ],
   "criticalPath": ["T01", "T02", "T03", "T04", "T09", "T10", "T11", "T13", "T14", "T16", "T17", "T20"],
+  "manualModeRemovalPath": ["T31", "T32", "T33", "T34"],
   "uiCriticalPath": ["T21", "T22", "T25", "T27", "T30"],
-  "estimatedTotalEffort": "6 phases, 30 tasks (P1-P5: バックエンド移行 20タスク / P6: UI刷新 10タスク)"
+  "estimatedTotalEffort": "7 phases, 34 tasks (P1-P4: バックエンド移行 16タスク / P5: マニュアルモード廃止 4タスク / P6: クリーンアップ 4タスク / P7: UI刷新 10タスク)"
 }
