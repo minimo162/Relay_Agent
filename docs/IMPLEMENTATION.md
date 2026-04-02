@@ -2925,3 +2925,82 @@ Observed result:
 - `apps/desktop/src/lib/components/ActivityFeed.svelte` no longer forces `afterUpdate + tick` scrolling on every render. Auto-scroll now only runs when the event tail changes, which removed the WebDriver hang seen during desktop automation.
 - The temporary probe-only instrumentation used during root-cause isolation was removed before verification, and the final report artifact is recorded in `docs/TAURI_WEBDRIVER_E2E_REPORT.md`.
 - `pnpm -C apps/desktop check` passed with zero Svelte diagnostics, and `pnpm -C apps/desktop e2e:webdriver` passed with 2 passing tests on this Windows workspace.
+
+Copilot live E2E follow-up:
+
+```bash
+pnpm typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm -C apps/desktop exec tauri info
+pnpm -C apps/desktop copilot-browser:build
+node --dns-result-order=ipv4first apps/desktop/scripts/dist/copilot-browser.js --action connect --auto-launch --cdp-port 9333 --timeout 60000
+node --dns-result-order=ipv4first apps/desktop/scripts/dist/copilot-browser.js --action connect --cdp-port 9333 --timeout 60000
+node --dns-result-order=ipv4first apps/desktop/scripts/dist/copilot-browser.js --action connect --cdp-port 9342 --timeout 60000
+```
+
+Observed result:
+
+- `pnpm typecheck` passed, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` passed with `104` tests.
+- `pnpm -C apps/desktop exec tauri info` confirmed Windows 10.0.26100, WebView2 `146.0.3856.84`, Node `24.13.1`, pnpm `10.33.0`, Rust `1.93.1`, and Tauri `2.10.3`.
+- `pnpm -C apps/desktop copilot-browser:build` succeeded and rebuilt `apps/desktop/scripts/dist/copilot-browser.js`.
+- Live CDP connection worked when Edge was launched manually by full executable path on port `9333`; the M365 Copilot page, prompt editor, and send button were present, and a direct Playwright probe returned `CDP connection works`.
+- Auto-launch still failed on Windows in this workspace because `copilot-browser.js` shells out to `msedge.exe` and assumes it is on `PATH`; the live run returned `CDP_UNAVAILABLE` with `spawn msedge.exe ENOENT`.
+- A fresh-profile probe on port `9334` showed an upgrade/upsell page while the current readiness check still reported `ready`, which means the live readiness heuristic is too weak for non-usable Copilot states.
+- The detailed live execution record is stored in `docs/E2E_COPILOT_LIVE_REPORT.md`. Only Phase `A-2` and `A-3` were fully verified in this session; later app-driven phases remain explicitly unexecuted.
+
+Copilot account-state clarity follow-up:
+
+```bash
+pnpm -C apps/desktop check
+pnpm -C apps/desktop copilot-browser:build
+node --dns-result-order=ipv4first apps/desktop/scripts/dist/copilot-browser.js --action connect --cdp-port 9333 --timeout 60000
+node --dns-result-order=ipv4first apps/desktop/scripts/dist/copilot-browser.js --action send --cdp-port 9333 --timeout 60000 --prompt "Reply with exactly OK and nothing else."
+node apps/desktop/scripts/dist/copilot-browser.js --action send --cdp-port 9334 --timeout 60000 --prompt "Reply with ok"
+```
+
+Observed result:
+
+- `apps/desktop/scripts/copilot-browser.ts` now resolves the Edge executable from standard Windows install paths before falling back to `msedge.exe` on `PATH`.
+- The Copilot readiness check now requires a usable prompt UI and explicitly rejects upgrade / upsell pages as `NOT_LOGGED_IN` instead of reporting a false `ready` state.
+- The send flow now treats network-response capture as opportunistic and falls back to DOM polling if the network hook fails, which avoids surfacing spurious internal browser errors to the user.
+- `apps/desktop/src/lib/copilot-browser.ts` now shows clearer user-facing guidance: sign in with the account that can actually use M365 Copilot, rather than only saying "not logged in."
+- `pnpm -C apps/desktop check` and `pnpm -C apps/desktop copilot-browser:build` passed after the change.
+- Live verification passed on the usable profile at port `9333`: `connect` returned `ready`, and `send` returned `{"status":"ok","response":"OK"}`.
+- The non-usable profile at port `9334` now fails the send path with `NOT_LOGGED_IN`, which matches the intended single-account UX better than silently treating the page as ready.
+
+Guided flow live E2E follow-up:
+
+```bash
+pnpm -C apps/desktop exec tauri build --no-bundle
+```
+
+Observed result:
+
+- The packaged Tauri app was driven through WebDriver with isolated `RELAY_AGENT_TEST_APP_LOCAL_DATA_DIR` values so that manual-flow checks did not depend on existing local continuity state.
+- Step 1 setup passed in Manual mode: entering `C:\relay-test\data_a.csv` plus the objective `approved が true の行だけ残してください` enabled the Step 2 Copilot flow.
+- Step 2 live Copilot execution passed: the app-populated response JSON proposed `table.filter_rows` with `[approved] == true` and `workbook.save_copy` to `C:/relay-test/data_a.copy.csv`.
+- Invalid JSON handling passed: pasting `{"invalid": true}` produced a validation card and did not expose any enabled save button.
+- Step 3 review/save passed: Relay Agent completed the save-copy flow and wrote `C:\relay-test\data_a.copy.csv`, whose contents contained only `approved=true` rows.
+- `docs/E2E_COPILOT_LIVE_REPORT.md` was updated to reflect the newly verified `A-4`, `B-1`, `B-2`, `B-3`, and `B-4` scenarios.
+
+Copilot live E2E follow-up 2:
+
+```bash
+node --dns-result-order=ipv4first apps/desktop/scripts/dist/copilot-browser.js --action connect --auto-launch --cdp-port 9333 --timeout 60000
+node --dns-result-order=ipv4first apps/desktop/scripts/dist/copilot-browser.js --action send --cdp-port 9333 --timeout 5000 --prompt "Reply with exactly OK and nothing else."
+pnpm -C apps/desktop exec tauri build --no-bundle
+# plus inline selenium-webdriver packaged-app probes with isolated
+# RELAY_AGENT_TEST_APP_LOCAL_DATA_DIR values under C:\relay-test\
+```
+
+Observed result:
+
+- `connect --auto-launch` now returns `{"status":"ready","cdpPort":9333}` on this Windows machine instead of failing with `spawn msedge.exe ENOENT`. This run attached to the existing Edge session on `9333`, so it proves the Windows path fix but not a cold-start Edge launch from zero state.
+- `send --timeout 5000` now reproduces `RESPONSE_TIMEOUT` in the standalone browser tool, which gives a stable lower bound for timeout-focused app checks.
+- Packaged-app WebDriver probing now verifies `C-1` end to end: Manual mode + `cdpPort=9333` + `timeoutMs=60000` successfully populates the in-app Copilot response field after `Copilotに自動送信 ▶`.
+- Packaged-app timeout probing still exposes a product gap for `C-2`: `timeoutMs=1000` fails early with a CDP error, while `timeoutMs=5000` can leave a partially populated response without surfacing a reliable timeout error card.
+- Smart approval probing now verifies `H-2`: with `approvalPolicy=standard`, a valid `table.filter_rows + workbook.save_copy` response reaches Step 3, shows the `保存する` gate, and does not write an output before approval.
+- Smart approval probing found two regressions:
+  - `H-3`: with `approvalPolicy=fast`, the same medium-risk save-copy response still stops at the manual `保存する` gate and does not auto-execute, even though `apps/desktop/src-tauri/src/risk_evaluator.rs` says `Fast` should auto-approve `Medium`.
+  - `H-4`: setting `approvalPolicy=fast` in an isolated packaged-app profile does not persist across restart; reopening settings shows `safe`.
+- `docs/E2E_COPILOT_LIVE_REPORT.md` was updated again to record the new `A-1`, `C-1`, `C-2`, `H-2`, `H-3`, and `H-4` results.

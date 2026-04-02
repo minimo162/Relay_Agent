@@ -1,3 +1,6 @@
+import { accessSync, constants } from "fs";
+import os from "os";
+import path from "path";
 import { execFile } from "child_process";
 import net from "net";
 import { chromium, errors, type Browser, type Locator, type Page, type Response } from "playwright";
@@ -13,6 +16,14 @@ const DOM_STABLE_POLLS = 2;
 const DOM_POLL_INTERVAL_MS = 200;
 const MAX_COPILOT_RETRIES = 2;
 const NETWORK_CAPTURE_TIMEOUT_MS = 15_000;
+const COPILOT_UI_CHECK_TIMEOUT_MS = 5_000;
+const COPILOT_UI_CHECK_POLL_MS = 250;
+const COPILOT_UPSELL_PATTERNS = [
+  /Microsoft 365 をアップグレードして Copilot Chat を使用する/i,
+  /アップグレード時にプレミアム Copilot 特典を受ける/i,
+  /Microsoft 365 を購入/i,
+  /プランを比較/i
+];
 
 // Candidate selectors tried in order for DOM polling fallback.
 // The first selector that yields non-empty text wins.
@@ -130,9 +141,9 @@ async function handleConnect(options: CliOptions): Promise<ConnectResult> {
     const connection = await connectToBrowser(options);
     browser = connection.browser;
     const page = await ensureCopilotPage(browser, options.timeout);
-    const loginResult = detectLoginPage(page);
-    if (loginResult) {
-      return loginResult;
+    const availabilityResult = await detectCopilotAvailability(page, options.timeout);
+    if (availabilityResult) {
+      return availabilityResult;
     }
 
     return {
@@ -156,9 +167,9 @@ async function handleSend(options: CliOptions, promptArg?: string): Promise<Send
     const connection = await connectToBrowser(options);
     browser = connection.browser;
     const page = await ensureCopilotPage(browser, options.timeout);
-    const loginResult = detectLoginPage(page);
-    if (loginResult) {
-      return loginResult;
+    const availabilityResult = await detectCopilotAvailability(page, options.timeout);
+    if (availabilityResult) {
+      return availabilityResult;
     }
 
     for (let attempt = 0; attempt <= MAX_COPILOT_RETRIES; attempt += 1) {
@@ -212,7 +223,7 @@ async function connectToBrowser(
   }
 
   try {
-    const browser = await chromium.connectOverCDP(`http://localhost:${port}`);
+    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
     if (options.autoLaunch) {
       emitProgress("cdp_connect", "接続しました");
     }
@@ -277,9 +288,11 @@ async function findExistingCdpEdge(): Promise<number | null> {
 }
 
 async function launchEdgeWithCdp(port: number): Promise<void> {
+  const edgeExecutable = resolveEdgeExecutable();
+
   await new Promise<void>((resolve, reject) => {
     const child = execFile(
-      "msedge.exe",
+      edgeExecutable,
       [`--remote-debugging-port=${port}`, "--no-first-run"],
       { detached: true, stdio: "ignore" }
     );
@@ -338,17 +351,35 @@ function sleep(ms: number): Promise<void> {
 
 async function ensureCopilotPage(browser: Browser, timeout: number): Promise<Page> {
   const page = await getOrCreatePage(browser);
-  if (!page.url().startsWith(COPILOT_URL)) {
-    await page.goto(COPILOT_URL, {
-      timeout,
-      waitUntil: "domcontentloaded"
-    });
+  if (shouldNavigateToCopilot(page.url())) {
+    try {
+      await page.goto(COPILOT_URL, {
+        timeout,
+        waitUntil: "domcontentloaded"
+      });
+    } catch (error) {
+      const message = describeError(error);
+      if (!(error instanceof errors.TimeoutError) && !/ERR_ABORTED/i.test(message)) {
+        throw error;
+      }
+    }
   }
-  await page.waitForLoadState("domcontentloaded", { timeout });
+  await page.waitForLoadState("domcontentloaded", { timeout }).catch(() => undefined);
   return page;
 }
 
-function detectLoginPage(page: Page): ErrorResult | null {
+function shouldNavigateToCopilot(url: string): boolean {
+  if (!url || url === "about:blank") {
+    return true;
+  }
+
+  return !/(m365\.cloud\.microsoft|login|signin|microsoftonline)/i.test(url);
+}
+
+async function detectCopilotAvailability(
+  page: Page,
+  timeout: number
+): Promise<ErrorResult | null> {
   const url = page.url();
   if (/(login|signin)/i.test(url)) {
     return {
@@ -357,7 +388,109 @@ function detectLoginPage(page: Page): ErrorResult | null {
       message: "M365 Copilot login is required before browser automation can continue."
     };
   }
+
+  const deadline = Date.now() + Math.min(timeout, COPILOT_UI_CHECK_TIMEOUT_MS);
+  while (Date.now() < deadline) {
+    if (await hasUsableCopilotPrompt(page)) {
+      return null;
+    }
+
+    const unsupportedAccountState = await detectUnsupportedAccountState(page);
+    if (unsupportedAccountState) {
+      return unsupportedAccountState;
+    }
+
+    await page.waitForTimeout(COPILOT_UI_CHECK_POLL_MS);
+  }
+
+  if (await hasUsableCopilotPrompt(page)) {
+    return null;
+  }
+
+  return (
+    (await detectUnsupportedAccountState(page)) ?? {
+      status: "error",
+      errorCode: "NOT_LOGGED_IN",
+      message:
+        "M365 Copilot is open in Edge, but the current account cannot send prompts. Sign in with the account that has access to M365 Copilot and reopen chat."
+    }
+  );
+}
+
+async function hasUsableCopilotPrompt(page: Page): Promise<boolean> {
+  const candidates = [page.locator(EDITOR_SELECTOR).first(), page.getByRole("textbox").first()];
+
+  for (const candidate of candidates) {
+    if (!(await candidate.count().catch(() => 0))) {
+      continue;
+    }
+
+    if (await candidate.isVisible().catch(() => false)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function detectUnsupportedAccountState(page: Page): Promise<ErrorResult | null> {
+  const bodyText = await page.locator("body").innerText().catch(() => "");
+  if (!bodyText) {
+    return null;
+  }
+
+  if (COPILOT_UPSELL_PATTERNS.some((pattern) => pattern.test(bodyText))) {
+    return {
+      status: "error",
+      errorCode: "NOT_LOGGED_IN",
+      message:
+        "M365 Copilot opened in Edge, but the current account does not have access to Copilot chat. Sign in with the account that can use M365 Copilot and reopen chat."
+    };
+  }
+
   return null;
+}
+
+function resolveEdgeExecutable(): string {
+  const candidates =
+    process.platform === "win32"
+      ? [
+          process.env["ProgramFiles(x86)"] &&
+            path.join(process.env["ProgramFiles(x86)"], "Microsoft", "Edge", "Application", "msedge.exe"),
+          process.env.ProgramFiles &&
+            path.join(process.env.ProgramFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
+          path.join(os.homedir(), "AppData", "Local", "Microsoft", "Edge", "Application", "msedge.exe"),
+          "msedge.exe"
+        ]
+      : ["msedge"];
+
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+
+    if (!candidate.includes(path.sep)) {
+      return candidate;
+    }
+
+    if (canAccessFile(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw createError(
+    "CDP_UNAVAILABLE",
+    "Microsoft Edge could not be found. Install Edge or launch it manually with remote debugging enabled."
+  );
+}
+
+function canAccessFile(filePath: string): boolean {
+  try {
+    accessSync(filePath, constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function getOrCreatePage(browser: Browser): Promise<Page> {
@@ -390,10 +523,8 @@ async function runSendAttempt(
   try {
     const response = await networkResponsePromise;
     responseText = await extractResponseText(response);
-  } catch (error) {
-    if (!(error instanceof errors.TimeoutError)) {
-      throw error;
-    }
+  } catch {
+    // Network capture is opportunistic. If it fails, fall back to DOM polling.
   }
 
   if (!responseText.trim()) {

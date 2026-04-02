@@ -5,13 +5,8 @@ import type {
   CopilotBrowserProgressEvent
 } from "@relay-agent/contracts";
 
-import {
-  checkCopilotConnectionCommand,
-  sendCopilotPrompt
-} from "./ipc";
-import {
-  loadBrowserAutomationSettings
-} from "./continuity";
+import { checkCopilotConnectionCommand, sendCopilotPrompt } from "./ipc";
+import { loadBrowserAutomationSettings } from "./continuity";
 
 const COPILOT_PROGRESS_EVENT = "copilot-browser-progress";
 
@@ -26,15 +21,15 @@ type RunBrowserCommandOptions = {
 
 export const COPILOT_ERROR_MESSAGES: Record<CopilotBrowserErrorCode, string> = {
   CDP_UNAVAILABLE:
-    "Edge に接続できませんでした。設定で自動起動を有効にするか、手動で起動してから再試行してください。",
+    "Edge に接続できませんでした。設定で自動起動を有効にするか、手動で起動してから再接続してください。",
   NOT_LOGGED_IN:
-    "M365 Copilot にログインしていません。Edge で M365 にログインしてから再試行してください。",
+    "M365 Copilot を使えるアカウントで Edge にサインインしてから、もう一度接続してください。現在のアカウントでは Copilot chat を利用できない可能性があります。",
   RESPONSE_TIMEOUT:
-    "Copilot の応答待機がタイムアウトしました。手動でコピー＆ペーストしてください。",
+    "Copilot の応答待ちで時間切れになりました。少し待ってから再試行してください。",
   COPILOT_ERROR:
-    "Copilot がエラーを返しました。手動でコピー＆ペーストしてください。",
+    "Copilot 側でエラーが発生しました。内容を確認してから再試行してください。",
   SEND_FAILED:
-    "プロンプトの送信に失敗しました。手動でコピー＆ペーストしてください。"
+    "Copilot への送信に失敗しました。少し待ってから再試行してください。"
 };
 
 export class CopilotBrowserError extends Error {
