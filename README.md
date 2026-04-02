@@ -81,7 +81,7 @@ Copilot が実行計画を立案し、読み取り操作を自動実行、書き
 **主要 UI コンポーネント**
 - `UnifiedFeed` — ✓/⟳/○/✗ アイコン付きステップクラスター、コンパクション区切り線
 - `TaskInput` — auto-grow テキストエリア、Stop ボタン、アイドルヒントチップ
-- `ApprovalCard` — 折りたたみヘッダー、アクセントバー、3 択アクション（拒否 / 今回のみ / 常に許可）
+- `ApprovalCard` — permission フェーズ（ツール名・説明表示）→ 3 択アクション（拒否 / 今回のみ / 常に許可）、折りたたみヘッダー、アクセントバー
 - `StatusStrip` — 接続状態に応じたリアクティブ ping ドット（connected / connecting / disconnected）
 - `CommandPalette` — ⌘K / Ctrl+K でオープン、ナビゲーション・テーマ切り替え等のアクション
 - `AgentActivityFeed` — エージェント動作のリアルタイムアクティビティ表示
@@ -236,7 +236,7 @@ apps/
           ContextPanel.svelte    # 右ペイン：Files / Servers / Policy タブ
           UnifiedFeed.svelte     # ステップクラスターフィード
           TaskInput.svelte       # 下部固定コンポーザー
-          ApprovalCard.svelte    # 3 択承認カード
+          ApprovalCard.svelte    # permission フェーズ付き 3 択承認カード
           ApprovalGate.svelte    # 承認ゲートUI
           AgentActivityFeed.svelte  # エージェント動作フィード
           ActivityFeed.svelte    # 汎用アクティビティフィード
