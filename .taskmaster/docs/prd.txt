@@ -3,7 +3,7 @@
   方針: 自作ツールを捨て、claw-code (Rust) を薄くラップする
   制約: Claude API 不可 → Copilot Chat で代替
   UI参考: openwork (different-ai/openwork) のデザイン言語
-  Created: 2026-04-02  Updated: 2026-04-03 (マニュアルモード廃止方針を追記)
+  Created: 2026-04-02  Updated: 2026-04-03 (P5完了: マニュアルモード廃止実装済み / P7 Phase1完了: UI刷新実装済み)
 ================================================================================
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -167,24 +167,32 @@
     - tool-runtime.ts → claw-tools が担当
     - copilot-browser.ts → copilot_provider.rs に統合
 
-  ■ マニュアルモード (ガイドワークフロー) の廃止
+  ■ マニュアルモード (ガイドワークフロー) の廃止 ✅ 完了 (2026-04-03)
     全ユーザーが Edge CDP 環境を持つことが確認されたため、
-    手動コピペ方式のガイドワークフローを完全廃止する。
+    手動コピペ方式のガイドワークフローを完全廃止済み。
 
-    削除対象 (+page.svelte 内):
-    - マニュアルモード UI セクション (~857 行, {:else} ブロック)
-    - guidedStage ステート (setup → copilot → review-save)
-    - handleSetupStage / handleCopilotStage / handleReviewSaveStage 関数
-      ※ 委任モードから呼ばれていない純粋なマニュアル専用関数のみ削除
-    - uiMode 変数 + setUiMode 関数 + セグメントコントロール UI
-    - buildSetupSignature / stepState / currentStepNumber ヘルパー
-    - $: currentSetupSignature / setupStepComplete / copilotStepAvailable
-         / reviewStepAvailable リアクティブ宣言
+    実施済み (+page.svelte):
+    - マニュアルモード UI セクション削除 (-877 行, {:else} ブロック)
+    - guidedStage ステート (setup → copilot → review-save) 削除
+    - uiMode 変数 + setUiMode 関数 + セグメントコントロール UI 削除
+    - buildSetupSignature / stepState / currentStepNumber ヘルパー削除
+    - $: currentSetupSignature / setupStepComplete / copilotStepAvailable 削除
+    - 未使用 CSS セレクタ群削除 (-1079 行)
+    - 孤立コンポーネント import 削除 (GoalInput, AgentActivityFeed,
+      ArtifactPreview, ApprovalGate, CompletionTimeline, Sidebar)
 
-    削除対象 (continuity.ts):
-    - UiMode 型から "manual" を除去
-    - ContinuityState.uiMode フィールド
-    - normalizeUiMode / loadUiMode / saveUiMode 関数
+    実施済み (continuity.ts):
+    - UiMode 型を "delegation" のみに縮小
+    - ContinuityState.uiMode フィールド削除
+    - normalizeUiMode / loadUiMode / saveUiMode 関数削除
+
+    実施済み (コンポーネント削除):
+    - GoalInput.svelte, AgentActivityFeed.svelte,
+      CompletionTimeline.svelte, Sidebar.svelte を削除
+
+    実績コード量削減:
+    - +page.svelte: 7140 行 → 4942 行 (-2198 行)
+    - コンポーネント: 32 個 → 28 個
 
   ■ 削除によるコード量削減 (推定)
     - Rust: ~400KB → ~80KB (storage.rs 328KB の大部分が不要に)
@@ -455,13 +463,15 @@
     - 旧 relay.rs, risk_evaluator.rs を削除
     - テスト: セッション管理が正常に動くことを確認
 
-  Phase 5: マニュアルモード廃止
-    - +page.svelte からガイドワークフロー UI を削除 (~857 行)
+  Phase 5: マニュアルモード廃止 ✅ 完了 (2026-04-03)
+    - +page.svelte からガイドワークフロー UI を削除 (-2198 行)
     - guidedStage, uiMode, 関連ヘルパー関数を削除
     - continuity.ts から UiMode/loadUiMode/saveUiMode を削除
-    - テスト: 委任モードのみで全機能が動くことを確認
+    - 孤立コンポーネント 4 個 (GoalInput, AgentActivityFeed,
+      CompletionTimeline, Sidebar) を削除
+    - pnpm typecheck 0 エラーで完了
 
-  Phase 6: クリーンアップ
+  Phase 6: クリーンアップ (進行中)
     - 未使用コード・依存の削除
     - IPC 型定義 (contracts/) の簡素化
     - ドキュメント更新

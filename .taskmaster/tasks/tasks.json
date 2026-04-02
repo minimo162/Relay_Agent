@@ -23,7 +23,9 @@
           "id": "T02",
           "title": "Cargo.toml に claw crates を依存追加",
           "description": "claw-core, claw-tools, claw-provider, claw-permissions, claw-compact を pinned git 依存で追加し、cargo check が通ることを確認する。",
-          "files": ["apps/desktop/src-tauri/Cargo.toml"],
+          "files": [
+            "apps/desktop/src-tauri/Cargo.toml"
+          ],
           "effort": "S",
           "priority": "critical",
           "blockedBy": [],
@@ -33,7 +35,9 @@
           "id": "T03",
           "title": "CopilotChatProvider の実装",
           "description": "claw-provider の ModelProvider trait を実装する CopilotChatProvider を作成。Copilot browser スクリプトを使って M365 Copilot Chat にプロンプトを送信し、messages + tools を Copilot 向けプロンプト文字列に変換してレスポンスを ModelResponse にパースする。stream() は complete() を1チャンク列へ変換する擬似実装とする。",
-          "files": ["apps/desktop/src-tauri/src/copilot_provider.rs"],
+          "files": [
+            "apps/desktop/src-tauri/src/copilot_provider.rs"
+          ],
           "subtasks": [
             "ModelProvider trait の complete() 実装",
             "messages → Copilot プロンプト文字列変換 (format_for_copilot)",
@@ -45,17 +49,23 @@
           ],
           "effort": "L",
           "priority": "critical",
-          "blockedBy": ["T02"],
+          "blockedBy": [
+            "T02"
+          ],
           "status": "completed"
         },
         {
           "id": "T04",
           "title": "CopilotChatProvider の結合テスト",
           "description": "claw-core の query() 関数に CopilotChatProvider を渡し、単一ターンの会話が成功することを確認。Copilot Chat にプロンプトを送り、テキスト応答が正常にパースされることをテスト。",
-          "files": ["apps/desktop/src-tauri/src/copilot_provider.rs"],
+          "files": [
+            "apps/desktop/src-tauri/src/copilot_provider.rs"
+          ],
           "effort": "M",
           "priority": "critical",
-          "blockedBy": ["T03"],
+          "blockedBy": [
+            "T03"
+          ],
           "status": "completed"
         }
       ]
@@ -83,7 +93,9 @@
           ],
           "effort": "M",
           "priority": "critical",
-          "blockedBy": ["T02"],
+          "blockedBy": [
+            "T02"
+          ],
           "status": "completed"
         },
         {
@@ -113,7 +125,9 @@
           ],
           "effort": "XL",
           "priority": "critical",
-          "blockedBy": ["T05"],
+          "blockedBy": [
+            "T05"
+          ],
           "status": "completed"
         },
         {
@@ -128,7 +142,9 @@
           ],
           "effort": "M",
           "priority": "high",
-          "blockedBy": ["T06"],
+          "blockedBy": [
+            "T06"
+          ],
           "status": "completed"
         },
         {
@@ -140,7 +156,9 @@
           ],
           "effort": "M",
           "priority": "high",
-          "blockedBy": ["T07"],
+          "blockedBy": [
+            "T07"
+          ],
           "status": "completed"
         }
       ]
@@ -154,7 +172,9 @@
           "id": "T09",
           "title": "tauri_bridge.rs の実装",
           "description": "claw-core のエージェントループと Tauri フロントエンド間の橋渡しモジュール。start_agent, respond_approval, cancel_agent, get_session_history の 4 コマンドを実装。ツール実行時に Tauri イベント (agent:tool_start, agent:tool_result, agent:approval_needed, agent:turn_complete, agent:error) を emit。",
-          "files": ["apps/desktop/src-tauri/src/tauri_bridge.rs"],
+          "files": [
+            "apps/desktop/src-tauri/src/tauri_bridge.rs"
+          ],
           "subtasks": [
             "start_agent コマンド: claw-core query() をバックグラウンドで起動",
             "イベント emit: tool_start, tool_result",
@@ -166,14 +186,19 @@
           ],
           "effort": "XL",
           "priority": "critical",
-          "blockedBy": ["T04", "T06"],
+          "blockedBy": [
+            "T04",
+            "T06"
+          ],
           "status": "completed"
         },
         {
           "id": "T10",
           "title": "フロントエンド agent-ui.ts の実装",
           "description": "Tauri イベントを listen し、Svelte ストアを更新するモジュール。旧 agent-loop.ts, agent-loop-core.ts, tool-runtime.ts を置換。start_agent IPC を呼び出し、以降はイベント駆動で UI を更新。",
-          "files": ["apps/desktop/src/lib/agent-ui.ts"],
+          "files": [
+            "apps/desktop/src/lib/agent-ui.ts"
+          ],
           "subtasks": [
             "Tauri イベント listener の登録 (agent:*)",
             "feedStore: FeedEntry[] の管理 (tool_start/result で更新)",
@@ -185,7 +210,9 @@
           ],
           "effort": "L",
           "priority": "critical",
-          "blockedBy": ["T09"],
+          "blockedBy": [
+            "T09"
+          ],
           "status": "completed"
         },
         {
@@ -202,7 +229,9 @@
           ],
           "effort": "M",
           "priority": "high",
-          "blockedBy": ["T10"],
+          "blockedBy": [
+            "T10"
+          ],
           "status": "completed"
         },
         {
@@ -218,7 +247,9 @@
           ],
           "effort": "L",
           "priority": "high",
-          "blockedBy": ["T10"],
+          "blockedBy": [
+            "T10"
+          ],
           "status": "completed"
         },
         {
@@ -228,7 +259,10 @@
           "files": [],
           "effort": "L",
           "priority": "critical",
-          "blockedBy": ["T11", "T12"],
+          "blockedBy": [
+            "T11",
+            "T12"
+          ],
           "status": "completed"
         }
       ]
@@ -242,7 +276,9 @@
           "id": "T14",
           "title": "claw-core セッション管理への移行",
           "description": "storage.rs のセッション/ターン/メッセージ管理を claw-core に委譲。storage.rs にはワークブック状態 (WorkbookState, DiffSummary)、承認記録 (ApprovalDecision)、アーティファクト管理のみ残す。",
-          "files": ["apps/desktop/src-tauri/src/storage.rs"],
+          "files": [
+            "apps/desktop/src-tauri/src/storage.rs"
+          ],
           "subtasks": [
             "claw-core のセッション管理 API を把握",
             "セッション CRUD を claw-core に委譲",
@@ -254,7 +290,9 @@
           ],
           "effort": "XL",
           "priority": "high",
-          "blockedBy": ["T13"],
+          "blockedBy": [
+            "T13"
+          ],
           "status": "pending"
         },
         {
@@ -267,7 +305,9 @@
           ],
           "effort": "M",
           "priority": "high",
-          "blockedBy": ["T09"],
+          "blockedBy": [
+            "T09"
+          ],
           "status": "pending"
         },
         {
@@ -280,7 +320,9 @@
           ],
           "effort": "S",
           "priority": "medium",
-          "blockedBy": ["T14"],
+          "blockedBy": [
+            "T14"
+          ],
           "status": "pending"
         }
       ]
@@ -294,7 +336,9 @@
           "id": "T31",
           "title": "マニュアルモード UI セクション削除 (+page.svelte)",
           "description": "+page.svelte の {:else} ブロック (マニュアルモード UI, ~857 行) を削除。guidedStage 型・変数宣言、stepBanner 定数、handleSetupStage / handleCopilotStage / handleReviewSaveStage 関数 (マニュアル専用のもの)、buildSetupSignature / stepState / currentStepNumber ヘルパー、$: リアクティブ宣言 (currentSetupSignature / setupStepComplete / copilotStepAvailable / reviewStepAvailable)、step1Expanded / preparedSetupSignature 等の変数を削除。",
-          "files": ["apps/desktop/src/routes/+page.svelte"],
+          "files": [
+            "apps/desktop/src/routes/+page.svelte"
+          ],
           "subtasks": [
             "{:else} ブロック全体 (lines ~4879-5735) 削除",
             "type GuidedStage と let guidedStage 変数削除",
@@ -309,13 +353,15 @@
           "effort": "L",
           "priority": "critical",
           "blockedBy": [],
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "T32",
           "title": "uiMode 変数・セグメントコントロール UI 削除",
           "description": "uiMode 変数と setUiMode 関数を削除し、モード切替セグメントコントロール UI を削除する。if (uiMode === 'delegation') ガードを全て unwrap (無条件化)、if (uiMode !== 'delegation') early return を削除。UiMode / loadUiMode / saveUiMode を import から除去。pnpm typecheck で型エラーがないことを確認。",
-          "files": ["apps/desktop/src/routes/+page.svelte"],
+          "files": [
+            "apps/desktop/src/routes/+page.svelte"
+          ],
           "subtasks": [
             "let uiMode: UiMode = 'delegation' 変数削除",
             "setUiMode 関数削除",
@@ -329,14 +375,18 @@
           ],
           "effort": "M",
           "priority": "critical",
-          "blockedBy": ["T31"],
-          "status": "pending"
+          "blockedBy": [
+            "T31"
+          ],
+          "status": "completed"
         },
         {
           "id": "T33",
           "title": "continuity.ts UiMode 関連削除",
           "description": "continuity.ts から UiMode 型の 'manual' 値、ContinuityState.uiMode フィールド、normalizeUiMode / loadUiMode / saveUiMode 関数を削除。LocalStorage の 'ra-ui-mode' キーは次回起動時に無視されるため追加対応不要。",
-          "files": ["apps/desktop/src/lib/continuity.ts"],
+          "files": [
+            "apps/desktop/src/lib/continuity.ts"
+          ],
           "subtasks": [
             "UiMode 型を 'delegation' のみに変更、または型ごと削除",
             "ContinuityState.uiMode フィールド削除",
@@ -348,8 +398,10 @@
           ],
           "effort": "S",
           "priority": "high",
-          "blockedBy": ["T32"],
-          "status": "pending"
+          "blockedBy": [
+            "T32"
+          ],
+          "status": "completed"
         },
         {
           "id": "T34",
@@ -367,8 +419,36 @@
           ],
           "effort": "M",
           "priority": "critical",
-          "blockedBy": ["T33"],
-          "status": "pending"
+          "blockedBy": [
+            "T33"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "T35",
+          "title": "孤立コンポーネントの削除",
+          "description": "マニュアルモード廃止後に参照されなくなったコンポーネントファイルの削除と、+page.svelte の未使用 import 行の除去。",
+          "files": [
+            "apps/desktop/src/lib/components/GoalInput.svelte",
+            "apps/desktop/src/lib/components/AgentActivityFeed.svelte",
+            "apps/desktop/src/lib/components/CompletionTimeline.svelte",
+            "apps/desktop/src/lib/components/Sidebar.svelte",
+            "apps/desktop/src/routes/+page.svelte"
+          ],
+          "subtasks": [
+            "GoalInput.svelte 削除",
+            "AgentActivityFeed.svelte 削除",
+            "CompletionTimeline.svelte 削除",
+            "Sidebar.svelte 削除",
+            "+page.svelte から未使用 import 6 件削除 (GoalInput, AgentActivityFeed, ArtifactPreview, ApprovalGate, CompletionTimeline, Sidebar)",
+            "pnpm typecheck 0 エラーで完了確認"
+          ],
+          "effort": "S",
+          "priority": "medium",
+          "blockedBy": [
+            "T34"
+          ],
+          "status": "completed"
         }
       ]
     },
@@ -389,7 +469,10 @@
           ],
           "effort": "M",
           "priority": "medium",
-          "blockedBy": ["T14", "T16"],
+          "blockedBy": [
+            "T14",
+            "T16"
+          ],
           "status": "pending"
         },
         {
@@ -404,17 +487,23 @@
           ],
           "effort": "M",
           "priority": "medium",
-          "blockedBy": ["T11"],
+          "blockedBy": [
+            "T11"
+          ],
           "status": "pending"
         },
         {
           "id": "T19",
           "title": "旧 Cargo 依存の削除",
           "description": "claw-code で代替された依存 (csv パース用の一部、regex の直接利用等) を Cargo.toml から削除。claw-tools が内部で持っているものは不要。",
-          "files": ["apps/desktop/src-tauri/Cargo.toml"],
+          "files": [
+            "apps/desktop/src-tauri/Cargo.toml"
+          ],
           "effort": "S",
           "priority": "low",
-          "blockedBy": ["T17"],
+          "blockedBy": [
+            "T17"
+          ],
           "status": "pending"
         },
         {
@@ -424,7 +513,11 @@
           "files": [],
           "effort": "L",
           "priority": "critical",
-          "blockedBy": ["T17", "T18", "T19"],
+          "blockedBy": [
+            "T17",
+            "T18",
+            "T19"
+          ],
           "status": "pending"
         }
       ]
@@ -438,7 +531,9 @@
           "id": "T21",
           "title": "デザイントークン刷新 (cool neutral + pill radius + IBM Plex Sans)",
           "description": "旧 Shizuka warm stone パレットを cool neutral (#f6f9fc ベース) に全面置換。角丸を pill ファーストに大幅拡大 (8/16/24/32/pill)。フォントスタックを IBM Plex Sans + Noto Sans JP に変更。shadow を3段階に薄化。uppercase セクションラベル用 .label-section クラス追加。旧 --kz-* トークン完全削除。",
-          "files": ["apps/desktop/src/routes/+layout.svelte"],
+          "files": [
+            "apps/desktop/src/routes/+layout.svelte"
+          ],
           "subtasks": [
             "Light Mode カラートークン (#f6f9fc / #f9fafb / #f3f4f6 ボーダー)",
             "Dark Mode カラートークン (slate-900/800/700 ベース)",
@@ -452,7 +547,7 @@
           "effort": "M",
           "priority": "critical",
           "blockedBy": [],
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "T22",
@@ -472,8 +567,10 @@
           ],
           "effort": "L",
           "priority": "critical",
-          "blockedBy": ["T21"],
-          "status": "pending"
+          "blockedBy": [
+            "T21"
+          ],
+          "status": "completed"
         },
         {
           "id": "T23",
@@ -495,8 +592,10 @@
           ],
           "effort": "M",
           "priority": "high",
-          "blockedBy": ["T21"],
-          "status": "pending"
+          "blockedBy": [
+            "T21"
+          ],
+          "status": "completed"
         },
         {
           "id": "T24",
@@ -518,14 +617,18 @@
           ],
           "effort": "M",
           "priority": "high",
-          "blockedBy": ["T21"],
-          "status": "pending"
+          "blockedBy": [
+            "T21"
+          ],
+          "status": "completed"
         },
         {
           "id": "T25",
           "title": "UnifiedFeed → Step Cluster フィード全面刷新",
           "description": "1行1エントリから Step Cluster 方式に変更。エージェントループの1ラウンドを1クラスターにグループ化。クラスターヘッダー(ラベル/ステップ数/経過時間/展開アイコン)、ステップ行(✓⟳○✗ + ツール名 + 時間)、詳細アコーディオン。実行中は accent 左ボーダー 2px。コンパクション区切りライン表示。",
-          "files": ["apps/desktop/src/lib/components/UnifiedFeed.svelte"],
+          "files": [
+            "apps/desktop/src/lib/components/UnifiedFeed.svelte"
+          ],
           "subtasks": [
             "StepCluster / StepEntry 型定義",
             "クラスターヘッダー: label + ステップ数バッジ + 経過時間 + ▶/▼",
@@ -538,14 +641,19 @@
           ],
           "effort": "L",
           "priority": "critical",
-          "blockedBy": ["T10", "T21"],
-          "status": "pending"
+          "blockedBy": [
+            "T10",
+            "T21"
+          ],
+          "status": "completed"
         },
         {
           "id": "T26",
           "title": "TaskInput ボトム固定 Composer 実装",
           "description": "常時ボトム固定の Composer に統一。ツールバー (@ファイル / /コマンド / Copilot▾)、auto-grow textarea (56-200px)、ファイルチップ、送信/停止切替。border-radius --r-xl(32px)。空状態の中央エリアにサジェストチップと最近ファイルを表示。",
-          "files": ["apps/desktop/src/lib/components/TaskInput.svelte"],
+          "files": [
+            "apps/desktop/src/lib/components/TaskInput.svelte"
+          ],
           "subtasks": [
             "position: sticky bottom / --r-xl(32px) シェル",
             "ツールバー: @ファイルボタン / /コマンドボタン / Copilot▾ボタン",
@@ -557,14 +665,18 @@
           ],
           "effort": "M",
           "priority": "high",
-          "blockedBy": ["T21"],
-          "status": "pending"
+          "blockedBy": [
+            "T21"
+          ],
+          "status": "completed"
         },
         {
           "id": "T27",
           "title": "ApprovalCard インライン化 + 3択ボタン",
           "description": "承認UIをフィード内インラインカードに変更。「拒否 / 今回のみ許可 / 常に許可」3択。「常に許可」→ ContextPanel の承認ポリシー自動更新。accent 左ボーダー 3px。スコープ警告はカード内インラインアラート。",
-          "files": ["apps/desktop/src/lib/components/ApprovalCard.svelte"],
+          "files": [
+            "apps/desktop/src/lib/components/ApprovalCard.svelte"
+          ],
           "subtasks": [
             "フィード内インライン表示 (モーダル・オーバーレイ廃止)",
             "書込承認カード: 3択ボタン (拒否/今回/常に)",
@@ -576,8 +688,11 @@
           ],
           "effort": "M",
           "priority": "critical",
-          "blockedBy": ["T22", "T25"],
-          "status": "pending"
+          "blockedBy": [
+            "T22",
+            "T25"
+          ],
+          "status": "completed"
         },
         {
           "id": "T28",
@@ -598,7 +713,9 @@
           ],
           "effort": "L",
           "priority": "high",
-          "blockedBy": ["T22"],
+          "blockedBy": [
+            "T22"
+          ],
           "status": "pending"
         },
         {
@@ -616,7 +733,9 @@
           ],
           "effort": "M",
           "priority": "medium",
-          "blockedBy": ["T21"],
+          "blockedBy": [
+            "T21"
+          ],
           "status": "pending"
         },
         {
@@ -626,7 +745,17 @@
           "files": [],
           "effort": "M",
           "priority": "critical",
-          "blockedBy": ["T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29"],
+          "blockedBy": [
+            "T21",
+            "T22",
+            "T23",
+            "T24",
+            "T25",
+            "T26",
+            "T27",
+            "T28",
+            "T29"
+          ],
           "status": "pending"
         }
       ]
@@ -634,53 +763,225 @@
   ],
   "taskDependencyGraph": {
     "T01": [],
-    "T02": ["T01"],
-    "T03": ["T02"],
-    "T04": ["T03"],
-    "T05": ["T02"],
-    "T06": ["T05"],
-    "T07": ["T06"],
-    "T08": ["T07"],
-    "T09": ["T04", "T06"],
-    "T10": ["T09"],
-    "T11": ["T10"],
-    "T12": ["T10"],
-    "T13": ["T11", "T12"],
-    "T14": ["T13"],
-    "T15": ["T09"],
-    "T16": ["T14"],
-    "T17": ["T14", "T16"],
-    "T18": ["T11"],
-    "T19": ["T17"],
-    "T20": ["T17", "T18", "T19"],
+    "T02": [
+      "T01"
+    ],
+    "T03": [
+      "T02"
+    ],
+    "T04": [
+      "T03"
+    ],
+    "T05": [
+      "T02"
+    ],
+    "T06": [
+      "T05"
+    ],
+    "T07": [
+      "T06"
+    ],
+    "T08": [
+      "T07"
+    ],
+    "T09": [
+      "T04",
+      "T06"
+    ],
+    "T10": [
+      "T09"
+    ],
+    "T11": [
+      "T10"
+    ],
+    "T12": [
+      "T10"
+    ],
+    "T13": [
+      "T11",
+      "T12"
+    ],
+    "T14": [
+      "T13"
+    ],
+    "T15": [
+      "T09"
+    ],
+    "T16": [
+      "T14"
+    ],
+    "T17": [
+      "T14",
+      "T16"
+    ],
+    "T18": [
+      "T11"
+    ],
+    "T19": [
+      "T17"
+    ],
+    "T20": [
+      "T17",
+      "T18",
+      "T19"
+    ],
     "T21": [],
-    "T22": ["T21"],
-    "T23": ["T21"],
-    "T24": ["T21"],
-    "T25": ["T10", "T21"],
-    "T26": ["T21"],
-    "T27": ["T22", "T25"],
-    "T28": ["T22"],
-    "T29": ["T21"],
-    "T30": ["T21", "T22", "T23", "T24", "T25", "T26", "T27", "T28", "T29"],
+    "T22": [
+      "T21"
+    ],
+    "T23": [
+      "T21"
+    ],
+    "T24": [
+      "T21"
+    ],
+    "T25": [
+      "T10",
+      "T21"
+    ],
+    "T26": [
+      "T21"
+    ],
+    "T27": [
+      "T22",
+      "T25"
+    ],
+    "T28": [
+      "T22"
+    ],
+    "T29": [
+      "T21"
+    ],
+    "T30": [
+      "T21",
+      "T22",
+      "T23",
+      "T24",
+      "T25",
+      "T26",
+      "T27",
+      "T28",
+      "T29"
+    ],
     "T31": [],
-    "T32": ["T31"],
-    "T33": ["T32"],
-    "T34": ["T33"]
+    "T32": [
+      "T31"
+    ],
+    "T33": [
+      "T32"
+    ],
+    "T34": [
+      "T33"
+    ],
+    "T35": [
+      "T34"
+    ]
   },
   "parallelizableGroups": [
-    { "group": "P1-parallel", "tasks": ["T03", "T05"], "note": "T02 完了後に並行可能" },
-    { "group": "P3-parallel", "tasks": ["T11", "T12"], "note": "T10 完了後に並行可能" },
-    { "group": "P4-parallel", "tasks": ["T14", "T15"], "note": "ストレージ移行とパーミッション移行は並行可能" },
-    { "group": "P5-manual", "tasks": ["T31", "T32", "T33", "T34"], "note": "T13 完了済のため即着手可能。T31→T32→T33→T34 の順次実行" },
-    { "group": "P6-parallel", "tasks": ["T17", "T18"], "note": "Rust クリーンアップと TS 型定義簡素化は並行可能" },
-    { "group": "P7-wave1", "tasks": ["T21"], "note": "UI の起点。これが全 UI タスクの前提" },
-    { "group": "P7-wave2", "tasks": ["T22", "T23", "T24", "T26", "T29"], "note": "T21 完了後に全て並行可能" },
-    { "group": "P7-wave3", "tasks": ["T25", "T27", "T28"], "note": "T22 + T10 完了後に並行可能 (T25 は T10 待ち)" },
-    { "group": "P7-wave4", "tasks": ["T30"], "note": "全 UI タスク完了後" }
+    {
+      "group": "P1-parallel",
+      "tasks": [
+        "T03",
+        "T05"
+      ],
+      "note": "T02 完了後に並行可能"
+    },
+    {
+      "group": "P3-parallel",
+      "tasks": [
+        "T11",
+        "T12"
+      ],
+      "note": "T10 完了後に並行可能"
+    },
+    {
+      "group": "P4-parallel",
+      "tasks": [
+        "T14",
+        "T15"
+      ],
+      "note": "ストレージ移行とパーミッション移行は並行可能"
+    },
+    {
+      "group": "P5-manual",
+      "tasks": [
+        "T31",
+        "T32",
+        "T33",
+        "T34"
+      ],
+      "note": "T13 完了済のため即着手可能。T31→T32→T33→T34 の順次実行"
+    },
+    {
+      "group": "P6-parallel",
+      "tasks": [
+        "T17",
+        "T18"
+      ],
+      "note": "Rust クリーンアップと TS 型定義簡素化は並行可能"
+    },
+    {
+      "group": "P7-wave1",
+      "tasks": [
+        "T21"
+      ],
+      "note": "UI の起点。これが全 UI タスクの前提"
+    },
+    {
+      "group": "P7-wave2",
+      "tasks": [
+        "T22",
+        "T23",
+        "T24",
+        "T26",
+        "T29"
+      ],
+      "note": "T21 完了後に全て並行可能"
+    },
+    {
+      "group": "P7-wave3",
+      "tasks": [
+        "T25",
+        "T27",
+        "T28"
+      ],
+      "note": "T22 + T10 完了後に並行可能 (T25 は T10 待ち)"
+    },
+    {
+      "group": "P7-wave4",
+      "tasks": [
+        "T30"
+      ],
+      "note": "全 UI タスク完了後"
+    }
   ],
-  "criticalPath": ["T01", "T02", "T03", "T04", "T09", "T10", "T11", "T13", "T14", "T16", "T17", "T20"],
-  "manualModeRemovalPath": ["T31", "T32", "T33", "T34"],
-  "uiCriticalPath": ["T21", "T22", "T25", "T27", "T30"],
-  "estimatedTotalEffort": "7 phases, 34 tasks (P1-P4: バックエンド移行 16タスク / P5: マニュアルモード廃止 4タスク / P6: クリーンアップ 4タスク / P7: UI刷新 10タスク)"
+  "criticalPath": [
+    "T01",
+    "T02",
+    "T03",
+    "T04",
+    "T09",
+    "T10",
+    "T11",
+    "T13",
+    "T14",
+    "T16",
+    "T17",
+    "T20"
+  ],
+  "manualModeRemovalPath": [
+    "T31",
+    "T32",
+    "T33",
+    "T34",
+    "T35"
+  ],
+  "uiCriticalPath": [
+    "T21",
+    "T22",
+    "T25",
+    "T27",
+    "T30"
+  ],
+  "estimatedTotalEffort": "7 phases, 35 tasks (P1-P4: バックエンド移行 16タスク / P5: マニュアルモード廃止 5タスク [完了] / P6: クリーンアップ 4タスク / P7: UI刷新 10タスク [T21-T27完了])"
 }

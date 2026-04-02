@@ -2,16 +2,11 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-shell";
-  import AgentActivityFeed from "$lib/components/AgentActivityFeed.svelte";
   import ApprovalCard from "$lib/components/ApprovalCard.svelte";
-  import ArtifactPreview from "$lib/components/ArtifactPreview.svelte";
-  import ApprovalGate from "$lib/components/ApprovalGate.svelte";
   import BatchDashboard from "$lib/components/BatchDashboard.svelte";
   import BatchTargetSelector from "$lib/components/BatchTargetSelector.svelte";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
   import CompletionCard from "$lib/components/CompletionCard.svelte";
-  import CompletionTimeline from "$lib/components/CompletionTimeline.svelte";
-  import GoalInput from "$lib/components/GoalInput.svelte";
   import PipelineBuilder from "$lib/components/PipelineBuilder.svelte";
   import PipelineProgress from "$lib/components/PipelineProgress.svelte";
   import ProjectSelector from "$lib/components/ProjectSelector.svelte";
@@ -19,7 +14,6 @@
   import SettingsModal from "$lib/components/SettingsModal.svelte";
   import AppSidebar from "$lib/components/AppSidebar.svelte";
   import ContextPanel from "$lib/components/ContextPanel.svelte";
-  import Sidebar from "$lib/components/Sidebar.svelte";
   import StatusStrip from "$lib/components/StatusStrip.svelte";
   import TaskInput from "$lib/components/TaskInput.svelte";
   import TemplateBrowser from "$lib/components/TemplateBrowser.svelte";
