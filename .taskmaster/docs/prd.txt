@@ -3,7 +3,7 @@
   方針: 自作ツールを捨て、claw-code (Rust) を薄くラップする
   制約: Claude API 不可 → Copilot Chat で代替
   UI参考: openwork (different-ai/openwork) のデザイン言語
-  Created: 2026-04-02  Updated: 2026-04-03
+  Created: 2026-04-02  Updated: 2026-04-03 (マニュアルモード廃止方針を追記)
 ================================================================================
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -166,6 +166,25 @@
     - agent-loop-prompts.ts → claw-core のシステムプロンプト + CLAUDE.md
     - tool-runtime.ts → claw-tools が担当
     - copilot-browser.ts → copilot_provider.rs に統合
+
+  ■ マニュアルモード (ガイドワークフロー) の廃止
+    全ユーザーが Edge CDP 環境を持つことが確認されたため、
+    手動コピペ方式のガイドワークフローを完全廃止する。
+
+    削除対象 (+page.svelte 内):
+    - マニュアルモード UI セクション (~857 行, {:else} ブロック)
+    - guidedStage ステート (setup → copilot → review-save)
+    - handleSetupStage / handleCopilotStage / handleReviewSaveStage 関数
+      ※ 委任モードから呼ばれていない純粋なマニュアル専用関数のみ削除
+    - uiMode 変数 + setUiMode 関数 + セグメントコントロール UI
+    - buildSetupSignature / stepState / currentStepNumber ヘルパー
+    - $: currentSetupSignature / setupStepComplete / copilotStepAvailable
+         / reviewStepAvailable リアクティブ宣言
+
+    削除対象 (continuity.ts):
+    - UiMode 型から "manual" を除去
+    - ContinuityState.uiMode フィールド
+    - normalizeUiMode / loadUiMode / saveUiMode 関数
 
   ■ 削除によるコード量削減 (推定)
     - Rust: ~400KB → ~80KB (storage.rs 328KB の大部分が不要に)
@@ -436,7 +455,13 @@
     - 旧 relay.rs, risk_evaluator.rs を削除
     - テスト: セッション管理が正常に動くことを確認
 
-  Phase 5: クリーンアップ
+  Phase 5: マニュアルモード廃止
+    - +page.svelte からガイドワークフロー UI を削除 (~857 行)
+    - guidedStage, uiMode, 関連ヘルパー関数を削除
+    - continuity.ts から UiMode/loadUiMode/saveUiMode を削除
+    - テスト: 委任モードのみで全機能が動くことを確認
+
+  Phase 6: クリーンアップ
     - 未使用コード・依存の削除
     - IPC 型定義 (contracts/) の簡素化
     - ドキュメント更新
@@ -473,6 +498,8 @@
   5. Copilot Chat 経由でマルチターンのエージェントループが動作
   6. 承認ゲート (書込前の確認) が従来通り機能
   7. バッチ/パイプライン/テンプレートが従来通り機能
+  8. マニュアルモード (ガイドワークフロー) が完全廃止され、
+     委任モード (Edge CDP + 自律実行) のみに一本化されている
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 12. UI/UX 設計 — openwork インスパイア
