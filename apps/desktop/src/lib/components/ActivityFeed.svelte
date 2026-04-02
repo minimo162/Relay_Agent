@@ -100,8 +100,8 @@
   }
 
   .feed-event:hover {
-    background: #f0eeea;
-    border-radius: 8px;
+    background: var(--c-canvas);
+    border-radius: var(--r-sm);
   }
 
   /* Timeline dot */
@@ -136,14 +136,14 @@
   .event-action-required {
     background: var(--c-warning-subtle);
     border-left: 3px solid var(--c-warning);
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     padding-left: var(--sp-3);
   }
 
   .event-error {
     background: var(--c-error-subtle);
     border-left: 3px solid var(--c-error);
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     padding-left: var(--sp-3);
   }
 
@@ -172,7 +172,7 @@
     align-items: center;
     padding: 0.125rem var(--sp-2);
     border-radius: var(--r-full);
-    background: #f0eeea;
+    background: var(--c-canvas);
     color: var(--c-text-2);
     font-size: var(--sz-xs);
     font-weight: 500;
@@ -216,7 +216,7 @@
     word-break: break-word;
     font-family: var(--font-mono);
     font-size: var(--sz-xs);
-    background: #f0eeea;
+    background: var(--c-canvas);
     padding: var(--sp-2) var(--sp-3);
     border-radius: var(--r-sm);
     border: 1px solid var(--c-border-strong);

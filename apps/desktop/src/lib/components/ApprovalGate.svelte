@@ -44,7 +44,7 @@
     margin: 0 0 var(--sp-4);
     background: var(--c-warning-subtle);
     border: 1px solid var(--c-warning-subtle);
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     color: var(--c-text-2);
     font-size: var(--sz-sm);
     line-height: 1.5;
@@ -91,7 +91,7 @@
   }
 
   .btn-secondary:not(:disabled):hover {
-    background: #f0eeea;
+    background: var(--c-canvas);
     border-color: var(--c-border-strong);
     color: var(--c-text);
   }
@@ -103,7 +103,7 @@
     padding: var(--sp-3) var(--sp-6);
     font-size: var(--sz-base);
     font-weight: 700;
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     box-shadow: var(--shadow-sm);
   }
 

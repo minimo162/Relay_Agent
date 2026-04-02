@@ -216,7 +216,7 @@
     padding: var(--sp-5);
     border: 1px solid var(--c-border-strong);
     border-left: 3px solid var(--c-warning);
-    border-radius: 12px;
+    border-radius: var(--r-md);
     background: var(--c-surface);
     box-shadow: var(--shadow-md);
     backdrop-filter: blur(20px) saturate(180%);
@@ -225,7 +225,7 @@
   }
 
   .intervention-card:hover {
-    box-shadow: 0 8px 24px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04);
+    box-shadow: var(--shadow-md);
   }
 
   .intervention-card h4 {
@@ -288,7 +288,7 @@
     margin: var(--sp-3) 0;
     padding: var(--sp-3);
     border: 1px solid var(--c-error-subtle);
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     background: var(--c-error-subtle);
   }
 
@@ -315,8 +315,8 @@
     gap: var(--sp-3);
     padding: var(--sp-3) var(--sp-4);
     border: 1px solid var(--c-border-strong);
-    border-radius: 8px;
-    background: #f0eeea;
+    border-radius: var(--r-sm);
+    background: var(--c-canvas);
     transition: border-color var(--duration-fast) var(--ease),
                 background var(--duration-fast) var(--ease),
                 box-shadow var(--duration-fast) var(--ease);
@@ -405,7 +405,7 @@
     font-family: var(--font-mono);
     font-size: var(--sz-xs);
     color: var(--c-text-3);
-    background: #f0eeea;
+    background: var(--c-canvas);
     padding: 0.1rem var(--sp-2);
     border-radius: var(--r-full);
     white-space: nowrap;
@@ -489,7 +489,7 @@
     background: transparent;
     color: var(--c-text-2);
     border: 1px solid var(--c-border-strong);
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     transition: background var(--duration-fast) var(--ease),
                 color var(--duration-fast) var(--ease),
                 border-color var(--duration-fast) var(--ease);
@@ -497,7 +497,7 @@
   }
 
   .btn-row .btn-secondary:hover:not(:disabled) {
-    background: #f0eeea;
+    background: var(--c-canvas);
     color: var(--c-text);
     border-color: var(--c-text-3);
   }
@@ -517,9 +517,9 @@
     font-family: var(--font-sans);
     font-size: var(--sz-sm);
     color: var(--c-text);
-    background: #f0eeea;
+    background: var(--c-canvas);
     border: 1px solid var(--c-border-strong);
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     resize: vertical;
     min-height: 5rem;
     max-height: 16rem;

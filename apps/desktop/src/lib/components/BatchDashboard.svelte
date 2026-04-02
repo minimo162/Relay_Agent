@@ -100,7 +100,7 @@
   .dashboard-row {
     grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) auto;
     padding: var(--sp-3) var(--sp-4);
-    border-radius: 12px;
+    border-radius: var(--r-md);
     border: 1px solid var(--c-border-strong);
     background: var(--c-surface);
     box-shadow: var(--shadow-sm);
@@ -146,7 +146,7 @@
   .progress-bar {
     height: 0.5rem;
     border-radius: var(--r-full);
-    background: #f0eeea;
+    background: var(--c-canvas);
     overflow: hidden;
   }
 

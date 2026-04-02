@@ -181,7 +181,7 @@
     z-index: 1;
     grid-template-columns: auto minmax(0, 1fr) auto;
     padding: var(--sp-4);
-    border-radius: 16px;
+    border-radius: var(--r-lg);
     border: 1px solid var(--c-border-strong);
     background: var(--c-surface);
     box-shadow: var(--shadow-sm);
@@ -205,7 +205,7 @@
     color: var(--c-accent);
     font-size: var(--sz-sm);
     font-weight: 700;
-    border: 2px solid rgba(13,148,136,0.20);
+    border: 2px solid var(--c-accent-subtle);
     flex-shrink: 0;
   }
 

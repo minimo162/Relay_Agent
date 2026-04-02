@@ -3,7 +3,10 @@
   import type { OutputArtifact, PlanStep } from "@relay-agent/contracts";
   import ArtifactPreview from "./ArtifactPreview.svelte";
 
-  export let phase: "plan" | "scope" | "write" = "plan";
+  export let phase: "plan" | "scope" | "write" | "permission" = "plan";
+  /** permission phase — tool awaiting approval */
+  export let permissionToolName = "";
+  export let permissionDescription = "";
   export let planSteps: PlanStep[] = [];
   export let planSummary = "";
   export let artifacts: OutputArtifact[] = [];
@@ -24,6 +27,10 @@
     back: void;
     retry: void;
     alwaysAllow: void;
+    /** permission phase */
+    permissionDeny: void;
+    permissionAllowOnce: void;
+    permissionAlwaysAllow: void;
   }>();
 
   let showReplanInput = false;
@@ -85,6 +92,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
           </svg>
+        {:else if phase === "permission"}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
         {:else}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
@@ -96,6 +107,7 @@
         <span class="header-title">
           {#if phase === "plan"}実行計画の確認
           {:else if phase === "scope"}スコープ確認
+          {:else if phase === "permission"}ツール実行の許可
           {:else}変更の確認
           {/if}
         </span>
@@ -163,6 +175,18 @@
           </div>
         {/if}
 
+        <!-- PERMISSION phase -->
+        {#if phase === "permission"}
+          <div class="permission-body">
+            {#if permissionToolName}
+              <code class="perm-tool">{permissionToolName}</code>
+            {/if}
+            {#if permissionDescription}
+              <p class="perm-desc">{permissionDescription}</p>
+            {/if}
+          </div>
+        {/if}
+
         <!-- WRITE phase -->
         {#if phase === "write"}
           {#if previewWarnings.length > 0}
@@ -190,36 +214,59 @@
 
     <!-- Inline 3-choice action row -->
     <div class="action-row">
-      <!-- Reject / back -->
-      <button class="choice-btn choice-reject" type="button" on:click={phase === "plan" && !showReplanInput ? () => { showReplanInput = true; } : handleReject}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-        {#if phase === "plan"}修正を依頼{:else if phase === "scope"}拒否{:else}{reviewStepAvailable ? "内容を見直す" : "キャンセル"}{/if}
-      </button>
-
-      <!-- Once / approve -->
-      <button class="choice-btn choice-once" type="button" on:click={handleApprove} disabled={busy}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="20 6 9 17 4 12"/>
-        </svg>
-        {#if busy}
-          <span class="spinner"></span>
-        {:else if phase === "plan"}実行する
-        {:else if phase === "scope"}今回のみ許可
-        {:else}保存する
-        {/if}
-      </button>
-
-      <!-- Always allow (scope/write only) -->
-      {#if phase === "scope" || phase === "write"}
-        <button class="choice-btn choice-always" type="button" on:click={handleAlwaysAllow} disabled={busy}>
+      {#if phase === "permission"}
+        <!-- Permission: 拒否 / 今回のみ / 常に許可 -->
+        <button class="choice-btn choice-reject" type="button" on:click={() => dispatch("permissionDeny")}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+          拒否
+        </button>
+        <button class="choice-btn choice-once" type="button" on:click={() => dispatch("permissionAllowOnce")}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          今回のみ許可
+        </button>
+        <button class="choice-btn choice-always" type="button" on:click={() => dispatch("permissionAlwaysAllow")}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
             <polyline points="9 12 11 14 15 10"/>
           </svg>
           常に許可
         </button>
+      {:else}
+        <!-- Reject / back -->
+        <button class="choice-btn choice-reject" type="button" on:click={phase === "plan" && !showReplanInput ? () => { showReplanInput = true; } : handleReject}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+          {#if phase === "plan"}修正を依頼{:else if phase === "scope"}拒否{:else}{reviewStepAvailable ? "内容を見直す" : "キャンセル"}{/if}
+        </button>
+
+        <!-- Once / approve -->
+        <button class="choice-btn choice-once" type="button" on:click={handleApprove} disabled={busy}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+          {#if busy}
+            <span class="spinner"></span>
+          {:else if phase === "plan"}実行する
+          {:else if phase === "scope"}今回のみ許可
+          {:else}保存する
+          {/if}
+        </button>
+
+        <!-- Always allow (scope/write only) -->
+        {#if phase === "scope" || phase === "write"}
+          <button class="choice-btn choice-always" type="button" on:click={handleAlwaysAllow} disabled={busy}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              <polyline points="9 12 11 14 15 10"/>
+            </svg>
+            常に許可
+          </button>
+        {/if}
       {/if}
     </div>
   </div>
@@ -249,9 +296,10 @@
     width: 3px;
     border-radius: var(--r-md) 0 0 var(--r-md);
   }
-  .accent-bar[data-phase="plan"]  { background: var(--c-accent); }
-  .accent-bar[data-phase="scope"] { background: var(--c-warning); }
-  .accent-bar[data-phase="write"] { background: var(--c-success); }
+  .accent-bar[data-phase="plan"]       { background: var(--c-accent); }
+  .accent-bar[data-phase="scope"]      { background: var(--c-warning); }
+  .accent-bar[data-phase="write"]      { background: var(--c-success); }
+  .accent-bar[data-phase="permission"] { background: var(--c-error); }
 
   .card-inner {
     padding: var(--sp-3, 12px) var(--sp-4, 16px) var(--sp-3, 12px) calc(var(--sp-4, 16px) + 3px);
@@ -292,9 +340,10 @@
     border-radius: var(--r-sm, 8px);
     flex-shrink: 0;
   }
-  .phase-icon[data-phase="plan"]  { background: var(--c-accent-subtle);  color: var(--c-accent); }
-  .phase-icon[data-phase="scope"] { background: var(--c-warning-subtle); color: var(--c-warning); }
-  .phase-icon[data-phase="write"] { background: var(--c-success-subtle); color: var(--c-success); }
+  .phase-icon[data-phase="plan"]       { background: var(--c-accent-subtle);  color: var(--c-accent); }
+  .phase-icon[data-phase="scope"]      { background: var(--c-warning-subtle); color: var(--c-warning); }
+  .phase-icon[data-phase="write"]      { background: var(--c-success-subtle); color: var(--c-success); }
+  .phase-icon[data-phase="permission"] { background: var(--c-error-subtle);   color: var(--c-error); }
   .phase-icon svg { width: 14px; height: 14px; }
 
   .header-text {
@@ -509,4 +558,26 @@
     font-size: var(--sz-xs, 0.75rem);
   }
   .violation-list li { margin-bottom: 2px; }
+
+  /* Permission phase */
+  .permission-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2, 8px);
+  }
+  .perm-tool {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: var(--sz-xs, 0.75rem);
+    color: var(--c-error);
+    background: var(--c-error-subtle);
+    padding: 2px var(--sp-2, 8px);
+    border-radius: var(--r-full);
+  }
+  .perm-desc {
+    font-size: var(--sz-sm, 0.875rem);
+    color: var(--c-text-2);
+    margin: 0;
+    line-height: 1.5;
+  }
 </style>

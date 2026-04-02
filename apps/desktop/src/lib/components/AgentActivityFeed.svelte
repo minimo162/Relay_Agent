@@ -126,7 +126,7 @@
   .activity-feed {
     background: var(--c-surface);
     border: 1px solid var(--c-border-strong);
-    border-radius: 12px;
+    border-radius: var(--r-md);
     padding: var(--sp-4);
     box-shadow: var(--shadow-sm);
     backdrop-filter: blur(20px) saturate(180%);
@@ -151,7 +151,7 @@
     justify-content: center;
     width: 36px;
     height: 36px;
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     background: var(--c-accent-subtle);
     color: var(--c-accent);
     font-family: var(--font-mono);
@@ -289,7 +289,7 @@
     font-family: var(--font-mono);
     font-size: 0.6875rem;
     color: var(--c-text-3);
-    background: #f0eeea;
+    background: var(--c-canvas);
     padding: 0.0625rem var(--sp-2);
     border-radius: var(--r-full);
     letter-spacing: 0.02em;
@@ -364,9 +364,9 @@
   .detail-json {
     margin-top: var(--sp-2);
     padding: var(--sp-3);
-    background: #f0eeea;
+    background: var(--c-canvas);
     border: 1px solid var(--c-border-strong);
-    border-radius: 8px;
+    border-radius: var(--r-sm);
     font-family: var(--font-mono);
     font-size: 0.6875rem;
     line-height: 1.6;

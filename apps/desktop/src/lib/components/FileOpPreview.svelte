@@ -118,7 +118,7 @@
 
   .file-op-card {
     border: 1px solid var(--c-border-strong);
-    border-radius: 12px;
+    border-radius: var(--r-md);
     padding: var(--sp-4);
     background: var(--c-surface);
     box-shadow: var(--shadow-sm);

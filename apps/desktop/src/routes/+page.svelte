@@ -20,7 +20,6 @@
   import AppSidebar from "$lib/components/AppSidebar.svelte";
   import ContextPanel from "$lib/components/ContextPanel.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
-  import StatusBar from "$lib/components/StatusBar.svelte";
   import StatusStrip from "$lib/components/StatusStrip.svelte";
   import TaskInput from "$lib/components/TaskInput.svelte";
   import TemplateBrowser from "$lib/components/TemplateBrowser.svelte";
@@ -4523,18 +4522,18 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     </span>
   </div>
   <div class="header-actions">
-    <div class="mode-toggle-group" role="tablist" aria-label="ui mode">
+    <div class="seg-track" role="tablist" aria-label="ui mode">
       <button
-        class="mode-toggle-btn"
-        class:mode-toggle-active={uiMode === "delegation"}
+        class="seg-item"
+        class:seg-item-active={uiMode === "delegation"}
         type="button"
         on:click={() => setUiMode("delegation")}
       >
         Delegation
       </button>
       <button
-        class="mode-toggle-btn"
-        class:mode-toggle-active={uiMode === "manual"}
+        class="seg-item"
+        class:seg-item-active={uiMode === "manual"}
         type="button"
         on:click={() => setUiMode("manual")}
       >
@@ -5796,16 +5795,14 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
 </div><!-- end .workspace -->
 
-<!-- Status Bar -->
-<StatusBar
-  copilotConnected={cdpTestStatus === "ok"}
-  sessionName={taskName || (sessionId ? `Session ${sessionId.slice(0, 8)}` : "")}
+<!-- Status Strip -->
+<StatusStrip
+  connected={cdpTestStatus === "ok"}
+  connecting={cdpTestStatus === "testing"}
   projectName={selectedProjectId
     ? (projects.find(p => p.id === selectedProjectId)?.name ?? "")
     : ""}
-  agentTurn={agentLoopLog.length}
-  agentMaxTurns={maxTurns}
-  agentRunning={agentLoopRunning}
+  on:connectionClick={() => void testCdpConnection()}
 />
 
 <style>

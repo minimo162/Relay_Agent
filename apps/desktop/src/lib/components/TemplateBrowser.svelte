@@ -176,7 +176,7 @@
     padding: var(--sp-1) var(--sp-2);
     border-radius: var(--r-full);
     border: 1px solid var(--c-border-strong);
-    background: #f0eeea;
+    background: var(--c-canvas);
     font-size: var(--sz-xs);
     color: var(--c-text-3);
     font-family: var(--font-mono);
@@ -197,7 +197,7 @@
 
   .template-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 8px 24px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04);
+    box-shadow: var(--shadow-md);
     border-color: var(--c-border-strong);
   }
 
