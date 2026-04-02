@@ -2910,3 +2910,18 @@ Observed result:
 - `apps/desktop/scripts/e2e_windows_smoke.mjs`, `apps/desktop/src-tauri/src/integration_tests.rs`, and `docs/E2E_WINDOWS_MANUAL_CHECKLIST.md` were added to satisfy the missing Windows E2E artifacts from `docs/CODEX_PROMPT_E2E_WINDOWS.md`, and `apps/desktop/package.json` plus `apps/desktop/src-tauri/Cargo.toml` were updated to wire them in.
 - The fix prompt expected a ToolRegistry count of 21 built-ins, but the current product implementation exposes 10 built-in tools. The new integration coverage therefore locks to the current registry surface instead of inventing 11 new tools outside this milestone.
 - All listed verification commands now pass on this Windows workspace, including `cargo test` with 79 passing tests, the contracts build, the new Windows smoke script, and the existing `launch:test` / `workflow:test` smoke flows.
+
+Tauri WebDriver smoke follow-up:
+
+```bash
+pnpm -C apps/desktop check
+pnpm -C apps/desktop e2e:webdriver
+```
+
+Observed result:
+
+- `apps/desktop/e2e-tests/tauri.webdriver.mjs` now provides packaged-app smoke coverage through `tauri-driver` and `msedgedriver`, including launch, welcome dismissal, Manual mode selection, guided workflow presence, and settings modal access.
+- `apps/desktop/package.json` and `pnpm-lock.yaml` now wire in the dedicated `e2e:webdriver` script plus `mocha`, `chai`, and `selenium-webdriver`.
+- `apps/desktop/src/lib/components/ActivityFeed.svelte` no longer forces `afterUpdate + tick` scrolling on every render. Auto-scroll now only runs when the event tail changes, which removed the WebDriver hang seen during desktop automation.
+- The temporary probe-only instrumentation used during root-cause isolation was removed before verification, and the final report artifact is recorded in `docs/TAURI_WEBDRIVER_E2E_REPORT.md`.
+- `pnpm -C apps/desktop check` passed with zero Svelte diagnostics, and `pnpm -C apps/desktop e2e:webdriver` passed with 2 passing tests on this Windows workspace.

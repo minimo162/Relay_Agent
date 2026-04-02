@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { afterUpdate, tick } from "svelte";
+  import { afterUpdate } from "svelte";
 
   import type { ActivityFeedEvent } from "$lib/stores/delegation";
 
@@ -7,12 +7,25 @@
   export let emptyLabel = "やりたいことを入力して、エージェントを開始してください。";
 
   let feedContainer: HTMLDivElement | null = null;
+  let lastScrolledEventKey = "";
 
-  afterUpdate(async () => {
-    await tick();
-    if (feedContainer) {
-      feedContainer.scrollTop = feedContainer.scrollHeight;
+  afterUpdate(() => {
+    if (!feedContainer || events.length === 0) {
+      return;
     }
+
+    const tailEvent = events[events.length - 1];
+    const nextScrollKey = `${events.length}:${tailEvent?.id ?? ""}`;
+    if (nextScrollKey === lastScrolledEventKey) {
+      return;
+    }
+
+    lastScrolledEventKey = nextScrollKey;
+    queueMicrotask(() => {
+      if (feedContainer?.isConnected) {
+        feedContainer.scrollTop = feedContainer.scrollHeight;
+      }
+    });
   });
 </script>
 
