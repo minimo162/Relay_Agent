@@ -13,7 +13,7 @@ import type {
 import type { CopilotConversationTurn } from "./prompt-templates";
 
 type RelayMode = "discover" | "plan" | "repair" | "followup";
-export type UiMode = "delegation" | "manual";
+export type UiMode = "delegation";
 
 const STORAGE_KEY = "relay-agent.continuity.v1";
 const MAX_RECENT_SESSIONS = 6;
@@ -138,7 +138,6 @@ type ContinuityState = {
   recentFiles: RecentFile[];
   auditHistory: AuditHistoryEntry[];
   selectedProjectId: string | null;
-  uiMode: UiMode;
   browserAutomation: BrowserAutomationSettings;
   toolSettings: ToolSettings;
   approvalPolicy: ApprovalPolicy;
@@ -153,7 +152,6 @@ function createDefaultState(): ContinuityState {
     recentFiles: [],
     auditHistory: [],
     selectedProjectId: null,
-    uiMode: "delegation",
     browserAutomation: { ...DEFAULT_BROWSER_AUTOMATION_SETTINGS },
     toolSettings: {
       disabledToolIds: [],
@@ -184,7 +182,6 @@ function readState(): ContinuityState {
       recentFiles: normalizeRecentFiles(parsed.recentFiles),
       auditHistory: normalizeAuditHistory(parsed.auditHistory),
       selectedProjectId: asOptionalString(parsed.selectedProjectId),
-      uiMode: normalizeUiMode(parsed.uiMode),
       browserAutomation: normalizeBrowserAutomationSettings(parsed.browserAutomation),
       toolSettings: normalizeToolSettings(parsed.toolSettings),
       approvalPolicy: normalizeApprovalPolicy(parsed.approvalPolicy)
@@ -606,9 +603,6 @@ function normalizeRelayMode(value: unknown): RelayMode | null {
     : null;
 }
 
-function normalizeUiMode(value: unknown): UiMode {
-  return value === "manual" ? "manual" : "delegation";
-}
 
 function normalizeDelegationState(value: unknown): DelegationState | null {
   return value === "idle" ||
@@ -980,24 +974,11 @@ export function loadApprovalPolicy(): ApprovalPolicy {
   return readState().approvalPolicy;
 }
 
-export function loadUiMode(): UiMode {
-  return readState().uiMode;
-}
 
 export function loadSelectedProjectId(): string | null {
   return readState().selectedProjectId;
 }
 
-export function saveUiMode(mode: UiMode): UiMode {
-  const nextMode = normalizeUiMode(mode);
-
-  updateState((current) => ({
-    ...current,
-    uiMode: nextMode
-  }));
-
-  return nextMode;
-}
 
 export function saveSelectedProjectId(projectId: string | null): string | null {
   const nextProjectId = projectId?.trim() || null;
