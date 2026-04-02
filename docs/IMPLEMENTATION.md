@@ -3004,3 +3004,18 @@ Observed result:
   - `H-3`: with `approvalPolicy=fast`, the same medium-risk save-copy response still stops at the manual `保存する` gate and does not auto-execute, even though `apps/desktop/src-tauri/src/risk_evaluator.rs` says `Fast` should auto-approve `Medium`.
   - `H-4`: setting `approvalPolicy=fast` in an isolated packaged-app profile does not persist across restart; reopening settings shows `safe`.
 - `docs/E2E_COPILOT_LIVE_REPORT.md` was updated again to record the new `A-1`, `C-1`, `C-2`, `H-2`, `H-3`, and `H-4` results.
+
+Copilot live E2E follow-up 3:
+
+```bash
+# plus inline selenium-webdriver packaged-app probes with isolated
+# RELAY_AGENT_TEST_APP_LOCAL_DATA_DIR values under C:\relay-test\
+# for Delegation mode planning approval
+```
+
+Observed result:
+
+- Delegation-mode probing now reaches a real in-app plan proposal against the live `9333` Copilot session after seeding `recentFiles` through the Manual flow.
+- The packaged app rendered a four-step proposed plan with editable steps and visible `計画を承認する / 再計画する / キャンセル` controls, which is enough to mark the planning half of `D-1` as exercised.
+- The current blocker is the approval transition itself: under packaged-app WebDriver, clicking the visible `計画を承認する` control did not move the app into execution, write approval, or completion.
+- `docs/E2E_COPILOT_LIVE_REPORT.md` was updated again to mark `D-1` as a concrete failure instead of an unexecuted scenario.

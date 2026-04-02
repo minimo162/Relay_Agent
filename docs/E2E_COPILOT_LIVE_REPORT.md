@@ -149,10 +149,16 @@ Additional live probes:
 ## Phase D: Delegation Mode Agent Loop
 
 ### D-1 Planned agent loop
-- Status: `[~]`
+- Status: `[ ]`
 - Notes:
-  - Not executed
-  - Reason: requires manual in-app delegation flow plus live Copilot loop approval
+  - Executed in the packaged Tauri app with isolated app-local-data state and the live Copilot session on `9333`
+  - Relay Agent accepted the delegation goal after a seeded recent-file context and produced a four-step plan:
+    - structure / sample inspection
+    - `approved=true` filtering
+    - `workbook.save_copy`
+  - The plan review UI rendered correctly with editable steps and visible `計画を承認する / 再計画する / キャンセル` controls
+  - Blocker: approving the visible plan did not advance the app into execution or write-approval state in this packaged-app/WebDriver path
+  - Result: planning proposal works, but the planned delegation execution loop is not yet passing end to end
 
 ### D-2 No-planning agent loop
 - Status: `[~]`
@@ -312,7 +318,7 @@ Additional live probes:
 | C-1 | Auto-send happy path | Pass | In-app auto-send populated a valid response through the live `9333` Copilot session |
 | C-2 | Auto-send timeout | Fail | Short timeouts did not produce stable in-app timeout handling |
 | C-3 | Copilot error response | Skip | In-app auto-send flow not executed |
-| D-1 | Planned agent loop | Skip | In-app delegation flow not executed |
+| D-1 | Planned agent loop | Fail | Plan proposal rendered, but approving the plan did not advance into execution |
 | D-2 | No-planning agent loop | Skip | In-app delegation flow not executed |
 | D-3 | Agent loop cancellation | Skip | In-app delegation flow not executed |
 | E-1 | Pipeline happy path | Skip | In-app pipeline flow not executed |
@@ -338,8 +344,8 @@ Additional live probes:
 
 - Total scenarios: `30`
 - Passed: `10`
-- Failed: `3`
-- Skipped: `17`
+- Failed: `4`
+- Skipped: `16`
 
 Key findings:
 
@@ -347,6 +353,7 @@ Key findings:
 - The Windows auto-launch regression caused by `msedge.exe` path resolution is fixed well enough for `connect --auto-launch` to return `ready` on this machine.
 - Guided mode happy-path execution still works end to end for the tested `approved == true` flow, including save-copy output creation.
 - Standard approval mode behaves as expected for the tested write response: the preview is prepared, but execution stays blocked until explicit approval.
+- Delegation planning now reaches a concrete proposed plan in-app, but the visible approval control did not transition into execution under packaged-app automation.
 - Two approval-policy issues remain:
   - `fast` did not auto-approve a medium-risk `workbook.save_copy` flow even though `risk_evaluator.rs` says it should.
   - Approval policy did not persist across restart in the packaged-app path.
