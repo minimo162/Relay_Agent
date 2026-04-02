@@ -249,21 +249,26 @@ apps/
           # ... その他 18 コンポーネント
         stores/
           delegation.ts          # 委任モードストア
+          ui.ts                  # UI 状態ストア
         agent-ui.ts              # エージェント UI オーケストレーター
         agent-ui.test.ts
+        auto-fix.ts              # 自動修正ロジック
+        auto-fix.test.ts
         copilot-agent.ts         # Copilot エージェントループ
         copilot-turn.ts          # 単一ターン実行・応答パース
         copilot-turn.test.ts
         browser-automation-ui.ts # Edge CDP 接続管理
         continuity.ts            # ドラフト永続化（IndexedDB）
+        error-messages.ts        # エラーメッセージ定義
         ipc.ts                   # Tauri IPC ラッパー（Zod 型付き）
         project-scope.ts         # プロジェクトスコープ検証
         prompt-templates.ts      # プロンプトテンプレート
+        welcome.ts               # 初回起動ウェルカム処理
     src-tauri/
       src/
-        tauri_bridge.rs          # Tauri コマンドエントリーポイント（50+ コマンド）
+        tauri_bridge.rs          # Tauri コマンド（start_agent / respond_approval / cancel_agent / get_session_history）
         copilot_provider.rs      # Copilot プロバイダー実装
-        relay_tools.rs           # ビルトインツールレジストリ（21 ツール）
+        relay_tools.rs           # ビルトインツール実装（20 ツール）
         tool_catalog.rs          # ツールカタログ管理
         storage.rs               # セッション・プロジェクト・プラン統合ストレージ
         session_store.rs         # セッション CRUD
@@ -284,6 +289,15 @@ apps/
         quality_validator.rs     # 出力品質チェック
         startup.rs               # 起動・リカバリー処理
         agent_loop_smoke.rs      # エージェントループスモークテスト
+        workflow_smoke.rs        # ワークフロースモークテスト
+        workbook/                # ワークブック処理エンジン
+          engine.rs              # 変換実行
+          inspect.rs             # シート構造解析
+          preview.rs             # 差分プレビュー生成
+          preflight.rs           # 実行前検証
+          csv_backend.rs         # CSV 読み書き
+          xlsx_backend.rs        # XLSX 読み取り
+          source.rs              # ソースファイル管理
 packages/
   contracts/
     src/
@@ -297,6 +311,8 @@ packages/
       batch.ts         # バッチ処理スキーマ
       template.ts      # ワークフローテンプレートスキーマ
       core.ts          # セッション・ターン・アーティファクト共通型
+      meta.ts          # アプリメタデータスキーマ
+      shared.ts        # 共通バリデーター（entityId・日付等）
 examples/
   revenue-workflow-demo.csv
 docs/
