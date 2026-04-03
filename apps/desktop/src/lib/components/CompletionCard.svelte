@@ -12,7 +12,7 @@
   }>();
 </script>
 
-<div class="completion-card">
+<div class="completion-card card">
   <!-- Checkmark -->
   <div class="check-icon">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -21,6 +21,7 @@
   </div>
 
   <h3 class="completion-title">完了しました</h3>
+  <p class="label-section completion-label">Task Complete</p>
 
   {#if summary}
     <p class="completion-summary">{summary}</p>
@@ -53,6 +54,9 @@
   .completion-card {
     text-align: center;
     padding: var(--sp-10, 40px) var(--sp-6, 24px);
+    border-radius: var(--r-xl);
+    border-color: var(--c-border-strong);
+    box-shadow: var(--shadow-md);
     animation: fade-in var(--duration-normal, 250ms) var(--ease) both;
   }
 
@@ -86,7 +90,11 @@
     font-size: var(--sz-xl, 1.5rem);
     font-weight: 700;
     color: var(--c-success, #16a34a);
-    margin: 0 0 var(--sp-2, 8px);
+    margin: 0;
+  }
+
+  .completion-label {
+    margin: 0 0 var(--sp-3, 12px);
   }
 
   .completion-summary {
@@ -106,9 +114,10 @@
   }
   .completion-output code {
     font-family: var(--font-mono);
-    background: var(--c-canvas, #fafaf9);
-    padding: 2px var(--sp-2, 8px);
-    border-radius: 4px;
+    background: var(--c-sidebar, #f9fafb);
+    padding: 0.25rem var(--sp-2, 8px);
+    border-radius: var(--r-full);
+    border: 1px solid var(--c-border);
   }
 
   .completion-actions {

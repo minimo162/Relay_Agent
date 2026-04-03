@@ -1,8 +1,9 @@
 use tauri::State;
 
 use crate::models::{
-    CreateSessionRequest, ReadSessionRequest, ReadTurnArtifactsRequest, ReadTurnArtifactsResponse,
-    Session, SessionDetail, StartTurnRequest, StartTurnResponse,
+    AddInboxFileRequest, CreateSessionRequest, ReadSessionRequest, ReadTurnArtifactsRequest,
+    ReadTurnArtifactsResponse, RemoveInboxFileRequest, Session, SessionDetail, StartTurnRequest,
+    StartTurnResponse,
 };
 use crate::state::DesktopState;
 
@@ -13,6 +14,24 @@ pub fn create_session(
 ) -> Result<Session, String> {
     let mut storage = state.storage.lock().expect("desktop storage poisoned");
     storage.create_session(request)
+}
+
+#[tauri::command]
+pub fn add_inbox_file(
+    state: State<'_, DesktopState>,
+    request: AddInboxFileRequest,
+) -> Result<Session, String> {
+    let mut storage = state.storage.lock().expect("desktop storage poisoned");
+    storage.add_inbox_file(request)
+}
+
+#[tauri::command]
+pub fn remove_inbox_file(
+    state: State<'_, DesktopState>,
+    request: RemoveInboxFileRequest,
+) -> Result<Session, String> {
+    let mut storage = state.storage.lock().expect("desktop storage poisoned");
+    storage.remove_inbox_file(request)
 }
 
 #[tauri::command]

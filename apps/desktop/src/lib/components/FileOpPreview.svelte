@@ -90,6 +90,7 @@
 
 {#if actions.length > 0}
   <div class="file-op-list">
+    <p class="label-section">File Operations</p>
     {#each actions as action}
       {@const summary = summarize(action)}
       <article class="file-op-card">
@@ -118,7 +119,7 @@
 
   .file-op-card {
     border: 1px solid var(--c-border-strong);
-    border-radius: var(--r-md);
+    border-radius: var(--r-lg);
     padding: var(--sp-4);
     background: var(--c-surface);
     box-shadow: var(--shadow-sm);
@@ -148,7 +149,7 @@
     font-weight: 700;
     color: var(--c-accent);
     background: var(--c-accent-subtle);
-    border: 2px solid rgba(13,148,136,0.20);
+    border: 1px solid var(--c-border-strong);
     flex-shrink: 0;
   }
 
@@ -171,7 +172,7 @@
 
   .file-op-details {
     margin: var(--sp-3) 0 0;
-    padding-left: var(--sp-5);
+    padding-left: 1.1rem;
     color: var(--c-text-2);
     font-size: var(--sz-sm);
     line-height: 1.5;

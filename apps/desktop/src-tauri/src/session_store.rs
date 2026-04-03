@@ -4,7 +4,7 @@ use claw_core::{Message, SessionConfig, SessionState};
 use uuid::Uuid;
 
 use crate::models::{
-    CreateSessionRequest, Session, SessionDetail, SessionStatus, StartTurnRequest,
+    CreateSessionRequest, InboxFile, Session, SessionDetail, SessionStatus, StartTurnRequest,
     StartTurnResponse, Turn, TurnStatus,
 };
 
@@ -70,6 +70,7 @@ impl SessionStore {
             objective,
             status: SessionStatus::Draft,
             primary_workbook_path,
+            inbox_files: Vec::new(),
             created_at: now.clone(),
             updated_at: now,
             latest_turn_id: None,
@@ -106,6 +107,62 @@ impl SessionStore {
             .get(session_id)
             .cloned()
             .ok_or_else(|| format!("session `{session_id}` was not found"))
+    }
+
+    pub(crate) fn replace_inbox_files(
+        &mut self,
+        session_id: &str,
+        inbox_files: Vec<InboxFile>,
+        now: String,
+    ) -> Result<Session, String> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| format!("session `{session_id}` was not found"))?;
+        session.inbox_files = inbox_files;
+        session.updated_at = now;
+        Ok(session.clone())
+    }
+
+    pub(crate) fn add_inbox_file(
+        &mut self,
+        session_id: &str,
+        inbox_file: InboxFile,
+        now: String,
+    ) -> Result<Session, String> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| format!("session `{session_id}` was not found"))?;
+        if let Some(existing) = session
+            .inbox_files
+            .iter_mut()
+            .find(|entry| entry.path == inbox_file.path)
+        {
+            *existing = inbox_file;
+        } else {
+            session.inbox_files.push(inbox_file);
+        }
+        session
+            .inbox_files
+            .sort_by(|left, right| left.added_at.cmp(&right.added_at));
+        session.updated_at = now;
+        Ok(session.clone())
+    }
+
+    pub(crate) fn remove_inbox_file(
+        &mut self,
+        session_id: &str,
+        path: &str,
+        now: String,
+    ) -> Result<Session, String> {
+        let session = self
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| format!("session `{session_id}` was not found"))?;
+        session.inbox_files.retain(|entry| entry.path != path);
+        session.updated_at = now;
+        Ok(session.clone())
     }
 
     pub(crate) fn read_latest_turn_model(&self, session_id: &str) -> Result<Turn, String> {
@@ -297,7 +354,7 @@ mod tests {
     use claw_core::Message;
 
     use super::SessionStore;
-    use crate::models::{CreateSessionRequest, RelayMode, StartTurnRequest};
+    use crate::models::{CreateSessionRequest, InboxFile, RelayMode, StartTurnRequest};
 
     #[test]
     fn sync_session_messages_roundtrips_through_core_state() {
@@ -335,5 +392,42 @@ mod tests {
             .read_session_messages(&session.id)
             .expect("messages should be readable");
         assert_eq!(messages.len(), 2);
+    }
+
+    #[test]
+    fn inbox_files_can_be_added_and_removed() {
+        let mut store = SessionStore::default();
+        let session = store
+            .create_session(
+                CreateSessionRequest {
+                    title: "Inbox sync".to_string(),
+                    objective: "Track shared files".to_string(),
+                    primary_workbook_path: None,
+                },
+                "2025-01-01T00:00:00Z".to_string(),
+            )
+            .expect("session should be created");
+
+        let updated = store
+            .add_inbox_file(
+                &session.id,
+                InboxFile {
+                    path: "/tmp/input.csv".to_string(),
+                    size: 128,
+                    added_at: "2025-01-01T00:00:01Z".to_string(),
+                },
+                "2025-01-01T00:00:01Z".to_string(),
+            )
+            .expect("inbox file should be added");
+        assert_eq!(updated.inbox_files.len(), 1);
+
+        let updated = store
+            .remove_inbox_file(
+                &session.id,
+                "/tmp/input.csv",
+                "2025-01-01T00:00:02Z".to_string(),
+            )
+            .expect("inbox file should be removed");
+        assert!(updated.inbox_files.is_empty());
     }
 }

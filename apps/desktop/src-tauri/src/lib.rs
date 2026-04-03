@@ -1,6 +1,6 @@
-mod approval_store;
 mod agent_loop_smoke;
 mod app;
+mod approval_store;
 mod batch;
 mod browser_automation;
 mod copilot_provider;
@@ -14,6 +14,7 @@ mod persistence;
 mod pipeline;
 mod project;
 mod quality_validator;
+mod read_action_executor;
 mod relay;
 mod relay_tools;
 mod risk_evaluator;
@@ -25,7 +26,6 @@ mod storage;
 mod tauri_bridge;
 mod template;
 mod tool_catalog;
-mod read_action_executor;
 mod workbook;
 mod workbook_state;
 mod workflow_smoke;
@@ -55,6 +55,8 @@ pub fn run() {
             app::inspect_workbook,
             app::initialize_app,
             session::create_session,
+            session::add_inbox_file,
+            session::remove_inbox_file,
             project::create_project,
             project::list_projects,
             project::read_project,

@@ -308,7 +308,7 @@
           "blockedBy": [
             "T09"
           ],
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "T16",
@@ -716,7 +716,7 @@
           "blockedBy": [
             "T22"
           ],
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "T29",
@@ -736,7 +736,7 @@
           "blockedBy": [
             "T21"
           ],
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "T30",

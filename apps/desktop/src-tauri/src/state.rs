@@ -166,11 +166,11 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
+    use crate::storage::AppStorage;
     use claw_permissions::{PermissionMode, RuleBasedPolicy};
     use claw_tools::{ToolContext, ToolOutput};
     use serde_json::{json, Value};
     use tempfile::tempdir;
-    use crate::storage::AppStorage;
     use uuid::Uuid;
 
     use super::{build_claw_tool_registry, DesktopState, StartupPreflight};
@@ -384,8 +384,13 @@ mod tests {
         };
         let ctx = tool_context(&session.id, workspace.path().to_path_buf());
 
-        let inspect = execute_tool(&state.claw_tool_registry, &ctx, "workbook.inspect", json!({}))
-            .await;
+        let inspect = execute_tool(
+            &state.claw_tool_registry,
+            &ctx,
+            "workbook.inspect",
+            json!({}),
+        )
+        .await;
         assert!(!inspect.is_error);
         let inspect_metadata = inspect.metadata.expect("inspect metadata should exist");
         assert_eq!(
@@ -595,8 +600,13 @@ mod tests {
         };
         let ctx = tool_context(&session.id, workspace.path().to_path_buf());
 
-        let inspect = execute_tool(&state.claw_tool_registry, &ctx, "workbook.inspect", json!({}))
-            .await;
+        let inspect = execute_tool(
+            &state.claw_tool_registry,
+            &ctx,
+            "workbook.inspect",
+            json!({}),
+        )
+        .await;
         assert!(!inspect.is_error);
 
         let filtered_path = workspace.path().join("filtered.csv");

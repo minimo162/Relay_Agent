@@ -74,16 +74,14 @@
               >
                 <span class="session-title">{session.title || "無題"}</span>
                 {#if hoveredId === session.id}
-                  <button
+                  <span
                     class="session-menu"
-                    type="button"
-                    on:click|stopPropagation={() => {}}
-                    aria-label="メニュー"
+                    aria-hidden="true"
                   >
                     <svg viewBox="0 0 24 24" fill="currentColor" style="width:14px;height:14px">
                       <circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>
                     </svg>
-                  </button>
+                  </span>
                 {/if}
               </button>
             {/each}

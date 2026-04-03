@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use claw_tools::{Tool, ToolContext, ToolOutput, ToolRegistry};
 use serde_json::{json, Value};
 
-use crate::{file_support, models::SpreadsheetAction, storage::AppStorage, workbook::WorkbookEngine};
+use crate::{
+    file_support, models::SpreadsheetAction, storage::AppStorage, workbook::WorkbookEngine,
+};
 
 pub fn register_relay_tools(registry: &mut ToolRegistry, storage: Arc<Mutex<AppStorage>>) {
     registry.register(Arc::new(WorkbookInspectTool::new(Arc::clone(&storage))));

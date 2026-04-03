@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   approvalPolicyConfigSchema,
+  addInboxFileRequestSchema,
   addProjectMemoryRequestSchema,
   assessCopilotHandoffRequestSchema,
   assessCopilotHandoffResponseSchema,
@@ -41,6 +42,7 @@ import {
   recordPlanProgressRequestSchema,
   relayPacketSchema,
   removeProjectMemoryRequestSchema,
+  removeInboxFileRequestSchema,
   respondToApprovalRequestSchema,
   respondToApprovalResponseSchema,
   runExecutionRequestSchema,
@@ -73,6 +75,7 @@ import {
   validateOutputQualityRequestSchema,
   validateOutputQualityResponseSchema,
   type ApprovalPolicyConfig,
+  type AddInboxFileRequest,
   type AddProjectMemoryRequest,
   type AssessCopilotHandoffRequest,
   type AssessCopilotHandoffResponse,
@@ -113,6 +116,7 @@ import {
   type ReadTurnArtifactsResponse,
   type RecordPlanProgressRequest,
   type RemoveProjectMemoryRequest,
+  type RemoveInboxFileRequest,
   type RespondToApprovalRequest,
   type RespondToApprovalResponse,
   type RunExecutionRequest,
@@ -281,6 +285,28 @@ export function createSession(
     "create_session",
     payload,
     createSessionRequestSchema,
+    sessionSchema
+  );
+}
+
+export function addInboxFile(
+  payload: AddInboxFileRequest
+): Promise<Session> {
+  return invokeWithPayload(
+    "add_inbox_file",
+    payload,
+    addInboxFileRequestSchema,
+    sessionSchema
+  );
+}
+
+export function removeInboxFile(
+  payload: RemoveInboxFileRequest
+): Promise<Session> {
+  return invokeWithPayload(
+    "remove_inbox_file",
+    payload,
+    removeInboxFileRequestSchema,
     sessionSchema
   );
 }
@@ -758,6 +784,8 @@ export const relayAgentIpc = {
   preflightWorkbook,
   createProject,
   createSession,
+  addInboxFile,
+  removeInboxFile,
   listProjects,
   readProject,
   updateProject,

@@ -16,6 +16,136 @@
 
 ## Milestone Log
 
+### Phase 7 Follow-up
+
+#### Task T28 Inbox panel persistence slice
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src/lib/components/InboxPanel.svelte`
+- `apps/desktop/src/lib/components/ContextPanel.svelte`
+- `apps/desktop/src/routes/+page.svelte`
+- `apps/desktop/src/lib/ipc.ts`
+- `packages/contracts/src/core.ts`
+- `packages/contracts/src/ipc.ts`
+- `apps/desktop/src-tauri/src/models.rs`
+- `apps/desktop/src-tauri/src/session.rs`
+- `apps/desktop/src-tauri/src/session_store.rs`
+- `apps/desktop/src-tauri/src/storage.rs`
+- `apps/desktop/src-tauri/src/tauri_bridge.rs`
+
+Outcome:
+
+- Extracted the FILES tab into `InboxPanel.svelte` with drag-and-drop, picker-based add, hover remove, and file size plus added-at metadata.
+- Added persisted `inboxFiles` session state plus `add_inbox_file` and `remove_inbox_file` IPC commands, and synchronized shared inbox state across sessions linked to the same project.
+- Updated session creation, recoverable-draft restore, and `start_agent` session bootstrap so inbox files flow into stored session context and the agent system prompt automatically includes them.
+
+Verification:
+
+Commands run:
+
+- `pnpm typecheck`
+- `pnpm --filter @relay-agent/desktop build`
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml inbox_files`
+
+Result:
+
+- Passed in the current environment.
+- `pnpm typecheck` and the desktop build still emit the pre-existing Svelte SSR warning in `apps/desktop/src/lib/components/AppSidebar.svelte` about a nested `<button>`; no new inbox-related errors were reported.
+
+### Phase 4 Follow-up
+
+#### Task T14 session-migration design diff
+
+In progress.
+
+Artifacts:
+
+- `docs/T14_SESSION_MIGRATION_DESIGN.md`
+- `apps/desktop/src-tauri/src/storage.rs`
+
+Outcome:
+
+- Documented the current migration baseline for `T14`: `SessionStore` already owns session CRUD, turn CRUD, and `claw-core` message history, while `storage.rs` still owns the Relay-era packet and pasted-response lifecycle.
+- Fixed the remaining blocker boundary explicitly: the main guided flow and shared contracts still depend on `generate_relay_packet`, `submit_copilot_response`, packet-specific turn statuses, and `relay-packet` inspection items.
+- Split the work boundary between `T14` and follow-up cleanup tasks so the next implementation step is clear: move preview/review to structured agent output from history or artifacts first, then remove the packet-first storage path.
+- Added a shared latest-structured-response accessor in `storage.rs` that resolves a `CopilotTurnResponse` from the live response cache first, then persisted response/validation artifacts, then the latest assistant JSON stored in `claw-core` session history for the latest turn.
+- Updated `preview_execution()` to use that accessor, which means Rust agent sessions can now enter preview/review without going through `submit_copilot_response()` first as long as the latest assistant message contains a valid structured response.
+- Added a regression that drives preview generation from session history only, plus a second regression confirming the existing manual pasted-response preview flow still passes.
+
+Verification:
+
+Commands run:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml preview_execution_uses_latest_structured_response_from_session_history -- --nocapture`
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml preview_execution_summarizes_parsed_csv_write_actions -- --nocapture`
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`
+
+Result:
+
+- Passed in the current environment.
+
+#### Task T15 claw-permissions approval-policy integration
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src-tauri/src/tauri_bridge.rs`
+- `apps/desktop/src-tauri/src/risk_evaluator.rs`
+
+Outcome:
+
+- Updated the bridge-owned `PermissionPolicy` so agent tool execution now wraps `risk_evaluator` instead of always prompting for every write-capable tool.
+- Readonly tools are allowed immediately, shell execution still requires explicit approval, and `ApprovalPolicy::Standard` / `Fast` now auto-allow eligible low or medium-risk known tool runs inside the agent loop.
+- Added agent-loop regressions covering the existing manual-approval path and the new fast-policy auto-approval path for `workbook.save_copy`.
+
+Verification:
+
+Commands run:
+
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agent_loop_`
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`
+
+Result:
+
+- Passed in the current environment.
+
+### Phase 7 Follow-up
+
+#### Task T29 design-token cleanup for remaining components
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src/lib/components/CompletionCard.svelte`
+- `apps/desktop/src/lib/components/SheetDiffCard.svelte`
+- `apps/desktop/src/lib/components/FileOpPreview.svelte`
+- `apps/desktop/src/lib/components/PipelineBuilder.svelte`
+- `apps/desktop/src/lib/components/BatchDashboard.svelte`
+- `apps/desktop/src/lib/components/TemplateBrowser.svelte`
+- `apps/desktop/src/lib/components/Toast.svelte`
+
+Outcome:
+
+- Moved the remaining completion, diff, file-operation, pipeline, batch, template, and toast surfaces onto the current cool-neutral token set instead of the older mixed hard-coded styling.
+- Standardized larger card radii, badge treatment, section labeling, progress surfaces, and code-pill presentation so these components now match the openwork-inspired shell introduced earlier.
+- Swapped the template category pills to the shared `SegmentedControl` component and kept all affected buttons on the global pill-shaped button treatment.
+
+Verification:
+
+Commands run:
+
+- `pnpm --filter @relay-agent/desktop typecheck`
+- `pnpm --filter @relay-agent/desktop build`
+
+Result:
+
+- Passed in the current environment with `svelte-check found 0 errors and 0 warnings`.
+
 ### Cowork Follow-up
 
 #### Tasks 164-169 Pipeline workflow slice

@@ -40,7 +40,7 @@
         {/if}
       </span>
       <span class="toast-message">{toast.message}</span>
-      <button class="toast-close" on:click={() => onDismiss(toast.id)} aria-label="閉じる">
+      <button class="toast-close" type="button" on:click={() => onDismiss(toast.id)} aria-label="閉じる">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M18 6 6 18" /><path d="m6 6 12 12" />
         </svg>
@@ -66,11 +66,11 @@
     align-items: center;
     gap: var(--sp-3);
     padding: var(--sp-3) var(--sp-4);
-    border-radius: var(--r-lg);
+    border-radius: var(--r-xl);
     background: var(--c-surface);
     backdrop-filter: blur(20px) saturate(180%);
-    border: 1px solid var(--c-border);
-    box-shadow: 0 8px 24px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04);
+    border: 1px solid var(--c-border-strong);
+    box-shadow: var(--shadow-md);
     font-size: var(--sz-sm);
     color: var(--c-text);
   }
@@ -107,7 +107,7 @@
     color: var(--c-text-3);
     flex-shrink: 0;
     padding: var(--sp-1);
-    border-radius: var(--r-sm);
+    border-radius: var(--r-full);
     transition: color var(--duration-instant), background var(--duration-instant);
   }
   .toast-close:hover {

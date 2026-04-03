@@ -23,10 +23,11 @@ use uuid::Uuid;
 use crate::{
     copilot_provider::CopilotChatProvider,
     models::{
-        BrowserAutomationSettings, CancelAgentRequest, CreateSessionRequest,
+        AddInboxFileRequest, BrowserAutomationSettings, CancelAgentRequest, CreateSessionRequest,
         GetAgentSessionHistoryRequest, RelayMode, RespondAgentApprovalRequest, StartAgentRequest,
         StartTurnRequest,
     },
+    risk_evaluator::{evaluate_risk, should_auto_approve, ApprovalPolicy, OperationRisk},
     state::DesktopState,
 };
 
@@ -189,6 +190,7 @@ struct BridgePermissionPolicy {
     runtime: Arc<AgentSessionRuntime>,
     emit: AgentEventEmitter,
     tool_input: serde_json::Value,
+    approval_policy: ApprovalPolicy,
 }
 
 #[async_trait]
@@ -198,6 +200,12 @@ impl PermissionPolicy for BridgePermissionPolicy {
             return PermissionDecision::Deny {
                 reason: "agent session was cancelled".to_string(),
             };
+        }
+
+        if let Some(decision) =
+            permission_decision_without_prompt(self.approval_policy, request, &self.tool_input)
+        {
+            return decision;
         }
 
         let approval_id = Uuid::new_v4().to_string();
@@ -231,6 +239,23 @@ impl PermissionPolicy for BridgePermissionPolicy {
             }
         }
     }
+}
+
+fn permission_decision_without_prompt(
+    approval_policy: ApprovalPolicy,
+    request: &PermissionRequest,
+    tool_input: &serde_json::Value,
+) -> Option<PermissionDecision> {
+    if matches!(request.resource, ResourceKind::ShellExec) {
+        return None;
+    }
+
+    let risk = evaluate_risk(&request.tool_name, tool_input);
+    if matches!(risk, OperationRisk::Readonly) || should_auto_approve(approval_policy, risk) {
+        return Some(PermissionDecision::Allow);
+    }
+
+    None
 }
 
 enum AgentBridgeEvent {
@@ -313,12 +338,7 @@ pub(crate) fn start_agent_with_provider(
     request: StartAgentRequest,
     provider: Arc<dyn ModelProvider>,
 ) -> Result<String, String> {
-    start_agent_impl(
-        state,
-        request,
-        provider,
-        tauri_event_emitter(app.clone()),
-    )
+    start_agent_impl(state, request, provider, tauri_event_emitter(app.clone()))
 }
 
 fn start_agent_impl(
@@ -334,6 +354,19 @@ fn start_agent_impl(
 
     let cwd = resolve_agent_cwd(request.cwd.as_deref(), &request.files)?;
     let session_metadata = create_backing_agent_session(state, goal, &request.files)?;
+    let approval_policy = *state
+        .approval_policy
+        .lock()
+        .expect("approval policy poisoned");
+    let session_files = {
+        let storage = state.storage.lock().expect("desktop storage poisoned");
+        storage
+            .read_session_model(&session_metadata.session_id)?
+            .inbox_files
+            .into_iter()
+            .map(|file| file.path)
+            .collect::<Vec<_>>()
+    };
     let registry = Arc::clone(&state.claw_tool_registry);
     let storage = Arc::clone(&state.storage);
     let max_turns = request.max_turns.unwrap_or(DEFAULT_AGENT_MAX_TURNS);
@@ -341,7 +374,7 @@ fn start_agent_impl(
     let mut session = SessionState::new(
         SessionConfig {
             model: "copilot-chat".to_string(),
-            system_prompt: build_agent_system_prompt(&request.files),
+            system_prompt: build_agent_system_prompt(&session_files),
             max_turns,
             token_budget: TokenBudget::default(),
             permission_mode: PermissionMode::Interactive,
@@ -349,7 +382,7 @@ fn start_agent_impl(
         cwd,
     );
     session.id = session_metadata.session_id.clone();
-    session.push_message(Message::user(build_agent_goal_prompt(goal, &request.files)));
+    session.push_message(Message::user(build_agent_goal_prompt(goal, &session_files)));
     {
         let mut storage = storage.lock().expect("desktop storage poisoned");
         storage.sync_session_messages(&session.id, session.messages.clone())?;
@@ -368,6 +401,7 @@ fn start_agent_impl(
             registry,
             Arc::clone(&storage),
             Arc::clone(&runtime_for_task),
+            approval_policy,
             Arc::clone(&emit),
         )
         .await;
@@ -449,6 +483,7 @@ async fn run_agent_session_loop(
     registry: Arc<ToolRegistry>,
     storage: Arc<Mutex<crate::storage::AppStorage>>,
     runtime: Arc<AgentSessionRuntime>,
+    approval_policy: ApprovalPolicy,
     emit: AgentEventEmitter,
 ) -> Result<(), AgentError> {
     loop {
@@ -541,6 +576,7 @@ async fn run_agent_session_loop(
                 &session,
                 Arc::clone(&registry),
                 Arc::clone(&runtime),
+                approval_policy,
                 Arc::clone(&emit),
                 &tool_name,
                 tool_input.clone(),
@@ -570,10 +606,7 @@ async fn run_agent_session_loop(
     }
 }
 
-fn sync_storage_history(
-    storage: &Arc<Mutex<crate::storage::AppStorage>>,
-    session: &SessionState,
-) {
+fn sync_storage_history(storage: &Arc<Mutex<crate::storage::AppStorage>>, session: &SessionState) {
     if let Ok(mut storage) = storage.lock() {
         let _ = storage.sync_session_messages(&session.id, session.messages.clone());
     }
@@ -583,6 +616,7 @@ async fn execute_tool_call(
     session: &SessionState,
     registry: Arc<ToolRegistry>,
     runtime: Arc<AgentSessionRuntime>,
+    approval_policy: ApprovalPolicy,
     emit: AgentEventEmitter,
     tool_name: &str,
     tool_input: serde_json::Value,
@@ -603,6 +637,7 @@ async fn execute_tool_call(
             runtime: Arc::clone(&runtime),
             emit: Arc::clone(&emit),
             tool_input: tool_input.clone(),
+            approval_policy,
         });
         match policy.check(&request).await {
             PermissionDecision::Allow => {}
@@ -622,6 +657,7 @@ async fn execute_tool_call(
             runtime: Arc::clone(&runtime),
             emit: Arc::clone(&emit),
             tool_input: tool_input.clone(),
+            approval_policy,
         }),
         session_id: session.id.clone(),
     };
@@ -711,6 +747,12 @@ fn create_backing_agent_session(
         objective: goal.to_string(),
         primary_workbook_path,
     })?;
+    for file in files {
+        storage.add_inbox_file(AddInboxFileRequest {
+            session_id: session.id.clone(),
+            path: file.clone(),
+        })?;
+    }
     let turn = storage.start_turn(StartTurnRequest {
         session_id: session.id.clone(),
         title: if title.is_empty() {
@@ -819,7 +861,10 @@ mod tests {
     #[async_trait]
     impl ModelProvider for SequenceProvider {
         async fn complete(&self, _request: ModelRequest) -> Result<ModelResponse> {
-            let mut responses = self.responses.lock().expect("provider responses mutex poisoned");
+            let mut responses = self
+                .responses
+                .lock()
+                .expect("provider responses mutex poisoned");
             if responses.is_empty() {
                 return Err(anyhow!("sequence provider ran out of responses"));
             }
@@ -896,6 +941,35 @@ mod tests {
         }
     }
 
+    struct SaveCopyTool;
+
+    #[async_trait]
+    impl Tool for SaveCopyTool {
+        fn name(&self) -> &str {
+            "workbook.save_copy"
+        }
+
+        fn description(&self) -> &str {
+            "Medium-risk save-copy test tool."
+        }
+
+        fn input_schema(&self) -> serde_json::Value {
+            json!({"type": "object"})
+        }
+
+        async fn execute(
+            &self,
+            _ctx: &ToolContext,
+            _input: serde_json::Value,
+        ) -> anyhow::Result<ToolOutput> {
+            Ok(ToolOutput::success("save copy ok"))
+        }
+
+        fn is_read_only(&self) -> bool {
+            false
+        }
+    }
+
     fn test_response(content: Vec<ResponseContent>, stop_reason: StopReason) -> ModelResponse {
         ModelResponse {
             id: Uuid::new_v4().to_string(),
@@ -932,7 +1006,10 @@ mod tests {
                     }],
                     StopReason::ToolUse,
                 ),
-                test_response(vec![ResponseContent::Text("done".to_string())], StopReason::EndTurn),
+                test_response(
+                    vec![ResponseContent::Text("done".to_string())],
+                    StopReason::EndTurn,
+                ),
             ])),
         });
         let mut registry = ToolRegistry::new();
@@ -971,10 +1048,11 @@ mod tests {
             registry,
             Arc::clone(&storage),
             Arc::clone(&runtime),
+            ApprovalPolicy::Safe,
             emit,
         )
-            .await
-            .expect("agent loop should succeed");
+        .await
+        .expect("agent loop should succeed");
 
         let history = storage
             .lock()
@@ -982,14 +1060,26 @@ mod tests {
             .read_session_messages(&session_id)
             .expect("history should be readable");
         assert_eq!(history.len(), 4);
-        assert!(matches!(history[1].content[0], ContentBlock::ToolUse { .. }));
-        assert!(matches!(history[2].content[0], ContentBlock::ToolResult { .. }));
+        assert!(matches!(
+            history[1].content[0],
+            ContentBlock::ToolUse { .. }
+        ));
+        assert!(matches!(
+            history[2].content[0],
+            ContentBlock::ToolResult { .. }
+        ));
         assert!(matches!(history[3].content[0], ContentBlock::Text { .. }));
 
         let events = events.lock().expect("events mutex poisoned");
-        assert!(events.iter().any(|event| matches!(event, AgentBridgeEvent::ToolStart(_))));
-        assert!(events.iter().any(|event| matches!(event, AgentBridgeEvent::ToolResult(_))));
-        assert!(events.iter().any(|event| matches!(event, AgentBridgeEvent::TurnComplete(_))));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, AgentBridgeEvent::ToolStart(_))));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, AgentBridgeEvent::ToolResult(_))));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, AgentBridgeEvent::TurnComplete(_))));
     }
 
     #[tokio::test]
@@ -1004,7 +1094,10 @@ mod tests {
                     }],
                     StopReason::ToolUse,
                 ),
-                test_response(vec![ResponseContent::Text("done".to_string())], StopReason::EndTurn),
+                test_response(
+                    vec![ResponseContent::Text("done".to_string())],
+                    StopReason::EndTurn,
+                ),
             ])),
         });
         let mut registry = ToolRegistry::new();
@@ -1040,6 +1133,7 @@ mod tests {
             registry,
             Arc::clone(&storage),
             Arc::clone(&runtime_for_task),
+            ApprovalPolicy::Safe,
             emit,
         ));
 
@@ -1085,6 +1179,98 @@ mod tests {
             panic!("expected tool_result block");
         };
         assert_eq!(content, "write ok");
+        assert!(!is_error);
+    }
+
+    #[tokio::test]
+    async fn agent_loop_auto_approves_medium_risk_tools_under_fast_policy() {
+        let provider = Arc::new(SequenceProvider {
+            responses: Arc::new(StdMutex::new(vec![
+                test_response(
+                    vec![ResponseContent::ToolUse {
+                        id: "tool-1".to_string(),
+                        name: "workbook.save_copy".to_string(),
+                        input: json!({"outputPath": "/tmp/reviewed.csv"}),
+                    }],
+                    StopReason::ToolUse,
+                ),
+                test_response(
+                    vec![ResponseContent::Text("done".to_string())],
+                    StopReason::EndTurn,
+                ),
+            ])),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(SaveCopyTool));
+        let registry = Arc::new(registry);
+        let mut session = test_session("run save copy tool");
+        let storage = Arc::new(Mutex::new(crate::storage::AppStorage::default()));
+        {
+            let mut storage = storage.lock().expect("storage mutex poisoned");
+            let backing_session = storage
+                .create_session(CreateSessionRequest {
+                    title: "Save copy tool".to_string(),
+                    objective: "Run save copy tool".to_string(),
+                    primary_workbook_path: None,
+                })
+                .expect("session should be created");
+            session.id = backing_session.id.clone();
+            storage
+                .sync_session_messages(&session.id, session.messages.clone())
+                .expect("session history should sync");
+        }
+        let session_id = session.id.clone();
+        let runtime = Arc::new(AgentSessionRuntime::new());
+        let events = Arc::new(StdMutex::new(Vec::new()));
+        let events_clone = Arc::clone(&events);
+        let emit: AgentEventEmitter = Arc::new(move |event| {
+            events_clone
+                .lock()
+                .expect("events mutex poisoned")
+                .push(event);
+        });
+
+        run_agent_session_loop(
+            session,
+            provider,
+            registry,
+            Arc::clone(&storage),
+            Arc::clone(&runtime),
+            ApprovalPolicy::Fast,
+            emit,
+        )
+        .await
+        .expect("agent loop should succeed");
+
+        let events = events.lock().expect("events mutex poisoned");
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, AgentBridgeEvent::ApprovalNeeded(_))));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, AgentBridgeEvent::TurnComplete(_))));
+
+        let history = storage
+            .lock()
+            .expect("storage mutex poisoned")
+            .read_session_messages(&session_id)
+            .expect("history should be readable");
+        let tool_result_message = history
+            .iter()
+            .find(|message| {
+                message
+                    .content
+                    .iter()
+                    .any(|block| matches!(block, ContentBlock::ToolResult { .. }))
+            })
+            .expect("tool_result should be present");
+        let ContentBlock::ToolResult {
+            content, is_error, ..
+        } = &tool_result_message.content[0]
+        else {
+            panic!("expected tool_result block");
+        };
+        assert_eq!(content, "save copy ok");
         assert!(!is_error);
     }
 

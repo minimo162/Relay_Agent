@@ -2,9 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::json;
 
-use crate::models::{
-    McpServerConfig, ToolDescriptor, ToolPhase, ToolRegistration, ToolSource,
-};
+use crate::models::{McpServerConfig, ToolDescriptor, ToolPhase, ToolRegistration, ToolSource};
 
 pub struct ToolCatalog {
     tools: HashMap<String, ToolRegistration>,

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SegmentedControl from "./SegmentedControl.svelte";
   import type {
     WorkflowTemplate,
     WorkflowTemplateCategory
@@ -20,11 +21,17 @@
     { key: "general", label: "汎用" },
     { key: "custom", label: "カスタム" }
   ];
+
+  $: categoryItems = categories.map((category) => ({
+    value: category.key,
+    label: category.label
+  }));
 </script>
 
 <section class="template-browser card">
   <div class="browser-head">
     <div>
+      <p class="label-section">Template Library</p>
       <h3>テンプレートライブラリ</h3>
       <p>よく使うワークフローを再利用できます。</p>
     </div>
@@ -38,16 +45,12 @@
   </div>
 
   <div class="category-tabs">
-    {#each categories as category}
-      <button
-        class="category-tab"
-        class:is-active={activeCategory === category.key}
-        type="button"
-        on:click={() => onCategoryChange(category.key)}
-      >
-        {category.label}
-      </button>
-    {/each}
+    <SegmentedControl
+      items={categoryItems}
+      value={activeCategory}
+      size="sm"
+      on:change={(event) => onCategoryChange(event.detail as WorkflowTemplateCategory | "all")}
+    />
   </div>
 
   <div class="template-grid">
@@ -91,6 +94,8 @@
   .template-browser {
     display: grid;
     gap: var(--sp-4);
+    border-radius: var(--r-xl);
+    border-color: var(--c-border-strong);
   }
 
   .template-grid {
@@ -120,26 +125,11 @@
   }
 
   .search-input {
-    border-radius: var(--r-lg);
-    border: 1px solid var(--c-border-strong);
-    padding: var(--sp-2) var(--sp-3);
-    font-size: var(--sz-sm);
-    background: var(--c-surface);
-    color: var(--c-text);
-    transition: border-color var(--duration-fast) var(--ease),
-                box-shadow var(--duration-fast) var(--ease);
-  }
-
-  .search-input:focus {
-    outline: none;
-    border-color: var(--c-accent);
-    box-shadow: 0 0 0 3px var(--c-accent-subtle);
+    border-radius: var(--r-full);
   }
 
   .category-tabs {
     display: flex;
-    gap: var(--sp-2);
-    flex-wrap: wrap;
   }
 
   .tag-row,
@@ -147,29 +137,6 @@
     display: flex;
     gap: var(--sp-2);
     flex-wrap: wrap;
-  }
-
-  .category-tab {
-    padding: var(--sp-1) var(--sp-3);
-    border-radius: var(--r-full);
-    border: 1px solid var(--c-border-strong);
-    background: var(--c-surface);
-    font-size: var(--sz-xs);
-    font-weight: 500;
-    color: var(--c-text-2);
-    cursor: pointer;
-    transition: all var(--duration-fast) var(--ease);
-  }
-
-  .category-tab:hover {
-    border-color: var(--c-border-strong);
-    color: var(--c-text);
-  }
-
-  .category-tab.is-active {
-    border-color: var(--c-accent);
-    background: var(--c-accent-subtle);
-    color: var(--c-accent);
   }
 
   .tag {

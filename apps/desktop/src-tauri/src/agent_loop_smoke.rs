@@ -80,7 +80,10 @@ impl claw_provider::ModelProvider for SequenceProvider {
         &self,
         _request: claw_provider::ModelRequest,
     ) -> Result<claw_provider::ModelResponse> {
-        let mut responses = self.responses.lock().expect("smoke provider mutex poisoned");
+        let mut responses = self
+            .responses
+            .lock()
+            .expect("smoke provider mutex poisoned");
         if responses.is_empty() {
             return Err(anyhow!("agent loop smoke provider ran out of responses"));
         }
@@ -91,9 +94,8 @@ impl claw_provider::ModelProvider for SequenceProvider {
     async fn stream(
         &self,
         _request: claw_provider::ModelRequest,
-    ) -> Result<
-        std::pin::Pin<Box<dyn Stream<Item = Result<claw_provider::StreamEvent>> + Send>>,
-    > {
+    ) -> Result<std::pin::Pin<Box<dyn Stream<Item = Result<claw_provider::StreamEvent>> + Send>>>
+    {
         Ok(Box::pin(stream::empty()))
     }
 
@@ -262,22 +264,31 @@ fn run_agent_loop_smoke_inner(
 
     let provider = Arc::new(SequenceProvider {
         responses: Arc::new(Mutex::new(vec![
-            model_response(vec![claw_provider::ResponseContent::ToolUse {
-                id: "inspect-1".to_string(),
-                name: "workbook.inspect".to_string(),
-                input: serde_json::json!({}),
-            }], claw_provider::StopReason::ToolUse),
-            model_response(vec![claw_provider::ResponseContent::ToolUse {
-                id: "filter-1".to_string(),
-                name: "table.filter_rows".to_string(),
-                input: serde_json::json!({
-                    "predicate": "approved = true",
-                    "outputPath": output_path.to_string_lossy().to_string()
-                }),
-            }], claw_provider::StopReason::ToolUse),
-            model_response(vec![claw_provider::ResponseContent::Text(
-                "Agent smoke completed".to_string(),
-            )], claw_provider::StopReason::EndTurn),
+            model_response(
+                vec![claw_provider::ResponseContent::ToolUse {
+                    id: "inspect-1".to_string(),
+                    name: "workbook.inspect".to_string(),
+                    input: serde_json::json!({}),
+                }],
+                claw_provider::StopReason::ToolUse,
+            ),
+            model_response(
+                vec![claw_provider::ResponseContent::ToolUse {
+                    id: "filter-1".to_string(),
+                    name: "table.filter_rows".to_string(),
+                    input: serde_json::json!({
+                        "predicate": "approved = true",
+                        "outputPath": output_path.to_string_lossy().to_string()
+                    }),
+                }],
+                claw_provider::StopReason::ToolUse,
+            ),
+            model_response(
+                vec![claw_provider::ResponseContent::Text(
+                    "Agent smoke completed".to_string(),
+                )],
+                claw_provider::StopReason::EndTurn,
+            ),
         ])),
     });
 
@@ -299,7 +310,10 @@ fn run_agent_loop_smoke_inner(
     )
     .map_err(|error| summary.fail("start-agent", error))?;
     summary.session_id = Some(session_id.clone());
-    summary.push_ok("start-agent", format!("Agent session `{session_id}` started."));
+    summary.push_ok(
+        "start-agent",
+        format!("Agent session `{session_id}` started."),
+    );
 
     let deadline = Instant::now() + Duration::from_secs(20);
     let approval_id = loop {
@@ -399,7 +413,10 @@ fn run_agent_loop_smoke_inner(
     let written = fs::read_to_string(&output_path).map_err(|error| {
         summary.fail(
             "verify-output",
-            format!("Agent loop output at `{}` could not be read: {error}", output_path.display()),
+            format!(
+                "Agent loop output at `{}` could not be read: {error}",
+                output_path.display()
+            ),
         )
     })?;
     summary.output_exists = output_path.exists();
@@ -412,7 +429,10 @@ fn run_agent_loop_smoke_inner(
     }
     summary.push_ok(
         "verify-output",
-        format!("Agent loop wrote a filtered save-copy to `{}`.", output_path.display()),
+        format!(
+            "Agent loop wrote a filtered save-copy to `{}`.",
+            output_path.display()
+        ),
     );
 
     let source_unchanged = fs::read_to_string(&sample_workbook_path)
@@ -494,7 +514,6 @@ fn write_summary(path: &Path, summary: &AgentLoopSmokeSummary) -> Result<(), Str
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
 
-    let serialized =
-        serde_json::to_string_pretty(summary).map_err(|error| error.to_string())?;
+    let serialized = serde_json::to_string_pretty(summary).map_err(|error| error.to_string())?;
     fs::write(path, serialized).map_err(|error| error.to_string())
 }

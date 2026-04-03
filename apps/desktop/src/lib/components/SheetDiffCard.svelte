@@ -112,7 +112,7 @@
   .sheet-diff-card {
     background: var(--c-surface);
     border: 1px solid var(--c-border-strong);
-    border-radius: var(--r-lg);
+    border-radius: var(--r-xl);
     box-shadow: var(--shadow-md);
     overflow: hidden;
     transition: box-shadow var(--duration-normal) var(--ease),
@@ -120,7 +120,7 @@
   }
 
   .sheet-diff-card:hover {
-    box-shadow: 0 8px 24px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04);
+    box-shadow: var(--shadow-md);
     border-color: var(--c-border-strong);
   }
 
@@ -130,7 +130,7 @@
     justify-content: space-between;
     padding: var(--sp-3) var(--sp-4);
     border-bottom: 1px solid var(--c-border-strong);
-    background: #f0eeea;
+    background: var(--c-sidebar);
   }
 
   .sheet-diff-title {
@@ -162,10 +162,12 @@
 
   .sheet-diff-label {
     font-size: var(--sz-xs);
-    font-weight: 500;
+    font-weight: 700;
     color: var(--c-text-2);
     min-width: 5rem;
     flex-shrink: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
   }
 
   .sheet-diff-badges {
@@ -227,7 +229,7 @@
 
   .row-sample-card {
     border: 1px solid var(--c-border-strong);
-    border-radius: var(--r-md);
+    border-radius: var(--r-lg);
     overflow: hidden;
     background: var(--c-surface);
   }
@@ -237,7 +239,7 @@
     align-items: center;
     gap: var(--sp-2);
     padding: var(--sp-2) var(--sp-3);
-    background: #f0eeea;
+    background: var(--c-sidebar);
     border-bottom: 1px solid var(--c-border-strong);
   }
 

@@ -24,6 +24,7 @@
 <section class="pipeline-builder card">
   <div class="builder-header">
     <div>
+      <p class="label-section">Pipeline Builder</p>
       <h3>パイプライン</h3>
       <p>複数ターンを順番に実行し、前ステップの出力を次へ渡します。</p>
     </div>
@@ -76,7 +77,7 @@
           <label>
             <span>入力元</span>
             <select
-              class="input"
+              class="select"
               value={step.inputSource}
               on:change={(event) =>
                 onUpdateStepInputSource(
@@ -131,6 +132,11 @@
     gap: var(--sp-4);
   }
 
+  .pipeline-builder {
+    border-radius: var(--r-xl);
+    border-color: var(--c-border-strong);
+  }
+
   .builder-header,
   .builder-grid,
   .step-card {
@@ -141,6 +147,8 @@
   .builder-header {
     grid-template-columns: 1fr auto;
     align-items: start;
+    padding-bottom: var(--sp-3);
+    border-bottom: 1px solid var(--c-border);
   }
 
   .builder-header h3 {
@@ -181,7 +189,7 @@
     z-index: 1;
     grid-template-columns: auto minmax(0, 1fr) auto;
     padding: var(--sp-4);
-    border-radius: var(--r-lg);
+    border-radius: var(--r-xl);
     border: 1px solid var(--c-border-strong);
     background: var(--c-surface);
     box-shadow: var(--shadow-sm);
@@ -217,6 +225,7 @@
 
   .step-actions {
     align-content: start;
+    grid-auto-rows: min-content;
   }
 
   label {
@@ -226,10 +235,10 @@
 
   label span {
     font-size: var(--sz-xs);
-    font-weight: 500;
+    font-weight: 700;
     color: var(--c-text-2);
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.08em;
   }
 
   @media (max-width: 760px) {

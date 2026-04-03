@@ -5,6 +5,7 @@ use std::{
 };
 
 use chrono::{SecondsFormat, Utc};
+use claw_core::{ContentBlock, Role};
 use serde::Serialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -13,23 +14,24 @@ use crate::approval_store::{StoredApproval, StoredScopeApproval};
 use crate::file_support;
 use crate::mcp_client::McpClient;
 use crate::models::{
-    AddProjectMemoryRequest, AgentLoopStatus, ApprovalDecision, ApprovalInspectionPayload,
-    ApprovePlanRequest, ApprovePlanResponse, ArtifactType, AssessCopilotHandoffRequest,
-    AssessCopilotHandoffResponse, CopilotHandoffReason, CopilotHandoffReasonSource,
-    CopilotHandoffStatus, CopilotTurnResponse, CreateProjectRequest, CreateSessionRequest,
-    DiffSummary, ExecuteReadActionsRequest, ExecuteReadActionsResponse, ExecutionArtifactPayload,
-    ExecutionInspectionPayload, ExecutionInspectionState, ExecutionPlan,
-    GenerateRelayPacketRequest, LinkSessionToProjectRequest, ListProjectsResponse, OutputArtifact,
-    OutputFormat, OutputSpec, PacketInspectionPayload, PlanProgressRequest, PlanProgressResponse,
-    PlanStepState, PlanStepStatus, PlanningContext, PlanningContextToolGroups,
-    PreviewArtifactPayload, PreviewExecutionRequest, PreviewExecutionResponse, Project,
-    ProjectMemoryEntry, ProjectMemorySource, ReadProjectRequest, ReadTurnArtifactsResponse,
-    RecordPlanProgressRequest, RecordScopeApprovalRequest, RecordScopeApprovalResponse,
-    RelayPacket, RelayPacketResponseContract, RemoveProjectMemoryRequest, RespondToApprovalRequest,
-    RespondToApprovalResponse, RunExecutionMultiRequest, RunExecutionRequest, RunExecutionResponse,
+    AddInboxFileRequest, AddProjectMemoryRequest, AgentLoopStatus, ApprovalDecision,
+    ApprovalInspectionPayload, ApprovePlanRequest, ApprovePlanResponse, ArtifactType,
+    AssessCopilotHandoffRequest, AssessCopilotHandoffResponse, CopilotHandoffReason,
+    CopilotHandoffReasonSource, CopilotHandoffStatus, CopilotTurnResponse, CreateProjectRequest,
+    CreateSessionRequest, DiffSummary, ExecuteReadActionsRequest, ExecuteReadActionsResponse,
+    ExecutionArtifactPayload, ExecutionInspectionPayload, ExecutionInspectionState, ExecutionPlan,
+    GenerateRelayPacketRequest, InboxFile, LinkSessionToProjectRequest, ListProjectsResponse,
+    OutputArtifact, OutputFormat, OutputSpec, PacketInspectionPayload, PlanProgressRequest,
+    PlanProgressResponse, PlanStepState, PlanStepStatus, PlanningContext,
+    PlanningContextToolGroups, PreviewArtifactPayload, PreviewExecutionRequest,
+    PreviewExecutionResponse, Project, ProjectMemoryEntry, ProjectMemorySource, ReadProjectRequest,
+    ReadTurnArtifactsResponse, RecordPlanProgressRequest, RecordScopeApprovalRequest,
+    RecordScopeApprovalResponse, RelayPacket, RelayPacketResponseContract, RemoveInboxFileRequest,
+    RemoveProjectMemoryRequest, RespondToApprovalRequest, RespondToApprovalResponse,
+    RunExecutionMultiRequest, RunExecutionRequest, RunExecutionResponse,
     ScopeApprovalArtifactPayload, ScopeApprovalSource, ScopeOverrideInspectionRecord, Session,
-    SessionDetail, SetSessionProjectRequest, SpreadsheetAction, StartTurnRequest, StartTurnResponse,
-    SubmitCopilotResponseRequest, SubmitCopilotResponseResponse, ToolDescriptor,
+    SessionDetail, SetSessionProjectRequest, SpreadsheetAction, StartTurnRequest,
+    StartTurnResponse, SubmitCopilotResponseRequest, SubmitCopilotResponseResponse, ToolDescriptor,
     ToolExecutionResult, ToolPhase, ToolSettings, Turn, TurnArtifactRecord, TurnDetailsViewModel,
     TurnInspectionSection, TurnInspectionSourceType, TurnInspectionUnavailableReason, TurnOverview,
     TurnOverviewStep, TurnOverviewStepState, TurnStatus, UpdateProjectRequest,
@@ -57,6 +59,23 @@ struct StoredResponse {
     repair_prompt: Option<String>,
     created_at: String,
     artifact_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StructuredResponseSource {
+    LiveResponseCache,
+    PersistedArtifacts,
+    SessionHistory,
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedStructuredResponse {
+    source: StructuredResponseSource,
+    raw_response: Option<String>,
+    parsed_response: Option<CopilotTurnResponse>,
+    validation_issues: Vec<ValidationIssue>,
+    repair_prompt: Option<String>,
+    artifact_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -475,6 +494,7 @@ impl AppStorage {
 
         let updated = project.clone();
         self.persist_projects_state()?;
+        self.sync_project_inbox_files(&request.project_id)?;
         Ok(updated)
     }
 
@@ -493,6 +513,17 @@ impl AppStorage {
             }
         }
 
+        let affected_project_ids = self
+            .projects
+            .values()
+            .filter(|project| {
+                project
+                    .session_ids
+                    .iter()
+                    .any(|session_id| session_id == &request.session_id)
+            })
+            .map(|project| project.id.clone())
+            .collect::<BTreeSet<_>>();
         let mut changed = false;
         for project in self.projects.values_mut() {
             let before = project.session_ids.len();
@@ -505,6 +536,7 @@ impl AppStorage {
             }
         }
 
+        let mut affected_project_ids = affected_project_ids;
         if let Some(project_id) = target_project_id {
             let project = self
                 .projects
@@ -519,10 +551,15 @@ impl AppStorage {
                 project.updated_at = timestamp();
                 changed = true;
             }
+            affected_project_ids.insert(project_id);
         }
 
         if changed {
             self.persist_projects_state()?;
+        }
+
+        for project_id in affected_project_ids {
+            self.sync_project_inbox_files(&project_id)?;
         }
 
         Ok(self.list_projects())
@@ -545,6 +582,62 @@ impl AppStorage {
         Ok(session)
     }
 
+    pub fn add_inbox_file(&mut self, request: AddInboxFileRequest) -> Result<Session, String> {
+        let session_id = request.session_id;
+        let path = require_existing_file("path", request.path)?;
+        let metadata = fs::metadata(&path)
+            .map_err(|error| format!("failed to read file metadata for `{path}`: {error}"))?;
+        let inbox_file = InboxFile {
+            path: path.clone(),
+            size: metadata.len(),
+            added_at: timestamp(),
+        };
+        let updated = self
+            .session_store
+            .add_inbox_file(&session_id, inbox_file, timestamp())?;
+        self.persist_session_state(&session_id)?;
+        self.append_session_log(
+            &session_id,
+            "inbox-file-added",
+            format!("Inbox file added: {path}"),
+            None,
+            Some(json!({ "path": path })),
+        )?;
+
+        if let Some(project_id) = self.project_id_for_session(&session_id) {
+            self.sync_project_inbox_files(&project_id)?;
+            return self.read_session_model(&session_id);
+        }
+
+        Ok(updated)
+    }
+
+    pub fn remove_inbox_file(
+        &mut self,
+        request: RemoveInboxFileRequest,
+    ) -> Result<Session, String> {
+        let session_id = request.session_id;
+        let path = require_text("path", request.path)?;
+        let updated = self
+            .session_store
+            .remove_inbox_file(&session_id, &path, timestamp())?;
+        self.persist_session_state(&session_id)?;
+        self.append_session_log(
+            &session_id,
+            "inbox-file-removed",
+            format!("Inbox file removed: {path}"),
+            None,
+            Some(json!({ "path": path })),
+        )?;
+
+        if let Some(project_id) = self.project_id_for_session(&session_id) {
+            self.sync_project_inbox_files(&project_id)?;
+            return self.read_session_model(&session_id);
+        }
+
+        Ok(updated)
+    }
+
     pub fn list_sessions(&self) -> Vec<Session> {
         self.session_store.list_sessions()
     }
@@ -558,7 +651,8 @@ impl AppStorage {
         session_id: &str,
         messages: Vec<claw_core::Message>,
     ) -> Result<(), String> {
-        self.session_store.sync_session_messages(session_id, messages)?;
+        self.session_store
+            .sync_session_messages(session_id, messages)?;
         self.persist_session_state(session_id)
     }
 
@@ -684,9 +778,7 @@ impl AppStorage {
             mode: turn.mode,
             objective: turn.objective.clone(),
             context,
-            allowed_read_tools: self
-                .tool_catalog
-                .list_descriptors_by_phase(ToolPhase::Read),
+            allowed_read_tools: self.tool_catalog.list_descriptors_by_phase(ToolPhase::Read),
             allowed_write_tools: self
                 .tool_catalog
                 .list_descriptors_by_phase(ToolPhase::Write),
@@ -1111,6 +1203,110 @@ impl AppStorage {
         })
     }
 
+    fn resolve_latest_structured_response(
+        &self,
+        session: &Session,
+        turn: &Turn,
+    ) -> Result<ResolvedStructuredResponse, String> {
+        if let Some(response) = self.responses.get(&turn.id) {
+            return Ok(ResolvedStructuredResponse {
+                source: StructuredResponseSource::LiveResponseCache,
+                raw_response: None,
+                parsed_response: response.parsed_response.clone(),
+                validation_issues: response.validation_issues.clone(),
+                repair_prompt: response.repair_prompt.clone(),
+                artifact_id: Some(response.artifact_id.clone()),
+            });
+        }
+
+        if let Some(response) = self.read_persisted_structured_response(&session.id, turn)? {
+            return Ok(response);
+        }
+
+        if let Some(response) = self.read_session_history_structured_response(session, turn)? {
+            return Ok(response);
+        }
+
+        Err(
+            "submit a Copilot response or complete an agent turn before previewing execution"
+                .to_string(),
+        )
+    }
+
+    fn read_persisted_structured_response(
+        &self,
+        session_id: &str,
+        turn: &Turn,
+    ) -> Result<Option<ResolvedStructuredResponse>, String> {
+        let mut persisted = PersistedTurnLifecycleArtifacts::default();
+
+        if let Some(app_local_data_dir) = self.app_local_data_dir.as_deref() {
+            for artifact_id in &turn.item_ids {
+                let meta =
+                    persistence::read_artifact_meta(app_local_data_dir, session_id, artifact_id)?;
+                persisted.capture(app_local_data_dir, session_id, &meta)?;
+            }
+        }
+
+        let Some(response) = persisted.response.as_ref() else {
+            return Ok(None);
+        };
+
+        let validation_issues = persisted
+            .validation
+            .as_ref()
+            .map(|validation| validation.payload.validation_issues.clone())
+            .unwrap_or_default();
+        let repair_prompt = persisted
+            .validation
+            .as_ref()
+            .and_then(|validation| validation.payload.repair_prompt.clone());
+        let artifact_id = persisted
+            .validation
+            .as_ref()
+            .map(|validation| validation.artifact_id.clone())
+            .or_else(|| Some(response.artifact_id.clone()));
+
+        Ok(Some(ResolvedStructuredResponse {
+            source: StructuredResponseSource::PersistedArtifacts,
+            raw_response: None,
+            parsed_response: response.payload.parsed_response.clone(),
+            validation_issues,
+            repair_prompt,
+            artifact_id,
+        }))
+    }
+
+    fn read_session_history_structured_response(
+        &self,
+        session: &Session,
+        turn: &Turn,
+    ) -> Result<Option<ResolvedStructuredResponse>, String> {
+        if session.latest_turn_id.as_deref() != Some(turn.id.as_str()) {
+            return Ok(None);
+        }
+
+        let messages = self.read_session_messages(&session.id)?;
+        let Some(raw_response) = latest_assistant_text(&messages) else {
+            return Ok(None);
+        };
+        let (parsed_response, validation_issues) = parse_copilot_response(&raw_response);
+        let repair_prompt = if validation_issues.is_empty() {
+            None
+        } else {
+            Some(build_repair_prompt(&validation_issues))
+        };
+
+        Ok(Some(ResolvedStructuredResponse {
+            source: StructuredResponseSource::SessionHistory,
+            raw_response: Some(raw_response),
+            parsed_response,
+            validation_issues,
+            repair_prompt,
+            artifact_id: None,
+        }))
+    }
+
     fn learn_project_memory_from_response(
         &mut self,
         session_id: &str,
@@ -1215,16 +1411,13 @@ impl AppStorage {
         approval_policy: ApprovalPolicy,
     ) -> Result<PreviewExecutionResponse, String> {
         let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
-        let stored_response = self
-            .responses
-            .get(&turn.id)
-            .ok_or_else(|| "submit a Copilot response before previewing execution".to_string())?;
+        let structured_response = self.resolve_latest_structured_response(&session, &turn)?;
 
-        if !stored_response.validation_issues.is_empty() {
+        if !structured_response.validation_issues.is_empty() {
             return Err("cannot preview execution while validation issues remain".to_string());
         }
 
-        let parsed_response = stored_response
+        let parsed_response = structured_response
             .parsed_response
             .clone()
             .ok_or_else(|| "no parsed Copilot response is available for preview".to_string())?;
@@ -1301,6 +1494,12 @@ impl AppStorage {
             &turn.id,
             "preview",
             &json!({
+                "structuredResponseSource": format!("{:?}", structured_response.source),
+                "responseArtifactId": structured_response.artifact_id.clone(),
+                "responseCapturedFromHistory": matches!(
+                    structured_response.source,
+                    StructuredResponseSource::SessionHistory
+                ),
                 "diffSummary": diff_summary.clone(),
                 "requiresApproval": requires_approval,
                 "autoApproved": auto_approved,
@@ -1309,6 +1508,8 @@ impl AppStorage {
                 "warnings": warnings.clone(),
                 "fileWriteActions": file_write_actions.clone(),
                 "artifacts": artifacts.clone(),
+                "rawResponse": structured_response.raw_response.clone(),
+                "repairPrompt": structured_response.repair_prompt.clone(),
             }),
             None,
         )?;
@@ -2061,6 +2262,62 @@ impl AppStorage {
     ) -> Result<Turn, String> {
         self.session_store
             .update_turn_status(turn_id, status, validation_error_count, timestamp())
+    }
+
+    fn project_id_for_session(&self, session_id: &str) -> Option<String> {
+        self.projects
+            .values()
+            .find(|project| {
+                project
+                    .session_ids
+                    .iter()
+                    .any(|candidate| candidate == session_id)
+            })
+            .map(|project| project.id.clone())
+    }
+
+    fn sync_project_inbox_files(&mut self, project_id: &str) -> Result<(), String> {
+        let Some(project) = self.projects.get(project_id) else {
+            return Ok(());
+        };
+        let session_ids = project.session_ids.clone();
+        if session_ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut merged = HashMap::<String, InboxFile>::new();
+        for session_id in &session_ids {
+            let session = self.session_store.read_session_model(session_id)?;
+            for file in session.inbox_files {
+                merged
+                    .entry(file.path.clone())
+                    .and_modify(|existing| {
+                        if existing.added_at < file.added_at {
+                            *existing = file.clone();
+                        }
+                    })
+                    .or_insert(file);
+            }
+        }
+
+        let mut merged_files = merged.into_values().collect::<Vec<_>>();
+        merged_files.sort_by(|left, right| {
+            left.added_at
+                .cmp(&right.added_at)
+                .then_with(|| left.path.cmp(&right.path))
+        });
+
+        let now = timestamp();
+        for session_id in session_ids {
+            self.session_store.replace_inbox_files(
+                &session_id,
+                merged_files.clone(),
+                now.clone(),
+            )?;
+            self.persist_session_state(&session_id)?;
+        }
+
+        Ok(())
     }
 
     fn persist_session_state(&mut self, session_id: &str) -> Result<(), String> {
@@ -4689,6 +4946,29 @@ fn normalize_scope_path(path: &str) -> String {
         .to_lowercase()
 }
 
+fn latest_assistant_text(messages: &[claw_core::Message]) -> Option<String> {
+    messages.iter().rev().find_map(|message| {
+        if !matches!(message.role, Role::Assistant) {
+            return None;
+        }
+
+        let text = message
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
 fn parse_copilot_response(
     raw_response: &str,
 ) -> (Option<CopilotTurnResponse>, Vec<ValidationIssue>) {
@@ -5829,6 +6109,23 @@ fn require_existing_directory(field: &str, value: String) -> Result<String, Stri
     Ok(trimmed)
 }
 
+fn require_existing_file(field: &str, value: String) -> Result<String, String> {
+    let trimmed = require_text(field, value)?;
+    let path = Path::new(&trimmed);
+
+    if !path.exists() {
+        return Err(format!(
+            "{field} `{trimmed}` must point to an existing file"
+        ));
+    }
+
+    if !path.is_file() {
+        return Err(format!("{field} `{trimmed}` must point to a file"));
+    }
+
+    Ok(trimmed)
+}
+
 fn timestamp() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
@@ -5839,15 +6136,15 @@ mod tests {
 
     use super::AppStorage;
     use crate::models::{
-        AddProjectMemoryRequest, ApprovalDecision, AssessCopilotHandoffRequest,
-        CopilotHandoffStatus, CreateProjectRequest, CreateSessionRequest,
-        ExecuteReadActionsRequest, ExecutionInspectionState, GenerateRelayPacketRequest,
-        LinkSessionToProjectRequest, OutputFormat, OutputSpec, PreviewExecutionRequest,
-        ProjectMemorySource, ReadProjectRequest, ReadSessionRequest, RecordScopeApprovalRequest,
-        RelayMode, RespondToApprovalRequest, RunExecutionMultiRequest, RunExecutionRequest,
-        ScopeApprovalSource, SetSessionProjectRequest, SpreadsheetAction, StartTurnRequest,
-        SubmitCopilotResponseRequest, TurnArtifactRecord, TurnInspectionSourceType, TurnStatus,
-        UpdateProjectRequest,
+        AddInboxFileRequest, AddProjectMemoryRequest, ApprovalDecision,
+        AssessCopilotHandoffRequest, CopilotHandoffStatus, CreateProjectRequest,
+        CreateSessionRequest, ExecuteReadActionsRequest, ExecutionInspectionState,
+        GenerateRelayPacketRequest, LinkSessionToProjectRequest, OutputFormat, OutputSpec,
+        PreviewExecutionRequest, ProjectMemorySource, ReadProjectRequest, ReadSessionRequest,
+        RecordScopeApprovalRequest, RelayMode, RespondToApprovalRequest, RunExecutionMultiRequest,
+        RunExecutionRequest, ScopeApprovalSource, SetSessionProjectRequest, SpreadsheetAction,
+        StartTurnRequest, SubmitCopilotResponseRequest, TurnArtifactRecord,
+        TurnInspectionSourceType, TurnStatus, UpdateProjectRequest,
     };
     use crate::persistence;
     use serde::{de::DeserializeOwned, Deserialize};
@@ -6180,6 +6477,82 @@ mod tests {
             .iter()
             .any(|warning| warning.contains("do not match `number`")));
         assert!(!Path::new(&output_path).exists());
+
+        fs::remove_file(csv_path).expect("test csv should clean up");
+    }
+
+    #[test]
+    fn preview_execution_uses_latest_structured_response_from_session_history() {
+        let csv_path =
+            write_test_csv("customer_id,amount,approved\n1,42.5,true\n2,13.0,false\n3,77.0,true\n");
+        let output_path = env::temp_dir()
+            .join(format!(
+                "relay-agent-storage-history-preview-{}.csv",
+                Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let mut storage = AppStorage::default();
+
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "History-backed preview".to_string(),
+                objective: "Preview should read the latest structured response from history."
+                    .to_string(),
+                primary_workbook_path: Some(csv_path.to_string_lossy().into_owned()),
+            })
+            .expect("session should be created");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Preview from agent history".to_string(),
+                objective: "Use the latest assistant JSON without submit_copilot_response."
+                    .to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+
+        storage
+            .sync_session_messages(
+                &session.id,
+                vec![
+                    claw_core::Message::user("Preview the reviewed output."),
+                    claw_core::Message::assistant_text(copilot_response(
+                        "Filter approved rows and stage a save-copy preview.",
+                        vec![
+                            json!({
+                                "tool": "table.filter_rows",
+                                "sheet": "Sheet1",
+                                "args": {
+                                    "predicate": "approved = true"
+                                }
+                            }),
+                            json!({
+                                "tool": "workbook.save_copy",
+                                "args": {
+                                    "outputPath": output_path.clone()
+                                }
+                            }),
+                        ],
+                    )),
+                ],
+            )
+            .expect("session history should sync");
+
+        let preview = storage
+            .preview_execution(PreviewExecutionRequest {
+                session_id: session.id,
+                turn_id: turn.id,
+            })
+            .expect("preview should succeed from session history");
+
+        assert!(preview.ready);
+        assert!(preview.requires_approval);
+        assert_eq!(preview.diff_summary.output_path, output_path);
+        assert_eq!(preview.diff_summary.estimated_affected_rows, 2);
+        assert_eq!(preview.diff_summary.sheets.len(), 1);
+        assert_eq!(preview.diff_summary.sheets[0].target.sheet, "Sheet1");
 
         fs::remove_file(csv_path).expect("test csv should clean up");
     }
@@ -8393,6 +8766,68 @@ mod tests {
         fs::remove_dir_all(app_local_data_dir).expect("test storage should clean up");
         fs::remove_dir_all(revenue_root).expect("revenue root should clean up");
         fs::remove_dir_all(finance_root).expect("finance root should clean up");
+    }
+
+    #[test]
+    fn inbox_files_sync_across_sessions_linked_to_same_project() {
+        let revenue_root = create_test_directory("revenue-inbox");
+        let shared_file = revenue_root.join("shared.csv");
+        fs::write(&shared_file, "id,value\n1,ok\n").expect("shared inbox file should be written");
+
+        let mut storage = AppStorage::default();
+        let project = storage
+            .create_project(CreateProjectRequest {
+                name: "Revenue Ops".to_string(),
+                root_folder: revenue_root.display().to_string(),
+                custom_instructions: None,
+            })
+            .expect("project should be created");
+        let first_session = storage
+            .create_session(CreateSessionRequest {
+                title: "First".to_string(),
+                objective: "Inspect file".to_string(),
+                primary_workbook_path: Some(shared_file.display().to_string()),
+            })
+            .expect("first session should be created");
+        let second_session = storage
+            .create_session(CreateSessionRequest {
+                title: "Second".to_string(),
+                objective: "Reuse inbox".to_string(),
+                primary_workbook_path: Some(shared_file.display().to_string()),
+            })
+            .expect("second session should be created");
+
+        storage
+            .link_session_to_project(LinkSessionToProjectRequest {
+                project_id: project.id.clone(),
+                session_id: first_session.id.clone(),
+            })
+            .expect("first session should link");
+        storage
+            .link_session_to_project(LinkSessionToProjectRequest {
+                project_id: project.id.clone(),
+                session_id: second_session.id.clone(),
+            })
+            .expect("second session should link");
+
+        let updated = storage
+            .add_inbox_file(AddInboxFileRequest {
+                session_id: first_session.id.clone(),
+                path: shared_file.display().to_string(),
+            })
+            .expect("shared inbox file should be added");
+        assert_eq!(updated.inbox_files.len(), 1);
+
+        let reloaded_second = storage
+            .read_session(&second_session.id)
+            .expect("second session should be readable");
+        assert_eq!(reloaded_second.session.inbox_files.len(), 1);
+        assert_eq!(
+            reloaded_second.session.inbox_files[0].path,
+            shared_file.display().to_string()
+        );
+
+        fs::remove_dir_all(revenue_root).expect("revenue inbox root should clean up");
     }
 
     #[test]

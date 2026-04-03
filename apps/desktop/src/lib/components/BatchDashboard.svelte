@@ -25,6 +25,7 @@
 <section class="batch-dashboard card">
   <div class="dashboard-head">
     <div>
+      <p class="label-section">Batch Dashboard</p>
       <h3>バッチ進行ダッシュボード</h3>
       <p>{batchJob ? `${completedCount} / ${batchJob.targets.length} 完了` : "まだジョブがありません。"}</p>
     </div>
@@ -57,7 +58,7 @@
           </div>
           {#if target.status === "pending"}
             <button class="btn btn-secondary" type="button" on:click={() => onSkipTarget(target.filePath)}>
-              スキップ
+              <span>スキップ</span>
             </button>
           {/if}
         </article>
@@ -73,6 +74,11 @@
     gap: var(--sp-4);
   }
 
+  .batch-dashboard {
+    border-radius: var(--r-xl);
+    border-color: var(--c-border-strong);
+  }
+
   .dashboard-head,
   .dashboard-row {
     display: grid;
@@ -82,6 +88,8 @@
   .dashboard-head {
     grid-template-columns: 1fr auto;
     align-items: start;
+    padding-bottom: var(--sp-3);
+    border-bottom: 1px solid var(--c-border);
   }
 
   .dashboard-head h3 {
@@ -100,7 +108,7 @@
   .dashboard-row {
     grid-template-columns: minmax(180px, 220px) minmax(0, 1fr) auto;
     padding: var(--sp-3) var(--sp-4);
-    border-radius: var(--r-md);
+    border-radius: var(--r-lg);
     border: 1px solid var(--c-border-strong);
     background: var(--c-surface);
     box-shadow: var(--shadow-sm);
@@ -110,11 +118,12 @@
 
   .dashboard-row:hover {
     border-color: var(--c-border-strong);
+    box-shadow: var(--shadow-md);
   }
 
   .dashboard-row strong {
     font-size: var(--sz-sm);
-    font-weight: 500;
+    font-weight: 600;
     color: var(--c-text);
   }
 
@@ -146,8 +155,9 @@
   .progress-bar {
     height: 0.5rem;
     border-radius: var(--r-full);
-    background: var(--c-canvas);
+    background: var(--c-sidebar);
     overflow: hidden;
+    border: 1px solid var(--c-border);
   }
 
   .progress-fill {

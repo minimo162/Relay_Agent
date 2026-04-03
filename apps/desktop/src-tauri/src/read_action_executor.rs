@@ -95,9 +95,9 @@ fn invoke_read_action(
         "file.stat" => file_support::execute_file_stat(&action.args),
         "text.search" => file_support::execute_text_search(&action.args),
         "document.read_text" => file_support::execute_document_read_text(&action.args),
-        "browser.send_to_copilot" => Err(
-            "browser tools are executed via the desktop browser automation command".to_string(),
-        ),
+        "browser.send_to_copilot" => {
+            Err("browser tools are executed via the desktop browser automation command".to_string())
+        }
         tool => Err(format!("unknown read tool: {tool}")),
     }
 }

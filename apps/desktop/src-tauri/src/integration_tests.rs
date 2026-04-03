@@ -310,7 +310,10 @@ fn mcp_tool_returns_delegation_error() {
         .get("mcp.demo.echo")
         .expect("mcp tool should be registered");
     assert_eq!(registration.source, crate::models::ToolSource::Mcp);
-    assert_eq!(registration.mcp_server_url.as_deref(), Some("http://localhost:3100/mcp"));
+    assert_eq!(
+        registration.mcp_server_url.as_deref(),
+        Some("http://localhost:3100/mcp")
+    );
 }
 
 #[test]

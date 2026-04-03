@@ -57,6 +57,7 @@
     WorkflowTemplateCategory
   } from "@relay-agent/contracts";
   import {
+    addInboxFile,
     addProjectMemory,
     approvePlan,
     assessCopilotHandoff,
@@ -110,6 +111,7 @@
     readTurnArtifacts,
     readSession,
     removeProjectMemory,
+    removeInboxFile,
     rememberRecentFile,
     rememberRecentSession,
     resumeAgentLoopWithPlan,
@@ -367,6 +369,89 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     setTimeout(() => {
       toasts = toasts.filter((t) => t.id !== id);
     }, 3000);
+  }
+
+  function mergeLocalInboxFile(path: string): void {
+    const normalizedPath = path.trim();
+    if (!normalizedPath || inboxFiles.some((file) => file.path === normalizedPath)) {
+      return;
+    }
+    inboxFiles = [
+      ...inboxFiles,
+      { path: normalizedPath, size: 0, addedAt: new Date().toISOString() }
+    ];
+  }
+
+  async function syncInboxFilesFromSession(targetSessionId: string): Promise<void> {
+    if (!targetSessionId) {
+      inboxFiles = [];
+      return;
+    }
+
+    const detail = await readSession({ sessionId: targetSessionId });
+    inboxFiles = detail.session.inboxFiles;
+  }
+
+  async function persistStagedInboxFiles(targetSessionId: string): Promise<void> {
+    if (!targetSessionId || inboxFiles.length === 0) {
+      return;
+    }
+
+    let latestInboxFiles = inboxFiles;
+    for (const file of inboxFiles) {
+      const updatedSession = await addInboxFile({
+        sessionId: targetSessionId,
+        path: file.path
+      });
+      latestInboxFiles = updatedSession.inboxFiles;
+    }
+    inboxFiles = latestInboxFiles;
+  }
+
+  async function handleInboxFileAdd(path: string): Promise<void> {
+    const normalizedPath = path.trim();
+    if (!normalizedPath) {
+      return;
+    }
+
+    if (!sessionId) {
+      mergeLocalInboxFile(normalizedPath);
+      return;
+    }
+
+    try {
+      const updatedSession = await addInboxFile({
+        sessionId,
+        path: normalizedPath
+      });
+      inboxFiles = updatedSession.inboxFiles;
+      await refreshSessions();
+    } catch (error) {
+      addToast(toError(error), "error");
+    }
+  }
+
+  async function handleInboxFileRemove(path: string): Promise<void> {
+    const normalizedPath = path.trim();
+    if (!normalizedPath) {
+      return;
+    }
+
+    if (!sessionId) {
+      inboxFiles = inboxFiles.filter((file) => file.path !== normalizedPath);
+      return;
+    }
+
+    try {
+      const updatedSession = await removeInboxFile({
+        sessionId,
+        path: normalizedPath
+      });
+      inboxFiles = updatedSession.inboxFiles;
+      await refreshSessions();
+    } catch (error) {
+      addToast(toError(error), "error");
+    }
   }
 
   function toggleDarkMode() {
@@ -2251,6 +2336,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     resetTurnInspectionState();
     executionDone = false;
     executionSummary = "";
+    inboxFiles = [];
     workbookProfile = null;
     workbookColumnProfiles = [];
     filePath = session.workbookPath;
@@ -2355,7 +2441,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     }
 
     try {
-      await startDesktopAgent({
+      const startedSessionId = await startDesktopAgent({
         goal,
         files: attachedFiles,
         cwd: selectedProject?.rootFolder || undefined,
@@ -2366,6 +2452,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         },
         maxTurns
       });
+      sessionId = startedSessionId;
+      await syncInboxFilesFromSession(startedSessionId);
+      await refreshSessions();
     } catch (error) {
       copilotAutoError = toError(error);
       addToast(copilotAutoError, "error");
@@ -2461,6 +2550,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     executionSummary = draft.executionSummary;
     showRecent = false;
     void refreshWorkbookContext(filePath);
+    void syncInboxFilesFromSession(draft.sessionId);
     loadExpertDetails();
     hydratingDraft = false;
   }
@@ -3502,6 +3592,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         objective: objectiveText,
         primaryWorkbookPath: path
       });
+      sessionId = session.id;
       if (selectedProjectId) {
         await linkSessionToProject({
           projectId: selectedProjectId,
@@ -3510,7 +3601,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         await refreshProjects();
         projectInfoMsg = "新しいセッションを現在のプロジェクトに紐付けました。";
       }
-      sessionId = session.id;
+      await persistStagedInboxFiles(session.id);
+      await syncInboxFilesFromSession(session.id);
       rememberRecentSession({
         sessionId: session.id,
         title: session.title,
@@ -4691,8 +4783,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       mcpServers={[]}
       approvalPolicy={{ scope: approvalPolicy === "safe" ? "ask" : "always", patterns: [] }}
       projectName={selectedProjectId ? (projects.find(p => p.id === selectedProjectId)?.name ?? "") : ""}
-      on:addFile={(e) => { inboxFiles = [...inboxFiles, { path: e.detail.path, size: 0, addedAt: new Date().toISOString() }]; }}
-      on:removeFile={(e) => { inboxFiles = inboxFiles.filter(f => f.path !== e.detail.path); }}
+      on:addFile={(e) => { void handleInboxFileAdd(e.detail.path); }}
+      on:removeFile={(e) => { void handleInboxFileRemove(e.detail.path); }}
     />
   </div>
 {/if}

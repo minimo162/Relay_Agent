@@ -117,6 +117,16 @@ export const createSessionRequestSchema = z.object({
   primaryWorkbookPath: z.string().trim().min(1).optional()
 });
 
+export const addInboxFileRequestSchema = z.object({
+  sessionId: entityIdSchema,
+  path: nonEmptyStringSchema
+});
+
+export const removeInboxFileRequestSchema = z.object({
+  sessionId: entityIdSchema,
+  path: nonEmptyStringSchema
+});
+
 export const createProjectRequestSchema = z.object({
   name: nonEmptyStringSchema,
   rootFolder: nonEmptyStringSchema,
@@ -797,6 +807,8 @@ export type PreflightWorkbookResponse = z.infer<
 >;
 export type InspectWorkbookResponse = z.infer<typeof inspectWorkbookResponseSchema>;
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
+export type AddInboxFileRequest = z.infer<typeof addInboxFileRequestSchema>;
+export type RemoveInboxFileRequest = z.infer<typeof removeInboxFileRequestSchema>;
 export type CreateProjectRequest = z.infer<typeof createProjectRequestSchema>;
 export type ReadProjectRequest = z.infer<typeof readProjectRequestSchema>;
 export type UpdateProjectRequest = z.infer<typeof updateProjectRequestSchema>;

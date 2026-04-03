@@ -114,6 +114,14 @@ pub struct ProjectMemoryEntry {
     pub source: ProjectMemorySource,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxFile {
+    pub path: String,
+    pub size: u64,
+    pub added_at: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
@@ -135,6 +143,8 @@ pub struct Session {
     pub objective: String,
     pub status: SessionStatus,
     pub primary_workbook_path: Option<String>,
+    #[serde(default)]
+    pub inbox_files: Vec<InboxFile>,
     pub created_at: String,
     pub updated_at: String,
     pub latest_turn_id: Option<String>,
@@ -643,6 +653,20 @@ pub struct CreateSessionRequest {
     pub title: String,
     pub objective: String,
     pub primary_workbook_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddInboxFileRequest {
+    pub session_id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveInboxFileRequest {
+    pub session_id: String,
+    pub path: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -40,12 +40,19 @@ export const itemKindSchema = z.enum([
   "log"
 ]);
 
+export const inboxFileSchema = z.object({
+  path: nonEmptyStringSchema,
+  size: z.number().int().nonnegative(),
+  addedAt: isoDateTimeSchema
+});
+
 export const sessionSchema = z.object({
   id: entityIdSchema,
   title: nonEmptyStringSchema,
   objective: nonEmptyStringSchema,
   status: sessionStatusSchema,
   primaryWorkbookPath: nullishNonEmptyStringSchema,
+  inboxFiles: z.array(inboxFileSchema).default([]),
   createdAt: isoDateTimeSchema,
   updatedAt: isoDateTimeSchema,
   latestTurnId: nullishEntityIdSchema,
@@ -78,6 +85,7 @@ export const itemSchema = z.object({
 export type SessionStatus = z.infer<typeof sessionStatusSchema>;
 export type TurnStatus = z.infer<typeof turnStatusSchema>;
 export type ItemKind = z.infer<typeof itemKindSchema>;
+export type InboxFile = z.infer<typeof inboxFileSchema>;
 export type Session = z.infer<typeof sessionSchema>;
 export type Turn = z.infer<typeof turnSchema>;
 export type Item = z.infer<typeof itemSchema>;
