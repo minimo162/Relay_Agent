@@ -18,7 +18,7 @@ pub(crate) struct StoredScopeApproval {
     pub(crate) violations: Vec<String>,
     pub(crate) source: ScopeApprovalSource,
     pub(crate) note: Option<String>,
-    pub(crate) response_artifact_id: String,
+    pub(crate) response_artifact_id: Option<String>,
     pub(crate) created_at: String,
     pub(crate) artifact_id: String,
 }

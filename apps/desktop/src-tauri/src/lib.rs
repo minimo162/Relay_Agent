@@ -15,7 +15,6 @@ mod pipeline;
 mod project;
 mod quality_validator;
 mod read_action_executor;
-mod relay;
 mod relay_tools;
 mod risk_evaluator;
 mod session;
@@ -69,8 +68,8 @@ pub fn run() {
             session::read_session,
             session::read_turn_artifacts,
             session::start_turn,
-            relay::assess_copilot_handoff,
-            relay::record_structured_response,
+            execution::assess_copilot_handoff,
+            execution::record_structured_response,
             execution::list_tools,
             execution::set_tool_enabled,
             execution::execute_claw_tool,

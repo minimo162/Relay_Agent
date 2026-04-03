@@ -3483,3 +3483,42 @@ Observed result:
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after the persistence-boundary cleanup and runtime removal change.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tauri_bridge::tests -- --nocapture` passed with 4 targeted bridge regressions after adding runtime removal coverage.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml persists_sessions_and_turns_across_reloads -- --nocapture` passed after the persistence-boundary cleanup, confirming reload behavior still works.
+
+Phase 4 T14 completion:
+
+```bash
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml preview_execution_uses_latest_structured_response_from_session_history -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml validates_preview_and_approval_flow -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml persists_turn_artifacts_and_logs_with_session_linkage -- --nocapture
+pnpm --filter @relay-agent/desktop typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/storage.rs` no longer owns a packet-first live lifecycle: the in-memory `relay_packets` / `responses` caches were removed, preview/approval/execution now resolve the latest structured response from persisted artifacts or `SessionStore`-backed `claw-core` history, and scope approvals now bind to that structured-response source.
+- Turn inspection now treats relay packets as legacy persisted artifacts only. New turns no longer create relay-packet artifacts or packet-generated turn-log events, and the overview/inspection copy now points users at structured agent history as the active source of truth.
+- The remaining `generate_relay_packet()` helper in `storage.rs` is now a pure legacy packet builder with no storage side effects. It no longer mutates turn status, appends logs, or records artifacts, which keeps old packet-shape tests available without reintroducing ownership of the conversation lifecycle.
+- Storage regressions were updated to assert the new artifact/log set: `structured-response-recorded` replaces the old submit-flow event, and persisted turn artifacts now cover response, validation, preview, approval, and execution only.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after the storage-boundary cleanup.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml preview_execution_uses_latest_structured_response_from_session_history -- --nocapture` passed with the session-history preview path.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml validates_preview_and_approval_flow -- --nocapture` passed with the structured-response preview/approval path.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml persists_turn_artifacts_and_logs_with_session_linkage -- --nocapture` passed with the new artifact and turn-log expectations.
+- `pnpm --filter @relay-agent/desktop typecheck` passed with `svelte-check found 0 errors and 0 warnings`.
+- `pnpm --filter @relay-agent/desktop build` passed with the static desktop bundle output.
+
+Phase 4 T16 relay module removal:
+
+```bash
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/relay.rs` was deleted. Its two thin Tauri command wrappers, `assess_copilot_handoff` and `record_structured_response`, now live in [execution.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/execution.rs).
+- [lib.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/lib.rs) no longer declares `mod relay;`, and the invoke handler now binds those commands directly from `execution::...`.
+- No frontend or contract surface changed: the invoke command names stay `assess_copilot_handoff` and `record_structured_response`, so the module deletion is internal cleanup only.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after removing the module.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run` passed, confirming the remaining Rust test targets compile without `relay.rs`.

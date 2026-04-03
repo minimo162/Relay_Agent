@@ -293,7 +293,7 @@
           "blockedBy": [
             "T13"
           ],
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "T15",
@@ -323,7 +323,7 @@
           "blockedBy": [
             "T14"
           ],
-          "status": "pending"
+          "status": "completed"
         }
       ]
     },

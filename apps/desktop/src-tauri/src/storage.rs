@@ -5,7 +5,7 @@ use std::{
 };
 
 use chrono::{SecondsFormat, Utc};
-use claw_core::{ContentBlock, Role};
+use claw_core::{ContentBlock, Message, Role};
 use serde::Serialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -45,25 +45,8 @@ use crate::tool_catalog::ToolCatalog;
 use crate::workbook::{SheetColumnProfile, SheetPreview, WorkbookEngine, WorkbookSource};
 use crate::workbook_state::{StoredExecution, StoredPlanProgress, StoredPreview};
 
-#[derive(Clone, Debug)]
-struct StoredRelayPacket {
-    packet: RelayPacket,
-    created_at: String,
-    artifact_id: String,
-}
-
-#[derive(Clone, Debug)]
-struct StoredResponse {
-    parsed_response: Option<CopilotTurnResponse>,
-    validation_issues: Vec<ValidationIssue>,
-    repair_prompt: Option<String>,
-    created_at: String,
-    artifact_id: String,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StructuredResponseSource {
-    LiveResponseCache,
     PersistedArtifacts,
     SessionHistory,
 }
@@ -190,8 +173,6 @@ pub struct AppStorage {
     tool_restore_warnings: Vec<String>,
     projects: HashMap<String, Project>,
     session_store: SessionStore,
-    relay_packets: HashMap<String, StoredRelayPacket>,
-    responses: HashMap<String, StoredResponse>,
     previews: HashMap<String, StoredPreview>,
     approvals: HashMap<String, StoredApproval>,
     scope_approvals: HashMap<String, StoredScopeApproval>,
@@ -209,8 +190,6 @@ impl Default for AppStorage {
             tool_restore_warnings: Vec::new(),
             projects: HashMap::new(),
             session_store: SessionStore::default(),
-            relay_packets: HashMap::new(),
-            responses: HashMap::new(),
             previews: HashMap::new(),
             approvals: HashMap::new(),
             scope_approvals: HashMap::new(),
@@ -770,14 +749,13 @@ impl AppStorage {
         request: GenerateRelayPacketRequest,
     ) -> Result<RelayPacket, String> {
         let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
-        let context = build_packet_context(&session, &turn);
-        let packet = RelayPacket {
+        Ok(RelayPacket {
             version: "1.0",
             session_id: session.id.clone(),
             turn_id: turn.id.clone(),
             mode: turn.mode,
             objective: turn.objective.clone(),
-            context,
+            context: build_packet_context(&session, &turn),
             allowed_read_tools: self.tool_catalog.list_descriptors_by_phase(ToolPhase::Read),
             allowed_write_tools: self
                 .tool_catalog
@@ -791,33 +769,7 @@ impl AppStorage {
                     "Write actions require preview and approval before execution.".to_string(),
                 ],
             },
-        };
-
-        let packet_artifact =
-            self.record_turn_artifact(&session.id, &turn.id, "relay-packet", &packet, None)?;
-        self.relay_packets.insert(
-            turn.id.clone(),
-            StoredRelayPacket {
-                packet: packet.clone(),
-                created_at: packet_artifact.created_at.clone(),
-                artifact_id: packet_artifact.id.clone(),
-            },
-        );
-        self.update_turn_status(&turn.id, TurnStatus::PacketReady, 0)?;
-        self.touch_session(&session.id)?;
-        self.append_turn_log(
-            &session.id,
-            &turn.id,
-            Some(&packet_artifact.id),
-            "relay-packet-generated",
-            "Relay packet generated for the current turn.".to_string(),
-            Some(json!({
-                "mode": turn.mode,
-                "contextCount": packet.context.len(),
-            })),
-        )?;
-
-        Ok(packet)
+        })
     }
 
     pub fn assess_copilot_handoff(
@@ -1120,6 +1072,16 @@ impl AppStorage {
         let parsed_response = parsed_response.ok_or_else(|| {
             "structured response could not be parsed after validation".to_string()
         })?;
+        if session.latest_turn_id.as_deref() == Some(turn.id.as_str()) {
+            let mut messages = self.read_session_messages(&session.id)?;
+            let latest_assistant_matches = latest_assistant_text(&messages)
+                .map(|text| text.trim() == raw_response.trim())
+                .unwrap_or(false);
+            if !latest_assistant_matches {
+                messages.push(Message::assistant_text(raw_response.clone()));
+                self.sync_session_messages(&session.id, messages)?;
+            }
+        }
         let auto_learned_memory =
             self.learn_project_memory_from_response(&session.id, Some(&parsed_response))?;
         let response_artifact = self.record_turn_artifact(
@@ -1146,16 +1108,6 @@ impl AppStorage {
         )?;
         let next_turn = self.update_turn_status(&turn.id, TurnStatus::Validated, 0)?;
 
-        self.responses.insert(
-            turn.id.clone(),
-            StoredResponse {
-                parsed_response: Some(parsed_response.clone()),
-                validation_issues: Vec::new(),
-                repair_prompt: None,
-                created_at: validation_artifact.created_at.clone(),
-                artifact_id: validation_artifact.id.clone(),
-            },
-        );
         self.previews.remove(&turn.id);
         self.approvals.remove(&turn.id);
         self.scope_approvals.remove(&turn.id);
@@ -1200,17 +1152,6 @@ impl AppStorage {
         session: &Session,
         turn: &Turn,
     ) -> Result<ResolvedStructuredResponse, String> {
-        if let Some(response) = self.responses.get(&turn.id) {
-            return Ok(ResolvedStructuredResponse {
-                source: StructuredResponseSource::LiveResponseCache,
-                raw_response: None,
-                parsed_response: response.parsed_response.clone(),
-                validation_issues: response.validation_issues.clone(),
-                repair_prompt: response.repair_prompt.clone(),
-                artifact_id: Some(response.artifact_id.clone()),
-            });
-        }
-
         if let Some(response) = self.read_persisted_structured_response(&session.id, turn)? {
             return Ok(response);
         }
@@ -1220,8 +1161,7 @@ impl AppStorage {
         }
 
         Err(
-            "submit a Copilot response or complete an agent turn before previewing execution"
-                .to_string(),
+            "complete an agent turn before previewing execution".to_string(),
         )
     }
 
@@ -1663,10 +1603,13 @@ impl AppStorage {
         request: RecordScopeApprovalRequest,
     ) -> Result<RecordScopeApprovalResponse, String> {
         let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
-        let response = self.responses.get(&turn.id).ok_or_else(|| {
-            "a validated Copilot response must exist before scope approval can be recorded"
-                .to_string()
-        })?;
+        let response = self.resolve_latest_structured_response(&session, &turn)?;
+        if response.parsed_response.is_none() || !response.validation_issues.is_empty() {
+            return Err(
+                "a validated structured response must exist before scope approval can be recorded"
+                    .to_string(),
+            );
+        }
         let response_artifact_id = response.artifact_id.clone();
         let root_folder = require_text("rootFolder", request.root_folder)?;
         let violations = request
@@ -1689,7 +1632,7 @@ impl AppStorage {
                 violations: violations.clone(),
                 source: request.source,
                 note: request.note.clone(),
-                response_artifact_id: Some(response_artifact_id.clone()),
+                response_artifact_id: response_artifact_id.clone(),
             },
             None,
         )?;
@@ -1762,13 +1705,12 @@ impl AppStorage {
             }
         }
 
-        let stored_response = self
-            .responses
-            .get(&turn.id)
-            .ok_or_else(|| "no validated response is available for execution".to_string())?;
-        let parsed_response = stored_response
+        let structured_response = self.resolve_latest_structured_response(&session, &turn)?;
+        if !structured_response.validation_issues.is_empty() {
+            return Err("no validated response is available for execution".to_string());
+        }
+        let parsed_response = structured_response
             .parsed_response
-            .clone()
             .ok_or_else(|| "no parsed response is available for execution".to_string())?;
 
         let workbook_write_actions = parsed_response
@@ -2012,13 +1954,12 @@ impl AppStorage {
             }
         }
 
-        let stored_response = self
-            .responses
-            .get(&turn.id)
-            .ok_or_else(|| "no validated response is available for execution".to_string())?;
-        let parsed_response = stored_response
+        let structured_response = self.resolve_latest_structured_response(&session, &turn)?;
+        if !structured_response.validation_issues.is_empty() {
+            return Err("no validated response is available for execution".to_string());
+        }
+        let parsed_response = structured_response
             .parsed_response
-            .clone()
             .ok_or_else(|| "no parsed response is available for execution".to_string())?;
 
         let workbook_write_actions = parsed_response
@@ -2490,8 +2431,8 @@ impl AppStorage {
         persisted: &PersistedTurnLifecycleArtifacts,
     ) -> TurnDetailsViewModel {
         let packet = self.resolve_packet_section(session, turn, persisted);
-        let validation = self.resolve_validation_section(turn, persisted);
-        let approval = self.resolve_approval_section(turn, persisted);
+        let validation = self.resolve_validation_section(session, turn, persisted);
+        let approval = self.resolve_approval_section(session, turn, persisted);
         let execution = self.resolve_execution_section(turn, persisted);
 
         TurnDetailsViewModel {
@@ -2523,13 +2464,11 @@ impl AppStorage {
         let steps = vec![
             TurnOverviewStep {
                 id: "packet".to_string(),
-                label: "Packet".to_string(),
+                label: "Relay Packet".to_string(),
                 state: if packet.available {
                     TurnOverviewStepState::Complete
-                } else if turn.status == TurnStatus::Draft {
-                    TurnOverviewStepState::Current
                 } else {
-                    TurnOverviewStepState::Pending
+                    TurnOverviewStepState::NotRequired
                 },
                 summary: packet.summary.clone(),
             },
@@ -2547,10 +2486,7 @@ impl AppStorage {
                     } else {
                         TurnOverviewStepState::Failed
                     }
-                } else if matches!(
-                    turn.status,
-                    TurnStatus::PacketReady | TurnStatus::AwaitingResponse
-                ) {
+                } else if turn.status == TurnStatus::Draft {
                     TurnOverviewStepState::Current
                 } else {
                     TurnOverviewStepState::Pending
@@ -2562,7 +2498,13 @@ impl AppStorage {
                 label: "Preview".to_string(),
                 state: if preview_ready {
                     TurnOverviewStepState::Complete
-                } else if matches!(turn.status, TurnStatus::Validated) {
+                } else if validation.available
+                    && validation
+                        .payload
+                        .as_ref()
+                        .map(|payload| payload.accepted)
+                        .unwrap_or(false)
+                {
                     TurnOverviewStepState::Current
                 } else {
                     TurnOverviewStepState::Pending
@@ -2581,7 +2523,8 @@ impl AppStorage {
                         "A persisted preview is available for read-only review.".to_string()
                     }
                 } else {
-                    "Preview details appear after checked changes are generated.".to_string()
+                    "Preview details appear after a structured agent response is recorded."
+                        .to_string()
                 },
             },
             TurnOverviewStep {
@@ -2649,29 +2592,9 @@ impl AppStorage {
         turn: &Turn,
         persisted: &PersistedTurnLifecycleArtifacts,
     ) -> TurnInspectionSection<PacketInspectionPayload> {
-        if let Some(packet) = self.relay_packets.get(&turn.id) {
-            return self.available_section(
-                "Relay packet is ready for this turn.".to_string(),
-                TurnInspectionSourceType::Live,
-                packet.created_at.clone(),
-                Some(packet.artifact_id.clone()),
-                PacketInspectionPayload {
-                    session_title: session.title.clone(),
-                    turn_title: turn.title.clone(),
-                    source_path: session.primary_workbook_path.clone(),
-                    relay_mode: packet.packet.mode,
-                    objective: packet.packet.objective.clone(),
-                    context_lines: packet.packet.context.clone(),
-                    allowed_read_tool_count: packet.packet.allowed_read_tools.len(),
-                    allowed_write_tool_count: packet.packet.allowed_write_tools.len(),
-                    response_notes: packet.packet.response_contract.notes.clone(),
-                },
-            );
-        }
-
         if let Some(packet) = persisted.packet.as_ref() {
             return self.available_section(
-                "A saved relay packet is available for this turn.".to_string(),
+                "A legacy relay packet artifact is available for this turn.".to_string(),
                 TurnInspectionSourceType::Persisted,
                 packet.created_at.clone(),
                 Some(packet.artifact_id.clone()),
@@ -2689,16 +2612,8 @@ impl AppStorage {
             );
         }
 
-        if turn.status == TurnStatus::Draft {
-            return self.unavailable_section(
-                "Packet details appear after a relay packet is generated for this turn."
-                    .to_string(),
-                TurnInspectionUnavailableReason::NotGeneratedYet,
-            );
-        }
-
         self.unavailable_section(
-            "Packet details are not available for this turn or this older turn version."
+            "Relay packets are legacy. New turns use structured agent history instead."
                 .to_string(),
             TurnInspectionUnavailableReason::NotSupportedForTurnVersion,
         )
@@ -2706,6 +2621,7 @@ impl AppStorage {
 
     fn resolve_validation_section(
         &self,
+        session: &Session,
         turn: &Turn,
         persisted: &PersistedTurnLifecycleArtifacts,
     ) -> TurnInspectionSection<ValidationInspectionPayload> {
@@ -2720,61 +2636,64 @@ impl AppStorage {
                     .map(|preview| preview.artifact_id.clone())
             });
 
-        if let Some(response) = self.responses.get(&turn.id) {
-            let accepted = response.validation_issues.is_empty();
-            let warning_count = response
-                .parsed_response
-                .as_ref()
-                .map(|payload| payload.warnings.len())
-                .unwrap_or(0);
-            let issues = response
-                .validation_issues
-                .iter()
-                .map(|issue| ValidationIssueSummary {
-                    path: format_issue_path(&issue.path),
-                    message: issue.message.clone(),
-                    code: issue.code.clone(),
-                })
-                .collect::<Vec<_>>();
-            return self.available_section(
-                if accepted {
-                    "Validation passed for the current response.".to_string()
+        if let Ok(response) = self.read_session_history_structured_response(session, turn) {
+            if let Some(response) = response {
+                let accepted = response.validation_issues.is_empty();
+                let warning_count = response
+                    .parsed_response
+                    .as_ref()
+                    .map(|payload| payload.warnings.len())
+                    .unwrap_or(0);
+                let issues = response
+                    .validation_issues
+                    .iter()
+                    .map(|issue| ValidationIssueSummary {
+                        path: format_issue_path(&issue.path),
+                        message: issue.message.clone(),
+                        code: issue.code.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                let summary = if accepted {
+                    "Validation passed for the current structured response.".to_string()
                 } else {
                     format!(
-                        "Validation found {} issue(s) in the current response.",
+                        "Validation found {} issue(s) in the current structured response.",
                         response.validation_issues.len()
                     )
-                },
-                TurnInspectionSourceType::Live,
-                response.created_at.clone(),
-                Some(response.artifact_id.clone()),
-                ValidationInspectionPayload {
-                    accepted,
-                    can_preview: accepted,
-                    issue_count: response.validation_issues.len(),
-                    warning_count,
-                    headline: if accepted {
-                        if warning_count > 0 {
-                            "Validation passed with warnings.".to_string()
+                };
+                return self.available_section(
+                    summary,
+                    TurnInspectionSourceType::Live,
+                    turn.updated_at.clone(),
+                    response.artifact_id.clone(),
+                    ValidationInspectionPayload {
+                        accepted,
+                        can_preview: accepted,
+                        issue_count: response.validation_issues.len(),
+                        warning_count,
+                        headline: if accepted {
+                            if warning_count > 0 {
+                                "Validation passed with warnings.".to_string()
+                            } else {
+                                "Validation passed.".to_string()
+                            }
                         } else {
-                            "Validation passed.".to_string()
-                        }
-                    } else {
-                        "Validation needs changes.".to_string()
+                            "Validation needs changes.".to_string()
+                        },
+                        primary_reason: if let Some(issue) = response.validation_issues.first() {
+                            issue.message.clone()
+                        } else if warning_count > 0 {
+                            "The response passed validation, but it still includes warning notes."
+                                .to_string()
+                        } else {
+                            "The response is safe to send into preview.".to_string()
+                        },
+                        issues,
+                        repair_prompt_available: response.repair_prompt.is_some(),
+                        related_preview_artifact_id: preview_artifact_id,
                     },
-                    primary_reason: if let Some(issue) = response.validation_issues.first() {
-                        issue.message.clone()
-                    } else if warning_count > 0 {
-                        "The response passed validation, but it still includes warning notes."
-                            .to_string()
-                    } else {
-                        "The response is safe to send into preview.".to_string()
-                    },
-                    issues,
-                    repair_prompt_available: response.repair_prompt.is_some(),
-                    related_preview_artifact_id: preview_artifact_id,
-                },
-            );
+                );
+            }
         }
 
         if let Some(validation) = persisted.validation.as_ref() {
@@ -2840,15 +2759,9 @@ impl AppStorage {
 
         if turn.status == TurnStatus::Draft {
             return self.unavailable_section(
-                "Validation becomes available after a packet is generated and a Copilot response is pasted back into Studio.".to_string(),
+                "Validation becomes available after the first structured agent response is recorded."
+                    .to_string(),
                 TurnInspectionUnavailableReason::StepNotReached,
-            );
-        }
-
-        if turn.status == TurnStatus::PacketReady {
-            return self.unavailable_section(
-                "A Copilot response has not been validated for this turn yet.".to_string(),
-                TurnInspectionUnavailableReason::NotGeneratedYet,
             );
         }
 
@@ -2861,6 +2774,7 @@ impl AppStorage {
 
     fn resolve_approval_section(
         &self,
+        session: &Session,
         turn: &Turn,
         persisted: &PersistedTurnLifecycleArtifacts,
     ) -> TurnInspectionSection<ApprovalInspectionPayload> {
@@ -2885,9 +2799,9 @@ impl AppStorage {
             .map(|preview| preview.artifact_id.clone())
             .or_else(|| persisted_preview.map(|preview| preview.artifact_id.clone()));
         let current_response_artifact_id = self
-            .responses
-            .get(&turn.id)
-            .map(|response| response.artifact_id.clone())
+            .resolve_latest_structured_response(session, turn)
+            .ok()
+            .and_then(|response| response.artifact_id)
             .or_else(|| {
                 persisted
                     .validation
@@ -2898,7 +2812,7 @@ impl AppStorage {
             .scope_approvals
             .get(&turn.id)
             .filter(|scope| {
-                Some(scope.response_artifact_id.clone()) == current_response_artifact_id
+                scope.response_artifact_id == current_response_artifact_id
             })
             .map(|scope| ScopeOverrideInspectionRecord {
                 decision: scope.decision,
@@ -2907,7 +2821,7 @@ impl AppStorage {
                 violations: scope.violations.clone(),
                 source: scope.source,
                 note: scope.note.clone(),
-                response_artifact_id: Some(scope.response_artifact_id.clone()),
+                response_artifact_id: scope.response_artifact_id.clone(),
                 artifact_id: Some(scope.artifact_id.clone()),
             })
             .or_else(|| {
@@ -3704,8 +3618,8 @@ impl AppStorage {
 fn humanize_turn_status(status: TurnStatus) -> String {
     match status {
         TurnStatus::Draft => "Draft".to_string(),
-        TurnStatus::PacketReady => "Packet ready".to_string(),
-        TurnStatus::AwaitingResponse => "Awaiting a corrected response".to_string(),
+        TurnStatus::PacketReady => "Legacy packet generated".to_string(),
+        TurnStatus::AwaitingResponse => "Legacy response correction needed".to_string(),
         TurnStatus::Validated => "Validation passed".to_string(),
         TurnStatus::PreviewReady => "Preview ready".to_string(),
         TurnStatus::Approved => "Approved".to_string(),
@@ -7416,7 +7330,7 @@ mod tests {
             .find(|turn| turn.id == turn_id)
             .expect("turn should be present after reload");
 
-        assert_eq!(turn.item_ids.len(), 6);
+        assert_eq!(turn.item_ids.len(), 5);
         assert_eq!(turn.status, TurnStatus::Executed);
 
         let mut artifact_types = BTreeSet::new();
@@ -7458,7 +7372,6 @@ mod tests {
                 "copilot-response".to_string(),
                 "execution".to_string(),
                 "preview".to_string(),
-                "relay-packet".to_string(),
                 "validation".to_string(),
             ])
         );
@@ -7516,10 +7429,9 @@ mod tests {
             turn_event_types,
             BTreeSet::from([
                 "approval-recorded".to_string(),
-                "copilot-response-submitted".to_string(),
+                "structured-response-recorded".to_string(),
                 "execution-preview-created".to_string(),
                 "execution-recorded".to_string(),
-                "relay-packet-generated".to_string(),
                 "turn-started".to_string(),
             ])
         );
@@ -9170,6 +9082,7 @@ rl.on("line", (line) => {
     fn copilot_response(summary: &str, actions: Vec<Value>) -> String {
         json!({
             "version": "1.0",
+            "status": "ready_to_write",
             "summary": summary,
             "actions": actions,
             "followUpQuestions": [],

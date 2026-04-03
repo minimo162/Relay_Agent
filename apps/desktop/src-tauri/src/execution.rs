@@ -6,13 +6,15 @@ use tauri::State;
 
 use crate::mcp_client::McpClient;
 use crate::models::{
-    ApprovePlanRequest, ApprovePlanResponse, ExecuteClawToolRequest, ExecuteClawToolResponse,
+    ApprovePlanRequest, ApprovePlanResponse, AssessCopilotHandoffRequest,
+    AssessCopilotHandoffResponse, ExecuteClawToolRequest, ExecuteClawToolResponse,
     ExecuteReadActionsRequest, ExecuteReadActionsResponse, InvokeMcpToolRequest,
     InvokeMcpToolResponse, ListToolsResponse, McpServerConfig, PlanProgressRequest,
     PlanProgressResponse, PreviewExecutionRequest, PreviewExecutionResponse,
     RecordPlanProgressRequest, RecordScopeApprovalRequest, RecordScopeApprovalResponse,
-    RespondToApprovalRequest, RespondToApprovalResponse, RunExecutionMultiRequest,
-    RunExecutionRequest, RunExecutionResponse, SetToolEnabledRequest, ToolRegistration, ToolSource,
+    RecordStructuredResponseRequest, RecordStructuredResponseResponse, RespondToApprovalRequest,
+    RespondToApprovalResponse, RunExecutionMultiRequest, RunExecutionRequest,
+    RunExecutionResponse, SetToolEnabledRequest, ToolRegistration, ToolSource,
     ValidateOutputQualityRequest,
 };
 use crate::risk_evaluator::ApprovalPolicy;
@@ -180,6 +182,24 @@ pub fn preview_execution(
         .lock()
         .expect("approval policy poisoned");
     storage.preview_execution_with_policy(request, approval_policy)
+}
+
+#[tauri::command]
+pub fn assess_copilot_handoff(
+    state: State<'_, DesktopState>,
+    request: AssessCopilotHandoffRequest,
+) -> Result<AssessCopilotHandoffResponse, String> {
+    let storage = state.storage.lock().expect("desktop storage poisoned");
+    storage.assess_copilot_handoff(request)
+}
+
+#[tauri::command]
+pub fn record_structured_response(
+    state: State<'_, DesktopState>,
+    request: RecordStructuredResponseRequest,
+) -> Result<RecordStructuredResponseResponse, String> {
+    let mut storage = state.storage.lock().expect("desktop storage poisoned");
+    storage.record_structured_response(request)
 }
 
 #[tauri::command]
