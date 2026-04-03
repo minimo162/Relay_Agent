@@ -26,6 +26,7 @@ pub fn run() {
             tauri_bridge::respond_approval,
             tauri_bridge::cancel_agent,
             tauri_bridge::get_session_history,
+            tauri_bridge::compact_agent_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -8,10 +8,13 @@ use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 use runtime::{
-    PermissionMode, PermissionPolicy, PermissionPrompter,
+    self, PermissionMode, PermissionPolicy, PermissionPrompter,
     PermissionRequest, PermissionPromptDecision, ContentBlock,
     Session as RuntimeSession, ConversationMessage, ToolExecutor,
+    CompactionConfig,
 };
+
+use commands::handle_slash_command;
 
 use crate::copilot_client::{CopilotApiClient, CopilotStreamEvent, PersistedSessionConfig};
 use crate::models::*;
@@ -144,6 +147,55 @@ pub async fn respond_approval(
 
     tx.send(request.approved)
         .map_err(|_| "approval channel closed — session may have ended".into())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactAgentSessionRequest {
+    pub session_id: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactAgentSessionResponse {
+    pub message: String,
+    pub removed_message_count: usize,
+}
+
+#[tauri::command]
+pub async fn compact_agent_session(
+    registry: State<'_, SessionRegistry>,
+    request: CompactAgentSessionRequest,
+) -> Result<CompactAgentSessionResponse, String> {
+    let result = {
+        let mut data = registry.data.lock().expect("registry poisoned");
+        let entry = data
+            .get_mut(&request.session_id)
+            .ok_or_else(|| format!("session `{}` not found", request.session_id))?;
+
+        let config = CompactionConfig {
+            preserve_recent_messages: 2,
+            max_estimated_tokens: 4000,
+        };
+
+        let cmd_result = handle_slash_command(
+            "/compact",
+            &entry.session,
+            config,
+        )
+        .ok_or_else(|| "compact command is only available for existing sessions".to_string())?;
+
+        let removed = cmd_result.message.len();
+        let removed_count = entry.session.messages.len().saturating_sub(cmd_result.session.messages.len());
+
+        entry.session = cmd_result.session;
+        CompactAgentSessionResponse {
+            message: cmd_result.message,
+            removed_message_count: removed_count,
+        }
+    };
+
+    Ok(result)
 }
 
 #[tauri::command]

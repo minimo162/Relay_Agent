@@ -138,6 +138,21 @@ export async function getSessionHistory(
   return invoke<AgentSessionHistoryResponse>("get_session_history", { request });
 }
 
+export interface CompactAgentSessionRequest {
+  sessionId: string;
+}
+
+export interface CompactAgentSessionResponse {
+  message: string;
+  removedMessageCount: number;
+}
+
+export async function compactAgentSession(
+  request: CompactAgentSessionRequest,
+): Promise<CompactAgentSessionResponse> {
+  return invoke<CompactAgentSessionResponse>("compact_agent_session", { request });
+}
+
 /* ============================================================
    Tauri events — listen to all
    ============================================================ */
