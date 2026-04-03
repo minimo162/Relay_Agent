@@ -4,7 +4,7 @@
   "category": "general",
   "description": "列名の揺れを揃え、必要な型へ変換します。",
   "goal": "列名を統一し、必要な列の型を整えて確認用コピーを保存する",
-  "expectedTools": ["table.rename_columns", "table.cast_columns", "workbook.save_copy"],
+  "expectedTools": ["browser.send_to_copilot", "file.copy"],
   "exampleInputFile": "dataset.csv",
   "tags": ["汎用", "列名", "型変換"],
   "isBuiltIn": true,

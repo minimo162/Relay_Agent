@@ -3522,3 +3522,357 @@ Observed result:
 - No frontend or contract surface changed: the invoke command names stay `assess_copilot_handoff` and `record_structured_response`, so the module deletion is internal cleanup only.
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after removing the module.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run` passed, confirming the remaining Rust test targets compile without `relay.rs`.
+
+Phase 6 T17 dead Rust cleanup:
+
+```bash
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run
+pnpm --filter @relay-agent/desktop typecheck
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/models.rs` no longer defines the unused Rust-side packet request/response types `GenerateRelayPacketRequest`, `RelayPacket`, and `RelayPacketResponseContract`.
+- `apps/desktop/src-tauri/src/storage.rs` no longer exposes the legacy `generate_relay_packet()` helper or `build_packet_context()`. Rust-side tests now record structured responses directly after `start_turn()` instead of simulating the removed packet handoff.
+- `apps/desktop/src-tauri/src/workflow_smoke.rs` and `apps/desktop/src-tauri/src/integration_tests.rs` were updated to match the current primary path, which starts a turn and records a structured response without a relay-packet pre-step.
+- The legacy packet inspection payload reader remains in `storage.rs` so persisted old artifacts can still be inspected. Contract-level packet schema cleanup is deferred to `T18`.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after the Rust cleanup.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run` passed, confirming the Rust test targets compile after the helper/type removals.
+- `pnpm --filter @relay-agent/desktop typecheck` passed with `svelte-check found 0 errors and 0 warnings`.
+
+Phase 6 T18 contracts simplification:
+
+```bash
+pnpm --filter @relay-agent/contracts build
+pnpm --filter @relay-agent/desktop typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- `packages/contracts/src/core.ts` no longer exposes the unused `Item` / `ItemKind` contract or the legacy turn-status values `packet-ready` and `awaiting-response`.
+- `packages/contracts/src/relay.ts` no longer defines `RelayPacket`. The structured model response contract was renamed from `CopilotTurnResponse` to `AgentTurnResponse`, and the file now also exports typed `AgentEvent` / `AgentEventName` schemas for the Tauri bridge event stream.
+- `packages/contracts/src/ipc.ts` now uses `agentTurnResponseSchema` for `recordStructuredResponse` request/response validation.
+- `apps/desktop/src/lib/copilot-agent.ts`, `apps/desktop/src/lib/copilot-turn.ts`, and [ +page.svelte ](/workspace/relay-agent-main/apps/desktop/src/routes/+page.svelte) were updated to consume `AgentTurnResponse` instead of the old Copilot-specific contract name.
+- `apps/desktop/src/lib/agent-ui.ts` now imports bridge event payload types from `@relay-agent/contracts`, so the event payload contract lives in one place instead of being duplicated locally.
+- `pnpm --filter @relay-agent/contracts build` passed after the contract cleanup.
+- `pnpm --filter @relay-agent/desktop typecheck` passed with `svelte-check found 0 errors and 0 warnings`.
+- `pnpm --filter @relay-agent/desktop build` passed with the static desktop bundle output.
+
+Phase 6 T19 Cargo dependency cleanup:
+
+```bash
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/Cargo.toml` no longer declares `quick-xml` as a direct dependency. The current Rust code paths use `reqwest`, `shell-words`, `trash`, `csv`, `regex`, `lopdf`, `zip`, and `calamine` directly, but there is no in-repo `quick_xml::...` usage left after the relay-flow cleanup.
+- `Cargo.lock` was refreshed accordingly, so `quick-xml` remains only as a transitive dependency from other crates, not as a direct dependency of `relay-agent-desktop`.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after removing the direct dependency.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run` passed, confirming the Rust test targets still compile after the dependency prune.
+
+Phase 6 T20 final verification run:
+
+```bash
+pnpm check
+pnpm startup:test
+pnpm launch:test
+pnpm workflow:test
+pnpm --filter @relay-agent/desktop agent-loop:test
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+find apps/desktop/src-tauri/src -name '*.rs' -print0 | xargs -0 wc -c | tail -n 1
+wc -c apps/desktop/src/lib/copilot-agent.ts apps/desktop/src/lib/copilot-turn.ts apps/desktop/src/lib/agent-ui.ts
+rg -n '\buiMode\b|GuidedStage|manual mode|manual workflow|generateRelayPacket|submitCopilotResponse' apps/desktop/src -g'*.ts' -g'*.svelte'
+```
+
+Observed result:
+
+- `pnpm check` passed.
+- `pnpm startup:test` passed. The startup smoke binary reported `ready`, `retry-recovery`, and `attention` scenarios, and the targeted Rust startup tests passed.
+- `pnpm launch:test` passed. The `tauri-dev-launch` smoke detected both the frontend and desktop binary and survived the stability window.
+- `pnpm workflow:test` passed after updating the smoke harness to stop expecting the removed `generate-packet` step. The workflow smoke completed with output verification and source immutability intact.
+- `pnpm --filter @relay-agent/desktop agent-loop:test` passed. The smoke observed approval + completion events and verified the filtered save-copy output while preserving the source file.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` passed with 127 Rust tests after updating remaining fixture/inspection expectations to the structured-response flow.
+- The manual-mode removal check returned no matches for `uiMode`, `GuidedStage`, `generateRelayPacket`, or `submitCopilotResponse` in `apps/desktop/src`, which confirms the old guided/manual UI path is no longer present in the current frontend sources.
+
+Acceptance snapshot:
+
+- Criterion 3 passed: the full Rust test suite and smoke runs still cover the claw builtins path, including registry execution coverage in `state::tests` and the launched agent-loop smoke.
+- Criterion 4 passed: Relay-specific tools remain exercised through `relay_tools::tests`, `workflow:test`, and `agent-loop:test`.
+- Criterion 5 passed: the launched app agent-loop smoke completed end to end through Copilot-style structured responses, approval, and save-copy output.
+- Criterion 6 passed: approval gating was observed in the launched agent-loop smoke and the Rust bridge tests.
+- Criterion 7 passed: batch / pipeline / template Rust tests continued to pass inside the full `cargo test` run.
+- Criterion 8 passed: the old manual/guided UI mode is absent from the current frontend source.
+- Criterion 1 failed: authored Rust source under `apps/desktop/src-tauri/src` currently totals `853556` bytes (`833.6 KiB`), which is far above the PRD target of `80 KiB`.
+- Criterion 2 failed: TypeScript agent-loop code still exists. `apps/desktop/src/lib/copilot-agent.ts`, `apps/desktop/src/lib/copilot-turn.ts`, and `apps/desktop/src/lib/agent-ui.ts` total `33148` bytes, so the PRD target of `0` is not yet met.
+
+Task status note:
+
+- `T20` remains pending after this verification run because the size/migration acceptance criteria are still unmet even though the automated functional checks now pass.
+
+Implementation direction update:
+
+- We are no longer preserving compatibility with earlier internal relay/packet/manual-era flows. This app has not been distributed yet, so dead transition paths should be deleted rather than maintained.
+- The intended architecture is now explicit again: claw-code owns the agent behavior and session/runtime flow, openwork remains the UI/UX reference, and custom Relay code should be limited to M365 Copilot interop plus workbook-specific tools that claw-code does not provide.
+- The next reduction target is the remaining TypeScript agent-loop path (`copilot-agent.ts`, `copilot-turn.ts`, and the `runAgentLoop` / `resumeAgentLoopWithPlan` branches in `+page.svelte`). That path still represents custom Copilot orchestration outside the Rust claw bridge and blocks the PRD migration criteria.
+
+TS loop settings reduction:
+
+```bash
+pnpm --filter @relay-agent/desktop typecheck
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- [continuity.ts](/workspace/relay-agent-main/apps/desktop/src/lib/continuity.ts) no longer persists the TypeScript loop-era browser automation flags (`agentLoopEnabled`, `loopTimeoutMs`, `planningEnabled`, `autoApproveReadSteps`, `pauseBetweenSteps`). The stored settings surface is now limited to the values still used by the Rust bridge path: `cdpPort`, `autoLaunchEdge`, `timeoutMs`, and `maxTurns`.
+- [SettingsModal.svelte](/workspace/relay-agent-main/apps/desktop/src/lib/components/SettingsModal.svelte) no longer renders the old agent-loop toggle card or its related per-step planning controls. The settings UI now exposes only the Copilot browser connection controls and `maxTurns`, which maps directly to `start_agent`.
+- [+page.svelte](/workspace/relay-agent-main/apps/desktop/src/routes/+page.svelte) now loads and saves only the reduced browser automation settings surface when wiring the active desktop-agent flow.
+- `pnpm --filter @relay-agent/desktop typecheck` passed with `svelte-check found 0 errors and 0 warnings`.
+- `pnpm --filter @relay-agent/desktop build` passed.
+
+TS agent-loop removal:
+
+```bash
+pnpm --filter @relay-agent/desktop typecheck
+pnpm --filter @relay-agent/desktop build
+rg -n "copilot-agent|copilot-turn|runAgentLoop|resumeAgentLoopWithPlan|requestCopilotTurn" apps/desktop/src
+```
+
+Observed result:
+
+- [copilot-agent.ts](/workspace/relay-agent-main/apps/desktop/src/lib/copilot-agent.ts) and [copilot-turn.ts](/workspace/relay-agent-main/apps/desktop/src/lib/copilot-turn.ts) were deleted, along with [copilot-turn.test.ts](/workspace/relay-agent-main/apps/desktop/src/lib/copilot-turn.test.ts).
+- [index.ts](/workspace/relay-agent-main/apps/desktop/src/lib/index.ts) no longer re-exports the deleted TS loop modules.
+- [+page.svelte](/workspace/relay-agent-main/apps/desktop/src/routes/+page.svelte) no longer imports or calls `runAgentLoop()` / `resumeAgentLoopWithPlan()`, and the unreachable planning / retry / staged setup branches that depended on those functions were removed.
+- The source-tree grep returned no matches for `copilot-agent`, `copilot-turn`, `runAgentLoop`, `resumeAgentLoopWithPlan`, or `requestCopilotTurn` under `apps/desktop/src`.
+- `pnpm --filter @relay-agent/desktop typecheck` passed with `svelte-check found 0 errors and 0 warnings`.
+- `pnpm --filter @relay-agent/desktop build` passed.
+
+Delegation draft/store cleanup:
+
+```bash
+pnpm --filter @relay-agent/desktop typecheck
+pnpm -C apps/desktop exec tsx --test src/lib/stores/delegation.test.ts
+pnpm --filter @relay-agent/desktop build
+```
+
+Observed result:
+
+- [delegation.ts](/workspace/relay-agent-main/apps/desktop/src/lib/stores/delegation.ts) no longer keeps the plan-era fields `plan` and `currentStepIndex`, and its state machine no longer includes `plan_review`. The remaining store states align with the current desktop-agent path: `idle`, `goal_entered`, `planning`, `executing`, `awaiting_approval`, `completed`, and `error`.
+- [continuity.ts](/workspace/relay-agent-main/apps/desktop/src/lib/continuity.ts) no longer persists or normalizes the legacy delegation draft fields `planSnapshot`, `conversationHistorySnapshot`, and `currentStepIndex`. The delegation draft shape is now limited to `goal`, `attachedFiles`, `activityFeedSnapshot`, `delegationState`, and `lastUpdatedAt`.
+- [+page.svelte](/workspace/relay-agent-main/apps/desktop/src/routes/+page.svelte) now saves and hydrates only that reduced delegation draft shape.
+- [delegation.test.ts](/workspace/relay-agent-main/apps/desktop/src/lib/stores/delegation.test.ts) was updated to cover the reduced store lifecycle instead of the removed plan-review/step-index path.
+- `pnpm --filter @relay-agent/desktop typecheck` passed with `svelte-check found 0 errors and 0 warnings`.
+- `pnpm -C apps/desktop exec tsx --test src/lib/stores/delegation.test.ts` passed with 6 tests.
+- `pnpm --filter @relay-agent/desktop build` passed.
+
+Plan-era prompt and IPC cleanup:
+
+```bash
+pnpm --filter @relay-agent/desktop typecheck
+pnpm -C apps/desktop exec tsx --test src/lib/prompt-templates.test.ts
+pnpm --filter @relay-agent/desktop build
+rg -n "buildPlanningPrompt|buildPlanningPromptV2|buildFollowUpPromptV2|buildLoopContinuationPrompt|buildStepExecutionPrompt|approvePlan\\(|getPlanProgress\\(|recordPlanProgress\\(" apps/desktop/src
+```
+
+Observed result:
+
+- [prompt-templates.ts](/workspace/relay-agent-main/apps/desktop/src/lib/prompt-templates.ts) was reduced to the only remaining runtime helper, `buildProjectContext()`. The plan-era prompt builders and continuation helpers were removed.
+- [prompt-templates.test.ts](/workspace/relay-agent-main/apps/desktop/src/lib/prompt-templates.test.ts) now covers only `buildProjectContext()` instead of the removed planning/continuation prompt functions.
+- [ipc.ts](/workspace/relay-agent-main/apps/desktop/src/lib/ipc.ts) no longer exports the unused frontend wrappers `approvePlan()`, `getPlanProgress()`, or `recordPlanProgress()`, and the related request/response schema imports were removed.
+- The grep returned no matches for the removed plan-era prompt helpers or frontend plan-progress IPC wrappers under `apps/desktop/src`.
+- `pnpm --filter @relay-agent/desktop typecheck` passed with `svelte-check found 0 errors and 0 warnings`.
+- `pnpm -C apps/desktop exec tsx --test src/lib/prompt-templates.test.ts` passed with 1 test.
+- `pnpm --filter @relay-agent/desktop build` passed.
+
+Frontend bridge reduction:
+
+```bash
+pnpm --filter @relay-agent/desktop typecheck
+pnpm --filter @relay-agent/desktop build
+rg -n "agent-ui|feedStore|approvalStore|sessionStore|bindAgentUi|disposeAgentUi|getActiveSessionState|startDesktopAgent|respondDesktopAgentApproval|cancelDesktopAgent|refreshDesktopAgentSessionHistory|resetAgentUi" apps/desktop/src
+```
+
+Observed result:
+
+- [agent-ui.ts](/workspace/relay-agent-main/apps/desktop/src/lib/agent-ui.ts) and [agent-ui.test.ts](/workspace/relay-agent-main/apps/desktop/src/lib/agent-ui.test.ts) were deleted. The dedicated frontend controller/store layer around `start_agent`, `respond_approval`, `cancel_agent`, and `get_session_history` is no longer present.
+- [+page.svelte](/workspace/relay-agent-main/apps/desktop/src/routes/+page.svelte) now binds the `agent:*` Tauri events directly, keeps the session/approval/feed state locally, and invokes the Rust commands directly. This leaves the page on the minimal UI-only side of the bridge instead of routing through a second custom TypeScript orchestration layer.
+- [index.ts](/workspace/relay-agent-main/apps/desktop/src/lib/index.ts) no longer re-exports `agent-ui`.
+- The grep returned no matches for the removed `agent-ui` exports/imports or the old wrapper names under `apps/desktop/src`.
+- Deleted dedicated frontend bridge/test bytes: `16682` (`agent-ui.ts` `12910` + `agent-ui.test.ts` `3556` + `index.ts` export shrink).
+- `pnpm --filter @relay-agent/desktop typecheck` passed with `svelte-check found 0 errors and 0 warnings`.
+- `pnpm --filter @relay-agent/desktop build` passed.
+
+Workbook context removal slice:
+
+```bash
+pnpm --filter @relay-agent/contracts build
+pnpm --filter @relay-agent/desktop typecheck
+pnpm --filter @relay-agent/desktop build
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+find apps/desktop/src-tauri/src -type f -name '*.rs' -print0 | xargs -0 wc -c | tail -n 1
+rg -n "preflight_workbook|inspect_workbook|PreflightWorkbookResponse|InspectWorkbookResponse|preflightWorkbook\\(|inspectWorkbook\\(" apps/desktop/src apps/desktop/src-tauri/src packages/contracts/src -g '!**/*test*'
+```
+
+Observed result:
+
+- `PLANS.md` now explicitly treats the in-repo workbook engine, workbook-context inspection, and workbook-shaped prompt construction as removal targets. The intended direction is upstream `claw-code` / `claw-code-parity` for behavior, `openwork` for UI direction, and custom Relay code limited to M365 Copilot interop.
+- [packages/contracts/src/ipc.ts](/workspace/relay-agent-main/packages/contracts/src/ipc.ts) and [apps/desktop/src/lib/ipc.ts](/workspace/relay-agent-main/apps/desktop/src/lib/ipc.ts) no longer expose the custom `preflight_workbook` / `inspect_workbook` surface.
+- [app.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/app.rs) and [lib.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/lib.rs) no longer register or implement those two Tauri commands, and [preflight.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/workbook/preflight.rs) was deleted.
+- [+page.svelte](/workspace/relay-agent-main/apps/desktop/src/routes/+page.svelte) no longer fetches workbook metadata to shape the Copilot prompt. The prompt now stays generic: goal, attached file paths, enabled tool list, and the minimal response schema. This removes the custom workbook-introspection dependency from the M365 handoff path.
+- File pickers in [TaskInput.svelte](/workspace/relay-agent-main/apps/desktop/src/lib/components/TaskInput.svelte), [InboxPanel.svelte](/workspace/relay-agent-main/apps/desktop/src/lib/components/InboxPanel.svelte), [ChatComposer.svelte](/workspace/relay-agent-main/apps/desktop/src/lib/components/ChatComposer.svelte), and [BatchTargetSelector.svelte](/workspace/relay-agent-main/apps/desktop/src/lib/components/BatchTargetSelector.svelte) no longer advertise workbook-specific extension filters.
+- Authored Rust source under `apps/desktop/src-tauri/src` dropped from `853556` bytes to `822292` bytes after removing the preflight module and related bridge surface.
+- The remaining internal `inspect_workbook` references are confined to the still-unreduced custom workbook runtime (`storage.rs`, `read_action_executor.rs`, `relay_tools.rs`, `workbook/inspect.rs`, `workbook/engine.rs`). No public frontend or public IPC path still calls `inspect_workbook` / `preflight_workbook`.
+- `pnpm --filter @relay-agent/contracts build`, `pnpm --filter @relay-agent/desktop typecheck`, `pnpm --filter @relay-agent/desktop build`, and `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed.
+
+Workbook read-runtime removal slice:
+
+```bash
+pnpm --filter @relay-agent/contracts build
+pnpm --filter @relay-agent/desktop typecheck
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run
+find apps/desktop/src-tauri/src -type f -name '*.rs' -print0 | xargs -0 wc -c | tail -n 1
+rg -n "workbook\\.inspect|sheet\\.preview|sheet\\.profile_columns|session\\.diff_from_base|TurnArtifactRecord::WorkbookProfile|TurnArtifactRecord::SheetPreview|TurnArtifactRecord::ColumnProfile|session_diff_from_base|read_diff_summary_artifact" apps/desktop/src-tauri/src apps/desktop/src packages/contracts/src
+```
+
+Observed result:
+
+- [storage.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/storage.rs), [relay_tools.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/relay_tools.rs), [read_action_executor.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/read_action_executor.rs), and [workbook/inspect.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/workbook/inspect.rs) no longer implement or reference the custom read-side workbook tools `workbook.inspect`, `sheet.preview`, `sheet.profile_columns`, or `session.diff_from_base`.
+- [tool_catalog.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/tool_catalog.rs), [risk_evaluator.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/risk_evaluator.rs), [agent_loop_smoke.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/agent_loop_smoke.rs), [integration_tests.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/integration_tests.rs), and the storage tests were aligned to the current file/table/save-copy flow instead of the removed workbook inspect flow.
+- [packages/contracts/src/workbook.ts](/workspace/relay-agent-main/packages/contracts/src/workbook.ts) and [packages/contracts/src/ipc.ts](/workspace/relay-agent-main/packages/contracts/src/ipc.ts) dropped the dead workbook profile / sheet preview / column profile schemas and the related read-action contract surface.
+- [models.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/models.rs) no longer carries the dead `WorkbookSheet` / `WorkbookProfile` inspection payload structs, and [workbook/preview.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/workbook/preview.rs) no longer contains no-op handling for the removed read-side workbook tools.
+- The grep returned no matches for the removed read-side workbook tools or their deleted artifact variants under `apps/desktop/src-tauri/src`, `apps/desktop/src`, or `packages/contracts/src`.
+- Authored Rust source under `apps/desktop/src-tauri/src` dropped further from `822292` bytes to `767973` bytes after this slice.
+- `pnpm --filter @relay-agent/contracts build`, `pnpm --filter @relay-agent/desktop typecheck`, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run` passed.
+- Remaining warnings are limited to the pre-existing dead-code warning on `read_latest_turn_model()` in [session_store.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/session_store.rs) and [storage.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/storage.rs).
+
+Unused packet / handoff surface removal:
+
+```bash
+pnpm --filter @relay-agent/contracts build
+pnpm --filter @relay-agent/desktop typecheck
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run
+find apps/desktop/src-tauri/src -type f -name '*.rs' -print0 | xargs -0 wc -c | tail -n 1
+rg -n "AssessCopilotHandoff|CopilotHandoff|PlanningContext|packetInspectionPayloadSchema|packetInspectionSectionSchema|PacketInspectionPayload|relay-packet|turn_details\\.packet|turnInspectionDetails\\.packet|SettingsPage|agentLoopEnabled|loopTimeoutMs|planningEnabled|autoApproveReadSteps|pauseBetweenSteps|agentLoopAbortController|handoffCaution|PacketReady|AwaitingResponse" apps/desktop/src-tauri/src apps/desktop/src packages/contracts/src
+```
+
+Observed result:
+
+- [packages/contracts/src/ipc.ts](/workspace/relay-agent-main/packages/contracts/src/ipc.ts), [apps/desktop/src/lib/ipc.ts](/workspace/relay-agent-main/apps/desktop/src/lib/ipc.ts), [apps/desktop/src-tauri/src/execution.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/execution.rs), [apps/desktop/src-tauri/src/lib.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/lib.rs), [apps/desktop/src-tauri/src/models.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/models.rs), and [apps/desktop/src-tauri/src/storage.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/storage.rs) no longer expose or implement the unused `assess_copilot_handoff` IPC surface or its `PlanningContext` / handoff reason payload types.
+- Legacy packet-inspection support was removed from [packages/contracts/src/ipc.ts](/workspace/relay-agent-main/packages/contracts/src/ipc.ts), [apps/desktop/src-tauri/src/models.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/models.rs), and [apps/desktop/src-tauri/src/storage.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/storage.rs). Turn inspection now reports only validation, preview, approval, and execution sections.
+- The dead packet-era turn statuses `PacketReady` and `AwaitingResponse` were removed from [apps/desktop/src-tauri/src/models.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/models.rs), and the storage-side stage labels/tests were updated away from packet-era wording.
+- [apps/desktop/src/routes/+page.svelte](/workspace/relay-agent-main/apps/desktop/src/routes/+page.svelte) no longer keeps unused `sampleWorkbookPath` assignment, `handoffCaution`, or the dead loop/planning state fields `agentLoopEnabled`, `loopTimeoutMs`, `planningEnabled`, `autoApproveReadSteps`, `pauseBetweenSteps`, and `agentLoopAbortController`.
+- [apps/desktop/src/lib/components/SettingsPage.svelte](/workspace/relay-agent-main/apps/desktop/src/lib/components/SettingsPage.svelte) was deleted because it was no longer imported anywhere after the SettingsModal-based flow replaced it.
+- [apps/desktop/src-tauri/src/session_store.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/session_store.rs), [apps/desktop/src-tauri/src/storage.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/storage.rs), and [apps/desktop/src-tauri/src/tool_catalog.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/tool_catalog.rs) were trimmed to remove the last dead helper/warning paths introduced by earlier cleanup.
+- The grep returned no matches for the removed handoff surface, packet-inspection surface, deleted loop/planning state variables, or packet-era status names under `apps/desktop/src-tauri/src`, `apps/desktop/src`, or `packages/contracts/src`.
+- Authored Rust source under `apps/desktop/src-tauri/src` dropped from `767973` bytes to `750834` bytes after this slice.
+- `pnpm --filter @relay-agent/contracts build`, `pnpm --filter @relay-agent/desktop typecheck`, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run` passed.
+
+Plan-progress surface removal:
+
+```bash
+pnpm --filter @relay-agent/contracts build
+pnpm --filter @relay-agent/desktop typecheck
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run
+find apps/desktop/src-tauri/src -type f -name '*.rs' -print0 | xargs -0 wc -c | tail -n 1
+rg -n "approve_plan|get_plan_progress|record_plan_progress|ApprovePlanRequest|ApprovePlanResponse|PlanProgressRequest|PlanProgressResponse|RecordPlanProgressRequest|plan-progress|execution-plan-approved|ExecutionPlanArtifactPayload|PlanProgressArtifactPayload|StoredPlanProgress|PlanStepStatus|PlanStepState" apps/desktop/src-tauri/src apps/desktop/src packages/contracts/src
+```
+
+Observed result:
+
+- [apps/desktop/src-tauri/src/execution.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/execution.rs), [apps/desktop/src-tauri/src/lib.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/lib.rs), [packages/contracts/src/ipc.ts](/workspace/relay-agent-main/packages/contracts/src/ipc.ts), and [apps/desktop/src-tauri/src/models.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/models.rs) no longer expose the unused `approve_plan`, `get_plan_progress`, or `record_plan_progress` command surface or their request/response payload types.
+- [apps/desktop/src-tauri/src/storage.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/storage.rs) no longer keeps `plan_progress` in-memory state, the `approve_plan()` / `get_plan_progress()` / `record_plan_progress()` methods, or the `execution-plan` / `plan-progress` artifact payload helpers that existed only for that unused API family.
+- [apps/desktop/src-tauri/src/workbook_state.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/workbook_state.rs) no longer carries `StoredPlanProgress`, because preview/approval/execution are the only remaining live turn-side runtime caches.
+- The grep returned no matches for the removed plan-progress command surface, payload types, or artifact helper names under `apps/desktop/src-tauri/src`, `apps/desktop/src`, or `packages/contracts/src`.
+- Authored Rust source under `apps/desktop/src-tauri/src` dropped from `750834` bytes to `740077` bytes after this slice.
+- `pnpm --filter @relay-agent/contracts build`, `pnpm --filter @relay-agent/desktop typecheck`, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run` passed.
+
+Storage runtime split:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm --filter @relay-agent/contracts build
+pnpm --filter @relay-agent/desktop typecheck
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run
+wc -c apps/desktop/src-tauri/src/storage.rs apps/desktop/src-tauri/src/storage_runtime.rs
+find apps/desktop/src-tauri/src -type f -name '*.rs' -print0 | xargs -0 wc -c | tail -n 1
+```
+
+Observed result:
+
+- [apps/desktop/src-tauri/src/storage.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/storage.rs) now keeps session/persistence/inspection responsibilities, while preview generation, approval recording, execution, and output-artifact helpers moved into the new child module [apps/desktop/src-tauri/src/storage_runtime.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/storage_runtime.rs).
+- The split uses `#[path = "storage_runtime.rs"] mod runtime;` inside `storage.rs`, so the extracted runtime code can keep using private storage helpers and state without widening visibility across the crate.
+- [apps/desktop/src-tauri/src/storage.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/storage.rs) dropped to `239581` bytes, and the extracted runtime module is `56687` bytes.
+- Authored Rust source under `apps/desktop/src-tauri/src` dropped from `740077` bytes to `739732` bytes after this slice. The total barely moved because this change was primarily a responsibility split to make the next removals safer, not a behavior cut.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`, `pnpm --filter @relay-agent/contracts build`, `pnpm --filter @relay-agent/desktop typecheck`, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run` passed.
+
+T20 acceptance revision and reassessment:
+
+```bash
+rg -n "80KB|80 KiB|Relay 固有ツール|TypeScript のエージェントループコードが 0|成功基準" .taskmaster/docs/prd.txt PLANS.md .taskmaster/tasks/tasks.json
+find apps/desktop/src-tauri/src -type f -name '*.rs' -print0 | xargs -0 wc -c | tail -n 1
+find apps/desktop/src-tauri/src/workbook -type f -name '*.rs' -print0 | xargs -0 wc -c
+wc -c apps/desktop/src-tauri/src/copilot_provider.rs apps/desktop/src-tauri/src/tauri_bridge.rs apps/desktop/src-tauri/src/storage.rs apps/desktop/src-tauri/src/storage_runtime.rs apps/desktop/src/routes/+page.svelte
+rg -n "start_agent|respond_approval|cancel_agent|get_session_history|listen\\(|agent:" apps/desktop/src/routes/+page.svelte apps/desktop/src/lib/ipc.ts apps/desktop/src/lib/continuity.ts
+rg -n "WorkbookEngine|relay_tools|read_action_executor|workbook\\.save_copy|table\\.|document\\.read_text" apps/desktop/src-tauri/src apps/desktop/src/routes/+page.svelte
+```
+
+Observed result:
+
+- The PRD, `PLANS.md`, and Task Master now use an architectural reduction gate for `T20` instead of the old raw `80 KiB` hard fail. The new gate is: no TypeScript agent-loop/orchestration, no in-repo workbook or relay-tool runtime, and remaining custom Rust limited to M365 Copilot interop plus thin desktop glue.
+- `T20` in [.taskmaster/tasks/tasks.json](/workspace/relay-agent-main/.taskmaster/tasks/tasks.json) was updated to match that new acceptance definition, while keeping byte counts as telemetry to be recorded during final verification.
+- The frontend part of the revised gate is now materially closer to complete: the current route only invokes `start_agent`, `respond_approval`, `cancel_agent`, and `get_session_history`, and listens to `agent:*` events from the Rust bridge. The earlier dedicated TypeScript loop modules are already gone.
+- The backend part still fails the revised gate today. Custom workbook / relay runtime is still present in [apps/desktop/src-tauri/src/workbook/preview.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/workbook/preview.rs), [apps/desktop/src-tauri/src/workbook/engine.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/workbook/engine.rs), [apps/desktop/src-tauri/src/relay_tools.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/relay_tools.rs), [apps/desktop/src-tauri/src/read_action_executor.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/read_action_executor.rs), and the validation / tool-catalog surface in [apps/desktop/src-tauri/src/storage.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/storage.rs) plus [apps/desktop/src-tauri/src/storage_runtime.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/storage_runtime.rs).
+- Current telemetry after the criterion revision is: authored Rust under `apps/desktop/src-tauri/src` = `739732` bytes; `workbook/` alone = `73831` bytes; [apps/desktop/src-tauri/src/copilot_provider.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/copilot_provider.rs) = `23898` bytes; [apps/desktop/src-tauri/src/tauri_bridge.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/tauri_bridge.rs) = `41978` bytes; [apps/desktop/src-tauri/src/storage.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/storage.rs) = `239581` bytes; [apps/desktop/src-tauri/src/storage_runtime.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/storage_runtime.rs) = `56687` bytes; [+page.svelte](/workspace/relay-agent-main/apps/desktop/src/routes/+page.svelte) = `110926` bytes.
+- Based on that reassessment, `T20` remains `pending`. The acceptance gate is now better aligned with the intended architecture, but the codebase still carries the disallowed workbook / relay runtime that the revised gate explicitly forbids.
+
+Workbook/runtime removal follow-up:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm --filter @relay-agent/contracts build
+pnpm --filter @relay-agent/desktop typecheck
+pnpm --filter @relay-agent/desktop build
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run
+find apps/desktop/src-tauri/src -type f -name '*.rs' -print0 | xargs -0 wc -c | tail -n 1
+rg -n "workbook\\.save_copy|table\\.(rename_columns|cast_columns|filter_rows|derive_column|group_aggregate)|document\\.read_text|run_execution_multi|RunExecutionMultiRequest|OutputSpec|OutputFormat" apps/desktop/src-tauri/src apps/desktop/src packages/contracts/src
+```
+
+Observed result:
+
+- [apps/desktop/src-tauri/src/lib.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/lib.rs), [apps/desktop/src-tauri/src/execution.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/execution.rs), [apps/desktop/src-tauri/src/models.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/models.rs), [apps/desktop/src-tauri/src/storage.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/storage.rs), [apps/desktop/src/lib/ipc.ts](/workspace/relay-agent-main/apps/desktop/src/lib/ipc.ts), [packages/contracts/src/ipc.ts](/workspace/relay-agent-main/packages/contracts/src/ipc.ts), and [packages/contracts/src/relay.ts](/workspace/relay-agent-main/packages/contracts/src/relay.ts) no longer expose `run_execution_multi`, `OutputSpec`, or `OutputFormat`. Multi-output was a leftover workbook-era surface and is now gone.
+- [packages/contracts/src/workbook.ts](/workspace/relay-agent-main/packages/contracts/src/workbook.ts) was reduced to diff/preview display types only. Workbook action schemas were removed, and [packages/contracts/src/file.ts](/workspace/relay-agent-main/packages/contracts/src/file.ts) no longer includes `document.read_text`.
+- [apps/desktop/src-tauri/src/file_support.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/file_support.rs) no longer contains the document extraction path (`docx`/`pptx`/`pdf`) for `document.read_text`.
+- [apps/desktop/src-tauri/src/risk_evaluator.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/risk_evaluator.rs), [apps/desktop/src-tauri/src/workflow_smoke.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/workflow_smoke.rs), [apps/desktop/src-tauri/src/agent_loop_smoke.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/agent_loop_smoke.rs), [apps/desktop/src-tauri/src/tauri_bridge.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/tauri_bridge.rs), [apps/desktop/src-tauri/src/template.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/template.rs), [apps/desktop/src-tauri/assets/templates/sales_filter.json](/workspace/relay-agent-main/apps/desktop/src-tauri/assets/templates/sales_filter.json), [apps/desktop/src-tauri/assets/templates/monthly_rollup.json](/workspace/relay-agent-main/apps/desktop/src-tauri/assets/templates/monthly_rollup.json), [apps/desktop/src-tauri/assets/templates/normalize_columns.json](/workspace/relay-agent-main/apps/desktop/src-tauri/assets/templates/normalize_columns.json), [apps/desktop/src-tauri/assets/templates/remove_duplicates.json](/workspace/relay-agent-main/apps/desktop/src-tauri/assets/templates/remove_duplicates.json), and [apps/desktop/src-tauri/assets/templates/invoice_cleanup.json](/workspace/relay-agent-main/apps/desktop/src-tauri/assets/templates/invoice_cleanup.json) were updated so tests, smoke flows, and template metadata no longer advertise workbook/table tools that were removed from the runtime.
+- [apps/desktop/src-tauri/src/storage.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/storage.rs) test coverage was rewritten around file-copy/text-replace flows, and workbook-era tests were deleted. The remaining storage-side memory-learning coverage now asserts only file-based preferences.
+- [apps/desktop/src/lib/auto-fix.test.ts](/workspace/relay-agent-main/apps/desktop/src/lib/auto-fix.test.ts), [apps/desktop/src/lib/project-scope.test.ts](/workspace/relay-agent-main/apps/desktop/src/lib/project-scope.test.ts), and [apps/desktop/src/lib/components/ApprovalCard.svelte](/workspace/relay-agent-main/apps/desktop/src/lib/components/ApprovalCard.svelte) were aligned with the reduced tool set so frontend examples and labels no longer mention workbook/table tools.
+- The grep returned no matches for workbook/table tool names, `document.read_text`, or `run_execution_multi` under `apps/desktop/src-tauri/src`, `apps/desktop/src`, or `packages/contracts/src`.
+- Authored Rust source under `apps/desktop/src-tauri/src` dropped again from `739732` bytes to `530980` bytes after this slice.
+- `pnpm --filter @relay-agent/contracts build`, `pnpm --filter @relay-agent/desktop typecheck`, `pnpm --filter @relay-agent/desktop build`, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run` passed.
+- `T20` still remains `pending`. The workbook/relay runtime removal moved substantially closer to the revised gate, but custom file-support/read-side helpers and other thin desktop glue are still present, so the “custom Rust limited to M365 Copilot interop + minimal desktop glue” end-state has not been reached yet.
+
+Read-side helper cleanup:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run
+find apps/desktop/src-tauri/src -type f -name '*.rs' -print0 | xargs -0 wc -c | tail -n 1
+```
+
+Observed result:
+
+- [apps/desktop/src-tauri/src/file_support.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/file_support.rs) no longer contains the unused read-side helpers `execute_file_list`, `execute_file_read_text`, `execute_file_stat`, or `execute_text_search`, nor the directory listing / byte truncation helpers that existed only to support them.
+- [apps/desktop/src-tauri/src/models.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/models.rs) no longer defines the unused Rust-side `ToolDescriptor`.
+- [apps/desktop/src-tauri/src/tool_catalog.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/tool_catalog.rs) no longer exposes the test-only `get()` / `list_descriptors_by_phase()` helpers; tests now assert through `list()` instead.
+- [apps/desktop/src-tauri/src/integration_tests.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/integration_tests.rs) dropped the read-side `text.search` helper coverage and now only keeps file mutation / project / MCP coverage that still exists in the current runtime.
+- Authored Rust source under `apps/desktop/src-tauri/src` dropped from `530980` bytes to `522347` bytes after this slice.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run` passed.

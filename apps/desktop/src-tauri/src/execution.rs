@@ -6,15 +6,11 @@ use tauri::State;
 
 use crate::mcp_client::McpClient;
 use crate::models::{
-    ApprovePlanRequest, ApprovePlanResponse, AssessCopilotHandoffRequest,
-    AssessCopilotHandoffResponse, ExecuteClawToolRequest, ExecuteClawToolResponse,
-    ExecuteReadActionsRequest, ExecuteReadActionsResponse, InvokeMcpToolRequest,
-    InvokeMcpToolResponse, ListToolsResponse, McpServerConfig, PlanProgressRequest,
-    PlanProgressResponse, PreviewExecutionRequest, PreviewExecutionResponse,
-    RecordPlanProgressRequest, RecordScopeApprovalRequest, RecordScopeApprovalResponse,
-    RecordStructuredResponseRequest, RecordStructuredResponseResponse, RespondToApprovalRequest,
-    RespondToApprovalResponse, RunExecutionMultiRequest, RunExecutionRequest,
-    RunExecutionResponse, SetToolEnabledRequest, ToolRegistration, ToolSource,
+    ExecuteClawToolRequest, ExecuteClawToolResponse, InvokeMcpToolRequest, InvokeMcpToolResponse,
+    ListToolsResponse, McpServerConfig, PreviewExecutionRequest, PreviewExecutionResponse,
+    RecordScopeApprovalRequest, RecordScopeApprovalResponse, RecordStructuredResponseRequest,
+    RecordStructuredResponseResponse, RespondToApprovalRequest, RespondToApprovalResponse,
+    RunExecutionRequest, RunExecutionResponse, SetToolEnabledRequest, ToolRegistration, ToolSource,
     ValidateOutputQualityRequest,
 };
 use crate::risk_evaluator::ApprovalPolicy;
@@ -185,57 +181,12 @@ pub fn preview_execution(
 }
 
 #[tauri::command]
-pub fn assess_copilot_handoff(
-    state: State<'_, DesktopState>,
-    request: AssessCopilotHandoffRequest,
-) -> Result<AssessCopilotHandoffResponse, String> {
-    let storage = state.storage.lock().expect("desktop storage poisoned");
-    storage.assess_copilot_handoff(request)
-}
-
-#[tauri::command]
 pub fn record_structured_response(
     state: State<'_, DesktopState>,
     request: RecordStructuredResponseRequest,
 ) -> Result<RecordStructuredResponseResponse, String> {
     let mut storage = state.storage.lock().expect("desktop storage poisoned");
     storage.record_structured_response(request)
-}
-
-#[tauri::command]
-pub fn execute_read_actions(
-    state: State<'_, DesktopState>,
-    request: ExecuteReadActionsRequest,
-) -> Result<ExecuteReadActionsResponse, String> {
-    let mut storage = state.storage.lock().expect("desktop storage poisoned");
-    storage.execute_read_actions(request)
-}
-
-#[tauri::command]
-pub fn approve_plan(
-    state: State<'_, DesktopState>,
-    request: ApprovePlanRequest,
-) -> Result<ApprovePlanResponse, String> {
-    let mut storage = state.storage.lock().expect("desktop storage poisoned");
-    storage.approve_plan(request)
-}
-
-#[tauri::command]
-pub fn get_plan_progress(
-    state: State<'_, DesktopState>,
-    request: PlanProgressRequest,
-) -> Result<PlanProgressResponse, String> {
-    let storage = state.storage.lock().expect("desktop storage poisoned");
-    storage.get_plan_progress(request)
-}
-
-#[tauri::command]
-pub fn record_plan_progress(
-    state: State<'_, DesktopState>,
-    request: RecordPlanProgressRequest,
-) -> Result<PlanProgressResponse, String> {
-    let mut storage = state.storage.lock().expect("desktop storage poisoned");
-    storage.record_plan_progress(request)
 }
 
 #[tauri::command]
@@ -263,15 +214,6 @@ pub fn run_execution(
 ) -> Result<RunExecutionResponse, String> {
     let mut storage = state.storage.lock().expect("desktop storage poisoned");
     storage.run_execution(request)
-}
-
-#[tauri::command]
-pub fn run_execution_multi(
-    state: State<'_, DesktopState>,
-    request: RunExecutionMultiRequest,
-) -> Result<Vec<RunExecutionResponse>, String> {
-    let mut storage = state.storage.lock().expect("desktop storage poisoned");
-    storage.run_execution_multi(request)
 }
 
 #[tauri::command]

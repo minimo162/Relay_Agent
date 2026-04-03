@@ -1,5 +1,5 @@
 use crate::{
-    models::{DiffSummary, PlanProgressResponse},
+    models::DiffSummary,
     risk_evaluator::{ApprovalPolicy, OperationRisk},
 };
 
@@ -27,9 +27,4 @@ pub(crate) struct StoredExecution {
     pub(crate) reason: Option<String>,
     pub(crate) created_at: String,
     pub(crate) artifact_id: String,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct StoredPlanProgress {
-    pub(crate) progress: PlanProgressResponse,
 }

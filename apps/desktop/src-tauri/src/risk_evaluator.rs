@@ -46,18 +46,8 @@ impl ApprovalPolicy {
 
 pub fn evaluate_risk(tool_name: &str, _args: &Value) -> OperationRisk {
     match tool_name {
-        "file.list"
-        | "file.stat"
-        | "workbook.inspect"
-        | "sheet.preview"
-        | "sheet.profile_columns"
-        | "session.diff_from_base" => OperationRisk::Readonly,
-        "table.rename_columns" | "table.filter_rows" => OperationRisk::Low,
-        "table.cast_columns"
-        | "table.derive_column"
-        | "table.group_aggregate"
-        | "workbook.save_copy"
-        | "file.copy" => OperationRisk::Medium,
+        "file.list" | "file.stat" | "file.read_text" | "text.search" => OperationRisk::Readonly,
+        "file.copy" | "text.replace" => OperationRisk::Medium,
         "file.move" => OperationRisk::High,
         "file.delete" => OperationRisk::Critical,
         _ => OperationRisk::Medium,
@@ -170,13 +160,7 @@ mod tests {
 
     #[test]
     fn readonly_tools_evaluate_as_readonly() {
-        for tool in [
-            "file.list",
-            "file.stat",
-            "workbook.inspect",
-            "sheet.preview",
-            "sheet.profile_columns",
-        ] {
+        for tool in ["file.list", "file.stat"] {
             assert_eq!(
                 evaluate_risk(tool, &serde_json::json!({})),
                 OperationRisk::Readonly,

@@ -195,43 +195,37 @@
     - コンポーネント: 32 個 → 28 個
 
   ■ 削除によるコード量削減 (推定)
-    - Rust: ~400KB → ~80KB (storage.rs 328KB の大部分が不要に)
-    - TypeScript: agent-loop 関連 ~30KB → ~5KB (UI 制御のみ)
+    - Rust: 固定 80KB 目標ではなく、
+      workbook runtime / relay-specific tool runtime の全削除を優先
+    - TypeScript: agent-loop 関連 custom orchestration → 0
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-4. 残すもの (Relay 固有)
+4. 残すもの (Relay 固有, 最小限)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  claw-code にない Relay Agent 固有の機能:
+  claw-code / openwork に寄せた後も Relay Agent 側に残す最小責務:
 
-  ■ ワークブック処理 (workbook/ モジュール)
-    - CSV/XLSX の inspect, preview, profile_columns
-    - table.rename_columns, table.cast_columns, table.filter_rows,
-      table.derive_column, table.group_aggregate
-    - workbook.save_copy
-    - session.diff_from_base
-    → claw-tools の Tool trait で登録
-
-  ■ ドキュメント読取 (document.read_text)
-    - .docx, .pptx, PDF からテキスト抽出
-    → claw-tools の Tool trait で登録
-
-  ■ ブラウザ自動化 (browser_automation.rs)
+  ■ M365 Copilot 連携
     - Edge + Playwright 経由の Copilot Chat
+    - prompt 送信 / 応答回収 / structured response 化
     → copilot_provider.rs の内部実装として利用
 
-  ■ 承認ワークフロー
+  ■ Thin desktop glue
     - 書込前の承認ゲート UI
-    - プラン確認フロー
-    → claw-permissions にフックを追加
+    - session / history / persistence の最小接続
+    - Tauri IPC と claw-core runtime の接続
+    → claw-permissions と desktop state にフックを追加
 
   ■ バッチ/パイプライン/テンプレート
-    - batch.rs, pipeline.rs, template.rs
-    → そのまま残す (claw-code にない機能)
+    - UI/状態管理として必要な範囲のみ残す
+    - workbook/document/tool の独自 runtime 前提は残さない
 
   ■ プロジェクト管理
     - project.rs
     → そのまま残す
+
+  それ以外の workbook/document/tool 実装は、
+  upstream claw-code / claw-code-parity に寄せるか、未対応として削除する。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 5. CopilotChatProvider 設計
@@ -319,23 +313,14 @@
   | glob       | ファイル検索                  | 有効               |
   | grep       | コンテンツ検索                | 有効               |
 
-■ Relay 固有ツール (Tool trait で追加登録)
+■ Relay 固有ツール
 
-  claw-tools の Tool trait を実装して ToolRegistry に追加:
+  最終形では Relay 固有ツール runtime は残さない。
 
-  | ツール                  | 元のソース          | 変更点           |
-  |------------------------|-------------------|-----------------|
-  | workbook.inspect       | workbook/inspect  | trait 実装に変更  |
-  | sheet.preview          | workbook/preview  | trait 実装に変更  |
-  | sheet.profile_columns  | workbook/inspect  | trait 実装に変更  |
-  | session.diff_from_base | workbook/engine   | trait 実装に変更  |
-  | table.rename_columns   | workbook/preview  | trait 実装に変更  |
-  | table.cast_columns     | workbook/preview  | trait 実装に変更  |
-  | table.filter_rows      | workbook/preview  | trait 実装に変更  |
-  | table.derive_column    | workbook/preview  | trait 実装に変更  |
-  | table.group_aggregate  | workbook/preview  | trait 実装に変更  |
-  | workbook.save_copy     | workbook/engine   | trait 実装に変更  |
-  | document.read_text     | file_ops.rs       | trait 実装に変更  |
+  - workbook.* / document.* / table.* の自前実装は upstream claw-code /
+    claw-code-parity に寄せるか、未対応として削除する
+  - ToolRegistry は upstream 側のツールを主に使い、
+    Relay 側の custom tool 実装は M365 Copilot 連携に必須なもの以外は持たない
 
 ■ 削除するツール (claw-tools で代替)
 
@@ -446,9 +431,9 @@
 
   Phase 2: ツール移行
     - claw-tools のビルトイン (bash, file_*, glob, grep) を有効化
-    - Relay 固有ツール (workbook.*, document.*) を Tool trait で登録
-    - 旧 tool_registry.rs, file_ops.rs を削除
-    - テスト: 全ツールが claw-tools 経由で動くことを確認
+    - Relay 固有ツール runtime は upstream 化または削除
+    - 旧 tool_registry.rs, file_ops.rs, workbook runtime を削除対象にする
+    - テスト: 必要な挙動が claw-code / claw-code-parity 経由で動くことを確認
 
   Phase 3: エージェントループ移行
     - TypeScript の agent-loop を Rust の claw-core ループに置換
@@ -459,7 +444,7 @@
 
   Phase 4: ストレージ簡素化
     - storage.rs の大部分を claw-core のセッション管理に移行
-    - ワークブック状態管理のみ残す
+    - workbook/document runtime を前提にした状態管理は残さない
     - 旧 relay.rs, risk_evaluator.rs を削除
     - テスト: セッション管理が正常に動くことを確認
 
@@ -501,14 +486,19 @@
 11. 成功基準
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  1. 自前の Rust コードが 328KB (storage.rs) → 合計 80KB 以下に削減
-  2. TypeScript のエージェントループコードが 0 に (Rust 側に移行)
-  3. claw-code の 6 ビルトインツールが全て動作
-  4. Relay 固有の 11 ツール (workbook.*, document.*) が Tool trait 経由で動作
-  5. Copilot Chat 経由でマルチターンのエージェントループが動作
-  6. 承認ゲート (書込前の確認) が従来通り機能
-  7. バッチ/パイプライン/テンプレートが従来通り機能
-  8. マニュアルモード (ガイドワークフロー) が完全廃止され、
+  1. TypeScript のエージェントループ / planning / retry orchestration が 0 に
+     なり、frontend は UI state と Tauri invoke/listen のみを担う
+  2. in-repo workbook runtime / relay-specific tool runtime
+     (`workbook/`, `relay_tools.rs`, `read_action_executor.rs` など) が削除される
+  3. 残る custom Rust は M365 Copilot interop と thin desktop glue
+     (provider, browser/CDP bridge, approval/session/persistence 接続) に限定される
+  4. 最終検証では Rust / TS の byte 数を telemetry として記録する
+     (固定 80KB hard gate は使わない)
+  5. claw-code / claw-code-parity の upstream tool path が end-to-end で動作
+  6. Copilot Chat 経由でマルチターンのエージェントループが動作
+  7. 承認ゲート (書込前の確認) が従来通り機能
+  8. バッチ/パイプライン/テンプレートが従来通り機能
+  9. マニュアルモード (ガイドワークフロー) が完全廃止され、
      委任モード (Edge CDP + 自律実行) のみに一本化されている
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

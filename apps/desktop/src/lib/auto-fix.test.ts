@@ -26,33 +26,34 @@ test("removes bom and normalizes line endings", () => {
 });
 
 test("removes trailing commas", () => {
-  const result = autoFixCopilotResponse('{"summary":"ok","actions":[{"tool":"workbook.save_copy","args":{"outputPath":"/tmp/out.csv"}},]}');
+  const result = autoFixCopilotResponse('{"summary":"ok","actions":[{"tool":"file.copy","args":{"sourcePath":"/tmp/in.csv","destPath":"/tmp/out.csv"}},]}');
 
   assert.equal(
     result.fixed,
-    '{"summary":"ok","actions":[{"tool":"workbook.save_copy","args":{"outputPath":"/tmp/out.csv"}}]}'
+    '{"summary":"ok","actions":[{"tool":"file.copy","args":{"sourcePath":"/tmp/in.csv","destPath":"/tmp/out.csv"}}]}'
   );
   assert.ok(result.fixes.includes("JSON の末尾カンマを修正しました"));
 });
 
 test("removes markdown-style escaping from underscores and brackets", () => {
   const result = autoFixCopilotResponse(
-    '{\n"summary":"ok","actions": \\[\n{"tool":"table.group\\_aggregate","sheet":"Sheet1","args":{"groupBy": \\["__all\\_rows"],"measures": \\[{"column":"amount","op":"sum","as":"total\\_amount"}\\]}}\n\\]\n}'
+    '{\n"summary":"ok","actions": \\[\n{"tool":"text.replace","args":{"path":"C:\\\\tmp\\\\notes.txt","pattern":"draft\\_copy","replacement":"approved\\_copy"}}\n\\]\n}'
   );
 
   assert.match(result.fixed, /"actions": \[/);
-  assert.match(result.fixed, /"tool":"table.group_aggregate"/);
-  assert.match(result.fixed, /"groupBy": \["__all_rows"\]/);
-  assert.match(result.fixed, /"as":"total_amount"/);
+  assert.match(result.fixed, /"tool":"text.replace"/);
+  assert.match(result.fixed, /"pattern":"draft_copy"/);
+  assert.match(result.fixed, /"replacement":"approved_copy"/);
   assert.ok(result.fixes.includes("Markdown 由来の不要なエスケープを除去しました"));
 });
 
 test("converts escaped windows paths after parsing", () => {
   const result = autoFixCopilotResponse(
-    '{"summary":"ok","actions":[{"tool":"workbook.save_copy","args":{"outputPath":"C:\\\\temp\\\\out.csv"}}]}'
+    '{"summary":"ok","actions":[{"tool":"file.copy","args":{"sourcePath":"C:\\\\temp\\\\in.csv","destPath":"C:\\\\temp\\\\out.csv"}}]}'
   );
 
-  assert.match(result.fixed, /"outputPath": "C:\/temp\/out\.csv"/);
+  assert.match(result.fixed, /"sourcePath": "C:\/temp\/in\.csv"/);
+  assert.match(result.fixed, /"destPath": "C:\/temp\/out\.csv"/);
   assert.ok(result.fixes.includes("ファイルパスの区切りを修正しました"));
 });
 
@@ -68,22 +69,23 @@ test("normalizes smart quotes and full-width spaces", () => {
 
 test("extracts a json object from surrounding prose", () => {
   const result = autoFixCopilotResponse(
-    '以下が JSON です。\n{"summary":"ok","actions":[{"tool":"workbook.save_copy","args":{"outputPath":"/tmp/out.csv"}}]}\nよろしくお願いします。'
+    '以下が JSON です。\n{"summary":"ok","actions":[{"tool":"file.delete","args":{"path":"/tmp/out.csv","toRecycleBin":false}}]}\nよろしくお願いします。'
   );
 
   assert.equal(
     result.fixed,
-    '{"summary":"ok","actions":[{"tool":"workbook.save_copy","args":{"outputPath":"/tmp/out.csv"}}]}'
+    '{"summary":"ok","actions":[{"tool":"file.delete","args":{"path":"/tmp/out.csv","toRecycleBin":false}}]}'
   );
   assert.ok(result.fixes.includes("JSON 部分だけを取り出しました"));
 });
 
 test("applies multiple fixes together", () => {
   const result = autoFixCopilotResponse(
-    '  ~~~json\r\n\u3000{\r\n  “summary”:“ok”,\r\n  “actions”:[{"tool":"workbook.save_copy","args":{"outputPath":"C:\\\\temp\\\\out.csv"}},],\r\n}\r\n~~~  '
+    '  ~~~json\r\n\u3000{\r\n  “summary”:“ok”,\r\n  “actions”:[{"tool":"file.move","args":{"sourcePath":"C:\\\\temp\\\\in.csv","destPath":"C:\\\\temp\\\\out.csv"}},],\r\n}\r\n~~~  '
   );
 
-  assert.match(result.fixed, /"outputPath": "C:\/temp\/out\.csv"/);
+  assert.match(result.fixed, /"sourcePath": "C:\/temp\/in\.csv"/);
+  assert.match(result.fixed, /"destPath": "C:\/temp\/out\.csv"/);
   assert.ok(result.fixes.includes("Markdown の記号を除去しました"));
   assert.ok(result.fixes.includes("引用符の種類を標準の記号にそろえました"));
   assert.ok(result.fixes.includes("全角スペースを半角スペースにそろえました"));

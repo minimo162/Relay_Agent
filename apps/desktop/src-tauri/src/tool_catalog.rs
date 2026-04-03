@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::json;
 
-use crate::models::{McpServerConfig, ToolDescriptor, ToolPhase, ToolRegistration, ToolSource};
+use crate::models::{McpServerConfig, ToolPhase, ToolRegistration, ToolSource};
 
 pub struct ToolCatalog {
     tools: HashMap<String, ToolRegistration>,
@@ -23,10 +23,6 @@ impl ToolCatalog {
         tools
     }
 
-    pub fn get(&self, tool_id: &str) -> Option<ToolRegistration> {
-        self.tools.get(tool_id).cloned()
-    }
-
     #[cfg(test)]
     pub fn has(&self, tool_id: &str) -> bool {
         self.tools.contains_key(tool_id)
@@ -43,23 +39,6 @@ impl ToolCatalog {
             .ok_or_else(|| format!("unknown tool: {tool_id}"))?;
         tool.enabled = enabled;
         Ok(tool.clone())
-    }
-
-    pub fn list_descriptors_by_phase(&self, phase: ToolPhase) -> Vec<ToolDescriptor> {
-        let mut descriptors = self
-            .tools
-            .values()
-            .filter(|tool| tool.enabled && tool.phase == phase)
-            .map(|tool| ToolDescriptor {
-                id: tool.id.clone(),
-                title: tool.title.clone(),
-                description: tool.description.clone(),
-                phase: tool.phase,
-                requires_approval: tool.requires_approval,
-            })
-            .collect::<Vec<_>>();
-        descriptors.sort_by(|left, right| left.id.cmp(&right.id));
-        descriptors
     }
 
     pub fn register_mcp_tools(
@@ -108,34 +87,6 @@ impl Default for ToolCatalog {
 fn builtin_tools() -> Vec<ToolRegistration> {
     let mut tools = vec![
         registration(
-            "workbook.inspect",
-            "Inspect workbook",
-            "Read workbook metadata, sheets, and basic summary information.",
-            ToolPhase::Read,
-            false,
-        ),
-        registration(
-            "sheet.preview",
-            "Preview sheet rows",
-            "Read a small sample of rows from a sheet.",
-            ToolPhase::Read,
-            false,
-        ),
-        registration(
-            "sheet.profile_columns",
-            "Profile columns",
-            "Inspect inferred types and sample values for sheet columns.",
-            ToolPhase::Read,
-            false,
-        ),
-        registration(
-            "session.diff_from_base",
-            "Diff from base",
-            "Compare the current session state to the original workbook input.",
-            ToolPhase::Read,
-            false,
-        ),
-        registration(
             "file.list",
             "List files",
             "Read file and directory names plus basic metadata.",
@@ -164,60 +115,11 @@ fn builtin_tools() -> Vec<ToolRegistration> {
             false,
         ),
         registration(
-            "document.read_text",
-            "Read document text",
-            "Extract text from DOCX, PPTX, PDF, and common plain-text files.",
-            ToolPhase::Read,
-            false,
-        ),
-        registration(
             "browser.send_to_copilot",
             "Copilot にプロンプト送信",
             "Edge の M365 Copilot にプロンプトを送信し応答を取得",
             ToolPhase::Read,
             false,
-        ),
-        registration(
-            "table.rename_columns",
-            "Rename columns",
-            "Rename one or more columns in a table or sheet.",
-            ToolPhase::Write,
-            true,
-        ),
-        registration(
-            "table.cast_columns",
-            "Cast columns",
-            "Convert one or more columns to new logical types.",
-            ToolPhase::Write,
-            true,
-        ),
-        registration(
-            "table.filter_rows",
-            "Filter rows",
-            "Filter table rows into a refined output.",
-            ToolPhase::Write,
-            true,
-        ),
-        registration(
-            "table.derive_column",
-            "Derive column",
-            "Create a derived output column from an expression.",
-            ToolPhase::Write,
-            true,
-        ),
-        registration(
-            "table.group_aggregate",
-            "Group aggregate",
-            "Group rows and calculate aggregated output columns.",
-            ToolPhase::Write,
-            true,
-        ),
-        registration(
-            "workbook.save_copy",
-            "Save copy",
-            "Write the output to a new workbook or CSV copy.",
-            ToolPhase::Write,
-            true,
         ),
         registration(
             "file.copy",
@@ -289,24 +191,23 @@ fn registration(
 #[cfg(test)]
 mod tests {
     use super::ToolCatalog;
-    use crate::models::{McpTransport, ToolPhase, ToolSource};
+    use crate::models::{McpTransport, ToolSource};
     use serde_json::json;
 
     #[test]
     fn registers_builtin_tools_and_supports_enable_toggle() {
         let mut catalog = ToolCatalog::new();
-        assert!(catalog.has("workbook.inspect"));
+        assert!(catalog.has("file.list"));
         assert!(catalog.has("browser.send_to_copilot"));
 
         let disabled = catalog
-            .set_enabled("workbook.inspect", false)
+            .set_enabled("file.list", false)
             .expect("tool should toggle");
         assert!(!disabled.enabled);
 
-        let read_descriptors = catalog.list_descriptors_by_phase(ToolPhase::Read);
-        assert!(!read_descriptors
-            .iter()
-            .any(|descriptor| descriptor.id == "workbook.inspect"));
+        assert!(!catalog.list().iter().any(|tool| tool.enabled
+            && tool.phase == crate::models::ToolPhase::Read
+            && tool.id == "file.list"));
     }
 
     #[test]
@@ -327,7 +228,11 @@ mod tests {
 
         assert_eq!(registered_tool_ids, vec!["mcp.demo.echo".to_string()]);
         assert_eq!(
-            catalog.get("mcp.demo.echo").map(|tool| tool.source),
+            catalog
+                .list()
+                .into_iter()
+                .find(|tool| tool.id == "mcp.demo.echo")
+                .map(|tool| tool.source),
             Some(ToolSource::Mcp)
         );
     }

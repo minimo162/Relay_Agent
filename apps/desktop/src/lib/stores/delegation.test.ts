@@ -21,41 +21,10 @@ test("delegation store complete lifecycle: goal to completed", () => {
   delegationStore.reset();
   delegationStore.setGoal("テスト目標", ["/tmp/a.csv"]);
   delegationStore.startPlanning();
-  delegationStore.proposePlan({
-    summary: "テスト計画",
-    totalEstimatedSteps: 2,
-    steps: [
-      {
-        id: "s1",
-        tool: "table.filter_rows",
-        description: "フィルタ",
-        phase: "read",
-        estimatedEffect: "条件に合う行を確認",
-        args: {}
-      },
-      {
-        id: "s2",
-        tool: "workbook.save_copy",
-        description: "書き出し",
-        phase: "write",
-        estimatedEffect: "保存用コピーを作成",
-        args: {}
-      }
-    ]
-  });
+  delegationStore.resumeExecution();
 
   let state = get(delegationStore);
-  assert.equal(state.state, "plan_review");
-  assert.ok(state.plan !== null);
-
-  delegationStore.approvePlan();
-  state = get(delegationStore);
   assert.equal(state.state, "executing");
-  assert.equal(state.currentStepIndex, 0);
-
-  delegationStore.advanceStep();
-  state = get(delegationStore);
-  assert.equal(state.currentStepIndex, 1);
 
   delegationStore.complete();
   state = get(delegationStore);
@@ -67,14 +36,13 @@ test("delegation store hydrate restores state", () => {
   delegationStore.hydrate({
     state: "executing",
     goal: "復元テスト",
-    attachedFiles: ["/tmp/b.csv"],
-    currentStepIndex: 3
+    attachedFiles: ["/tmp/b.csv"]
   });
 
   const state = get(delegationStore);
   assert.equal(state.state, "executing");
   assert.equal(state.goal, "復元テスト");
-  assert.equal(state.currentStepIndex, 3);
+  assert.deepEqual(state.attachedFiles, ["/tmp/b.csv"]);
 });
 
 test("delegation store error state", () => {

@@ -43,9 +43,9 @@ test("validateProjectScopeActions deduplicates out-of-scope paths", () => {
           }
         },
         {
-          tool: "workbook.save_copy",
+          tool: "file.delete",
           args: {
-            outputPath: "/tmp/outside.csv"
+            path: "/tmp/outside.csv"
           }
         }
       ],

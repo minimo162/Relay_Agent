@@ -4,7 +4,7 @@
   "category": "sales",
   "description": "月次の売上を集計し、集約済みコピーを生成します。",
   "goal": "売上データを月ごとに集計し、結果を確認できる別コピーを保存する",
-  "expectedTools": ["table.group_aggregate", "workbook.save_copy"],
+  "expectedTools": ["browser.send_to_copilot", "file.copy"],
   "exampleInputFile": "monthly-sales.csv",
   "tags": ["営業", "集計", "月次"],
   "isBuiltIn": true,

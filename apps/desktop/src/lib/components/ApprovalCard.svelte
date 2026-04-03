@@ -52,7 +52,7 @@
 
   function stepTypeLabel(step: PlanStep): string {
     const tool = step.tool ?? "";
-    if (tool.startsWith("workbook.save") || tool.startsWith("table.")) return "書込";
+    if (tool.startsWith("file.copy") || tool.startsWith("text.replace")) return "書込";
     if (tool.startsWith("file.delete") || tool.startsWith("file.move")) return "変更";
     return "読取";
   }

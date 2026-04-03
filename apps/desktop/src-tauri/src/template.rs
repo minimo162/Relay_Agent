@@ -294,7 +294,7 @@ mod tests {
             category,
             description: "desc".to_string(),
             goal: "do something".to_string(),
-            expected_tools: vec!["table.filter_rows".to_string()],
+            expected_tools: vec!["file.copy".to_string()],
             example_input_file: None,
             tags: vec![],
             is_built_in,
@@ -394,9 +394,6 @@ mod tests {
         let restored: WorkflowTemplate = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.id, "rt-1");
         assert!(!restored.is_built_in);
-        assert_eq!(
-            restored.expected_tools,
-            vec!["table.filter_rows".to_string()]
-        );
+        assert_eq!(restored.expected_tools, vec!["file.copy".to_string()]);
     }
 }

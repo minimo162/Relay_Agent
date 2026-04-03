@@ -3,8 +3,6 @@ import {
   approvalPolicyConfigSchema,
   addInboxFileRequestSchema,
   addProjectMemoryRequestSchema,
-  assessCopilotHandoffRequestSchema,
-  assessCopilotHandoffResponseSchema,
   batchCreateRequestSchema,
   batchJobSchema,
   batchSkipTargetRequestSchema,
@@ -12,23 +10,15 @@ import {
   checkCopilotConnectionRequestSchema,
   copilotBrowserConnectResultSchema,
   copilotBrowserResultSchema,
-  approvePlanRequestSchema,
-  approvePlanResponseSchema,
   connectMcpServerRequestSchema,
   connectMcpServerResponseSchema,
   createProjectRequestSchema,
   createSessionRequestSchema,
-  executeReadActionsRequestSchema,
-  executeReadActionsResponseSchema,
-  inspectWorkbookRequestSchema,
-  inspectWorkbookResponseSchema,
   initializeAppResponseSchema,
   linkSessionToProjectRequestSchema,
   listProjectsResponseSchema,
   listToolsResponseSchema,
   listSessionsResponseSchema,
-  preflightWorkbookRequestSchema,
-  preflightWorkbookResponseSchema,
   previewExecutionRequestSchema,
   previewExecutionResponseSchema,
   recordStructuredResponseRequestSchema,
@@ -40,14 +30,11 @@ import {
   readSessionRequestSchema,
   readTurnArtifactsRequestSchema,
   readTurnArtifactsResponseSchema,
-  recordPlanProgressRequestSchema,
   removeProjectMemoryRequestSchema,
   removeInboxFileRequestSchema,
   respondToApprovalRequestSchema,
   respondToApprovalResponseSchema,
   runExecutionRequestSchema,
-  runExecutionMultiRequestSchema,
-  runExecutionMultiResponseSchema,
   runExecutionResponseSchema,
   sessionDetailSchema,
   sendCopilotPromptRequestSchema,
@@ -56,8 +43,6 @@ import {
   setSessionProjectRequestSchema,
   startTurnRequestSchema,
   startTurnResponseSchema,
-  planProgressRequestSchema,
-  planProgressResponseSchema,
   pipelineCreateRequestSchema,
   pipelineSchema,
   pipelineStatusRequestSchema,
@@ -75,8 +60,6 @@ import {
   type ApprovalPolicyConfig,
   type AddInboxFileRequest,
   type AddProjectMemoryRequest,
-  type AssessCopilotHandoffRequest,
-  type AssessCopilotHandoffResponse,
   type BatchCreateRequest,
   type BatchJob,
   type BatchSkipTargetRequest,
@@ -84,23 +67,15 @@ import {
   type CheckCopilotConnectionRequest,
   type CopilotBrowserResult,
   type CopilotBrowserConnectResult,
-  type ApprovePlanRequest,
-  type ApprovePlanResponse,
   type ConnectMcpServerRequest,
   type ConnectMcpServerResponse,
   type CreateProjectRequest,
   type CreateSessionRequest,
-  type ExecuteReadActionsRequest,
-  type ExecuteReadActionsResponse,
-  type InspectWorkbookRequest,
-  type InspectWorkbookResponse,
   type InitializeAppResponse,
   type LinkSessionToProjectRequest,
   type ListProjectsResponse,
   type ListToolsResponse,
   type ListSessionsResponse,
-  type PreflightWorkbookRequest,
-  type PreflightWorkbookResponse,
   type PreviewExecutionRequest,
   type PreviewExecutionResponse,
   type RecordStructuredResponseRequest,
@@ -112,14 +87,11 @@ import {
   type ReadSessionRequest,
   type ReadTurnArtifactsRequest,
   type ReadTurnArtifactsResponse,
-  type RecordPlanProgressRequest,
   type RemoveProjectMemoryRequest,
   type RemoveInboxFileRequest,
   type RespondToApprovalRequest,
   type RespondToApprovalResponse,
   type RunExecutionRequest,
-  type RunExecutionMultiRequest,
-  type RunExecutionMultiResponse,
   type RunExecutionResponse,
   type SendCopilotPromptRequest,
   type Session,
@@ -128,8 +100,6 @@ import {
   type SetSessionProjectRequest,
   type StartTurnRequest,
   type StartTurnResponse,
-  type PlanProgressRequest,
-  type PlanProgressResponse,
   type Pipeline,
   type PipelineCreateRequest,
   type PipelineStatusRequest,
@@ -250,28 +220,6 @@ export async function pingDesktop(): Promise<string> {
 
 export function initializeApp(): Promise<InitializeAppResponse> {
   return invokeWithoutPayload("initialize_app", initializeAppResponseSchema);
-}
-
-export function preflightWorkbook(
-  payload: PreflightWorkbookRequest
-): Promise<PreflightWorkbookResponse> {
-  return invokeWithPayload(
-    "preflight_workbook",
-    payload,
-    preflightWorkbookRequestSchema,
-    preflightWorkbookResponseSchema
-  );
-}
-
-export function inspectWorkbook(
-  payload: InspectWorkbookRequest
-): Promise<InspectWorkbookResponse> {
-  return invokeWithPayload(
-    "inspect_workbook",
-    payload,
-    inspectWorkbookRequestSchema,
-    inspectWorkbookResponseSchema
-  );
 }
 
 export function createSession(
@@ -473,17 +421,6 @@ export function startTurn(
   );
 }
 
-export function assessCopilotHandoff(
-  payload: AssessCopilotHandoffRequest
-): Promise<AssessCopilotHandoffResponse> {
-  return invokeWithPayload(
-    "assess_copilot_handoff",
-    payload,
-    assessCopilotHandoffRequestSchema,
-    assessCopilotHandoffResponseSchema
-  );
-}
-
 export function recordStructuredResponse(
   payload: RecordStructuredResponseRequest
 ): Promise<RecordStructuredResponseResponse> {
@@ -503,50 +440,6 @@ export function previewExecution(
     payload,
     previewExecutionRequestSchema,
     previewExecutionResponseSchema
-  );
-}
-
-export function executeReadActions(
-  payload: ExecuteReadActionsRequest
-): Promise<ExecuteReadActionsResponse> {
-  return invokeWithPayload(
-    "execute_read_actions",
-    payload,
-    executeReadActionsRequestSchema,
-    executeReadActionsResponseSchema
-  );
-}
-
-export function approvePlan(
-  payload: ApprovePlanRequest
-): Promise<ApprovePlanResponse> {
-  return invokeWithPayload(
-    "approve_plan",
-    payload,
-    approvePlanRequestSchema,
-    approvePlanResponseSchema
-  );
-}
-
-export function getPlanProgress(
-  payload: PlanProgressRequest
-): Promise<PlanProgressResponse> {
-  return invokeWithPayload(
-    "get_plan_progress",
-    payload,
-    planProgressRequestSchema,
-    planProgressResponseSchema
-  );
-}
-
-export function recordPlanProgress(
-  payload: RecordPlanProgressRequest
-): Promise<PlanProgressResponse> {
-  return invokeWithPayload(
-    "record_plan_progress",
-    payload,
-    recordPlanProgressRequestSchema,
-    planProgressResponseSchema
   );
 }
 
@@ -580,17 +473,6 @@ export function runExecution(
     payload,
     runExecutionRequestSchema,
     runExecutionResponseSchema
-  );
-}
-
-export function runExecutionMulti(
-  payload: RunExecutionMultiRequest
-): Promise<RunExecutionMultiResponse> {
-  return invokeWithPayload(
-    "run_execution_multi",
-    payload,
-    runExecutionMultiRequestSchema,
-    runExecutionMultiResponseSchema
   );
 }
 
@@ -766,7 +648,6 @@ export function setApprovalPolicy(
 export const relayAgentIpc = {
   pingDesktop,
   initializeApp,
-  preflightWorkbook,
   createProject,
   createSession,
   addInboxFile,
@@ -782,17 +663,11 @@ export const relayAgentIpc = {
   readSession,
   readTurnArtifacts,
   startTurn,
-  assessCopilotHandoff,
   recordStructuredResponse,
-  executeReadActions,
-  approvePlan,
-  getPlanProgress,
-  recordPlanProgress,
   previewExecution,
   recordScopeApproval,
   respondToApproval,
   runExecution,
-  runExecutionMulti,
   validateOutputQuality,
   pipelineCreate,
   pipelineGetStatus,

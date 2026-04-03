@@ -3,15 +3,10 @@ import { z } from "zod";
 import { approvalPolicyEnum, operationRiskEnum } from "./approval";
 import { sessionSchema, turnSchema, turnStatusSchema } from "./core";
 import {
-  documentReadTextActionSchema,
-  fileListActionSchema,
   fileCopyActionSchema,
   fileDeleteActionSchema,
   fileMoveActionSchema,
-  fileReadTextActionSchema,
-  fileStatActionSchema,
   textReplaceActionSchema,
-  textSearchActionSchema
 } from "./file";
 import {
   projectMemoryEntrySchema,
@@ -19,10 +14,9 @@ import {
   projectSchema
 } from "./project";
 import {
-  copilotTurnResponseSchema,
+  agentTurnResponseSchema,
   executionPlanSchema,
   outputArtifactSchema,
-  outputSpecSchema,
   mcpTransportSchema,
   planStepSchema,
   qualityCheckResultSchema,
@@ -36,11 +30,7 @@ import {
   relayModeSchema
 } from "./shared";
 import {
-  diffSummarySchema,
-  sheetColumnProfileSchema,
-  sheetPreviewSchema,
-  workbookFormatSchema,
-  workbookProfileSchema
+  diffSummarySchema
 } from "./workbook";
 
 export const storageModeSchema = z.enum(["memory", "local-json"]);
@@ -70,43 +60,6 @@ export const initializeAppResponseSchema = z.object({
   startupStatus: startupStatusSchema,
   startupIssue: startupIssueSchema.optional(),
   sampleWorkbookPath: z.string().trim().min(1).optional()
-});
-
-export const workbookPreflightStatusSchema = z.enum([
-  "ready",
-  "warning",
-  "blocked"
-]);
-export const workbookPreflightCheckLevelSchema = z.enum([
-  "info",
-  "warning",
-  "blocking"
-]);
-export const preflightWorkbookRequestSchema = z.object({
-  workbookPath: z.string().trim().min(1)
-});
-export const inspectWorkbookRequestSchema = z.object({
-  workbookPath: z.string().trim().min(1)
-});
-export const workbookPreflightCheckSchema = z.object({
-  code: z.string().trim().min(1),
-  title: z.string().trim().min(1),
-  detail: z.string().trim().min(1),
-  level: workbookPreflightCheckLevelSchema
-});
-export const preflightWorkbookResponseSchema = z.object({
-  workbookPath: z.string().trim().min(1),
-  status: workbookPreflightStatusSchema,
-  headline: z.string().trim().min(1),
-  summary: z.string().trim().min(1),
-  format: workbookFormatSchema.optional(),
-  fileSizeBytes: z.number().int().nonnegative().optional(),
-  checks: z.array(workbookPreflightCheckSchema).default([]),
-  guidance: z.array(z.string().trim().min(1)).default([])
-});
-export const inspectWorkbookResponseSchema = z.object({
-  profile: workbookProfileSchema,
-  columnProfiles: z.array(sheetColumnProfileSchema).default([])
 });
 
 export const createSessionRequestSchema = z.object({
@@ -286,7 +239,7 @@ export const executionInspectionStateSchema = z.enum([
 ]);
 
 export const turnOverviewStepSchema = z.object({
-  id: z.enum(["packet", "validation", "preview", "approval", "execution"]),
+  id: z.enum(["validation", "preview", "approval", "execution"]),
   label: nonEmptyStringSchema,
   state: turnOverviewStepStateSchema,
   summary: nonEmptyStringSchema
@@ -300,18 +253,6 @@ export const turnOverviewSchema = z.object({
   summary: nonEmptyStringSchema,
   guardrailSummary: nonEmptyStringSchema,
   steps: z.array(turnOverviewStepSchema).default([])
-});
-
-export const packetInspectionPayloadSchema = z.object({
-  sessionTitle: nonEmptyStringSchema,
-  turnTitle: nonEmptyStringSchema,
-  sourcePath: nonEmptyStringSchema.optional(),
-  relayMode: relayModeSchema,
-  objective: nonEmptyStringSchema,
-  contextLines: z.array(nonEmptyStringSchema).default([]),
-  allowedReadToolCount: z.number().int().nonnegative(),
-  allowedWriteToolCount: z.number().int().nonnegative(),
-  responseNotes: z.array(nonEmptyStringSchema).default([])
 });
 
 export const validationIssueSummarySchema = z.object({
@@ -401,9 +342,6 @@ function buildTurnInspectionSectionSchema<TPayload extends z.ZodTypeAny>(
     });
 }
 
-export const packetInspectionSectionSchema = buildTurnInspectionSectionSchema(
-  packetInspectionPayloadSchema
-);
 export const validationInspectionSectionSchema = buildTurnInspectionSectionSchema(
   validationInspectionPayloadSchema
 );
@@ -416,7 +354,6 @@ export const executionInspectionSectionSchema = buildTurnInspectionSectionSchema
 
 export const turnDetailsViewModelSchema = z.object({
   overview: turnOverviewSchema,
-  packet: packetInspectionSectionSchema,
   validation: validationInspectionSectionSchema,
   approval: approvalInspectionSectionSchema,
   execution: executionInspectionSectionSchema
@@ -428,18 +365,6 @@ const turnArtifactBaseSchema = z.object({
 });
 
 export const turnArtifactSchema = z.discriminatedUnion("artifactType", [
-  turnArtifactBaseSchema.extend({
-    artifactType: z.literal("workbook-profile"),
-    payload: workbookProfileSchema
-  }),
-  turnArtifactBaseSchema.extend({
-    artifactType: z.literal("sheet-preview"),
-    payload: sheetPreviewSchema
-  }),
-  turnArtifactBaseSchema.extend({
-    artifactType: z.literal("column-profile"),
-    payload: sheetColumnProfileSchema
-  }),
   turnArtifactBaseSchema.extend({
     artifactType: z.literal("diff-summary"),
     payload: diffSummarySchema
@@ -479,169 +404,22 @@ export const startTurnResponseSchema = z.object({
 
 export const listSessionsResponseSchema = z.array(sessionSchema);
 
-export const copilotHandoffStatusSchema = z.enum(["clear", "caution"]);
-export const copilotHandoffReasonSourceSchema = z.enum([
-  "path",
-  "column",
-  "objective"
-]);
-export const assessCopilotHandoffRequestSchema = z.object({
-  sessionId: z.string().trim().min(1),
-  turnId: z.string().trim().min(1)
-});
-export const copilotHandoffReasonSchema = z.object({
-  source: copilotHandoffReasonSourceSchema,
-  label: z.string().trim().min(1),
-  detail: z.string().trim().min(1)
-});
-export const planningContextToolGroupsSchema = z.object({
-  read: z.array(z.string().trim().min(1)).default([]),
-  write: z.array(z.string().trim().min(1)).default([])
-});
-export const planningContextSchema = z.object({
-  workbookSummary: z.string().trim().min(1),
-  availableTools: planningContextToolGroupsSchema,
-  suggestedApproach: z.array(z.string().trim().min(1)).default([])
-});
-export const assessCopilotHandoffResponseSchema = z.object({
-  status: copilotHandoffStatusSchema,
-  headline: z.string().trim().min(1),
-  summary: z.string().trim().min(1),
-  reasons: z.array(copilotHandoffReasonSchema).default([]),
-  suggestedActions: z.array(z.string().trim().min(1)).default([]),
-  planningContext: planningContextSchema.optional()
-});
-
 export const recordStructuredResponseRequestSchema = z.object({
   sessionId: z.string().trim().min(1),
   turnId: z.string().trim().min(1),
   rawResponse: z.string().trim().min(1).optional(),
-  parsedResponse: copilotTurnResponseSchema
+  parsedResponse: agentTurnResponseSchema
 });
 
 export const recordStructuredResponseResponseSchema = z.object({
   turn: turnSchema,
-  parsedResponse: copilotTurnResponseSchema,
+  parsedResponse: agentTurnResponseSchema,
   autoLearnedMemory: z.array(projectMemoryEntrySchema).default([])
 });
 
 export const previewExecutionRequestSchema = z.object({
   sessionId: z.string().trim().min(1),
   turnId: z.string().trim().min(1)
-});
-
-export const toolExecutionResultSchema = z.object({
-  tool: z.string().trim().min(1),
-  args: z.record(z.string(), z.unknown()).default({}),
-  ok: z.boolean(),
-  result: z.unknown().optional(),
-  error: z.string().trim().min(1).optional()
-});
-
-export const executeReadActionsRequestSchema = z.object({
-  sessionId: z.string().trim().min(1),
-  turnId: z.string().trim().min(1),
-  loopTurn: z.number().int().positive(),
-  maxTurns: z.number().int().positive(),
-  actions: z
-    .array(
-      z.union([
-        fileListActionSchema,
-        fileReadTextActionSchema,
-        fileStatActionSchema,
-        textSearchActionSchema,
-        documentReadTextActionSchema,
-        z.object({
-          tool: z.literal("workbook.inspect"),
-          args: z.object({
-            sourcePath: z.string().trim().min(1).optional()
-          })
-        }),
-        z.object({
-          tool: z.literal("sheet.preview"),
-          args: z.object({
-            sheet: z.string().trim().min(1),
-            limit: z.number().int().positive().max(200).default(25)
-          })
-        }),
-        z.object({
-          tool: z.literal("sheet.profile_columns"),
-          args: z.object({
-            sheet: z.string().trim().min(1),
-            sampleSize: z.number().int().positive().max(5000).default(250)
-          })
-        }),
-        z.object({
-          tool: z.literal("session.diff_from_base"),
-          args: z.object({
-            artifactId: z.string().trim().min(1).optional()
-          })
-        }),
-        z.object({
-          tool: z.enum([
-            "table.rename_columns",
-            "table.cast_columns",
-            "table.filter_rows",
-            "table.derive_column",
-            "table.group_aggregate",
-            "workbook.save_copy",
-            "file.copy",
-            "file.move",
-            "file.delete",
-            "text.replace"
-          ]),
-          sheet: z.string().trim().min(1).optional(),
-          args: z.record(z.string(), z.unknown()).default({})
-        })
-      ])
-    )
-    .default([])
-});
-
-export const executeReadActionsResponseSchema = z.object({
-  shouldContinue: z.boolean(),
-  toolResults: z.array(toolExecutionResultSchema).default([]),
-  hasWriteActions: z.boolean().default(false),
-  guardMessage: z.string().trim().min(1).optional()
-});
-
-export const planStepStatusSchema = z.object({
-  stepId: z.string().trim().min(1),
-  state: z.enum(["pending", "running", "completed", "skipped", "failed"]),
-  result: z.unknown().optional(),
-  error: z.string().trim().min(1).optional()
-});
-
-export const approvePlanRequestSchema = z.object({
-  sessionId: entityIdSchema,
-  turnId: entityIdSchema,
-  approvedStepIds: z.array(z.string().trim().min(1)).default([]),
-  modifiedSteps: z.array(planStepSchema).default([])
-});
-
-export const approvePlanResponseSchema = z.object({
-  approved: z.boolean(),
-  plan: executionPlanSchema
-});
-
-export const planProgressRequestSchema = z.object({
-  sessionId: entityIdSchema,
-  turnId: entityIdSchema
-});
-
-export const planProgressResponseSchema = z.object({
-  currentStepId: z.string().trim().min(1).nullable(),
-  completedCount: z.number().int().min(0),
-  totalCount: z.number().int().min(0),
-  stepStatuses: z.array(planStepStatusSchema).default([])
-});
-export const recordPlanProgressRequestSchema = z.object({
-  sessionId: entityIdSchema,
-  turnId: entityIdSchema,
-  currentStepId: z.string().trim().min(1).nullable(),
-  completedCount: z.number().int().min(0),
-  totalCount: z.number().int().min(0),
-  stepStatuses: z.array(planStepStatusSchema).default([])
 });
 
 export const previewExecutionResponseSchema = z.object({
@@ -714,14 +492,6 @@ export const runExecutionResponseSchema = z.object({
   reason: z.string().min(1).optional()
 });
 
-export const runExecutionMultiRequestSchema = z.object({
-  sessionId: entityIdSchema,
-  turnId: entityIdSchema,
-  outputSpecs: z.array(outputSpecSchema).min(1)
-});
-
-export const runExecutionMultiResponseSchema = z.array(runExecutionResponseSchema);
-
 export const validateOutputQualityRequestSchema = z.object({
   sourcePath: nonEmptyStringSchema,
   outputPath: nonEmptyStringSchema
@@ -786,17 +556,6 @@ export type StartupStatus = z.infer<typeof startupStatusSchema>;
 export type StartupRecoveryAction = z.infer<typeof startupRecoveryActionSchema>;
 export type StartupIssue = z.infer<typeof startupIssueSchema>;
 export type InitializeAppResponse = z.infer<typeof initializeAppResponseSchema>;
-export type WorkbookPreflightStatus = z.infer<typeof workbookPreflightStatusSchema>;
-export type WorkbookPreflightCheckLevel = z.infer<
-  typeof workbookPreflightCheckLevelSchema
->;
-export type PreflightWorkbookRequest = z.infer<typeof preflightWorkbookRequestSchema>;
-export type InspectWorkbookRequest = z.infer<typeof inspectWorkbookRequestSchema>;
-export type WorkbookPreflightCheck = z.infer<typeof workbookPreflightCheckSchema>;
-export type PreflightWorkbookResponse = z.infer<
-  typeof preflightWorkbookResponseSchema
->;
-export type InspectWorkbookResponse = z.infer<typeof inspectWorkbookResponseSchema>;
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 export type AddInboxFileRequest = z.infer<typeof addInboxFileRequestSchema>;
 export type RemoveInboxFileRequest = z.infer<typeof removeInboxFileRequestSchema>;
@@ -834,7 +593,6 @@ export type TurnOverviewStepState = z.infer<typeof turnOverviewStepStateSchema>;
 export type ExecutionInspectionState = z.infer<typeof executionInspectionStateSchema>;
 export type TurnOverviewStep = z.infer<typeof turnOverviewStepSchema>;
 export type TurnOverview = z.infer<typeof turnOverviewSchema>;
-export type PacketInspectionPayload = z.infer<typeof packetInspectionPayloadSchema>;
 export type ValidationIssueSummary = z.infer<typeof validationIssueSummarySchema>;
 export type ValidationInspectionPayload = z.infer<
   typeof validationInspectionPayloadSchema
@@ -845,7 +603,6 @@ export type ApprovalInspectionPayload = z.infer<
 export type ExecutionInspectionPayload = z.infer<
   typeof executionInspectionPayloadSchema
 >;
-export type PacketInspectionSection = z.infer<typeof packetInspectionSectionSchema>;
 export type ValidationInspectionSection = z.infer<
   typeof validationInspectionSectionSchema
 >;
@@ -861,41 +618,11 @@ export type ReadTurnArtifactsResponse = z.infer<typeof readTurnArtifactsResponse
 export type StartTurnRequest = z.infer<typeof startTurnRequestSchema>;
 export type StartTurnResponse = z.infer<typeof startTurnResponseSchema>;
 export type ListSessionsResponse = z.infer<typeof listSessionsResponseSchema>;
-export type CopilotHandoffStatus = z.infer<typeof copilotHandoffStatusSchema>;
-export type CopilotHandoffReasonSource = z.infer<
-  typeof copilotHandoffReasonSourceSchema
->;
-export type AssessCopilotHandoffRequest = z.infer<
-  typeof assessCopilotHandoffRequestSchema
->;
-export type CopilotHandoffReason = z.infer<typeof copilotHandoffReasonSchema>;
-export type PlanningContextToolGroups = z.infer<
-  typeof planningContextToolGroupsSchema
->;
-export type PlanningContext = z.infer<typeof planningContextSchema>;
-export type AssessCopilotHandoffResponse = z.infer<
-  typeof assessCopilotHandoffResponseSchema
->;
 export type RecordStructuredResponseRequest = z.infer<
   typeof recordStructuredResponseRequestSchema
 >;
 export type RecordStructuredResponseResponse = z.infer<
   typeof recordStructuredResponseResponseSchema
->;
-export type ToolExecutionResult = z.infer<typeof toolExecutionResultSchema>;
-export type ExecuteReadActionsRequest = z.infer<
-  typeof executeReadActionsRequestSchema
->;
-export type ExecuteReadActionsResponse = z.infer<
-  typeof executeReadActionsResponseSchema
->;
-export type PlanStepStatus = z.infer<typeof planStepStatusSchema>;
-export type ApprovePlanRequest = z.infer<typeof approvePlanRequestSchema>;
-export type ApprovePlanResponse = z.infer<typeof approvePlanResponseSchema>;
-export type PlanProgressRequest = z.infer<typeof planProgressRequestSchema>;
-export type PlanProgressResponse = z.infer<typeof planProgressResponseSchema>;
-export type RecordPlanProgressRequest = z.infer<
-  typeof recordPlanProgressRequestSchema
 >;
 export type PreviewExecutionRequest = z.infer<typeof previewExecutionRequestSchema>;
 export type PreviewExecutionResponse = z.infer<typeof previewExecutionResponseSchema>;
@@ -913,8 +640,6 @@ export type RecordScopeApprovalResponse = z.infer<
 >;
 export type RunExecutionRequest = z.infer<typeof runExecutionRequestSchema>;
 export type RunExecutionResponse = z.infer<typeof runExecutionResponseSchema>;
-export type RunExecutionMultiRequest = z.infer<typeof runExecutionMultiRequestSchema>;
-export type RunExecutionMultiResponse = z.infer<typeof runExecutionMultiResponseSchema>;
 export type ValidateOutputQualityRequest = z.infer<
   typeof validateOutputQualityRequestSchema
 >;

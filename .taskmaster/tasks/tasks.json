@@ -473,7 +473,7 @@
             "T14",
             "T16"
           ],
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "T18",
@@ -490,7 +490,7 @@
           "blockedBy": [
             "T11"
           ],
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "T19",
@@ -504,12 +504,12 @@
           "blockedBy": [
             "T17"
           ],
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "T20",
           "title": "最終 E2E テスト & コード量確認",
-          "description": "全機能の E2E テスト実行。自前 Rust コードが 80KB 以下、TS エージェントループコードが 0 であることを確認。成功基準 7 項目を全てチェック。",
+          "description": "全機能の E2E テスト実行。TS agent-loop/orchestration が 0 であること、in-repo workbook runtime / relay-specific tool runtime が削除されていること、残る custom Rust が M365 Copilot interop + thin desktop glue に限定されていることを確認する。Rust/TS の byte 数は telemetry として記録する。",
           "files": [],
           "effort": "L",
           "priority": "critical",

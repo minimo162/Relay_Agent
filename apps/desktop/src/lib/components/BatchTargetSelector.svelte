@@ -34,8 +34,7 @@
           name: basename(path),
           size: file.size
         };
-      })
-      .filter((entry) => /\.(csv|xlsx|xlsm|xls)$/i.test(entry.path));
+      });
 
     return next;
   }
@@ -57,7 +56,6 @@
         bind:this={fileInput}
         type="file"
         multiple
-        accept=".csv,.xlsx,.xlsm,.xls"
         class="hidden"
         on:change={handleFiles}
       />

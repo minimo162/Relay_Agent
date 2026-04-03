@@ -10,9 +10,9 @@ use uuid::Uuid;
 
 use crate::{
     models::{
-        ApprovalDecision, CopilotTurnResponse, CreateSessionRequest, GenerateRelayPacketRequest,
-        PreviewExecutionRequest, RecordStructuredResponseRequest, RelayMode,
-        RespondToApprovalRequest, RunExecutionRequest, StartTurnRequest,
+        ApprovalDecision, CopilotTurnResponse, CreateSessionRequest, PreviewExecutionRequest,
+        RecordStructuredResponseRequest, RelayMode, RespondToApprovalRequest, RunExecutionRequest,
+        StartTurnRequest,
     },
     startup::{self, StartupStatus},
 };
@@ -22,17 +22,11 @@ const WORKFLOW_SUMMARY_PATH_ENV: &str = "RELAY_AGENT_WORKFLOW_SMOKE_SUMMARY_PATH
 const WORKFLOW_SCENARIO: &str = "launched-app-workflow-smoke";
 const SAMPLE_SESSION_TITLE: &str = "Workflow smoke demo";
 const SAMPLE_SESSION_OBJECTIVE: &str =
-    "Inspect the sample CSV, preview a safe transform, and write a sanitized copy.";
-const SAMPLE_TURN_TITLE: &str = "Workflow smoke approved revenue cleanup";
+    "Inspect the sample CSV, preview a safe copy, and write a reviewed duplicate.";
+const SAMPLE_TURN_TITLE: &str = "Workflow smoke approved file copy";
 const SAMPLE_TURN_OBJECTIVE: &str =
-    "Keep approved rows, add a review label, preview the diff, approve it, and save a copy.";
+    "Copy the sample file into a reviewed output path after preview and approval.";
 const SAMPLE_APPROVAL_NOTE: &str = "Workflow smoke auto-approval";
-const EXPECTED_SAMPLE_OUTPUT: &str = concat!(
-    "customer_id,region,segment,amount,approved,posted_on,comment,review_label\n",
-    "1,East,Retail,42.5,true,2025-01-01,'=needs-review,Retail-approved\n",
-    "3,West,Retail,11.25,true,2025-01-03,'+follow-up,Retail-approved\n",
-    "4,West,Enterprise,oops,true,2025-01-04,'@vip,Enterprise-approved\n"
-);
 
 #[derive(Debug)]
 struct WorkflowSmokeConfig {
@@ -239,22 +233,7 @@ fn run_workflow_smoke_inner(
             format!("Turn `{}` started in `plan` mode.", turn.id),
         );
 
-        let packet = storage
-            .generate_relay_packet(GenerateRelayPacketRequest {
-                session_id: session.id.clone(),
-                turn_id: turn.id.clone(),
-            })
-            .map_err(|error| summary.fail("generate-packet", error))?;
-        summary.push_ok(
-            "generate-packet",
-            format!(
-                "Relay packet generated with {} read tool(s) and {} write tool(s).",
-                packet.allowed_read_tools.len(),
-                packet.allowed_write_tools.len()
-            ),
-        );
-
-        let raw_response = build_sample_response(&output_path);
+        let raw_response = build_sample_response(&sample_workbook_path, &output_path);
         let parsed_response = serde_json::from_str::<CopilotTurnResponse>(&raw_response)
             .map_err(|error| summary.fail("validate-response", error.to_string()))?;
         storage
@@ -282,7 +261,7 @@ fn run_workflow_smoke_inner(
         if !preview.requires_approval {
             return Err(summary.fail(
                 "preview",
-                "Workflow smoke expected preview to require approval before save-copy execution.",
+                "Workflow smoke expected preview to require approval before file-copy execution.",
             ));
         }
         summary.push_ok(
@@ -309,7 +288,7 @@ fn run_workflow_smoke_inner(
         }
         summary.push_ok(
             "approval",
-            "Preview approval was recorded before save-copy execution.",
+            "Preview approval was recorded before file-copy execution.",
         );
 
         let execution = storage
@@ -328,7 +307,7 @@ fn run_workflow_smoke_inner(
         summary.push_ok(
             "execution",
             format!(
-                "Save-copy execution completed with {} warning(s).",
+                "File-copy execution completed with {} warning(s).",
                 execution.warnings.len()
             ),
         );
@@ -347,7 +326,7 @@ fn run_workflow_smoke_inner(
         )
     })?;
     summary.output_exists = true;
-    summary.output_matches_expected = output_contents == EXPECTED_SAMPLE_OUTPUT;
+    summary.output_matches_expected = output_contents == original_source;
 
     if !summary.output_matches_expected {
         return Err(summary.fail(
@@ -378,41 +357,28 @@ fn run_workflow_smoke_inner(
     );
     summary.push_ok(
         "verify-source",
-        "Bundled sample source stayed unchanged after save-copy execution.",
+        "Bundled sample source stayed unchanged after file-copy execution.",
     );
 
     Ok(())
 }
 
-fn build_sample_response(output_path: &Path) -> String {
+fn build_sample_response(source_path: &str, output_path: &Path) -> String {
     json!({
         "version": "1.0",
-        "summary": "Keep approved rows, add a review label, and write a sanitized CSV copy.",
+        "status": "ready_to_write",
+        "summary": "Write a reviewed copy of the sample CSV.",
         "actions": [
             {
-                "tool": "table.filter_rows",
-                "sheet": "Sheet1",
+                "tool": "file.copy",
                 "args": {
-                    "predicate": "approved = true"
-                }
-            },
-            {
-                "tool": "table.derive_column",
-                "sheet": "Sheet1",
-                "args": {
-                    "column": "review_label",
-                    "expression": "[segment] + \"-approved\"",
-                    "position": "end"
-                }
-            },
-            {
-                "tool": "workbook.save_copy",
-                "args": {
-                    "outputPath": output_path.display().to_string()
+                    "sourcePath": source_path,
+                    "destPath": output_path.display().to_string(),
+                    "overwrite": true
                 }
             }
         ],
-        "followupQuestions": [],
+        "followUpQuestions": [],
         "warnings": []
     })
     .to_string()

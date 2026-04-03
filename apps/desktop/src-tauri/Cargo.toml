@@ -25,7 +25,6 @@ csv = "1.4.0"
 encoding_rs = "0.8"
 futures = "0.3"
 lopdf = "0.34"
-quick-xml = "0.36"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 shell-words = "1.1"

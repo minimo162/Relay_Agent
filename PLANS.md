@@ -17,6 +17,11 @@ Practical implication:
 - Priority A: get a safe vertical slice working end to end first.
 - Priority B: harden validation, diff preview, and file IO after the slice works.
 - Priority C: extend workbook handling only if the MVP path is stable.
+- Minimize custom implementation. Prefer claw-code for behavior and system flow, and preserve custom code only where Relay must mediate M365 Copilot.
+- Current reduction rule: treat the in-repo workbook engine, workbook context inspection, and workbook-specific prompt shaping as removal targets. The desired end state is upstream `claw-code` / `claw-code-parity` for behavior and `openwork` for UI direction, with custom Relay code limited to M365 Copilot interop.
+- Final reduction acceptance is architectural, not a raw byte cap: `T20` is satisfied only when no TypeScript agent-loop/orchestration remains, no in-repo workbook or relay-tool runtime remains, and the remaining custom Rust is limited to M365 Copilot interop plus thin desktop glue. Byte counts are still recorded as telemetry, but they are no longer the primary gate.
+- Preserve the openwork-inspired UI/UX direction, but do not keep compatibility shims just to protect earlier internal flows.
+- Compatibility is not a release requirement for the current pre-distribution phase. Prefer deleting obsolete paths over maintaining dual flows.
 - Save-copy only is the default write model.
 - Original spreadsheet inputs are treated as read-only.
 - No arbitrary code execution, shell execution, VBA, or external network access in the product flow.

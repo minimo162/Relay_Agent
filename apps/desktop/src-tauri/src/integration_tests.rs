@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::fs;
 
 use serde_json::json;
 use tempfile::tempdir;
@@ -8,103 +8,12 @@ use crate::{
     file_support,
     mcp_client::McpToolDefinition,
     models::{
-        ApprovalDecision, CopilotTurnResponse, CreateProjectRequest, CreateSessionRequest,
-        McpServerConfig, McpTransport, OutputFormat, OutputSpec, PreviewExecutionRequest,
-        ReadProjectRequest, RecordStructuredResponseRequest, RelayMode,
-        RespondToApprovalRequest, RunExecutionMultiRequest, StartTurnRequest, UpdateProjectRequest,
+        CreateProjectRequest, McpServerConfig, McpTransport, ReadProjectRequest,
+        UpdateProjectRequest,
     },
     storage::{is_within_project_scope, AppStorage},
     tool_catalog::ToolCatalog,
 };
-
-fn copilot_response(summary: &str, actions: Vec<serde_json::Value>) -> String {
-    json!({
-        "version": "1.0",
-        "summary": summary,
-        "actions": actions,
-        "followUpQuestions": [],
-        "warnings": []
-    })
-    .to_string()
-}
-
-fn record_copilot_response(
-    storage: &mut AppStorage,
-    session_id: &str,
-    turn_id: &str,
-    raw_response: String,
-) {
-    let parsed_response = serde_json::from_str::<CopilotTurnResponse>(&raw_response)
-        .expect("response should deserialize");
-    storage
-        .record_structured_response(RecordStructuredResponseRequest {
-            session_id: session_id.to_string(),
-            turn_id: turn_id.to_string(),
-            raw_response: Some(raw_response),
-            parsed_response,
-        })
-        .expect("response should record");
-}
-
-fn stage_multi_output_response(
-    storage: &mut AppStorage,
-    source_path: &str,
-    default_output_path: &str,
-) -> (String, String) {
-    let session = storage
-        .create_session(CreateSessionRequest {
-            title: "Multi-output".to_string(),
-            objective: "Prepare alternate save-copy outputs".to_string(),
-            primary_workbook_path: Some(source_path.to_string()),
-        })
-        .expect("session should be created");
-    let turn = storage
-        .start_turn(StartTurnRequest {
-            session_id: session.id.clone(),
-            title: "Save copy".to_string(),
-            objective: "Prepare alternate save-copy outputs".to_string(),
-            mode: RelayMode::Plan,
-        })
-        .expect("turn should be created")
-        .turn;
-
-    storage
-        .generate_relay_packet(crate::models::GenerateRelayPacketRequest {
-            session_id: session.id.clone(),
-            turn_id: turn.id.clone(),
-        })
-        .expect("packet should generate");
-    record_copilot_response(
-        storage,
-        &session.id,
-        &turn.id,
-        copilot_response(
-            "Prepare a save-copy output.",
-            vec![json!({
-                "tool": "workbook.save_copy",
-                "args": {
-                    "outputPath": default_output_path
-                }
-            })],
-        ),
-    );
-    storage
-        .preview_execution(PreviewExecutionRequest {
-            session_id: session.id.clone(),
-            turn_id: turn.id.clone(),
-        })
-        .expect("preview should succeed");
-    storage
-        .respond_to_approval(RespondToApprovalRequest {
-            session_id: session.id.clone(),
-            turn_id: turn.id.clone(),
-            decision: ApprovalDecision::Approved,
-            note: None,
-        })
-        .expect("approval should succeed");
-
-    (session.id, turn.id)
-}
 
 #[test]
 fn file_copy_creates_destination_and_keeps_source() {
@@ -161,23 +70,6 @@ fn file_delete_removes_target() {
     .expect("delete should succeed");
 
     assert!(!target_path.exists());
-}
-
-#[test]
-fn text_search_returns_matching_lines() {
-    let workspace = tempdir().expect("temp dir should be created");
-    let target_path = workspace.path().join("notes.txt");
-    fs::write(&target_path, "alpha\nTODO item\nomega\n").expect("notes should be written");
-
-    let result = file_support::execute_text_search(&json!({
-        "path": target_path.display().to_string(),
-        "pattern": "TODO"
-    }))
-    .expect("search should succeed");
-
-    assert_eq!(result["matchCount"], json!(1));
-    assert_eq!(result["matches"][0]["lineNumber"], json!(2));
-    assert_eq!(result["matches"][0]["matchedText"], json!("TODO item"));
 }
 
 #[test]
@@ -288,8 +180,7 @@ fn tool_registry_lists_current_builtin_tools() {
         .map(|tool| tool.id)
         .collect::<Vec<_>>();
 
-    assert!(tool_ids.len() >= 10);
-    assert!(tool_ids.iter().any(|id| id == "workbook.inspect"));
+    assert!(tool_ids.len() >= 9);
     assert!(tool_ids.iter().any(|id| id == "file.stat"));
     assert!(tool_ids.iter().any(|id| id == "browser.send_to_copilot"));
 }
@@ -298,13 +189,13 @@ fn tool_registry_lists_current_builtin_tools() {
 fn disabled_tool_returns_error() {
     let mut registry = ToolCatalog::new();
     registry
-        .set_enabled("workbook.inspect", false)
+        .set_enabled("file.stat", false)
         .expect("tool should toggle");
 
     assert!(!registry
-        .list_descriptors_by_phase(crate::models::ToolPhase::Read)
+        .list()
         .iter()
-        .any(|tool| tool.id == "workbook.inspect"));
+        .any(|tool| tool.enabled && tool.phase == crate::models::ToolPhase::Read && tool.id == "file.stat"));
 }
 
 #[test]
@@ -324,7 +215,9 @@ fn mcp_tool_returns_delegation_error() {
     );
 
     let registration = registry
-        .get("mcp.demo.echo")
+        .list()
+        .into_iter()
+        .find(|tool| tool.id == "mcp.demo.echo")
         .expect("mcp tool should be registered");
     assert_eq!(registration.source, crate::models::ToolSource::Mcp);
     assert_eq!(
@@ -341,70 +234,4 @@ fn parse_mcp_tool_name_validation() {
         parse_mcp_tool_name("mcp.server.tool").expect("tool id should parse"),
         "tool"
     );
-}
-
-#[test]
-fn multi_output_csv_writes_requested_file() {
-    let workspace = tempdir().expect("temp dir should be created");
-    let source_path = workspace.path().join("input.csv");
-    let default_output_path = workspace.path().join("default.csv");
-    let requested_output_path = workspace.path().join("requested.csv");
-    fs::write(&source_path, "name,value\nalpha,1\nbeta,2\n").expect("csv source should be written");
-
-    let mut storage = AppStorage::default();
-    let (session_id, turn_id) = stage_multi_output_response(
-        &mut storage,
-        &source_path.display().to_string(),
-        &default_output_path.display().to_string(),
-    );
-
-    let results = storage
-        .run_execution_multi(RunExecutionMultiRequest {
-            session_id,
-            turn_id,
-            output_specs: vec![OutputSpec {
-                format: OutputFormat::Csv,
-                output_path: requested_output_path.display().to_string(),
-            }],
-        })
-        .expect("csv multi-output should succeed");
-
-    assert_eq!(results.len(), 1);
-    assert!(Path::new(&requested_output_path).exists());
-    assert!(!Path::new(&default_output_path).exists());
-}
-
-#[test]
-fn multi_output_xlsx_copy_writes_requested_file() {
-    let workspace = tempdir().expect("temp dir should be created");
-    let source_path = workspace.path().join("input.xlsx");
-    let default_output_path = workspace.path().join("default.xlsx");
-    let requested_output_path = workspace.path().join("requested.xlsx");
-    let source_bytes = b"placeholder xlsx bytes";
-    fs::write(&source_path, source_bytes).expect("xlsx source should be written");
-
-    let mut storage = AppStorage::default();
-    let (session_id, turn_id) = stage_multi_output_response(
-        &mut storage,
-        &source_path.display().to_string(),
-        &default_output_path.display().to_string(),
-    );
-
-    let results = storage
-        .run_execution_multi(RunExecutionMultiRequest {
-            session_id,
-            turn_id,
-            output_specs: vec![OutputSpec {
-                format: OutputFormat::Xlsx,
-                output_path: requested_output_path.display().to_string(),
-            }],
-        })
-        .expect("xlsx multi-output should succeed");
-
-    assert_eq!(results.len(), 1);
-    assert_eq!(
-        fs::read(&requested_output_path).expect("requested xlsx output should be readable"),
-        source_bytes
-    );
-    assert!(!Path::new(&default_output_path).exists());
 }

@@ -156,7 +156,6 @@ async function main() {
         "locate-sample",
         "create-session",
         "start-turn",
-        "generate-packet",
         "validate-response",
         "preview",
         "approval",

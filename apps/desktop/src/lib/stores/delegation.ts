@@ -1,12 +1,9 @@
 import { derived, writable } from "svelte/store";
 
-import type { ExecutionPlan } from "@relay-agent/contracts";
-
 export type DelegationState =
   | "idle"
   | "goal_entered"
   | "planning"
-  | "plan_review"
   | "executing"
   | "awaiting_approval"
   | "completed"
@@ -41,8 +38,6 @@ export type DelegationStoreState = {
   state: DelegationState;
   goal: string;
   attachedFiles: string[];
-  plan: ExecutionPlan | null;
-  currentStepIndex: number;
   error: string | null;
 };
 
@@ -50,8 +45,6 @@ const DEFAULT_STATE: DelegationStoreState = {
   state: "idle",
   goal: "",
   attachedFiles: [],
-  plan: null,
-  currentStepIndex: -1,
   error: null
 };
 const MAX_ACTIVITY_EVENTS = 200;
@@ -71,18 +64,6 @@ function createDelegationStore() {
     },
     startPlanning() {
       update((state) => ({ ...state, state: "planning", error: null }));
-    },
-    proposePlan(plan: ExecutionPlan) {
-      update((state) => ({ ...state, state: "plan_review", plan }));
-    },
-    approvePlan() {
-      update((state) => ({ ...state, state: "executing", currentStepIndex: 0 }));
-    },
-    advanceStep() {
-      update((state) => ({
-        ...state,
-        currentStepIndex: state.currentStepIndex + 1
-      }));
     },
     requestApproval() {
       update((state) => ({ ...state, state: "awaiting_approval" }));
@@ -141,7 +122,5 @@ export const delegationStore = createDelegationStore();
 export const activityFeedStore = createActivityFeedStore();
 
 export const requiresIntervention = derived(delegationStore, ($state) =>
-  $state.state === "plan_review" ||
-  $state.state === "awaiting_approval" ||
-  $state.state === "error"
+  $state.state === "awaiting_approval" || $state.state === "error"
 );

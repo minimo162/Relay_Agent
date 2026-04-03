@@ -4,7 +4,7 @@
   "category": "sales",
   "description": "営業向けに対象条件の売上行だけを残し、確認用コピーを作成します。",
   "goal": "売上 CSV から対象条件に合う行だけを残し、結果を確認できる別コピーを保存する",
-  "expectedTools": ["table.filter_rows", "workbook.save_copy"],
+  "expectedTools": ["browser.send_to_copilot", "file.copy"],
   "exampleInputFile": "sales.csv",
   "tags": ["営業", "フィルタ", "CSV"],
   "isBuiltIn": true,

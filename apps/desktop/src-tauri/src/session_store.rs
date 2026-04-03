@@ -165,20 +165,6 @@ impl SessionStore {
         Ok(session.clone())
     }
 
-    pub(crate) fn read_latest_turn_model(&self, session_id: &str) -> Result<Turn, String> {
-        let session = self.read_session_model(session_id)?;
-        let turn_id = session
-            .latest_turn_id
-            .clone()
-            .or_else(|| session.turn_ids.last().cloned())
-            .ok_or_else(|| format!("session `{session_id}` does not have any turns yet"))?;
-
-        self.turns
-            .get(&turn_id)
-            .cloned()
-            .ok_or_else(|| format!("turn `{turn_id}` was not found"))
-    }
-
     pub(crate) fn start_turn(
         &mut self,
         request: StartTurnRequest,

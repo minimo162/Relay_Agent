@@ -14,8 +14,6 @@ mod persistence;
 mod pipeline;
 mod project;
 mod quality_validator;
-mod read_action_executor;
-mod relay_tools;
 mod risk_evaluator;
 mod session;
 mod session_store;
@@ -25,7 +23,6 @@ mod storage;
 mod tauri_bridge;
 mod template;
 mod tool_catalog;
-mod workbook;
 mod workbook_state;
 mod workflow_smoke;
 
@@ -50,8 +47,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app::ping,
-            app::preflight_workbook,
-            app::inspect_workbook,
             app::initialize_app,
             session::create_session,
             session::add_inbox_file,
@@ -68,7 +63,6 @@ pub fn run() {
             session::read_session,
             session::read_turn_artifacts,
             session::start_turn,
-            execution::assess_copilot_handoff,
             execution::record_structured_response,
             execution::list_tools,
             execution::set_tool_enabled,
@@ -77,15 +71,10 @@ pub fn run() {
             execution::invoke_mcp_tool,
             browser_automation::send_copilot_prompt,
             browser_automation::check_copilot_connection,
-            execution::execute_read_actions,
-            execution::approve_plan,
-            execution::get_plan_progress,
-            execution::record_plan_progress,
             execution::preview_execution,
             execution::respond_to_approval,
             execution::record_scope_approval,
             execution::run_execution,
-            execution::run_execution_multi,
             execution::validate_output_quality,
             pipeline::pipeline_create,
             pipeline::pipeline_run,

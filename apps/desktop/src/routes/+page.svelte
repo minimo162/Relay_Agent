@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-shell";
@@ -28,62 +29,46 @@
     ApprovalPolicy,
     BatchJob,
     BatchTargetUpdateEvent,
-    CopilotTurnResponse,
+    AgentApprovalNeededEventPayload,
+    AgentErrorEventPayload,
+    AgentToolResultEventPayload,
+    AgentToolStartEventPayload,
+    AgentTurnResponse,
+    AgentTurnCompleteEventPayload,
     DiffSummary,
-    ExecutionPlan,
     McpTransport,
     McpServerConfig,
     OutputArtifact,
-    PlanProgressResponse,
-    PlanStep,
-    PlanStepStatus,
     Pipeline,
     PipelineInputSource,
     PipelineStep,
     PipelineStepUpdateEvent,
-    PreflightWorkbookResponse,
     Project,
     ReadTurnArtifactsResponse,
     Session,
-    SheetColumnProfile,
     StartupIssue,
     ToolRegistration,
-    ToolExecutionResult,
     TurnDetailsViewModel,
-    WorkbookProfile,
     WorkflowTemplate,
     WorkflowTemplateCategory
   } from "@relay-agent/contracts";
   import {
     addInboxFile,
     addProjectMemory,
-    approvePlan,
-    assessCopilotHandoff,
     batchCreate,
     batchGetStatus,
     batchRun,
     batchSkipTarget,
-    bindAgentUi,
-    buildPlanningPrompt,
-    cancelAgent as cancelDesktopAgent,
     connectMcpServer,
     createProject,
-    createSession,
     discardDelegationDraft,
     discardStudioDraft,
-    disposeAgentUi,
-    feedStore,
-    getPlanProgress,
-    getCopilotBrowserErrorMessage,
-    getActiveSessionState,
     getFriendlyError,
-    inspectWorkbook,
     initializeApp,
     isWithinProjectScope,
     linkSessionToProject,
     listTools,
     listSessions,
-    recordPlanProgress,
     recordScopeApproval,
     listRecentFiles,
     listProjects,
@@ -103,17 +88,13 @@
     pipelineCreate,
     pipelineGetStatus,
     pipelineRun,
-    preflightWorkbook,
     previewExecution,
     readTurnArtifacts,
     readSession,
-    recordStructuredResponse,
     removeProjectMemory,
     removeInboxFile,
     rememberRecentFile,
     rememberRecentSession,
-    resumeAgentLoopWithPlan,
-    runAgentLoop,
     respondToApproval,
     runExecution,
     validateOutputQuality,
@@ -122,26 +103,14 @@
     saveDelegationDraft,
     saveSelectedProjectId,
     saveToolSettings,
-    sendPromptViaBrowserTool,
     saveStudioDraft,
-    sessionStore,
     setSessionProject,
     setApprovalPolicy,
     setToolEnabled,
-    startAgent as startDesktopAgent,
-    startTurn,
     templateDelete,
     templateFromSession,
     templateList,
-    approvalStore,
-    refreshSessionHistory as refreshDesktopAgentSessionHistory,
-    resetAgentUi,
-    respondApproval as respondDesktopAgentApproval,
     validateProjectScopeActions,
-    type AgentLoopResult,
-    type AgentFeedEntry,
-    type BrowserCommandProgress,
-    type CopilotConversationTurn,
     type PersistedStudioDraft,
     type RecentFile,
     type RecentSession,
@@ -161,24 +130,6 @@
     label: string;
     status: ProgressStatus;
     message?: string;
-  };
-  type AgentLoopLogEntry = {
-    id: string;
-    tool: string;
-    label: string;
-    status: ProgressStatus;
-    startTime: number;
-    endTime?: number;
-    detail?: string;
-    errorMessage?: string;
-    rawResult?: unknown;
-    showDetail?: boolean;
-  };
-  type PlanExecutionStepState = PlanStepStatus["state"];
-  type PlanExecutionStep = PlanStep & {
-    state: PlanExecutionStepState;
-    result?: unknown;
-    error?: string;
   };
   type ProjectSessionSummary = {
     id: string;
@@ -204,6 +155,63 @@
     ReadTurnArtifactsResponse["artifacts"][number],
     { artifactType: "execution" }
   >;
+  type AgentContentBlock =
+    | { type: "text"; text: string }
+    | { type: "tool_use"; id: string; name: string; input: unknown }
+    | { type: "tool_result"; toolUseId: string; content: string; isError: boolean };
+  type AgentMessage = {
+    role: "user" | "assistant";
+    content: AgentContentBlock[];
+  };
+  type AgentSessionHistory = {
+    sessionId: string;
+    running: boolean;
+    messages: AgentMessage[];
+  };
+  type AgentSessionStatus =
+    | "idle"
+    | "running"
+    | "awaiting_approval"
+    | "completed"
+    | "error"
+    | "cancelled";
+  type AgentSessionState = {
+    sessionId: string | null;
+    running: boolean;
+    status: AgentSessionStatus;
+    messages: AgentMessage[];
+    lastStopReason: string | null;
+    lastError: string | null;
+  };
+  type AgentPendingApproval = {
+    sessionId: string;
+    approvalId: string;
+    toolName: string;
+    description: string;
+    target?: string;
+    input: unknown;
+  };
+  type AgentApprovalState = {
+    pending: AgentPendingApproval | null;
+  };
+  type AgentFeedEntryType =
+    | "session_started"
+    | "tool_start"
+    | "tool_result"
+    | "approval_needed"
+    | "turn_complete"
+    | "error";
+  type AgentFeedEntry = {
+    id: string;
+    sessionId: string;
+    type: AgentFeedEntryType;
+    title: string;
+    detail?: string;
+    toolName?: string;
+    toolUseId?: string;
+    isError?: boolean;
+    timestamp: string;
+  };
   type UnifiedFeedEntry = {
     id: string;
     type: "tool" | "thinking" | "error";
@@ -247,7 +255,7 @@
   const expertDetailsStoragePrefix = "relay-agent.expert-details";
   const AUTO_CDP_PORT_RANGE_START = 9333;
   const AUTO_CDP_PORT_RANGE_END = 9342;
-  const instructionColumnLimit = 20;
+  const MAX_AGENT_FEED_ENTRIES = 200;
   const objectivePresets = [
     "approved が true の行だけ残してください",
     "amount 列の合計を新しい列として追加してください",
@@ -321,17 +329,11 @@
 
   // Exact args structure for each tool. This is embedded verbatim in the Copilot
   // instruction so the LLM uses the correct field names and nesting.
-  const TOOL_ARGS_REFERENCE = `workbook.inspect   : { "tool": "workbook.inspect", "args": { "sourcePath": "/path/to/file.csv" } }
-sheet.preview      : { "tool": "sheet.preview", "args": { "sheet": "Sheet1", "limit": 25 } }
-sheet.profile_columns: { "tool": "sheet.profile_columns", "args": { "sheet": "Sheet1", "sampleSize": 250 } }
-session.diff_from_base: { "tool": "session.diff_from_base", "args": {} }
-table.filter_rows  : { "tool": "table.filter_rows", "sheet": "Sheet1", "args": { "predicate": "[approved] == true" } }
-table.rename_columns: { "tool": "table.rename_columns", "sheet": "Sheet1", "args": { "renames": [{ "from": "old_name", "to": "new_name" }] } }
-table.cast_columns : { "tool": "table.cast_columns", "sheet": "Sheet1", "args": { "casts": [{ "column": "amount", "toType": "number" }] } }
-table.derive_column: { "tool": "table.derive_column", "sheet": "Sheet1", "args": { "column": "new_col", "expression": "[amount] * 2", "position": "end" } }
-table.group_aggregate: { "tool": "table.group_aggregate", "sheet": "Sheet1", "args": { "groupBy": ["region"], "measures": [{ "column": "amount", "op": "sum", "as": "total_amount" }] } }
-workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/path/to/output.csv" } }
-重要: sheet.preview / sheet.profile_columns / workbook.* / session.* は sheet を args の中に書く。table.* だけ sheet をトップレベルに書く。`;
+  const TOOL_ARGS_REFERENCE = `file.copy   : { "tool": "file.copy", "args": { "sourcePath": "/path/to/source.txt", "destPath": "/path/to/copy.txt" } }
+file.move   : { "tool": "file.move", "args": { "sourcePath": "/path/to/source.txt", "destPath": "/path/to/moved.txt" } }
+file.delete : { "tool": "file.delete", "args": { "path": "/path/to/file.txt", "toRecycleBin": true } }
+text.replace: { "tool": "text.replace", "args": { "path": "/path/to/file.txt", "pattern": "old", "replacement": "new", "createBackup": true } }
+重要: すべての引数は args の中に書いてください。`;
 
   let busy = false;
   let errorMsg = "";
@@ -479,27 +481,17 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   let startupIssue: StartupIssue | null = null;
   let storagePath: string | null = null;
-  let sampleWorkbookPath: string | null = null;
-  let handoffCaution: {
-    headline: string;
-    reasons: Array<{ text: string; source: string }>;
-  } | null = null;
 
   let filePath = "";
   let objectiveText = "";
   let taskName = "";
   let taskNameEdited = false;
   let selectedTemplateKey: TemplateKey | null = null;
-  let preflight: PreflightWorkbookResponse | null = null;
-  let workbookProfile: WorkbookProfile | null = null;
-  let workbookColumnProfiles: SheetColumnProfile[] = [];
-
   let sessionId = "";
   let turnId = "";
   let copilotInstructionText = "";
   let copiedBrowserCommandNotice = "";
   let isSendingToCopilot = false;
-  let sendStatusMessage = "";
   let copilotAutoError: string | null = null;
   let cdpPort = AUTO_CDP_PORT_RANGE_START;
   let autoLaunchEdge = true;
@@ -511,37 +503,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let connectingMcp = false;
   let toolInfoMessage = "";
   let toolErrorMessage = "";
-  let agentLoopEnabled = false;
   let maxTurns = 10;
-  let loopTimeoutMs = 120000;
-  let planningEnabled = true;
-  let autoApproveReadSteps = true;
-  let pauseBetweenSteps = false;
   let approvalPolicy: ApprovalPolicy = "safe";
-  let agentLoopRunning = false;
-  let agentLoopTurn = 0;
-  let agentLoopLog: AgentLoopLogEntry[] = [];
-  let agentLoopSummary = "";
-  let agentLoopFinalStatus:
-    | CopilotTurnResponse["status"]
-    | "awaiting_plan_approval"
-    | null = null;
-  let agentLoopResult: AgentLoopResult | null = null;
-  let agentLoopConversationHistory: CopilotConversationTurn[] = [];
-  let agentLoopAbortController: AbortController | null = null;
-  let activeAgentLoopEntryId: string | null = null;
-  let planSteps: PlanStep[] = [];
-  let showReplanFeedback = false;
-  let replanFeedback = "";
-  let approvedPlan: ExecutionPlan | null = null;
-  let pendingPlan: ExecutionPlan | null = null;
-  let executionStepStatuses: PlanExecutionStep[] = [];
-  let currentPlanStepId: string | null = null;
-  let isPlanExecuting = false;
-  let isPlanPaused = false;
-  let planPauseRequested = false;
-  let planPauseReason = "";
-  let planPauseResolver: (() => void) | null = null;
 
   let previewSummary = "";
   let previewTargetCount = 0;
@@ -558,7 +521,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let scopeApprovalSummary = "";
   let scopeApprovalRootFolder = "";
   let scopeApprovalViolations: string[] = [];
-  let scopeApprovalResponse: CopilotTurnResponse | null = null;
+  let scopeApprovalResponse: AgentTurnResponse | null = null;
   let scopeApprovalRawResponse = "";
   let showDetailedChanges = false;
   let executionDone = false;
@@ -592,6 +555,19 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let recentSessions: RecentSession[] = [];
   let recentFiles: RecentFile[] = [];
   let agentFeedEntries: UnifiedFeedEntry[] = [];
+  let agentFeedState: AgentFeedEntry[] = [];
+  let agentSessionState: AgentSessionState = {
+    sessionId: null,
+    running: false,
+    status: "idle",
+    messages: [],
+    lastStopReason: null,
+    lastError: null
+  };
+  let agentApprovalState: AgentApprovalState = {
+    pending: null
+  };
+  let activeAgentSessionId: string | null = null;
   let recoverableDraftSessionIds: string[] = [];
   let showRecent = false;
   let progressItems: ProgressItem[] = [];
@@ -1171,30 +1147,12 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     return source === "agent-loop" ? "自律実行" : "スタジオ";
   }
 
-  function getRemainingPlanAfterCurrentStep(): ExecutionPlan | null {
-    if (!approvedPlan || !currentPlanStepId) {
-      return pendingPlan;
-    }
-
-    const currentIndex = approvedPlan.steps.findIndex((step) => step.id === currentPlanStepId);
-    if (currentIndex < 0 || currentIndex >= approvedPlan.steps.length - 1) {
-      return null;
-    }
-
-    const remainingSteps = approvedPlan.steps.slice(currentIndex + 1);
-    return {
-      ...approvedPlan,
-      totalEstimatedSteps: remainingSteps.length,
-      steps: remainingSteps
-    };
-  }
-
   function openScopeApproval(options: {
     source: ScopeApprovalSource;
     rootFolder: string;
     violations: string[];
     responseSummary: string;
-    parsedResponse: CopilotTurnResponse;
+    parsedResponse: AgentTurnResponse;
     rawResponse?: string;
   }): void {
     const uniqueViolations = [...new Set(options.violations.filter((value) => value.trim()))];
@@ -1225,254 +1183,29 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     return /(^|[\\/])revenue-workflow-demo\.csv$/i.test(path.trim());
   }
 
-  function suggestOutputPath(inputPath: string): string {
-    const normalizedPath = inputPath.trim().replace(/\\/g, "/");
-    if (!normalizedPath) {
-      return "/path/to/output.copy.csv";
-    }
-
-    const lastSlashIndex = normalizedPath.lastIndexOf("/");
-    const directory =
-      lastSlashIndex >= 0 ? normalizedPath.slice(0, lastSlashIndex + 1) : "";
-    const fileName =
-      lastSlashIndex >= 0 ? normalizedPath.slice(lastSlashIndex + 1) : normalizedPath;
-    const extensionIndex = fileName.lastIndexOf(".");
-
-    if (extensionIndex > 0) {
-      return `${directory}${fileName.slice(0, extensionIndex)}.copy${fileName.slice(extensionIndex)}`;
-    }
-
-    return `${directory}${fileName}.copy`;
-  }
-
-
-  function buildExpectedResponseTemplate(outputPath: string): string {
+  function buildExpectedResponseTemplate(): string {
     return `{
   "version": "1.0",
   "status": "ready_to_write",
   "summary": "何をするかを短く説明する",
-  "actions": [
-    {
-      "tool": "table.filter_rows",
-      "sheet": "Sheet1",
-      "args": {
-        "predicate": "[approved] == true"
-      }
-    },
-    {
-      "tool": "workbook.save_copy",
-      "args": {
-        "outputPath": "${outputPath}"
-      }
-    }
-  ]
+  "actions": []
 }`;
-  }
-
-  function formatWorkbookContextLines(
-    profile: WorkbookProfile | null,
-    columnProfiles: SheetColumnProfile[]
-  ): string[] {
-    if (!profile || profile.sheets.length === 0) {
-      return ["- シート: 情報をまだ取得できていません"];
-    }
-
-    const lines: string[] = [];
-
-    for (const sheet of profile.sheets) {
-      lines.push(`- シート: ${sheet.name}`);
-
-      const matchingProfile = columnProfiles.find(
-        (columnProfile) => columnProfile.sheet === sheet.name
-      );
-      const typedColumns =
-        matchingProfile?.columns.map((column) => `${column.column} (${column.inferredType})`) ??
-        sheet.columns.map((column) => `${column} (string)`);
-
-      if (typedColumns.length === 0) {
-        lines.push("- 列（使える名前をそのまま使うこと）: 取得できませんでした");
-        continue;
-      }
-
-      lines.push("- 列（使える名前をそのまま使うこと）:");
-      const visibleColumns = typedColumns.slice(0, instructionColumnLimit);
-      for (const column of visibleColumns) {
-        lines.push(`  - ${column}`);
-      }
-      if (typedColumns.length > instructionColumnLimit) {
-        lines.push(`  - （他 ${typedColumns.length - instructionColumnLimit} 列）`);
-      }
-    }
-
-    return lines;
-  }
-
-  function buildTemplateExample(
-    templateKey: TemplateKey | null,
-    workbookPath: string,
-    outputPath: string
-  ): string {
-    if (isBundledRevenueDemo(workbookPath)) {
-      return `{
-  "version": "1.0",
-  "summary": "approved が true の行だけ残し、amount の確認列を追加して別コピーを保存します。",
-  "actions": [
-    {
-      "tool": "table.filter_rows",
-      "sheet": "Sheet1",
-      "args": {
-        "predicate": "[approved] == true"
-      }
-    },
-    {
-      "tool": "table.derive_column",
-      "sheet": "Sheet1",
-      "args": {
-        "column": "amount_check",
-        "expression": "[amount]",
-        "position": "end"
-      }
-    },
-    {
-      "tool": "workbook.save_copy",
-      "args": {
-        "outputPath": "${outputPath}"
-      }
-    }
-  ]
-}`;
-    }
-
-    switch (templateKey) {
-      case "rename_columns":
-        return `{
-  "version": "1.0",
-  "summary": "列名を分かりやすい名前に変更して別コピーを保存します。",
-  "actions": [
-    {
-      "tool": "table.rename_columns",
-      "sheet": "Sheet1",
-      "args": {
-        "renames": [
-          { "from": "name", "to": "customer_name" }
-        ]
-      }
-    },
-    {
-      "tool": "workbook.save_copy",
-      "args": {
-        "outputPath": "${outputPath}"
-      }
-    }
-  ]
-}`;
-      case "cast_columns":
-        return `{
-  "version": "1.0",
-  "summary": "amount 列を number 型として扱えるように整えて別コピーを保存します。",
-  "actions": [
-    {
-      "tool": "table.cast_columns",
-      "sheet": "Sheet1",
-      "args": {
-        "casts": [
-          { "column": "amount", "toType": "number" }
-        ]
-      }
-    },
-    {
-      "tool": "workbook.save_copy",
-      "args": {
-        "outputPath": "${outputPath}"
-      }
-    }
-  ]
-}`;
-      case "derive_column":
-        return `{
-  "version": "1.0",
-  "summary": "新しい計算列を追加して別コピーを保存します。",
-  "actions": [
-    {
-      "tool": "table.derive_column",
-      "sheet": "Sheet1",
-      "args": {
-        "column": "amount_with_tax",
-        "expression": "[amount] * 1.1",
-        "position": "end"
-      }
-    },
-    {
-      "tool": "workbook.save_copy",
-      "args": {
-        "outputPath": "${outputPath}"
-      }
-    }
-  ]
-}`;
-      case "group_aggregate":
-        return `{
-  "version": "1.0",
-  "summary": "category ごとの amount 合計を集計して別コピーを保存します。",
-  "actions": [
-    {
-      "tool": "table.group_aggregate",
-      "sheet": "Sheet1",
-      "args": {
-        "groupBy": ["category"],
-        "measures": [
-          { "column": "amount", "op": "sum", "as": "total_amount" }
-        ]
-      }
-    },
-    {
-      "tool": "workbook.save_copy",
-      "args": {
-        "outputPath": "${outputPath}"
-      }
-    }
-  ]
-}`;
-      case "filter_rows":
-      case "inspect_safe_copy":
-      default:
-        return `{
-  "version": "1.0",
-  "summary": "条件に合う行だけ残して別コピーを保存します。",
-  "actions": [
-    {
-      "tool": "table.filter_rows",
-      "sheet": "Sheet1",
-      "args": {
-        "predicate": "[approved] == true"
-      }
-    },
-    {
-      "tool": "workbook.save_copy",
-      "args": {
-        "outputPath": "${outputPath}"
-      }
-    }
-  ]
-}`;
-    }
   }
 
   function buildCopilotInstructionText(
     objective: string,
-    workbookPath: string,
     title: string,
-    profile: WorkbookProfile | null,
-    columnProfiles: SheetColumnProfile[],
+    attachedFiles: string[],
     availableTools: ToolRegistration[],
-    templateKey: TemplateKey | null,
     projectContext = ""
   ): string {
     const toolLines = availableTools.map(
       (tool) => `- ${tool.id}: ${tool.description}`
     );
-    const outputPath = suggestOutputPath(workbookPath);
-    const example = buildTemplateExample(templateKey, workbookPath, outputPath);
+    const fileLines =
+      attachedFiles.length > 0
+        ? attachedFiles.map((path) => `- ${path}`)
+        : ["- 添付ファイルなし"];
 
     return [
       "Relay Agent からの依頼です。",
@@ -1483,8 +1216,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       `- 目的: ${objective}`,
       "",
       "2. 対象ファイル",
-      `- ファイル: ${workbookPath}`,
-      ...formatWorkbookContextLines(profile, columnProfiles),
+      ...fileLines,
       "",
       "3. 使ってよい操作",
       ...toolLines,
@@ -1497,14 +1229,10 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       "- ``` で囲まないでください。",
       "- パス区切りは / を使ってください。",
       "- _ や [ ] を \\_ や \\[ \\] にしないでください。",
-      "- tool 名、args 名、列名は見えている文字をそのまま使ってください。",
       "- 上にない tool は使わないでください。",
       "",
       "6. 回答テンプレート",
-      buildExpectedResponseTemplate(outputPath),
-      "",
-      "7. 回答例",
-      example
+      buildExpectedResponseTemplate()
     ].join("\n");
   }
 
@@ -1732,239 +1460,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     automationTab = "pipeline";
   }
 
-  function resetAgentLoopState(clearLog = true): void {
-    agentLoopRunning = false;
-    agentLoopTurn = 0;
-    agentLoopSummary = "";
-    agentLoopFinalStatus = null;
-    agentLoopResult = null;
-    agentLoopConversationHistory = [];
-    agentLoopAbortController = null;
-    activeAgentLoopEntryId = null;
-    if (clearLog) {
-      agentLoopLog = [];
-    }
-  }
+  function resetAgentLoopState(): void {}
 
-  function resetPlanExecutionState(clearPlanReview = true): void {
-    approvedPlan = null;
-    pendingPlan = null;
-    executionStepStatuses = [];
-    currentPlanStepId = null;
-    isPlanExecuting = false;
-    isPlanPaused = false;
-    planPauseRequested = false;
-    planPauseReason = "";
-    planPauseResolver = null;
-    if (clearPlanReview) {
-      planSteps = [];
-      showReplanFeedback = false;
-      replanFeedback = "";
-    }
-  }
-
-  function buildFallbackPlanningContext(): {
-    workbookSummary: string;
-    availableTools: { read: string[]; write: string[] };
-  } {
-    const availableTools = currentAllowedTools();
-    const workbookSummary = [
-      filePath.trim() ? `File: ${filePath.trim()}` : "File: not selected",
-      ...formatWorkbookContextLines(workbookProfile, workbookColumnProfiles)
-    ].join("\n");
-
-    return {
-      workbookSummary,
-      availableTools: {
-        read: availableTools
-          .filter((tool) => tool.phase === "read")
-          .map((tool) => tool.id),
-        write: availableTools
-          .filter((tool) => tool.phase === "write")
-          .map((tool) => tool.id)
-      }
-    };
-  }
-
-  function initializePlanExecution(plan: ExecutionPlan): void {
-    approvedPlan = plan;
-    executionStepStatuses = plan.steps.map((step) => ({
-      ...step,
-      state: "pending"
-    }));
-    currentPlanStepId = null;
-  }
-
-  function applyPlanProgressSnapshot(progress: PlanProgressResponse): void {
-    currentPlanStepId = progress.currentStepId;
-    executionStepStatuses = executionStepStatuses.map((step) => {
-      const persisted = progress.stepStatuses.find(
-        (candidate) => candidate.stepId === step.id
-      );
-
-      return persisted
-        ? {
-            ...step,
-            state: persisted.state,
-            result: persisted.result,
-            error: persisted.error
-          }
-        : step;
-    });
-  }
-
-  function updatePlanStepState(
-    stepId: string,
-    patch: Partial<Pick<PlanExecutionStep, "state" | "result" | "error">>
-  ): void {
-    executionStepStatuses = executionStepStatuses.map((step) =>
-      step.id === stepId ? { ...step, ...patch } : step
-    );
-  }
-
-  function buildPlanProgressPayload() {
-    return {
-      sessionId,
-      turnId,
-      currentStepId: currentPlanStepId,
-      completedCount: executionStepStatuses.filter((step) => step.state === "completed")
-        .length,
-      totalCount: executionStepStatuses.length,
-      stepStatuses: executionStepStatuses.map((step) => ({
-        stepId: step.id,
-        state: step.state,
-        result: step.result,
-        error: step.error
-      }))
-    };
-  }
-
-  async function persistPlanProgressSnapshot(): Promise<void> {
-    if (!sessionId || !turnId || executionStepStatuses.length === 0) {
-      return;
-    }
-
-    await recordPlanProgress(buildPlanProgressPayload());
-  }
-
-  function releasePlanPause(): void {
-    const resolver = planPauseResolver;
-    planPauseResolver = null;
-    isPlanPaused = false;
-    planPauseReason = "";
-    resolver?.();
-  }
-
-  async function waitForPlanContinuation(step: PlanStep): Promise<void> {
-    const needsManualReadApproval = step.phase === "read" && !autoApproveReadSteps;
-    const shouldPauseNow =
-      pauseBetweenSteps || planPauseRequested || needsManualReadApproval;
-
-    if (!shouldPauseNow) {
-      return;
-    }
-
-    planPauseRequested = false;
-    isPlanPaused = true;
-    planPauseReason = needsManualReadApproval
-      ? "読み取りステップの実行待ちです。"
-      : "次のステップの開始前で一時停止しています。";
-
-    await new Promise<void>((resolve) => {
-      planPauseResolver = resolve;
-    });
-  }
-
-  function requestPlanPause(): void {
-    if (!isPlanExecuting) {
-      return;
-    }
-
-    planPauseRequested = true;
-    planPauseReason = "現在のステップ完了後に一時停止します。";
-  }
-
-  function resumePlanExecution(): void {
-    releasePlanPause();
-  }
-
-  function pushAgentLoopLog(
-    tool: string,
-    label: string,
-    status: ProgressStatus,
-    options?: {
-      detail?: string;
-      errorMessage?: string;
-      rawResult?: unknown;
-      startTime?: number;
-      endTime?: number;
-      showDetail?: boolean;
-    }
-  ): string {
-    const id = `${Date.now()}-${agentLoopLog.length}`;
-    agentLoopLog = [
-      ...agentLoopLog,
-      {
-        id,
-        tool,
-        label,
-        status,
-        startTime: options?.startTime ?? Date.now(),
-        endTime: options?.endTime,
-        detail: options?.detail,
-        errorMessage: options?.errorMessage,
-        rawResult: options?.rawResult,
-        showDetail: options?.showDetail ?? false
-      }
-    ];
-
-    return id;
-  }
-
-  function updateAgentLoopLog(
-    id: string,
-    patch: Partial<Omit<AgentLoopLogEntry, "id">>
-  ): void {
-    agentLoopLog = agentLoopLog.map((entry) =>
-      entry.id === id ? { ...entry, ...patch } : entry
-    );
-  }
-
-  function toggleAgentLoopDetail(id: string): void {
-    agentLoopLog = agentLoopLog.map((entry) =>
-      entry.id === id ? { ...entry, showDetail: !entry.showDetail } : entry
-    );
-  }
-
-  function summarizeToolResult(result: ToolExecutionResult): string {
-    if (!result.ok) {
-      return result.error ?? "ツール実行に失敗しました。";
-    }
-
-    if (result.tool === "workbook.inspect") {
-      const sheetCount = (result.result as { sheetCount?: number } | undefined)?.sheetCount;
-      return typeof sheetCount === "number"
-        ? `${sheetCount} シートを確認しました。`
-        : "ブック情報を確認しました。";
-    }
-
-    if (result.tool === "sheet.preview") {
-      const rows = (result.result as { rows?: unknown[] } | undefined)?.rows;
-      return Array.isArray(rows) ? `${rows.length} 行をプレビューしました。` : "シートをプレビューしました。";
-    }
-
-    if (result.tool === "sheet.profile_columns") {
-      const columns = (result.result as { columns?: unknown[] } | undefined)?.columns;
-      return Array.isArray(columns) ? `${columns.length} 列を確認しました。` : "列型を確認しました。";
-    }
-
-    return "読み取りツールを実行しました。";
-  }
-
-  function cancelAgentLoop(): void {
-    agentLoopAbortController?.abort();
-    releasePlanPause();
-  }
+  function resetPlanExecutionState(): void {}
 
   function startFromWelcome(): void {
     markWelcomeSeen();
@@ -2084,24 +1582,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     return recoverableDraftSessionIds.includes(sessionId);
   }
 
-  async function refreshWorkbookContext(path: string): Promise<void> {
-    const trimmedPath = path.trim();
-    if (!trimmedPath) {
-      workbookProfile = null;
-      workbookColumnProfiles = [];
-      return;
-    }
-
-    try {
-      const inspection = await inspectWorkbook({ workbookPath: trimmedPath });
-      workbookProfile = inspection.profile;
-      workbookColumnProfiles = inspection.columnProfiles;
-    } catch {
-      workbookProfile = null;
-      workbookColumnProfiles = [];
-    }
-  }
-
   function inferDelegationFiles(goal: string, files: string[]): string[] {
     if (files.length > 0) {
       return files;
@@ -2123,54 +1603,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       attachedFiles: $delegationStore.attachedFiles,
       activityFeedSnapshot: $activityFeedStore,
       delegationState: $delegationStore.state,
-      planSnapshot: $delegationStore.plan,
-      conversationHistorySnapshot: agentLoopConversationHistory,
-      currentStepIndex: $delegationStore.currentStepIndex,
       lastUpdatedAt: new Date().toISOString()
     });
-  }
-
-  async function handleDelegationSubmit(
-    event: CustomEvent<{ goal: string; files: string[] }>
-  ): Promise<void> {
-    const goal = event.detail.goal.trim();
-    const attachedFiles = inferDelegationFiles(goal, event.detail.files);
-
-    delegationStore.reset();
-    activityFeedStore.clear();
-    delegationStore.setGoal(goal, attachedFiles);
-    pushDelegationEvent("goal_set", `目標を設定しました: ${goal}`);
-
-    for (const file of attachedFiles) {
-      pushDelegationEvent("file_attached", `ファイルを関連付けました: ${file.split(/[\\/]/).pop()}`, {
-        detail: file
-      });
-    }
-
-    if (attachedFiles.length === 0) {
-      delegationStore.setError("ファイルを添付するか、最近使ったファイル名を目標文に含めてください。");
-      pushDelegationEvent("error", "対象ファイルがまだ選択されていません。", {
-        actionRequired: true
-      });
-      return;
-    }
-
-    filePath = attachedFiles[0] ?? "";
-    updateObjective(goal);
-    taskName = deriveTitle(goal);
-    taskNameEdited = false;
-    clearProgress();
-    delegationStore.startPlanning();
-    pushDelegationEvent("copilot_turn", "作業の準備とプランニングを開始します。");
-
-    await handleSetupStage();
-    if (errorMsg) {
-      delegationStore.setError(errorMsg);
-      pushDelegationEvent("error", errorMsg, { actionRequired: true });
-      return;
-    }
-
-    await handleAgentLoopAutoSend(undefined, true);
   }
 
   function applyRecentSessionFallback(session: RecentSession): void {
@@ -2190,8 +1624,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     executionDone = false;
     executionSummary = "";
     inboxFiles = [];
-    workbookProfile = null;
-    workbookColumnProfiles = [];
     filePath = session.workbookPath;
     selectedTemplateKey = null;
     if (session.lastTurnTitle.trim()) {
@@ -2247,8 +1679,211 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     return "";
   }
 
-  function stringifyStructuredResponse(response: CopilotTurnResponse): string {
+  function stringifyStructuredResponse(response: AgentTurnResponse): string {
     return JSON.stringify(response, null, 2);
+  }
+
+  function nextAgentFeedEntryId(): string {
+    return typeof crypto?.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function isActiveAgentSession(sessionId: string): boolean {
+    return activeAgentSessionId === sessionId;
+  }
+
+  function pushAgentFeed(
+    entry: Omit<AgentFeedEntry, "id" | "timestamp">
+  ): void {
+    agentFeedState = [
+      ...agentFeedState,
+      {
+        ...entry,
+        id: nextAgentFeedEntryId(),
+        timestamp: new Date().toISOString()
+      }
+    ].slice(-MAX_AGENT_FEED_ENTRIES);
+  }
+
+  function resetAgentUiState(): void {
+    activeAgentSessionId = null;
+    agentFeedState = [];
+    agentApprovalState = {
+      pending: null
+    };
+    agentSessionState = {
+      sessionId: null,
+      running: false,
+      status: "idle",
+      messages: [],
+      lastStopReason: null,
+      lastError: null
+    };
+  }
+
+  async function refreshAgentSessionHistory(
+    sessionId: string | null = activeAgentSessionId
+  ): Promise<AgentSessionHistory | null> {
+    if (!sessionId) {
+      return null;
+    }
+
+    const history = await invoke<AgentSessionHistory>("get_session_history", {
+      request: { sessionId }
+    });
+    if (!isActiveAgentSession(history.sessionId)) {
+      return history;
+    }
+
+    agentSessionState = {
+      ...agentSessionState,
+      sessionId: history.sessionId,
+      running: history.running,
+      messages: history.messages
+    };
+    return history;
+  }
+
+  async function handleAgentToolStart(
+    payload: AgentToolStartEventPayload
+  ): Promise<void> {
+    if (!isActiveAgentSession(payload.sessionId)) {
+      return;
+    }
+
+    pushAgentFeed({
+      sessionId: payload.sessionId,
+      type: "tool_start",
+      title: `ツール開始: ${payload.toolName}`,
+      detail: payload.toolUseId,
+      toolName: payload.toolName,
+      toolUseId: payload.toolUseId
+    });
+  }
+
+  async function handleAgentToolResult(
+    payload: AgentToolResultEventPayload
+  ): Promise<void> {
+    if (!isActiveAgentSession(payload.sessionId)) {
+      return;
+    }
+
+    pushAgentFeed({
+      sessionId: payload.sessionId,
+      type: "tool_result",
+      title: payload.isError
+        ? `ツール失敗: ${payload.toolName}`
+        : `ツール完了: ${payload.toolName}`,
+      detail: payload.content,
+      toolName: payload.toolName,
+      toolUseId: payload.toolUseId,
+      isError: payload.isError
+    });
+    await refreshAgentSessionHistory(payload.sessionId);
+  }
+
+  async function handleAgentApprovalNeeded(
+    payload: AgentApprovalNeededEventPayload
+  ): Promise<void> {
+    if (!isActiveAgentSession(payload.sessionId)) {
+      return;
+    }
+
+    agentApprovalState = {
+      pending: {
+        sessionId: payload.sessionId,
+        approvalId: payload.approvalId,
+        toolName: payload.toolName,
+        description: payload.description,
+        target: payload.target,
+        input: payload.input
+      }
+    };
+    agentSessionState = {
+      ...agentSessionState,
+      status: "awaiting_approval"
+    };
+    pushAgentFeed({
+      sessionId: payload.sessionId,
+      type: "approval_needed",
+      title: `承認待ち: ${payload.toolName}`,
+      detail: payload.target ?? payload.description,
+      toolName: payload.toolName
+    });
+  }
+
+  async function handleAgentTurnComplete(
+    payload: AgentTurnCompleteEventPayload
+  ): Promise<void> {
+    if (!isActiveAgentSession(payload.sessionId)) {
+      return;
+    }
+
+    agentApprovalState = {
+      pending: null
+    };
+    agentSessionState = {
+      ...agentSessionState,
+      running: false,
+      status: "completed",
+      lastStopReason: payload.stopReason
+    };
+    pushAgentFeed({
+      sessionId: payload.sessionId,
+      type: "turn_complete",
+      title: "エージェントが完了しました",
+      detail: payload.assistantMessage
+    });
+    await refreshAgentSessionHistory(payload.sessionId);
+  }
+
+  async function handleAgentError(
+    payload: AgentErrorEventPayload
+  ): Promise<void> {
+    if (!isActiveAgentSession(payload.sessionId)) {
+      return;
+    }
+
+    agentApprovalState = {
+      pending: null
+    };
+    agentSessionState = {
+      ...agentSessionState,
+      running: false,
+      status: payload.cancelled ? "cancelled" : "error",
+      lastError: payload.error
+    };
+    pushAgentFeed({
+      sessionId: payload.sessionId,
+      type: "error",
+      title: payload.cancelled
+        ? "エージェントをキャンセルしました"
+        : "エージェントでエラーが発生しました",
+      detail: payload.error,
+      isError: true
+    });
+    await refreshAgentSessionHistory(payload.sessionId);
+  }
+
+  async function bindAgentEventListeners(): Promise<Array<() => void>> {
+    return Promise.all([
+      listen<AgentToolStartEventPayload>("agent:tool_start", (event) => {
+        void handleAgentToolStart(event.payload);
+      }),
+      listen<AgentToolResultEventPayload>("agent:tool_result", (event) => {
+        void handleAgentToolResult(event.payload);
+      }),
+      listen<AgentApprovalNeededEventPayload>("agent:approval_needed", (event) => {
+        void handleAgentApprovalNeeded(event.payload);
+      }),
+      listen<AgentTurnCompleteEventPayload>("agent:turn_complete", (event) => {
+        void handleAgentTurnComplete(event.payload);
+      }),
+      listen<AgentErrorEventPayload>("agent:error", (event) => {
+        void handleAgentError(event.payload);
+      })
+    ]);
   }
 
   function currentAgentOutputPath(): string {
@@ -2278,7 +1913,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     previewWarnings = [];
     previewArtifacts = [];
     discardDelegationDraft();
-    resetAgentUi();
+    resetAgentUiState();
 
     updateObjective(goal);
     taskName = deriveTitle(goal);
@@ -2294,11 +1929,11 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         source: "draft"
       });
       recentFiles = listRecentFiles();
-      await refreshWorkbookContext(primaryFile);
     }
 
     try {
-      const startedSessionId = await startDesktopAgent({
+      const startedSessionId = await invoke<string>("start_agent", {
+        request: {
         goal,
         files: attachedFiles,
         cwd: selectedProject?.rootFolder || undefined,
@@ -2308,7 +1943,24 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
           timeoutMs
         },
         maxTurns
+        }
       });
+      activeAgentSessionId = startedSessionId;
+      agentSessionState = {
+        sessionId: startedSessionId,
+        running: true,
+        status: "running",
+        messages: [],
+        lastStopReason: null,
+        lastError: null
+      };
+      pushAgentFeed({
+        sessionId: startedSessionId,
+        type: "session_started",
+        title: "エージェントを開始しました",
+        detail: attachedFiles.length ? `${goal}\n${attachedFiles.join("\n")}` : goal
+      });
+      await refreshAgentSessionHistory(startedSessionId);
       sessionId = startedSessionId;
       await syncInboxFilesFromSession(startedSessionId);
       await refreshSessions();
@@ -2319,14 +1971,27 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   async function handleAgentApprovalDecision(approved: boolean): Promise<void> {
-    const pending = $approvalStore.pending;
+    const pending = agentApprovalState.pending;
     if (!pending) {
       return;
     }
 
     try {
-      await respondDesktopAgentApproval(pending.approvalId, approved);
-      await refreshDesktopAgentSessionHistory();
+      await invoke("respond_approval", {
+        request: {
+          sessionId: pending.sessionId,
+          approvalId: pending.approvalId,
+          approved
+        }
+      });
+      agentApprovalState = {
+        pending: null
+      };
+      agentSessionState = {
+        ...agentSessionState,
+        status: approved ? "running" : agentSessionState.status
+      };
+      await refreshAgentSessionHistory();
     } catch (error) {
       copilotAutoError = toError(error);
       addToast(copilotAutoError, "error");
@@ -2334,16 +1999,19 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   async function handleAgentReset(): Promise<void> {
-    const activeSession = getActiveSessionState();
-    if (activeSession.running) {
+    if (agentSessionState.running && activeAgentSessionId) {
       try {
-        await cancelDesktopAgent();
+        await invoke("cancel_agent", {
+          request: {
+            sessionId: activeAgentSessionId
+          }
+        });
       } catch (error) {
         copilotAutoError = toError(error);
       }
     }
 
-    resetAgentUi();
+    resetAgentUiState();
     discardDelegationDraft();
   }
 
@@ -2361,7 +2029,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     resetAgentLoopState();
     resetPlanExecutionState();
     clearProgress();
-    preflight = null;
     sessionId = draft.sessionId;
     turnId = draft.selectedTurnId ?? "";
     filePath = draft.workbookPath || session.workbookPath;
@@ -2397,7 +2064,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     executionDone = false;
     executionSummary = draft.executionSummary;
     showRecent = false;
-    void refreshWorkbookContext(filePath);
     void syncInboxFilesFromSession(draft.sessionId);
     loadExpertDetails();
     hydratingDraft = false;
@@ -2439,22 +2105,12 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       cdpPort,
       autoLaunchEdge,
       timeoutMs,
-      agentLoopEnabled,
-      maxTurns,
-      loopTimeoutMs,
-      planningEnabled,
-      autoApproveReadSteps,
-      pauseBetweenSteps
+      maxTurns
     });
     cdpPort = saved.cdpPort;
     autoLaunchEdge = saved.autoLaunchEdge;
     timeoutMs = saved.timeoutMs;
-    agentLoopEnabled = saved.agentLoopEnabled;
     maxTurns = saved.maxTurns;
-    loopTimeoutMs = saved.loopTimeoutMs;
-    planningEnabled = saved.planningEnabled;
-    autoApproveReadSteps = saved.autoApproveReadSteps;
-    pauseBetweenSteps = saved.pauseBetweenSteps;
     copiedBrowserCommandNotice = "";
     cdpTestStatus = "idle";
     cdpTestMessage = "";
@@ -2593,726 +2249,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     return `msedge.exe --remote-debugging-port=${getGuidePort()} --no-first-run`;
   }
 
-  function describeBrowserProgressStep(step: string): string {
-    switch (step) {
-      case "port_scan":
-        return "空きポートを探索中…";
-      case "edge_launch":
-        return "Edge を起動中…";
-      case "cdp_connect":
-        return "接続しています…";
-      default:
-        return "Copilot に送信中…";
-    }
-  }
-
-  function handleBrowserProgress(event: BrowserCommandProgress): void {
-    sendStatusMessage = event.detail?.trim() || describeBrowserProgressStep(event.step);
-  }
-
-  async function buildPlanningInstruction(extraFeedback = ""): Promise<string> {
-    const fallback = buildFallbackPlanningContext();
-    let planningContext = {
-      workbookSummary: fallback.workbookSummary,
-      availableTools: fallback.availableTools
-    };
-
-    try {
-      const handoff = await assessCopilotHandoff({ sessionId, turnId });
-      planningContext = handoff.planningContext ?? {
-        workbookSummary: fallback.workbookSummary,
-        availableTools: fallback.availableTools,
-        suggestedApproach: handoff.suggestedActions
-      };
-    } catch {
-      planningContext = fallback;
-    }
-    return buildPlanningPrompt(
-      objectiveText.trim(),
-      planningContext.workbookSummary,
-      planningContext.availableTools,
-      extraFeedback.trim() || undefined,
-      projectContextText || undefined
-    );
-  }
-
-  async function executeApprovedPlan(
-    planToExecute: ExecutionPlan,
-    options: { resetProgress?: boolean } = {}
-  ): Promise<void> {
-    if (planToExecute.steps.length === 0) {
-      executionDone = true;
-      executionSummary = executionSummary || "すべてのステップが完了しました。";
-      return;
-    }
-
-    if (options.resetProgress ?? true) {
-      initializePlanExecution(planToExecute);
-      delegationStore.approvePlan();
-      pushDelegationEvent("plan_approved", "承認した計画の実行を開始しました。");
-      const persisted = await getPlanProgress({ sessionId, turnId });
-      if (persisted.totalCount > 0) {
-        applyPlanProgressSnapshot(persisted);
-      }
-    }
-
-    pendingPlan = planToExecute;
-    clearScopeApproval();
-    isPlanExecuting = true;
-    isSendingToCopilot = true;
-    sendStatusMessage = "計画を実行しています…";
-    agentLoopRunning = true;
-    agentLoopTurn = 0;
-    agentLoopSummary = "";
-    agentLoopFinalStatus = null;
-    copilotAutoError = null;
-
-    const abortController = new AbortController();
-    agentLoopAbortController = abortController;
-
-    try {
-      const result = await resumeAgentLoopWithPlan(
-        {
-          sessionId,
-          turnId,
-          initialPrompt: copilotInstructionText,
-          maxTurns: Math.max(maxTurns, planToExecute.steps.length),
-          loopTimeoutMs,
-          abortSignal: abortController.signal,
-          planningEnabled: false,
-          initialConversationHistory: agentLoopConversationHistory,
-          projectContext: projectContextText || undefined,
-          projectRootFolder: selectedProject?.rootFolder || undefined
-        },
-        planToExecute,
-        {
-          onBrowserProgress: handleBrowserProgress,
-          onTurnStart: (turn) => {
-            agentLoopTurn = turn;
-          },
-          onStepStart: (step, index) => {
-            agentLoopTurn = index + 1;
-            currentPlanStepId = step.id;
-            updatePlanStepState(step.id, {
-              state: step.phase === "write" ? "pending" : "running",
-              error: undefined
-            });
-            activeAgentLoopEntryId = pushAgentLoopLog(
-              step.tool,
-              `Step ${index + 1}: ${step.description}`,
-              "running"
-            );
-            pushDelegationEvent("copilot_turn", `ステップ ${index + 1} を開始しました: ${step.description}`, {
-              detail: `${step.tool} / ${step.phase}`
-            });
-
-            void persistPlanProgressSnapshot();
-          },
-          onCopilotResponse: (_turn, response) => {
-            agentLoopSummary = response.summary;
-            if (activeAgentLoopEntryId) {
-              updateAgentLoopLog(activeAgentLoopEntryId, {
-                status: "done",
-                endTime: Date.now(),
-                detail: response.message ?? response.summary,
-                rawResult: response
-              });
-              activeAgentLoopEntryId = null;
-            }
-          },
-          onRetry: (turn, retryLevel, error, retryPromptText) => {
-            pushAgentLoopLog(
-              `copilot.retry.${turn}.${retryLevel}`,
-              `Step ${turn}: 再試行 ${retryLevel}`,
-              "error",
-              {
-                detail: retryPromptText,
-                errorMessage: error,
-                endTime: Date.now()
-              }
-            );
-            pushDelegationEvent("error", `Copilot 応答の再試行 ${retryLevel}`, {
-              detail: error,
-              expandable: false
-            });
-
-          },
-          onManualFallback: (_turn, _fallbackPrompt, error) => {
-            const message = `Copilot の構造化応答を確定できなかったため停止しました: ${error}`;
-            copilotAutoError = message;
-            pushDelegationEvent("error", message, {
-              expandable: true,
-              actionRequired: true
-            });
-          },
-          onScopeWarning: ({ violations, rootFolder, tool, rawResponse, parsedResponse }) => {
-            const firstViolation = violations[0] ?? "";
-            copilotAutoError = `プロジェクトスコープ外のファイルアクセスが検出されました: ${firstViolation}`;
-            openScopeApproval({
-              source: "agent-loop",
-              rootFolder,
-              violations,
-              responseSummary:
-                parsedResponse.message ??
-                parsedResponse.summary ??
-                "Copilot がプロジェクトルート外へのファイル操作を提案しました。",
-              parsedResponse,
-              rawResponse
-            });
-            delegationStore.requestApproval();
-            pushDelegationEvent("write_approval_requested", "プロジェクト範囲外アクセスの承認が必要です。", {
-              detail: `${tool}\n許可されたルート: ${rootFolder}\n${violations.join("\n")}`,
-              expandable: true,
-              actionRequired: true
-            });
-
-          },
-          onToolResults: (_turn, toolResults) => {
-            for (const toolResult of toolResults) {
-              pushAgentLoopLog(
-                toolResult.tool,
-                toolResult.tool,
-                toolResult.ok ? "done" : "error",
-                {
-                  detail: summarizeToolResult(toolResult),
-                  errorMessage: toolResult.error,
-                  rawResult: toolResult.ok ? toolResult.result : { error: toolResult.error },
-                  endTime: Date.now()
-                }
-              );
-              pushDelegationEvent(
-                "tool_executed",
-                `${toolResult.tool} を実行しました`,
-                {
-                  detail: summarizeToolResult(toolResult),
-                  expandable: false
-                }
-              );
-
-            }
-          },
-          onStepComplete: (step, _index, result) => {
-            updatePlanStepState(step.id, {
-              state: result.ok ? "completed" : "failed",
-              result: result.result,
-              error: result.error
-            });
-            if (currentPlanStepId === step.id) {
-              currentPlanStepId = null;
-            }
-            delegationStore.advanceStep();
-            pushDelegationEvent(
-              result.ok ? "step_completed" : "error",
-              result.ok
-                ? `ステップが完了しました: ${step.description}`
-                : `ステップが失敗しました: ${step.description}`,
-              {
-                detail: result.ok ? summarizeToolResult(result) : result.error,
-                actionRequired: !result.ok
-              }
-            );
-
-            void persistPlanProgressSnapshot();
-          },
-          onWriteStepReached: (step) => {
-            currentPlanStepId = step.id;
-            updatePlanStepState(step.id, { state: "pending" });
-            delegationStore.requestApproval();
-            pushDelegationEvent("write_approval_requested", `書き込み前の承認が必要です: ${step.description}`, {
-              detail: step.tool,
-              actionRequired: true
-            });
-
-            void persistPlanProgressSnapshot();
-          },
-          waitForStepContinuation: waitForPlanContinuation
-        }
-      );
-
-      agentLoopResult = result;
-      agentLoopConversationHistory = result.conversationHistory;
-      agentLoopSummary = result.summary;
-      agentLoopFinalStatus = result.status === "cancelled" ? null : result.status;
-      pendingPlan = result.proposedPlan ?? null;
-
-      if (result.status === "ready_to_write" && result.finalResponse) {
-        const rawResponse = stringifyStructuredResponse(result.finalResponse);
-        isPlanExecuting = false;
-        await recordStructuredResponse({
-          sessionId,
-          turnId,
-          rawResponse,
-          parsedResponse: result.finalResponse
-        });
-        const previewResult = await openPreviewFromStructuredResponse(result.finalResponse, {
-          rawResponse,
-          scopeApprovalSource: "agent-loop"
-        });
-        if (previewResult.blockedByScope) {
-          copilotAutoError = previewResult.message;
-          delegationStore.requestApproval();
-          pushDelegationEvent("write_approval_requested", "プロジェクト範囲外アクセスの承認が必要です。", {
-            detail: `${selectedProject?.rootFolder ?? "未設定"}\n${scopeApprovalViolations.join("\n")}`,
-            expandable: true,
-            actionRequired: true
-          });
-          return;
-        }
-        if (previewResult.preview.autoApproved) {
-          delegationStore.resumeExecution();
-          pushDelegationEvent("write_approved", "現在の承認ポリシーで自動承認されました。", {
-            detail: `${previewResult.preview.approvalPolicy} / ${previewResult.preview.highestRisk}`,
-            badgeLabel: "自動承認済み"
-          });
-          await handleReviewSaveStage();
-          return;
-        }
-        delegationStore.requestApproval();
-        pushDelegationEvent("write_approval_requested", "保存前の確認が必要です。", {
-          detail: previewSummary,
-          actionRequired: true
-        });
-        return;
-      }
-
-      if (result.status === "done") {
-        currentPlanStepId = null;
-        await persistPlanProgressSnapshot();
-        executionSummary = result.summary;
-        executionDone = true;
-        delegationStore.complete();
-        pushDelegationEvent("completed", "自律実行が完了しました。", {
-          detail: result.summary
-        });
-
-        return;
-      }
-
-      if (result.status === "error") {
-        copilotAutoError = result.summary;
-        delegationStore.setError(result.summary);
-        pushDelegationEvent("error", result.summary, { actionRequired: true });
-
-      }
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        agentLoopSummary = "自律実行をキャンセルしました。";
-      } else if (scopeApprovalVisible) {
-        if (currentPlanStepId) {
-          updatePlanStepState(currentPlanStepId, {
-            state: "pending",
-            error: undefined
-          });
-          void persistPlanProgressSnapshot();
-        }
-      } else {
-        const friendlyMsg = getCopilotBrowserErrorMessage(error);
-        const rawMsg = error instanceof Error ? error.message.trim() : String(error);
-        copilotAutoError = rawMsg && rawMsg !== friendlyMsg
-          ? `${friendlyMsg}\n[詳細: ${rawMsg}]`
-          : friendlyMsg;
-        if (currentPlanStepId) {
-          updatePlanStepState(currentPlanStepId, {
-            state: "failed",
-            error: copilotAutoError
-          });
-          void persistPlanProgressSnapshot();
-        }
-        delegationStore.setError(copilotAutoError);
-        pushDelegationEvent("error", copilotAutoError, { actionRequired: true });
-
-      }
-    } finally {
-      isSendingToCopilot = false;
-      sendStatusMessage = "";
-      agentLoopRunning = false;
-      agentLoopAbortController = null;
-      isPlanExecuting = false;
-    }
-  }
-
-  async function handleApprovePlan(): Promise<void> {
-    if (!agentLoopResult?.proposedPlan || planSteps.length === 0) {
-      return;
-    }
-
-    const response = await approvePlan({
-      sessionId,
-      turnId,
-      approvedStepIds: planSteps.map((step) => step.id),
-      modifiedSteps: planSteps
-    });
-    const approved = response.plan;
-    agentLoopResult = null;
-    showReplanFeedback = false;
-    replanFeedback = "";
-    initializePlanExecution(approved);
-    delegationStore.proposePlan(approved);
-    await executeApprovedPlan(approved);
-  }
-
-  function removePlanStep(index: number): void {
-    planSteps = planSteps.filter((_, candidateIndex) => candidateIndex !== index);
-  }
-
-  function movePlanStep(index: number, direction: -1 | 1): void {
-    const nextIndex = index + direction;
-    if (nextIndex < 0 || nextIndex >= planSteps.length) {
-      return;
-    }
-
-    const nextSteps = [...planSteps];
-    const [step] = nextSteps.splice(index, 1);
-    nextSteps.splice(nextIndex, 0, step);
-    planSteps = nextSteps;
-  }
-
-  async function handleReplan(): Promise<void> {
-    if (!sessionId || !turnId) {
-      return;
-    }
-
-    showReplanFeedback = false;
-    const planningPrompt = await buildPlanningInstruction(replanFeedback);
-    pushDelegationEvent("copilot_turn", "フィードバック付きで再計画します。", {
-      detail: replanFeedback
-    });
-    replanFeedback = "";
-    resetPlanExecutionState(false);
-    agentLoopResult = null;
-    planSteps = [];
-    await handleAgentLoopAutoSend(planningPrompt, true);
-  }
-
-  function handleCancelPlan(): void {
-    cancelAgentLoop();
-    releasePlanPause();
-    resetPlanExecutionState();
-    agentLoopResult = null;
-    delegationStore.setError("自律実行をキャンセルしました。");
-    pushDelegationEvent("error", "自律実行をキャンセルしました。", {
-      actionRequired: true
-    });
-
-  }
-
-  async function handleAgentLoopAutoSend(
-    initialPromptOverride?: string,
-    forcePlanning = false
-  ): Promise<void> {
-    if (!copilotInstructionText.trim() && !initialPromptOverride?.trim()) {
-      return;
-    }
-
-    const planningMode = forcePlanning || planningEnabled;
-    isSendingToCopilot = true;
-    sendStatusMessage = "Copilot に送信中…";
-    agentLoopRunning = true;
-    agentLoopTurn = 0;
-    agentLoopLog = [];
-    agentLoopSummary = "";
-    agentLoopFinalStatus = null;
-    agentLoopResult = null;
-    agentLoopConversationHistory = [];
-    copilotAutoError = null;
-    clearScopeApproval();
-    if (planningMode) {
-      resetPlanExecutionState();
-      delegationStore.startPlanning();
-    }
-
-    const abortController = new AbortController();
-    agentLoopAbortController = abortController;
-
-    try {
-      const initialPrompt =
-        initialPromptOverride ??
-        (planningMode
-          ? await buildPlanningInstruction()
-          : copilotInstructionText);
-      const result = await runAgentLoop(
-        {
-          sessionId,
-          turnId,
-          initialPrompt,
-          maxTurns,
-          loopTimeoutMs,
-          abortSignal: abortController.signal,
-          planningEnabled: planningMode,
-          initialConversationHistory: agentLoopConversationHistory,
-          projectContext: projectContextText || undefined,
-          projectRootFolder: selectedProject?.rootFolder || undefined
-        },
-        {
-          onBrowserProgress: handleBrowserProgress,
-          onTurnStart: (turn) => {
-            agentLoopTurn = turn;
-            activeAgentLoopEntryId = pushAgentLoopLog(
-              `copilot.turn.${turn}`,
-              `Turn ${turn}: Copilot に送信`,
-              "running"
-            );
-            pushDelegationEvent("copilot_turn", `Copilot へ問い合わせています (turn ${turn})`);
-
-          },
-          onCopilotResponse: (turn, response) => {
-            agentLoopSummary = response.summary;
-            if (activeAgentLoopEntryId) {
-              updateAgentLoopLog(activeAgentLoopEntryId, {
-                status: "done",
-                endTime: Date.now(),
-                detail: response.message ?? response.summary,
-                rawResult: response
-              });
-              activeAgentLoopEntryId = null;
-            } else {
-              pushAgentLoopLog(
-                `copilot.turn.${turn}`,
-                `Turn ${turn}: Copilot が ${response.status} を返しました`,
-                "done",
-                {
-                  detail: response.message ?? response.summary,
-                  rawResult: response,
-                  endTime: Date.now()
-                }
-              );
-            }
-            pushDelegationEvent("copilot_turn", `Copilot が応答しました (turn ${turn})`, {
-              detail: response.summary,
-              expandable: false
-            });
-
-          },
-          onToolResults: (turn, toolResults) => {
-            if (toolResults.length === 0) {
-              pushAgentLoopLog(
-                `turn.${turn}.tools`,
-                `Turn ${turn}: 実行できる read ツールはありません`,
-                "done",
-                { endTime: Date.now() }
-              );
-              return;
-            }
-
-            for (const toolResult of toolResults) {
-              pushAgentLoopLog(
-                toolResult.tool,
-                `Turn ${turn}: ${toolResult.tool}`,
-                toolResult.ok ? "done" : "error",
-                {
-                  detail: summarizeToolResult(toolResult),
-                  errorMessage: toolResult.error,
-                  rawResult: toolResult.ok ? toolResult.result : { error: toolResult.error },
-                  endTime: Date.now()
-                }
-              );
-              pushDelegationEvent("tool_executed", `Turn ${turn}: ${toolResult.tool}`, {
-                detail: summarizeToolResult(toolResult)
-              });
-
-            }
-          },
-          onPlanProposed: (plan) => {
-            agentLoopResult = null;
-            planSteps = [...plan.steps];
-            delegationStore.proposePlan(plan);
-            pushDelegationEvent("plan_proposed", "実行計画が提案されました。", {
-              detail: plan.summary,
-              actionRequired: true
-            });
-
-          },
-          onRetry: (turn, retryLevel, error, retryPromptText) => {
-            pushAgentLoopLog(
-              `copilot.retry.${turn}.${retryLevel}`,
-              `Turn ${turn}: 再試行 ${retryLevel}`,
-              "error",
-              {
-                detail: retryPromptText,
-                errorMessage: error,
-                endTime: Date.now()
-              }
-            );
-            pushDelegationEvent("error", `Copilot 応答の再試行 ${retryLevel}`, {
-              detail: error,
-              expandable: false
-            });
-
-          },
-          onManualFallback: (turn, _fallbackPrompt, error) => {
-            const message = `Copilot の構造化応答を確定できなかったため停止しました: ${error}`;
-            pushAgentLoopLog(
-              `copilot.manual-fallback.${turn}`,
-              `Turn ${turn}: 自動処理を停止`,
-              "error",
-              {
-                detail: message,
-                errorMessage: message,
-                endTime: Date.now()
-              }
-            );
-            copilotAutoError = message;
-            pushDelegationEvent("error", message, {
-              expandable: true,
-              actionRequired: true
-            });
-          },
-          onScopeWarning: ({ violations, rootFolder, tool, rawResponse, parsedResponse }) => {
-            const firstViolation = violations[0] ?? "";
-            copilotAutoError = `プロジェクトスコープ外のファイルアクセスが検出されました: ${firstViolation}`;
-            openScopeApproval({
-              source: "agent-loop",
-              rootFolder,
-              violations,
-              responseSummary:
-                parsedResponse.message ??
-                parsedResponse.summary ??
-                "Copilot がプロジェクトルート外へのファイル操作を提案しました。",
-              parsedResponse,
-              rawResponse
-            });
-            pushAgentLoopLog(
-              `project-scope.${tool}`,
-              "プロジェクトスコープ外アクセスを停止",
-              "error",
-              {
-                detail: `${tool}\n許可されたルート: ${rootFolder}\n${violations.join("\n")}`,
-                errorMessage: copilotAutoError,
-                endTime: Date.now()
-              }
-            );
-            delegationStore.requestApproval();
-            pushDelegationEvent("write_approval_requested", "プロジェクト範囲外アクセスの承認が必要です。", {
-              detail: `${tool}\n許可されたルート: ${rootFolder}\n${violations.join("\n")}`,
-              expandable: true,
-              actionRequired: true
-            });
-
-          }
-        }
-      );
-
-      agentLoopResult = result;
-      agentLoopConversationHistory = result.conversationHistory;
-      agentLoopSummary = result.summary;
-      agentLoopFinalStatus = result.status === "cancelled" ? null : result.status;
-
-      if (result.proposedPlan) {
-        planSteps = [...result.proposedPlan.steps];
-      }
-
-      if (result.status === "awaiting_plan_approval") {
-        return;
-      }
-
-      if (result.status === "ready_to_write" && result.finalResponse) {
-        const rawResponse = stringifyStructuredResponse(result.finalResponse);
-        await recordStructuredResponse({
-          sessionId,
-          turnId,
-          rawResponse,
-          parsedResponse: result.finalResponse
-        });
-        const previewResult = await openPreviewFromStructuredResponse(result.finalResponse, {
-          rawResponse,
-          scopeApprovalSource: "agent-loop"
-        });
-        if (previewResult.blockedByScope) {
-          copilotAutoError = previewResult.message;
-          delegationStore.requestApproval();
-          pushDelegationEvent("write_approval_requested", "プロジェクト範囲外アクセスの承認が必要です。", {
-            detail: `${selectedProject?.rootFolder ?? "未設定"}\n${scopeApprovalViolations.join("\n")}`,
-            expandable: true,
-            actionRequired: true
-          });
-          return;
-        }
-        if (previewResult.preview.autoApproved) {
-          delegationStore.resumeExecution();
-          pushDelegationEvent("write_approved", "現在の承認ポリシーで自動承認されました。", {
-            detail: `${previewResult.preview.approvalPolicy} / ${previewResult.preview.highestRisk}`,
-            badgeLabel: "自動承認済み"
-          });
-          await handleReviewSaveStage();
-          return;
-        }
-        delegationStore.requestApproval();
-        pushDelegationEvent("write_approval_requested", "保存前の確認が必要です。", {
-          detail: previewSummary,
-          actionRequired: true
-        });
-        return;
-      }
-
-      if (result.status === "error") {
-        copilotAutoError = result.summary;
-        delegationStore.setError(result.summary);
-        pushDelegationEvent("error", result.summary, { actionRequired: true });
-
-      }
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        agentLoopSummary = "エージェントループをキャンセルしました。手動入力に切り替えられます。";
-        if (activeAgentLoopEntryId) {
-          updateAgentLoopLog(activeAgentLoopEntryId, {
-            status: "error",
-            endTime: Date.now(),
-            detail: agentLoopSummary,
-            errorMessage: agentLoopSummary
-          });
-          activeAgentLoopEntryId = null;
-        } else {
-          pushAgentLoopLog("agent-loop", "エージェントループをキャンセルしました", "error", {
-            detail: agentLoopSummary,
-            errorMessage: agentLoopSummary,
-            endTime: Date.now()
-          });
-        }
-        delegationStore.setError(agentLoopSummary);
-        pushDelegationEvent("error", agentLoopSummary, { actionRequired: true });
-
-      } else if (scopeApprovalVisible) {
-        if (activeAgentLoopEntryId) {
-          updateAgentLoopLog(activeAgentLoopEntryId, {
-            status: "error",
-            endTime: Date.now(),
-            detail: "プロジェクト範囲外アクセスの承認待ちです。"
-          });
-          activeAgentLoopEntryId = null;
-        }
-      } else {
-        console.error("[agent-loop] handleAgentLoopAutoSend error:", error);
-        const friendlyMsg = getCopilotBrowserErrorMessage(error);
-        const rawMsg = error instanceof Error ? error.message.trim() : String(error);
-        copilotAutoError = rawMsg && rawMsg !== friendlyMsg
-          ? `${friendlyMsg}\n[詳細: ${rawMsg}]`
-          : friendlyMsg;
-        if (activeAgentLoopEntryId) {
-          updateAgentLoopLog(activeAgentLoopEntryId, {
-            status: "error",
-            endTime: Date.now(),
-            detail: copilotAutoError,
-            errorMessage: copilotAutoError
-          });
-          activeAgentLoopEntryId = null;
-        }
-        pushAgentLoopLog("agent-loop", "エージェントループが失敗しました", "error", {
-          detail: copilotAutoError,
-          errorMessage: copilotAutoError,
-          endTime: Date.now()
-        });
-        delegationStore.setError(copilotAutoError);
-        pushDelegationEvent("error", copilotAutoError, { actionRequired: true });
-
-      }
-    } finally {
-      isSendingToCopilot = false;
-      sendStatusMessage = "";
-      agentLoopRunning = false;
-      agentLoopAbortController = null;
-    }
-  }
-
   function resetAll(): void {
     if (sessionId) {
       discardStudioDraft(sessionId);
@@ -3328,14 +2264,10 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     taskName = "";
     taskNameEdited = false;
     selectedTemplateKey = null;
-    preflight = null;
-    workbookProfile = null;
-    workbookColumnProfiles = [];
     sessionId = "";
     turnId = "";
     copilotInstructionText = "";
     copiedBrowserCommandNotice = "";
-    handoffCaution = null;
     isSendingToCopilot = false;
     copilotAutoError = null;
     clearScopeApproval();
@@ -3351,128 +2283,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     lastSavedDraftSignature = "";
   }
 
-  async function handleSetupStage(): Promise<void> {
-    errorMsg = "";
-    copiedBrowserCommandNotice = "";
-    copilotAutoError = null;
-    handoffCaution = null;
-    busy = true;
-    setProgress([
-      "ファイルの状態を確認しています",
-      "列情報を読み取っています",
-      "新しい作業を作成しています",
-      "Copilot への依頼を開始しています",
-      "Copilot への依頼文を準備しています"
-    ]);
-
-    try {
-      const path = filePath.trim();
-      if (!path) {
-        failCurrentProgress("ファイルを選ぶと開始できます。");
-        errorMsg = "ファイルパスを入力してください";
-        return;
-      }
-
-      if (!objectiveText.trim()) {
-        failCurrentProgress("やりたいことを入れると次へ進めます。");
-        errorMsg = "やりたいことを入力してください";
-        return;
-      }
-      if (selectedProject && !isWithinProjectScope(path, selectedProject.rootFolder)) {
-        failCurrentProgress("選択したファイルはプロジェクトのルート外です。");
-        errorMsg = `選択したファイルはプロジェクトルート外です: ${selectedProject.rootFolder}`;
-        return;
-      }
-
-      const title = taskName.trim() || deriveTitle(objectiveText);
-      taskName = title;
-
-      const result = await preflightWorkbook({ workbookPath: path });
-      preflight = result;
-      if (result.status === "blocked") {
-        failCurrentProgress(result.summary);
-        errorMsg = result.summary;
-        return;
-      }
-      markProgress(0, "done");
-
-      await refreshWorkbookContext(path);
-      markProgress(1, "done");
-
-      const session = await createSession({
-        title,
-        objective: objectiveText,
-        primaryWorkbookPath: path
-      });
-      sessionId = session.id;
-      if (selectedProjectId) {
-        await linkSessionToProject({
-          projectId: selectedProjectId,
-          sessionId: session.id
-        });
-        await refreshProjects();
-        projectInfoMsg = "新しいセッションを現在のプロジェクトに紐付けました。";
-      }
-      await persistStagedInboxFiles(session.id);
-      await syncInboxFilesFromSession(session.id);
-      rememberRecentSession({
-        sessionId: session.id,
-        title: session.title,
-        workbookPath: path,
-        lastOpenedAt: new Date().toISOString(),
-        lastTurnTitle: title
-      });
-      rememberRecentFile({
-        path,
-        lastUsedAt: new Date().toISOString(),
-        sessionId: session.id,
-        source: "session"
-      });
-      loadExpertDetails();
-      markProgress(2, "done");
-
-      const turnResponse = await startTurn({
-        sessionId: session.id,
-        title,
-        objective: objectiveText,
-        mode: "plan"
-      });
-      turnId = turnResponse.turn.id;
-      markProgress(3, "done");
-      try {
-        const handoff = await assessCopilotHandoff({
-          sessionId: session.id,
-          turnId: turnResponse.turn.id
-        });
-        if (handoff.status === "caution") {
-          handoffCaution = {
-            headline: handoff.headline,
-            reasons: handoff.reasons.map((reason) => ({
-              text: `${reason.label}: ${reason.detail}`,
-              source: reason.source
-            }))
-          };
-        } else {
-          handoffCaution = null;
-        }
-      } catch {
-        handoffCaution = null;
-      }
-      markProgress(4, "done");
-      requestTurnInspectionRefresh();
-    } catch (error) {
-      const failure = toError(error);
-      failCurrentProgress(failure);
-      errorMsg = failure;
-    } finally {
-      requestTurnInspectionRefresh();
-      requestProjectApprovalAuditRefresh();
-      busy = false;
-    }
-  }
-
   async function openPreviewFromStructuredResponse(
-    parsedResponse: CopilotTurnResponse,
+    parsedResponse: AgentTurnResponse,
     options: {
       allowScopeOverride?: boolean;
       rawResponse?: string;
@@ -3587,13 +2399,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       );
 
       if (!result.executed) {
-        if (currentPlanStepId) {
-          updatePlanStepState(currentPlanStepId, {
-            state: "failed",
-            error: executionSummary
-          });
-          await persistPlanProgressSnapshot();
-        }
         errorMsg = executionSummary;
         return;
       }
@@ -3641,18 +2446,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         }
       }
 
-      if (currentPlanStepId) {
-        updatePlanStepState(currentPlanStepId, { state: "completed" });
-        currentPlanStepId = null;
-        await persistPlanProgressSnapshot();
-      }
-
-      if (pendingPlan?.steps.length) {
-        executionSummary = "保存が完了したため、残りのステップを続けます。";
-        await executeApprovedPlan(pendingPlan, { resetProgress: false });
-        return;
-      }
-
       executionDone = true;
       delegationStore.complete();
       pushDelegationEvent("completed", "保存と自律実行が完了しました。", {
@@ -3662,13 +2455,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     } catch (error) {
       const failure = toError(error);
       failCurrentProgress(failure);
-      if (currentPlanStepId) {
-        updatePlanStepState(currentPlanStepId, {
-          state: "failed",
-          error: failure
-        });
-        await persistPlanProgressSnapshot();
-      }
       errorMsg = failure;
     } finally {
       requestTurnInspectionRefresh();
@@ -3682,9 +2468,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       return;
     }
 
-    if (currentPlanStepId) {
-      pendingPlan = getRemainingPlanAfterCurrentStep();
-    }
     pushDelegationEvent("write_approved", "プロジェクト範囲外アクセスを承認しました。");
 
 
@@ -3754,17 +2537,16 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
     if (event.key === "Escape") {
       event.preventDefault();
-      handleCancelPlan();
+      if (agentSessionState.running) {
+        void handleAgentReset();
+      } else if (scopeApprovalVisible) {
+        handleBackFromScopeApproval();
+      }
       return;
     }
 
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
       event.preventDefault();
-      if (agentLoopResult?.status === "awaiting_plan_approval" && planSteps.length > 0) {
-        void handleApprovePlan();
-        return;
-      }
-
       if (scopeApprovalVisible) {
         void handleApproveScopeOverride();
         return;
@@ -3807,7 +2589,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     const unlistenFns: Array<() => void> = [];
 
     void (async () => {
-      await bindAgentUi();
+      unlistenFns.push(...(await bindAgentEventListeners()));
       unlistenFns.push(
         await listen<PipelineStepUpdateEvent & { pipelineId?: string; error?: string }>(
           "pipeline:step_update",
@@ -3842,12 +2624,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       cdpPort = browserAutomationSettings.cdpPort;
       autoLaunchEdge = browserAutomationSettings.autoLaunchEdge;
       timeoutMs = browserAutomationSettings.timeoutMs;
-      agentLoopEnabled = browserAutomationSettings.agentLoopEnabled;
       maxTurns = browserAutomationSettings.maxTurns;
-      loopTimeoutMs = browserAutomationSettings.loopTimeoutMs;
-      planningEnabled = browserAutomationSettings.planningEnabled;
-      autoApproveReadSteps = browserAutomationSettings.autoApproveReadSteps;
-      pauseBetweenSteps = browserAutomationSettings.pauseBetweenSteps;
       approvalPolicy = saveApprovalPolicy(loadApprovalPolicy());
 
       try {
@@ -3855,7 +2632,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         const app = await initializeApp();
         startupIssue = app.startupIssue ?? null;
         storagePath = app.storagePath ?? null;
-        sampleWorkbookPath = app.sampleWorkbookPath ?? null;
         await refreshProjects();
         await refreshSessions();
         await refreshTools();
@@ -3876,12 +2652,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         delegationStore.hydrate({
           state: delegationDraft.delegationState,
           goal: delegationDraft.goal,
-          attachedFiles: delegationDraft.attachedFiles,
-          plan: delegationDraft.planSnapshot,
-          currentStepIndex: delegationDraft.currentStepIndex
+          attachedFiles: delegationDraft.attachedFiles
         });
         activityFeedStore.hydrate(delegationDraft.activityFeedSnapshot);
-        agentLoopConversationHistory = delegationDraft.conversationHistorySnapshot;
         if (delegationDraft.attachedFiles[0]) {
           filePath = delegationDraft.attachedFiles[0];
           pipelineInitialInputPath = delegationDraft.attachedFiles[0];
@@ -3894,14 +2667,13 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
     return () => {
       window.removeEventListener("keydown", handleGlobalKeydown);
-      disposeAgentUi();
       for (const unlisten of unlistenFns) {
         unlisten();
       }
     };
   });
 
-  $: agentFeedEntries = $feedStore.map(mapAgentFeedEntry);
+  $: agentFeedEntries = agentFeedState.map(mapAgentFeedEntry);
   $: if (!pipelineInitialInputPath && filePath) {
     pipelineInitialInputPath = filePath;
   }
@@ -3979,12 +2751,11 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     filePath.trim()
       ? buildCopilotInstructionText(
           objectiveText.trim(),
-          filePath,
           taskName.trim() || deriveTitle(objectiveText),
-          workbookProfile,
-          workbookColumnProfiles,
+          [filePath, ...inboxFiles.map((file) => file.path)].filter(
+            (path, index, allPaths) => path.trim() && allPaths.indexOf(path) === index
+          ),
           currentAllowedTools(),
-          selectedTemplateKey,
           projectContextText
         )
       : "";
@@ -4306,9 +3077,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     </aside>
 
     <section class="delegation-main card">
-      {#if $sessionStore.status === "completed"}
+      {#if agentSessionState.status === "completed"}
         <CompletionCard
-          summary={extractLatestAssistantText($sessionStore.messages) || executionSummary || previewSummary}
+          summary={extractLatestAssistantText(agentSessionState.messages) || executionSummary || previewSummary}
           outputPath={currentAgentOutputPath()}
           canSaveTemplate={Boolean(sessionId)}
           on:openOutput={() => {
@@ -4322,19 +3093,19 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
           }}
         />
       {:else}
-        <UnifiedFeed entries={agentFeedEntries} isRunning={$sessionStore.running} />
+        <UnifiedFeed entries={agentFeedEntries} isRunning={agentSessionState.running} />
       {/if}
     </section>
 
     <div class="delegation-intervention">
-      {#if $approvalStore.pending}
+      {#if agentApprovalState.pending}
         <ApprovalCard
           phase="write"
-          previewSummary={`ツール ${$approvalStore.pending.toolName} の実行許可を待っています。`}
-          previewOutputPath={$approvalStore.pending.target ?? ""}
+          previewSummary={`ツール ${agentApprovalState.pending.toolName} の実行許可を待っています。`}
+          previewOutputPath={agentApprovalState.pending.target ?? ""}
           previewWarnings={[
-            $approvalStore.pending.description,
-            ...($approvalStore.pending.target ? [`target: ${$approvalStore.pending.target}`] : [])
+            agentApprovalState.pending.description,
+            ...(agentApprovalState.pending.target ? [`target: ${agentApprovalState.pending.target}`] : [])
           ]}
           reviewStepAvailable={true}
           on:approve={() => {
@@ -4344,15 +3115,15 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
             void handleAgentApprovalDecision(false);
           }}
         />
-      {:else if $sessionStore.status === "error" || $sessionStore.status === "cancelled"}
+      {:else if agentSessionState.status === "error" || agentSessionState.status === "cancelled"}
         <section class="card card-warn">
-          <strong>{$sessionStore.status === "cancelled" ? "エージェントをキャンセルしました" : "エージェントでエラーが発生しました"}</strong>
-          <p>{$sessionStore.lastError || "実行結果を Unified Feed で確認してください。"}</p>
-          {#if $sessionStore.lastStopReason}
-            <p>stop: {$sessionStore.lastStopReason}</p>
+          <strong>{agentSessionState.status === "cancelled" ? "エージェントをキャンセルしました" : "エージェントでエラーが発生しました"}</strong>
+          <p>{agentSessionState.lastError || "実行結果を Unified Feed で確認してください。"}</p>
+          {#if agentSessionState.lastStopReason}
+            <p>stop: {agentSessionState.lastStopReason}</p>
           {/if}
           <div class="inline-actions">
-            <button class="btn btn-secondary" type="button" on:click={() => resetAgentUi()}>
+            <button class="btn btn-secondary" type="button" on:click={() => resetAgentUiState()}>
               閉じる
             </button>
             <button class="btn btn-primary" type="button" on:click={() => { void handleAgentReset(); }}>
@@ -4463,7 +3234,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       recentFiles={recentFiles}
       suggestions={delegationSuggestions}
       disabled={busy}
-      mode={$sessionStore.running ? "busy" : $sessionStore.sessionId ? "active" : "idle"}
+      mode={agentSessionState.running ? "busy" : agentSessionState.sessionId ? "active" : "idle"}
       initialGoal={objectiveText}
       initialFiles={filePath ? [filePath] : []}
       on:submit={handleAgentTaskSubmit}
@@ -4479,11 +3250,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   bind:cdpPort
   bind:timeoutMs
   bind:maxTurns
-  bind:loopTimeoutMs
-  bind:agentLoopEnabled
-  bind:planningEnabled
-  bind:autoApproveReadSteps
-  bind:pauseBetweenSteps
   bind:approvalPolicy
   {cdpTestStatus}
   {cdpTestMessage}

@@ -76,14 +76,6 @@ export const textReplaceActionSchema = z.object({
   })
 });
 
-export const documentReadTextActionSchema = z.object({
-  tool: z.literal("document.read_text"),
-  args: z.object({
-    path: nonEmptyStringSchema,
-    maxChars: z.number().int().positive().max(500_000).default(50_000)
-  })
-});
-
 // Union
 
 export const fileActionSchema = z.discriminatedUnion("tool", [
@@ -94,8 +86,7 @@ export const fileActionSchema = z.discriminatedUnion("tool", [
   fileMoveActionSchema,
   fileDeleteActionSchema,
   textSearchActionSchema,
-  textReplaceActionSchema,
-  documentReadTextActionSchema
+  textReplaceActionSchema
 ]);
 
 export type FileListAction = z.infer<typeof fileListActionSchema>;
@@ -106,5 +97,4 @@ export type FileMoveAction = z.infer<typeof fileMoveActionSchema>;
 export type FileDeleteAction = z.infer<typeof fileDeleteActionSchema>;
 export type TextSearchAction = z.infer<typeof textSearchActionSchema>;
 export type TextReplaceAction = z.infer<typeof textReplaceActionSchema>;
-export type DocumentReadTextAction = z.infer<typeof documentReadTextActionSchema>;
 export type FileAction = z.infer<typeof fileActionSchema>;

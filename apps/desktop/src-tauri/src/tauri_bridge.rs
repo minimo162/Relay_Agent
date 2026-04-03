@@ -941,16 +941,16 @@ mod tests {
         }
     }
 
-    struct SaveCopyTool;
+    struct FileCopyTool;
 
     #[async_trait]
-    impl Tool for SaveCopyTool {
+    impl Tool for FileCopyTool {
         fn name(&self) -> &str {
-            "workbook.save_copy"
+            "file.copy"
         }
 
         fn description(&self) -> &str {
-            "Medium-risk save-copy test tool."
+            "Medium-risk file copy test tool."
         }
 
         fn input_schema(&self) -> serde_json::Value {
@@ -1189,8 +1189,12 @@ mod tests {
                 test_response(
                     vec![ResponseContent::ToolUse {
                         id: "tool-1".to_string(),
-                        name: "workbook.save_copy".to_string(),
-                        input: json!({"outputPath": "/tmp/reviewed.csv"}),
+                        name: "file.copy".to_string(),
+                        input: json!({
+                            "sourcePath": "/tmp/source.csv",
+                            "destPath": "/tmp/reviewed.csv",
+                            "overwrite": true
+                        }),
                     }],
                     StopReason::ToolUse,
                 ),
@@ -1201,16 +1205,16 @@ mod tests {
             ])),
         });
         let mut registry = ToolRegistry::new();
-        registry.register(Arc::new(SaveCopyTool));
+        registry.register(Arc::new(FileCopyTool));
         let registry = Arc::new(registry);
-        let mut session = test_session("run save copy tool");
+        let mut session = test_session("run file copy tool");
         let storage = Arc::new(Mutex::new(crate::storage::AppStorage::default()));
         {
             let mut storage = storage.lock().expect("storage mutex poisoned");
             let backing_session = storage
                 .create_session(CreateSessionRequest {
-                    title: "Save copy tool".to_string(),
-                    objective: "Run save copy tool".to_string(),
+                    title: "File copy tool".to_string(),
+                    objective: "Run file copy tool".to_string(),
                     primary_workbook_path: None,
                 })
                 .expect("session should be created");

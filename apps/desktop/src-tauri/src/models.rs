@@ -27,8 +27,6 @@ pub enum SessionStatus {
 #[serde(rename_all = "kebab-case")]
 pub enum TurnStatus {
     Draft,
-    PacketReady,
-    AwaitingResponse,
     Validated,
     PreviewReady,
     Approved,
@@ -50,25 +48,6 @@ pub enum ToolSource {
     Mcp,
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum WorkbookFormat {
-    Csv,
-    Xlsx,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum ColumnType {
-    String,
-    Number,
-    Integer,
-    Boolean,
-    Date,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ApprovalDecision {
@@ -81,21 +60,6 @@ pub enum ApprovalDecision {
 pub enum ScopeApprovalSource {
     Manual,
     AgentLoop,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum CopilotHandoffStatus {
-    Clear,
-    Caution,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum CopilotHandoffReasonSource {
-    Path,
-    Column,
-    Objective,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -168,16 +132,6 @@ pub struct Turn {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolDescriptor {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    pub phase: ToolPhase,
-    pub requires_approval: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ToolRegistration {
     pub id: String,
     pub title: String,
@@ -199,28 +153,6 @@ pub struct ToolRegistration {
 pub struct ToolSettings {
     pub disabled_tool_ids: Vec<String>,
     pub mcp_servers: Vec<McpServerConfig>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RelayPacketResponseContract {
-    pub format: &'static str,
-    pub expects_actions: bool,
-    pub notes: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RelayPacket {
-    pub version: &'static str,
-    pub session_id: String,
-    pub turn_id: String,
-    pub mode: RelayMode,
-    pub objective: String,
-    pub context: Vec<String>,
-    pub allowed_read_tools: Vec<ToolDescriptor>,
-    pub allowed_write_tools: Vec<ToolDescriptor>,
-    pub response_contract: RelayPacketResponseContract,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -396,43 +328,6 @@ pub struct QualityCheckResult {
     pub warnings: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum OutputFormat {
-    Csv,
-    Xlsx,
-    Text,
-    Json,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OutputSpec {
-    pub format: OutputFormat,
-    pub output_path: String,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkbookSheet {
-    pub name: String,
-    pub row_count: u32,
-    pub column_count: u32,
-    pub columns: Vec<String>,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkbookProfile {
-    pub source_path: String,
-    pub format: WorkbookFormat,
-    pub sheet_count: u32,
-    pub sheets: Vec<WorkbookSheet>,
-    pub warnings: Vec<String>,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewArtifactPayload {
@@ -522,21 +417,6 @@ pub struct TurnOverview {
     pub summary: String,
     pub guardrail_summary: String,
     pub steps: Vec<TurnOverviewStep>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PacketInspectionPayload {
-    pub session_title: String,
-    pub turn_title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_path: Option<String>,
-    pub relay_mode: RelayMode,
-    pub objective: String,
-    pub context_lines: Vec<String>,
-    pub allowed_read_tool_count: usize,
-    pub allowed_write_tool_count: usize,
-    pub response_notes: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -641,7 +521,6 @@ pub struct TurnInspectionSection<T: Serialize> {
 #[serde(rename_all = "camelCase")]
 pub struct TurnDetailsViewModel {
     pub overview: TurnOverview,
-    pub packet: TurnInspectionSection<PacketInspectionPayload>,
     pub validation: TurnInspectionSection<ValidationInspectionPayload>,
     pub approval: TurnInspectionSection<ApprovalInspectionPayload>,
     pub execution: TurnInspectionSection<ExecutionInspectionPayload>,
@@ -931,26 +810,12 @@ pub struct StartTurnRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GenerateRelayPacketRequest {
-    pub session_id: String,
-    pub turn_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RecordStructuredResponseRequest {
     pub session_id: String,
     pub turn_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_response: Option<String>,
     pub parsed_response: CopilotTurnResponse,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AssessCopilotHandoffRequest {
-    pub session_id: String,
-    pub turn_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -965,16 +830,6 @@ pub struct PreviewExecutionRequest {
 pub struct ValidateOutputQualityRequest {
     pub source_path: String,
     pub output_path: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecuteReadActionsRequest {
-    pub session_id: String,
-    pub turn_id: String,
-    pub loop_turn: u32,
-    pub max_turns: u32,
-    pub actions: Vec<SpreadsheetAction>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1005,62 +860,6 @@ pub struct RunExecutionRequest {
     pub turn_id: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RunExecutionMultiRequest {
-    pub session_id: String,
-    pub turn_id: String,
-    pub output_specs: Vec<OutputSpec>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlanStepStatus {
-    pub step_id: String,
-    pub state: PlanStepState,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum PlanStepState {
-    Pending,
-    Running,
-    Completed,
-    Skipped,
-    Failed,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApprovePlanRequest {
-    pub session_id: String,
-    pub turn_id: String,
-    pub approved_step_ids: Vec<String>,
-    pub modified_steps: Vec<PlanStep>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlanProgressRequest {
-    pub session_id: String,
-    pub turn_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RecordPlanProgressRequest {
-    pub session_id: String,
-    pub turn_id: String,
-    pub current_step_id: Option<String>,
-    pub completed_count: u32,
-    pub total_count: u32,
-    pub step_statuses: Vec<PlanStepStatus>,
-}
-
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionDetail {
@@ -1071,21 +870,6 @@ pub struct SessionDetail {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "artifactType", rename_all = "kebab-case")]
 pub enum TurnArtifactRecord {
-    WorkbookProfile {
-        artifact_id: String,
-        created_at: String,
-        payload: WorkbookProfile,
-    },
-    SheetPreview {
-        artifact_id: String,
-        created_at: String,
-        payload: crate::workbook::SheetPreview,
-    },
-    ColumnProfile {
-        artifact_id: String,
-        created_at: String,
-        payload: crate::workbook::SheetColumnProfile,
-    },
     DiffSummary {
         artifact_id: String,
         created_at: String,
@@ -1134,41 +918,6 @@ pub struct RecordStructuredResponseResponse {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CopilotHandoffReason {
-    pub source: CopilotHandoffReasonSource,
-    pub label: String,
-    pub detail: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AssessCopilotHandoffResponse {
-    pub status: CopilotHandoffStatus,
-    pub headline: String,
-    pub summary: String,
-    pub reasons: Vec<CopilotHandoffReason>,
-    pub suggested_actions: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub planning_context: Option<PlanningContext>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlanningContextToolGroups {
-    pub read: Vec<String>,
-    pub write: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlanningContext {
-    pub workbook_summary: String,
-    pub available_tools: PlanningContextToolGroups,
-    pub suggested_approach: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct PreviewExecutionResponse {
     pub turn: Turn,
     pub ready: bool,
@@ -1213,44 +962,6 @@ pub struct RecordScopeApprovalResponse {
     pub turn: Turn,
     pub decision: ApprovalDecision,
     pub recorded_at: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ApprovePlanResponse {
-    pub approved: bool,
-    pub plan: ExecutionPlan,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolExecutionResult {
-    pub tool: String,
-    pub args: Value,
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecuteReadActionsResponse {
-    pub should_continue: bool,
-    pub tool_results: Vec<ToolExecutionResult>,
-    pub has_write_actions: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub guard_message: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlanProgressResponse {
-    pub current_step_id: Option<String>,
-    pub completed_count: u32,
-    pub total_count: u32,
-    pub step_statuses: Vec<PlanStepStatus>,
 }
 
 #[derive(Clone, Debug, Serialize)]

@@ -84,7 +84,6 @@
 <input
   bind:this={hiddenInput}
   type="file"
-  accept=".csv,.xlsx,.xlsm,.xls,.txt,.docx"
   class="hidden-input"
   on:change={handleInputChange}
 />

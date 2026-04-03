@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { slide } from "svelte/transition";
   import type {
     ApprovalPolicy,
     McpTransport,
@@ -11,11 +10,6 @@
   export let cdpPort = 9333;
   export let timeoutMs = 60000;
   export let maxTurns = 10;
-  export let loopTimeoutMs = 120000;
-  export let agentLoopEnabled = false;
-  export let planningEnabled = true;
-  export let autoApproveReadSteps = true;
-  export let pauseBetweenSteps = false;
   export let approvalPolicy: ApprovalPolicy = "safe";
   export let cdpTestStatus: "idle" | "testing" | "ok" | "fail" = "idle";
   export let cdpTestMessage = "";
@@ -116,6 +110,17 @@
           on:change={onPersist}
         />
 
+        <label class="field-label" for="settings-max-turns">最大ターン数</label>
+        <input
+          id="settings-max-turns"
+          class="input"
+          type="number"
+          min="1"
+          max="20"
+          bind:value={maxTurns}
+          on:change={onPersist}
+        />
+
         <div class="cdp-guide">
           <div class="cdp-command-row">
             <code class="cdp-command">{edgeLaunchCommand}</code>
@@ -133,84 +138,6 @@
               <span class="cdp-test-result cdp-test-fail">✗ {cdpTestMessage}</span>
             {/if}
           </div>
-        </div>
-
-        <div class="loop-toggle-card" class:loop-toggle-on={agentLoopEnabled}>
-          <div class="loop-toggle-header">
-            <div class="loop-toggle-info">
-              <span class="loop-toggle-icon">{agentLoopEnabled ? "🤖" : "💬"}</span>
-              <div>
-                <div class="loop-toggle-title">エージェントループ</div>
-                <div class="loop-toggle-desc">
-                  {#if agentLoopEnabled}
-                    Copilot が自動で情報収集し、最適な処理を計画します
-                  {:else}
-                    1 回だけ Copilot に送信します
-                  {/if}
-                </div>
-              </div>
-            </div>
-            <button
-              class="loop-toggle-switch"
-              class:loop-switch-on={agentLoopEnabled}
-              type="button"
-              role="switch"
-              aria-label="エージェントループを切り替える"
-              aria-checked={agentLoopEnabled}
-              on:click={() => {
-                agentLoopEnabled = !agentLoopEnabled;
-                onPersist();
-              }}
-            >
-              <span class="loop-switch-thumb"></span>
-            </button>
-          </div>
-
-          {#if agentLoopEnabled}
-            <div class="loop-options" transition:slide={{ duration: 200 }}>
-              <label class="field-label loop-option-label" for="settings-max-turns">
-                最大ターン数: {maxTurns}
-              </label>
-              <input
-                id="settings-max-turns"
-                class="loop-turns-slider"
-                type="range"
-                min="1"
-                max="20"
-                bind:value={maxTurns}
-                on:input={onPersist}
-              />
-
-              <label class="field-label loop-option-label" for="settings-loop-timeout">
-                ループタイムアウト (ms)
-              </label>
-              <input
-                id="settings-loop-timeout"
-                class="input"
-                type="number"
-                min="30000"
-                max="300000"
-                step="1000"
-                bind:value={loopTimeoutMs}
-                on:change={onPersist}
-              />
-
-              <div class="autonomous-settings">
-                <label class="checkbox-row">
-                  <input type="checkbox" bind:checked={planningEnabled} on:change={onPersist} />
-                  <span>計画フェーズを有効にする</span>
-                </label>
-                <label class="checkbox-row">
-                  <input type="checkbox" bind:checked={autoApproveReadSteps} on:change={onPersist} />
-                  <span>読み取りステップを自動実行する</span>
-                </label>
-                <label class="checkbox-row">
-                  <input type="checkbox" bind:checked={pauseBetweenSteps} on:change={onPersist} />
-                  <span>各ステップの前で一時停止する</span>
-                </label>
-              </div>
-            </div>
-          {/if}
         </div>
 
         {#if copiedBrowserCommandNotice}
@@ -554,129 +481,6 @@
 
   .cdp-test-fail {
     color: var(--c-error);
-  }
-
-  /* --- Agent loop card --- */
-  .loop-toggle-card {
-    margin-top: var(--sp-4);
-    padding: var(--sp-4) var(--sp-5);
-    border: 1px solid var(--c-border-strong);
-    border-radius: var(--r-lg);
-    background: var(--c-surface);
-    box-shadow: var(--shadow-sm);
-    transition: all var(--duration-normal) var(--ease);
-  }
-
-  .loop-toggle-card.loop-toggle-on {
-    border-color: rgba(13,148,136,0.20);
-    background: rgba(13,148,136,0.04);
-    box-shadow: 0 0 0 1px rgba(13,148,136,0.20), var(--shadow-sm);
-  }
-
-  .loop-toggle-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--sp-4);
-  }
-
-  .loop-toggle-info {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-3);
-  }
-
-  .loop-toggle-icon {
-    font-size: var(--sz-2xl);
-    line-height: 1;
-  }
-
-  .loop-toggle-title {
-    font-weight: 700;
-    font-size: var(--sz-base);
-    color: var(--c-text);
-  }
-
-  .loop-toggle-desc {
-    font-size: var(--sz-sm);
-    color: var(--c-text-3);
-    margin-top: var(--sp-1);
-    line-height: 1.4;
-  }
-
-  /* --- Loop options --- */
-  .loop-options {
-    margin-top: var(--sp-4);
-    padding-top: var(--sp-4);
-    border-top: 1px solid var(--c-border-strong);
-    display: grid;
-    gap: var(--sp-2);
-  }
-
-  .loop-option-label {
-    margin-top: var(--sp-2);
-  }
-
-  .loop-turns-slider {
-    width: 100%;
-    height: 4px;
-    appearance: none;
-    background: var(--c-border-strong);
-    border-radius: var(--r-full);
-    outline: none;
-    cursor: pointer;
-  }
-
-  .loop-turns-slider::-webkit-slider-thumb {
-    appearance: none;
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: var(--c-accent);
-    box-shadow: var(--shadow-md);
-    cursor: pointer;
-    transition: transform var(--duration-fast) var(--ease);
-  }
-
-  .loop-turns-slider::-webkit-slider-thumb:hover {
-    transform: scale(1.15);
-  }
-
-  .loop-turns-slider::-moz-range-thumb {
-    width: 18px;
-    height: 18px;
-    border: none;
-    border-radius: 50%;
-    background: var(--c-accent);
-    box-shadow: var(--shadow-md);
-    cursor: pointer;
-  }
-
-  .autonomous-settings {
-    display: grid;
-    gap: var(--sp-3);
-    margin-top: var(--sp-3);
-    padding: var(--sp-3) var(--sp-4);
-    background: #f0eeea;
-    border-radius: var(--r-md);
-    border: 1px solid var(--c-border-strong);
-  }
-
-  .checkbox-row {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    font-size: var(--sz-sm);
-    color: var(--c-text);
-    cursor: pointer;
-  }
-
-  .checkbox-row input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
-    accent-color: var(--c-accent);
-    cursor: pointer;
-    flex-shrink: 0;
   }
 
   /* --- Messages --- */

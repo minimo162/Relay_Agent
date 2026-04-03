@@ -1,7 +1,6 @@
 import { browser } from "$app/environment";
 import type {
   ApprovalPolicy,
-  ExecutionPlan,
   McpServerConfig,
   OutputArtifact
 } from "@relay-agent/contracts";
@@ -10,7 +9,6 @@ import type {
   ActivityFeedEvent,
   DelegationState
 } from "./stores/delegation";
-import type { CopilotConversationTurn } from "./prompt-templates";
 
 type RelayMode = "discover" | "plan" | "repair" | "followup";
 export type UiMode = "delegation";
@@ -23,12 +21,7 @@ const DEFAULT_BROWSER_AUTOMATION_SETTINGS = {
   cdpPort: 9333,
   autoLaunchEdge: true,
   timeoutMs: 60000,
-  agentLoopEnabled: false,
-  maxTurns: 10,
-  loopTimeoutMs: 120000,
-  planningEnabled: true,
-  autoApproveReadSteps: true,
-  pauseBetweenSteps: false
+  maxTurns: 10
 } as const;
 const DEFAULT_TOOL_SETTINGS = {
   disabledToolIds: [],
@@ -102,12 +95,7 @@ export type BrowserAutomationSettings = {
   cdpPort: number;
   autoLaunchEdge: boolean;
   timeoutMs: number;
-  agentLoopEnabled: boolean;
   maxTurns: number;
-  loopTimeoutMs: number;
-  planningEnabled: boolean;
-  autoApproveReadSteps: boolean;
-  pauseBetweenSteps: boolean;
 };
 
 export type ToolSettings = {
@@ -120,9 +108,6 @@ export type PersistedDelegationDraft = {
   attachedFiles: string[];
   activityFeedSnapshot: ActivityFeedEvent[];
   delegationState: DelegationState;
-  planSnapshot: ExecutionPlan | null;
-  conversationHistorySnapshot: CopilotConversationTurn[];
-  currentStepIndex: number;
   lastUpdatedAt: string;
 };
 
@@ -367,11 +352,6 @@ function normalizeDelegationDraft(value: unknown): PersistedDelegationDraft | nu
     attachedFiles: asStringArray(record.attachedFiles),
     activityFeedSnapshot: normalizeActivityFeedSnapshot(record.activityFeedSnapshot),
     delegationState,
-    planSnapshot: normalizeExecutionPlan(record.planSnapshot),
-    conversationHistorySnapshot: normalizeConversationHistorySnapshot(
-      record.conversationHistorySnapshot
-    ),
-    currentStepIndex: asNumber(record.currentStepIndex) ?? -1,
     lastUpdatedAt
   };
 }
@@ -549,43 +529,6 @@ function normalizeActivityFeedEvent(value: unknown): ActivityFeedEvent | null {
   };
 }
 
-function normalizeConversationHistorySnapshot(
-  value: unknown
-): CopilotConversationTurn[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value
-    .map((entry) => normalizeConversationTurn(entry))
-    .filter((entry): entry is CopilotConversationTurn => Boolean(entry));
-}
-
-function normalizeConversationTurn(value: unknown): CopilotConversationTurn | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const record = value as Record<string, unknown>;
-  const role = record.role;
-  const content = asString(record.content);
-  const timestamp = asString(record.timestamp);
-
-  if (
-    (role !== "user" && role !== "assistant") ||
-    !content ||
-    !timestamp
-  ) {
-    return null;
-  }
-
-  return {
-    role,
-    content,
-    timestamp
-  };
-}
-
 function normalizeRelayMode(value: unknown): RelayMode | null {
   return value === "discover" ||
     value === "plan" ||
@@ -600,7 +543,6 @@ function normalizeDelegationState(value: unknown): DelegationState | null {
   return value === "idle" ||
     value === "goal_entered" ||
     value === "planning" ||
-    value === "plan_review" ||
     value === "executing" ||
     value === "awaiting_approval" ||
     value === "completed" ||
@@ -625,26 +567,6 @@ function normalizeActivityEventType(value: unknown): ActivityFeedEvent["type"] |
     : null;
 }
 
-function normalizeExecutionPlan(value: unknown): ExecutionPlan | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const record = value as Record<string, unknown>;
-  if (!Array.isArray(record.steps) || typeof record.summary !== "string") {
-    return null;
-  }
-
-  return {
-    steps: record.steps as ExecutionPlan["steps"],
-    summary: record.summary,
-    totalEstimatedSteps:
-      typeof record.totalEstimatedSteps === "number"
-        ? record.totalEstimatedSteps
-        : record.steps.length
-  };
-}
-
 function normalizeBrowserAutomationSettings(value: unknown): BrowserAutomationSettings {
   if (!value || typeof value !== "object") {
     return { ...DEFAULT_BROWSER_AUTOMATION_SETTINGS };
@@ -659,25 +581,7 @@ function normalizeBrowserAutomationSettings(value: unknown): BrowserAutomationSe
         ? record.autoLaunchEdge
         : DEFAULT_BROWSER_AUTOMATION_SETTINGS.autoLaunchEdge,
     timeoutMs: asNumber(record.timeoutMs) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.timeoutMs,
-    agentLoopEnabled:
-      typeof record.agentLoopEnabled === "boolean"
-        ? record.agentLoopEnabled
-        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.agentLoopEnabled,
-    maxTurns: asNumber(record.maxTurns) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.maxTurns,
-    loopTimeoutMs:
-      asNumber(record.loopTimeoutMs) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.loopTimeoutMs,
-    planningEnabled:
-      typeof record.planningEnabled === "boolean"
-        ? record.planningEnabled
-        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.planningEnabled,
-    autoApproveReadSteps:
-      typeof record.autoApproveReadSteps === "boolean"
-        ? record.autoApproveReadSteps
-        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.autoApproveReadSteps,
-    pauseBetweenSteps:
-      typeof record.pauseBetweenSteps === "boolean"
-        ? record.pauseBetweenSteps
-        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.pauseBetweenSteps
+    maxTurns: asNumber(record.maxTurns) ?? DEFAULT_BROWSER_AUTOMATION_SETTINGS.maxTurns
   });
 }
 
@@ -744,7 +648,6 @@ function sanitizeBrowserAutomationSettings(
   const nextPort = Math.trunc(value.cdpPort);
   const nextTimeout = Math.trunc(value.timeoutMs);
   const nextMaxTurns = Math.trunc(value.maxTurns);
-  const nextLoopTimeout = Math.trunc(value.loopTimeoutMs);
 
   return {
     cdpPort:
@@ -756,20 +659,10 @@ function sanitizeBrowserAutomationSettings(
       Number.isFinite(nextTimeout) && nextTimeout >= 1000
         ? nextTimeout
         : DEFAULT_BROWSER_AUTOMATION_SETTINGS.timeoutMs,
-    agentLoopEnabled: Boolean(value.agentLoopEnabled),
     maxTurns:
       Number.isFinite(nextMaxTurns) && nextMaxTurns >= 1 && nextMaxTurns <= 20
         ? nextMaxTurns
-        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.maxTurns,
-    loopTimeoutMs:
-      Number.isFinite(nextLoopTimeout) &&
-      nextLoopTimeout >= 30_000 &&
-      nextLoopTimeout <= 300_000
-        ? nextLoopTimeout
-        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.loopTimeoutMs,
-    planningEnabled: Boolean(value.planningEnabled),
-    autoApproveReadSteps: Boolean(value.autoApproveReadSteps),
-    pauseBetweenSteps: Boolean(value.pauseBetweenSteps)
+        : DEFAULT_BROWSER_AUTOMATION_SETTINGS.maxTurns
   };
 }
 
@@ -789,9 +682,7 @@ function hasMeaningfulDelegationDraft(draft: PersistedDelegationDraft): boolean 
   return Boolean(
     draft.goal.trim() ||
       draft.attachedFiles.length > 0 ||
-      draft.activityFeedSnapshot.length > 0 ||
-      draft.planSnapshot ||
-      draft.conversationHistorySnapshot.length > 0
+      draft.activityFeedSnapshot.length > 0
   );
 }
 

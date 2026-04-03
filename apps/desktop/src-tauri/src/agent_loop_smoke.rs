@@ -266,19 +266,12 @@ fn run_agent_loop_smoke_inner(
         responses: Arc::new(Mutex::new(vec![
             model_response(
                 vec![claw_provider::ResponseContent::ToolUse {
-                    id: "inspect-1".to_string(),
-                    name: "workbook.inspect".to_string(),
-                    input: serde_json::json!({}),
-                }],
-                claw_provider::StopReason::ToolUse,
-            ),
-            model_response(
-                vec![claw_provider::ResponseContent::ToolUse {
                     id: "filter-1".to_string(),
-                    name: "table.filter_rows".to_string(),
+                    name: "file.copy".to_string(),
                     input: serde_json::json!({
-                        "predicate": "approved = true",
-                        "outputPath": output_path.to_string_lossy().to_string()
+                        "sourcePath": sample_workbook_path.clone(),
+                        "destPath": output_path.to_string_lossy().to_string(),
+                        "overwrite": true
                     }),
                 }],
                 claw_provider::StopReason::ToolUse,
@@ -296,7 +289,7 @@ fn run_agent_loop_smoke_inner(
         app_handle.clone(),
         state.inner(),
         StartAgentRequest {
-            goal: "Keep approved rows and save a reviewed copy.".to_string(),
+            goal: "Copy the sample file into a reviewed output path.".to_string(),
             files: vec![sample_workbook_path.clone()],
             cwd: None,
             browser_settings: Some(BrowserAutomationSettings {
