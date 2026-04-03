@@ -95,6 +95,12 @@ export interface AgentTurnCompleteEvent {
   messageCount: number;
 }
 
+export interface AgentTextDeltaEvent {
+  sessionId: string;
+  text: string;
+  isComplete: boolean;
+}
+
 export interface AgentErrorEvent {
   sessionId: string;
   error: string;
@@ -106,6 +112,7 @@ export type AgentEvent =
   | { type: "tool_start"; data: AgentToolStartEvent }
   | { type: "tool_result"; data: AgentToolResultEvent }
   | { type: "approval_needed"; data: AgentApprovalNeededEvent }
+  | { type: "text_delta"; data: AgentTextDeltaEvent }
   | { type: "turn_complete"; data: AgentTurnCompleteEvent }
   | { type: "error"; data: AgentErrorEvent };
 
@@ -138,6 +145,7 @@ export async function getSessionHistory(
 const E_TOOL_START = "agent:tool_start";
 const E_TOOL_RESULT = "agent:tool_result";
 const E_APPROVAL_NEEDED = "agent:approval_needed";
+const E_TEXT_DELTA = "agent:text_delta";
 const E_TURN_COMPLETE = "agent:turn_complete";
 const E_ERROR = "agent:error";
 
@@ -153,6 +161,9 @@ export function onAgentEvent(
     ),
     listen<AgentApprovalNeededEvent>(E_APPROVAL_NEEDED, (e) =>
       callback({ type: "approval_needed", data: e.payload }),
+    ),
+    listen<AgentTextDeltaEvent>(E_TEXT_DELTA, (e) =>
+      callback({ type: "text_delta", data: e.payload }),
     ),
     listen<AgentTurnCompleteEvent>(E_TURN_COMPLETE, (e) =>
       callback({ type: "turn_complete", data: e.payload }),
@@ -228,16 +239,19 @@ export function chunksFromHistory(messages: AgentMessage[]): UiChunk[] {
         if (block.type === "tool_use") {
           chunks.push({
             kind: "tool_call",
+            toolUseId: block.id,
             toolName: block.name,
             result: null,
             status: "running",
           });
         }
         if (block.type === "tool_result") {
-          // Attach result to the most recent tool_call chunk
           const lastTool = [...chunks]
             .reverse()
-            .find((c): c is Extract<UiChunk, { kind: "tool_call" }> => c.kind === "tool_call");
+            .find(
+              (c): c is Extract<UiChunk, { kind: "tool_call" }> =>
+                c.kind === "tool_call" && c.toolUseId === block.tool_use_id,
+            );
           if (lastTool) {
             lastTool.result = block.content;
             lastTool.status = block.is_error ? "error" : "done";
@@ -254,6 +268,7 @@ export type UiChunk =
   | { kind: "assistant"; text: string }
   | {
       kind: "tool_call";
+      toolUseId: string;
       toolName: string;
       status: "running" | "done" | "error";
       result: string | null;

@@ -23,7 +23,10 @@ import {
   startAgent,
   type AgentApprovalNeededEvent,
   type AgentErrorEvent,
+  type AgentTextDeltaEvent,
   type AgentTurnCompleteEvent,
+  type AgentToolResultEvent,
+  type AgentToolStartEvent,
   type UiChunk,
 } from "./lib/ipc";
 import { Button, Input, StatusDot } from "./components/ui";
@@ -79,6 +82,7 @@ function MessageBubble(props: { role: "user" | "assistant"; text: string }) {
 
 /** Tool call / result row */
 function ToolCallRow(props: {
+  toolUseId: string;
   toolName: string;
   status: "running" | "done" | "error";
   result: string | null;
@@ -146,6 +150,7 @@ function MessageFeed(props: { chunks: UiChunk[]; sessionState: SessionState }) {
           if (chunk.kind === "tool_call") {
             return (
               <ToolCallRow
+                toolUseId={chunk.toolUseId}
                 toolName={chunk.toolName}
                 status={chunk.status}
                 result={chunk.result}
@@ -412,8 +417,79 @@ export default function Shell(): JSX.Element {
 
   // ── Start IPC event listener on mount ────────────────────
   onMount(async () => {
+    const appendAssistantText = (sessionId: string, text: string, isComplete: boolean) => {
+      if (!text && !isComplete) return;
+      if (activeSessionId() !== sessionId) return;
+
+      if (!text && isComplete) {
+        return;
+      }
+
+      setChunks((prev) => {
+        const next = [...prev];
+        const last = next.at(-1);
+        if (last?.kind === "assistant") {
+          last.text += text;
+          return next;
+        }
+        next.push({ kind: "assistant", text });
+        return next;
+      });
+    };
+
+    const trackToolStart = (sessionId: string, event: AgentToolStartEvent) => {
+      if (activeSessionId() !== sessionId) return;
+      setChunks((prev) => {
+        const next = [...prev];
+        const existing = next.find(
+          (chunk): chunk is Extract<UiChunk, { kind: "tool_call" }> =>
+            chunk.kind === "tool_call" && chunk.toolUseId === event.toolUseId,
+        );
+        if (!existing) {
+          next.push({
+            kind: "tool_call",
+            toolUseId: event.toolUseId,
+            toolName: event.toolName,
+            result: null,
+            status: "running",
+          });
+        }
+        return next;
+      });
+    };
+
+    const trackToolResult = (sessionId: string, event: AgentToolResultEvent) => {
+      if (activeSessionId() !== sessionId) return;
+      setChunks((prev) => {
+        const next = [...prev];
+        const existing = next.find(
+          (chunk): chunk is Extract<UiChunk, { kind: "tool_call" }> =>
+            chunk.kind === "tool_call" && chunk.toolUseId === event.toolUseId,
+        );
+        if (existing) {
+          existing.result = event.content;
+          existing.status = event.isError ? "error" : "done";
+          return next;
+        }
+        next.push({
+          kind: "tool_call",
+          toolUseId: event.toolUseId,
+          toolName: event.toolName,
+          result: event.content,
+          status: event.isError ? "error" : "done",
+        });
+        return next;
+      });
+    };
+
     const unlisten = await onAgentEvent((event) => {
       switch (event.type) {
+        case "text_delta": {
+          const e = event.data as AgentTextDeltaEvent;
+          appendAssistantText(e.sessionId, e.text, e.isComplete);
+          break;
+        }
+
         case "turn_complete": {
           const e = event.data as AgentTurnCompleteEvent;
           console.log("[IPC] turn_complete", e.sessionId, e.stopReason);
@@ -446,10 +522,17 @@ export default function Shell(): JSX.Element {
           break;
         }
 
-        case "tool_start":
-        case "tool_result":
-          // History will reflect these after each turn
+        case "tool_start": {
+          const e = event.data as AgentToolStartEvent;
+          trackToolStart(e.sessionId, e);
           break;
+        }
+
+        case "tool_result": {
+          const e = event.data as AgentToolResultEvent;
+          trackToolResult(e.sessionId, e);
+          break;
+        }
       }
     });
 

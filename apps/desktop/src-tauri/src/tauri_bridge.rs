@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -7,12 +8,12 @@ use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 use runtime::{
-    ApiClient, PermissionMode, PermissionPolicy, PermissionPrompter,
+    PermissionMode, PermissionPolicy, PermissionPrompter,
     PermissionRequest, PermissionPromptDecision, ContentBlock,
     Session as RuntimeSession, ConversationMessage, ToolExecutor,
 };
 
-use crate::copilot_client::CopilotApiClient;
+use crate::copilot_client::{CopilotApiClient, CopilotStreamEvent, PersistedSessionConfig};
 use crate::models::*;
 
 /* ── Session registry (managed by Tauri) ─── */
@@ -22,7 +23,7 @@ use crate::models::*;
 pub struct SessionEntry {
     pub session: RuntimeSession,
     pub running: bool,
-    pub cancelled: bool,
+    pub cancelled: Arc<AtomicBool>,
     /// approval_id → oneshot Sender<bool>
     pub approvals: std::sync::Mutex<HashMap<String, std::sync::mpsc::Sender<bool>>>,
 }
@@ -75,9 +76,10 @@ pub async fn start_agent(
     let entry = SessionEntry {
         session: RuntimeSession::new(),
         running: true,
-        cancelled: false,
+        cancelled: Arc::new(AtomicBool::new(false)),
         approvals: std::sync::Mutex::new(HashMap::new()),
     };
+    let cancelled = Arc::clone(&entry.cancelled);
     registry
         .data
         .lock()
@@ -94,6 +96,9 @@ pub async fn start_agent(
             &reg_for_task,
             &sid_for_task,
             goal,
+            request.cwd,
+            request.max_turns,
+            cancelled,
         );
 
         if let Err(err) = result {
@@ -149,7 +154,7 @@ pub async fn cancel_agent(
 ) -> Result<(), String> {
     if let Ok(mut data) = registry.data.lock() {
         if let Some(entry) = data.get_mut(&request.session_id) {
-            entry.cancelled = true;
+            entry.cancelled.store(true, Ordering::SeqCst);
             entry.running = false;
             // Cancel all pending approvals
             for (_, tx) in entry.approvals.lock().expect("poisoned").drain() {
@@ -174,23 +179,33 @@ pub async fn get_session_history(
     registry: State<'_, SessionRegistry>,
     request: GetAgentSessionHistoryRequest,
 ) -> Result<AgentSessionHistoryResponse, String> {
-    let data = registry.data.lock().expect("registry poisoned");
-    let entry = data
-        .get(&request.session_id)
+    let maybe_loaded = {
+        let data = registry.data.lock().expect("registry poisoned");
+        data.get(&request.session_id).map(|entry| {
+            let running = entry.running && !entry.cancelled.load(Ordering::SeqCst);
+            let messages = entry.session.messages.iter().map(msg_to_relay).collect();
+            AgentSessionHistoryResponse {
+                session_id: request.session_id.clone(),
+                running,
+                messages,
+            }
+        })
+    };
+
+    if let Some(history) = maybe_loaded {
+        return Ok(history);
+    }
+
+    let api_client = CopilotApiClient::new_with_default_settings();
+    let loaded = api_client
+        .load_session(&request.session_id)
+        .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("session `{}` not found", request.session_id))?;
-
-    let running = entry.running && !entry.cancelled;
-
-    let messages: Vec<RelayMessage> = entry
-        .session
-        .messages
-        .iter()
-        .map(msg_to_relay)
-        .collect();
+    let messages = loaded.session.messages.iter().map(msg_to_relay).collect();
 
     Ok(AgentSessionHistoryResponse {
         session_id: request.session_id,
-        running,
+        running: false,
         messages,
     })
 }
@@ -202,11 +217,47 @@ fn run_agent_loop_impl(
     registry: &SessionRegistry,
     session_id: &str,
     goal: String,
+    cwd: Option<String>,
+    max_turns: Option<usize>,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let api_client = CopilotApiClient::new_with_default_settings();
+    let original_cwd = std::env::current_dir().ok();
+    if let Some(path) = cwd.as_deref() {
+        std::env::set_current_dir(path)
+            .map_err(|error| format!("failed to set working directory to `{path}`: {error}"))?;
+    }
+
+    let app_for_stream = app.clone();
+    let session_for_stream = session_id.to_string();
+    let api_client = CopilotApiClient::new_with_default_settings().with_stream_callback(
+        move |event| match event {
+            CopilotStreamEvent::TextDelta(text) => {
+                let _ = app_for_stream.emit(
+                    E_TEXT_DELTA,
+                    AgentTextDeltaEvent {
+                        session_id: session_for_stream.clone(),
+                        text,
+                        is_complete: false,
+                    },
+                );
+            }
+            CopilotStreamEvent::MessageStop => {
+                let _ = app_for_stream.emit(
+                    E_TEXT_DELTA,
+                    AgentTextDeltaEvent {
+                        session_id: session_for_stream.clone(),
+                        text: String::new(),
+                        is_complete: true,
+                    },
+                );
+            }
+        },
+    );
+    let persistence_client = CopilotApiClient::new_with_default_settings();
     let tool_executor = build_tool_executor(app, session_id);
     let permission_policy = PermissionPolicy::new(PermissionMode::Prompt);
     let system_prompt = vec![build_system_prompt(&goal)];
+    let max_turns = max_turns.unwrap_or(32);
 
     let mut runtime = runtime::ConversationRuntime::new(
         RuntimeSession::new(),
@@ -215,7 +266,7 @@ fn run_agent_loop_impl(
         permission_policy,
         system_prompt,
     );
-    runtime = runtime.with_max_iterations(32);
+    runtime = runtime.with_max_iterations(max_turns);
 
     let mut prompter = TauriApprovalPrompter {
         app: app.clone(),
@@ -223,41 +274,112 @@ fn run_agent_loop_impl(
         registry: registry.clone(),
     };
 
-    let summary = runtime
-        .run_turn(&goal, Some(&mut prompter))
-        .map_err(|e| format!("agent loop failed: {e}"))?;
+    let mut final_summary = None;
 
-    let last_text = summary
-        .assistant_messages
-        .last()
-        .map(|msg| {
-            msg.blocks
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::Text { text } => Some(text.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_default();
+    for turn in 0..max_turns {
+        if cancelled.load(Ordering::SeqCst) {
+            break;
+        }
 
-    let _ = app.emit(
-        E_TURN_COMPLETE,
-        AgentTurnCompleteEvent {
-            session_id: session_id.to_string(),
-            stop_reason: "end_turn".into(),
-            assistant_message: last_text,
-            message_count: runtime.session().messages.len(),
-        },
-    );
+        let turn_input = if turn == 0 { goal.as_str() } else { "Continue." };
+        let summary = match runtime.run_turn(turn_input, Some(&mut prompter)) {
+            Ok(summary) => summary,
+            Err(error) => {
+                let _ = app.emit(
+                    E_ERROR,
+                    AgentErrorEvent {
+                        session_id: session_id.to_string(),
+                        error: format!("agent loop failed: {error}"),
+                        cancelled: false,
+                    },
+                );
+                break;
+            }
+        };
 
-    // Save session
+        if let Ok(mut data) = registry.data.lock() {
+            if let Some(entry) = data.get_mut(session_id) {
+                entry.session = runtime.session().clone();
+            }
+        }
+        persistence_client
+            .save_session(
+                session_id,
+                runtime.session(),
+                PersistedSessionConfig {
+                    goal: Some(goal.clone()),
+                    cwd: cwd.clone(),
+                    max_turns: Some(max_turns),
+                },
+            )
+            .map_err(|error| error.to_string())?;
+
+        let needs_more_turns = summary
+            .assistant_messages
+            .last()
+            .is_some_and(|message| {
+                message
+                    .blocks
+                    .iter()
+                    .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
+            });
+
+        final_summary = Some(summary);
+
+        if !needs_more_turns {
+            break;
+        }
+    }
+
+    if let Some(summary) = final_summary {
+        let last_text = summary
+            .assistant_messages
+            .last()
+            .map(|msg| {
+                msg.blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+
+        if !cancelled.load(Ordering::SeqCst) {
+            let _ = app.emit(
+                E_TURN_COMPLETE,
+                AgentTurnCompleteEvent {
+                    session_id: session_id.to_string(),
+                    stop_reason: "end_turn".into(),
+                    assistant_message: last_text,
+                    message_count: runtime.session().messages.len(),
+                },
+            );
+        }
+    }
+
     let session = runtime.into_session();
+    persistence_client
+        .save_session(
+            session_id,
+            &session,
+            PersistedSessionConfig {
+                goal: Some(goal),
+                cwd,
+                max_turns: Some(max_turns),
+            },
+        )
+        .map_err(|error| error.to_string())?;
     if let Ok(mut data) = registry.data.lock() {
         if let Some(entry) = data.get_mut(session_id) {
             entry.session = session;
         }
+    }
+
+    if let Some(path) = original_cwd {
+        let _ = std::env::set_current_dir(path);
     }
 
     Ok(())
@@ -273,6 +395,19 @@ struct TauriApprovalPrompter {
 
 impl PermissionPrompter for TauriApprovalPrompter {
     fn decide(&mut self, request: &PermissionRequest) -> PermissionPromptDecision {
+        if self
+            .registry
+            .data
+            .lock()
+            .expect("registry poisoned")
+            .get(&self.session_id)
+            .is_some_and(|entry| entry.cancelled.load(Ordering::SeqCst))
+        {
+            return PermissionPromptDecision::Deny {
+                reason: "session was cancelled".into(),
+            };
+        }
+
         let approval_id = Uuid::new_v4().to_string();
 
         // Build a human-readable description from input JSON
@@ -346,11 +481,12 @@ struct TauriToolExecutor {
 
 impl ToolExecutor for TauriToolExecutor {
     fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, runtime::ToolError> {
+        let tool_use_id = Uuid::new_v4().to_string();
         let _ = self.app.emit(
             E_TOOL_START,
             AgentToolStartEvent {
                 session_id: self.session_id.clone(),
-                tool_use_id: Uuid::new_v4().to_string(),
+                tool_use_id: tool_use_id.clone(),
                 tool_name: tool_name.to_string(),
             },
         );
@@ -364,7 +500,7 @@ impl ToolExecutor for TauriToolExecutor {
             E_TOOL_RESULT,
             AgentToolResultEvent {
                 session_id: self.session_id.clone(),
-                tool_use_id: Uuid::new_v4().to_string(),
+                tool_use_id,
                 tool_name: tool_name.to_string(),
                 content: result.clone(),
                 is_error: false,
@@ -411,6 +547,23 @@ fn msg_to_relay(msg: &ConversationMessage) -> RelayMessage {
 }
 
 fn build_system_prompt(goal: &str) -> String {
+    if let Some(path) = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .map(|home| home.join(".relay-agent").join("SYSTEM_PROMPT.md"))
+    {
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            let custom = contents.trim();
+            if !custom.is_empty() {
+                return if custom.contains("{goal}") {
+                    custom.replace("{goal}", goal)
+                } else {
+                    format!("{custom}\n\nGoal:\n{goal}")
+                };
+            }
+        }
+    }
+
     format!(
         concat!(
             "You are Relay Agent running inside a Tauri desktop app.\n",
@@ -472,6 +625,14 @@ pub struct AgentErrorEvent {
     pub session_id: String,
     pub error: String,
     pub cancelled: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTextDeltaEvent {
+    pub session_id: String,
+    pub text: String,
+    pub is_complete: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

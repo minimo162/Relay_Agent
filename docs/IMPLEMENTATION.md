@@ -16,6 +16,44 @@
 
 ## Milestone Log
 
+### 2026-04-04 Agent loop and streaming fixes
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src-tauri/src/tauri_bridge.rs`
+- `apps/desktop/src-tauri/src/copilot_client.rs`
+- `apps/desktop/src/lib/ipc.ts`
+- `apps/desktop/src/root.tsx`
+
+Outcome:
+
+- Fixed Tauri tool event correlation so `tool_start` and `tool_result` now share one `toolUseId`.
+- Passed `cwd` and `maxTurns` through the bridge, replaced cross-thread cancellation with `Arc<AtomicBool>`, and saved session state after each loop iteration.
+- Added disk-backed session persistence under `~/.relay-agent/sessions/` and allowed session history fallback loading from saved JSON.
+- Switched the backend client path to streamed SSE handling through the `api` crate, emitting live `agent:text_delta` events into the Tauri bridge.
+- Updated the Solid frontend IPC and root shell so partial assistant text renders live and tool rows update in place by `toolUseId`.
+- Added support for a user-provided `~/.relay-agent/SYSTEM_PROMPT.md` override with `{goal}` placeholder substitution or appended-goal fallback.
+
+Verification:
+
+Commands run:
+
+- `cargo check --manifest-path /tmp/Relay_Agent/apps/desktop/src-tauri/Cargo.toml`
+- `cargo check --manifest-path /tmp/Relay_Agent/apps/desktop/src-tauri/Cargo.toml`
+- `cargo check --manifest-path /tmp/Relay_Agent/apps/desktop/src-tauri/Cargo.toml`
+- `cargo check --manifest-path /tmp/Relay_Agent/apps/desktop/src-tauri/Cargo.toml`
+- `cargo check --manifest-path /tmp/Relay_Agent/apps/desktop/src-tauri/Cargo.toml`
+- `npx tsc --noEmit`
+- `npm run typecheck`
+
+Result:
+
+- All required Rust `cargo check` runs passed after each Rust change.
+- `npx tsc --noEmit` was blocked by sandbox network resolution because `npx` attempted to reach `registry.npmjs.org`.
+- `npm run typecheck` was blocked because `tsc` is not installed in the current workspace environment (`node_modules` / local TypeScript binary unavailable).
+
 ### Phase 7 Follow-up
 
 #### Task T28 Inbox panel persistence slice
