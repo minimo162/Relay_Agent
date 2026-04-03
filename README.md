@@ -1,363 +1,187 @@
 # Relay Agent
 
-Relay Agent は M365 Copilot を使ったデスクトップ自律エージェントアプリです。
-ファイル変換・テキスト処理・ドキュメント読み取りなどのタスクを自然言語で指示すると、
-Copilot が実行計画を立案し、読み取り操作を自動実行、書き込み操作はユーザー承認後に実行します。
+An AI-powered desktop application powered by Amazon Nova 3, built with Tauri v2, SolidJS, and Rust.
 
-## 機能概要
+## Overview
 
-### エージェントループ（自律実行）
+Relay Agent bridges a Tauri desktop application with a remote AI agent backend. You describe a goal, the agent works autonomously, and you approve or reject actions that need your input — all from a beautiful native desktop UI.
 
-- M365 Copilot（Edge CDP 経由）に自然言語でタスクを指示
-- Copilot が read ツールを自律実行しながらデータを調査
-- 書き込み操作は必ずプレビュー確認 → ユーザー承認を経てから実行
-- 最大ターン数・タイムアウトを設定可能、途中キャンセルに対応
+## Stack
 
-### プランニングモード
+- **Desktop UI:** SolidJS + Vite (TypeScript)
+- **Desktop Framework:** Tauri v2 (Rust backend)
+- **AI Backend:** Amazon Nova 3 via Copilot Proxy (`api.copilot-proxy.ai`)
+- **Language:** Rust + TypeScript
+- **Testing:** Vitest (frontend crate tests), Cargo (Rust unit tests)
 
-- 実行前に Copilot がステップごとの実行計画（ExecutionPlan）を提案
-- 計画をユーザーが確認・編集・承認してから自律実行
-- 書き込みステップに到達したら自動停止し、再度承認を要求
-- 計画の進捗をリアルタイムに UnifiedFeed に表示
+## Architecture
 
-### 対応ツール
+```
+┌─────────────────────────────────────────────────┐
+│  Tauri Desktop App                              │
+│  ┌───────────────────────────────────────────┐  │
+│  │  SolidJS Frontend (src/)                  │  │
+│  │  - Message feed with text & tool calls    │  │
+│  │  - Approval overlay for tool permissions  │  │
+│  │  - Session sidebar & context panel        │  │
+│  │  - Real-time IPC event listeners          │  │
+│  └──────────────┬────────────────────────────┘  │
+│                 │ Tauri invoke/listen           │
+│  ┌──────────────▼────────────────────────────┐  │
+│  │  Rust Backend (src-tauri/)                │  │
+│  │  - tauri_bridge.rs (IPC commands)         │  │
+│  │  - copilot_client.rs (AI API client)      │  │
+│  │  - models.rs (shared types)               │  │
+│  │                                           │  │
+│  │  Internal Crates:                         │  │
+│  │  - api/        – Copilot API (SSE stream) │  │
+│  │  - runtime/    – Session management       │  │
+│  │  - tools/      – Tool registry (stub)     │  │
+│  │  - commands/   – Slash commands (stub)    │  │
+│  │  - compat/     – Manifest extraction      │  │
+│  └──────────────┬────────────────────────────┘  │
+└─────────────────┼───────────────────────────────┘
+                  │ HTTPS
+                  ▼
+        ┌───────────────────┐
+        │ Copilot Proxy API │
+        │ (Amazon Nova 3)   │
+        └───────────────────┘
+```
 
-ツールはすべて ToolCatalog で一元管理され、設定画面から有効/無効を切り替えられます。
+## Quick Start
 
-**スプレッドシート操作（CSV / XLSX）**
-- `workbook.inspect` — シート構成・列情報の読み取り
-- `sheet.preview` — 行サンプルの読み取り
-- `sheet.profile_columns` — 列の型推論とサンプル値の読み取り
-- `session.diff_from_base` — 変更差分の確認
-- `table.rename_columns` — 列名変更
-- `table.cast_columns` — 列の型変換
-- `table.filter_rows` — 行フィルタリング
-- `table.derive_column` — 派生列の追加
-- `table.group_aggregate` — グループ集計
-- `workbook.save_copy` — 別名保存（元ファイルは変更しない）
+### Prerequisites
 
-**汎用ファイル操作**
-- `file.list` — ディレクトリ一覧の読み取り
-- `file.read_text` — テキストファイルの読み取り（最大 1MB）
-- `file.stat` — ファイルメタデータの読み取り
-- `file.copy` — ファイルコピー（承認必須）
-- `file.move` — ファイル移動・リネーム（承認必須）
-- `file.delete` — ゴミ箱への移動（承認必須）
+- **Rust** 1.80+ (with `rustc` and `cargo`)
+- **Node.js** 20+ (with `npm` or `pnpm`)
 
-**テキスト処理**
-- `text.search` — 正規表現での検索（コンテキスト行付き）
-- `text.replace` — 正規表現での置換（バックアップ自動作成、承認必須）
-
-**ドキュメント読み取り**
-- `document.read_text` — Word（.docx）・PowerPoint（.pptx）・PDF からのテキスト抽出
-
-**ブラウザ自動化**
-- `browser.send_to_copilot` — Edge CDP 経由で M365 Copilot にプロンプト送信
-
-### MCP（Model Context Protocol）外部ツール
-
-設定画面の「ツール」タブから MCP サーバーを登録できます。
-
-- JSON-RPC 2.0 準拠（HTTP/SSE・stdio トランスポート対応）
-- 接続時にサーバーのツール一覧を自動発見・登録
-- MCP ツールはすべて承認ゲート経由で実行（`requiresApproval: true`）
-- MCP ツール呼び出しには 30 秒タイムアウトを適用
-- ContextPanel の「Servers」タブで接続状態をリアルタイム確認
-
-### プロジェクト管理
-
-- プロジェクト単位でフォルダ・カスタム指示・学習済み設定を管理
-- カスタム指示はすべての Copilot プロンプトに自動挿入
-- 学習済み設定（メモリ）で繰り返しタスクの文脈を維持
-- プロジェクトのルートフォルダ外へのファイルアクセスを警告
-
-### UI（openwork インスパイアドデザインシステム）
-
-**3 ペインワークスペース**
-- **左: AppSidebar** — ピル型セッション行・グループラベル・三点メニュー、ナビゲーション
-- **中央: UnifiedFeed + TaskInput** — Step Cluster フィード（折りたたみ可能なラウンド）＋常時下部固定のコンポーザー
-- **右: ContextPanel** — Files / Servers / Policy タブ、ドラッグ＆ドロップ受信ボックス、MCP 接続 ping ドット
-
-**主要 UI コンポーネント**
-- `UnifiedFeed` — ✓/⟳/○/✗ アイコン付きステップクラスター、コンパクション区切り線
-- `TaskInput` — auto-grow テキストエリア、Stop ボタン、アイドルヒントチップ
-- `ApprovalCard` — permission フェーズ（ツール名・説明表示）→ 3 択アクション（拒否 / 今回のみ / 常に許可）、折りたたみヘッダー、アクセントバー
-- `StatusStrip` — 接続状態に応じたリアクティブ ping ドット（connected / connecting / disconnected）
-- `CommandPalette` — ⌘K / Ctrl+K でオープン、ナビゲーション・テーマ切り替え等のアクション
-- `ApprovalGate` — 書き込み前の承認ゲートUI
-- `BatchDashboard` / `PipelineBuilder` — バッチ・パイプライン管理
-- `TemplateBrowser` — ワークフローテンプレート一覧
-- `ArtifactPreview` — アーティファクトプレビュー表示
-- `BatchTargetSelector` — バッチターゲット選択
-- `ChatComposer` — チャット形式コンポーザー
-- `CompletionCard` — 完了カード表示
-- `FileOpPreview` — ファイル操作プレビュー
-- `InboxPanel` — インボックスパネル
-- `InterventionPanel` — 介入パネル
-- `PipelineProgress` — パイプライン進捗表示
-- `ProjectSelector` — プロジェクト選択
-- `RecentSessions` — 最近のセッション一覧
-- `SessionList` — セッションリスト
-- `SettingsModal` — 設定モーダル
-- `SheetDiffCard` — シート差分カード
-- `StatusBar` — ステータスバー
-- `Toast` — トースト通知
-
-**その他機能**
-- ダークモード対応（`data-theme` 属性切り替え、LocalStorage 永続化）
-- ドラフト自動保存・ページリロード後の再開に対応
-
-### 安全設計
-
-- 書き込み操作はすべて承認ゲート経由
-- 元ファイルは変更しない（別名保存のみ）
-- `file.delete` はゴミ箱移動（完全削除はオプション）
-- `text.replace` は `.bak` バックアップを自動作成
-- CSV インジェクション対策（`=`, `+`, `-`, `@` の先頭文字をエスケープ）
-
-## 必要環境
-
-- Node.js `>= 22`
-- pnpm `10.x`
-- Rust stable toolchain（`cargo`）
-- Tauri v2 向けのネイティブ依存（OS ごとのビルドツール）
-
-## インストール
+### Setup
 
 ```bash
-pnpm install
+# Clone the repository
+git clone https://github.com/minimo162/Relay_Agent.git
+cd Relay_Agent
+
+# Install Node dependencies
+npm install
+
+# Run in development mode
+npm run dev
 ```
 
-## 起動
+This launches the Tauri dev environment with hot-reloading for both the SolidJS frontend and Rust backend.
 
-Tauri デスクトップアプリ（推奨）:
+## Project Structure
+
+```
+apps/desktop/
+├── src/                          # SolidJS frontend
+│   ├── index.tsx                 # Entry point
+│   ├── root.tsx                  # Main shell (3-pane layout)
+│   ├── lib/
+│   │   ├── ipc.ts                # Tauri IPC bridge + event types
+│   │   └── tauri-mock-*.ts       # Mocks for browser development
+│   └── components/
+│       └── ui.tsx                # Reusable UI components
+│
+├── src-tauri/
+│   ├── src/
+│   │   ├── lib.rs                # Tauri app entry + auth setup
+│   │   ├── tauri_bridge.rs       # IPC commands (start/respond/cancel/history)
+│   │   ├── copilot_client.rs     # Copilot Proxy API client
+│   │   └── models.rs             # Shared Rust types
+│   └── crates/
+│       ├── api/                  # Low-level Copilot API (SSE parsing, OAuth)
+│       ├── runtime/              # Session management & compaction
+│       ├── tools/                # Tool registry definitions (stub)
+│       ├── commands/             # Slash command parsing (stub)
+│       └── compat-harness/       # Upstream manifest extraction
+```
+
+## Features
+
+### ✅ Implemented
+
+- **AI Agent Loop** — Send a goal → agent processes autonomously → returns results with tool call details
+- **Tool Approval System** — Approve or reject individual tool executions in real-time
+- **Session Management** — Multiple concurrent agent sessions with side-panel navigation
+- **Session History** — Full message history with text and tool call/result blocks (loaded from Rust storage)
+- **Agent Cancellation** — Stop a running agent mid-execution
+- **Real-time Events** — Tool start, tool result, approval needed, turn complete, and error events via Tauri event system
+- **3-Pane Desktop Layout** — Sidebar (sessions), Main (chat + composer), Right panel (context tabs)
+- **OAuth Token Resolution** — Reads auth token from `.auth_key`, `.agent_auth_key`, or falls back to direct token
+- **Session Compaction** — Compresses long sessions into resumable system summaries
+- **Mock System** — Tauri API mocks allow full frontend development in the browser without Tauri running
+
+### 🚧 Stub / Planned
+
+- **MCP Server Integration** — Tool registry and MCP server connection (types defined, not wired up)
+- **Slash Commands** — 22 slash commands parsed (`/help`, `/compact`, `/model`, `/export`, etc.) but most return `None` from the harness
+- **Context System** — File drop, MCP server list, and policy tabs in the right panel (UI exists, data not populated)
+- **Browser Automation** — Browser automation settings in request type (CDP port, auto-launch, timeout) — not implemented on backend
+- **Conversation Export** — Export conversation to markdown (stub — `export_conversation_markdown` returns empty string)
+
+## IPC API
+
+### Tauri Commands (Rust → Frontend)
+
+| Command | Description |
+|---------|-------------|
+| `start_agent` | Start a new agent session with a goal, optional files, and cwd |
+| `respond_approval` | Approve or reject a pending tool execution |
+| `cancel_agent` | Cancel a running agent session |
+| `get_session_history` | Load full message history for a session |
+
+### Tauri Events (Rust → Frontend)
+
+| Event | Payload |
+|-------|---------|
+| `agent:tool_start` | Tool execution started (sessionId, toolUseId, toolName) |
+| `agent:tool_result` | Tool execution completed (content, isError) |
+| `agent:approval_needed` | User approval required (toolName, description, target, input) |
+| `agent:turn_complete` | Agent turn finished (stopReason, assistantMessage, messageCount) |
+| `agent:error` | Error occurred in agent loop (error message, cancelled flag) |
+
+## Development
+
+### Running the Desktop App
 
 ```bash
-pnpm --filter @relay-agent/desktop tauri:dev
+# Development mode (hot-reload, opens native window)
+npm run dev
+
+# Build for production
+npm run build
+
+# Lint
+npm run lint
 ```
 
-フロントエンドのみ（UI 確認用）:
+### Rust Crate Tests
 
 ```bash
-pnpm --filter @relay-agent/desktop dev
+cargo test --package tools
+cargo test --package commands
+cargo test --package compat-harness -- --ignored
 ```
 
-## ビルド（Windows インストーラー）
-
-Windows 10/11 x64 向け NSIS インストーラーのビルド:
+### Frontend Tests
 
 ```bash
-pnpm install
-pnpm typecheck
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
-pnpm --dir apps/desktop exec tauri build --config src-tauri/tauri.windows.conf.json
+npx vitest run
 ```
 
-出力先: `target/release/bundle/nsis/`
+## Environment
 
-タグ（例: `v0.1.0`）を push すると GitHub Actions が自動ビルドして Release に添付します。
+- **Copilot Proxy:** Configured via `.env` (`COPILOT_PROXY_BASE_URL`, defaults to `https://api.copilot-proxy.ai/v1`)
+- **Auth Token:** `.auth_key` or `.agent_auth_key` in project root, or provided directly
+- **Model:** Amazon Nova 3 (`amazon.nova-3`)
 
-## 動作確認コマンド
+## License
 
-```bash
-pnpm check                  # Svelte チェック
-pnpm typecheck              # TypeScript 型チェック
-pnpm startup:test           # 起動スモークテスト（ウィンドウ非表示）
-pnpm launch:test            # アプリ起動テスト（Xvfb）
-pnpm workflow:test          # ワークフロースモークテスト（E2E）
-pnpm agent-loop:test        # エージェントループスモークテスト
-. "$HOME/.cargo/env" && cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
-```
+Relay Agent is licensed under the **[Apache License 2.0](LICENSE)**.
 
-個別テスト:
+## Contributing
 
-```bash
-# TypeScript ユニットテスト
-pnpm -C apps/desktop exec tsx --test \
-  src/lib/auto-fix.test.ts \
-  src/lib/project-scope.test.ts \
-  src/lib/prompt-templates.test.ts \
-  src/lib/stores/delegation.test.ts
-```
-
-## デモ
-
-サンプル CSV: [`examples/revenue-workflow-demo.csv`](examples/revenue-workflow-demo.csv)
-
-### エージェントモードでの実行例
-
-1. `pnpm --filter @relay-agent/desktop tauri:dev` で起動
-2. 設定でエージェントループを有効化（CDP ポート設定）
-3. TaskInput にゴールを入力:
-   ```
-   revenue-workflow-demo.csv の approved が true の行だけ残して、
-   review_label 列を追加し、別コピーとして保存して
-   ```
-4. ContextPanel の「Files」タブにファイルをドラッグ＆ドロップ（または直接入力）
-5. UnifiedFeed で Copilot の実行過程をステップクラスターとして確認
-6. ApprovalCard で書き込み確認が来たら内容を確認して「今回のみ」または「常に許可」を選択
-7. 出力ファイルを確認
-
-### マニュアルモードでの実行例
-
-1. `1. はじめる` でファイルパスとタスク名を入力し「準備する」
-2. `2. Copilot に聞く` で「依頼をコピー」し M365 Copilot に貼り付け
-3. Copilot の JSON レスポンスを貼り付けて「確認する」
-4. `3. 確認して保存` で変更内容を確認し「保存する」
-
-## Copilot レスポンス例（マニュアルモード）
-
-```json
-{
-  "version": "1.0",
-  "status": "ready_to_write",
-  "summary": "approved が true の行だけ残し、review_label 列を追加して保存",
-  "actions": [
-    {
-      "tool": "table.filter_rows",
-      "sheet": "Sheet1",
-      "args": { "predicate": "[approved] == true" }
-    },
-    {
-      "tool": "table.derive_column",
-      "sheet": "Sheet1",
-      "args": {
-        "column": "review_label",
-        "expression": "[segment] + \"-approved\"",
-        "position": "end"
-      }
-    },
-    {
-      "tool": "workbook.save_copy",
-      "args": { "outputPath": "/path/to/output.csv" }
-    }
-  ],
-  "followupQuestions": [],
-  "warnings": []
-}
-```
-
-## リポジトリ構成
-
-```
-apps/
-  desktop/
-    src/               # SvelteKit フロントエンド
-      lib/
-        components/    # UI コンポーネント（23 個）
-          AppSidebar.svelte       # 左ペイン：セッション・ナビゲーション
-          ContextPanel.svelte     # 右ペイン：Files / Servers / Policy タブ
-          UnifiedFeed.svelte      # ステップクラスターフィード
-          TaskInput.svelte        # 下部固定コンポーザー
-          ApprovalCard.svelte     # permission フェーズ付き 3 択承認カード
-          ApprovalGate.svelte     # 承認ゲートUI
-          ArtifactPreview.svelte  # アーティファクトプレビュー
-          BatchDashboard.svelte   # バッチジョブ管理
-          BatchTargetSelector.svelte  # バッチターゲット選択
-          ChatComposer.svelte     # チャット形式コンポーザー
-          CommandPalette.svelte   # ⌘K コマンドパレット
-          CompletionCard.svelte   # 完了カード
-          FileOpPreview.svelte    # ファイル操作プレビュー
-          InboxPanel.svelte       # インボックスパネル
-          InterventionPanel.svelte # 介入パネル
-          PipelineBuilder.svelte  # パイプライン構築
-          PipelineProgress.svelte # パイプライン進捗
-          ProjectSelector.svelte  # プロジェクト選択
-          RecentSessions.svelte   # 最近のセッション
-          SegmentedControl.svelte # ピル型セグメントコントロール
-          SessionList.svelte      # セッションリスト
-          SettingsModal.svelte    # 設定モーダル
-          SheetDiffCard.svelte    # シート差分カード
-          StatusBar.svelte        # ステータスバー
-          StatusStrip.svelte      # 接続状態 ping ドット
-          TemplateBrowser.svelte  # テンプレート一覧
-          Toast.svelte            # トースト通知
-        stores/
-          delegation.ts           # 委任モードストア
-          ui.ts                   # UI 状態ストア
-        auto-fix.ts               # 自動修正ロジック
-        auto-fix.test.ts
-        browser-automation-ui.ts  # Edge CDP 接続管理
-        continuity.ts             # ドラフト永続化（IndexedDB）
-        error-messages.ts         # エラーメッセージ定義
-        ipc.ts                    # Tauri IPC ラッパー（Zod 型付き）
-        project-scope.ts          # プロジェクトスコープ検証
-        project-scope.test.ts
-        prompt-templates.ts       # プロンプトテンプレート
-        prompt-templates.test.ts
-        welcome.ts                # 初回起動ウェルカム処理
-    src-tauri/
-      src/
-        app.rs                    # アプリケーションモジュール
-        tauri_bridge.rs           # Tauri コマンド（start_agent / respond_approval / cancel_agent / get_session_history）
-        copilot_provider.rs       # Copilot プロバイダー実装
-        relay_tools.rs            # ビルトインツール実装
-        tool_catalog.rs           # ツールカタログ管理
-        storage.rs                # セッション・プロジェクト・プラン統合ストレージ
-        storage_runtime.rs        # ランタイムストレージ
-        session_store.rs          # セッション CRUD
-        session.rs                # セッション管理
-        state.rs                  # アプリ状態管理
-        execution.rs              # ツール実行ディスパッチャー
-        approval_store.rs         # 承認ポリシー永続化
-        workbook_state.rs         # ワークブック状態管理
-        relay.rs                  # RelayPacket 生成
-        mcp_client.rs             # MCP JSON-RPC クライアント（HTTP/Stdio）
-        browser_automation.rs     # ブラウザ自動化コマンド
-        pipeline.rs               # パイプライン管理
-        batch.rs                  # バッチジョブ管理
-        file_support.rs           # ファイル操作実装
-        models.rs                 # Rust 型定義
-        persistence.rs            # JSON ローカルストレージ
-        risk_evaluator.rs         # 操作リスク評価
-        quality_validator.rs      # 出力品質チェック
-        startup.rs                # 起動・リカバリー処理
-        agent_loop_smoke.rs       # エージェントループスモークテスト
-        workflow_smoke.rs         # ワークフロースモークテスト
-        template.rs               # テンプレート管理
-        project.rs                # プロジェクト管理
-        integration_tests.rs      # 統合テスト
-        bin/
-          startup_smoke.rs        # 起動スモークテスト（バイナリ）
-        workbook/                 # ワークブック処理エンジン
-          engine.rs               # 変換実行
-          inspect.rs              # シート構造解析
-          preview.rs              # 差分プレビュー生成
-          preflight.rs            # 実行前検証
-          csv_backend.rs          # CSV 読み書き
-          xlsx_backend.rs         # XLSX 読み取り
-          source.rs               # ソースファイル管理
-packages/
-  contracts/
-    src/
-      relay.ts         # RelayPacket・ExecutionPlan・ToolRegistration スキーマ
-      ipc.ts           # IPC リクエスト/レスポンススキーマ
-      file.ts          # ファイル操作スキーマ
-      project.ts       # プロジェクトスキーマ
-      workbook.ts      # スプレッドシートスキーマ
-      approval.ts      # 承認ポリシースキーマ
-      pipeline.ts      # パイプラインスキーマ
-      batch.ts         # バッチ処理スキーマ
-      template.ts      # ワークフローテンプレートスキーマ
-      core.ts          # セッション・ターン・アーティファクト共通型
-      meta.ts          # アプリメタデータスキーマ
-      shared.ts        # 共通バリデーター（entityId・日付等）
-examples/
-  revenue-workflow-demo.csv
-docs/
-  # 設計ドキュメント・実装ログ・Codex 委任プロンプト（60+ ファイル）
-```
-
-## 現在の制限事項
-
-- CSV が書き込み実行の主対象。XLSX は検査・プレビューのみ対応（書き込み未対応）
-- エンコーディングは UTF-8 と Shift_JIS のみ対応
-- `text.search` は行単位マッチのみ（複数行にまたがるパターン非対応）
-- プロジェクトとセッションの自動紐付けは未実装
-- MCP stdio トランスポートは接続時にサーバープロセスを都度起動（永続デーモン未対応）
-- シェル実行・任意コード実行・VBA 実行・外部ネットワーク呼び出しは意図的に対象外
-
-## 環境変数
-
-デスクトップアプリの起動に `.env` ファイルは不要です。
-TaskMaster AI 連携を使う場合は `.env.example` を `.env` にコピーして設定してください。
+Contributions are welcome! Please feel free to submit a Pull Request.
