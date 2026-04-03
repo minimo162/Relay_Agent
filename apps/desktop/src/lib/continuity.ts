@@ -60,10 +60,6 @@ export type PersistedStudioDraft = {
   relayMode: RelayMode;
   workbookPath: string;
   workbookFocus: string;
-  relayPacketText: string;
-  relayPacketSummary: string;
-  rawResponse: string;
-  validationSummary: string;
   previewSummary: string;
   approvalSummary: string;
   executionSummary: string;
@@ -252,10 +248,6 @@ function normalizeDraft(value: unknown): PersistedStudioDraft | null {
     relayMode,
     workbookPath: asString(record.workbookPath) ?? "",
     workbookFocus: asString(record.workbookFocus) ?? "Sheet1",
-    relayPacketText: asString(record.relayPacketText) ?? "",
-    relayPacketSummary: asString(record.relayPacketSummary) ?? "",
-    rawResponse: asString(record.rawResponse) ?? "",
-    validationSummary: asString(record.validationSummary) ?? "",
     previewSummary: asString(record.previewSummary) ?? "",
     approvalSummary: asString(record.approvalSummary) ?? "",
     executionSummary: asString(record.executionSummary) ?? "",
@@ -786,9 +778,6 @@ function hasMeaningfulDraft(draft: PersistedStudioDraft): boolean {
     draft.turnTitle.trim() ||
       draft.turnObjective.trim() ||
       draft.workbookPath.trim() ||
-      draft.relayPacketText.trim() ||
-      draft.rawResponse.trim() ||
-      draft.validationSummary.trim() ||
       draft.previewSummary.trim() ||
       draft.approvalSummary.trim() ||
       draft.executionSummary.trim() ||

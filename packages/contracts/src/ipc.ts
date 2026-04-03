@@ -26,10 +26,8 @@ import {
   mcpTransportSchema,
   planStepSchema,
   qualityCheckResultSchema,
-  relayPacketSchema,
   toolRegistrationSchema,
-  toolSourceSchema,
-  validationIssueSchema
+  toolSourceSchema
 } from "./relay";
 import {
   entityIdSchema,
@@ -481,11 +479,6 @@ export const startTurnResponseSchema = z.object({
 
 export const listSessionsResponseSchema = z.array(sessionSchema);
 
-export const generateRelayPacketRequestSchema = z.object({
-  sessionId: z.string().trim().min(1),
-  turnId: z.string().trim().min(1)
-});
-
 export const copilotHandoffStatusSchema = z.enum(["clear", "caution"]);
 export const copilotHandoffReasonSourceSchema = z.enum([
   "path",
@@ -519,18 +512,16 @@ export const assessCopilotHandoffResponseSchema = z.object({
   planningContext: planningContextSchema.optional()
 });
 
-export const submitCopilotResponseRequestSchema = z.object({
+export const recordStructuredResponseRequestSchema = z.object({
   sessionId: z.string().trim().min(1),
   turnId: z.string().trim().min(1),
-  rawResponse: z.string().trim().min(1)
+  rawResponse: z.string().trim().min(1).optional(),
+  parsedResponse: copilotTurnResponseSchema
 });
 
-export const submitCopilotResponseResponseSchema = z.object({
+export const recordStructuredResponseResponseSchema = z.object({
   turn: turnSchema,
-  accepted: z.boolean(),
-  validationIssues: z.array(validationIssueSchema),
-  parsedResponse: copilotTurnResponseSchema.optional(),
-  repairPrompt: z.string().optional(),
+  parsedResponse: copilotTurnResponseSchema,
   autoLearnedMemory: z.array(projectMemoryEntrySchema).default([])
 });
 
@@ -870,8 +861,6 @@ export type ReadTurnArtifactsResponse = z.infer<typeof readTurnArtifactsResponse
 export type StartTurnRequest = z.infer<typeof startTurnRequestSchema>;
 export type StartTurnResponse = z.infer<typeof startTurnResponseSchema>;
 export type ListSessionsResponse = z.infer<typeof listSessionsResponseSchema>;
-export type GenerateRelayPacketRequest = z.infer<typeof generateRelayPacketRequestSchema>;
-export type GenerateRelayPacketResponse = z.infer<typeof relayPacketSchema>;
 export type CopilotHandoffStatus = z.infer<typeof copilotHandoffStatusSchema>;
 export type CopilotHandoffReasonSource = z.infer<
   typeof copilotHandoffReasonSourceSchema
@@ -887,11 +876,11 @@ export type PlanningContext = z.infer<typeof planningContextSchema>;
 export type AssessCopilotHandoffResponse = z.infer<
   typeof assessCopilotHandoffResponseSchema
 >;
-export type SubmitCopilotResponseRequest = z.infer<
-  typeof submitCopilotResponseRequestSchema
+export type RecordStructuredResponseRequest = z.infer<
+  typeof recordStructuredResponseRequestSchema
 >;
-export type SubmitCopilotResponseResponse = z.infer<
-  typeof submitCopilotResponseResponseSchema
+export type RecordStructuredResponseResponse = z.infer<
+  typeof recordStructuredResponseResponseSchema
 >;
 export type ToolExecutionResult = z.infer<typeof toolExecutionResultSchema>;
 export type ExecuteReadActionsRequest = z.infer<

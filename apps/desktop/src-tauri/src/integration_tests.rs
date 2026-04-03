@@ -8,10 +8,10 @@ use crate::{
     file_support,
     mcp_client::McpToolDefinition,
     models::{
-        ApprovalDecision, CreateProjectRequest, CreateSessionRequest, McpServerConfig,
-        McpTransport, OutputFormat, OutputSpec, PreviewExecutionRequest, ReadProjectRequest,
-        RelayMode, RespondToApprovalRequest, RunExecutionMultiRequest, StartTurnRequest,
-        SubmitCopilotResponseRequest, UpdateProjectRequest,
+        ApprovalDecision, CopilotTurnResponse, CreateProjectRequest, CreateSessionRequest,
+        McpServerConfig, McpTransport, OutputFormat, OutputSpec, PreviewExecutionRequest,
+        ReadProjectRequest, RecordStructuredResponseRequest, RelayMode,
+        RespondToApprovalRequest, RunExecutionMultiRequest, StartTurnRequest, UpdateProjectRequest,
     },
     storage::{is_within_project_scope, AppStorage},
     tool_catalog::ToolCatalog,
@@ -26,6 +26,24 @@ fn copilot_response(summary: &str, actions: Vec<serde_json::Value>) -> String {
         "warnings": []
     })
     .to_string()
+}
+
+fn record_copilot_response(
+    storage: &mut AppStorage,
+    session_id: &str,
+    turn_id: &str,
+    raw_response: String,
+) {
+    let parsed_response = serde_json::from_str::<CopilotTurnResponse>(&raw_response)
+        .expect("response should deserialize");
+    storage
+        .record_structured_response(RecordStructuredResponseRequest {
+            session_id: session_id.to_string(),
+            turn_id: turn_id.to_string(),
+            raw_response: Some(raw_response),
+            parsed_response,
+        })
+        .expect("response should record");
 }
 
 fn stage_multi_output_response(
@@ -56,21 +74,20 @@ fn stage_multi_output_response(
             turn_id: turn.id.clone(),
         })
         .expect("packet should generate");
-    storage
-        .submit_copilot_response(SubmitCopilotResponseRequest {
-            session_id: session.id.clone(),
-            turn_id: turn.id.clone(),
-            raw_response: copilot_response(
-                "Prepare a save-copy output.",
-                vec![json!({
-                    "tool": "workbook.save_copy",
-                    "args": {
-                        "outputPath": default_output_path
-                    }
-                })],
-            ),
-        })
-        .expect("response should parse");
+    record_copilot_response(
+        storage,
+        &session.id,
+        &turn.id,
+        copilot_response(
+            "Prepare a save-copy output.",
+            vec![json!({
+                "tool": "workbook.save_copy",
+                "args": {
+                    "outputPath": default_output_path
+                }
+            })],
+        ),
+    );
     storage
         .preview_execution(PreviewExecutionRequest {
             session_id: session.id.clone(),

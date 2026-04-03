@@ -65,6 +65,11 @@ Artifacts:
 
 - `docs/T14_SESSION_MIGRATION_DESIGN.md`
 - `apps/desktop/src-tauri/src/storage.rs`
+- `apps/desktop/src-tauri/src/relay.rs`
+- `apps/desktop/src-tauri/src/models.rs`
+- `apps/desktop/src/lib/ipc.ts`
+- `packages/contracts/src/ipc.ts`
+- `apps/desktop/src/routes/+page.svelte`
 
 Outcome:
 
@@ -74,14 +79,23 @@ Outcome:
 - Added a shared latest-structured-response accessor in `storage.rs` that resolves a `CopilotTurnResponse` from the live response cache first, then persisted response/validation artifacts, then the latest assistant JSON stored in `claw-core` session history for the latest turn.
 - Updated `preview_execution()` to use that accessor, which means Rust agent sessions can now enter preview/review without going through `submit_copilot_response()` first as long as the latest assistant message contains a valid structured response.
 - Added a regression that drives preview generation from session history only, plus a second regression confirming the existing manual pasted-response preview flow still passes.
+- Added `record_structured_response` as a new backend/frontend IPC path for the primary agent-loop flow, so a validated `CopilotTurnResponse` can now be recorded directly without generating a relay packet or going through pasted-response submission.
+- Updated the main page so setup no longer generates a relay packet for the active turn; instruction text and planning fallback now derive from the enabled tool list plus workbook context instead of `relayPacket`.
+- Updated the auto agent-loop ready-to-write path so it records the final structured response through the new IPC, then opens preview/review directly from backend state instead of re-entering the old pasted-response flow.
+- Removed the remaining manual pasted-response entry point and its backend command: the desktop route no longer keeps relay-packet or pasted-response continuity state, scope-approval resume now reuses the pending structured response directly, and `submit_copilot_response` has been deleted in favor of `record_structured_response`.
+- Removed the public `generate_relay_packet` and `submit_copilot_response` IPC wrappers, updated recoverable studio drafts to persist only the current session/preview/execution state, and migrated Rust smoke/integration tests to record structured responses directly instead of using the deleted submit flow.
 
 Verification:
 
 Commands run:
 
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml preview_execution_uses_latest_structured_response_from_session_history -- --nocapture`
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml record_structured_response_enables_preview_without_submit_flow -- --nocapture`
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml preview_execution_summarizes_parsed_csv_write_actions -- --nocapture`
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`
+- `pnpm --filter @relay-agent/desktop typecheck`
+- `pnpm --filter @relay-agent/desktop build`
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run`
 
 Result:
 

@@ -10,9 +10,9 @@ use uuid::Uuid;
 
 use crate::{
     models::{
-        ApprovalDecision, CreateSessionRequest, GenerateRelayPacketRequest,
-        PreviewExecutionRequest, RelayMode, RespondToApprovalRequest, RunExecutionRequest,
-        StartTurnRequest, SubmitCopilotResponseRequest,
+        ApprovalDecision, CopilotTurnResponse, CreateSessionRequest, GenerateRelayPacketRequest,
+        PreviewExecutionRequest, RecordStructuredResponseRequest, RelayMode,
+        RespondToApprovalRequest, RunExecutionRequest, StartTurnRequest,
     },
     startup::{self, StartupStatus},
 };
@@ -254,25 +254,20 @@ fn run_workflow_smoke_inner(
             ),
         );
 
-        let submission = storage
-            .submit_copilot_response(SubmitCopilotResponseRequest {
+        let raw_response = build_sample_response(&output_path);
+        let parsed_response = serde_json::from_str::<CopilotTurnResponse>(&raw_response)
+            .map_err(|error| summary.fail("validate-response", error.to_string()))?;
+        storage
+            .record_structured_response(RecordStructuredResponseRequest {
                 session_id: session.id.clone(),
                 turn_id: turn.id.clone(),
-                raw_response: build_sample_response(&output_path),
+                raw_response: Some(raw_response),
+                parsed_response,
             })
             .map_err(|error| summary.fail("validate-response", error))?;
-        if !submission.accepted {
-            return Err(summary.fail(
-                "validate-response",
-                format!(
-                    "Bundled sample response was rejected with {} validation issue(s).",
-                    submission.validation_issues.len()
-                ),
-            ));
-        }
         summary.push_ok(
             "validate-response",
-            "Bundled sample response was accepted without validation issues.",
+            "Bundled sample response was recorded without validation issues.",
         );
 
         let preview = storage

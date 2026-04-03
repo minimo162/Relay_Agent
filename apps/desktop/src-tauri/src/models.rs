@@ -938,10 +938,12 @@ pub struct GenerateRelayPacketRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SubmitCopilotResponseRequest {
+pub struct RecordStructuredResponseRequest {
     pub session_id: String,
     pub turn_id: String,
-    pub raw_response: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_response: Option<String>,
+    pub parsed_response: CopilotTurnResponse,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1124,14 +1126,9 @@ pub struct StartTurnResponse {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SubmitCopilotResponseResponse {
+pub struct RecordStructuredResponseResponse {
     pub turn: Turn,
-    pub accepted: bool,
-    pub validation_issues: Vec<ValidationIssue>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parsed_response: Option<CopilotTurnResponse>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repair_prompt: Option<String>,
+    pub parsed_response: CopilotTurnResponse,
     pub auto_learned_memory: Vec<ProjectMemoryEntry>,
 }
 

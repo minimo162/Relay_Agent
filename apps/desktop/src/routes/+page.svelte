@@ -31,7 +31,6 @@
     CopilotTurnResponse,
     DiffSummary,
     ExecutionPlan,
-    GenerateRelayPacketResponse,
     McpTransport,
     McpServerConfig,
     OutputArtifact,
@@ -51,7 +50,6 @@
     ToolRegistration,
     ToolExecutionResult,
     TurnDetailsViewModel,
-    ValidationIssue,
     WorkbookProfile,
     WorkflowTemplate,
     WorkflowTemplateCategory
@@ -75,7 +73,6 @@
     discardStudioDraft,
     disposeAgentUi,
     feedStore,
-    generateRelayPacket,
     getPlanProgress,
     getCopilotBrowserErrorMessage,
     getActiveSessionState,
@@ -110,6 +107,7 @@
     previewExecution,
     readTurnArtifacts,
     readSession,
+    recordStructuredResponse,
     removeProjectMemory,
     removeInboxFile,
     rememberRecentFile,
@@ -132,7 +130,6 @@
     setToolEnabled,
     startAgent as startDesktopAgent,
     startTurn,
-    submitCopilotResponse,
     templateDelete,
     templateFromSession,
     templateList,
@@ -150,7 +147,6 @@
     type RecentSession,
     type ToolSettings,
   } from "$lib";
-  import { autoFixCopilotResponse } from "$lib/auto-fix";
   import { buildProjectContext } from "$lib/prompt-templates";
 
   type AutomationTab = "pipeline" | "batch" | "template";
@@ -190,13 +186,6 @@
     updatedAt: string;
     workbookPath?: string | null;
     assignedProjectName?: string | null;
-  };
-  type ValidationFeedback = {
-    level: 1 | 2 | 3;
-    title: string;
-    summary: string;
-    specificError: string;
-    details: string[];
   };
   type FileWritePreviewAction = {
     tool: string;
@@ -258,8 +247,6 @@
   const expertDetailsStoragePrefix = "relay-agent.expert-details";
   const AUTO_CDP_PORT_RANGE_START = 9333;
   const AUTO_CDP_PORT_RANGE_END = 9342;
-  const expectedResponseShape =
-    '{ "version": "1.0", "status": "thinking|ready_to_write|done|error", "summary": "...", "actions": [...] }';
   const instructionColumnLimit = 20;
   const objectivePresets = [
     "approved が true の行だけ残してください",
@@ -509,22 +496,11 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   let sessionId = "";
   let turnId = "";
-  let relayPacket: GenerateRelayPacketResponse | null = null;
-  let relayPacketText = "";
   let copilotInstructionText = "";
-  let expectedResponseTemplate = "";
-  let copiedInstructionNotice = "";
   let copiedBrowserCommandNotice = "";
-  let copilotResponse = "";
-  let originalCopilotResponse = "";
-  let autoFixMessages: string[] = [];
-  let validationFeedback: ValidationFeedback | null = null;
-  let retryPrompt = "";
-  let showInstructionPreview = false;
   let isSendingToCopilot = false;
   let sendStatusMessage = "";
   let copilotAutoError: string | null = null;
-  let copilotResponseField: HTMLTextAreaElement | null = null;
   let cdpPort = AUTO_CDP_PORT_RANGE_START;
   let autoLaunchEdge = true;
   let timeoutMs = 60000;
@@ -582,6 +558,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   let scopeApprovalSummary = "";
   let scopeApprovalRootFolder = "";
   let scopeApprovalViolations: string[] = [];
+  let scopeApprovalResponse: CopilotTurnResponse | null = null;
+  let scopeApprovalRawResponse = "";
   let showDetailedChanges = false;
   let executionDone = false;
   let executionSummary = "";
@@ -1108,6 +1086,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     scopeApprovalSummary = "";
     scopeApprovalRootFolder = "";
     scopeApprovalViolations = [];
+    scopeApprovalResponse = null;
+    scopeApprovalRawResponse = "";
   }
 
   function resetTurnInspectionState(): void {
@@ -1188,7 +1168,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   function formatScopeApprovalSource(
     source?: ScopeApprovalSource | "manual" | "agent-loop"
   ): string {
-    return source === "agent-loop" ? "自律実行" : "手動貼り付け";
+    return source === "agent-loop" ? "自律実行" : "スタジオ";
   }
 
   function getRemainingPlanAfterCurrentStep(): ExecutionPlan | null {
@@ -1214,6 +1194,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     rootFolder: string;
     violations: string[];
     responseSummary: string;
+    parsedResponse: CopilotTurnResponse;
     rawResponse?: string;
   }): void {
     const uniqueViolations = [...new Set(options.violations.filter((value) => value.trim()))];
@@ -1226,11 +1207,8 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     scopeApprovalSummary = options.responseSummary;
     scopeApprovalRootFolder = options.rootFolder;
     scopeApprovalViolations = uniqueViolations;
-    if (options.rawResponse?.trim()) {
-      copilotResponse = options.rawResponse;
-      originalCopilotResponse = "";
-      autoFixMessages = [];
-    }
+    scopeApprovalResponse = options.parsedResponse;
+    scopeApprovalRawResponse = options.rawResponse?.trim() ?? "";
   }
 
   function handleTaskNameInput(nextTaskName: string): void {
@@ -1481,15 +1459,16 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   function buildCopilotInstructionText(
-    packet: GenerateRelayPacketResponse,
+    objective: string,
     workbookPath: string,
     title: string,
     profile: WorkbookProfile | null,
     columnProfiles: SheetColumnProfile[],
+    availableTools: ToolRegistration[],
     templateKey: TemplateKey | null,
     projectContext = ""
   ): string {
-    const toolLines = [...packet.allowedReadTools, ...packet.allowedWriteTools].map(
+    const toolLines = availableTools.map(
       (tool) => `- ${tool.id}: ${tool.description}`
     );
     const outputPath = suggestOutputPath(workbookPath);
@@ -1501,7 +1480,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       ...(projectContext.trim() ? [projectContext.trim(), ""] : []),
       "1. やりたいこと",
       `- 作業名: ${title}`,
-      `- 目的: ${packet.objective}`,
+      `- 目的: ${objective}`,
       "",
       "2. 対象ファイル",
       `- ファイル: ${workbookPath}`,
@@ -1529,118 +1508,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     ].join("\n");
   }
 
-  function allowedToolIds(): string[] {
-    if (!relayPacket) {
-      return [];
-    }
-
-    return [...relayPacket.allowedReadTools, ...relayPacket.allowedWriteTools].map(
-      (tool) => tool.id
-    );
+  function currentAllowedTools(): ToolRegistration[] {
+    return tools.filter((tool) => tool.enabled);
   }
-
-  function classifyValidationIssues(
-    issues: ValidationIssue[],
-    allowedTools: string[]
-  ): ValidationFeedback {
-    const invalidJsonIssue = issues.find((issue) => issue.code === "invalid_json");
-    if (invalidJsonIssue) {
-      return {
-        level: 1,
-        title: "JSON の書き方を直してください",
-        summary: "回答を JSON として読めませんでした。余分な記号やカンマを確認してください。",
-        specificError: invalidJsonIssue.message,
-        details: [
-          "JSON だけを返してください。",
-          "``` は付けないでください。",
-          "カンマや引用符の閉じ忘れを確認してください。"
-        ]
-      };
-    }
-
-    const unknownToolIssue = issues.find((issue) => issue.code === "unknown_tool");
-    if (unknownToolIssue) {
-      return {
-        level: 3,
-        title: "使える操作名が違います",
-        summary: "書式は読めましたが、許可されていない tool 名が含まれています。",
-        specificError: unknownToolIssue.message,
-        details: [
-          `使える tool: ${allowedTools.join(", ")}`,
-          "tool 名はそのまま使ってください。"
-        ]
-      };
-    }
-
-    return {
-      level: 2,
-      title: "必要な項目が足りないか、形が違います",
-      summary: "JSON には見えましたが、Relay Agent が必要とする項目がそろっていません。",
-      specificError:
-        issues[0]?.message ?? "summary または actions の形を確認してください。",
-      details: [
-        "version / summary / actions を含めてください。",
-        "actions は配列で返してください。",
-        `期待する形式: ${expectedResponseShape}`
-      ]
-    };
-  }
-
-  function buildRetryPrompt(
-    feedback: ValidationFeedback,
-    allowedTools: string[]
-  ): string {
-    const commonRules = [
-      "``` で囲まない",
-      "パスは / 区切りで書く",
-      "JSON 以外の説明文を付けない",
-      "_ や [ ] を \\_ や \\[ \\] にしない"
-    ];
-
-    if (feedback.level === 1) {
-      return [
-        "先ほどの回答は Relay Agent で受け付けられませんでした。",
-        `JSON 構文エラー: ${feedback.specificError}`,
-        "",
-        "同じ内容のまま、JSON の書き方だけを直してください。",
-        ...commonRules.map((rule, index) => `${index + 1}. ${rule}`),
-        "5. カンマ、引用符、{ } と [ ] の閉じ忘れを直す",
-        "",
-        "期待するテンプレート:",
-        expectedResponseTemplate
-      ].join("\n");
-    }
-
-    if (feedback.level === 2) {
-      return [
-        "先ほどの回答は Relay Agent で受け付けられませんでした。",
-        `スキーマエラー: ${feedback.specificError}`,
-        "",
-        "必要な項目をそろえて、同じ意図の JSON を返してください。",
-        ...commonRules.map((rule, index) => `${index + 1}. ${rule}`),
-        "5. version / summary / actions を必ず含める",
-        "6. actions は配列で返す",
-        "",
-        "期待するテンプレート:",
-        expectedResponseTemplate
-      ].join("\n");
-    }
-
-    return [
-      "先ほどの回答は Relay Agent で受け付けられませんでした。",
-      `tool 名エラー: ${feedback.specificError}`,
-      "",
-      "使える tool 名だけに直して、同じ内容の JSON を返してください。",
-      ...commonRules.map((rule, index) => `${index + 1}. ${rule}`),
-      `5. 使える tool: ${allowedTools.join(", ")}`,
-      "6. tool 名は見えている文字をそのまま使う",
-      "",
-      "期待するテンプレート:",
-      expectedResponseTemplate
-    ].join("\n");
-  }
-
-
 
   function setProgress(labels: string[]): void {
     progressItems = labels.map((label, index) => ({
@@ -1897,6 +1767,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     workbookSummary: string;
     availableTools: { read: string[]; write: string[] };
   } {
+    const availableTools = currentAllowedTools();
     const workbookSummary = [
       filePath.trim() ? `File: ${filePath.trim()}` : "File: not selected",
       ...formatWorkbookContextLines(workbookProfile, workbookColumnProfiles)
@@ -1905,8 +1776,12 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     return {
       workbookSummary,
       availableTools: {
-        read: relayPacket?.allowedReadTools.map((tool) => tool.id) ?? [],
-        write: relayPacket?.allowedWriteTools.map((tool) => tool.id) ?? []
+        read: availableTools
+          .filter((tool) => tool.phase === "read")
+          .map((tool) => tool.id),
+        write: availableTools
+          .filter((tool) => tool.phase === "write")
+          .map((tool) => tool.id)
       }
     };
   }
@@ -2298,40 +2173,18 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     await handleAgentLoopAutoSend(undefined, true);
   }
 
-  function parseRelayPacket(
-    packetText: string
-  ): GenerateRelayPacketResponse | null {
-    if (!packetText.trim()) {
-      return null;
-    }
-
-    try {
-      return JSON.parse(packetText) as GenerateRelayPacketResponse;
-    } catch {
-      return null;
-    }
-  }
-
   function applyRecentSessionFallback(session: RecentSession): void {
     errorMsg = "";
-    copiedInstructionNotice = "";
     copiedBrowserCommandNotice = "";
     copilotAutoError = null;
     isSendingToCopilot = false;
     clearScopeApproval();
     resetAgentLoopState();
     resetPlanExecutionState();
-    validationFeedback = null;
-    retryPrompt = "";
     clearProgress();
     sessionId = "";
     turnId = "";
-    relayPacket = null;
-    relayPacketText = "";
     copilotInstructionText = "";
-    copilotResponse = "";
-    originalCopilotResponse = "";
-    autoFixMessages = [];
     clearPreviewState();
     resetTurnInspectionState();
     executionDone = false;
@@ -2392,6 +2245,10 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     }
 
     return "";
+  }
+
+  function stringifyStructuredResponse(response: CopilotTurnResponse): string {
+    return JSON.stringify(response, null, 2);
   }
 
   function currentAgentOutputPath(): string {
@@ -2497,15 +2354,12 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     hydratingDraft = true;
 
     errorMsg = "";
-    copiedInstructionNotice = "";
     copiedBrowserCommandNotice = "";
     copilotAutoError = null;
     isSendingToCopilot = false;
     clearScopeApproval();
     resetAgentLoopState();
     resetPlanExecutionState();
-    validationFeedback = null;
-    retryPrompt = "";
     clearProgress();
     preflight = null;
     sessionId = draft.sessionId;
@@ -2515,12 +2369,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     selectedTemplateKey = inferTemplateKey(draft.turnObjective);
     taskName = draft.turnTitle || session.lastTurnTitle || session.title;
     taskNameEdited = Boolean(taskName.trim());
-    relayPacketText = draft.relayPacketText;
-    const restoredPacket = parseRelayPacket(draft.relayPacketText);
-    relayPacket = restoredPacket;
-    copilotResponse = draft.rawResponse;
-    originalCopilotResponse = "";
-    autoFixMessages = [];
     previewSummary = draft.previewSummary;
     previewTargetCount = draft.previewSnapshot?.targetCount ?? 0;
     previewAffectedRows = draft.previewSnapshot?.estimatedAffectedRows ?? 0;
@@ -2732,16 +2580,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       connectingMcp = false;
     }
   }
-
-  async function copyCopilotInstruction(): Promise<void> {
-    if (!copilotInstructionText.trim()) {
-      return;
-    }
-
-    await copyToClipboard(copilotInstructionText);
-    copiedInstructionNotice = "Copilot に渡すテキストをコピーしました。";
-  }
-
   async function copyEdgeLaunchCommand(): Promise<void> {
     await copyToClipboard(getEdgeLaunchCommand());
     copiedBrowserCommandNotice = "Edge の起動コマンドをコピーしました。";
@@ -2770,46 +2608,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   function handleBrowserProgress(event: BrowserCommandProgress): void {
     sendStatusMessage = event.detail?.trim() || describeBrowserProgressStep(event.step);
-  }
-
-  function focusCopilotResponseField(): void {
-    copilotResponseField?.focus();
-    copilotResponseField?.scrollIntoView({ block: "center" });
-  }
-
-  async function handleSingleShotCopilotAutoSend(): Promise<void> {
-    if (!copilotInstructionText.trim()) {
-      return;
-    }
-
-    isSendingToCopilot = true;
-    sendStatusMessage = "Copilot に送信中…";
-    copilotAutoError = null;
-    copiedInstructionNotice = "";
-    clearScopeApproval();
-    resetAgentLoopState();
-    resetPlanExecutionState();
-
-    try {
-      const response = await sendPromptViaBrowserTool(copilotInstructionText, {
-        onProgress: handleBrowserProgress
-      });
-      copilotResponse = response;
-      originalCopilotResponse = "";
-      autoFixMessages = [];
-      validationFeedback = null;
-      retryPrompt = "";
-    } catch (error) {
-      console.error("[copilot-browser] handleCopilotAutoSend error:", error);
-      const friendlyMsg = getCopilotBrowserErrorMessage(error);
-      const rawMsg = error instanceof Error ? error.message.trim() : String(error);
-      copilotAutoError = rawMsg && rawMsg !== friendlyMsg
-        ? `${friendlyMsg}\n[詳細: ${rawMsg}]`
-        : friendlyMsg;
-    } finally {
-      isSendingToCopilot = false;
-      sendStatusMessage = "";
-    }
   }
 
   async function buildPlanningInstruction(extraFeedback = ""): Promise<string> {
@@ -2939,14 +2737,13 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
             });
 
           },
-          onManualFallback: (_turn, fallbackPrompt, error) => {
-            retryPrompt = fallbackPrompt;
-            pushDelegationEvent("error", "手動フォールバックが必要です。", {
-              detail: `${error}\n\n${fallbackPrompt}`,
+          onManualFallback: (_turn, _fallbackPrompt, error) => {
+            const message = `Copilot の構造化応答を確定できなかったため停止しました: ${error}`;
+            copilotAutoError = message;
+            pushDelegationEvent("error", message, {
               expandable: true,
               actionRequired: true
             });
-
           },
           onScopeWarning: ({ violations, rootFolder, tool, rawResponse, parsedResponse }) => {
             const firstViolation = violations[0] ?? "";
@@ -2959,6 +2756,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
                 parsedResponse.message ??
                 parsedResponse.summary ??
                 "Copilot がプロジェクトルート外へのファイル操作を提案しました。",
+              parsedResponse,
               rawResponse
             });
             delegationStore.requestApproval();
@@ -3038,11 +2836,42 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       pendingPlan = result.proposedPlan ?? null;
 
       if (result.status === "ready_to_write" && result.finalResponse) {
-        copilotResponse = JSON.stringify(result.finalResponse, null, 2);
-        originalCopilotResponse = "";
-        autoFixMessages = [];
+        const rawResponse = stringifyStructuredResponse(result.finalResponse);
         isPlanExecuting = false;
-        await handleCopilotStage();
+        await recordStructuredResponse({
+          sessionId,
+          turnId,
+          rawResponse,
+          parsedResponse: result.finalResponse
+        });
+        const previewResult = await openPreviewFromStructuredResponse(result.finalResponse, {
+          rawResponse,
+          scopeApprovalSource: "agent-loop"
+        });
+        if (previewResult.blockedByScope) {
+          copilotAutoError = previewResult.message;
+          delegationStore.requestApproval();
+          pushDelegationEvent("write_approval_requested", "プロジェクト範囲外アクセスの承認が必要です。", {
+            detail: `${selectedProject?.rootFolder ?? "未設定"}\n${scopeApprovalViolations.join("\n")}`,
+            expandable: true,
+            actionRequired: true
+          });
+          return;
+        }
+        if (previewResult.preview.autoApproved) {
+          delegationStore.resumeExecution();
+          pushDelegationEvent("write_approved", "現在の承認ポリシーで自動承認されました。", {
+            detail: `${previewResult.preview.approvalPolicy} / ${previewResult.preview.highestRisk}`,
+            badgeLabel: "自動承認済み"
+          });
+          await handleReviewSaveStage();
+          return;
+        }
+        delegationStore.requestApproval();
+        pushDelegationEvent("write_approval_requested", "保存前の確認が必要です。", {
+          detail: previewSummary,
+          actionRequired: true
+        });
         return;
       }
 
@@ -3186,9 +3015,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     agentLoopResult = null;
     agentLoopConversationHistory = [];
     copilotAutoError = null;
-    copiedInstructionNotice = "";
-    validationFeedback = null;
-    retryPrompt = "";
     clearScopeApproval();
     if (planningMode) {
       resetPlanExecutionState();
@@ -3313,24 +3139,23 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
             });
 
           },
-          onManualFallback: (turn, fallbackPrompt, error) => {
-            retryPrompt = fallbackPrompt;
+          onManualFallback: (turn, _fallbackPrompt, error) => {
+            const message = `Copilot の構造化応答を確定できなかったため停止しました: ${error}`;
             pushAgentLoopLog(
               `copilot.manual-fallback.${turn}`,
-              `Turn ${turn}: 手動フォールバック`,
+              `Turn ${turn}: 自動処理を停止`,
               "error",
               {
-                detail: fallbackPrompt,
-                errorMessage: error,
+                detail: message,
+                errorMessage: message,
                 endTime: Date.now()
               }
             );
-            pushDelegationEvent("error", "手動フォールバックが必要です。", {
-              detail: `${error}\n\n${fallbackPrompt}`,
+            copilotAutoError = message;
+            pushDelegationEvent("error", message, {
               expandable: true,
               actionRequired: true
             });
-
           },
           onScopeWarning: ({ violations, rootFolder, tool, rawResponse, parsedResponse }) => {
             const firstViolation = violations[0] ?? "";
@@ -3343,6 +3168,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
                 parsedResponse.message ??
                 parsedResponse.summary ??
                 "Copilot がプロジェクトルート外へのファイル操作を提案しました。",
+              parsedResponse,
               rawResponse
             });
             pushAgentLoopLog(
@@ -3379,14 +3205,42 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
         return;
       }
 
-      if (result.finalResponse) {
-        copilotResponse = JSON.stringify(result.finalResponse, null, 2);
-        originalCopilotResponse = "";
-        autoFixMessages = [];
-      }
-
       if (result.status === "ready_to_write" && result.finalResponse) {
-        await handleCopilotStage();
+        const rawResponse = stringifyStructuredResponse(result.finalResponse);
+        await recordStructuredResponse({
+          sessionId,
+          turnId,
+          rawResponse,
+          parsedResponse: result.finalResponse
+        });
+        const previewResult = await openPreviewFromStructuredResponse(result.finalResponse, {
+          rawResponse,
+          scopeApprovalSource: "agent-loop"
+        });
+        if (previewResult.blockedByScope) {
+          copilotAutoError = previewResult.message;
+          delegationStore.requestApproval();
+          pushDelegationEvent("write_approval_requested", "プロジェクト範囲外アクセスの承認が必要です。", {
+            detail: `${selectedProject?.rootFolder ?? "未設定"}\n${scopeApprovalViolations.join("\n")}`,
+            expandable: true,
+            actionRequired: true
+          });
+          return;
+        }
+        if (previewResult.preview.autoApproved) {
+          delegationStore.resumeExecution();
+          pushDelegationEvent("write_approved", "現在の承認ポリシーで自動承認されました。", {
+            detail: `${previewResult.preview.approvalPolicy} / ${previewResult.preview.highestRisk}`,
+            badgeLabel: "自動承認済み"
+          });
+          await handleReviewSaveStage();
+          return;
+        }
+        delegationStore.requestApproval();
+        pushDelegationEvent("write_approval_requested", "保存前の確認が必要です。", {
+          detail: previewSummary,
+          actionRequired: true
+        });
         return;
       }
 
@@ -3459,35 +3313,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     }
   }
 
-  async function handleCopilotAutoSend(): Promise<void> {
-    if (agentLoopEnabled) {
-      await handleAgentLoopAutoSend();
-      return;
-    }
-
-    await handleSingleShotCopilotAutoSend();
-  }
-
-  function undoAutoFix(): void {
-    if (!originalCopilotResponse.trim()) {
-      return;
-    }
-
-    copilotResponse = originalCopilotResponse;
-    autoFixMessages = [];
-    originalCopilotResponse = "";
-  }
-
-  async function copyRetryPrompt(): Promise<void> {
-    if (!retryPrompt.trim()) {
-      return;
-    }
-
-    await copyToClipboard(retryPrompt);
-  }
-
-
-
   function resetAll(): void {
     if (sessionId) {
       discardStudioDraft(sessionId);
@@ -3508,19 +3333,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     workbookColumnProfiles = [];
     sessionId = "";
     turnId = "";
-    relayPacket = null;
-    relayPacketText = "";
     copilotInstructionText = "";
-    expectedResponseTemplate = "";
-    copiedInstructionNotice = "";
     copiedBrowserCommandNotice = "";
-    copilotResponse = "";
-    originalCopilotResponse = "";
-    autoFixMessages = [];
     handoffCaution = null;
-    validationFeedback = null;
-    retryPrompt = "";
-    showInstructionPreview = false;
     isSendingToCopilot = false;
     copilotAutoError = null;
     clearScopeApproval();
@@ -3538,12 +3353,9 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
   async function handleSetupStage(): Promise<void> {
     errorMsg = "";
-    copiedInstructionNotice = "";
     copiedBrowserCommandNotice = "";
     copilotAutoError = null;
     handoffCaution = null;
-    validationFeedback = null;
-    retryPrompt = "";
     busy = true;
     setProgress([
       "ファイルの状態を確認しています",
@@ -3627,13 +3439,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       });
       turnId = turnResponse.turn.id;
       markProgress(3, "done");
-
-      const packet = await generateRelayPacket({
-        sessionId: session.id,
-        turnId: turnResponse.turn.id
-      });
-      relayPacket = packet;
-      relayPacketText = JSON.stringify(packet, null, 2);
       try {
         const handoff = await assessCopilotHandoff({
           sessionId: session.id,
@@ -3666,161 +3471,80 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
     }
   }
 
-  async function handleCopilotStage(options: { allowScopeOverride?: boolean } = {}): Promise<void> {
-    errorMsg = "";
-    copiedInstructionNotice = "";
-    copilotAutoError = null;
-    validationFeedback = null;
-    retryPrompt = "";
-    clearPreviewState();
-    if (!options.allowScopeOverride) {
-      clearScopeApproval();
-    }
-    busy = true;
-    setProgress([
-      "回答の書式を自動で整えています",
-      "回答の形式を確認しています",
-      "保存前の変更内容を準備しています"
-    ]);
-
-    try {
-      if (!copilotResponse.trim()) {
-        failCurrentProgress("Copilot の回答を貼り付けてください。");
-        errorMsg = "Copilot の返答を貼り付けてください";
-        return;
-      }
-
-      const fixResult = autoFixCopilotResponse(copilotResponse);
-      autoFixMessages = fixResult.fixes;
-      originalCopilotResponse =
-        fixResult.fixed !== fixResult.originalPreserved ? fixResult.originalPreserved : "";
-      copilotResponse = fixResult.fixed;
-      markProgress(0, "done");
-
-      const submitResult = await submitCopilotResponse({
-        sessionId,
-        turnId,
-        rawResponse: fixResult.fixed
+  async function openPreviewFromStructuredResponse(
+    parsedResponse: CopilotTurnResponse,
+    options: {
+      allowScopeOverride?: boolean;
+      rawResponse?: string;
+      scopeApprovalSource?: ScopeApprovalSource;
+    } = {}
+  ): Promise<
+    | { blockedByScope: true; message: string }
+    | { blockedByScope: false; preview: Awaited<ReturnType<typeof previewExecution>> }
+  > {
+    const scopeViolations = validateProjectScopeActions(
+      (parsedResponse.actions ?? []) as Array<{
+        tool: string;
+        args: Record<string, unknown>;
+      }>,
+      selectedProject?.rootFolder ?? ""
+    );
+    if (scopeViolations.length > 0 && !options.allowScopeOverride) {
+      const firstViolation = scopeViolations[0];
+      openScopeApproval({
+        source: options.scopeApprovalSource ?? "manual",
+        rootFolder: selectedProject?.rootFolder ?? "",
+        violations: scopeViolations,
+        responseSummary:
+          parsedResponse.message ??
+          parsedResponse.summary ??
+          "Copilot がプロジェクトルート外へのファイル操作を提案しました。",
+        parsedResponse,
+        rawResponse: options.rawResponse
       });
-      if (submitResult.autoLearnedMemory.length > 0) {
-        await refreshProjects();
-        projectInfoMsg = `プロジェクト設定を自動学習しました: ${submitResult.autoLearnedMemory
-          .map((entry) => entry.key)
-          .join("、")}`;
-        pushDelegationEvent("tool_executed", "プロジェクト設定を自動学習しました。", {
-          detail: submitResult.autoLearnedMemory
-            .map((entry) => `${entry.key}: ${entry.value}`)
-            .join("\n")
-        });
 
-      }
-
-      if (!submitResult.accepted) {
-        const feedback = classifyValidationIssues(
-          submitResult.validationIssues as ValidationIssue[],
-          allowedToolIds()
-        );
-        validationFeedback = feedback;
-        retryPrompt = buildRetryPrompt(feedback, allowedToolIds());
-        markProgress(1, "error", feedback.summary);
-        errorMsg = feedback.specificError;
-        return;
-      }
-
-      markProgress(1, "done");
-
-      const scopeViolations = validateProjectScopeActions(
-        (submitResult.parsedResponse?.actions ?? []) as Array<{
-          tool: string;
-          args: Record<string, unknown>;
-        }>,
-        selectedProject?.rootFolder ?? ""
-      );
-      if (scopeViolations.length > 0 && !options.allowScopeOverride) {
-        const firstViolation = scopeViolations[0];
-        const message = `プロジェクトスコープ外のファイルアクセスが含まれています: ${firstViolation}`;
-        markProgress(2, "error", message);
-        errorMsg = message;
-        openScopeApproval({
-          source: "manual",
-          rootFolder: selectedProject?.rootFolder ?? "",
-          violations: scopeViolations,
-          responseSummary:
-            submitResult.parsedResponse?.message ??
-            submitResult.parsedResponse?.summary ??
-            "Copilot がプロジェクトルート外へのファイル操作を提案しました。",
-          rawResponse: fixResult.fixed
-        });
-        delegationStore.requestApproval();
-        pushDelegationEvent("write_approval_requested", "プロジェクト範囲外アクセスの承認が必要です。", {
-          detail: `許可ルート: ${selectedProject?.rootFolder ?? "未設定"}\n${scopeViolations.join("\n")}`,
-          expandable: true,
-          actionRequired: true
-        });
-
-        return;
-      }
-
-      const preview = await previewExecution({ sessionId, turnId });
-      const diff = preview.diffSummary;
-      previewSummary =
-        submitResult.parsedResponse?.summary ??
-        diff.sheets[0]?.target.label ??
-        `${diff.targetCount} 件の変更を確認できます。`;
-      previewTargetCount = diff.targetCount;
-      previewAffectedRows = diff.estimatedAffectedRows;
-      previewOutputPath = diff.outputPath;
-      previewWarnings = [
-        ...(scopeViolations.length > 0
-          ? [`プロジェクト範囲外アクセスを承認しました: ${scopeViolations.join(" / ")}`]
-          : []),
-        ...diff.warnings,
-        ...preview.warnings
-      ];
-      previewSheetDiffs = diff.sheets;
-      previewFileWriteActions = preview.fileWriteActions as FileWritePreviewAction[];
-      previewArtifacts =
-        preview.artifacts.length > 0
-          ? preview.artifacts
-          : wrapLegacyPreviewArtifacts(
-              diff,
-              preview.fileWriteActions as FileWritePreviewAction[]
-            );
-      previewRequiresApproval = preview.requiresApproval;
-      previewChangeDetails = diff.sheets.map((sheet) => {
-        const changedColumns =
-          sheet.changedColumns.length > 0
-            ? `変更列: ${sheet.changedColumns.join("、")}`
-            : "変更列の追加情報はありません。";
-        return `${sheet.target.label} / ${sheet.estimatedAffectedRows} 行 / ${changedColumns}`;
-      });
-      showDetailedChanges = false;
-      markProgress(2, "done");
-      if (preview.autoApproved) {
-        delegationStore.resumeExecution();
-        pushDelegationEvent("write_approved", "現在の承認ポリシーで自動承認されました。", {
-          detail: `${preview.approvalPolicy} / ${preview.highestRisk}`,
-          badgeLabel: "自動承認済み"
-        });
-        await handleReviewSaveStage();
-        return;
-      } else {
-        delegationStore.requestApproval();
-        pushDelegationEvent("write_approval_requested", "保存前の確認が必要です。", {
-          detail: previewSummary,
-          actionRequired: true
-        });
-      }
-
-    } catch (error) {
-      const failure = toError(error);
-      failCurrentProgress(failure);
-      errorMsg = failure;
-    } finally {
-      requestTurnInspectionRefresh();
-      requestProjectApprovalAuditRefresh();
-      busy = false;
+      return {
+        blockedByScope: true,
+        message: `プロジェクトスコープ外のファイルアクセスが含まれています: ${firstViolation}`
+      };
     }
+
+    const preview = await previewExecution({ sessionId, turnId });
+    const diff = preview.diffSummary;
+    previewSummary =
+      parsedResponse.summary ??
+      diff.sheets[0]?.target.label ??
+      `${diff.targetCount} 件の変更を確認できます。`;
+    previewTargetCount = diff.targetCount;
+    previewAffectedRows = diff.estimatedAffectedRows;
+    previewOutputPath = diff.outputPath;
+    previewWarnings = [
+      ...(scopeViolations.length > 0
+        ? [`プロジェクト範囲外アクセスを承認しました: ${scopeViolations.join(" / ")}`]
+        : []),
+      ...diff.warnings,
+      ...preview.warnings
+    ];
+    previewSheetDiffs = diff.sheets;
+    previewFileWriteActions = preview.fileWriteActions as FileWritePreviewAction[];
+    previewArtifacts =
+      preview.artifacts.length > 0
+        ? preview.artifacts
+        : wrapLegacyPreviewArtifacts(
+            diff,
+            preview.fileWriteActions as FileWritePreviewAction[]
+          );
+    previewRequiresApproval = preview.requiresApproval;
+    previewChangeDetails = diff.sheets.map((sheet) => {
+      const changedColumns =
+        sheet.changedColumns.length > 0
+          ? `変更列: ${sheet.changedColumns.join("、")}`
+          : "変更列の追加情報はありません。";
+      return `${sheet.target.label} / ${sheet.estimatedAffectedRows} 行 / ${changedColumns}`;
+    });
+    showDetailedChanges = false;
+
+    return { blockedByScope: false, preview };
   }
 
   async function handleReviewSaveStage(): Promise<void> {
@@ -3954,7 +3678,7 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   async function handleApproveScopeOverride(): Promise<void> {
-    if (!scopeApprovalVisible) {
+    if (!scopeApprovalVisible || !scopeApprovalResponse) {
       return;
     }
 
@@ -3983,10 +3707,37 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
 
     errorMsg = "";
     copilotAutoError = null;
+    const approvedResponse = scopeApprovalResponse;
+    const approvedRawResponse = scopeApprovalRawResponse;
+    const approvedSource = scopeApprovalSource ?? "manual";
     clearScopeApproval();
+
+    const previewResult = await openPreviewFromStructuredResponse(approvedResponse, {
+      allowScopeOverride: true,
+      rawResponse: approvedRawResponse,
+      scopeApprovalSource: approvedSource
+    });
     requestTurnInspectionRefresh();
     requestProjectApprovalAuditRefresh();
-    await handleCopilotStage({ allowScopeOverride: true });
+    if (previewResult.blockedByScope) {
+      errorMsg = previewResult.message;
+      copilotAutoError = previewResult.message;
+      return;
+    }
+    if (previewResult.preview.autoApproved) {
+      delegationStore.resumeExecution();
+      pushDelegationEvent("write_approved", "現在の承認ポリシーで自動承認されました。", {
+        detail: `${previewResult.preview.approvalPolicy} / ${previewResult.preview.highestRisk}`,
+        badgeLabel: "自動承認済み"
+      });
+      await handleReviewSaveStage();
+      return;
+    }
+    delegationStore.requestApproval();
+    pushDelegationEvent("write_approval_requested", "保存前の確認が必要です。", {
+      detail: previewSummary,
+      actionRequired: true
+    });
   }
 
   function handleBackFromScopeApproval(): void {
@@ -3997,10 +3748,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       actionRequired: true
     });
 
-  }
-
-  function retryCurrentStage(): void {
-    void handleReviewSaveStage();
   }
 
   function handleGlobalKeydown(event: KeyboardEvent): void {
@@ -4155,7 +3902,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   });
 
   $: agentFeedEntries = $feedStore.map(mapAgentFeedEntry);
-  $: expectedResponseTemplate = buildExpectedResponseTemplate(suggestOutputPath(filePath));
   $: if (!pipelineInitialInputPath && filePath) {
     pipelineInitialInputPath = filePath;
   }
@@ -4230,13 +3976,14 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
   }
 
   $: copilotInstructionText =
-    relayPacket && filePath.trim()
+    filePath.trim()
       ? buildCopilotInstructionText(
-          relayPacket,
+          objectiveText.trim(),
           filePath,
           taskName.trim() || deriveTitle(objectiveText),
           workbookProfile,
           workbookColumnProfiles,
+          currentAllowedTools(),
           selectedTemplateKey,
           projectContextText
         )
@@ -4265,10 +4012,6 @@ workbook.save_copy : { "tool": "workbook.save_copy", "args": { "outputPath": "/p
       relayMode: "plan" as const,
       workbookPath: filePath,
       workbookFocus: "Sheet1",
-      relayPacketText,
-      relayPacketSummary: previewSummary,
-      rawResponse: copilotResponse,
-      validationSummary: validationFeedback?.summary ?? "",
       previewSummary,
       approvalSummary: scopeApprovalVisible
         ? "プロジェクト範囲外アクセスの承認が必要です"

@@ -26,16 +26,16 @@ use crate::models::{
     PlanningContextToolGroups, PreviewArtifactPayload, PreviewExecutionRequest,
     PreviewExecutionResponse, Project, ProjectMemoryEntry, ProjectMemorySource, ReadProjectRequest,
     ReadTurnArtifactsResponse, RecordPlanProgressRequest, RecordScopeApprovalRequest,
-    RecordScopeApprovalResponse, RelayPacket, RelayPacketResponseContract, RemoveInboxFileRequest,
-    RemoveProjectMemoryRequest, RespondToApprovalRequest, RespondToApprovalResponse,
-    RunExecutionMultiRequest, RunExecutionRequest, RunExecutionResponse,
-    ScopeApprovalArtifactPayload, ScopeApprovalSource, ScopeOverrideInspectionRecord, Session,
-    SessionDetail, SetSessionProjectRequest, SpreadsheetAction, StartTurnRequest,
-    StartTurnResponse, SubmitCopilotResponseRequest, SubmitCopilotResponseResponse, ToolDescriptor,
-    ToolExecutionResult, ToolPhase, ToolSettings, Turn, TurnArtifactRecord, TurnDetailsViewModel,
-    TurnInspectionSection, TurnInspectionSourceType, TurnInspectionUnavailableReason, TurnOverview,
-    TurnOverviewStep, TurnOverviewStepState, TurnStatus, UpdateProjectRequest,
-    ValidationInspectionPayload, ValidationIssue, ValidationIssueSummary,
+    RecordScopeApprovalResponse, RecordStructuredResponseRequest, RecordStructuredResponseResponse,
+    RelayPacket, RelayPacketResponseContract, RemoveInboxFileRequest, RemoveProjectMemoryRequest,
+    RespondToApprovalRequest, RespondToApprovalResponse, RunExecutionMultiRequest,
+    RunExecutionRequest, RunExecutionResponse, ScopeApprovalArtifactPayload, ScopeApprovalSource,
+    ScopeOverrideInspectionRecord, Session, SessionDetail, SetSessionProjectRequest,
+    SpreadsheetAction, StartTurnRequest, StartTurnResponse, ToolDescriptor, ToolExecutionResult,
+    ToolPhase, ToolSettings, Turn, TurnArtifactRecord, TurnDetailsViewModel, TurnInspectionSection,
+    TurnInspectionSourceType, TurnInspectionUnavailableReason, TurnOverview, TurnOverviewStep,
+    TurnOverviewStepState, TurnStatus, UpdateProjectRequest, ValidationInspectionPayload,
+    ValidationIssue, ValidationIssueSummary,
 };
 use crate::persistence::{self, PersistedArtifactMeta, StorageManifest};
 use crate::read_action_executor;
@@ -1096,35 +1096,39 @@ impl AppStorage {
         Ok(response)
     }
 
-    pub fn submit_copilot_response(
+    pub fn record_structured_response(
         &mut self,
-        request: SubmitCopilotResponseRequest,
-    ) -> Result<SubmitCopilotResponseResponse, String> {
+        request: RecordStructuredResponseRequest,
+    ) -> Result<RecordStructuredResponseResponse, String> {
         let (session, turn) = self.get_session_and_turn(&request.session_id, &request.turn_id)?;
-
-        if !self.relay_packets.contains_key(&turn.id) {
-            return Err("relay packet must be generated before submitting a response".to_string());
+        let raw_response = request.raw_response.unwrap_or_else(|| {
+            serde_json::to_string_pretty(&request.parsed_response).unwrap_or_else(|_| {
+                serde_json::to_string(&request.parsed_response).unwrap_or_default()
+            })
+        });
+        let (parsed_response, validation_issues) = parse_copilot_response(&raw_response);
+        if !validation_issues.is_empty() {
+            return Err(format!(
+                "structured response failed backend validation: {}",
+                validation_issues
+                    .first()
+                    .map(|issue| issue.message.as_str())
+                    .unwrap_or("unknown validation error")
+            ));
         }
 
-        let (parsed_response, validation_issues) = parse_copilot_response(&request.raw_response);
-        let accepted = validation_issues.is_empty();
-        let repair_prompt = if accepted {
-            None
-        } else {
-            Some(build_repair_prompt(&validation_issues))
-        };
-        let auto_learned_memory = if accepted {
-            self.learn_project_memory_from_response(&session.id, parsed_response.as_ref())?
-        } else {
-            Vec::new()
-        };
+        let parsed_response = parsed_response.ok_or_else(|| {
+            "structured response could not be parsed after validation".to_string()
+        })?;
+        let auto_learned_memory =
+            self.learn_project_memory_from_response(&session.id, Some(&parsed_response))?;
         let response_artifact = self.record_turn_artifact(
             &session.id,
             &turn.id,
             "copilot-response",
             &json!({
-                "rawResponse": request.raw_response.clone(),
-                "accepted": accepted,
+                "rawResponse": raw_response,
+                "accepted": true,
                 "parsedResponse": parsed_response.clone(),
             }),
             None,
@@ -1134,27 +1138,20 @@ impl AppStorage {
             &turn.id,
             "validation",
             &json!({
-                "accepted": accepted,
-                "validationIssues": validation_issues.clone(),
-                "repairPrompt": repair_prompt.clone(),
+                "accepted": true,
+                "validationIssues": Vec::<ValidationIssue>::new(),
+                "repairPrompt": Value::Null,
             }),
             None,
         )?;
-
-        let next_status = if accepted {
-            TurnStatus::Validated
-        } else {
-            TurnStatus::AwaitingResponse
-        };
-        let next_turn =
-            self.update_turn_status(&turn.id, next_status, validation_issues.len() as u32)?;
+        let next_turn = self.update_turn_status(&turn.id, TurnStatus::Validated, 0)?;
 
         self.responses.insert(
             turn.id.clone(),
             StoredResponse {
-                parsed_response: parsed_response.clone(),
-                validation_issues: validation_issues.clone(),
-                repair_prompt: repair_prompt.clone(),
+                parsed_response: Some(parsed_response.clone()),
+                validation_issues: Vec::new(),
+                repair_prompt: None,
                 created_at: validation_artifact.created_at.clone(),
                 artifact_id: validation_artifact.id.clone(),
             },
@@ -1168,13 +1165,11 @@ impl AppStorage {
             &session.id,
             &turn.id,
             Some(&validation_artifact.id),
-            "copilot-response-submitted",
-            "Copied model response was stored and validated.".to_string(),
+            "structured-response-recorded",
+            "Structured agent response was recorded for preview.".to_string(),
             Some(json!({
-                "accepted": accepted,
                 "responseArtifactId": response_artifact.id.clone(),
                 "validationArtifactId": validation_artifact.id.clone(),
-                "validationIssueCount": validation_issues.len(),
             })),
         )?;
         if !auto_learned_memory.is_empty() {
@@ -1184,7 +1179,7 @@ impl AppStorage {
                 Some(&validation_artifact.id),
                 "project-memory-learned",
                 format!(
-                    "Learned {} project preference(s) from the accepted model response.",
+                    "Learned {} project preference(s) from the structured agent response.",
                     auto_learned_memory.len()
                 ),
                 Some(json!({
@@ -1193,12 +1188,9 @@ impl AppStorage {
             )?;
         }
 
-        Ok(SubmitCopilotResponseResponse {
+        Ok(RecordStructuredResponseResponse {
             turn: next_turn,
-            accepted,
-            validation_issues,
             parsed_response,
-            repair_prompt,
             auto_learned_memory,
         })
     }
@@ -6136,15 +6128,15 @@ mod tests {
 
     use super::AppStorage;
     use crate::models::{
-        AddInboxFileRequest, AddProjectMemoryRequest, ApprovalDecision,
-        AssessCopilotHandoffRequest, CopilotHandoffStatus, CreateProjectRequest,
-        CreateSessionRequest, ExecuteReadActionsRequest, ExecutionInspectionState,
-        GenerateRelayPacketRequest, LinkSessionToProjectRequest, OutputFormat, OutputSpec,
-        PreviewExecutionRequest, ProjectMemorySource, ReadProjectRequest, ReadSessionRequest,
-        RecordScopeApprovalRequest, RelayMode, RespondToApprovalRequest, RunExecutionMultiRequest,
-        RunExecutionRequest, ScopeApprovalSource, SetSessionProjectRequest, SpreadsheetAction,
-        StartTurnRequest, SubmitCopilotResponseRequest, TurnArtifactRecord,
-        TurnInspectionSourceType, TurnStatus, UpdateProjectRequest,
+        AddInboxFileRequest, AddProjectMemoryRequest, AgentLoopStatus, ApprovalDecision,
+        AssessCopilotHandoffRequest, CopilotHandoffStatus, CopilotTurnResponse,
+        CreateProjectRequest, CreateSessionRequest, ExecuteReadActionsRequest,
+        ExecutionInspectionState, GenerateRelayPacketRequest, LinkSessionToProjectRequest,
+        OutputFormat, OutputSpec, PreviewExecutionRequest, ProjectMemorySource, ReadProjectRequest,
+        ReadSessionRequest, RecordScopeApprovalRequest, RecordStructuredResponseRequest, RelayMode,
+        RespondToApprovalRequest, RunExecutionMultiRequest, RunExecutionRequest,
+        ScopeApprovalSource, SetSessionProjectRequest, SpreadsheetAction, StartTurnRequest,
+        TurnArtifactRecord, TurnInspectionSourceType, TurnStatus, UpdateProjectRequest,
     };
     use crate::persistence;
     use serde::{de::DeserializeOwned, Deserialize};
@@ -6235,33 +6227,32 @@ mod tests {
             .expect("packet should generate");
         assert_eq!(packet.allowed_write_tools.len(), 10);
 
-        let submitted = storage
-            .submit_copilot_response(SubmitCopilotResponseRequest {
-                session_id: session.id.clone(),
-                turn_id: turn.id.clone(),
-                raw_response: copilot_response(
-                    "Create a normalized output copy.",
-                    vec![
-                        json!({
-                            "tool": "table.derive_column",
-                            "sheet": "Sheet1",
-                            "args": {
-                                "column": "normalized_total",
-                                "expression": "amount",
-                                "position": "end"
-                            }
-                        }),
-                        json!({
-                            "tool": "workbook.save_copy",
-                            "args": {
-                                "outputPath": output_path.clone()
-                            }
-                        }),
-                    ],
-                ),
-            })
-            .expect("response should parse");
-        assert!(submitted.accepted);
+        let submitted = record_copilot_response(
+            &mut storage,
+            &session.id,
+            &turn.id,
+            copilot_response(
+                "Create a normalized output copy.",
+                vec![
+                    json!({
+                        "tool": "table.derive_column",
+                        "sheet": "Sheet1",
+                        "args": {
+                            "column": "normalized_total",
+                            "expression": "amount",
+                            "position": "end"
+                        }
+                    }),
+                    json!({
+                        "tool": "workbook.save_copy",
+                        "args": {
+                            "outputPath": output_path.clone()
+                        }
+                    }),
+                ],
+            ),
+        );
+        assert_eq!(submitted.turn.status, TurnStatus::Validated);
 
         let preview = storage
             .preview_execution(PreviewExecutionRequest {
@@ -6394,32 +6385,32 @@ mod tests {
                 turn_id: turn.id.clone(),
             })
             .expect("packet should generate");
-        let submitted = storage
-            .submit_copilot_response(SubmitCopilotResponseRequest {
-                session_id: session.id.clone(),
-                turn_id: turn.id.clone(),
-                raw_response: copilot_response(
-                    "Preview a normalized output copy.",
-                    vec![
-                        json!({
-                            "tool": "table.rename_columns",
-                            "sheet": "Sheet1",
-                            "args": {
-                                "renames": [
-                                    { "from": "amount", "to": "net_amount" }
-                                ]
-                            }
-                        }),
-                        json!({
-                            "tool": "table.cast_columns",
-                            "sheet": "Sheet1",
-                            "args": {
-                                "casts": [
-                                    { "column": "net_amount", "toType": "number" }
-                                ]
-                            }
-                        }),
-                        json!({
+        let submitted = record_copilot_response(
+            &mut storage,
+            &session.id,
+            &turn.id,
+            copilot_response(
+                "Preview a normalized output copy.",
+                vec![
+                    json!({
+                        "tool": "table.rename_columns",
+                        "sheet": "Sheet1",
+                        "args": {
+                            "renames": [
+                                { "from": "amount", "to": "net_amount" }
+                            ]
+                        }
+                    }),
+                    json!({
+                        "tool": "table.cast_columns",
+                        "sheet": "Sheet1",
+                        "args": {
+                            "casts": [
+                                { "column": "net_amount", "toType": "number" }
+                            ]
+                        }
+                    }),
+                    json!({
                             "tool": "table.filter_rows",
                             "sheet": "Sheet1",
                             "args": {
@@ -6444,9 +6435,8 @@ mod tests {
                         }),
                     ],
                 ),
-            })
-            .expect("response should parse");
-        assert!(submitted.accepted);
+        );
+        assert_eq!(submitted.parsed_response.actions.len(), 5);
 
         let preview = storage
             .preview_execution(PreviewExecutionRequest {
@@ -6506,7 +6496,7 @@ mod tests {
             .start_turn(StartTurnRequest {
                 session_id: session.id.clone(),
                 title: "Preview from agent history".to_string(),
-                objective: "Use the latest assistant JSON without submit_copilot_response."
+                objective: "Use the latest assistant JSON without a manual response submission."
                     .to_string(),
                 mode: RelayMode::Plan,
             })
@@ -6558,6 +6548,83 @@ mod tests {
     }
 
     #[test]
+    fn record_structured_response_enables_preview_without_submit_flow() {
+        let csv_path =
+            write_test_csv("customer_id,amount,approved\n1,42.5,true\n2,13.0,false\n3,77.0,true\n");
+        let output_path = env::temp_dir()
+            .join(format!(
+                "relay-agent-structured-response-preview-{}.csv",
+                Uuid::new_v4()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let mut storage = AppStorage::default();
+
+        let session = storage
+            .create_session(CreateSessionRequest {
+                title: "Structured response".to_string(),
+                objective: "Record a structured response directly.".to_string(),
+                primary_workbook_path: Some(csv_path.to_string_lossy().into_owned()),
+            })
+            .expect("session should be created");
+        let turn = storage
+            .start_turn(StartTurnRequest {
+                session_id: session.id.clone(),
+                title: "Preview from direct response".to_string(),
+                objective: "Use record_structured_response.".to_string(),
+                mode: RelayMode::Plan,
+            })
+            .expect("turn should start")
+            .turn;
+
+        let recorded = storage
+            .record_structured_response(RecordStructuredResponseRequest {
+                session_id: session.id.clone(),
+                turn_id: turn.id.clone(),
+                raw_response: None,
+                parsed_response: CopilotTurnResponse {
+                    version: "1.0".to_string(),
+                    status: AgentLoopStatus::ReadyToWrite,
+                    summary: "Filter approved rows and save a reviewed copy.".to_string(),
+                    actions: vec![
+                        SpreadsheetAction {
+                            id: None,
+                            tool: "table.filter_rows".to_string(),
+                            rationale: None,
+                            sheet: Some("Sheet1".to_string()),
+                            args: json!({ "predicate": "approved = true" }),
+                        },
+                        SpreadsheetAction {
+                            id: None,
+                            tool: "workbook.save_copy".to_string(),
+                            rationale: None,
+                            sheet: None,
+                            args: json!({ "outputPath": output_path.clone() }),
+                        },
+                    ],
+                    execution_plan: None,
+                    message: None,
+                    follow_up_questions: Vec::new(),
+                    warnings: Vec::new(),
+                },
+            })
+            .expect("structured response should record");
+        assert_eq!(recorded.turn.status, TurnStatus::Validated);
+
+        let preview = storage
+            .preview_execution(PreviewExecutionRequest {
+                session_id: session.id,
+                turn_id: turn.id,
+            })
+            .expect("preview should succeed");
+        assert!(preview.ready);
+        assert_eq!(preview.diff_summary.output_path, output_path);
+        assert_eq!(preview.diff_summary.estimated_affected_rows, 2);
+
+        fs::remove_file(csv_path).expect("test csv should clean up");
+    }
+
+    #[test]
     fn execution_sanitizes_formula_like_csv_cells_on_save_copy() {
         let original_csv = "customer_id,comment,balance\n1,=SUM(A1:A2),-5\n2,@mention,+4\n";
         let csv_path = write_test_csv(original_csv);
@@ -6593,32 +6660,31 @@ mod tests {
                 turn_id: turn.id.clone(),
             })
             .expect("packet should generate");
-        storage
-            .submit_copilot_response(SubmitCopilotResponseRequest {
-                session_id: session.id.clone(),
-                turn_id: turn.id.clone(),
-                raw_response: copilot_response(
-                    "Write a sanitized CSV save-copy output.",
-                    vec![
-                        json!({
-                            "tool": "table.derive_column",
-                            "sheet": "Sheet1",
-                            "args": {
-                                "column": "review_flag",
-                                "expression": "\"=needs-review\"",
-                                "position": "end"
-                            }
-                        }),
-                        json!({
-                            "tool": "workbook.save_copy",
-                            "args": {
-                                "outputPath": output_path.clone()
-                            }
-                        }),
-                    ],
-                ),
-            })
-            .expect("response should parse");
+        record_copilot_response(
+            &mut storage,
+            &session.id,
+            &turn.id,
+            copilot_response(
+                "Write a sanitized CSV save-copy output.",
+                vec![
+                    json!({
+                        "tool": "table.derive_column",
+                        "sheet": "Sheet1",
+                        "args": {
+                            "column": "review_flag",
+                            "expression": "\"=needs-review\"",
+                            "position": "end"
+                        }
+                    }),
+                    json!({
+                        "tool": "workbook.save_copy",
+                        "args": {
+                            "outputPath": output_path.clone()
+                        }
+                    }),
+                ],
+            ),
+        );
         storage
             .preview_execution(PreviewExecutionRequest {
                 session_id: session.id.clone(),
@@ -6728,47 +6794,39 @@ mod tests {
                     example_csv_path.to_string_lossy()
                 )));
 
-            let submission = storage
-                .submit_copilot_response(SubmitCopilotResponseRequest {
-                    session_id: session.id.clone(),
-                    turn_id: turn.id.clone(),
-                    raw_response: copilot_response(
-                        "Keep approved rows, add a review label, and write a sanitized CSV copy.",
-                        vec![
-                            json!({
-                                "tool": "table.filter_rows",
-                                "sheet": "Sheet1",
-                                "args": {
-                                    "predicate": "approved = true"
-                                }
-                            }),
-                            json!({
-                                "tool": "table.derive_column",
-                                "sheet": "Sheet1",
-                                "args": {
-                                    "column": "review_label",
-                                    "expression": "[segment] + \"-approved\"",
-                                    "position": "end"
-                                }
-                            }),
-                            json!({
-                                "tool": "workbook.save_copy",
-                                "args": {
-                                    "outputPath": output_path.clone()
-                                }
-                            }),
-                        ],
-                    ),
-                })
-                .expect("README response example should parse");
-            assert!(submission.accepted);
-            assert_eq!(
-                submission
-                    .parsed_response
-                    .as_ref()
-                    .map(|response| response.actions.len()),
-                Some(3)
-            );
+            let submission = record_copilot_response(
+                &mut storage,
+                &session.id,
+                &turn.id,
+                copilot_response(
+                    "Keep approved rows, add a review label, and write a sanitized CSV copy.",
+                    vec![
+                        json!({
+                            "tool": "table.filter_rows",
+                            "sheet": "Sheet1",
+                            "args": {
+                                "predicate": "approved = true"
+                            }
+                        }),
+                        json!({
+                            "tool": "table.derive_column",
+                            "sheet": "Sheet1",
+                            "args": {
+                                "column": "review_label",
+                                "expression": "[segment] + \"-approved\"",
+                                "position": "end"
+                            }
+                        }),
+                        json!({
+                            "tool": "workbook.save_copy",
+                            "args": {
+                                "outputPath": output_path.clone()
+                            }
+                        }),
+                    ],
+                ),
+        );
+            assert_eq!(submission.parsed_response.actions.len(), 3);
 
             let preview = storage
                 .preview_execution(PreviewExecutionRequest {
@@ -6867,21 +6925,36 @@ mod tests {
             })
             .expect("packet should generate");
 
-        let submitted = storage
-            .submit_copilot_response(SubmitCopilotResponseRequest {
-                session_id: session.id,
-                turn_id: turn.id,
-                raw_response: r#"{
+        let invalid_raw_response = r#"{
                   "summary": "",
                   "actions": [{ "tool": "table.derive_column", "args": {} }]
                 }"#
-                .to_string(),
+        .to_string();
+        let invalid_error = storage
+            .record_structured_response(RecordStructuredResponseRequest {
+                session_id: session.id,
+                turn_id: turn.id,
+                raw_response: Some(invalid_raw_response),
+                parsed_response: CopilotTurnResponse {
+                    version: "1.0".to_string(),
+                    status: AgentLoopStatus::ReadyToWrite,
+                    summary: "invalid".to_string(),
+                    actions: vec![SpreadsheetAction {
+                        id: None,
+                        tool: "table.derive_column".to_string(),
+                        rationale: None,
+                        sheet: None,
+                        args: json!({}),
+                    }],
+                    execution_plan: None,
+                    message: None,
+                    follow_up_questions: Vec::new(),
+                    warnings: Vec::new(),
+                },
             })
-            .expect("submission should return validation issues");
+            .expect_err("invalid raw response should fail validation");
 
-        assert!(!submitted.accepted);
-        assert!(!submitted.validation_issues.is_empty());
-        assert!(submitted.repair_prompt.is_some());
+        assert!(invalid_error.contains("structured response failed backend validation"));
     }
 
     #[test]
@@ -6998,21 +7071,20 @@ mod tests {
                     turn_id: turn.id.clone(),
                 })
                 .expect("packet should generate");
-            storage
-                .submit_copilot_response(SubmitCopilotResponseRequest {
-                    session_id: session.id.clone(),
-                    turn_id: turn.id.clone(),
-                    raw_response: copilot_response(
-                        "Write a reviewed copy outside the default project root.",
-                        vec![json!({
-                            "tool": "workbook.save_copy",
-                            "args": {
-                                "outputPath": "/tmp/outside-reviewed-copy.csv"
-                            }
-                        })],
-                    ),
-                })
-                .expect("response should parse");
+            record_copilot_response(
+                &mut storage,
+                &session.id,
+                &turn.id,
+                copilot_response(
+                    "Write a reviewed copy outside the default project root.",
+                    vec![json!({
+                        "tool": "workbook.save_copy",
+                        "args": {
+                            "outputPath": "/tmp/outside-reviewed-copy.csv"
+                        }
+                    })],
+                ),
+            );
             storage
                 .record_scope_approval(RecordScopeApprovalRequest {
                     session_id: session.id.clone(),
@@ -7284,32 +7356,31 @@ mod tests {
                     turn_id: turn.id.clone(),
                 })
                 .expect("packet should generate");
-            storage
-                .submit_copilot_response(SubmitCopilotResponseRequest {
-                    session_id: session.id.clone(),
-                    turn_id: turn.id.clone(),
-                    raw_response: copilot_response(
-                        "Create a normalized output copy.",
-                        vec![
-                            json!({
-                                "tool": "table.derive_column",
-                                "sheet": "Sheet1",
-                                "args": {
-                                    "column": "normalized_total",
-                                    "expression": "amount",
-                                    "position": "end"
-                                }
-                            }),
-                            json!({
-                                "tool": "workbook.save_copy",
-                                "args": {
-                                    "outputPath": output_path.clone()
-                                }
-                            }),
-                        ],
-                    ),
-                })
-                .expect("response should parse");
+            record_copilot_response(
+                &mut storage,
+                &session.id,
+                &turn.id,
+                copilot_response(
+                    "Create a normalized output copy.",
+                    vec![
+                        json!({
+                            "tool": "table.derive_column",
+                            "sheet": "Sheet1",
+                            "args": {
+                                "column": "normalized_total",
+                                "expression": "amount",
+                                "position": "end"
+                            }
+                        }),
+                        json!({
+                            "tool": "workbook.save_copy",
+                            "args": {
+                                "outputPath": output_path.clone()
+                            }
+                        }),
+                    ],
+                ),
+        );
             storage
                 .preview_execution(PreviewExecutionRequest {
                     session_id: session.id.clone(),
@@ -7502,40 +7573,40 @@ mod tests {
                     turn_id: turn.id.clone(),
                 })
                 .expect("packet should generate");
-            storage
-                .submit_copilot_response(SubmitCopilotResponseRequest {
-                    session_id: session.id.clone(),
-                    turn_id: turn.id.clone(),
-                    raw_response: copilot_response(
-                        "Inspect the workbook and stage a rename preview.",
-                        vec![
-                            json!({
-                                "tool": "workbook.inspect",
-                                "args": {}
-                            }),
-                            json!({
-                                "tool": "sheet.preview",
-                                "args": {
-                                    "sheet": "Sheet1",
-                                    "limit": 2
-                                }
-                            }),
-                            json!({
-                                "tool": "sheet.profile_columns",
-                                "args": {
-                                    "sheet": "Sheet1",
-                                    "sampleSize": 2
-                                }
-                            }),
-                            json!({
-                                "tool": "session.diff_from_base",
-                                "args": {}
-                            }),
-                            json!({
-                                "tool": "table.rename_columns",
+            record_copilot_response(
+                &mut storage,
+                &session.id,
+                &turn.id,
+                copilot_response(
+                    "Inspect the workbook and stage a rename preview.",
+                    vec![
+                        json!({
+                            "tool": "workbook.inspect",
+                            "args": {}
+                        }),
+                        json!({
+                            "tool": "sheet.preview",
+                            "args": {
                                 "sheet": "Sheet1",
-                                "args": {
-                                    "renames": [
+                                "limit": 2
+                            }
+                        }),
+                        json!({
+                            "tool": "sheet.profile_columns",
+                            "args": {
+                                "sheet": "Sheet1",
+                                "sampleSize": 2
+                            }
+                        }),
+                        json!({
+                            "tool": "session.diff_from_base",
+                            "args": {}
+                        }),
+                        json!({
+                            "tool": "table.rename_columns",
+                            "sheet": "Sheet1",
+                            "args": {
+                                "renames": [
                                         {
                                             "from": "amount",
                                             "to": "normalized_amount"
@@ -7550,9 +7621,8 @@ mod tests {
                                 }
                             }),
                         ],
-                    ),
-                })
-                .expect("response should parse");
+                ),
+            );
             let preview = storage
                 .preview_execution(PreviewExecutionRequest {
                     session_id: session.id.clone(),
@@ -7759,35 +7829,34 @@ mod tests {
                     turn_id: turn.id.clone(),
                 })
                 .expect("packet should generate");
-            storage
-                .submit_copilot_response(SubmitCopilotResponseRequest {
-                    session_id: session.id.clone(),
-                    turn_id: turn.id.clone(),
-                    raw_response: copilot_response(
-                        "Rename a column and attempt to save a reviewed copy.",
-                        vec![
-                            json!({
-                                "tool": "table.rename_columns",
-                                "sheet": "Sheet1",
-                                "args": {
-                                    "renames": [
-                                        {
-                                            "from": "amount",
-                                            "to": "normalized_amount"
-                                        }
-                                    ]
-                                }
-                            }),
-                            json!({
-                                "tool": "workbook.save_copy",
-                                "args": {
-                                    "outputPath": output_path.clone()
-                                }
-                            }),
-                        ],
-                    ),
-                })
-                .expect("response should parse");
+            record_copilot_response(
+                &mut storage,
+                &session.id,
+                &turn.id,
+                copilot_response(
+                    "Rename a column and attempt to save a reviewed copy.",
+                    vec![
+                        json!({
+                            "tool": "table.rename_columns",
+                            "sheet": "Sheet1",
+                            "args": {
+                                "renames": [
+                                    {
+                                        "from": "amount",
+                                        "to": "normalized_amount"
+                                    }
+                                ]
+                            }
+                        }),
+                        json!({
+                            "tool": "workbook.save_copy",
+                            "args": {
+                                "outputPath": output_path.clone()
+                            }
+                        }),
+                    ],
+                ),
+            );
             storage
                 .preview_execution(PreviewExecutionRequest {
                     session_id: session.id.clone(),
@@ -7948,30 +8017,29 @@ mod tests {
                 turn_id: turn.id.clone(),
             })
             .expect("packet should generate");
-        storage
-            .submit_copilot_response(SubmitCopilotResponseRequest {
-                session_id: session.id.clone(),
-                turn_id: turn.id.clone(),
-                raw_response: copilot_response(
-                    "Filter approved rows and stage a save-copy preview.",
-                    vec![
-                        json!({
-                            "tool": "table.filter_rows",
-                            "sheet": "Sheet1",
-                            "args": {
-                                "predicate": "approved = true"
-                            }
-                        }),
-                        json!({
-                            "tool": "workbook.save_copy",
-                            "args": {
-                                "outputPath": output_path.clone()
-                            }
-                        }),
-                    ],
-                ),
-            })
-            .expect("response should parse");
+        record_copilot_response(
+            &mut storage,
+            &session.id,
+            &turn.id,
+            copilot_response(
+                "Filter approved rows and stage a save-copy preview.",
+                vec![
+                    json!({
+                        "tool": "table.filter_rows",
+                        "sheet": "Sheet1",
+                        "args": {
+                            "predicate": "approved = true"
+                        }
+                    }),
+                    json!({
+                        "tool": "workbook.save_copy",
+                        "args": {
+                            "outputPath": output_path.clone()
+                        }
+                    }),
+                ],
+            ),
+        );
         storage
             .preview_execution(PreviewExecutionRequest {
                 session_id: session.id.clone(),
@@ -8061,23 +8129,23 @@ mod tests {
                     turn_id: turn.id.clone(),
                 })
                 .expect("packet should generate");
-            storage
-                .submit_copilot_response(SubmitCopilotResponseRequest {
-                    session_id: session.id.clone(),
-                    turn_id: turn.id.clone(),
-                    raw_response: copilot_response(
-                        "Inspect the workbook and preview an aggregated save-copy output.",
-                        vec![
-                            json!({
-                                "tool": "workbook.inspect",
-                                "args": {}
-                            }),
-                            json!({
-                                "tool": "table.group_aggregate",
-                                "sheet": "Sheet1",
-                                "args": {
-                                    "groupBy": ["region"],
-                                    "measures": [
+            record_copilot_response(
+                &mut storage,
+                &session.id,
+                &turn.id,
+                copilot_response(
+                    "Inspect the workbook and preview an aggregated save-copy output.",
+                    vec![
+                        json!({
+                            "tool": "workbook.inspect",
+                            "args": {}
+                        }),
+                        json!({
+                            "tool": "table.group_aggregate",
+                            "sheet": "Sheet1",
+                            "args": {
+                                "groupBy": ["region"],
+                                "measures": [
                                         {
                                             "column": "amount",
                                             "op": "sum",
@@ -8103,9 +8171,8 @@ mod tests {
                                 }
                             }),
                         ],
-                    ),
-                })
-                .expect("response should parse");
+                ),
+            );
 
             storage
                 .preview_execution(PreviewExecutionRequest {
@@ -8429,29 +8496,28 @@ mod tests {
             })
             .expect("packet should generate");
 
-        storage
-            .submit_copilot_response(SubmitCopilotResponseRequest {
-                session_id: session.id.clone(),
-                turn_id: turn.id.clone(),
-                raw_response: json!({
-                    "version": "1.0",
-                    "status": "ready_to_write",
-                    "summary": "Replace hello with hi.",
-                    "actions": [
-                        {
-                            "tool": "text.replace",
-                            "args": {
-                                "path": text_path,
-                                "pattern": "hello",
-                                "replacement": "hi",
-                                "createBackup": true
-                            }
+        record_copilot_response(
+            &mut storage,
+            &session.id,
+            &turn.id,
+            json!({
+                "version": "1.0",
+                "status": "ready_to_write",
+                "summary": "Replace hello with hi.",
+                "actions": [
+                    {
+                        "tool": "text.replace",
+                        "args": {
+                            "path": text_path,
+                            "pattern": "hello",
+                            "replacement": "hi",
+                            "createBackup": true
                         }
-                    ]
-                })
-                .to_string(),
+                    }
+                ]
             })
-            .expect("response should parse");
+            .to_string(),
+        );
 
         let preview = storage
             .preview_execution(PreviewExecutionRequest {
@@ -8534,30 +8600,29 @@ mod tests {
                 turn_id: turn.id.clone(),
             })
             .expect("packet should generate");
-        storage
-            .submit_copilot_response(SubmitCopilotResponseRequest {
-                session_id: session.id.clone(),
-                turn_id: turn.id.clone(),
-                raw_response: copilot_response(
-                    "Filter approved rows and prepare multiple outputs.",
-                    vec![
-                        json!({
-                            "tool": "table.filter_rows",
-                            "sheet": "Sheet1",
-                            "args": {
-                                "predicate": "approved = true"
-                            }
-                        }),
-                        json!({
-                            "tool": "workbook.save_copy",
-                            "args": {
-                                "outputPath": default_output_path.clone()
-                            }
-                        }),
-                    ],
-                ),
-            })
-            .expect("response should parse");
+        record_copilot_response(
+            &mut storage,
+            &session.id,
+            &turn.id,
+            copilot_response(
+                "Filter approved rows and prepare multiple outputs.",
+                vec![
+                    json!({
+                        "tool": "table.filter_rows",
+                        "sheet": "Sheet1",
+                        "args": {
+                            "predicate": "approved = true"
+                        }
+                    }),
+                    json!({
+                        "tool": "workbook.save_copy",
+                        "args": {
+                            "outputPath": default_output_path.clone()
+                        }
+                    }),
+                ],
+            ),
+        );
         storage
             .preview_execution(PreviewExecutionRequest {
                 session_id: session.id.clone(),
@@ -8887,44 +8952,43 @@ mod tests {
             })
             .expect("relay packet should be created");
 
-        let response = storage
-            .submit_copilot_response(SubmitCopilotResponseRequest {
-                session_id: session.id.clone(),
-                turn_id: turn.id.clone(),
-                raw_response: copilot_response(
-                    "Prepare a save-copy output.",
-                    vec![
-                        json!({
-                            "tool": "table.filter_rows",
-                            "sheet": "Sheet1",
-                            "args": {
-                                "predicate": "[approved] == true",
-                                "outputSheet": "ApprovedRows"
-                            }
-                        }),
-                        json!({
-                            "tool": "text.replace",
-                            "args": {
-                                "path": revenue_root.join("exports/notes.txt").display().to_string(),
-                                "pattern": "draft",
-                                "replacement": "approved",
-                                "createBackup": true
-                            }
-                        }),
-                        json!({
-                            "tool": "file.copy",
-                            "args": {
-                                "sourcePath": revenue_root.join("source.csv").display().to_string(),
-                                "destPath": revenue_root.join("exports/revenue.cleaned.csv").display().to_string(),
-                                "overwrite": true
-                            }
-                        })
-                    ],
-                ),
-            })
-            .expect("response should be accepted");
+        let response = record_copilot_response(
+            &mut storage,
+            &session.id,
+            &turn.id,
+            copilot_response(
+                "Prepare a save-copy output.",
+                vec![
+                    json!({
+                        "tool": "table.filter_rows",
+                        "sheet": "Sheet1",
+                        "args": {
+                            "predicate": "[approved] == true",
+                            "outputSheet": "ApprovedRows"
+                        }
+                    }),
+                    json!({
+                        "tool": "text.replace",
+                        "args": {
+                            "path": revenue_root.join("exports/notes.txt").display().to_string(),
+                            "pattern": "draft",
+                            "replacement": "approved",
+                            "createBackup": true
+                        }
+                    }),
+                    json!({
+                        "tool": "file.copy",
+                        "args": {
+                            "sourcePath": revenue_root.join("source.csv").display().to_string(),
+                            "destPath": revenue_root.join("exports/revenue.cleaned.csv").display().to_string(),
+                            "overwrite": true
+                        }
+                    })
+                ],
+            ),
+        );
 
-        assert!(response.accepted);
+        assert_eq!(response.turn.status, TurnStatus::Validated);
         assert_eq!(response.auto_learned_memory.len(), 5);
         assert_eq!(
             response.auto_learned_memory[0].source,
@@ -9013,26 +9077,24 @@ mod tests {
             })
             .expect("relay packet should be created");
 
-        let response = storage
-            .submit_copilot_response(SubmitCopilotResponseRequest {
-                session_id: session.id.clone(),
-                turn_id: turn.id.clone(),
-                raw_response: json!({
-                    "version": "1.0",
-                    "summary": format!(
-                        "Save a CSV copy to {} and overwrite existing files.",
-                        revenue_root.join("exports/natural.cleaned.csv").display()
-                    ),
-                    "message": "Use output sheet: NaturalRows and create a backup.",
-                    "actions": [],
-                    "warnings": ["Keep a backup before replacing the original notes."],
-                    "followUpQuestions": []
-                })
-                .to_string(),
+        let response = record_copilot_response(
+            &mut storage,
+            &session.id,
+            &turn.id,
+            json!({
+                "version": "1.0",
+                "summary": format!(
+                    "Save a CSV copy to {} and overwrite existing files.",
+                    revenue_root.join("exports/natural.cleaned.csv").display()
+                ),
+                "message": "Use output sheet: NaturalRows and create a backup.",
+                "actions": [],
+                "warnings": ["Keep a backup before replacing the original notes."],
+                "followUpQuestions": []
             })
-            .expect("response should be accepted");
+            .to_string(),
+        );
 
-        assert!(response.accepted);
         assert_eq!(response.auto_learned_memory.len(), 5);
         assert_eq!(
             response.auto_learned_memory[0].key,
@@ -9114,6 +9176,24 @@ rl.on("line", (line) => {
             "warnings": []
         })
         .to_string()
+    }
+
+    fn record_copilot_response(
+        storage: &mut AppStorage,
+        session_id: &str,
+        turn_id: &str,
+        raw_response: String,
+    ) -> crate::models::RecordStructuredResponseResponse {
+        let parsed_response = serde_json::from_str::<CopilotTurnResponse>(&raw_response)
+            .expect("test response should deserialize");
+        storage
+            .record_structured_response(RecordStructuredResponseRequest {
+                session_id: session_id.to_string(),
+                turn_id: turn_id.to_string(),
+                raw_response: Some(raw_response),
+                parsed_response,
+            })
+            .expect("structured response should record")
     }
 
     fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {

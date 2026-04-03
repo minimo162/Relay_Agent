@@ -20,7 +20,6 @@ import {
   createSessionRequestSchema,
   executeReadActionsRequestSchema,
   executeReadActionsResponseSchema,
-  generateRelayPacketRequestSchema,
   inspectWorkbookRequestSchema,
   inspectWorkbookResponseSchema,
   initializeAppResponseSchema,
@@ -32,6 +31,8 @@ import {
   preflightWorkbookResponseSchema,
   previewExecutionRequestSchema,
   previewExecutionResponseSchema,
+  recordStructuredResponseRequestSchema,
+  recordStructuredResponseResponseSchema,
   recordScopeApprovalRequestSchema,
   recordScopeApprovalResponseSchema,
   projectSchema,
@@ -40,7 +41,6 @@ import {
   readTurnArtifactsRequestSchema,
   readTurnArtifactsResponseSchema,
   recordPlanProgressRequestSchema,
-  relayPacketSchema,
   removeProjectMemoryRequestSchema,
   removeInboxFileRequestSchema,
   respondToApprovalRequestSchema,
@@ -56,8 +56,6 @@ import {
   setSessionProjectRequestSchema,
   startTurnRequestSchema,
   startTurnResponseSchema,
-  submitCopilotResponseRequestSchema,
-  submitCopilotResponseResponseSchema,
   planProgressRequestSchema,
   planProgressResponseSchema,
   pipelineCreateRequestSchema,
@@ -94,8 +92,6 @@ import {
   type CreateSessionRequest,
   type ExecuteReadActionsRequest,
   type ExecuteReadActionsResponse,
-  type GenerateRelayPacketRequest,
-  type GenerateRelayPacketResponse,
   type InspectWorkbookRequest,
   type InspectWorkbookResponse,
   type InitializeAppResponse,
@@ -107,6 +103,8 @@ import {
   type PreflightWorkbookResponse,
   type PreviewExecutionRequest,
   type PreviewExecutionResponse,
+  type RecordStructuredResponseRequest,
+  type RecordStructuredResponseResponse,
   type RecordScopeApprovalRequest,
   type RecordScopeApprovalResponse,
   type Project,
@@ -130,8 +128,6 @@ import {
   type SetSessionProjectRequest,
   type StartTurnRequest,
   type StartTurnResponse,
-  type SubmitCopilotResponseRequest,
-  type SubmitCopilotResponseResponse,
   type PlanProgressRequest,
   type PlanProgressResponse,
   type Pipeline,
@@ -477,17 +473,6 @@ export function startTurn(
   );
 }
 
-export function generateRelayPacket(
-  payload: GenerateRelayPacketRequest
-): Promise<GenerateRelayPacketResponse> {
-  return invokeWithPayload(
-    "generate_relay_packet",
-    payload,
-    generateRelayPacketRequestSchema,
-    relayPacketSchema
-  );
-}
-
 export function assessCopilotHandoff(
   payload: AssessCopilotHandoffRequest
 ): Promise<AssessCopilotHandoffResponse> {
@@ -499,14 +484,14 @@ export function assessCopilotHandoff(
   );
 }
 
-export function submitCopilotResponse(
-  payload: SubmitCopilotResponseRequest
-): Promise<SubmitCopilotResponseResponse> {
+export function recordStructuredResponse(
+  payload: RecordStructuredResponseRequest
+): Promise<RecordStructuredResponseResponse> {
   return invokeWithPayload(
-    "submit_copilot_response",
+    "record_structured_response",
     payload,
-    submitCopilotResponseRequestSchema,
-    submitCopilotResponseResponseSchema
+    recordStructuredResponseRequestSchema,
+    recordStructuredResponseResponseSchema
   );
 }
 
@@ -797,9 +782,8 @@ export const relayAgentIpc = {
   readSession,
   readTurnArtifacts,
   startTurn,
-  generateRelayPacket,
   assessCopilotHandoff,
-  submitCopilotResponse,
+  recordStructuredResponse,
   executeReadActions,
   approvePlan,
   getPlanProgress,
