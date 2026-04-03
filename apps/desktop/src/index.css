@@ -1,0 +1,322 @@
+@import "tailwindcss";
+
+/* ============================================================
+ * Relay Agent Design System (inspired by OpenWork)
+ * Dark-mode first — M365 Copilot companion app
+ * ============================================================ */
+
+:root {
+  color-scheme: dark;
+
+  /* Surface */
+  --ra-surface: #121212;
+  --ra-surface-elevated: #1a1a1a;
+  --ra-sidebar: #161616;
+  --ra-border: #262626;
+  --ra-border-focus: #3b82f6;
+
+  /* Accent */
+  --ra-accent: #3b82f6;
+  --ra-accent-hover: #2563eb;
+  --ra-accent-rgb: 59 130 246;
+
+  /* Text */
+  --ra-text-primary: #ededed;
+  --ra-text-secondary: #9ca3af;
+  --ra-text-muted: #6b7280;
+
+  /* Interaction */
+  --ra-hover: #1f1f1f;
+  --ra-active: #2d2d2d;
+
+  /* Status */
+  --ra-green: #10b981;
+  --ra-green-rgb: 16 185 129;
+  --ra-yellow: #f59e0b;
+  --ra-red: #ef4444;
+
+  /* Shapes */
+  --ra-radius: 0.75rem;
+  --ra-radius-lg: 1rem;
+  --ra-radius-xl: 1.5rem;
+
+  /* Shadows */
+  --ra-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --ra-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.3);
+  --ra-shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --ra-surface: #ffffff;
+  --ra-surface-elevated: #f9fafb;
+  --ra-sidebar: #f3f4f6;
+  --ra-border: #e5e7eb;
+
+  --ra-accent: #2563eb;
+  --ra-accent-hover: #1d4ed8;
+
+  --ra-text-primary: #111827;
+  --ra-text-secondary: #6b7280;
+  --ra-text-muted: #9ca3af;
+
+  --ra-hover: #f3f4f6;
+  --ra-active: #e5e7eb;
+
+  --ra-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --ra-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --ra-shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.1);
+}
+
+/* ============================================================
+ * Reset & base
+ * ============================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family:
+    "Inter",
+    "Noto Sans JP",
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--ra-text-primary);
+  background-color: var(--ra-surface);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ============================================================
+ * Shell layout — 3-pane (OpenWork style)
+ * ============================================================ */
+
+.ra-shell {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  grid-template-columns: 260px 1fr 300px;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--ra-surface);
+}
+
+.ra-shell-header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--ra-border);
+  background: var(--ra-surface-elevated);
+  min-height: 48px;
+}
+
+.ra-shell-sidebar {
+  grid-row: 2 / 3;
+  grid-column: 1 / 2;
+  overflow-y: auto;
+  border-right: 1px solid var(--ra-border);
+  background: var(--ra-sidebar);
+}
+
+.ra-shell-main {
+  grid-row: 2 / 3;
+  grid-column: 2 / 3;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--ra-surface);
+}
+
+.ra-shell-context-panel {
+  grid-row: 2 / 3;
+  grid-column: 3 / 4;
+  overflow-y: auto;
+  border-left: 1px solid var(--ra-border);
+  background: var(--ra-surface-elevated);
+}
+
+.ra-shell-footer {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 1rem;
+  border-top: 1px solid var(--ra-border);
+  background: var(--ra-surface-elevated);
+  min-height: 28px;
+  font-size: 0.75rem;
+  color: var(--ra-text-secondary);
+}
+
+/* ============================================================
+ * Components
+ * ============================================================ */
+
+.ra-card {
+  border: 1px solid var(--ra-border);
+  background: var(--ra-surface-elevated);
+  border-radius: var(--ra-radius);
+  box-shadow: var(--ra-shadow-sm);
+}
+
+.ra-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: none;
+  border-radius: 9999px;
+  padding: 0.5rem 1rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 150ms ease, transform 150ms ease, opacity 150ms ease;
+}
+
+.ra-button-primary {
+  background: var(--ra-accent);
+  color: #ffffff;
+  box-shadow: 0 4px 16px -8px rgba(var(--ra-accent-rgb), 0.5);
+}
+
+.ra-button-primary:hover:not(:disabled) {
+  background: var(--ra-accent-hover);
+}
+
+.ra-button-secondary {
+  background: var(--ra-surface-elevated);
+  color: var(--ra-text-primary);
+  border: 1px solid var(--ra-border);
+}
+
+.ra-button-secondary:hover:not(:disabled) {
+  background: var(--ra-hover);
+}
+
+.ra-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ra-button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.ra-input {
+  width: 100%;
+  border: 1px solid var(--ra-border);
+  border-radius: var(--ra-radius);
+  background: var(--ra-surface);
+  color: var(--ra-text-primary);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.ra-input:focus {
+  outline: none;
+  border-color: var(--ra-border-focus);
+  box-shadow: 0 0 0 2px rgba(var(--ra-accent-rgb), 0.15);
+}
+
+.ra-input::placeholder {
+  color: var(--ra-text-muted);
+}
+
+/* Status dot */
+.ra-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.ra-status-dot--connected {
+  background: var(--ra-green);
+}
+
+.ra-status-dot--connecting {
+  background: var(--ra-yellow);
+  animation: soft-pulse 1.5s ease-in-out infinite;
+}
+
+.ra-status-dot--disconnected {
+  background: var(--ra-red);
+}
+
+@keyframes soft-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+/* Composer (task input area) */
+.ra-composer {
+  border-top: 1px solid var(--ra-border);
+  padding: 0.75rem 1rem;
+  background: var(--ra-surface-elevated);
+}
+
+.ra-composer textarea {
+  width: 100%;
+  border: 1px solid var(--ra-border);
+  border-radius: var(--ra-radius-lg);
+  background: var(--ra-surface);
+  color: var(--ra-text-primary);
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  resize: none;
+  font-family: inherit;
+  min-height: 48px;
+  max-height: 200px;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.ra-composer textarea:focus {
+  outline: none;
+  border-color: var(--ra-border-focus);
+  box-shadow: 0 0 0 2px rgba(var(--ra-accent-rgb), 0.15);
+}
+
+/* ============================================================
+ * Scrollbar
+ * ============================================================ */
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ra-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ra-text-muted);
+}

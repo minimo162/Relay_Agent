@@ -7,7 +7,7 @@
     "beforeBuildCommand": "pnpm build",
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1421",
-    "frontendDist": "../build"
+    "frontendDist": "../dist"
   },
   "app": {
     "windows": [
@@ -26,8 +26,7 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "../../../examples/revenue-workflow-demo.csv": "examples/revenue-workflow-demo.csv",
-      "../scripts/dist/copilot-browser.js": "../scripts/dist/copilot-browser.js"
+      "../../../examples/revenue-workflow-demo.csv": "examples/revenue-workflow-demo.csv"
     },
     "icon": ["icons/icon.png"]
   }

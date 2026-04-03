@@ -1,689 +1,260 @@
-import { invoke } from "@tauri-apps/api/core";
-import {
-  approvalPolicyConfigSchema,
-  addInboxFileRequestSchema,
-  addProjectMemoryRequestSchema,
-  batchCreateRequestSchema,
-  batchJobSchema,
-  batchSkipTargetRequestSchema,
-  batchStatusRequestSchema,
-  checkCopilotConnectionRequestSchema,
-  copilotBrowserConnectResultSchema,
-  copilotBrowserResultSchema,
-  connectMcpServerRequestSchema,
-  connectMcpServerResponseSchema,
-  createProjectRequestSchema,
-  createSessionRequestSchema,
-  initializeAppResponseSchema,
-  linkSessionToProjectRequestSchema,
-  listProjectsResponseSchema,
-  listToolsResponseSchema,
-  listSessionsResponseSchema,
-  previewExecutionRequestSchema,
-  previewExecutionResponseSchema,
-  recordStructuredResponseRequestSchema,
-  recordStructuredResponseResponseSchema,
-  recordScopeApprovalRequestSchema,
-  recordScopeApprovalResponseSchema,
-  projectSchema,
-  readProjectRequestSchema,
-  readSessionRequestSchema,
-  readTurnArtifactsRequestSchema,
-  readTurnArtifactsResponseSchema,
-  removeProjectMemoryRequestSchema,
-  removeInboxFileRequestSchema,
-  respondToApprovalRequestSchema,
-  respondToApprovalResponseSchema,
-  runExecutionRequestSchema,
-  runExecutionResponseSchema,
-  sessionDetailSchema,
-  sendCopilotPromptRequestSchema,
-  sessionSchema,
-  setToolEnabledRequestSchema,
-  setSessionProjectRequestSchema,
-  startTurnRequestSchema,
-  startTurnResponseSchema,
-  pipelineCreateRequestSchema,
-  pipelineSchema,
-  pipelineStatusRequestSchema,
-  toolRegistrationSchema,
-  templateCreateRequestSchema,
-  templateDeleteRequestSchema,
-  templateFromSessionRequestSchema,
-  templateGetRequestSchema,
-  templateListRequestSchema,
-  workflowTemplateSchema,
-  setApprovalPolicyRequestSchema,
-  updateProjectRequestSchema,
-  validateOutputQualityRequestSchema,
-  validateOutputQualityResponseSchema,
-  type ApprovalPolicyConfig,
-  type AddInboxFileRequest,
-  type AddProjectMemoryRequest,
-  type BatchCreateRequest,
-  type BatchJob,
-  type BatchSkipTargetRequest,
-  type BatchStatusRequest,
-  type CheckCopilotConnectionRequest,
-  type CopilotBrowserResult,
-  type CopilotBrowserConnectResult,
-  type ConnectMcpServerRequest,
-  type ConnectMcpServerResponse,
-  type CreateProjectRequest,
-  type CreateSessionRequest,
-  type InitializeAppResponse,
-  type LinkSessionToProjectRequest,
-  type ListProjectsResponse,
-  type ListToolsResponse,
-  type ListSessionsResponse,
-  type PreviewExecutionRequest,
-  type PreviewExecutionResponse,
-  type RecordStructuredResponseRequest,
-  type RecordStructuredResponseResponse,
-  type RecordScopeApprovalRequest,
-  type RecordScopeApprovalResponse,
-  type Project,
-  type ReadProjectRequest,
-  type ReadSessionRequest,
-  type ReadTurnArtifactsRequest,
-  type ReadTurnArtifactsResponse,
-  type RemoveProjectMemoryRequest,
-  type RemoveInboxFileRequest,
-  type RespondToApprovalRequest,
-  type RespondToApprovalResponse,
-  type RunExecutionRequest,
-  type RunExecutionResponse,
-  type SendCopilotPromptRequest,
-  type Session,
-  type SessionDetail,
-  type SetToolEnabledRequest,
-  type SetSessionProjectRequest,
-  type StartTurnRequest,
-  type StartTurnResponse,
-  type Pipeline,
-  type PipelineCreateRequest,
-  type PipelineStatusRequest,
-  type ToolRegistration,
-  type TemplateCreateRequest,
-  type TemplateDeleteRequest,
-  type TemplateFromSessionRequest,
-  type TemplateGetRequest,
-  type TemplateListRequest,
-  type UpdateProjectRequest,
-  type ValidateOutputQualityRequest,
-  type ValidateOutputQualityResponse,
-  type WorkflowTemplate,
-  type SetApprovalPolicyRequest
-} from "@relay-agent/contracts";
+/**
+ * Tauri IPC bridge — commands + events for Relay Agent
+ *
+ * Commands (tauri_bridge.rs):
+ *   start_agent, respond_approval, cancel_agent, get_session_history
+ *
+ * Events:
+ *   agent:tool_start | agent:tool_result | agent:approval_needed
+ *   agent:turn_complete | agent:error
+ */
 
-type Schema<T> = {
-  parse(value: unknown): T;
-};
+import { invoke } from "@/tauri-mock-core";
+import { listen, UnlistenFn, Event } from "@/tauri-mock-event";
 
-const stringSchema: Schema<string> = {
-  parse(value: unknown): string {
-    if (typeof value !== "string") {
-      throw new TypeError("Expected a string response.");
+/* ============================================================
+   Request / Response types (Rust models.rs → camelCase)
+   ============================================================ */
+
+export interface BrowserAutomationSettings {
+  cdpPort: number;
+  autoLaunchEdge: boolean;
+  timeoutMs: number;
+}
+
+export interface StartAgentRequest {
+  goal: string;
+  files?: string[];
+  cwd?: string | null;
+  browserSettings?: BrowserAutomationSettings | null;
+  maxTurns?: number | null;
+}
+
+export interface RespondAgentApprovalRequest {
+  sessionId: string;
+  approvalId: string;
+  approved: boolean;
+}
+
+export interface CancelAgentRequest {
+  sessionId: string;
+}
+
+export interface GetAgentSessionHistoryRequest {
+  sessionId: string;
+}
+
+/* Content block inside a Rust Message */
+type MessageBlock =
+  | { type: "text"; text: string }
+  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
+  | { type: "tool_result"; tool_use_id: string; content: string; is_error: boolean };
+
+export interface AgentMessage {
+  role: string;
+  content: MessageBlock[];
+}
+
+export interface AgentSessionHistoryResponse {
+  sessionId: string;
+  running: boolean;
+  messages: AgentMessage[];
+}
+
+/* ============================================================
+   Tauri event payloads
+   ============================================================ */
+
+export interface AgentToolStartEvent {
+  sessionId: string;
+  toolUseId: string;
+  toolName: string;
+}
+
+export interface AgentToolResultEvent {
+  sessionId: string;
+  toolUseId: string;
+  toolName: string;
+  content: string;
+  isError: boolean;
+}
+
+export interface AgentApprovalNeededEvent {
+  sessionId: string;
+  approvalId: string;
+  toolName: string;
+  description: string;
+  target?: string;
+  input: Record<string, unknown>;
+}
+
+export interface AgentTurnCompleteEvent {
+  sessionId: string;
+  stopReason: string;
+  assistantMessage: string;
+  messageCount: number;
+}
+
+export interface AgentErrorEvent {
+  sessionId: string;
+  error: string;
+  cancelled: boolean;
+}
+
+/* Union of all agent events */
+export type AgentEvent =
+  | { type: "tool_start"; data: AgentToolStartEvent }
+  | { type: "tool_result"; data: AgentToolResultEvent }
+  | { type: "approval_needed"; data: AgentApprovalNeededEvent }
+  | { type: "turn_complete"; data: AgentTurnCompleteEvent }
+  | { type: "error"; data: AgentErrorEvent };
+
+/* ============================================================
+   Tauri commands
+   ============================================================ */
+
+export async function startAgent(request: StartAgentRequest): Promise<string> {
+  return invoke<string>("start_agent", { request });
+}
+
+export async function respondApproval(request: RespondAgentApprovalRequest): Promise<void> {
+  return invoke<void>("respond_approval", { request });
+}
+
+export async function cancelAgent(request: CancelAgentRequest): Promise<void> {
+  return invoke<void>("cancel_agent", { request });
+}
+
+export async function getSessionHistory(
+  request: GetAgentSessionHistoryRequest,
+): Promise<AgentSessionHistoryResponse> {
+  return invoke<AgentSessionHistoryResponse>("get_session_history", { request });
+}
+
+/* ============================================================
+   Tauri events — listen to all
+   ============================================================ */
+
+const E_TOOL_START = "agent:tool_start";
+const E_TOOL_RESULT = "agent:tool_result";
+const E_APPROVAL_NEEDED = "agent:approval_needed";
+const E_TURN_COMPLETE = "agent:turn_complete";
+const E_ERROR = "agent:error";
+
+export function onAgentEvent(
+  callback: (event: AgentEvent) => void,
+): Promise<() => void> {
+  const p = [
+    listen<AgentToolStartEvent>(E_TOOL_START, (e) =>
+      callback({ type: "tool_start", data: e.payload }),
+    ),
+    listen<AgentToolResultEvent>(E_TOOL_RESULT, (e) =>
+      callback({ type: "tool_result", data: e.payload }),
+    ),
+    listen<AgentApprovalNeededEvent>(E_APPROVAL_NEEDED, (e) =>
+      callback({ type: "approval_needed", data: e.payload }),
+    ),
+    listen<AgentTurnCompleteEvent>(E_TURN_COMPLETE, (e) =>
+      callback({ type: "turn_complete", data: e.payload }),
+    ),
+    listen<AgentErrorEvent>(E_ERROR, (e) =>
+      callback({ type: "error", data: e.payload }),
+    ),
+  ];
+  return Promise.all(p).then((fns) => () => fns.forEach((fn) => fn()));
+}
+
+/* ============================================================
+   Message formatting helpers
+   ============================================================ */
+
+/** Flatten a Rust Message into displayable UI chunks */
+export function formatMessageBlock(block: MessageBlock): UiMessageChunk {
+  switch (block.type) {
+    case "text":
+      return { kind: "text", text: block.text };
+
+    case "tool_use":
+      return {
+        kind: "tool_use",
+        toolUseId: block.id,
+        toolName: block.name,
+        input: block.input,
+        status: "running",
+      };
+
+    case "tool_result":
+      return {
+        kind: "tool_result",
+        toolUseId: block.tool_use_id,
+        content: block.content,
+        isError: block.is_error,
+      };
+  }
+}
+
+export type UiMessageChunk =
+  | { kind: "text"; text: string }
+  | {
+      kind: "tool_use";
+      toolUseId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+      status: "running" | "done" | "error";
     }
+  | {
+      kind: "tool_result";
+      toolUseId: string;
+      content: string;
+      isError: boolean;
+    };
 
-    return value;
-  }
-};
-
-const emptyResponseSchema: Schema<null> = {
-  parse(value: unknown): null {
-    if (value === null || typeof value === "undefined") {
-      return null;
+/** Convert full history to a flat array of UI chunks (ordered) */
+export function chunksFromHistory(messages: AgentMessage[]): UiChunk[] {
+  const chunks: UiChunk[] = [];
+  for (const msg of messages) {
+    if (msg.role === "user") {
+      const texts = msg.content
+        .filter((b): b is Extract<MessageBlock, { type: "text" }> => b.type === "text")
+        .map((b) => b.text)
+        .join("\n");
+      if (texts) chunks.push({ kind: "user" as const, text: texts });
     }
-
-    throw new TypeError("Expected an empty response.");
-  }
-};
-
-function describeInvokeError(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message.trim();
-  }
-
-  if (typeof error === "string" && error.trim()) {
-    return error.trim();
-  }
-
-  if (error && typeof error === "object") {
-    const maybeMessage = (error as { message?: unknown }).message;
-    if (typeof maybeMessage === "string" && maybeMessage.trim()) {
-      return maybeMessage.trim();
+    if (msg.role === "assistant") {
+      for (const block of msg.content) {
+        if (block.type === "text" && block.text) {
+          chunks.push({ kind: "assistant" as const, text: block.text });
+        }
+        if (block.type === "tool_use") {
+          chunks.push({
+            kind: "tool_call",
+            toolName: block.name,
+            result: null,
+            status: "running",
+          });
+        }
+        if (block.type === "tool_result") {
+          // Attach result to the most recent tool_call chunk
+          const lastTool = [...chunks]
+            .reverse()
+            .find((c): c is Extract<UiChunk, { kind: "tool_call" }> => c.kind === "tool_call");
+          if (lastTool) {
+            lastTool.result = block.content;
+            lastTool.status = block.is_error ? "error" : "done";
+          }
+        }
+      }
     }
-
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return "Unknown desktop command error.";
-    }
   }
-
-  return "Unknown desktop command error.";
+  return chunks;
 }
 
-export class RelayAgentIpcError extends Error {
-  command: string;
-  causeValue: unknown;
-
-  constructor(command: string, message: string, causeValue?: unknown) {
-    super(message);
-    this.name = "RelayAgentIpcError";
-    this.command = command;
-    this.causeValue = causeValue;
-  }
-}
-
-async function invokeWithoutPayload<TResponse>(
-  command: string,
-  responseSchema: Schema<TResponse>
-): Promise<TResponse> {
-  try {
-    return responseSchema.parse(await invoke(command));
-  } catch (error) {
-    throw new RelayAgentIpcError(
-      command,
-      `Failed to invoke \`${command}\`: ${describeInvokeError(error)}`,
-      error
-    );
-  }
-}
-
-async function invokeWithPayload<TRequest, TResponse>(
-  command: string,
-  payload: TRequest,
-  requestSchema: Schema<TRequest>,
-  responseSchema: Schema<TResponse>
-): Promise<TResponse> {
-  try {
-    const request = requestSchema.parse(payload);
-    return responseSchema.parse(await invoke(command, { request }));
-  } catch (error) {
-    throw new RelayAgentIpcError(
-      command,
-      `Failed to invoke \`${command}\`: ${describeInvokeError(error)}`,
-      error
-    );
-  }
-}
-
-export async function pingDesktop(): Promise<string> {
-  try {
-    return await invokeWithoutPayload("ping", stringSchema);
-  } catch {
-    return "tauri-unavailable";
-  }
-}
-
-export function initializeApp(): Promise<InitializeAppResponse> {
-  return invokeWithoutPayload("initialize_app", initializeAppResponseSchema);
-}
-
-export function createSession(
-  payload: CreateSessionRequest
-): Promise<Session> {
-  return invokeWithPayload(
-    "create_session",
-    payload,
-    createSessionRequestSchema,
-    sessionSchema
-  );
-}
-
-export function addInboxFile(
-  payload: AddInboxFileRequest
-): Promise<Session> {
-  return invokeWithPayload(
-    "add_inbox_file",
-    payload,
-    addInboxFileRequestSchema,
-    sessionSchema
-  );
-}
-
-export function removeInboxFile(
-  payload: RemoveInboxFileRequest
-): Promise<Session> {
-  return invokeWithPayload(
-    "remove_inbox_file",
-    payload,
-    removeInboxFileRequestSchema,
-    sessionSchema
-  );
-}
-
-export function createProject(
-  payload: CreateProjectRequest
-): Promise<Project> {
-  return invokeWithPayload(
-    "create_project",
-    payload,
-    createProjectRequestSchema,
-    projectSchema
-  );
-}
-
-export function listProjects(): Promise<ListProjectsResponse> {
-  return invokeWithoutPayload("list_projects", listProjectsResponseSchema);
-}
-
-export function listTools(): Promise<ListToolsResponse> {
-  return invokeWithoutPayload("list_tools", listToolsResponseSchema);
-}
-
-export function setToolEnabled(
-  payload: SetToolEnabledRequest
-): Promise<ToolRegistration> {
-  return invokeWithPayload(
-    "set_tool_enabled",
-    payload,
-    setToolEnabledRequestSchema,
-    toolRegistrationSchema
-  );
-}
-
-export function connectMcpServer(
-  payload: ConnectMcpServerRequest
-): Promise<ConnectMcpServerResponse> {
-  return invokeWithPayload(
-    "connect_mcp_server",
-    payload,
-    connectMcpServerRequestSchema,
-    connectMcpServerResponseSchema
-  );
-}
-
-export function sendCopilotPrompt(
-  payload: SendCopilotPromptRequest
-): Promise<CopilotBrowserResult> {
-  return invokeWithPayload(
-    "send_copilot_prompt",
-    payload,
-    sendCopilotPromptRequestSchema,
-    copilotBrowserResultSchema
-  );
-}
-
-export function checkCopilotConnectionCommand(
-  payload: CheckCopilotConnectionRequest
-): Promise<CopilotBrowserConnectResult> {
-  return invokeWithPayload(
-    "check_copilot_connection",
-    payload,
-    checkCopilotConnectionRequestSchema,
-    copilotBrowserConnectResultSchema
-  );
-}
-
-export function readProject(
-  payload: ReadProjectRequest
-): Promise<Project> {
-  return invokeWithPayload(
-    "read_project",
-    payload,
-    readProjectRequestSchema,
-    projectSchema
-  );
-}
-
-export function updateProject(
-  payload: UpdateProjectRequest
-): Promise<Project> {
-  return invokeWithPayload(
-    "update_project",
-    payload,
-    updateProjectRequestSchema,
-    projectSchema
-  );
-}
-
-export function addProjectMemory(
-  payload: AddProjectMemoryRequest
-): Promise<Project> {
-  return invokeWithPayload(
-    "add_project_memory",
-    payload,
-    addProjectMemoryRequestSchema,
-    projectSchema
-  );
-}
-
-export function removeProjectMemory(
-  payload: RemoveProjectMemoryRequest
-): Promise<Project> {
-  return invokeWithPayload(
-    "remove_project_memory",
-    payload,
-    removeProjectMemoryRequestSchema,
-    projectSchema
-  );
-}
-
-export function linkSessionToProject(
-  payload: LinkSessionToProjectRequest
-): Promise<Project> {
-  return invokeWithPayload(
-    "link_session_to_project",
-    payload,
-    linkSessionToProjectRequestSchema,
-    projectSchema
-  );
-}
-
-export function setSessionProject(
-  payload: SetSessionProjectRequest
-): Promise<ListProjectsResponse> {
-  return invokeWithPayload(
-    "set_session_project",
-    payload,
-    setSessionProjectRequestSchema,
-    listProjectsResponseSchema
-  );
-}
-
-export function listSessions(): Promise<ListSessionsResponse> {
-  return invokeWithoutPayload("list_sessions", listSessionsResponseSchema);
-}
-
-export function readSession(
-  payload: ReadSessionRequest
-): Promise<SessionDetail> {
-  return invokeWithPayload(
-    "read_session",
-    payload,
-    readSessionRequestSchema,
-    sessionDetailSchema
-  );
-}
-
-export function readTurnArtifacts(
-  payload: ReadTurnArtifactsRequest
-): Promise<ReadTurnArtifactsResponse> {
-  return invokeWithPayload(
-    "read_turn_artifacts",
-    payload,
-    readTurnArtifactsRequestSchema,
-    readTurnArtifactsResponseSchema
-  );
-}
-
-export function startTurn(
-  payload: StartTurnRequest
-): Promise<StartTurnResponse> {
-  return invokeWithPayload(
-    "start_turn",
-    payload,
-    startTurnRequestSchema,
-    startTurnResponseSchema
-  );
-}
-
-export function recordStructuredResponse(
-  payload: RecordStructuredResponseRequest
-): Promise<RecordStructuredResponseResponse> {
-  return invokeWithPayload(
-    "record_structured_response",
-    payload,
-    recordStructuredResponseRequestSchema,
-    recordStructuredResponseResponseSchema
-  );
-}
-
-export function previewExecution(
-  payload: PreviewExecutionRequest
-): Promise<PreviewExecutionResponse> {
-  return invokeWithPayload(
-    "preview_execution",
-    payload,
-    previewExecutionRequestSchema,
-    previewExecutionResponseSchema
-  );
-}
-
-export function respondToApproval(
-  payload: RespondToApprovalRequest
-): Promise<RespondToApprovalResponse> {
-  return invokeWithPayload(
-    "respond_to_approval",
-    payload,
-    respondToApprovalRequestSchema,
-    respondToApprovalResponseSchema
-  );
-}
-
-export function recordScopeApproval(
-  payload: RecordScopeApprovalRequest
-): Promise<RecordScopeApprovalResponse> {
-  return invokeWithPayload(
-    "record_scope_approval",
-    payload,
-    recordScopeApprovalRequestSchema,
-    recordScopeApprovalResponseSchema
-  );
-}
-
-export function runExecution(
-  payload: RunExecutionRequest
-): Promise<RunExecutionResponse> {
-  return invokeWithPayload(
-    "run_execution",
-    payload,
-    runExecutionRequestSchema,
-    runExecutionResponseSchema
-  );
-}
-
-export function validateOutputQuality(
-  payload: ValidateOutputQualityRequest
-): Promise<ValidateOutputQualityResponse> {
-  return invokeWithPayload(
-    "validate_output_quality",
-    payload,
-    validateOutputQualityRequestSchema,
-    validateOutputQualityResponseSchema
-  );
-}
-
-export function pipelineCreate(
-  payload: PipelineCreateRequest
-): Promise<Pipeline> {
-  return invokeWithPayload(
-    "pipeline_create",
-    payload,
-    pipelineCreateRequestSchema,
-    pipelineSchema
-  );
-}
-
-export function pipelineGetStatus(
-  payload: PipelineStatusRequest
-): Promise<Pipeline> {
-  return invokeWithPayload(
-    "pipeline_get_status",
-    payload,
-    pipelineStatusRequestSchema,
-    pipelineSchema
-  );
-}
-
-export async function pipelineRun(
-  payload: PipelineStatusRequest
-): Promise<void> {
-  await invokeWithPayload(
-    "pipeline_run",
-    payload,
-    pipelineStatusRequestSchema,
-    emptyResponseSchema
-  );
-}
-
-export async function pipelineCancel(
-  payload: PipelineStatusRequest
-): Promise<void> {
-  await invokeWithPayload(
-    "pipeline_cancel",
-    payload,
-    pipelineStatusRequestSchema,
-    emptyResponseSchema
-  );
-}
-
-export function batchCreate(
-  payload: BatchCreateRequest
-): Promise<BatchJob> {
-  return invokeWithPayload(
-    "batch_create",
-    payload,
-    batchCreateRequestSchema,
-    batchJobSchema
-  );
-}
-
-export function batchGetStatus(
-  payload: BatchStatusRequest
-): Promise<BatchJob> {
-  return invokeWithPayload(
-    "batch_get_status",
-    payload,
-    batchStatusRequestSchema,
-    batchJobSchema
-  );
-}
-
-export async function batchRun(
-  payload: BatchStatusRequest
-): Promise<void> {
-  await invokeWithPayload(
-    "batch_run",
-    payload,
-    batchStatusRequestSchema,
-    emptyResponseSchema
-  );
-}
-
-export async function batchSkipTarget(
-  payload: BatchSkipTargetRequest
-): Promise<void> {
-  await invokeWithPayload(
-    "batch_skip_target",
-    payload,
-    batchSkipTargetRequestSchema,
-    emptyResponseSchema
-  );
-}
-
-export function templateList(
-  payload: TemplateListRequest = {}
-): Promise<WorkflowTemplate[]> {
-  return invokeWithPayload(
-    "template_list",
-    payload,
-    templateListRequestSchema,
-    workflowTemplateSchema.array()
-  );
-}
-
-export function templateGet(
-  payload: TemplateGetRequest
-): Promise<WorkflowTemplate> {
-  return invokeWithPayload(
-    "template_get",
-    payload,
-    templateGetRequestSchema,
-    workflowTemplateSchema
-  );
-}
-
-export function templateCreate(
-  payload: TemplateCreateRequest
-): Promise<WorkflowTemplate> {
-  return invokeWithPayload(
-    "template_create",
-    payload,
-    templateCreateRequestSchema,
-    workflowTemplateSchema
-  );
-}
-
-export async function templateDelete(
-  payload: TemplateDeleteRequest
-): Promise<void> {
-  await invokeWithPayload(
-    "template_delete",
-    payload,
-    templateDeleteRequestSchema,
-    emptyResponseSchema
-  );
-}
-
-export function templateFromSession(
-  payload: TemplateFromSessionRequest
-): Promise<WorkflowTemplate> {
-  return invokeWithPayload(
-    "template_from_session",
-    payload,
-    templateFromSessionRequestSchema,
-    workflowTemplateSchema
-  );
-}
-
-export function getApprovalPolicy(): Promise<ApprovalPolicyConfig> {
-  return invokeWithoutPayload("get_approval_policy", approvalPolicyConfigSchema);
-}
-
-export function setApprovalPolicy(
-  payload: SetApprovalPolicyRequest
-): Promise<ApprovalPolicyConfig> {
-  return invokeWithPayload(
-    "set_approval_policy",
-    payload,
-    setApprovalPolicyRequestSchema,
-    approvalPolicyConfigSchema
-  );
-}
-
-export const relayAgentIpc = {
-  pingDesktop,
-  initializeApp,
-  createProject,
-  createSession,
-  addInboxFile,
-  removeInboxFile,
-  listProjects,
-  readProject,
-  updateProject,
-  addProjectMemory,
-  removeProjectMemory,
-  linkSessionToProject,
-  setSessionProject,
-  listSessions,
-  readSession,
-  readTurnArtifacts,
-  startTurn,
-  recordStructuredResponse,
-  previewExecution,
-  recordScopeApproval,
-  respondToApproval,
-  runExecution,
-  validateOutputQuality,
-  pipelineCreate,
-  pipelineGetStatus,
-  pipelineRun,
-  pipelineCancel,
-  batchCreate,
-  batchGetStatus,
-  batchRun,
-  batchSkipTarget,
-  templateList,
-  templateGet,
-  templateCreate,
-  templateDelete,
-  templateFromSession,
-  getApprovalPolicy,
-  setApprovalPolicy
-};
-
-export type RelayAgentIpc = typeof relayAgentIpc;
+export type UiChunk =
+  | { kind: "user"; text: string }
+  | { kind: "assistant"; text: string }
+  | {
+      kind: "tool_call";
+      toolName: string;
+      status: "running" | "done" | "error";
+      result: string | null;
+    };

@@ -1,6 +1,6 @@
 [package]
 name = "relay-agent-desktop"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 default-run = "relay-agent-desktop"
 
@@ -8,34 +8,46 @@ default-run = "relay-agent-desktop"
 name = "relay_agent_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[workspace]
+members = ["crates/api", "crates/runtime", "crates/tools", "crates/commands"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_panics_doc = "allow"
+missing_errors_doc = "allow"
+
 [build-dependencies]
 tauri-build = { version = "2.0.0", features = [] }
 
 [dependencies]
+api = { path = "crates/api" }
+runtime = { path = "crates/runtime" }
+tools = { path = "crates/tools" }
+
 anyhow = "1"
 async-trait = "0.1"
-calamine = "0.34.0"
 chrono = { version = "0.4", features = ["clock"] }
-claw-compact = { git = "https://github.com/claw-cli/claw-code-rust.git", rev = "33e5883d7909afd0c55b00b49c3034e21e33f440", package = "claw-compact" }
-claw-core = { git = "https://github.com/claw-cli/claw-code-rust.git", rev = "33e5883d7909afd0c55b00b49c3034e21e33f440", package = "claw-core" }
-claw-permissions = { git = "https://github.com/claw-cli/claw-code-rust.git", rev = "33e5883d7909afd0c55b00b49c3034e21e33f440", package = "claw-permissions" }
-claw-provider = { git = "https://github.com/claw-cli/claw-code-rust.git", rev = "33e5883d7909afd0c55b00b49c3034e21e33f440", package = "claw-provider" }
-claw-tools = { git = "https://github.com/claw-cli/claw-code-rust.git", rev = "33e5883d7909afd0c55b00b49c3034e21e33f440", package = "claw-tools" }
-csv = "1.4.0"
-encoding_rs = "0.8"
-futures = "0.3"
-lopdf = "0.34"
-regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-shell-words = "1.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tauri = { version = "2.0.0", features = [] }
 tauri-plugin-shell = "2.0.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
-trash = "5"
 uuid = { version = "1.18.1", features = ["v4"] }
-zip = "2"
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints]
+workspace = true

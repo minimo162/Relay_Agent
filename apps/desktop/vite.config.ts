@@ -1,12 +1,32 @@
-import path from "path";
-import { sveltekit } from "@sveltejs/kit/vite";
 import { defineConfig } from "vite";
+import solidPlugin from "vite-plugin-solid";
+import tailwindcss from "@tailwindcss/vite";
+import path from "path";
+
+const isE2E = process.env.RELAY_E2E === "1";
 
 export default defineConfig({
-  plugins: [sveltekit()],
+  plugins: [
+    tailwindcss(),
+    solidPlugin(),
+  ],
   define: {
-    __COPILOT_SCRIPT_DEV_PATH__: JSON.stringify(
-      path.resolve(__dirname, "scripts/dist/copilot-browser.js")
-    )
-  }
+    "import.meta.env.RELAY_E2E": JSON.stringify(isE2E),
+  },
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "src"),
+    },
+  },
+  server: {
+    port: 1421,
+    host: "0.0.0.0",
+  },
+  preview: {
+    port: 4173,
+    host: "0.0.0.0",
+  },
+  build: {
+    target: "esnext",
+  },
 });
