@@ -71,24 +71,41 @@ Copilot が実行計画を立案し、読み取り操作を自動実行、書き
 - 学習済み設定（メモリ）で繰り返しタスクの文脈を維持
 - プロジェクトのルートフォルダ外へのファイルアクセスを警告
 
-### UI（SolidJS ベース 3 ペインワークスペース）
+### UI（openwork インスパイアドデザインシステム）
 
-SvelteKit から SolidJS へ移行し、コア機能に集中したミニマルな構成。
+**3 ペインワークスペース**
+- **左: AppSidebar** — ピル型セッション行・グループラベル・三点メニュー、ナビゲーション
+- **中央: UnifiedFeed + TaskInput** — Step Cluster フィード（折りたたみ可能なラウンド）＋常時下部固定のコンポーザー
+- **右: ContextPanel** — Files / Servers / Policy タブ、ドラッグ＆ドロップ受信ボックス、MCP 接続 ping ドット
 
-**3 ペインワークスペース（1421px ポート）**
-- **左: Sidebar** — セッション一覧（検索機能付き）
-- **中央: MessageFeed + Composer** — ツール呼び出し・メッセージ表示＋送信エリア＋承認オーバーレイ
-- **右: ContextPanel** — Files / Servers / Policy タブ
+**主要 UI コンポーネント**
+- `UnifiedFeed` — ✓/⟳/○/✗ アイコン付きステップクラスター、コンパクション区切り線
+- `TaskInput` — auto-grow テキストエリア、Stop ボタン、アイドルヒントチップ
+- `ApprovalCard` — permission フェーズ（ツール名・説明表示）→ 3 択アクション（拒否 / 今回のみ / 常に許可）、折りたたみヘッダー、アクセントバー
+- `StatusStrip` — 接続状態に応じたリアクティブ ping ドット（connected / connecting / disconnected）
+- `CommandPalette` — ⌘K / Ctrl+K でオープン、ナビゲーション・テーマ切り替え等のアクション
+- `ApprovalGate` — 書き込み前の承認ゲートUI
+- `BatchDashboard` / `PipelineBuilder` — バッチ・パイプライン管理
+- `TemplateBrowser` — ワークフローテンプレート一覧
+- `ArtifactPreview` — アーティファクトプレビュー表示
+- `BatchTargetSelector` — バッチターゲット選択
+- `ChatComposer` — チャット形式コンポーザー
+- `CompletionCard` — 完了カード表示
+- `FileOpPreview` — ファイル操作プレビュー
+- `InboxPanel` — インボックスパネル
+- `InterventionPanel` — 介入パネル
+- `PipelineProgress` — パイプライン進捗表示
+- `ProjectSelector` — プロジェクト選択
+- `RecentSessions` — 最近のセッション一覧
+- `SessionList` — セッションリスト
+- `SettingsModal` — 設定モーダル
+- `SheetDiffCard` — シート差分カード
+- `StatusBar` — ステータスバー
+- `Toast` — トースト通知
 
-**主要 UI コンポーネント（SolidJS）**
-- `Shell` — ルートレイアウト（3-ペイングリッド）
-- `MessageFeed` — ✓/⟳/✗ ステータス付きツール呼び出し、メッセージバブル、自動スクロール
-- `Composer` — auto-grow テキストエリア、Send/Cancel ボタン、Enter で送信
-- `ApprovalOverlay` — ツール承認要求オーバーレイ（Reject / Approve）
-- `Sidebar` — セッションリスト、ハイライト付き選択
-- `ContextPanel` — タブ付き情報パネル
-- `StatusBar` — 接続状態＋セッション数
-- `ui.tsx` — 基本パーツ（Button, Input, StatusDot）
+**その他機能**
+- ダークモード対応（`data-theme` 属性切り替え、LocalStorage 永続化）
+- ドラフト自動保存・ページリロード後の再開に対応
 
 ### 安全設計
 
@@ -143,10 +160,24 @@ pnpm --dir apps/desktop exec tauri build --config src-tauri/tauri.windows.conf.j
 ## 動作確認コマンド
 
 ```bash
+pnpm check                  # Svelte チェック
 pnpm typecheck              # TypeScript 型チェック
-pnpm --filter @relay-agent/desktop build  # Vite ビルド
-cd apps/desktop && pnpm test:e2e  # Playwright E2E
-. "$HOME/.cargo/env" && cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml  # Rust テスト
+pnpm startup:test           # 起動スモークテスト（ウィンドウ非表示）
+pnpm launch:test            # アプリ起動テスト（Xvfb）
+pnpm workflow:test          # ワークフロースモークテスト（E2E）
+pnpm agent-loop:test        # エージェントループスモークテスト
+. "$HOME/.cargo/env" && cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+```
+
+個別テスト:
+
+```bash
+# TypeScript ユニットテスト
+pnpm -C apps/desktop exec tsx --test \
+  src/lib/auto-fix.test.ts \
+  src/lib/project-scope.test.ts \
+  src/lib/prompt-templates.test.ts \
+  src/lib/stores/delegation.test.ts
 ```
 
 ## デモ
@@ -156,12 +187,25 @@ cd apps/desktop && pnpm test:e2e  # Playwright E2E
 ### エージェントモードでの実行例
 
 1. `pnpm --filter @relay-agent/desktop tauri:dev` で起動
-2. Composer にタスクを入力して送信
-3. MessageFeed で Copilot の実行過程をリアルタイム表示
-4. ApprovalOverlay が来たら内容を確認して Approve / Reject を選択
-5. 出力ファイルを確認
+2. 設定でエージェントループを有効化（CDP ポート設定）
+3. TaskInput にゴールを入力:
+   ```
+   revenue-workflow-demo.csv の approved が true の行だけ残して、
+   review_label 列を追加し、別コピーとして保存して
+   ```
+4. ContextPanel の「Files」タブにファイルをドラッグ＆ドロップ（または直接入力）
+5. UnifiedFeed で Copilot の実行過程をステップクラスターとして確認
+6. ApprovalCard で書き込み確認が来たら内容を確認して「今回のみ」または「常に許可」を選択
+7. 出力ファイルを確認
 
-## Copilot レスポンス例
+### マニュアルモードでの実行例
+
+1. `1. はじめる` でファイルパスとタスク名を入力し「準備する」
+2. `2. Copilot に聞く` で「依頼をコピー」し M365 Copilot に貼り付け
+3. Copilot の JSON レスポンスを貼り付けて「確認する」
+4. `3. 確認して保存` で変更内容を確認し「保存する」
+
+## Copilot レスポンス例（マニュアルモード）
 
 ```json
 {
@@ -198,37 +242,91 @@ cd apps/desktop && pnpm test:e2e  # Playwright E2E
 ```
 apps/
   desktop/
-    src/
-      root.tsx             # SolidJS ルートコンポーネント（Shell）
-      index.tsx            # エントリーポイント（mount）
-      components/
-        ui.tsx             # 基本 UI パーツ（Button, Input, StatusDot）
+    src/               # SvelteKit フロントエンド
       lib/
-        ipc.ts             # Tauri IPC ラッパー（Zod 型付き）
-        tauri-mock-core.ts # Tauri モック（E2E 用）
-        tauri-mock-event.ts# Tauri イベントモック
-      index.html           # HTML エントリー
-      index.css            # Tailwind + カスタムプロパティ
-      vite-env.d.ts
-    tests/                 # Playwright E2E テスト
-      app.e2e.spec.ts
-      mock-tauri.ts
-      tauri-mock-core.ts
-      tauri-mock-event.ts
-      tauri-mock-preload.ts
-    playwright.config.ts
-    vite.config.ts         # Vite + SolidJS + Tailwind
-    tsconfig.json
-    package.json
+        components/    # UI コンポーネント（23 個）
+          AppSidebar.svelte       # 左ペイン：セッション・ナビゲーション
+          ContextPanel.svelte     # 右ペイン：Files / Servers / Policy タブ
+          UnifiedFeed.svelte      # ステップクラスターフィード
+          TaskInput.svelte        # 下部固定コンポーザー
+          ApprovalCard.svelte     # permission フェーズ付き 3 択承認カード
+          ApprovalGate.svelte     # 承認ゲートUI
+          ArtifactPreview.svelte  # アーティファクトプレビュー
+          BatchDashboard.svelte   # バッチジョブ管理
+          BatchTargetSelector.svelte  # バッチターゲット選択
+          ChatComposer.svelte     # チャット形式コンポーザー
+          CommandPalette.svelte   # ⌘K コマンドパレット
+          CompletionCard.svelte   # 完了カード
+          FileOpPreview.svelte    # ファイル操作プレビュー
+          InboxPanel.svelte       # インボックスパネル
+          InterventionPanel.svelte # 介入パネル
+          PipelineBuilder.svelte  # パイプライン構築
+          PipelineProgress.svelte # パイプライン進捗
+          ProjectSelector.svelte  # プロジェクト選択
+          RecentSessions.svelte   # 最近のセッション
+          SegmentedControl.svelte # ピル型セグメントコントロール
+          SessionList.svelte      # セッションリスト
+          SettingsModal.svelte    # 設定モーダル
+          SheetDiffCard.svelte    # シート差分カード
+          StatusBar.svelte        # ステータスバー
+          StatusStrip.svelte      # 接続状態 ping ドット
+          TemplateBrowser.svelte  # テンプレート一覧
+          Toast.svelte            # トースト通知
+        stores/
+          delegation.ts           # 委任モードストア
+          ui.ts                   # UI 状態ストア
+        auto-fix.ts               # 自動修正ロジック
+        auto-fix.test.ts
+        browser-automation-ui.ts  # Edge CDP 接続管理
+        continuity.ts             # ドラフト永続化（IndexedDB）
+        error-messages.ts         # エラーメッセージ定義
+        ipc.ts                    # Tauri IPC ラッパー（Zod 型付き）
+        project-scope.ts          # プロジェクトスコープ検証
+        project-scope.test.ts
+        prompt-templates.ts       # プロンプトテンプレート
+        prompt-templates.test.ts
+        welcome.ts                # 初回起動ウェルカム処理
     src-tauri/
       src/
-        tauri_bridge.rs    # Tauri コマンド集約（start_agent, respond_approval, cancel_agent, get_session_history）
-        copilot_client.rs  # Copilot HTTP クライアント
-        models.rs          # Rust 型定義
-        main.rs
-        lib.rs
-      Cargo.toml
-      tauri.conf.json
+        app.rs                    # アプリケーションモジュール
+        tauri_bridge.rs           # Tauri コマンド（start_agent / respond_approval / cancel_agent / get_session_history）
+        copilot_provider.rs       # Copilot プロバイダー実装
+        relay_tools.rs            # ビルトインツール実装
+        tool_catalog.rs           # ツールカタログ管理
+        storage.rs                # セッション・プロジェクト・プラン統合ストレージ
+        storage_runtime.rs        # ランタイムストレージ
+        session_store.rs          # セッション CRUD
+        session.rs                # セッション管理
+        state.rs                  # アプリ状態管理
+        execution.rs              # ツール実行ディスパッチャー
+        approval_store.rs         # 承認ポリシー永続化
+        workbook_state.rs         # ワークブック状態管理
+        relay.rs                  # RelayPacket 生成
+        mcp_client.rs             # MCP JSON-RPC クライアント（HTTP/Stdio）
+        browser_automation.rs     # ブラウザ自動化コマンド
+        pipeline.rs               # パイプライン管理
+        batch.rs                  # バッチジョブ管理
+        file_support.rs           # ファイル操作実装
+        models.rs                 # Rust 型定義
+        persistence.rs            # JSON ローカルストレージ
+        risk_evaluator.rs         # 操作リスク評価
+        quality_validator.rs      # 出力品質チェック
+        startup.rs                # 起動・リカバリー処理
+        agent_loop_smoke.rs       # エージェントループスモークテスト
+        workflow_smoke.rs         # ワークフロースモークテスト
+        template.rs               # テンプレート管理
+        project.rs                # プロジェクト管理
+        integration_tests.rs      # 統合テスト
+        bin/
+          startup_smoke.rs        # 起動スモークテスト（バイナリ）
+        workbook/                 # ワークブック処理エンジン
+          engine.rs               # 変換実行
+          inspect.rs              # シート構造解析
+          preview.rs              # 差分プレビュー生成
+          preflight.rs            # 実行前検証
+          csv_backend.rs          # CSV 読み書き
+          xlsx_backend.rs         # XLSX 読み取り
+          source.rs               # ソースファイル管理
 packages/
   contracts/
     src/
