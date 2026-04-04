@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct BrowserAutomationSettings {
     pub cdp_port: u16,
+    #[allow(dead_code)]
     pub auto_launch_edge: bool,
     pub timeout_ms: u32,
 }

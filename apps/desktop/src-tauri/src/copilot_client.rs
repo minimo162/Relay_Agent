@@ -7,15 +7,14 @@ use std::sync::Arc;
 use api::{
     read_base_url, AnthropicClient, AuthSource, ContentBlockDelta as ApiContentBlockDelta,
     InputContentBlock, InputMessage, MessageRequest, MessageResponse,
-    OutputContentBlock as ApiOutputContentBlock, StreamEvent as ApiStreamEvent, ToolChoice,
-    ToolDefinition, ToolResultContentBlock,
+    OutputContentBlock as ApiOutputContentBlock, StreamEvent as ApiStreamEvent, ToolChoice, ToolResultContentBlock,
 };
 use runtime::{
     ApiClient, ApiRequest, AssistantEvent, ContentBlock, MessageRole, RuntimeError, Session,
     TokenUsage, FRONTIER_MODEL_NAME,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::models::BrowserAutomationSettings;
 

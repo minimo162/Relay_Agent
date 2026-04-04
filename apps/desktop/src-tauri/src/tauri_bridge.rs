@@ -14,9 +14,7 @@ use crate::registry::SessionRegistry;
 // Re-export registry and agent_loop types for external consumers
 pub use crate::registry::SessionEntry;
 pub use crate::agent_loop::{
-    AgentApprovalNeededEvent, AgentErrorEvent, AgentSessionHistoryResponse,
-    AgentTextDeltaEvent, AgentToolResultEvent, AgentToolStartEvent, AgentTurnCompleteEvent,
-    MessageContent, RelayMessage,
+    AgentErrorEvent, AgentSessionHistoryResponse,
 };
 
 // What we need from agent_loop
@@ -49,13 +47,10 @@ pub async fn start_agent(
         running: true,
         cancelled: Arc::new(AtomicBool::new(false)),
         approvals: Mutex::new(HashMap::new()),
+        finished_at: None,
     };
     let cancelled = Arc::clone(&entry.cancelled);
-    registry
-        .data
-        .lock()
-        .map_err(|e| format!("session registry lock poisoned: {e}"))?
-        .insert(session_id.clone(), entry);
+    registry.insert(session_id.clone(), entry)?;
 
     let app_for_task = app.clone();
     let sid_for_task = session_id.clone();
@@ -97,7 +92,7 @@ pub async fn start_agent(
                     cancelled: false,
                 };
                 if let Err(e) = app_for_task.emit(E_ERROR, &evt) {
-                    eprintln!("[RelayAgent] emit failed ({E_ERROR}): {e}");
+                    tracing::warn!("[RelayAgent] emit failed ({E_ERROR}): {e}");
                 }
             }
             Err(panic_info) => {
@@ -108,24 +103,20 @@ pub async fn start_agent(
                 } else {
                     "agent loop panicked with unknown payload".to_string()
                 };
-                eprintln!("[RelayAgent] agent loop panicked ({sid_for_task}): {msg}");
+                tracing::error!("[RelayAgent] agent loop panicked ({sid_for_task}): {msg}");
                 let evt = AgentErrorEvent {
                     session_id: sid_for_task.clone(),
                     error: format!("agent loop panicked: {msg}"),
                     cancelled: false,
                 };
                 if let Err(e) = app_for_task.emit(E_ERROR, &evt) {
-                    eprintln!("[RelayAgent] emit failed ({E_ERROR}): {e}");
+                    tracing::warn!("[RelayAgent] emit failed ({E_ERROR}): {e}");
                 }
             }
         }
 
         // Always clean up session state, even on panic
-        if let Ok(mut data) = reg_for_task.data.lock() {
-            if let Some(entry) = data.get_mut(&sid_for_task) {
-                entry.mark_finished();
-            }
-        }
+        let _ignore = reg_for_task.mutate_session(&sid_for_task, |entry| entry.mark_finished());
 
         // Release concurrency slot
         drop(permit);
@@ -203,7 +194,7 @@ pub async fn compact_agent_session(
         )
         .ok_or_else(|| "compact command is only available for existing sessions".to_string())?;
 
-        let removed = cmd_result.message.len();
+        let _removed = cmd_result.message.len();
         let removed_count = entry.session.messages.len().saturating_sub(cmd_result.session.messages.len());
 
         entry.session = cmd_result.session;
@@ -222,27 +213,32 @@ pub async fn cancel_agent(
     registry: State<'_, SessionRegistry>,
     request: CancelAgentRequest,
 ) -> Result<(), String> {
+    // Mark cancelled and drain approvals via the registry API
     if let Ok(mut data) = registry.data.lock() {
         if let Some(entry) = data.get_mut(&request.session_id) {
-            entry.cancelled.store(true, Ordering::SeqCst);
+            entry.cancelled.store(true, Ordering::Relaxed);
             entry.running = false;
-            // Cancel all pending approvals
-            for (_, tx) in entry.approvals.lock().unwrap_or_else(|e| {
-                eprintln!("[RelayAgent] approvals lock poisoned during cancel: {e}");
-                e.into_inner()
-            }).drain() {
+        }
+    }
+    // Drain approvals and reject them all
+    match registry.drain_approvals(&request.session_id) {
+        Ok(senders) => {
+            for tx in senders {
                 let _ = tx.send(false);
             }
+        }
+        Err(e) => {
+            tracing::error!("[RelayAgent] drain approvals failed during cancel: {e}");
         }
     }
 
     let evt = AgentErrorEvent {
-        session_id: request.session_id,
-        error: "agent session was cancelled".into(),
+        session_id: request.session_id.clone(),
+        error: "session cancelled by user".into(),
         cancelled: true,
     };
     if let Err(e) = app.emit(E_ERROR, &evt) {
-        eprintln!("[RelayAgent] emit failed ({E_ERROR}): {e}");
+        tracing::warn!("[RelayAgent] emit failed ({E_ERROR}): {e}");
     }
     Ok(())
 }

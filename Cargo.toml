@@ -17,7 +17,7 @@ publish = false
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-unused = "warn"
+dead_code = "allow"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

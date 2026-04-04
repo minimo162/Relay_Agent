@@ -1,6 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -15,7 +14,6 @@ use runtime::{
 
 use crate::copilot_client::{CopilotApiClient, CopilotStreamEvent, PersistedSessionConfig};
 use crate::registry::SessionRegistry;
-use crate::models::*;
 
 /* ── Event name constants ─── */
 
@@ -55,7 +53,7 @@ pub fn run_agent_loop_impl(
 ) -> Result<(), String> {
     let app_for_stream = app.clone();
     let session_for_stream = session_id.to_string();
-    let shared_client = SHARED_ANTHROPIC_CLIENT.get_or_init(|| {
+    let _shared_client = SHARED_ANTHROPIC_CLIENT.get_or_init(|| {
         api::AnthropicClient::from_auth(api::AuthSource::None).with_base_url(api::read_base_url())
     });
     let api_client = CopilotApiClient::new_with_default_settings().with_stream_callback(
@@ -69,7 +67,7 @@ pub fn run_agent_loop_impl(
                         is_complete: false,
                     },
                 ) {
-                    eprintln!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
+                    tracing::warn!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
                 }
             }
             CopilotStreamEvent::MessageStop => {
@@ -81,7 +79,7 @@ pub fn run_agent_loop_impl(
                         is_complete: true,
                     },
                 ) {
-                    eprintln!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
+                    tracing::warn!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
                 }
             }
         },
@@ -126,17 +124,16 @@ pub fn run_agent_loop_impl(
                     cancelled: false,
                 };
                 if let Err(e) = app.emit(E_ERROR, &evt) {
-                    eprintln!("[RelayAgent] emit failed ({E_ERROR}): {e}");
+                    tracing::warn!("[RelayAgent] emit failed ({E_ERROR}): {e}");
                 }
                 break;
             }
         };
 
-        if let Ok(mut data) = registry.data.lock() {
-            if let Some(entry) = data.get_mut(session_id) {
-                entry.session = runtime_session.session().clone();
-            }
-        }
+        // Update session state in registry without holding lock across turns
+        let _ignore = registry.mutate_session(session_id, |entry| {
+            entry.session = runtime_session.session().clone();
+        });
         persistence_client
             .save_session(
                 session_id,
@@ -192,7 +189,7 @@ pub fn run_agent_loop_impl(
                     message_count: runtime_session.session().messages.len(),
                 },
             ) {
-                eprintln!("[RelayAgent] emit failed ({E_TURN_COMPLETE}): {e}");
+                tracing::warn!("[RelayAgent] emit failed ({E_TURN_COMPLETE}): {e}");
             }
         }
     }
@@ -209,11 +206,10 @@ pub fn run_agent_loop_impl(
             },
         )
         .map_err(|error| error.to_string())?;
-    if let Ok(mut data) = registry.data.lock() {
-        if let Some(entry) = data.get_mut(session_id) {
-            entry.session = session;
-        }
-    }
+    // Update final session state
+    let _ignore = registry.mutate_session(session_id, |entry| {
+        entry.session = session;
+    });
 
     Ok(())
 }
@@ -236,7 +232,7 @@ impl PermissionPrompter for TauriApprovalPrompter {
                     .get(&self.session_id)
                     .is_some_and(|entry| entry.cancelled.load(Ordering::SeqCst)),
                 Err(e) => {
-                    eprintln!("[RelayAgent] registry lock poisoned during permission check: {e}");
+                    tracing::error!("[RelayAgent] registry lock poisoned during permission check: {e}");
                     return PermissionPromptDecision::Deny {
                         reason: "registry lock poisoned".into(),
                     };
@@ -280,21 +276,24 @@ impl PermissionPrompter for TauriApprovalPrompter {
                 input: input_obj,
             },
         ) {
-            eprintln!("[RelayAgent] emit failed ({E_APPROVAL_NEEDED}): {e}");
+            tracing::warn!("[RelayAgent] emit failed ({E_APPROVAL_NEEDED}): {e}");
         }
 
         // Create oneshot channel
         let (tx, rx) = std::sync::mpsc::channel::<bool>();
-
-        // Step 2 — register approval (short, independent lock)
         {
-            let data = self.registry.data.lock().map_err(|e| {
-                eprintln!("[RelayAgent] registry lock poisoned during approval registration: {e}");
-                PermissionPromptDecision::Deny { reason: "registry lock poisoned".into() }
-            })?;
-            if let Some(entry) = data.get(&self.session_id) {
+            let mut data = match self.registry.data.lock() {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::error!("[RelayAgent] registry lock poisoned during approval registration: {e}");
+                    return PermissionPromptDecision::Deny {
+                        reason: "registry lock poisoned".into(),
+                    };
+                }
+            };
+            if let Some(entry) = data.get_mut(&self.session_id) {
                 let mut approvals = entry.approvals.lock().unwrap_or_else(|e| {
-                    eprintln!("[RelayAgent] approvals lock poisoned: {e}");
+                    tracing::error!("[RelayAgent] approvals lock poisoned: {e}");
                     e.into_inner()
                 });
                 approvals.insert(approval_id.clone(), tx);
@@ -346,7 +345,7 @@ impl ToolExecutor for TauriToolExecutor {
                 tool_name: tool_name.to_string(),
             },
         ) {
-            eprintln!("[RelayAgent] emit failed ({E_TOOL_START}): {e}");
+            tracing::warn!("[RelayAgent] emit failed ({E_TOOL_START}): {e}");
         }
 
         let mut input_value: Value =
@@ -380,7 +379,7 @@ impl ToolExecutor for TauriToolExecutor {
                 is_error: false,
             },
         ) {
-            eprintln!("[RelayAgent] emit failed ({E_TOOL_RESULT}): {e}");
+            tracing::warn!("[RelayAgent] emit failed ({E_TOOL_RESULT}): {e}");
         }
 
         Ok(result)

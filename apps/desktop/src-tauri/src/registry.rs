@@ -31,7 +31,7 @@ impl SessionEntry {
 }
 
 pub struct SessionRegistry {
-    data: Arc<Mutex<HashMap<String, SessionEntry>>>,
+    pub(crate) data: Arc<Mutex<HashMap<String, SessionEntry>>>,
 }
 
 // Manual Clone: Arc is already shared, no deep clone needed
@@ -50,11 +50,55 @@ impl SessionRegistry {
         }
     }
 
+    /// Insert a session into the registry.
+    pub fn insert(&self, id: String, entry: SessionEntry) -> Result<(), String> {
+        let mut data = self.data.lock().map_err(|e| format!("registry lock poisoned: {e}"))?;
+        data.insert(id, entry);
+        Ok(())
+    }
+
+    /// Lock the registry and run a closure over the data.
+    pub fn with_data<F, R>(&self, f: F) -> Result<R, String>
+    where
+        F: FnOnce(&mut HashMap<String, SessionEntry>) -> R,
+    {
+        let mut data = self.data.lock().map_err(|e| format!("registry lock poisoned: {e}"))?;
+        Ok(f(&mut data))
+    }
+
+    /// Get a reference to a session entry (while holding the lock).
+    pub fn get_session<F, R>(&self, session_id: &str, f: F) -> Result<Option<R>, String>
+    where
+        F: FnOnce(&SessionEntry) -> R,
+    {
+        let data = self.data.lock().map_err(|e| format!("registry lock poisoned: {e}"))?;
+        Ok(data.get(session_id).map(f))
+    }
+
+    /// Mutate a session entry (while holding the lock).
+    pub fn mutate_session<F, R>(&self, session_id: &str, f: F) -> Result<Option<R>, String>
+    where
+        F: FnOnce(&mut SessionEntry) -> R,
+    {
+        let mut data = self.data.lock().map_err(|e| format!("registry lock poisoned: {e}"))?;
+        Ok(data.get_mut(session_id).map(f))
+    }
+
+    /// Drain all approval senders for a session and return them.
+    pub fn drain_approvals(&self, session_id: &str) -> Result<Vec<std::sync::mpsc::Sender<bool>>, String> {
+        let mut data = self.data.lock().map_err(|e| format!("registry lock poisoned: {e}"))?;
+        let Some(entry) = data.get_mut(session_id) else {
+            return Ok(Vec::new());
+        };
+        let mut approvals = entry.approvals.lock().map_err(|e| format!("approvals lock poisoned: {e}"))?;
+        Ok(approvals.drain().map(|(_, tx)| tx).collect())
+    }
+
     /// Evict completed/cancelled sessions older than `ttl_seconds`.
     /// Call this periodically (e.g. on each new session start, or via a timer).
     pub fn cleanup_stale_sessions(&self, ttl_seconds: i64) -> usize {
         let Ok(mut data) = self.data.lock() else {
-            eprintln!("[SessionRegistry] cleanup: lock poisoned");
+            tracing::error!("[SessionRegistry] cleanup: lock poisoned");
             return 0;
         };
         let now = Utc::now().timestamp();
