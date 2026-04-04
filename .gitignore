@@ -15,6 +15,11 @@ node_modules/
 !.env.example
 .env.local
 
+# Auth files
+.auth_key
+.agent_auth_key
+.oauth_token*
+
 # Build output
 .svelte-kit/
 build/
