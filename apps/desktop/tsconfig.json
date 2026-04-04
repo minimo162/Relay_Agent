@@ -14,8 +14,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "paths": {
-      "@/*": ["./src/*"],
-      "@relay-agent/contracts": ["../../packages/contracts/src/index.ts"]
+      "@/*": ["./src/*"]
     },
     "baseUrl": "."
   },

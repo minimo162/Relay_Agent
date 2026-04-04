@@ -89,11 +89,6 @@ This launches the Tauri dev environment with hot-reloading for both the SolidJS 
 Relay_Agent/
 ├── Cargo.toml                    # Workspace root
 ├── package.json                  # Root pnpm workspace config
-├── packages/
-│   └── contracts/                # Shared TypeScript type contracts
-│       └── src/                  #   approval, batch, core, file, ipc,
-│                                 #   meta, pipeline, project, relay,
-│                                 #   shared, template, workbook
 │
 └── apps/desktop/
     ├── src/                      # SolidJS frontend
@@ -150,7 +145,6 @@ Relay_Agent/
 ### 🚧 Planned / Partially Implemented
 
 - **MCP Server Integration** — Types and client infrastructure in `runtime/`, basic MCP stdio client — not yet wired into the agent loop
-- **Contracts Package** — TypeScript type contracts defined (`packages/contracts/`) for approval, batch, file, pipeline, project, relay, template, workbook — not yet fully consumed
 - **Slash Commands** — `/compact` fully implemented; 22 total commands parsed but most are scaffolding
 - **Context System** — File drop, MCP server list, and policy tabs in the right panel (UI exists, data not fully populated)
 
