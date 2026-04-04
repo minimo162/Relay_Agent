@@ -48,6 +48,7 @@ Relay Agent bridges a Tauri desktop application with an AI agent backend. You de
 │  │  │  crates/runtime/   – Session core   │  │  │
 │  │  │  crates/tools/     – Tool registry  │  │  │
 │  │  │  crates/commands/  – Slash cmds     │  │  │
+│  │  │  crates/onyx-concept/ – RAG engine   │  │  │
 │  │  │  crates/compat-harness/             │  │  │
 │  │  └─────────────────────────────────────┘  │  │
 │  └───────────────────────────────────────────┘  │
@@ -116,9 +117,16 @@ Relay_Agent/
     │   │   ├── runtime/          # Session core, permissions, MCP
     │   │   ├── tools/            # Tool registry definitions
     │   │   ├── commands/         # Slash command handling
+    │   │   ├── onyx-concept/     # RAG engine (SQLite FTS5, Context Router, MCP)
     │   │   └── compat-harness/   # Upstream manifest extraction
     │   ├── capabilities/         # Tauri v2 capability files
     │   └── tauri.conf.json       # App configuration
+    │
+    └── tests/                    # E2E tests (Playwright)
+        ├── app.e2e.spec.ts       # Core UI + agent flow tests
+        ├── mock-tauri.ts         # Tauri API mock for browser
+        ├── tauri-mock-core.ts    # IPC invoke mock
+        └── tauri-mock-event.ts   # Event listen/emit mock
 ```
 
 ## Features
@@ -160,13 +168,18 @@ Relay_Agent/
 - **Panic Safety** — `catch_unwind` wrapper on the agent loop to prevent silent thread death and stuck sessions
 - **Session Search** — Sidebar session filtering with live search input
 - **CI Pipeline** — GitHub Actions workflow for `cargo check`, `cargo clippy`, and `pnpm typecheck` on every PR/push
+- **Onyx RAG Engine** — Internalized RAG architecture replacing external Docker/Vespa dependencies:
+  - `DataSource` trait abstraction for pluggable data connectors
+  - SQLite FTS5 hybrid search index for fast full-text retrieval
+  - Context Router for intelligent query routing and document ranking
+  - MCP Server integration for tool-based data access
+  - Built-in connectors for file system and git repositories
 
 ### 🚧 Planned / Partially Implemented
 
 - **MCP Agent Loop Integration** — MCP server tools called automatically by the agent during execution
 - **Expanded Slash Commands** — 22 total commands in `crates/commands/` — wire remaining commands to the UI
-- **PageIndex (Vectorless RAG)** — Integrate tree-search based context retrieval into the agent's toolset
-- **E2E Test Coverage** — Expand Playwright tests for new MCP, slash command, and context features
+- **E2E Test Expansion** — Comprehensive coverage for streaming, approval flows, session lifecycle, slash commands (~51 tests)
 
 ## IPC API
 
