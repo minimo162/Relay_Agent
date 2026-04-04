@@ -155,6 +155,11 @@ Relay_Agent/
 - **Config System** — Centralized `AgentConfig` with adjustable parameters
 - **POSIX Shell Escaping** — Secure shell argument escaping for bash tool execution
 - **Session TTL Cleanup** — Auto-eviction of completed sessions after configurable TTL (default: 30 min)
+- **Traced Logging** — Structured logging via `tracing` crate (warn/error levels) instead of raw `eprintln!`
+- **Structured Concurrency** — `tokio::task::spawn_blocking` + semaphore-based concurrency limits for agent sessions
+- **Panic Safety** — `catch_unwind` wrapper on the agent loop to prevent silent thread death and stuck sessions
+- **Session Search** — Sidebar session filtering with live search input
+- **CI Pipeline** — GitHub Actions workflow for `cargo check`, `cargo clippy`, and `pnpm typecheck` on every PR/push
 
 ### 🚧 Planned / Partially Implemented
 
