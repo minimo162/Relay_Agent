@@ -1,6 +1,8 @@
+mod agent_loop;
 mod cdp_copilot;
 mod copilot_client;
 mod models;
+mod registry;
 mod tauri_bridge;
 
 use std::env;
@@ -8,7 +10,7 @@ use std::path::PathBuf;
 
 use tauri::Manager;
 
-use crate::tauri_bridge::SessionRegistry;
+use crate::registry::SessionRegistry;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
