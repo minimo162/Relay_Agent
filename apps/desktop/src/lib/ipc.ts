@@ -11,8 +11,8 @@
  *   agent:turn_complete | agent:text_delta | agent:error
  */
 
-import { invoke } from "@/tauri-mock-core";
-import { listen, UnlistenFn, Event } from "@/tauri-mock-event";
+import { invoke } from "@tauri-apps/api/core";
+import { listen, UnlistenFn, Event } from "@tauri-apps/api/event";
 
 /* ============================================================
    Request / Response types (Rust models.rs → camelCase)
