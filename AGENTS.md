@@ -1,10 +1,11 @@
 # Relay_Agent Repository Rules
 
-## Repository Reality
+## Repository State
 
-- This repository is currently greenfield apart from `.taskmaster/` planning assets.
-- Do not assume existing `apps/desktop`, `packages/contracts`, or Rust/Tauri implementation directories already exist.
-- Use `.taskmaster/docs/repo_audit.md` and `PLANS.md` as the baseline references before changing scope.
+- This repository contains a working Tauri v2 + SolidJS desktop agent application under `apps/desktop/`.
+- Rust backend lives in `apps/desktop/src-tauri/` with internal crates under `crates/{api,runtime,tools,commands,compat-harness}`.
+- The legacy `packages/contracts` directory has been removed; contracts are now defined inline within the Rust crates.
+- Use `PLANS.md` for the milestone roadmap and `docs/IMPLEMENTATION.md` for implementation notes.
 
 ## Source of Truth
 
@@ -12,8 +13,8 @@
   1. `PLANS.md`
   2. `AGENTS.md`
   3. `docs/IMPLEMENTATION.md`
-- Contracts should become the source of truth only after `packages/contracts` is created.
-- Until then, the PRD and planning docs are the current source of truth.
+- The Rust crate types and IPC command signatures in `src-tauri/` are the source of truth for contracts.
+- The frontend types in `src/lib/ipc.ts` must stay in sync with the Rust IPC layer.
 
 ## Execution Rules
 
@@ -32,19 +33,18 @@
 
 ## MVP Guardrails
 
-- Priority A: make the safe vertical slice work end to end.
-- Priority B: harden validation, diff preview, and file IO.
-- Priority C: extend workbook handling only after the MVP path is stable.
-- Save-copy only is the default write behavior.
-- Treat original workbook inputs as read-only.
-- Do not implement arbitrary code execution, shell access, VBA, or external network execution in the product workflow.
-- Do not accept raw Excel formulas directly from model output.
+- Priority A: make the agent loop work end to end with Copilot Proxy API and M365 Copilot via CDP.
+- Priority B: harden MCP server integration, tool approval, and session management.
+- Priority C: expand CDP browser automation and context-aware execution.
+- Do not implement arbitrary code execution, shell access, VBA, or external network execution outside agent-controlled tools.
+- Bash tool runs in a sandboxed context with approval gating for risky operations.
 
 ## Documentation Discipline
 
 - `PLANS.md` holds the implementation plan.
 - `docs/IMPLEMENTATION.md` holds progress notes, decisions, verification runs, and known limitations.
-- `README.md` should be updated only when behavior or setup instructions become real and testable.
+- `README.md` should reflect the current implemented behavior and setup instructions.
+- Archived planning docs (`docs/archive/`) contain historical CODEX_PROMPT files from early development.
 
 ## Task Master Usage
 
