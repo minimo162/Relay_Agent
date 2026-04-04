@@ -13,6 +13,7 @@ use runtime::{
 };
 
 use crate::copilot_client::{CopilotApiClient, CopilotStreamEvent, PersistedSessionConfig};
+use crate::error::AgentLoopError;
 use crate::registry::SessionRegistry;
 
 /* ── Event name constants ─── */
@@ -50,7 +51,7 @@ pub fn run_agent_loop_impl(
     cwd: Option<String>,
     max_turns: Option<usize>,
     cancelled: Arc<AtomicBool>,
-) -> Result<(), String> {
+) -> Result<(), AgentLoopError> {
     let app_for_stream = app.clone();
     let session_for_stream = session_id.to_string();
     let _shared_client = SHARED_ANTHROPIC_CLIENT.get_or_init(|| {
@@ -144,7 +145,7 @@ pub fn run_agent_loop_impl(
                     max_turns: Some(max_turns),
                 },
             )
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| AgentLoopError::PersistenceError(error.to_string()))?;
 
         let needs_more_turns = summary
             .assistant_messages
@@ -205,7 +206,7 @@ pub fn run_agent_loop_impl(
                 max_turns: Some(max_turns),
             },
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| AgentLoopError::PersistenceError(error.to_string()))?;
     // Update final session state
     let _ignore = registry.mutate_session(session_id, |entry| {
         entry.session = session;

@@ -50,7 +50,8 @@ pub async fn start_agent(
         finished_at: None,
     };
     let cancelled = Arc::clone(&entry.cancelled);
-    registry.insert(session_id.clone(), entry)?;
+    registry.insert(session_id.clone(), entry)
+        .map_err(|e| e.to_string())?;
 
     let app_for_task = app.clone();
     let sid_for_task = session_id.clone();
@@ -88,7 +89,7 @@ pub async fn start_agent(
             Ok(Err(err)) => {
                 let evt = AgentErrorEvent {
                     session_id: sid_for_task.clone(),
-                    error: err,
+                    error: err.to_string(),
                     cancelled: false,
                 };
                 if let Err(e) = app_for_task.emit(E_ERROR, &evt) {

@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::Utc;
 use runtime::Session as RuntimeSession;
 
+use crate::error::AgentLoopError;
+
 /// Shared state for an active agent session.
 /// The approval channel map lets respond_approval() unblock the agent loop.
 pub struct SessionEntry {
@@ -51,46 +53,52 @@ impl SessionRegistry {
     }
 
     /// Insert a session into the registry.
-    pub fn insert(&self, id: String, entry: SessionEntry) -> Result<(), String> {
-        let mut data = self.data.lock().map_err(|e| format!("registry lock poisoned: {e}"))?;
+    pub fn insert(&self, id: String, entry: SessionEntry) -> Result<(), AgentLoopError> {
+        let mut data = self.data.lock()
+            .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
         data.insert(id, entry);
         Ok(())
     }
 
     /// Lock the registry and run a closure over the data.
-    pub fn with_data<F, R>(&self, f: F) -> Result<R, String>
+    pub fn with_data<F, R>(&self, f: F) -> Result<R, AgentLoopError>
     where
         F: FnOnce(&mut HashMap<String, SessionEntry>) -> R,
     {
-        let mut data = self.data.lock().map_err(|e| format!("registry lock poisoned: {e}"))?;
+        let mut data = self.data.lock()
+            .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
         Ok(f(&mut data))
     }
 
     /// Get a reference to a session entry (while holding the lock).
-    pub fn get_session<F, R>(&self, session_id: &str, f: F) -> Result<Option<R>, String>
+    pub fn get_session<F, R>(&self, session_id: &str, f: F) -> Result<Option<R>, AgentLoopError>
     where
         F: FnOnce(&SessionEntry) -> R,
     {
-        let data = self.data.lock().map_err(|e| format!("registry lock poisoned: {e}"))?;
+        let data = self.data.lock()
+            .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
         Ok(data.get(session_id).map(f))
     }
 
     /// Mutate a session entry (while holding the lock).
-    pub fn mutate_session<F, R>(&self, session_id: &str, f: F) -> Result<Option<R>, String>
+    pub fn mutate_session<F, R>(&self, session_id: &str, f: F) -> Result<Option<R>, AgentLoopError>
     where
         F: FnOnce(&mut SessionEntry) -> R,
     {
-        let mut data = self.data.lock().map_err(|e| format!("registry lock poisoned: {e}"))?;
+        let mut data = self.data.lock()
+            .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
         Ok(data.get_mut(session_id).map(f))
     }
 
     /// Drain all approval senders for a session and return them.
-    pub fn drain_approvals(&self, session_id: &str) -> Result<Vec<std::sync::mpsc::Sender<bool>>, String> {
-        let mut data = self.data.lock().map_err(|e| format!("registry lock poisoned: {e}"))?;
+    pub fn drain_approvals(&self, session_id: &str) -> Result<Vec<std::sync::mpsc::Sender<bool>>, AgentLoopError> {
+        let mut data = self.data.lock()
+            .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
         let Some(entry) = data.get_mut(session_id) else {
             return Ok(Vec::new());
         };
-        let mut approvals = entry.approvals.lock().map_err(|e| format!("approvals lock poisoned: {e}"))?;
+        let mut approvals = entry.approvals.lock()
+            .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
         Ok(approvals.drain().map(|(_, tx)| tx).collect())
     }
 
