@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Settings for M365 Copilot browser automation via Chrome DevTools Protocol.
+/// Settings for M365 Copilot browser automation via Chrome `DevTools` Protocol.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserAutomationSettings {

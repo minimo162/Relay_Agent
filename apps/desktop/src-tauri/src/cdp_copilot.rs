@@ -37,26 +37,20 @@ fn port_is_free(port: u16) -> bool {
 /// Launch a dedicated Edge instance for CDP control.
 /// Uses a separate user-data-dir so it doesn't conflict with
 /// the user's personal browser.
-pub async fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
+pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
     // Determine Edge executable path
     let edge_path = find_edge_path()?;
 
     // Dedicated profile directory (separate from user's Edge profile)
     let home = if cfg!(target_os = "windows") {
         std::env::var("LOCALAPPDATA")
-            .ok()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(r"C:\Users\Default\AppData\Local"))
+            .ok().map_or_else(|| PathBuf::from(r"C:\Users\Default\AppData\Local"), PathBuf::from)
     } else if cfg!(target_os = "macos") {
         std::env::var("HOME")
-            .ok()
-            .map(|h| PathBuf::from(h).join("Library").join("Application Support"))
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .ok().map_or_else(|| PathBuf::from("/tmp"), |h| PathBuf::from(h).join("Library").join("Application Support"))
     } else {
         std::env::var("HOME")
-            .ok()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .ok().map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
     };
     let profile_dir = home.join("RelayAgentEdgeProfile");
     std::fs::create_dir_all(&profile_dir).ok();
@@ -88,7 +82,7 @@ pub async fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
 
     let child = cmd
         .spawn()
-        .with_context(|| format!("failed to spawn Edge at {}", edge_path))?;
+        .with_context(|| format!("failed to spawn Edge at {edge_path}"))?;
 
     info!("[CDP] Edge process spawned (PID: {})", child.id());
     Ok(child)
@@ -137,10 +131,10 @@ pub async fn wait_for_cdp_ready(debug_url: &str, max_wait_secs: u64) -> Result<(
 
     loop {
         if start.elapsed() > Duration::from_secs(max_wait_secs) {
-            bail!("Edge did not become ready within {}s", max_wait_secs);
+            bail!("Edge did not become ready within {max_wait_secs}s");
         }
 
-        if reqwest::get(&format!("{}/json/version", debug_url))
+        if reqwest::get(&format!("{debug_url}/json/version"))
             .await
             .is_ok()
         {
@@ -184,7 +178,7 @@ pub struct PageInfo {
 }
 
 pub async fn list_pages(debug_url: &str) -> Result<Vec<PageInfo>> {
-    let resp = reqwest::get(&format!("{}/json/list", debug_url))
+    let resp = reqwest::get(&format!("{debug_url}/json/list"))
         .await
         .context("fetch /json/list")?;
     let items: Vec<Value> = resp.json().await.context("/json/list JSON")?;
@@ -246,7 +240,7 @@ impl Ctx {
             while let Some(msg) = read.next().await {
                 if let Ok(txt) = msg.as_ref().map(|m| m.to_text()) {
                     if let Ok(v) = serde_json::from_str::<Value>(txt.unwrap()) {
-                        if v.get("id").and_then(|v| v.as_u64()) == Some(id) {
+                        if v.get("id").and_then(serde_json::Value::as_u64) == Some(id) {
                             tx.send(v).ok();
                             return;
                         }
@@ -256,7 +250,7 @@ impl Ctx {
         });
 
         write
-            .send(Message::Text(cmd.to_string().into()))
+            .send(Message::Text(cmd.to_string()))
             .await
             .context("send CDP cmd")?;
 
@@ -269,7 +263,7 @@ impl Ctx {
         reader_handle.abort();
 
         if let Some(err) = resp.get("error") {
-            bail!("CDP {}: {}", method, err);
+            bail!("CDP {method}: {err}");
         }
         Ok(resp.get("result").cloned().unwrap_or(Value::Null))
     }
@@ -366,7 +360,7 @@ impl CopilotPage {
             r2["result"]["value"].as_str().unwrap_or("{}"),
         )
         .unwrap_or(Value::Null);
-        if val.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        if val.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
             bail!("send button not found");
         }
 
@@ -509,16 +503,16 @@ pub async fn connect_copilot_page(debug_url: &str, auto_launch: bool, base_port:
     }
 
     if !auto_launch {
-        bail!("No Copilot browser found at {}. Enable auto_launch or start Edge with --remote-debugging-port.", debug_url);
+        bail!("No Copilot browser found at {debug_url}. Enable auto_launch or start Edge with --remote-debugging-port.");
     }
 
     // Find a free port and launch Edge
     let port = find_free_port(base_port, 20);
-    let debug_url_new = format!("http://127.0.0.1:{}", port);
+    let debug_url_new = format!("http://127.0.0.1:{port}");
 
     info!("[CDP] No existing browser found. Launching dedicated Edge on port {}...", port);
     
-    launch_dedicated_edge(port).await?;
+    launch_dedicated_edge(port)?;
     wait_for_cdp_ready(&debug_url_new, 30).await?;
 
     // Find or create the Copilot page
@@ -557,7 +551,7 @@ async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
     }
 
     // Check if the browser is reachable at all
-    if reqwest::get(&format!("{}/json/version", debug_url))
+    if reqwest::get(&format!("{debug_url}/json/version"))
         .await
         .is_ok()
     {
@@ -584,7 +578,7 @@ async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
 fn parse_port(debug_url: &str) -> Option<u16> {
     debug_url
         .split(':')
-        .last()
+        .next_back()
         .and_then(|s| s.parse().ok())
 }
 
@@ -592,7 +586,7 @@ async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
     if ws.starts_with("ws://") && !ws.contains("localhost") {
         return Ok(ws.into());
     }
-    let r = reqwest::get(&format!("{}/json/version", debug))
+    let r = reqwest::get(&format!("{debug}/json/version"))
         .await
         .context("/json/version")?;
     let v: Value = r.json().await?;
@@ -604,5 +598,5 @@ async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
         .strip_prefix("http://")
         .or_else(|| debug.strip_prefix("https://"))
         .unwrap_or(debug);
-    Ok(url.replace("ws://localhost/", &format!("ws://{}/", host)))
+    Ok(url.replace("ws://localhost/", &format!("ws://{host}/")))
 }

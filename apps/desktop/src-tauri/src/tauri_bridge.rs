@@ -8,7 +8,7 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::cdp_copilot;
-use crate::models::*;
+use crate::models::{StartAgentRequest, RespondAgentApprovalRequest, CancelAgentRequest, GetAgentSessionHistoryRequest, McpServerInfo, McpAddServerRequest};
 use crate::registry::SessionRegistry;
 
 // Re-export registry and agent_loop types for external consumers
@@ -58,7 +58,7 @@ pub async fn start_agent(
     let reg_for_task = registry.inner().clone();
 
     // Periodically evict stale sessions to prevent memory leaks
-    let ttl_seconds = crate::config::AgentConfig::global().session_cleanup_ttl_minutes as i64 * 60;
+    let ttl_seconds = crate::config::AgentConfig::global().session_cleanup_ttl_minutes.cast_signed() * 60;
     registry.cleanup_stale_sessions(ttl_seconds);
 
     let permit = AGENT_SEMAPHORE
@@ -117,7 +117,7 @@ pub async fn start_agent(
         }
 
         // Always clean up session state, even on panic
-        let _ignore = reg_for_task.mutate_session(&sid_for_task, |entry| entry.mark_finished());
+        let _ignore = reg_for_task.mutate_session(&sid_for_task, super::registry::SessionEntry::mark_finished);
 
         // Release concurrency slot
         drop(permit);
@@ -269,7 +269,8 @@ pub async fn get_session_history(
         return Ok(history);
     }
 
-    let api_client = crate::copilot_client::CopilotApiClient::new_with_default_settings();
+    let api_client = crate::copilot_client::CopilotApiClient::new_with_default_settings()
+        .map_err(|e| e.to_string())?;
     let loaded = api_client
         .load_session(&request.session_id)
         .map_err(|error| error.to_string())?
@@ -296,7 +297,7 @@ fn launched_port_state() -> Arc<Mutex<Option<u16>>> {
 }
 
 fn get_launched_port() -> Option<u16> {
-    launched_port_state().lock().unwrap().clone()
+    *launched_port_state().lock().unwrap()
 }
 
 fn set_launched_port(port: u16) {
@@ -305,9 +306,9 @@ fn set_launched_port(port: u16) {
 
 fn resolve_debug_url(preferred_base: u16) -> String {
     if let Some(port) = get_launched_port() {
-        format!("http://127.0.0.1:{}", port)
+        format!("http://127.0.0.1:{port}")
     } else {
-        format!("http://127.0.0.1:{}", preferred_base)
+        format!("http://127.0.0.1:{preferred_base}")
     }
 }
 
@@ -407,14 +408,14 @@ pub async fn cdp_send_prompt(
         Ok(r) => r.page,
         Err(e) => return Ok(CdpPromptResult {
             ok: false, response_text: String::new(), body_length: 0,
-            error: Some(format!("CDP connect: {}", e)),
+            error: Some(format!("CDP connect: {e}")),
         }),
     };
 
     if let Err(e) = page.send_prompt(&request.prompt).await {
         return Ok(CdpPromptResult {
             ok: false, response_text: String::new(), body_length: 0,
-            error: Some(format!("Send: {}", e)),
+            error: Some(format!("Send: {e}")),
         });
     }
 
@@ -426,7 +427,7 @@ pub async fn cdp_send_prompt(
                 ok: false,
                 response_text: partial.clone(),
                 body_length: partial.len(),
-                error: Some(format!("Response timeout: {}", e)),
+                error: Some(format!("Response timeout: {e}")),
             });
         }
     };
@@ -465,7 +466,7 @@ pub async fn cdp_start_new_chat(
             ok: false, debug_url: debug_url.clone(),
             page_url: res.page.url.clone(), page_title: res.page.title.clone(),
             port: Some(res.port), launched: res.launched,
-            error: Some(format!("Navigate: {}", e)),
+            error: Some(format!("Navigate: {e}")),
         });
     }
 
@@ -482,12 +483,12 @@ pub async fn cdp_screenshot(_app: AppHandle) -> Result<serde_json::Value, String
 
     let page = match cdp_copilot::connect_copilot_page(&debug_url, false, 9222).await {
         Ok(r) => r.page,
-        Err(e) => return Err(format!("CDP connect: {}", e)),
+        Err(e) => return Err(format!("CDP connect: {e}")),
     };
 
     let tmp = std::env::temp_dir().join("relay_cdp_screenshot.png");
     page.screenshot(tmp.to_str().unwrap_or("screenshot.png")).await
-        .map_err(|e| format!("Screenshot: {}", e))?;
+        .map_err(|e| format!("Screenshot: {e}"))?;
 
     let bytes = std::fs::read(&tmp).map_err(|e| e.to_string())?;
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);

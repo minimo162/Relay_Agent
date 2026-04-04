@@ -15,8 +15,8 @@ use crate::registry::SessionRegistry;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .setup(|_app| {
-            _app.manage(SessionRegistry::new());
+        .setup(|app| {
+            app.manage(SessionRegistry::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

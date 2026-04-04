@@ -9,7 +9,7 @@ use runtime::Session as RuntimeSession;
 use crate::error::AgentLoopError;
 
 /// Shared state for an active agent session.
-/// The approval channel map lets respond_approval() unblock the agent loop.
+/// The approval channel map lets `respond_approval()` unblock the agent loop.
 pub struct SessionEntry {
     pub session: RuntimeSession,
     pub running: bool,
@@ -17,7 +17,7 @@ pub struct SessionEntry {
     /// Timestamp (UTC epoch seconds) when the session completed or was cancelled.
     /// Used for TTL-based eviction.
     pub finished_at: Option<i64>,
-    /// approval_id → oneshot Sender<bool>
+    /// `approval_id` → oneshot Sender<bool>
     pub approvals: Mutex<HashMap<String, std::sync::mpsc::Sender<bool>>>,
 }
 
@@ -117,8 +117,7 @@ impl SessionRegistry {
                 !entry.running
                     && entry
                         .finished_at
-                        .map(|t| now - t > ttl_seconds)
-                        .unwrap_or(false)
+                        .is_some_and(|t| now - t > ttl_seconds)
             })
             .map(|(id, _)| id.clone())
             .collect();

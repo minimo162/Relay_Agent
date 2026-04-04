@@ -27,6 +27,9 @@ pub enum AgentLoopError {
     #[error("API error: {0}")]
     ApiError(String),
 
+    #[error("initialization error: {0}")]
+    InitializationError(String),
+
     #[error("persistence error: {0}")]
     PersistenceError(String),
 }

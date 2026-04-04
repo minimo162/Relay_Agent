@@ -16,8 +16,8 @@ use serde_json::Value;
 
 /* ── Copilot API Client — adapts the Copilot Proxy API to runtime::ApiClient ─── */
 
-/// CopilotApiClient adapts the Copilot Proxy API (Anthropic-compatible SSE)
-/// to implement runtime::ApiClient for the agent loop.
+/// `CopilotApiClient` adapts the Copilot Proxy API (Anthropic-compatible SSE)
+/// to implement `runtime::ApiClient` for the agent loop.
 pub struct CopilotApiClient {
     client: AnthropicClient,
     runtime: tokio::runtime::Runtime,
@@ -97,19 +97,20 @@ struct PersistedTokenUsage {
 }
 
 impl CopilotApiClient {
-    pub fn new() -> Self {
-        Self {
+    pub fn new() -> Result<Self, RuntimeError> {
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|e| RuntimeError::new(format!("failed to create tokio runtime: {e}")))?;
+        Ok(Self {
             client: AnthropicClient::from_auth(AuthSource::None).with_base_url(read_base_url()),
-            runtime: tokio::runtime::Runtime::new()
-                .expect("failed to create tokio runtime for CopilotApiClient"),
+            runtime,
             model: std::env::var("RELAY_AGENT_MODEL")
                 .unwrap_or_else(|_| FRONTIER_MODEL_NAME.to_string()),
             call_count: 0,
             stream_callback: None,
-        }
+        })
     }
 
-    pub fn new_with_default_settings() -> Self {
+    pub fn new_with_default_settings() -> Result<Self, RuntimeError> {
         Self::new()
     }
 
@@ -376,7 +377,7 @@ fn session_storage_dir() -> Result<PathBuf, RuntimeError> {
     Ok(home.join(".relay-agent").join("sessions"))
 }
 
-/// Validates a session_id for safe use in filesystem paths.
+/// Validates a `session_id` for safe use in filesystem paths.
 /// Ensures it contains only alphanumeric characters, hyphens, and underscores,
 /// rejects path traversal sequences, and limits length to 128 characters.
 fn validate_session_id(id: &str) -> Result<(), String> {
@@ -392,8 +393,7 @@ fn validate_session_id(id: &str) -> Result<(), String> {
     for ch in id.chars() {
         if !ch.is_ascii_alphanumeric() && ch != '-' && ch != '_' {
             return Err(format!(
-                "session_id contains invalid character '{}' (only alphanumeric, hyphens, and underscores are allowed)",
-                ch
+                "session_id contains invalid character '{ch}' (only alphanumeric, hyphens, and underscores are allowed)"
             ));
         }
     }
