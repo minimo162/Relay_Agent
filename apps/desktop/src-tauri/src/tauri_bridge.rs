@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
+use tracing::info;
 use uuid::Uuid;
 
 use runtime::{
@@ -17,6 +18,7 @@ use runtime::{
 use commands::handle_slash_command;
 
 use crate::copilot_client::{CopilotApiClient, CopilotStreamEvent, PersistedSessionConfig};
+use crate::cdp_copilot;
 use crate::models::*;
 
 /* ── Session registry (managed by Tauri) ─── */
@@ -253,11 +255,7 @@ pub async fn get_session_history(
         return Ok(history);
     }
 
-    let api_client = CopilotApiClient::new(
-        SHARED_ANTHROPIC_CLIENT.get_or_init(|| {
-            api::AnthropicClient::from_auth(api::AuthSource::None).with_base_url(api::read_base_url())
-        }).clone(),
-    );
+    let api_client = CopilotApiClient::new_with_default_settings();
     let loaded = api_client
         .load_session(&request.session_id)
         .map_err(|error| error.to_string())?
@@ -290,7 +288,7 @@ fn run_agent_loop_impl(
     let shared_client = SHARED_ANTHROPIC_CLIENT.get_or_init(|| {
         api::AnthropicClient::from_auth(api::AuthSource::None).with_base_url(api::read_base_url())
     });
-    let api_client = CopilotApiClient::new(shared_client.clone()).with_stream_callback(
+    let api_client = CopilotApiClient::new_with_default_settings().with_stream_callback(
         move |event| match event {
             CopilotStreamEvent::TextDelta(text) => {
                 let mut ok = false;
@@ -322,7 +320,7 @@ fn run_agent_loop_impl(
             }
         },
     );
-    let persistence_client = CopilotApiClient::new(shared_client.clone());
+    let persistence_client = CopilotApiClient::new_with_default_settings();
     let tool_executor = build_tool_executor(app, session_id, cwd.clone());
     let permission_policy = PermissionPolicy::new(PermissionMode::Prompt);
     let system_prompt = vec![build_system_prompt(&goal)];
@@ -761,4 +759,214 @@ pub enum MessageContent {
         content: String,
         is_error: bool,
     },
+}
+
+/* ── CDP Copilot Tauri commands ────────────────────────────── */
+
+/// Shared state: tracks the port of our auto-launched Edge.
+static LAUNCHED_EDGE_PORT: OnceLock<Arc<std::sync::Mutex<Option<u16>>>> = OnceLock::new();
+
+fn launched_port_state() -> Arc<std::sync::Mutex<Option<u16>>> {
+    Arc::clone(
+        LAUNCHED_EDGE_PORT
+            .get_or_init(|| Arc::new(std::sync::Mutex::new(None))),
+    )
+}
+
+fn get_launched_port() -> Option<u16> {
+    launched_port_state().lock().unwrap().clone()
+}
+
+fn set_launched_port(port: u16) {
+    *launched_port_state().lock().unwrap() = Some(port);
+}
+
+fn resolve_debug_url(preferred_base: u16) -> String {
+    if let Some(port) = get_launched_port() {
+        format!("http://127.0.0.1:{}", port)
+    } else {
+        format!("http://127.0.0.1:{}", preferred_base)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectCdpRequest {
+    /// If true and no existing browser is found, auto-launch a dedicated Edge.
+    #[serde(default)]
+    pub auto_launch: Option<bool>,
+    /// Preferred base port (default: 9222). Tries 9222, 9223, …
+    #[serde(default)]
+    pub base_port: Option<u16>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CdpSendPromptRequest {
+    pub prompt: String,
+    #[serde(default)]
+    pub wait_response_secs: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CdpConnectResult {
+    pub ok: bool,
+    pub debug_url: String,
+    pub page_url: String,
+    pub page_title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub launched: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CdpPromptResult {
+    pub ok: bool,
+    pub response_text: String,
+    pub body_length: usize,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn connect_cdp(
+    _app: AppHandle,
+    request: ConnectCdpRequest,
+) -> Result<CdpConnectResult, String> {
+    let auto_launch = request.auto_launch.unwrap_or(true);
+    let base_port = request.base_port.unwrap_or(9222);
+    let debug_url = resolve_debug_url(base_port);
+
+    info!("[CDP] connect → {} (auto_launch={})", debug_url, auto_launch);
+
+    match cdp_copilot::connect_copilot_page(&debug_url, auto_launch, base_port).await {
+        Ok(res) => {
+            info!("[CDP] connected → {} — {}", res.page.url, res.page.title);
+            if res.launched {
+                set_launched_port(res.port);
+            }
+            Ok(CdpConnectResult {
+                ok: true,
+                debug_url: format!("http://127.0.0.1:{}", res.port),
+                page_url: res.page.url.clone(),
+                page_title: res.page.title.clone(),
+                port: Some(res.port),
+                launched: res.launched,
+                error: None,
+            })
+        }
+        Err(e) => Ok(CdpConnectResult {
+            ok: false,
+            debug_url,
+            page_url: String::new(),
+            page_title: String::new(),
+            port: None,
+            launched: false,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn cdp_send_prompt(
+    _app: AppHandle,
+    request: CdpSendPromptRequest,
+) -> Result<CdpPromptResult, String> {
+    let debug_url = resolve_debug_url(9222);
+    let timeout_secs = request.wait_response_secs.unwrap_or(120);
+
+    info!("[CDP] send prompt: {}…", &request.prompt[..request.prompt.len().min(60)]);
+
+    let page = match cdp_copilot::connect_copilot_page(&debug_url, false, 9222).await {
+        Ok(r) => r.page,
+        Err(e) => return Ok(CdpPromptResult {
+            ok: false, response_text: String::new(), body_length: 0,
+            error: Some(format!("CDP connect: {}", e)),
+        }),
+    };
+
+    if let Err(e) = page.send_prompt(&request.prompt).await {
+        return Ok(CdpPromptResult {
+            ok: false, response_text: String::new(), body_length: 0,
+            error: Some(format!("Send: {}", e)),
+        });
+    }
+
+    let response = match page.wait_for_response(timeout_secs).await {
+        Ok(t) => t,
+        Err(e) => {
+            let partial = page.body_text().await.unwrap_or_default();
+            return Ok(CdpPromptResult {
+                ok: false,
+                response_text: partial.clone(),
+                body_length: partial.len(),
+                error: Some(format!("Response timeout: {}", e)),
+            });
+        }
+    };
+
+    info!("[CDP] response {} chars", response.len());
+    Ok(CdpPromptResult {
+        ok: true,
+        response_text: response.clone(),
+        body_length: response.len(),
+        error: None,
+    })
+}
+
+#[tauri::command]
+pub async fn cdp_start_new_chat(
+    _app: AppHandle,
+    request: ConnectCdpRequest,
+) -> Result<CdpConnectResult, String> {
+    let auto_launch = request.auto_launch.unwrap_or(true);
+    let base_port = request.base_port.unwrap_or(9222);
+    let debug_url = resolve_debug_url(base_port);
+
+    let res = match cdp_copilot::connect_copilot_page(&debug_url, auto_launch, base_port).await {
+        Ok(r) => r,
+        Err(e) => return Ok(CdpConnectResult {
+            ok: false, debug_url, page_url: String::new(),
+            page_title: String::new(), port: None, launched: false,
+            error: Some(e.to_string()),
+        }),
+    };
+
+    if res.launched { set_launched_port(res.port); }
+
+    if let Err(e) = res.page.navigate_to_chat().await {
+        return Ok(CdpConnectResult {
+            ok: false, debug_url: debug_url.clone(),
+            page_url: res.page.url.clone(), page_title: res.page.title.clone(),
+            port: Some(res.port), launched: res.launched,
+            error: Some(format!("Navigate: {}", e)),
+        });
+    }
+
+    Ok(CdpConnectResult {
+        ok: true, debug_url,
+        page_url: res.page.url.clone(), page_title: res.page.title.clone(),
+        port: Some(res.port), launched: res.launched, error: None,
+    })
+}
+
+#[tauri::command]
+pub async fn cdp_screenshot(_app: AppHandle) -> Result<serde_json::Value, String> {
+    let debug_url = resolve_debug_url(9222);
+
+    let page = match cdp_copilot::connect_copilot_page(&debug_url, false, 9222).await {
+        Ok(r) => r.page,
+        Err(e) => return Err(format!("CDP connect: {}", e)),
+    };
+
+    let tmp = std::env::temp_dir().join("relay_cdp_screenshot.png");
+    page.screenshot(tmp.to_str().unwrap_or("screenshot.png")).await
+        .map_err(|e| format!("Screenshot: {}", e))?;
+
+    let bytes = std::fs::read(&tmp).map_err(|e| e.to_string())?;
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
+    Ok(serde_json::json!({ "ok": true, "format": "png", "data": b64 }))
 }

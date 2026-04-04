@@ -1,3 +1,4 @@
+mod cdp_copilot;
 mod copilot_client;
 mod models;
 mod tauri_bridge;
@@ -14,10 +15,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            // Register session registry as Tauri state
             app.manage(SessionRegistry::new());
-
-            // Bootstrap (minimal — no storage needed for now)
             let _sample_workbook = discover_sample_workbook_path(&app.handle());
             Ok(())
         })
@@ -27,6 +25,10 @@ pub fn run() {
             tauri_bridge::cancel_agent,
             tauri_bridge::get_session_history,
             tauri_bridge::compact_agent_session,
+            tauri_bridge::connect_cdp,
+            tauri_bridge::cdp_send_prompt,
+            tauri_bridge::cdp_start_new_chat,
+            tauri_bridge::cdp_screenshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
