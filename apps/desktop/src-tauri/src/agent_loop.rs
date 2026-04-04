@@ -12,7 +12,8 @@ use runtime::{
     Session as RuntimeSession, ConversationMessage, ToolExecutor,
 };
 
-use crate::copilot_client::{CopilotApiClient, CopilotStreamEvent, PersistedSessionConfig};
+use crate::copilot_client::{CopilotApiClient, CopilotStreamEvent};
+use crate::copilot_persistence::PersistedSessionConfig;
 use crate::error::AgentLoopError;
 use crate::registry::SessionRegistry;
 
