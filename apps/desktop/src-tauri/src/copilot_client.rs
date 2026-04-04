@@ -254,6 +254,7 @@ impl CopilotApiClient {
         session: &Session,
         config: PersistedSessionConfig,
     ) -> Result<(), RuntimeError> {
+        validate_session_id(session_id).map_err(|e| RuntimeError::new(format!("invalid session_id: {e}")))?;
         let dir = session_storage_dir()?;
         fs::create_dir_all(&dir).map_err(io_error)?;
         let path = dir.join(format!("{session_id}.json"));
@@ -273,6 +274,7 @@ impl CopilotApiClient {
     }
 
     pub fn load_session(&self, session_id: &str) -> Result<Option<LoadedSession>, RuntimeError> {
+        validate_session_id(session_id).map_err(|e| RuntimeError::new(format!("invalid session_id: {e}")))?;
         let path = session_storage_dir()?.join(format!("{session_id}.json"));
         if !path.is_file() {
             return Ok(None);
@@ -661,6 +663,30 @@ fn session_storage_dir() -> Result<PathBuf, RuntimeError> {
         .map(PathBuf::from)
         .ok_or_else(|| RuntimeError::new("unable to resolve the home directory for session storage"))?;
     Ok(home.join(".relay-agent").join("sessions"))
+}
+
+/// Validates a session_id for safe use in filesystem paths.
+/// Ensures it contains only alphanumeric characters, hyphens, and underscores,
+/// rejects path traversal sequences, and limits length to 128 characters.
+fn validate_session_id(id: &str) -> Result<(), String> {
+    if id.is_empty() {
+        return Err("session_id must not be empty".to_string());
+    }
+    if id.len() > 128 {
+        return Err(format!(
+            "session_id exceeds maximum length of 128 characters (got {})",
+            id.len()
+        ));
+    }
+    for ch in id.chars() {
+        if !ch.is_ascii_alphanumeric() && ch != '-' && ch != '_' {
+            return Err(format!(
+                "session_id contains invalid character '{}' (only alphanumeric, hyphens, and underscores are allowed)",
+                ch
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn io_error(error: std::io::Error) -> RuntimeError {
