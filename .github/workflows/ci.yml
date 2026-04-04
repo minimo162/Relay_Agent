@@ -49,7 +49,7 @@ jobs:
         run: cargo check
 
       - name: cargo clippy
-        run: cargo clippy --allow-dirty
+        run: cargo clippy -- -D warnings
 
       - name: pnpm typecheck
         run: pnpm typecheck
