@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /* ── Session persistence types ─── */
 
-/// Configuration for a persisted session (goal, cwd, max_turns).
+/// Configuration for a persisted session (goal, cwd, `max_turns`).
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedSessionConfig {
@@ -153,6 +153,7 @@ fn validate_session_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn io_error(error: std::io::Error) -> RuntimeError {
     RuntimeError::new(format!("session persistence failed: {error}"))
 }

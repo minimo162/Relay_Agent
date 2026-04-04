@@ -58,6 +58,7 @@ impl CopilotApiClient {
     }
 
     /// Save a session to disk.
+    #[allow(clippy::unused_self)]
     pub fn save_session(
         &self,
         session_id: &str,
@@ -68,6 +69,7 @@ impl CopilotApiClient {
     }
 
     /// Load a session from disk.
+    #[allow(clippy::unused_self)]
     pub fn load_session(&self, session_id: &str) -> Result<Option<LoadedSession>, RuntimeError> {
         load_session(session_id)
     }

@@ -556,6 +556,7 @@ pub fn mcp_add_server(request: McpAddServerRequest) -> Result<McpServerInfo, Str
 
 /// Remove an MCP server from the registry.
 #[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 pub fn mcp_remove_server(name: String) -> Result<bool, String> {
     let registry = mcp_registry();
     let mut data = registry
@@ -566,6 +567,7 @@ pub fn mcp_remove_server(name: String) -> Result<bool, String> {
 
 /// Check the status of a single MCP server.
 #[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 pub fn mcp_check_server_status(name: String) -> Result<McpServerInfo, String> {
     let registry = mcp_registry();
     let data = registry

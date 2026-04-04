@@ -44,6 +44,7 @@ pub(crate) fn posix_shell_escape(s: &str) -> String {
 
 /* ── Agent loop ─── */
 
+#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
 pub fn run_agent_loop_impl(
     app: &AppHandle,
     registry: &SessionRegistry,

@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err, clippy::items_after_statements)]
+
 //! CDP-driven M365 Copilot client.
 //!
 //! Automatically launches a dedicated Edge instance on a free port,
