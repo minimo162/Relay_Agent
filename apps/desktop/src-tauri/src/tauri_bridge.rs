@@ -61,6 +61,10 @@ pub async fn start_agent(
     let sid_for_task = session_id.clone();
     let reg_for_task = registry.inner().clone();
 
+    // Periodically evict stale sessions to prevent memory leaks
+    let ttl_seconds = crate::config::AgentConfig::global().session_cleanup_ttl_minutes as i64 * 60;
+    registry.cleanup_stale_sessions(ttl_seconds);
+
     let permit = AGENT_SEMAPHORE
         .get_or_init(|| Arc::new(Semaphore::new(4)))
         .clone()
@@ -119,7 +123,7 @@ pub async fn start_agent(
         // Always clean up session state, even on panic
         if let Ok(mut data) = reg_for_task.data.lock() {
             if let Some(entry) = data.get_mut(&sid_for_task) {
-                entry.running = false;
+                entry.mark_finished();
             }
         }
 

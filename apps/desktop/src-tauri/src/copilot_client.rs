@@ -694,6 +694,12 @@ impl From<PersistedTokenUsage> for TokenUsage {
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
+// Node.js browser bridge — dead code awaiting removal.
+// These parse the output of a Node.js script that talks to Copilot via CDP.
+// The canonical path now uses the Anthropic API client directly (stream method).
+// Remove this entire block once the CDP Copilot browser integration is re-architected.
+
+#[allow(dead_code)]
 enum CopilotContent {
     Text {
         #[serde(rename = "type")]
@@ -710,10 +716,15 @@ enum CopilotContent {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct CopilotResponse {
     content: Vec<CopilotContent>,
 }
 
+// Node.js browser bridge helper functions — dead code.
+// Used only by send_copilot_prompt_via_browser which itself is never called.
+// The canonical path is the Anthropic API client (stream method above).
+#[allow(dead_code)]
 fn parse_copilot_output(stdout: &str) -> anyhow::Result<String> {
     // The copilot-browser.js returns a JSON line with status/response
     for line in stdout.lines().rev() {
@@ -767,6 +778,7 @@ fn parse_copilot_output(stdout: &str) -> anyhow::Result<String> {
     Ok(non_empty)
 }
 
+#[allow(dead_code)]
 fn parse_copilot_to_events(raw: &str) -> Result<Vec<AssistantEvent>, RuntimeError> {
     // Try to extract JSON from the raw response
     let json_str = extract_json(raw).ok_or_else(|| {
@@ -808,6 +820,7 @@ fn parse_copilot_to_events(raw: &str) -> Result<Vec<AssistantEvent>, RuntimeErro
     Ok(events)
 }
 
+#[allow(dead_code)]
 fn extract_json(raw: &str) -> Option<String> {
     // 1. Try direct parse
     if serde_json::from_str::<Value>(raw.trim()).is_ok() {
@@ -850,6 +863,7 @@ fn extract_json(raw: &str) -> Option<String> {
     None
 }
 
+#[allow(dead_code)]
 fn find_balanced_json_object(raw: &str) -> Option<String> {
     let mut start = None;
     let mut depth = 0usize;

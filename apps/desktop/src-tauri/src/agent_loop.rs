@@ -91,7 +91,8 @@ pub fn run_agent_loop_impl(
     let permission_policy = PermissionPolicy::new(PermissionMode::Prompt);
     let system_prompt = vec![build_system_prompt(&goal)];
     // Default: 16 turns — enough for most tasks without ballooning token costs.
-    let max_turns = max_turns.unwrap_or(16);
+    let config = crate::config::AgentConfig::global();
+    let max_turns = max_turns.unwrap_or(config.max_turns);
 
     let mut runtime_session = runtime::ConversationRuntime::new(
         RuntimeSession::new(),

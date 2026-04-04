@@ -1,5 +1,4 @@
 /// <reference types="vite/client" />
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import {
   For,
   Match,
@@ -224,17 +223,30 @@ function Sidebar(props: {
   activeSessionId: string | null;
   onSelect: (id: string) => void;
 }) {
+  const [search, setSearch] = createSignal("");
+
+  const filtered = createMemo(() => {
+    const q = search().toLowerCase();
+    if (!q) return props.sessionIds;
+    return props.sessionIds.filter((id) => id.toLowerCase().includes(q));
+  });
+
   return (
     <aside class={`${C.surfaceElevated} ${C.border} border-r overflow-y-auto h-full`}>
       <div class={`p-3 border-b ${C.border}`}>
         <h2 class={`text-sm font-semibold ${C.textPrimary} mb-2`}>Sessions</h2>
-        <Input type="text" placeholder="Search sessions…" class="text-xs" />
+        <Input
+          type="text"
+          placeholder="Search sessions…"
+          class="text-xs"
+          onInput={(e) => setSearch(e.currentTarget.value)}
+        />
       </div>
       <div class="flex-1 overflow-y-auto p-2">
-        <Show when={props.sessionIds.length === 0}>
-          <div class={`text-xs ${C.mutedText} text-center py-8`}>No sessions yet</div>
+        <Show when={filtered().length === 0}>
+          <div class={`text-xs ${C.mutedText} text-center py-8`}>No matching sessions</div>
         </Show>
-        <For each={props.sessionIds}>
+        <For each={filtered()}>
           {(id) => (
             <button
               class={`w-full text-left text-xs px-3 py-2 rounded-lg mb-1 transition-colors truncate ${
@@ -604,6 +616,7 @@ export default function Shell(): JSX.Element {
   // ── Select a session from sidebar ────────────────────────
   const selectSession = (id: string) => {
     setActiveSessionId(id);
+    setSessionError(null);
     void reloadHistory(id);
   };
 

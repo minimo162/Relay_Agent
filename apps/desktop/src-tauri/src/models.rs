@@ -1,3 +1,7 @@
+#![allow(dead_code)]
+// This module contains types for planned features that are not yet wired up.
+// Remove this attribute once dead types are either implemented or deleted.
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};

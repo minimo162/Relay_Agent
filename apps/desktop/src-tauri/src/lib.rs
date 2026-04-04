@@ -1,5 +1,6 @@
 mod agent_loop;
 mod cdp_copilot;
+mod config;
 mod copilot_client;
 mod models;
 mod registry;
