@@ -2,11 +2,13 @@
  * Tauri IPC bridge — commands + events for Relay Agent
  *
  * Commands (tauri_bridge.rs):
- *   start_agent, respond_approval, cancel_agent, get_session_history
+ *   start_agent, respond_approval, cancel_agent, get_session_history,
+ *   compact_agent_session,
+ *   connect_cdp, cdp_send_prompt, cdp_start_new_chat, cdp_screenshot
  *
  * Events:
  *   agent:tool_start | agent:tool_result | agent:approval_needed
- *   agent:turn_complete | agent:error
+ *   agent:turn_complete | agent:text_delta | agent:error
  */
 
 import { invoke } from "@/tauri-mock-core";
@@ -151,6 +153,63 @@ export async function compactAgentSession(
   request: CompactAgentSessionRequest,
 ): Promise<CompactAgentSessionResponse> {
   return invoke<CompactAgentSessionResponse>("compact_agent_session", { request });
+}
+
+/* ============================================================
+   CDP (Chrome DevTools Protocol) — M365 Copilot integration
+   ============================================================ */
+
+export interface ConnectCdpRequest {
+  autoLaunch?: boolean;
+  basePort?: number;
+}
+
+export interface CdpConnectResult {
+  ok: boolean;
+  debugUrl: string;
+  pageUrl: string;
+  pageTitle: string;
+  port?: number;
+  launched: boolean;
+  error: string | null;
+}
+
+export interface CdpSendPromptRequest {
+  prompt: string;
+  waitResponseSecs?: number;
+}
+
+export interface CdpPromptResult {
+  ok: boolean;
+  responseText: string;
+  bodyLength: number;
+  error: string | null;
+}
+
+/** Connect to M365 Copilot via Edge CDP */
+export async function connectCdp(
+  request: ConnectCdpRequest,
+): Promise<CdpConnectResult> {
+  return invoke<CdpConnectResult>("connect_cdp", { request });
+}
+
+/** Send a prompt to M365 Copilot and wait for the response */
+export async function cdpSendPrompt(
+  request: CdpSendPromptRequest,
+): Promise<CdpPromptResult> {
+  return invoke<CdpPromptResult>("cdp_send_prompt", { request });
+}
+
+/** Start a new chat in M365 Copilot */
+export async function cdpStartNewChat(
+  request: ConnectCdpRequest,
+): Promise<CdpConnectResult> {
+  return invoke<CdpConnectResult>("cdp_start_new_chat", { request });
+}
+
+/** Capture a screenshot of the Copilot browser */
+export async function cdpScreenshot(): Promise<Record<string, unknown>> {
+  return invoke<Record<string, unknown>>("cdp_screenshot", {});
 }
 
 /* ============================================================
