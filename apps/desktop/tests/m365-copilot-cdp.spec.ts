@@ -112,6 +112,18 @@ async function sendPrompt(page: any, text: string) {
   }
 }
 
+/** Wait for any response content to appear on the page */
+async function waitForResponse(page: any, timeoutMs = 60_000) {
+  await page.waitForFunction(
+    () => {
+      const body = document.body;
+      const text = body.innerText || "";
+      return text.length > 50;
+    },
+    { timeout: timeoutMs, polling: 1000 },
+  );
+}
+
 /** Wait until a NEW response appears after the prompt */
 async function waitForNewResponse(page: any, expectedBodyAfter: number, timeoutMs = 60_000) {
   await page.waitForFunction(
