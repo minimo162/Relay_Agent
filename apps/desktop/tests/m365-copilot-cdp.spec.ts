@@ -64,7 +64,6 @@ async function findPromptInput(page: any) {
   return null;
 }
 
-/** Get full page body text length */
 async function getBodyLength(page: any): Promise<number> {
   return await page.evaluate(() => document.body.innerText?.length ?? 0);
 }
@@ -74,66 +73,88 @@ async function sendPrompt(page: any, text: string) {
   if (input) {
     await input.click();
     await input.fill(text);
-    await page.waitForTimeout(500);
     await page.keyboard.press("Enter");
     console.log(`[CDP] Sent prompt via .fill + Enter: "${text.substring(0, 40)}..."`);
   } else {
     await page.click("body", { position: { x: 600, y: 700 } });
     await page.keyboard.type(text);
-    await page.waitForTimeout(500);
     await page.keyboard.press("Enter");
     console.log(`[CDP] Sent prompt via fallback: "${text.substring(0, 40)}..."`);
   }
 }
 
 /**
- * Wait for a streaming Copilot response to COMPLETE.
- * Strategy:
- *   1. Wait until body grows significantly (confirm response started)
- *   2. Then wait for streaming to STOP (body text stabilises for 3s)
+ * Detect Copilot generation using the stop button as the signal.
+ *
+ * M365 Copilot shows a "Stop generating" button while streaming
+ * and hides it when done. We watch its visibility:
+ *   1. Appears  → streaming started (optional, may happen too fast)
+ *   2. Gone     → streaming finished
+ *
+ * If no stop button appears at all, we fall back to textarea-ready
+ * detection (the input becomes interactive again).
  */
-async function waitForStreamingComplete(
-  page: any,
-  initialBodyLength: number,
-  timeoutMs = 120_000,
-) {
+async function waitForGenerationDone(page: any, timeoutMs = 120_000) {
   const start = Date.now();
-  let lastLength = initialBodyLength;
-  let stableCount = 0;
-  const requiredStableChecks = 3; // 3×1s = stable for 3 seconds
 
-  console.log(`[CDP] Waiting for response to complete (initial length: ${initialBodyLength})...`);
+  // ── Strategy A: stop button appearance + disappearance ──
+  const stopSelectors = [
+    'button:has-text("生成を停止")',
+    'button:has-text("Stop generating")',
+    'button:has-text("Stop")',
+    'button[aria-label*="Stop generating"]',
+    'button[aria-label*="生成を停止"]',
+    '[class*="stop"] button',
+  ];
 
-  while (Date.now() - start < timeoutMs) {
-    await page.waitForTimeout(1_000);
-    const currentLength = await getBodyLength(page);
-
-    if (currentLength > initialBodyLength + 30) {
-      // Content has started arriving
-      if (currentLength === lastLength) {
-        stableCount++;
-        if (stableCount >= requiredStableChecks) {
-          console.log(
-            `[CDP] Response complete! body length: ${currentLength} (Δ +${currentLength - initialBodyLength})`,
-          );
-          return;
-        }
-      } else {
-        // Still streaming — reset stability counter
-        stableCount = 0;
+  // Try detecting stop button within 3s of prompt sent
+  let streamDetected = false;
+  for (const sel of stopSelectors) {
+    try {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible({ timeout: 3_000 })) {
+        streamDetected = true;
+        console.log(`[CDP] Streaming detected via stop button: ${sel}`);
+        // Now wait for that button to disappear
+        await btn.waitFor({ state: "hidden", timeout: timeoutMs });
+        console.log(`[CDP] Stop button hidden — generation complete!`);
+        return;
       }
-      lastLength = currentLength;
-    } else {
-      // No growth yet — keep waiting
+    } catch {
+      continue;
     }
   }
 
-  // Final check — even if not perfectly stable, return if we got some content
-  const finalLength = await getBodyLength(page);
-  console.log(
-    `[CDP] Timeout but got some content: ${finalLength} (Δ +${finalLength - initialBodyLength})`,
-  );
-  return; // don't fail — just log
+  if (streamDetected) return;
+
+  // ── Strategy B: textarea becomes interactive again ──
+  console.log("[CDP] No stop button — watching for ready input...");
+  while (Date.now() - start < timeoutMs) {
+    await page.waitForTimeout(1_000);
+    const ready = await page.evaluate(() => {
+      // Find the compose textarea
+      const els = document.querySelectorAll(
+        'textarea, div[role="textbox"], [contenteditable="true"]',
+      );
+      for (const el of els) {
+        // Check no aria-busy or disabled state
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 50) {
+          // Has visible width, check no busy state
+          const busy = el.getAttribute("aria-busy") === "true";
+          const disabled = (el as HTMLElement).getAttribute("data-disabled") === "true";
+          if (!busy && !disabled) return true;
+        }
+      }
+      return false;
+    });
+    if (ready) {
+      console.log("[CDP] Input is interactive again — generation complete!");
+      return;
+    }
+  }
+
+  console.log("[CDP] Waiting timed out — assuming done");
 }
 
 /* ── Tests ───────────────────────────────────────────────────── */
@@ -170,22 +191,19 @@ test.describe("M365 Copilot via CDP", () => {
   });
 
   test("03 — send a prompt and receive a response", async () => {
-    // Capture initial state BEFORE sending
     const initialLength = await getBodyLength(page);
     console.log(`[CDP] Initial body length: ${initialLength}`);
 
     await sendPrompt(page, "日本の首都はどこですか？一言で答えてください。");
     await page.screenshot({ path: "test-results/cdp-03-before-send.png" });
 
-    // Wait for the streaming response to fully complete
-    await waitForStreamingComplete(page, initialLength);
-
-    await page.waitForTimeout(2_000); // grace period
-    await page.screenshot({ path: "test-results/cdp-03-response.png" });
+    await waitForGenerationDone(page);
 
     const finalLength = await getBodyLength(page);
     console.log(`[CDP] After response, body length: ${finalLength}`);
     expect(finalLength).toBeGreaterThan(initialLength);
+
+    await page.screenshot({ path: "test-results/cdp-03-response.png" });
   });
 
   test("04 — multi-turn follow-up", async () => {
@@ -194,14 +212,13 @@ test.describe("M365 Copilot via CDP", () => {
 
     await sendPrompt(page, "その都市の名所を3つ教えて");
 
-    await waitForStreamingComplete(page, bodyBefore);
-    await page.waitForTimeout(2_000);
-
-    await page.screenshot({ path: "test-results/cdp-04-followup.png" });
+    await waitForGenerationDone(page);
 
     const bodyAfter = await getBodyLength(page);
     console.log(`[CDP] After follow-up, body length: ${bodyAfter} (was ${bodyBefore})`);
     expect(bodyAfter).toBeGreaterThan(bodyBefore);
+
+    await page.screenshot({ path: "test-results/cdp-04-followup.png" });
   });
 
   test("05 — full-page screenshot of conversation", async () => {
