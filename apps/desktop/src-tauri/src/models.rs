@@ -46,3 +46,26 @@ pub struct CancelAgentRequest {
 pub struct GetAgentSessionHistoryRequest {
     pub session_id: String,
 }
+
+/// Information about a registered MCP server.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerInfo {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub status: String,
+    pub connected: bool,
+    #[serde(default)]
+    pub tools: Vec<String>,
+}
+
+/// Request to add an MCP server to the registry.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpAddServerRequest {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}

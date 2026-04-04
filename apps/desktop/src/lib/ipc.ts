@@ -347,3 +347,88 @@ export type UiChunk =
       status: "running" | "done" | "error";
       result: string | null;
     };
+
+/* ============================================================
+   MCP Server Management
+   ============================================================ */
+
+export interface McpServerInfo {
+  name: string;
+  command: string;
+  args: string[];
+  status: string;
+  connected: boolean;
+  tools: string[];
+}
+
+export interface McpAddServerRequest {
+  name: string;
+  command: string;
+  args?: string[];
+}
+
+/* ============================================================
+   Context Panel types
+   ============================================================ */
+
+export interface ContextFile {
+  name: string;
+  path: string;
+  size: number;
+}
+
+export /** Re-export as McpServer for UI convenience */
+interface McpServer {
+  /** Server name (same as McpServerInfo.name) */
+  name: string;
+  /** Command to spawn the MCP server */
+  command: string;
+  /** Command arguments */
+  args: string[];
+  /** Connection status for UI */
+  status: "connected" | "disconnected";
+  /** Number of tools available */
+  toolCount: number;
+}
+
+export interface Policy {
+  name: string;
+  requirement: "require_approval" | "auto_deny" | "auto_allow";
+  description?: string;
+}
+
+/** List all registered MCP servers (mapped from McpServerInfo to McpServer). */
+export async function mcpListServers(): Promise<McpServer[]> {
+  const servers = await invoke<McpServerInfo[]>("mcp_list_servers", {});
+  return servers.map((s) => ({
+    name: s.name,
+    command: s.command,
+    args: s.args,
+    status: s.connected ? ("connected" as const) : ("disconnected" as const),
+    toolCount: s.tools.length,
+  }));
+}
+
+/** Add an MCP server to the registry. */
+export async function mcpAddServer(
+  request: McpAddServerRequest,
+): Promise<McpServer> {
+  const info = await invoke<McpServerInfo>("mcp_add_server", { request });
+  return {
+    name: info.name,
+    command: info.command,
+    args: info.args,
+    status: info.connected ? ("connected" as const) : ("disconnected" as const),
+    toolCount: info.tools.length,
+  };
+}
+
+/** Remove an MCP server from the registry. Returns true if it existed. */
+export async function mcpRemoveServer(name: string): Promise<boolean> {
+  return invoke<boolean>("mcp_remove_server", { name });
+}
+
+/** Check the status of a single MCP server. */
+export async function mcpCheckServerStatus(name: string): Promise<McpServerInfo> {
+  return invoke<McpServerInfo>("mcp_check_server_status", { name });
+}

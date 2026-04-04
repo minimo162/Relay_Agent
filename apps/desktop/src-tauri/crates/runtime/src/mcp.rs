@@ -3,6 +3,9 @@ use crate::config::{McpServerConfig, ScopedMcpServerConfig};
 const CLAUDEAI_SERVER_PREFIX: &str = "claude.ai ";
 const CCR_PROXY_PATH_MARKERS: [&str; 2] = ["/v2/session_ingress/shttp/mcp/", "/v2/ccr-sessions/"];
 
+// Re-export registry types for consumers
+pub use crate::mcp_registry::{McpRegistry, McpServerEntry, get_mcp_registry};
+
 #[must_use]
 pub fn normalize_name_for_mcp(name: &str) -> String {
     let mut normalized = name

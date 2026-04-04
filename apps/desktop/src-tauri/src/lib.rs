@@ -32,6 +32,10 @@ pub fn run() {
             tauri_bridge::cdp_send_prompt,
             tauri_bridge::cdp_start_new_chat,
             tauri_bridge::cdp_screenshot,
+            tauri_bridge::mcp_list_servers,
+            tauri_bridge::mcp_add_server,
+            tauri_bridge::mcp_remove_server,
+            tauri_bridge::mcp_check_server_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

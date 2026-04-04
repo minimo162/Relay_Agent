@@ -16,18 +16,32 @@ import {
 import {
   cancelAgent,
   chunksFromHistory,
+  compactAgentSession,
   getSessionHistory,
+  mcpAddServer,
+  mcpListServers,
+  mcpRemoveServer,
   onAgentEvent,
   respondApproval,
   startAgent,
   type AgentApprovalNeededEvent,
   type AgentErrorEvent,
   type AgentTextDeltaEvent,
-  type AgentTurnCompleteEvent,
   type AgentToolResultEvent,
   type AgentToolStartEvent,
+  type AgentTurnCompleteEvent,
+  type ContextFile,
+  type McpServer,
+  type Policy,
   type UiChunk,
 } from "./lib/ipc";
+import {
+  detectSlashMode,
+  executeSlashCommand,
+  findSlashCommands,
+  type SlashCommand,
+  type SlashCommandContext,
+} from "./lib/slash-commands";
 import { Button, Input, StatusDot } from "./components/ui";
 
 /* Shared class tokens */
@@ -266,15 +280,78 @@ function Sidebar(props: {
 }
 
 /** Context panel — files / servers / policy */
-function ContextPanel() {
+function ContextPanel(props: {
+  contextFiles: () => ContextFile[];
+  setContextFiles: (fn: (prev: ContextFile[]) => ContextFile[]) => void;
+  mcpServers: () => McpServer[];
+  setMcpServers: (fn: (prev: McpServer[]) => McpServer[]) => void;
+  policies: () => Policy[];
+}) {
   type TabId = "files" | "servers" | "policy";
   const [activeTab, setActiveTab] = createSignal<TabId>("files");
+  const [showAddFile, setShowAddFile] = createSignal(false);
+  const [showAddServer, setShowAddServer] = createSignal(false);
+  const [newFilePath, setNewFilePath] = createSignal("");
+  const [newServerName, setNewServerName] = createSignal("");
+  const [newServerCommand, setNewServerCommand] = createSignal("");
+  const [newServerArgs, setNewServerArgs] = createSignal("");
 
   const tabs: { id: TabId; label: string }[] = [
     { id: "files", label: "Files" },
     { id: "servers", label: "Servers" },
     { id: "policy", label: "Policy" },
   ];
+
+  const formatSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const addFile = async () => {
+    const path = newFilePath().trim();
+    if (!path) return;
+    const name = path.split("/").pop() || path;
+    // Mock: create a file entry with fake size
+    props.setContextFiles((prev) => [
+      ...prev,
+      { name, path, size: Math.floor(Math.random() * 50000) + 500 },
+    ]);
+    setNewFilePath("");
+    setShowAddFile(false);
+  };
+
+  const removeFile = (index: number) => {
+    props.setContextFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const addServer = async () => {
+    const name = newServerName().trim();
+    const command = newServerCommand().trim();
+    const args = newServerArgs().trim();
+    if (!name || !command) return;
+    try {
+      const server = await mcpAddServer({ name, command, args: args ? args.split(" ").filter(Boolean) : undefined });
+      props.setMcpServers((prev) => [...prev, server]);
+      setNewServerName("");
+      setNewServerCommand("");
+      setNewServerArgs("");
+      setShowAddServer(false);
+    } catch (err) {
+      console.error("[MCP] Failed to add server:", err);
+    }
+  };
+
+  const removeServer = async (index: number) => {
+    const servers = props.mcpServers();
+    const server = servers[index];
+    try {
+      await mcpRemoveServer(server.name);
+      props.setMcpServers((prev) => prev.filter((_, i) => i !== index));
+    } catch (err) {
+      console.error(`[MCP] Failed to remove ${server.name}:`, err);
+    }
+  };
 
   return (
     <aside
@@ -298,24 +375,300 @@ function ContextPanel() {
       </div>
       <div class="flex-1 overflow-y-auto p-3">
         <Switch>
+          {/* ── FILES TAB ── */}
           <Match when={activeTab() === "files"}>
-            <div class={`text-xs ${C.mutedText} text-center py-8`}>
-              Drop files or open picker
+            <div class="flex flex-col gap-2">
+              <div class="flex items-center justify-between">
+                <span class={`text-[11px] font-medium ${C.mutedText} uppercase tracking-wide`}>
+                  {props.contextFiles().length} file{props.contextFiles().length !== 1 ? "s" : ""}
+                </span>
+                <Show
+                  when={showAddFile()}
+                  fallback={
+                    <button
+                      class={`text-xs px-2 py-1 rounded border ${C.border} ${C.accent} hover:bg-[var(--ra-hover)] transition-colors`}
+                      onClick={() => setShowAddFile(true)}
+                    >
+                      + Add File
+                    </button>
+                  }
+                >
+                  <div class="flex gap-1 items-center">
+                    <Input
+                      type="text"
+                      placeholder="/path/to/file"
+                      value={newFilePath()}
+                      onInput={(e) => setNewFilePath(e.currentTarget.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") addFile();
+                        if (e.key === "Escape") setShowAddFile(false);
+                      }}
+                      class="text-xs flex-1 !py-1 !px-2"
+                    />
+                    <Button
+                      variant="primary"
+                      onClick={addFile}
+                      class="!px-2 !py-1 !text-xs"
+                    >
+                      ✓
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => setShowAddFile(false)}
+                      class="!px-2 !py-1 !text-xs"
+                    >
+                      ✕
+                    </Button>
+                  </div>
+                </Show>
+              </div>
+
+              <Show
+                when={props.contextFiles().length > 0}
+                fallback={
+                  <div class={`text-xs ${C.mutedText} text-center py-8`}>
+                    No files in context
+                  </div>
+                }
+              >
+                <For each={props.contextFiles()}>
+                  {(file, idx) => (
+                    <div
+                      class={`group flex items-start gap-2 px-2 py-2 rounded-lg border ${C.border} ${C.hover} transition-colors`}
+                    >
+                      <span class="text-sm mt-0.5 flex-shrink-0">📄</span>
+                      <div class="flex-1 min-w-0">
+                        <div class={`text-xs font-medium ${C.textPrimary} truncate`}>
+                          {file.name}
+                        </div>
+                        <div class={`text-[11px] ${C.mutedText} truncate font-mono`}>
+                          {file.path}
+                        </div>
+                        <div class={`text-[10px] ${C.mutedText} opacity-60`}>
+                          {formatSize(file.size)}
+                        </div>
+                      </div>
+                      <button
+                        class="opacity-0 group-hover:opacity-100 text-[var(--ra-red)] text-xs transition-opacity px-1"
+                        title="Remove file"
+                        onClick={() => removeFile(idx())}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
+                </For>
+              </Show>
             </div>
           </Match>
+
+          {/* ── SERVERS TAB ── */}
           <Match when={activeTab() === "servers"}>
-            <div class={`text-xs ${C.mutedText} text-center py-8`}>
-              No MCP servers connected
+            <div class="flex flex-col gap-2">
+              <div class="flex items-center justify-between">
+                <span class={`text-[11px] font-medium ${C.mutedText} uppercase tracking-wide`}>
+                  {props.mcpServers().length} server{props.mcpServers().length !== 1 ? "s" : ""}
+                </span>
+                <Show
+                  when={showAddServer()}
+                  fallback={
+                    <button
+                      class={`text-xs px-2 py-1 rounded border ${C.border} ${C.accent} hover:bg-[var(--ra-hover)] transition-colors`}
+                      onClick={() => setShowAddServer(true)}
+                    >
+                      + Add Server
+                    </button>
+                  }
+                >
+                  <div class="flex flex-col gap-1.5 w-full">
+                    <Input
+                      type="text"
+                      placeholder="Server name"
+                      value={newServerName()}
+                      onInput={(e) => setNewServerName(e.currentTarget.value)}
+                      class="text-xs !py-1 !px-2"
+                    />
+                    <Input
+                      type="text"
+                      placeholder="Command (e.g. npx)"
+                      value={newServerCommand()}
+                      onInput={(e) => setNewServerCommand(e.currentTarget.value)}
+                      class="text-xs !py-1 !px-2"
+                    />
+                    <Input
+                      type="text"
+                      placeholder="Args (space-separated)"
+                      value={newServerArgs()}
+                      onInput={(e) => setNewServerArgs(e.currentTarget.value)}
+                      class="text-xs !py-1 !px-2"
+                    />
+                    <div class="flex gap-1">
+                      <Button
+                        variant="primary"
+                        onClick={addServer}
+                        class="flex-1 !py-1 !text-xs"
+                      >
+                        Add
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => setShowAddServer(false)}
+                        class="flex-1 !py-1 !text-xs"
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                </Show>
+              </div>
+
+              <Show
+                when={props.mcpServers().length > 0}
+                fallback={
+                  <div class={`text-xs ${C.mutedText} text-center py-8`}>
+                    No MCP servers connected
+                  </div>
+                }
+              >
+                <For each={props.mcpServers()}>
+                  {(server, idx) => (
+                    <div
+                      class={`group flex items-center gap-2 px-3 py-2.5 rounded-lg border ${C.border} ${C.hover} transition-colors`}
+                    >
+                      <span
+                        class={`w-2 h-2 rounded-full flex-shrink-0 ${
+                          server.status === "connected"
+                            ? "bg-[var(--ra-green)]"
+                            : "bg-[var(--ra-text-muted)]"
+                        }`}
+                      />
+                      <div class="flex-1 min-w-0">
+                        <div class={`text-xs font-medium ${C.textPrimary}`}>
+                          {server.name}
+                        </div>
+                        <div class={`text-[11px] ${C.mutedText} truncate font-mono`}>
+                          {server.command} {server.args.join(" ")}
+                        </div>
+                        <div class={`text-[10px] ${C.mutedText} opacity-60`}>
+                          {server.toolCount} tool{server.toolCount !== 1 ? "s" : ""}
+                        </div>
+                      </div>
+                      <button
+                        class="opacity-0 group-hover:opacity-100 text-[var(--ra-red)] text-xs transition-opacity px-1"
+                        title="Remove server"
+                        onClick={() => removeServer(idx())}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
+                </For>
+              </Show>
             </div>
           </Match>
+
+          {/* ── POLICY TAB ── */}
           <Match when={activeTab() === "policy"}>
-            <div class={`text-xs ${C.mutedText} text-center py-8`}>
-              No active policies
+            <div class="flex flex-col gap-2">
+              <span class={`text-[11px] font-medium ${C.mutedText} uppercase tracking-wide`}>
+                {props.policies().length} active polic{props.policies().length !== 1 ? "ies" : "y"}
+              </span>
+
+              <Show
+                when={props.policies().length > 0}
+                fallback={
+                  <div class={`text-xs ${C.mutedText} text-center py-8`}>
+                    No active policies
+                  </div>
+                }
+              >
+                <For each={props.policies()}>
+                  {(policy) => {
+                    const badgeColor =
+                      policy.requirement === "require_approval"
+                        ? "bg-[var(--ra-yellow)]/20 text-[var(--ra-yellow)]"
+                        : policy.requirement === "auto_deny"
+                          ? "bg-[var(--ra-red)]/20 text-[var(--ra-red)]"
+                          : "bg-[var(--ra-green)]/20 text-[var(--ra-green)]";
+
+                    const badgeLabel =
+                      policy.requirement === "require_approval"
+                        ? "⚡ Approve"
+                        : policy.requirement === "auto_deny"
+                          ? "⛔ Deny"
+                          : "✓ Allow";
+
+                    return (
+                      <div
+                        class={`flex items-center gap-2 px-3 py-2.5 rounded-lg border ${C.border}`}
+                      >
+                        <div class="flex-1 min-w-0">
+                          <div class={`text-xs font-medium ${C.textPrimary}`}>
+                            {policy.name}
+                          </div>
+                          <Show when={policy.description}>
+                            <div class={`text-[11px] ${C.mutedText} truncate`}>
+                              {policy.description}
+                            </div>
+                          </Show>
+                        </div>
+                        <span
+                          class={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${badgeColor}`}
+                        >
+                          {badgeLabel}
+                        </span>
+                      </div>
+                    );
+                  }}
+                </For>
+              </Show>
             </div>
           </Match>
         </Switch>
       </div>
     </aside>
+  );
+}
+
+/** Slash command autocomplete dropdown */
+function SlashAutocomplete(props: {
+  commands: SlashCommand[];
+  selectedIndex: number;
+  onSelect: (cmd: SlashCommand) => void;
+  onSelectIndex: (index: number) => void;
+}) {
+  return (
+    <div
+      class="absolute left-0 bottom-full mb-1 min-w-full w-64 rounded-lg shadow-xl py-1 overflow-hidden z-50"
+      style={{
+        background: "var(--ra-surface-elevated, #1e1e2e)",
+        border: "1px solid var(--ra-border, rgba(255,255,255,0.08))",
+      }}
+    >
+      {props.commands.length === 0 ? (
+        <div class="px-3 py-1.5 text-xs opacity-50">No matching commands</div>
+      ) : (
+        props.commands.map((cmd, i) => (
+          <div
+            class={`flex items-center gap-2 px-3 py-1.5 cursor-pointer text-xs transition-colors ${
+              i === props.selectedIndex
+                ? "bg-[var(--ra-accent)] text-white"
+                : "opacity-70 hover:opacity-100 hover:bg-white/5"
+            }`}
+            onClick={() => props.onSelect(cmd)}
+            onMouseEnter={() => props.onSelectIndex(i)}
+          >
+            <span class="font-mono font-medium">/{cmd.command}</span>
+            <span class="opacity-60 ml-auto truncate max-w-[120px]">
+              {cmd.description}
+            </span>
+          </div>
+        ))
+      )}
+      <div class="px-3 py-1 text-[10px] opacity-40 border-t border-white/5">
+        <kbd>Tab</kbd> or <kbd>Enter</kbd> to select
+      </div>
+    </div>
   );
 }
 
@@ -325,17 +678,108 @@ function Composer(props: {
   disabled: boolean;
   running: boolean;
   onCancel: () => void;
+  /** Callback for slash command execution. Returns response text or null. */
+  onSlashCommand?: (input: string) => Promise<string | null>;
+  /** Append a response message directly to the feed (for slash command output) */
+  onAppendAssistant?: (text: string) => void;
 }) {
   const [text, setText] = createSignal("");
+  const [slashMode, setSlashMode] = createSignal<{
+    query: string;
+    commands: SlashCommand[];
+    selectedIndex: number;
+  } | null>(null);
 
-  const send = () => {
+  let textareaRef!: HTMLTextAreaElement;
+
+  /** Close slash dropdown and reset state */
+  const closeSlashDropdown = () => setSlashMode(null);
+
+  /** Select a command from the dropdown (completes to "/command ") */
+  const selectCommand = (cmd: SlashCommand) => {
+    setText(`/${cmd.command} `);
+    closeSlashDropdown();
+    textareaRef.focus();
+  };
+
+  const send = async () => {
     const value = text().trim();
     if (!value || props.disabled) return;
+
+    // Check if this is a slash command
+    if (value.startsWith("/") && props.onSlashCommand) {
+      const response = await props.onSlashCommand(value);
+      setText("");
+      if (response && props.onAppendAssistant) {
+        // Append the command result as an assistant message
+        props.onAppendAssistant(response);
+      }
+      // Show the command itself as a user message
+      props.onSend(value);
+      return;
+    }
+
+    // Normal send
     props.onSend(value);
     setText("");
   };
 
+  const onInput = (e: InputEvent & { currentTarget: HTMLTextAreaElement }) => {
+    const newVal = e.currentTarget.value;
+    setText(newVal);
+
+    // Detect slash mode
+    const detection = detectSlashMode(newVal, newVal.length);
+    if (detection) {
+      const matches = findSlashCommands(detection.query);
+      setSlashMode({
+        query: detection.query,
+        commands: matches,
+        selectedIndex: 0,
+      });
+    } else {
+      closeSlashDropdown();
+    }
+  };
+
   const onKey = (e: KeyboardEvent) => {
+    const current = slashMode();
+
+    if (current && current.commands.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSlashMode({
+          ...current,
+          selectedIndex: (current.selectedIndex + 1) % current.commands.length,
+        });
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashMode({
+          ...current,
+          selectedIndex:
+            (current.selectedIndex - 1 + current.commands.length) % current.commands.length,
+        });
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        selectCommand(current.commands[current.selectedIndex]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeSlashDropdown();
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        selectCommand(current.commands[current.selectedIndex]);
+        return;
+      }
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
@@ -343,16 +787,31 @@ function Composer(props: {
   };
 
   return (
-    <div class={`${C.surfaceElevated} ${C.border} border-t px-4 py-3`}>
-      <textarea
-        rows={1}
-        placeholder="What would you like to do?"
-        value={text()}
-        onInput={(e) => setText(e.currentTarget.value)}
-        onKeyDown={onKey}
-        disabled={props.disabled}
-        class="resize-none"
-      />
+    <div class={`${C.surfaceElevated} ${C.border} border-t px-4 py-3 relative`}>
+      <div class="relative">
+        <textarea
+          ref={textareaRef}
+          rows={1}
+          placeholder="What would you like to do? (type / for commands)"
+          value={text()}
+          onInput={onInput}
+          onKeyDown={onKey}
+          disabled={props.disabled}
+          class="resize-none w-full"
+        />
+        <Show when={slashMode()}>
+          {(m) => (
+            <SlashAutocomplete
+              commands={m().commands}
+              selectedIndex={m().selectedIndex}
+              onSelect={selectCommand}
+              onSelectIndex={(index) =>
+                setSlashMode({ ...m(), selectedIndex: index })
+              }
+            />
+          )}
+        </Show>
+      </div>
       <div class="flex justify-end mt-2 gap-2">
         <Show when={props.running}>
           <Button
@@ -420,6 +879,29 @@ export default function Shell(): JSX.Element {
 
   // Pending approval queue
   const [approvals, setApprovals] = createSignal<Approval[]>([]);
+
+  // ── Context panel signals ────────────────────────────────
+  const [contextFiles, setContextFiles] = createSignal<ContextFile[]>([
+    { name: "README.md", path: "/tmp/Relay_Agent/README.md", size: 1024 },
+    { name: "package.json", path: "/tmp/Relay_Agent/package.json", size: 2048 },
+  ]);
+  const [mcpServers, setMcpServers] = createSignal<McpServer[]>([]);
+  const [policies, setPolicies] = createSignal<Policy[]>([
+    { name: "Bash", requirement: "require_approval", description: "Shell commands" },
+    { name: "File write", requirement: "require_approval", description: "Write/modify files" },
+    { name: "File read", requirement: "auto_allow", description: "Read-only access" },
+    { name: "URL fetch", requirement: "auto_deny", description: "External requests" },
+  ]);
+
+  // ── Load MCP servers on mount ────────────────────────────
+  onMount(async () => {
+    try {
+      const servers = await mcpListServers();
+      setMcpServers(servers);
+    } catch (err) {
+      console.error("[MCP] Failed to load servers:", err);
+    }
+  });
 
   const sessionState = createMemo((): SessionState => {
     if (sessionRunning()) return "running";
@@ -658,6 +1140,19 @@ export default function Shell(): JSX.Element {
           disabled={sessionRunning()}
           running={sessionRunning()}
           onCancel={handleCancel}
+          onSlashCommand={(input) => {
+            const ctx: SlashCommandContext = {
+              sessionId: activeSessionId(),
+              clearChunks: () => setChunks([]),
+              compactSession: (sid) => compactAgentSession({ sessionId: sid }),
+              sessionRunning: sessionRunning(),
+              chunksCount: chunks().length,
+            };
+            return executeSlashCommand(input, ctx);
+          }}
+          onAppendAssistant={(text: string) => {
+            setChunks((prev) => [...prev, { kind: "assistant", text }]);
+          }}
         />
         <ApprovalOverlay
           approvals={approvals()}
@@ -666,7 +1161,13 @@ export default function Shell(): JSX.Element {
         />
       </main>
 
-      <ContextPanel />
+      <ContextPanel
+        contextFiles={contextFiles}
+        setContextFiles={setContextFiles}
+        mcpServers={mcpServers}
+        setMcpServers={setMcpServers}
+        policies={policies}
+      />
 
       {/* Footer */}
       <div class="col-span-full">

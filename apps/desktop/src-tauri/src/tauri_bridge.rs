@@ -496,3 +496,84 @@ pub async fn cdp_screenshot(_app: AppHandle) -> Result<serde_json::Value, String
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
     Ok(serde_json::json!({ "ok": true, "format": "png", "data": b64 }))
 }
+
+/* ── MCP Server Management ─────────────────────────────────── */
+
+/// Global registry of MCP servers keyed by name.
+static MCP_SERVER_REGISTRY: OnceLock<Arc<Mutex<HashMap<String, McpServerInfo>>>> = OnceLock::new();
+
+fn mcp_registry() -> Arc<Mutex<HashMap<String, McpServerInfo>>> {
+    Arc::clone(
+        MCP_SERVER_REGISTRY
+            .get_or_init(|| Arc::new(Mutex::new(HashMap::new()))),
+    )
+}
+
+fn new_server_info(name: &str, command: &str, args: Vec<String>) -> McpServerInfo {
+    McpServerInfo {
+        name: name.to_string(),
+        command: command.to_string(),
+        args,
+        status: "registered".to_string(),
+        connected: false,
+        tools: Vec::new(),
+    }
+}
+
+/// List all registered MCP servers.
+#[tauri::command]
+pub fn mcp_list_servers() -> Result<Vec<McpServerInfo>, String> {
+    let registry = mcp_registry();
+    let data = registry
+        .lock()
+        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    let mut servers: Vec<McpServerInfo> = data.values().cloned().collect();
+    servers.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(servers)
+}
+
+/// Add an MCP server to the registry, or replace an existing one.
+/// If the server was already connected, it is reset to disconnected.
+#[tauri::command]
+pub fn mcp_add_server(request: McpAddServerRequest) -> Result<McpServerInfo, String> {
+    let name = request.name.trim().to_string();
+    if name.is_empty() {
+        return Err("server name must not be empty".into());
+    }
+
+    let command = request.command.trim().to_string();
+    if command.is_empty() {
+        return Err("command must not be empty".into());
+    }
+
+    let registry = mcp_registry();
+    let mut data = registry
+        .lock()
+        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+
+    let info = new_server_info(&name, &command, request.args);
+    data.insert(name.clone(), info.clone());
+    Ok(info)
+}
+
+/// Remove an MCP server from the registry.
+#[tauri::command]
+pub fn mcp_remove_server(name: String) -> Result<bool, String> {
+    let registry = mcp_registry();
+    let mut data = registry
+        .lock()
+        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    Ok(data.remove(&name).is_some())
+}
+
+/// Check the status of a single MCP server.
+#[tauri::command]
+pub fn mcp_check_server_status(name: String) -> Result<McpServerInfo, String> {
+    let registry = mcp_registry();
+    let data = registry
+        .lock()
+        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    data.get(&name)
+        .cloned()
+        .ok_or_else(|| format!("server `{name}` not found"))
+}

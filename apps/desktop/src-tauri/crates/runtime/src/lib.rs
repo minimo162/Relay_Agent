@@ -9,6 +9,7 @@ mod json;
 mod mcp;
 mod mcp_client;
 mod mcp_stdio;
+mod mcp_registry;
 mod oauth;
 mod permissions;
 mod prompt;
