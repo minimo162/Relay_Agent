@@ -26,12 +26,7 @@ impl McpRegistry {
     }
 
     /// Insert or replace a server in the registry.
-    pub fn insert(
-        &self,
-        name: String,
-        command: String,
-        args: Vec<String>,
-    ) -> McpServerEntry {
+    pub fn insert(&self, name: String, command: String, args: Vec<String>) -> McpServerEntry {
         let entry = McpServerEntry {
             name: name.clone(),
             command,

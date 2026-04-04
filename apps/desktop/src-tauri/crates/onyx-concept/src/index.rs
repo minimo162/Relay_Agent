@@ -186,11 +186,9 @@ impl KnowledgeIndex {
                 .map_err(|e| crate::Error::IndexError(e.to_string()))?;
 
             let source_count: i64 = conn
-                .query_row(
-                    "SELECT COUNT(DISTINCT source) FROM documents",
-                    [],
-                    |row| row.get(0),
-                )
+                .query_row("SELECT COUNT(DISTINCT source) FROM documents", [], |row| {
+                    row.get(0)
+                })
                 .map_err(|e| crate::Error::IndexError(e.to_string()))?;
 
             let mut sources = std::collections::HashMap::new();

@@ -45,7 +45,12 @@ impl ContextRouter {
         let mut remaining = max_chars.saturating_sub(ctx.len());
 
         for (i, doc) in docs.iter().enumerate() {
-            let header = format!("### Document {} (source: {}, doc: {})\n", i + 1, doc.source, doc.doc_id);
+            let header = format!(
+                "### Document {} (source: {}, doc: {})\n",
+                i + 1,
+                doc.source,
+                doc.doc_id
+            );
             if header.len() > remaining {
                 break;
             }

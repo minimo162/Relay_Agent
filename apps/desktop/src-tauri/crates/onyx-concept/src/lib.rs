@@ -13,7 +13,7 @@
     clippy::unnecessary_fallible_conversions,
     clippy::manual_flatten,
     clippy::items_after_statements,
-    clippy::result_large_err,
+    clippy::result_large_err
 )]
 
 //! Relay_Agent の内部的な \"Onyx Concept\" — ナレッジ横断検索の概念レイヤ。

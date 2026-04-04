@@ -132,7 +132,11 @@ impl DataSource for LocalFileConnector {
 
             // 拡張子で判定
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let matched_ext = self.config.file_globs.iter().any(|g| g.ends_with(&format!(".{ext}")));
+            let matched_ext = self
+                .config
+                .file_globs
+                .iter()
+                .any(|g| g.ends_with(&format!(".{ext}")));
             if !matched_ext {
                 continue;
             }
@@ -167,9 +171,7 @@ impl DataSource for LocalFileConnector {
                     path.display().to_string()
                 };
 
-                let title = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string());
+                let title = path.file_name().map(|n| n.to_string_lossy().to_string());
                 let doc = match title {
                     Some(t) => Document::new(self.name(), doc_id, chunk).with_title(t),
                     None => Document::new(self.name(), doc_id, chunk),
@@ -210,7 +212,9 @@ fn chunk_text(content: &str, chunk_size: usize) -> Vec<String> {
     while start < bytes.len() {
         let end = (start + chunk_size).min(bytes.len());
         if end >= bytes.len() {
-            let chunk = std::str::from_utf8(&bytes[start..]).unwrap_or("").to_string();
+            let chunk = std::str::from_utf8(&bytes[start..])
+                .unwrap_or("")
+                .to_string();
             if !chunk.trim().is_empty() {
                 chunks.push(chunk);
             }
