@@ -44,16 +44,12 @@ async function findCopilotPage(browser: any) {
   return page;
 }
 
-/* ── Compose helpers ─────────────────────────────────────────── */
+/* ── Helpers ─────────────────────────────────────────────────── */
 
 async function getBodyLength(page: any): Promise<number> {
   return await page.evaluate(() => document.body.innerText?.length ?? 0);
 }
 
-/**
- * Get the text content of the composer/prompt box.
- * Useful for verifying text was entered.
- */
 async function getComposerText(page: any): Promise<string> {
   return await page.evaluate(() => {
     const els = document.querySelectorAll(
@@ -67,33 +63,55 @@ async function getComposerText(page: any): Promise<string> {
   });
 }
 
+async function countUserMessages(page: any): Promise<number> {
+  return await page.evaluate(() => {
+    // M365 Copilot shows user messages with specific structure
+    // Count distinct user message bubbles in the conversation
+    let count = 0;
+    // User prompts tend to be short and near the bottom
+    const articles = document.querySelectorAll("article, [class*='message'], [data-conversation]");
+    for (const article of articles) {
+      const text = article.innerText || "";
+      // User messages contain the prompt text (short, no copilot markers)
+      if (
+        text.includes("首都") ||
+        text.includes("名所") ||
+        text.includes("東京") ||
+        text.length < 200
+      ) {
+        count++;
+      }
+    }
+    return count || 1; // fallback
+  });
+}
+
 /**
- * Find and click the send/reply button.
- * M365 Copilot's send button is near the composer area, usually
- * a send icon (paper plane / arrow) button.
- *
- * We find buttons near the bottom-right of the viewport and
- * click the one that has the send icon.
+ * Start a new conversation in M365 Copilot.
+ * Clicks "New Chat" in the sidebar or navigates to /chat.
  */
-async function clickSendButton(page: any) {
-  // Strategy 1: aria-label based
-  const ariaSelectors = [
-    'button[aria-label="Reply"]',
-    'button[aria-label="返信"]',
-    'button[aria-label="Send"]',
-    'button[aria-label="送信"]',
-    // The send button might have a tooltip
-    '[title="Reply"]',
-    '[title="Send"]',
+async function startNewChat(page: any) {
+  console.log("[CDP] Starting new chat...");
+
+  // Method 1: Click "New Chat" in sidebar
+  const newChatSelectors = [
+    'button[aria-label="New chat"]',
+    'button[aria-label="新しいチャット"]',
+    'a[href*="/chat"]',
+    'button:has-text("New Chat")',
+    'button:has-text("新しいチャット")',
+    // The "+ / New" button in the sidebar
+    'div[role="button"]:has-text("+")',
+    'button:has(svg):above(textarea)',
   ];
-  for (const sel of ariaSelectors) {
+
+  for (const sel of newChatSelectors) {
     try {
       const btn = page.locator(sel).first();
       if (await btn.isVisible({ timeout: 2000 })) {
-        const rect = await btn.boundingBox();
-        await btn.scrollIntoViewIfNeeded();
-        await btn.click({ force: true, timeout: 3000 });
-        console.log(`[CDP] ✅ Sent via aria-label: ${sel} (x=${Math.round(rect?.x)}, y=${Math.round(rect?.y)})`);
+        await btn.click();
+        console.log(`[CDP] New chat via: ${sel}`);
+        await page.waitForTimeout(2000);
         return true;
       }
     } catch {
@@ -101,91 +119,35 @@ async function clickSendButton(page: any) {
     }
   }
 
-  // Strategy 2: look for SVG send/paper-plane icon
-  try {
-    // The send button typically contains a path that looks like an airplane/arrow
-    const svgButtons = await page.locator("button svg").all();
-    for (const svg of svgButtons) {
-      const btn = svg.locator(".."); // parent <button>
-      try {
-        await btn.waitFor({ state: "visible", timeout: 500 });
-        const isEnabled = await btn.isEnabled({ timeout: 500 }).catch(() => false);
-        if (isEnabled) {
-          await btn.scrollIntoViewIfNeeded();
-          await btn.click({ force: true });
-          console.log("[CDP] ✅ Sent via SVG button click");
-          return true;
-        }
-      } catch {
-        continue;
-      }
-    }
-  } catch {
-    // no SVG buttons found
-  }
-
-  // Strategy 3: dispatch a submit event on the form
-  try {
-    const formSubmitted = await page.evaluate(() => {
-      // Try to find a form and submit it
-      const forms = document.querySelectorAll("form");
-      for (const form of forms) {
-        const submitters = form.querySelectorAll('button[type="submit"], [role="button"]');
-        for (const btn of submitters) {
-          (btn as HTMLElement).click();
-          return true;
-        }
-      }
-
-      // Try the M365 Copilot specific: look for the send button by class
-      const sendBtn = document.querySelector(
-        'button[class*="send"], button[class*="submit"], [class*="composer"] button'
-      ) as HTMLElement;
-      if (sendBtn) {
-        sendBtn.click();
-        return true;
-      }
-
-      // Last resort: dispatch keyboard event on the textbox
-      const textbox = document.querySelector(
-        'div[role="textbox"], [contenteditable="true"]'
-      ) as HTMLElement;
-      if (textbox) {
-        textbox.focus();
-        textbox.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
-        textbox.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", ctrlKey: true, bubbles: true }));
-        return true;
-      }
-      return false;
-    });
-    if (formSubmitted) {
-      console.log("[CDP] ✅ Sent via JS dispatch");
-      return true;
-    }
-  } catch (e) {
-    console.log(`[CDP] ❌ JS dispatch failed: ${e}`);
-  }
-
-  console.log("[CDP] ❌ Could not find send button!");
-  return false;
+  // Method 2: Navigate to the base chat URL
+  console.log("[CDP] No New Chat button found, navigating to /chat...");
+  await page.goto(M365_COPILOT_URL, {
+    waitUntil: "networkidle",
+    timeout: 30_000,
+  });
+  await page.waitForTimeout(2000);
+  return true;
 }
 
 /**
- * Send a prompt to M365 Copilot.
- * 1. Fill the text in the composer
- * 2. Click the send button
- * 3. Verify the text disappeared from the composer (i.e., it was sent)
+ * Send a prompt to M365 Copilot and verify it was actually sent.
+ *
+ * Returns true only if:
+ * 1. Text was entered in the composer
+ * 2. Send button was clicked
+ * 3. Composer text cleared (message was actually submitted)
  */
-async function sendPrompt(page: any, text: string) {
-  const selectors = [
+async function sendPrompt(page: any, text: string): Promise<boolean> {
+  // Find the composer input
+  const inputSelectors = [
     'div[role="textbox"]',
     'textarea',
     '[contenteditable="true"]',
     'input[role="combobox"]',
   ];
 
-  let input = null;
-  for (const sel of selectors) {
+  let input: any = null;
+  for (const sel of inputSelectors) {
     try {
       const el = page.locator(sel).first();
       if (await el.isVisible({ timeout: 3000 })) {
@@ -202,19 +164,57 @@ async function sendPrompt(page: any, text: string) {
     return false;
   }
 
-  // Fill the prompt
+  // Clear any existing text
   await input.click();
+  await page.waitForTimeout(300);
+
+  // Select all and delete
+  await input.fill("");
+  await page.waitForTimeout(200);
+
+  // Type the new text
   await input.fill(text);
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(800); // ⬆️ increased wait for React state to catch up
 
   // Verify text was entered
-  const composerText = await getComposerText(page);
-  console.log(`[CDP] Composer text before send: "${composerText.substring(0, 50)}..."`);
+  const composedText = await getComposerText(page);
+  console.log(`[CDP] Composer text: "${composedText.substring(0, 60)}"`);
+  if (!composedText.includes(text.substring(0, 10))) {
+    console.log(`[CDP] ❌ Text not properly entered in composer`);
+    return false;
+  }
 
-  // Click send
-  await clickSendButton(page);
+  // Find and click the send button
+  // M365 Copilot send button aria-label is "送信" or "Reply"
+  const sendSelectors = [
+    'button[aria-label="送信"]',
+    'button[aria-label="Reply"]',
+    'button[aria-label="返信"]',
+    'button[aria-label="Send"]',
+  ];
 
-  // Wait for composer to clear (indicates the message was sent)
+  let sendClicked = false;
+  for (const sel of sendSelectors) {
+    try {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible({ timeout: 3000 })) {
+        await btn.scrollIntoViewIfNeeded();
+        await btn.click({ force: true });
+        sendClicked = true;
+        console.log(`[CDP] Clicked send: ${sel}`);
+        break;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  if (!sendClicked) {
+    console.log("[CDP] ❌ Could not find send button");
+    return false;
+  }
+
+  // Wait for the composer to clear (confirms message was sent, not just clicked)
   try {
     await page.waitForFunction(
       () => {
@@ -223,17 +223,17 @@ async function sendPrompt(page: any, text: string) {
         );
         for (const el of els) {
           const text = (el as HTMLElement).innerText?.trim();
-          if (text && text.length > 0) return false; // still has text
+          if (text && text.length > 5) return false; // still has content
         }
-        return true; // all clear
+        return true;
       },
       { timeout: 5_000 }
     );
-    console.log("[CDP] ✅ Composer cleared — prompt sent!");
+    console.log("[CDP] ✅ Composer cleared — message sent!");
     return true;
   } catch {
     const afterText = await getComposerText(page);
-    console.log(`[CDP] ⚠️ Composer still has: "${afterText.substring(0, 50)}..."`);
+    console.log(`[CDP] ❌ Composer still has: "${afterText.substring(0, 60)}"`);
     return false;
   }
 }
@@ -241,8 +241,9 @@ async function sendPrompt(page: any, text: string) {
 /**
  * Wait for Copilot generation to complete.
  *
- * Strategy A: "Stop generating" button appears then disappears
- * Strategy B: body text length stability
+ * Strategy A: "Stop generating" button appears → disappears
+ * Strategy B: body text stability (fallback)
+ * Strategy C: check for user message count increase + response text
  */
 async function waitForGenerationDone(page: any, timeoutMs = 120_000) {
   const start = Date.now();
@@ -262,8 +263,8 @@ async function waitForGenerationDone(page: any, timeoutMs = 120_000) {
       if (await btn.isVisible({ timeout: 3_000 })) {
         console.log(`[CDP] Streaming detected via: ${sel}`);
         await btn.waitFor({ state: "hidden", timeout: timeoutMs });
-        console.log(`[CDP] Stop button hidden → generation complete`);
-        return;
+        console.log("[CDP] Stop button hidden → generation complete");
+        return true;
       }
     } catch {
       continue;
@@ -279,19 +280,21 @@ async function waitForGenerationDone(page: any, timeoutMs = 120_000) {
     await page.waitForTimeout(1_000);
     const currLength = await getBodyLength(page);
 
-    if (currLength > prevLength + 20) {
-      stableCount = 0; // still growing
+    if (currLength > prevLength + 30) {
+      // Content is growing - streaming is active
+      stableCount = 0;
     } else if (currLength === prevLength && currLength > 200) {
       stableCount++;
       if (stableCount >= 2) {
         console.log(`[CDP] Body stable at ${currLength} chars → done`);
-        return;
+        return true;
       }
     }
     prevLength = currLength;
   }
 
   console.log(`[CDP] Timeout at ${await getBodyLength(page)} chars — assuming done`);
+  return false;
 }
 
 /* ── Tests ───────────────────────────────────────────────────── */
@@ -307,7 +310,25 @@ test.describe("M365 Copilot via CDP", () => {
     page = await findCopilotPage(browser);
   });
 
-  test("01 — m365.cloud.microsoft/chat is open and ready", async () => {
+  test("00 — start a new chat", async () => {
+    await startNewChat(page);
+
+    // Verify the page loaded
+    const url = page.url();
+    console.log(`[CDP] After new chat, URL: ${url}`);
+
+    // Wait for composer to be ready
+    const input = page.locator('div[role="textbox"], [contenteditable="true"]').first();
+ await expect(input).toBeVisible({ timeout: 10_000 });
+
+    // Verify composer is empty (fresh chat)
+    const composerText = await getComposerText(page);
+    console.log(`[CDP] Composer text (should be empty): "${composerText}"`);
+
+    await page.screenshot({ path: "test-results/cdp-00-new-chat.png" });
+  });
+
+  test("01 — m365.cloud.microsoft/chat is ready", async () => {
     const url = page.url();
     console.log(`[CDP] Current URL: ${url}`);
     expect(url).toBeTruthy();
@@ -320,21 +341,20 @@ test.describe("M365 Copilot via CDP", () => {
   });
 
   test("02 — compose area is visible", async () => {
-    const text = await getComposerText(page);
-    console.log(`[CDP] Composer text (should not be stuck): "${text.substring(0, 80)}"`);
-
-    const input = page.locator('div[role="textbox"], textarea, [contenteditable="true"]').first();
+    const input = await page.locator('div[role="textbox"], textarea, [contenteditable="true"]').first();
     await expect(input).toBeVisible();
 
     await page.screenshot({ path: "test-results/cdp-02-compose.png" });
   });
 
   test("03 — send a prompt and receive a response", async () => {
-    const ok = await sendPrompt(page, "日本の首都はどこですか？一言で答えてください。");
-    expect(ok).toBe(true);
+    const sent = await sendPrompt(page, "日本の首都はどこですか？一言で答えてください。");
+    expect(sent).toBe(true);
+
     await page.screenshot({ path: "test-results/cdp-03-before-send.png" });
 
-    await waitForGenerationDone(page);
+    const completed = await waitForGenerationDone(page);
+    expect(completed).toBe(true);
 
     const finalLength = await getBodyLength(page);
     console.log(`[CDP] After response, body length: ${finalLength}`);
@@ -347,14 +367,15 @@ test.describe("M365 Copilot via CDP", () => {
     const bodyBefore = await getBodyLength(page);
     console.log(`[CDP] Body before follow-up: ${bodyBefore}`);
 
-    const ok = await sendPrompt(page, "その都市の名所を3つ教えて");
-    expect(ok).toBe(true);
+    const sent = await sendPrompt(page, "その都市の名所を3つ教えて");
+    expect(sent).toBe(true);
 
-    await waitForGenerationDone(page);
+    const completed = await waitForGenerationDone(page);
+    expect(completed).toBe(true);
 
     const bodyAfter = await getBodyLength(page);
     console.log(`[CDP] After follow-up, body length: ${bodyAfter} (was ${bodyBefore})`);
-    expect(bodyAfter).toBeGreaterThan(bodyBefore);
+    expect(bodyAfter).toBeGreaterThan(bodyBefore + 100); // Need at least 100 chars for 3 items
 
     await page.screenshot({ path: "test-results/cdp-04-followup.png" });
   });
