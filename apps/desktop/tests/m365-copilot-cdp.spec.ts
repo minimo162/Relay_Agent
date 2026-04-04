@@ -13,12 +13,9 @@ async function connectViaCDP() {
 }
 
 /**
- * Find an existing tab on the Copilot page, or fall back to the
- * very first context (the default Chrome profile context).
+ * Find an existing tab on the Copilot page, or open a new one.
  */
 async function findCopilotPage(browser: any) {
-  // CDP connect gives contexts that mirror Chrome's browser contexts
-  // The default profile is usually the first context
   const contexts = browser.contexts();
   for (const ctx of contexts) {
     const pages = ctx.pages();
@@ -30,8 +27,7 @@ async function findCopilotPage(browser: any) {
           url.includes("copilot.microsoft") ||
           url.includes("copilot.cloud.microsoft")
         ) {
-          const title = await page.title();
-          console.log(`[CDP] Found existing tab: ${url} — "${title}"`);
+          console.log(`[CDP] Found existing tab: ${url}`);
           return page;
         }
       } catch {
@@ -40,8 +36,7 @@ async function findCopilotPage(browser: any) {
     }
   }
 
-  // No matching tab found — open one in the default context
-  console.log("[CDP] No existing Copilot tab found, opening new one...");
+  console.log("[CDP] No existing Copilot tab, opening one...");
   const defaultContext = contexts[0] ?? (await browser.newContext());
   const page = await defaultContext.newPage();
   await page.goto(M365_COPILOT_URL, {
@@ -55,11 +50,13 @@ async function findCopilotPage(browser: any) {
 /* ── Compose helpers ─────────────────────────────────────────── */
 
 async function findPromptInput(page: any) {
+  // After initial prompt the input is in a different spot (follow-up box at bottom)
   const selectors = [
+    // follow-up compose area (after first exchange)
+    'div[role="textbox"]',
     'textarea',
     '[contenteditable="true"]',
     'input[role="combobox"]',
-    'input[type="text"]',
   ];
   for (const sel of selectors) {
     try {
@@ -69,8 +66,32 @@ async function findPromptInput(page: any) {
       continue;
     }
   }
-  // Fallback: click approximate composer area
   return null;
+}
+
+/** Count visible message bubbles in the conversation */
+async function countMessages(page: any): Promise<number> {
+  // Copilot wraps each turn in article/section-like elements with meaningful text
+  const count = await page.evaluate(() => {
+    // Count distinct response paragraphs / content blocks
+    const articleEls = document.querySelectorAll("article, [class*='message'], [class*='conversation'] article, [data-test-id*='message']");
+    return articleEls.length;
+  });
+  // Fallback: count sections of substantial text in the body
+  if (count === 0) {
+    return await page.evaluate(() => {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+        acceptNode: (node) =>
+          (node.textContent?.trim()?.length ?? 0) > 100
+            ? NodeFilter.FILTER_ACCEPT
+            : NodeFilter.FILTER_REJECT,
+      });
+      let n = 0;
+      while (walker.nextNode()) n++;
+      return n;
+    });
+  }
+  return count;
 }
 
 async function sendPrompt(page: any, text: string) {
@@ -78,22 +99,29 @@ async function sendPrompt(page: any, text: string) {
   if (input) {
     await input.click();
     await input.fill(text);
+    await page.waitForTimeout(500); // let the fill register
+    await page.keyboard.press("Enter");
+    console.log(`[CDP] Sent prompt via .fill + Enter: "${text.substring(0, 40)}..."`);
   } else {
+    // Fallback
     await page.click("body", { position: { x: 600, y: 700 } });
     await page.keyboard.type(text);
+    await page.waitForTimeout(500);
+    await page.keyboard.press("Enter");
+    console.log(`[CDP] Sent prompt via fallback: "${text.substring(0, 40)}..."`);
   }
-  await page.keyboard.press("Enter");
 }
 
-async function waitForResponse(page: any, timeoutMs = 60_000) {
+/** Wait until a NEW response appears after the prompt */
+async function waitForNewResponse(page: any, expectedBodyAfter: number, timeoutMs = 60_000) {
   await page.waitForFunction(
-    () => {
-      // Look for substantial text content that looks like a Copilot response
+    ({ threshold }) => {
       const body = document.body;
       const text = body.innerText || "";
-      return text.length > 200;
+      return text.length > threshold;
     },
     { timeout: timeoutMs, polling: 1000 },
+    { threshold: expectedBodyAfter + 50 }, // require at least 50 more chars
   );
 }
 
@@ -103,57 +131,42 @@ test.describe.configure({ mode: "serial" });
 
 test.describe("M365 Copilot via CDP", () => {
   let browser: any;
+  let page: any;
 
   test.beforeAll(async () => {
     browser = await connectViaCDP();
+    page = await findCopilotPage(browser);
   });
 
   test("01 — m365.cloud.microsoft/chat is open and ready", async () => {
-    const page = await findCopilotPage(browser);
-
     const url = page.url();
     console.log(`[CDP] Current URL: ${url}`);
-
-    await page.screenshot({
-      path: "test-results/cdp-01-chat-ready.png",
-    });
+    expect(url).toBeTruthy();
 
     const title = await page.title();
     console.log(`[CDP] Page title: ${title}`);
-
-    // Allow the URL even if it briefly passed through login
     expect(title).toBeTruthy();
-    expect(title.length).toBeGreaterThan(0);
+
+    await page.screenshot({ path: "test-results/cdp-01-chat-ready.png" });
   });
 
   test("02 — compose area is visible", async () => {
-    const page = await findCopilotPage(browser);
-
     const input = await findPromptInput(page);
     expect(input).toBeTruthy();
-    if (input) {
-      await expect(input).toBeVisible();
-    }
+    if (input) await expect(input).toBeVisible();
 
     await page.screenshot({ path: "test-results/cdp-02-compose.png" });
   });
 
   test("03 — send a prompt and receive a response", async () => {
-    const page = await findCopilotPage(browser);
-
     await sendPrompt(page, "日本の首都はどこですか？一言で答えてください。");
+    await page.screenshot({ path: "test-results/cdp-03-before-send.png" });
+    console.log("[CDP] Waiting for response...");
 
-    await page.screenshot({
-      path: "test-results/cdp-03-before-send.png",
-    });
-
-    console.log("[CDP] Prompt sent, waiting for response...");
     await waitForResponse(page);
-    await page.waitForTimeout(3_000);
+    await page.waitForTimeout(5_000); // extra time for full response
 
-    await page.screenshot({
-      path: "test-results/cdp-03-response.png",
-    });
+    await page.screenshot({ path: "test-results/cdp-03-response.png" });
 
     const bodyText = await page.textContent("body");
     expect(bodyText?.length).toBeGreaterThan(100);
@@ -161,31 +174,29 @@ test.describe("M365 Copilot via CDP", () => {
   });
 
   test("04 — multi-turn follow-up", async () => {
-    const page = await findCopilotPage(browser);
+    // Record current body length so we can detect NEW content
+    const bodyBefore = await page.evaluate(() => document.body.innerText?.length ?? 0);
+    console.log(`[CDP] Body before follow-up: ${bodyBefore}`);
 
     await sendPrompt(page, "その都市の名所を3つ教えて");
 
-    console.log("[CDP] Follow-up sent, waiting for response...");
-    await waitForResponse(page);
-    await page.waitForTimeout(3_000);
+    console.log("[CDP] Waiting for follow-up response...");
+    await waitForNewResponse(page, bodyBefore);
+    await page.waitForTimeout(5_000);
 
-    await page.screenshot({
-      path: "test-results/cdp-04-followup.png",
-    });
+    await page.screenshot({ path: "test-results/cdp-04-followup.png" });
 
-    const bodyText = await page.textContent("body");
-    expect(bodyText?.length).toBeGreaterThan(200);
-    console.log(`[CDP] Follow-up response, body length: ${bodyText?.length}`);
+    const bodyAfter = await page.evaluate(() => document.body.innerText?.length ?? 0);
+    console.log(`[CDP] Follow-up response received, body length: ${bodyAfter} (was ${bodyBefore})`);
+
+    expect(bodyAfter).toBeGreaterThan(bodyBefore);
   });
 
   test("05 — full-page screenshot of conversation", async () => {
-    const page = await findCopilotPage(browser);
-
     await page.screenshot({
       path: "test-results/cdp-05-full-page.png",
       fullPage: true,
     });
-
     console.log("[CDP] Full-page screenshot captured!");
   });
 });
