@@ -11,6 +11,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::net::TcpStream;
 use std::path::PathBuf;
+use std::process::Child;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::oneshot;
 use tokio::time::{timeout, Duration};
@@ -274,7 +275,8 @@ impl Ctx {
             .context("CDP timeout")?
             .context("response lost")?;
 
-        // Abort the reader task — it has served its purpose
+        // Gracefully close the WS before aborting the reader
+        let _ = write.close().await;
         reader_handle.abort();
 
         if let Some(err) = resp.get("error") {
@@ -508,6 +510,19 @@ pub struct ConnectionResult {
     pub page: CopilotPage,
     pub port: u16,
     pub launched: bool,
+    _edge_process: Option<Child>,
+}
+
+impl ConnectionResult {
+    /// Quit the Edge process if it was launched by this connection.
+    /// Safe to call multiple times; subsequent calls are no-ops.
+    pub fn quit_edge(&mut self) {
+        if let Some(mut child) = self._edge_process.take() {
+            info!("[CDP] Quitting Edge process (PID: {})", child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 /// Connect to a Copilot page, auto-launching Edge if needed.
@@ -529,16 +544,17 @@ pub async fn connect_copilot_page(
     let port = find_free_port(base_port, 20);
     let debug_url_new = format!("http://127.0.0.1:{port}");
 
-    info!(
-        "[CDP] No existing browser found. Launching dedicated Edge on port {}...",
-        port
-    );
-
-    launch_dedicated_edge(port)?;
+    info!("[CDP] No existing browser found. Launching dedicated Edge on port {}...", port);
+    
+    let child = launch_dedicated_edge(port)?;
     wait_for_cdp_ready(&debug_url_new, 30).await?;
 
     // Find or create the Copilot page
-    if let Some(p) = try_existing(&debug_url_new).await {
+    if let Some(mut p) = try_existing(&debug_url_new).await {
+        if let Ok(ref mut result) = p {
+            result._edge_process = Some(child);
+            result.launched = true;
+        }
         return p;
     }
 
@@ -557,6 +573,7 @@ pub async fn connect_copilot_page(
         },
         port,
         launched: true,
+        _edge_process: Some(child),
     })
 }
 
@@ -572,6 +589,7 @@ async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
             },
             port: parse_port(debug_url).unwrap_or(9222),
             launched: false,
+            _edge_process: None,
         }));
     }
 
@@ -592,6 +610,7 @@ async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
                     },
                     port: parse_port(debug_url).unwrap_or(9222),
                     launched: false,
+                    _edge_process: None,
                 }));
             }
         }
@@ -608,7 +627,8 @@ fn parse_port(debug_url: &str) -> Option<u16> {
 }
 
 async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
-    if ws.starts_with("ws://") && !ws.contains("localhost") {
+    // If the WS URL already uses a routable host (not localhost or 127.0.0.1), use it as-is
+    if ws.starts_with("ws://") && !ws.contains("localhost") && !ws.contains("127.0.0.1") {
         return Ok(ws.into());
     }
     let r = reqwest::get(&format!("{debug}/json/version"))
@@ -623,5 +643,7 @@ async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
         .strip_prefix("http://")
         .or_else(|| debug.strip_prefix("https://"))
         .unwrap_or(debug);
-    Ok(url.replace("ws://localhost/", &format!("ws://{host}/")))
+    // Normalize both localhost and 127.0.0.1 to the debug URL's host
+    let url = url.replace("ws://localhost/", &format!("ws://{host}/"));
+    Ok(url.replace("ws://127.0.0.1/", &format!("ws://{host}/")))
 }
