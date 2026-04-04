@@ -228,14 +228,27 @@ Application-level defaults in `config.rs`:
 
 ## Development
 
-### Code Statistics (as of v4.0)
+### Code Statistics (as of 2026-04-05)
 
-| Language | Files | Lines | Description |
-|----------|-------|-------|-------------|
-| Rust | 47 | 20,287 | Core backend (Tauri + workspace crates) |
-| TypeScript | 16 | 2,393 | SolidJS frontend + mocks |
-| Svelte | 12 | 1,176 | UI components |
-| **Total** | **179** | **57,466** | Full project |
+| Language | Files | Code Lines | Description |
+|----------|-------|------------|-------------|
+| Rust | 47 | 18,384 | Core backend (Tauri + workspace crates) |
+| TypeScript | 21 | 2,620 | SolidJS frontend + mocks + E2E tests |
+| TSX | 3 | 1,102 | UI components |
+| JSON | 18 | 8,297 | Config, capabilities, test data |
+| Markdown | 72 | 6,931* | Documentation + verification checklists |
+| YAML | 2 | 1,388 | CI/CD workflows |
+| **Total** | **179** | **39,991** | Full project |
+
+*Markdown includes embedded code blocks (928 BASH, 1,793 Rust, 2,052 TypeScript, 1,091 Svelte lines)
+
+### Quality Gates
+
+- **Clippy:** 0 warnings (`-D warnings` enforced)
+- **Tests:** 13 unit tests passing
+- **TypeScript:** `tsc --noEmit` clean
+- **E2E:** 19/21 Playwright tests passing (2 require Windows + Edge CDP)
+- **CI:** GitHub Actions (cargo check, cargo clippy, pnpm typecheck)
 
 ### Desktop App
 
