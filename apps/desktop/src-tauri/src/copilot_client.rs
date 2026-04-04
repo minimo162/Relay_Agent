@@ -325,7 +325,8 @@ impl CopilotApiClient {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let tools = self.tool_definitions_json();
+        let tools = serde_json::to_string_pretty(&tools::tool_definitions_for_copilot())
+            .unwrap_or_default();
 
         format!(
             concat!(
@@ -348,118 +349,6 @@ impl CopilotApiClient {
         )
     }
 
-    fn tool_definitions_json(&self) -> String {
-        // These are the tools available in the runtime.
-        // For now, Copilot is prompted generically; the actual tool dispatch
-        // is handled by runtime::StaticToolExecutor / tools crate.
-        serde_json::to_string_pretty(&json!([
-            { "name": "bash", "description": "Execute a shell command", "input_schema": { "type": "object", "properties": { "command": { "type": "string" } }, "required": ["command"] }},
-            { "name": "read_file", "description": "Read a file", "input_schema": { "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"] }},
-            { "name": "write_file", "description": "Write a file", "input_schema": { "type": "object", "properties": { "path": { "type": "string" }, "content": { "type": "string" } }, "required": ["path", "content"] }},
-            { "name": "edit_file", "description": "Edit a file", "input_schema": { "type": "object", "properties": { "path": { "type": "string" }, "old_string": { "type": "string" }, "new_string": { "type": "string" } }, "required": ["path", "old_string", "new_string"] }},
-            { "name": "glob_search", "description": "Find files by glob pattern", "input_schema": { "type": "object", "properties": { "pattern": { "type": "string" } }, "required": ["pattern"] }},
-            { "name": "grep_search", "description": "Search file contents with regex", "input_schema": { "type": "object", "properties": { "pattern": {  "type": "string" } }, "required": ["pattern"] }},
-            { "name": "TodoWrite", "description": "Update the task list", "input_schema": { "type": "object", "properties": { "todos": { "type": "array", "items": { "type": "object" } } }, "required": ["todos"] }},
-            { "name": "WebSearch", "description": "Search the web", "input_schema": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] }},
-            { "name": "WebFetch", "description": "Fetch a URL", "input_schema": { "type": "object", "properties": { "url": { "type": "string" }, "prompt": { "type": "string" } }, "required": ["url", "prompt"] }},
-        ])).unwrap_or_default()
-    }
-
-    fn tool_definitions(&self) -> Vec<ToolDefinition> {
-        vec![
-            ToolDefinition {
-                name: "bash".to_string(),
-                description: Some("Execute a shell command".to_string()),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": { "command": { "type": "string" } },
-                    "required": ["command"]
-                }),
-            },
-            ToolDefinition {
-                name: "read_file".to_string(),
-                description: Some("Read a file".to_string()),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": { "path": { "type": "string" } },
-                    "required": ["path"]
-                }),
-            },
-            ToolDefinition {
-                name: "write_file".to_string(),
-                description: Some("Write a file".to_string()),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string" },
-                        "content": { "type": "string" }
-                    },
-                    "required": ["path", "content"]
-                }),
-            },
-            ToolDefinition {
-                name: "edit_file".to_string(),
-                description: Some("Edit a file".to_string()),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string" },
-                        "old_string": { "type": "string" },
-                        "new_string": { "type": "string" }
-                    },
-                    "required": ["path", "old_string", "new_string"]
-                }),
-            },
-            ToolDefinition {
-                name: "glob_search".to_string(),
-                description: Some("Find files by glob pattern".to_string()),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": { "pattern": { "type": "string" } },
-                    "required": ["pattern"]
-                }),
-            },
-            ToolDefinition {
-                name: "grep_search".to_string(),
-                description: Some("Search file contents with regex".to_string()),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": { "pattern": { "type": "string" } },
-                    "required": ["pattern"]
-                }),
-            },
-            ToolDefinition {
-                name: "TodoWrite".to_string(),
-                description: Some("Update the task list".to_string()),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": { "todos": { "type": "array", "items": { "type": "object" } } },
-                    "required": ["todos"]
-                }),
-            },
-            ToolDefinition {
-                name: "WebSearch".to_string(),
-                description: Some("Search the web".to_string()),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": { "query": { "type": "string" } },
-                    "required": ["query"]
-                }),
-            },
-            ToolDefinition {
-                name: "WebFetch".to_string(),
-                description: Some("Fetch a URL".to_string()),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "url": { "type": "string" },
-                        "prompt": { "type": "string" }
-                    },
-                    "required": ["url", "prompt"]
-                }),
-            },
-        ]
-    }
 }
 
 impl ApiClient for CopilotApiClient {
@@ -470,7 +359,7 @@ impl ApiClient for CopilotApiClient {
             max_tokens: 32_000,
             messages: convert_messages(&request.messages),
             system: (!request.system_prompt.is_empty()).then(|| request.system_prompt.join("\n\n")),
-            tools: Some(self.tool_definitions()),
+            tools: Some(tools::tool_definitions_for_copilot()),
             tool_choice: Some(ToolChoice::Auto),
             stream: true,
         };

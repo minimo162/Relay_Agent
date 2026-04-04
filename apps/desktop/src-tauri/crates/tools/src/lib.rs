@@ -380,6 +380,20 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
     ]
 }
 
+/// Convert `mvp_tool_specs()` into `api::ToolDefinition` values for use
+/// by the Copilot client (single source of truth — no duplication).
+#[must_use]
+pub fn tool_definitions_for_copilot() -> Vec<api::ToolDefinition> {
+    mvp_tool_specs()
+        .into_iter()
+        .map(|spec| api::ToolDefinition {
+            name: spec.name.into(),
+            description: Some(spec.description.into()),
+            input_schema: spec.input_schema.clone(),
+        })
+        .collect()
+}
+
 pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
     match name {
         "bash" => from_value::<BashCommandInput>(input).and_then(run_bash),
