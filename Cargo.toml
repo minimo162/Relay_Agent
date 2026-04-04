@@ -6,6 +6,7 @@ members = [
     "apps/desktop/src-tauri/crates/tools",
     "apps/desktop/src-tauri/crates/commands",
     "apps/desktop/src-tauri/crates/compat-harness",
+    "apps/desktop/src-tauri/crates/onyx-concept",
 ]
 resolver = "2"
 
