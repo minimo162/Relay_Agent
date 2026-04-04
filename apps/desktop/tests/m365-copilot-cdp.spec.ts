@@ -46,78 +46,223 @@ async function findCopilotPage(browser: any) {
 
 /* ── Compose helpers ─────────────────────────────────────────── */
 
-async function findPromptInput(page: any) {
+async function getBodyLength(page: any): Promise<number> {
+  return await page.evaluate(() => document.body.innerText?.length ?? 0);
+}
+
+/**
+ * Get the text content of the composer/prompt box.
+ * Useful for verifying text was entered.
+ */
+async function getComposerText(page: any): Promise<string> {
+  return await page.evaluate(() => {
+    const els = document.querySelectorAll(
+      'div[role="textbox"], textarea, [contenteditable="true"]'
+    );
+    for (const el of els) {
+      const text = (el as HTMLElement).innerText?.trim();
+      if (text && text.length > 0) return text;
+    }
+    return "";
+  });
+}
+
+/**
+ * Find and click the send/reply button.
+ * M365 Copilot's send button is near the composer area, usually
+ * a send icon (paper plane / arrow) button.
+ *
+ * We find buttons near the bottom-right of the viewport and
+ * click the one that has the send icon.
+ */
+async function clickSendButton(page: any) {
+  // Strategy 1: aria-label based
+  const ariaSelectors = [
+    'button[aria-label="Reply"]',
+    'button[aria-label="返信"]',
+    'button[aria-label="Send"]',
+    'button[aria-label="送信"]',
+    // The send button might have a tooltip
+    '[title="Reply"]',
+    '[title="Send"]',
+  ];
+  for (const sel of ariaSelectors) {
+    try {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible({ timeout: 2000 })) {
+        const rect = await btn.boundingBox();
+        await btn.scrollIntoViewIfNeeded();
+        await btn.click({ force: true, timeout: 3000 });
+        console.log(`[CDP] ✅ Sent via aria-label: ${sel} (x=${Math.round(rect?.x)}, y=${Math.round(rect?.y)})`);
+        return true;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  // Strategy 2: look for SVG send/paper-plane icon
+  try {
+    // The send button typically contains a path that looks like an airplane/arrow
+    const svgButtons = await page.locator("button svg").all();
+    for (const svg of svgButtons) {
+      const btn = svg.locator(".."); // parent <button>
+      try {
+        await btn.waitFor({ state: "visible", timeout: 500 });
+        const isEnabled = await btn.isEnabled({ timeout: 500 }).catch(() => false);
+        if (isEnabled) {
+          await btn.scrollIntoViewIfNeeded();
+          await btn.click({ force: true });
+          console.log("[CDP] ✅ Sent via SVG button click");
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    // no SVG buttons found
+  }
+
+  // Strategy 3: dispatch a submit event on the form
+  try {
+    const formSubmitted = await page.evaluate(() => {
+      // Try to find a form and submit it
+      const forms = document.querySelectorAll("form");
+      for (const form of forms) {
+        const submitters = form.querySelectorAll('button[type="submit"], [role="button"]');
+        for (const btn of submitters) {
+          (btn as HTMLElement).click();
+          return true;
+        }
+      }
+
+      // Try the M365 Copilot specific: look for the send button by class
+      const sendBtn = document.querySelector(
+        'button[class*="send"], button[class*="submit"], [class*="composer"] button'
+      ) as HTMLElement;
+      if (sendBtn) {
+        sendBtn.click();
+        return true;
+      }
+
+      // Last resort: dispatch keyboard event on the textbox
+      const textbox = document.querySelector(
+        'div[role="textbox"], [contenteditable="true"]'
+      ) as HTMLElement;
+      if (textbox) {
+        textbox.focus();
+        textbox.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
+        textbox.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", ctrlKey: true, bubbles: true }));
+        return true;
+      }
+      return false;
+    });
+    if (formSubmitted) {
+      console.log("[CDP] ✅ Sent via JS dispatch");
+      return true;
+    }
+  } catch (e) {
+    console.log(`[CDP] ❌ JS dispatch failed: ${e}`);
+  }
+
+  console.log("[CDP] ❌ Could not find send button!");
+  return false;
+}
+
+/**
+ * Send a prompt to M365 Copilot.
+ * 1. Fill the text in the composer
+ * 2. Click the send button
+ * 3. Verify the text disappeared from the composer (i.e., it was sent)
+ */
+async function sendPrompt(page: any, text: string) {
   const selectors = [
     'div[role="textbox"]',
     'textarea',
     '[contenteditable="true"]',
     'input[role="combobox"]',
   ];
+
+  let input = null;
   for (const sel of selectors) {
     try {
       const el = page.locator(sel).first();
-      if (await el.isVisible({ timeout: 3000 })) return el;
+      if (await el.isVisible({ timeout: 3000 })) {
+        input = el;
+        break;
+      }
     } catch {
       continue;
     }
   }
-  return null;
-}
 
-async function getBodyLength(page: any): Promise<number> {
-  return await page.evaluate(() => document.body.innerText?.length ?? 0);
-}
+  if (!input) {
+    console.log("[CDP] ❌ Could not find composer input");
+    return false;
+  }
 
-async function sendPrompt(page: any, text: string) {
-  const input = await findPromptInput(page);
-  if (input) {
-    await input.click();
-    await input.fill(text);
-    await page.keyboard.press("Enter");
-    console.log(`[CDP] Sent prompt via .fill + Enter: "${text.substring(0, 40)}..."`);
-  } else {
-    await page.click("body", { position: { x: 600, y: 700 } });
-    await page.keyboard.type(text);
-    await page.keyboard.press("Enter");
-    console.log(`[CDP] Sent prompt via fallback: "${text.substring(0, 40)}..."`);
+  // Fill the prompt
+  await input.click();
+  await input.fill(text);
+  await page.waitForTimeout(500);
+
+  // Verify text was entered
+  const composerText = await getComposerText(page);
+  console.log(`[CDP] Composer text before send: "${composerText.substring(0, 50)}..."`);
+
+  // Click send
+  await clickSendButton(page);
+
+  // Wait for composer to clear (indicates the message was sent)
+  try {
+    await page.waitForFunction(
+      () => {
+        const els = document.querySelectorAll(
+          'div[role="textbox"], [contenteditable="true"]'
+        );
+        for (const el of els) {
+          const text = (el as HTMLElement).innerText?.trim();
+          if (text && text.length > 0) return false; // still has text
+        }
+        return true; // all clear
+      },
+      { timeout: 5_000 }
+    );
+    console.log("[CDP] ✅ Composer cleared — prompt sent!");
+    return true;
+  } catch {
+    const afterText = await getComposerText(page);
+    console.log(`[CDP] ⚠️ Composer still has: "${afterText.substring(0, 50)}..."`);
+    return false;
   }
 }
 
 /**
- * Detect Copilot generation using the stop button as the signal.
+ * Wait for Copilot generation to complete.
  *
- * M365 Copilot shows a "Stop generating" button while streaming
- * and hides it when done. We watch its visibility:
- *   1. Appears  → streaming started (optional, may happen too fast)
- *   2. Gone     → streaming finished
- *
- * If no stop button appears at all, we fall back to textarea-ready
- * detection (the input becomes interactive again).
+ * Strategy A: "Stop generating" button appears then disappears
+ * Strategy B: body text length stability
  */
 async function waitForGenerationDone(page: any, timeoutMs = 120_000) {
   const start = Date.now();
 
-  // ── Strategy A: stop button appearance + disappearance ──
+  // Strategy A: stop button
   const stopSelectors = [
     'button:has-text("生成を停止")',
     'button:has-text("Stop generating")',
     'button:has-text("Stop")',
     'button[aria-label*="Stop generating"]',
     'button[aria-label*="生成を停止"]',
-    '[class*="stop"] button',
   ];
 
-  // Try detecting stop button within 3s of prompt sent
-  let streamDetected = false;
   for (const sel of stopSelectors) {
     try {
       const btn = page.locator(sel).first();
       if (await btn.isVisible({ timeout: 3_000 })) {
-        streamDetected = true;
-        console.log(`[CDP] Streaming detected via stop button: ${sel}`);
-        // Now wait for that button to disappear
+        console.log(`[CDP] Streaming detected via: ${sel}`);
         await btn.waitFor({ state: "hidden", timeout: timeoutMs });
-        console.log(`[CDP] Stop button hidden — generation complete!`);
+        console.log(`[CDP] Stop button hidden → generation complete`);
         return;
       }
     } catch {
@@ -125,36 +270,28 @@ async function waitForGenerationDone(page: any, timeoutMs = 120_000) {
     }
   }
 
-  if (streamDetected) return;
+  // Strategy B: body text stability
+  console.log("[CDP] No stop button — watching body text stability...");
+  let prevLength = await getBodyLength(page);
+  let stableCount = 0;
 
-  // ── Strategy B: textarea becomes interactive again ──
-  console.log("[CDP] No stop button — watching for ready input...");
   while (Date.now() - start < timeoutMs) {
     await page.waitForTimeout(1_000);
-    const ready = await page.evaluate(() => {
-      // Find the compose textarea
-      const els = document.querySelectorAll(
-        'textarea, div[role="textbox"], [contenteditable="true"]',
-      );
-      for (const el of els) {
-        // Check no aria-busy or disabled state
-        const rect = el.getBoundingClientRect();
-        if (rect.width > 50) {
-          // Has visible width, check no busy state
-          const busy = el.getAttribute("aria-busy") === "true";
-          const disabled = (el as HTMLElement).getAttribute("data-disabled") === "true";
-          if (!busy && !disabled) return true;
-        }
+    const currLength = await getBodyLength(page);
+
+    if (currLength > prevLength + 20) {
+      stableCount = 0; // still growing
+    } else if (currLength === prevLength && currLength > 200) {
+      stableCount++;
+      if (stableCount >= 2) {
+        console.log(`[CDP] Body stable at ${currLength} chars → done`);
+        return;
       }
-      return false;
-    });
-    if (ready) {
-      console.log("[CDP] Input is interactive again — generation complete!");
-      return;
     }
+    prevLength = currLength;
   }
 
-  console.log("[CDP] Waiting timed out — assuming done");
+  console.log(`[CDP] Timeout at ${await getBodyLength(page)} chars — assuming done`);
 }
 
 /* ── Tests ───────────────────────────────────────────────────── */
@@ -183,43 +320,43 @@ test.describe("M365 Copilot via CDP", () => {
   });
 
   test("02 — compose area is visible", async () => {
-    const input = await findPromptInput(page);
-    expect(input).toBeTruthy();
-    if (input) await expect(input).toBeVisible();
+    const text = await getComposerText(page);
+    console.log(`[CDP] Composer text (should not be stuck): "${text.substring(0, 80)}"`);
+
+    const input = page.locator('div[role="textbox"], textarea, [contenteditable="true"]').first();
+    await expect(input).toBeVisible();
 
     await page.screenshot({ path: "test-results/cdp-02-compose.png" });
   });
 
   test("03 — send a prompt and receive a response", async () => {
-    await sendPrompt(page, "日本の首都はどこですか？一言で答えてください。");
+    const ok = await sendPrompt(page, "日本の首都はどこですか？一言で答えてください。");
+    expect(ok).toBe(true);
     await page.screenshot({ path: "test-results/cdp-03-before-send.png" });
 
     await waitForGenerationDone(page);
 
     const finalLength = await getBodyLength(page);
     console.log(`[CDP] After response, body length: ${finalLength}`);
+    expect(finalLength).toBeGreaterThan(200);
 
     await page.screenshot({ path: "test-results/cdp-03-response.png" });
-
-    // Verify page has meaningful content
-    expect(finalLength).toBeGreaterThan(200);
   });
 
   test("04 — multi-turn follow-up", async () => {
     const bodyBefore = await getBodyLength(page);
     console.log(`[CDP] Body before follow-up: ${bodyBefore}`);
 
-    await sendPrompt(page, "その都市の名所を3つ教えて");
+    const ok = await sendPrompt(page, "その都市の名所を3つ教えて");
+    expect(ok).toBe(true);
 
     await waitForGenerationDone(page);
 
     const bodyAfter = await getBodyLength(page);
     console.log(`[CDP] After follow-up, body length: ${bodyAfter} (was ${bodyBefore})`);
+    expect(bodyAfter).toBeGreaterThan(bodyBefore);
 
     await page.screenshot({ path: "test-results/cdp-04-followup.png" });
-
-    // Verify page grew compared to before
-    expect(bodyAfter).toBeGreaterThan(bodyBefore);
   });
 
   test("05 — full-page screenshot of conversation", async () => {
