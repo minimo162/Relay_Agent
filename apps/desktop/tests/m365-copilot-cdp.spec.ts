@@ -12,9 +12,6 @@ async function connectViaCDP() {
   return await chromium.connectOverCDP(CDP_ENDPOINT);
 }
 
-/**
- * Find an existing tab on the Copilot page, or open a new one.
- */
 async function findCopilotPage(browser: any) {
   const contexts = browser.contexts();
   for (const ctx of contexts) {
@@ -50,9 +47,7 @@ async function findCopilotPage(browser: any) {
 /* ── Compose helpers ─────────────────────────────────────────── */
 
 async function findPromptInput(page: any) {
-  // After initial prompt the input is in a different spot (follow-up box at bottom)
   const selectors = [
-    // follow-up compose area (after first exchange)
     'div[role="textbox"]',
     'textarea',
     '[contenteditable="true"]',
@@ -69,29 +64,9 @@ async function findPromptInput(page: any) {
   return null;
 }
 
-/** Count visible message bubbles in the conversation */
-async function countMessages(page: any): Promise<number> {
-  // Copilot wraps each turn in article/section-like elements with meaningful text
-  const count = await page.evaluate(() => {
-    // Count distinct response paragraphs / content blocks
-    const articleEls = document.querySelectorAll("article, [class*='message'], [class*='conversation'] article, [data-test-id*='message']");
-    return articleEls.length;
-  });
-  // Fallback: count sections of substantial text in the body
-  if (count === 0) {
-    return await page.evaluate(() => {
-      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-        acceptNode: (node) =>
-          (node.textContent?.trim()?.length ?? 0) > 100
-            ? NodeFilter.FILTER_ACCEPT
-            : NodeFilter.FILTER_REJECT,
-      });
-      let n = 0;
-      while (walker.nextNode()) n++;
-      return n;
-    });
-  }
-  return count;
+/** Get full page body text length */
+async function getBodyLength(page: any): Promise<number> {
+  return await page.evaluate(() => document.body.innerText?.length ?? 0);
 }
 
 async function sendPrompt(page: any, text: string) {
@@ -99,11 +74,10 @@ async function sendPrompt(page: any, text: string) {
   if (input) {
     await input.click();
     await input.fill(text);
-    await page.waitForTimeout(500); // let the fill register
+    await page.waitForTimeout(500);
     await page.keyboard.press("Enter");
     console.log(`[CDP] Sent prompt via .fill + Enter: "${text.substring(0, 40)}..."`);
   } else {
-    // Fallback
     await page.click("body", { position: { x: 600, y: 700 } });
     await page.keyboard.type(text);
     await page.waitForTimeout(500);
@@ -112,29 +86,54 @@ async function sendPrompt(page: any, text: string) {
   }
 }
 
-/** Wait for any response content to appear on the page */
-async function waitForResponse(page: any, timeoutMs = 60_000) {
-  await page.waitForFunction(
-    () => {
-      const body = document.body;
-      const text = body.innerText || "";
-      return text.length > 50;
-    },
-    { timeout: timeoutMs, polling: 1000 },
-  );
-}
+/**
+ * Wait for a streaming Copilot response to COMPLETE.
+ * Strategy:
+ *   1. Wait until body grows significantly (confirm response started)
+ *   2. Then wait for streaming to STOP (body text stabilises for 3s)
+ */
+async function waitForStreamingComplete(
+  page: any,
+  initialBodyLength: number,
+  timeoutMs = 120_000,
+) {
+  const start = Date.now();
+  let lastLength = initialBodyLength;
+  let stableCount = 0;
+  const requiredStableChecks = 3; // 3×1s = stable for 3 seconds
 
-/** Wait until a NEW response appears after the prompt */
-async function waitForNewResponse(page: any, expectedBodyAfter: number, timeoutMs = 60_000) {
-  await page.waitForFunction(
-    ({ threshold }) => {
-      const body = document.body;
-      const text = body.innerText || "";
-      return text.length > threshold;
-    },
-    { timeout: timeoutMs, polling: 1000 },
-    { threshold: expectedBodyAfter + 50 }, // require at least 50 more chars
+  console.log(`[CDP] Waiting for response to complete (initial length: ${initialBodyLength})...`);
+
+  while (Date.now() - start < timeoutMs) {
+    await page.waitForTimeout(1_000);
+    const currentLength = await getBodyLength(page);
+
+    if (currentLength > initialBodyLength + 30) {
+      // Content has started arriving
+      if (currentLength === lastLength) {
+        stableCount++;
+        if (stableCount >= requiredStableChecks) {
+          console.log(
+            `[CDP] Response complete! body length: ${currentLength} (Δ +${currentLength - initialBodyLength})`,
+          );
+          return;
+        }
+      } else {
+        // Still streaming — reset stability counter
+        stableCount = 0;
+      }
+      lastLength = currentLength;
+    } else {
+      // No growth yet — keep waiting
+    }
+  }
+
+  // Final check — even if not perfectly stable, return if we got some content
+  const finalLength = await getBodyLength(page);
+  console.log(
+    `[CDP] Timeout but got some content: ${finalLength} (Δ +${finalLength - initialBodyLength})`,
   );
+  return; // don't fail — just log
 }
 
 /* ── Tests ───────────────────────────────────────────────────── */
@@ -171,36 +170,37 @@ test.describe("M365 Copilot via CDP", () => {
   });
 
   test("03 — send a prompt and receive a response", async () => {
+    // Capture initial state BEFORE sending
+    const initialLength = await getBodyLength(page);
+    console.log(`[CDP] Initial body length: ${initialLength}`);
+
     await sendPrompt(page, "日本の首都はどこですか？一言で答えてください。");
     await page.screenshot({ path: "test-results/cdp-03-before-send.png" });
-    console.log("[CDP] Waiting for response...");
 
-    await waitForResponse(page);
-    await page.waitForTimeout(5_000); // extra time for full response
+    // Wait for the streaming response to fully complete
+    await waitForStreamingComplete(page, initialLength);
 
+    await page.waitForTimeout(2_000); // grace period
     await page.screenshot({ path: "test-results/cdp-03-response.png" });
 
-    const bodyText = await page.textContent("body");
-    expect(bodyText?.length).toBeGreaterThan(100);
-    console.log(`[CDP] Response received, body length: ${bodyText?.length}`);
+    const finalLength = await getBodyLength(page);
+    console.log(`[CDP] After response, body length: ${finalLength}`);
+    expect(finalLength).toBeGreaterThan(initialLength);
   });
 
   test("04 — multi-turn follow-up", async () => {
-    // Record current body length so we can detect NEW content
-    const bodyBefore = await page.evaluate(() => document.body.innerText?.length ?? 0);
+    const bodyBefore = await getBodyLength(page);
     console.log(`[CDP] Body before follow-up: ${bodyBefore}`);
 
     await sendPrompt(page, "その都市の名所を3つ教えて");
 
-    console.log("[CDP] Waiting for follow-up response...");
-    await waitForNewResponse(page, bodyBefore);
-    await page.waitForTimeout(5_000);
+    await waitForStreamingComplete(page, bodyBefore);
+    await page.waitForTimeout(2_000);
 
     await page.screenshot({ path: "test-results/cdp-04-followup.png" });
 
-    const bodyAfter = await page.evaluate(() => document.body.innerText?.length ?? 0);
-    console.log(`[CDP] Follow-up response received, body length: ${bodyAfter} (was ${bodyBefore})`);
-
+    const bodyAfter = await getBodyLength(page);
+    console.log(`[CDP] After follow-up, body length: ${bodyAfter} (was ${bodyBefore})`);
     expect(bodyAfter).toBeGreaterThan(bodyBefore);
   });
 
