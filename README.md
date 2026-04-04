@@ -143,10 +143,11 @@ Relay_Agent/
 - **CDP Browser Automation** — M365 Copilot integration via Chrome DevTools Protocol:
   - Auto-launches dedicated Edge instance (separate user data dir)
   - Free port scanning, screenshot, prompt sending, new chat
+  - Streaming detection and response wait logic
 - **MCP Server Integration** — Full support for standard MCP servers via stdio transport:
   - Add/remove/list MCP servers with real-time status monitoring
+  - Health check command (`mcp_check_server_status`) with live status reporting
   - Tool discovery and capability reporting per server
-  - Health checks with configurable timeouts
   - Persistent registry with atomic state management
 - **Slash Commands** — Quick actions via the Composer input:
   - `/help` — List all available slash commands
@@ -196,6 +197,10 @@ Relay_Agent/
 | `cdp_send_prompt` | Send a prompt to M365 Copilot |
 | `cdp_start_new_chat` | Start a new chat in M365 Copilot |
 | `cdp_screenshot` | Capture screenshot of the Copilot browser |
+| `mcp_list_servers` | List all registered MCP servers with status |
+| `mcp_add_server` | Add a new MCP server to the registry |
+| `mcp_remove_server` | Remove an MCP server from the registry |
+| `mcp_check_server_status` | Check the live health status of a single MCP server |
 
 ### Tauri Events (Rust → Frontend)
 
@@ -222,6 +227,15 @@ Application-level defaults in `config.rs`:
 | `session_cleanup_ttl_minutes` | 30 | TTL for session cleanup |
 
 ## Development
+
+### Code Statistics (as of v4.0)
+
+| Language | Files | Lines | Description |
+|----------|-------|-------|-------------|
+| Rust | 47 | 20,287 | Core backend (Tauri + workspace crates) |
+| TypeScript | 16 | 2,393 | SolidJS frontend + mocks |
+| Svelte | 12 | 1,176 | UI components |
+| **Total** | **179** | **57,466** | Full project |
 
 ### Desktop App
 
