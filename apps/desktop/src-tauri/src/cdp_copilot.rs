@@ -241,8 +241,8 @@ impl Ctx {
         let (mut write, mut read) = ws.split();
         let (tx, rx) = oneshot::channel::<Value>();
 
-        // reader
-        tokio::spawn(async move {
+        // reader — we keep its JoinHandle so we can abort it after getting the response
+        let reader_handle = tokio::spawn(async move {
             while let Some(msg) = read.next().await {
                 if let Ok(txt) = msg.as_ref().map(|m| m.to_text()) {
                     if let Ok(v) = serde_json::from_str::<Value>(txt.unwrap()) {
@@ -264,6 +264,9 @@ impl Ctx {
             .await
             .context("CDP timeout")?
             .context("response lost")?;
+
+        // Abort the reader task — it has served its purpose
+        reader_handle.abort();
 
         if let Some(err) = resp.get("error") {
             bail!("CDP {}: {}", method, err);
@@ -423,15 +426,34 @@ impl CopilotPage {
         let mut prev = 0;
         let mut stable = 0;
         let mut streaming = false;
+        const MAX_CONSECUTIVE_ERRORS: usize = 5;
+        let mut consecutive_errors = 0;
 
         loop {
             if start.elapsed() > Duration::from_secs(timeout_secs) {
-                bail!("response timeout");
+                bail!("response timeout after {timeout_secs}s");
             }
-            let txt = self.body_text().await.unwrap_or_default();
+
+            // body_text: propagate actual errors so we don't spin forever
+            let txt = match self.body_text().await {
+                Ok(text) => {
+                    consecutive_errors = 0;
+                    text
+                }
+                Err(e) => {
+                    consecutive_errors += 1;
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        bail!("body_text failed {MAX_CONSECUTIVE_ERRORS} times in a row: {e}");
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
             let len = txt.len();
 
-            if self.is_streaming().await.unwrap_or(false) {
+            let is_streaming = self.is_streaming().await.unwrap_or(false);
+
+            if is_streaming {
                 streaming = true;
                 stable = 0;
             } else if streaming && len > 200 {

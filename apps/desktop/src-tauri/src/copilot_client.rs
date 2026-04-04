@@ -1,7 +1,5 @@
 use std::fs;
-use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use api::{
@@ -16,134 +14,11 @@ use runtime::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::models::BrowserAutomationSettings;
+/* ── Copilot API Client — adapts the Copilot Proxy API to runtime::ApiClient ─── */
 
-/* ── Copilot Chat Provider (M365 Copilot via Edge CDP) ─── */
-
-const DEFAULT_CDP_PORT: u16 = 9222;
-const DEFAULT_TIMEOUT_MS: u32 = 120_000;
-const DEFAULT_AUTO_LAUNCH_EDGE: bool = true;
-
-/// CopilotChatProvider — wraps M365 Copilot (Edge CDP + Node.js script)
-/// to produce `ModelResponse` compatible output.
-pub struct CopilotChatProvider {
-    settings: BrowserAutomationSettings,
-    script_path: Option<PathBuf>,
-    retry_limit: usize,
-}
-
-impl CopilotChatProvider {
-    pub fn new(settings: BrowserAutomationSettings) -> Self {
-        Self {
-            settings,
-            script_path: None,
-            retry_limit: 1,
-        }
-    }
-
-    pub fn with_default_settings() -> Self {
-        Self::new(BrowserAutomationSettings {
-            cdp_port: DEFAULT_CDP_PORT,
-            auto_launch_edge: DEFAULT_AUTO_LAUNCH_EDGE,
-            timeout_ms: DEFAULT_TIMEOUT_MS,
-        })
-    }
-
-    /// Send a prompt to Copilot and parse the response.
-    pub fn send_prompt(&self, prompt: &str) -> anyhow::Result<String> {
-        let script_path = self.resolve_script_path()?;
-        let mut args = vec![
-            script_path.display().to_string(),
-            "--action".to_string(),
-            "send".to_string(),
-        ];
-
-        if self.settings.auto_launch_edge {
-            args.push("--auto-launch".to_string());
-        } else {
-            args.push("--cdp-port".to_string());
-            args.push(self.settings.cdp_port.to_string());
-        }
-
-        args.push("--timeout".to_string());
-        args.push(self.settings.timeout_ms.to_string());
-        args.push("--prompt".to_string());
-        args.push(prompt.to_string());
-
-        let output = Command::new("node")
-            .args(&args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .map_err(|e| anyhow::anyhow!("failed to start copilot-browser.js: {e}"))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            anyhow::bail!(
-                "Copilot browser command failed (exit {:?}): {}\n{}",
-                output.status.code(),
-                stderr.trim(),
-                stdout.trim()
-            );
-        }
-
-        let mut stdout = String::new();
-        std::io::Cursor::new(output.stdout)
-            .read_to_string(&mut stdout)
-            .map_err(|e| anyhow::anyhow!("failed to read stdout: {e}"))?;
-
-        parse_copilot_output(&stdout)
-    }
-
-    fn resolve_script_path(&self) -> anyhow::Result<PathBuf> {
-        if let Some(path) = &self.script_path {
-            if path.is_file() {
-                return Ok(path.clone());
-            }
-        }
-
-        if let Ok(path) = std::env::var("RELAY_AGENT_COPILOT_SCRIPT") {
-            let candidate = PathBuf::from(path);
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
-
-        // Search relative to the binary working directory
-        let mut candidates = Vec::new();
-        if let Ok(cwd) = std::env::current_dir() {
-            candidates.push(cwd.join("scripts").join("dist").join("copilot-browser.js"));
-            candidates.push(
-                cwd.join("apps")
-                    .join("desktop")
-                    .join("scripts")
-                    .join("dist")
-                    .join("copilot-browser.js"),
-            );
-        }
-
-        candidates
-            .into_iter()
-            .find(|p| p.is_file())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "copilot-browser.js not found. Run: pnpm --filter @relay-agent/desktop copilot-browser:build"
-                )
-            })
-    }
-}
-
-/* ── Copilot API Client — adapts Copilot to runtime::ApiClient ─── */
-
-/// CopilotApiClient wraps CopilotChatProvider to implement runtime::ApiClient.
-/// This is the bridge between ConversationRuntime and M365 Copilot.
-///
-/// Unlike Anthropic's streaming SSE, Copilot returns a full response in one shot,
-/// so we simulate the streaming events post-hoc.
+/// CopilotApiClient adapts the Copilot Proxy API (Anthropic-compatible SSE)
+/// to implement runtime::ApiClient for the agent loop.
 pub struct CopilotApiClient {
-    provider: CopilotChatProvider,
     client: AnthropicClient,
     runtime: tokio::runtime::Runtime,
     model: String,
@@ -222,9 +97,8 @@ struct PersistedTokenUsage {
 }
 
 impl CopilotApiClient {
-    pub fn new(provider: CopilotChatProvider) -> Self {
+    pub fn new() -> Self {
         Self {
-            provider,
             client: AnthropicClient::from_auth(AuthSource::None).with_base_url(read_base_url()),
             runtime: tokio::runtime::Runtime::new()
                 .expect("failed to create tokio runtime for CopilotApiClient"),
@@ -236,7 +110,7 @@ impl CopilotApiClient {
     }
 
     pub fn new_with_default_settings() -> Self {
-        Self::new(CopilotChatProvider::with_default_settings())
+        Self::new()
     }
 
     pub fn with_stream_callback<F>(mut self, callback: F) -> Self
@@ -297,57 +171,6 @@ impl CopilotApiClient {
             config: record.config,
         }))
     }
-
-    /// Format an ApiRequest into a prompt for Copilot.
-    /// Copilot expects a natural-language prompt with tool definitions.
-    fn format_prompt(&self, request: &ApiRequest) -> String {
-        let system = request.system_prompt.join("\n\n");
-        let messages = request
-            .messages
-            .iter()
-            .map(|msg| match msg.role {
-                runtime::MessageRole::User => format!("User: {}", msg.blocks.iter().filter_map(|b| match b {
-                    ContentBlock::Text { text } => Some(text.clone()),
-                    ContentBlock::ToolResult { output, .. } => Some(output.clone()),
-                    _ => None,
-                }).collect::<Vec<_>>().join("\n")),
-                runtime::MessageRole::Assistant => format!("Assistant: {}", msg.blocks.iter().filter_map(|b| match b {
-                    ContentBlock::Text { text } => Some(text.clone()),
-                    _ => None,
-                }).collect::<Vec<_>>().join("\n")),
-                runtime::MessageRole::Tool => format!("[Tool Result] {}", msg.blocks.iter().filter_map(|b| match b {
-                    ContentBlock::ToolResult { output, .. } => Some(output.clone()),
-                    _ => None,
-                }).collect::<Vec<_>>().join("\n")),
-                runtime::MessageRole::System => String::new(),
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let tools = serde_json::to_string_pretty(&tools::tool_definitions_for_copilot())
-            .unwrap_or_default();
-
-        format!(
-            concat!(
-                "You are an autonomous agent running inside a Tauri desktop app.\n",
-                "Return your response as a JSON object with this exact schema:\n",
-                "{{\n",
-                "  \"content\": [\n",
-                "    {{ \"type\": \"text\", \"text\": \"your response\" }},\n",
-                "    {{ \"type\": \"tool_use\", \"id\": \"call-1\", \"name\": \"tool_name\", \"input\": {{}} }}\n",
-                "  ]\n",
-                "}}\n\n",
-                "System:\n{system}\n\n",
-                "Available tools:\n{tools}\n\n",
-                "Conversation:\n{messages}\n\n",
-                "Respond with a JSON object only. No markdown fences."
-            ),
-            system = system,
-            messages = messages,
-            tools = tools,
-        )
-    }
-
 }
 
 impl ApiClient for CopilotApiClient {
