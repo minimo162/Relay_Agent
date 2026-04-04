@@ -36,8 +36,8 @@ Relay Agent bridges a Tauri desktop application with a remote AI agent backend. 
 │  │  Internal Crates:                         │  │
 │  │  - api/        – Copilot API (SSE stream) │  │
 │  │  - runtime/    – Session management       │  │
-│  │  - tools/      – Tool registry (stub)     │  │
-│  │  - commands/   – Slash commands (stub)    │  │
+│  │  - tools/      – Tool registry (bash, read, write, edit)     │  │
+│  │  - commands/   – Slash commands (/compact, /help, etc.)    │  │
 │  │  - compat/     – Manifest extraction      │  │
 │  └──────────────┬────────────────────────────┘  │
 └─────────────────┼───────────────────────────────┘
@@ -93,9 +93,9 @@ apps/desktop/
 │   │   └── models.rs             # Shared Rust types
 │   └── crates/
 │       ├── api/                  # Low-level Copilot API (SSE parsing, OAuth)
-│       ├── runtime/              # Session management & compaction
-│       ├── tools/                # Tool registry definitions (stub)
-│       ├── commands/             # Slash command parsing (stub)
+│       ├── runtime/              # Session management (compact, bootstrap, config)
+│       ├── tools/                # Tool registry (bash, read, write, edit)
+│       ├── commands/             # Slash command handling
 │       └── compat-harness/       # Upstream manifest extraction
 ```
 
@@ -114,10 +114,10 @@ apps/desktop/
 - **Session Compaction** — Compresses long sessions into resumable system summaries
 - **Mock System** — Tauri API mocks allow full frontend development in the browser without Tauri running
 
-### 🚧 Stub / Planned
+### 🚧 Planned
 
-- **MCP Server Integration** — Tool registry and MCP server connection (types defined, not wired up)
-- **Slash Commands** — 22 slash commands parsed (`/help`, `/compact`, `/model`, `/export`, etc.) but most return `None` from the harness
+- **MCP Server Integration** — Tool registry and MCP server connection (types defined, types defined, basic MCP client implemented, not yet wired into runtime)
+- **Slash Commands** — 22 slash commands parsed (`/help`, `/compact`, `/model`, `/export`, etc.) but /compact is fully implemented, others are scaffolding
 - **Context System** — File drop, MCP server list, and policy tabs in the right panel (UI exists, data not populated)
 - **Browser Automation** — Browser automation settings in request type (CDP port, auto-launch, timeout) — not implemented on backend
 - **Conversation Export** — Export conversation to markdown (stub — `export_conversation_markdown` returns empty string)

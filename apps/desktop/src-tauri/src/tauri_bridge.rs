@@ -253,7 +253,11 @@ pub async fn get_session_history(
         return Ok(history);
     }
 
-    let api_client = CopilotApiClient::new_with_default_settings();
+    let api_client = CopilotApiClient::new(
+        SHARED_ANTHROPIC_CLIENT.get_or_init(|| {
+            api::AnthropicClient::from_auth(api::AuthSource::None).with_base_url(api::read_base_url())
+        }).clone(),
+    );
     let loaded = api_client
         .load_session(&request.session_id)
         .map_err(|error| error.to_string())?
