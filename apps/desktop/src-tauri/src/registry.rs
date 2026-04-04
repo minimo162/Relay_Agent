@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::sync::Mutex;
 
 use chrono::Utc;
 use runtime::Session as RuntimeSession;
@@ -54,7 +54,9 @@ impl SessionRegistry {
 
     /// Insert a session into the registry.
     pub fn insert(&self, id: String, entry: SessionEntry) -> Result<(), AgentLoopError> {
-        let mut data = self.data.lock()
+        let mut data = self
+            .data
+            .lock()
             .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
         data.insert(id, entry);
         Ok(())
@@ -65,7 +67,9 @@ impl SessionRegistry {
     where
         F: FnOnce(&mut HashMap<String, SessionEntry>) -> R,
     {
-        let mut data = self.data.lock()
+        let mut data = self
+            .data
+            .lock()
             .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
         Ok(f(&mut data))
     }
@@ -75,7 +79,9 @@ impl SessionRegistry {
     where
         F: FnOnce(&SessionEntry) -> R,
     {
-        let data = self.data.lock()
+        let data = self
+            .data
+            .lock()
             .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
         Ok(data.get(session_id).map(f))
     }
@@ -85,19 +91,28 @@ impl SessionRegistry {
     where
         F: FnOnce(&mut SessionEntry) -> R,
     {
-        let mut data = self.data.lock()
+        let mut data = self
+            .data
+            .lock()
             .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
         Ok(data.get_mut(session_id).map(f))
     }
 
     /// Drain all approval senders for a session and return them.
-    pub fn drain_approvals(&self, session_id: &str) -> Result<Vec<std::sync::mpsc::Sender<bool>>, AgentLoopError> {
-        let mut data = self.data.lock()
+    pub fn drain_approvals(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<std::sync::mpsc::Sender<bool>>, AgentLoopError> {
+        let mut data = self
+            .data
+            .lock()
             .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
         let Some(entry) = data.get_mut(session_id) else {
             return Ok(Vec::new());
         };
-        let mut approvals = entry.approvals.lock()
+        let mut approvals = entry
+            .approvals
+            .lock()
             .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
         Ok(approvals.drain().map(|(_, tx)| tx).collect())
     }
@@ -114,10 +129,7 @@ impl SessionRegistry {
             .iter()
             .filter(|(_, entry)| {
                 // Only evict non-running sessions that have a finished_at timestamp
-                !entry.running
-                    && entry
-                        .finished_at
-                        .is_some_and(|t| now - t > ttl_seconds)
+                !entry.running && entry.finished_at.is_some_and(|t| now - t > ttl_seconds)
             })
             .map(|(id, _)| id.clone())
             .collect();

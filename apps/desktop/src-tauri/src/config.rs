@@ -1,5 +1,6 @@
 /// Application-wide configuration with sensible defaults.
 /// All magic numbers should live here and be adjustable via UI or config file in the future.
+///
 /// Agent loop and session configuration.
 #[derive(Debug, Clone)]
 pub struct AgentConfig {

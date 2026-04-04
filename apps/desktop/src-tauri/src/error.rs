@@ -47,7 +47,10 @@ mod tests {
     #[test]
     fn test_registry_lock_poisoned_display() {
         let err = AgentLoopError::RegistryLockPoisoned("mutex error".to_string());
-        assert_eq!(err.to_string(), "session registry lock poisoned: mutex error");
+        assert_eq!(
+            err.to_string(),
+            "session registry lock poisoned: mutex error"
+        );
     }
 
     #[test]
@@ -118,7 +121,7 @@ mod tests {
     fn test_pattern_match_concurrency_limit() {
         let err = AgentLoopError::ConcurrencyLimitReached;
         match err {
-            AgentLoopError::ConcurrencyLimitReached => {}   // expected
+            AgentLoopError::ConcurrencyLimitReached => {} // expected
             other => panic!("expected ConcurrencyLimitReached, got {other:?}"),
         }
     }

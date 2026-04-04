@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -8,20 +8,19 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::cdp_copilot;
-use crate::models::{StartAgentRequest, RespondAgentApprovalRequest, CancelAgentRequest, GetAgentSessionHistoryRequest, McpServerInfo, McpAddServerRequest};
+use crate::models::{
+    CancelAgentRequest, GetAgentSessionHistoryRequest, McpAddServerRequest, McpServerInfo,
+    RespondAgentApprovalRequest, StartAgentRequest,
+};
 use crate::registry::SessionRegistry;
 
 // Re-export registry and agent_loop types for external consumers
+pub use crate::agent_loop::{AgentErrorEvent, AgentSessionHistoryResponse};
 pub use crate::registry::SessionEntry;
-pub use crate::agent_loop::{
-    AgentErrorEvent, AgentSessionHistoryResponse,
-};
 
 // What we need from agent_loop
-use crate::agent_loop::{
-    run_agent_loop_impl, msg_to_relay,
-};
 use crate::agent_loop::E_ERROR;
+use crate::agent_loop::{msg_to_relay, run_agent_loop_impl};
 
 /* ── Tauri commands ─── */
 
@@ -50,7 +49,8 @@ pub async fn start_agent(
         finished_at: None,
     };
     let cancelled = Arc::clone(&entry.cancelled);
-    registry.insert(session_id.clone(), entry)
+    registry
+        .insert(session_id.clone(), entry)
         .map_err(|e| e.to_string())?;
 
     let app_for_task = app.clone();
@@ -58,7 +58,10 @@ pub async fn start_agent(
     let reg_for_task = registry.inner().clone();
 
     // Periodically evict stale sessions to prevent memory leaks
-    let ttl_seconds = crate::config::AgentConfig::global().session_cleanup_ttl_minutes.cast_signed() * 60;
+    let ttl_seconds = crate::config::AgentConfig::global()
+        .session_cleanup_ttl_minutes
+        .cast_signed()
+        * 60;
     registry.cleanup_stale_sessions(ttl_seconds);
 
     let permit = AGENT_SEMAPHORE
@@ -117,7 +120,8 @@ pub async fn start_agent(
         }
 
         // Always clean up session state, even on panic
-        let _ignore = reg_for_task.mutate_session(&sid_for_task, super::registry::SessionEntry::mark_finished);
+        let _ignore = reg_for_task
+            .mutate_session(&sid_for_task, super::registry::SessionEntry::mark_finished);
 
         // Release concurrency slot
         drop(permit);
@@ -188,15 +192,15 @@ pub async fn compact_agent_session(
             max_estimated_tokens: 4000,
         };
 
-        let cmd_result = handle_slash_command(
-            "/compact",
-            &entry.session,
-            config,
-        )
-        .ok_or_else(|| "compact command is only available for existing sessions".to_string())?;
+        let cmd_result = handle_slash_command("/compact", &entry.session, config)
+            .ok_or_else(|| "compact command is only available for existing sessions".to_string())?;
 
         let _removed = cmd_result.message.len();
-        let removed_count = entry.session.messages.len().saturating_sub(cmd_result.session.messages.len());
+        let removed_count = entry
+            .session
+            .messages
+            .len()
+            .saturating_sub(cmd_result.session.messages.len());
 
         entry.session = cmd_result.session;
         CompactAgentSessionResponse {
@@ -290,10 +294,7 @@ pub async fn get_session_history(
 static LAUNCHED_EDGE_PORT: OnceLock<Arc<Mutex<Option<u16>>>> = OnceLock::new();
 
 fn launched_port_state() -> Arc<Mutex<Option<u16>>> {
-    Arc::clone(
-        LAUNCHED_EDGE_PORT
-            .get_or_init(|| Arc::new(Mutex::new(None))),
-    )
+    Arc::clone(LAUNCHED_EDGE_PORT.get_or_init(|| Arc::new(Mutex::new(None))))
 }
 
 fn get_launched_port() -> Option<u16> {
@@ -363,7 +364,11 @@ pub async fn connect_cdp(
     let base_port = request.base_port.unwrap_or(9222);
     let debug_url = resolve_debug_url(base_port);
 
-    tracing::info!("[CDP] connect → {} (auto_launch={})", debug_url, auto_launch);
+    tracing::info!(
+        "[CDP] connect → {} (auto_launch={})",
+        debug_url,
+        auto_launch
+    );
 
     match cdp_copilot::connect_copilot_page(&debug_url, auto_launch, base_port).await {
         Ok(res) => {
@@ -406,15 +411,21 @@ pub async fn cdp_send_prompt(
 
     let page = match cdp_copilot::connect_copilot_page(&debug_url, false, 9222).await {
         Ok(r) => r.page,
-        Err(e) => return Ok(CdpPromptResult {
-            ok: false, response_text: String::new(), body_length: 0,
-            error: Some(format!("CDP connect: {e}")),
-        }),
+        Err(e) => {
+            return Ok(CdpPromptResult {
+                ok: false,
+                response_text: String::new(),
+                body_length: 0,
+                error: Some(format!("CDP connect: {e}")),
+            })
+        }
     };
 
     if let Err(e) = page.send_prompt(&request.prompt).await {
         return Ok(CdpPromptResult {
-            ok: false, response_text: String::new(), body_length: 0,
+            ok: false,
+            response_text: String::new(),
+            body_length: 0,
             error: Some(format!("Send: {e}")),
         });
     }
@@ -452,28 +463,43 @@ pub async fn cdp_start_new_chat(
 
     let res = match cdp_copilot::connect_copilot_page(&debug_url, auto_launch, base_port).await {
         Ok(r) => r,
-        Err(e) => return Ok(CdpConnectResult {
-            ok: false, debug_url, page_url: String::new(),
-            page_title: String::new(), port: None, launched: false,
-            error: Some(e.to_string()),
-        }),
+        Err(e) => {
+            return Ok(CdpConnectResult {
+                ok: false,
+                debug_url,
+                page_url: String::new(),
+                page_title: String::new(),
+                port: None,
+                launched: false,
+                error: Some(e.to_string()),
+            })
+        }
     };
 
-    if res.launched { set_launched_port(res.port); }
+    if res.launched {
+        set_launched_port(res.port);
+    }
 
     if let Err(e) = res.page.navigate_to_chat().await {
         return Ok(CdpConnectResult {
-            ok: false, debug_url: debug_url.clone(),
-            page_url: res.page.url.clone(), page_title: res.page.title.clone(),
-            port: Some(res.port), launched: res.launched,
+            ok: false,
+            debug_url: debug_url.clone(),
+            page_url: res.page.url.clone(),
+            page_title: res.page.title.clone(),
+            port: Some(res.port),
+            launched: res.launched,
             error: Some(format!("Navigate: {e}")),
         });
     }
 
     Ok(CdpConnectResult {
-        ok: true, debug_url,
-        page_url: res.page.url.clone(), page_title: res.page.title.clone(),
-        port: Some(res.port), launched: res.launched, error: None,
+        ok: true,
+        debug_url,
+        page_url: res.page.url.clone(),
+        page_title: res.page.title.clone(),
+        port: Some(res.port),
+        launched: res.launched,
+        error: None,
     })
 }
 
@@ -487,7 +513,8 @@ pub async fn cdp_screenshot(_app: AppHandle) -> Result<serde_json::Value, String
     };
 
     let tmp = std::env::temp_dir().join("relay_cdp_screenshot.png");
-    page.screenshot(tmp.to_str().unwrap_or("screenshot.png")).await
+    page.screenshot(tmp.to_str().unwrap_or("screenshot.png"))
+        .await
         .map_err(|e| format!("Screenshot: {e}"))?;
 
     let bytes = std::fs::read(&tmp).map_err(|e| e.to_string())?;
@@ -501,10 +528,7 @@ pub async fn cdp_screenshot(_app: AppHandle) -> Result<serde_json::Value, String
 static MCP_SERVER_REGISTRY: OnceLock<Arc<Mutex<HashMap<String, McpServerInfo>>>> = OnceLock::new();
 
 fn mcp_registry() -> Arc<Mutex<HashMap<String, McpServerInfo>>> {
-    Arc::clone(
-        MCP_SERVER_REGISTRY
-            .get_or_init(|| Arc::new(Mutex::new(HashMap::new()))),
-    )
+    Arc::clone(MCP_SERVER_REGISTRY.get_or_init(|| Arc::new(Mutex::new(HashMap::new()))))
 }
 
 fn new_server_info(name: &str, command: &str, args: Vec<String>) -> McpServerInfo {
@@ -555,6 +579,7 @@ pub fn mcp_add_server(request: McpAddServerRequest) -> Result<McpServerInfo, Str
 }
 
 /// Remove an MCP server from the registry.
+#[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 pub fn mcp_remove_server(name: String) -> Result<bool, String> {
@@ -566,6 +591,7 @@ pub fn mcp_remove_server(name: String) -> Result<bool, String> {
 }
 
 /// Check the status of a single MCP server.
+#[allow(clippy::needless_pass_by_value)]
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 pub fn mcp_check_server_status(name: String) -> Result<McpServerInfo, String> {

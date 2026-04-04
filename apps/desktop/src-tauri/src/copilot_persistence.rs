@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /* ── Session persistence types ─── */
 
-/// Configuration for a persisted session (goal, cwd, `max_turns`).
+/// Configuration for a persisted session (`goal`, `cwd`, `max_turns`).
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedSessionConfig {
@@ -48,8 +48,14 @@ struct PersistedMessage {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum PersistedContentBlock {
-    Text { text: String },
-    ToolUse { id: String, name: String, input: String },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: String,
+    },
     ToolResult {
         tool_use_id: String,
         tool_name: String,
@@ -76,7 +82,8 @@ pub fn save_session(
     session: &Session,
     config: PersistedSessionConfig,
 ) -> Result<(), RuntimeError> {
-    validate_session_id(session_id).map_err(|e| RuntimeError::new(format!("invalid session_id: {e}")))?;
+    validate_session_id(session_id)
+        .map_err(|e| RuntimeError::new(format!("invalid session_id: {e}")))?;
     let dir = session_storage_dir()?;
     fs::create_dir_all(&dir).map_err(io_error)?;
     let path = dir.join(format!("{session_id}.json"));
@@ -97,7 +104,8 @@ pub fn save_session(
 
 /// Load a session from disk, if it exists.
 pub fn load_session(session_id: &str) -> Result<Option<LoadedSession>, RuntimeError> {
-    validate_session_id(session_id).map_err(|e| RuntimeError::new(format!("invalid session_id: {e}")))?;
+    validate_session_id(session_id)
+        .map_err(|e| RuntimeError::new(format!("invalid session_id: {e}")))?;
     let path = session_storage_dir()?.join(format!("{session_id}.json"));
     if !path.is_file() {
         return Ok(None);
@@ -128,7 +136,9 @@ fn session_storage_dir() -> Result<PathBuf, RuntimeError> {
     let home = env::var_os("HOME")
         .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from)
-        .ok_or_else(|| RuntimeError::new("unable to resolve the home directory for session storage"))?;
+        .ok_or_else(|| {
+            RuntimeError::new("unable to resolve the home directory for session storage")
+        })?;
     Ok(home.join(".relay-agent").join("sessions"))
 }
 

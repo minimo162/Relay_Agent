@@ -7,9 +7,9 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use runtime::{
-    self, PermissionPolicy, PermissionMode, PermissionPrompter,
-    PermissionRequest, PermissionPromptDecision, ContentBlock,
-    Session as RuntimeSession, ConversationMessage, ToolExecutor,
+    self, ContentBlock, ConversationMessage, PermissionMode, PermissionPolicy,
+    PermissionPromptDecision, PermissionPrompter, PermissionRequest, Session as RuntimeSession,
+    ToolExecutor,
 };
 
 use crate::copilot_client::{CopilotApiClient, CopilotStreamEvent};
@@ -28,7 +28,8 @@ pub(crate) const E_TEXT_DELTA: &str = "agent:text_delta";
 
 /* ── Shared resources ─── */
 
-static SHARED_ANTHROPIC_CLIENT: std::sync::OnceLock<api::AnthropicClient> = std::sync::OnceLock::new();
+static SHARED_ANTHROPIC_CLIENT: std::sync::OnceLock<api::AnthropicClient> =
+    std::sync::OnceLock::new();
 
 /* ── POSIX shell escaping ─── */
 
@@ -36,7 +37,9 @@ static SHARED_ANTHROPIC_CLIENT: std::sync::OnceLock<api::AnthropicClient> = std:
 /// Wraps the string in single quotes, escaping embedded single quotes as `'\''`.
 /// Rejects null bytes and control characters (except tab 0x09).
 pub(crate) fn posix_shell_escape(s: &str) -> String {
-    if s.bytes().any(|b| b == 0 || (b < 0x20 && b != 0x09) || b == 0x7F) {
+    if s.bytes()
+        .any(|b| b == 0 || (b < 0x20 && b != 0x09) || b == 0x7F)
+    {
         return String::from(".");
     }
     s.replace('\'', "'\\''")
@@ -61,8 +64,7 @@ pub fn run_agent_loop_impl(
     });
     let api_client = CopilotApiClient::new_with_default_settings()
         .map_err(|e| AgentLoopError::InitializationError(e.to_string()))?
-        .with_stream_callback(
-        move |event| match event {
+        .with_stream_callback(move |event| match event {
             CopilotStreamEvent::TextDelta(text) => {
                 if let Err(e) = app_for_stream.emit(
                     E_TEXT_DELTA,
@@ -87,8 +89,7 @@ pub fn run_agent_loop_impl(
                     tracing::warn!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
                 }
             }
-        },
-    );
+        });
     let persistence_client = CopilotApiClient::new_with_default_settings()
         .map_err(|e| AgentLoopError::InitializationError(e.to_string()))?;
     let tool_executor = build_tool_executor(app, session_id, cwd.clone());
@@ -120,7 +121,11 @@ pub fn run_agent_loop_impl(
             break;
         }
 
-        let turn_input = if turn == 0 { goal.as_str() } else { "Continue." };
+        let turn_input = if turn == 0 {
+            goal.as_str()
+        } else {
+            "Continue."
+        };
         let summary = match runtime_session.run_turn(turn_input, Some(&mut prompter)) {
             Ok(summary) => summary,
             Err(error) => {
@@ -152,15 +157,12 @@ pub fn run_agent_loop_impl(
             )
             .map_err(|error| AgentLoopError::PersistenceError(error.to_string()))?;
 
-        let needs_more_turns = summary
-            .assistant_messages
-            .last()
-            .is_some_and(|message| {
-                message
-                    .blocks
-                    .iter()
-                    .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
-            });
+        let needs_more_turns = summary.assistant_messages.last().is_some_and(|message| {
+            message
+                .blocks
+                .iter()
+                .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
+        });
 
         final_summary = Some(summary);
 
@@ -238,7 +240,9 @@ impl PermissionPrompter for TauriApprovalPrompter {
                     .get(&self.session_id)
                     .is_some_and(|entry| entry.cancelled.load(Ordering::SeqCst)),
                 Err(e) => {
-                    tracing::error!("[RelayAgent] registry lock poisoned during permission check: {e}");
+                    tracing::error!(
+                        "[RelayAgent] registry lock poisoned during permission check: {e}"
+                    );
                     return PermissionPromptDecision::Deny {
                         reason: "registry lock poisoned".into(),
                     };
@@ -260,7 +264,11 @@ impl PermissionPrompter for TauriApprovalPrompter {
                 if let Some(path) = v.get("path").and_then(|p| p.as_str()) {
                     format!("{} on {}", request.tool_name, path)
                 } else if let Some(cmd) = v.get("command").and_then(|c| c.as_str()) {
-                    format!("{}: {}", request.tool_name, cmd.chars().take(60).collect::<String>())
+                    format!(
+                        "{}: {}",
+                        request.tool_name,
+                        cmd.chars().take(60).collect::<String>()
+                    )
                 } else {
                     format!("{} request", request.tool_name)
                 }
@@ -291,7 +299,9 @@ impl PermissionPrompter for TauriApprovalPrompter {
             let mut data = match self.registry.data.lock() {
                 Ok(d) => d,
                 Err(e) => {
-                    tracing::error!("[RelayAgent] registry lock poisoned during approval registration: {e}");
+                    tracing::error!(
+                        "[RelayAgent] registry lock poisoned during approval registration: {e}"
+                    );
                     return PermissionPromptDecision::Deny {
                         reason: "registry lock poisoned".into(),
                     };
@@ -534,7 +544,9 @@ pub struct RelayMessage {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageContent {
-    Text { text: String },
+    Text {
+        text: String,
+    },
     ToolUse {
         id: String,
         name: String,

@@ -3,14 +3,17 @@ use std::sync::Arc;
 use api::{
     read_base_url, AnthropicClient, AuthSource, ContentBlockDelta as ApiContentBlockDelta,
     InputContentBlock, InputMessage, MessageRequest, MessageResponse,
-    OutputContentBlock as ApiOutputContentBlock, StreamEvent as ApiStreamEvent, ToolChoice, ToolResultContentBlock,
+    OutputContentBlock as ApiOutputContentBlock, StreamEvent as ApiStreamEvent, ToolChoice,
+    ToolResultContentBlock,
 };
 use runtime::{
-    ApiClient, ApiRequest, AssistantEvent, ContentBlock, MessageRole, RuntimeError,
-    TokenUsage, FRONTIER_MODEL_NAME,
+    ApiClient, ApiRequest, AssistantEvent, ContentBlock, MessageRole, RuntimeError, TokenUsage,
+    FRONTIER_MODEL_NAME,
 };
 
-pub use crate::copilot_persistence::{PersistedSessionConfig, LoadedSession, load_session, save_session};
+pub use crate::copilot_persistence::{
+    load_session, save_session, LoadedSession, PersistedSessionConfig,
+};
 
 /* ── Copilot API Client — adapts the Copilot Proxy API to runtime::ApiClient ─── */
 
@@ -76,6 +79,7 @@ impl CopilotApiClient {
 }
 
 impl ApiClient for CopilotApiClient {
+    #[allow(clippy::too_many_lines)]
     fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
         self.call_count += 1;
         let message_request = MessageRequest {
@@ -110,7 +114,12 @@ impl ApiClient for CopilotApiClient {
                         }
                     }
                     ApiStreamEvent::ContentBlockStart(start) => {
-                        push_output_block(start.content_block, &mut events, &mut pending_tool, true);
+                        push_output_block(
+                            start.content_block,
+                            &mut events,
+                            &mut pending_tool,
+                            true,
+                        );
                     }
                     ApiStreamEvent::ContentBlockDelta(delta) => match delta.delta {
                         ApiContentBlockDelta::TextDelta { text } => {

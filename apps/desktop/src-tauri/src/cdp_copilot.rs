@@ -6,6 +6,7 @@
 //! keeping it separate from the user's personal browser.
 
 use anyhow::{bail, Context, Result};
+use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::net::TcpStream;
@@ -45,14 +46,19 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
 
     // Dedicated profile directory (separate from user's Edge profile)
     let home = if cfg!(target_os = "windows") {
-        std::env::var("LOCALAPPDATA")
-            .ok().map_or_else(|| PathBuf::from(r"C:\Users\Default\AppData\Local"), PathBuf::from)
+        std::env::var("LOCALAPPDATA").ok().map_or_else(
+            || PathBuf::from(r"C:\Users\Default\AppData\Local"),
+            PathBuf::from,
+        )
     } else if cfg!(target_os = "macos") {
-        std::env::var("HOME")
-            .ok().map_or_else(|| PathBuf::from("/tmp"), |h| PathBuf::from(h).join("Library").join("Application Support"))
+        std::env::var("HOME").ok().map_or_else(
+            || PathBuf::from("/tmp"),
+            |h| PathBuf::from(h).join("Library").join("Application Support"),
+        )
     } else {
         std::env::var("HOME")
-            .ok().map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
+            .ok()
+            .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
     };
     let profile_dir = home.join("RelayAgentEdgeProfile");
     std::fs::create_dir_all(&profile_dir).ok();
@@ -112,12 +118,18 @@ fn find_edge_path() -> Result<String> {
         }
     } else {
         // Linux: try PATH
-        if let Ok(output) = std::process::Command::new("which").arg("microsoft-edge-stable").output() {
+        if let Ok(output) = std::process::Command::new("which")
+            .arg("microsoft-edge-stable")
+            .output()
+        {
             if output.status.success() {
                 return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
             }
         }
-        if let Ok(output) = std::process::Command::new("which").arg("microsoft-edge").output() {
+        if let Ok(output) = std::process::Command::new("which")
+            .arg("microsoft-edge")
+            .output()
+        {
             if output.status.success() {
                 return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
             }
@@ -226,6 +238,7 @@ impl Ctx {
     }
 
     /// Open a WS, send one CDP command, wait for response, close.
+    #[allow(clippy::result_large_err, clippy::items_after_statements)]
     async fn one_shot(&self, method: &str, params: Value) -> Result<Value> {
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let cmd = json!({ "id": id, "method": method, "params": params });
@@ -307,7 +320,8 @@ impl CopilotPage {
         ctx.one_shot(
             "Page.navigate",
             json!({ "url": "https://m365.cloud.microsoft/chat" }),
-        ).await?;
+        )
+        .await?;
         ctx.one_shot("Page.enable", json!({})).await?;
         tokio::time::sleep(Duration::from_secs(2)).await;
         Ok(())
@@ -358,10 +372,8 @@ impl CopilotPage {
             return JSON.stringify({ ok: false });
         })()"#;
         let r2 = ctx2.eval(js2).await?;
-        let val: Value = serde_json::from_str(
-            r2["result"]["value"].as_str().unwrap_or("{}"),
-        )
-        .unwrap_or(Value::Null);
+        let val: Value = serde_json::from_str(r2["result"]["value"].as_str().unwrap_or("{}"))
+            .unwrap_or(Value::Null);
         if val.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
             bail!("send button not found");
         }
@@ -372,8 +384,9 @@ impl CopilotPage {
             loop {
                 let ctx3 = self.ctx().await.ok();
                 if let Some(ctx) = ctx3 {
-                    if let Ok(r) = ctx.eval(
-                        r#"(() => {
+                    if let Ok(r) = ctx
+                        .eval(
+                            r#"(() => {
                             for (const el of document.querySelectorAll(
                                 'div[role="textbox"],textarea,[contenteditable="true"]'
                             )) {
@@ -381,8 +394,8 @@ impl CopilotPage {
                             }
                             return true;
                         })()"#,
-                    )
-                    .await
+                        )
+                        .await
                     {
                         if r["result"]["value"].as_bool() == Some(true) {
                             return Ok::<(), anyhow::Error>(());
@@ -401,8 +414,9 @@ impl CopilotPage {
 
     pub async fn is_streaming(&self) -> Result<bool> {
         let ctx = self.ctx().await?;
-        let r = ctx.eval(
-            r#"(() => {
+        let r = ctx
+            .eval(
+                r#"(() => {
                 for (const s of [
                     'button[aria-label*="生成を停止"]',
                     'button[aria-label*="Stop generating"]'
@@ -413,16 +427,17 @@ impl CopilotPage {
                 }
                 return false;
             })()"#,
-        ).await?;
+            )
+            .await?;
         Ok(r["result"]["value"].as_bool().unwrap_or(false))
     }
 
     pub async fn wait_for_response(&self, timeout_secs: u64) -> Result<String> {
+        const MAX_CONSECUTIVE_ERRORS: usize = 5;
         let start = std::time::Instant::now();
         let mut prev = 0;
         let mut stable = 0;
         let mut streaming = false;
-        const MAX_CONSECUTIVE_ERRORS: usize = 5;
         let mut consecutive_errors = 0;
 
         loop {
@@ -477,11 +492,9 @@ impl CopilotPage {
             .one_shot("Page.captureScreenshot", json!({ "format": "png" }))
             .await?;
         let b64 = r["data"].as_str().context("no data")?;
-        use base64::Engine;
-        let bytes =
-            base64::engine::general_purpose::STANDARD
-                .decode(b64)
-                .context("base64")?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .context("base64")?;
         std::fs::write(path, bytes)?;
         info!("[CDP] screenshot → {}", path);
         Ok(())
@@ -498,7 +511,11 @@ pub struct ConnectionResult {
 }
 
 /// Connect to a Copilot page, auto-launching Edge if needed.
-pub async fn connect_copilot_page(debug_url: &str, auto_launch: bool, base_port: u16) -> Result<ConnectionResult> {
+pub async fn connect_copilot_page(
+    debug_url: &str,
+    auto_launch: bool,
+    base_port: u16,
+) -> Result<ConnectionResult> {
     // Try existing browser first
     if let Some(p) = try_existing(debug_url).await {
         return p;
@@ -512,8 +529,11 @@ pub async fn connect_copilot_page(debug_url: &str, auto_launch: bool, base_port:
     let port = find_free_port(base_port, 20);
     let debug_url_new = format!("http://127.0.0.1:{port}");
 
-    info!("[CDP] No existing browser found. Launching dedicated Edge on port {}...", port);
-    
+    info!(
+        "[CDP] No existing browser found. Launching dedicated Edge on port {}...",
+        port
+    );
+
     launch_dedicated_edge(port)?;
     wait_for_cdp_ready(&debug_url_new, 30).await?;
 
@@ -524,7 +544,10 @@ pub async fn connect_copilot_page(debug_url: &str, auto_launch: bool, base_port:
 
     // Fallback: use any available page
     let pages = list_pages(&debug_url_new).await?;
-    let first = pages.iter().find(|p| p.kind == "page").context("no page after launch")?;
+    let first = pages
+        .iter()
+        .find(|p| p.kind == "page")
+        .context("no page after launch")?;
     Ok(ConnectionResult {
         page: CopilotPage {
             debug_url: debug_url_new,
