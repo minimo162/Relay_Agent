@@ -135,18 +135,33 @@ Relay_Agent/
 - **CDP Browser Automation** — M365 Copilot integration via Chrome DevTools Protocol:
   - Auto-launches dedicated Edge instance (separate user data dir)
   - Free port scanning, screenshot, prompt sending, new chat
+- **MCP Server Integration** — Full support for standard MCP servers via stdio transport:
+  - Add/remove/list MCP servers with real-time status monitoring
+  - Tool discovery and capability reporting per server
+  - Health checks with configurable timeouts
+  - Persistent registry with atomic state management
+- **Slash Commands** — Quick actions via the Composer input:
+  - `/help` — List all available slash commands
+  - `/clear` — Clear the current chat feed
+  - `/compact` — Compact the agent session to free context
+  - `/status` — Show current session status and state
+  - Autocomplete dropdown with keyboard navigation (↑↓/Tab/Enter/Esc)
+- **Context Panel Data Binding** — Fully reactive right panel with live data:
+  - **Files** — View, add, and remove context files with size info
+  - **MCP Servers** — Server status, tool counts, and management UI
+  - **Policy** — Permission policies (approve/deny/allow) with colored badges
 - **3-Pane Desktop Layout** — Sidebar (sessions), Main (chat + composer), Right panel (context tabs)
 - **Auth Token Resolution** — Reads from `.auth_key`, `.agent_auth_key`, or direct token
-- **Mock System** — Tauri API mocks for full frontend development in the browser
 - **Config System** — Centralized `AgentConfig` with adjustable parameters
 - **POSIX Shell Escaping** — Secure shell argument escaping for bash tool execution
 - **Session TTL Cleanup** — Auto-eviction of completed sessions after configurable TTL (default: 30 min)
 
 ### 🚧 Planned / Partially Implemented
 
-- **MCP Server Integration** — Types and client infrastructure in `runtime/`, basic MCP stdio client — not yet wired into the agent loop
-- **Slash Commands** — `/compact` fully implemented; 22 total commands parsed but most are scaffolding
-- **Context System** — File drop, MCP server list, and policy tabs in the right panel (UI exists, data not fully populated)
+- **MCP Agent Loop Integration** — MCP server tools called automatically by the agent during execution
+- **Expanded Slash Commands** — 22 total commands in `crates/commands/` — wire remaining commands to the UI
+- **PageIndex (Vectorless RAG)** — Integrate tree-search based context retrieval into the agent's toolset
+- **E2E Test Coverage** — Expand Playwright tests for new MCP, slash command, and context features
 
 ## IPC API
 
