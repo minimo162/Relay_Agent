@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -61,6 +61,11 @@ const E_TURN_COMPLETE: &str = "agent:turn_complete";
 const E_ERROR: &str = "agent:error";
 const E_TEXT_DELTA: &str = "agent:text_delta";
 
+/* ── Shared resources (fix #6) ─── */
+
+/// Shared anthropic client to avoid per-session runtime creation.
+static SHARED_ANTHROPIC_CLIENT: OnceLock<api::AnthropicClient> = OnceLock::new();
+
 /* ── Tauri commands ─── */
 
 #[tauri::command]
@@ -105,14 +110,14 @@ pub async fn start_agent(
         );
 
         if let Err(err) = result {
-            let _ = app_for_task.emit(
-                E_ERROR,
-                AgentErrorEvent {
-                    session_id: sid_for_task.clone(),
-                    error: err,
-                    cancelled: false,
-                },
-            );
+            let evt = AgentErrorEvent {
+                session_id: sid_for_task.clone(),
+                error: err,
+                cancelled: false,
+            };
+            if let Err(e) = app_for_task.emit(E_ERROR, &evt) {
+                eprintln!("[RelayAgent] emit failed ({E_ERROR}): {e}");
+            }
         }
 
         if let Ok(mut data) = reg_for_task.data.lock() {
@@ -215,14 +220,14 @@ pub async fn cancel_agent(
         }
     }
 
-    let _ = app.emit(
-        E_ERROR,
-        AgentErrorEvent {
-            session_id: request.session_id,
-            error: "agent session was cancelled".into(),
-            cancelled: true,
-        },
-    );
+    let evt = AgentErrorEvent {
+        session_id: request.session_id,
+        error: "agent session was cancelled".into(),
+        cancelled: true,
+    };
+    if let Err(e) = app.emit(E_ERROR, &evt) {
+        eprintln!("[RelayAgent] emit failed ({E_ERROR}): {e}");
+    }
     Ok(())
 }
 
@@ -273,43 +278,52 @@ fn run_agent_loop_impl(
     max_turns: Option<usize>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let original_cwd = std::env::current_dir().ok();
-    if let Some(path) = cwd.as_deref() {
-        std::env::set_current_dir(path)
-            .map_err(|error| format!("failed to set working directory to `{path}`: {error}"))?;
-    }
+    // Do NOT mutate process-global CWD — pass it via the tool executor instead.
+    // (CWD is prepended to bash commands as `cd <cwd> && (…)` in the executor.)
 
     let app_for_stream = app.clone();
     let session_for_stream = session_id.to_string();
-    let api_client = CopilotApiClient::new_with_default_settings().with_stream_callback(
+    let shared_client = SHARED_ANTHROPIC_CLIENT.get_or_init(|| {
+        api::AnthropicClient::from_auth(api::AuthSource::None).with_base_url(api::read_base_url())
+    });
+    let api_client = CopilotApiClient::new(shared_client.clone()).with_stream_callback(
         move |event| match event {
             CopilotStreamEvent::TextDelta(text) => {
-                let _ = app_for_stream.emit(
+                let mut ok = false;
+                if let Err(e) = app_for_stream.emit(
                     E_TEXT_DELTA,
                     AgentTextDeltaEvent {
                         session_id: session_for_stream.clone(),
                         text,
                         is_complete: false,
                     },
-                );
+                ) {
+                    eprintln!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
+                } else {
+                    ok = true;
+                }
+                let _ = ok;
             }
             CopilotStreamEvent::MessageStop => {
-                let _ = app_for_stream.emit(
+                if let Err(e) = app_for_stream.emit(
                     E_TEXT_DELTA,
                     AgentTextDeltaEvent {
                         session_id: session_for_stream.clone(),
                         text: String::new(),
                         is_complete: true,
                     },
-                );
+                ) {
+                    eprintln!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
+                }
             }
         },
     );
-    let persistence_client = CopilotApiClient::new_with_default_settings();
-    let tool_executor = build_tool_executor(app, session_id);
+    let persistence_client = CopilotApiClient::new(shared_client.clone());
+    let tool_executor = build_tool_executor(app, session_id, cwd.clone());
     let permission_policy = PermissionPolicy::new(PermissionMode::Prompt);
     let system_prompt = vec![build_system_prompt(&goal)];
-    let max_turns = max_turns.unwrap_or(32);
+    // Default: 16 turns — enough for most tasks without ballooning token costs.
+    let max_turns = max_turns.unwrap_or(16);
 
     let mut runtime = runtime::ConversationRuntime::new(
         RuntimeSession::new(),
@@ -337,14 +351,14 @@ fn run_agent_loop_impl(
         let summary = match runtime.run_turn(turn_input, Some(&mut prompter)) {
             Ok(summary) => summary,
             Err(error) => {
-                let _ = app.emit(
-                    E_ERROR,
-                    AgentErrorEvent {
-                        session_id: session_id.to_string(),
-                        error: format!("agent loop failed: {error}"),
-                        cancelled: false,
-                    },
-                );
+                let evt = AgentErrorEvent {
+                    session_id: session_id.to_string(),
+                    error: format!("agent loop failed: {error}"),
+                    cancelled: false,
+                };
+                if let Err(e) = app.emit(E_ERROR, &evt) {
+                    eprintln!("[RelayAgent] emit failed ({E_ERROR}): {e}");
+                }
                 break;
             }
         };
@@ -400,7 +414,7 @@ fn run_agent_loop_impl(
             .unwrap_or_default();
 
         if !cancelled.load(Ordering::SeqCst) {
-            let _ = app.emit(
+            if let Err(e) = app.emit(
                 E_TURN_COMPLETE,
                 AgentTurnCompleteEvent {
                     session_id: session_id.to_string(),
@@ -408,7 +422,9 @@ fn run_agent_loop_impl(
                     assistant_message: last_text,
                     message_count: runtime.session().messages.len(),
                 },
-            );
+            ) {
+                eprintln!("[RelayAgent] emit failed ({E_TURN_COMPLETE}): {e}");
+            }
         }
     }
 
@@ -430,14 +446,11 @@ fn run_agent_loop_impl(
         }
     }
 
-    if let Some(path) = original_cwd {
-        let _ = std::env::set_current_dir(path);
-    }
-
     Ok(())
 }
 
 /* ── Approval prompter with real channel wiring ─── */
+/* Fix #3: restructured to avoid nested registry + approvals lock */
 
 struct TauriApprovalPrompter {
     app: AppHandle,
@@ -447,14 +460,14 @@ struct TauriApprovalPrompter {
 
 impl PermissionPrompter for TauriApprovalPrompter {
     fn decide(&mut self, request: &PermissionRequest) -> PermissionPromptDecision {
-        if self
-            .registry
-            .data
-            .lock()
-            .expect("registry poisoned")
-            .get(&self.session_id)
-            .is_some_and(|entry| entry.cancelled.load(Ordering::SeqCst))
-        {
+        // Step 1 — check cancelled (short, independent lock)
+        let cancelled = {
+            let data = self.registry.data.lock().expect("registry poisoned");
+            data.get(&self.session_id)
+                .is_some_and(|entry| entry.cancelled.load(Ordering::SeqCst))
+        };
+
+        if cancelled {
             return PermissionPromptDecision::Deny {
                 reason: "session was cancelled".into(),
             };
@@ -479,7 +492,7 @@ impl PermissionPrompter for TauriApprovalPrompter {
         // Parse input for the event
         let input_obj = serde_json::from_str(&request.input).unwrap_or(serde_json::json!({}));
 
-        let _ = self.app.emit(
+        if let Err(e) = self.app.emit(
             E_APPROVAL_NEEDED,
             AgentApprovalNeededEvent {
                 session_id: self.session_id.clone(),
@@ -489,12 +502,14 @@ impl PermissionPrompter for TauriApprovalPrompter {
                 target: None,
                 input: input_obj,
             },
-        );
+        ) {
+            eprintln!("[RelayAgent] emit failed ({E_APPROVAL_NEEDED}): {e}");
+        }
 
         // Create oneshot channel
         let (tx, rx) = std::sync::mpsc::channel::<bool>();
 
-        // Register it in the session entry
+        // Step 2 — register approval (short, independent lock)
         {
             let data = self.registry.data.lock().expect("registry poisoned");
             if let Some(entry) = data.get(&self.session_id) {
@@ -519,36 +534,60 @@ impl PermissionPrompter for TauriApprovalPrompter {
 
 /* ── Tool executor ─── */
 
-fn build_tool_executor(app: &AppHandle, session_id: &str) -> TauriToolExecutor {
+fn build_tool_executor(
+    app: &AppHandle,
+    session_id: &str,
+    cwd: Option<String>,
+) -> TauriToolExecutor {
     TauriToolExecutor {
         app: app.clone(),
         session_id: session_id.to_string(),
+        cwd,
     }
 }
 
 struct TauriToolExecutor {
     app: AppHandle,
     session_id: String,
+    cwd: Option<String>,
 }
 
 impl ToolExecutor for TauriToolExecutor {
     fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, runtime::ToolError> {
         let tool_use_id = Uuid::new_v4().to_string();
-        let _ = self.app.emit(
+        if let Err(e) = self.app.emit(
             E_TOOL_START,
             AgentToolStartEvent {
                 session_id: self.session_id.clone(),
                 tool_use_id: tool_use_id.clone(),
                 tool_name: tool_name.to_string(),
             },
-        );
+        ) {
+            eprintln!("[RelayAgent] emit failed ({E_TOOL_START}): {e}");
+        }
 
-        let input_value: Value =
+        let mut input_value: Value =
             serde_json::from_str(input).unwrap_or_else(|_| serde_json::json!({}));
+
+        // Fix #2 — prevent AI from disabling the sandbox via input JSON
+        if tool_name == "bash" {
+            if let Some(obj) = input_value.as_object_mut() {
+                obj.remove("dangerouslyDisableSandbox");
+            }
+            // Fix #4 — prepend cwd to bash commands instead of mutating process-global CWD
+            if let Some(ref cwd) = self.cwd {
+                if let Some(cmd) = input_value.get("command").and_then(|v| v.as_str()) {
+                    let escaped = cwd.replace('\\', "\\\\").replace('\'', "'\\'");
+                    let prefixed = format!("cd '{}' && ( {} )", escaped, cmd);
+                    input_value["command"] = Value::String(prefixed);
+                }
+            }
+        }
+
         let result =
             tools::execute_tool(tool_name, &input_value).map_err(|e| runtime::ToolError::new(e))?;
 
-        let _ = self.app.emit(
+        if let Err(e) = self.app.emit(
             E_TOOL_RESULT,
             AgentToolResultEvent {
                 session_id: self.session_id.clone(),
@@ -557,7 +596,9 @@ impl ToolExecutor for TauriToolExecutor {
                 content: result.clone(),
                 is_error: false,
             },
-        );
+        ) {
+            eprintln!("[RelayAgent] emit failed ({E_TOOL_RESULT}): {e}");
+        }
 
         Ok(result)
     }
