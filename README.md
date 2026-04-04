@@ -10,7 +10,7 @@ Relay Agent bridges a Tauri desktop application with an AI agent backend. You de
 
 - **Desktop UI:** SolidJS + Vite (TypeScript)
 - **Desktop Framework:** Tauri v2 (Rust backend)
-- **AI Backend:** Anthropic-compatible API via Copilot Proxy / M365 Copilot (CDP-driven)
+- **AI Backend:** Anthropic Messages-compatible API via Copilot Proxy / M365 Copilot (CDP-driven)
 - **Language:** Rust + TypeScript
 - **Package Manager:** pnpm (monorepo)
 - **Testing:** Vitest (frontend tests), Cargo (Rust tests), Playwright (E2E)
@@ -56,7 +56,7 @@ Relay Agent bridges a Tauri desktop application with an AI agent backend. You de
                   ▼
         ┌──────────────┐    ┌────────────────┐
         │ Copilot Proxy│    │ M365 Copilot   │
-        │ (Anthropic)  │    │ (Edge CDP)     │
+        │ (SSE stream) │    │ (Edge CDP)     │
         └──────────────┘    └────────────────┘
 ```
 
