@@ -349,11 +349,11 @@ pub fn handle_slash_command(
         SlashCommand::Status => Some(handle_status(session)),
         SlashCommand::Cost => Some(handle_cost(session)),
         SlashCommand::Memory => Some(handle_memory(session)),
-        SlashCommand::Config { section } => Some(handle_config(section, session)),
+        SlashCommand::Config { section } => Some(handle_config(section.as_deref(), session)),
         SlashCommand::Init => Some(handle_init(session)),
         SlashCommand::Diff => Some(handle_diff(session)),
         SlashCommand::Export { path } => Some(handle_export(path, session)),
-        SlashCommand::Session { action, target } => Some(handle_session(action, target, session)),
+        SlashCommand::Session { action, target } => Some(handle_session(action.as_deref(), target.as_deref(), session)),
         SlashCommand::Version => Some(handle_version(session)),
         SlashCommand::Clear { confirm } => Some(handle_clear(confirm, session)),
         SlashCommand::Resume { session_path } => Some(handle_resume(session_path, session)),
@@ -427,8 +427,8 @@ fn handle_memory(session: &Session) -> SlashCommandResult {
     }
 }
 
-fn handle_config(section: Option<String>, session: &Session) -> SlashCommandResult {
-    let message = match section.as_deref() {
+fn handle_config(section: Option<&str>, session: &Session) -> SlashCommandResult {
+    let message = match section {
         Some("env") => format!(
             "Environment variables:\n  RELAY_AGENT_MODEL={}\n  CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS={}",
             std::env::var("RELAY_AGENT_MODEL").unwrap_or_else(|_| "(not set)".into()),
@@ -485,11 +485,11 @@ fn handle_export(path: Option<String>, session: &Session) -> SlashCommandResult 
 }
 
 fn handle_session(
-    action: Option<String>,
-    target: Option<String>,
+    action: Option<&str>,
+    target: Option<&str>,
     session: &Session,
 ) -> SlashCommandResult {
-    let message = match (action.as_deref(), target.as_deref()) {
+    let message = match (action, target) {
         (Some("list"), _) => {
             "Session listing is available through the desktop UI session panel.".to_string()
         }
