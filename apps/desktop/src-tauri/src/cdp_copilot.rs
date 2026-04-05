@@ -516,6 +516,7 @@ pub struct ConnectionResult {
 impl ConnectionResult {
     /// Quit the Edge process if it was launched by this connection.
     /// Safe to call multiple times; subsequent calls are no-ops.
+    #[allow(clippy::used_underscore_binding)]
     pub fn quit_edge(&mut self) {
         if let Some(mut child) = self._edge_process.take() {
             info!("[CDP] Quitting Edge process (PID: {})", child.id());
@@ -551,6 +552,7 @@ pub async fn connect_copilot_page(
 
     // Find or create the Copilot page
     if let Some(mut p) = try_existing(&debug_url_new).await {
+        #[allow(clippy::used_underscore_binding)]
         if let Ok(ref mut result) = p {
             result._edge_process = Some(child);
             result.launched = true;
