@@ -12,8 +12,7 @@ use runtime::{
     ToolExecutor,
 };
 
-use crate::config::AgentConfig;
-use crate::copilot_client::{self, CopilotApiClient, CopilotStreamEvent};
+use crate::copilot_client::{CopilotApiClient, CopilotStreamEvent};
 use crate::copilot_persistence::{self, PersistedSessionConfig};
 use crate::error::AgentLoopError;
 use crate::registry::SessionRegistry;
@@ -91,8 +90,7 @@ pub fn run_agent_loop_impl(
                 }
             }
         });
-    let persistence_client = CopilotApiClient::with_default_settings()
-        .map_err(|e| AgentLoopError::InitializationError(e.to_string()))?;
+    // Initialize the API client (no persistence client needed — sessions are saved after each turn below)
     let tool_executor = build_tool_executor(app, session_id, cwd.clone());
     let permission_policy = PermissionPolicy::new(PermissionMode::Prompt);
     let system_prompt = vec![build_system_prompt(&goal)];

@@ -11,9 +11,7 @@ use runtime::{
     FRONTIER_MODEL_NAME,
 };
 
-pub use crate::copilot_persistence::{
-    load_session, save_session, LoadedSession, PersistedSessionConfig,
-};
+
 
 /* ── Copilot API Client — adapts the Copilot Proxy API to runtime::ApiClient ─── */
 
@@ -46,6 +44,12 @@ impl CopilotApiClient {
             call_count: 0,
             stream_callback: None,
         })
+    }
+
+    /// Create a client with default settings (no stream callback).
+    /// Intended for session-persistence contexts where streaming deltas are not needed.
+    pub fn with_default_settings() -> Result<Self, RuntimeError> {
+        Self::new()
     }
 
     pub fn with_stream_callback<F>(mut self, callback: F) -> Self
