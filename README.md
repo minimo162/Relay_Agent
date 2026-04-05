@@ -4,13 +4,13 @@ An AI-powered desktop agent application built with Tauri v2, SolidJS, and Rust.
 
 ## Overview
 
-Relay Agent bridges a Tauri desktop application with an AI agent backend. You describe a goal, the agent works autonomously, and you approve or reject actions in real-time — all from a native desktop UI. Supports both **Copilot Proxy API** (Anthropic-compatible backends) and **M365 Copilot via CDP** (browser automation).
+Relay Agent bridges a Tauri desktop application with an AI agent backend. You describe a goal, the agent works autonomously, and you approve or reject actions in real-time — all from a native desktop UI. Uses **M365 Copilot via CDP** (browser automation through Edge).
 
 ## Stack
 
 - **Desktop UI:** SolidJS + Vite (TypeScript)
 - **Desktop Framework:** Tauri v2 (Rust backend)
-- **AI Backend:** Anthropic Messages-compatible API via Copilot Proxy / M365 Copilot (CDP-driven)
+- **AI Backend:** M365 Copilot (CDP-driven via Edge browser automation)
 - **Language:** Rust + TypeScript
 - **Package Manager:** pnpm (monorepo)
 - **Testing:** Vitest (frontend tests), Cargo (Rust tests), Playwright (E2E)
@@ -37,14 +37,12 @@ Relay Agent bridges a Tauri desktop application with an AI agent backend. You de
 │  │  │  tauri_bridge.rs   – IPC commands   │  │  │
 │  │  │  agent_loop.rs     – Agent loop     │  │  │
 │  │  │  registry.rs       – Session mgmt   │  │  │
-│  │  │  copilot_client.rs – API client     │  │  │
 │  │  │  cdp_copilot.rs    – CDP automation │  │  │
 │  │  │  config.rs         – App config     │  │  │
 │  │  │  models.rs         – Shared types   │  │  │
 │  │  └─────────────────────────────────────┘  │  │
 │  │  ┌─────────────────────────────────────┐  │  │
 │  │  │  Internal Crates                    │  │  │
-│  │  │  crates/api/       – Copilot API    │  │  │
 │  │  │  crates/runtime/   – Session core   │  │  │
 │  │  │  crates/tools/     – Tool registry  │  │  │
 │  │  │  crates/commands/  – Slash cmds     │  │  │
@@ -53,12 +51,12 @@ Relay Agent bridges a Tauri desktop application with an AI agent backend. You de
 │  │  └─────────────────────────────────────┘  │  │
 │  └───────────────────────────────────────────┘  │
 └─────────────────┬───────────────────────────────┘
-                  │ HTTPS / CDP WebSocket
+                  │ CDP WebSocket
                   ▼
-        ┌──────────────┐    ┌────────────────┐
-        │ Copilot Proxy│    │ M365 Copilot   │
-        │ (SSE stream) │    │ (Edge CDP)     │
-        └──────────────┘    └────────────────┘
+        ┌────────────────┐
+        │ M365 Copilot   │
+        │ (Edge CDP)     │
+        └────────────────┘
 ```
 
 ## Quick Start
@@ -108,12 +106,10 @@ Relay_Agent/
     │   │   ├── tauri_bridge.rs   # IPC commands (8 commands)
     │   │   ├── agent_loop.rs     # Agent execution loop
     │   │   ├── registry.rs       # Session registry (TTL cleanup)
-    │   │   ├── copilot_client.rs # Copilot API client + M365 wrapper
     │   │   ├── cdp_copilot.rs    # M365 Copilot via Edge CDP
     │   │   ├── config.rs         # AgentConfig (defaults, limits)
     │   │   └── models.rs         # Shared Rust types
     │   ├── crates/
-    │   │   ├── api/              # Low-level Copilot API (SSE, OAuth)
     │   │   ├── runtime/          # Session core, permissions, MCP
     │   │   ├── tools/            # Tool registry definitions
     │   │   ├── commands/         # Slash command handling
@@ -140,10 +136,11 @@ Relay_Agent/
 - **Session History** — Full message history with text and tool call/result blocks
 - **Session Compaction** — Compresses long sessions into resumable system summaries (configurable thresholds)
 - **Agent Cancellation** — Stop a running agent mid-execution
-- **CDP Browser Automation** — M365 Copilot integration via Chrome DevTools Protocol:
+- **CDP Browser Automation** — Sole AI backend: M365 Copilot via Chrome DevTools Protocol:
   - Auto-launches dedicated Edge instance (separate user data dir)
   - Free port scanning, screenshot, prompt sending, new chat
   - Streaming detection and response wait logic
+  - Agent loop sends conversation context as text prompts, receives complete responses
 - **MCP Server Integration** — Full support for standard MCP servers via stdio transport:
   - Add/remove/list MCP servers with real-time status monitoring
   - Health check command (`mcp_check_server_status`) with live status reporting
@@ -175,7 +172,7 @@ Relay_Agent/
 - **3-Pane Desktop Layout** — Sidebar (sessions), Main (chat + composer), Right panel (context tabs)
 - **Auth Token Resolution** — Reads from `.auth_key`, `.agent_auth_key`, or direct token
 - **Config System** — Centralized `AgentConfig` with adjustable parameters
-- **API Retry with Exponential Backoff** — Transient API errors (5xx, network, timeout) are automatically retried up to 3 times with exponential backoff (500ms, 1s, 2s). Permanent errors (4xx) fail immediately.
+- **CDP Session State** — Connected CopilotPage is cached in shared state for reuse across agent loop runs (no reconnection per turn)
 - **Shared Tokio Runtime** — MCP tool execution reuses a single `tokio::runtime::Runtime` instead of creating a new one per call
 - **POSIX Shell Escaping** — Secure shell argument escaping for bash tool execution
 - **Session TTL Cleanup** — Auto-eviction of completed sessions after configurable TTL (default: 30 min)
@@ -239,7 +236,6 @@ Application-level defaults in `config.rs`:
 | `compact_max_tokens` | 4,000 | Token threshold for triggering compaction |
 | `max_concurrent_sessions` | 4 | Max simultaneous agent sessions |
 | `session_cleanup_ttl_minutes` | 30 | TTL for session cleanup |
-| `api_retry_count` | 3 | Retry attempts for transient API errors |
 
 ## Development
 
@@ -300,9 +296,7 @@ npx playwright test
 
 ## Environment
 
-- **Copilot Proxy:** Configured via `.env` (`COPILOT_PROXY_BASE_URL`, defaults to `https://api.copilot-proxy.ai/v1`)
-- **Auth Token:** `.auth_key` or `.agent_auth_key` in project root, or provided directly
-- **M365 Copilot (CDP):** Edge auto-launch on free port, configurable timeout (default: 120s)
+- **M365 Copilot (CDP):** Sole AI backend. Edge auto-launches on free port with isolated profile. Configurable timeout (default: 120s). Login via browser UI on first use.
 
 ## License
 

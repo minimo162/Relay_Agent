@@ -15,7 +15,6 @@ workspace = true
 tauri-build = { version = "2.0.0", features = [] }
 
 [dependencies]
-api = { path = "crates/api" }
 runtime = { path = "crates/runtime" }
 tools = { path = "crates/tools" }
 commands = { path = "crates/commands" }

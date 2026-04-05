@@ -7,15 +7,16 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use runtime::{
-    self, ContentBlock, ConversationMessage, McpServerManager, PermissionMode, PermissionPolicy,
-    PermissionPromptDecision, PermissionPrompter, PermissionRequest, Session as RuntimeSession,
-    ToolExecutor,
+    self, ApiClient, ApiRequest, AssistantEvent, ContentBlock, ConversationMessage, McpServerManager,
+    PermissionMode, PermissionPolicy, PermissionPromptDecision, PermissionPrompter,
+    PermissionRequest, RuntimeError, Session as RuntimeSession, TokenUsage, ToolExecutor,
 };
 
-use crate::copilot_client::{CopilotApiClient, CopilotStreamEvent};
+use crate::cdp_copilot;
 use crate::copilot_persistence::{self, PersistedSessionConfig};
 use crate::error::AgentLoopError;
 use crate::registry::SessionRegistry;
+use crate::tauri_bridge;
 
 /* ── Event name constants ─── */
 
@@ -52,9 +53,9 @@ pub fn run_agent_loop_impl(
     max_turns: Option<usize>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(), AgentLoopError> {
-    let api_client = CopilotApiClient::new()
-        .map_err(|e| AgentLoopError::InitializationError(e.to_string()))?
-        .with_stream_callback(make_stream_callback(app, session_id));
+    let page = tauri_bridge::get_cdp_page()
+        .map_err(|e| AgentLoopError::InitializationError(e))?;
+    let api_client = CdpApiClient::new(page);
 
     let tool_executor = build_tool_executor(app, session_id, cwd.clone());
     let permission_policy = PermissionPolicy::new(PermissionMode::Prompt);
@@ -131,36 +132,113 @@ pub fn run_agent_loop_impl(
     Ok(())
 }
 
-/// Create a stream callback that forwards `TextDelta` and `MessageStop` events to the frontend.
-fn make_stream_callback(
-    app: &AppHandle,
-    session_id: &str,
-) -> impl Fn(CopilotStreamEvent) + Send + Sync + 'static {
-    let app = app.clone();
-    let sid = session_id.to_string();
-    move |event| {
-        let (text, is_complete) = match event {
-            CopilotStreamEvent::TextDelta(text) => (text, false),
-            CopilotStreamEvent::MessageStop => (String::new(), true),
-        };
-        if let Err(e) = app.emit(
-            E_TEXT_DELTA,
-            AgentTextDeltaEvent {
-                session_id: sid.clone(),
-                text,
-                is_complete,
-            },
-        ) {
-            tracing::warn!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
+/* ── CDP-based API client ─── */
+
+/// CDP-based API client that sends prompts to M365 Copilot via browser automation.
+/// Copilot returns complete text responses (no structured tool calls, no streaming deltas).
+pub struct CdpApiClient {
+    page: cdp_copilot::CopilotPage,
+    runtime: tokio::runtime::Runtime,
+    response_timeout_secs: u64,
+}
+
+impl CdpApiClient {
+    fn new(page: cdp_copilot::CopilotPage) -> Self {
+        Self {
+            page,
+            runtime: tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create tokio runtime for CDP client"),
+            response_timeout_secs: 120,
         }
     }
+}
+
+impl ApiClient for CdpApiClient {
+    fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        let prompt = build_cdp_prompt(&request);
+
+        let prompt_preview = &prompt[..prompt.len().min(80)];
+        tracing::info!("[CdpApiClient] sending prompt: {prompt_preview}…");
+
+        let response_text = self.runtime.block_on(async {
+            self.page
+                .send_prompt(&prompt)
+                .await
+                .map_err(|e| RuntimeError::new(format!("CDP send failed: {e}")))?;
+            self.page
+                .wait_for_response(self.response_timeout_secs)
+                .await
+                .map_err(|e| RuntimeError::new(format!("CDP response failed: {e}")))
+        })?;
+
+        tracing::info!("[CdpApiClient] response {} chars", response_text.len());
+
+        let mut events = Vec::new();
+        if !response_text.is_empty() {
+            // Chunk the response into TextDelta events for UI progress display
+            for chunk in response_text.chars().collect::<Vec<_>>().chunks(200) {
+                events.push(AssistantEvent::TextDelta(chunk.iter().collect()));
+            }
+        }
+        events.push(AssistantEvent::Usage(TokenUsage {
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+        }));
+        events.push(AssistantEvent::MessageStop);
+        Ok(events)
+    }
+}
+
+/// Convert an `ApiRequest` into a human-readable text prompt for CDP.
+fn build_cdp_prompt(request: &ApiRequest) -> String {
+    let mut parts = Vec::new();
+
+    if !request.system_prompt.is_empty() {
+        parts.push(request.system_prompt.join("\n\n"));
+    }
+
+    for msg in &request.messages {
+        let role = match msg.role {
+            runtime::MessageRole::System | runtime::MessageRole::User => "User",
+            runtime::MessageRole::Assistant => "Assistant",
+            runtime::MessageRole::Tool => "Tool Result",
+        };
+
+        let text: Vec<String> = msg
+            .blocks
+            .iter()
+            .map(|b| match b {
+                ContentBlock::Text { text } => text.clone(),
+                ContentBlock::ToolUse { name, input, .. } => {
+                    format!("[Tool Call: {name}] {input}")
+                }
+                ContentBlock::ToolResult {
+                    output, is_error, ..
+                } => {
+                    if *is_error {
+                        format!("[Error] {output}")
+                    } else {
+                        output.clone()
+                    }
+                }
+            })
+            .collect();
+
+        parts.push(format!("{role}:\n{}", text.join("\n")));
+    }
+
+    parts.join("\n\n")
 }
 
 /// Persist the session state after a turn: update registry + save to disk.
 fn persist_turn(
     app: &AppHandle,
     registry: &SessionRegistry,
-    runtime_session: &runtime::ConversationRuntime<CopilotApiClient, TauriToolExecutor>,
+    runtime_session: &runtime::ConversationRuntime<CdpApiClient, TauriToolExecutor>,
     session_id: &str,
     goal: &str,
     cwd: &Option<String>,
@@ -189,7 +267,7 @@ fn emit_turn_complete(
     app: &AppHandle,
     session_id: &str,
     summary: &runtime::TurnSummary,
-    runtime_session: &runtime::ConversationRuntime<CopilotApiClient, TauriToolExecutor>,
+    runtime_session: &runtime::ConversationRuntime<CdpApiClient, TauriToolExecutor>,
     cancelled: &AtomicBool,
 ) {
     let last_text = summary

@@ -297,6 +297,8 @@ struct CdpSessionState {
     connected: bool,
     /// URL of the Copilot page (if connected).
     page_url: Option<String>,
+    /// Connected Copilot page for agent loop use.
+    page: Option<cdp_copilot::CopilotPage>,
 }
 
 static CDP_SESSION: OnceLock<Mutex<CdpSessionState>> = OnceLock::new();
@@ -307,6 +309,7 @@ fn cdp_session() -> &'static Mutex<CdpSessionState> {
             launched_port: None,
             connected: false,
             page_url: None,
+            page: None,
         })
     })
 }
@@ -331,11 +334,12 @@ fn cdp_is_connected() -> bool {
     cdp_session().lock().map_or(false, |s| s.connected)
 }
 
-fn mark_cdp_connected(port: u16, page_url: String) {
+fn mark_cdp_connected(port: u16, page_url: String, page: cdp_copilot::CopilotPage) {
     if let Ok(mut state) = cdp_session().lock() {
         state.launched_port = Some(port);
         state.connected = true;
         state.page_url = Some(page_url);
+        state.page = Some(page);
     } else {
         tracing::warn!("[CDP] cdp_session lock poisoned in mark_cdp_connected");
     }
@@ -345,9 +349,21 @@ fn mark_cdp_disconnected() {
     if let Ok(mut state) = cdp_session().lock() {
         state.connected = false;
         state.page_url = None;
+        state.page = None;
     } else {
         tracing::warn!("[CDP] cdp_session lock poisoned in mark_cdp_disconnected");
     }
+}
+
+/// Get the current CDP CopilotPage for use by the agent loop.
+pub fn get_cdp_page() -> Result<cdp_copilot::CopilotPage, String> {
+    let state = cdp_session()
+        .lock()
+        .map_err(|e| format!("cdp_session lock poisoned: {e}"))?;
+    state
+        .page
+        .clone()
+        .ok_or_else(|| "CDP not connected — call connect_cdp first".to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -430,12 +446,13 @@ pub async fn connect_cdp(
         Ok(res) => {
             tracing::info!("[CDP] connected → {} — {}", res.page.url, res.page.title);
             if res.launched {
-                mark_cdp_connected(res.port, res.page.url.clone());
+                mark_cdp_connected(res.port, res.page.url.clone(), res.page.clone());
             } else {
                 // Existing browser: still mark as connected but don't track port as launched
                 if let Ok(mut state) = cdp_session().lock() {
                     state.connected = true;
                     state.page_url = Some(res.page.url.clone());
+                    state.page = Some(res.page.clone());
                 } else {
                     tracing::warn!("[CDP] cdp_session lock poisoned during connect");
                 }
@@ -542,7 +559,7 @@ pub async fn cdp_start_new_chat(
     };
 
     if res.launched {
-        mark_cdp_connected(res.port, res.page.url.clone());
+        mark_cdp_connected(res.port, res.page.url.clone(), res.page.clone());
     }
 
     if let Err(e) = res.page.navigate_to_chat().await {
