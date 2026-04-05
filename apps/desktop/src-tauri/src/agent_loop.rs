@@ -36,18 +36,18 @@ static SHARED_ANTHROPIC_CLIENT: std::sync::OnceLock<api::AnthropicClient> =
 /// POSIX-compliant shell escaping for use in `sh -c` contexts.
 /// Wraps the string in single quotes, escaping embedded single quotes as `'\''`.
 /// Rejects null bytes and control characters (except tab 0x09).
-pub(crate) fn posix_shell_escape(s: &str) -> String {
+pub(crate) fn posix_shell_escape(s: &str) -> Result<String, String> {
     if s.bytes()
         .any(|b| b == 0 || (b < 0x20 && b != 0x09) || b == 0x7F)
     {
-        return String::from(".");
+        return Err("working directory path contains control characters".to_string());
     }
-    s.replace('\'', "'\\''")
+    Ok(s.replace('\'', "'\\''"))
 }
 
 /* ── Agent loop ─── */
 
-#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value)]
 pub fn run_agent_loop_impl(
     app: &AppHandle,
     registry: &SessionRegistry,
@@ -57,44 +57,16 @@ pub fn run_agent_loop_impl(
     max_turns: Option<usize>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(), AgentLoopError> {
-    let app_for_stream = app.clone();
-    let session_for_stream = session_id.to_string();
     let _shared_client = SHARED_ANTHROPIC_CLIENT.get_or_init(|| {
         api::AnthropicClient::from_auth(api::AuthSource::None).with_base_url(api::read_base_url())
     });
     let api_client = CopilotApiClient::new()
         .map_err(|e| AgentLoopError::InitializationError(e.to_string()))?
-        .with_stream_callback(move |event| match event {
-            CopilotStreamEvent::TextDelta(text) => {
-                if let Err(e) = app_for_stream.emit(
-                    E_TEXT_DELTA,
-                    AgentTextDeltaEvent {
-                        session_id: session_for_stream.clone(),
-                        text,
-                        is_complete: false,
-                    },
-                ) {
-                    tracing::warn!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
-                }
-            }
-            CopilotStreamEvent::MessageStop => {
-                if let Err(e) = app_for_stream.emit(
-                    E_TEXT_DELTA,
-                    AgentTextDeltaEvent {
-                        session_id: session_for_stream.clone(),
-                        text: String::new(),
-                        is_complete: true,
-                    },
-                ) {
-                    tracing::warn!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
-                }
-            }
-        });
-    // Initialize the API client (no persistence client needed — sessions are saved after each turn below)
+        .with_stream_callback(make_stream_callback(app, session_id));
+
     let tool_executor = build_tool_executor(app, session_id, cwd.clone());
     let permission_policy = PermissionPolicy::new(PermissionMode::Prompt);
     let system_prompt = vec![build_system_prompt(&goal)];
-    // Default: 16 turns — enough for most tasks without ballooning token costs.
     let config = crate::config::AgentConfig::global();
     let max_turns = max_turns.unwrap_or(config.max_turns);
 
@@ -120,40 +92,16 @@ pub fn run_agent_loop_impl(
             break;
         }
 
-        let turn_input = if turn == 0 {
-            goal.as_str()
-        } else {
-            "Continue."
-        };
+        let turn_input = if turn == 0 { goal.as_str() } else { "Continue." };
         let summary = match runtime_session.run_turn(turn_input, Some(&mut prompter)) {
             Ok(summary) => summary,
             Err(error) => {
-                let evt = AgentErrorEvent {
-                    session_id: session_id.to_string(),
-                    error: format!("agent loop failed: {error}"),
-                    cancelled: false,
-                };
-                if let Err(e) = app.emit(E_ERROR, &evt) {
-                    tracing::warn!("[RelayAgent] emit failed ({E_ERROR}): {e}");
-                }
+                emit_error(app, session_id, &format!("agent loop failed: {error}"), false);
                 break;
             }
         };
 
-        // Update session state in registry without holding lock across turns
-        let _ignore = registry.mutate_session(session_id, |entry| {
-            entry.session = runtime_session.session().clone();
-        });
-        copilot_persistence::save_session(
-            session_id,
-            runtime_session.session(),
-            PersistedSessionConfig {
-                goal: Some(goal.clone()),
-                cwd: cwd.clone(),
-                max_turns: Some(max_turns),
-            },
-        )
-        .map_err(|error| AgentLoopError::PersistenceError(error.to_string()))?;
+        persist_turn(app, registry, &runtime_session, session_id, &goal, &cwd, max_turns)?;
 
         let needs_more_turns = summary.assistant_messages.last().is_some_and(|message| {
             message
@@ -169,35 +117,8 @@ pub fn run_agent_loop_impl(
         }
     }
 
-    if let Some(summary) = final_summary {
-        let last_text = summary
-            .assistant_messages
-            .last()
-            .map(|msg| {
-                msg.blocks
-                    .iter()
-                    .filter_map(|b| match b {
-                        ContentBlock::Text { text } => Some(text.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-            .unwrap_or_default();
-
-        if !cancelled.load(Ordering::SeqCst) {
-            if let Err(e) = app.emit(
-                E_TURN_COMPLETE,
-                AgentTurnCompleteEvent {
-                    session_id: session_id.to_string(),
-                    stop_reason: "end_turn".into(),
-                    assistant_message: last_text,
-                    message_count: runtime_session.session().messages.len(),
-                },
-            ) {
-                tracing::warn!("[RelayAgent] emit failed ({E_TURN_COMPLETE}): {e}");
-            }
-        }
+    if let Some(summary) = &final_summary {
+        emit_turn_complete(app, session_id, summary, &runtime_session, &cancelled);
     }
 
     let session = runtime_session.into_session();
@@ -211,12 +132,111 @@ pub fn run_agent_loop_impl(
         },
     )
     .map_err(|error| AgentLoopError::PersistenceError(error.to_string()))?;
-    // Update final session state
     let _ignore = registry.mutate_session(session_id, |entry| {
         entry.session = session;
     });
 
     Ok(())
+}
+
+/// Create a stream callback that forwards `TextDelta` and `MessageStop` events to the frontend.
+fn make_stream_callback(
+    app: &AppHandle,
+    session_id: &str,
+) -> impl Fn(CopilotStreamEvent) + Send + Sync + 'static {
+    let app = app.clone();
+    let sid = session_id.to_string();
+    move |event| {
+        let (text, is_complete) = match event {
+            CopilotStreamEvent::TextDelta(text) => (text, false),
+            CopilotStreamEvent::MessageStop => (String::new(), true),
+        };
+        if let Err(e) = app.emit(
+            E_TEXT_DELTA,
+            AgentTextDeltaEvent {
+                session_id: sid.clone(),
+                text,
+                is_complete,
+            },
+        ) {
+            tracing::warn!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
+        }
+    }
+}
+
+/// Persist the session state after a turn: update registry + save to disk.
+fn persist_turn(
+    app: &AppHandle,
+    registry: &SessionRegistry,
+    runtime_session: &runtime::ConversationRuntime<CopilotApiClient, TauriToolExecutor>,
+    session_id: &str,
+    goal: &str,
+    cwd: &Option<String>,
+    max_turns: usize,
+) -> Result<(), AgentLoopError> {
+    let _ignore = registry.mutate_session(session_id, |entry| {
+        entry.session = runtime_session.session().clone();
+    });
+    copilot_persistence::save_session(
+        session_id,
+        runtime_session.session(),
+        PersistedSessionConfig {
+            goal: Some(goal.to_string()),
+            cwd: cwd.clone(),
+            max_turns: Some(max_turns),
+        },
+    )
+    .map_err(|error| AgentLoopError::PersistenceError(error.to_string()))
+}
+
+/// Emit the `turn_complete` event with the final assistant text and message count.
+fn emit_turn_complete(
+    app: &AppHandle,
+    session_id: &str,
+    summary: &runtime::TurnSummary,
+    runtime_session: &runtime::ConversationRuntime<CopilotApiClient, TauriToolExecutor>,
+    cancelled: &AtomicBool,
+) {
+    let last_text = summary
+        .assistant_messages
+        .last()
+        .map(|msg| {
+            msg.blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+
+    if !cancelled.load(Ordering::SeqCst) {
+        if let Err(e) = app.emit(
+            E_TURN_COMPLETE,
+            AgentTurnCompleteEvent {
+                session_id: session_id.to_string(),
+                stop_reason: "end_turn".into(),
+                assistant_message: last_text,
+                message_count: runtime_session.session().messages.len(),
+            },
+        ) {
+            tracing::warn!("[RelayAgent] emit failed ({E_TURN_COMPLETE}): {e}");
+        }
+    }
+}
+
+/// Emit an error event to the frontend.
+fn emit_error(app: &AppHandle, session_id: &str, error: &str, cancelled: bool) {
+    let evt = AgentErrorEvent {
+        session_id: session_id.to_string(),
+        error: error.to_string(),
+        cancelled,
+    };
+    if let Err(e) = app.emit(E_ERROR, &evt) {
+        tracing::warn!("[RelayAgent] emit failed ({E_ERROR}): {e}");
+    }
 }
 
 /* ── Approval prompter with real channel wiring ─── */
@@ -379,7 +399,8 @@ impl ToolExecutor for TauriToolExecutor {
             // Fix #4 — prepend cwd to bash commands instead of mutating process-global CWD
             if let Some(ref cwd) = self.cwd {
                 if let Some(cmd) = input_value.get("command").and_then(|v| v.as_str()) {
-                    let escaped = posix_shell_escape(cwd);
+                    let escaped = posix_shell_escape(cwd)
+                        .map_err(runtime::ToolError::new)?;
                     let prefixed = format!("cd '{escaped}' && ( {cmd} )");
                     input_value["command"] = Value::String(prefixed);
                 }

@@ -569,34 +569,33 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "REPL" => from_value::<ReplInput>(input).and_then(run_repl),
         "PowerShell" => from_value::<PowerShellInput>(input).and_then(run_powershell),
         // CLI Hub
-        "CliList" => Ok(serde_json::to_string_pretty(&cli_hub::cli_list()).unwrap()),
-        "CliDiscover" => Ok(serde_json::to_string_pretty(&cli_hub::cli_discover()).unwrap()),
+        "CliList" => to_pretty_json(&cli_hub::cli_list()),
+        "CliDiscover" => to_pretty_json(&cli_hub::cli_discover()),
         "CliRegister" => {
-            Ok(from_value::<CliRegisterInput>(input).map_or_else(|e| e, run_cli_register))
+            from_value::<CliRegisterInput>(input).and_then(run_cli_register)
         }
         "CliUnregister" => {
-            Ok(from_value::<CliUnregisterInput>(input).map_or_else(|e| e, run_cli_unregister))
+            from_value::<CliUnregisterInput>(input).and_then(run_cli_unregister)
         }
-        "CliRun" => Ok(from_value::<CliRunInput>(input).map_or_else(|e| e, run_cli_run)),
+        "CliRun" => from_value::<CliRunInput>(input).and_then(run_cli_run),
         // Electron CDP
         "ElectronApps" => {
-            Ok(serde_json::to_string_pretty(&electron_cdp::electron_apps_status()).unwrap())
+            to_pretty_json(&electron_cdp::electron_apps_status())
         }
         "ElectronLaunch" => {
-            Ok(from_value::<ElectronLaunchInput>(input).map_or_else(|e| e, run_electron_launch))
+            from_value::<ElectronLaunchInput>(input).and_then(run_electron_launch)
         }
         "ElectronEval" => {
-            Ok(from_value::<ElectronEvalInput>(input).map_or_else(|e| e, run_electron_eval))
+            from_value::<ElectronEvalInput>(input).and_then(run_electron_eval)
         }
         "ElectronGetText" => {
-            Ok(from_value::<ElectronGetTextInput>(input).map_or_else(|e| e, run_electron_get_text))
+            from_value::<ElectronGetTextInput>(input).and_then(run_electron_get_text)
         }
         "ElectronClick" => {
-            Ok(from_value::<ElectronClickInput>(input).map_or_else(|e| e, run_electron_click))
+            from_value::<ElectronClickInput>(input).and_then(run_electron_click)
         }
         "ElectronTypeText" => {
-            Ok(from_value::<ElectronTypeTextInput>(input)
-                .map_or_else(|e| e, run_electron_type_text))
+            from_value::<ElectronTypeTextInput>(input).and_then(run_electron_type_text)
         }
         _ => Err(format!("unsupported tool: {name}")),
     }
@@ -698,66 +697,60 @@ fn run_powershell(input: PowerShellInput) -> Result<String, String> {
     to_pretty_json(execute_powershell(input).map_err(|error| error.to_string())?)
 }
 
-fn run_cli_register(input: CliRegisterInput) -> String {
-    serde_json::to_string_pretty(&cli_hub::cli_register(input.name)).unwrap()
+fn run_cli_register(input: CliRegisterInput) -> Result<String, String> {
+    to_pretty_json(&cli_hub::cli_register(input.name))
 }
 
-fn run_cli_unregister(input: CliUnregisterInput) -> String {
-    serde_json::to_string_pretty(&cli_hub::cli_unregister(input.name)).unwrap()
+fn run_cli_unregister(input: CliUnregisterInput) -> Result<String, String> {
+    to_pretty_json(&cli_hub::cli_unregister(input.name))
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_cli_run(input: CliRunInput) -> String {
+fn run_cli_run(input: CliRunInput) -> Result<String, String> {
     let args: Vec<&str> = input.args.iter().map(std::string::String::as_str).collect();
-    serde_json::to_string_pretty(&cli_hub::cli_execute(&input.cli, &args, input.timeout_ms))
-        .unwrap()
+    to_pretty_json(&cli_hub::cli_execute(&input.cli, &args, input.timeout_ms))
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_electron_launch(input: ElectronLaunchInput) -> String {
-    serde_json::to_string_pretty(&electron_cdp::electron_launch(&input.app, input.cdp_port))
-        .unwrap()
+fn run_electron_launch(input: ElectronLaunchInput) -> Result<String, String> {
+    to_pretty_json(&electron_cdp::electron_launch(&input.app, input.cdp_port))
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_electron_eval(input: ElectronEvalInput) -> String {
-    serde_json::to_string_pretty(&electron_cdp::electron_eval(
+fn run_electron_eval(input: ElectronEvalInput) -> Result<String, String> {
+    to_pretty_json(&electron_cdp::electron_eval(
         &input.app,
         input.cdp_port,
         &input.expression,
     ))
-    .unwrap()
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_electron_get_text(input: ElectronGetTextInput) -> String {
-    serde_json::to_string_pretty(&electron_cdp::electron_get_text(
+fn run_electron_get_text(input: ElectronGetTextInput) -> Result<String, String> {
+    to_pretty_json(&electron_cdp::electron_get_text(
         &input.app,
         input.cdp_port,
         input.selector.as_deref(),
     ))
-    .unwrap()
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_electron_click(input: ElectronClickInput) -> String {
-    serde_json::to_string_pretty(&electron_cdp::electron_click(
+fn run_electron_click(input: ElectronClickInput) -> Result<String, String> {
+    to_pretty_json(&electron_cdp::electron_click(
         &input.app,
         input.cdp_port,
         &input.selector,
     ))
-    .unwrap()
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_electron_type_text(input: ElectronTypeTextInput) -> String {
-    serde_json::to_string_pretty(&electron_cdp::electron_type_text(
+fn run_electron_type_text(input: ElectronTypeTextInput) -> Result<String, String> {
+    to_pretty_json(&electron_cdp::electron_type_text(
         &input.app,
         input.cdp_port,
         &input.selector,
         &input.text,
     ))
-    .unwrap()
 }
 
 fn to_pretty_json<T: serde::Serialize>(value: T) -> Result<String, String> {

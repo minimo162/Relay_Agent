@@ -62,7 +62,9 @@ pub async fn start_agent(
         .session_cleanup_ttl_minutes
         .cast_signed()
         * 60;
-    registry.cleanup_stale_sessions(ttl_seconds);
+    if let Err(e) = registry.cleanup_stale_sessions(ttl_seconds) {
+        tracing::warn!("[RelayAgent] stale session cleanup failed: {e}");
+    }
 
     let permit = AGENT_SEMAPHORE
         .get_or_init(|| Arc::new(Semaphore::new(4)))
@@ -310,29 +312,42 @@ fn cdp_session() -> &'static Mutex<CdpSessionState> {
 }
 
 fn get_cdp_debug_url(preferred_base: u16) -> String {
-    let state = cdp_session().lock().unwrap();
-    if let Some(port) = state.launched_port {
-        format!("http://127.0.0.1:{port}")
-    } else {
-        format!("http://127.0.0.1:{preferred_base}")
+    match cdp_session().lock() {
+        Ok(state) => {
+            if let Some(port) = state.launched_port {
+                format!("http://127.0.0.1:{port}")
+            } else {
+                format!("http://127.0.0.1:{preferred_base}")
+            }
+        }
+        Err(e) => {
+            tracing::warn!("[CDP] cdp_session lock poisoned in get_cdp_debug_url: {e}");
+            format!("http://127.0.0.1:{preferred_base}")
+        }
     }
 }
 
 fn cdp_is_connected() -> bool {
-    cdp_session().lock().unwrap().connected
+    cdp_session().lock().map_or(false, |s| s.connected)
 }
 
 fn mark_cdp_connected(port: u16, page_url: String) {
-    let mut state = cdp_session().lock().unwrap();
-    state.launched_port = Some(port);
-    state.connected = true;
-    state.page_url = Some(page_url);
+    if let Ok(mut state) = cdp_session().lock() {
+        state.launched_port = Some(port);
+        state.connected = true;
+        state.page_url = Some(page_url);
+    } else {
+        tracing::warn!("[CDP] cdp_session lock poisoned in mark_cdp_connected");
+    }
 }
 
 fn mark_cdp_disconnected() {
-    let mut state = cdp_session().lock().unwrap();
-    state.connected = false;
-    state.page_url = None;
+    if let Ok(mut state) = cdp_session().lock() {
+        state.connected = false;
+        state.page_url = None;
+    } else {
+        tracing::warn!("[CDP] cdp_session lock poisoned in mark_cdp_disconnected");
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -384,7 +399,7 @@ pub async fn connect_cdp(
 ) -> Result<CdpConnectResult, String> {
     // If already connected, return current status
     {
-        let state = cdp_session().lock().unwrap();
+        let state = cdp_session().lock().map_err(|e| format!("cdp_session lock poisoned: {e}"))?;
         if state.connected {
             return Ok(CdpConnectResult {
                 ok: true,
@@ -418,9 +433,12 @@ pub async fn connect_cdp(
                 mark_cdp_connected(res.port, res.page.url.clone());
             } else {
                 // Existing browser: still mark as connected but don't track port as launched
-                let mut state = cdp_session().lock().unwrap();
-                state.connected = true;
-                state.page_url = Some(res.page.url.clone());
+                if let Ok(mut state) = cdp_session().lock() {
+                    state.connected = true;
+                    state.page_url = Some(res.page.url.clone());
+                } else {
+                    tracing::warn!("[CDP] cdp_session lock poisoned during connect");
+                }
             }
             Ok(CdpConnectResult {
                 ok: true,
@@ -557,7 +575,10 @@ pub async fn disconnect_cdp(_app: AppHandle) -> Result<(), String> {
     // The ConnectionResult from a prior connect_copilot_page() call owns the Edge child
     // process, but since CDP commands are one-shot (open WS → send → close), we can
     // kill the process directly by port ownership.
-    let launched_port = cdp_session().lock().unwrap().launched_port;
+    let launched_port = cdp_session()
+        .lock()
+        .map_err(|e| format!("cdp_session lock poisoned: {e}"))?
+        .launched_port;
 
     if let Some(port) = launched_port {
         tracing::info!("[CDP] disconnect: killing auto-launched Edge (port {port})");
@@ -614,10 +635,10 @@ pub async fn cdp_screenshot(_app: AppHandle) -> Result<serde_json::Value, String
 /* ── MCP Server Management ─────────────────────────────────── */
 
 /// Global registry of MCP servers keyed by name.
-static MCP_SERVER_REGISTRY: OnceLock<Arc<Mutex<HashMap<String, McpServerInfo>>>> = OnceLock::new();
+static MCP_SERVER_REGISTRY: OnceLock<Mutex<HashMap<String, McpServerInfo>>> = OnceLock::new();
 
-fn mcp_registry() -> Arc<Mutex<HashMap<String, McpServerInfo>>> {
-    Arc::clone(MCP_SERVER_REGISTRY.get_or_init(|| Arc::new(Mutex::new(HashMap::new()))))
+fn mcp_registry() -> &'static Mutex<HashMap<String, McpServerInfo>> {
+    MCP_SERVER_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn new_server_info(name: &str, command: &str, args: Vec<String>) -> McpServerInfo {

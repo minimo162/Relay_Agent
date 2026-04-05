@@ -119,11 +119,11 @@ impl SessionRegistry {
 
     /// Evict completed/cancelled sessions older than `ttl_seconds`.
     /// Call this periodically (e.g. on each new session start, or via a timer).
-    pub fn cleanup_stale_sessions(&self, ttl_seconds: i64) -> usize {
-        let Ok(mut data) = self.data.lock() else {
-            tracing::error!("[SessionRegistry] cleanup: lock poisoned");
-            return 0;
-        };
+    pub fn cleanup_stale_sessions(&self, ttl_seconds: i64) -> Result<usize, AgentLoopError> {
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
         let now = Utc::now().timestamp();
         let stale_ids: Vec<String> = data
             .iter()
@@ -143,6 +143,6 @@ impl SessionRegistry {
                 "[SessionRegistry] evicted {count} stale session(s) (TTL: {ttl_seconds}s)"
             );
         }
-        count
+        Ok(count)
     }
 }
