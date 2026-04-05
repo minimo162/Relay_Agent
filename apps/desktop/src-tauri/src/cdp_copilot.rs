@@ -592,7 +592,7 @@ impl Drop for ConnectionResult {
 /// Takes ownership of the `ConnectionResult`, calls `quit_edge()` to gracefully
 /// shut down the browser process, and drops the WebSocket connection.
 /// Safe to call even if no Edge process was launched (`launched == false`).
-pub async fn disconnect_copilot_page(result: ConnectionResult) -> Result<(), anyhow::Error> {
+pub fn disconnect_copilot_page(result: ConnectionResult) -> Result<(), anyhow::Error> {
     let debug_url = result.page.debug_url.clone();
     let mut result = result;
     result.quit_edge();
