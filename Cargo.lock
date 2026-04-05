@@ -4368,11 +4368,13 @@ name = "tools"
 version = "0.1.0"
 dependencies = [
  "api",
+ "dirs",
  "reqwest 0.12.28",
  "runtime",
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

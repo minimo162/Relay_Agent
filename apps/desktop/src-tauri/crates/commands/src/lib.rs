@@ -344,157 +344,19 @@ pub fn handle_slash_command(
     compaction: CompactionConfig,
 ) -> Option<SlashCommandResult> {
     match SlashCommand::parse(input)? {
-        SlashCommand::Compact => {
-            let result = compact_session(session, compaction);
-            let message = if result.removed_message_count == 0 {
-                "Compaction skipped: session is below the compaction threshold.".to_string()
-            } else {
-                format!(
-                    "Compacted {} messages into a resumable system summary.",
-                    result.removed_message_count
-                )
-            };
-            Some(SlashCommandResult {
-                message,
-                session: result.compacted_session,
-            })
-        }
-        SlashCommand::Help => Some(SlashCommandResult {
-            message: render_slash_command_help(),
-            session: session.clone(),
-        }),
-        SlashCommand::Status => {
-            let msg_count = session.messages.len();
-            let token_estimate = estimate_session_tokens(session);
-            let message = format!(
-                "Session status:\n  Messages: {msg_count}\n  Estimated tokens: ~{token_estimate}"
-            );
-            Some(SlashCommandResult {
-                message,
-                session: session.clone(),
-            })
-        }
-        SlashCommand::Cost => {
-            let token_estimate = estimate_session_tokens(session);
-            let message = format!(
-                "Estimated session tokens: ~{token_estimate}\n\
-                 (Actual costs depend on model and provider pricing)"
-            );
-            Some(SlashCommandResult {
-                message,
-                session: session.clone(),
-            })
-        }
-        SlashCommand::Memory => {
-            let message = "Memory inspection is available via AGENTS.md, CLAUDE.md, \
-                and .claude/ files in the workspace root."
-                .to_string();
-            Some(SlashCommandResult {
-                message,
-                session: session.clone(),
-            })
-        }
-        SlashCommand::Config { section } => {
-            let message = match section.as_deref() {
-                Some("env") => format!(
-                    "Environment variables:\n  RELAY_AGENT_MODEL={}\n  CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS={}",
-                    std::env::var("RELAY_AGENT_MODEL").unwrap_or_else(|_| "(not set)".into()),
-                    std::env::var("CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS").unwrap_or_else(|_| "(not set)".into()),
-                ),
-                Some("model") => format!(
-                    "Active model: {}",
-                    std::env::var("RELAY_AGENT_MODEL").unwrap_or_else(|_| "claude-sonnet-4-20250514".into()),
-                ),
-                _ => "Use /config env, /config model, or /config hooks to inspect specific sections.".to_string(),
-            };
-            Some(SlashCommandResult {
-                message,
-                session: session.clone(),
-            })
-        }
-        SlashCommand::Init => {
-            let message = concat!(
-                "To create a CLAUDE.md for this repo, write a file at the workspace root\n",
-                "describing: project structure, key conventions, testing commands, and\n",
-                "any AI-assistant-specific guidance."
-            )
-            .to_string();
-            Some(SlashCommandResult {
-                message,
-                session: session.clone(),
-            })
-        }
-        SlashCommand::Diff => {
-            let message = "Run `git diff` in the workspace terminal to see current changes.".to_string();
-            Some(SlashCommandResult {
-                message,
-                session: session.clone(),
-            })
-        }
-        SlashCommand::Export { path } => {
-            let message = if let Some(output_path) = path {
-                // Session export hint — actual export requires persistence layer
-                format!(
-                    "To export this session ({msg} messages), save it via the \
-                     persistence API to: {output_path}",
-                    msg = session.messages.len(),
-                )
-            } else {
-                "Usage: /export <file-path> — exports the current conversation as JSON.".to_string()
-            };
-            Some(SlashCommandResult {
-                message,
-                session: session.clone(),
-            })
-        }
-        SlashCommand::Session { action, target } => {
-            let message = match (action.as_deref(), target.as_deref()) {
-                (Some("list"), _) => "Session listing is available through the desktop UI session panel.".to_string(),
-                (Some("switch"), Some(id)) => format!("To switch session, restart with the desired session ID: {id}"),
-                _ => "Usage: /session list or /session switch <session-id>".to_string(),
-            };
-            Some(SlashCommandResult {
-                message,
-                session: session.clone(),
-            })
-        }
-        SlashCommand::Version => {
-            let message = format!(
-                "Relay Agent — version info:\n  Built with Rust {} / Tauri v2",
-                std::env!("CARGO_PKG_VERSION"),
-            );
-            Some(SlashCommandResult {
-                message,
-                session: session.clone(),
-            })
-        }
-        SlashCommand::Clear { confirm } => {
-            let new_session = if confirm {
-                Session::new()
-            } else {
-                session.clone()
-            };
-            let message = if confirm {
-                "Session cleared. A fresh conversation context is now active.".to_string()
-            } else {
-                "To clear the session, use /clear --confirm".to_string()
-            };
-            Some(SlashCommandResult {
-                message,
-                session: new_session,
-            })
-        }
-        SlashCommand::Resume { session_path } => {
-            let message = if let Some(path) = session_path {
-                format!("To resume session `{path}`, restart the agent with --resume {path}")
-            } else {
-                "Usage: /resume <session-path> — resume a saved session.".to_string()
-            };
-            Some(SlashCommandResult {
-                message,
-                session: session.clone(),
-            })
-        }
+        SlashCommand::Compact => Some(handle_compact(session, compaction)),
+        SlashCommand::Help => Some(handle_help(session)),
+        SlashCommand::Status => Some(handle_status(session)),
+        SlashCommand::Cost => Some(handle_cost(session)),
+        SlashCommand::Memory => Some(handle_memory(session)),
+        SlashCommand::Config { section } => Some(handle_config(section, session)),
+        SlashCommand::Init => Some(handle_init(session)),
+        SlashCommand::Diff => Some(handle_diff(session)),
+        SlashCommand::Export { path } => Some(handle_export(path, session)),
+        SlashCommand::Session { action, target } => Some(handle_session(action, target, session)),
+        SlashCommand::Version => Some(handle_version(session)),
+        SlashCommand::Clear { confirm } => Some(handle_clear(confirm, session)),
+        SlashCommand::Resume { session_path } => Some(handle_resume(session_path, session)),
         SlashCommand::Bughunter { .. }
         | SlashCommand::Commit
         | SlashCommand::Pr { .. }
@@ -505,6 +367,183 @@ pub fn handle_slash_command(
         | SlashCommand::Model { .. }
         | SlashCommand::Permissions { .. }
         | SlashCommand::Unknown(_) => None,
+    }
+}
+
+fn handle_compact(session: &Session, compaction: CompactionConfig) -> SlashCommandResult {
+    let result = compact_session(session, compaction);
+    let message = if result.removed_message_count == 0 {
+        "Compaction skipped: session is below the compaction threshold.".to_string()
+    } else {
+        format!(
+            "Compacted {} messages into a resumable system summary.",
+            result.removed_message_count
+        )
+    };
+    SlashCommandResult {
+        message,
+        session: result.compacted_session,
+    }
+}
+
+fn handle_help(session: &Session) -> SlashCommandResult {
+    SlashCommandResult {
+        message: render_slash_command_help(),
+        session: session.clone(),
+    }
+}
+
+fn handle_status(session: &Session) -> SlashCommandResult {
+    let msg_count = session.messages.len();
+    let token_estimate = estimate_session_tokens(session);
+    let message = format!(
+        "Session status:\n  Messages: {msg_count}\n  Estimated tokens: ~{token_estimate}"
+    );
+    SlashCommandResult {
+        message,
+        session: session.clone(),
+    }
+}
+
+fn handle_cost(session: &Session) -> SlashCommandResult {
+    let token_estimate = estimate_session_tokens(session);
+    let message = format!(
+        "Estimated session tokens: ~{token_estimate}\n\
+         (Actual costs depend on model and provider pricing)"
+    );
+    SlashCommandResult {
+        message,
+        session: session.clone(),
+    }
+}
+
+fn handle_memory(session: &Session) -> SlashCommandResult {
+    let message = "Memory inspection is available via AGENTS.md, CLAUDE.md, \
+        and .claude/ files in the workspace root."
+        .to_string();
+    SlashCommandResult {
+        message,
+        session: session.clone(),
+    }
+}
+
+fn handle_config(section: Option<String>, session: &Session) -> SlashCommandResult {
+    let message = match section.as_deref() {
+        Some("env") => format!(
+            "Environment variables:\n  RELAY_AGENT_MODEL={}\n  CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS={}",
+            std::env::var("RELAY_AGENT_MODEL").unwrap_or_else(|_| "(not set)".into()),
+            std::env::var("CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS").unwrap_or_else(|_| "(not set)".into()),
+        ),
+        Some("model") => format!(
+            "Active model: {}",
+            std::env::var("RELAY_AGENT_MODEL").unwrap_or_else(|_| "claude-sonnet-4-20250514".into()),
+        ),
+        _ => "Use /config env, /config model, or /config hooks to inspect specific sections.".to_string(),
+    };
+    SlashCommandResult {
+        message,
+        session: session.clone(),
+    }
+}
+
+fn handle_init(session: &Session) -> SlashCommandResult {
+    let message = concat!(
+        "To create a CLAUDE.md for this repo, write a file at the workspace root\n",
+        "describing: project structure, key conventions, testing commands, and\n",
+        "any AI-assistant-specific guidance."
+    )
+    .to_string();
+    SlashCommandResult {
+        message,
+        session: session.clone(),
+    }
+}
+
+fn handle_diff(session: &Session) -> SlashCommandResult {
+    let message =
+        "Run `git diff` in the workspace terminal to see current changes.".to_string();
+    SlashCommandResult {
+        message,
+        session: session.clone(),
+    }
+}
+
+fn handle_export(path: Option<String>, session: &Session) -> SlashCommandResult {
+    let message = if let Some(output_path) = path {
+        format!(
+            "To export this session ({msg} messages), save it via the \
+             persistence API to: {output_path}",
+            msg = session.messages.len(),
+        )
+    } else {
+        "Usage: /export <file-path> — exports the current conversation as JSON.".to_string()
+    };
+    SlashCommandResult {
+        message,
+        session: session.clone(),
+    }
+}
+
+fn handle_session(
+    action: Option<String>,
+    target: Option<String>,
+    session: &Session,
+) -> SlashCommandResult {
+    let message = match (action.as_deref(), target.as_deref()) {
+        (Some("list"), _) => {
+            "Session listing is available through the desktop UI session panel.".to_string()
+        }
+        (Some("switch"), Some(id)) => {
+            format!("To switch session, restart with the desired session ID: {id}")
+        }
+        _ => "Usage: /session list or /session switch <session-id>".to_string(),
+    };
+    SlashCommandResult {
+        message,
+        session: session.clone(),
+    }
+}
+
+fn handle_version(session: &Session) -> SlashCommandResult {
+    let message = format!(
+        "Relay Agent — version info:\n  Built with Rust {} / Tauri v2",
+        std::env!("CARGO_PKG_VERSION"),
+    );
+    SlashCommandResult {
+        message,
+        session: session.clone(),
+    }
+}
+
+fn handle_clear(confirm: bool, session: &Session) -> SlashCommandResult {
+    let new_session = if confirm {
+        Session::new()
+    } else {
+        session.clone()
+    };
+    let message = if confirm {
+        "Session cleared. A fresh conversation context is now active.".to_string()
+    } else {
+        "To clear the session, use /clear --confirm".to_string()
+    };
+    SlashCommandResult {
+        message,
+        session: new_session,
+    }
+}
+
+fn handle_resume(
+    session_path: Option<String>,
+    session: &Session,
+) -> SlashCommandResult {
+    let message = if let Some(path) = session_path {
+        format!("To resume session `{path}`, restart the agent with --resume {path}")
+    } else {
+        "Usage: /resume <session-path> — resume a saved session.".to_string()
+    };
+    SlashCommandResult {
+        message,
+        session: session.clone(),
     }
 }
 
