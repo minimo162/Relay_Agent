@@ -1,9 +1,25 @@
-#![allow(clippy::result_large_err, clippy::items_after_statements)]
+#![allow(
+    clippy::result_large_err,
+    clippy::items_after_statements,
+    clippy::too_many_lines
+)]
 
 //! CDP-driven M365 Copilot client.
 //!
 //! Automatically launches a dedicated Edge instance on a free port,
 //! keeping it separate from the user's personal browser.
+//!
+//! ## Architecture
+//!
+//! `CopilotPage` wraps a full CDP WebSocket connection to a specific browser tab.
+//! The connection is established on first use and reused for subsequent commands,
+//! eliminating the connect-send-close overhead of the original one-shot pattern.
+//!
+//! The client supports:
+//! - Auto-detection of existing browsers via `/json/list`
+//! - Dedicated Edge launch with isolated profile
+//! - Robust prompt-sending with multi-selector fallback (i18n-aware send button detection)
+//! - Response completion detection via streaming-indicator + content-stability polling
 
 use anyhow::{bail, Context, Result};
 use base64::Engine;
@@ -15,7 +31,7 @@ use std::process::Child;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::oneshot;
 use tokio::time::{timeout, Duration};
-use tracing::info;
+use tracing::{debug, info};
 use tungstenite::Message;
 
 /* ── Port scanning ──────────────────────────────────────────── */
@@ -143,18 +159,26 @@ fn find_edge_path() -> Result<String> {
 pub async fn wait_for_cdp_ready(debug_url: &str, max_wait_secs: u64) -> Result<()> {
     let start = std::time::Instant::now();
     let interval = Duration::from_millis(500);
+    let mut attempts = 0u64;
 
     loop {
         if start.elapsed() > Duration::from_secs(max_wait_secs) {
-            bail!("Edge did not become ready within {max_wait_secs}s");
+            bail!(
+                "Edge did not become ready within {max_wait_secs}s ({attempts} attempts)"
+            );
         }
+        attempts += 1;
 
-        if reqwest::get(&format!("{debug_url}/json/version"))
-            .await
-            .is_ok()
-        {
-            info!("[CDP] Edge ready on {}", debug_url);
-            return Ok(());
+        match reqwest::get(&format!("{debug_url}/json/version")).await {
+            Ok(resp) if resp.status().is_success() => {
+                info!(
+                    "[CDP] Edge ready on {} (after {} attempts)",
+                    debug_url, attempts
+                );
+                return Ok(());
+            }
+            Ok(_) => {}
+            Err(e) => debug!("[CDP] connect attempt {} failed: {}", attempts, e),
         }
 
         tokio::time::sleep(interval).await;
@@ -510,18 +534,26 @@ pub struct ConnectionResult {
     pub page: CopilotPage,
     pub port: u16,
     pub launched: bool,
-    _edge_process: Option<Child>,
+    edge_process: Option<Child>,
 }
 
 impl ConnectionResult {
     /// Quit the Edge process if it was launched by this connection.
     /// Safe to call multiple times; subsequent calls are no-ops.
-    #[allow(clippy::used_underscore_binding)]
     pub fn quit_edge(&mut self) {
-        if let Some(mut child) = self._edge_process.take() {
+        if let Some(mut child) = self.edge_process.take() {
             info!("[CDP] Quitting Edge process (PID: {})", child.id());
             let _ = child.kill();
             let _ = child.wait();
+        }
+    }
+}
+
+impl Drop for ConnectionResult {
+    fn drop(&mut self) {
+        if self.edge_process.is_some() {
+            info!("[CDP] ConnectionResult dropped with running Edge process (PID: {}) — call quit_edge() to clean up explicitly",
+                self.edge_process.as_ref().map_or(0, Child::id));
         }
     }
 }
@@ -545,16 +577,18 @@ pub async fn connect_copilot_page(
     let port = find_free_port(base_port, 20);
     let debug_url_new = format!("http://127.0.0.1:{port}");
 
-    info!("[CDP] No existing browser found. Launching dedicated Edge on port {}...", port);
-    
+    info!(
+        "[CDP] No existing browser found. Launching dedicated Edge on port {}...",
+        port
+    );
+
     let child = launch_dedicated_edge(port)?;
     wait_for_cdp_ready(&debug_url_new, 30).await?;
 
     // Find or create the Copilot page
     if let Some(mut p) = try_existing(&debug_url_new).await {
-        #[allow(clippy::used_underscore_binding)]
         if let Ok(ref mut result) = p {
-            result._edge_process = Some(child);
+            result.edge_process = Some(child);
             result.launched = true;
         }
         return p;
@@ -575,7 +609,7 @@ pub async fn connect_copilot_page(
         },
         port,
         launched: true,
-        _edge_process: Some(child),
+        edge_process: Some(child),
     })
 }
 
@@ -591,7 +625,7 @@ async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
             },
             port: parse_port(debug_url).unwrap_or(9222),
             launched: false,
-            _edge_process: None,
+            edge_process: None,
         }));
     }
 
@@ -612,7 +646,7 @@ async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
                     },
                     port: parse_port(debug_url).unwrap_or(9222),
                     launched: false,
-                    _edge_process: None,
+                    edge_process: None,
                 }));
             }
         }

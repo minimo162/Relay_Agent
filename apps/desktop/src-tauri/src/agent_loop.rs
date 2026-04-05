@@ -62,7 +62,7 @@ pub fn run_agent_loop_impl(
     let _shared_client = SHARED_ANTHROPIC_CLIENT.get_or_init(|| {
         api::AnthropicClient::from_auth(api::AuthSource::None).with_base_url(api::read_base_url())
     });
-    let api_client = CopilotApiClient::new_with_default_settings()
+    let api_client = CopilotApiClient::with_default_settings()
         .map_err(|e| AgentLoopError::InitializationError(e.to_string()))?
         .with_stream_callback(move |event| match event {
             CopilotStreamEvent::TextDelta(text) => {
@@ -90,7 +90,7 @@ pub fn run_agent_loop_impl(
                 }
             }
         });
-    let persistence_client = CopilotApiClient::new_with_default_settings()
+    let persistence_client = CopilotApiClient::with_default_settings()
         .map_err(|e| AgentLoopError::InitializationError(e.to_string()))?;
     let tool_executor = build_tool_executor(app, session_id, cwd.clone());
     let permission_policy = PermissionPolicy::new(PermissionMode::Prompt);

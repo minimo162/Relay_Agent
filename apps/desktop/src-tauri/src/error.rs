@@ -32,6 +32,22 @@ pub enum AgentLoopError {
 
     #[error("persistence error: {0}")]
     PersistenceError(String),
+
+    // ── Copilot/CDP specific errors ──
+    #[error("CDP connection failed: {0}")]
+    CdpConnectionError(String),
+
+    #[error("CDP command failed: {method} — {reason}")]
+    CdpCommandError { method: String, reason: String },
+
+    #[error("CDP timeout: {0}")]
+    CdpTimeoutError(String),
+
+    #[error("copilot page not found: {0}")]
+    CopilotPageNotFound(String),
+
+    #[error("copilot prompt failed: {0}")]
+    CopilotPromptError(String),
 }
 
 #[cfg(test)]
@@ -124,5 +140,47 @@ mod tests {
             AgentLoopError::ConcurrencyLimitReached => {} // expected
             other => panic!("expected ConcurrencyLimitReached, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_cdp_connection_error_display() {
+        let err = AgentLoopError::CdpConnectionError("browser unreachable".to_string());
+        assert_eq!(
+            err.to_string(),
+            "CDP connection failed: browser unreachable"
+        );
+    }
+
+    #[test]
+    fn test_cdp_command_error_display() {
+        let err = AgentLoopError::CdpCommandError {
+            method: "Runtime.evaluate".to_string(),
+            reason: "context destroyed".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "CDP command failed: Runtime.evaluate — context destroyed"
+        );
+    }
+
+    #[test]
+    fn test_cdp_timeout_error_display() {
+        let err = AgentLoopError::CdpTimeoutError("5s".to_string());
+        assert_eq!(err.to_string(), "CDP timeout: 5s");
+    }
+
+    #[test]
+    fn test_copilot_page_not_found_display() {
+        let err = AgentLoopError::CopilotPageNotFound("no page matching URL".to_string());
+        assert_eq!(
+            err.to_string(),
+            "copilot page not found: no page matching URL"
+        );
+    }
+
+    #[test]
+    fn test_copilot_prompt_error_display() {
+        let err = AgentLoopError::CopilotPromptError("composer not found".to_string());
+        assert_eq!(err.to_string(), "copilot prompt failed: composer not found");
     }
 }

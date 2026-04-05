@@ -273,7 +273,7 @@ pub async fn get_session_history(
         return Ok(history);
     }
 
-    let api_client = crate::copilot_client::CopilotApiClient::new_with_default_settings()
+    let api_client = crate::copilot_client::CopilotApiClient::with_default_settings()
         .map_err(|e| e.to_string())?;
     let loaded = api_client
         .load_session(&request.session_id)
@@ -291,18 +291,18 @@ pub async fn get_session_history(
 /* ── CDP Copilot Tauri commands ────────────────────────────── */
 
 /// Shared state: tracks the port of our auto-launched Edge.
-static LAUNCHED_EDGE_PORT: OnceLock<Arc<Mutex<Option<u16>>>> = OnceLock::new();
+static LAUNCHED_EDGE_PORT: OnceLock<Mutex<Option<u16>>> = OnceLock::new();
 
-fn launched_port_state() -> Arc<Mutex<Option<u16>>> {
-    Arc::clone(LAUNCHED_EDGE_PORT.get_or_init(|| Arc::new(Mutex::new(None))))
+fn launched_port_lock() -> &'static Mutex<Option<u16>> {
+    LAUNCHED_EDGE_PORT.get_or_init(|| Mutex::new(None))
 }
 
 fn get_launched_port() -> Option<u16> {
-    *launched_port_state().lock().unwrap()
+    *launched_port_lock().lock().unwrap()
 }
 
 fn set_launched_port(port: u16) {
-    *launched_port_state().lock().unwrap() = Some(port);
+    *launched_port_lock().lock().unwrap() = Some(port);
 }
 
 fn resolve_debug_url(preferred_base: u16) -> String {
@@ -410,7 +410,7 @@ pub async fn cdp_send_prompt(
     tracing::info!("[CDP] send prompt: {}…", prompt_preview);
 
     let page = match cdp_copilot::connect_copilot_page(&debug_url, false, 9222).await {
-        Ok(r) => r.page,
+        Ok(r) => r.page.clone(),
         Err(e) => {
             return Ok(CdpPromptResult {
                 ok: false,
@@ -508,7 +508,7 @@ pub async fn cdp_screenshot(_app: AppHandle) -> Result<serde_json::Value, String
     let debug_url = resolve_debug_url(9222);
 
     let page = match cdp_copilot::connect_copilot_page(&debug_url, false, 9222).await {
-        Ok(r) => r.page,
+        Ok(r) => r.page.clone(),
         Err(e) => return Err(format!("CDP connect: {e}")),
     };
 

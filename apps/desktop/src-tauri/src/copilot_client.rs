@@ -48,7 +48,8 @@ impl CopilotApiClient {
         })
     }
 
-    pub fn new_with_default_settings() -> Result<Self, RuntimeError> {
+    /// Convenience alias for [`Self::new`].
+    pub fn with_default_settings() -> Result<Self, RuntimeError> {
         Self::new()
     }
 
