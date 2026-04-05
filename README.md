@@ -197,6 +197,7 @@ Relay_Agent/
 | `cdp_send_prompt` | Send a prompt to M365 Copilot |
 | `cdp_start_new_chat` | Start a new chat in M365 Copilot |
 | `cdp_screenshot` | Capture screenshot of the Copilot browser |
+| `disconnect_cdp` | Disconnect from the Copilot browser and clean up resources |
 | `mcp_list_servers` | List all registered MCP servers with status |
 | `mcp_add_server` | Add a new MCP server to the registry |
 | `mcp_remove_server` | Remove an MCP server from the registry |
@@ -228,26 +229,26 @@ Application-level defaults in `config.rs`:
 
 ## Development
 
-### Code Statistics (as of 2026-04-05)
+### Code Statistics (as of 2026-04-06)
 
 | Language | Files | Code Lines | Description |
 |----------|-------|------------|-------------|
-| Rust | 47 | 18,384 | Core backend (Tauri + workspace crates) |
-| TypeScript | 21 | 2,620 | SolidJS frontend + mocks + E2E tests |
-| TSX | 3 | 1,102 | UI components |
-| JSON | 18 | 8,297 | Config, capabilities, test data |
-| Markdown | 72 | 6,931* | Documentation + verification checklists |
-| YAML | 2 | 1,388 | CI/CD workflows |
-| **Total** | **179** | **39,991** | Full project |
+| Rust | 47 | 20,804 | Core backend (Tauri + workspace crates) |
+| TypeScript + TSX | 26 | 5,289 | SolidJS frontend + mocks + E2E tests |
+| JSON | 24 | 9,362 | Config, capabilities, test data |
+| Markdown | 80 | 21,821* | Documentation + verification checklists |
+| YAML | 2 | 2,067 | CI/CD workflows |
+| CSS/HTML | — | 376 | Styling |
+| **Total** | **179** | **59,719** | Full project |
 
-*Markdown includes embedded code blocks (928 BASH, 1,793 Rust, 2,052 TypeScript, 1,091 Svelte lines)
+*Markdown includes embedded code blocks from plans and verification documents
 
 ### Quality Gates
 
 - **Clippy:** 0 warnings (`-D warnings` enforced)
-- **Tests:** 13 unit tests passing
+- **Tests:** 26 passed; 1 known failure (skill local prompt test)
 - **TypeScript:** `tsc --noEmit` clean
-- **E2E:** 19/21 Playwright tests passing (2 require Windows + Edge CDP)
+- **E2E:** 72 tests across 11 spec files (mix of mock-based and CDP-dependent)
 - **CI:** GitHub Actions (cargo check, cargo clippy, pnpm typecheck)
 
 ### Desktop App
