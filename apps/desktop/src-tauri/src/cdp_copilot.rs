@@ -64,14 +64,16 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
     let home = std::env::var("HOME")
         .ok()
         .or_else(|| std::env::var("USERPROFILE").ok())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            if cfg!(target_os = "windows") {
-                PathBuf::from(r"C:\Users\Default\AppData\Local")
-            } else {
-                PathBuf::from("/tmp")
-            }
-        });
+        .map_or_else(
+            || {
+                if cfg!(target_os = "windows") {
+                    PathBuf::from(r"C:\Users\Default\AppData\Local")
+                } else {
+                    PathBuf::from("/tmp")
+                }
+            },
+            PathBuf::from,
+        );
 
     let profile_dir = home.join("RelayAgentEdgeProfile");
     std::fs::create_dir_all(&profile_dir).ok();
@@ -594,12 +596,11 @@ impl Drop for ConnectionResult {
 /// Takes ownership of the `ConnectionResult`, calls `quit_edge()` to gracefully
 /// shut down the browser process, and drops the WebSocket connection.
 /// Safe to call even if no Edge process was launched (`launched == false`).
-pub fn disconnect_copilot_page(result: ConnectionResult) -> Result<(), anyhow::Error> {
+pub fn disconnect_copilot_page(result: ConnectionResult) {
     let debug_url = result.page.debug_url.clone();
     let mut result = result;
     result.quit_edge();
     info!("[CDP] Disconnected from {:?}", debug_url);
-    Ok(())
 }
 
 /// Connect to a Copilot page, auto-launching Edge if needed.
