@@ -33,6 +33,9 @@ pub enum AgentLoopError {
     #[error("persistence error: {0}")]
     PersistenceError(String),
 
+    #[error("API retry exhausted after {0} attempts: {1}")]
+    RetryExhausted(usize, String),
+
     // ── Copilot/CDP specific errors ──
     #[error("CDP connection failed: {0}")]
     CdpConnectionError(String),

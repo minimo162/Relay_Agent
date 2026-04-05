@@ -186,7 +186,10 @@ fn persist_turn(
             max_turns: Some(max_turns),
         },
     )
-    .map_err(|error| AgentLoopError::PersistenceError(error.to_string()))
+    .map_err(|error| {
+        tracing::error!("[RelayAgent] failed to persist session {session_id}: {error}");
+        AgentLoopError::PersistenceError(error.to_string())
+    })
 }
 
 /// Emit the `turn_complete` event with the final assistant text and message count.
@@ -359,6 +362,10 @@ pub fn build_tool_executor(
         session_id: session_id.to_string(),
         cwd,
         mcp_manager: runtime::McpServerManager::from_servers(&std::collections::BTreeMap::new()),
+        runtime: tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to create tokio runtime for tool executor"),
     }
 }
 
@@ -367,12 +374,15 @@ pub struct TauriToolExecutor {
     session_id: String,
     cwd: Option<String>,
     mcp_manager: McpServerManager,
+    runtime: tokio::runtime::Runtime,
 }
 
 impl ToolExecutor for TauriToolExecutor {
     fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, runtime::ToolError> {
         // Phase 1: Route MCP tool calls (prefixed with `mcp__`) to the MCP server manager
-        if let Some(mcp_result) = try_execute_mcp_tool(&mut self.mcp_manager, tool_name, input) {
+        if let Some(mcp_result) =
+            try_execute_mcp_tool(&mut self.mcp_manager, &self.runtime, tool_name, input)
+        {
             return mcp_result;
         }
 
@@ -434,6 +444,7 @@ impl ToolExecutor for TauriToolExecutor {
 /// or `None` if the tool name doesn't match any MCP tool (fall back to built-in tools).
 fn try_execute_mcp_tool(
     mcp_manager: &mut McpServerManager,
+    runtime: &tokio::runtime::Runtime,
     tool_name: &str,
     input: &str,
 ) -> Option<Result<String, runtime::ToolError>> {
@@ -453,16 +464,11 @@ fn try_execute_mcp_tool(
         route.raw_name
     );
 
-    // Execute the MCP tool call via blocking the async runtime
+    // Execute the MCP tool call via the shared async runtime
     let result: Result<runtime::JsonRpcResponse<runtime::McpToolCallResult>, runtime::ToolError> =
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| runtime::ToolError::new(format!("failed to build tokio runtime: {e}")))
-            .and_then(|rt| {
-                rt.block_on(async { mcp_manager.call_tool(tool_name, Some(input_value)).await })
-                    .map_err(|e| runtime::ToolError::new(e.to_string()))
-            });
+        runtime
+            .block_on(async { mcp_manager.call_tool(tool_name, Some(input_value)).await })
+            .map_err(|e| runtime::ToolError::new(e.to_string()));
 
     match result {
         Ok(response) => {

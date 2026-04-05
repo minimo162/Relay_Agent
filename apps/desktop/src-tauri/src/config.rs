@@ -18,6 +18,9 @@ pub struct AgentConfig {
     /// Session cleanup TTL in minutes. Sessions completed/cancelled longer ago
     /// than this are evicted from the in-memory registry.
     pub session_cleanup_ttl_minutes: u64,
+    /// Number of retry attempts for transient API errors (5xx, network failures).
+    /// 4xx errors (auth, bad request) are never retried.
+    pub api_retry_count: usize,
 }
 
 impl Default for AgentConfig {
@@ -29,6 +32,7 @@ impl Default for AgentConfig {
             compact_max_tokens: 4000,
             max_concurrent_sessions: 4,
             session_cleanup_ttl_minutes: 30,
+            api_retry_count: 3,
         }
     }
 }

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use api::{
     read_base_url, AnthropicClient, AuthSource, ContentBlockDelta as ApiContentBlockDelta,
@@ -68,24 +69,16 @@ impl CopilotApiClient {
     }
 }
 
-impl ApiClient for CopilotApiClient {
+impl CopilotApiClient {
     #[allow(clippy::too_many_lines)]
-    fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
-        self.call_count += 1;
-        let message_request = MessageRequest {
-            model: self.model.clone(),
-            max_tokens: 32_000,
-            messages: convert_messages(&request.messages),
-            system: (!request.system_prompt.is_empty()).then(|| request.system_prompt.join("\n\n")),
-            tools: Some(tools::tool_definitions_for_copilot()),
-            tool_choice: Some(ToolChoice::Auto),
-            stream: true,
-        };
-
+    fn try_stream(
+        &mut self,
+        message_request: &MessageRequest,
+    ) -> Result<Vec<AssistantEvent>, RuntimeError> {
         self.runtime.block_on(async {
             let mut stream = self
                 .client
-                .stream_message(&message_request)
+                .stream_message(message_request)
                 .await
                 .map_err(|error| RuntimeError::new(format!("Copilot API error: {error}")))?;
             let mut events = Vec::new();
@@ -179,6 +172,73 @@ impl ApiClient for CopilotApiClient {
             Ok(response_to_events(response))
         })
     }
+}
+
+impl ApiClient for CopilotApiClient {
+    fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        self.call_count += 1;
+        let max_tokens = crate::config::AgentConfig::global().max_tokens as u32;
+        let max_retries = crate::config::AgentConfig::global().api_retry_count;
+        let message_request = MessageRequest {
+            model: self.model.clone(),
+            max_tokens,
+            messages: convert_messages(&request.messages),
+            system: (!request.system_prompt.is_empty()).then(|| request.system_prompt.join("\n\n")),
+            tools: Some(tools::tool_definitions_for_copilot()),
+            tool_choice: Some(ToolChoice::Auto),
+            stream: true,
+        };
+
+        let mut last_error = None;
+        for attempt in 0..=max_retries {
+            if attempt > 0 {
+                let delay = 500 * 2u64.pow((attempt - 1) as u32);
+                tracing::info!(
+                    "[CopilotClient] retrying API call (attempt {}/{}, delay {}ms)",
+                    attempt + 1,
+                    max_retries + 1,
+                    delay
+                );
+                std::thread::sleep(Duration::from_millis(delay));
+            }
+
+            match self.try_stream(&message_request) {
+                Ok(events) => return Ok(events),
+                Err(e) if is_retryable_error(&e) && attempt < max_retries => {
+                    tracing::warn!("[CopilotClient] transient API error (attempt {}): {e}", attempt + 1);
+                    last_error = Some(e);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            RuntimeError::new("API retry exhausted with no error captured".to_string())
+        }))
+    }
+}
+
+/// Returns `true` for transient errors worth retrying (5xx, network failures).
+/// Returns `false` for permanent errors (4xx auth errors, bad requests).
+fn is_retryable_error(error: &RuntimeError) -> bool {
+    let msg = error.to_string().to_lowercase();
+    // 4xx errors are permanent — do not retry
+    if msg.contains("400") || msg.contains("401") || msg.contains("403") || msg.contains("404") {
+        return false;
+    }
+    // 5xx, network errors, timeouts, connection resets — retry
+    msg.contains("500")
+        || msg.contains("502")
+        || msg.contains("503")
+        || msg.contains("529")
+        || msg.contains("timeout")
+        || msg.contains("connection")
+        || msg.contains("network")
+        || msg.contains("dns")
+        || msg.contains("reset")
+        || msg.contains("eof")
+        || msg.contains("overloaded")
 }
 
 fn convert_messages(messages: &[runtime::ConversationMessage]) -> Vec<InputMessage> {
