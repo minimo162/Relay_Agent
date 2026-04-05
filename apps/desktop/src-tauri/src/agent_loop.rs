@@ -26,11 +26,6 @@ pub(crate) const E_TURN_COMPLETE: &str = "agent:turn_complete";
 pub(crate) const E_ERROR: &str = "agent:error";
 pub(crate) const E_TEXT_DELTA: &str = "agent:text_delta";
 
-/* ── Shared resources ─── */
-
-static SHARED_ANTHROPIC_CLIENT: std::sync::OnceLock<api::AnthropicClient> =
-    std::sync::OnceLock::new();
-
 /* ── POSIX shell escaping ─── */
 
 /// POSIX-compliant shell escaping for use in `sh -c` contexts.
@@ -57,9 +52,6 @@ pub fn run_agent_loop_impl(
     max_turns: Option<usize>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(), AgentLoopError> {
-    let _shared_client = SHARED_ANTHROPIC_CLIENT.get_or_init(|| {
-        api::AnthropicClient::from_auth(api::AuthSource::None).with_base_url(api::read_base_url())
-    });
     let api_client = CopilotApiClient::new()
         .map_err(|e| AgentLoopError::InitializationError(e.to_string()))?
         .with_stream_callback(make_stream_callback(app, session_id));

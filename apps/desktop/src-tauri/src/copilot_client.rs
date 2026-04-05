@@ -41,8 +41,11 @@ impl CopilotApiClient {
             .build()
             .map_err(|e| RuntimeError::new(format!("failed to create tokio runtime: {e}")))?;
 
+        let auth = AuthSource::from_env_or_saved()
+            .map_err(|e| RuntimeError::new(format!("failed to resolve auth: {e}")))?;
+
         Ok(Self {
-            client: AnthropicClient::from_auth(AuthSource::None).with_base_url(read_base_url()),
+            client: AnthropicClient::from_auth(auth).with_base_url(read_base_url()),
             runtime,
             model: std::env::var("RELAY_AGENT_MODEL")
                 .unwrap_or_else(|_| FRONTIER_MODEL_NAME.to_string()),
