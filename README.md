@@ -166,7 +166,7 @@ Relay_Agent/
   - Autocomplete dropdown with keyboard navigation (↑↓/Tab/Enter/Esc)
 - **MCP Agent Loop Integration** — Agent automatically routes MCP tool calls through `McpServerManager` during execution:
   - Tools discovered from registered MCP servers are available in the tool index
-  - MCP tool calls are synchronized via `tokio::runtime::block_on()` from the blocking agent loop
+  - MCP tool calls share a single `tokio::runtime::Runtime` via `block_on()` for efficient async bridging
   - MCP results are formatted into human-readable text for the assistant
 - **Context Panel Data Binding** — Fully reactive right panel with live data:
   - **Files** — View, add, and remove context files with size info
@@ -175,6 +175,8 @@ Relay_Agent/
 - **3-Pane Desktop Layout** — Sidebar (sessions), Main (chat + composer), Right panel (context tabs)
 - **Auth Token Resolution** — Reads from `.auth_key`, `.agent_auth_key`, or direct token
 - **Config System** — Centralized `AgentConfig` with adjustable parameters
+- **API Retry with Exponential Backoff** — Transient API errors (5xx, network, timeout) are automatically retried up to 3 times with exponential backoff (500ms, 1s, 2s). Permanent errors (4xx) fail immediately.
+- **Shared Tokio Runtime** — MCP tool execution reuses a single `tokio::runtime::Runtime` instead of creating a new one per call
 - **POSIX Shell Escaping** — Secure shell argument escaping for bash tool execution
 - **Session TTL Cleanup** — Auto-eviction of completed sessions after configurable TTL (default: 30 min)
 - **Traced Logging** — Structured logging via `tracing` crate (warn/error levels) instead of raw `eprintln!`
@@ -237,6 +239,7 @@ Application-level defaults in `config.rs`:
 | `compact_max_tokens` | 4,000 | Token threshold for triggering compaction |
 | `max_concurrent_sessions` | 4 | Max simultaneous agent sessions |
 | `session_cleanup_ttl_minutes` | 30 | TTL for session cleanup |
+| `api_retry_count` | 3 | Retry attempts for transient API errors |
 
 ## Development
 
