@@ -55,7 +55,7 @@ pub use mcp_stdio::{
     McpInitializeServerInfo, McpListResourcesParams, McpListResourcesResult, McpListToolsParams,
     McpListToolsResult, McpReadResourceParams, McpReadResourceResult, McpResource,
     McpResourceContents, McpServerManager, McpServerManagerError, McpStdioProcess, McpTool,
-    McpToolCallContent, McpToolCallParams, McpToolCallResult, UnsupportedMcpServer,
+    McpToolCallContent, McpToolCallParams, McpToolCallResult, ToolRoute, UnsupportedMcpServer,
 };
 pub use oauth::{
     clear_oauth_credentials, code_challenge_s256, credentials_path, generate_pkce_pair,

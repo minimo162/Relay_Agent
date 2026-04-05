@@ -286,9 +286,9 @@ impl From<io::Error> for McpServerManagerError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ToolRoute {
-    server_name: String,
-    raw_name: String,
+pub struct ToolRoute {
+    pub server_name: String,
+    pub raw_name: String,
 }
 
 #[derive(Debug)]
@@ -480,6 +480,12 @@ impl McpServerManager {
             server.initialized = false;
         }
         Ok(())
+    }
+
+    /// Returns the tool routing index for external consumers (e.g., TauriToolExecutor).
+    #[must_use]
+    pub fn tool_index(&self) -> &BTreeMap<String, ToolRoute> {
+        &self.tool_index
     }
 
     fn clear_routes_for_server(&mut self, server_name: &str) {

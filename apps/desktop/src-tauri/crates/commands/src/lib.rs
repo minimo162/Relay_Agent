@@ -1,4 +1,4 @@
-use runtime::{compact_session, CompactionConfig, Session};
+use runtime::{compact_session, estimate_session_tokens, CompactionConfig, Session};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandManifestEntry {
@@ -363,8 +363,139 @@ pub fn handle_slash_command(
             message: render_slash_command_help(),
             session: session.clone(),
         }),
-        SlashCommand::Status
-        | SlashCommand::Bughunter { .. }
+        SlashCommand::Status => {
+            let msg_count = session.messages.len();
+            let token_estimate = estimate_session_tokens(session);
+            let message = format!(
+                "Session status:\n  Messages: {msg_count}\n  Estimated tokens: ~{token_estimate}"
+            );
+            Some(SlashCommandResult {
+                message,
+                session: session.clone(),
+            })
+        }
+        SlashCommand::Cost => {
+            let token_estimate = estimate_session_tokens(session);
+            let message = format!(
+                "Estimated session tokens: ~{token_estimate}\n\
+                 (Actual costs depend on model and provider pricing)"
+            );
+            Some(SlashCommandResult {
+                message,
+                session: session.clone(),
+            })
+        }
+        SlashCommand::Memory => {
+            let message = "Memory inspection is available via AGENTS.md, CLAUDE.md, \
+                and .claude/ files in the workspace root."
+                .to_string();
+            Some(SlashCommandResult {
+                message,
+                session: session.clone(),
+            })
+        }
+        SlashCommand::Config { section } => {
+            let message = match section.as_deref() {
+                Some("env") => format!(
+                    "Environment variables:\n  RELAY_AGENT_MODEL={}\n  CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS={}",
+                    std::env::var("RELAY_AGENT_MODEL").unwrap_or_else(|_| "(not set)".into()),
+                    std::env::var("CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS").unwrap_or_else(|_| "(not set)".into()),
+                ),
+                Some("model") => format!(
+                    "Active model: {}",
+                    std::env::var("RELAY_AGENT_MODEL").unwrap_or_else(|_| "claude-sonnet-4-20250514".into()),
+                ),
+                _ => "Use /config env, /config model, or /config hooks to inspect specific sections.".to_string(),
+            };
+            Some(SlashCommandResult {
+                message,
+                session: session.clone(),
+            })
+        }
+        SlashCommand::Init => {
+            let message = concat!(
+                "To create a CLAUDE.md for this repo, write a file at the workspace root\n",
+                "describing: project structure, key conventions, testing commands, and\n",
+                "any AI-assistant-specific guidance."
+            )
+            .to_string();
+            Some(SlashCommandResult {
+                message,
+                session: session.clone(),
+            })
+        }
+        SlashCommand::Diff => {
+            let message = "Run `git diff` in the workspace terminal to see current changes.".to_string();
+            Some(SlashCommandResult {
+                message,
+                session: session.clone(),
+            })
+        }
+        SlashCommand::Export { path } => {
+            let message = if let Some(output_path) = path {
+                // Session export hint — actual export requires persistence layer
+                format!(
+                    "To export this session ({msg} messages), save it via the \
+                     persistence API to: {output_path}",
+                    msg = session.messages.len(),
+                )
+            } else {
+                "Usage: /export <file-path> — exports the current conversation as JSON.".to_string()
+            };
+            Some(SlashCommandResult {
+                message,
+                session: session.clone(),
+            })
+        }
+        SlashCommand::Session { action, target } => {
+            let message = match (action.as_deref(), target.as_deref()) {
+                (Some("list"), _) => "Session listing is available through the desktop UI session panel.".to_string(),
+                (Some("switch"), Some(id)) => format!("To switch session, restart with the desired session ID: {id}"),
+                _ => "Usage: /session list or /session switch <session-id>".to_string(),
+            };
+            Some(SlashCommandResult {
+                message,
+                session: session.clone(),
+            })
+        }
+        SlashCommand::Version => {
+            let message = format!(
+                "Relay Agent — version info:\n  Built with Rust {} / Tauri v2",
+                std::env!("CARGO_PKG_VERSION"),
+            );
+            Some(SlashCommandResult {
+                message,
+                session: session.clone(),
+            })
+        }
+        SlashCommand::Clear { confirm } => {
+            let new_session = if confirm {
+                Session::new()
+            } else {
+                session.clone()
+            };
+            let message = if confirm {
+                "Session cleared. A fresh conversation context is now active.".to_string()
+            } else {
+                "To clear the session, use /clear --confirm".to_string()
+            };
+            Some(SlashCommandResult {
+                message,
+                session: new_session,
+            })
+        }
+        SlashCommand::Resume { session_path } => {
+            let message = if let Some(path) = session_path {
+                format!("To resume session `{path}`, restart the agent with --resume {path}")
+            } else {
+                "Usage: /resume <session-path> — resume a saved session.".to_string()
+            };
+            Some(SlashCommandResult {
+                message,
+                session: session.clone(),
+            })
+        }
+        SlashCommand::Bughunter { .. }
         | SlashCommand::Commit
         | SlashCommand::Pr { .. }
         | SlashCommand::Issue { .. }
@@ -373,16 +504,6 @@ pub fn handle_slash_command(
         | SlashCommand::DebugToolCall
         | SlashCommand::Model { .. }
         | SlashCommand::Permissions { .. }
-        | SlashCommand::Clear { .. }
-        | SlashCommand::Cost
-        | SlashCommand::Resume { .. }
-        | SlashCommand::Config { .. }
-        | SlashCommand::Memory
-        | SlashCommand::Init
-        | SlashCommand::Diff
-        | SlashCommand::Version
-        | SlashCommand::Export { .. }
-        | SlashCommand::Session { .. }
         | SlashCommand::Unknown(_) => None,
     }
 }
@@ -564,10 +685,144 @@ mod tests {
     }
 
     #[test]
-    fn ignores_unknown_or_runtime_bound_slash_commands() {
+    fn handles_status_command() {
+        let session = Session {
+            version: 1,
+            messages: vec![
+                ConversationMessage::user_text("hello"),
+                ConversationMessage::assistant(vec![ContentBlock::Text {
+                    text: "hi".to_string(),
+                }]),
+            ],
+        };
+        let result =
+            handle_slash_command("/status", &session, CompactionConfig::default())
+                .expect("status should be handled");
+        assert!(result.message.contains("Messages: 2"));
+        assert!(result.message.contains("Estimated tokens"));
+        assert_eq!(result.session.messages.len(), 2);
+    }
+
+    #[test]
+    fn handles_cost_command() {
+        let session = Session::new();
+        let result =
+            handle_slash_command("/cost", &session, CompactionConfig::default())
+                .expect("cost should be handled");
+        assert!(result.message.contains("Estimated session tokens"));
+    }
+
+    #[test]
+    fn handles_memory_command() {
+        let session = Session::new();
+        let result =
+            handle_slash_command("/memory", &session, CompactionConfig::default())
+                .expect("memory should be handled");
+        assert!(result.message.contains("Memory"));
+    }
+
+    #[test]
+    fn handles_config_command() {
+        let session = Session::new();
+        let result =
+            handle_slash_command("/config", &session, CompactionConfig::default())
+                .expect("config should be handled");
+        assert!(result.message.contains("/config"));
+    }
+
+    #[test]
+    fn handles_init_command() {
+        let session = Session::new();
+        let result =
+            handle_slash_command("/init", &session, CompactionConfig::default())
+                .expect("init should be handled");
+        assert!(result.message.contains("CLAUDE.md"));
+    }
+
+    #[test]
+    fn handles_diff_command() {
+        let session = Session::new();
+        let result =
+            handle_slash_command("/diff", &session, CompactionConfig::default())
+                .expect("diff should be handled");
+        assert!(result.message.contains("git diff"));
+    }
+
+    #[test]
+    fn handles_export_command() {
+        let session = Session::new();
+        let result = handle_slash_command(
+            "/export notes.json",
+            &session,
+            CompactionConfig::default(),
+        )
+        .expect("export should be handled");
+        assert!(result.message.contains("export"));
+    }
+
+    #[test]
+    fn handles_session_command() {
+        let session = Session::new();
+        let result =
+            handle_slash_command("/session list", &session, CompactionConfig::default())
+                .expect("session should be handled");
+        assert!(result.message.contains("session"));
+    }
+
+    #[test]
+    fn handles_version_command() {
+        let session = Session::new();
+        let result =
+            handle_slash_command("/version", &session, CompactionConfig::default())
+                .expect("version should be handled");
+        assert!(result.message.contains("Relay Agent"));
+    }
+
+    #[test]
+    fn handles_clear_command_without_confirm() {
+        let session = Session {
+            version: 1,
+            messages: vec![ConversationMessage::user_text("hello")],
+        };
+        let result =
+            handle_slash_command("/clear", &session, CompactionConfig::default())
+                .expect("clear should be handled");
+        assert!(result.message.contains("--confirm"));
+        assert_eq!(result.session.messages.len(), 1);
+    }
+
+    #[test]
+    fn handles_clear_command_with_confirm() {
+        let session = Session {
+            version: 1,
+            messages: vec![ConversationMessage::user_text("hello")],
+        };
+        let result = handle_slash_command(
+            "/clear --confirm",
+            &session,
+            CompactionConfig::default(),
+        )
+        .expect("clear should be handled");
+        assert!(result.message.contains("cleared"));
+        assert_eq!(result.session.messages.len(), 0);
+    }
+
+    #[test]
+    fn handles_resume_command() {
+        let session = Session::new();
+        let result = handle_slash_command(
+            "/resume session.json",
+            &session,
+            CompactionConfig::default(),
+        )
+        .expect("resume should be handled");
+        assert!(result.message.contains("resume"));
+    }
+
+    #[test]
+    fn ignores_unhandled_slash_commands() {
         let session = Session::new();
         assert!(handle_slash_command("/unknown", &session, CompactionConfig::default()).is_none());
-        assert!(handle_slash_command("/status", &session, CompactionConfig::default()).is_none());
         assert!(
             handle_slash_command("/bughunter", &session, CompactionConfig::default()).is_none()
         );
@@ -593,30 +848,5 @@ mod tests {
             CompactionConfig::default()
         )
         .is_none());
-        assert!(handle_slash_command("/clear", &session, CompactionConfig::default()).is_none());
-        assert!(
-            handle_slash_command("/clear --confirm", &session, CompactionConfig::default())
-                .is_none()
-        );
-        assert!(handle_slash_command("/cost", &session, CompactionConfig::default()).is_none());
-        assert!(handle_slash_command(
-            "/resume session.json",
-            &session,
-            CompactionConfig::default()
-        )
-        .is_none());
-        assert!(handle_slash_command("/config", &session, CompactionConfig::default()).is_none());
-        assert!(
-            handle_slash_command("/config env", &session, CompactionConfig::default()).is_none()
-        );
-        assert!(handle_slash_command("/diff", &session, CompactionConfig::default()).is_none());
-        assert!(handle_slash_command("/version", &session, CompactionConfig::default()).is_none());
-        assert!(
-            handle_slash_command("/export note.txt", &session, CompactionConfig::default())
-                .is_none()
-        );
-        assert!(
-            handle_slash_command("/session list", &session, CompactionConfig::default()).is_none()
-        );
     }
 }

@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 use runtime::{
-    self, ContentBlock, ConversationMessage, PermissionMode, PermissionPolicy,
+    self, ContentBlock, ConversationMessage, McpServerManager, PermissionMode, PermissionPolicy,
     PermissionPromptDecision, PermissionPrompter, PermissionRequest, Session as RuntimeSession,
     ToolExecutor,
 };
@@ -338,6 +338,7 @@ pub fn build_tool_executor(
         app: app.clone(),
         session_id: session_id.to_string(),
         cwd,
+        mcp_manager: runtime::McpServerManager::from_servers(&std::collections::BTreeMap::new()),
     }
 }
 
@@ -345,10 +346,16 @@ pub struct TauriToolExecutor {
     app: AppHandle,
     session_id: String,
     cwd: Option<String>,
+    mcp_manager: McpServerManager,
 }
 
 impl ToolExecutor for TauriToolExecutor {
     fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, runtime::ToolError> {
+        // Phase 1: Route MCP tool calls (prefixed with `mcp__`) to the MCP server manager
+        if let Some(mcp_result) = try_execute_mcp_tool(&mut self.mcp_manager, tool_name, input) {
+            return mcp_result;
+        }
+
         let tool_use_id = Uuid::new_v4().to_string();
         if let Err(e) = self.app.emit(
             E_TOOL_START,
@@ -396,6 +403,113 @@ impl ToolExecutor for TauriToolExecutor {
         }
 
         Ok(result)
+    }
+}
+
+/// Phase 1: Attempt to execute an MCP tool call.
+///
+/// Returns `Some(Ok(result))` if the tool was successfully executed,
+/// `Some(Err(error))` if it was an MCP tool but execution failed,
+/// or `None` if the tool name doesn't match any MCP tool (fall back to built-in tools).
+fn try_execute_mcp_tool(
+    mcp_manager: &mut McpServerManager,
+    tool_name: &str,
+    input: &str,
+) -> Option<Result<String, runtime::ToolError>> {
+    // Check if this tool name maps to an MCP tool
+    let route = mcp_manager.tool_index().get(tool_name).cloned();
+    let Some(route) = route else {
+        return None;
+    };
+
+    let input_value: serde_json::Value =
+        serde_json::from_str(input).unwrap_or_else(|_| serde_json::json!({}));
+
+    tracing::info!(
+        "[RelayAgent] MCP tool call: {} → {} ({})",
+        tool_name,
+        route.server_name,
+        route.raw_name
+    );
+
+    // Execute the MCP tool call via blocking the async runtime
+    let result: Result<runtime::JsonRpcResponse<runtime::McpToolCallResult>, runtime::ToolError> =
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| runtime::ToolError::new(format!("failed to build tokio runtime: {e}")))
+            .and_then(|rt| {
+                rt.block_on(async { mcp_manager.call_tool(tool_name, Some(input_value)).await })
+                    .map_err(|e| runtime::ToolError::new(e.to_string()))
+            });
+
+    match result {
+        Ok(response) => {
+            if let Some(error) = response.error {
+                Some(Err(runtime::ToolError::new(format!(
+                    "MCP tool `{tool_name}` returned error: {} ({})",
+                    error.message, error.code
+                ))))
+            } else if let Some(result_data) = response.result {
+                let formatted = format_mcp_tool_call_result(&result_data);
+                Some(Ok(formatted))
+            } else {
+                Some(Err(runtime::ToolError::new(format!(
+                    "MCP tool `{tool_name}` returned empty response"
+                ))))
+            }
+        }
+        Err(e) => Some(Err(e)),
+    }
+}
+
+/// Format MCP tool call result content into a human-readable string.
+fn format_mcp_tool_call_result(result: &runtime::McpToolCallResult) -> String {
+    if result.content.is_empty() && result.structured_content.is_none() {
+        return String::new();
+    }
+
+    let mut parts = Vec::new();
+
+    for content in &result.content {
+        match content.kind.as_str() {
+            "text" => {
+                if let Some(text) = content.data.get("text").and_then(|v| v.as_str()) {
+                    parts.push(text.to_string());
+                }
+            }
+            "image" => {
+                parts.push("[image content]".to_string());
+            }
+            "resource" => {
+                if let Some(resource) = content.data.get("resource") {
+                    if let Some(text) = resource.get("text").and_then(|v| v.as_str()) {
+                        parts.push(text.to_string());
+                    } else if let Some(uri) = resource.get("uri").and_then(|v| v.as_str()) {
+                        parts.push(format!("[resource: {uri}]"));
+                    }
+                }
+            }
+            other => {
+                parts.push(format!("[{other} content]"));
+            }
+        }
+    }
+
+    if let Some(structured) = &result.structured_content {
+        if parts.is_empty() {
+            parts.push(
+                serde_json::to_string_pretty(structured)
+                    .unwrap_or_else(|_| format!("{structured:?}")),
+            );
+        }
+    }
+
+    let output = parts.join("\n\n");
+    if let Some(true) = result.is_error {
+        format!("Error: {output}")
+    } else {
+        output
     }
 }
 
@@ -525,21 +639,13 @@ pub struct AgentTextDeltaEvent {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentSessionHistoryResponse {
-    pub session_id: String,
-    pub running: bool,
-    pub messages: Vec<RelayMessage>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RelayMessage {
     pub role: String,
     pub content: Vec<MessageContent>,
 }
 
 #[derive(Clone, Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(rename_all = "camelCase", tag = "type")]
 pub enum MessageContent {
     Text {
         text: String,
@@ -550,8 +656,18 @@ pub enum MessageContent {
         input: serde_json::Value,
     },
     ToolResult {
+        #[serde(rename = "toolUseId")]
         tool_use_id: String,
         content: String,
+        #[serde(rename = "isError")]
         is_error: bool,
     },
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionHistoryResponse {
+    pub session_id: String,
+    pub running: bool,
+    pub messages: Vec<RelayMessage>,
 }
