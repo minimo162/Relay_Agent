@@ -9,7 +9,7 @@ mod electron_cdp;
 use reqwest::blocking::Client;
 use runtime::{
     edit_file, execute_bash, glob_search, grep_search, read_file, write_file,
-    BashCommandInput, GrepSearchInput, PermissionMode, ToolError,
+    BashCommandInput, GrepSearchInput, PermissionMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -994,8 +994,7 @@ struct SkillOutput {
     prompt: String,
 }
 
-#[derive(Debug, Clone)]
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct ToolSearchOutput {
     matches: Vec<String>,
     query: String,
