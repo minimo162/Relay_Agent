@@ -125,7 +125,11 @@ fn find_edge_path() -> Result<String> {
         }
     } else {
         // Linux: try PATH
-        for candidate in ["microsoft-edge-stable", "microsoft-edge", "microsoft-edge-dev"] {
+        for candidate in [
+            "microsoft-edge-stable",
+            "microsoft-edge",
+            "microsoft-edge-dev",
+        ] {
             if let Ok(output) = std::process::Command::new("which").arg(candidate).output() {
                 if output.status.success() {
                     return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
@@ -144,9 +148,7 @@ pub async fn wait_for_cdp_ready(debug_url: &str, max_wait_secs: u64) -> Result<(
 
     loop {
         if start.elapsed() > Duration::from_secs(max_wait_secs) {
-            bail!(
-                "Edge did not become ready within {max_wait_secs}s ({attempts} attempts)"
-            );
+            bail!("Edge did not become ready within {max_wait_secs}s ({attempts} attempts)");
         }
         attempts += 1;
 
@@ -501,9 +503,7 @@ impl CopilotPage {
                 Err(e) => {
                     consecutive_errors += 1;
                     if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                        bail!(
-                            "body_text failed {MAX_CONSECUTIVE_ERRORS} times in a row: {e}"
-                        );
+                        bail!("body_text failed {MAX_CONSECUTIVE_ERRORS} times in a row: {e}");
                     }
                     debug!("[CDP] body_text error (attempt {consecutive_errors}): {e}");
                     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -542,7 +542,9 @@ impl CopilotPage {
         let r = ctx
             .one_shot("Page.captureScreenshot", json!({ "format": "png" }))
             .await?;
-        let b64 = r["data"].as_str().context("no screenshot data in CDP response")?;
+        let b64 = r["data"]
+            .as_str()
+            .context("no screenshot data in CDP response")?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(b64)
             .context("base64 decode failed")?;
@@ -685,7 +687,10 @@ async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
         // Browser is up but no Copilot page — use any page
         if let Ok(pages) = list_pages(debug_url).await {
             if let Some(first) = pages.iter().find(|p| p.kind == "page") {
-                warn!("[CDP] No Copilot page found, falling back to tab: {}", first.url);
+                warn!(
+                    "[CDP] No Copilot page found, falling back to tab: {}",
+                    first.url
+                );
                 return Some(Ok(ConnectionResult {
                     page: CopilotPage {
                         debug_url: debug_url.into(),
@@ -715,10 +720,7 @@ fn parse_port(debug_url: &str) -> Option<u16> {
 /// Handles localhost ↔ 127.0.0.1 normalization.
 async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
     // If the WS URL already uses a routable host, use it as-is
-    if ws.starts_with("ws://")
-        && !ws.contains("localhost")
-        && !ws.contains("127.0.0.1")
-    {
+    if ws.starts_with("ws://") && !ws.contains("localhost") && !ws.contains("127.0.0.1") {
         return Ok(ws.into());
     }
     let r = reqwest::get(&format!("{debug}/json/version"))

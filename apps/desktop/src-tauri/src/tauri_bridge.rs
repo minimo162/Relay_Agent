@@ -388,10 +388,10 @@ pub async fn connect_cdp(
         if state.connected {
             return Ok(CdpConnectResult {
                 ok: true,
-                debug_url: state
-                    .launched_port
-                    .map(|p| format!("http://127.0.0.1:{p}"))
-                    .unwrap_or_else(|| format!("http://127.0.0.1:{}", request.base_port.unwrap_or(9222))),
+                debug_url: state.launched_port.map_or_else(
+                    || format!("http://127.0.0.1:{}", request.base_port.unwrap_or(9222)),
+                    |p| format!("http://127.0.0.1:{p}"),
+                ),
                 page_url: state.page_url.clone().unwrap_or_default(),
                 page_title: String::new(),
                 port: state.launched_port,

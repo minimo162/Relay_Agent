@@ -95,8 +95,7 @@ impl ApiClient for CopilotApiClient {
             while let Some(event) = stream
                 .next_event()
                 .await
-                .map_err(|error| RuntimeError::new(format!("Copilot API error: {error}")))
-                ?
+                .map_err(|error| RuntimeError::new(format!("Copilot API error: {error}")))?
             {
                 match event {
                     ApiStreamEvent::MessageStart(start) => {
