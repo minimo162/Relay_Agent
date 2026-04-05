@@ -482,7 +482,7 @@ impl McpServerManager {
         Ok(())
     }
 
-    /// Returns the tool routing index for external consumers (e.g., TauriToolExecutor).
+    /// Returns the tool routing index for external consumers (e.g., `TauriToolExecutor`).
     #[must_use]
     pub fn tool_index(&self) -> &BTreeMap<String, ToolRoute> {
         &self.tool_index

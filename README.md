@@ -151,10 +151,23 @@ Relay_Agent/
   - Persistent registry with atomic state management
 - **Slash Commands** — Quick actions via the Composer input:
   - `/help` — List all available slash commands
-  - `/clear` — Clear the current chat feed
+  - `/clear` — Clear the current chat feed (requires `--confirm`)
   - `/compact` — Compact the agent session to free context
-  - `/status` — Show current session status and state
+  - `/status` — Show current session status (message count, token estimate)
+  - `/cost` — Show estimated session token usage
+  - `/memory` — Inspect loaded instruction memory files
+  - `/config` — Inspect config sections (env, model)
+  - `/init` — Generate starter CLAUDE.md guidance
+  - `/diff` — Show git diff for workspace changes
+  - `/export` — Export the conversation to JSON
+  - `/session` — List or switch managed sessions
+  - `/version` — Show CLI version info
+  - `/resume` — Resume a saved session
   - Autocomplete dropdown with keyboard navigation (↑↓/Tab/Enter/Esc)
+- **MCP Agent Loop Integration** — Agent automatically routes MCP tool calls through `McpServerManager` during execution:
+  - Tools discovered from registered MCP servers are available in the tool index
+  - MCP tool calls are synchronized via `tokio::runtime::block_on()` from the blocking agent loop
+  - MCP results are formatted into human-readable text for the assistant
 - **Context Panel Data Binding** — Fully reactive right panel with live data:
   - **Files** — View, add, and remove context files with size info
   - **MCP Servers** — Server status, tool counts, and management UI
@@ -178,8 +191,6 @@ Relay_Agent/
 
 ### 🚧 Planned / Partially Implemented
 
-- **MCP Agent Loop Integration** — MCP server tools called automatically by the agent during execution
-- **Expanded Slash Commands** — 22 total commands in `crates/commands/` — wire remaining commands to the UI
 - **E2E Test Expansion** — Comprehensive coverage for streaming, approval flows, session lifecycle, slash commands (~51 tests)
 
 ## IPC API
