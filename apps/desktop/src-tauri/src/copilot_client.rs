@@ -11,8 +11,6 @@ use runtime::{
     FRONTIER_MODEL_NAME,
 };
 
-
-
 /* ── Copilot API Client — adapts the Copilot Proxy API to runtime::ApiClient ─── */
 
 /// `CopilotStreamEvent` represents streaming chunks from the API.
@@ -24,6 +22,9 @@ pub enum CopilotStreamEvent {
 
 /// `CopilotApiClient` adapts the Copilot Proxy API (Anthropic-compatible SSE)
 /// to implement `runtime::ApiClient` for the agent loop.
+///
+/// This is intended to be created inside `spawn_blocking` or a blocking context.
+/// It carries a lightweight embedded tokio runtime to bridge async/sync boundaries.
 pub struct CopilotApiClient {
     client: AnthropicClient,
     runtime: tokio::runtime::Runtime,
@@ -34,8 +35,11 @@ pub struct CopilotApiClient {
 
 impl CopilotApiClient {
     pub fn new() -> Result<Self, RuntimeError> {
-        let runtime = tokio::runtime::Runtime::new()
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
             .map_err(|e| RuntimeError::new(format!("failed to create tokio runtime: {e}")))?;
+
         Ok(Self {
             client: AnthropicClient::from_auth(AuthSource::None).with_base_url(read_base_url()),
             runtime,
@@ -88,7 +92,8 @@ impl ApiClient for CopilotApiClient {
             while let Some(event) = stream
                 .next_event()
                 .await
-                .map_err(|error| RuntimeError::new(format!("Copilot API error: {error}")))?
+                .map_err(|error| RuntimeError::new(format!("Copilot API error: {error}")))
+                ?
             {
                 match event {
                     ApiStreamEvent::MessageStart(start) => {

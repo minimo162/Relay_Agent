@@ -212,6 +212,11 @@ export async function cdpScreenshot(): Promise<Record<string, unknown>> {
   return invoke<Record<string, unknown>>("cdp_screenshot", {});
 }
 
+/** Disconnect from the Copilot page and clean up the auto-launched browser */
+export async function disconnectCdp(): Promise<void> {
+  return invoke<void>("disconnect_cdp", {});
+}
+
 /* ============================================================
    Tauri events — listen to all
    ============================================================ */

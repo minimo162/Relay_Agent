@@ -287,27 +287,52 @@ pub async fn get_session_history(
 
 /* ── CDP Copilot Tauri commands ────────────────────────────── */
 
-/// Shared state: tracks the port of our auto-launched Edge.
-static LAUNCHED_EDGE_PORT: OnceLock<Mutex<Option<u16>>> = OnceLock::new();
-
-fn launched_port_lock() -> &'static Mutex<Option<u16>> {
-    LAUNCHED_EDGE_PORT.get_or_init(|| Mutex::new(None))
+/// Shared state: tracks the session for auto-launched Edge + connection status.
+struct CdpSessionState {
+    /// Port of our auto-launched Edge instance (if any).
+    launched_port: Option<u16>,
+    /// Whether the frontend currently has an active CDP connection.
+    connected: bool,
+    /// URL of the Copilot page (if connected).
+    page_url: Option<String>,
 }
 
-fn get_launched_port() -> Option<u16> {
-    *launched_port_lock().lock().unwrap()
+static CDP_SESSION: OnceLock<Mutex<CdpSessionState>> = OnceLock::new();
+
+fn cdp_session() -> &'static Mutex<CdpSessionState> {
+    CDP_SESSION.get_or_init(|| {
+        Mutex::new(CdpSessionState {
+            launched_port: None,
+            connected: false,
+            page_url: None,
+        })
+    })
 }
 
-fn set_launched_port(port: u16) {
-    *launched_port_lock().lock().unwrap() = Some(port);
-}
-
-fn resolve_debug_url(preferred_base: u16) -> String {
-    if let Some(port) = get_launched_port() {
+fn get_cdp_debug_url(preferred_base: u16) -> String {
+    let state = cdp_session().lock().unwrap();
+    if let Some(port) = state.launched_port {
         format!("http://127.0.0.1:{port}")
     } else {
         format!("http://127.0.0.1:{preferred_base}")
     }
+}
+
+fn cdp_is_connected() -> bool {
+    cdp_session().lock().unwrap().connected
+}
+
+fn mark_cdp_connected(port: u16, page_url: String) {
+    let mut state = cdp_session().lock().unwrap();
+    state.launched_port = Some(port);
+    state.connected = true;
+    state.page_url = Some(page_url);
+}
+
+fn mark_cdp_disconnected() {
+    let mut state = cdp_session().lock().unwrap();
+    state.connected = false;
+    state.page_url = None;
 }
 
 #[derive(Debug, Deserialize)]
@@ -357,9 +382,28 @@ pub async fn connect_cdp(
     _app: AppHandle,
     request: ConnectCdpRequest,
 ) -> Result<CdpConnectResult, String> {
+    // If already connected, return current status
+    {
+        let state = cdp_session().lock().unwrap();
+        if state.connected {
+            return Ok(CdpConnectResult {
+                ok: true,
+                debug_url: state
+                    .launched_port
+                    .map(|p| format!("http://127.0.0.1:{p}"))
+                    .unwrap_or_else(|| format!("http://127.0.0.1:{}", request.base_port.unwrap_or(9222))),
+                page_url: state.page_url.clone().unwrap_or_default(),
+                page_title: String::new(),
+                port: state.launched_port,
+                launched: state.launched_port.is_some(),
+                error: None,
+            });
+        }
+    }
+
     let auto_launch = request.auto_launch.unwrap_or(true);
     let base_port = request.base_port.unwrap_or(9222);
-    let debug_url = resolve_debug_url(base_port);
+    let debug_url = get_cdp_debug_url(base_port);
 
     tracing::info!(
         "[CDP] connect → {} (auto_launch={})",
@@ -371,7 +415,12 @@ pub async fn connect_cdp(
         Ok(res) => {
             tracing::info!("[CDP] connected → {} — {}", res.page.url, res.page.title);
             if res.launched {
-                set_launched_port(res.port);
+                mark_cdp_connected(res.port, res.page.url.clone());
+            } else {
+                // Existing browser: still mark as connected but don't track port as launched
+                let mut state = cdp_session().lock().unwrap();
+                state.connected = true;
+                state.page_url = Some(res.page.url.clone());
             }
             Ok(CdpConnectResult {
                 ok: true,
@@ -400,12 +449,13 @@ pub async fn cdp_send_prompt(
     _app: AppHandle,
     request: CdpSendPromptRequest,
 ) -> Result<CdpPromptResult, String> {
-    let debug_url = resolve_debug_url(9222);
+    let debug_url = get_cdp_debug_url(9222);
     let timeout_secs = request.wait_response_secs.unwrap_or(120);
 
     let prompt_preview = &request.prompt[..request.prompt.len().min(60)];
-    tracing::info!("[CDP] send prompt: {}…", prompt_preview);
+    tracing::info!("[CDP] send prompt: {prompt_preview}…");
 
+    // Use existing connection if available, otherwise connect fresh
     let page = match cdp_copilot::connect_copilot_page(&debug_url, false, 9222).await {
         Ok(r) => r.page.clone(),
         Err(e) => {
@@ -456,7 +506,7 @@ pub async fn cdp_start_new_chat(
 ) -> Result<CdpConnectResult, String> {
     let auto_launch = request.auto_launch.unwrap_or(true);
     let base_port = request.base_port.unwrap_or(9222);
-    let debug_url = resolve_debug_url(base_port);
+    let debug_url = get_cdp_debug_url(base_port);
 
     let res = match cdp_copilot::connect_copilot_page(&debug_url, auto_launch, base_port).await {
         Ok(r) => r,
@@ -474,7 +524,7 @@ pub async fn cdp_start_new_chat(
     };
 
     if res.launched {
-        set_launched_port(res.port);
+        mark_cdp_connected(res.port, res.page.url.clone());
     }
 
     if let Err(e) = res.page.navigate_to_chat().await {
@@ -500,10 +550,48 @@ pub async fn cdp_start_new_chat(
     })
 }
 
+/// Disconnect from the Copilot page and clean up the browser if it was auto-launched.
+#[tauri::command]
+pub async fn disconnect_cdp(_app: AppHandle) -> Result<(), String> {
+    let debug_url = get_cdp_debug_url(9222);
+
+    // Attempt to connect and kill the Edge process if it was launched by us
+    if let Ok(res) = cdp_copilot::connect_copilot_page(&debug_url, false, 9222).await {
+        if res.launched {
+            tracing::info!("[CDP] disconnect: killing auto-launched Edge (port {})", res.port);
+        }
+    }
+
+    // If we have a tracked launched port, clean up the Edge process directly
+    if let Some(_port) = cdp_session().lock().unwrap().launched_port {
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/FI", "IMAGENAME eq msedge.exe"])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output();
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = std::process::Command::new("pkill")
+                .arg("-f")
+                .arg("relay-agent-edge-profile")
+                .output();
+        }
+    }
+
+    mark_cdp_disconnected();
+    tracing::info!("[CDP] disconnected");
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn cdp_screenshot(_app: AppHandle) -> Result<serde_json::Value, String> {
-    let debug_url = resolve_debug_url(9222);
+    let debug_url = get_cdp_debug_url(9222);
 
+    // If already connected, reuse the session; otherwise do a fresh lookup
     let page = match cdp_copilot::connect_copilot_page(&debug_url, false, 9222).await {
         Ok(r) => r.page.clone(),
         Err(e) => return Err(format!("CDP connect: {e}")),

@@ -1,4 +1,3 @@
-use std::env;
 use std::fs;
 use std::path::PathBuf;
 
@@ -133,16 +132,13 @@ pub fn load_session(session_id: &str) -> Result<Option<LoadedSession>, RuntimeEr
 /* ── Persistence internals ─── */
 
 fn session_storage_dir() -> Result<PathBuf, RuntimeError> {
-    // Check USERPROFILE first on Windows, fall back to HOME for other platforms
-    let home = if cfg!(windows) {
-        env::var_os("USERPROFILE").or_else(|| env::var_os("HOME"))
-    } else {
-        env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))
-    }
-    .map(PathBuf::from)
-    .ok_or_else(|| {
-        RuntimeError::new("unable to resolve the home directory for session storage")
-    })?;
+    let home = std::env::var("HOME")
+        .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok())
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            RuntimeError::new("unable to resolve the home directory for session storage")
+        })?;
     Ok(home.join(".relay-agent").join("sessions"))
 }
 

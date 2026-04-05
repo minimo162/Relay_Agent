@@ -11,9 +11,10 @@
 //!
 //! ## Architecture
 //!
-//! `CopilotPage` wraps a full CDP WebSocket connection to a specific browser tab.
-//! The connection is established on first use and reused for subsequent commands,
-//! eliminating the connect-send-close overhead of the original one-shot pattern.
+//! `CopilotPage` wraps a CDP WebSocket connection to a specific browser tab.
+//! The connection is established on first use via `Ctx` (one-shot pattern:
+//! connect → send command → receive response → close). This avoids holding
+//! long-running WebSocket connections while keeping the debug URL stable.
 //!
 //! The client supports:
 //! - Auto-detection of existing browsers via `/json/list`
@@ -31,7 +32,7 @@ use std::process::Child;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::oneshot;
 use tokio::time::{timeout, Duration};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use tungstenite::Message;
 
 /* ── Port scanning ──────────────────────────────────────────── */
@@ -58,25 +59,20 @@ fn port_is_free(port: u16) -> bool {
 /// Uses a separate user-data-dir so it doesn't conflict with
 /// the user's personal browser.
 pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
-    // Determine Edge executable path
     let edge_path = find_edge_path()?;
 
-    // Dedicated profile directory (separate from user's Edge profile)
-    let home = if cfg!(target_os = "windows") {
-        std::env::var("LOCALAPPDATA").ok().map_or_else(
-            || PathBuf::from(r"C:\Users\Default\AppData\Local"),
-            PathBuf::from,
-        )
-    } else if cfg!(target_os = "macos") {
-        std::env::var("HOME").ok().map_or_else(
-            || PathBuf::from("/tmp"),
-            |h| PathBuf::from(h).join("Library").join("Application Support"),
-        )
-    } else {
-        std::env::var("HOME")
-            .ok()
-            .map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
-    };
+    let home = std::env::var("HOME")
+        .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            if cfg!(target_os = "windows") {
+                PathBuf::from(r"C:\Users\Default\AppData\Local")
+            } else {
+                PathBuf::from("/tmp")
+            }
+        });
+
     let profile_dir = home.join("RelayAgentEdgeProfile");
     std::fs::create_dir_all(&profile_dir).ok();
 
@@ -91,17 +87,12 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
         &port.to_string(),
         "--user-data-dir",
         profile_dir.to_str().unwrap(),
-        // Suppress first-run prompts
         "--no-first-run",
         "--no-default-browser-check",
-        // Start in background (don't steal focus)
         "--no-startup-window",
-        // Disable features that might interfere
         "--disable-infobars",
         "--disable-hang-monitor",
-        // Use a fixed window size for consistency
         "--window-size=1440,900",
-        // Navigate directly to Copilot
         "https://m365.cloud.microsoft/chat",
     ]);
 
@@ -115,7 +106,6 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
 
 fn find_edge_path() -> Result<String> {
     if cfg!(windows) {
-        // Check standard locations
         let candidates = [
             r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
             r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
@@ -135,23 +125,14 @@ fn find_edge_path() -> Result<String> {
         }
     } else {
         // Linux: try PATH
-        if let Ok(output) = std::process::Command::new("which")
-            .arg("microsoft-edge-stable")
-            .output()
-        {
-            if output.status.success() {
-                return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+        for candidate in ["microsoft-edge-stable", "microsoft-edge", "microsoft-edge-dev"] {
+            if let Ok(output) = std::process::Command::new("which").arg(candidate).output() {
+                if output.status.success() {
+                    return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+                }
             }
         }
-        if let Ok(output) = std::process::Command::new("which")
-            .arg("microsoft-edge")
-            .output()
-        {
-            if output.status.success() {
-                return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
-            }
-        }
-        bail!("Microsoft Edge not found on Linux");
+        bail!("Microsoft Edge not found on Linux (tried microsoft-edge-stable, microsoft-edge, microsoft-edge-dev)");
     }
 }
 
@@ -177,7 +158,7 @@ pub async fn wait_for_cdp_ready(debug_url: &str, max_wait_secs: u64) -> Result<(
                 );
                 return Ok(());
             }
-            Ok(_) => {}
+            Ok(_) => debug!("[CDP] connect attempt {} returned {}", attempts, resp.status()),
             Err(e) => debug!("[CDP] connect attempt {} failed: {}", attempts, e),
         }
 
@@ -234,13 +215,17 @@ pub async fn list_pages(debug_url: &str) -> Result<Vec<PageInfo>> {
         .collect())
 }
 
+/// Copilot page URL patterns checked in order.
+const COPILOT_URL_PATTERNS: &[&str] = &[
+    "m365.cloud.microsoft",
+    "copilot.microsoft.com",
+    "copilot.cloud.microsoft",
+    "m365.microsoft.com/chat",
+];
+
 pub async fn find_copilot_page(debug_url: &str) -> Result<Option<PageInfo>> {
     for p in list_pages(debug_url).await? {
-        if p.kind == "page"
-            && (p.url.contains("m365.cloud.microsoft")
-                || p.url.contains("copilot.microsoft")
-                || p.url.contains("copilot.cloud.microsoft"))
-        {
+        if p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat)) {
             return Ok(Some(p));
         }
     }
@@ -262,7 +247,7 @@ impl Ctx {
         }
     }
 
-    /// Open a WS, send one CDP command, wait for response, close.
+    /// Open a WebSocket, send one CDP command, wait for response, close.
     #[allow(clippy::result_large_err, clippy::items_after_statements)]
     async fn one_shot(&self, method: &str, params: Value) -> Result<Value> {
         let id = self.next.fetch_add(1, Ordering::SeqCst);
@@ -275,7 +260,7 @@ impl Ctx {
         let (mut write, mut read) = ws.split();
         let (tx, rx) = oneshot::channel::<Value>();
 
-        // reader — we keep its JoinHandle so we can abort it after getting the response
+        // reader — abort after getting the response
         let reader_handle = tokio::spawn(async move {
             while let Some(msg) = read.next().await {
                 if let Ok(txt) = msg.as_ref().map(|m| m.to_text()) {
@@ -353,19 +338,30 @@ impl CopilotPage {
         Ok(())
     }
 
+    /// Send a prompt to the Copilot composer and click send.
+    /// Uses multi-selector fallback for the composer and send button
+    /// to handle UI changes and i18n (Japanese/English).
     pub async fn send_prompt(&self, text: &str) -> Result<()> {
-        info!("[CDP] send: {}", &text[..text.len().min(40)]);
+        let preview = text.chars().take(60).collect::<String>();
+        info!("[CDP] send: {preview}…");
         let ctx = self.ctx().await?;
 
-        // 1. Type into composer
+        // 1. Type into composer — try multiple selectors
         let js = format!(
             r#"(() => {{
-                for (const s of ['div[role="textbox"]','textarea','[contenteditable="true"]']) {{
+                for (const s of [
+                    'div[role="textbox"]',
+                    'textarea',
+                    '[contenteditable="true"]',
+                    '#m365-chat-editor-target-element',
+                    'div[role="combobox"]'
+                ]) {{
                     const el = document.querySelector(s);
                     if (el && el.offsetParent !== null) {{
                         el.focus();
                         el.innerText = {};
                         el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
                         return true;
                     }}
                 }}
@@ -375,19 +371,28 @@ impl CopilotPage {
         );
         let r = ctx.eval(&js).await?;
         if r["result"]["value"].as_bool() != Some(true) {
-            bail!("composer not found");
+            bail!("composer not found — Copilot page may not be ready");
         }
 
         tokio::time::sleep(Duration::from_millis(800)).await;
 
-        // 2. Click send
+        // 2. Click send — i18n-aware multi-selector fallback
         let ctx2 = self.ctx().await?;
         let js2 = r#"(() => {
             for (const s of [
+                // Japanese
                 'button[aria-label="送信"]',
-                'button[aria-label="Reply"]',
+                'button[aria-label*="送信"]',
+                // English
                 'button[aria-label="Send"]',
-                'button[aria-label="返信"]'
+                'button[aria-label="Reply"]',
+                'button[aria-label*="Send"]',
+                // Generic
+                'button[data-testid="sendButton"]',
+                'button[type="submit"]',
+                // Icon button patterns
+                'button:has(svg[iconName="Send"])',
+                '[data-icon-name="Send"]'
             ]) {
                 const b = document.querySelector(s);
                 if (b && b.offsetParent !== null) {
@@ -401,20 +406,20 @@ impl CopilotPage {
         let val: Value = serde_json::from_str(r2["result"]["value"].as_str().unwrap_or("{}"))
             .unwrap_or(Value::Null);
         if val.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
-            bail!("send button not found");
+            bail!("send button not found — page may not be interactive");
         }
 
-        // 3. Wait for composer to clear
+        // 3. Wait for composer to clear (confirms prompt was dispatched)
         tokio::time::sleep(Duration::from_millis(500)).await;
         timeout(Duration::from_secs(5), async {
             loop {
                 let ctx3 = self.ctx().await.ok();
-                if let Some(ctx) = ctx3 {
-                    if let Ok(r) = ctx
+                if let Some(ctx_ref) = ctx3 {
+                    if let Ok(r) = ctx_ref
                         .eval(
                             r#"(() => {
                             for (const el of document.querySelectorAll(
-                                'div[role="textbox"],textarea,[contenteditable="true"]'
+                                'div[role="textbox"],textarea,[contenteditable="true"],#m365-chat-editor-target-element'
                             )) {
                                 if ((el.innerText||'').trim().length > 5) return false;
                             }
@@ -432,12 +437,13 @@ impl CopilotPage {
             }
         })
         .await
-        .context("composer didn't clear")??;
+        .context("composer didn't clear after send")??;
 
         info!("[CDP] prompt sent ✓");
         Ok(())
     }
 
+    /// Check if Copilot is currently generating a response.
     pub async fn is_streaming(&self) -> Result<bool> {
         let ctx = self.ctx().await?;
         let r = ctx
@@ -445,7 +451,9 @@ impl CopilotPage {
                 r#"(() => {
                 for (const s of [
                     'button[aria-label*="生成を停止"]',
-                    'button[aria-label*="Stop generating"]'
+                    'button[aria-label*="Stop generating"]',
+                    'button[aria-label*="Stop response"]',
+                    'button[data-testid="stopGeneratingButton"]'
                 ]) {
                     for (const el of document.querySelectorAll(s)) {
                         if (el.offsetParent !== null) return true;
@@ -458,6 +466,8 @@ impl CopilotPage {
         Ok(r["result"]["value"].as_bool().unwrap_or(false))
     }
 
+    /// Wait for Copilot to finish generating a response.
+    /// Uses streaming detection + content stability polling.
     pub async fn wait_for_response(&self, timeout_secs: u64) -> Result<String> {
         const MAX_CONSECUTIVE_ERRORS: usize = 5;
         let start = std::time::Instant::now();
@@ -471,7 +481,6 @@ impl CopilotPage {
                 bail!("response timeout after {timeout_secs}s");
             }
 
-            // body_text: propagate actual errors so we don't spin forever
             let txt = match self.body_text().await {
                 Ok(text) => {
                     consecutive_errors = 0;
@@ -480,8 +489,11 @@ impl CopilotPage {
                 Err(e) => {
                     consecutive_errors += 1;
                     if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                        bail!("body_text failed {MAX_CONSECUTIVE_ERRORS} times in a row: {e}");
+                        bail!(
+                            "body_text failed {MAX_CONSECUTIVE_ERRORS} times in a row: {e}"
+                        );
                     }
+                    debug!("[CDP] body_text error (attempt {consecutive_errors}): {e}");
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     continue;
                 }
@@ -512,15 +524,16 @@ impl CopilotPage {
         }
     }
 
+    /// Capture a screenshot of the current page.
     pub async fn screenshot(&self, path: &str) -> Result<()> {
         let ctx = self.ctx().await?;
         let r = ctx
             .one_shot("Page.captureScreenshot", json!({ "format": "png" }))
             .await?;
-        let b64 = r["data"].as_str().context("no data")?;
+        let b64 = r["data"].as_str().context("no screenshot data in CDP response")?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(b64)
-            .context("base64")?;
+            .context("base64 decode failed")?;
         std::fs::write(path, bytes)?;
         info!("[CDP] screenshot → {}", path);
         Ok(())
@@ -552,17 +565,18 @@ impl ConnectionResult {
 impl Drop for ConnectionResult {
     fn drop(&mut self) {
         if self.edge_process.is_some() {
-            info!("[CDP] ConnectionResult dropped with running Edge process (PID: {}) — call quit_edge() to clean up explicitly",
-                self.edge_process.as_ref().map_or(0, Child::id));
+            info!(
+                "[CDP] ConnectionResult dropped with running Edge process (PID: {}) — call quit_edge() to clean up explicitly",
+                self.edge_process
+                    .as_ref()
+                    .map_or(0, Child::id)
+            );
         }
     }
 }
 
 /// Disconnect from the Copilot page and clean up the browser if it was launched.
-/// This is a one-shot operation — the `DisconnectResult` cannot be reused.
-pub async fn disconnect_copilot_page(
-    result: ConnectionResult,
-) -> Result<(), anyhow::Error> {
+pub async fn disconnect_copilot_page(result: ConnectionResult) -> Result<(), anyhow::Error> {
     let debug_url = result.page.debug_url.clone();
     let mut result = result;
     result.quit_edge();
@@ -582,7 +596,10 @@ pub async fn connect_copilot_page(
     }
 
     if !auto_launch {
-        bail!("No Copilot browser found at {debug_url}. Enable auto_launch or start Edge with --remote-debugging-port.");
+        bail!(
+            "No Copilot browser found at {debug_url}. \
+             Enable auto_launch or start Edge with --remote-debugging-port."
+        );
     }
 
     // Find a free port and launch Edge
@@ -611,7 +628,7 @@ pub async fn connect_copilot_page(
     let first = pages
         .iter()
         .find(|p| p.kind == "page")
-        .context("no page after launch")?;
+        .context("no page found after Edge launch")?;
     Ok(ConnectionResult {
         page: CopilotPage {
             debug_url: debug_url_new,
@@ -625,9 +642,12 @@ pub async fn connect_copilot_page(
     })
 }
 
+/// Try to find an existing Copilot page at the given debug URL.
+/// Returns `Some(Ok(...))` if a page was found, `Some(Err(...))` on network error,
+/// or `None` if the browser is unreachable.
 async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
     if let Ok(Some(p)) = find_copilot_page(debug_url).await {
-        info!("[CDP] using tab: {}", p.url);
+        info!("[CDP] using existing copilot tab: {}", p.url);
         return Some(Ok(ConnectionResult {
             page: CopilotPage {
                 debug_url: debug_url.into(),
@@ -649,6 +669,7 @@ async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
         // Browser is up but no Copilot page — use any page
         if let Ok(pages) = list_pages(debug_url).await {
             if let Some(first) = pages.iter().find(|p| p.kind == "page") {
+                warn!("[CDP] No Copilot page found, falling back to tab: {}", first.url);
                 return Some(Ok(ConnectionResult {
                     page: CopilotPage {
                         debug_url: debug_url.into(),
@@ -674,18 +695,23 @@ fn parse_port(debug_url: &str) -> Option<u16> {
         .and_then(|s| s.parse().ok())
 }
 
+/// Resolve the actual WebSocket URL for CDP communication.
+/// Handles localhost ↔ 127.0.0.1 normalization.
 async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
-    // If the WS URL already uses a routable host (not localhost or 127.0.0.1), use it as-is
-    if ws.starts_with("ws://") && !ws.contains("localhost") && !ws.contains("127.0.0.1") {
+    // If the WS URL already uses a routable host, use it as-is
+    if ws.starts_with("ws://")
+        && !ws.contains("localhost")
+        && !ws.contains("127.0.0.1")
+    {
         return Ok(ws.into());
     }
     let r = reqwest::get(&format!("{debug}/json/version"))
         .await
         .context("/json/version")?;
-    let v: Value = r.json().await?;
+    let v: Value = r.json().await.context("/json/version JSON")?;
     let url = v["webSocketDebuggerUrl"]
         .as_str()
-        .context("missing")?
+        .context("missing webSocketDebuggerUrl")?
         .to_string();
     let host = debug
         .strip_prefix("http://")
