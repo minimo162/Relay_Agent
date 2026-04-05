@@ -158,7 +158,7 @@ pub async fn wait_for_cdp_ready(debug_url: &str, max_wait_secs: u64) -> Result<(
                 );
                 return Ok(());
             }
-            Ok(_) => debug!("[CDP] connect attempt {} returned {}", attempts, resp.status()),
+            Ok(r) => debug!("[CDP] connect attempt {} returned {}", attempts, r.status()),
             Err(e) => debug!("[CDP] connect attempt {} failed: {}", attempts, e),
         }
 
