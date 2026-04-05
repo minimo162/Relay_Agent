@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+mod cli_hub;
+mod electron_cdp;
+
 use api::{
     read_base_url, AnthropicClient, ContentBlockDelta, InputContentBlock, InputMessage,
     MessageRequest, MessageResponse, OutputContentBlock, StreamEvent as ApiStreamEvent, ToolChoice,
@@ -377,6 +380,154 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             }),
             required_permission: PermissionMode::DangerFullAccess,
         },
+        // ── CLI Hub (OpenCLI-inspired) ──
+        ToolSpec {
+            name: "CliList",
+            description: "List all discoverable external CLIs with their installed status.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "CliDiscover",
+            description: "Discover all known CLIs and report which are installed vs missing.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "CliRegister",
+            description: "Register a new external CLI by name so AI agents can discover it.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" }
+                },
+                "required": ["name"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::WorkspaceWrite,
+        },
+        ToolSpec {
+            name: "CliUnregister",
+            description: "Unregister a custom CLI from the registry.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" }
+                },
+                "required": ["name"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::WorkspaceWrite,
+        },
+        ToolSpec {
+            name: "CliRun",
+            description: "Execute an external CLI with arguments. Returns stdout, stderr, and exit code.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "cli": { "type": "string" },
+                    "args": { "type": "array", "items": { "type": "string" } },
+                    "timeout_ms": { "type": "integer", "minimum": 100 }
+                },
+                "required": ["cli", "args"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
+        },
+        // ── Electron CDP Controller (OpenCLI-inspired) ──
+        ToolSpec {
+            name: "ElectronApps",
+            description: "List known Electron desktop apps with their running status and CDP configuration.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "ElectronLaunch",
+            description: "Launch an Electron app with CDP (Chrome DevTools Protocol) enabled for remote control.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "app": { "type": "string" },
+                    "cdp_port": { "type": "integer", "minimum": 1024 }
+                },
+                "required": ["app"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
+        },
+        ToolSpec {
+            name: "ElectronEval",
+            description: "Execute JavaScript in an Electron app's renderer process via CDP.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "app": { "type": "string" },
+                    "cdp_port": { "type": "integer", "minimum": 1024 },
+                    "expression": { "type": "string" }
+                },
+                "required": ["app", "expression"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
+        },
+        ToolSpec {
+            name: "ElectronGetText",
+            description: "Get text content from an Electron app page via CDP.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "app": { "type": "string" },
+                    "cdp_port": { "type": "integer", "minimum": 1024 },
+                    "selector": { "type": "string" }
+                },
+                "required": ["app"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "ElectronClick",
+            description: "Click an element in an Electron app via CDP.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "app": { "type": "string" },
+                    "cdp_port": { "type": "integer", "minimum": 1024 },
+                    "selector": { "type": "string" }
+                },
+                "required": ["app", "selector"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
+        },
+        ToolSpec {
+            name: "ElectronTypeText",
+            description: "Type text into an input field in an Electron app via CDP.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "app": { "type": "string" },
+                    "cdp_port": { "type": "integer", "minimum": 1024 },
+                    "selector": { "type": "string" },
+                    "text": { "type": "string" }
+                },
+                "required": ["app", "selector", "text"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
+        },
     ]
 }
 
@@ -417,6 +568,36 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         }
         "REPL" => from_value::<ReplInput>(input).and_then(run_repl),
         "PowerShell" => from_value::<PowerShellInput>(input).and_then(run_powershell),
+        // CLI Hub
+        "CliList" => Ok(serde_json::to_string_pretty(&cli_hub::cli_list()).unwrap()),
+        "CliDiscover" => Ok(serde_json::to_string_pretty(&cli_hub::cli_discover()).unwrap()),
+        "CliRegister" => {
+            Ok(from_value::<CliRegisterInput>(input).map_or_else(|e| e, run_cli_register))
+        }
+        "CliUnregister" => {
+            Ok(from_value::<CliUnregisterInput>(input).map_or_else(|e| e, run_cli_unregister))
+        }
+        "CliRun" => Ok(from_value::<CliRunInput>(input).map_or_else(|e| e, run_cli_run)),
+        // Electron CDP
+        "ElectronApps" => {
+            Ok(serde_json::to_string_pretty(&electron_cdp::electron_apps_status()).unwrap())
+        }
+        "ElectronLaunch" => {
+            Ok(from_value::<ElectronLaunchInput>(input).map_or_else(|e| e, run_electron_launch))
+        }
+        "ElectronEval" => {
+            Ok(from_value::<ElectronEvalInput>(input).map_or_else(|e| e, run_electron_eval))
+        }
+        "ElectronGetText" => {
+            Ok(from_value::<ElectronGetTextInput>(input).map_or_else(|e| e, run_electron_get_text))
+        }
+        "ElectronClick" => {
+            Ok(from_value::<ElectronClickInput>(input).map_or_else(|e| e, run_electron_click))
+        }
+        "ElectronTypeText" => {
+            Ok(from_value::<ElectronTypeTextInput>(input)
+                .map_or_else(|e| e, run_electron_type_text))
+        }
         _ => Err(format!("unsupported tool: {name}")),
     }
 }
@@ -515,6 +696,68 @@ fn run_repl(input: ReplInput) -> Result<String, String> {
 
 fn run_powershell(input: PowerShellInput) -> Result<String, String> {
     to_pretty_json(execute_powershell(input).map_err(|error| error.to_string())?)
+}
+
+fn run_cli_register(input: CliRegisterInput) -> String {
+    serde_json::to_string_pretty(&cli_hub::cli_register(input.name)).unwrap()
+}
+
+fn run_cli_unregister(input: CliUnregisterInput) -> String {
+    serde_json::to_string_pretty(&cli_hub::cli_unregister(input.name)).unwrap()
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_cli_run(input: CliRunInput) -> String {
+    let args: Vec<&str> = input.args.iter().map(std::string::String::as_str).collect();
+    serde_json::to_string_pretty(&cli_hub::cli_execute(&input.cli, &args, input.timeout_ms))
+        .unwrap()
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_electron_launch(input: ElectronLaunchInput) -> String {
+    serde_json::to_string_pretty(&electron_cdp::electron_launch(&input.app, input.cdp_port))
+        .unwrap()
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_electron_eval(input: ElectronEvalInput) -> String {
+    serde_json::to_string_pretty(&electron_cdp::electron_eval(
+        &input.app,
+        input.cdp_port,
+        &input.expression,
+    ))
+    .unwrap()
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_electron_get_text(input: ElectronGetTextInput) -> String {
+    serde_json::to_string_pretty(&electron_cdp::electron_get_text(
+        &input.app,
+        input.cdp_port,
+        input.selector.as_deref(),
+    ))
+    .unwrap()
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_electron_click(input: ElectronClickInput) -> String {
+    serde_json::to_string_pretty(&electron_cdp::electron_click(
+        &input.app,
+        input.cdp_port,
+        &input.selector,
+    ))
+    .unwrap()
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_electron_type_text(input: ElectronTypeTextInput) -> String {
+    serde_json::to_string_pretty(&electron_cdp::electron_type_text(
+        &input.app,
+        input.cdp_port,
+        &input.selector,
+        &input.text,
+    ))
+    .unwrap()
 }
 
 fn to_pretty_json<T: serde::Serialize>(value: T) -> Result<String, String> {
@@ -682,6 +925,62 @@ struct PowerShellInput {
     timeout: Option<u64>,
     description: Option<String>,
     run_in_background: Option<bool>,
+}
+
+/* ── CLI Hub inputs/outputs ─────────────────────────────────── */
+
+#[derive(Debug, Deserialize)]
+struct CliRegisterInput {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CliUnregisterInput {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CliRunInput {
+    cli: String,
+    args: Vec<String>,
+    timeout_ms: Option<u64>,
+}
+
+/* ── Electron CDP inputs ────────────────────────────────────── */
+
+#[derive(Debug, Deserialize)]
+struct ElectronLaunchInput {
+    app: String,
+    cdp_port: Option<u16>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ElectronEvalInput {
+    app: String,
+    cdp_port: u16,
+    expression: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ElectronGetTextInput {
+    app: String,
+    cdp_port: u16,
+    selector: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ElectronClickInput {
+    app: String,
+    cdp_port: u16,
+    selector: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ElectronTypeTextInput {
+    app: String,
+    cdp_port: u16,
+    selector: String,
+    text: String,
 }
 
 #[derive(Debug, Serialize)]
