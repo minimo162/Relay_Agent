@@ -558,6 +558,18 @@ impl Drop for ConnectionResult {
     }
 }
 
+/// Disconnect from the Copilot page and clean up the browser if it was launched.
+/// This is a one-shot operation — the `DisconnectResult` cannot be reused.
+pub async fn disconnect_copilot_page(
+    result: ConnectionResult,
+) -> Result<(), anyhow::Error> {
+    let debug_url = result.page.debug_url.clone();
+    let mut result = result;
+    result.quit_edge();
+    info!("[CDP] Disconnected from {:?}", debug_url);
+    Ok(())
+}
+
 /// Connect to a Copilot page, auto-launching Edge if needed.
 pub async fn connect_copilot_page(
     debug_url: &str,

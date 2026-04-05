@@ -48,34 +48,12 @@ impl CopilotApiClient {
         })
     }
 
-    /// Convenience alias for [`Self::new`].
-    pub fn with_default_settings() -> Result<Self, RuntimeError> {
-        Self::new()
-    }
-
     pub fn with_stream_callback<F>(mut self, callback: F) -> Self
     where
         F: Fn(CopilotStreamEvent) + Send + Sync + 'static,
     {
         self.stream_callback = Some(Arc::new(callback));
         self
-    }
-
-    /// Save a session to disk.
-    #[allow(clippy::unused_self)]
-    pub fn save_session(
-        &self,
-        session_id: &str,
-        session: &runtime::Session,
-        config: PersistedSessionConfig,
-    ) -> Result<(), RuntimeError> {
-        save_session(session_id, session, config)
-    }
-
-    /// Load a session from disk.
-    #[allow(clippy::unused_self)]
-    pub fn load_session(&self, session_id: &str) -> Result<Option<LoadedSession>, RuntimeError> {
-        load_session(session_id)
     }
 }
 

@@ -273,10 +273,7 @@ pub async fn get_session_history(
         return Ok(history);
     }
 
-    let api_client = crate::copilot_client::CopilotApiClient::with_default_settings()
-        .map_err(|e| e.to_string())?;
-    let loaded = api_client
-        .load_session(&request.session_id)
+    let loaded = crate::copilot_persistence::load_session(&request.session_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("session `{}` not found", request.session_id))?;
     let messages = loaded.session.messages.iter().map(msg_to_relay).collect();

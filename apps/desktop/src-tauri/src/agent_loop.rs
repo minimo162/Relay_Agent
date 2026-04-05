@@ -12,8 +12,9 @@ use runtime::{
     ToolExecutor,
 };
 
-use crate::copilot_client::{CopilotApiClient, CopilotStreamEvent};
-use crate::copilot_persistence::PersistedSessionConfig;
+use crate::config::AgentConfig;
+use crate::copilot_client::{self, CopilotApiClient, CopilotStreamEvent};
+use crate::copilot_persistence::{self, PersistedSessionConfig};
 use crate::error::AgentLoopError;
 use crate::registry::SessionRegistry;
 
@@ -62,7 +63,7 @@ pub fn run_agent_loop_impl(
     let _shared_client = SHARED_ANTHROPIC_CLIENT.get_or_init(|| {
         api::AnthropicClient::from_auth(api::AuthSource::None).with_base_url(api::read_base_url())
     });
-    let api_client = CopilotApiClient::with_default_settings()
+    let api_client = CopilotApiClient::new()
         .map_err(|e| AgentLoopError::InitializationError(e.to_string()))?
         .with_stream_callback(move |event| match event {
             CopilotStreamEvent::TextDelta(text) => {
@@ -145,17 +146,16 @@ pub fn run_agent_loop_impl(
         let _ignore = registry.mutate_session(session_id, |entry| {
             entry.session = runtime_session.session().clone();
         });
-        persistence_client
-            .save_session(
-                session_id,
-                runtime_session.session(),
-                PersistedSessionConfig {
-                    goal: Some(goal.clone()),
-                    cwd: cwd.clone(),
-                    max_turns: Some(max_turns),
-                },
-            )
-            .map_err(|error| AgentLoopError::PersistenceError(error.to_string()))?;
+        copilot_persistence::save_session(
+            session_id,
+            runtime_session.session(),
+            PersistedSessionConfig {
+                goal: Some(goal.clone()),
+                cwd: cwd.clone(),
+                max_turns: Some(max_turns),
+            },
+        )
+        .map_err(|error| AgentLoopError::PersistenceError(error.to_string()))?;
 
         let needs_more_turns = summary.assistant_messages.last().is_some_and(|message| {
             message
@@ -203,17 +203,16 @@ pub fn run_agent_loop_impl(
     }
 
     let session = runtime_session.into_session();
-    persistence_client
-        .save_session(
-            session_id,
-            &session,
-            PersistedSessionConfig {
-                goal: Some(goal),
-                cwd,
-                max_turns: Some(max_turns),
-            },
-        )
-        .map_err(|error| AgentLoopError::PersistenceError(error.to_string()))?;
+    copilot_persistence::save_session(
+        session_id,
+        &session,
+        PersistedSessionConfig {
+            goal: Some(goal),
+            cwd,
+            max_turns: Some(max_turns),
+        },
+    )
+    .map_err(|error| AgentLoopError::PersistenceError(error.to_string()))?;
     // Update final session state
     let _ignore = registry.mutate_session(session_id, |entry| {
         entry.session = session;
