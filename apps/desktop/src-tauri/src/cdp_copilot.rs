@@ -248,6 +248,9 @@ impl Ctx {
     }
 
     /// Open a WebSocket, send one CDP command, wait for response, close.
+    ///
+    /// Uses a dedicated reader task with a proper error branch so that
+    /// WS errors are logged instead of silently swallowed.
     #[allow(clippy::result_large_err, clippy::items_after_statements)]
     async fn one_shot(&self, method: &str, params: Value) -> Result<Value> {
         let id = self.next.fetch_add(1, Ordering::SeqCst);
@@ -260,16 +263,25 @@ impl Ctx {
         let (mut write, mut read) = ws.split();
         let (tx, rx) = oneshot::channel::<Value>();
 
-        // reader — abort after getting the response
+        // reader — drains the WS until the matching response is found
         let reader_handle = tokio::spawn(async move {
-            while let Some(msg) = read.next().await {
-                if let Ok(txt) = msg.as_ref().map(|m| m.to_text()) {
-                    if let Ok(v) = serde_json::from_str::<Value>(txt.unwrap()) {
-                        if v.get("id").and_then(serde_json::Value::as_u64) == Some(id) {
-                            tx.send(v).ok();
-                            return;
+            loop {
+                match read.next().await {
+                    Some(Ok(msg)) => {
+                        if let Ok(txt) = msg.to_text() {
+                            if let Ok(v) = serde_json::from_str::<Value>(txt) {
+                                if v.get("id").and_then(serde_json::Value::as_u64) == Some(id) {
+                                    tx.send(v).ok();
+                                    return;
+                                }
+                            }
                         }
                     }
+                    Some(Err(e)) => {
+                        debug!("[CDP] one_shot reader error: {e}");
+                        return;
+                    }
+                    None => return,
                 }
             }
         });
@@ -284,9 +296,9 @@ impl Ctx {
             .context("CDP timeout")?
             .context("response lost")?;
 
-        // Gracefully close the WS before aborting the reader
+        // close the writer side to signal the remote, then wait for the reader
         let _ = write.close().await;
-        reader_handle.abort();
+        let _ = reader_handle.await;
 
         if let Some(err) = resp.get("error") {
             bail!("CDP {method}: {err}");
@@ -575,7 +587,11 @@ impl Drop for ConnectionResult {
     }
 }
 
-/// Disconnect from the Copilot page and clean up the browser if it was launched.
+/// Disconnect from a Copilot page and clean up the browser if it was auto-launched.
+///
+/// Takes ownership of the `ConnectionResult`, calls `quit_edge()` to gracefully
+/// shut down the browser process, and drops the WebSocket connection.
+/// Safe to call even if no Edge process was launched (`launched == false`).
 pub async fn disconnect_copilot_page(result: ConnectionResult) -> Result<(), anyhow::Error> {
     let debug_url = result.page.debug_url.clone();
     let mut result = result;

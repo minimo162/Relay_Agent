@@ -135,6 +135,14 @@ fn session_storage_dir() -> Result<PathBuf, RuntimeError> {
     let home = std::env::var("HOME")
         .ok()
         .or_else(|| std::env::var("USERPROFILE").ok())
+        .or_else(|| {
+            // Fallback for environments without HOME/USERPROFILE
+            if cfg!(target_os = "windows") {
+                std::env::var("LOCALAPPDATA").ok()
+            } else {
+                None
+            }
+        })
         .map(PathBuf::from)
         .ok_or_else(|| {
             RuntimeError::new("unable to resolve the home directory for session storage")
@@ -255,6 +263,38 @@ impl PersistedContentBlock {
                 is_error,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_session_id_normal() {
+        assert!(validate_session_id("abc-123").is_ok());
+        assert!(validate_session_id("session_01").is_ok());
+        assert!(validate_session_id("simple").is_ok());
+    }
+
+    #[test]
+    fn test_validate_session_id_empty() {
+        assert!(validate_session_id("").is_err());
+    }
+
+    #[test]
+    fn test_validate_session_id_too_long() {
+        let long = "a".repeat(129);
+        assert!(validate_session_id(&long).is_err());
+        assert!(validate_session_id(&"a".repeat(128)).is_ok());
+    }
+
+    #[test]
+    fn test_validate_session_id_invalid_chars() {
+        assert!(validate_session_id("abc/def").is_err());
+        assert!(validate_session_id("abc\\def").is_err());
+        assert!(validate_session_id("abc..def").is_err());
+        assert!(validate_session_id("abc def").is_err());
     }
 }
 

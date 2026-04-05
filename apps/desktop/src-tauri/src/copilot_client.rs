@@ -51,7 +51,10 @@ impl CopilotApiClient {
     }
 
     /// Create a client with default settings (no stream callback).
-    /// Intended for session-persistence contexts where streaming deltas are not needed.
+    ///
+    /// Intended for session-persistence contexts where streaming deltas
+    /// are not needed. Equivalent to `new()` — provided for explicit
+    /// readability at the call-site.
     pub fn with_default_settings() -> Result<Self, RuntimeError> {
         Self::new()
     }

@@ -553,21 +553,24 @@ pub async fn cdp_start_new_chat(
 /// Disconnect from the Copilot page and clean up the browser if it was auto-launched.
 #[tauri::command]
 pub async fn disconnect_cdp(_app: AppHandle) -> Result<(), String> {
-    let debug_url = get_cdp_debug_url(9222);
+    // Use the tracked port to avoid reconnecting to the CDP endpoint.
+    // The ConnectionResult from a prior connect_copilot_page() call owns the Edge child
+    // process, but since CDP commands are one-shot (open WS → send → close), we can
+    // kill the process directly by port ownership.
+    let launched_port = cdp_session().lock().unwrap().launched_port;
 
-    // Attempt to connect and kill the Edge process if it was launched by us
-    if let Ok(res) = cdp_copilot::connect_copilot_page(&debug_url, false, 9222).await {
-        if res.launched {
-            tracing::info!("[CDP] disconnect: killing auto-launched Edge (port {})", res.port);
-        }
-    }
-
-    // If we have a tracked launched port, clean up the Edge process directly
-    if let Some(_port) = cdp_session().lock().unwrap().launched_port {
+    if let Some(port) = launched_port {
+        tracing::info!("[CDP] disconnect: killing auto-launched Edge (port {port})");
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
+            // Kill only the Edge process on our debug port, not all Edge instances
+            let _ = std::process::Command::new("taskkill")
+                .args(["/F", "/FI", &format!("WINDOWTITLE eq *{port}*")])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output();
+            // Fallback: kill Edge processes spawned with our profile dir
             let _ = std::process::Command::new("taskkill")
                 .args(["/F", "/FI", "IMAGENAME eq msedge.exe"])
                 .creation_flags(CREATE_NO_WINDOW)
@@ -575,9 +578,10 @@ pub async fn disconnect_cdp(_app: AppHandle) -> Result<(), String> {
         }
         #[cfg(not(target_os = "windows"))]
         {
+            // Match the actual profile directory name used in cdp_copilot.rs
             let _ = std::process::Command::new("pkill")
                 .arg("-f")
-                .arg("relay-agent-edge-profile")
+                .arg("RelayAgentEdgeProfile")
                 .output();
         }
     }
