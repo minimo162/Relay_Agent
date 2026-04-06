@@ -12,6 +12,47 @@ function parseIntEnv(name: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/** Headed は Linux で DISPLAY が無いと起動に失敗する（SSH など）。 */
+function resolveHeadless(): boolean {
+  const wantHeaded =
+    process.env.E2E_HEADED === "1" ||
+    process.env.E2E_HEADED === "true" ||
+    parseIntEnv("E2E_2FA_PAUSE_MS", 0) > 0 ||
+    !!(process.env.E2E_2FA_WAIT_FILE?.trim());
+
+  if (!wantHeaded) {
+    return true;
+  }
+  if (process.platform === "linux" && !process.env.DISPLAY?.trim()) {
+    console.warn(
+      "[e2e:auth] Headed mode was requested (E2E_HEADED / E2E_2FA_*), but DISPLAY is unset — using headless. " +
+        "For a visible browser: export DISPLAY=:0 or use `xvfb-run -a pnpm test:e2e`.",
+    );
+    return true;
+  }
+  return false;
+}
+
+async function launchChromiumForAuth(headless: boolean) {
+  const channel = process.env.E2E_CHROME_CHANNEL?.trim() || undefined;
+  const opts = { headless, channel } as const;
+  try {
+    return await chromium.launch({ headless: opts.headless, channel: opts.channel });
+  } catch (err) {
+    if (channel) {
+      console.warn(
+        `[e2e:auth] Launch with E2E_CHROME_CHANNEL=${channel} failed; retrying bundled Chromium.`,
+        err,
+      );
+      return await chromium.launch({ headless });
+    }
+    const hint =
+      "Install: pnpm exec playwright install chromium\n" +
+      "Linux system libs: pnpm exec playwright install-deps (or install --with-deps)";
+    throw new Error(`${String(err)}\n[e2e:auth] ${hint}`);
+  }
+}
+
 export default async function globalSetup(_config: FullConfig): Promise<void> {
   loadE2eEnv();
 
@@ -42,16 +83,9 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     return;
   }
 
-  const headed =
-    process.env.E2E_HEADED === "1" ||
-    process.env.E2E_HEADED === "true" ||
-    parseIntEnv("E2E_2FA_PAUSE_MS", 0) > 0 ||
-    !!(process.env.E2E_2FA_WAIT_FILE?.trim());
+  const headless = resolveHeadless();
 
-  const browser = await chromium.launch({
-    headless: !headed,
-    channel: process.env.E2E_CHROME_CHANNEL || undefined,
-  });
+  const browser = await launchChromiumForAuth(headless);
 
   try {
     const context = await browser.newContext();
