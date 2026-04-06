@@ -11,9 +11,10 @@ var DEFAULT_PORT = 18080;
 var DEFAULT_CDP_PORT = 9333;
 var COPILOT_URL = "https://m365.cloud.microsoft/chat/";
 var INPUT_SELECTOR = '#m365-chat-editor-target-element, [data-lexical-editor="true"]';
+var COMPOSER_WAIT_MS = 25e3;
 var NEW_CHAT_BUTTON_SELECTOR = '[data-testid="newChatButton"]';
 var STOP_BUTTON_SELECTOR = ".fai-SendButton__stopBackground";
-var SEND_BUTTON_ANY_SELECTOR = '.fai-SendButton, button[aria-label*="Send"], button[aria-label*="\u9001\u4FE1"]';
+var SEND_BUTTON_ANY_SELECTOR = '.fai-SendButton, button[aria-label*="Send"], button[aria-label*="\u9001\u4FE1"], button[aria-label="Reply"], button[data-testid="sendButton"]';
 var RESPONSE_SELECTORS = [
   '[data-testid="markdown-reply"]',
   'div[data-message-type="Chat"]',
@@ -300,14 +301,14 @@ class CopilotSession {
 
       console.error("[copilot:describe] starting new chat...");
       await pageSession.click(NEW_CHAT_BUTTON_SELECTOR).catch(() => {});
-      await sleep(500);
+      await sleep(800);
 
       console.error("[copilot:describe] pasting prompt...");
       const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${userPrompt}` : userPrompt;
       await pastePromptRaw(pageSession, fullPrompt);
 
       console.error("[copilot:describe] submitting prompt...");
-      return await submitPromptRaw(pageSession);
+      return await submitPromptRaw(pageSession, fullPrompt.length);
     } finally {
       if (pageSession) { pageSession.close(); }
       this.lock = false;
@@ -320,56 +321,258 @@ function isLoginUrl(url) {
   return url?.includes("login.microsoftonline.com") || url?.includes("login.live.com") || url?.includes("microsoft.com/fwlink");
 }
 
-async function pastePromptRaw(session, text) {
-  console.error("[copilot:paste] focusing input...");
-  await session.click(INPUT_SELECTOR).catch(() => {});
-  await sleep(200);
-
-  // Lexical (M365 Copilot's editor) doesn't respond to paste events.
-  // Use Input.dispatchKeyEvent to type the text character by character.
-  // For long text, we can set the content directly on contentEditable elements
-  // and dispatch the right DOM events so the React/Lexical state updates.
-  console.error("[copilot:paste] setting text via DOM mutation (", text.length, "chars )");
-
-  await session.evaluate(`
-    ((txt) => {
-      // Target #m365-chat-editor-target-element (the Lexical contentEditable)
-      const el = document.querySelector('#m365-chat-editor-target-element')
-        ?? document.querySelector('[data-lexical-editor="true"]');
-      if (!el) { console.error('[copilot] input element not found'); return; }
-      el.focus();
-      el.textContent = '';
-      el.innerText = txt;
-      // Dispatch input events so React/Lexical picks up the change
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-    })(${JSON.stringify(text)})
-  `);
-  await sleep(1e3);
+/** True if element looks like the Copilot composer (Lexical / contenteditable). */
+async function focusComposer(session) {
+  const r = await session.evaluate(`(() => {
+    const selectors = [
+      '#m365-chat-editor-target-element',
+      '[data-lexical-editor="true"]',
+      'div[role="textbox"][contenteditable="true"]',
+      'div[role="textbox"]',
+      '[contenteditable="true"]'
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el && el.offsetParent !== null) {
+        try {
+          el.scrollIntoView({ block: 'center', inline: 'nearest' });
+        } catch (_) {}
+        el.click();
+        el.focus();
+        return true;
+      }
+    }
+    return false;
+  })()`);
+  return r.value === true;
 }
 
-async function submitPromptRaw(session) {
+async function waitForComposer(session) {
+  const start = Date.now();
+  while (Date.now() - start < COMPOSER_WAIT_MS) {
+    if (await focusComposer(session)) return;
+    await sleep(250);
+  }
+  throw new Error("Copilot composer not found or not visible");
+}
+
+/** Approximate visible character count in composer (Lexical exposes innerText on root). */
+async function getComposerTextLength(session) {
+  const r = await session.evaluate(`(() => {
+    const el = document.querySelector('#m365-chat-editor-target-element')
+      ?? document.querySelector('[data-lexical-editor="true"]')
+      ?? document.querySelector('div[role="textbox"]');
+    if (!el) return 0;
+    const raw = el.innerText || el.textContent || '';
+    const t = raw.replace(new RegExp(String.fromCharCode(0x200b), 'g'), '');
+    return t.trim().length;
+  })()`).catch(() => ({ value: 0 }));
+  return Number(r.value) || 0;
+}
+
+async function cdpInputEnable(session) {
+  await session.send("Page.bringToFront", {}).catch(() => {});
+  await session.send("Input.enable", {}).catch(() => {});
+}
+
+/** Clear composer via keyboard so Lexical updates internal state. */
+async function clearComposerViaKeyboard(session) {
+  const mod = process.platform === "darwin" ? 4 : 2; // Meta vs Ctrl (select all)
+  await session.send("Input.dispatchKeyEvent", {
+    type: "keyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: mod
+  });
+  await session.send("Input.dispatchKeyEvent", {
+    type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: mod
+  });
+  await sleep(40);
+  await session.send("Input.dispatchKeyEvent", {
+    type: "keyDown", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8
+  });
+  await session.send("Input.dispatchKeyEvent", {
+    type: "keyUp", key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8
+  });
+  await sleep(80);
+}
+
+/**
+ * Insert text using Chromium CDP Input.insertText (IME-style). Lexical ignores innerText + generic input events.
+ */
+async function insertTextViaCdp(session, text) {
+  const chunkSize = 4e3;
+  for (let i = 0; i < text.length; i += chunkSize) {
+    const chunk = text.slice(i, i + chunkSize);
+    await session.send("Input.insertText", { text: chunk });
+    if (text.length > chunkSize) await sleep(30);
+  }
+}
+
+/** Fallback: beforeinput + input with InputEvent (some React versions listen for this). Slow — capped. */
+async function insertTextViaInputEvents(session, text) {
+  const cap = 4e3;
+  const txt = text.length > cap ? text.slice(0, cap) : text;
+  if (txt.length < text.length) {
+    console.error("[copilot:paste] InputEvent fallback truncated to", cap, "chars");
+  }
+  await session.evaluate(`
+    ((payload) => {
+      const el = document.querySelector('#m365-chat-editor-target-element')
+        ?? document.querySelector('[data-lexical-editor="true"]')
+        ?? document.querySelector('div[role="textbox"]');
+      if (!el) return false;
+      el.focus();
+      for (const c of payload) {
+        el.dispatchEvent(new InputEvent('beforeinput', {
+          bubbles: true, cancelable: true, inputType: 'insertText', data: c
+        }));
+        el.dispatchEvent(new InputEvent('input', {
+          bubbles: true, inputType: 'insertText', data: c
+        }));
+      }
+      return true;
+    })(${JSON.stringify(txt)})
+  `);
+}
+
+/** Last resort: synthetic key events with "text" (slower; works when insertText is blocked). */
+async function insertTextViaKeyChars(session, text) {
+  const maxChars = 12e3;
+  const slice = text.length > maxChars ? text.slice(0, maxChars) : text;
+  if (slice.length < text.length) {
+    console.error("[copilot:paste] truncating prompt to", maxChars, "chars for keyChar fallback");
+  }
+  for (const ch of slice) {
+    if (ch === "\n") {
+      await session.send("Input.dispatchKeyEvent", {
+        type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13
+      });
+      await session.send("Input.dispatchKeyEvent", {
+        type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13
+      });
+    } else {
+      await session.send("Input.dispatchKeyEvent", { type: "char", text: ch });
+    }
+  }
+}
+
+async function pastePromptRaw(session, text) {
+  console.error("[copilot:paste] CDP Input path (", text.length, "chars )");
+  await cdpInputEnable(session);
+  await waitForComposer(session);
+  await sleep(200);
+
+  await clearComposerViaKeyboard(session);
+  await sleep(120);
+  await focusComposer(session);
+  await sleep(80);
+
+  let errInsert = null;
+  try {
+    await insertTextViaCdp(session, text);
+  } catch (e) {
+    errInsert = e;
+    console.error("[copilot:paste] Input.insertText failed:", e?.message || e);
+  }
+
+  await sleep(400);
+  let len = await getComposerTextLength(session);
+  const needMin =
+    text.length < 20
+      ? 1
+      : Math.min(120, Math.max(12, Math.floor(text.length * 0.06)));
+
+  if (len < needMin && text.length >= 20) {
+    console.error("[copilot:paste] composer still short (", len, "), trying InputEvent fallback");
+    await focusComposer(session);
+    await clearComposerViaKeyboard(session);
+    await sleep(100);
+    await focusComposer(session);
+    await sleep(80);
+    await insertTextViaInputEvents(session, text);
+    await sleep(400);
+    len = await getComposerTextLength(session);
+  }
+
+  if (len < needMin && text.length >= 20) {
+    console.error("[copilot:paste] composer still short (", len, "), trying keyChar fallback");
+    await focusComposer(session);
+    await clearComposerViaKeyboard(session);
+    await sleep(100);
+    await focusComposer(session);
+    await sleep(80);
+    await insertTextViaKeyChars(session, text);
+    await sleep(500);
+    len = await getComposerTextLength(session);
+  }
+
+  if (text.length >= 20 && len < needMin) {
+    const hint = errInsert ? ` CDP insertText error: ${errInsert.message}` : "";
+    throw new Error(
+      `Prompt did not reach Copilot composer (visible length ${len}, expected ~${text.length}).${hint}`
+    );
+  }
+
+  console.error("[copilot:paste] composer length OK:", len);
+  await sleep(300);
+}
+
+async function submitPromptRaw(session, expectedPromptLen) {
+  const minComposer = Math.min(
+    Math.max(8, Math.floor(expectedPromptLen * 0.15)),
+    Math.floor(expectedPromptLen * 0.85)
+  );
+
+  // Until composer shows our text, Send often stays disabled
+  const composeDeadline = Date.now() + 15e3;
+  while (Date.now() < composeDeadline) {
+    const n = await getComposerTextLength(session);
+    if (n >= minComposer || expectedPromptLen < 20) break;
+    await sleep(200);
+  }
+
   // Wait for send button to become visible and enabled
-  const deadline = Date.now() + 3e4;
+  const deadline = Date.now() + 45e3;
   let stableSince = 0;
+  let sendClicked = false;
   while (Date.now() < deadline) {
     const btnVisible = await session.evaluate(`(() => {
-      const el = document.querySelector('.fai-SendButton')
-        ?? document.querySelector('button[aria-label*="Send"]')
-        ?? document.querySelector('button[aria-label*="送信"]');
-      return el ? (el.offsetParent !== null && !el.disabled) : false;
+      function clickable(b) {
+        if (!b || b.offsetParent === null) return false;
+        if (b.disabled) return false;
+        if (b.getAttribute('aria-disabled') === 'true') return false;
+        return true;
+      }
+      const selectors = [
+        '.fai-SendButton',
+        'button[aria-label*="Send"]',
+        'button[aria-label*="送信"]',
+        'button[aria-label="Reply"]',
+        'button[data-testid="sendButton"]'
+      ];
+      for (const s of selectors) {
+        const el = document.querySelector(s);
+        if (clickable(el)) return true;
+      }
+      return false;
     })()`).catch(() => ({ value: false }));
 
     if (btnVisible.value) {
       if (!stableSince) stableSince = Date.now();
       if (Date.now() - stableSince >= 750) {
         await session.click(SEND_BUTTON_ANY_SELECTOR).catch(() => {});
+        sendClicked = true;
         break;
       }
     } else {
       stableSince = 0;
     }
     await sleep(250);
+  }
+
+  if (!sendClicked) {
+    const n = await getComposerTextLength(session);
+    throw new Error(
+      `Copilot send button did not become clickable within 45s (composer visible length=${n}).`
+    );
   }
 
   // Wait for response
