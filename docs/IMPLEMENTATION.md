@@ -16,6 +16,28 @@
 
 ## Milestone Log
 
+### 2026-04-06 Edge CDP connection hardening
+
+Completed.
+
+Artifacts:
+
+- `apps/desktop/src-tauri/src/cdp_copilot.rs`
+- `apps/desktop/scripts/copilot-browser.ts`
+
+Outcome:
+
+- Fixed `resolve_ws` so `/json/version` is fetched with a full `http://…` base URL (the previous `127.0.0.1:port/json/version` form is not a valid URL for `reqwest`, which broke WebSocket URL resolution after connecting to an existing Edge session).
+- Added `--remote-allow-origins=*` to the Rust auto-launch path and the `copilot-browser` script so Chromium 111+ CDP/WebSocket clients can attach (aligned with `copilot_server.js`).
+- Normalized `ws://0.0.36.6:port/…` as well as host-only `0.0.36.6` URLs on Windows.
+- Expanded Edge discovery: Windows Beta/Dev paths; Linux `microsoft-edge-beta` and `msedge` via `which`.
+
+Verification:
+
+Commands run:
+
+- `cargo test` / `cargo check` (blocked in this agent image: registry dependency `toml_parser` requires Cargo `edition2024` support; newer toolchain resolves).
+
 ### 2026-04-04 Agent loop and streaming fixes
 
 Completed.

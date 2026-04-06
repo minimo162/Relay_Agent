@@ -91,6 +91,8 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
     cmd.args([
         "--remote-debugging-port",
         &port.to_string(),
+        // Chromium 111+ restricts DevTools/WebSocket origins without this; Edge needs it for CDP clients.
+        "--remote-allow-origins=*",
         &format!("--user-data-dir={}", profile_dir.to_str().unwrap()),
         "--no-first-run",
         "--no-default-browser-check",
@@ -120,6 +122,10 @@ fn find_edge_path() -> Result<String> {
         let candidates = [
             r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
             r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files (x86)\Microsoft\Edge Beta\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge Beta\Application\msedge.exe",
+            r"C:\Program Files (x86)\Microsoft\Edge Dev\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge Dev\Application\msedge.exe",
         ];
         for path in &candidates {
             if std::path::Path::new(path).exists() {
@@ -140,6 +146,8 @@ fn find_edge_path() -> Result<String> {
             "microsoft-edge-stable",
             "microsoft-edge",
             "microsoft-edge-dev",
+            "microsoft-edge-beta",
+            "msedge",
         ] {
             if let Ok(output) = std::process::Command::new("which").arg(candidate).output() {
                 if output.status.success() {
@@ -147,7 +155,7 @@ fn find_edge_path() -> Result<String> {
                 }
             }
         }
-        bail!("Microsoft Edge not found on Linux (tried microsoft-edge-stable, microsoft-edge, microsoft-edge-dev)");
+        bail!("Microsoft Edge not found on Linux (tried microsoft-edge-stable, microsoft-edge, microsoft-edge-dev, microsoft-edge-beta, msedge)");
     }
 }
 
@@ -925,7 +933,8 @@ async fn resolve_ws_from_port(debug_url: &str) -> Result<String> {
         .as_str()
         .context("missing webSocketDebuggerUrl")?
         .to_string();
-    // Windows may return ws://0.0.36.6/… — normalize to 127.0.0.1
+    // Windows may return ws://0.0.36.6/… or ws://0.0.36.6:port/… (IPv4-mapped ::1) — normalize.
+    let url = url.replace("ws://0.0.36.6:", "ws://127.0.0.1:");
     let url = url.replace("ws://0.0.36.6/", "ws://127.0.0.1/");
     Ok(url)
 }
@@ -933,10 +942,11 @@ async fn resolve_ws_from_port(debug_url: &str) -> Result<String> {
 /// Resolve the actual WebSocket URL for CDP communication.
 /// Handles localhost, 127.0.0.1, and Windows IPv4-mapped ::1 (0.0.36.6) normalization.
 async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
-    let target_host = debug
+    let debug_base = debug.trim_end_matches('/');
+    let target_host = debug_base
         .strip_prefix("http://")
-        .or_else(|| debug.strip_prefix("https://"))
-        .unwrap_or(debug);
+        .or_else(|| debug_base.strip_prefix("https://"))
+        .unwrap_or(debug_base);
 
     // If the WS URL already uses a routable (non-loopback) host, use it as-is
     if ws.starts_with("ws://")
@@ -947,8 +957,8 @@ async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
         return Ok(ws.into());
     }
 
-    // Fetch the canonical WebSocket debugger URL from the CDP endpoint
-    let r = reqwest::get(&format!("{target_host}/json/version"))
+    // Must use a full URL (scheme + host); `127.0.0.1:port` alone is invalid for HTTP clients.
+    let r = reqwest::get(format!("{debug_base}/json/version"))
         .await
         .context("/json/version")?;
     let v: Value = r.json().await.context("/json/version JSON")?;
@@ -961,7 +971,8 @@ async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
     //   ws://localhost/…       -> ws://{target_host}/…
     //   ws://127.0.0.1/…       -> ws://{target_host}/…
     //   ws://0.0.36.6/…        -> ws://{target_host}/… (Windows IPv4-mapped ::1)
-    // Also handle URLs that include a port: ws://0.0.36.6:9222/…
+    //   ws://0.0.36.6:port/…   -> ws://127.0.0.1:port/… (keep port; target_host may include its own port)
+    let url = url.replace("ws://0.0.36.6:", "ws://127.0.0.1:");
     let url = url.replace("ws://localhost/", &format!("ws://{target_host}/"));
     let url = url.replace("ws://127.0.0.1/", &format!("ws://{target_host}/"));
     Ok(url.replace("ws://0.0.36.6/", &format!("ws://{target_host}/")))

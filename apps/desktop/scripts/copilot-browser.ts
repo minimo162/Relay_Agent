@@ -428,7 +428,11 @@ async function launchEdgeWithCdp(port: number): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = execFile(
       edgeExecutable,
-      [`--remote-debugging-port=${port}`, "--no-first-run"],
+      [
+        `--remote-debugging-port=${port}`,
+        "--remote-allow-origins=*",
+        "--no-first-run"
+      ],
       { detached: true, stdio: "ignore" }
     );
 
