@@ -1,5 +1,7 @@
+#[allow(dead_code)]
 mod agent_browser_daemon;
 mod agent_loop;
+mod copilot_server;
 mod cdp_copilot;
 mod config;
 mod copilot_persistence;

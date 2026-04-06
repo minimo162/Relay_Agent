@@ -494,7 +494,7 @@ fn start_daemon_process(session: &str) -> Result<(), DaemonError> {
 
     info!("[agent-browser] launching: {} daemon --session {}", agent_browser, session);
 
-    let mut child = Command::new(&agent_browser)
+    let child = Command::new(&agent_browser)
         .args(["daemon", "--session", session])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

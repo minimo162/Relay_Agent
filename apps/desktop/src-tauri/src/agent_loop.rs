@@ -133,18 +133,16 @@ pub fn run_agent_loop_impl(
 
 /* ── CDP-based API client ─── */
 
-/// CDP-based API client that sends prompts to M365 Copilot via agent-browser daemon.
+/// Sends prompts to M365 Copilot via the bundled `copilot_server.js` (Node + CDP).
 pub struct CdpApiClient {
-    daemon: std::sync::Arc<std::sync::Mutex<crate::agent_browser_daemon::AgentBrowserDaemon>>,
+    server: std::sync::Arc<std::sync::Mutex<crate::copilot_server::CopilotServer>>,
     response_timeout_secs: u64,
 }
 
 impl CdpApiClient {
-    fn new(
-        daemon: std::sync::Arc<std::sync::Mutex<crate::agent_browser_daemon::AgentBrowserDaemon>>,
-    ) -> Self {
+    fn new(server: std::sync::Arc<std::sync::Mutex<crate::copilot_server::CopilotServer>>) -> Self {
         Self {
-            daemon,
+            server,
             response_timeout_secs: 120,
         }
     }
@@ -157,13 +155,23 @@ impl ApiClient for CdpApiClient {
         let prompt_preview = &prompt[..prompt.len().min(80)];
         tracing::info!("[CdpApiClient] sending prompt: {prompt_preview}…");
 
-        let mut d = self
-            .daemon
-            .lock()
-            .map_err(|e| RuntimeError::new(format!("daemon lock poisoned: {e}")))?;
-        let response_text = d
-            .send_prompt("", &prompt, self.response_timeout_secs)
-            .map_err(|e| RuntimeError::new(format!("Copilot request failed: {e}")))?;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| RuntimeError::new(format!("tokio runtime: {e}")))?;
+
+        let response_text = {
+            let srv = self
+                .server
+                .lock()
+                .map_err(|e| RuntimeError::new(format!("copilot server lock poisoned: {e}")))?;
+            rt.block_on(async {
+                srv
+                    .send_prompt("", &prompt, self.response_timeout_secs)
+                    .await
+            })
+            .map_err(|e| RuntimeError::new(format!("Copilot request failed: {e}")))?
+        };
 
         tracing::info!("[CdpApiClient] response {} chars", response_text.len());
 
@@ -235,7 +243,7 @@ fn build_cdp_prompt(request: &ApiRequest<'_>) -> String {
 
 /// Persist the session state after a turn: update registry + save to disk.
 fn persist_turn(
-    app: &AppHandle,
+    _app: &AppHandle,
     registry: &SessionRegistry,
     runtime_session: &runtime::ConversationRuntime<CdpApiClient, TauriToolExecutor>,
     session_id: &str,

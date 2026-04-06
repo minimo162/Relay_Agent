@@ -14,62 +14,90 @@ use crate::models::{
 };
 use crate::registry::SessionRegistry;
 
-/* ── Agent Browser Daemon management ───────────────────────── *
- * Uses agent-browser daemon (agent-browser CLI via TCP/Unix     *
- * socket) instead of copilot_server.js. This uses real          *
- * Input.dispatchKeyEvent for reliable text input in Lexical     *
- * editors (M365 Copilot).                                      */
+/* ── Copilot Node bridge (copilot_server.js) ───────────────── *
+ * Spawns Node + copilot_server.js, which attaches to Edge via *
+ * CDP and drives M365 Copilot (Input.insertText + Edge launch). *
+ * This is the default path so Edge opens without a global       *
+ * `agent-browser` install. See `agent_browser_daemon.rs` for   *
+ * an optional alternate approach.                               */
 
-pub struct AgentBrowserDaemonState {
-    daemon: Arc<std::sync::Mutex<crate::agent_browser_daemon::AgentBrowserDaemon>>,
+pub struct CopilotServerState {
+    server: Arc<Mutex<crate::copilot_server::CopilotServer>>,
     started: bool,
 }
 
-static AGENT_BROWSER_DAEMON: OnceLock<Mutex<Option<AgentBrowserDaemonState>>> = OnceLock::new();
+static COPILOT_SERVER_SLOT: OnceLock<Mutex<Option<CopilotServerState>>> = OnceLock::new();
 
-fn daemon_state() -> &'static Mutex<Option<AgentBrowserDaemonState>> {
-    AGENT_BROWSER_DAEMON.get_or_init(|| Mutex::new(None))
+fn copilot_server_slot() -> &'static Mutex<Option<CopilotServerState>> {
+    COPILOT_SERVER_SLOT.get_or_init(|| Mutex::new(None))
 }
 
-const AGENT_BROWSER_CDP_PORT: u16 = 9333;
+const COPILOT_HTTP_PORT: u16 = 18080;
+const COPILOT_JS_CDP_PORT: u16 = 9333;
 
-fn ensure_daemon_initialized(
-    cdp_port: u16,
-) -> Result<Arc<std::sync::Mutex<crate::agent_browser_daemon::AgentBrowserDaemon>>, String> {
-    let mut state = daemon_state().lock().map_err(|e| format!("lock poisoned: {e}"))?;
-
-    if let Some(existing) = state.as_ref() {
-        if existing.started {
-            return Ok(Arc::clone(&existing.daemon));
-        }
-    }
-
-    let new_daemon = crate::agent_browser_daemon::AgentBrowserDaemon::new(cdp_port);
-    let arc = Arc::new(std::sync::Mutex::new(new_daemon));
-    *state = Some(AgentBrowserDaemonState {
-        daemon: Arc::clone(&arc),
-        started: false,
-    });
-
-    Ok(arc)
-}
-
-pub fn ensure_copilot_server() -> Result<Arc<std::sync::Mutex<crate::agent_browser_daemon::AgentBrowserDaemon>>, String> {
-    let cdp_port = AGENT_BROWSER_CDP_PORT;
-    let daemon = ensure_daemon_initialized(cdp_port)?;
-
-    {
-        let mut state = daemon_state().lock().map_err(|e| format!("lock poisoned: {e}"))?;
-        if let Some(ref mut s) = state.as_mut() {
-            if !s.started {
-                let mut d = daemon.lock().map_err(|e| format!("daemon lock poisoned: {e}"))?;
-                d.start().map_err(|e| format!("daemon start failed: {e}"))?;
-                s.started = true;
+pub fn ensure_copilot_server() -> Result<Arc<Mutex<crate::copilot_server::CopilotServer>>, String> {
+    let server_arc = {
+        let mut slot = copilot_server_slot()
+            .lock()
+            .map_err(|e| format!("copilot server state lock poisoned: {e}"))?;
+        if let Some(existing) = slot.as_ref() {
+            if existing.started {
+                return Ok(Arc::clone(&existing.server));
             }
         }
+        if slot.is_none() {
+            let server = crate::copilot_server::CopilotServer::new(
+                COPILOT_HTTP_PORT,
+                COPILOT_JS_CDP_PORT,
+                None,
+                None,
+            )
+            .map_err(|e| format!("Copilot server init failed: {e}"))?;
+            let arc = Arc::new(Mutex::new(server));
+            *slot = Some(CopilotServerState {
+                server: Arc::clone(&arc),
+                started: false,
+            });
+        }
+        Arc::clone(
+            &slot
+                .as_ref()
+                .expect("copilot server slot just populated")
+                .server,
+        )
+    };
+
+    {
+        let mut slot = copilot_server_slot()
+            .lock()
+            .map_err(|e| format!("copilot server state lock poisoned: {e}"))?;
+        let st = slot
+            .as_mut()
+            .expect("copilot server slot must exist after init");
+        if !st.started {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("failed to create tokio runtime for copilot start: {e}"))?;
+            let start_result = {
+                let mut srv = st
+                    .server
+                    .lock()
+                    .map_err(|e| format!("copilot server mutex poisoned: {e}"))?;
+                rt.block_on(srv.start())
+            };
+            if let Err(e) = start_result {
+                if let Ok(mut srv) = st.server.lock() {
+                    srv.stop();
+                }
+                *slot = None;
+                return Err(format!("copilot server start failed: {e}"));
+            }
+            st.started = true;
+        }
     }
 
-    Ok(daemon)
+    Ok(server_arc)
 }
 
 // Re-export registry and agent_loop types for external consumers
