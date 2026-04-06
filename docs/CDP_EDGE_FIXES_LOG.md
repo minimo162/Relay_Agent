@@ -87,18 +87,101 @@ Fix: Added `tracing-subscriber` crate with `Level::INFO` initialization in `lib.
 Files: `lib.rs`, `Cargo.toml`
 Commit: `7b99b9d`
 
+### Fix 10: CDP port conflict and tab discovery improvements (from kiroku reference)
+
+Symptom: Even after moving the base port from 9222 to 9240, existing browser devtools ports still conflicted. Tab discovery right after Edge launch sometimes found zero pages because Edge registers tabs asynchronously.
+
+Fix:
+- Changed default CDP base port from 9240 to 9333 (matching kiroku's `kiroku` configuration)
+- Increased `find_free_port` max_attempts from 20 to 50
+- Added 3-retry loop for `list_pages` after Edge launch with 2-second waits between attempts
+- Extended Copilot navigation wait from 5 to 10 seconds
+- Made `list_pages` calls more resilient using `unwrap_or_default` instead of hard failure
+- Added `Target.createTarget` result logging for troubleshooting
+- Added final fallback: navigate any available page to Copilot URL if no Copilot-specific tab is found
+- Removed unsupported `--no-sandbox` flag from Edge launch args (Edge does not support this flag)
+
+Note: This fix improved connection robustness but did NOT resolve the VBS error 577 that completely blocks Edge in the target corporate environment.
+
+Files: `cdp_copilot.rs`, `tauri_bridge.rs`
+Commit: `8cae2ed`, `abceb01`, then reverted `--no-sandbox`
+
+### Fix 11: VBS Error 577 — Direct Edge launch is completely blocked; switch to Playwright proxy
+
+Symptom: `LoadEnclaveImageW failed, error code 577` persisted despite all VBS-related `--disable-features` flags (`EdgeEnclave`, `VbsEnclave`, `RendererCodeIntegrity`) and `--no-sandbox`, `--disable-site-isolation-trials`, `--disable-breakpad`, `--disable-crashpad`. The corporate GroupPolicy forces VBS enclave loading for Edge processes, preventing the browser from responding to CDP. Edge appears to start but remains unresponsive on the debug port for 30+ seconds until timeout.
+
+Root cause: Windows VBS (Virtualization-Based Security) GroupPolicy in the corporate environment (`m242054` machine) enforces Code Integrity policies that cannot be disabled via command-line flags. Edge's `edge_ess\vbs_encoder.cc` fails with error 577 when loaded from an external process (Rust `std::process::Command`), preventing CDP from becoming available.
+
+Decision: The kiroku project (`https://github.com/minimo162/kiroku`) uses the same M365 Copilot integration and works in this environment. It uses a fundamentally different architecture:
+- **Relay_Agent original**: Rust → tokio-tungstenite WebSocket → Direct CDP → Edge (blocked by VBS)
+- **Kiroku**: Rust → HTTP → copilot_server.js (Node.js) → Playwright → chromium.connectOverCDP() → Edge
+
+Playwright's `chromium.connectOverCDP()` connects to an already-running Edge instance differently than our direct `Command::new(edge_path).spawn()` approach. The copilot_server.js also handles Edge lifecycle (detection, launch, port scanning) internally with better compatibility.
+
+Fix:
+- Copied `copilot_server.js` from kiroku to `src-tauri/binaries/copilot_server.js`
+- Created `copilot_server.rs` module to launch and manage the Node.js copilot server process
+- Changed `agent_loop.rs` to use `CopilotServer` (HTTP client) instead of `CdpApiClient(page)` (direct WebSocket)
+- Added `copilot_start`, `copilot_stop`, `copilot_status` Tauri commands
+- Added copilot server auto-start when agent loop begins via `ensure_copilot_server()`
+- Existing direct CDP commands (`connect_cdp`, `cdp_send_prompt`, etc.) are preserved for manual UI use
+
+Architecture:
+```
+┌─────────────────┐
+│   UI (Frontend) │
+└────────┬────────┘
+         │
+┌────────▼──────────────────────────────────────┐
+│  Tauri / Rust Backend                         │
+│  ┌────────────────────┐  ┌──────────────────┐ │
+│  │  copilot_server.rs │  │  cdp_copilot.rs  │ │
+│  │  (HTTP → Node.js)  │  │  (WebSocket CDP) │ │
+│  └────────┬───────────┘  └────────┬─────────┘ │
+│           │                       │            │
+│  ┌────────▼───────────┐  ┌────────▼─────────┐ │
+│  │  agent_loop.rs     │  │  cdp_send_prompt │ │
+│  │  (CopilotServer)   │  │  (manual use)    │ │
+│  └────────────────────┘  └──────────────────┘ │
+└────────────────────────┬──────────────────────┘
+                         │
+┌────────────────────────▼──────────────────────┐
+│  copilot_server.js (Node.js, port 18080)       │
+│  ┌──────────────────────────────────────────┐  │
+│  │  Playwright chromium.connectOverCDP()    │  │
+│  │  ↓                                       │  │
+│  │  Edge (CDP port 9333)                    │  │
+│  │  ↓                                       │  │
+│  │  M365 Copilot (m365.cloud.microsoft/chat)│  │
+│  └──────────────────────────────────────────┘  │
+│                                                │
+│  Endpoints:                                    │
+│  GET  /health                                  │
+│  GET  /status                                  │
+│  POST /v1/chat/completions (OpenAI-compatible) │
+└────────────────────────────────────────────────┘
+```
+
+Files: `copilot_server.rs` (new), `agent_loop.rs`, `tauri_bridge.rs`, `lib.rs`, `binaries/copilot_server.js`
+Commit: `0471218`
+
 ## Remaining Issues
 
-- **Error 577 (VBS)**: Edge launches but CDP may still be unresponsive in some corporate environments. The `--disable-features` flags help but are not guaranteed to work on all policy-managed machines.
-- **Two tabs (`about:blank` + Copilot)**: About:blank tab still opens as Edge's startup page. It is not closed because it is the initial tab; it is later replaced by Copilot navigation but may remain open.
-- **`disconnect_cdp` cleanup**: Uses `CMDLINE eq *RelayAgentEdgeProfile*` filter which works but is not as precise as tracking the PID directly.
+- **Edge detection in copilot_server.js**: Only supports Windows (`process.platform !== "win32"` returns `null`). macOS/Linux support could be added via a new `--edge-path` CLI flag from the Rust wrapper.
+- **Two tabs (`about:blank` + Copilot)**: Direct CDP codebase still has this issue (preserved for potential manual use). The copilot_server.js handles this internally via Playwright's browser context management.
+- **Playwright browser install**: `pnpm exec playwright install chromium` may be needed on fresh machines before copilot_server.js can launch Edge.
+- **copilot_server.js dependencies**: Requires `playwright` npm package already installed (currently in devDependencies).
 
 ## Key Code Locations
 
 | Component | File |
 |-----------|------|
-| Auto-connect CDP | `apps/desktop/src-tauri/src/tauri_bridge.rs:ensure_cdp_connected()` |
-| Edge launch | `apps/desktop/src-tauri/src/cdp_copilot.rs:launch_dedicated_edge()` |
-| WS URL normalization | `apps/desktop/src-tauri/src/cdp_copilot.rs:resolve_ws()`, `resolve_ws_from_port()` |
-| Copilot tab creation | `apps/desktop/src-tauri/src/cdp_copilot.rs:connect_copilot_page()` |
-| Agent loop entry | `apps/desktop/src-tauri/src/agent_loop.rs:run_agent_loop_impl()` |
+| Agent loop entry (via CopilotServer) | `apps/desktop/src-tauri/src/agent_loop.rs:run_agent_loop_impl()` |
+| Copilot server Rust wrapper | `apps/desktop/src-tauri/src/copilot_server.rs` |
+| Copilot server JS (Playwright) | `apps/desktop/src-tauri/binaries/copilot_server.js` |
+| Copilot server Tauri commands | `apps/desktop/src-tauri/src/tauri_bridge.rs:copilot_*` |
+| Direct CDP (manual use) | `apps/desktop/src-tauri/src/cdp_copilot.rs` |
+| Direct CDP Tauri commands | `apps/desktop/src-tauri/src/tauri_bridge.rs:connect_cdp`, `cdp_send_prompt` |
+| Tauri command registration | `apps/desktop/src-tauri/src/lib.rs:run()` |
+| Session management | `apps/desktop/src-tauri/src/tauri_bridge.rs:CdpSessionState`, `COPILOT_SERVER` |
+| Edge launch (direct CDP) | `apps/desktop/src-tauri/src/cdp_copilot.rs:launch_dedicated_edge()` |
