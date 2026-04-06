@@ -14,12 +14,22 @@ var COPILOT_URL = "https://m365.cloud.microsoft/chat/";
 var INPUT_SELECTOR = '#m365-chat-editor-target-element, [data-lexical-editor="true"]';
 var COMPOSER_WAIT_MS = 25e3;
 var NEW_CHAT_BUTTON_SELECTOR = '[data-testid="newChatButton"]';
-var STOP_BUTTON_SELECTOR = ".fai-SendButton__stopBackground";
+/** Any visible “stop generating” control (M365 UI varies by locale/build). */
+var STREAMING_STOP_SELECTORS = [
+  ".fai-SendButton__stopBackground",
+  'button[aria-label*="生成を停止"]',
+  'button[aria-label*="Stop generating"]',
+  'button[aria-label*="Stop response"]',
+  'button[data-testid="stopGeneratingButton"]'
+];
 var SEND_BUTTON_ANY_SELECTOR = '.fai-SendButton, button[aria-label*="Send"], button[aria-label*="\u9001\u4FE1"], button[aria-label="Reply"], button[data-testid="sendButton"]';
-var RESPONSE_SELECTORS = [
+var ASSISTANT_REPLY_DOM_SELECTORS = [
   '[data-testid="markdown-reply"]',
   'div[data-message-type="Chat"]',
-  'article[data-message-author-role="assistant"]'
+  'article[data-message-author-role="assistant"]',
+  '[data-message-author-role="assistant"]',
+  '[role="article"]',
+  ".markdown-body"
 ];
 var RESPONSE_URL_PATTERN = /substrate\.office\.com|copilot\.microsoft\.com|m365\.cloud\.microsoft|api\.bing\.microsoft\.com/i;
 var RESPONSE_TIMEOUT_MS = 12e4;
@@ -27,7 +37,7 @@ var CDP_PROBE_TIMEOUT_MS = 2e3;
 var CDP_COMMAND_TIMEOUT_MS = 5e3;
 var EDGE_LAUNCH_TIMEOUT_MS = 45e3;
 var EDGE_LAUNCH_POLL_INTERVAL_MS = 500;
-var CDP_PORT_SCAN_RANGE = 10;
+var CDP_PORT_SCAN_RANGE = 20;
 /** Written under the dedicated Edge profile dir so we reconnect to Relay's instance, not a manually debugged personal Edge on 9333. */
 var RELAY_CDP_PORT_MARKER = ".relay-agent-cdp-port";
 
@@ -582,38 +592,76 @@ async function submitPromptRaw(session, expectedPromptLen) {
   return await waitForDomResponse(session);
 }
 
-async function waitForDomResponse(session) {
-  // Wait for stop button to appear (generating), then disappear (done)
-  await session.waitForSelector(STOP_BUTTON_SELECTOR, 15e3).catch(() => {});
-  const deadline = Date.now() + RESPONSE_TIMEOUT_MS;
-
-  let waitCount = 0;
-  while (Date.now() < deadline) {
-    // Check if stop button is gone (response complete)
-    const stopVisible = await session.evaluate(`(() => {
-      const el = document.querySelector(${JSON.stringify(STOP_BUTTON_SELECTOR)});
-      return el ? el.offsetParent !== null : false;
-    })()`).catch(() => ({ value: false }));
-
-    if (waitCount > 0 && !stopVisible.value) {
-      // Try to get the response text
-      for (const selector of RESPONSE_SELECTORS) {
-        const text = await session.getText(selector).catch(() => "");
-        if (text && text.trim()) {
-          return text.trim();
-        }
+async function isCopilotGenerating(session) {
+  const r = await session.evaluate(`(() => {
+    const sels = ${JSON.stringify(STREAMING_STOP_SELECTORS)};
+    for (const s of sels) {
+      for (const el of document.querySelectorAll(s)) {
+        if (el && el.offsetParent !== null) return true;
       }
     }
+    return false;
+  })()`).catch(() => ({ value: false }));
+  return r?.value === true;
+}
 
-    waitCount++;
+/** Longest visible assistant-shaped block (aligns with cdp_copilot wait_for_response heuristics). */
+async function extractAssistantReplyText(session) {
+  const r = await session.evaluate(`(() => {
+    const selectors = ${JSON.stringify(ASSISTANT_REPLY_DOM_SELECTORS)};
+    let best = "";
+    for (const s of selectors) {
+      for (const el of document.querySelectorAll(s)) {
+        if (!el || el.offsetParent === null) continue;
+        const t = (el.innerText || "").trim();
+        if (t.length > best.length) best = t;
+      }
+    }
+    return best;
+  })()`).catch(() => ({ value: "" }));
+  return typeof r?.value === "string" ? r.value : "";
+}
+
+async function waitForDomResponse(session) {
+  await sleep(2e3);
+  const startLen = (await extractAssistantReplyText(session)).trim().length;
+  const deadline = Date.now() + RESPONSE_TIMEOUT_MS;
+  let prev = (await extractAssistantReplyText(session)).trim().length;
+  let stable = 0;
+  let streamed = false;
+  const minDoneLen = () => Math.max(30, startLen + 15);
+
+  while (Date.now() < deadline) {
     await sleep(1e3);
+    const generating = await isCopilotGenerating(session);
+    const reply = (await extractAssistantReplyText(session)).trim();
+    const len = reply.length;
+
+    if (generating) {
+      streamed = true;
+      stable = 0;
+      prev = len;
+      continue;
+    }
+
+    if (len > prev + 5) {
+      stable = 0;
+      prev = len;
+      continue;
+    }
+
+    const grewEnough = streamed || len >= startLen + 12 || len >= 200;
+    if (Math.abs(len - prev) <= 2 && len >= minDoneLen() && grewEnough) {
+      stable++;
+      if (stable >= 2) return reply;
+    } else {
+      stable = 0;
+    }
+    prev = len;
   }
 
-  // Timeout — return whatever text we can find
-  for (const selector of RESPONSE_SELECTORS) {
-    const text = await session.getText(selector).catch(() => "");
-    if (text && text.trim()) return text.trim();
-  }
+  const fb = (await extractAssistantReplyText(session)).trim();
+  if (fb) return fb;
   throw new Error("Copilot response not found in DOM");
 }
 
