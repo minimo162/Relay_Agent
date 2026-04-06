@@ -13,7 +13,6 @@ use runtime::{
 };
 
 use crate::copilot_persistence::{self, PersistedSessionConfig};
-use crate::copilot_server::CopilotServer;
 use crate::error::AgentLoopError;
 use crate::registry::SessionRegistry;
 use crate::tauri_bridge;
@@ -134,22 +133,18 @@ pub fn run_agent_loop_impl(
 
 /* ── CDP-based API client ─── */
 
-/// CDP-based API client that sends prompts to M365 Copilot via copilot_server.js.
-/// Copilot returns complete text responses (no structured tool calls, no streaming deltas).
+/// CDP-based API client that sends prompts to M365 Copilot via agent-browser daemon.
 pub struct CdpApiClient {
-    server: std::sync::Arc<tokio::sync::Mutex<CopilotServer>>,
-    runtime: tokio::runtime::Runtime,
+    daemon: std::sync::Arc<std::sync::Mutex<crate::agent_browser_daemon::AgentBrowserDaemon>>,
     response_timeout_secs: u64,
 }
 
 impl CdpApiClient {
-    fn new(server: std::sync::Arc<tokio::sync::Mutex<CopilotServer>>) -> Self {
+    fn new(
+        daemon: std::sync::Arc<std::sync::Mutex<crate::agent_browser_daemon::AgentBrowserDaemon>>,
+    ) -> Self {
         Self {
-            server,
-            runtime: tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("failed to create tokio runtime for CDP client"),
+            daemon,
             response_timeout_secs: 120,
         }
     }
@@ -162,22 +157,13 @@ impl ApiClient for CdpApiClient {
         let prompt_preview = &prompt[..prompt.len().min(80)];
         tracing::info!("[CdpApiClient] sending prompt: {prompt_preview}…");
 
-        let response_text = self.runtime.block_on(async {
-            // Ensure server is running
-            {
-                let mut server = self.server.lock().await;
-                if !server.is_running() {
-                    server.start().await.map_err(|e| {
-                        RuntimeError::new(format!("copilot server start failed: {e}"))
-                    })?;
-                }
-            }
-            let server = self.server.lock().await;
-            server
-                .send_prompt("", &prompt, self.response_timeout_secs)
-                .await
-                .map_err(|e| RuntimeError::new(format!("Copilot request failed: {e}")))
-        })?;
+        let mut d = self
+            .daemon
+            .lock()
+            .map_err(|e| RuntimeError::new(format!("daemon lock poisoned: {e}")))?;
+        let response_text = d
+            .send_prompt("", &prompt, self.response_timeout_secs)
+            .map_err(|e| RuntimeError::new(format!("Copilot request failed: {e}")))?;
 
         tracing::info!("[CdpApiClient] response {} chars", response_text.len());
 

@@ -1,22 +1,27 @@
 # Relay_Agent Implementation Plan
 
-Date: 2026-03-28
+Date: 2026-04-06
 
 ## Planning Baseline
 
-This repository is currently a Task Master planning shell, not an existing application codebase. The audit at `.taskmaster/docs/repo_audit.md` confirmed that the PRD's expected implementation directories do not exist yet.
+The repository now contains a **working Tauri v2 + SolidJS desktop application** under `apps/desktop/`, with the Rust backend in `apps/desktop/src-tauri/` and internal crates under `apps/desktop/src-tauri/crates/` (including `api`, `runtime`, `tools`, `commands`, `compat-harness`, `onyx-concept`; see `AGENTS.md` and the workspace manifests).
 
 Practical implication:
 
-- `apps/desktop`, `packages/contracts`, and the Rust/Tauri backend need to be created from scratch.
-- `.taskmaster/` should remain the existing planning layer.
-- "Preserve existing structure" in the PRD should be interpreted as "do not introduce unnecessary reshaping once the new structure is created," not as "there is already an app scaffold to keep."
+- **Greenfield planning below is historical:** Milestones 0–1 (and much of the relay/session vertical slice) are implemented in source; treat earlier “directories do not exist” wording in `.taskmaster/docs/repo_audit.md` as superseded unless the audit file is explicitly refreshed.
+- The legacy **`packages/contracts` workspace package has been removed**; IPC and shared shapes are defined in Rust and kept in sync with `apps/desktop/src/lib/ipc.ts` (see `AGENTS.md` — Rust IPC is the source of truth).
+- `.taskmaster/` remains the planning and task-graph layer alongside `PLANS.md` and `docs/IMPLEMENTATION.md`.
+- “Preserve existing structure” means: avoid unnecessary reshaping of the **current** app layout; prefer incremental milestones over churny renames.
 
 ## Delivery Principles
 
-- Priority A: get a safe vertical slice working end to end first.
-- Priority B: harden validation, diff preview, and file IO after the slice works.
-- Priority C: extend workbook handling only if the MVP path is stable.
+MVP guardrails (authoritative summary: `AGENTS.md`):
+
+- **Priority A:** Agent loop end to end with Copilot Proxy API and M365 Copilot via CDP.
+- **Priority B:** Harden MCP server integration, tool approval, and session management.
+- **Priority C:** Expand CDP browser automation and context-aware execution.
+
+Additional product principles (spreadsheet-era PRD and reduction goals):
 - Minimize custom implementation. Prefer claw-code for behavior and system flow, and preserve custom code only where Relay must mediate M365 Copilot.
 - Current reduction rule: treat the in-repo workbook engine, workbook context inspection, and workbook-specific prompt shaping as removal targets. The desired end state is upstream `claw-code` / `claw-code-parity` for behavior and `openwork` for UI direction, with custom Relay code limited to M365 Copilot interop.
 - Final reduction acceptance is architectural, not a raw byte cap: `T20` is satisfied only when no TypeScript agent-loop/orchestration remains, no in-repo workbook or relay-tool runtime remains, and the remaining custom Rust is limited to M365 Copilot interop plus thin desktop glue. Byte counts are still recorded as telemetry, but they are no longer the primary gate.
@@ -29,19 +34,23 @@ Practical implication:
 
 ## Draft Completion Conditions
 
+The **spreadsheet-centric demo bar** below remains the reference for CSV/save-copy MVP completeness. The **currently shipped vertical slice** also includes the agent loop, streaming UI, tool events, CDP-driven M365 Copilot, and related follow-ups documented in `docs/IMPLEMENTATION.md` and the Task Master graph.
+
 The MVP should not be treated as complete until all of the following are true:
 
 - `pnpm install` resolves the workspace successfully.
 - `pnpm check` passes.
 - `pnpm typecheck` passes.
 - `pnpm --filter @relay-agent/desktop build` passes.
-- `cargo check` passes.
-- The UI supports session creation, turn start, relay packet generation, pasted Copilot response validation, and execution preview in one usable flow.
+- `cargo check` passes (from `apps/desktop/src-tauri/` or workspace root as documented in `README.md`).
+- The UI supports session creation, agent turns, structured response / execution preview, and validation in a usable flow (relay-packet-first flows may be legacy; see `docs/IMPLEMENTATION.md`).
 - A diff preview and approval path exist before any write action.
 - A minimal CSV end-to-end demo works.
 - `README.md` documents startup steps, demo usage, and limitations.
 
 ## Milestone 0: Planning Artifacts
+
+**Status:** Complete (baseline artifacts exist; refresh `repo_audit.md` if a new baseline audit is needed).
 
 ### Goal
 
@@ -84,24 +93,25 @@ test -f docs/IMPLEMENTATION.md
 
 ## Milestone 1: Monorepo and Build Foundation
 
+**Status:** Complete in source (pnpm workspace + SolidJS/Vite desktop + Tauri v2).
+
 ### Goal
 
-Create a working workspace foundation that can host the desktop app, shared contracts, and Rust/Tauri backend.
+Create a working workspace foundation that can host the desktop app and Rust/Tauri backend, with typed IPC between frontend and backend.
 
 ### Change Targets
 
 - `package.json`
 - `pnpm-workspace.yaml`
 - `tsconfig*.json`
-- `apps/desktop/**`
-- `packages/contracts/**`
-- Rust/Tauri root files such as `Cargo.toml`, `src-tauri/**`, or equivalent structure chosen for the app
+- `apps/desktop/**` (SolidJS + Vite frontend, `src-tauri/` Rust backend)
+- Workspace `Cargo.toml` and `apps/desktop/src-tauri/**`
 
 ### Acceptance Criteria
 
 - The workspace installs successfully.
-- The desktop app structure exists as SvelteKit SPA + Tauri v2.
-- The contracts package can be imported by TypeScript consumers.
+- The desktop app structure exists as **SolidJS + Vite SPA + Tauri v2** (not SvelteKit).
+- TypeScript IPC types in `apps/desktop/src/lib/ipc.ts` align with Rust command/event signatures in `tauri_bridge.rs` and related modules.
 - Basic JS/TS and Rust checks run without structural failures.
 
 ### Verification Commands
@@ -124,29 +134,30 @@ cargo check
 
 - Risk: greenfield workspace setup drifts into unnecessary architecture work.
   Mitigation: create only the directories and config needed to support the MVP milestones.
-- Risk: Tauri and SvelteKit integration fails due to incompatible defaults.
+- Risk: Tauri and Vite/Solid integration fails due to incompatible defaults.
   Mitigation: validate the desktop build immediately after structure creation instead of deferring integration checks.
 
 ## Milestone 2: Session, Turn, and Relay Vertical Slice
 
+**Status:** Largely superseded in source by the **agent loop + structured responses + CDP Copilot** path; relay-packet-first UX may remain only in history/docs. See `docs/IMPLEMENTATION.md` for the current session and turn model.
+
 ### Goal
 
-Make the application capable of creating sessions, starting turns, generating relay packets, accepting pasted Copilot output, and validating it through a typed UI-to-backend flow.
+Make the application capable of creating sessions, starting turns, and moving Copilot/agent output through a typed UI-to-backend flow (historically: relay packets and pasted responses; currently: structured recording, streaming, and registry-backed tools).
 
 ### Change Targets
 
-- `packages/contracts/**`
-- desktop UI routes, stores, and typed IPC wrapper
-- Rust/Tauri commands for app initialization, session lifecycle, relay packet generation, and response submission
-- local storage modules for sessions and turns
+- Rust models and Tauri IPC (`models.rs`, `tauri_bridge.rs`, internal crates)
+- Desktop UI shell and typed IPC wrapper (`apps/desktop/src/lib/ipc.ts`, `root.tsx`, components)
+- Rust/Tauri commands for app initialization, session lifecycle, agent loop, and response/artifact handling
+- Local storage modules for sessions and turns
 
 ### Acceptance Criteria
 
-- Shared schemas exist for the core entities defined in the PRD.
+- Shared shapes exist for core entities (Rust + mirrored TS IPC types).
 - The frontend can create and list sessions.
-- A turn can be started from the UI.
-- A relay packet can be generated and displayed.
-- A pasted Copilot response can be parsed and validated with structured error output.
+- A turn / agent run can be started from the UI.
+- Copilot or proxy responses flow through validation/preview paths as implemented (relay packet display is not required if replaced by structured flow).
 - Session data persists locally and survives restart.
 
 ### Verification Commands
@@ -162,10 +173,9 @@ Manual verification:
 
 1. Launch the desktop app.
 2. Create a session.
-3. Start a turn.
-4. Generate a relay packet.
-5. Paste a valid or invalid response sample.
-6. Confirm validation results are shown.
+3. Start a turn or agent run.
+4. Exercise the current primary flow (e.g. goal → agent loop → tool/streaming events → structured response / preview as applicable).
+5. Confirm validation or error output matches the implemented path.
 
 ### Out of Scope
 
@@ -176,7 +186,7 @@ Manual verification:
 ### Risks and Mitigations
 
 - Risk: contract drift between frontend and backend payloads.
-  Mitigation: keep the contracts package as the only schema/type source of truth.
+  Mitigation: treat Rust IPC as source of truth; update `ipc.ts` in the same change as command/event shape changes.
 - Risk: session persistence is added late and breaks flow state.
   Mitigation: build local storage during this milestone, not after UI wiring is finished.
 
@@ -400,9 +410,9 @@ These items remain outside the MVP unless explicitly pulled in later:
 
 ## Recommended Execution Order
 
-1. Finish Milestone 0 planning artifacts.
-2. Complete Milestone 1 until the workspace and desktop build are stable.
-3. Deliver Milestone 2 as the first user-visible vertical slice.
-4. Add Milestone 3 preview capability on top of the validated relay flow.
-5. Add Milestone 4 execution only after preview and approval are trustworthy.
-6. Finish with Milestone 5 documentation and demo hardening.
+1. Keep planning artifacts (`PLANS.md`, `AGENTS.md`, `docs/IMPLEMENTATION.md`) aligned with the code that exists (Milestones 0–1 are done).
+2. Drive **Priority A–C** in `AGENTS.md` (agent loop + Copilot/CDP, MCP/tools/session hardening, CDP depth).
+3. For the **spreadsheet demo path**, use Milestones 3–5: preview (M3), save-copy execution (M4), docs/examples (M5).
+4. Use `.taskmaster/tasks/tasks.json` and the follow-up notes in this file for ordered closure of verification checklists (especially Windows + M365 manual runs).
+
+Historical linear order (for context only): Milestone 0 → 1 → 2 → 3 → 4 → 5 as originally written; steps 0–2 are substantially implemented, with Milestone 2’s relay-first wording superseded by the agent-loop architecture.

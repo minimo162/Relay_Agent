@@ -321,23 +321,31 @@ function isLoginUrl(url) {
 }
 
 async function pastePromptRaw(session, text) {
-  // Focus and paste via CDP Runtime.evaluate
+  console.error("[copilot:paste] focusing input...");
   await session.click(INPUT_SELECTOR).catch(() => {});
   await sleep(200);
 
+  // Lexical (M365 Copilot's editor) doesn't respond to paste events.
+  // Use Input.dispatchKeyEvent to type the text character by character.
+  // For long text, we can set the content directly on contentEditable elements
+  // and dispatch the right DOM events so the React/Lexical state updates.
+  console.error("[copilot:paste] setting text via DOM mutation (", text.length, "chars )");
+
   await session.evaluate(`
     ((txt) => {
+      // Target #m365-chat-editor-target-element (the Lexical contentEditable)
       const el = document.querySelector('#m365-chat-editor-target-element')
         ?? document.querySelector('[data-lexical-editor="true"]');
-      if (!el) return;
+      if (!el) { console.error('[copilot] input element not found'); return; }
       el.focus();
       el.textContent = '';
-      const dt = new DataTransfer();
-      dt.setData('text/plain', txt);
-      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true }));
+      el.innerText = txt;
+      // Dispatch input events so React/Lexical picks up the change
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
     })(${JSON.stringify(text)})
   `);
-  await sleep(500);
+  await sleep(1e3);
 }
 
 async function submitPromptRaw(session) {
