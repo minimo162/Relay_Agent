@@ -702,24 +702,25 @@ pub async fn connect_copilot_page(
     auto_launch: bool,
     base_port: u16,
 ) -> Result<ConnectionResult> {
-    // Try existing browser first
-    if let Some(p) = try_existing(debug_url).await {
-        return p;
-    }
-
     if !auto_launch {
+        // When not auto-launching, try existing browser at the given debug URL
+        if let Some(p) = try_existing(debug_url).await {
+            return p;
+        }
         bail!(
             "No Copilot browser found at {debug_url}. \
              Enable auto_launch or start Edge with --remote-debugging-port."
         );
     }
 
-    // Find a free port and launch Edge
+    // Always launch a dedicated Edge instance to avoid conflicts with the user's
+    // existing browser (which may already use the default CDP port or return
+    // problematic WebSocket URLs like ws://0.0.36.6/).
     let port = find_free_port(base_port, 20);
     let debug_url_new = format!("http://127.0.0.1:{port}");
 
     info!(
-        "[CDP] No existing browser found. Launching dedicated Edge on port {}...",
+        "[CDP] Launching dedicated Edge on port {}...",
         port
     );
 
