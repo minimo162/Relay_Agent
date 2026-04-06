@@ -727,24 +727,43 @@ pub async fn connect_copilot_page(
         return p;
     }
 
-    // No page found — use CDP to create a new tab and navigate to Copilot
+    // No Copilot tab found — close any stray tabs and create a fresh Copilot tab via CDP
+    info!("[CDP] No Copilot tab found, cleaning up and creating one…");
     let ws_url = resolve_ws_from_port(&debug_url_new).await?;
     let ctx = Ctx::connect(&ws_url).await?;
 
+    // Close any existing non-Copilot tabs
+    let pages = list_pages(&debug_url_new).await?;
+    for page in &pages {
+        if !COPILOT_URL_PATTERNS.iter().any(|pat| page.url.contains(pat)) {
+            if let Some(target_id) = extract_target_id(&page.ws_url) {
+                let _ = ctx
+                    .send("Target.closeTarget", json!({ "targetId": target_id }))
+                    .await;
+            }
+        }
+    }
+
+    // Create a fresh Copilot tab
     ctx.send(
         "Target.createTarget",
         json!({ "type": "page", "url": "https://m365.cloud.microsoft/chat" }),
     )
     .await?;
 
-    // Wait a moment for the new tab to appear
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    // Let the page initialize
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     let pages = list_pages(&debug_url_new).await?;
     let first = pages
         .iter()
         .find(|p| p.kind == "page")
         .context("no page found after creating Copilot tab")?;
+
+    info!(
+        "[CDP] Created Copilot tab: {} ({})",
+        first.url, first.title
+    );
 
     Ok(ConnectionResult {
         page: CopilotPage {
@@ -816,6 +835,12 @@ fn parse_port(debug_url: &str) -> Option<u16> {
         .split(':')
         .next_back()
         .and_then(|s| s.parse().ok())
+}
+
+/// Extract the target ID from a WebSocket debugger URL.
+/// Format: ws://host:port/devtools/page/<target-id>
+fn extract_target_id(ws_url: &str) -> Option<String> {
+    ws_url.rsplit('/').next().filter(|s| !s.is_empty()).map(String::from)
 }
 
 /// Resolve the WebSocket URL from a debug endpoint by fetching /json/version directly.
