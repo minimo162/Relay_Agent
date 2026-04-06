@@ -85,6 +85,7 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
         port, profile_dir
     );
 
+    // Launch Edge with no initial window. CDP navigation will open the Copilot tab.
     let mut cmd = std::process::Command::new(&edge_path);
     cmd.args([
         "--remote-debugging-port",
@@ -94,12 +95,9 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
         "--no-default-browser-check",
         "--disable-infobars",
         "--disable-hang-monitor",
+        "--disable-restore-session-state",
+        "--no-startup-window",
     ]);
-
-    #[cfg(target_os = "windows")]
-    {
-        cmd.arg("https://m365.cloud.microsoft/chat");
-    }
     #[cfg(not(target_os = "windows"))]
     {
         cmd.args(["--no-startup-window", "https://m365.cloud.microsoft/chat"]);
@@ -703,7 +701,6 @@ pub async fn connect_copilot_page(
     base_port: u16,
 ) -> Result<ConnectionResult> {
     if !auto_launch {
-        // When not auto-launching, try existing browser at the given debug URL
         if let Some(p) = try_existing(debug_url).await {
             return p;
         }
@@ -713,9 +710,6 @@ pub async fn connect_copilot_page(
         );
     }
 
-    // Always launch a dedicated Edge instance to avoid conflicts with the user's
-    // existing browser (which may already use the default CDP port or return
-    // problematic WebSocket URLs like ws://0.0.36.6/).
     let port = find_free_port(base_port, 20);
     let debug_url_new = format!("http://127.0.0.1:{port}");
 
@@ -727,7 +721,7 @@ pub async fn connect_copilot_page(
     let child = launch_dedicated_edge(port)?;
     wait_for_cdp_ready(&debug_url_new, 30).await?;
 
-    // Find or create the Copilot page
+    // Try to find an existing Copilot tab (session restored)
     if let Some(mut p) = try_existing(&debug_url_new).await {
         if let Ok(ref mut result) = p {
             result.edge_process = Some(child);
@@ -736,15 +730,28 @@ pub async fn connect_copilot_page(
         return p;
     }
 
-    // Fallback: use any available page
+    // No page found — use CDP to create a new tab and navigate to Copilot
+    let ws_url = resolve_ws_from_port(&debug_url_new).await?;
+    let ctx = Ctx::connect(&ws_url).await?;
+
+    ctx.send(
+        "Target.createTarget",
+        json!({ "type": "page", "url": "https://m365.cloud.microsoft/chat" }),
+    )
+    .await?;
+
+    // Wait a moment for the new tab to appear
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
     let pages = list_pages(&debug_url_new).await?;
     let first = pages
         .iter()
         .find(|p| p.kind == "page")
-        .context("no page found after Edge launch")?;
+        .context("no page found after creating Copilot tab")?;
+
     Ok(ConnectionResult {
         page: CopilotPage {
-            debug_url: debug_url_new,
+            debug_url: debug_url_new.clone(),
             ws_url: first.ws_url.clone(),
             resolved_ws: Arc::new(AsyncMutex::new(None)),
             url: first.url.clone(),
@@ -812,6 +819,21 @@ fn parse_port(debug_url: &str) -> Option<u16> {
         .split(':')
         .next_back()
         .and_then(|s| s.parse().ok())
+}
+
+/// Resolve the WebSocket URL from a debug endpoint by fetching /json/version directly.
+async fn resolve_ws_from_port(debug_url: &str) -> Result<String> {
+    let r = reqwest::get(&format!("{debug_url}/json/version"))
+        .await
+        .context("/json/version")?;
+    let v: Value = r.json().await.context("/json/version JSON")?;
+    let url = v["webSocketDebuggerUrl"]
+        .as_str()
+        .context("missing webSocketDebuggerUrl")?
+        .to_string();
+    // Windows may return ws://0.0.36.6/… — normalize to 127.0.0.1
+    let url = url.replace("ws://0.0.36.6/", "ws://127.0.0.1/");
+    Ok(url)
 }
 
 /// Resolve the actual WebSocket URL for CDP communication.
