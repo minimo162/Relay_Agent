@@ -14,12 +14,36 @@ use tauri::Manager;
 
 use crate::registry::SessionRegistry;
 
+/// When `RELAY_WEBVIEW2_CDP_PORT` is set (digits only), forward it to WebView2 so
+/// Playwright / agent-browser can attach via CDP (`connectOverCDP`, `--cdp`).
+/// Must run before any WebView2 environment is created.
+#[cfg(windows)]
+fn relay_apply_webview2_cdp_from_env() {
+    let port = match std::env::var("RELAY_WEBVIEW2_CDP_PORT") {
+        Ok(p) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => p,
+        _ => return,
+    };
+    let args = format!("--remote-debugging-port={port}");
+    std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", &args);
+}
+
+#[cfg(not(windows))]
+fn relay_apply_webview2_cdp_from_env() {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    relay_apply_webview2_cdp_from_env();
+
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_target(false)
         .init();
+
+    if std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_ok() {
+        tracing::info!(
+            "[webview2] remote debugging enabled via WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
+        );
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
