@@ -7,7 +7,9 @@ import {
   readMicrosoftAuthenticatorMatchNumber,
 } from "./microsoft-number-match";
 
-const COPILOT_URL = process.env.E2E_COPILOT_URL ?? "https://copilot.microsoft.com/";
+function copilotUrl(): string {
+  return (process.env.E2E_COPILOT_URL ?? "https://copilot.microsoft.com/").trim() || "https://copilot.microsoft.com/";
+}
 
 function totpFromEnv(): string | null {
   const secret = process.env.M365_COPILOT_TOTP_SECRET?.trim();
@@ -28,22 +30,83 @@ async function clickIfVisible(
   return false;
 }
 
+async function dismissCookieBanners(page: Page): Promise<void> {
+  const labels = [
+    /Accept all/i,
+    /^Accept$/i,
+    /同意/i,
+    /^OK$/i,
+    /Got it/i,
+    /了解/i,
+    /Reject all/i,
+  ];
+  for (const name of labels) {
+    await page
+      .getByRole("button", { name })
+      .first()
+      .click({ timeout: 2000 })
+      .catch(() => {});
+  }
+}
+
+/** アカウント / プロフィールを開いてから Sign in を探す */
+async function tryOpenSignInFromAccountMenu(page: Page): Promise<boolean> {
+  const triggerSelectors = [
+    '[aria-label*="Account" i]',
+    '[aria-label*="アカウント" i]',
+    '[aria-label*="Sign in" i]',
+    '[aria-label*="profile" i]',
+    '[aria-label*="Profile" i]',
+    'button[class*="user" i]',
+    'header button[type="button"]',
+  ];
+  for (const sel of triggerSelectors) {
+    const btn = page.locator(sel).first();
+    if (await btn.isVisible({ timeout: 1500 }).catch(() => false)) {
+      await btn.click().catch(() => {});
+      await page.waitForTimeout(600);
+      const signIn = page
+        .getByRole("menuitem", { name: /Sign in|サインイン|ログイン/i })
+        .or(page.getByRole("link", { name: /Sign in|サインイン/i }))
+        .or(page.getByRole("button", { name: /Sign in|サインイン/i }));
+      if (await signIn.first().isVisible({ timeout: 5000 }).catch(() => false)) {
+        await signIn.first().click();
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 async function tryClickSignInOnCopilot(page: Page): Promise<boolean> {
   const attempts: Array<() => Promise<void>> = [
     async () => {
-      await page.getByRole("button", { name: /^Sign in$/i }).first().click({ timeout: 6000 });
+      await page.locator('a[href*="login.live.com" i], a[href*="login.microsoftonline.com" i]').first().click({
+        timeout: 10_000,
+      });
     },
     async () => {
-      await page.getByRole("link", { name: /Sign in/i }).first().click({ timeout: 6000 });
+      await page.locator('a[href*="login" i], a[href*="signin" i]').first().click({ timeout: 10_000 });
     },
     async () => {
-      await page.getByRole("button", { name: /サインイン/i }).first().click({ timeout: 6000 });
+      await page.getByRole("button", { name: /^Sign in$/i }).first().click({ timeout: 10_000 });
     },
     async () => {
-      await page.getByRole("link", { name: /サインイン/i }).first().click({ timeout: 6000 });
+      await page.getByRole("link", { name: /^Sign in$/i }).first().click({ timeout: 10_000 });
     },
     async () => {
-      await page.locator('a[href*="login"], a[href*="signin"]').first().click({ timeout: 6000 });
+      await page.getByRole("button", { name: /Sign in to Copilot|Sign in with Microsoft/i }).first().click({
+        timeout: 10_000,
+      });
+    },
+    async () => {
+      await page.getByText(/^Sign in$/i).first().click({ timeout: 10_000 });
+    },
+    async () => {
+      await page.getByRole("button", { name: /サインイン/i }).first().click({ timeout: 10_000 });
+    },
+    async () => {
+      await page.getByRole("link", { name: /サインイン/i }).first().click({ timeout: 10_000 });
     },
     async () => {
       await page.getByTestId("sidebar-settings-button").click({ timeout: 5000 });
@@ -63,25 +126,81 @@ async function tryClickSignInOnCopilot(page: Page): Promise<boolean> {
   return false;
 }
 
-/** Copilot から Microsoft ログインページへ遷移する（既にログイン画面なら何もしない）。 */
-export async function openMicrosoftLoginFromCopilot(page: Page): Promise<void> {
-  await page.goto(COPILOT_URL, { waitUntil: "domcontentloaded", timeout: 90_000 });
-  await page.waitForTimeout(2000);
+/** コンシューマ MSA のログイン入口（Copilot の UI が取れないときの最終手段） */
+async function openConsumerLoginLive(page: Page): Promise<void> {
+  const candidates = [
+    process.env.E2E_LOGIN_LIVE_FALLBACK_URL?.trim(),
+    "https://login.live.com/",
+    "https://account.live.com/",
+  ].filter((u): u is string => !!u);
 
-  if (/login\.(microsoftonline|live)\.com|signup\.live\.com/i.test(page.url())) {
+  const emailHint = page.getByRole("textbox", {
+    name: /メール、電話、Skype|Email, phone, or Skype|電子メール|メールアドレス|Email or phone/i,
+  });
+  const emailLoose = page.locator('input[type="email"], input[name="loginfmt"], input#i0116').first();
+
+  for (const url of candidates) {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90_000 });
+    await page.waitForTimeout(2000);
+    if (await emailHint.isVisible({ timeout: 12_000 }).catch(() => false)) {
+      return;
+    }
+    if (await emailLoose.isVisible({ timeout: 12_000 }).catch(() => false)) {
+      return;
+    }
+  }
+
+  throw new Error(
+    "[e2e] login.live.com を開いてもメール入力欄が見つかりません。E2E_MICROSOFT_LOGIN_URL にブラウザでコピーしたサインイン URL を設定してください。",
+  );
+}
+
+function isMicrosoftLoginHost(u: string): boolean {
+  return /login\.(microsoftonline|live)\.com|signup\.live\.com/i.test(u);
+}
+
+/**
+ * Microsoft ログインページへ遷移する。
+ * 優先: E2E_MICROSOFT_LOGIN_URL → Copilot で Sign in → アカウントメニュー → login.live.com 系フォールバック。
+ */
+export async function openMicrosoftLoginFromCopilot(page: Page): Promise<void> {
+  const custom = process.env.E2E_MICROSOFT_LOGIN_URL?.trim();
+  if (custom) {
+    await page.goto(custom, { waitUntil: "domcontentloaded", timeout: 90_000 });
+    await page.waitForTimeout(2000);
+    if (isMicrosoftLoginHost(page.url())) {
+      return;
+    }
+  }
+
+  const url = copilotUrl();
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90_000 });
+  try {
+    await page.waitForLoadState("networkidle", { timeout: 45_000 });
+  } catch {
+    /* SPA は networkidle しないことがある */
+  }
+  await page.waitForTimeout(3000);
+  await dismissCookieBanners(page);
+
+  if (isMicrosoftLoginHost(page.url())) {
     return;
   }
 
-  const clicked = await tryClickSignInOnCopilot(page);
+  let clicked = await tryClickSignInOnCopilot(page);
   if (!clicked) {
-    throw new Error(
-      "[e2e] Copilot 上でサインインを開始できませんでした。E2E_HEADED=1 で画面を確認するか、E2E_COPILOT_URL を調整してください。",
-    );
+    clicked = await tryOpenSignInFromAccountMenu(page);
   }
 
-  await page.waitForURL(/login\.(microsoftonline|live)\.com|signup\.live\.com/, {
-    timeout: 60_000,
-  });
+  if (clicked) {
+    await page.waitForURL(/login\.(microsoftonline|live)\.com|signup\.live\.com/i, { timeout: 90_000 });
+    return;
+  }
+
+  console.warn(
+    "[e2e] Copilot 上で Sign in が見つかりません。login.live.com 系に直接遷移します（E2E_MICROSOFT_LOGIN_URL で上書き可能）。",
+  );
+  await openConsumerLoginLive(page);
 }
 
 /**
@@ -107,16 +226,22 @@ export async function signInMicrosoftViaCopilotUi(
     .click({ timeout: 4000 })
     .catch(() => {});
 
-  const emailBox = page.getByRole("textbox", {
-    name: /メール、電話、Skype|Email, phone, or Skype|電子メール|メールアドレス/i,
-  });
+  const emailBox = page
+    .getByRole("textbox", {
+      name: /メール、電話、Skype|Email, phone, or Skype|電子メール|メールアドレス|Email or phone/i,
+    })
+    .or(page.locator('input[name="loginfmt"], input#i0116, input[type="email"]').first());
+
   await emailBox.click({ timeout: 30_000 });
   await emailBox.fill(email);
   await page.getByRole("button", { name: /次へ|Next/i }).click();
 
   await page.waitForTimeout(1500);
 
-  const pwBox = page.getByRole("textbox", { name: /パスワード|Password/i });
+  const pwBox = page
+    .getByRole("textbox", { name: /パスワード|Password/i })
+    .or(page.locator('input[name="passwd"], input#i0118, input[type="password"]').first());
+
   await pwBox.click({ timeout: 30_000 });
   await pwBox.fill(password);
   await page.getByRole("button", { name: /サインイン|Sign in/i }).click();
@@ -157,8 +282,8 @@ export async function signInMicrosoftViaCopilotUi(
       await announceMicrosoftAuthenticatorMatchNumber(code, shotDir);
     }
 
-    const url = page.url();
-    if (/copilot\.microsoft\.com/i.test(url) && !/signin|login/i.test(url)) {
+    const u = page.url();
+    if (/copilot\.microsoft\.com/i.test(u) && !/signin|login/i.test(u)) {
       break;
     }
 
@@ -184,6 +309,10 @@ export async function signInMicrosoftViaCopilotUi(
     () => page.getByRole("button", { name: /copilot\.cloud\.microsoft/i }),
     5000,
   );
+
+  if (!/copilot\.microsoft\.com/i.test(page.url())) {
+    await page.goto(copilotUrl(), { waitUntil: "domcontentloaded", timeout: 90_000 });
+  }
 
   await page.waitForURL(/copilot\.microsoft\.com/, { timeout: options.postPasswordTimeoutMs });
   await page.context().storageState({ path: options.authStatePath });
