@@ -53,7 +53,7 @@ pub fn run_agent_loop_impl(
     max_turns: Option<usize>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(), AgentLoopError> {
-    let page = tauri_bridge::get_cdp_page()
+    let page = tauri_bridge::ensure_cdp_connected()
         .map_err(|e| AgentLoopError::InitializationError(e))?;
     let api_client = CdpApiClient::new(page);
 
@@ -156,8 +156,8 @@ impl CdpApiClient {
 }
 
 impl ApiClient for CdpApiClient {
-    fn stream(&mut self, request: ApiRequest) -> Result<Vec<AssistantEvent>, RuntimeError> {
-        let prompt = build_cdp_prompt(&request);
+    fn stream(&mut self, request: &ApiRequest<'_>) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        let prompt = build_cdp_prompt(request);
 
         let prompt_preview = &prompt[..prompt.len().min(80)];
         tracing::info!("[CdpApiClient] sending prompt: {prompt_preview}…");
@@ -178,8 +178,15 @@ impl ApiClient for CdpApiClient {
         let mut events = Vec::new();
         if !response_text.is_empty() {
             // Chunk the response into TextDelta events for UI progress display
-            for chunk in response_text.chars().collect::<Vec<_>>().chunks(200) {
-                events.push(AssistantEvent::TextDelta(chunk.iter().collect()));
+            let mut start = 0;
+            for (i, _) in response_text.char_indices() {
+                if i > start && (i - start) >= 200 {
+                    events.push(AssistantEvent::TextDelta(response_text[start..i].to_string()));
+                    start = i;
+                }
+            }
+            if start < response_text.len() {
+                events.push(AssistantEvent::TextDelta(response_text[start..].to_string()));
             }
         }
         events.push(AssistantEvent::Usage(TokenUsage {
@@ -194,14 +201,14 @@ impl ApiClient for CdpApiClient {
 }
 
 /// Convert an `ApiRequest` into a human-readable text prompt for CDP.
-fn build_cdp_prompt(request: &ApiRequest) -> String {
+fn build_cdp_prompt(request: &ApiRequest<'_>) -> String {
     let mut parts = Vec::new();
 
     if !request.system_prompt.is_empty() {
         parts.push(request.system_prompt.join("\n\n"));
     }
 
-    for msg in &request.messages {
+    for msg in request.messages {
         let role = match msg.role {
             runtime::MessageRole::System | runtime::MessageRole::User => "User",
             runtime::MessageRole::Assistant => "Assistant",

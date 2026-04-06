@@ -26,11 +26,13 @@ use anyhow::{bail, Context, Result};
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::oneshot;
+use std::sync::Arc;
+use tokio::sync::{oneshot, Mutex as AsyncMutex};
 use tokio::time::{timeout, Duration};
 use tracing::{debug, info, warn};
 use tungstenite::Message;
@@ -91,12 +93,18 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
         profile_dir.to_str().unwrap(),
         "--no-first-run",
         "--no-default-browser-check",
-        "--no-startup-window",
         "--disable-infobars",
         "--disable-hang-monitor",
-        "--window-size=1440,900",
-        "https://m365.cloud.microsoft/chat",
     ]);
+
+    #[cfg(target_os = "windows")]
+    {
+        cmd.arg("https://m365.cloud.microsoft/chat");
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        cmd.args(["--no-startup-window", "https://m365.cloud.microsoft/chat"]);
+    }
 
     let child = cmd
         .spawn()
@@ -236,73 +244,95 @@ pub async fn find_copilot_page(debug_url: &str) -> Result<Option<PageInfo>> {
     Ok(None)
 }
 
-/* ── One-shot CDP helpers ───────────────────────────────────── */
+/* ── Persistent CDP connection ──────────────────────────────── */
 
+type PendingMap = Arc<AsyncMutex<HashMap<u64, oneshot::Sender<Value>>>>;
+type WsWriter = Arc<AsyncMutex<
+    futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        Message,
+    >,
+>>;
+
+/// A persistent WebSocket connection to a CDP target.
+/// A background reader task dispatches responses by ID to waiting callers.
+/// Multiple commands can be multiplexed over a single connection.
 struct Ctx {
     next: AtomicU64,
-    ws_url: String,
+    writer: WsWriter,
+    pending: PendingMap,
+    _reader_task: tokio::task::JoinHandle<()>,
 }
 
 impl Ctx {
-    fn new(ws_url: String) -> Self {
-        Self {
-            next: AtomicU64::new(1),
-            ws_url,
-        }
-    }
-
-    /// Open a WebSocket, send one CDP command, wait for response, close.
-    ///
-    /// Uses a dedicated reader task with a proper error branch so that
-    /// WS errors are logged instead of silently swallowed.
-    #[allow(clippy::result_large_err, clippy::items_after_statements)]
-    async fn one_shot(&self, method: &str, params: Value) -> Result<Value> {
-        let id = self.next.fetch_add(1, Ordering::SeqCst);
-        let cmd = json!({ "id": id, "method": method, "params": params });
-
-        let (ws, _) = tokio_tungstenite::connect_async(&self.ws_url)
+    /// Establish a persistent WebSocket connection with a background reader.
+    async fn connect(ws_url: &str) -> Result<Self> {
+        let (ws, _) = tokio_tungstenite::connect_async(ws_url)
             .await
-            .with_context(|| format!("connect {}", self.ws_url))?;
+            .with_context(|| format!("connect {ws_url}"))?;
 
-        let (mut write, mut read) = ws.split();
-        let (tx, rx) = oneshot::channel::<Value>();
+        let (write, mut read) = ws.split();
+        let writer = Arc::new(AsyncMutex::new(write));
+        let pending: PendingMap = Arc::new(AsyncMutex::new(HashMap::new()));
+        let pending_clone = Arc::clone(&pending);
 
-        // reader — drains the WS until the matching response is found
-        let reader_handle = tokio::spawn(async move {
-            loop {
-                match read.next().await {
-                    Some(Ok(msg)) => {
+        let reader_task = tokio::spawn(async move {
+            while let Some(msg) = read.next().await {
+                match msg {
+                    Ok(msg) => {
                         if let Ok(txt) = msg.to_text() {
                             if let Ok(v) = serde_json::from_str::<Value>(txt) {
-                                if v.get("id").and_then(serde_json::Value::as_u64) == Some(id) {
-                                    tx.send(v).ok();
-                                    return;
+                                if let Some(id) = v.get("id").and_then(|v| v.as_u64()) {
+                                    let mut map = pending_clone.lock().await;
+                                    if let Some(tx) = map.remove(&id) {
+                                        tx.send(v).ok();
+                                    }
                                 }
+                                // Non-response events (e.g. DOM events) are silently dropped
                             }
                         }
                     }
-                    Some(Err(e)) => {
-                        debug!("[CDP] one_shot reader error: {e}");
-                        return;
+                    Err(e) => {
+                        debug!("[CDP] persistent reader error: {e}");
+                        break;
                     }
-                    None => return,
                 }
             }
         });
 
-        write
-            .send(Message::Text(cmd.to_string()))
-            .await
-            .context("send CDP cmd")?;
+        Ok(Self {
+            next: AtomicU64::new(1),
+            writer,
+            pending,
+            _reader_task: reader_task,
+        })
+    }
+
+    /// Send a CDP command over the persistent connection and wait for the response.
+    async fn send(&self, method: &str, params: Value) -> Result<Value> {
+        let id = self.next.fetch_add(1, Ordering::SeqCst);
+        let cmd = json!({ "id": id, "method": method, "params": params });
+
+        let (tx, rx) = oneshot::channel::<Value>();
+        {
+            let mut map = self.pending.lock().await;
+            map.insert(id, tx);
+        }
+
+        {
+            let mut writer = self.writer.lock().await;
+            writer
+                .send(Message::Text(cmd.to_string()))
+                .await
+                .context("send CDP cmd")?;
+        }
 
         let resp = timeout(Duration::from_secs(10), rx)
             .await
             .context("CDP timeout")?
-            .context("response lost")?;
-
-        // close the writer side to signal the remote, then wait for the reader
-        let _ = write.close().await;
-        let _ = reader_handle.await;
+            .context("response channel closed")?;
 
         if let Some(err) = resp.get("error") {
             bail!("CDP {method}: {err}");
@@ -310,12 +340,39 @@ impl Ctx {
         Ok(resp.get("result").cloned().unwrap_or(Value::Null))
     }
 
+    /// Evaluate a JS expression over the persistent connection.
     async fn eval(&self, expr: &str) -> Result<Value> {
-        self.one_shot(
+        self.send(
             "Runtime.evaluate",
             json!({ "expression": expr, "returnByValue": true }),
         )
         .await
+    }
+
+    /// One-shot: connect WS, send one command, drop connection.
+    async fn one_shot(ws_url: &str, method: &str, params: Value) -> Result<Value> {
+        let (ws, _) = tokio_tungstenite::connect_async(ws_url)
+            .await
+            .with_context(|| format!("one_shot connect {ws_url}"))?;
+        let (mut write, mut read) = ws.split();
+
+        let id = 1u64;
+        let cmd = json!({ "id": id, "method": method, "params": params });
+        write.send(Message::Text(cmd.to_string())).await.context("send CDP one_shot")?;
+
+        while let Some(msg) = read.next().await {
+            if let Ok(txt) = msg?.to_text() {
+                if let Ok(v) = serde_json::from_str::<Value>(txt) {
+                    if v.get("id").and_then(|v| v.as_u64()) == Some(id) {
+                        if let Some(err) = v.get("error") {
+                            bail!("CDP {method}: {err}");
+                        }
+                        return Ok(v.get("result").cloned().unwrap_or(Value::Null));
+                    }
+                }
+            }
+        }
+        bail!("CDP one_shot: no response for method={method}");
     }
 }
 
@@ -325,42 +382,74 @@ impl Ctx {
 pub struct CopilotPage {
     debug_url: String,
     ws_url: String,
+    /// Cached resolved WS URL — avoids repeated `/json/version` HTTP calls.
+    resolved_ws: Arc<AsyncMutex<Option<String>>>,
     pub url: String,
     pub title: String,
 }
 
 impl CopilotPage {
-    async fn ctx(&self) -> Result<Ctx> {
-        let ws = resolve_ws(&self.debug_url, &self.ws_url).await?;
-        Ok(Ctx::new(ws))
+    /// Resolve the WS URL once and cache it. Subsequent calls return the cached value.
+    async fn resolve_ws_cached(&self) -> Result<String> {
+        {
+            let cached = self.resolved_ws.lock().await;
+            if let Some(ref url) = *cached {
+                return Ok(url.clone());
+            }
+        }
+        let resolved = resolve_ws(&self.debug_url, &self.ws_url).await?;
+        let mut cached = self.resolved_ws.lock().await;
+        *cached = Some(resolved.clone());
+        Ok(resolved)
+    }
+
+    /// Open a persistent CDP connection for multi-command sequences.
+    async fn connect_ctx(&self) -> Result<Ctx> {
+        let ws_url = self.resolve_ws_cached().await?;
+        Ctx::connect(&ws_url).await
+    }
+
+    /// One-shot helper: resolve WS, run a single command, done.
+    async fn one_shot(&self, method: &str, params: Value) -> Result<Value> {
+        let ws_url = self.resolve_ws_cached().await?;
+        Ctx::one_shot(&ws_url, method, params).await
     }
 
     pub async fn body_text(&self) -> Result<String> {
-        let ctx = self.ctx().await?;
-        let r = ctx.eval("document.body.innerText").await?;
+        let r = self.one_shot_eval("document.body.innerText").await?;
         Ok(r["result"]["value"].as_str().unwrap_or_default().into())
+    }
+
+    /// Evaluate JS via a one-shot connection.
+    async fn one_shot_eval(&self, expr: &str) -> Result<Value> {
+        self.one_shot(
+            "Runtime.evaluate",
+            json!({ "expression": expr, "returnByValue": true }),
+        )
+        .await
     }
 
     pub async fn navigate_to_chat(&self) -> Result<()> {
         info!("[CDP] navigate to /chat");
-        let ctx = self.ctx().await?;
-        ctx.one_shot(
+        let ctx = self.connect_ctx().await?;
+        ctx.send(
             "Page.navigate",
             json!({ "url": "https://m365.cloud.microsoft/chat" }),
         )
         .await?;
-        ctx.one_shot("Page.enable", json!({})).await?;
+        ctx.send("Page.enable", json!({})).await?;
         tokio::time::sleep(Duration::from_secs(2)).await;
         Ok(())
     }
 
     /// Send a prompt to the Copilot composer and click send.
+    /// Uses a single persistent connection for all 3 CDP operations (type, click, wait-clear).
     /// Uses multi-selector fallback for the composer and send button
     /// to handle UI changes and i18n (Japanese/English).
     pub async fn send_prompt(&self, text: &str) -> Result<()> {
         let preview = text.chars().take(60).collect::<String>();
         info!("[CDP] send: {preview}…");
-        let ctx = self.ctx().await?;
+        let ctx = self.connect_ctx().await?;
 
         // 1. Type into composer — try multiple selectors
         let js = format!(
@@ -393,7 +482,6 @@ impl CopilotPage {
         tokio::time::sleep(Duration::from_millis(800)).await;
 
         // 2. Click send — i18n-aware multi-selector fallback
-        let ctx2 = self.ctx().await?;
         let js2 = r#"(() => {
             for (const s of [
                 // Japanese
@@ -418,7 +506,7 @@ impl CopilotPage {
             }
             return JSON.stringify({ ok: false });
         })()"#;
-        let r2 = ctx2.eval(js2).await?;
+        let r2 = ctx.eval(js2).await?;
         let val: Value = serde_json::from_str(r2["result"]["value"].as_str().unwrap_or("{}"))
             .unwrap_or(Value::Null);
         if val.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
@@ -429,24 +517,21 @@ impl CopilotPage {
         tokio::time::sleep(Duration::from_millis(500)).await;
         timeout(Duration::from_secs(5), async {
             loop {
-                let ctx3 = self.ctx().await.ok();
-                if let Some(ctx_ref) = ctx3 {
-                    if let Ok(r) = ctx_ref
-                        .eval(
-                            r#"(() => {
-                            for (const el of document.querySelectorAll(
-                                'div[role="textbox"],textarea,[contenteditable="true"],#m365-chat-editor-target-element'
-                            )) {
-                                if ((el.innerText||'').trim().length > 5) return false;
-                            }
-                            return true;
-                        })()"#,
-                        )
-                        .await
-                    {
-                        if r["result"]["value"].as_bool() == Some(true) {
-                            return Ok::<(), anyhow::Error>(());
+                if let Ok(r) = ctx
+                    .eval(
+                        r#"(() => {
+                        for (const el of document.querySelectorAll(
+                            'div[role="textbox"],textarea,[contenteditable="true"],#m365-chat-editor-target-element'
+                        )) {
+                            if ((el.innerText||'').trim().length > 5) return false;
                         }
+                        return true;
+                    })()"#,
+                    )
+                    .await
+                {
+                    if r["result"]["value"].as_bool() == Some(true) {
+                        return Ok::<(), anyhow::Error>(());
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -460,8 +545,8 @@ impl CopilotPage {
     }
 
     /// Check if Copilot is currently generating a response.
-    pub async fn is_streaming(&self) -> Result<bool> {
-        let ctx = self.ctx().await?;
+    /// Accepts a `Ctx` to reuse the existing connection.
+    async fn is_streaming_ctx(ctx: &Ctx) -> Result<bool> {
         let r = ctx
             .eval(
                 r#"(() => {
@@ -483,7 +568,9 @@ impl CopilotPage {
     }
 
     /// Wait for Copilot to finish generating a response.
+    /// Uses a single persistent connection for all polling operations.
     /// Uses streaming detection + content stability polling.
+    /// All polling uses a single persistent WebSocket connection.
     pub async fn wait_for_response(&self, timeout_secs: u64) -> Result<String> {
         const MAX_CONSECUTIVE_ERRORS: usize = 5;
         let start = std::time::Instant::now();
@@ -492,12 +579,14 @@ impl CopilotPage {
         let mut streaming = false;
         let mut consecutive_errors = 0;
 
+        let ctx = self.connect_ctx().await?;
+
         loop {
             if start.elapsed() > Duration::from_secs(timeout_secs) {
                 bail!("response timeout after {timeout_secs}s");
             }
 
-            let txt = match self.body_text().await {
+            let txt = match Self::body_text_ctx(&ctx).await {
                 Ok(text) => {
                     consecutive_errors = 0;
                     text
@@ -514,7 +603,7 @@ impl CopilotPage {
             };
             let len = txt.len();
 
-            let is_streaming = self.is_streaming().await.unwrap_or(false);
+            let is_streaming = Self::is_streaming_ctx(&ctx).await.unwrap_or(false);
 
             if is_streaming {
                 streaming = true;
@@ -538,10 +627,15 @@ impl CopilotPage {
         }
     }
 
+    /// Get body text via an existing Ctx connection.
+    async fn body_text_ctx(ctx: &Ctx) -> Result<String> {
+        let r = ctx.eval("document.body.innerText").await?;
+        Ok(r["result"]["value"].as_str().unwrap_or_default().into())
+    }
+
     /// Capture a screenshot of the current page.
     pub async fn screenshot(&self, path: &str) -> Result<()> {
-        let ctx = self.ctx().await?;
-        let r = ctx
+        let r = self
             .one_shot("Page.captureScreenshot", json!({ "format": "png" }))
             .await?;
         let b64 = r["data"]
@@ -652,6 +746,7 @@ pub async fn connect_copilot_page(
         page: CopilotPage {
             debug_url: debug_url_new,
             ws_url: first.ws_url.clone(),
+            resolved_ws: Arc::new(AsyncMutex::new(None)),
             url: first.url.clone(),
             title: first.title.clone(),
         },
@@ -671,6 +766,7 @@ async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
             page: CopilotPage {
                 debug_url: debug_url.into(),
                 ws_url: p.ws_url,
+                resolved_ws: Arc::new(AsyncMutex::new(None)),
                 url: p.url,
                 title: p.title,
             },
@@ -696,6 +792,7 @@ async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
                     page: CopilotPage {
                         debug_url: debug_url.into(),
                         ws_url: first.ws_url.clone(),
+                        resolved_ws: Arc::new(AsyncMutex::new(None)),
                         url: first.url.clone(),
                         title: first.title.clone(),
                     },

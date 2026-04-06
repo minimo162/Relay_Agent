@@ -366,6 +366,64 @@ pub fn get_cdp_page() -> Result<cdp_copilot::CopilotPage, String> {
         .ok_or_else(|| "CDP not connected — call connect_cdp first".to_string())
 }
 
+/// Ensure a CDP connection is available, auto-connecting if needed.
+/// This allows the agent loop to start without requiring a prior `connect_cdp` call.
+/// If already connected (e.g. via `connect_cdp`), returns the existing page immediately.
+pub fn ensure_cdp_connected() -> Result<cdp_copilot::CopilotPage, String> {
+    // Fast path: already connected via `connect_cdp`
+    if let Ok(state) = cdp_session().lock() {
+        if let Some(ref page) = state.page {
+            return Ok(page.clone());
+        }
+    }
+
+    // Slow path: auto-connect CDP
+    let debug_url = get_cdp_debug_url(9222);
+    tracing::info!("[CDP] auto-connecting to {} (start_agent)…", debug_url);
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("CDP: failed to create runtime: {e}"))?;
+
+    let result = rt
+        .block_on(async {
+            cdp_copilot::connect_copilot_page(&debug_url, true, 9222).await
+        })
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("Microsoft Edge could not be found") {
+                format!("CDP: Microsoft Edge is not installed. Please install Edge and try again.")
+            } else if msg.contains("Edge did not become ready") {
+                format!("CDP: Edge did not start within 30 seconds. It may be blocked by a security policy.")
+            } else {
+                format!("CDP: {msg}")
+            }
+        })?;
+
+    let page = result.page.clone();
+    let port = result.port;
+    let page_url = result.page.url.clone();
+
+    if result.launched {
+        // Edge was auto-launched: track port so disconnect_cdp can clean it up
+        mark_cdp_connected(port, page_url, page.clone());
+    } else {
+        // Existing browser: mark connected but don't track a launched port
+        if let Ok(mut state) = cdp_session().lock() {
+            state.connected = true;
+            state.page_url = Some(page_url);
+            state.page = Some(page.clone());
+        }
+    }
+
+    tracing::info!("[CDP] auto-connected to {}", page.url);
+    // ConnectionResult dropped here; its Edge process ownership is no longer needed
+    // since the port is tracked in CdpSessionState and disconnect_cdp handles cleanup.
+
+    Ok(page)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectCdpRequest {
@@ -603,14 +661,13 @@ pub async fn disconnect_cdp(_app: AppHandle) -> Result<(), String> {
         {
             use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
-            // Kill only the Edge process on our debug port, not all Edge instances
+            // Kill Edge processes that use our isolated profile directory
             let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/FI", &format!("WINDOWTITLE eq *{port}*")])
+                .args(["/F", "/FI", &format!("WINDOWTITLE eq *{}*", port)])
                 .creation_flags(CREATE_NO_WINDOW)
                 .output();
-            // Fallback: kill Edge processes spawned with our profile dir
             let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/FI", "IMAGENAME eq msedge.exe"])
+                .args(["/F", "/IM", "msedge.exe", "/FI", &format!("CMDLINE eq *RelayAgentEdgeProfile*")])
                 .creation_flags(CREATE_NO_WINDOW)
                 .output();
         }

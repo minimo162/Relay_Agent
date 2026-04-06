@@ -60,17 +60,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
-name = "api"
-version = "0.1.0"
-dependencies = [
- "reqwest 0.12.28",
- "runtime",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -915,6 +904,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b147ee9d1f6d097cef9ce628cd2ee62288d963e16fb287bd9286455b241382d"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-io",
+ "futures-sink",
+ "futures-task",
+ "futures-util",
+]
+
+[[package]]
 name = "futures-channel"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -976,6 +980,7 @@ version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "389ca41296e6190b48053de0321d02a77f32f8a5d2461dd38762c0593805c6d6"
 dependencies = [
+ "futures-channel",
  "futures-core",
  "futures-io",
  "futures-macro",
@@ -2963,11 +2968,11 @@ name = "relay-agent-desktop"
 version = "0.2.0"
 dependencies = [
  "anyhow",
- "api",
  "async-trait",
  "base64 0.22.1",
  "chrono",
  "commands",
+ "futures",
  "futures-util",
  "reqwest 0.12.28",
  "runtime",
@@ -4367,7 +4372,6 @@ checksum = "d282ade6016312faf3e41e57ebbba0c073e4056dab1232ab1cb624199648f8ed"
 name = "tools"
 version = "0.1.0"
 dependencies = [
- "api",
  "dirs",
  "reqwest 0.12.28",
  "runtime",

@@ -302,6 +302,7 @@ export type UiMessageChunk =
 /** Convert full history to a flat array of UI chunks (ordered) */
 export function chunksFromHistory(messages: AgentMessage[]): UiChunk[] {
   const chunks: UiChunk[] = [];
+  const toolCallIndex = new Map<string, Extract<UiChunk, { kind: "tool_call" }>>();
   for (const msg of messages) {
     if (msg.role === "user") {
       const texts = msg.content
@@ -316,21 +317,18 @@ export function chunksFromHistory(messages: AgentMessage[]): UiChunk[] {
           chunks.push({ kind: "assistant" as const, text: block.text });
         }
         if (block.type === "tool_use") {
-          chunks.push({
-            kind: "tool_call",
+          const chunk = {
+            kind: "tool_call" as const,
             toolUseId: block.id,
             toolName: block.name,
-            result: null,
-            status: "running",
-          });
+            result: null as string | null,
+            status: "running" as const,
+          };
+          chunks.push(chunk);
+          toolCallIndex.set(block.id, chunk);
         }
         if (block.type === "tool_result") {
-          const lastTool = [...chunks]
-            .reverse()
-            .find(
-              (c): c is Extract<UiChunk, { kind: "tool_call" }> =>
-                c.kind === "tool_call" && c.toolUseId === block.tool_use_id,
-            );
+          const lastTool = toolCallIndex.get(block.tool_use_id);
           if (lastTool) {
             lastTool.result = block.content;
             lastTool.status = block.is_error ? "error" : "done";
