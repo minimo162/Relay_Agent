@@ -85,9 +85,8 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
         port, profile_dir
     );
 
-    // Launch Edge without any initial tab. A Copilot tab will be created via CDP.
-    // Using --no-startup-window avoids restoring previous session tabs.
-    // The Copilot URL will be set programmatically after the browser is ready.
+    // Launch Edge with a blank start page to avoid stray tabs like about:blank.
+    // The Copilot URL will be navigated to after the browser is ready.
     let mut cmd = std::process::Command::new(&edge_path);
     cmd.args([
         "--remote-debugging-port",
@@ -98,6 +97,7 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
         "--disable-infobars",
         "--disable-hang-monitor",
         "--disable-restore-session-state",
+        "about:blank",
     ]);
 
     let child = cmd
@@ -727,42 +727,36 @@ pub async fn connect_copilot_page(
         return p;
     }
 
-    // No Copilot tab found — close stray tabs and create one via CDP
-    info!("[CDP] No Copilot tab found, cleaning up and creating one via CDP…");
+    // No Copilot tab found — create one via CDP
+    info!("[CDP] No Copilot tab found, creating one via CDP…");
     let ws_url = resolve_ws_from_port(&debug_url_new).await?;
     let ctx = Ctx::connect(&ws_url).await?;
 
-    // Close any existing non-Copilot tabs
-    let pages = list_pages(&debug_url_new).await?;
-    for page in &pages {
-        if !COPILOT_URL_PATTERNS.iter().any(|pat| page.url.contains(pat))
-            && page.kind == "page"
-        {
-            info!("[CDP] Closing stray tab: {}", page.url);
-            // Get targetId from ws_url: ws://host/devtools/page/<targetId>
-            if let Some(target_id) = extract_target_id(&page.ws_url) {
-                let _ = ctx
-                    .send("Target.closeTarget", json!({ "targetId": target_id }))
-                    .await;
-            }
-        }
-    }
+    // Create a fresh Copilot tab
+    let create_result = ctx
+        .send(
+            "Target.createTarget",
+            json!({
+                "type": "page",
+                "url": "https://m365.cloud.microsoft/chat"
+            }),
+        )
+        .await;
 
-    // Create a fresh Copilot tab with explicit windowId=1 to ensure visibility
-    ctx.send(
-        "Target.createTarget",
-        json!({
-            "type": "page",
-            "url": "https://m365.cloud.microsoft/chat",
-            "newWindow": true
-        }),
-    )
-    .await?;
+    info!("[CDP] Target.createTarget result: {:?}", create_result);
 
     // Let the page initialize
     tokio::time::sleep(Duration::from_secs(3)).await;
 
+    // List all pages and log them for debugging
     let pages = list_pages(&debug_url_new).await?;
+    for page in &pages {
+        info!(
+            "[CDP] Page: kind={} url={} title={}",
+            page.kind, page.url, page.title
+        );
+    }
+
     let first = pages
         .iter()
         .find(|p| p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat)))
@@ -770,17 +764,43 @@ pub async fn connect_copilot_page(
         .context("no page found after creating Copilot tab")?;
 
     info!(
-        "[CDP] Copilot tab found: {} ({})",
+        "[CDP] Selected page: {} ({})",
         first.url, first.title
     );
+
+    // If the page is not on Copilot URL, navigate it
+    let final_page = if COPILOT_URL_PATTERNS.iter().any(|pat| first.url.contains(pat)) {
+        first.clone()
+    } else {
+        info!("[CDP] Page is not on Copilot URL, navigating…");
+        let page_ws = resolve_ws_from_port(&debug_url_new).await?;
+        let page_ctx = Ctx::connect(&page_ws).await?;
+        page_ctx
+            .send(
+                "Page.navigate",
+                json!({ "url": "https://m365.cloud.microsoft/chat" }),
+            )
+            .await?;
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
+        let pages2 = list_pages(&debug_url_new).await?;
+        pages2
+            .iter()
+            .find(|p| {
+                p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat))
+            })
+            .or_else(|| pages2.iter().find(|p| p.kind == "page"))
+            .cloned()
+            .context("no page found after navigation")?
+    };
 
     Ok(ConnectionResult {
         page: CopilotPage {
             debug_url: debug_url_new.clone(),
-            ws_url: first.ws_url.clone(),
+            ws_url: final_page.ws_url.clone(),
             resolved_ws: Arc::new(AsyncMutex::new(None)),
-            url: first.url.clone(),
-            title: first.title.clone(),
+            url: final_page.url.clone(),
+            title: final_page.title.clone(),
         },
         port,
         launched: true,
