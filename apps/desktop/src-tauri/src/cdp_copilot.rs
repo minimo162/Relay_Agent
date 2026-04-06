@@ -727,15 +727,19 @@ pub async fn connect_copilot_page(
         return p;
     }
 
-    // No Copilot tab found — close any stray tabs and create a fresh Copilot tab via CDP
-    info!("[CDP] No Copilot tab found, cleaning up and creating one…");
+    // No Copilot tab found — close stray tabs and create one via CDP
+    info!("[CDP] No Copilot tab found, cleaning up and creating one via CDP…");
     let ws_url = resolve_ws_from_port(&debug_url_new).await?;
     let ctx = Ctx::connect(&ws_url).await?;
 
     // Close any existing non-Copilot tabs
     let pages = list_pages(&debug_url_new).await?;
     for page in &pages {
-        if !COPILOT_URL_PATTERNS.iter().any(|pat| page.url.contains(pat)) {
+        if !COPILOT_URL_PATTERNS.iter().any(|pat| page.url.contains(pat))
+            && page.kind == "page"
+        {
+            info!("[CDP] Closing stray tab: {}", page.url);
+            // Get targetId from ws_url: ws://host/devtools/page/<targetId>
             if let Some(target_id) = extract_target_id(&page.ws_url) {
                 let _ = ctx
                     .send("Target.closeTarget", json!({ "targetId": target_id }))
@@ -744,24 +748,29 @@ pub async fn connect_copilot_page(
         }
     }
 
-    // Create a fresh Copilot tab
+    // Create a fresh Copilot tab with explicit windowId=1 to ensure visibility
     ctx.send(
         "Target.createTarget",
-        json!({ "type": "page", "url": "https://m365.cloud.microsoft/chat" }),
+        json!({
+            "type": "page",
+            "url": "https://m365.cloud.microsoft/chat",
+            "newWindow": true
+        }),
     )
     .await?;
 
     // Let the page initialize
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
     let pages = list_pages(&debug_url_new).await?;
     let first = pages
         .iter()
-        .find(|p| p.kind == "page")
+        .find(|p| p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat)))
+        .or_else(|| pages.iter().find(|p| p.kind == "page"))
         .context("no page found after creating Copilot tab")?;
 
     info!(
-        "[CDP] Created Copilot tab: {} ({})",
+        "[CDP] Copilot tab found: {} ({})",
         first.url, first.title
     );
 
