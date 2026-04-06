@@ -188,10 +188,10 @@ pub struct CdpConfig {
 impl Default for CdpConfig {
     fn default() -> Self {
         Self {
-            debug_url: "http://127.0.0.1:9222".into(),
+            debug_url: "http://127.0.0.1:9333".into(),
             copilot_url: "https://m365.cloud.microsoft/chat".into(),
             auto_launch: false,
-            base_port: 9222,
+            base_port: 9333,
         }
     }
 }
@@ -710,7 +710,7 @@ pub async fn connect_copilot_page(
         );
     }
 
-    let port = find_free_port(base_port, 20);
+    let port = find_free_port(base_port, 50);
     let debug_url_new = format!("http://127.0.0.1:{port}");
 
     info!(
@@ -722,13 +722,28 @@ pub async fn connect_copilot_page(
     wait_for_cdp_ready(&debug_url_new, 30).await?;
 
     // Wait a bit for the initial tab to settle
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
 
-    // Get all pages and navigate each to Copilot URL, close the rest
+    // Get all pages — retry a few times since Edge may need a moment to register tabs
     let ws_url = resolve_ws_from_port(&debug_url_new).await?;
     let ctx = Ctx::connect(&ws_url).await?;
 
-    let pages = list_pages(&debug_url_new).await?;
+    let mut pages = Vec::new();
+    for attempt in 0..3 {
+        pages = list_pages(&debug_url_new).await.unwrap_or_default();
+        if !pages.is_empty() {
+            if attempt > 0 {
+                info!("[CDP] pages found on attempt {} ({} tabs)", attempt + 1, pages.len());
+            }
+            break;
+        }
+        info!("[CDP] no pages on attempt {}, waiting…", attempt + 1);
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+
+    if pages.is_empty() {
+        bail!("[CDP] no tabs found after Edge launch");
+    }
     let mut copilot_page: Option<PageInfo> = None;
 
     for page in &pages {
@@ -758,10 +773,10 @@ pub async fn connect_copilot_page(
                 )
                 .await;
             info!("[CDP] Page.navigate result: {:?}", result);
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            tokio::time::sleep(Duration::from_secs(10)).await;
 
             // Re-check if navigation succeeded
-            let pages2 = list_pages(&debug_url_new).await?;
+            let pages2 = list_pages(&debug_url_new).await.unwrap_or_default();
             copilot_page = pages2
                 .into_iter()
                 .find(|p| {
@@ -774,20 +789,40 @@ pub async fn connect_copilot_page(
     if copilot_page.is_none() {
         // Create a new tab via Target.createTarget
         info!("[CDP] Creating new Copilot tab via Target.createTarget…");
-        ctx.send(
-            "Target.createTarget",
-            json!({
-                "type": "page",
-                "url": "https://m365.cloud.microsoft/chat"
-            }),
-        )
-        .await?;
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        let create_result = ctx
+            .send(
+                "Target.createTarget",
+                json!({
+                    "type": "page",
+                    "url": "https://m365.cloud.microsoft/chat"
+                }),
+            )
+            .await;
+        info!("[CDP] Target.createTarget result: {:?}", create_result);
+        tokio::time::sleep(Duration::from_secs(10)).await;
 
-        let pages3 = list_pages(&debug_url_new).await?;
+        let pages3 = list_pages(&debug_url_new).await.unwrap_or_default();
         copilot_page = pages3.into_iter().find(|p| {
             p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat))
         });
+    }
+
+    // Last resort: use any available page even if not Copilot URL
+    if copilot_page.is_none() {
+        warn!("[CDP] No Copilot tab found, falling back to first available page");
+        let pages4 = list_pages(&debug_url_new).await.unwrap_or_default();
+        if let Some(first) = pages4.into_iter().find(|p| p.kind == "page") {
+            // Navigate it to Copilot URL
+            let page_ctx = Ctx::connect(&first.ws_url).await?;
+            let _ = page_ctx
+                .send(
+                    "Page.navigate",
+                    json!({ "url": "https://m365.cloud.microsoft/chat" }),
+                )
+                .await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            copilot_page = Some(first);
+        }
     }
 
     let copilot_page =
