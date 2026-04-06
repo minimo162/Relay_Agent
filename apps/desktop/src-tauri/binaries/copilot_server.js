@@ -2,7 +2,10 @@
 // Works in VBS-restricted corporate environments where Playwright connectOverCDP hangs.
 import * as fs from "node:fs";
 import * as http from "node:http";
-import { WebSocket } from "ws";
+
+// Use Node 22+ built-in WebSocket. If unavailable, fall back to bare-net via http upgrade.
+const WS = globalThis.WebSocket ?? globalThis.ws;
+if (!WS) throw new Error("WebSocket is not available. Use Node.js 22+ or install the 'ws' package.");
 
 var DEFAULT_PORT = 18080;
 var DEFAULT_CDP_PORT = 9333;
@@ -35,12 +38,13 @@ class CdpSession {
   #listeners = new Map();
 
   constructor(wsUrl) {
-    this.#ws = new WebSocket(wsUrl);
+    this.#ws = new WS(wsUrl);
+    this.#ws.onmessage = (e) => this._handle(typeof e.data === "string" ? e.data : String(e.data));
   }
 
   get ready() {
     return new Promise((resolve, reject) => {
-      if (this.#ws.readyState === WebSocket.OPEN) return resolve();
+      if (this.#ws.readyState === WS.OPEN) return resolve();
       const t = setTimeout(() => reject(new Error("CDP WebSocket timeout")), 10e3);
       this.#ws.addEventListener("open", () => { clearTimeout(t); resolve(); }, { once: true });
       this.#ws.addEventListener("error", (e) => { clearTimeout(t); reject(e.error ?? e); }, { once: true });
