@@ -13,7 +13,8 @@
  * Use `--keep-app` or RELAY_E2E_KEEP_APP=1 to leave the app running for manual inspection.
  *
  * Default assertion is read-only (innerText check) — the UI will not change. Use `--ui-demo`
- * or RELAY_E2E_UI_DEMO=1 to focus the composer and type sample text so you can see automation.
+ * or RELAY_E2E_UI_DEMO=1 to fill the composer, click Send, and start the Rust agent session
+ * (same as a manual send; Copilot/M365 delivery depends on agent config and backend).
  *
  * Env:
  *   RELAY_WEBVIEW2_CDP_PORT   (default 9222)
@@ -198,19 +199,34 @@ async function assertShellViaPlaywright() {
     console.log("[e2e-agent-browser] OK (Playwright: Relay Agent + Sessions)");
 
     if (UI_DEMO) {
+      const demoMsg = "E2E CDP demo — safe to delete";
       console.log(
-        "[e2e-agent-browser] ui-demo: focus + fill composer (watch the app window)…",
+        "[e2e-agent-browser] ui-demo: fill composer + click Send (starts startAgent / IPC)…",
       );
       const ta = page.getByPlaceholder(COMPOSER_PLACEHOLDER);
       await ta.click({ timeout: PW_ASSERT_MS });
-      await ta.fill("E2E CDP demo — safe to delete");
-      await new Promise((r) => setTimeout(r, 2500));
+      await ta.fill(demoMsg);
+      const sendBtn = page.getByRole("button", { name: "Send" });
+      await sendBtn.waitFor({ state: "visible", timeout: 15_000 });
+      await sendBtn.click();
       console.log(
-        "[e2e-agent-browser] ui-demo: done (Send not pressed; text left in field)",
+        "[e2e-agent-browser] ui-demo: Send clicked — agent session starting (M365 Copilot only if that backend path is configured)",
       );
+      try {
+        await page
+          .getByText("E2E CDP demo", { exact: false })
+          .first()
+          .waitFor({ state: "visible", timeout: 10_000 });
+        console.log("[e2e-agent-browser] ui-demo: user message visible in feed");
+      } catch {
+        console.log(
+          "[e2e-agent-browser] ui-demo: user bubble not seen in 10s (composer may be disabled if a run was already in progress)",
+        );
+      }
+      await new Promise((r) => setTimeout(r, 2000));
     } else {
       console.log(
-        "[e2e-agent-browser] tip: read-only check — UI looks unchanged. For visible typing: --ui-demo (often with --keep-app)",
+        "[e2e-agent-browser] tip: read-only check — UI looks unchanged. For fill+Send: --ui-demo (often with --keep-app)",
       );
     }
   } finally {

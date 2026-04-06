@@ -406,6 +406,16 @@ impl Ctx {
     }
 }
 
+/// Match `copilot_server.js`: minimum visible composer length to trust paste for longer prompts.
+fn copilot_composer_need_min(text_char_len: usize) -> u64 {
+    if text_char_len < 20 {
+        1
+    } else {
+        let raw = ((text_char_len as f64) * 0.06).floor() as u64;
+        (12_u64).max(raw).min(120)
+    }
+}
+
 /* ── Copilot Page Handle ────────────────────────────────────── */
 
 #[derive(Clone)]
@@ -419,6 +429,61 @@ pub struct CopilotPage {
 }
 
 impl CopilotPage {
+    async fn cdp_composer_visible_len(ctx: &Ctx) -> Result<u64> {
+        let r = ctx
+            .eval(
+                r#"(() => {
+                function lenOf(el) {
+                    if (!el) return 0;
+                    const raw = el.innerText || el.textContent || '';
+                    const t = raw.replace(/\u200b/g, '');
+                    return t.trim().length;
+                }
+                const root = document.querySelector('#m365-chat-editor-target-element')
+                    ?? document.querySelector('[data-lexical-editor="true"]');
+                if (root && root.offsetParent !== null) {
+                    const inner = root.querySelector('[contenteditable="true"]');
+                    const n = lenOf(inner && inner.offsetParent !== null ? inner : root);
+                    if (n > 0) return n;
+                }
+                const fb = document.querySelector('div[role="textbox"]');
+                return lenOf(fb);
+            })()"#,
+            )
+            .await?;
+        let v = &r["result"]["value"];
+        Ok(v.as_u64()
+            .or_else(|| v.as_f64().map(|f| f as u64))
+            .unwrap_or(0))
+    }
+
+    async fn cdp_insert_exec_command(ctx: &Ctx, text: &str) -> Result<()> {
+        // Small chunks: large execCommand runs freeze the renderer and can stall CDP responses.
+        const CAP: usize = 200;
+        let chars: Vec<char> = text.chars().collect();
+        for chunk in chars.chunks(CAP) {
+            let s: String = chunk.iter().collect();
+            let escaped =
+                serde_json::to_string(&s).context("escape prompt chunk for execCommand")?;
+            let expr = format!(
+                r#"(() => {{
+                const root = document.querySelector('#m365-chat-editor-target-element')
+                    ?? document.querySelector('[data-lexical-editor="true"]');
+                const inner = root?.querySelector('[contenteditable="true"]');
+                const el = (inner && inner.offsetParent !== null ? inner : null)
+                    ?? root
+                    ?? document.querySelector('div[role="textbox"]');
+                if (!el) return false;
+                el.focus();
+                try {{ return document.execCommand('insertText', false, {escaped}); }} catch (e) {{ return false; }}
+            }})()"#
+            );
+            ctx.eval(&expr).await?;
+            tokio::time::sleep(Duration::from_millis(15)).await;
+        }
+        Ok(())
+    }
+
     /// Resolve the WS URL once and cache it. Subsequent calls return the cached value.
     async fn resolve_ws_cached(&self) -> Result<String> {
         {
@@ -481,17 +546,33 @@ impl CopilotPage {
         info!("[CDP] send: {preview}…");
         let ctx = self.connect_ctx().await?;
 
-        // 1. Focus the composer (stable id first, then role-based fallbacks).
+        let _ = ctx.send("Page.bringToFront", json!({})).await;
+        let _ = ctx.send("Input.enable", json!({})).await;
+
+        // 1. Focus inner Lexical surface when present (same strategy as copilot_server.js).
         let focus_js = r#"(() => {
-            const ordered = [
-                '#m365-chat-editor-target-element',
-                'textarea',
-                '[contenteditable="true"]',
-                'div[role="textbox"]'
-            ];
-            for (const s of ordered) {
+            function visible(el) {
+                return el && el.offsetParent !== null;
+            }
+            const roots = [
+                document.querySelector('#m365-chat-editor-target-element'),
+                document.querySelector('[data-lexical-editor="true"]')
+            ].filter(Boolean);
+            for (const root of roots) {
+                if (!visible(root)) continue;
+                const inner = root.querySelector('[contenteditable="true"]');
+                const el = visible(inner) ? inner : root;
+                try { el.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
+                el.click();
+                el.focus();
+                return true;
+            }
+            const fallbacks = ['textarea', 'div[role="textbox"]', '[contenteditable="true"]'];
+            for (const s of fallbacks) {
                 const el = document.querySelector(s);
-                if (el && el.offsetParent !== null) {
+                if (visible(el)) {
+                    try { el.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (_) {}
+                    el.click();
                     el.focus();
                     return true;
                 }
@@ -503,12 +584,29 @@ impl CopilotPage {
             bail!("composer not found — Copilot page may not be ready");
         }
 
-        // 2. Insert text + submit via CDP Input (no send-button selectors).
+        // 2. Insert text; fall back to execCommand if CDP typing does not reach Lexical.
         ctx.send("Input.insertText", json!({ "text": text }))
             .await
             .context("Input.insertText")?;
 
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        let text_len = text.chars().count();
+        let need_min = copilot_composer_need_min(text_len);
+        let mut visible_len = Self::cdp_composer_visible_len(&ctx).await?;
+        if text_len >= 20 && visible_len < need_min {
+            warn!(
+                "[CDP] Input.insertText left composer short (len={visible_len}, need~{need_min}); trying execCommand"
+            );
+            Self::cdp_insert_exec_command(&ctx, text).await?;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            visible_len = Self::cdp_composer_visible_len(&ctx).await?;
+        }
+        if text_len >= 20 && visible_len < need_min {
+            bail!(
+                "prompt did not reach Copilot composer (visible len {visible_len}, need ~{need_min})"
+            );
+        }
 
         for phase in ["keyDown", "keyUp"] {
             ctx.send(
@@ -532,12 +630,25 @@ impl CopilotPage {
                 if let Ok(r) = ctx
                     .eval(
                         r#"(() => {
-                        for (const el of document.querySelectorAll(
-                            '#m365-chat-editor-target-element,textarea,[contenteditable="true"],div[role="textbox"]'
-                        )) {
-                            if ((el.innerText||'').trim().length > 5) return false;
+                        function lenOf(el) {
+                            if (!el) return 0;
+                            const raw = el.innerText || el.textContent || '';
+                            return raw.replace(/\u200b/g, '').trim().length;
                         }
-                        return true;
+                        const root = document.querySelector('#m365-chat-editor-target-element')
+                            ?? document.querySelector('[data-lexical-editor="true"]');
+                        let n = 0;
+                        if (root && root.offsetParent !== null) {
+                            const inner = root.querySelector('[contenteditable="true"]');
+                            n = lenOf(inner && inner.offsetParent !== null ? inner : root);
+                        }
+                        if (n <= 5) {
+                            for (const el of document.querySelectorAll('textarea,[contenteditable="true"],div[role="textbox"]')) {
+                                if (lenOf(el) > 5) return false;
+                            }
+                            return true;
+                        }
+                        return false;
                     })()"#,
                     )
                     .await

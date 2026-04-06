@@ -35,6 +35,8 @@ var RESPONSE_URL_PATTERN = /substrate\.office\.com|copilot\.microsoft\.com|m365\
 var RESPONSE_TIMEOUT_MS = 12e4;
 var CDP_PROBE_TIMEOUT_MS = 2e3;
 var CDP_COMMAND_TIMEOUT_MS = 5e3;
+/** Runtime.evaluate can run long synchronous DOM work; default CDP timeout was killing large execCommand pastes. */
+var CDP_RUNTIME_EVALUATE_TIMEOUT_MS = 90e3;
 var EDGE_LAUNCH_TIMEOUT_MS = 45e3;
 var EDGE_LAUNCH_POLL_INTERVAL_MS = 500;
 var CDP_PORT_SCAN_RANGE = 20;
@@ -73,10 +75,10 @@ class CdpSession {
   }
   off(event, fn) { this.#listeners.get(event)?.delete(fn); }
 
-  send(method, params = {}) {
+  send(method, params = {}, timeoutMs = CDP_COMMAND_TIMEOUT_MS) {
     return new Promise((resolve, reject) => {
       const id = ++this.#id;
-      const t = setTimeout(() => { this.#pending.delete(id); reject(new Error(`CDP ${method} timed out`)); }, CDP_COMMAND_TIMEOUT_MS);
+      const t = setTimeout(() => { this.#pending.delete(id); reject(new Error(`CDP ${method} timed out`)); }, timeoutMs);
       this.#pending.set(id, { resolve, reject, timer: t });
       this.#ws.send(JSON.stringify({ id, method, params }));
     });
@@ -102,8 +104,12 @@ class CdpSession {
   _onError = () => { /* errors logged at call site */ }
 
   /** Run JS in the target page and return the result */
-  async evaluate(expression) {
-    const r = await this.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+  async evaluate(expression, evaluateTimeoutMs = CDP_RUNTIME_EVALUATE_TIMEOUT_MS) {
+    const r = await this.send(
+      "Runtime.evaluate",
+      { expression, returnByValue: true, awaitPromise: true },
+      evaluateTimeoutMs
+    );
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
     return r.result;
   }
@@ -123,7 +129,7 @@ class CdpSession {
   }
 
   async navigateExisting(targetId, url) {
-    await this.send("Page.navigate", { url }, true);
+    await this.send("Page.navigate", { url });
   }
 
   async closeTarget(targetId) {
@@ -309,12 +315,12 @@ class CopilotSession {
       if (!isCopilotUrl(page.url)) {
         console.error("[copilot:describe] navigating to Copilot URL...");
         await pageSession.send("Page.navigate", { url: COPILOT_URL });
-        await sleep(2000);
+        await sleep(3500);
       }
 
       console.error("[copilot:describe] starting new chat...");
       await pageSession.click(NEW_CHAT_BUTTON_SELECTOR).catch(() => {});
-      await sleep(800);
+      await sleep(1500);
 
       console.error("[copilot:describe] pasting prompt...");
       const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${userPrompt}` : userPrompt;
@@ -334,19 +340,38 @@ function isLoginUrl(url) {
   return url?.includes("login.microsoftonline.com") || url?.includes("login.live.com") || url?.includes("microsoft.com/fwlink");
 }
 
-/** True if element looks like the Copilot composer (Lexical / contenteditable). */
+/**
+ * Lexical often nests the real editor: outer #m365-chat-editor-target-element vs inner [contenteditable="true"].
+ * CDP Input.insertText targets the focused node; focusing only the outer shell can paste "nowhere".
+ */
 async function focusComposer(session) {
   const r = await session.evaluate(`(() => {
-    const selectors = [
-      '#m365-chat-editor-target-element',
-      '[data-lexical-editor="true"]',
+    function visible(el) {
+      return el && el.offsetParent !== null;
+    }
+    const roots = [
+      document.querySelector('#m365-chat-editor-target-element'),
+      document.querySelector('[data-lexical-editor="true"]')
+    ].filter(Boolean);
+    for (const root of roots) {
+      if (!visible(root)) continue;
+      const inner = root.querySelector('[contenteditable="true"]');
+      const el = visible(inner) ? inner : root;
+      try {
+        el.scrollIntoView({ block: 'center', inline: 'nearest' });
+      } catch (_) {}
+      el.click();
+      el.focus();
+      return true;
+    }
+    const fallbacks = [
       'div[role="textbox"][contenteditable="true"]',
       'div[role="textbox"]',
       '[contenteditable="true"]'
     ];
-    for (const sel of selectors) {
+    for (const sel of fallbacks) {
       const el = document.querySelector(sel);
-      if (el && el.offsetParent !== null) {
+      if (visible(el)) {
         try {
           el.scrollIntoView({ block: 'center', inline: 'nearest' });
         } catch (_) {}
@@ -372,13 +397,21 @@ async function waitForComposer(session) {
 /** Approximate visible character count in composer (Lexical exposes innerText on root). */
 async function getComposerTextLength(session) {
   const r = await session.evaluate(`(() => {
-    const el = document.querySelector('#m365-chat-editor-target-element')
-      ?? document.querySelector('[data-lexical-editor="true"]')
-      ?? document.querySelector('div[role="textbox"]');
-    if (!el) return 0;
-    const raw = el.innerText || el.textContent || '';
-    const t = raw.replace(new RegExp(String.fromCharCode(0x200b), 'g'), '');
-    return t.trim().length;
+    function lenOf(el) {
+      if (!el) return 0;
+      const raw = el.innerText || el.textContent || '';
+      const t = raw.replace(new RegExp(String.fromCharCode(0x200b), 'g'), '');
+      return t.trim().length;
+    }
+    const root = document.querySelector('#m365-chat-editor-target-element')
+      ?? document.querySelector('[data-lexical-editor="true"]');
+    if (root && root.offsetParent !== null) {
+      const inner = root.querySelector('[contenteditable="true"]');
+      const n = lenOf(inner && inner.offsetParent !== null ? inner : root);
+      if (n > 0) return n;
+    }
+    const fb = document.querySelector('div[role="textbox"]');
+    return lenOf(fb);
   })()`).catch(() => ({ value: 0 }));
   return Number(r.value) || 0;
 }
@@ -386,6 +419,85 @@ async function getComposerTextLength(session) {
 async function cdpInputEnable(session) {
   await session.send("Page.bringToFront", {}).catch(() => {});
   await session.send("Input.enable", {}).catch(() => {});
+}
+
+/** Unicode-safe chunking (avoid splitting surrogate pairs with string.slice byte indices). */
+function chunkByCodePoints(text, size) {
+  const units = Array.from(text);
+  const out = [];
+  for (let i = 0; i < units.length; i += size) {
+    out.push(units.slice(i, i + size).join(""));
+  }
+  return out;
+}
+
+function pasteNeedMinChars(textLen) {
+  if (textLen < 20) return 1;
+  let n = Math.min(120, Math.max(12, Math.floor(textLen * 0.06)));
+  if (textLen > 5000) n = Math.min(n, 96);
+  return n;
+}
+
+/** Reject “success” when only a short tail (e.g. fenced relay_tool example) is visible in a long prompt. */
+function pasteLooksComplete(visibleLen, fullLen) {
+  if (fullLen < 20) return visibleLen >= 1;
+  if (fullLen <= 400) {
+    return visibleLen >= Math.max(1, Math.floor(fullLen * 0.82));
+  }
+  if (fullLen > 4000 && visibleLen >= 720) {
+    return true;
+  }
+  const target = Math.min(900, Math.max(140, Math.floor(fullLen * 0.035)));
+  return visibleLen >= target;
+}
+
+/**
+ * Lexical often ingests full payloads correctly from a single synthetic paste (one transaction).
+ * Chunked CDP insertText / per-chunk execCommand+focus can leave only the last fragment visible.
+ */
+async function pasteViaSyntheticClipboard(session, text) {
+  const maxPerPaste = 12e3;
+  const parts = chunkByCodePoints(text, maxPerPaste);
+  for (let pi = 0; pi < parts.length; pi++) {
+    const part = parts[pi];
+    const r = await session.evaluate(`
+      ((payload, isFirstPart) => {
+        const root = document.querySelector('#m365-chat-editor-target-element')
+          ?? document.querySelector('[data-lexical-editor="true"]');
+        const inner = root?.querySelector('[contenteditable="true"]');
+        const el = (inner && inner.offsetParent !== null ? inner : null)
+          ?? root
+          ?? document.querySelector('div[role="textbox"]');
+        if (!el) return false;
+        if (isFirstPart) {
+          el.focus();
+          try {
+            const sel = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            range.collapse(false);
+            sel.removeAllRanges();
+            sel.addRange(range);
+          } catch (_) {}
+        }
+        try {
+          const dt = new DataTransfer();
+          dt.setData('text/plain', payload);
+          el.dispatchEvent(new ClipboardEvent('paste', {
+            clipboardData: dt,
+            bubbles: true,
+            cancelable: true
+          }));
+          return true;
+        } catch (_) {
+          return false;
+        }
+      })(${JSON.stringify(part)}, ${pi === 0})
+    `);
+    if (r.value !== true) return false;
+    await sleep(parts.length > 1 ? 120 : 80);
+  }
+  return true;
 }
 
 /** Clear composer via keyboard so Lexical updates internal state. */
@@ -409,48 +521,97 @@ async function clearComposerViaKeyboard(session) {
 
 /**
  * Insert text using Chromium CDP Input.insertText (IME-style). Lexical ignores innerText + generic input events.
+ * Code-point chunks; do not refocus mid-loop (refocus can reset selection so only the last chunk remains).
  */
 async function insertTextViaCdp(session, text) {
-  const chunkSize = 4e3;
-  for (let i = 0; i < text.length; i += chunkSize) {
-    const chunk = text.slice(i, i + chunkSize);
-    await session.send("Input.insertText", { text: chunk });
-    if (text.length > chunkSize) await sleep(30);
+  const chunks = chunkByCodePoints(text, 160);
+  for (let i = 0; i < chunks.length; i++) {
+    await session.send("Input.insertText", { text: chunks[i] });
+    await sleep(chunks.length > 40 ? 35 : 28);
   }
 }
 
-/** Fallback: beforeinput + input with InputEvent (some React versions listen for this). Slow — capped. */
+/** Fallback: beforeinput + input with InputEvent (some React versions listen for this). Batched so one evaluate does not freeze the page. */
 async function insertTextViaInputEvents(session, text) {
   const cap = 4e3;
   const txt = text.length > cap ? text.slice(0, cap) : text;
   if (txt.length < text.length) {
     console.error("[copilot:paste] InputEvent fallback truncated to", cap, "chars");
   }
-  await session.evaluate(`
-    ((payload) => {
-      const el = document.querySelector('#m365-chat-editor-target-element')
-        ?? document.querySelector('[data-lexical-editor="true"]')
-        ?? document.querySelector('div[role="textbox"]');
-      if (!el) return false;
-      el.focus();
-      for (const c of payload) {
-        el.dispatchEvent(new InputEvent('beforeinput', {
-          bubbles: true, cancelable: true, inputType: 'insertText', data: c
-        }));
-        el.dispatchEvent(new InputEvent('input', {
-          bubbles: true, inputType: 'insertText', data: c
-        }));
-      }
-      return true;
-    })(${JSON.stringify(txt)})
-  `);
+  const batchSize = 48;
+  const batches = chunkByCodePoints(txt, batchSize);
+  for (const batch of batches) {
+    await session.evaluate(`
+      ((payload) => {
+        const root = document.querySelector('#m365-chat-editor-target-element')
+          ?? document.querySelector('[data-lexical-editor="true"]');
+        const inner = root?.querySelector('[contenteditable="true"]');
+        const el = (inner && inner.offsetParent !== null ? inner : null)
+          ?? root
+          ?? document.querySelector('div[role="textbox"]');
+        if (!el) return false;
+        el.focus();
+        for (const c of payload) {
+          el.dispatchEvent(new InputEvent('beforeinput', {
+            bubbles: true, cancelable: true, inputType: 'insertText', data: c
+          }));
+          el.dispatchEvent(new InputEvent('input', {
+            bubbles: true, inputType: 'insertText', data: c
+          }));
+        }
+        return true;
+      })(${JSON.stringify(batch)})
+    `);
+    await sleep(12);
+  }
+}
+
+/**
+ * Lexical often accepts execCommand insertText when CDP Input.insertText does not update the tree.
+ * Focus + collapse selection only on the first chunk; repeating focus() each tick often replaces the whole composer.
+ */
+async function insertTextViaExecCommand(session, text) {
+  const chunks = chunkByCodePoints(text, 180);
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const chunk = chunks[ci];
+    const isFirst = ci === 0;
+    await session.evaluate(`
+      ((payload, isFirst) => {
+        const root = document.querySelector('#m365-chat-editor-target-element')
+          ?? document.querySelector('[data-lexical-editor="true"]');
+        const inner = root?.querySelector('[contenteditable="true"]');
+        const el = (inner && inner.offsetParent !== null ? inner : null)
+          ?? root
+          ?? document.querySelector('div[role="textbox"]');
+        if (!el) return false;
+        if (isFirst) {
+          el.focus();
+          try {
+            const sel = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            range.collapse(false);
+            sel.removeAllRanges();
+            sel.addRange(range);
+          } catch (_) {}
+        }
+        try {
+          return document.execCommand('insertText', false, payload);
+        } catch (_) {
+          return false;
+        }
+      })(${JSON.stringify(chunk)}, ${isFirst})
+    `);
+    await sleep(14);
+  }
 }
 
 /** Last resort: synthetic key events with "text" (slower; works when insertText is blocked). */
 async function insertTextViaKeyChars(session, text) {
   const maxChars = 12e3;
-  const slice = text.length > maxChars ? text.slice(0, maxChars) : text;
-  if (slice.length < text.length) {
+  const units = Array.from(text);
+  const slice = units.length > maxChars ? units.slice(0, maxChars).join("") : text;
+  if (units.length > maxChars) {
     console.error("[copilot:paste] truncating prompt to", maxChars, "chars for keyChar fallback");
   }
   for (const ch of slice) {
@@ -468,36 +629,76 @@ async function insertTextViaKeyChars(session, text) {
 }
 
 async function pastePromptRaw(session, text) {
-  console.error("[copilot:paste] CDP Input path (", text.length, "chars )");
+  console.error("[copilot:paste] begin (", text.length, "chars )");
   await cdpInputEnable(session);
   await waitForComposer(session);
-  await sleep(200);
+  await sleep(400);
 
-  await clearComposerViaKeyboard(session);
-  await sleep(120);
+  const preClearLen = await getComposerTextLength(session);
+  if (preClearLen > 0) {
+    await clearComposerViaKeyboard(session);
+    await sleep(120);
+  }
   await focusComposer(session);
-  await sleep(80);
+  await sleep(120);
+
+  console.error("[copilot:paste] trying synthetic Clipboard paste first…");
+  let pasted = false;
+  try {
+    pasted = await pasteViaSyntheticClipboard(session, text);
+  } catch (e) {
+    console.error("[copilot:paste] synthetic paste failed:", e?.message || e);
+  }
+  await sleep(pasted ? 500 : 0);
+  let len = await getComposerTextLength(session);
 
   let errInsert = null;
-  try {
-    await insertTextViaCdp(session, text);
-  } catch (e) {
-    errInsert = e;
-    console.error("[copilot:paste] Input.insertText failed:", e?.message || e);
+  const needMin = pasteNeedMinChars(text.length);
+  if (!pasteLooksComplete(len, text.length)) {
+    if (pasted && len > 0) {
+      console.error("[copilot:paste] incomplete after synthetic (visible", len, "), clear + CDP Input.insertText");
+      await clearComposerViaKeyboard(session);
+      await sleep(100);
+      await focusComposer(session);
+      await sleep(80);
+    }
+    console.error("[copilot:paste] CDP Input.insertText (", text.length, "chars )");
+    try {
+      await insertTextViaCdp(session, text);
+    } catch (e) {
+      errInsert = e;
+      console.error("[copilot:paste] Input.insertText failed:", e?.message || e);
+    }
+    await sleep(400);
+    len = await getComposerTextLength(session);
+  } else {
+    console.error("[copilot:paste] synthetic paste looks complete, visible len:", len);
   }
 
-  await sleep(400);
-  let len = await getComposerTextLength(session);
-  const needMin =
-    text.length < 20
-      ? 1
-      : Math.min(120, Math.max(12, Math.floor(text.length * 0.06)));
+  await sleep(200);
+  len = await getComposerTextLength(session);
+
+  if (len < needMin && text.length >= 20) {
+    console.error("[copilot:paste] composer still short (", len, "), trying execCommand insertText");
+    await focusComposer(session);
+    if ((await getComposerTextLength(session)) > 0) {
+      await clearComposerViaKeyboard(session);
+      await sleep(100);
+    }
+    await focusComposer(session);
+    await sleep(100);
+    await insertTextViaExecCommand(session, text);
+    await sleep(400);
+    len = await getComposerTextLength(session);
+  }
 
   if (len < needMin && text.length >= 20) {
     console.error("[copilot:paste] composer still short (", len, "), trying InputEvent fallback");
     await focusComposer(session);
-    await clearComposerViaKeyboard(session);
-    await sleep(100);
+    if ((await getComposerTextLength(session)) > 0) {
+      await clearComposerViaKeyboard(session);
+      await sleep(100);
+    }
     await focusComposer(session);
     await sleep(80);
     await insertTextViaInputEvents(session, text);
@@ -508,8 +709,10 @@ async function pastePromptRaw(session, text) {
   if (len < needMin && text.length >= 20) {
     console.error("[copilot:paste] composer still short (", len, "), trying keyChar fallback");
     await focusComposer(session);
-    await clearComposerViaKeyboard(session);
-    await sleep(100);
+    if ((await getComposerTextLength(session)) > 0) {
+      await clearComposerViaKeyboard(session);
+      await sleep(100);
+    }
     await focusComposer(session);
     await sleep(80);
     await insertTextViaKeyChars(session, text);
@@ -517,7 +720,7 @@ async function pastePromptRaw(session, text) {
     len = await getComposerTextLength(session);
   }
 
-  if (text.length >= 20 && len < needMin) {
+  if (text.length >= 20 && !pasteLooksComplete(len, text.length)) {
     const hint = errInsert ? ` CDP insertText error: ${errInsert.message}` : "";
     throw new Error(
       `Prompt did not reach Copilot composer (visible length ${len}, expected ~${text.length}).${hint}`
@@ -528,11 +731,175 @@ async function pastePromptRaw(session, text) {
   await sleep(300);
 }
 
-async function submitPromptRaw(session, expectedPromptLen) {
-  const minComposer = Math.min(
+/** Lexical often does not expose the full prompt in innerText — cap so we do not spin 15s waiting. */
+function minComposerThresholdForSubmit(expectedPromptLen) {
+  const raw = Math.min(
     Math.max(8, Math.floor(expectedPromptLen * 0.15)),
     Math.floor(expectedPromptLen * 0.85)
   );
+  return Math.min(raw, 400);
+}
+
+async function trySubmitViaEnter(session) {
+  await cdpInputEnable(session);
+  await focusComposer(session);
+  await sleep(100);
+  for (const phase of ["keyDown", "keyUp"]) {
+    await session.send("Input.dispatchKeyEvent", {
+      type: phase,
+      key: "Enter",
+      code: "Enter",
+      windowsVirtualKeyCode: 13,
+      nativeVirtualKeyCode: 13
+    });
+  }
+}
+
+/**
+ * Find a visible, enabled primary send control (avoid "Send feedback" etc.).
+ * Returns { ok, x, y } viewport center for CDP mouse fallback, or { ok: false }.
+ */
+async function findSendButtonCenter(session) {
+  const r = await session.evaluate(`(() => {
+    function visible(el) {
+      return el && el.offsetParent !== null;
+    }
+    function clickable(el) {
+      if (!visible(el)) return false;
+      if (el.disabled) return false;
+      if (el.getAttribute("aria-disabled") === "true") return false;
+      if (el.getAttribute("aria-hidden") === "true") return false;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 2 || rect.height < 2) return false;
+      return true;
+    }
+    function badLabel(label) {
+      if (!label) return true;
+      return /send feedback|送信する場所|settings|設定|share|共有/i.test(label);
+    }
+    function tryEl(el) {
+      if (!clickable(el)) return null;
+      const rect = el.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    }
+    const bySelector = [
+      'button[data-testid="sendButton"]',
+      'button[data-testid^="send"]',
+      '[data-testid="sendButton"]',
+      ".fai-SendButton",
+      'button.fai-SendButton',
+      'div[role="button"][data-testid="sendButton"]'
+    ];
+    for (const sel of bySelector) {
+      for (const el of document.querySelectorAll(sel)) {
+        const p = tryEl(el);
+        if (p) return { ok: true, ...p };
+      }
+    }
+    for (const el of document.querySelectorAll("button, [role='button']")) {
+      const label = (el.getAttribute("aria-label") || el.getAttribute("title") || "").trim();
+      if (badLabel(label)) continue;
+      if (
+        /送信(?!.*フィードバック)/.test(label) ||
+        /^send$/i.test(label) ||
+        /send message/i.test(label) ||
+        (label.includes("Send") && !/sending|sender/i.test(label)) ||
+        /^reply$/i.test(label)
+      ) {
+        const p = tryEl(el);
+        if (p) return { ok: true, ...p };
+      }
+    }
+    return { ok: false };
+  })()`).catch(() => ({ value: { ok: false } }));
+  const v = r.value;
+  if (v && v.ok) return v;
+  return { ok: false };
+}
+
+async function clickSendViaDom(session) {
+  const r = await session.evaluate(`(() => {
+    function visible(el) {
+      return el && el.offsetParent !== null;
+    }
+    function clickable(el) {
+      if (!visible(el)) return false;
+      if (el.disabled) return false;
+      if (el.getAttribute("aria-disabled") === "true") return false;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 2 || rect.height < 2) return false;
+      return true;
+    }
+    function badLabel(label) {
+      if (!label) return true;
+      return /send feedback|送信する場所|settings|設定/i.test(label);
+    }
+    const bySelector = [
+      'button[data-testid="sendButton"]',
+      'button[data-testid^="send"]',
+      ".fai-SendButton",
+      'button.fai-SendButton'
+    ];
+    for (const sel of bySelector) {
+      for (const el of document.querySelectorAll(sel)) {
+        if (clickable(el)) {
+          el.click();
+          return true;
+        }
+      }
+    }
+    for (const el of document.querySelectorAll("button, [role='button']")) {
+      const label = (el.getAttribute("aria-label") || el.getAttribute("title") || "").trim();
+      if (badLabel(label)) continue;
+      if (
+        /送信(?!.*フィードバック)/.test(label) ||
+        /^send$/i.test(label) ||
+        /send message/i.test(label) ||
+        (label.includes("Send") && !/sending|sender/i.test(label)) ||
+        /^reply$/i.test(label)
+      ) {
+        if (clickable(el)) {
+          el.click();
+          return true;
+        }
+      }
+    }
+    return false;
+  })()`).catch(() => ({ value: false }));
+  return r.value === true;
+}
+
+async function clickSendViaCdpMouse(session) {
+  const pos = await findSendButtonCenter(session);
+  if (!pos.ok) return false;
+  const { x, y } = pos;
+  await session.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x,
+    y
+  }).catch(() => {});
+  await sleep(40);
+  await session.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x,
+    y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1
+  }).catch(() => {});
+  await session.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x,
+    y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1
+  }).catch(() => {});
+  return true;
+}
+
+async function submitPromptRaw(session, expectedPromptLen) {
+  const minComposer = minComposerThresholdForSubmit(expectedPromptLen);
 
   // Until composer shows our text, Send often stays disabled
   const composeDeadline = Date.now() + 15e3;
@@ -542,49 +909,76 @@ async function submitPromptRaw(session, expectedPromptLen) {
     await sleep(200);
   }
 
+  const lenBefore = await getComposerTextLength(session);
+
   // Wait for send button to become visible and enabled
   const deadline = Date.now() + 45e3;
   let stableSince = 0;
   let sendClicked = false;
   while (Date.now() < deadline) {
-    const btnVisible = await session.evaluate(`(() => {
-      function clickable(b) {
-        if (!b || b.offsetParent === null) return false;
-        if (b.disabled) return false;
-        if (b.getAttribute('aria-disabled') === 'true') return false;
-        return true;
-      }
-      const selectors = [
-        '.fai-SendButton',
-        'button[aria-label*="Send"]',
-        'button[aria-label*="送信"]',
-        'button[aria-label="Reply"]',
-        'button[data-testid="sendButton"]'
-      ];
-      for (const s of selectors) {
-        const el = document.querySelector(s);
-        if (clickable(el)) return true;
-      }
-      return false;
-    })()`).catch(() => ({ value: false }));
-
-    if (btnVisible.value) {
+    const pos = await findSendButtonCenter(session);
+    if (pos.ok) {
       if (!stableSince) stableSince = Date.now();
-      if (Date.now() - stableSince >= 750) {
-        await session.click(SEND_BUTTON_ANY_SELECTOR).catch(() => {});
-        sendClicked = true;
-        break;
+      if (Date.now() - stableSince >= 500) {
+        console.error("[copilot:submit] clicking send (DOM)");
+        const domOk = await clickSendViaDom(session);
+        if (!domOk) {
+          await session.click(SEND_BUTTON_ANY_SELECTOR).catch(() => {});
+        }
+        await sleep(700);
+        let generating = await isCopilotGenerating(session);
+        let lenNow = await getComposerTextLength(session);
+        let looksSent = generating || lenNow + 25 < lenBefore;
+        if (!looksSent) {
+          console.error("[copilot:submit] DOM click did not dispatch; trying CDP mouse");
+          await clickSendViaCdpMouse(session);
+          await sleep(700);
+          generating = await isCopilotGenerating(session);
+          lenNow = await getComposerTextLength(session);
+          looksSent = generating || lenNow + 25 < lenBefore;
+        }
+        if (looksSent) {
+          sendClicked = true;
+          break;
+        }
+        console.error("[copilot:submit] send not confirmed; waiting for UI again");
+        stableSince = 0;
+        await sleep(500);
       }
     } else {
       stableSince = 0;
     }
-    await sleep(250);
+    await sleep(200);
+  }
+
+  if (!sendClicked) {
+    console.error("[copilot:submit] no send button; trying Enter");
+    await trySubmitViaEnter(session);
+    await sleep(2200);
+    const generating = await isCopilotGenerating(session);
+    const lenAfter = await getComposerTextLength(session);
+    if (generating || lenAfter + 30 < lenBefore) {
+      sendClicked = true;
+    }
+  }
+
+  if (!sendClicked) {
+    console.error("[copilot:submit] retry Enter + mouse");
+    await trySubmitViaEnter(session);
+    await sleep(300);
+    await clickSendViaCdpMouse(session).catch(() => {});
+    await sleep(2000);
+    const generating2 = await isCopilotGenerating(session);
+    const lenAfter2 = await getComposerTextLength(session);
+    if (generating2 || lenAfter2 + 30 < lenBefore) {
+      sendClicked = true;
+    }
   }
 
   if (!sendClicked) {
     const n = await getComposerTextLength(session);
     throw new Error(
-      `Copilot send button did not become clickable within 45s (composer visible length=${n}).`
+      `Copilot send failed (no clickable send within 45s, Enter did not start stream; composer visible length=${n}).`
     );
   }
 
