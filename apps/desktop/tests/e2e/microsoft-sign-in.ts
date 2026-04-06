@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Page } from "@playwright/test";
 import { generateSync } from "otplib";
+import {
+  announceMicrosoftAuthenticatorMatchNumber,
+  readMicrosoftAuthenticatorMatchNumber,
+} from "./microsoft-number-match";
 
 const COPILOT_URL = process.env.E2E_COPILOT_URL ?? "https://copilot.microsoft.com/";
 
@@ -24,10 +28,64 @@ async function clickIfVisible(
   return false;
 }
 
+async function tryClickSignInOnCopilot(page: Page): Promise<boolean> {
+  const attempts: Array<() => Promise<void>> = [
+    async () => {
+      await page.getByRole("button", { name: /^Sign in$/i }).first().click({ timeout: 6000 });
+    },
+    async () => {
+      await page.getByRole("link", { name: /Sign in/i }).first().click({ timeout: 6000 });
+    },
+    async () => {
+      await page.getByRole("button", { name: /サインイン/i }).first().click({ timeout: 6000 });
+    },
+    async () => {
+      await page.getByRole("link", { name: /サインイン/i }).first().click({ timeout: 6000 });
+    },
+    async () => {
+      await page.locator('a[href*="login"], a[href*="signin"]').first().click({ timeout: 6000 });
+    },
+    async () => {
+      await page.getByTestId("sidebar-settings-button").click({ timeout: 5000 });
+      await page.getByTestId("connect-account-button").click({ timeout: 5000 });
+      await page.getByTestId("msa-sign-in-button").click({ timeout: 5000 });
+    },
+  ];
+
+  for (const run of attempts) {
+    try {
+      await run();
+      return true;
+    } catch {
+      /* try next */
+    }
+  }
+  return false;
+}
+
+/** Copilot から Microsoft ログインページへ遷移する（既にログイン画面なら何もしない）。 */
+export async function openMicrosoftLoginFromCopilot(page: Page): Promise<void> {
+  await page.goto(COPILOT_URL, { waitUntil: "domcontentloaded", timeout: 90_000 });
+  await page.waitForTimeout(2000);
+
+  if (/login\.(microsoftonline|live)\.com|signup\.live\.com/i.test(page.url())) {
+    return;
+  }
+
+  const clicked = await tryClickSignInOnCopilot(page);
+  if (!clicked) {
+    throw new Error(
+      "[e2e] Copilot 上でサインインを開始できませんでした。E2E_HEADED=1 で画面を確認するか、E2E_COPILOT_URL を調整してください。",
+    );
+  }
+
+  await page.waitForURL(/login\.(microsoftonline|live)\.com|signup\.live\.com/, {
+    timeout: 60_000,
+  });
+}
+
 /**
- * Complete M365 / consumer Microsoft sign-in from Copilot “connect account” through
- * email+password, optional TOTP (M365_COPILOT_TOTP_SECRET), optional manual 2FA wait,
- * then persist storage state.
+ * Copilot → Microsoft サインイン（メール/パスワード、任意 TOTP、番号照合の検出と通知）→ storage 保存。
  */
 export async function signInMicrosoftViaCopilotUi(
   page: Page,
@@ -35,38 +93,36 @@ export async function signInMicrosoftViaCopilotUi(
   password: string,
   options: {
     authStatePath: string;
-    /** After password submit: max ms to wait for Copilot (push approval, etc.). */
     postPasswordTimeoutMs: number;
-    /** If > 0, take screenshots this often while waiting for post-password flows. */
     twoFaScreenshotIntervalMs: number;
-    /** Touch this file (or create it) to continue when E2E_2FA_WAIT_FILE is set. */
     manualContinueFile: string | null;
   },
 ): Promise<void> {
   await fs.promises.mkdir(path.dirname(options.authStatePath), { recursive: true });
 
-  await page.goto(COPILOT_URL, { waitUntil: "networkidle", timeout: 60_000 });
+  await openMicrosoftLoginFromCopilot(page);
 
-  await page.getByTestId("sidebar-settings-button").click();
-  await page.getByTestId("connect-account-button").click();
-  await page.getByTestId("msa-sign-in-button").click();
+  await page
+    .getByRole("link", { name: /Use another account|別のアカウント/i })
+    .click({ timeout: 4000 })
+    .catch(() => {});
 
   const emailBox = page.getByRole("textbox", {
-    name: /メール、電話、Skype|Email, phone, or Skype/i,
+    name: /メール、電話、Skype|Email, phone, or Skype|電子メール|メールアドレス/i,
   });
-  await emailBox.click();
+  await emailBox.click({ timeout: 30_000 });
   await emailBox.fill(email);
   await page.getByRole("button", { name: /次へ|Next/i }).click();
 
   await page.waitForTimeout(1500);
 
   const pwBox = page.getByRole("textbox", { name: /パスワード|Password/i });
-  await pwBox.click();
+  await pwBox.click({ timeout: 30_000 });
   await pwBox.fill(password);
   await page.getByRole("button", { name: /サインイン|Sign in/i }).click();
 
   await page.waitForURL(/ProcessAuth|login\.live\.com|login\.microsoftonline\.com|copilot\.microsoft/i, {
-    timeout: 30_000,
+    timeout: 45_000,
   });
 
   const totp = totpFromEnv();
@@ -83,8 +139,10 @@ export async function signInMicrosoftViaCopilotUi(
   await fs.promises.mkdir(shotDir, { recursive: true });
 
   const deadline = Date.now() + options.postPasswordTimeoutMs;
-  const interval = Math.max(5000, options.twoFaScreenshotIntervalMs || 30_000);
+  const shotEveryMs = Math.max(5000, options.twoFaScreenshotIntervalMs || 30_000);
+  const tickMs = 2000;
   let shotCount = 0;
+  let msSinceShot = 0;
 
   while (Date.now() < deadline) {
     await clickIfVisible(page, () => page.getByRole("button", { name: /はい|Yes/i }), 800);
@@ -93,6 +151,11 @@ export async function signInMicrosoftViaCopilotUi(
       () => page.getByRole("button", { name: /copilot\.cloud\.microsoft/i }),
       800,
     );
+
+    const code = await readMicrosoftAuthenticatorMatchNumber(page);
+    if (code) {
+      await announceMicrosoftAuthenticatorMatchNumber(code, shotDir);
+    }
 
     const url = page.url();
     if (/copilot\.microsoft\.com/i.test(url) && !/signin|login/i.test(url)) {
@@ -103,12 +166,16 @@ export async function signInMicrosoftViaCopilotUi(
       break;
     }
 
-    if (headed || process.env.E2E_2FA_SCREENSHOTS === "1") {
-      const p = path.join(shotDir, `e2e-2fa-wait-${++shotCount}.png`);
-      await page.screenshot({ path: p, fullPage: true }).catch(() => {});
+    msSinceShot += tickMs;
+    if (msSinceShot >= shotEveryMs) {
+      msSinceShot = 0;
+      if (headed || process.env.E2E_2FA_SCREENSHOTS === "1") {
+        const p = path.join(shotDir, `e2e-2fa-wait-${++shotCount}.png`);
+        await page.screenshot({ path: p, fullPage: true }).catch(() => {});
+      }
     }
 
-    await page.waitForTimeout(Math.min(interval, deadline - Date.now()));
+    await page.waitForTimeout(Math.min(tickMs, deadline - Date.now()));
   }
 
   await clickIfVisible(page, () => page.getByRole("button", { name: /はい|Yes/i }), 3000);
