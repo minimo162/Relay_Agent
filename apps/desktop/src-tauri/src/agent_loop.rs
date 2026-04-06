@@ -2,9 +2,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
+
+/// M365 Copilot (CDP) cannot take API `tools`; model must emit this fenced JSON for invocations.
+const CDP_TOOL_FENCE: &str = "```relay_tool";
 
 use runtime::{
     self, ApiClient, ApiRequest, AssistantEvent, ContentBlock, ConversationMessage, McpServerManager,
@@ -175,20 +178,27 @@ impl ApiClient for CdpApiClient {
 
         tracing::info!("[CdpApiClient] response {} chars", response_text.len());
 
+        let (visible_text, tool_calls) = parse_copilot_tool_response(&response_text);
+
         let mut events = Vec::new();
-        if !response_text.is_empty() {
+        if !visible_text.is_empty() {
             // Chunk the response into TextDelta events for UI progress display
             let mut start = 0;
-            for (i, _) in response_text.char_indices() {
+            for (i, _) in visible_text.char_indices() {
                 if i > start && (i - start) >= 200 {
-                    events.push(AssistantEvent::TextDelta(response_text[start..i].to_string()));
+                    events.push(AssistantEvent::TextDelta(visible_text[start..i].to_string()));
                     start = i;
                 }
             }
-            if start < response_text.len() {
-                events.push(AssistantEvent::TextDelta(response_text[start..].to_string()));
+            if start < visible_text.len() {
+                events.push(AssistantEvent::TextDelta(visible_text[start..].to_string()));
             }
         }
+
+        for (id, name, input) in tool_calls {
+            events.push(AssistantEvent::ToolUse { id, name, input });
+        }
+
         events.push(AssistantEvent::Usage(TokenUsage {
             input_tokens: 0,
             output_tokens: 0,
@@ -198,6 +208,157 @@ impl ApiClient for CdpApiClient {
         events.push(AssistantEvent::MessageStop);
         Ok(events)
     }
+}
+
+/// Serialize built-in tool specs for the Copilot text prompt.
+fn cdp_tool_catalog_section() -> String {
+    let catalog: Vec<Value> = tools::mvp_tool_specs()
+        .iter()
+        .map(|s| {
+            json!({
+                "name": s.name,
+                "description": s.description,
+                "input_schema": s.input_schema.clone(),
+            })
+        })
+        .collect();
+    let json_pretty = serde_json::to_string_pretty(&catalog).unwrap_or_else(|_| "[]".to_string());
+    format!(
+        r#"## Relay Agent tools
+
+The JSON array below lists every tool you may invoke. Each entry has `name`, `description`, and `input_schema` (JSON Schema for the tool's `input` object).
+
+```json
+{json_pretty}
+```
+
+## Tool invocation protocol
+
+When you need to call one or more tools, you may write a short user-facing explanation, then append a Markdown fenced block whose **info string is exactly** `relay_tool` (three backticks, then `relay_tool`, then a newline). Inside the fence put **only** JSON — no markdown, no commentary.
+
+- **Single tool:** one JSON object: `{{ "name": "<tool_name>", "input": {{ ... }} }}`
+- **Optional:** `"id": "<string>"` — omit if unsure; the host will assign one.
+- **Multiple tools:** either one JSON **array** of such objects inside a single `relay_tool` fence, or several separate `relay_tool` fences in order.
+
+Example:
+
+```relay_tool
+{{"name":"read_file","input":{{"path":"README.md"}}}}
+```
+"#,
+        json_pretty = json_pretty
+    )
+}
+
+/// Strip `relay_tool` fences and parse tool calls. Returns `(visible_text, Vec<(id, name, input_json)>)`.
+fn parse_copilot_tool_response(raw: &str) -> (String, Vec<(String, String, String)>) {
+    let (stripped, payloads) = extract_relay_tool_fences(raw);
+    let calls = parse_tool_payloads(&payloads);
+    (stripped, calls)
+}
+
+fn extract_relay_tool_fences(text: &str) -> (String, Vec<String>) {
+    let mut display = String::new();
+    let mut payloads = Vec::new();
+    let mut rest = text;
+
+    loop {
+        if let Some(idx) = rest.find(CDP_TOOL_FENCE) {
+            display.push_str(&rest[..idx]);
+            rest = &rest[idx + CDP_TOOL_FENCE.len()..];
+            for prefix in ["\r\n", "\n"] {
+                if let Some(s) = rest.strip_prefix(prefix) {
+                    rest = s;
+                    break;
+                }
+            }
+            match find_relay_tool_fence_end(rest) {
+                Some(end_inner) => {
+                    let inner = rest[..end_inner].trim();
+                    if !inner.is_empty() {
+                        payloads.push(inner.to_string());
+                    }
+                    rest = &rest[end_inner..];
+                    if let Some(after) = rest.strip_prefix("\r\n```") {
+                        rest = after;
+                    } else if let Some(after) = rest.strip_prefix("\n```") {
+                        rest = after;
+                    } else {
+                        rest = rest.strip_prefix("```").unwrap_or(rest);
+                    }
+                    if let Some(s) = rest.strip_prefix("\r\n") {
+                        rest = s;
+                    } else if let Some(s) = rest.strip_prefix('\n') {
+                        rest = s;
+                    }
+                }
+                None => {
+                    display.push_str(CDP_TOOL_FENCE);
+                    display.push_str(rest);
+                    break;
+                }
+            }
+        } else {
+            display.push_str(rest);
+            break;
+        }
+    }
+
+    (display.trim().to_string(), payloads)
+}
+
+/// Byte offset in `rest` where inner content ends (before `\n``` ` or a trailing ` ``` `).
+fn find_relay_tool_fence_end(rest: &str) -> Option<usize> {
+    if let Some(idx) = rest.find("\n```") {
+        return Some(idx);
+    }
+    rest.rfind("```")
+}
+
+fn parse_tool_payloads(payloads: &[String]) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    for p in payloads {
+        let v: Value = match serde_json::from_str(p) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("[CdpApiClient] skip invalid relay_tool JSON: {e}");
+                continue;
+            }
+        };
+        match v {
+            Value::Array(arr) => {
+                for item in arr {
+                    if let Some(t) = parse_one_tool_call(item) {
+                        out.push(t);
+                    }
+                }
+            }
+            Value::Object(_) => {
+                if let Some(t) = parse_one_tool_call(v) {
+                    out.push(t);
+                }
+            }
+            _ => tracing::warn!("[CdpApiClient] relay_tool JSON must be object or array"),
+        }
+    }
+    out
+}
+
+fn parse_one_tool_call(v: Value) -> Option<(String, String, String)> {
+    let obj = v.as_object()?;
+    let name = obj.get("name")?.as_str()?.to_string();
+    let id = obj
+        .get("id")
+        .and_then(|x| x.as_str())
+        .map(String::from)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let input = obj
+        .get("input")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    let input_str = serde_json::to_string(&input).ok()?;
+    Some((id, name, input_str))
 }
 
 /// Convert an `ApiRequest` into a human-readable text prompt for CDP.
@@ -238,7 +399,10 @@ fn build_cdp_prompt(request: &ApiRequest<'_>) -> String {
         parts.push(format!("{role}:\n{}", text.join("\n")));
     }
 
-    parts.join("\n\n")
+    let mut out = parts.join("\n\n");
+    out.push_str("\n\n");
+    out.push_str(&cdp_tool_catalog_section());
+    out
 }
 
 /// Persist the session state after a turn: update registry + save to disk.
@@ -774,4 +938,94 @@ pub struct AgentSessionHistoryResponse {
     pub session_id: String,
     pub running: bool,
     pub messages: Vec<RelayMessage>,
+}
+
+#[cfg(test)]
+mod cdp_copilot_tool_tests {
+    use super::*;
+
+    #[test]
+    fn catalog_lists_builtin_tools_and_protocol() {
+        let s = cdp_tool_catalog_section();
+        assert!(s.contains("read_file"));
+        assert!(s.contains("relay_tool"));
+        assert!(s.contains("input_schema"));
+    }
+
+    #[test]
+    fn parse_plain_text_no_tools() {
+        let (vis, tools) = parse_copilot_tool_response("Hello, no tools here.");
+        assert_eq!(vis, "Hello, no tools here.");
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn parse_single_object_fence() {
+        let raw = r#"Done.
+
+```relay_tool
+{"name":"glob_search","input":{"pattern":"*.rs"}}
+```"#;
+        let (vis, tools) = parse_copilot_tool_response(raw);
+        assert!(vis.contains("Done."));
+        assert!(!vis.contains("relay_tool"));
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "glob_search");
+        assert!(tools[0].2.contains("*.rs"));
+    }
+
+    #[test]
+    fn parse_array_inside_one_fence() {
+        let raw = r#"```relay_tool
+[{"name":"read_file","input":{"path":"a.txt"}},{"name":"read_file","input":{"path":"b.txt"}}]
+```"#;
+        let (vis, tools) = parse_copilot_tool_response(raw);
+        assert!(vis.is_empty());
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].1, "read_file");
+        assert_eq!(tools[1].1, "read_file");
+    }
+
+    #[test]
+    fn parse_two_fences() {
+        let raw = r#"```relay_tool
+{"name":"read_file","input":{"path":"x"}}
+```
+```relay_tool
+{"name":"read_file","input":{"path":"y"}}
+```"#;
+        let (vis, tools) = parse_copilot_tool_response(raw);
+        assert!(vis.is_empty());
+        assert_eq!(tools.len(), 2);
+    }
+
+    #[test]
+    fn parse_preserves_explicit_id() {
+        let raw = r#"```relay_tool
+{"id":"my-id","name":"read_file","input":{"path":"p"}}
+```"#;
+        let (_vis, tools) = parse_copilot_tool_response(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].0, "my-id");
+    }
+
+    #[test]
+    fn parse_invalid_json_skipped_but_fence_stripped() {
+        let raw = "Text\n```relay_tool\nnot json\n```\nTail";
+        let (vis, tools) = parse_copilot_tool_response(raw);
+        assert!(vis.contains("Text"));
+        assert!(vis.contains("Tail"));
+        assert!(!vis.contains("not json"));
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn closing_fence_without_leading_newline() {
+        let raw = r#"```relay_tool
+{"name":"read_file","input":{"path":"z"}}```"#;
+        let (vis, tools) = parse_copilot_tool_response(raw);
+        assert!(vis.is_empty());
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "read_file");
+    }
 }
