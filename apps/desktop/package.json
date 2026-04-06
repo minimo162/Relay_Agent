@@ -18,7 +18,9 @@
     "test:e2e:auth-save": "E2E_AUTH_SAVE_RUN=1 playwright test -c playwright.auth-save.config.ts",
     "test:e2e:webview-cdp": "playwright test -c playwright.webview-cdp.config.ts",
     "test:e2e:agent-browser": "node ./scripts/e2e-agent-browser.mjs",
-    "test:e2e:agent-browser:with-app": "node ./scripts/e2e-agent-browser.mjs --with-app"
+    "test:e2e:agent-browser:with-app": "node ./scripts/e2e-agent-browser.mjs --with-app",
+    "test:e2e:agent-browser:with-app:keep": "node ./scripts/e2e-agent-browser.mjs --with-app --keep-app",
+    "test:e2e:agent-browser:with-app:demo": "node ./scripts/e2e-agent-browser.mjs --with-app --keep-app --ui-demo"
   },
   "dependencies": {
     "@solidjs/router": "0.15.4",
@@ -27,7 +29,6 @@
     "solid-js": "^1.9.0"
   },
   "devDependencies": {
-    "agent-browser": "0.25.1",
     "@playwright/test": "^1.59.1",
     "@tailwindcss/vite": "^4.1.18",
     "@tauri-apps/cli": "^2.0.0",
