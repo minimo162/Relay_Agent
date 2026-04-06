@@ -85,8 +85,9 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
         port, profile_dir
     );
 
-    // Launch Edge with a Copilot tab visible. --user-data-dir uses = form so the
-    // directory path is not mistaken for a URL argument.
+    // Launch Edge without any initial tab. A Copilot tab will be created via CDP.
+    // Using --no-startup-window avoids restoring previous session tabs.
+    // The Copilot URL will be set programmatically after the browser is ready.
     let mut cmd = std::process::Command::new(&edge_path);
     cmd.args([
         "--remote-debugging-port",
@@ -97,7 +98,6 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
         "--disable-infobars",
         "--disable-hang-monitor",
         "--disable-restore-session-state",
-        "https://m365.cloud.microsoft/chat",
     ]);
 
     let child = cmd
