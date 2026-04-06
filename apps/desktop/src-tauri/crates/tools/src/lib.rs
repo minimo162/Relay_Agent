@@ -548,8 +548,8 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "REPL" => from_value::<ReplInput>(input).and_then(run_repl),
         "PowerShell" => from_value::<PowerShellInput>(input).and_then(run_powershell),
         // CLI Hub
-        "CliList" => to_pretty_json(&cli_hub::cli_list()),
-        "CliDiscover" => to_pretty_json(&cli_hub::cli_discover()),
+        "CliList" => to_pretty_json(cli_hub::cli_list()),
+        "CliDiscover" => to_pretty_json(cli_hub::cli_discover()),
         "CliRegister" => {
             from_value::<CliRegisterInput>(input).and_then(run_cli_register)
         }
@@ -559,7 +559,7 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "CliRun" => from_value::<CliRunInput>(input).and_then(run_cli_run),
         // Electron CDP
         "ElectronApps" => {
-            to_pretty_json(&electron_cdp::electron_apps_status())
+            to_pretty_json(electron_cdp::electron_apps_status())
         }
         "ElectronLaunch" => {
             from_value::<ElectronLaunchInput>(input).and_then(run_electron_launch)
@@ -677,27 +677,27 @@ fn run_powershell(input: PowerShellInput) -> Result<String, String> {
 }
 
 fn run_cli_register(input: CliRegisterInput) -> Result<String, String> {
-    to_pretty_json(&cli_hub::cli_register(input.name))
+    to_pretty_json(cli_hub::cli_register(input.name))
 }
 
 fn run_cli_unregister(input: CliUnregisterInput) -> Result<String, String> {
-    to_pretty_json(&cli_hub::cli_unregister(input.name))
+    to_pretty_json(cli_hub::cli_unregister(input.name))
 }
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_cli_run(input: CliRunInput) -> Result<String, String> {
     let args: Vec<&str> = input.args.iter().map(std::string::String::as_str).collect();
-    to_pretty_json(&cli_hub::cli_execute(&input.cli, &args, input.timeout_ms))
+    to_pretty_json(cli_hub::cli_execute(&input.cli, &args, input.timeout_ms))
 }
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_electron_launch(input: ElectronLaunchInput) -> Result<String, String> {
-    to_pretty_json(&electron_cdp::electron_launch(&input.app, input.cdp_port))
+    to_pretty_json(electron_cdp::electron_launch(&input.app, input.cdp_port))
 }
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_electron_eval(input: ElectronEvalInput) -> Result<String, String> {
-    to_pretty_json(&electron_cdp::electron_eval(
+    to_pretty_json(electron_cdp::electron_eval(
         &input.app,
         input.cdp_port,
         &input.expression,
@@ -706,7 +706,7 @@ fn run_electron_eval(input: ElectronEvalInput) -> Result<String, String> {
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_electron_get_text(input: ElectronGetTextInput) -> Result<String, String> {
-    to_pretty_json(&electron_cdp::electron_get_text(
+    to_pretty_json(electron_cdp::electron_get_text(
         &input.app,
         input.cdp_port,
         input.selector.as_deref(),
@@ -715,7 +715,7 @@ fn run_electron_get_text(input: ElectronGetTextInput) -> Result<String, String> 
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_electron_click(input: ElectronClickInput) -> Result<String, String> {
-    to_pretty_json(&electron_cdp::electron_click(
+    to_pretty_json(electron_cdp::electron_click(
         &input.app,
         input.cdp_port,
         &input.selector,
@@ -724,7 +724,7 @@ fn run_electron_click(input: ElectronClickInput) -> Result<String, String> {
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_electron_type_text(input: ElectronTypeTextInput) -> Result<String, String> {
-    to_pretty_json(&electron_cdp::electron_type_text(
+    to_pretty_json(electron_cdp::electron_type_text(
         &input.app,
         input.cdp_port,
         &input.selector,

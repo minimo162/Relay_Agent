@@ -36,7 +36,11 @@ var ASSISTANT_REPLY_DOM_SELECTORS = [
   'div[data-message-type="Chat"]',
   '[role="article"]',
   ".markdown-body",
-  ".fui-ChatMessageBody"
+  ".fui-ChatMessageBody",
+  '[class*="MessageBody"]',
+  '[class*="message-body"]',
+  "cib-message[type='response']",
+  "cib-message .content"
 ];
 var RESPONSE_URL_PATTERN = /substrate\.office\.com|copilot\.microsoft\.com|m365\.cloud\.microsoft|api\.bing\.microsoft\.com/i;
 var RESPONSE_TIMEOUT_MS = 18e4;
@@ -1013,11 +1017,40 @@ async function isCopilotGenerating(session) {
 }
 
 /**
- * Text of the latest assistant message in document order (not the longest on the page).
- * Using “longest” breaks completion detection when an older reply is longer than the new one.
+ * Prefer the outermost last assistant *turn* (full innerText). Taking the last matching leaf
+ * often yields a short fragment (e.g. citation chip) while the real answer lives on an ancestor.
  */
 async function extractAssistantReplyText(session) {
   const r = await session.evaluate(`(() => {
+    function visible(el) {
+      return el && el.offsetParent !== null;
+    }
+    function inComposer(el) {
+      return !!(el && el.closest('#m365-chat-editor-target-element, [data-lexical-editor="true"]'));
+    }
+    const byRole = [...new Set([
+      ...document.querySelectorAll('[data-message-author-role="assistant"]'),
+      ...document.querySelectorAll('article[data-message-author-role="assistant"]')
+    ])];
+    const roots = [];
+    for (const el of byRole) {
+      if (!visible(el) || inComposer(el)) continue;
+      const inner = byRole.some((other) => other !== el && other.contains(el));
+      if (inner) continue;
+      roots.push(el);
+    }
+    roots.sort((a, b) => {
+      const p = a.compareDocumentPosition(b);
+      if (p & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+      if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+      return 0;
+    });
+    if (roots.length) {
+      const lastTurn = roots[roots.length - 1];
+      const t = (lastTurn.innerText || "").trim();
+      if (t.length > 0) return t;
+    }
+
     const selectors = ${JSON.stringify(ASSISTANT_REPLY_DOM_SELECTORS)};
     const dedup = new Set();
     const els = [];
@@ -1025,8 +1058,7 @@ async function extractAssistantReplyText(session) {
       for (const el of document.querySelectorAll(s)) {
         if (!el || dedup.has(el)) continue;
         dedup.add(el);
-        if (el.offsetParent === null) continue;
-        if (el.closest('#m365-chat-editor-target-element, [data-lexical-editor="true"]')) continue;
+        if (!visible(el) || inComposer(el)) continue;
         const t = (el.innerText || "").trim();
         if (!t) continue;
         els.push(el);
@@ -1039,8 +1071,13 @@ async function extractAssistantReplyText(session) {
       if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
       return 0;
     });
-    const last = els[els.length - 1];
-    return (last.innerText || "").trim();
+    const tail = els.slice(-8);
+    let best = "";
+    for (const el of tail) {
+      const t = (el.innerText || "").trim();
+      if (t.length > best.length) best = t;
+    }
+    return best;
   })()`).catch(() => ({ value: "" }));
   return typeof r?.value === "string" ? r.value : "";
 }
@@ -1091,11 +1128,21 @@ async function waitForDomResponse(session) {
       len >= 120 ||
       len >= minDoneLen();
     const settled = Math.abs(len - prev) <= 12;
+    const needStableTicks = len < 550 ? 4 : 3;
     if (settled && len >= minDoneLen() && grewEnough) {
       stable++;
-      if (stable >= 3) {
-        console.error("[copilot:response] done, len=", len, "stable=", stable);
-        return reply;
+      if (stable >= needStableTicks) {
+        await sleep(2800);
+        const replyLate = (await extractAssistantReplyText(session)).trim();
+        if (replyLate.length > len + 40) {
+          console.error("[copilot:response] post-stable growth, keep waiting", len, "->", replyLate.length);
+          stable = 0;
+          prev = len;
+          continue;
+        }
+        const out = replyLate.length >= len ? replyLate : reply;
+        console.error("[copilot:response] done, len=", out.length, "stable=", stable);
+        return out;
       }
     } else {
       stable = 0;
@@ -1107,6 +1154,19 @@ async function waitForDomResponse(session) {
   if (fb.length >= 12) {
     console.error("[copilot:response] timeout, returning partial len=", fb.length);
     return fb;
+  }
+  const bodyFb = await session.evaluate(`(() => {
+    const raw = (document.body && document.body.innerText) ? document.body.innerText.trim() : "";
+    if (raw.length < 80) return "";
+    const nl = String.fromCharCode(10);
+    const lines = raw.split(nl).map((l) => l.trim()).filter(Boolean);
+    const tail = lines.slice(-40).join(nl);
+    return tail.length > 200 ? tail.slice(-12e3) : "";
+  })()`).catch(() => ({ value: "" }));
+  const bodyStr = typeof bodyFb?.value === "string" ? bodyFb.value : "";
+  if (bodyStr.length >= 80) {
+    console.error("[copilot:response] timeout body tail fallback len=", bodyStr.length);
+    return bodyStr;
   }
   throw new Error("Copilot response not found in DOM");
 }
