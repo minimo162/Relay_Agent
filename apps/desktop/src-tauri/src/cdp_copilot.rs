@@ -817,14 +817,22 @@ fn parse_port(debug_url: &str) -> Option<u16> {
 /// Resolve the actual WebSocket URL for CDP communication.
 /// Handles localhost, 127.0.0.1, and Windows IPv4-mapped ::1 (0.0.36.6) normalization.
 async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
-    let is_loopback = ws.starts_with("ws://localhost/")
-        || ws.starts_with("ws://127.0.0.1/")
-        || ws.starts_with("ws://0.0.36.6/");
-    // If the WS URL already uses a routable host, use it as-is
-    if ws.starts_with("ws://") && !is_loopback {
+    let target_host = debug
+        .strip_prefix("http://")
+        .or_else(|| debug.strip_prefix("https://"))
+        .unwrap_or(debug);
+
+    // If the WS URL already uses a routable (non-loopback) host, use it as-is
+    if ws.starts_with("ws://")
+        && !ws.contains("localhost")
+        && !ws.contains("127.0.0.1")
+        && !ws.contains("0.0.36.6")
+    {
         return Ok(ws.into());
     }
-    let r = reqwest::get(&format!("{debug}/json/version"))
+
+    // Fetch the canonical WebSocket debugger URL from the CDP endpoint
+    let r = reqwest::get(&format!("{target_host}/json/version"))
         .await
         .context("/json/version")?;
     let v: Value = r.json().await.context("/json/version JSON")?;
@@ -832,12 +840,13 @@ async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
         .as_str()
         .context("missing webSocketDebuggerUrl")?
         .to_string();
-    let host = debug
-        .strip_prefix("http://")
-        .or_else(|| debug.strip_prefix("https://"))
-        .unwrap_or(debug);
-    // Normalize localhost, 127.0.0.1, and 0.0.36.6 (Windows IPv4-mapped ::1)
-    let url = url.replace("ws://localhost/", &format!("ws://{host}/"));
-    let url = url.replace("ws://127.0.0.1/", &format!("ws://{host}/"));
-    Ok(url.replace("ws://0.0.36.6/", &format!("ws://{host}/")))
+
+    // Force all loopback addresses to the target host:
+    //   ws://localhost/…       -> ws://{target_host}/…
+    //   ws://127.0.0.1/…       -> ws://{target_host}/…
+    //   ws://0.0.36.6/…        -> ws://{target_host}/… (Windows IPv4-mapped ::1)
+    // Also handle URLs that include a port: ws://0.0.36.6:9222/…
+    let url = url.replace("ws://localhost/", &format!("ws://{target_host}/"));
+    let url = url.replace("ws://127.0.0.1/", &format!("ws://{target_host}/"));
+    Ok(url.replace("ws://0.0.36.6/", &format!("ws://{target_host}/")))
 }
