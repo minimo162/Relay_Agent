@@ -11,6 +11,35 @@ function copilotUrl(): string {
   return (process.env.E2E_COPILOT_URL ?? "https://copilot.microsoft.com/").trim() || "https://copilot.microsoft.com/";
 }
 
+/** サインインフロー開始時に開く URL（未指定なら E2E_COPILOT_URL）。M365 は https://m365.cloud.microsoft/ など。 */
+function authEntryUrl(): string {
+  const start = process.env.E2E_AUTH_ENTRY_URL?.trim();
+  if (start) return start;
+  return copilotUrl();
+}
+
+/** ログイン完了後に開きたい URL（未指定なら authEntryUrl）。 */
+function postAuthNavigateUrl(): string {
+  return process.env.E2E_AUTH_POST_LOGIN_URL?.trim() || authEntryUrl();
+}
+
+/** ログイン成功とみなすページの URL にマッチする正規表現（既定: Copilot または M365）。 */
+function authSuccessUrlRegex(): RegExp {
+  const raw = process.env.E2E_AUTH_SUCCESS_URL_REGEXP?.trim();
+  if (raw) {
+    try {
+      return new RegExp(raw, "i");
+    } catch {
+      console.warn("[e2e] Invalid E2E_AUTH_SUCCESS_URL_REGEXP — using default Copilot|M365 pattern.");
+    }
+  }
+  return /copilot\.microsoft\.com|m365\.cloud\.microsoft/i;
+}
+
+function isAuthProductUrl(u: string): boolean {
+  return authSuccessUrlRegex().test(u);
+}
+
 function totpFromEnv(): string | null {
   const secret = process.env.M365_COPILOT_TOTP_SECRET?.trim();
   if (!secret) return null;
@@ -49,10 +78,10 @@ async function dismissCookieBanners(page: Page): Promise<void> {
   }
 }
 
-/** Copilot 上でチャット入力が使え、明確な Sign in CTA が無い＝既にサインイン済みとみなす */
-export async function isCopilotSessionReady(page: Page): Promise<boolean> {
+/** Copilot / M365 等でチャット入力が使え、明確な Sign in CTA が無い＝既にサインイン済みとみなす */
+export async function isAuthSessionReady(page: Page): Promise<boolean> {
   const u = page.url();
-  if (!/copilot\.microsoft\.com/i.test(u)) return false;
+  if (!isAuthProductUrl(u)) return false;
   if (/signin|login|oauth/i.test(u)) return false;
 
   const signIn = page
@@ -78,6 +107,11 @@ export async function isCopilotSessionReady(page: Page): Promise<boolean> {
   }
 
   return await composer.isVisible({ timeout: 5000 }).catch(() => false);
+}
+
+/** @deprecated 互換エイリアス — isAuthSessionReady と同じ */
+export async function isCopilotSessionReady(page: Page): Promise<boolean> {
+  return isAuthSessionReady(page);
 }
 
 async function tryOpenSignInFromAccountMenu(page: Page): Promise<boolean> {
@@ -197,7 +231,7 @@ async function navigateToCopilotEntry(page: Page): Promise<void> {
     return;
   }
 
-  await page.goto(copilotUrl(), { waitUntil: "domcontentloaded", timeout: 90_000 });
+  await page.goto(authEntryUrl(), { waitUntil: "domcontentloaded", timeout: 90_000 });
   try {
     await page.waitForLoadState("networkidle", { timeout: 45_000 });
   } catch {
@@ -264,9 +298,11 @@ export async function signInMicrosoftViaCopilotUi(
 
   await navigateToCopilotEntry(page);
 
-  if (/copilot\.microsoft\.com/i.test(page.url()) && !isMicrosoftLoginHost(page.url())) {
-    if (await isCopilotSessionReady(page)) {
-      console.log("[e2e] Copilot は既にサインイン済みのため、ログイン手順をスキップして storage を保存します。");
+  if (isAuthProductUrl(page.url()) && !isMicrosoftLoginHost(page.url())) {
+    if (await isAuthSessionReady(page)) {
+      console.log(
+        "[e2e] 対象アプリは既にサインイン済みのため、ログイン手順をスキップして storage を保存します。",
+      );
       await saveStorageState(page, options.authStatePath);
       return;
     }
@@ -276,9 +312,11 @@ export async function signInMicrosoftViaCopilotUi(
     await proceedFromCopilotLandingToMicrosoftLogin(page);
   }
 
-  if (/copilot\.microsoft\.com/i.test(page.url()) && !isMicrosoftLoginHost(page.url())) {
-    if (await isCopilotSessionReady(page)) {
-      console.log("[e2e] Copilot は既にサインイン済みのため、ログイン手順をスキップして storage を保存します。");
+  if (isAuthProductUrl(page.url()) && !isMicrosoftLoginHost(page.url())) {
+    if (await isAuthSessionReady(page)) {
+      console.log(
+        "[e2e] 対象アプリは既にサインイン済みのため、ログイン手順をスキップして storage を保存します。",
+      );
       await saveStorageState(page, options.authStatePath);
       return;
     }
@@ -286,7 +324,7 @@ export async function signInMicrosoftViaCopilotUi(
 
   if (!isMicrosoftLoginHost(page.url())) {
     throw new Error(
-      "[e2e] Microsoft ログインページに到達できず、Copilot も未サインインです。E2E_MICROSOFT_LOGIN_URL や E2E_HEADED=1 で確認してください。",
+      "[e2e] Microsoft ログインページに到達できず、対象アプリも未サインインです。E2E_MICROSOFT_LOGIN_URL / E2E_AUTH_ENTRY_URL / E2E_HEADED=1 を確認してください。",
     );
   }
 
@@ -315,9 +353,12 @@ export async function signInMicrosoftViaCopilotUi(
   await pwBox.fill(password);
   await page.getByRole("button", { name: /サインイン|Sign in/i }).click();
 
-  await page.waitForURL(/ProcessAuth|login\.live\.com|login\.microsoftonline\.com|copilot\.microsoft/i, {
-    timeout: 45_000,
-  });
+  await page.waitForURL(
+    /ProcessAuth|login\.live\.com|login\.microsoftonline\.com|copilot\.microsoft|m365\.cloud\.microsoft/i,
+    {
+      timeout: 45_000,
+    },
+  );
 
   const totp = totpFromEnv();
   if (totp) {
@@ -352,7 +393,7 @@ export async function signInMicrosoftViaCopilotUi(
     }
 
     const u = page.url();
-    if (/copilot\.microsoft\.com/i.test(u) && !/signin|login/i.test(u)) {
+    if (isAuthProductUrl(u) && !isMicrosoftLoginHost(u)) {
       break;
     }
 
@@ -379,10 +420,11 @@ export async function signInMicrosoftViaCopilotUi(
     5000,
   );
 
-  if (!/copilot\.microsoft\.com/i.test(page.url())) {
-    await page.goto(copilotUrl(), { waitUntil: "domcontentloaded", timeout: 90_000 });
+  const successRe = authSuccessUrlRegex();
+  if (!successRe.test(page.url())) {
+    await page.goto(postAuthNavigateUrl(), { waitUntil: "domcontentloaded", timeout: 90_000 });
   }
 
-  await page.waitForURL(/copilot\.microsoft\.com/, { timeout: options.postPasswordTimeoutMs });
+  await page.waitForURL(successRe, { timeout: options.postPasswordTimeoutMs });
   await saveStorageState(page, options.authStatePath);
 }
