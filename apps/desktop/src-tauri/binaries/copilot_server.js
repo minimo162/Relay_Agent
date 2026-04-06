@@ -272,8 +272,18 @@ class CopilotSession {
     }
 
     if (!copilotPage) {
-      // No copilot page — create one via Target.createTarget
-      console.error("[copilot] no copilot page found, creating one...");
+      const disposables = pages.filter((p) => isDisposableStartUrl(p.url));
+      const reuse =
+        disposables.length > 0 ? disposables[disposables.length - 1] : pages.length > 0 ? pages[pages.length - 1] : null;
+      if (reuse) {
+        console.error(
+          "[copilot] no Copilot URL yet — reusing existing tab (navigate in describe):",
+          reuse.url?.slice(0, 120) || "(empty)",
+        );
+        this.cdpTargetId = reuse.targetId;
+        return reuse;
+      }
+      console.error("[copilot] no page targets — creating Copilot tab via Target.createTarget");
       const result = await session.send("Target.createTarget", {
         url: COPILOT_URL
       });
@@ -365,8 +375,9 @@ class CopilotSession {
 
       try {
         console.error("[copilot:describe] starting new chat...");
-        await pageSession.click(NEW_CHAT_BUTTON_SELECTOR).catch(() => {});
-        await sleep(1500);
+        const newChatOk = await clickFirstVisibleDeep(pageSession, NEW_CHAT_BUTTON_SELECTOR);
+        if (!newChatOk) await pageSession.click(NEW_CHAT_BUTTON_SELECTOR).catch(() => {});
+        await sleep(1800);
 
         console.error("[copilot:describe] pasting prompt...");
         const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${userPrompt}` : userPrompt;
@@ -388,47 +399,132 @@ function isLoginUrl(url) {
   return url?.includes("login.microsoftonline.com") || url?.includes("login.live.com") || url?.includes("microsoft.com/fwlink");
 }
 
+/** Prefer navigating these instead of Target.createTarget (avoids a second tab next to msedge's startup URL). */
+function isDisposableStartUrl(url) {
+  if (!url) return true;
+  const u = url.toLowerCase();
+  return (
+    u.startsWith("about:") ||
+    u.startsWith("edge://") ||
+    u.startsWith("chrome://") ||
+    u.includes("newtab") ||
+    u.includes("ntp.msn") ||
+    u === "data:," ||
+    u.startsWith("data:text/html")
+  );
+}
+
+/**
+ * Injected into composer-related Runtime.evaluate calls. Chat surface is often inside nested same-origin iframes.
+ */
+var COMPOSER_DOM_HELPERS = `
+  function __raVis(el) {
+    return el && el.offsetParent !== null;
+  }
+  function __raFindComposerEditable() {
+    function inDoc(doc, depth) {
+      if (!doc || depth > 14) return null;
+      const roots = [
+        doc.querySelector("#m365-chat-editor-target-element"),
+        doc.querySelector('[data-lexical-editor="true"]')
+      ].filter(Boolean);
+      for (const root of roots) {
+        if (!__raVis(root)) continue;
+        const inner = root.querySelector('[contenteditable="true"]');
+        const el = __raVis(inner) ? inner : root;
+        try {
+          if (doc.defaultView) doc.defaultView.focus();
+        } catch (_) {}
+        return el;
+      }
+      const fallbacks = [
+        'div[role="textbox"][contenteditable="true"]',
+        'div[role="textbox"]',
+        '[contenteditable="true"]'
+      ];
+      for (const sel of fallbacks) {
+        const el = doc.querySelector(sel);
+        if (__raVis(el)) {
+          try {
+            if (doc.defaultView) doc.defaultView.focus();
+          } catch (_) {}
+          return el;
+        }
+      }
+      let frames;
+      try {
+        frames = doc.querySelectorAll("iframe");
+      } catch (_) {
+        return null;
+      }
+      for (let i = 0; i < frames.length; i++) {
+        try {
+          const c = frames[i].contentDocument;
+          const found = inDoc(c, depth + 1);
+          if (found) return found;
+        } catch (_) {}
+      }
+      return null;
+    }
+    return inDoc(document, 0);
+  }
+`;
+
+/** Click first matching visible element in the main document or nested same-origin iframes. */
+async function clickFirstVisibleDeep(session, selector) {
+  const r = await session.evaluate(`((sel) => {
+    function vis(el) {
+      return el && el.offsetParent !== null;
+    }
+    function walk(doc, depth) {
+      if (!doc || depth > 14) return false;
+      let el;
+      try {
+        el = doc.querySelector(sel);
+      } catch (_) {
+        el = null;
+      }
+      if (vis(el)) {
+        try {
+          el.scrollIntoView({ block: "center", inline: "nearest" });
+        } catch (_) {}
+        el.click();
+        return true;
+      }
+      let frames;
+      try {
+        frames = doc.querySelectorAll("iframe");
+      } catch (_) {
+        return false;
+      }
+      for (let i = 0; i < frames.length; i++) {
+        try {
+          const c = frames[i].contentDocument;
+          if (walk(c, depth + 1)) return true;
+        } catch (_) {}
+      }
+      return false;
+    }
+    return walk(document, 0);
+  })(${JSON.stringify(selector)})`);
+  return r?.value === true;
+}
+
 /**
  * Lexical often nests the real editor: outer #m365-chat-editor-target-element vs inner [contenteditable="true"].
  * CDP Input.insertText targets the focused node; focusing only the outer shell can paste "nowhere".
  */
 async function focusComposer(session) {
   const r = await session.evaluate(`(() => {
-    function visible(el) {
-      return el && el.offsetParent !== null;
-    }
-    const roots = [
-      document.querySelector('#m365-chat-editor-target-element'),
-      document.querySelector('[data-lexical-editor="true"]')
-    ].filter(Boolean);
-    for (const root of roots) {
-      if (!visible(root)) continue;
-      const inner = root.querySelector('[contenteditable="true"]');
-      const el = visible(inner) ? inner : root;
-      try {
-        el.scrollIntoView({ block: 'center', inline: 'nearest' });
-      } catch (_) {}
-      el.click();
-      el.focus();
-      return true;
-    }
-    const fallbacks = [
-      'div[role="textbox"][contenteditable="true"]',
-      'div[role="textbox"]',
-      '[contenteditable="true"]'
-    ];
-    for (const sel of fallbacks) {
-      const el = document.querySelector(sel);
-      if (visible(el)) {
-        try {
-          el.scrollIntoView({ block: 'center', inline: 'nearest' });
-        } catch (_) {}
-        el.click();
-        el.focus();
-        return true;
-      }
-    }
-    return false;
+    ${COMPOSER_DOM_HELPERS}
+    const el = __raFindComposerEditable();
+    if (!el) return false;
+    try {
+      el.scrollIntoView({ block: "center", inline: "nearest" });
+    } catch (_) {}
+    el.click();
+    el.focus();
+    return true;
   })()`);
   return r.value === true;
 }
@@ -445,21 +541,15 @@ async function waitForComposer(session) {
 /** Approximate visible character count in composer (Lexical exposes innerText on root). */
 async function getComposerTextLength(session) {
   const r = await session.evaluate(`(() => {
+    ${COMPOSER_DOM_HELPERS}
     function lenOf(el) {
       if (!el) return 0;
       const raw = el.innerText || el.textContent || '';
       const t = raw.replace(new RegExp(String.fromCharCode(0x200b), 'g'), '');
       return t.trim().length;
     }
-    const root = document.querySelector('#m365-chat-editor-target-element')
-      ?? document.querySelector('[data-lexical-editor="true"]');
-    if (root && root.offsetParent !== null) {
-      const inner = root.querySelector('[contenteditable="true"]');
-      const n = lenOf(inner && inner.offsetParent !== null ? inner : root);
-      if (n > 0) return n;
-    }
-    const fb = document.querySelector('div[role="textbox"]');
-    return lenOf(fb);
+    const el = __raFindComposerEditable();
+    return lenOf(el);
   })()`).catch(() => ({ value: 0 }));
   return Number(r.value) || 0;
 }
@@ -510,18 +600,14 @@ async function pasteViaSyntheticClipboard(session, text) {
     const part = parts[pi];
     const r = await session.evaluate(`
       ((payload, isFirstPart) => {
-        const root = document.querySelector('#m365-chat-editor-target-element')
-          ?? document.querySelector('[data-lexical-editor="true"]');
-        const inner = root?.querySelector('[contenteditable="true"]');
-        const el = (inner && inner.offsetParent !== null ? inner : null)
-          ?? root
-          ?? document.querySelector('div[role="textbox"]');
+        ${COMPOSER_DOM_HELPERS}
+        const el = __raFindComposerEditable();
         if (!el) return false;
         if (isFirstPart) {
           el.focus();
           try {
-            const sel = window.getSelection();
-            const range = document.createRange();
+            const sel = el.ownerDocument.getSelection();
+            const range = el.ownerDocument.createRange();
             range.selectNodeContents(el);
             range.collapse(false);
             sel.removeAllRanges();
@@ -531,6 +617,12 @@ async function pasteViaSyntheticClipboard(session, text) {
         try {
           const dt = new DataTransfer();
           dt.setData('text/plain', payload);
+          el.dispatchEvent(new InputEvent('beforeinput', {
+            bubbles: true,
+            cancelable: true,
+            inputType: 'insertFromPaste',
+            data: null
+          }));
           el.dispatchEvent(new ClipboardEvent('paste', {
             clipboardData: dt,
             bubbles: true,
@@ -591,12 +683,8 @@ async function insertTextViaInputEvents(session, text) {
   for (const batch of batches) {
     await session.evaluate(`
       ((payload) => {
-        const root = document.querySelector('#m365-chat-editor-target-element')
-          ?? document.querySelector('[data-lexical-editor="true"]');
-        const inner = root?.querySelector('[contenteditable="true"]');
-        const el = (inner && inner.offsetParent !== null ? inner : null)
-          ?? root
-          ?? document.querySelector('div[role="textbox"]');
+        ${COMPOSER_DOM_HELPERS}
+        const el = __raFindComposerEditable();
         if (!el) return false;
         el.focus();
         for (const c of payload) {
@@ -625,18 +713,14 @@ async function insertTextViaExecCommand(session, text) {
     const isFirst = ci === 0;
     await session.evaluate(`
       ((payload, isFirst) => {
-        const root = document.querySelector('#m365-chat-editor-target-element')
-          ?? document.querySelector('[data-lexical-editor="true"]');
-        const inner = root?.querySelector('[contenteditable="true"]');
-        const el = (inner && inner.offsetParent !== null ? inner : null)
-          ?? root
-          ?? document.querySelector('div[role="textbox"]');
+        ${COMPOSER_DOM_HELPERS}
+        const el = __raFindComposerEditable();
         if (!el) return false;
         if (isFirst) {
           el.focus();
           try {
-            const sel = window.getSelection();
-            const range = document.createRange();
+            const sel = el.ownerDocument.getSelection();
+            const range = el.ownerDocument.createRange();
             range.selectNodeContents(el);
             range.collapse(false);
             sel.removeAllRanges();
@@ -644,7 +728,7 @@ async function insertTextViaExecCommand(session, text) {
           } catch (_) {}
         }
         try {
-          return document.execCommand('insertText', false, payload);
+          return el.ownerDocument.execCommand('insertText', false, payload);
         } catch (_) {
           return false;
         }
@@ -680,7 +764,7 @@ async function pastePromptRaw(session, text) {
   console.error("[copilot:paste] begin (", text.length, "chars )");
   await cdpInputEnable(session);
   await waitForComposer(session);
-  await sleep(400);
+  await sleep(550);
 
   const preClearLen = await getComposerTextLength(session);
   if (preClearLen > 0) {
@@ -1651,6 +1735,7 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
 
   globalOptions.cdpPort = actualPort;
   console.error("[copilot:ensureEdge] launching Relay Edge (isolated profile) on port", actualPort);
+  /** No startup URL — CLI Copilot URL + createTarget raced and opened duplicate tabs; describeImpl navigates. */
   const args = [
     `--remote-debugging-port=${actualPort}`,
     "--remote-allow-origins=*",
@@ -1660,7 +1745,6 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
     "--disable-restore-session-state",
     "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
     `--user-data-dir=${profileDir}`,
-    COPILOT_URL
   ];
   if (process.platform === "win32") {
     try {
@@ -1756,7 +1840,6 @@ async function ensureEdgeLegacyAttach(edgePath, cdpPort) {
     "--disable-infobars",
     "--disable-restore-session-state",
     "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
-    COPILOT_URL
   ];
   if (process.platform === "win32") {
     try {
