@@ -673,15 +673,24 @@ impl CopilotPage {
         let r = ctx
             .eval(
                 r#"(() => {
-                if (document.querySelector('[data-testid="stopGeneratingButton"]')?.offsetParent)
-                    return true;
-                const needles = ['Stop generating', 'Stop response', '生成を停止', '応答を停止'];
-                for (const b of document.querySelectorAll('button[aria-label]')) {
-                    if (!b.offsetParent) continue;
-                    const a = b.getAttribute('aria-label') || '';
-                    for (const n of needles) {
-                        if (a.includes(n)) return true;
+                const stopSels = [
+                    '[data-testid="stopGeneratingButton"]',
+                    'button[data-testid*="stop"]',
+                    '.fai-SendButton__stopBackground'
+                ];
+                for (const s of stopSels) {
+                    for (const el of document.querySelectorAll(s)) {
+                        if (el?.offsetParent) return true;
                     }
+                }
+                const needles = ['Stop generating', 'Stop response', '生成を停止', '応答を停止', '停止'];
+                for (const b of document.querySelectorAll('button[aria-label], [role="button"]')) {
+                    if (!b.offsetParent) continue;
+                    const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                    for (const n of needles) {
+                        if (a.includes(n.toLowerCase())) return true;
+                    }
+                    if (/\bstop\b/.test(a) && /generat|stream|response|応答|生成|回答/.test(a)) return true;
                 }
                 return false;
             })()"#,
@@ -703,6 +712,7 @@ impl CopilotPage {
         let mut consecutive_errors = 0;
 
         let ctx = self.connect_ctx().await?;
+        let mut start_len: Option<usize> = None;
 
         loop {
             if start.elapsed() > Duration::from_secs(timeout_secs) {
@@ -725,16 +735,23 @@ impl CopilotPage {
                 }
             };
             let len = txt.len();
+            if start_len.is_none() {
+                start_len = Some(len);
+            }
+            if !streaming && len > start_len.unwrap_or(0).saturating_add(40) {
+                streaming = true;
+            }
 
             let is_streaming = Self::is_streaming_ctx(&ctx).await.unwrap_or(false);
 
             if is_streaming {
                 streaming = true;
                 stable = 0;
-            } else if streaming && len > 200 {
-                if len == prev {
+            } else if streaming && len > 80 {
+                let delta = len.abs_diff(prev);
+                if delta <= 12 {
                     stable += 1;
-                    if stable >= 2 {
+                    if stable >= 3 {
                         info!("[CDP] response done ({} chars)", len);
                         return Ok(txt);
                     }
