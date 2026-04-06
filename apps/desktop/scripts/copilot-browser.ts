@@ -1,13 +1,12 @@
-import { accessSync, constants } from "fs";
+import { accessSync, constants, mkdirSync, readFileSync } from "fs";
 import os from "os";
 import path from "path";
-import { execFile } from "child_process";
-import net from "net";
+import { spawn } from "child_process";
 import { chromium, errors, type Browser, type Locator, type Page, type Response } from "playwright";
 
 const COPILOT_URL = "https://m365.cloud.microsoft/chat/";
-const CDP_PORT_RANGE_START = 9333;
-const CDP_PORT_RANGE_END = 9342;
+/** Default when not using `--auto-launch` (attach to existing browser). */
+const DEFAULT_CDP_PORT = 9333;
 const NEW_CHAT_SELECTOR = '[data-testid="newChatButton"]';
 const EDITOR_SELECTOR = "#m365-chat-editor-target-element";
 const SEND_READY_SEL = ".fai-SendButton:not([disabled])";
@@ -146,7 +145,7 @@ async function main(): Promise<void> {
 
 function parseCliOptions(argv: string[]): CliOptions {
   let action: CliOptions["action"] | null = null;
-  let cdpPort = CDP_PORT_RANGE_START;
+  let cdpPort = DEFAULT_CDP_PORT;
   let autoLaunch = false;
   let timeout = 60000;
   let prompt: string | undefined;
@@ -339,23 +338,56 @@ async function handleInspect(options: CliOptions, promptArg?: string): Promise<I
   }
 }
 
+function relayAgentEdgeProfileDir(): string {
+  return path.join(os.homedir(), "RelayAgentEdgeProfile");
+}
+
+function readDevToolsActivePort(profileDir: string): number | null {
+  try {
+    const raw = readFileSync(path.join(profileDir, "DevToolsActivePort"), "utf8");
+    const line = raw.split("\n")[0]?.trim() ?? "";
+    const port = parseInt(line, 10);
+    if (!Number.isFinite(port) || port <= 0) {
+      return null;
+    }
+    return port;
+  } catch {
+    return null;
+  }
+}
+
+async function waitForDevToolsActivePort(profileDir: string, maxWaitMs: number): Promise<number> {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    const p = readDevToolsActivePort(profileDir);
+    if (p !== null && (await isCdpListening(p))) {
+      return p;
+    }
+    await sleep(100);
+  }
+  throw createError(
+    "CDP_UNAVAILABLE",
+    `DevToolsActivePort did not become ready under ${profileDir} within ${maxWaitMs}ms.`
+  );
+}
+
+async function resolveCdpPortAutoLaunch(): Promise<number> {
+  const profileDir = relayAgentEdgeProfileDir();
+  mkdirSync(profileDir, { recursive: true });
+  const existing = readDevToolsActivePort(profileDir);
+  if (existing !== null && (await isCdpListening(existing))) {
+    emitProgress("cdp_connect", `既存の Relay Agent 用 Edge に接続（ポート ${existing}）…`);
+    return existing;
+  }
+  emitProgress("edge_launch", "Edge を起動中（CDP ポートは OS が自動割り当て）…");
+  await launchEdgeWithAutoCdpPort(profileDir);
+  return waitForDevToolsActivePort(profileDir, 30_000);
+}
+
 async function connectToBrowser(
   options: Pick<CliOptions, "cdpPort" | "autoLaunch">
 ): Promise<{ browser: Browser; port: number }> {
-  let port = options.cdpPort;
-
-  if (options.autoLaunch) {
-    const existing = await findExistingCdpEdge();
-    if (existing !== null) {
-      port = existing;
-      emitProgress("cdp_connect", `既存の Edge に接続中（ポート ${port}）…`);
-    } else {
-      emitProgress("port_scan", "空きポートを探索中…");
-      port = await findAvailableCdpPort();
-      emitProgress("edge_launch", `Edge を起動中（ポート ${port}）…`);
-      await launchEdgeWithCdp(port);
-    }
-  }
+  const port = options.autoLaunch ? await resolveCdpPortAutoLaunch() : options.cdpPort;
 
   try {
     const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
@@ -375,63 +407,22 @@ function emitProgress(step: string, detail?: string): void {
   process.stdout.write(`${JSON.stringify({ type: "progress", step, detail })}\n`);
 }
 
-function isPortFree(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = net.createConnection({ port, host: "127.0.0.1" });
-    let settled = false;
-
-    const finish = (isFree: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      socket.removeAllListeners();
-      socket.destroy();
-      resolve(isFree);
-    };
-
-    socket.once("connect", () => {
-      finish(false);
-    });
-    socket.once("error", () => {
-      finish(true);
-    });
-  });
-}
-
-async function findAvailableCdpPort(): Promise<number> {
-  for (let port = CDP_PORT_RANGE_START; port <= CDP_PORT_RANGE_END; port += 1) {
-    if (await isPortFree(port)) {
-      return port;
-    }
-  }
-
-  throw createError(
-    "CDP_UNAVAILABLE",
-    `All CDP ports ${CDP_PORT_RANGE_START}-${CDP_PORT_RANGE_END} are in use.`
-  );
-}
-
-async function findExistingCdpEdge(): Promise<number | null> {
-  for (let port = CDP_PORT_RANGE_START; port <= CDP_PORT_RANGE_END; port += 1) {
-    if (await isCdpListening(port)) {
-      return port;
-    }
-  }
-
-  return null;
-}
-
-async function launchEdgeWithCdp(port: number): Promise<void> {
+/** Match Rust `launch_dedicated_edge`: isolated profile + OS-assigned debug port. */
+async function launchEdgeWithAutoCdpPort(profileDir: string): Promise<void> {
   const edgeExecutable = resolveEdgeExecutable();
 
   await new Promise<void>((resolve, reject) => {
-    const child = execFile(
+    const child = spawn(
       edgeExecutable,
       [
-        `--remote-debugging-port=${port}`,
+        "--remote-debugging-port=0",
         "--remote-allow-origins=*",
-        "--no-first-run"
+        `--user-data-dir=${profileDir}`,
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-infobars",
+        "--disable-restore-session-state",
+        "about:blank"
       ],
       { detached: true, stdio: "ignore" }
     );
@@ -449,28 +440,6 @@ async function launchEdgeWithCdp(port: number): Promise<void> {
       resolve();
     });
   });
-
-  await waitForCdpReady(port, { maxWaitMs: 5000, intervalMs: 500 });
-}
-
-async function waitForCdpReady(
-  port: number,
-  opts: { maxWaitMs: number; intervalMs: number }
-): Promise<void> {
-  const deadline = Date.now() + opts.maxWaitMs;
-
-  while (Date.now() < deadline) {
-    if (await isCdpListening(port)) {
-      return;
-    }
-
-    await sleep(opts.intervalMs);
-  }
-
-  throw createError(
-    "CDP_UNAVAILABLE",
-    `Edge launched but CDP did not respond on port ${port} within ${opts.maxWaitMs}ms.`
-  );
 }
 
 async function isCdpListening(port: number): Promise<boolean> {

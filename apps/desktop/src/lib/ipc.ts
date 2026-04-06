@@ -161,6 +161,7 @@ export async function compactAgentSession(
 
 export interface ConnectCdpRequest {
   autoLaunch?: boolean;
+  /** When `autoLaunch` is true, CDP port is OS-assigned (`DevToolsActivePort`); this is ignored. */
   basePort?: number;
 }
 

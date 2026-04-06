@@ -6,8 +6,10 @@
 
 //! CDP-driven M365 Copilot client.
 //!
-//! Automatically launches a dedicated Edge instance on a free port,
-//! keeping it separate from the user's personal browser.
+//! Automatically launches a dedicated Edge instance with an OS-assigned CDP port
+//! (`--remote-debugging-port=0`), discovered via `DevToolsActivePort` in the
+//! isolated profile — no port scanning and no collision with devtools on 9222.
+//! If that profile already has a live CDP endpoint, reconnects reuse it.
 //!
 //! ## Architecture
 //!
@@ -27,7 +29,6 @@ use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -37,32 +38,10 @@ use tokio::time::{timeout, Duration};
 use tracing::{debug, info, warn};
 use tungstenite::Message;
 
-/* ── Port scanning ──────────────────────────────────────────── */
+/* ── Profile + DevToolsActivePort (port 0) ───────────────────── */
 
-/// Find a free TCP port starting from `base_port`.
-pub fn find_free_port(base_port: u16, max_attempts: u16) -> u16 {
-    for i in 0..max_attempts {
-        let port = base_port + i;
-        if port_is_free(port) {
-            return port;
-        }
-    }
-    // Last resort: use the last attempted port
-    base_port + max_attempts - 1
-}
-
-fn port_is_free(port: u16) -> bool {
-    TcpStream::connect(("127.0.0.1", port)).is_err()
-}
-
-/* ── Edge auto-launch ────────────────────────────────────────── */
-
-/// Launch a dedicated Edge instance for CDP control.
-/// Uses a separate user-data-dir so it doesn't conflict with
-/// the user's personal browser.
-pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
-    let edge_path = find_edge_path()?;
-
+/// Isolated Edge profile directory (same path the Tauri `disconnect_cdp` cleanup expects).
+pub fn relay_agent_edge_profile_dir() -> PathBuf {
     let home = std::env::var("HOME")
         .ok()
         .or_else(|| std::env::var("USERPROFILE").ok())
@@ -76,13 +55,55 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
             },
             PathBuf::from,
         );
+    home.join("RelayAgentEdgeProfile")
+}
 
-    let profile_dir = home.join("RelayAgentEdgeProfile");
+/// Read the Chromium-written `DevToolsActivePort` file (first line = port).
+fn read_devtools_active_port(profile_dir: &std::path::Path) -> Option<u16> {
+    let path = profile_dir.join("DevToolsActivePort");
+    let data = std::fs::read_to_string(&path).ok()?;
+    let line = data.lines().next()?.trim();
+    let port: u16 = line.parse().ok()?;
+    (port > 0).then_some(port)
+}
+
+/// Poll until `DevToolsActivePort` appears after `--remote-debugging-port=0` launch.
+async fn wait_for_devtools_active_port(profile_dir: &std::path::Path, max_wait_secs: u64) -> Result<u16> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(max_wait_secs);
+    let interval = Duration::from_millis(100);
+    loop {
+        if std::time::Instant::now() > deadline {
+            bail!("DevToolsActivePort did not appear within {max_wait_secs}s");
+        }
+        if let Some(p) = read_devtools_active_port(profile_dir) {
+            return Ok(p);
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
+async fn cdp_http_ready(debug_url: &str) -> bool {
+    matches!(
+        reqwest::get(format!("{debug_url}/json/version")).await,
+        Ok(r) if r.status().is_success()
+    )
+}
+
+/* ── Edge auto-launch ────────────────────────────────────────── */
+
+/// Launch a dedicated Edge instance for CDP control.
+/// Uses a separate user-data-dir so it doesn't conflict with
+/// the user's personal browser.
+/// Pass `debug_port: 0` so Chromium picks a free port (see `DevToolsActivePort`).
+pub fn launch_dedicated_edge(debug_port: u16) -> Result<std::process::Child> {
+    let edge_path = find_edge_path()?;
+
+    let profile_dir = relay_agent_edge_profile_dir();
     std::fs::create_dir_all(&profile_dir).ok();
 
     info!(
-        "[CDP] Launching Edge on port {} with profile: {:?}",
-        port, profile_dir
+        "[CDP] Launching Edge remote-debugging-port={} profile: {:?}",
+        debug_port, profile_dir
     );
 
     // Launch Edge with a blank start page. Use flags to avoid VBS/Code
@@ -90,7 +111,7 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
     let mut cmd = std::process::Command::new(&edge_path);
     cmd.args([
         "--remote-debugging-port",
-        &port.to_string(),
+        &debug_port.to_string(),
         // Chromium 111+ restricts DevTools/WebSocket origins without this; Edge needs it for CDP clients.
         "--remote-allow-origins=*",
         &format!("--user-data-dir={}", profile_dir.to_str().unwrap()),
@@ -460,77 +481,59 @@ impl CopilotPage {
         info!("[CDP] send: {preview}…");
         let ctx = self.connect_ctx().await?;
 
-        // 1. Type into composer — try multiple selectors
-        let js = format!(
-            r#"(() => {{
-                for (const s of [
-                    'div[role="textbox"]',
-                    'textarea',
-                    '[contenteditable="true"]',
-                    '#m365-chat-editor-target-element',
-                    'div[role="combobox"]'
-                ]) {{
-                    const el = document.querySelector(s);
-                    if (el && el.offsetParent !== null) {{
-                        el.focus();
-                        el.innerText = {};
-                        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                        return true;
-                    }}
-                }}
-                return false;
-            }})()"#,
-            serde_json::to_string(text)?
-        );
-        let r = ctx.eval(&js).await?;
+        // 1. Focus the composer (stable id first, then role-based fallbacks).
+        let focus_js = r#"(() => {
+            const ordered = [
+                '#m365-chat-editor-target-element',
+                'textarea',
+                '[contenteditable="true"]',
+                'div[role="textbox"]'
+            ];
+            for (const s of ordered) {
+                const el = document.querySelector(s);
+                if (el && el.offsetParent !== null) {
+                    el.focus();
+                    return true;
+                }
+            }
+            return false;
+        })()"#;
+        let r = ctx.eval(focus_js).await?;
         if r["result"]["value"].as_bool() != Some(true) {
             bail!("composer not found — Copilot page may not be ready");
         }
 
-        tokio::time::sleep(Duration::from_millis(800)).await;
+        // 2. Insert text + submit via CDP Input (no send-button selectors).
+        ctx.send("Input.insertText", json!({ "text": text }))
+            .await
+            .context("Input.insertText")?;
 
-        // 2. Click send — i18n-aware multi-selector fallback
-        let js2 = r#"(() => {
-            for (const s of [
-                // Japanese
-                'button[aria-label="送信"]',
-                'button[aria-label*="送信"]',
-                // English
-                'button[aria-label="Send"]',
-                'button[aria-label="Reply"]',
-                'button[aria-label*="Send"]',
-                // Generic
-                'button[data-testid="sendButton"]',
-                'button[type="submit"]',
-                // Icon button patterns
-                'button:has(svg[iconName="Send"])',
-                '[data-icon-name="Send"]'
-            ]) {
-                const b = document.querySelector(s);
-                if (b && b.offsetParent !== null) {
-                    b.click();
-                    return JSON.stringify({ ok: true });
-                }
-            }
-            return JSON.stringify({ ok: false });
-        })()"#;
-        let r2 = ctx.eval(js2).await?;
-        let val: Value = serde_json::from_str(r2["result"]["value"].as_str().unwrap_or("{}"))
-            .unwrap_or(Value::Null);
-        if val.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
-            bail!("send button not found — page may not be interactive");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        for phase in ["keyDown", "keyUp"] {
+            ctx.send(
+                "Input.dispatchKeyEvent",
+                json!({
+                    "type": phase,
+                    "key": "Enter",
+                    "code": "Enter",
+                    "windowsVirtualKeyCode": 13,
+                    "nativeVirtualKeyCode": 13
+                }),
+            )
+            .await
+            .context("Input.dispatchKeyEvent Enter")?;
         }
 
         // 3. Wait for composer to clear (confirms prompt was dispatched)
         tokio::time::sleep(Duration::from_millis(500)).await;
-        timeout(Duration::from_secs(5), async {
+        timeout(Duration::from_secs(8), async {
             loop {
                 if let Ok(r) = ctx
                     .eval(
                         r#"(() => {
                         for (const el of document.querySelectorAll(
-                            'div[role="textbox"],textarea,[contenteditable="true"],#m365-chat-editor-target-element'
+                            '#m365-chat-editor-target-element,textarea,[contenteditable="true"],div[role="textbox"]'
                         )) {
                             if ((el.innerText||'').trim().length > 5) return false;
                         }
@@ -559,14 +562,14 @@ impl CopilotPage {
         let r = ctx
             .eval(
                 r#"(() => {
-                for (const s of [
-                    'button[aria-label*="生成を停止"]',
-                    'button[aria-label*="Stop generating"]',
-                    'button[aria-label*="Stop response"]',
-                    'button[data-testid="stopGeneratingButton"]'
-                ]) {
-                    for (const el of document.querySelectorAll(s)) {
-                        if (el.offsetParent !== null) return true;
+                if (document.querySelector('[data-testid="stopGeneratingButton"]')?.offsetParent)
+                    return true;
+                const needles = ['Stop generating', 'Stop response', '生成を停止', '応答を停止'];
+                for (const b of document.querySelectorAll('button[aria-label]')) {
+                    if (!b.offsetParent) continue;
+                    const a = b.getAttribute('aria-label') || '';
+                    for (const n of needles) {
+                        if (a.includes(n)) return true;
                     }
                 }
                 return false;
@@ -710,7 +713,7 @@ pub fn disconnect_copilot_page(result: ConnectionResult) {
 pub async fn connect_copilot_page(
     debug_url: &str,
     auto_launch: bool,
-    base_port: u16,
+    _base_port: u16,
 ) -> Result<ConnectionResult> {
     if !auto_launch {
         if let Some(p) = try_existing(debug_url).await {
@@ -722,16 +725,44 @@ pub async fn connect_copilot_page(
         );
     }
 
-    let port = find_free_port(base_port, 50);
-    let debug_url_new = format!("http://127.0.0.1:{port}");
+    let profile_dir = relay_agent_edge_profile_dir();
+    std::fs::create_dir_all(&profile_dir).ok();
 
-    info!(
-        "[CDP] Launching dedicated Edge on port {}...",
-        port
-    );
+    let (debug_url_new, child, launched) =
+        if let Some(p) = read_devtools_active_port(&profile_dir) {
+            let url = format!("http://127.0.0.1:{p}");
+            if cdp_http_ready(&url).await {
+                info!(
+                    "[CDP] Reusing live Edge CDP on port {} (RelayAgentEdgeProfile)",
+                    p
+                );
+                (url, None, false)
+            } else {
+                info!("[CDP] DevToolsActivePort present but CDP dead; launching new Edge…");
+                let spawned = launch_dedicated_edge(0)?;
+                let p2 = wait_for_devtools_active_port(&profile_dir, 30).await?;
+                (
+                    format!("http://127.0.0.1:{p2}"),
+                    Some(spawned),
+                    true,
+                )
+            }
+        } else {
+            info!("[CDP] Launching Edge with OS-assigned CDP port (remote-debugging-port=0)…");
+            let spawned = launch_dedicated_edge(0)?;
+            let p = wait_for_devtools_active_port(&profile_dir, 30).await?;
+            (
+                format!("http://127.0.0.1:{p}"),
+                Some(spawned),
+                true,
+            )
+        };
 
-    let child = launch_dedicated_edge(port)?;
-    wait_for_cdp_ready(&debug_url_new, 30).await?;
+    if launched {
+        wait_for_cdp_ready(&debug_url_new, 30).await?;
+    } else {
+        wait_for_cdp_ready(&debug_url_new, 5).await?;
+    }
 
     // Wait a bit for the initial tab to settle
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -845,6 +876,8 @@ pub async fn connect_copilot_page(
         copilot_page.url, copilot_page.title
     );
 
+    let port = parse_port(&debug_url_new).unwrap_or(0);
+
     Ok(ConnectionResult {
         page: CopilotPage {
             debug_url: debug_url_new.clone(),
@@ -854,8 +887,8 @@ pub async fn connect_copilot_page(
             title: copilot_page.title.clone(),
         },
         port,
-        launched: true,
-        edge_process: Some(child),
+        launched,
+        edge_process: child,
     })
 }
 

@@ -379,8 +379,10 @@ pub async fn get_session_history(
 
 /// Shared state: tracks the session for auto-launched Edge + connection status.
 struct CdpSessionState {
-    /// Port of our auto-launched Edge instance (if any).
-    launched_port: Option<u16>,
+    /// Active CDP HTTP port (dynamic when using `remote-debugging-port=0`).
+    cdp_port: Option<u16>,
+    /// True if this app spawned Edge for this profile (disconnect may kill it).
+    owns_browser: bool,
     /// Whether the frontend currently has an active CDP connection.
     connected: bool,
     /// URL of the Copilot page (if connected).
@@ -394,7 +396,8 @@ static CDP_SESSION: OnceLock<Mutex<CdpSessionState>> = OnceLock::new();
 fn cdp_session() -> &'static Mutex<CdpSessionState> {
     CDP_SESSION.get_or_init(|| {
         Mutex::new(CdpSessionState {
-            launched_port: None,
+            cdp_port: None,
+            owns_browser: false,
             connected: false,
             page_url: None,
             page: None,
@@ -405,7 +408,7 @@ fn cdp_session() -> &'static Mutex<CdpSessionState> {
 fn get_cdp_debug_url(preferred_base: u16) -> String {
     match cdp_session().lock() {
         Ok(state) => {
-            if let Some(port) = state.launched_port {
+            if let Some(port) = state.cdp_port {
                 format!("http://127.0.0.1:{port}")
             } else {
                 format!("http://127.0.0.1:{preferred_base}")
@@ -422,19 +425,22 @@ fn cdp_is_connected() -> bool {
     cdp_session().lock().map_or(false, |s| s.connected)
 }
 
-fn mark_cdp_connected(port: u16, page_url: String, page: cdp_copilot::CopilotPage) {
+fn set_cdp_session_connected(port: u16, owns_browser: bool, page_url: String, page: cdp_copilot::CopilotPage) {
     if let Ok(mut state) = cdp_session().lock() {
-        state.launched_port = Some(port);
+        state.cdp_port = Some(port);
+        state.owns_browser = owns_browser;
         state.connected = true;
         state.page_url = Some(page_url);
         state.page = Some(page);
     } else {
-        tracing::warn!("[CDP] cdp_session lock poisoned in mark_cdp_connected");
+        tracing::warn!("[CDP] cdp_session lock poisoned in set_cdp_session_connected");
     }
 }
 
 fn mark_cdp_disconnected() {
     if let Ok(mut state) = cdp_session().lock() {
+        state.cdp_port = None;
+        state.owns_browser = false;
         state.connected = false;
         state.page_url = None;
         state.page = None;
@@ -493,17 +499,7 @@ pub fn ensure_cdp_connected() -> Result<cdp_copilot::CopilotPage, String> {
     let port = result.port;
     let page_url = result.page.url.clone();
 
-    if result.launched {
-        // Edge was auto-launched: track port so disconnect_cdp can clean it up
-        mark_cdp_connected(port, page_url, page.clone());
-    } else {
-        // Existing browser: mark connected but don't track a launched port
-        if let Ok(mut state) = cdp_session().lock() {
-            state.connected = true;
-            state.page_url = Some(page_url);
-            state.page = Some(page.clone());
-        }
-    }
+    set_cdp_session_connected(port, result.launched, page_url, page.clone());
 
     tracing::info!("[CDP] auto-connected to {}", page.url);
     // ConnectionResult dropped here; its Edge process ownership is no longer needed
@@ -518,7 +514,8 @@ pub struct ConnectCdpRequest {
     /// If true and no existing browser is found, auto-launch a dedicated Edge.
     #[serde(default)]
     pub auto_launch: Option<bool>,
-    /// Preferred base port (default: 9222). Tries 9222, 9223, …
+    /// Ignored when `auto_launch` is true (OS-assigned CDP port via `DevToolsActivePort`).
+    /// Used only when attaching to an existing browser at a known port (`auto_launch: false`).
     #[serde(default)]
     pub base_port: Option<u16>,
 }
@@ -565,14 +562,14 @@ pub async fn connect_cdp(
         if state.connected {
             return Ok(CdpConnectResult {
                 ok: true,
-                debug_url: state.launched_port.map_or_else(
+                debug_url: state.cdp_port.map_or_else(
                     || format!("http://127.0.0.1:{}", request.base_port.unwrap_or(9222)),
                     |p| format!("http://127.0.0.1:{p}"),
                 ),
                 page_url: state.page_url.clone().unwrap_or_default(),
                 page_title: String::new(),
-                port: state.launched_port,
-                launched: state.launched_port.is_some(),
+                port: state.cdp_port,
+                launched: state.owns_browser,
                 error: None,
             });
         }
@@ -591,18 +588,12 @@ pub async fn connect_cdp(
     match cdp_copilot::connect_copilot_page(&debug_url, auto_launch, base_port).await {
         Ok(res) => {
             tracing::info!("[CDP] connected → {} — {}", res.page.url, res.page.title);
-            if res.launched {
-                mark_cdp_connected(res.port, res.page.url.clone(), res.page.clone());
-            } else {
-                // Existing browser: still mark as connected but don't track port as launched
-                if let Ok(mut state) = cdp_session().lock() {
-                    state.connected = true;
-                    state.page_url = Some(res.page.url.clone());
-                    state.page = Some(res.page.clone());
-                } else {
-                    tracing::warn!("[CDP] cdp_session lock poisoned during connect");
-                }
-            }
+            set_cdp_session_connected(
+                res.port,
+                res.launched,
+                res.page.url.clone(),
+                res.page.clone(),
+            );
             Ok(CdpConnectResult {
                 ok: true,
                 debug_url: format!("http://127.0.0.1:{}", res.port),
@@ -704,14 +695,19 @@ pub async fn cdp_start_new_chat(
         }
     };
 
-    if res.launched {
-        mark_cdp_connected(res.port, res.page.url.clone(), res.page.clone());
-    }
+    let debug_url_resolved = format!("http://127.0.0.1:{}", res.port);
+
+    set_cdp_session_connected(
+        res.port,
+        res.launched,
+        res.page.url.clone(),
+        res.page.clone(),
+    );
 
     if let Err(e) = res.page.navigate_to_chat().await {
         return Ok(CdpConnectResult {
             ok: false,
-            debug_url: debug_url.clone(),
+            debug_url: debug_url_resolved.clone(),
             page_url: res.page.url.clone(),
             page_title: res.page.title.clone(),
             port: Some(res.port),
@@ -722,7 +718,7 @@ pub async fn cdp_start_new_chat(
 
     Ok(CdpConnectResult {
         ok: true,
-        debug_url,
+        debug_url: debug_url_resolved,
         page_url: res.page.url.clone(),
         page_title: res.page.title.clone(),
         port: Some(res.port),
@@ -738,20 +734,33 @@ pub async fn disconnect_cdp(_app: AppHandle) -> Result<(), String> {
     // The ConnectionResult from a prior connect_copilot_page() call owns the Edge child
     // process, but since CDP commands are one-shot (open WS → send → close), we can
     // kill the process directly by port ownership.
-    let launched_port = cdp_session()
-        .lock()
-        .map_err(|e| format!("cdp_session lock poisoned: {e}"))?
-        .launched_port;
+    let owns_browser = {
+        let state = cdp_session()
+            .lock()
+            .map_err(|e| format!("cdp_session lock poisoned: {e}"))?;
+        let kill = state.owns_browser;
+        if kill {
+            tracing::info!(
+                "[CDP] disconnect: killing auto-launched Edge (cdp port {:?})",
+                state.cdp_port
+            );
+        }
+        kill
+    };
 
-    if let Some(port) = launched_port {
-        tracing::info!("[CDP] disconnect: killing auto-launched Edge (port {port})");
+    if owns_browser {
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
+            let port_hint = cdp_session()
+                .lock()
+                .ok()
+                .and_then(|s| s.cdp_port)
+                .unwrap_or(0);
             // Kill Edge processes that use our isolated profile directory
             let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/FI", &format!("WINDOWTITLE eq *{}*", port)])
+                .args(["/F", "/FI", &format!("WINDOWTITLE eq *{}*", port_hint)])
                 .creation_flags(CREATE_NO_WINDOW)
                 .output();
             let _ = std::process::Command::new("taskkill")
