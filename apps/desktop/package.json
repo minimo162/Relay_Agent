@@ -11,7 +11,9 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "test:e2e": "playwright test",
-    "test:e2e:headed": "playwright test --headed"
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:local": "E2E_SKIP_AUTH_SETUP=1 playwright test app.e2e.spec.ts"
   },
   "dependencies": {
     "@solidjs/router": "0.15.4",
@@ -24,6 +26,7 @@
     "@tailwindcss/vite": "^4.1.18",
     "@tauri-apps/cli": "^2.0.0",
     "@types/node": "^24.5.2",
+    "otplib": "^13.4.0",
     "playwright": "^1.59.1",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.3",

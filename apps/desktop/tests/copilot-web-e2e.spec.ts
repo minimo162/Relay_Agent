@@ -1,16 +1,12 @@
+import fs from "node:fs";
 import { test, expect } from "@playwright/test";
+import { microsoftAuthStatePath } from "./e2e/auth-paths";
 
 /* ── Constants ────────────────────────────────────────────────── */
 
 const COPILOT_URL = "https://copilot.microsoft.com";
-
-/* ── Auth state ──────────────────────────────────────────────── */
-// Auth state should be saved from a browser session first:
-//   npx playwright codegen --save-storage=auth.json https://copilot.microsoft.com
-// Then: copilot.microsoft.com opens → manually sign in → close browser
-// Place auth.json in this test directory (gitignored).
-
-const storageFile = "tests/auth.json";
+const storageFile = microsoftAuthStatePath();
+const hasSavedAuth = fs.existsSync(storageFile);
 
 /* ── Helpers ─────────────────────────────────────────────────── */
 
@@ -82,7 +78,16 @@ async function waitForResponse(page: any, timeout = 60_000) {
 test.describe.configure({ mode: "serial" });
 
 test.describe("M365 Copilot Web UI E2E", () => {
-  test.use({ storageState: storageFile });
+  if (hasSavedAuth) {
+    test.use({ storageState: storageFile });
+  }
+
+  test.beforeEach(() => {
+    test.skip(
+      !hasSavedAuth,
+      `Missing ${storageFile}. Add M365_COPILOT_EMAIL/PASSWORD to .env.e2e and run pnpm test:e2e (globalSetup), or codegen --save-storage.`,
+    );
+  });
 
   test("navigates to copilot.microsoft.com and is ready", async ({ page }) => {
     await page.goto(COPILOT_URL, { waitUntil: "networkidle", timeout: 30_000 });

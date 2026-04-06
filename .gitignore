@@ -13,6 +13,7 @@ node_modules/
 .env
 .env.*
 !.env.example
+!.env.e2e.example
 .env.local
 
 # Auth files
@@ -40,3 +41,7 @@ apps/desktop/src-tauri/gen/schemas/windows-schema.json
 # OS specific
 .DS_Store
 test-results/
+
+# Playwright saved Microsoft session (sensitive)
+apps/desktop/tests/.auth/*.json
+apps/desktop/tests/auth.json

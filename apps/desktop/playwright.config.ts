@@ -1,7 +1,11 @@
 import { defineConfig, devices } from "@playwright/test";
+import { loadE2eEnv } from "./tests/e2e/load-e2e-env";
+
+loadE2eEnv();
 
 export default defineConfig({
   testDir: "./tests",
+  globalSetup: "./tests/e2e/global-setup.ts",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
