@@ -85,8 +85,8 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
         port, profile_dir
     );
 
-    // Launch Edge with a blank start page to avoid stray tabs like about:blank.
-    // The Copilot URL will be navigated to after the browser is ready.
+    // Launch Edge with a blank start page. Use flags to avoid VBS/Code
+    // Integrity issues (error 577) on Windows corporate environments.
     let mut cmd = std::process::Command::new(&edge_path);
     cmd.args([
         "--remote-debugging-port",
@@ -97,6 +97,9 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
         "--disable-infobars",
         "--disable-hang-monitor",
         "--disable-restore-session-state",
+        "--disable-gpu",
+        "--disable-gpu-compositing",
+        "--disable-features=EdgeEnclave,VbsEnclave",
         "about:blank",
     ]);
 

@@ -378,7 +378,7 @@ pub fn ensure_cdp_connected() -> Result<cdp_copilot::CopilotPage, String> {
     }
 
     // Slow path: auto-connect CDP
-    let debug_url = get_cdp_debug_url(9222);
+    let debug_url = get_cdp_debug_url(9240);
     tracing::info!("[CDP] auto-connecting to {} (start_agent)…", debug_url);
 
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -388,7 +388,7 @@ pub fn ensure_cdp_connected() -> Result<cdp_copilot::CopilotPage, String> {
 
     let result = rt
         .block_on(async {
-            cdp_copilot::connect_copilot_page(&debug_url, true, 9222).await
+            cdp_copilot::connect_copilot_page(&debug_url, true, 9240).await
         })
         .map_err(|e| {
             let msg = e.to_string();
