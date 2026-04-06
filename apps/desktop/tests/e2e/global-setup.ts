@@ -88,7 +88,17 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
   const browser = await launchChromiumForAuth(headless);
 
   try {
-    const context = await browser.newContext();
+    const usePriorStorage = !force && fs.existsSync(authPath);
+    if (usePriorStorage) {
+      console.log(`[e2e:auth] Prior storage state loaded to detect existing Copilot session (${authPath}).`);
+    }
+    if (force && fs.existsSync(authPath)) {
+      console.log("[e2e:auth] E2E_FORCE_AUTH — starting without prior storage state.");
+    }
+
+    const context = await browser.newContext(
+      usePriorStorage ? { storageState: authPath } : {},
+    );
     const page = await context.newPage();
 
     const postPasswordTimeoutMs = parseIntEnv("E2E_POST_PASSWORD_TIMEOUT_MS", 300_000);

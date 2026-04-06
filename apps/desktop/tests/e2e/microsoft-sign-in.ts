@@ -49,7 +49,37 @@ async function dismissCookieBanners(page: Page): Promise<void> {
   }
 }
 
-/** アカウント / プロフィールを開いてから Sign in を探す */
+/** Copilot 上でチャット入力が使え、明確な Sign in CTA が無い＝既にサインイン済みとみなす */
+export async function isCopilotSessionReady(page: Page): Promise<boolean> {
+  const u = page.url();
+  if (!/copilot\.microsoft\.com/i.test(u)) return false;
+  if (/signin|login|oauth/i.test(u)) return false;
+
+  const signIn = page
+    .getByRole("button", { name: /^Sign in$/i })
+    .or(page.getByRole("link", { name: /^Sign in$/i }));
+  const signInShown = await signIn.first().isVisible({ timeout: 2500 }).catch(() => false);
+
+  const composer = page
+    .locator(
+      'textarea, [contenteditable="true"][aria-multiline="true"], div[role="textbox"]',
+    )
+    .first();
+  const composerShown = await composer.isVisible({ timeout: 12_000 }).catch(() => false);
+
+  if (signInShown && !composerShown) return false;
+  if (composerShown && !signInShown) return true;
+  if (composerShown) return true;
+
+  await page.waitForTimeout(2000);
+  const body = (await page.locator("body").innerText().catch(() => "")) || "";
+  if (/Sign in to continue|Sign in with Microsoft|サインインして続行/i.test(body)) {
+    return false;
+  }
+
+  return await composer.isVisible({ timeout: 5000 }).catch(() => false);
+}
+
 async function tryOpenSignInFromAccountMenu(page: Page): Promise<boolean> {
   const triggerSelectors = [
     '[aria-label*="Account" i]',
@@ -58,7 +88,7 @@ async function tryOpenSignInFromAccountMenu(page: Page): Promise<boolean> {
     '[aria-label*="profile" i]',
     '[aria-label*="Profile" i]',
     'button[class*="user" i]',
-    'header button[type="button"]',
+    "header button[type=\"button\"]",
   ];
   for (const sel of triggerSelectors) {
     const btn = page.locator(sel).first();
@@ -126,7 +156,6 @@ async function tryClickSignInOnCopilot(page: Page): Promise<boolean> {
   return false;
 }
 
-/** コンシューマ MSA のログイン入口（Copilot の UI が取れないときの最終手段） */
 async function openConsumerLoginLive(page: Page): Promise<void> {
   const candidates = [
     process.env.E2E_LOGIN_LIVE_FALLBACK_URL?.trim(),
@@ -159,22 +188,16 @@ function isMicrosoftLoginHost(u: string): boolean {
   return /login\.(microsoftonline|live)\.com|signup\.live\.com/i.test(u);
 }
 
-/**
- * Microsoft ログインページへ遷移する。
- * 優先: E2E_MICROSOFT_LOGIN_URL → Copilot で Sign in → アカウントメニュー → login.live.com 系フォールバック。
- */
-export async function openMicrosoftLoginFromCopilot(page: Page): Promise<void> {
+async function navigateToCopilotEntry(page: Page): Promise<void> {
   const custom = process.env.E2E_MICROSOFT_LOGIN_URL?.trim();
   if (custom) {
     await page.goto(custom, { waitUntil: "domcontentloaded", timeout: 90_000 });
     await page.waitForTimeout(2000);
-    if (isMicrosoftLoginHost(page.url())) {
-      return;
-    }
+    await dismissCookieBanners(page);
+    return;
   }
 
-  const url = copilotUrl();
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90_000 });
+  await page.goto(copilotUrl(), { waitUntil: "domcontentloaded", timeout: 90_000 });
   try {
     await page.waitForLoadState("networkidle", { timeout: 45_000 });
   } catch {
@@ -182,7 +205,10 @@ export async function openMicrosoftLoginFromCopilot(page: Page): Promise<void> {
   }
   await page.waitForTimeout(3000);
   await dismissCookieBanners(page);
+}
 
+/** Copilot 上から Microsoft ログインへ（既に login.* なら何もしない） */
+async function proceedFromCopilotLandingToMicrosoftLogin(page: Page): Promise<void> {
   if (isMicrosoftLoginHost(page.url())) {
     return;
   }
@@ -204,7 +230,24 @@ export async function openMicrosoftLoginFromCopilot(page: Page): Promise<void> {
 }
 
 /**
+ * Microsoft ログインページへ遷移する。
+ * 優先: E2E_MICROSOFT_LOGIN_URL → Copilot で Sign in → アカウントメニュー → login.live.com 系フォールバック。
+ */
+export async function openMicrosoftLoginFromCopilot(page: Page): Promise<void> {
+  await navigateToCopilotEntry(page);
+  if (!isMicrosoftLoginHost(page.url())) {
+    await proceedFromCopilotLandingToMicrosoftLogin(page);
+  }
+}
+
+async function saveStorageState(page: Page, authStatePath: string): Promise<void> {
+  await fs.promises.mkdir(path.dirname(authStatePath), { recursive: true });
+  await page.context().storageState({ path: authStatePath });
+}
+
+/**
  * Copilot → Microsoft サインイン（メール/パスワード、任意 TOTP、番号照合の検出と通知）→ storage 保存。
+ * 既に Copilot にサインイン済みならメール/パスワードはスキップする。
  */
 export async function signInMicrosoftViaCopilotUi(
   page: Page,
@@ -219,7 +262,33 @@ export async function signInMicrosoftViaCopilotUi(
 ): Promise<void> {
   await fs.promises.mkdir(path.dirname(options.authStatePath), { recursive: true });
 
-  await openMicrosoftLoginFromCopilot(page);
+  await navigateToCopilotEntry(page);
+
+  if (/copilot\.microsoft\.com/i.test(page.url()) && !isMicrosoftLoginHost(page.url())) {
+    if (await isCopilotSessionReady(page)) {
+      console.log("[e2e] Copilot は既にサインイン済みのため、ログイン手順をスキップして storage を保存します。");
+      await saveStorageState(page, options.authStatePath);
+      return;
+    }
+  }
+
+  if (!isMicrosoftLoginHost(page.url())) {
+    await proceedFromCopilotLandingToMicrosoftLogin(page);
+  }
+
+  if (/copilot\.microsoft\.com/i.test(page.url()) && !isMicrosoftLoginHost(page.url())) {
+    if (await isCopilotSessionReady(page)) {
+      console.log("[e2e] Copilot は既にサインイン済みのため、ログイン手順をスキップして storage を保存します。");
+      await saveStorageState(page, options.authStatePath);
+      return;
+    }
+  }
+
+  if (!isMicrosoftLoginHost(page.url())) {
+    throw new Error(
+      "[e2e] Microsoft ログインページに到達できず、Copilot も未サインインです。E2E_MICROSOFT_LOGIN_URL や E2E_HEADED=1 で確認してください。",
+    );
+  }
 
   await page
     .getByRole("link", { name: /Use another account|別のアカウント/i })
@@ -315,5 +384,5 @@ export async function signInMicrosoftViaCopilotUi(
   }
 
   await page.waitForURL(/copilot\.microsoft\.com/, { timeout: options.postPasswordTimeoutMs });
-  await page.context().storageState({ path: options.authStatePath });
+  await saveStorageState(page, options.authStatePath);
 }
