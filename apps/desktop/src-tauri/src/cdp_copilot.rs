@@ -815,10 +815,13 @@ fn parse_port(debug_url: &str) -> Option<u16> {
 }
 
 /// Resolve the actual WebSocket URL for CDP communication.
-/// Handles localhost ↔ 127.0.0.1 normalization.
+/// Handles localhost, 127.0.0.1, and Windows IPv4-mapped ::1 (0.0.36.6) normalization.
 async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
+    let is_loopback = ws.starts_with("ws://localhost/")
+        || ws.starts_with("ws://127.0.0.1/")
+        || ws.starts_with("ws://0.0.36.6/");
     // If the WS URL already uses a routable host, use it as-is
-    if ws.starts_with("ws://") && !ws.contains("localhost") && !ws.contains("127.0.0.1") {
+    if ws.starts_with("ws://") && !is_loopback {
         return Ok(ws.into());
     }
     let r = reqwest::get(&format!("{debug}/json/version"))
@@ -833,7 +836,8 @@ async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
         .strip_prefix("http://")
         .or_else(|| debug.strip_prefix("https://"))
         .unwrap_or(debug);
-    // Normalize both localhost and 127.0.0.1 to the debug URL's host
+    // Normalize localhost, 127.0.0.1, and 0.0.36.6 (Windows IPv4-mapped ::1)
     let url = url.replace("ws://localhost/", &format!("ws://{host}/"));
-    Ok(url.replace("ws://127.0.0.1/", &format!("ws://{host}/")))
+    let url = url.replace("ws://127.0.0.1/", &format!("ws://{host}/"));
+    Ok(url.replace("ws://0.0.36.6/", &format!("ws://{host}/")))
 }
