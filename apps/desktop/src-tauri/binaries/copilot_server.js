@@ -2,6 +2,7 @@
 // Works in VBS-restricted corporate environments where Playwright connectOverCDP hangs.
 import * as fs from "node:fs";
 import * as http from "node:http";
+import * as path from "node:path";
 
 // Use Node 22+ built-in WebSocket. If unavailable, fall back to bare-net via http upgrade.
 const WS = globalThis.WebSocket ?? globalThis.ws;
@@ -24,7 +25,7 @@ var RESPONSE_URL_PATTERN = /substrate\.office\.com|copilot\.microsoft\.com|m365\
 var RESPONSE_TIMEOUT_MS = 12e4;
 var CDP_PROBE_TIMEOUT_MS = 2e3;
 var CDP_COMMAND_TIMEOUT_MS = 5e3;
-var EDGE_LAUNCH_TIMEOUT_MS = 15e3;
+var EDGE_LAUNCH_TIMEOUT_MS = 45e3;
 var EDGE_LAUNCH_POLL_INTERVAL_MS = 500;
 var CDP_PORT_SCAN_RANGE = 10;
 
@@ -659,12 +660,16 @@ async function ensureEdgeConnected(cdpPort) {
     "--remote-allow-origins=*",
     "--no-first-run",
     "--no-default-browser-check",
+    "--disable-infobars",
+    "--disable-restore-session-state",
     "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
     "--disable-gpu",
     "--disable-gpu-compositing"
   ];
-  if (globalOptions.userDataDir) {
-    args.push(`--user-data-dir=${globalOptions.userDataDir}`);
+  const profileDir = globalOptions.userDataDir || defaultRelayEdgeProfileDir();
+  if (profileDir) {
+    try { fs.mkdirSync(profileDir, { recursive: true }); } catch { /* ignore */ }
+    args.push(`--user-data-dir=${profileDir}`);
   }
   args.push(COPILOT_URL);
   const child = spawn(edgePath, args, { detached: true, stdio: "ignore", windowsHide: true });
@@ -695,11 +700,23 @@ async function probeCdpVersion(port) {
   }
 }
 
+function defaultRelayEdgeProfileDir() {
+  if (process.platform !== "win32") return null;
+  const home = process.env.USERPROFILE || process.env.HOME;
+  if (!home) return null;
+  return path.join(home, "RelayAgentEdgeProfile");
+}
+
 function findEdgePath() {
   if (process.platform !== "win32") return null;
+  const local = process.env.LOCALAPPDATA;
+  const candidates = [];
+  if (local) candidates.push(`${local}\\Microsoft\\Edge\\Application\\msedge.exe`);
   for (const root of [process.env["PROGRAMFILES(X86)"], process.env.PROGRAMFILES].filter(Boolean)) {
-    const p = `${root}\\Microsoft\\Edge\\Application\\msedge.exe`;
-    if (fs.existsSync(p)) return p;
+    candidates.push(`${root}\\Microsoft\\Edge\\Application\\msedge.exe`);
+  }
+  for (const p of candidates) {
+    if (p && fs.existsSync(p)) return p;
   }
   return null;
 }
@@ -787,6 +804,10 @@ function parseArgs(argv) {
 }
 
 var globalOptions = parseArgs(process.argv.slice(2));
+if (!globalOptions.userDataDir && process.platform === "win32") {
+  const d = defaultRelayEdgeProfileDir();
+  if (d) globalOptions.userDataDir = d;
+}
 
 async function main() {
   if (globalOptions.help) {

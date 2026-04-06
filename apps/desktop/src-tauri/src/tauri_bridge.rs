@@ -46,10 +46,12 @@ pub fn ensure_copilot_server() -> Result<Arc<Mutex<crate::copilot_server::Copilo
             }
         }
         if slot.is_none() {
+            let edge_profile = crate::copilot_server::default_edge_profile_dir();
+            let _ = std::fs::create_dir_all(&edge_profile);
             let server = crate::copilot_server::CopilotServer::new(
                 COPILOT_HTTP_PORT,
                 COPILOT_JS_CDP_PORT,
-                None,
+                Some(edge_profile),
                 None,
             )
             .map_err(|e| format!("Copilot server init failed: {e}"))?;

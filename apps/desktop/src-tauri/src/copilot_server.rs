@@ -325,6 +325,24 @@ impl CopilotServer {
     }
 }
 
+/// Dedicated Edge profile for CDP auto-launch (matches `cdp_copilot::launch_dedicated_edge`).
+/// Without this, spawning `msedge.exe` while a normal Edge is running often hands off to the
+/// existing singleton process, so `--remote-debugging-port` never binds and CDP probes time out.
+pub fn default_edge_profile_dir() -> PathBuf {
+    let home = env::var("HOME")
+        .ok()
+        .or_else(|| env::var("USERPROFILE").ok())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            if cfg!(target_os = "windows") {
+                PathBuf::from(r"C:\Users\Default")
+            } else {
+                PathBuf::from("/tmp")
+            }
+        });
+    home.join("RelayAgentEdgeProfile")
+}
+
 fn resolve_script_path() -> Option<PathBuf> {
     let candidates: Vec<PathBuf> = [
         // Dev mode: CARGO_MANIFEST_DIR/binaries/
