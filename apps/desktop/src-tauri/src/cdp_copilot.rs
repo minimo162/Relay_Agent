@@ -100,6 +100,10 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
         "--disable-gpu",
         "--disable-gpu-compositing",
         "--disable-features=EdgeEnclave,VbsEnclave",
+        "--no-sandbox",
+        "--disable-site-isolation-trials",
+        "--disable-breakpad",
+        "--disable-crashpad",
         "about:blank",
     ]);
 
