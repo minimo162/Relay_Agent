@@ -2,6 +2,7 @@ mod agent_loop;
 mod cdp_copilot;
 mod config;
 mod copilot_persistence;
+mod copilot_server;
 mod error;
 mod models;
 mod registry;
@@ -35,6 +36,9 @@ pub fn run() {
             tauri_bridge::cdp_start_new_chat,
             tauri_bridge::cdp_screenshot,
             tauri_bridge::disconnect_cdp,
+            tauri_bridge::copilot_start,
+            tauri_bridge::copilot_stop,
+            tauri_bridge::copilot_status,
             tauri_bridge::mcp_list_servers,
             tauri_bridge::mcp_add_server,
             tauri_bridge::mcp_remove_server,

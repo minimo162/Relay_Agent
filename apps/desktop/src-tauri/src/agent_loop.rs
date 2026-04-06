@@ -12,8 +12,8 @@ use runtime::{
     PermissionRequest, RuntimeError, Session as RuntimeSession, TokenUsage, ToolExecutor,
 };
 
-use crate::cdp_copilot;
 use crate::copilot_persistence::{self, PersistedSessionConfig};
+use crate::copilot_server::CopilotServer;
 use crate::error::AgentLoopError;
 use crate::registry::SessionRegistry;
 use crate::tauri_bridge;
@@ -53,9 +53,9 @@ pub fn run_agent_loop_impl(
     max_turns: Option<usize>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(), AgentLoopError> {
-    let page = tauri_bridge::ensure_cdp_connected()
+    let server = tauri_bridge::ensure_copilot_server()
         .map_err(|e| AgentLoopError::InitializationError(e))?;
-    let api_client = CdpApiClient::new(page);
+    let api_client = CdpApiClient::new(server);
 
     let tool_executor = build_tool_executor(app, session_id, cwd.clone());
     let permission_policy = PermissionPolicy::new(PermissionMode::Prompt);
@@ -134,18 +134,18 @@ pub fn run_agent_loop_impl(
 
 /* ── CDP-based API client ─── */
 
-/// CDP-based API client that sends prompts to M365 Copilot via browser automation.
+/// CDP-based API client that sends prompts to M365 Copilot via copilot_server.js.
 /// Copilot returns complete text responses (no structured tool calls, no streaming deltas).
 pub struct CdpApiClient {
-    page: cdp_copilot::CopilotPage,
+    server: std::sync::Arc<tokio::sync::Mutex<CopilotServer>>,
     runtime: tokio::runtime::Runtime,
     response_timeout_secs: u64,
 }
 
 impl CdpApiClient {
-    fn new(page: cdp_copilot::CopilotPage) -> Self {
+    fn new(server: std::sync::Arc<tokio::sync::Mutex<CopilotServer>>) -> Self {
         Self {
-            page,
+            server,
             runtime: tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -163,14 +163,20 @@ impl ApiClient for CdpApiClient {
         tracing::info!("[CdpApiClient] sending prompt: {prompt_preview}…");
 
         let response_text = self.runtime.block_on(async {
-            self.page
-                .send_prompt(&prompt)
+            // Ensure server is running
+            {
+                let mut server = self.server.lock().await;
+                if !server.is_running() {
+                    server.start().await.map_err(|e| {
+                        RuntimeError::new(format!("copilot server start failed: {e}"))
+                    })?;
+                }
+            }
+            let server = self.server.lock().await;
+            server
+                .send_prompt("", &prompt, self.response_timeout_secs)
                 .await
-                .map_err(|e| RuntimeError::new(format!("CDP send failed: {e}")))?;
-            self.page
-                .wait_for_response(self.response_timeout_secs)
-                .await
-                .map_err(|e| RuntimeError::new(format!("CDP response failed: {e}")))
+                .map_err(|e| RuntimeError::new(format!("Copilot request failed: {e}")))
         })?;
 
         tracing::info!("[CdpApiClient] response {} chars", response_text.len());

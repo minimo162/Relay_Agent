@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -13,6 +14,117 @@ use crate::models::{
     RespondAgentApprovalRequest, StartAgentRequest,
 };
 use crate::registry::SessionRegistry;
+
+/* ── Copilot Server management ─────────────────────────────── *
+ * Uses copilot_server.js (Playwright-based HTTP proxy) instead  *
+ * of direct CDP WebSocket. This works around VBS/Code Integrity *
+ * error 577 in corporate environments.                         */
+
+struct CopilotServerState {
+    server: Arc<tokio::sync::Mutex<crate::copilot_server::CopilotServer>>,
+    port: u16,
+    cdp_port: u16,
+    started: bool,
+}
+
+static COPILOT_SERVER: OnceLock<Mutex<Option<CopilotServerState>>> = OnceLock::new();
+
+fn copilot_server_state() -> &'static Mutex<Option<CopilotServerState>> {
+    COPILOT_SERVER.get_or_init(|| Mutex::new(None))
+}
+
+const COPILOT_SERVER_CDP_PORT: u16 = 9333;
+const COPILOT_SERVER_HTTP_PORT: u16 = 18080;
+
+fn default_user_data_dir() -> Option<PathBuf> {
+    if cfg!(windows) {
+        std::env::var("LOCALAPPDATA")
+            .ok()
+            .map(|d| PathBuf::from(d).join("RelayAgent").join("edge-profile"))
+    } else {
+        std::env::var("HOME")
+            .ok()
+            .map(|d| PathBuf::from(d).join("RelayAgent").join("edge-profile"))
+    }
+}
+
+/// Initialize and ensure the copilot server is ready.
+/// This is called before agent loop starts.
+fn ensure_copilot_server_initialized(server_port: u16, cdp_port: u16) -> Result<Arc<tokio::sync::Mutex<crate::copilot_server::CopilotServer>>, String> {
+    let arc_server = {
+        let state = copilot_server_state().lock().map_err(|e| format!("lock poisoned: {e}"))?;
+        if let Some(existing) = state.as_ref() {
+            if existing.port == server_port && existing.cdp_port == cdp_port {
+                return Ok(Arc::clone(&existing.server));
+            }
+            // Different config; restart needed (will be handled below)
+        }
+        let new_server = crate::copilot_server::CopilotServer::new(
+            server_port,
+            cdp_port,
+            default_user_data_dir(),
+            None, // edge_path: auto-discovered by copilot_server.js
+        ).map_err(|e| format!("copilot server init: {e}"))?;
+        Arc::new(tokio::sync::Mutex::new(new_server))
+    };
+
+    // Actually initialize the state
+    let mut state = copilot_server_state().lock().map_err(|e| format!("lock poisoned: {e}"))?;
+
+    if let Some(existing) = state.as_ref() {
+        if existing.port == server_port && existing.cdp_port == cdp_port && existing.started {
+            return Ok(Arc::clone(&existing.server));
+        }
+    }
+
+    *state = Some(CopilotServerState {
+        server: Arc::clone(&arc_server),
+        port: server_port,
+        cdp_port,
+        started: false,
+    });
+
+    Ok(arc_server)
+}
+
+/// Get or initialize the copilot server for use by the agent loop.
+pub fn ensure_copilot_server() -> Result<Arc<tokio::sync::Mutex<crate::copilot_server::CopilotServer>>, String> {
+    let server_port = COPILOT_SERVER_HTTP_PORT;
+    let cdp_port = COPILOT_SERVER_CDP_PORT;
+    let server = ensure_copilot_server_initialized(server_port, cdp_port)?;
+
+    // Start it synchronously if not running
+    let start_result = {
+        let mut state = copilot_server_state().lock().map_err(|e| format!("lock poisoned: {e}"))?;
+        if let Some(ref mut s) = state.as_mut() {
+            if !s.started {
+                // Cannot await here — start in a blocking manner
+                // Actually we need async; use block_on
+                let server_clone = Arc::clone(&s.server);
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| format!("runtime: {e}"))?;
+                let res = rt.block_on(async {
+                    let mut srv = server_clone.lock().await;
+                    srv.start().await
+                });
+                s.started = res.is_ok();
+                res.map_err(|e| format!("{e}"))
+            } else {
+                Ok(())
+            }
+        } else {
+            Err("copilot server state not initialized".to_string())
+        }
+    };
+
+    if let Err(e) = start_result {
+        return Err(format!("copilot server failed to start: {e}"));
+    }
+
+    Ok(server)
+}
 
 // Re-export registry and agent_loop types for external consumers
 pub use crate::agent_loop::{AgentErrorEvent, AgentSessionHistoryResponse};
@@ -784,4 +896,130 @@ pub fn mcp_check_server_status(name: String) -> Result<McpServerInfo, String> {
     data.get(&name)
         .cloned()
         .ok_or_else(|| format!("server `{name}` not found"))
+}
+
+/* ── Copilot Server (Playwright-based HTTP proxy) ──────────── */
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopilotServerStatusResult {
+    pub running: bool,
+    pub port: u16,
+    pub cdp_port: u16,
+    pub server_url: String,
+    pub connected: Option<bool>,
+    pub login_required: Option<bool>,
+    pub error: Option<String>,
+}
+
+/// Start the copilot server (Playwright-based HTTP proxy).
+#[tauri::command]
+pub async fn copilot_start(
+    _app: AppHandle,
+    _request: ConnectCdpRequest,
+) -> Result<CopilotServerStatusResult, String> {
+    let server_port = COPILOT_SERVER_HTTP_PORT;
+    let cdp_port = _request.base_port.unwrap_or(COPILOT_SERVER_CDP_PORT);
+
+    let server = ensure_copilot_server_initialized(server_port, cdp_port)?;
+
+    {
+        let mut srv = server.lock().await;
+        if !srv.is_running() {
+            srv.start().await.map_err(|e| format!("copilot server: {e}"))?;
+            if let Ok(mut state) = copilot_server_state().lock() {
+                if let Some(ref mut s) = state.as_mut() {
+                    s.started = true;
+                }
+            }
+        }
+    }
+
+    let result = server.lock().await.status().await.ok();
+
+    Ok(CopilotServerStatusResult {
+        running: true,
+        port: server_port,
+        cdp_port,
+        server_url: format!("http://127.0.0.1:{server_port}"),
+        connected: result.as_ref().map(|r| r.connected),
+        login_required: result.as_ref().map(|r| r.login_required),
+        error: None,
+    })
+}
+
+/// Stop the copilot server.
+#[tauri::command]
+pub async fn copilot_stop(_app: AppHandle) -> Result<bool, String> {
+    let server_option = {
+        let mut state = copilot_server_state().lock().map_err(|e| format!("lock poisoned: {e}"))?;
+        if let Some(ref mut s) = state.as_mut() {
+            s.started = false;
+            Some(Arc::clone(&s.server))
+        } else {
+            None
+        }
+    };
+
+    if let Some(server) = server_option {
+        server.lock().await.stop();
+    }
+    Ok(true)
+}
+
+/// Check the status of the copilot server.
+#[tauri::command]
+pub async fn copilot_status(_app: AppHandle) -> Result<CopilotServerStatusResult, String> {
+    let server_option = {
+        let state = copilot_server_state().lock().map_err(|e| format!("lock poisoned: {e}"))?;
+        state.as_ref().map(|s| (s.server.clone(), s.port, s.cdp_port))
+    };
+
+    let Some((server, port, cdp_port)) = server_option else {
+        return Ok(CopilotServerStatusResult {
+            running: false,
+            port: COPILOT_SERVER_HTTP_PORT,
+            cdp_port: COPILOT_SERVER_CDP_PORT,
+            server_url: format!("http://127.0.0.1:{}", COPILOT_SERVER_HTTP_PORT),
+            connected: None,
+            login_required: None,
+            error: Some("not initialized".to_string()),
+        });
+    };
+
+    let server_guard = server.lock().await;
+    let running = server_guard.is_running();
+
+    if running {
+        match server_guard.status().await {
+            Ok(status) => Ok(CopilotServerStatusResult {
+                running: true,
+                port,
+                cdp_port,
+                server_url: server_guard.server_url(),
+                connected: Some(status.connected),
+                login_required: Some(status.login_required),
+                error: None,
+            }),
+            Err(e) => Ok(CopilotServerStatusResult {
+                running: false,
+                port,
+                cdp_port,
+                server_url: server_guard.server_url(),
+                connected: None,
+                login_required: None,
+                error: Some(format!("{e}")),
+            }),
+        }
+    } else {
+        Ok(CopilotServerStatusResult {
+            running: false,
+            port,
+            cdp_port,
+            server_url: server_guard.server_url(),
+            connected: None,
+            login_required: None,
+            error: Some("not running".to_string()),
+        })
+    }
 }
