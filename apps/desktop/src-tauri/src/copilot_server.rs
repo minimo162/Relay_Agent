@@ -1,6 +1,5 @@
 use std::{
     env,
-    io::BufRead,
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
@@ -148,7 +147,7 @@ impl CopilotServer {
         info!("[copilot] launching: node {} --port {} --cdp-port {}",
             script_path.display(), self.port, self.cdp_port);
 
-        let child = Command::new(&node)
+        let mut child = Command::new(&node)
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
