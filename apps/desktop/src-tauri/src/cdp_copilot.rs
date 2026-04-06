@@ -89,8 +89,7 @@ pub fn launch_dedicated_edge(port: u16) -> Result<std::process::Child> {
     cmd.args([
         "--remote-debugging-port",
         &port.to_string(),
-        "--user-data-dir",
-        profile_dir.to_str().unwrap(),
+        &format!("--user-data-dir={}", profile_dir.to_str().unwrap()),
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-infobars",
