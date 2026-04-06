@@ -56,22 +56,28 @@ var CopilotSession = class {
   page = null;
   lock = false;
   async connect(cdpPort) {
+    console.error("[copilot:connect] ensuring Edge is connected on CDP port", cdpPort);
     await ensureEdgeConnected(cdpPort);
     const actualPort = globalOptions.cdpPort;
+    console.error("[copilot:connect] connecting to CDP on port", actualPort);
     if (!this.browser || !this.browser.isConnected()) {
       try {
         this.browser = await chromium.connectOverCDP(`http://127.0.0.1:${actualPort}`);
+        console.error("[copilot:connect] connected to CDP browser");
         this.browser.on("disconnected", () => {
           this.browser = null;
           this.page = null;
         });
       } catch (error) {
+        console.error("[copilot:connect] CDP connect failed:", error.message);
         this.browser = null;
         this.page = null;
         throw error;
       }
     }
+    console.error("[copilot:connect] finding or creating Copilot page...");
     this.page = await this.findOrCreateCopilotPage(this.browser);
+    console.error("[copilot:connect] page url:", this.page.url());
   }
   async inspectStatus() {
     try {
@@ -114,21 +120,30 @@ var CopilotSession = class {
     this.lock = true;
     let uploadedImagePath = null;
     try {
+      console.error("[copilot:describe] connect...");
       await this.connect(globalOptions.cdpPort);
+      console.error("[copilot:describe] connected, getting page...");
       const page = this.page;
       if (!page) {
         throw new Error("Copilot page is not available");
       }
+      console.error("[copilot:describe] page url:", page.url());
       await page.bringToFront();
       if (!isCopilotUrl(page.url())) {
+        console.error("[copilot:describe] navigating to Copilot URL...");
         await page.goto(COPILOT_URL, { waitUntil: "domcontentloaded" });
       }
+      console.error("[copilot:describe] checking login state...");
       await checkLoginState(page);
+      console.error("[copilot:describe] starting new chat...");
       await this.startNewChat(page);
       if (imageB64) {
+        console.error("[copilot:describe] uploading image...");
         uploadedImagePath = await uploadImage(page, imageB64);
       }
+      console.error("[copilot:describe] pasting prompt...");
       await pastePrompt(page, systemPrompt, userPrompt);
+      console.error("[copilot:describe] submitting prompt...");
       return await submitPrompt(page);
     } finally {
       if (uploadedImagePath) {
@@ -393,15 +408,19 @@ function createServer2(session) {
 }
 var CDP_PORT_SCAN_RANGE = 10;
 async function ensureEdgeConnected(cdpPort) {
+  console.error("[copilot:ensureEdge] probing CDP port", cdpPort, "...");
   const existing = await probeCdpVersion(cdpPort);
   if (existing && isOurEdgeProfile()) {
+    console.error("[copilot:ensureEdge] already connected via CDP port", cdpPort);
     return;
   }
   if (globalOptions.userDataDir && isOurEdgeProfile()) {
+    console.error("[copilot:ensureEdge] scanning for existing Edge on nearby ports...");
     for (let port = cdpPort; port < cdpPort + CDP_PORT_SCAN_RANGE; port++) {
       const probe = await probeCdpVersion(port);
       if (probe) {
         globalOptions.cdpPort = port;
+        console.error("[copilot:ensureEdge] found existing Edge on port", port);
         return;
       }
     }
@@ -410,6 +429,7 @@ async function ensureEdgeConnected(cdpPort) {
   if (!edgeExecutable) {
     throw new Error("Microsoft Edge \u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3002Edge \u3092\u30A4\u30F3\u30B9\u30C8\u30FC\u30EB\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
   }
+  console.error("[copilot:ensureEdge] no existing Edge found, will launch new instance");
   let actualPort = cdpPort;
   for (let port = cdpPort; port < cdpPort + CDP_PORT_SCAN_RANGE; port++) {
     if (!await probeCdpVersion(port)) {
@@ -426,10 +446,12 @@ async function ensureEdgeConnected(cdpPort) {
     console.error(`[copilot] CDP port ${cdpPort} is occupied, using ${actualPort} instead`);
   }
   globalOptions.cdpPort = actualPort;
+  console.error("[copilot:ensureEdge] launching Edge on port", actualPort);
   launchEdgeForCdp(edgeExecutable, actualPort);
   const deadline = Date.now() + EDGE_LAUNCH_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (await probeCdpVersion(actualPort)) {
+      console.error("[copilot:ensureEdge] CDP ready on port", actualPort);
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, EDGE_LAUNCH_POLL_INTERVAL_MS));
@@ -481,7 +503,10 @@ function launchEdgeForCdp(edgeExecutable, cdpPort) {
     `--remote-debugging-port=${cdpPort}`,
     "--remote-allow-origins=*",
     "--no-first-run",
-    "--no-default-browser-check"
+    "--no-default-browser-check",
+    "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
+    "--disable-gpu",
+    "--disable-gpu-compositing"
   ];
   if (globalOptions.userDataDir) {
     args.push(`--user-data-dir=${globalOptions.userDataDir}`);

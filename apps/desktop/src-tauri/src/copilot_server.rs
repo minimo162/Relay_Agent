@@ -1,8 +1,10 @@
 use std::{
     env,
+    io::BufRead,
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -29,6 +31,8 @@ pub struct CopilotServer {
     script_path: Option<PathBuf>,
     user_data_dir: Option<PathBuf>,
     edge_path: Option<String>,
+    #[allow(dead_code)]
+    log_threads: Vec<thread::JoinHandle<()>>,
 }
 
 #[derive(Debug)]
@@ -77,6 +81,7 @@ impl CopilotServer {
             script_path,
             user_data_dir,
             edge_path,
+            log_threads: Vec::new(),
         })
     }
 
@@ -146,12 +151,36 @@ impl CopilotServer {
         let child = Command::new(&node)
             .args(&args)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(CopilotError::Spawn)?;
 
         info!("[copilot] spawned node (pid: {})", child.id());
+
+        // Pipe stderr/stdout to tracing so we can see JS-side errors
+        let mut log_threads = Vec::new();
+        if let Some(stderr) = child.stderr.take() {
+            log_threads.push(thread::spawn(move || {
+                use std::io::BufRead;
+                for line in std::io::BufReader::new(stderr).lines() {
+                    if let Ok(line) = line {
+                        tracing::info!("[copilot:err] {line}");
+                    }
+                }
+            }));
+        }
+        if let Some(stdout) = child.stdout.take() {
+            log_threads.push(thread::spawn(move || {
+                use std::io::BufRead;
+                for line in std::io::BufReader::new(stdout).lines() {
+                    if let Ok(line) = line {
+                        tracing::info!("[copilot:out] {line}");
+                    }
+                }
+            }));
+        }
+        self.log_threads = log_threads;
         self.process = Some(Arc::new(Mutex::new(child)));
 
         match self.wait_for_ready(READY_TIMEOUT_SECS).await {
