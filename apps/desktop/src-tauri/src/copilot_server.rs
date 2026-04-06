@@ -142,10 +142,21 @@ impl CopilotServer {
         if let Some(ref data_dir) = self.user_data_dir {
             args.push("--user-data-dir".to_string());
             args.push(data_dir.to_string_lossy().to_string());
+            info!(
+                "[copilot] launching: node {} --port {} --cdp-port {} --user-data-dir {}",
+                script_path.display(),
+                self.port,
+                self.cdp_port,
+                data_dir.display()
+            );
+        } else {
+            info!(
+                "[copilot] launching: node {} --port {} --cdp-port {}",
+                script_path.display(),
+                self.port,
+                self.cdp_port
+            );
         }
-
-        info!("[copilot] launching: node {} --port {} --cdp-port {}",
-            script_path.display(), self.port, self.cdp_port);
 
         let mut child = Command::new(&node)
             .args(&args)

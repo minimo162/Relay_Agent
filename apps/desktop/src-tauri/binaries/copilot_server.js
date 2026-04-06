@@ -28,6 +28,8 @@ var CDP_COMMAND_TIMEOUT_MS = 5e3;
 var EDGE_LAUNCH_TIMEOUT_MS = 45e3;
 var EDGE_LAUNCH_POLL_INTERVAL_MS = 500;
 var CDP_PORT_SCAN_RANGE = 10;
+/** Written under the dedicated Edge profile dir so we reconnect to Relay's instance, not a manually debugged personal Edge on 9333. */
+var RELAY_CDP_PORT_MARKER = ".relay-agent-cdp-port";
 
 var CopilotLoginRequiredError = class extends Error {};
 
@@ -617,15 +619,109 @@ async function waitForDomResponse(session) {
 
 /* ─── Edge management ─── */
 
-async function ensureEdgeConnected(cdpPort) {
+function relayEdgeProfileDir() {
+  return globalOptions.userDataDir || defaultRelayEdgeProfileDir();
+}
+
+function cdpMarkerFile(profileDir) {
+  return path.join(profileDir, RELAY_CDP_PORT_MARKER);
+}
+
+function readCdpPortMarker(profileDir) {
+  try {
+    const raw = fs.readFileSync(cdpMarkerFile(profileDir), "utf8").trim();
+    const n = Number.parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 1 && n <= 65535) return n;
+  } catch { /* ignore */ }
+  return null;
+}
+
+function writeCdpPortMarker(profileDir, port) {
+  try {
+    fs.writeFileSync(cdpMarkerFile(profileDir), String(port), "utf8");
+  } catch { /* ignore */ }
+}
+
+function clearCdpPortMarker(profileDir) {
+  try { fs.unlinkSync(cdpMarkerFile(profileDir)); } catch { /* ignore */ }
+}
+
+/** Dedicated profile: do not attach to arbitrary CDP on 9333–9342 (user's manual Edge). */
+async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
+  const marked = readCdpPortMarker(profileDir);
+  if (marked != null && await probeCdpVersion(marked)) {
+    globalOptions.cdpPort = marked;
+    console.error("[copilot:ensureEdge] reusing Relay Edge (marker) on port", marked);
+    return;
+  }
+  if (marked != null) clearCdpPortMarker(profileDir);
+
+  const preExisting = new Set();
+  for (let port = cdpPort; port < cdpPort + CDP_PORT_SCAN_RANGE; port++) {
+    if (await probeCdpVersion(port)) preExisting.add(port);
+  }
+
+  let actualPort = cdpPort;
+  for (let port = cdpPort; port < cdpPort + CDP_PORT_SCAN_RANGE; port++) {
+    if (!preExisting.has(port)) {
+      actualPort = port;
+      break;
+    }
+    if (port === cdpPort + CDP_PORT_SCAN_RANGE - 1) {
+      throw new Error(
+        `CDPポート ${cdpPort}〜${port} はすべて使用中です。手動デバッグの Edge を閉じるか、別のポート範囲を空けてください。`
+      );
+    }
+  }
+  if (actualPort !== cdpPort) {
+    console.error(`[copilot:ensureEdge] port ${cdpPort} has foreign CDP; launching Relay Edge on ${actualPort}`);
+  }
+
+  globalOptions.cdpPort = actualPort;
+  console.error("[copilot:ensureEdge] launching Relay Edge (isolated profile) on port", actualPort);
+  const { spawn } = await import("node:child_process");
+  const args = [
+    `--remote-debugging-port=${actualPort}`,
+    "--remote-allow-origins=*",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-infobars",
+    "--disable-restore-session-state",
+    "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
+    "--disable-gpu",
+    "--disable-gpu-compositing",
+    `--user-data-dir=${profileDir}`,
+    COPILOT_URL
+  ];
+  const child = spawn(edgePath, args, { detached: true, stdio: "ignore", windowsHide: true });
+  child.unref();
+
+  const dl = Date.now() + EDGE_LAUNCH_TIMEOUT_MS;
+  while (Date.now() < dl) {
+    for (let port = cdpPort; port < cdpPort + CDP_PORT_SCAN_RANGE; port++) {
+      if (!(await probeCdpVersion(port))) continue;
+      // Prefer our launch port, or any CDP that was not already up before we spawned (avoids latching onto personal Edge on 9333).
+      if (port === actualPort || !preExisting.has(port)) {
+        globalOptions.cdpPort = port;
+        writeCdpPortMarker(profileDir, port);
+        console.error("[copilot:ensureEdge] CDP ready on port", port);
+        return;
+      }
+    }
+    await sleep(EDGE_LAUNCH_POLL_INTERVAL_MS);
+  }
+  throw new Error("Edgeのデバッグ接続が開始できません");
+}
+
+/** No dedicated profile: keep legacy attach-to-any-CDP-in-range behavior. */
+async function ensureEdgeLegacyAttach(edgePath, cdpPort) {
   console.error("[copilot:ensureEdge] probing CDP port", cdpPort);
   const existing = await probeCdpVersion(cdpPort);
   if (existing) {
+    globalOptions.cdpPort = cdpPort;
     console.error("[copilot:ensureEdge] already connected via CDP port", cdpPort);
     return;
   }
-
-  // Scan nearby ports
   for (let port = cdpPort; port < cdpPort + CDP_PORT_SCAN_RANGE; port++) {
     const probe = await probeCdpVersion(port);
     if (probe) {
@@ -635,11 +731,6 @@ async function ensureEdgeConnected(cdpPort) {
     }
   }
 
-  // No existing Edge found
-  const edgePath = findEdgePath();
-  if (!edgePath) throw new Error("Microsoft Edgeが見つかりません。Edgeをインストールしてください。");
-
-  // Find a free port
   let actualPort = cdpPort;
   for (let port = cdpPort; port < cdpPort + CDP_PORT_SCAN_RANGE; port++) {
     if (!await probeCdpVersion(port)) {
@@ -664,18 +755,12 @@ async function ensureEdgeConnected(cdpPort) {
     "--disable-restore-session-state",
     "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
     "--disable-gpu",
-    "--disable-gpu-compositing"
+    "--disable-gpu-compositing",
+    COPILOT_URL
   ];
-  const profileDir = globalOptions.userDataDir || defaultRelayEdgeProfileDir();
-  if (profileDir) {
-    try { fs.mkdirSync(profileDir, { recursive: true }); } catch { /* ignore */ }
-    args.push(`--user-data-dir=${profileDir}`);
-  }
-  args.push(COPILOT_URL);
   const child = spawn(edgePath, args, { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
 
-  // Wait for CDP to be ready
   const dl = Date.now() + EDGE_LAUNCH_TIMEOUT_MS;
   while (Date.now() < dl) {
     if (await probeCdpVersion(actualPort)) {
@@ -685,6 +770,20 @@ async function ensureEdgeConnected(cdpPort) {
     await sleep(EDGE_LAUNCH_POLL_INTERVAL_MS);
   }
   throw new Error("Edgeのデバッグ接続が開始できません");
+}
+
+async function ensureEdgeConnected(cdpPort) {
+  const edgePath = findEdgePath();
+  if (!edgePath) throw new Error("Microsoft Edgeが見つかりません。Edgeをインストールしてください。");
+
+  const profileDir = relayEdgeProfileDir();
+  if (profileDir) {
+    try { fs.mkdirSync(profileDir, { recursive: true }); } catch { /* ignore */ }
+    await ensureEdgeDedicated(edgePath, profileDir, cdpPort);
+    return;
+  }
+
+  await ensureEdgeLegacyAttach(edgePath, cdpPort);
 }
 
 async function probeCdpVersion(port) {
