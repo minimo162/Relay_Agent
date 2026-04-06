@@ -51,3 +51,40 @@
 - Keep `.taskmaster/tasks/tasks.json` aligned with real artifact state.
 - When a task is completed, confirm the related file or verification result exists first.
 - If a task was advanced without a real output, reopen it, create the missing artifact, and only then close it.
+
+## Cursor Cloud specific instructions
+
+### Services overview
+
+This is a Tauri v2 desktop app (Rust backend + SolidJS frontend). There is one service to run — the Tauri dev server — which bundles both Vite (frontend) and the Rust backend.
+
+### Running the app in dev mode
+
+- `pnpm dev` in the repo root starts the Vite dev server (frontend only) on `http://localhost:1421`.
+- `pnpm tauri:dev` in `apps/desktop/` starts the full Tauri app (Rust backend + webview frontend).
+- On headless Linux (Cloud Agent VMs), run with a virtual display and software rendering:
+  ```
+  LIBGL_ALWAYS_SOFTWARE=1 xvfb-run --server-args="-screen 0 1280x1024x24" pnpm tauri:dev
+  ```
+
+### Linting and testing
+
+| Check | Command | Notes |
+|-------|---------|-------|
+| TypeScript typecheck | `pnpm typecheck` | Runs from repo root |
+| Rust check | `cargo check` | From repo root |
+| Rust clippy | `cargo clippy` | New pedantic lints may appear with Rust updates; `cargo clippy` (without `-D warnings`) shows warnings without failing |
+| Rust tests | `cargo test --package commands && cargo test --package runtime && cargo test --package relay-agent-desktop && cargo test --package onyx-concept` | The `tools` crate has Rust-version-sensitive test compilation; test the other crates individually |
+| Frontend E2E | `cd apps/desktop && npx playwright test` | Builds with `RELAY_E2E=1`; ~54 mock-based tests pass; ~10 CDP/M365-dependent tests fail without Edge |
+| Vite frontend only | `cd apps/desktop && pnpm dev` | Serves on port 1421 |
+
+### System dependencies (Linux)
+
+Required for building: `libwebkit2gtk-4.1-dev`, `build-essential`, `libssl-dev`, `libxdo-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`. These are pre-installed in the Cloud Agent environment.
+
+### Known caveats
+
+- The `tools` crate has Rust-edition-sensitive code (type inference changes in newer Rust editions). `cargo test` for the full workspace may fail on the `tools` crate; test other crates individually.
+- M365 Copilot / CDP tests require Microsoft Edge and an M365 Copilot subscription — these will always fail in headless Cloud Agent environments.
+- Tauri requires a display server; use `xvfb-run` with `LIBGL_ALWAYS_SOFTWARE=1` on headless VMs.
+- The Rust toolchain must be updated to stable (1.85+); the default VM may ship an older version. Run `rustup update stable && rustup default stable` if `cargo check` fails with `edition2024` errors.
