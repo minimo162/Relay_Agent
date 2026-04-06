@@ -8,6 +8,11 @@ const TEST_EMAIL = process.env.M365_COPILOT_EMAIL?.trim() ?? "";
 const TEST_PASSWORD = process.env.M365_COPILOT_PASSWORD?.trim() ?? "";
 const AUTH_FILE = microsoftAuthStatePath();
 
+const SAVED_AUTH_ONLY =
+  process.env.E2E_AUTH_MODE === "saved-only" ||
+  process.env.E2E_USE_SAVED_AUTH_ONLY === "1" ||
+  process.env.E2E_USE_SAVED_AUTH_ONLY === "true";
+
 function parseIntEnv(name: string, fallback: number): number {
   const v = process.env[name];
   if (!v) return fallback;
@@ -19,6 +24,10 @@ test.describe("M365 Copilot — Browser Login & Chat", () => {
   test.describe.configure({ mode: "serial" });
 
   test("sign-in via UI saves storage state (when credentials are set)", async ({ page }) => {
+    test.skip(
+      SAVED_AUTH_ONLY,
+      "E2E_AUTH_MODE=saved-only — UI ログインは行わず storage のみ使用。記録は pnpm test:e2e:auth-save",
+    );
     test.skip(!TEST_PASSWORD || !TEST_EMAIL, "Set M365_COPILOT_EMAIL and M365_COPILOT_PASSWORD (e.g. in .env.e2e)");
     const hasSavedAuth = fs.existsSync(AUTH_FILE);
     test.skip(

@@ -65,15 +65,45 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
   const password = process.env.M365_COPILOT_PASSWORD?.trim() ?? "";
   const authPath = microsoftAuthStatePath();
 
+  const authSaveRun =
+    process.env.E2E_AUTH_SAVE_RUN === "1" || process.env.E2E_AUTH_SAVE_RUN === "true";
+  const savedOnly =
+    !authSaveRun &&
+    (process.env.E2E_AUTH_MODE === "saved-only" ||
+      process.env.E2E_USE_SAVED_AUTH_ONLY === "1" ||
+      process.env.E2E_USE_SAVED_AUTH_ONLY === "true");
+
+  if (savedOnly) {
+    console.log(
+      "[e2e:auth] E2E_AUTH_MODE=saved-only (or E2E_USE_SAVED_AUTH_ONLY) — globalSetup はブラウザログインしません。",
+    );
+    if (fs.existsSync(authPath)) {
+      console.log(`[e2e:auth] 既存の storage をテストで利用します: ${authPath}`);
+    } else {
+      console.warn(
+        `[e2e:auth] storage がありません: ${authPath}\n` +
+          "  記録: cd apps/desktop && pnpm test:e2e:auth-save（.env.e2e にメール・パスワードが必要）\n" +
+          "  または: npx playwright codegen --save-storage=tests/.auth/microsoft-copilot.json …",
+      );
+    }
+    return;
+  }
+
   const maxAgeHours = parseIntEnv("E2E_AUTH_MAX_AGE_HOURS", 24);
   const force = process.env.E2E_FORCE_AUTH === "1" || process.env.E2E_FORCE_AUTH === "true";
 
-  if (!force && fs.existsSync(authPath)) {
+  if (!force && !authSaveRun && fs.existsSync(authPath)) {
     const ageMs = Date.now() - fs.statSync(authPath).mtimeMs;
     if (ageMs < maxAgeHours * 3600_000) {
       console.log(`[e2e:auth] Reusing fresh storage state (${authPath}).`);
       return;
     }
+  }
+
+  if (authSaveRun && (!email || !password)) {
+    throw new Error(
+      "[e2e:auth] pnpm test:e2e:auth-save には .env.e2e の M365_COPILOT_EMAIL / M365_COPILOT_PASSWORD が必要です。",
+    );
   }
 
   if (!email || !password) {
