@@ -113,6 +113,12 @@ pub fn run_agent_loop_impl(
     }
 
     if let Some(summary) = &final_summary {
+        // Clear `running` before emitting so `get_session_history` matches the UI; otherwise the
+        // frontend reload after `turn_complete` can see `running: true` until `mark_finished` runs
+        // after persistence and re-enable the "thinking" indicator.
+        let _ignore = registry.mutate_session(session_id, |entry| {
+            entry.running = false;
+        });
         emit_turn_complete(app, session_id, summary, &runtime_session, &cancelled);
     }
 
@@ -164,7 +170,7 @@ impl ApiClient for CdpApiClient {
             .map_err(|e| RuntimeError::new(format!("tokio runtime: {e}")))?;
 
         let response_text = {
-            let srv = self
+            let mut srv = self
                 .server
                 .lock()
                 .map_err(|e| RuntimeError::new(format!("copilot server lock poisoned: {e}")))?;
@@ -178,7 +184,11 @@ impl ApiClient for CdpApiClient {
 
         tracing::info!("[CdpApiClient] response {} chars", response_text.len());
 
-        let (visible_text, tool_calls) = parse_copilot_tool_response(&response_text);
+        let (mut visible_text, tool_calls) = parse_copilot_tool_response(&response_text);
+        if visible_text.trim().is_empty() && !response_text.trim().is_empty() {
+            // Copilot may return prose that ends up empty after relay_tool stripping (or odd fences).
+            visible_text = response_text.trim().to_string();
+        }
 
         let mut events = Vec::new();
         if !visible_text.is_empty() {
@@ -443,18 +453,21 @@ fn emit_turn_complete(
 ) {
     let last_text = summary
         .assistant_messages
-        .last()
-        .map(|msg| {
-            msg.blocks
-                .iter()
-                .filter_map(|b| match b {
-                    ContentBlock::Text { text } => Some(text.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
+        .iter()
+        .flat_map(|msg| msg.blocks.iter())
+        .filter_map(|b| match b {
+            ContentBlock::Text { text } => {
+                let t = text.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(text.clone())
+                }
+            }
+            _ => None,
         })
-        .unwrap_or_default();
+        .collect::<Vec<_>>()
+        .join("\n\n");
 
     if !cancelled.load(Ordering::SeqCst) {
         if let Err(e) = app.emit(

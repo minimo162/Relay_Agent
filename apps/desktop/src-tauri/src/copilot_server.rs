@@ -8,12 +8,16 @@ use std::{
 };
 
 use reqwest::Client;
+use serde::Deserialize;
 use serde_json::json;
+use uuid::Uuid;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
 const READY_TIMEOUT_SECS: u64 = 30;
 const HEALTH_POLL_INTERVAL_MS: u64 = 500;
+/// If `127.0.0.1:18080` is held by a stray `node copilot_server.js` (e.g. after `--keep-app`), try the next ports.
+const COPILOT_HTTP_PORT_FALLBACKS: u16 = 32;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +30,8 @@ pub struct CopilotServer {
     process: Option<Arc<Mutex<Child>>>,
     port: u16,
     cdp_port: u16,
+    /// Matches `copilot_server.js` `/health` `bootToken` so we never treat a stale listener on `port` as ready.
+    boot_token: Option<String>,
     client: Client,
     script_path: Option<PathBuf>,
     user_data_dir: Option<PathBuf>,
@@ -73,8 +79,12 @@ impl CopilotServer {
             process: None,
             port,
             cdp_port,
+            boot_token: None,
             client: Client::builder()
-                .timeout(Duration::from_secs(3))
+                // Per-request timeouts still apply; avoid a tight default that races slow Windows loopback.
+                .timeout(Duration::from_secs(30))
+                // Stale keep-alive sockets to localhost Node after process restarts → "error sending request".
+                .pool_max_idle_per_host(0)
                 .build()
                 .map_err(CopilotError::Http)?,
             script_path,
@@ -130,79 +140,116 @@ impl CopilotServer {
             ))
         })?;
 
-        let mut args = vec![
-            "--no-warnings".to_string(), // suppress ESM warnings
-            script_path.to_string_lossy().to_string(),
-            "--port".to_string(),
-            self.port.to_string(),
-            "--cdp-port".to_string(),
-            self.cdp_port.to_string(),
-        ];
+        let preferred_port = self.port;
 
-        if let Some(ref data_dir) = self.user_data_dir {
-            args.push("--user-data-dir".to_string());
-            args.push(data_dir.to_string_lossy().to_string());
-            info!(
-                "[copilot] launching: node {} --port {} --cdp-port {} --user-data-dir {}",
-                script_path.display(),
-                self.port,
-                self.cdp_port,
-                data_dir.display()
-            );
-        } else {
-            info!(
-                "[copilot] launching: node {} --port {} --cdp-port {}",
-                script_path.display(),
-                self.port,
-                self.cdp_port
-            );
-        }
+        for offset in 0..COPILOT_HTTP_PORT_FALLBACKS {
+            self.stop();
+            self.port = preferred_port.saturating_add(offset);
 
-        let mut child = Command::new(&node)
-            .args(&args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(CopilotError::Spawn)?;
+            if offset > 0 {
+                warn!(
+                    "[copilot] retrying copilot_server on HTTP port {} (previous port not usable)",
+                    self.port
+                );
+            }
 
-        info!("[copilot] spawned node (pid: {})", child.id());
+            let boot_token = Uuid::new_v4().to_string();
+            self.boot_token = Some(boot_token.clone());
 
-        // Pipe stderr/stdout to tracing so we can see JS-side errors
-        let mut log_threads = Vec::new();
-        if let Some(stderr) = child.stderr.take() {
-            log_threads.push(thread::spawn(move || {
-                use std::io::BufRead;
-                for line in std::io::BufReader::new(stderr).lines() {
-                    if let Ok(line) = line {
-                        tracing::info!("[copilot:err] {line}");
+            let mut args = vec![
+                "--no-warnings".to_string(), // suppress ESM warnings
+                script_path.to_string_lossy().to_string(),
+                "--port".to_string(),
+                self.port.to_string(),
+                "--cdp-port".to_string(),
+                self.cdp_port.to_string(),
+                "--boot-token".to_string(),
+                boot_token,
+            ];
+
+            if let Some(ref data_dir) = self.user_data_dir {
+                args.push("--user-data-dir".to_string());
+                args.push(data_dir.to_string_lossy().to_string());
+                info!(
+                    "[copilot] launching: node {} --port {} --cdp-port {} --user-data-dir {}",
+                    script_path.display(),
+                    self.port,
+                    self.cdp_port,
+                    data_dir.display()
+                );
+            } else {
+                info!(
+                    "[copilot] launching: node {} --port {} --cdp-port {}",
+                    script_path.display(),
+                    self.port,
+                    self.cdp_port
+                );
+            }
+
+            let mut child = match Command::new(&node)
+                .args(&args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => return Err(CopilotError::Spawn(e)),
+            };
+
+            info!("[copilot] spawned node (pid: {})", child.id());
+
+            // Pipe stderr/stdout to tracing so we can see JS-side errors
+            let mut log_threads = Vec::new();
+            if let Some(stderr) = child.stderr.take() {
+                log_threads.push(thread::spawn(move || {
+                    use std::io::BufRead;
+                    for line in std::io::BufReader::new(stderr).lines() {
+                        if let Ok(line) = line {
+                            tracing::info!("[copilot:err] {line}");
+                        }
+                    }
+                }));
+            }
+            if let Some(stdout) = child.stdout.take() {
+                log_threads.push(thread::spawn(move || {
+                    use std::io::BufRead;
+                    for line in std::io::BufReader::new(stdout).lines() {
+                        if let Ok(line) = line {
+                            tracing::info!("[copilot:out] {line}");
+                        }
+                    }
+                }));
+            }
+            self.log_threads = log_threads;
+            self.process = Some(Arc::new(Mutex::new(child)));
+
+            match self.wait_for_ready(READY_TIMEOUT_SECS).await {
+                Ok(()) => {
+                    info!("[copilot] server ready on {}", self.server_url());
+                    return Ok(());
+                }
+                Err(e) => {
+                    warn!(
+                        "[copilot] copilot_server on port {} did not become ready: {}",
+                        self.port, e
+                    );
+                    self.stop();
+                    match e {
+                        CopilotError::ProcessExited(_) | CopilotError::StartupTimeout => {
+                            continue;
+                        }
+                        _ => return Err(e),
                     }
                 }
-            }));
+            }
         }
-        if let Some(stdout) = child.stdout.take() {
-            log_threads.push(thread::spawn(move || {
-                use std::io::BufRead;
-                for line in std::io::BufReader::new(stdout).lines() {
-                    if let Ok(line) = line {
-                        tracing::info!("[copilot:out] {line}");
-                    }
-                }
-            }));
-        }
-        self.log_threads = log_threads;
-        self.process = Some(Arc::new(Mutex::new(child)));
 
-        match self.wait_for_ready(READY_TIMEOUT_SECS).await {
-            Ok(()) => {
-                info!("[copilot] server ready on {}", self.server_url());
-                Ok(())
-            }
-            Err(e) => {
-                let _ = self.stop();
-                Err(e)
-            }
-        }
+        Err(CopilotError::PromptError(format!(
+            "copilot_server could not bind on ports {}–{}; stop orphan node.exe processes or free a port",
+            preferred_port,
+            preferred_port.saturating_add(COPILOT_HTTP_PORT_FALLBACKS - 1)
+        )))
     }
 
     pub async fn health_check(&self) -> Result<(), CopilotError> {
@@ -213,14 +260,42 @@ impl CopilotServer {
             .await
             .map_err(CopilotError::Http)?;
 
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            Err(CopilotError::PromptError(format!(
+        if !response.status().is_success() {
+            return Err(CopilotError::PromptError(format!(
                 "health check failed: status {}",
                 response.status()
-            )))
+            )));
         }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct HealthBody {
+            status: String,
+            boot_token: Option<String>,
+        }
+
+        let body: HealthBody = response.json().await.map_err(CopilotError::Http)?;
+        if body.status != "ok" {
+            return Err(CopilotError::PromptError(format!(
+                "health check failed: body status {:?}",
+                body.status
+            )));
+        }
+
+        if let Some(expected) = &self.boot_token {
+            if body.boot_token.as_deref() != Some(expected.as_str()) {
+                warn!(
+                    "[copilot] /health bootToken mismatch (stale process on port {}?); expected this session's token",
+                    self.port
+                );
+                return Err(CopilotError::PromptError(format!(
+                    "stale copilot_server on port {} (bootToken mismatch); stop the orphan node.exe or free the port",
+                    self.port
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn status(&self) -> Result<CopilotStatusResponse, CopilotError> {
@@ -244,7 +319,14 @@ impl CopilotServer {
         }
     }
 
-    pub async fn send_prompt(
+    fn http_error_recoverable(err: &CopilotError) -> bool {
+        match err {
+            CopilotError::Http(e) => e.is_connect() || e.is_timeout(),
+            _ => false,
+        }
+    }
+
+    async fn send_prompt_once(
         &self,
         system_prompt: &str,
         user_prompt: &str,
@@ -287,6 +369,30 @@ impl CopilotServer {
             .to_string();
 
         Ok(content)
+    }
+
+    /// POST to the Node bridge; on connect/timeout failure, restart `copilot_server.js` once and retry.
+    pub async fn send_prompt(
+        &mut self,
+        system_prompt: &str,
+        user_prompt: &str,
+        timeout_secs: u64,
+    ) -> Result<String, CopilotError> {
+        match self
+            .send_prompt_once(system_prompt, user_prompt, timeout_secs)
+            .await
+        {
+            Ok(t) => Ok(t),
+            Err(e) if Self::http_error_recoverable(&e) => {
+                warn!(
+                    "[copilot] chat/completions failed ({e}); restarting Node bridge and retrying once"
+                );
+                self.start().await?;
+                self.send_prompt_once(system_prompt, user_prompt, timeout_secs)
+                    .await
+            }
+            Err(e) => Err(e),
+        }
     }
 
     async fn wait_for_ready(&self, timeout_secs: u64) -> Result<(), CopilotError> {

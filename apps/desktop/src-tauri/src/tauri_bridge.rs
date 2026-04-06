@@ -40,11 +40,6 @@ pub fn ensure_copilot_server() -> Result<Arc<Mutex<crate::copilot_server::Copilo
         let mut slot = copilot_server_slot()
             .lock()
             .map_err(|e| format!("copilot server state lock poisoned: {e}"))?;
-        if let Some(existing) = slot.as_ref() {
-            if existing.started {
-                return Ok(Arc::clone(&existing.server));
-            }
-        }
         if slot.is_none() {
             let edge_profile = crate::copilot_server::default_edge_profile_dir();
             let _ = std::fs::create_dir_all(&edge_profile);
@@ -60,6 +55,30 @@ pub fn ensure_copilot_server() -> Result<Arc<Mutex<crate::copilot_server::Copilo
                 server: Arc::clone(&arc),
                 started: false,
             });
+        }
+        if let Some(st) = slot.as_mut() {
+            if st.started {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| format!("failed to create tokio runtime for copilot health: {e}"))?;
+                let healthy = {
+                    let srv = st
+                        .server
+                        .lock()
+                        .map_err(|e| format!("copilot server mutex poisoned: {e}"))?;
+                    rt.block_on(async { srv.is_running() && srv.health_check().await.is_ok() })
+                };
+                if !healthy {
+                    tracing::warn!(
+                        "[copilot] bridge marked started but process or /health failed; restarting"
+                    );
+                    if let Ok(mut srv) = st.server.lock() {
+                        srv.stop();
+                    }
+                    st.started = false;
+                }
+            }
         }
         Arc::clone(
             &slot

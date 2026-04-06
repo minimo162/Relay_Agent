@@ -86,6 +86,7 @@ function MessageBubble(props: { role: "user" | "assistant"; text: string }) {
             ? "bg-[var(--ra-accent)] text-white"
             : `${C.surfaceElevated} ${C.border} border`
         }`}
+        data-ra-bubble-role={props.role}
       >
         {props.text}
       </div>
@@ -110,7 +111,7 @@ function ToolCallRow(props: {
     : "text-[var(--ra-red)]";
 
   return (
-    <div class={`my-2 text-xs ${C.mutedText} flex items-start gap-2`}>
+    <div class={`my-2 text-xs ${C.mutedText} flex items-start gap-2`} data-ra-tool-row>
       <span class={`${color} font-mono text-sm`}>{icon}</span>
       <div class="flex-1 min-w-0">
         <span class="font-medium">{props.toolName}</span>
@@ -176,7 +177,10 @@ function MessageFeed(props: { chunks: UiChunk[]; sessionState: SessionState }) {
 
       {/* Running indicator */}
       <Show when={props.sessionState === "running"}>
-        <div class={`flex items-center gap-2 text-xs ${C.mutedText} mt-2`}>
+        <div
+          class={`flex items-center gap-2 text-xs ${C.mutedText} mt-2`}
+          data-ra-agent-thinking
+        >
           <span class="inline-block w-2 h-2 rounded-full bg-[var(--ra-yellow)] animate-pulse" />
           Agent is thinking…
         </div>
@@ -853,6 +857,7 @@ function StatusBar(props: { sessionState: SessionState; sessionCount: number }) 
     <footer
       class={`${C.surfaceElevated} ${C.border} border-t px-3 py-1 flex items-center gap-2 text-xs ${C.mutedText}`}
       style={{ "min-height": "28px" }}
+      data-ra-footer-session={props.sessionState}
     >
       <StatusDot status={dot} label={label} />
       <span>Relay Agent v0.1.0</span>
@@ -988,7 +993,10 @@ export default function Shell(): JSX.Element {
           const e = event.data as AgentTurnCompleteEvent;
           console.log("[IPC] turn_complete", e.sessionId, e.stopReason);
           setSessionRunning(false);
-          void reloadHistory(e.sessionId);
+          void reloadHistory(e.sessionId, {
+            fallbackAssistantText: e.assistantMessage,
+            afterTurnComplete: true,
+          });
           break;
         }
 
@@ -1034,14 +1042,31 @@ export default function Shell(): JSX.Element {
   });
 
   // ── Reload session history from Rust storage ─────────────
-  const reloadHistory = async (sessionId: string) => {
+  const reloadHistory = async (
+    sessionId: string,
+    opts?: { fallbackAssistantText?: string; afterTurnComplete?: boolean },
+  ) => {
     try {
       const res = await getSessionHistory({ sessionId });
-      setChunks(chunksFromHistory(res.messages));
-      setSessionRunning(res.running);
-      if (!res.running) setSessionError(null);
+      let next = chunksFromHistory(res.messages);
+      const hasAssistantText = next.some(
+        (c) => c.kind === "assistant" && c.text.trim().length > 0,
+      );
+      const fb = opts?.fallbackAssistantText?.trim();
+      if (!hasAssistantText && fb) {
+        next = [...next, { kind: "assistant" as const, text: fb }];
+      }
+      setChunks(next);
+      const idle = opts?.afterTurnComplete || !res.running;
+      setSessionRunning(!idle);
+      if (idle) setSessionError(null);
     } catch (err) {
       console.error("[IPC] load history failed", err);
+      const fb = opts?.fallbackAssistantText?.trim();
+      if (fb) {
+        setChunks((prev) => [...prev, { kind: "assistant", text: fb }]);
+      }
+      if (opts?.afterTurnComplete) setSessionRunning(false);
     }
   };
 
@@ -1134,6 +1159,15 @@ export default function Shell(): JSX.Element {
 
       {/* Main — feed + composer */}
       <main class="overflow-y-auto flex-1 flex-col relative">
+        <Show when={sessionError()}>
+          <div
+            role="alert"
+            data-ra-session-error
+            class={`shrink-0 px-6 py-2 text-xs border-b ${C.border} ${C.surfaceElevated} text-[var(--ra-red)] whitespace-pre-wrap break-words`}
+          >
+            {sessionError()}
+          </div>
+        </Show>
         <MessageFeed chunks={chunks()} sessionState={sessionState()} />
         <Composer
           onSend={handleSend}

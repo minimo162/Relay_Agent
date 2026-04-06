@@ -16,10 +16,18 @@
  * or RELAY_E2E_UI_DEMO=1 to fill the composer, click Send, and start the Rust agent session
  * (same as a manual send; Copilot/M365 delivery depends on agent config and backend).
  *
+ * With `--ui-demo`, after the user bubble appears the script waits for the footer to leave the
+ * running state, then asserts there is an assistant reply bubble, a tool row, or an error session
+ * (so CI without Copilot login can still pass). Set RELAY_E2E_STRICT_ASSISTANT=1 to require a
+ * non-empty assistant bubble when the session did not end in error.
+ *
  * Env:
  *   RELAY_WEBVIEW2_CDP_PORT   (default 9222)
  *   RELAY_WEBVIEW2_CDP_HTTP   (default http://127.0.0.1:<port>)
  *   RELAY_E2E_PW_ASSERT_MS    Playwright page wait / poll budget (default 60000)
+ *   RELAY_E2E_AGENT_START_MS    ui-demo: max wait for footer running|error after Send (default 45000)
+ *   RELAY_E2E_AGENT_DONE_MS   ui-demo: max wait for agent run to finish after started (default 240000)
+ *   RELAY_E2E_STRICT_ASSISTANT 1 = ui-demo must show assistant text if footer is not error
  *   RELAY_E2E_TAURI_LOG       with-app: Tauri/vite/cargo log file (default: temp file)
  *   RELAY_E2E_TAURI_DETACHED  1 = detached spawn (may hide UI; default off)
  *   RELAY_E2E_KEEP_APP        1 = do not taskkill Tauri after success (same as --keep-app)
@@ -50,6 +58,11 @@ const TAURI_DETACHED = process.env.RELAY_E2E_TAURI_DETACHED === "1";
 const COMPOSER_PLACEHOLDER =
   "What would you like to do? (type / for commands)";
 const PW_ASSERT_MS = Number(process.env.RELAY_E2E_PW_ASSERT_MS) || 60_000;
+/** ui-demo: wait for footer `running` or `error` after Send (avoid treating initial `idle` as finished). */
+const AGENT_START_MS = Number(process.env.RELAY_E2E_AGENT_START_MS) || 45_000;
+/** ui-demo: wait for `data-ra-footer-session` to leave `running` (Copilot can be slow). */
+const AGENT_DONE_MS = Number(process.env.RELAY_E2E_AGENT_DONE_MS) || 240_000;
+const STRICT_ASSISTANT = process.env.RELAY_E2E_STRICT_ASSISTANT === "1";
 
 function cdpWaitMs() {
   const raw = process.env.RELAY_E2E_CDP_WAIT_MS;
@@ -169,6 +182,145 @@ function killProcessTree(pid) {
   }
 }
 
+/**
+ * After Send: require user bubble, wait until agent session is not running, then assert output.
+ * @param {import("playwright").Page} page
+ */
+async function assertUiDemoAfterSend(page) {
+  const demoMsg = "E2E CDP demo — safe to delete";
+  console.log(
+    "[e2e-agent-browser] ui-demo: fill composer + click Send (starts startAgent / IPC)…",
+  );
+  const ta = page.getByPlaceholder(COMPOSER_PLACEHOLDER);
+  await ta.click({ timeout: PW_ASSERT_MS });
+  await ta.fill(demoMsg);
+  const sendBtn = page.getByRole("button", { name: "Send" });
+  await sendBtn.waitFor({ state: "visible", timeout: 15_000 });
+  await sendBtn.click();
+  console.log(
+    "[e2e-agent-browser] ui-demo: Send clicked — agent session starting (M365 Copilot only if that backend path is configured)",
+  );
+
+  await page
+    .getByText("E2E CDP demo", { exact: false })
+    .first()
+    .waitFor({ state: "visible", timeout: 15_000 });
+  console.log("[e2e-agent-browser] ui-demo: user message visible in feed");
+
+  await page
+    .locator("[data-ra-footer-session]")
+    .first()
+    .waitFor({ state: "attached", timeout: 15_000 });
+
+  console.log(
+    `[e2e-agent-browser] ui-demo: waiting for session to start (footer running or error, max ${Math.round(AGENT_START_MS / 1000)}s)…`,
+  );
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector("[data-ra-footer-session]");
+      if (!el) return false;
+      const s = el.getAttribute("data-ra-footer-session");
+      return s === "running" || s === "error";
+    },
+    undefined,
+    { timeout: AGENT_START_MS },
+  );
+
+  console.log(
+    `[e2e-agent-browser] ui-demo: session active — waiting for run to finish (max ${Math.round(AGENT_DONE_MS / 1000)}s, footer !== running)…`,
+  );
+  const heartbeat = setInterval(() => {
+    console.log(
+      "[e2e-agent-browser] ui-demo: …still waiting (Copilot / copilot_server may be slow; check Edge + Tauri logs)…",
+    );
+  }, 45_000);
+  try {
+    // Playwright: (fn, arg, options) — middle arg must be explicit.
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector("[data-ra-footer-session]");
+        if (!el) return false;
+        return el.getAttribute("data-ra-footer-session") !== "running";
+      },
+      undefined,
+      { timeout: AGENT_DONE_MS },
+    );
+  } finally {
+    clearInterval(heartbeat);
+  }
+
+  const footerState = await page
+    .locator("[data-ra-footer-session]")
+    .first()
+    .getAttribute("data-ra-footer-session");
+
+  const assistant = page.locator('[data-ra-bubble-role="assistant"]');
+  const assistantCount = await assistant.count();
+  let assistantTextLen = 0;
+  if (assistantCount > 0) {
+    const t = (await assistant.last().innerText()).trim();
+    assistantTextLen = t.length;
+  }
+
+  const toolRows = await page.locator("[data-ra-tool-row]").count();
+
+  console.log(
+    `[e2e-agent-browser] ui-demo: footer=${footerState} assistantBubbles=${assistantCount} (last len=${assistantTextLen}) toolRows=${toolRows}`,
+  );
+
+  if (footerState === "error") {
+    const errLoc = page.locator("[data-ra-session-error]");
+    const errN = await errLoc.count();
+    if (errN > 0) {
+      const detail = (await errLoc.first().innerText()).trim().slice(0, 4000);
+      console.log(
+        `[e2e-agent-browser] ui-demo: session error detail:\n${detail}`,
+      );
+    } else {
+      console.log(
+        "[e2e-agent-browser] ui-demo: session error (no banner text; inspect Rust / copilot_server logs)",
+      );
+    }
+  }
+
+  if (STRICT_ASSISTANT) {
+    if (footerState === "error") {
+      console.log(
+        "[e2e-agent-browser] ui-demo: STRICT_ASSISTANT skipped (session error — fix error above or use Copilot login)",
+      );
+      return;
+    }
+    if (assistantTextLen < 3) {
+      throw new Error(
+        "RELAY_E2E_STRICT_ASSISTANT=1: expected non-empty assistant bubble after run",
+      );
+    }
+    console.log("[e2e-agent-browser] ui-demo: STRICT_ASSISTANT OK (assistant text present)");
+    return;
+  }
+
+  if (
+    footerState === "error" ||
+    assistantCount > 0 ||
+    toolRows > 0
+  ) {
+    if (footerState === "error") {
+      console.log(
+        "[e2e-agent-browser] ui-demo: (pass) error outcome allowed by default; set RELAY_E2E_STRICT_ASSISTANT=1 to require an assistant reply",
+      );
+    } else if (assistantCount > 0) {
+      console.log("[e2e-agent-browser] ui-demo: assistant message visible in feed");
+    } else {
+      console.log("[e2e-agent-browser] ui-demo: tool row(s) visible in feed");
+    }
+    return;
+  }
+
+  throw new Error(
+    "ui-demo: agent finished (footer not running) but no assistant bubble, tool row, or error footer — empty outcome",
+  );
+}
+
 async function assertShellViaPlaywright() {
   console.log(
     "[e2e-agent-browser] Playwright connectOverCDP → assert shell (agent-browser CLI unreliable on WebView2)",
@@ -199,31 +351,7 @@ async function assertShellViaPlaywright() {
     console.log("[e2e-agent-browser] OK (Playwright: Relay Agent + Sessions)");
 
     if (UI_DEMO) {
-      const demoMsg = "E2E CDP demo — safe to delete";
-      console.log(
-        "[e2e-agent-browser] ui-demo: fill composer + click Send (starts startAgent / IPC)…",
-      );
-      const ta = page.getByPlaceholder(COMPOSER_PLACEHOLDER);
-      await ta.click({ timeout: PW_ASSERT_MS });
-      await ta.fill(demoMsg);
-      const sendBtn = page.getByRole("button", { name: "Send" });
-      await sendBtn.waitFor({ state: "visible", timeout: 15_000 });
-      await sendBtn.click();
-      console.log(
-        "[e2e-agent-browser] ui-demo: Send clicked — agent session starting (M365 Copilot only if that backend path is configured)",
-      );
-      try {
-        await page
-          .getByText("E2E CDP demo", { exact: false })
-          .first()
-          .waitFor({ state: "visible", timeout: 10_000 });
-        console.log("[e2e-agent-browser] ui-demo: user message visible in feed");
-      } catch {
-        console.log(
-          "[e2e-agent-browser] ui-demo: user bubble not seen in 10s (composer may be disabled if a run was already in progress)",
-        );
-      }
-      await new Promise((r) => setTimeout(r, 2000));
+      await assertUiDemoAfterSend(page);
     } else {
       console.log(
         "[e2e-agent-browser] tip: read-only check — UI looks unchanged. For fill+Send: --ui-demo (often with --keep-app)",

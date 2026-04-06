@@ -31,18 +31,24 @@ var SEND_BUTTON_ANY_SELECTOR = '.fai-SendButton, button[aria-label*="Send"], but
 var ASSISTANT_REPLY_DOM_SELECTORS = [
   '[data-testid="markdown-reply"]',
   '[data-testid*="message-content"]',
+  '[data-testid*="message-body"]',
+  '[data-testid*="assistant"]',
   '[data-message-author-role="assistant"]',
   'article[data-message-author-role="assistant"]',
   'div[data-message-type="Chat"]',
   '[role="article"]',
   ".markdown-body",
   ".fui-ChatMessageBody",
+  '[class*="ChatMessage"]',
   '[class*="MessageBody"]',
   '[class*="message-body"]',
   "cib-message[type='response']",
-  "cib-message .content"
+  "cib-message .content",
+  "cib-serp",
+  "cib-rich-card"
 ];
-var RESPONSE_URL_PATTERN = /substrate\.office\.com|copilot\.microsoft\.com|m365\.cloud\.microsoft|api\.bing\.microsoft\.com/i;
+var RESPONSE_URL_PATTERN =
+  /substrate\.office\.com|copilot\.microsoft\.com|m365\.cloud\.microsoft|api\.bing\.microsoft\.com|services\.actions\.ms|graph\.microsoft\.com|teams\.live\.com/i;
 var RESPONSE_TIMEOUT_MS = 18e4;
 var CDP_PROBE_TIMEOUT_MS = 2e3;
 var CDP_COMMAND_TIMEOUT_MS = 5e3;
@@ -203,7 +209,8 @@ class CopilotSession {
   cdpTargetId = null;
   cdpSession = null;
   cdpPort = null;
-  lock = false;
+  /** Serialize /v1/chat/completions — overlapping POSTs (e.g. Rust retry while Copilot still runs) must wait, not 500 "busy". */
+  _describeChain = Promise.resolve();
 
   async _getBrowserWsUrl(port) {
     // /json/version → webSocketDebuggerUrl (browser-level)
@@ -220,8 +227,12 @@ class CopilotSession {
     await ensureEdgeConnected(cdpPort);
     const actualPort = globalOptions.cdpPort;
 
-    if (actualPort !== this.cdpPort) {
-      if (this.cdpSession) { this.cdpSession.close(); this.cdpSession = null; }
+    const needWs = actualPort !== this.cdpPort || !this.cdpSession;
+    if (needWs) {
+      if (this.cdpSession) {
+        this.cdpSession.close();
+        this.cdpSession = null;
+      }
       this.cdpPort = actualPort;
 
       console.error("[copilot:connect] fetching browser WebSocket URL...");
@@ -229,7 +240,6 @@ class CopilotSession {
       if (!wsUrl) throw new Error(`Cannot get browser WebSocket URL from CDP port ${actualPort}`);
       console.error("[copilot:connect] browser WS URL:", wsUrl);
 
-      // Create browser-level CDP session
       this.cdpSession = new CdpSession(wsUrl);
       await this.cdpSession.ready;
       console.error("[copilot:connect] CDP session established");
@@ -239,15 +249,26 @@ class CopilotSession {
   async findOrCreatePage() {
     const session = this.cdpSession;
 
-    // List existing pages and find the Copilot one
+    // List existing pages and find the Copilot one. Prefer the *last* match so CDP attaches to the
+    // newest chat tab (a duplicate m365 tab from an extra Edge launch would otherwise stay stale).
     const pages = await session.listPages();
-    let copilotPage = pages.find((p) => p.url.includes("m365.cloud.microsoft/chat"));
-
-    // If no copilot page, try login page
-    if (!copilotPage) {
-      copilotPage = pages.find((p) =>
-        p.url.includes("login.microsoftonline.com") || p.url.includes("login.live.com")
+    const copilots = pages.filter((p) => p.url.includes("m365.cloud.microsoft/chat"));
+    let copilotPage = copilots.length ? copilots[copilots.length - 1] : undefined;
+    if (copilots.length > 1) {
+      console.error(
+        "[copilot] multiple Copilot tabs (",
+        copilots.length,
+        ") — using last in CDP list",
       );
+    }
+
+    // If no copilot page, try login page (last match: same reasoning as above)
+    if (!copilotPage) {
+      const logins = pages.filter(
+        (p) =>
+          p.url.includes("login.microsoftonline.com") || p.url.includes("login.live.com"),
+      );
+      copilotPage = logins.length ? logins[logins.length - 1] : undefined;
     }
 
     if (!copilotPage) {
@@ -305,8 +326,14 @@ class CopilotSession {
   }
 
   async describe(systemPrompt, userPrompt, imageB64) {
-    if (this.lock) throw new Error("Copilot session is busy");
-    this.lock = true;
+    const pending = this._describeChain.then(() =>
+      this.describeImpl(systemPrompt, userPrompt, imageB64),
+    );
+    this._describeChain = pending.catch(() => {});
+    return pending;
+  }
+
+  async describeImpl(systemPrompt, userPrompt, imageB64) {
     let pageSession = null;
     try {
       console.error("[copilot:describe] connecting...");
@@ -322,6 +349,10 @@ class CopilotSession {
       }
 
       pageSession = await this.navigateToPage(page);
+      await pageSession.send("Page.enable", {}).catch(() => {});
+      await pageSession.send("Page.bringToFront", {}).catch((e) => {
+        console.error("[copilot:describe] Page.bringToFront:", e?.message || e);
+      });
 
       if (!isCopilotUrl(page.url)) {
         console.error("[copilot:describe] navigating to Copilot URL...");
@@ -329,19 +360,25 @@ class CopilotSession {
         await sleep(3500);
       }
 
-      console.error("[copilot:describe] starting new chat...");
-      await pageSession.click(NEW_CHAT_BUTTON_SELECTOR).catch(() => {});
-      await sleep(1500);
+      const netCapture = createCopilotNetworkCapture(pageSession);
+      await netCapture.enable();
 
-      console.error("[copilot:describe] pasting prompt...");
-      const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${userPrompt}` : userPrompt;
-      await pastePromptRaw(pageSession, fullPrompt);
+      try {
+        console.error("[copilot:describe] starting new chat...");
+        await pageSession.click(NEW_CHAT_BUTTON_SELECTOR).catch(() => {});
+        await sleep(1500);
 
-      console.error("[copilot:describe] submitting prompt...");
-      return await submitPromptRaw(pageSession, fullPrompt.length);
+        console.error("[copilot:describe] pasting prompt...");
+        const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${userPrompt}` : userPrompt;
+        await pastePromptRaw(pageSession, fullPrompt);
+
+        console.error("[copilot:describe] submitting prompt...");
+        return await submitPromptRaw(pageSession, fullPrompt.length, netCapture);
+      } finally {
+        await netCapture.disable().catch(() => {});
+      }
     } finally {
       if (pageSession) { pageSession.close(); }
-      this.lock = false;
     }
   }
 }
@@ -909,7 +946,7 @@ async function clickSendViaCdpMouse(session) {
   return true;
 }
 
-async function submitPromptRaw(session, expectedPromptLen) {
+async function submitPromptRaw(session, expectedPromptLen, netCapture = null) {
   const minComposer = minComposerThresholdForSubmit(expectedPromptLen);
 
   // Until composer shows our text, Send often stays disabled
@@ -994,31 +1031,79 @@ async function submitPromptRaw(session, expectedPromptLen) {
   }
 
   // Wait for response
-  return await waitForDomResponse(session);
+  return await waitForDomResponse(session, netCapture);
 }
 
 async function isCopilotGenerating(session) {
   const r = await session.evaluate(`(() => {
-    const sels = ${JSON.stringify(STREAMING_STOP_SELECTORS)};
-    for (const s of sels) {
-      for (const el of document.querySelectorAll(s)) {
-        if (el && el.offsetParent !== null) return true;
+    function reallyVisible(el) {
+      if (!el || el.offsetParent === null) return false;
+      const st = getComputedStyle(el);
+      if (st.visibility === "hidden" || st.display === "none" || Number(st.opacity) === 0) return false;
+      const r = el.getBoundingClientRect();
+      if (r.width < 3 || r.height < 3) return false;
+      return r.bottom > 2 && r.right > 2 && r.top < innerHeight - 2 && r.left < innerWidth - 2;
+    }
+    function walkElements(root, visit) {
+      if (!root) return;
+      if (root.nodeType === 1) visit(root);
+      const tree = root.nodeType === 9 ? root.documentElement : root;
+      if (!tree) return;
+      const kids = tree.children || [];
+      for (let i = 0; i < kids.length; i++) walkElements(kids[i], visit);
+      if (tree.shadowRoot) walkElements(tree.shadowRoot, visit);
+    }
+    function queryDeepAll(selector, doc) {
+      const top = doc.documentElement || doc.body;
+      if (!top) return [];
+      const out = [];
+      walkElements(top, (el) => {
+        try {
+          if (el.matches && el.matches(selector)) out.push(el);
+        } catch (_) {}
+      });
+      return out;
+    }
+    function isGeneratingInDoc(doc) {
+      const sels = ${JSON.stringify(STREAMING_STOP_SELECTORS)};
+      for (const s of sels) {
+        for (const el of queryDeepAll(s, doc)) {
+          if (reallyVisible(el)) return true;
+        }
       }
+      for (const b of queryDeepAll("button, [role='button']", doc)) {
+        if (!reallyVisible(b)) continue;
+        const a = (b.getAttribute("aria-label") || "").toLowerCase();
+        if (!a) continue;
+        if (/\\bstop\\b/.test(a) && /generat|stream|response|応答|生成|回答/.test(a)) return true;
+      }
+      return false;
     }
-    for (const b of document.querySelectorAll("button, [role='button']")) {
-      if (!b.offsetParent) continue;
-      const a = (b.getAttribute("aria-label") || "").toLowerCase();
-      if (!a) continue;
-      if (/\bstop\b/.test(a) && /generat|stream|response|応答|生成|回答/.test(a)) return true;
+    function scanDocs(doc, depth) {
+      if (isGeneratingInDoc(doc)) return true;
+      if (depth > 8) return false;
+      let frames;
+      try {
+        frames = doc.querySelectorAll("iframe");
+      } catch (_) {
+        return false;
+      }
+      for (const f of frames) {
+        try {
+          const c = f.contentDocument;
+          if (c && scanDocs(c, depth + 1)) return true;
+        } catch (_) {}
+      }
+      return false;
     }
-    return false;
+    return scanDocs(document, 0);
   })()`).catch(() => ({ value: false }));
   return r?.value === true;
 }
 
 /**
- * Prefer the outermost last assistant *turn* (full innerText). Taking the last matching leaf
- * often yields a short fragment (e.g. citation chip) while the real answer lives on an ancestor.
+ * Prefer the outermost last assistant *turn*. Walks open shadow roots and same-origin iframes
+ * (M365 often hosts the transcript in an embedded frame).
  */
 async function extractAssistantReplyText(session) {
   const r = await session.evaluate(`(() => {
@@ -1028,75 +1113,329 @@ async function extractAssistantReplyText(session) {
     function inComposer(el) {
       return !!(el && el.closest('#m365-chat-editor-target-element, [data-lexical-editor="true"]'));
     }
-    const byRole = [...new Set([
-      ...document.querySelectorAll('[data-message-author-role="assistant"]'),
-      ...document.querySelectorAll('article[data-message-author-role="assistant"]')
-    ])];
-    const roots = [];
-    for (const el of byRole) {
-      if (!visible(el) || inComposer(el)) continue;
-      const inner = byRole.some((other) => other !== el && other.contains(el));
-      if (inner) continue;
-      roots.push(el);
+    function nodeText(el) {
+      const t = (el.innerText || el.textContent || "").trim();
+      return t;
     }
-    roots.sort((a, b) => {
-      const p = a.compareDocumentPosition(b);
-      if (p & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
-      if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
-      return 0;
-    });
-    if (roots.length) {
-      const lastTurn = roots[roots.length - 1];
-      const t = (lastTurn.innerText || "").trim();
-      if (t.length > 0) return t;
+    function walkElements(root, visit) {
+      if (!root) return;
+      if (root.nodeType === 1) visit(root);
+      const tree = root.nodeType === 9 ? root.documentElement : root;
+      if (!tree) return;
+      const kids = tree.children || [];
+      for (let i = 0; i < kids.length; i++) walkElements(kids[i], visit);
+      if (tree.shadowRoot) walkElements(tree.shadowRoot, visit);
     }
-
-    const selectors = ${JSON.stringify(ASSISTANT_REPLY_DOM_SELECTORS)};
-    const dedup = new Set();
-    const els = [];
-    for (const s of selectors) {
-      for (const el of document.querySelectorAll(s)) {
-        if (!el || dedup.has(el)) continue;
-        dedup.add(el);
+    function queryDeepAll(selector, doc) {
+      const top = doc.documentElement || doc.body;
+      if (!top) return [];
+      const out = [];
+      walkElements(top, (el) => {
+        try {
+          if (el.matches && el.matches(selector)) out.push(el);
+        } catch (_) {}
+      });
+      return out;
+    }
+    function extractFromDoc(doc) {
+      const byRole = [...new Set([
+        ...queryDeepAll('[data-message-author-role="assistant"]', doc),
+        ...queryDeepAll('article[data-message-author-role="assistant"]', doc)
+      ])];
+      const roots = [];
+      for (const el of byRole) {
         if (!visible(el) || inComposer(el)) continue;
-        const t = (el.innerText || "").trim();
-        if (!t) continue;
-        els.push(el);
+        const inner = byRole.some((other) => other !== el && other.contains(el));
+        if (inner) continue;
+        roots.push(el);
       }
+      roots.sort((a, b) => {
+        const p = a.compareDocumentPosition(b);
+        if (p & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+        return 0;
+      });
+      if (roots.length) {
+        const lastTurn = roots[roots.length - 1];
+        const t = nodeText(lastTurn);
+        if (t.length > 0) return t;
+      }
+
+      const selectors = ${JSON.stringify(ASSISTANT_REPLY_DOM_SELECTORS)};
+      const dedup = new Set();
+      const els = [];
+      for (const s of selectors) {
+        for (const el of queryDeepAll(s, doc)) {
+          if (!el || dedup.has(el)) continue;
+          dedup.add(el);
+          if (!visible(el) || inComposer(el)) continue;
+          const t = nodeText(el);
+          if (!t) continue;
+          els.push(el);
+        }
+      }
+      if (!els.length) return "";
+      els.sort((a, b) => {
+        const p = a.compareDocumentPosition(b);
+        if (p & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+        return 0;
+      });
+      const tail = els.slice(-8);
+      let best = "";
+      for (const el of tail) {
+        const t = nodeText(el);
+        if (t.length > best.length) best = t;
+      }
+      return best;
     }
-    if (!els.length) return "";
-    els.sort((a, b) => {
-      const p = a.compareDocumentPosition(b);
-      if (p & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
-      if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
-      return 0;
-    });
-    const tail = els.slice(-8);
-    let best = "";
-    for (const el of tail) {
-      const t = (el.innerText || "").trim();
-      if (t.length > best.length) best = t;
+    function bestAcrossIframes(doc, depth) {
+      let best = extractFromDoc(doc);
+      if (depth > 8) return best;
+      let frames;
+      try {
+        frames = doc.querySelectorAll("iframe");
+      } catch (_) {
+        return best;
+      }
+      for (const f of frames) {
+        try {
+          const c = f.contentDocument;
+          if (c) {
+            const inner = bestAcrossIframes(c, depth + 1);
+            if (inner.length > best.length) best = inner;
+          }
+        } catch (_) {}
+      }
+      return best;
     }
-    return best;
+    return bestAcrossIframes(document, 0);
   })()`).catch(() => ({ value: "" }));
   return typeof r?.value === "string" ? r.value : "";
 }
 
-async function waitForDomResponse(session) {
+/** Skip noisy CDP responses so we only scan likely Copilot payloads. */
+function shouldCaptureNetworkUrl(url) {
+  if (!url || !RESPONSE_URL_PATTERN.test(url)) return false;
+  const low = url.toLowerCase();
+  if (
+    /telemetry|metrics|favicon|clarity|onecollector|browserpipe|\.png(\?|$)|\.gif|\.woff|\.svg|chunk\.|webpack/i.test(
+      low,
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function clipNetworkText(s, max = 120_000) {
+  const t = (s || "").trim();
+  return t.length <= max ? t : t.slice(0, max);
+}
+
+function deepExtractAssistantStrings(v, depth) {
+  if (depth > 14) return [];
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (t.length < 8) return [];
+    if (/^[\d.,\s\-:+TZ]+$/.test(t)) return [];
+    return [t];
+  }
+  if (!v || typeof v !== "object") return [];
+  if (Array.isArray(v)) {
+    const out = [];
+    for (const x of v) out.push(...deepExtractAssistantStrings(x, depth + 1));
+    return out;
+  }
+  const keys = [
+    "text",
+    "content",
+    "message",
+    "answer",
+    "body",
+    "value",
+    "markdown",
+    "plainText",
+    "spokenText",
+    "result",
+    "output",
+  ];
+  const out = [];
+  for (const k of keys) {
+    if (v[k] != null) out.push(...deepExtractAssistantStrings(v[k], depth + 1));
+  }
+  if (!out.length) {
+    for (const k of Object.keys(v)) {
+      if (k === "headers" || k === "cookies") continue;
+      out.push(...deepExtractAssistantStrings(v[k], depth + 1));
+    }
+  }
+  return out;
+}
+
+function extractAssistantFromNetworkPayload(raw) {
+  const rawTrim = (raw || "").trim();
+  if (!rawTrim) return "";
+  if (rawTrim.includes("\ndata:") || rawTrim.startsWith("data:")) {
+    let acc = "";
+    for (const line of rawTrim.split(/\r?\n/)) {
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        const j = JSON.parse(payload);
+        const parts = deepExtractAssistantStrings(j, 0);
+        acc += parts.sort((a, b) => b.length - a.length)[0] || "";
+        acc += "\n";
+      } catch {
+        acc += `${payload}\n`;
+      }
+    }
+    return clipNetworkText(acc.replace(/\n+$/, ""));
+  }
+  try {
+    const j = JSON.parse(rawTrim);
+    const parts = deepExtractAssistantStrings(j, 0);
+    if (!parts.length) return "";
+    parts.sort((a, b) => b.length - a.length);
+    return clipNetworkText(parts[0]);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Listens for Copilot-related HTTP responses; after DOM wait, pulls response bodies via CDP.
+ * @param {CdpSession} session
+ */
+function createCopilotNetworkCapture(session) {
+  const metas = [];
+  const onResponse = (params) => {
+    const r = params.response;
+    if (!r || r.status < 200 || r.status >= 400) return;
+    const u = r.url || "";
+    if (!shouldCaptureNetworkUrl(u)) return;
+    metas.push({
+      requestId: params.requestId,
+      url: u,
+      mimeType: r.mimeType || "",
+    });
+  };
+  return {
+    async enable() {
+      session.on("Network.responseReceived", onResponse);
+      await session.send("Page.enable", {}).catch(() => {});
+      await session
+        .send("Network.enable", {
+          maxTotalBufferSize: 100_000_000,
+          maxResourceBufferSize: 50_000_000,
+        })
+        .catch((e) => {
+          console.error("[copilot:network] Network.enable failed:", e?.message || e);
+        });
+      await session.send("Network.setCacheDisabled", { cacheDisabled: true }).catch(() => {});
+    },
+    /**
+     * After Copilot has responded, try to beat DOM extraction using API / SSE payloads.
+     * @param {string} domText
+     */
+    async pickBestOver(domText) {
+      const dom = (domText || "").trim();
+      let best = dom;
+      await sleep(1500);
+      const recent = metas.slice(-35);
+      if (dom.length < 20 && metas.length) {
+        console.error("[copilot:network] captured responses=", metas.length, "scanning last", recent.length);
+      }
+      for (let i = recent.length - 1; i >= 0; i--) {
+        const { requestId, url } = recent[i];
+        try {
+          const rb = await session.send(
+            "Network.getResponseBody",
+            { requestId },
+            12e3,
+          );
+          const raw = rb.base64Encoded
+            ? Buffer.from(rb.body, "base64").toString("utf8")
+            : rb.body;
+          const t = extractAssistantFromNetworkPayload(raw).trim();
+          if (t.length > best.length && t.length >= 8) {
+            console.error(
+              "[copilot:network] candidate len=",
+              t.length,
+              "url=",
+              url.slice(0, 140),
+            );
+            best = t;
+          }
+        } catch {
+          /* not load-complete, binary, or CDP error */
+        }
+        if (best.length > 12_000) break;
+      }
+      if (best.length > dom.length) {
+        console.error("[copilot:network] using network text over DOM (dom len=", dom.length, ")");
+      }
+      return best;
+    },
+    async disable() {
+      session.off("Network.responseReceived", onResponse);
+      await session.send("Network.disable", {}).catch(() => {});
+    },
+  };
+}
+
+async function waitForDomResponse(session, netCapture = null) {
+  const wire = async (s) =>
+    netCapture ? await netCapture.pickBestOver(s) : s;
+
   await sleep(2e3);
   let baselineLen = (await extractAssistantReplyText(session)).trim().length;
   const deadline = Date.now() + RESPONSE_TIMEOUT_MS;
   let prev = baselineLen;
   let stable = 0;
   let streamed = false;
+  let lastDiag = 0;
+  /** Consecutive polls with generating=false; used to finish sooner when the UI is idle but ticks were high. */
+  let quietGen = 0;
+  /** Phantom “stop generating” in DOM keeps this true forever — ignore after N seconds. */
+  let genStreak = 0;
   const minDoneLen = () =>
     Math.max(streamed ? 6 : 22, baselineLen + (streamed ? 2 : 14));
 
   while (Date.now() < deadline) {
     await sleep(1e3);
-    const generating = await isCopilotGenerating(session);
+    const generatingRaw = await isCopilotGenerating(session);
     const reply = (await extractAssistantReplyText(session)).trim();
     const len = reply.length;
+
+    if (generatingRaw) {
+      genStreak++;
+    } else {
+      genStreak = 0;
+    }
+    if (generating) quietGen = 0;
+    else quietGen++;
+    const ignorePhantomStop = genStreak >= 55;
+    const generating = generatingRaw && !ignorePhantomStop;
+    if (ignorePhantomStop && genStreak === 55) {
+      console.error(
+        "[copilot:response] stop-button heuristic stuck ~55s; ignoring so completion can be detected",
+      );
+    }
+
+    if (Date.now() - lastDiag > 12e3) {
+      lastDiag = Date.now();
+      console.error("[copilot:response] poll", {
+        len,
+        generating,
+        generatingRaw,
+        genStreak,
+        streamed,
+        stable,
+        baselineLen,
+      });
+    }
 
     if (prev > 400 && len < prev * 0.15 && len < 800) {
       console.error("[copilot:response] baseline reset (new assistant bubble), prev=", prev, "len=", len);
@@ -1124,11 +1463,19 @@ async function waitForDomResponse(session) {
 
     const grewEnough =
       streamed ||
-      len >= baselineLen + 12 ||
+      len >= baselineLen + 10 ||
       len >= 120 ||
       len >= minDoneLen();
     const settled = Math.abs(len - prev) <= 12;
-    const needStableTicks = len < 550 ? 4 : 3;
+    let needStableTicks = len > 220 ? 2 : len < 550 ? 4 : 3;
+    if (
+      !generating &&
+      quietGen >= 8 &&
+      len >= Math.max(baselineLen + 6, 18) &&
+      (streamed || len >= baselineLen + 8)
+    ) {
+      needStableTicks = Math.min(needStableTicks, 2);
+    }
     if (settled && len >= minDoneLen() && grewEnough) {
       stable++;
       if (stable >= needStableTicks) {
@@ -1142,7 +1489,7 @@ async function waitForDomResponse(session) {
         }
         const out = replyLate.length >= len ? replyLate : reply;
         console.error("[copilot:response] done, len=", out.length, "stable=", stable);
-        return out;
+        return await wire(out);
       }
     } else {
       stable = 0;
@@ -1153,7 +1500,7 @@ async function waitForDomResponse(session) {
   const fb = (await extractAssistantReplyText(session)).trim();
   if (fb.length >= 12) {
     console.error("[copilot:response] timeout, returning partial len=", fb.length);
-    return fb;
+    return await wire(fb);
   }
   const bodyFb = await session.evaluate(`(() => {
     const raw = (document.body && document.body.innerText) ? document.body.innerText.trim() : "";
@@ -1166,7 +1513,14 @@ async function waitForDomResponse(session) {
   const bodyStr = typeof bodyFb?.value === "string" ? bodyFb.value : "";
   if (bodyStr.length >= 80) {
     console.error("[copilot:response] timeout body tail fallback len=", bodyStr.length);
-    return bodyStr;
+    return await wire(bodyStr);
+  }
+  if (netCapture) {
+    const nw = await netCapture.pickBestOver("");
+    if (nw.trim().length >= 12) {
+      console.error("[copilot:response] DOM empty; using network-only len=", nw.length);
+      return nw;
+    }
   }
   throw new Error("Copilot response not found in DOM");
 }
@@ -1200,13 +1554,77 @@ function clearCdpPortMarker(profileDir) {
   try { fs.unlinkSync(cdpMarkerFile(profileDir)); } catch { /* ignore */ }
 }
 
+/**
+ * Launch msedge with a visible window from Node spawned under Tauri.
+ * Raw `spawn(msedge)` can leave the browser off-screen or in the wrong session on Windows.
+ */
+async function launchEdgeMsedgeWin32(edgePath, argv) {
+  const { execFile } = await import("node:child_process");
+  const comspec = process.env.ComSpec || "cmd.exe";
+  /** `start "" app` — first quoted arg is window title; `""` = empty title (two quote chars). */
+  const startArgs = ["/d", "/c", "start", '""', edgePath, ...argv];
+  await new Promise((resolve, reject) => {
+    execFile(
+      comspec,
+      startArgs,
+      {
+        windowsHide: false,
+        cwd: path.dirname(edgePath),
+        env: process.env,
+      },
+      (err, _stdout, stderr) => {
+        if (stderr && String(stderr).trim()) {
+          console.error("[copilot:ensureEdge] start stderr:", String(stderr).trim().slice(0, 500));
+        }
+        if (err) reject(err);
+        else resolve();
+      },
+    );
+  });
+}
+
 /** Dedicated profile: do not attach to arbitrary CDP on 9333–9342 (user's manual Edge). */
 async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
+  if (process.env.RELAY_COPILOT_ALWAYS_LAUNCH_EDGE === "1") {
+    clearCdpPortMarker(profileDir);
+    console.error(
+      "[copilot:ensureEdge] RELAY_COPILOT_ALWAYS_LAUNCH_EDGE=1 — CDP marker cleared (always spawn Edge)",
+    );
+  }
   const marked = readCdpPortMarker(profileDir);
-  if (marked != null && await probeCdpVersion(marked)) {
+  if (marked != null && (await probeCdpVersion(marked)) && (await cdpPortIsMicrosoftEdge(marked))) {
     globalOptions.cdpPort = marked;
     console.error("[copilot:ensureEdge] reusing Relay Edge (marker) on port", marked);
+    if (
+      process.platform === "win32" &&
+      process.env.RELAY_COPILOT_NUDGE_EDGE !== "0"
+    ) {
+      /** No trailing URL — passing COPILOT_URL here opened a duplicate Copilot tab on every reuse. */
+      const nudgeArgs = [
+        `--remote-debugging-port=${marked}`,
+        "--remote-allow-origins=*",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-infobars",
+        "--disable-restore-session-state",
+        "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
+        `--user-data-dir=${profileDir}`,
+      ];
+      try {
+        await launchEdgeMsedgeWin32(edgePath, nudgeArgs);
+        console.error("[copilot:ensureEdge] Win32: nudge start dispatched (foreground existing Edge)");
+      } catch (e) {
+        console.error("[copilot:ensureEdge] nudge start failed (continuing with CDP reuse):", e?.message || e);
+      }
+    }
     return;
+  }
+  if (marked != null && (await probeCdpVersion(marked)) && !(await cdpPortIsMicrosoftEdge(marked))) {
+    console.error(
+      "[copilot:ensureEdge] marker port",
+      marked,
+      "has CDP but is not Microsoft Edge — clearing marker and launching Edge",
+    );
   }
   if (marked != null) clearCdpPortMarker(profileDir);
 
@@ -1233,7 +1651,6 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
 
   globalOptions.cdpPort = actualPort;
   console.error("[copilot:ensureEdge] launching Relay Edge (isolated profile) on port", actualPort);
-  const { spawn } = await import("node:child_process");
   const args = [
     `--remote-debugging-port=${actualPort}`,
     "--remote-allow-origins=*",
@@ -1242,29 +1659,61 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
     "--disable-infobars",
     "--disable-restore-session-state",
     "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
-    "--disable-gpu",
-    "--disable-gpu-compositing",
     `--user-data-dir=${profileDir}`,
     COPILOT_URL
   ];
-  const child = spawn(edgePath, args, { detached: true, stdio: "ignore", windowsHide: true });
-  child.unref();
+  if (process.platform === "win32") {
+    try {
+      await launchEdgeMsedgeWin32(edgePath, args);
+      console.error("[copilot:ensureEdge] Win32: cmd start dispatched for msedge (port", actualPort, ")");
+    } catch (e) {
+      console.error("[copilot:ensureEdge] cmd start failed, falling back to spawn:", e?.message || e);
+      const { spawn } = await import("node:child_process");
+      const child = spawn(edgePath, args, {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: false,
+      });
+      child.on("error", (err) => {
+        console.error("[copilot:ensureEdge] spawn error:", err?.message || err);
+      });
+      child.unref();
+      if (child.pid) console.error("[copilot:ensureEdge] spawn fallback pid=", child.pid);
+    }
+  } else {
+    const { spawn } = await import("node:child_process");
+    const child = spawn(edgePath, args, {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: false,
+    });
+    child.unref();
+  }
 
   const dl = Date.now() + EDGE_LAUNCH_TIMEOUT_MS;
+  let loggedMismatch = false;
   while (Date.now() < dl) {
-    for (let port = cdpPort; port < cdpPort + CDP_PORT_SCAN_RANGE; port++) {
-      if (!(await probeCdpVersion(port))) continue;
-      // Prefer our launch port, or any CDP that was not already up before we spawned (avoids latching onto personal Edge on 9333).
-      if (port === actualPort || !preExisting.has(port)) {
-        globalOptions.cdpPort = port;
-        writeCdpPortMarker(profileDir, port);
-        console.error("[copilot:ensureEdge] CDP ready on port", port);
-        return;
-      }
+    const info = await probeCdpVersion(actualPort);
+    if (info && cdpVersionLooksLikeEdge(info)) {
+      globalOptions.cdpPort = actualPort;
+      writeCdpPortMarker(profileDir, actualPort);
+      console.error("[copilot:ensureEdge] CDP ready on port", actualPort);
+      return;
+    }
+    if (info && !loggedMismatch && Date.now() > dl - 12e3) {
+      loggedMismatch = true;
+      console.error(
+        "[copilot:ensureEdge] port",
+        actualPort,
+        "responds but not classified as Edge yet:",
+        JSON.stringify({ Browser: info.Browser, UserAgent: info["User-Agent"] }).slice(0, 400),
+      );
     }
     await sleep(EDGE_LAUNCH_POLL_INTERVAL_MS);
   }
-  throw new Error("Edgeのデバッグ接続が開始できません");
+  throw new Error(
+    `Edgeのデバッグ接続が開始できません (port ${actualPort})。msedge の起動ブロック、プロファイルロック、または企業ポリシーを確認してください。`,
+  );
 }
 
 /** No dedicated profile: keep legacy attach-to-any-CDP-in-range behavior. */
@@ -1299,7 +1748,6 @@ async function ensureEdgeLegacyAttach(edgePath, cdpPort) {
   globalOptions.cdpPort = actualPort;
 
   console.error("[copilot:ensureEdge] launching Edge on port", actualPort);
-  const { spawn } = await import("node:child_process");
   const args = [
     `--remote-debugging-port=${actualPort}`,
     "--remote-allow-origins=*",
@@ -1308,16 +1756,26 @@ async function ensureEdgeLegacyAttach(edgePath, cdpPort) {
     "--disable-infobars",
     "--disable-restore-session-state",
     "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
-    "--disable-gpu",
-    "--disable-gpu-compositing",
     COPILOT_URL
   ];
-  const child = spawn(edgePath, args, { detached: true, stdio: "ignore", windowsHide: true });
-  child.unref();
+  if (process.platform === "win32") {
+    try {
+      await launchEdgeMsedgeWin32(edgePath, args);
+    } catch (e) {
+      console.error("[copilot:ensureEdge] cmd start failed, spawn fallback:", e?.message || e);
+      const { spawn } = await import("node:child_process");
+      const child = spawn(edgePath, args, { detached: true, stdio: "ignore", windowsHide: false });
+      child.unref();
+    }
+  } else {
+    const { spawn } = await import("node:child_process");
+    const child = spawn(edgePath, args, { detached: true, stdio: "ignore", windowsHide: false });
+    child.unref();
+  }
 
   const dl = Date.now() + EDGE_LAUNCH_TIMEOUT_MS;
   while (Date.now() < dl) {
-    if (await probeCdpVersion(actualPort)) {
+    if ((await probeCdpVersion(actualPort)) && (await cdpPortIsMicrosoftEdge(actualPort))) {
       console.error("[copilot:ensureEdge] CDP ready on port", actualPort);
       return;
     }
@@ -1353,6 +1811,24 @@ async function probeCdpVersion(port) {
   }
 }
 
+/**
+ * Edge often puts `Chrome/…` in `Browser` and `Edg/…` only in `User-Agent` — must merge both.
+ */
+function cdpVersionLooksLikeEdge(info) {
+  if (!info) return false;
+  const b = `${info.Browser || ""} ${info["User-Agent"] || ""}`.toLowerCase();
+  if (b.includes("edg")) return true;
+  if (b.includes("microsoft edge")) return true;
+  if (b.includes("google chrome")) return false;
+  if (b.includes("chrome/") && !b.includes("edg")) return false;
+  return true;
+}
+
+async function cdpPortIsMicrosoftEdge(port) {
+  const info = await probeCdpVersion(port);
+  return cdpVersionLooksLikeEdge(info);
+}
+
 function defaultRelayEdgeProfileDir() {
   if (process.platform !== "win32") return null;
   const home = process.env.USERPROFILE || process.env.HOME;
@@ -1380,7 +1856,9 @@ function createServer(session) {
   return http.createServer(async (req, res) => {
     try {
       if (req.method === "GET" && req.url === "/health") {
-        return writeJson(res, 200, { status: "ok" });
+        const body = { status: "ok" };
+        if (globalOptions.bootToken) body.bootToken = globalOptions.bootToken;
+        return writeJson(res, 200, body);
       }
       const reqUrl = new URL(req.url ?? "/", "http://127.0.0.1");
       if (req.method === "GET" && reqUrl.pathname === "/status") {
@@ -1446,14 +1924,15 @@ function writeJson(res, code, body) {
 /* ─── Entry ─── */
 
 function parseArgs(argv) {
-  let port = DEFAULT_PORT, cdpPort = DEFAULT_CDP_PORT, userDataDir = null, help = false;
+  let port = DEFAULT_PORT, cdpPort = DEFAULT_CDP_PORT, userDataDir = null, bootToken = null, help = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--help" || argv[i] === "-h") { help = true; continue; }
     if (argv[i] === "--port") { port = Number(argv[++i]); continue; }
     if (argv[i] === "--cdp-port") { cdpPort = Number(argv[++i]); continue; }
     if (argv[i] === "--user-data-dir") { userDataDir = argv[++i] ?? null; continue; }
+    if (argv[i] === "--boot-token") { bootToken = argv[++i] ?? null; continue; }
   }
-  return { port, cdpPort, userDataDir, help };
+  return { port, cdpPort, userDataDir, bootToken, help };
 }
 
 var globalOptions = parseArgs(process.argv.slice(2));
@@ -1464,7 +1943,7 @@ if (!globalOptions.userDataDir && process.platform === "win32") {
 
 async function main() {
   if (globalOptions.help) {
-    console.error("Usage: node copilot_server.js [--port 18080] [--cdp-port 9333] [--user-data-dir <path>]");
+    console.error("Usage: node copilot_server.js [--port 18080] [--cdp-port 9333] [--user-data-dir <path>] [--boot-token <uuid>]");
     return;
   }
   const session = new CopilotSession();
