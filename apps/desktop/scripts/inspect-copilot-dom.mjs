@@ -5,6 +5,7 @@
  *   CDP_HTTP=http://127.0.0.1:9333 node scripts/inspect-copilot-dom.mjs
  *
  * Requires Edge (or Chrome) with --remote-debugging-port and an open m365.cloud.microsoft/chat tab.
+ * The browser profile must already be signed in to M365 (same as Relay / `m365-cdp-chat` E2E).
  */
 import { chromium } from "playwright";
 
@@ -103,18 +104,32 @@ async function main() {
     await chat.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => {});
     const frames = chat.frames();
     const perFrame = [];
+    let replyDivTotal = 0;
+    let replyDivBestFrame = -1;
+    let replyDivBestSample = "";
     for (let i = 0; i < frames.length; i++) {
       const f = frames[i];
       try {
         const data = await f.evaluate(PROBE_JS);
         perFrame.push({ index: i, frameUrl: f.url(), ...data });
+        const n = data.copilotMessageReplyDivCount || 0;
+        if (n > replyDivTotal) {
+          replyDivTotal = n;
+          replyDivBestFrame = i;
+          replyDivBestSample = data.lastCopilotReplySample || "";
+        }
       } catch (e) {
         perFrame.push({ index: i, frameUrl: f.url(), error: String(e.message || e) });
       }
     }
     let a11y = null;
     try {
-      a11y = await chat.accessibility().snapshot({ interestingOnly: false });
+      // Playwright 1.59+ removed page.accessibility(); use ARIA snapshot string instead.
+      const snap =
+        typeof chat.ariaSnapshot === "function"
+          ? await chat.ariaSnapshot()
+          : await chat.locator("body").ariaSnapshot();
+      a11y = typeof snap === "string" ? snap.slice(0, 8000) : String(snap).slice(0, 8000);
     } catch (e) {
       a11y = { error: String(e.message || e) };
     }
@@ -127,14 +142,21 @@ async function main() {
         listHtmlLen = h;
       } catch (_) {}
     }
+    const a11yOut =
+      a11y && typeof a11y === "object" && "error" in a11y
+        ? a11y
+        : typeof a11y === "string"
+          ? a11y.slice(0, 8000)
+          : String(a11y).slice(0, 8000);
     console.log(
       JSON.stringify(
         {
           mainUrl: chat.url(),
           messageListContainerHtmlLen: listHtmlLen,
-          a11ySnippet: a11y
-            ? JSON.stringify(a11y).slice(0, 8000)
-            : null,
+          a11ySnippet: a11yOut,
+          copilotMessageReplyDivTotal: replyDivTotal,
+          copilotMessageReplyDivBestFrameIndex: replyDivBestFrame,
+          lastCopilotReplySampleFromBestFrame: replyDivBestSample,
           frames: perFrame,
         },
         null,

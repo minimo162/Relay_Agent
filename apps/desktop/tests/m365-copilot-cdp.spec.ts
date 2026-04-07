@@ -3,8 +3,21 @@ import { test, expect, chromium } from "@playwright/test";
 /* ── Constants ────────────────────────────────────────────────── */
 
 const M365_COPILOT_URL = "https://m365.cloud.microsoft/chat";
+/** Relay / noVNC Edge scripts default to 9333; override with CDP_ENDPOINT. */
 const CDP_ENDPOINT =
-  process.env.CDP_ENDPOINT ?? "http://127.0.0.1:9222";
+  process.env.CDP_ENDPOINT ?? "http://127.0.0.1:9333";
+
+/** Same priority as `copilot_server.js` / `COMPOSER_ANCESTOR_CLOSEST` — avoids wrong `role=textbox`. */
+const M365_COMPOSER_SELECTORS = [
+  "#m365-chat-editor-target-element",
+  '[data-lexical-editor="true"]',
+  'div[role="textbox"][aria-label*="Copilot"]',
+  'div[role="textbox"][aria-label*="メッセージ"]',
+  'div[role="textbox"][aria-label*="Send a message"]',
+  'div[role="textbox"]',
+] as const;
+
+const SELECT_ALL = process.platform === "darwin" ? "Meta+A" : "Control+A";
 
 /* ── Browser setup via CDP ───────────────────────────────────── */
 
@@ -50,7 +63,65 @@ async function getBodyLength(page: any): Promise<number> {
   return await page.evaluate(() => document.body.innerText?.length ?? 0);
 }
 
+/** Visible string in the M365 chat composer only (not other textboxes). */
+async function getM365ComposerText(page: any): Promise<string> {
+  return await page.evaluate(() => {
+    const root =
+      document.querySelector("#m365-chat-editor-target-element") ||
+      document.querySelector('[data-lexical-editor="true"]') ||
+      document.querySelector('div[role="textbox"][aria-label*="Copilot"]') ||
+      document.querySelector('div[role="textbox"][aria-label*="メッセージ"]') ||
+      document.querySelector('div[role="textbox"][aria-label*="Send a message"]') ||
+      document.querySelector("div[role=\"textbox\"]");
+    if (!root) return "";
+    return (root.innerText || "").replace(/\u200b/g, "").trim();
+  });
+}
+
+async function findM365Composer(page: any) {
+  for (const sel of M365_COMPOSER_SELECTORS) {
+    const loc = page.locator(sel).first();
+    try {
+      if (await loc.isVisible({ timeout: 1200 })) return loc;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+async function waitForM365ComposerEmpty(page: any, timeoutMs: number) {
+  await page.waitForFunction(
+    () => {
+      const root =
+        document.querySelector("#m365-chat-editor-target-element") ||
+        document.querySelector('[data-lexical-editor="true"]') ||
+        document.querySelector('div[role="textbox"][aria-label*="Copilot"]') ||
+        document.querySelector('div[role="textbox"][aria-label*="メッセージ"]') ||
+        document.querySelector('div[role="textbox"][aria-label*="Send a message"]') ||
+        document.querySelector("div[role=\"textbox\"]");
+      if (!root) return true;
+      const t = (root.innerText || "").replace(/\u200b/g, "").trim();
+      return t.length <= 2;
+    },
+    { timeout: timeoutMs },
+  );
+}
+
+/** Poll until composer shows typed prefix (Lexical commits async). */
+async function waitUntilComposerHasSubstring(page: any, needle: string, maxMs: number) {
+  const end = Date.now() + maxMs;
+  while (Date.now() < end) {
+    const t = await getM365ComposerText(page);
+    if (needle.length === 0 || t.includes(needle)) return;
+    await page.waitForTimeout(65);
+  }
+}
+
+/** @deprecated Prefer getM365ComposerText — kept for any legacy call sites. */
 async function getComposerText(page: any): Promise<string> {
+  const t = await getM365ComposerText(page);
+  if (t) return t;
   return await page.evaluate(() => {
     const els = document.querySelectorAll(
       'div[role="textbox"], textarea, [contenteditable="true"]'
@@ -138,54 +209,33 @@ async function startNewChat(page: any) {
  * 3. Composer text cleared (message was actually submitted)
  */
 async function sendPrompt(page: any, text: string): Promise<boolean> {
-  // Find the composer input
-  const inputSelectors = [
-    'div[role="textbox"]',
-    'textarea',
-    '[contenteditable="true"]',
-    'input[role="combobox"]',
-  ];
-
-  let input: any = null;
-  for (const sel of inputSelectors) {
-    try {
-      const el = page.locator(sel).first();
-      if (await el.isVisible({ timeout: 3000 })) {
-        input = el;
-        break;
-      }
-    } catch {
-      continue;
-    }
-  }
-
+  const input = await findM365Composer(page);
   if (!input) {
-    console.log("[CDP] ❌ Could not find composer input");
+    console.log("[CDP] ❌ Could not find M365 composer");
     return false;
   }
 
-  // Clear any existing text
   await input.click();
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(120);
+  await page.keyboard.press(SELECT_ALL);
+  await page.keyboard.press("Backspace");
+  await page.waitForTimeout(80);
+  try {
+    await input.pressSequentially(text, { delay: 10 });
+  } catch {
+    await page.keyboard.type(text, { delay: 10 });
+  }
 
-  // Select all and delete
-  await input.fill("");
-  await page.waitForTimeout(200);
+  const needle = text.substring(0, Math.min(12, text.length));
+  await waitUntilComposerHasSubstring(page, needle, 2_500);
 
-  // Type the new text
-  await input.fill(text);
-  await page.waitForTimeout(800); // ⬆️ increased wait for React state to catch up
-
-  // Verify text was entered
-  const composedText = await getComposerText(page);
+  const composedText = await getM365ComposerText(page);
   console.log(`[CDP] Composer text: "${composedText.substring(0, 60)}"`);
-  if (!composedText.includes(text.substring(0, 10))) {
+  if (!composedText.includes(text.substring(0, Math.min(10, text.length)))) {
     console.log(`[CDP] ❌ Text not properly entered in composer`);
     return false;
   }
 
-  // Find and click the send button
-  // M365 Copilot send button aria-label is "送信" or "Reply"
   const sendSelectors = [
     'button[aria-label="送信"]',
     'button[aria-label="Reply"]',
@@ -193,11 +243,38 @@ async function sendPrompt(page: any, text: string): Promise<boolean> {
     'button[aria-label="Send"]',
   ];
 
+  /** Match `copilot_server.js`: keyboard submit first, then send button. */
+  const tryEnter = async () => {
+    await input.click();
+    await page.waitForTimeout(40);
+    await page.keyboard.press("Enter");
+    await waitForM365ComposerEmpty(page, 6_000);
+  };
+
+  try {
+    await tryEnter();
+    console.log("[CDP] ✅ Sent via Enter (composer cleared)");
+    return true;
+  } catch {
+    console.log("[CDP] Enter did not submit; trying Ctrl+Enter");
+  }
+
+  try {
+    await input.click();
+    await page.waitForTimeout(40);
+    await page.keyboard.press("Control+Enter");
+    await waitForM365ComposerEmpty(page, 5_000);
+    console.log("[CDP] ✅ Sent via Ctrl+Enter");
+    return true;
+  } catch {
+    console.log("[CDP] Ctrl+Enter did not submit; clicking send button");
+  }
+
   let sendClicked = false;
   for (const sel of sendSelectors) {
     try {
       const btn = page.locator(sel).first();
-      if (await btn.isVisible({ timeout: 3000 })) {
+      if (await btn.isVisible({ timeout: 2500 })) {
         await btn.scrollIntoViewIfNeeded();
         await btn.click({ force: true });
         sendClicked = true;
@@ -214,27 +291,21 @@ async function sendPrompt(page: any, text: string): Promise<boolean> {
     return false;
   }
 
-  // Wait for the composer to clear (confirms message was sent, not just clicked)
   try {
-    await page.waitForFunction(
-      () => {
-        const els = document.querySelectorAll(
-          'div[role="textbox"], [contenteditable="true"]'
-        );
-        for (const el of els) {
-          const text = (el as HTMLElement).innerText?.trim();
-          if (text && text.length > 5) return false; // still has content
-        }
-        return true;
-      },
-      { timeout: 5_000 }
-    );
-    console.log("[CDP] ✅ Composer cleared — message sent!");
+    await waitForM365ComposerEmpty(page, 12_000);
+    console.log("[CDP] ✅ Composer cleared after send click");
     return true;
   } catch {
-    const afterText = await getComposerText(page);
-    console.log(`[CDP] ❌ Composer still has: "${afterText.substring(0, 60)}"`);
-    return false;
+    console.log("[CDP] Send click did not clear; retry Enter");
+    try {
+      await tryEnter();
+      console.log("[CDP] ✅ Composer cleared after Enter retry");
+      return true;
+    } catch {
+      const afterText = await getM365ComposerText(page);
+      console.log(`[CDP] ❌ Composer still has: "${afterText.substring(0, 60)}"`);
+      return false;
+    }
   }
 }
 
@@ -283,7 +354,7 @@ async function waitForGenerationDone(page: any, timeoutMs = 120_000) {
     if (currLength > prevLength + 30) {
       // Content is growing - streaming is active
       stableCount = 0;
-    } else if (currLength === prevLength && currLength > 200) {
+    } else if (currLength === prevLength && currLength > 90) {
       stableCount++;
       if (stableCount >= 2) {
         console.log(`[CDP] Body stable at ${currLength} chars → done`);
@@ -317,12 +388,11 @@ test.describe("M365 Copilot via CDP", () => {
     const url = page.url();
     console.log(`[CDP] After new chat, URL: ${url}`);
 
-    // Wait for composer to be ready
-    const input = page.locator('div[role="textbox"], [contenteditable="true"]').first();
- await expect(input).toBeVisible({ timeout: 10_000 });
+    const input = await findM365Composer(page);
+    expect(input).not.toBeNull();
+    await expect(input!).toBeVisible({ timeout: 10_000 });
 
-    // Verify composer is empty (fresh chat)
-    const composerText = await getComposerText(page);
+    const composerText = await getM365ComposerText(page);
     console.log(`[CDP] Composer text (should be empty): "${composerText}"`);
 
     await page.screenshot({ path: "test-results/cdp-00-new-chat.png" });
@@ -341,8 +411,9 @@ test.describe("M365 Copilot via CDP", () => {
   });
 
   test("02 — compose area is visible", async () => {
-    const input = await page.locator('div[role="textbox"], textarea, [contenteditable="true"]').first();
-    await expect(input).toBeVisible();
+    const input = await findM365Composer(page);
+    expect(input).not.toBeNull();
+    await expect(input!).toBeVisible();
 
     await page.screenshot({ path: "test-results/cdp-02-compose.png" });
   });
@@ -358,7 +429,8 @@ test.describe("M365 Copilot via CDP", () => {
 
     const finalLength = await getBodyLength(page);
     console.log(`[CDP] After response, body length: ${finalLength}`);
-    expect(finalLength).toBeGreaterThan(200);
+    // One-word answers keep document.body.innerText small (~100–150); rely on send + stream done above.
+    expect(finalLength).toBeGreaterThan(40);
 
     await page.screenshot({ path: "test-results/cdp-03-response.png" });
   });

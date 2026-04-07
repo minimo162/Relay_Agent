@@ -3,13 +3,16 @@ import { defineConfig } from "@playwright/test";
 /* Standalone Playwright config for CDP-connected M365 Copilot E2E tests.
  *
  * IMPORTANT: This config uses connectOverCDP to attach to a running Edge/Chrome
- * instance. You MUST start the browser with --remote-debugging-port=9222 before
- * running tests.  Do NOT use the default `chromium.launch()` path — it creates
+ * instance. You MUST start the browser with --remote-debugging-port (Relay 既定: 9333)
+ * before running tests. Do NOT use the default `chromium.launch()` path — it creates
  * an isolated profile that has NO M365 session cookies.
  *
+ * Memo: the attached browser profile must already be signed in to M365 Copilot;
+ * otherwise tests hit login.microsoftonline.com and fail for the wrong reason.
+ *
  * Usage:
- *   1. Launch Edge:  microsoft-edge --remote-debugging-port=9222
- *   2. Run tests:    npx playwright test --config=playwright-cdp.config.ts
+ *   1. Launch Edge (Relay 既定):  e.g. --remote-debugging-port=9333
+ *   2. Run tests:    CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test --config=playwright-cdp.config.ts
  *
  * Known pitfalls (see docs/COPILOT_E2E_CDP_PITFALLS.md for details):
  *   - Browserbase (browser_navigate) runs in a separate container — cookies are NOT shared
@@ -47,6 +50,11 @@ export default defineConfig({
           endpointURL: CDP_ENDPOINT,
         },
       },
+    },
+    /** Self-contained: tests call `chromium.connectOverCDP` in `beforeAll` (same endpoint). */
+    {
+      name: "m365-cdp-chat",
+      testMatch: "**/m365-copilot-cdp.spec.ts",
     },
   ],
 });

@@ -150,6 +150,7 @@ Relay_Agent/
   - Streaming detection and response wait logic (hot path uses one `Runtime.evaluate` for “generating” + reply text to halve CDP round-trips)
   - Agent loop sends conversation context as text prompts, receives complete responses
   - **`copilot_server.js`** (under `apps/desktop/src-tauri/binaries/`) implements DOM extraction with a **single source of truth**: `copilotDomGeneratingIifeExpression()` and `copilotDomReplyExtractIifeExpression()` build the in-page scripts; `isCopilotGenerating`, `extractAssistantReplyText`, and `pollCopilotGeneratingAndReply` all reuse them. M365 Copilot Web (Fluent) replies are read preferentially from **`[data-testid="copilot-message-reply-div"]`**, with user bubbles excluded via **`fai-UserMessage`** / **`chatQuestion`** heuristics; `stripM365CopilotReplyChrome` removes “Copilot said:” UI chrome from text.
+  - **Composer paste:** `waitForComposerPasteSettle` polls visible length until `pasteLooksComplete` (with a short deadline) instead of a single long fixed sleep after kiroku / `execCommand` / CDP insert paths. **Submit:** `getComposerLenAndCopilotGenerating` returns composer length and the generating scan in one `evaluate` after send clicks.
 - **MCP Server Integration** — Full support for standard MCP servers via stdio transport:
   - Add/remove/list MCP servers with real-time status monitoring
   - Health check command (`mcp_check_server_status`) with live status reporting
@@ -323,7 +324,9 @@ npx playwright test
 
 ### Inspect M365 Copilot DOM over CDP (Playwright)
 
-Use this when tuning selectors or debugging extract/wait behavior. Start Edge with remote debugging (e.g. port **9333**), open **M365 Chat**, then:
+**Reminder (このリポ／開発環境):** `connectOverCDP` や下記スモークは、**既に M365 にサインイン済みの Edge**（Relay 用プロファイル例: `~/RelayAgentEdgeProfile`、CDP 例: **9333**）に繋ぐ前提です。未ログインだとログイン画面だけが取れ、DOM 調査・`m365-cdp-chat` テストは意味がありません。
+
+Use this when tuning selectors or debugging extract/wait behavior. Start Edge with remote debugging (e.g. port **9333**), open **M365 Chat** (signed in), then:
 
 ```bash
 cd apps/desktop
@@ -338,11 +341,19 @@ From the monorepo root:
 pnpm --filter @relay-agent/desktop inspect:copilot-dom
 ```
 
-The script connects with Playwright `connectOverCDP`, walks frames, reports `data-testid` hints, **`copilot-message-reply-div`** counts / last sample, and an accessibility snapshot when the API is available. Align changes with **`copilot_server.js`** (same reply-div-first strategy).
+The script connects with Playwright `connectOverCDP`, walks **all frames**, reports `data-testid` hints, per-frame **`copilot-message-reply-div`** counts, plus **`copilotMessageReplyDivTotal`** / **`lastCopilotReplySampleFromBestFrame`** (picks the frame with the most reply nodes). It dumps an **ARIA snapshot** string (`page.ariaSnapshot()` on Playwright 1.59+). Align changes with **`copilot_server.js`** (same reply-div-first strategy).
+
+Authenticated Copilot smoke (Enter / Ctrl+Enter first, same composer selectors as production):
+
+```bash
+cd apps/desktop
+CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat
+```
 
 ## Environment
 
-- **M365 Copilot (CDP):** Sole AI backend. Edge auto-launches on free port with isolated profile. Configurable timeout (default: 120s). Login via browser UI on first use.
+- **M365 Copilot (CDP):** Sole AI backend. Edge auto-launches on free port with isolated profile. Configurable timeout (default: 120s). Login via browser UI on first use. **手動で CDP に繋ぐ検証**（`inspect:copilot-dom`、`playwright-cdp.config.ts` の `m365-cdp-chat` など）は、その Edge プロファイルで **M365 Copilot に既にサインイン済み**であることが前提（セッション切れ時はブラウザで再ログイン）。
+- **`RELAY_COPILOT_DEBUG_POLL=1`:** When set, `copilot_server.js` logs a `[copilot:response] poll` diagnostic every ~10s during `waitForDomResponse` (off by default to reduce noise).
 
 ### Linux / ヘッドレス（Copilot 接続の進め方）
 

@@ -1239,6 +1239,32 @@ function pasteLooksComplete(visibleLen, fullLen) {
   return visibleLen >= need;
 }
 
+/** Poll composer `innerText` length until `pasteLooksComplete` or `maxPollMs`, then optional `fallbackMs` sleep (Lexical is often a tick late). */
+var COMPOSER_PASTE_SETTLE_POLL_MS = 42;
+var COMPOSER_PASTE_SETTLE_KIROKU_POLL_MAX_MS = 380;
+var COMPOSER_PASTE_SETTLE_KIROKU_FALLBACK_MS = 240;
+var COMPOSER_PASTE_SETTLE_EXEC_POLL_MAX_MS = 440;
+var COMPOSER_PASTE_SETTLE_EXEC_FALLBACK_MS = 360;
+
+async function waitForComposerPasteSettle(session, fullLen, options = {}) {
+  const intervalMs = options.intervalMs ?? COMPOSER_PASTE_SETTLE_POLL_MS;
+  const maxPollMs = options.maxPollMs ?? 400;
+  const fallbackMs = options.fallbackMs ?? 0;
+  let len = await getComposerTextLength(session);
+  if (pasteLooksComplete(len, fullLen)) return len;
+  const deadline = Date.now() + maxPollMs;
+  while (Date.now() < deadline) {
+    await sleep(intervalMs);
+    len = await getComposerTextLength(session);
+    if (pasteLooksComplete(len, fullLen)) return len;
+  }
+  if (fallbackMs > 0) {
+    await sleep(fallbackMs);
+    len = await getComposerTextLength(session);
+  }
+  return len;
+}
+
 /**
  * Single Runtime.evaluate: run many execCommand("insertText") slices in one synchronous turn.
  * Often works when CDP Input.insertText never reaches Lexical (focus/session quirks on M365).
@@ -1495,8 +1521,10 @@ async function pastePromptRaw(session, text) {
   if (text.length <= 16_000) {
     const kOuter = await pasteViaKirokuOuterClipboardOnly(session, text);
     if (kOuter) {
-      await sleep(280);
-      len = await getComposerTextLength(session);
+      len = await waitForComposerPasteSettle(session, text.length, {
+        maxPollMs: COMPOSER_PASTE_SETTLE_KIROKU_POLL_MAX_MS,
+        fallbackMs: COMPOSER_PASTE_SETTLE_KIROKU_FALLBACK_MS,
+      });
       if (pasteLooksComplete(len, text.length)) {
         skipBulkFallbacks = true;
         console.error("[copilot:paste] kiroku outer ClipboardEvent satisfied pasteLooksComplete");
@@ -1511,8 +1539,10 @@ async function pastePromptRaw(session, text) {
     } catch (e) {
       console.error("[copilot:paste] sync in-page execCommand threw:", e?.message || e);
     }
-    await sleep(450);
-    len = await getComposerTextLength(session);
+    len = await waitForComposerPasteSettle(session, text.length, {
+      maxPollMs: COMPOSER_PASTE_SETTLE_EXEC_POLL_MAX_MS,
+      fallbackMs: COMPOSER_PASTE_SETTLE_EXEC_FALLBACK_MS,
+    });
     console.error("[copilot:paste] visible len after sync in-page:", len);
     if (pasteLooksComplete(len, text.length)) {
       skipBulkFallbacks = true;
@@ -1525,8 +1555,10 @@ async function pastePromptRaw(session, text) {
     console.error("[copilot:paste] long prompt — CDP Input.insertText first (", text.length, "chars )");
     try {
       await insertTextViaCdp(session, text);
-      await sleep(500);
-      len = await getComposerTextLength(session);
+      len = await waitForComposerPasteSettle(session, text.length, {
+        maxPollMs: 480,
+        fallbackMs: 400,
+      });
       console.error("[copilot:paste] after CDP-first, visible len:", len);
       if (pasteLooksComplete(len, text.length)) {
         console.error("[copilot:paste] CDP-first satisfied pasteLooksComplete");
@@ -1553,8 +1585,14 @@ async function pastePromptRaw(session, text) {
     } catch (e) {
       console.error("[copilot:paste] synthetic paste failed:", e?.message || e);
     }
-    await sleep(pasted ? 500 : 0);
-    len = await getComposerTextLength(session);
+    if (pasted) {
+      len = await waitForComposerPasteSettle(session, text.length, {
+        maxPollMs: 420,
+        fallbackMs: 380,
+      });
+    } else {
+      len = await getComposerTextLength(session);
+    }
     if (pasteLooksComplete(len, text.length)) skipBulkFallbacks = true;
   }
 
@@ -1573,8 +1611,10 @@ async function pastePromptRaw(session, text) {
       errInsert = e;
       console.error("[copilot:paste] Input.insertText failed:", e?.message || e);
     }
-    await sleep(400);
-    len = await getComposerTextLength(session);
+    len = await waitForComposerPasteSettle(session, text.length, {
+      maxPollMs: 360,
+      fallbackMs: 320,
+    });
     if (pasteLooksComplete(len, text.length)) skipBulkFallbacks = true;
   } else if (skipBulkFallbacks) {
     /* already satisfied */
@@ -1595,8 +1635,10 @@ async function pastePromptRaw(session, text) {
     await focusComposer(session);
     await sleep(100);
     await insertTextViaExecCommand(session, text);
-    await sleep(400);
-    len = await getComposerTextLength(session);
+    len = await waitForComposerPasteSettle(session, text.length, {
+      maxPollMs: 340,
+      fallbackMs: 300,
+    });
   }
 
   if (!skipBulkFallbacks && len < needMin && text.length >= 20) {
@@ -1609,8 +1651,10 @@ async function pastePromptRaw(session, text) {
     await focusComposer(session);
     await sleep(80);
     await insertTextViaInputEvents(session, text);
-    await sleep(400);
-    len = await getComposerTextLength(session);
+    len = await waitForComposerPasteSettle(session, text.length, {
+      maxPollMs: 340,
+      fallbackMs: 300,
+    });
   }
 
   if (!skipBulkFallbacks && len < needMin && text.length >= 20) {
@@ -1623,8 +1667,10 @@ async function pastePromptRaw(session, text) {
     await focusComposer(session);
     await sleep(80);
     await insertTextViaKeyChars(session, text);
-    await sleep(500);
-    len = await getComposerTextLength(session);
+    len = await waitForComposerPasteSettle(session, text.length, {
+      maxPollMs: 400,
+      fallbackMs: 420,
+    });
   }
 
   if (text.length >= 20 && !pasteLooksComplete(len, text.length)) {
@@ -1880,15 +1926,13 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
           await session.click(SEND_BUTTON_ANY_SELECTOR).catch(() => {});
         }
         await sleep(520);
-        let generating = await isCopilotGenerating(session);
-        let lenNow = await getComposerTextLength(session);
+        let { generating, len: lenNow } = await getComposerLenAndCopilotGenerating(session);
         let looksSent = generating || lenNow + 25 < lenBefore;
         if (!looksSent) {
           console.error("[copilot:submit] DOM click did not dispatch; trying CDP mouse");
           await clickSendViaCdpMouse(session);
           await sleep(520);
-          generating = await isCopilotGenerating(session);
-          lenNow = await getComposerTextLength(session);
+          ({ generating, len: lenNow } = await getComposerLenAndCopilotGenerating(session));
           looksSent = generating || lenNow + 25 < lenBefore;
         }
         if (looksSent) {
@@ -1909,8 +1953,7 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
     console.error("[copilot:submit] no send button; trying Enter");
     await trySubmitViaEnter(session);
     await sleep(2200);
-    const generating = await isCopilotGenerating(session);
-    const lenAfter = await getComposerTextLength(session);
+    const { generating, len: lenAfter } = await getComposerLenAndCopilotGenerating(session);
     if (generating || lenAfter + 30 < lenBefore) {
       sendClicked = true;
     }
@@ -1922,8 +1965,7 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
     await sleep(300);
     await clickSendViaCdpMouse(session).catch(() => {});
     await sleep(2000);
-    const generating2 = await isCopilotGenerating(session);
-    const lenAfter2 = await getComposerTextLength(session);
+    const { generating: generating2, len: lenAfter2 } = await getComposerLenAndCopilotGenerating(session);
     if (generating2 || lenAfter2 + 30 < lenBefore) {
       sendClicked = true;
     }
@@ -2191,6 +2233,34 @@ async function pollCopilotGeneratingAndReply(session) {
   const gen = v?.generating === true;
   const reply = stripM365CopilotReplyChrome(typeof v?.reply === "string" ? v.reply : "");
   return { generating: gen, reply };
+}
+
+/** One CDP evaluate: visible composer length + same `generating` scan as submit confirmation (avoids back-to-back evaluate). */
+function copilotDomComposerLenAndGeneratingExpression() {
+  return `(() => {
+    ${COMPOSER_DOM_HELPERS}
+    function lenOf(el) {
+      if (!el) return 0;
+      const raw = el.innerText || el.textContent || "";
+      const t = raw.replace(new RegExp(String.fromCharCode(0x200b), "g"), "");
+      return t.trim().length;
+    }
+    const cEl = __raFindComposerEditable();
+    const len = lenOf(cEl);
+    const generating = ${copilotDomGeneratingIifeExpression()};
+    return { len, generating };
+  })()`;
+}
+
+async function getComposerLenAndCopilotGenerating(session) {
+  const r = await session.evaluate(copilotDomComposerLenAndGeneratingExpression()).catch(() => ({
+    value: { len: 0, generating: false },
+  }));
+  const v = r?.value;
+  return {
+    len: Number(v?.len) || 0,
+    generating: v?.generating === true,
+  };
 }
 
 /** Last assistant turn by ARIA role only (avoids picking user text from generic markdown selectors). */
@@ -3118,7 +3188,7 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
   const wire = async (s) =>
     netCapture ? await netCapture.pickBestOver(s, submittedPromptLen) : s;
 
-  await sleep(550);
+  await sleep(520);
   let baselineLen = (await pollCopilotGeneratingAndReply(session)).reply.trim().length;
   /** If we captured the user's long prompt as "assistant", minDoneLen becomes unreachable (baseline+2 > len forever). */
   if (baselineLen > 12_000) {
@@ -3133,7 +3203,8 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
   let prev = baselineLen;
   let stable = 0;
   let streamed = false;
-  let lastDiag = 0;
+  /** When `RELAY_COPILOT_DEBUG_POLL=1`, periodic poll logs start ≥10s after this (avoids immediate spam with lastDiag=0). */
+  let lastDiag = waitStarted;
   /** Consecutive polls with generating=false; used to finish sooner when the UI is idle but ticks were high. */
   let quietGen = 0;
   /** Phantom “stop generating” in DOM keeps this true forever — ignore after N seconds. */
@@ -3169,7 +3240,7 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
       );
     }
 
-    if (Date.now() - lastDiag > 10e3) {
+    if (process.env.RELAY_COPILOT_DEBUG_POLL === "1" && Date.now() - lastDiag > 10e3) {
       lastDiag = Date.now();
       let bodyLen = 0;
       try {
