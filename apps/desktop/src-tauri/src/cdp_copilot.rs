@@ -314,7 +314,7 @@ impl Ctx {
                     Ok(msg) => {
                         if let Ok(txt) = msg.to_text() {
                             if let Ok(v) = serde_json::from_str::<Value>(txt) {
-                                if let Some(id) = v.get("id").and_then(|v| v.as_u64()) {
+                                if let Some(id) = v.get("id").and_then(Value::as_u64) {
                                     let mut map = pending_clone.lock().await;
                                     if let Some(tx) = map.remove(&id) {
                                         tx.send(v).ok();
@@ -393,7 +393,7 @@ impl Ctx {
         while let Some(msg) = read.next().await {
             if let Ok(txt) = msg?.to_text() {
                 if let Ok(v) = serde_json::from_str::<Value>(txt) {
-                    if v.get("id").and_then(|v| v.as_u64()) == Some(id) {
+                    if v.get("id").and_then(Value::as_u64) == Some(id) {
                         if let Some(err) = v.get("error") {
                             bail!("CDP {method}: {err}");
                         }
@@ -411,7 +411,8 @@ fn copilot_composer_need_min(text_char_len: usize) -> u64 {
     if text_char_len < 20 {
         1
     } else {
-        let raw = ((text_char_len as f64) * 0.06).floor() as u64;
+        let scaled = (text_char_len as u128).saturating_mul(6) / 100;
+        let raw = u64::try_from(scaled).unwrap_or(120);
         (12_u64).max(raw).min(120)
     }
 }
@@ -429,6 +430,7 @@ pub struct CopilotPage {
 }
 
 impl CopilotPage {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     async fn cdp_composer_visible_len(ctx: &Ctx) -> Result<u64> {
         let r = ctx
             .eval(
@@ -1101,7 +1103,7 @@ async fn resolve_ws_from_port(debug_url: &str) -> Result<String> {
 }
 
 /// Resolve the actual WebSocket URL for CDP communication.
-/// Handles localhost, 127.0.0.1, and Windows IPv4-mapped ::1 (0.0.36.6) normalization.
+/// Handles localhost, 127.0.0.1, and Windows IPv4-mapped `::1` (0.0.36.6) normalization.
 async fn resolve_ws(debug: &str, ws: &str) -> Result<String> {
     let debug_base = debug.trim_end_matches('/');
     let target_host = debug_base

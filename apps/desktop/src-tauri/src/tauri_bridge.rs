@@ -441,7 +441,7 @@ fn get_cdp_debug_url(preferred_base: u16) -> String {
 }
 
 fn cdp_is_connected() -> bool {
-    cdp_session().lock().map_or(false, |s| s.connected)
+    cdp_session().lock().is_ok_and(|s| s.connected)
 }
 
 fn set_cdp_session_connected(port: u16, owns_browser: bool, page_url: String, page: cdp_copilot::CopilotPage) {
@@ -468,7 +468,7 @@ fn mark_cdp_disconnected() {
     }
 }
 
-/// Get the current CDP CopilotPage for use by the agent loop.
+/// Get the current CDP `CopilotPage` for use by the agent loop.
 pub fn get_cdp_page() -> Result<cdp_copilot::CopilotPage, String> {
     let state = cdp_session()
         .lock()
@@ -506,9 +506,9 @@ pub fn ensure_cdp_connected() -> Result<cdp_copilot::CopilotPage, String> {
         .map_err(|e| {
             let msg = e.to_string();
             if msg.contains("Microsoft Edge could not be found") {
-                format!("CDP: Microsoft Edge is not installed. Please install Edge and try again.")
+                "CDP: Microsoft Edge is not installed. Please install Edge and try again.".to_string()
             } else if msg.contains("Edge did not become ready") {
-                format!("CDP: Edge did not start within 30 seconds. It may be blocked by a security policy.")
+                "CDP: Edge did not start within 30 seconds. It may be blocked by a security policy.".to_string()
             } else {
                 format!("CDP: {msg}")
             }

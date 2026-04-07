@@ -3,7 +3,7 @@
 //! Connects to the agent-browser daemon via TCP on Windows (or Unix domain socket
 //! on Linux/macOS) and sends line-delimited JSON commands to control the browser.
 //!
-//! This replaces the copilot_server.js (Playwright-based) approach, using
+//! This replaces the `copilot_server.js` (Playwright-based) approach, using
 //! agent-browser's native CDP Input.dispatchKeyEvent for reliable text input
 //! into Lexical-based editors (M365 Copilot).
 //!
@@ -126,7 +126,7 @@ fn send_command(stream: &mut TcpStream, cmd: &Value) -> Result<Value, DaemonErro
 
 /// Extract the success/data/error from a daemon response.
 fn check_response(resp: &Value, action: &str) -> Result<Value, DaemonError> {
-    if let Some(true) = resp.get("success").and_then(|v| v.as_bool()) {
+    if let Some(true) = resp.get("success").and_then(Value::as_bool) {
         Ok(resp.get("data").cloned().unwrap_or(Value::Null))
     } else {
         let err = resp
@@ -354,7 +354,7 @@ impl AgentBrowserDaemon {
     }
 
     /// Close the browser and daemon.
-    pub fn close(&mut self) -> Result<(), DaemonError> {
+    pub fn close(&mut self) {
         if let Err(e) = self.with_connection(|stream| {
             let resp = send_command(stream, &cmd("1", "close", vec![]))?;
             let _ = resp; // May not get response for close
@@ -363,7 +363,6 @@ impl AgentBrowserDaemon {
             warn!("[agent-browser] close command failed: {e}");
         }
         self.browser_ready = false;
-        Ok(())
     }
 
     /// Send a prompt to Copilot and wait for response.
@@ -452,7 +451,7 @@ impl AgentBrowserDaemon {
                         selector.replace('\'', "\\'")
                     );
                     if let Ok(text) = self.evaluate(&script) {
-                        if text.trim().len() > 0 {
+                        if !text.trim().is_empty() {
                             return Ok(text.trim().to_string());
                         }
                     }
@@ -473,7 +472,7 @@ impl AgentBrowserDaemon {
                 selector.replace('\'', "\\'")
             );
             if let Ok(text) = self.evaluate(&script) {
-                if text.trim().len() > 0 {
+                if !text.trim().is_empty() {
                     return Ok(text.trim().to_string());
                 }
             }

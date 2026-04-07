@@ -266,6 +266,28 @@ impl PersistedContentBlock {
     }
 }
 
+impl From<TokenUsage> for PersistedTokenUsage {
+    fn from(value: TokenUsage) -> Self {
+        Self {
+            input_tokens: value.input_tokens,
+            output_tokens: value.output_tokens,
+            cache_creation_input_tokens: value.cache_creation_input_tokens,
+            cache_read_input_tokens: value.cache_read_input_tokens,
+        }
+    }
+}
+
+impl From<PersistedTokenUsage> for TokenUsage {
+    fn from(value: PersistedTokenUsage) -> Self {
+        Self {
+            input_tokens: value.input_tokens,
+            output_tokens: value.output_tokens,
+            cache_creation_input_tokens: value.cache_creation_input_tokens,
+            cache_read_input_tokens: value.cache_read_input_tokens,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,27 +317,5 @@ mod tests {
         assert!(validate_session_id("abc\\def").is_err());
         assert!(validate_session_id("abc..def").is_err());
         assert!(validate_session_id("abc def").is_err());
-    }
-}
-
-impl From<TokenUsage> for PersistedTokenUsage {
-    fn from(value: TokenUsage) -> Self {
-        Self {
-            input_tokens: value.input_tokens,
-            output_tokens: value.output_tokens,
-            cache_creation_input_tokens: value.cache_creation_input_tokens,
-            cache_read_input_tokens: value.cache_read_input_tokens,
-        }
-    }
-}
-
-impl From<PersistedTokenUsage> for TokenUsage {
-    fn from(value: PersistedTokenUsage) -> Self {
-        Self {
-            input_tokens: value.input_tokens,
-            output_tokens: value.output_tokens,
-            cache_creation_input_tokens: value.cache_creation_input_tokens,
-            cache_read_input_tokens: value.cache_read_input_tokens,
-        }
     }
 }

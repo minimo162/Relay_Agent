@@ -30,6 +30,13 @@ pub struct CopilotStatusResponse {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HealthBody {
+    status: String,
+    boot_token: Option<String>,
+}
+
 pub struct CopilotServer {
     process: Option<Arc<Mutex<Child>>>,
     port: u16,
@@ -122,6 +129,7 @@ impl CopilotServer {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn start(&mut self) -> Result<(), CopilotError> {
         if self.process_running() {
             if self.health_check().await.is_ok() {
@@ -208,20 +216,22 @@ impl CopilotServer {
             if let Some(stderr) = child.stderr.take() {
                 log_threads.push(thread::spawn(move || {
                     use std::io::BufRead;
-                    for line in std::io::BufReader::new(stderr).lines() {
-                        if let Ok(line) = line {
-                            tracing::info!("[copilot:err] {line}");
-                        }
+                    for line in std::io::BufReader::new(stderr)
+                        .lines()
+                        .map_while(Result::ok)
+                    {
+                        tracing::info!("[copilot:err] {line}");
                     }
                 }));
             }
             if let Some(stdout) = child.stdout.take() {
                 log_threads.push(thread::spawn(move || {
                     use std::io::BufRead;
-                    for line in std::io::BufReader::new(stdout).lines() {
-                        if let Ok(line) = line {
-                            tracing::info!("[copilot:out] {line}");
-                        }
+                    for line in std::io::BufReader::new(stdout)
+                        .lines()
+                        .map_while(Result::ok)
+                    {
+                        tracing::info!("[copilot:out] {line}");
                     }
                 }));
             }
@@ -240,9 +250,7 @@ impl CopilotServer {
                     );
                     self.stop();
                     match e {
-                        CopilotError::ProcessExited(_) | CopilotError::StartupTimeout => {
-                            continue;
-                        }
+                        CopilotError::ProcessExited(_) | CopilotError::StartupTimeout => {}
                         _ => return Err(e),
                     }
                 }
@@ -269,13 +277,6 @@ impl CopilotServer {
                 "health check failed: status {}",
                 response.status()
             )));
-        }
-
-        #[derive(Debug, Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct HealthBody {
-            status: String,
-            boot_token: Option<String>,
         }
 
         let body: HealthBody = response.json().await.map_err(CopilotError::Http)?;
@@ -449,12 +450,8 @@ impl CopilotServer {
 
             if let Some(arc_child) = &self.process {
                 if let Ok(mut child) = arc_child.lock() {
-                    match child.try_wait() {
-                        Ok(Some(status)) => {
-                            return Err(CopilotError::ProcessExited(status.code()));
-                        }
-                        Ok(None) => {}
-                        Err(_) => {}
+                    if let Ok(Some(status)) = child.try_wait() {
+                        return Err(CopilotError::ProcessExited(status.code()));
                     }
                 }
             }

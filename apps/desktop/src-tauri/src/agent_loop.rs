@@ -64,9 +64,9 @@ fn human_approval_summary(tool_name: &str, input: &str) -> String {
     let url = v.get("url").and_then(|u| u.as_str());
 
     match tool_name {
-        "read_file" => path
-            .map(|p| format!("Allow reading this file?\n{p}"))
-            .unwrap_or_else(|| "Allow reading a file?".into()),
+        "read_file" => path.map_or_else(|| "Allow reading a file?".into(), |p| {
+            format!("Allow reading this file?\n{p}")
+        }),
         "glob_search" => {
             let pat = v.get("pattern").and_then(|x| x.as_str()).unwrap_or("*");
             format!("Search the workspace for files matching “{pat}”?")
@@ -75,29 +75,28 @@ fn human_approval_summary(tool_name: &str, input: &str) -> String {
             let pat = v.get("pattern").and_then(|x| x.as_str()).unwrap_or("pattern");
             format!("Search file contents for “{pat}”?")
         }
-        "write_file" => path
-            .map(|p| format!("Create or overwrite this file?\n{p}"))
-            .unwrap_or_else(|| "Create or overwrite a file?".into()),
-        "edit_file" => path
-            .map(|p| format!("Edit this file?\n{p}"))
-            .unwrap_or_else(|| "Edit a file?".into()),
-        "bash" | "PowerShell" => cmd
-            .map(|c| {
+        "write_file" => path.map_or_else(|| "Create or overwrite a file?".into(), |p| {
+            format!("Create or overwrite this file?\n{p}")
+        }),
+        "edit_file" => path.map_or_else(|| "Edit a file?".into(), |p| format!("Edit this file?\n{p}")),
+        "bash" | "PowerShell" => cmd.map_or_else(
+            || format!("Run a {tool_name} command?"),
+            |c| {
                 let preview: String = c.chars().take(120).collect();
                 format!("Run this command?\n{preview}")
-            })
-            .unwrap_or_else(|| format!("Run a {tool_name} command?")),
-        "WebFetch" => url
-            .map(|u| format!("Fetch content from this URL?\n{u}"))
-            .unwrap_or_else(|| "Fetch content from a URL?".into()),
+            },
+        ),
+        "WebFetch" => url.map_or_else(|| "Fetch content from a URL?".into(), |u| {
+            format!("Fetch content from this URL?\n{u}")
+        }),
         "WebSearch" => {
             let q = v.get("query").and_then(|x| x.as_str()).unwrap_or("…");
             format!("Search the web for “{q}”?")
         }
         "TodoWrite" => "Update the task list?".to_string(),
-        "NotebookEdit" => notebook_path
-            .map(|p| format!("Edit this notebook?\n{p}"))
-            .unwrap_or_else(|| "Edit a notebook?".into()),
+        "NotebookEdit" => notebook_path.map_or_else(|| "Edit a notebook?".into(), |p| {
+            format!("Edit this notebook?\n{p}")
+        }),
         "Config" => {
             let s = v.get("setting").and_then(|x| x.as_str()).unwrap_or("settings");
             format!("Change configuration: {s}?")
@@ -177,7 +176,7 @@ pub fn run_agent_loop_impl(
     cancelled: Arc<AtomicBool>,
 ) -> Result<(), AgentLoopError> {
     let server = tauri_bridge::ensure_copilot_server()
-        .map_err(|e| AgentLoopError::InitializationError(e))?;
+        .map_err(AgentLoopError::InitializationError)?;
     let api_client = CdpApiClient::new(server);
 
     let tool_executor = build_tool_executor(app, session_id, cwd.clone());
@@ -217,7 +216,7 @@ pub fn run_agent_loop_impl(
             }
         };
 
-        persist_turn(app, registry, &runtime_session, session_id, &goal, &cwd, max_turns)?;
+        persist_turn(app, registry, &runtime_session, session_id, &goal, cwd.as_ref(), max_turns)?;
 
         let needs_more_turns = summary.assistant_messages.last().is_some_and(|message| {
             message
@@ -424,7 +423,6 @@ Example:
 {{"name":"read_file","input":{{"path":"README.md"}}}}
 ```
 "#,
-        json_pretty = json_pretty
     )
 }
 
@@ -477,19 +475,16 @@ fn dedupe_relay_tool_calls(calls: Vec<(String, String, String)>) -> Vec<(String,
     let mut seen = HashSet::new();
     let mut out = Vec::with_capacity(calls.len());
     for (id, name, input_str) in calls {
-        let key = match serde_json::from_str::<Value>(&input_str) {
-            Ok(input_val) => {
-                let key_val = normalize_tool_input_for_dedup_key(&name, &input_val);
-                format!(
-                    "{}|{}",
-                    name,
-                    serde_json::to_string(&key_val).unwrap_or_default()
-                )
-            }
-            Err(_) => {
-                out.push((id, name, input_str));
-                continue;
-            }
+        let key = if let Ok(input_val) = serde_json::from_str::<Value>(&input_str) {
+            let key_val = normalize_tool_input_for_dedup_key(&name, &input_val);
+            format!(
+                "{}|{}",
+                name,
+                serde_json::to_string(&key_val).unwrap_or_default()
+            )
+        } else {
+            out.push((id, name, input_str));
+            continue;
         };
         if seen.insert(key) {
             out.push((id, name, input_str));
@@ -517,31 +512,28 @@ fn extract_relay_tool_fences(text: &str) -> (String, Vec<String>) {
                     break;
                 }
             }
-            match find_relay_tool_fence_end(rest) {
-                Some(end_inner) => {
-                    let inner = rest[..end_inner].trim();
-                    if !inner.is_empty() {
-                        payloads.push(inner.to_string());
-                    }
-                    rest = &rest[end_inner..];
-                    if let Some(after) = rest.strip_prefix("\r\n```") {
-                        rest = after;
-                    } else if let Some(after) = rest.strip_prefix("\n```") {
-                        rest = after;
-                    } else {
-                        rest = rest.strip_prefix("```").unwrap_or(rest);
-                    }
-                    if let Some(s) = rest.strip_prefix("\r\n") {
-                        rest = s;
-                    } else if let Some(s) = rest.strip_prefix('\n') {
-                        rest = s;
-                    }
+            if let Some(end_inner) = find_relay_tool_fence_end(rest) {
+                let inner = rest[..end_inner].trim();
+                if !inner.is_empty() {
+                    payloads.push(inner.to_string());
                 }
-                None => {
-                    display.push_str(CDP_TOOL_FENCE);
-                    display.push_str(rest);
-                    break;
+                rest = &rest[end_inner..];
+                if let Some(after) = rest.strip_prefix("\r\n```") {
+                    rest = after;
+                } else if let Some(after) = rest.strip_prefix("\n```") {
+                    rest = after;
+                } else {
+                    rest = rest.strip_prefix("```").unwrap_or(rest);
                 }
+                if let Some(s) = rest.strip_prefix("\r\n") {
+                    rest = s;
+                } else if let Some(s) = rest.strip_prefix('\n') {
+                    rest = s;
+                }
+            } else {
+                display.push_str(CDP_TOOL_FENCE);
+                display.push_str(rest);
+                break;
             }
         } else {
             display.push_str(rest);
@@ -573,13 +565,13 @@ fn parse_tool_payloads(payloads: &[String]) -> Vec<(String, String, String)> {
         match v {
             Value::Array(arr) => {
                 for item in arr {
-                    if let Some(t) = parse_one_tool_call(item) {
+                    if let Some(t) = parse_one_tool_call(&item) {
                         out.push(t);
                     }
                 }
             }
             Value::Object(_) => {
-                if let Some(t) = parse_one_tool_call(v) {
+                if let Some(t) = parse_one_tool_call(&v) {
                     out.push(t);
                 }
             }
@@ -589,7 +581,7 @@ fn parse_tool_payloads(payloads: &[String]) -> Vec<(String, String, String)> {
     out
 }
 
-fn parse_one_tool_call(v: Value) -> Option<(String, String, String)> {
+fn parse_one_tool_call(v: &Value) -> Option<(String, String, String)> {
     let obj = v.as_object()?;
     let name = obj.get("name")?.as_str()?.to_string();
     let id = obj
@@ -657,7 +649,7 @@ fn persist_turn(
     runtime_session: &runtime::ConversationRuntime<CdpApiClient, TauriToolExecutor>,
     session_id: &str,
     goal: &str,
-    cwd: &Option<String>,
+    cwd: Option<&String>,
     max_turns: usize,
 ) -> Result<(), AgentLoopError> {
     let _ignore = registry.mutate_session(session_id, |entry| {
@@ -668,7 +660,7 @@ fn persist_turn(
         runtime_session.session(),
         PersistedSessionConfig {
             goal: Some(goal.to_string()),
-            cwd: cwd.clone(),
+            cwd: cwd.cloned(),
             max_turns: Some(max_turns),
         },
     )
@@ -924,10 +916,7 @@ fn try_execute_mcp_tool(
     input: &str,
 ) -> Option<Result<String, runtime::ToolError>> {
     // Check if this tool name maps to an MCP tool
-    let route = mcp_manager.tool_index().get(tool_name).cloned();
-    let Some(route) = route else {
-        return None;
-    };
+    let route = mcp_manager.tool_index().get(tool_name).cloned()?;
 
     let input_value: serde_json::Value =
         serde_json::from_str(input).unwrap_or_else(|_| serde_json::json!({}));
