@@ -49,6 +49,54 @@ var ASSISTANT_REPLY_DOM_SELECTORS = [
 ];
 var RESPONSE_URL_PATTERN =
   /substrate\.office\.com|copilot\.microsoft\.com|m365\.cloud\.microsoft|api\.bing\.microsoft\.com|services\.actions\.ms|graph\.microsoft\.com|teams\.live\.com/i;
+
+/**
+ * Paths we never treat as chat model output (telemetry, shell assets, metrics).
+ * Used by allowlist mode; legacy broad capture uses a separate deny regex.
+ */
+var NON_CHAT_NETWORK_PATH_RE =
+  /pacman\/api\/|\/clientevents|search\/api\/v\d+\/events|\/events\?scenario=|\/telemetry|onecollector|browserpipe|clarity(\.ms)?|favicon|\.png(\?|$)|\.gif(\?|$)|\.woff2?(\?|$)|\.svg(\?|$)|\/webpack|\/resources\/icons\/|\/chunk\.|\/static\/|\/metrics(\/|\?|$)/i;
+
+/**
+ * Default: only capture responses whose URL plausibly carries assistant text.
+ * Broad host match + string heuristics (JWT, UUID, Pacman JSON, …) is endless;
+ * extend these patterns from DevTools → Network when M365 adds endpoints.
+ *
+ * Set RELAY_COPILOT_LEGACY_BROAD_NETWORK=1 to restore pre-allowlist behavior (debug only).
+ */
+function isAllowedChatNetworkUrl(url) {
+  const low = (url || "").toLowerCase();
+  if (NON_CHAT_NETWORK_PATH_RE.test(low)) return false;
+  let pathQ = low;
+  try {
+    const u = new URL(url);
+    pathQ = (u.pathname + u.search).toLowerCase();
+  } catch {
+    /* keep low */
+  }
+  if (/\/harmony\//i.test(pathQ) && /\/events/i.test(pathQ)) return false;
+  const pathHints = [
+    /\/chat\/completions/,
+    /\/completions(?:\/|\?|$)/,
+    /\/openai\//,
+    /\/deployments\/[^/]+\/chat\/completions/,
+    /\/deployments\/[^/]+\/completions/,
+    /\/chats\/[^/]+\/messages/,
+    /\/teams\/[^/]+\/channels\/[^/]+\/messages/,
+    /\/conversation[s]?\/[^/]+\/messages/i,
+    /\/harmony\/[^?]*(?:chat|message|completion|stream|turn|infer|orchestrat|dialog)/i,
+    /\/sydney\//i,
+    /\/m365chat\//i,
+  ];
+  const fullUrlHints = [
+    /m365\.cloud\.microsoft[^?]*\/api\/v\d+\/[^?]*(chat|conversation|message|copilot|harmony)/i,
+    /substrate\.office\.com[^?]*\/api\/[^?]*(chat|conversation|message|completion|harmony|sydney|orchestrat)/i,
+    /copilot\.microsoft\.com[^?]*(?:chat|conversation|message|completion|turn)/i,
+    /api\.bing\.microsoft\.com[^?]*(?:chat|conversation|sydney|message|completion)/i,
+  ];
+  if (pathHints.some((re) => re.test(pathQ))) return true;
+  return fullUrlHints.some((re) => re.test(low));
+}
 var RESPONSE_TIMEOUT_MS = 18e4;
 var CDP_PROBE_TIMEOUT_MS = 2e3;
 var CDP_COMMAND_TIMEOUT_MS = 5e3;
@@ -1649,18 +1697,22 @@ async function extractAssistantReplyHeuristic(session) {
   return typeof r?.value === "string" ? r.value : "";
 }
 
-/** Skip noisy CDP responses so we only scan likely Copilot payloads. */
+/** Whether to buffer a response body for assistant-text extraction (CDP Network). */
 function shouldCaptureNetworkUrl(url) {
   if (!url || !RESPONSE_URL_PATTERN.test(url)) return false;
-  const low = url.toLowerCase();
-  if (
-    /telemetry|metrics|favicon|clarity|onecollector|browserpipe|clientevents|pacman\/api\/clientevents|search\/api\/v\d+\/events|\/events\?scenario=|\.png(\?|$)|\.gif|\.woff|\.svg|chunk\.|webpack/i.test(
-      low,
-    )
-  ) {
-    return false;
+  if (process.env.RELAY_COPILOT_LEGACY_BROAD_NETWORK === "1") {
+    const low = url.toLowerCase();
+    if (NON_CHAT_NETWORK_PATH_RE.test(low)) return false;
+    if (
+      /telemetry|metrics|favicon|onecollector|browserpipe|clientevents|pacman\/api\/clientevents|search\/api\/v\d+\/events|\/events\?scenario=|chunk\.|webpack/i.test(
+        low,
+      )
+    ) {
+      return false;
+    }
+    return true;
   }
-  return true;
+  return isAllowedChatNetworkUrl(url);
 }
 
 function clipNetworkText(s, max = 120_000) {

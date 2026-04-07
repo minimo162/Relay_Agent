@@ -16,6 +16,18 @@
 
 ## Milestone Log
 
+### 2026-04-07 Copilot network capture: allowlist-first policy
+
+**Problem:** `copilot_server.js` captured every response under broad Copilot-related hosts, then tried to reject bad bodies with growing string heuristics (JWT, Pacman telemetry, UUIDs, HTML shell, etc.). That does not scale: new endpoints kept leaking into “assistant text.”
+
+**Policy (default):** Only buffer CDP `Network` responses whose URL matches **positive path patterns** for plausible chat/completions/messages traffic (`isAllowedChatNetworkUrl` in `copilot_server.js`). A shared **`NON_CHAT_NETWORK_PATH_RE`** blocks known telemetry/asset shapes regardless.
+
+**Debug:** Set `RELAY_COPILOT_LEGACY_BROAD_NETWORK=1` on the Node process to restore the older “broad host + denylist” capture for comparison when recording HARs.
+
+**Operational note:** When M365 changes API routes, capture DevTools → Network (XHR/fetch) during a real reply and **add regexes** to `isAllowedChatNetworkUrl` rather than new one-off string filters.
+
+**Artifacts:** `apps/desktop/src-tauri/binaries/copilot_server.js`
+
 ### 2026-04-06 Edge CDP connection hardening
 
 Completed.
