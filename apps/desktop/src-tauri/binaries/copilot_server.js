@@ -1285,7 +1285,7 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null) {
     RESPONSE_TIMEOUT_MS / 1000,
     "s)…",
   );
-  return await waitForDomResponse(session, netCapture);
+  return await waitForDomResponse(session, netCapture, expectedPromptLen);
 }
 
 async function isCopilotGenerating(session) {
@@ -1716,7 +1716,37 @@ function createCopilotNetworkCapture(session) {
   };
 }
 
-async function waitForDomResponse(session, netCapture = null) {
+/** Loose DOM extract length ≈ pasted prompt → still showing user wall, not a real assistant reply. */
+function domExtractLooksLikeSubmittedPrompt(textLen, submittedLen) {
+  if (!submittedLen || submittedLen < 1200) return false;
+  const low = submittedLen * 0.72;
+  const high = submittedLen * 1.2;
+  return textLen >= low && textLen <= high;
+}
+
+/**
+ * If loose text is prompt-sized garbage, require a shorter role=assistant extract or refuse to return
+ * (prevents agent-loop feedback that doubles prompt size every turn).
+ */
+async function resolveAssistantReplyForReturn(session, looseText, submittedPromptLen) {
+  const loose = (looseText || "").trim();
+  if (!domExtractLooksLikeSubmittedPrompt(loose.length, submittedPromptLen)) return loose;
+  const strict = (await extractAssistantReplyStrict(session)).trim();
+  if (strict.length >= 25 && strict.length < loose.length * 0.88) {
+    console.error(
+      "[copilot:response] prefer strict assistant over prompt-length loose extract strictLen=",
+      strict.length,
+      "looseLen=",
+      loose.length,
+      "submittedPromptLen=",
+      submittedPromptLen,
+    );
+    return strict;
+  }
+  return null;
+}
+
+async function waitForDomResponse(session, netCapture = null, submittedPromptLen = 0) {
   const wire = async (s) =>
     netCapture ? await netCapture.pickBestOver(s) : s;
 
@@ -1839,7 +1869,20 @@ async function waitForDomResponse(session, netCapture = null) {
           prev = len;
           continue;
         }
-        const out = replyLate.length >= len ? replyLate : reply;
+        const candidate = replyLate.length >= len ? replyLate : reply;
+        const out = await resolveAssistantReplyForReturn(session, candidate, submittedPromptLen);
+        if (out == null) {
+          console.error(
+            "[copilot:response] refuse false done: loose extract matches submitted prompt length but no strict assistant yet (submitted=",
+            submittedPromptLen,
+            "loose=",
+            candidate.length,
+            ")",
+          );
+          stable = 0;
+          prev = len;
+          continue;
+        }
         console.error("[copilot:response] done, len=", out.length, "stable=", stable);
         return await wire(out);
       }
@@ -1850,7 +1893,11 @@ async function waitForDomResponse(session, netCapture = null) {
     /** Generation ended long ago but len stayed at a huge false positive — finish and return best strict assistant extract. */
     if (streamed && !generating && quietGen >= 14 && len > 8_000) {
       const strict = await extractAssistantReplyStrict(session);
-      if (strict.length >= 12 && strict.length < len * 0.85) {
+      if (
+        strict.length >= 12 &&
+        strict.length < len * 0.85 &&
+        (!domExtractLooksLikeSubmittedPrompt(strict.length, submittedPromptLen) || strict.length < len * 0.25)
+      ) {
         console.error(
           "[copilot:response] done (quiet + strict assistant shorter than bogus len)",
           "strictLen=",
@@ -1865,10 +1912,22 @@ async function waitForDomResponse(session, netCapture = null) {
     prev = len;
   }
 
-  const fb = (await extractAssistantReplyText(session)).trim();
-  if (fb.length >= 12) {
-    console.error("[copilot:response] timeout, returning partial len=", fb.length);
-    return await wire(fb);
+  const fbLoose = (await extractAssistantReplyText(session)).trim();
+  const fbResolved = await resolveAssistantReplyForReturn(session, fbLoose, submittedPromptLen);
+  if (fbResolved != null) {
+    console.error("[copilot:response] timeout, using resolved assistant len=", fbResolved.length);
+    return await wire(fbResolved);
+  }
+  if (fbLoose.length >= 12 && !domExtractLooksLikeSubmittedPrompt(fbLoose.length, submittedPromptLen)) {
+    console.error("[copilot:response] timeout, returning partial len=", fbLoose.length);
+    return await wire(fbLoose);
+  }
+  if (fbLoose.length >= 12) {
+    console.error(
+      "[copilot:response] timeout, skipping prompt-echo loose extract (len=",
+      fbLoose.length,
+      ") — trying body/network",
+    );
   }
   const bodyFb = await session.evaluate(`(() => {
     const raw = (document.body && document.body.innerText) ? document.body.innerText.trim() : "";
