@@ -358,16 +358,30 @@ class CopilotSession {
         );
       }
 
+      await this.cdpSession.send("Target.activateTarget", { targetId: page.targetId }).catch((e) => {
+        console.error("[copilot:describe] Target.activateTarget:", e?.message || e);
+      });
+
       pageSession = await this.navigateToPage(page);
       await pageSession.send("Page.enable", {}).catch(() => {});
       await pageSession.send("Page.bringToFront", {}).catch((e) => {
         console.error("[copilot:describe] Page.bringToFront:", e?.message || e);
       });
 
-      if (!isCopilotUrl(page.url)) {
-        console.error("[copilot:describe] navigating to Copilot URL...");
+      let currentUrl = page.url || "";
+      if (!isCopilotUrl(currentUrl)) {
+        console.error("[copilot:describe] navigating to Copilot URL from:", currentUrl?.slice(0, 140) || "(empty)");
         await pageSession.send("Page.navigate", { url: COPILOT_URL });
-        await sleep(3500);
+        try {
+          currentUrl = await waitForTargetUrl(this.cdpSession, page.targetId, isCopilotUrl, 45e3);
+          console.error("[copilot:describe] Copilot URL reached:", currentUrl?.slice(0, 120));
+        } catch (e) {
+          console.error("[copilot:describe] navigate wait failed, retrying once:", e?.message || e);
+          await pageSession.send("Page.navigate", { url: COPILOT_URL });
+          currentUrl = await waitForTargetUrl(this.cdpSession, page.targetId, isCopilotUrl, 30e3);
+          console.error("[copilot:describe] Copilot URL after retry:", currentUrl?.slice(0, 120));
+        }
+        await sleep(1200);
       }
 
       const netCapture = createCopilotNetworkCapture(pageSession);
@@ -409,9 +423,27 @@ function isDisposableStartUrl(url) {
     u.startsWith("chrome://") ||
     u.includes("newtab") ||
     u.includes("ntp.msn") ||
+    u.includes("msn.com") ||
+    u.includes("microsoftstart.com") ||
+    u.includes("bing.com") ||
     u === "data:," ||
     u.startsWith("data:text/html")
   );
+}
+
+/** Poll Target list until the page target's URL matches (navigation committed). */
+async function waitForTargetUrl(browserSession, targetId, testFn, timeoutMs = 45e3) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const pages = await browserSession.listPages();
+    const p = pages.find((x) => x.targetId === targetId);
+    if (p && testFn(p.url || "")) return p.url || "";
+    await sleep(400);
+  }
+  const pages = await browserSession.listPages();
+  const p = pages.find((x) => x.targetId === targetId);
+  const last = p?.url || "";
+  throw new Error(`Timeout waiting for target URL (${timeoutMs}ms); last=${last.slice(0, 200)}`);
 }
 
 /**
@@ -1752,7 +1784,7 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
 
   globalOptions.cdpPort = actualPort;
   console.error("[copilot:ensureEdge] launching Relay Edge (isolated profile) on port", actualPort);
-  /** No startup URL — CLI Copilot URL + createTarget raced and opened duplicate tabs; describeImpl navigates. */
+  /** Open Copilot immediately so the window is not stuck on NTP/home; describeImpl still normalizes URL. */
   const args = [
     `--remote-debugging-port=${actualPort}`,
     "--remote-allow-origins=*",
@@ -1762,6 +1794,7 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
     "--disable-restore-session-state",
     "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
     `--user-data-dir=${profileDir}`,
+    COPILOT_URL,
   ];
   if (process.platform === "win32") {
     try {
@@ -1877,6 +1910,7 @@ async function ensureEdgeLegacyAttach(edgePath, cdpPort) {
     "--disable-infobars",
     "--disable-restore-session-state",
     "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
+    COPILOT_URL,
   ];
   if (process.platform === "win32") {
     try {
