@@ -17,11 +17,47 @@ var COPILOT_URL = "https://m365.cloud.microsoft/chat/";
  * "Copilot にメッセージを送信する" (e.g. ref e110); EN uses "Send a message…" on role=textbox.
  */
 var COMPOSER_ANCESTOR_CLOSEST =
-  '#m365-chat-editor-target-element, [data-lexical-editor="true"], [role="textbox"][aria-label*="メッセージを送信"], [role="textbox"][aria-label*="Send a message"]';
+  '#m365-chat-editor-target-element, [data-lexical-editor="true"], [role="textbox"][aria-label*="メッセージを送信"], [role="textbox"][aria-label*="Send a message"], [role="textbox"][aria-label*="Message"], [role="textbox"][aria-label*="message"], [role="textbox"][aria-label*="Copilot"]';
 var INPUT_SELECTOR = COMPOSER_ANCESTOR_CLOSEST;
 var COMPOSER_WAIT_MS = 25e3;
-var NEW_CHAT_BUTTON_SELECTOR =
-  '[data-testid="newChatButton"], button[aria-label*="新しいチャット"], button[aria-label*="New chat"]';
+/** Prefer single selectors: `clickFirstVisibleDeep` walks shadow roots per selector. */
+var NEW_CHAT_BUTTON_SELECTORS = [
+  '[data-testid="newChatButton"]',
+  'button[aria-label*="新しいチャット"]',
+  'button[aria-label*="New chat"]',
+  'button[aria-label*="New conversation"]',
+  '[role="button"][aria-label*="New chat"]',
+  '[role="button"][aria-label*="新しいチャット"]',
+  'a[aria-label*="New chat"]',
+  '[role="menuitem"][aria-label*="New chat"]',
+  '[role="menuitem"][aria-label*="新しいチャット"]',
+];
+/** Lowercase substrings against combined accessible name (label + labelledby text + title). */
+var NEW_CHAT_A11Y_HINTS = [
+  "new chat",
+  "new conversation",
+  "start new conversation",
+  "create new chat",
+  "another chat",
+  "新しいチャット",
+  "新規のチャット",
+  "新規チャット",
+  "別のチャット",
+  "チャットを開始",
+  "nouvelle conversation",
+  "neuer chat",
+  "nuevo chat",
+];
+var NEW_CHAT_A11Y_EXCLUDE = [
+  "feedback",
+  "フィードバック",
+  "settings",
+  "設定",
+  "help",
+  "ヘルプ",
+  "support",
+  "サポート",
+];
 /** Any visible “stop generating” control (M365 UI varies by locale/build). */
 var STREAMING_STOP_SELECTORS = [
   ".fai-SendButton__stopBackground",
@@ -454,8 +490,11 @@ class CopilotSession {
 
       try {
         console.error("[copilot:describe] starting new chat...");
-        const newChatOk = await clickFirstVisibleDeep(pageSession, NEW_CHAT_BUTTON_SELECTOR);
-        if (!newChatOk) await pageSession.click(NEW_CHAT_BUTTON_SELECTOR).catch(() => {});
+        const newChatOk = await clickNewChatDeep(pageSession);
+        if (!newChatOk) {
+          console.error("[copilot:describe] new chat not found (css+shadow+a11y); last-chance CDP click");
+          await pageSession.click(NEW_CHAT_BUTTON_SELECTORS[0]).catch(() => {});
+        }
         await sleep(2800);
 
         console.error("[copilot:describe] pasting prompt...");
@@ -518,6 +557,64 @@ var COMPOSER_DOM_HELPERS = `
   function __raVis(el) {
     return el && el.offsetParent !== null;
   }
+  function __raComposerLabelHints(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const lab = (
+      (el.getAttribute("aria-label") || "") +
+      " " +
+      (el.getAttribute("placeholder") || "") +
+      " " +
+      (el.getAttribute("data-placeholder") || "")
+    ).toLowerCase();
+    if (!lab.trim()) return false;
+    const hints = [
+      "send a message",
+      "message to copilot",
+      "copilot",
+      "メッセージ",
+      "返信",
+      "type a message",
+      "reply",
+      "ask copilot",
+      "compose",
+      "prompt"
+    ];
+    for (let i = 0; i < hints.length; i++) {
+      if (lab.includes(hints[i])) return true;
+    }
+    return false;
+  }
+  function __raBestInnerTextbox(root) {
+    if (!root || !__raVis(root)) return null;
+    const inner = root.querySelector('[contenteditable="true"]');
+    return __raVis(inner) ? inner : root;
+  }
+  function __raWalkFindComposerLabeled(root, depth) {
+    if (!root || depth > 18) return null;
+    if (root.nodeType === 1) {
+      try {
+        if (
+          root.matches &&
+          root.matches('[role="textbox"]') &&
+          __raComposerLabelHints(root) &&
+          __raVis(root)
+        ) {
+          const el = __raBestInnerTextbox(root);
+          if (el) return el;
+        }
+      } catch (_) {}
+      const kids = root.children || [];
+      for (let i = 0; i < kids.length; i++) {
+        const f = __raWalkFindComposerLabeled(kids[i], depth + 1);
+        if (f) return f;
+      }
+      if (root.shadowRoot) {
+        const f = __raWalkFindComposerLabeled(root.shadowRoot, depth + 1);
+        if (f) return f;
+      }
+    }
+    return null;
+  }
   function __raFindComposerEditable() {
     function inDoc(doc, depth) {
       if (!doc || depth > 14) return null;
@@ -526,8 +623,14 @@ var COMPOSER_DOM_HELPERS = `
         doc.querySelector('[data-lexical-editor="true"]'),
         doc.querySelector('[role="textbox"][aria-label*="メッセージを送信"]'),
         doc.querySelector('[role="textbox"][aria-label*="Send a message"]'),
+        doc.querySelector('main [role="textbox"]'),
+        doc.querySelector('[role="main"] [role="textbox"]'),
+        doc.querySelector('[role="textbox"][aria-label*="Copilot"]'),
       ].filter(Boolean);
+      const seen = new Set();
       for (const root of roots) {
+        if (!root || seen.has(root)) continue;
+        seen.add(root);
         if (!__raVis(root)) continue;
         const inner = root.querySelector('[contenteditable="true"]');
         const el = __raVis(inner) ? inner : root;
@@ -536,13 +639,41 @@ var COMPOSER_DOM_HELPERS = `
         } catch (_) {}
         return el;
       }
+      try {
+        const labeled = Array.from(doc.querySelectorAll('[role="textbox"]')).filter(
+          (n) => __raComposerLabelHints(n) && __raVis(n)
+        );
+        for (let i = 0; i < labeled.length; i++) {
+          const el = __raBestInnerTextbox(labeled[i]);
+          if (el) {
+            try {
+              if (doc.defaultView) doc.defaultView.focus();
+            } catch (_) {}
+            return el;
+          }
+        }
+      } catch (_) {}
+      const walked = __raWalkFindComposerLabeled(doc.body || doc.documentElement, 0);
+      if (walked) {
+        try {
+          if (doc.defaultView) doc.defaultView.focus();
+        } catch (_) {}
+        return walked;
+      }
+      const scope =
+        doc.querySelector("main") || doc.querySelector('[role="main"]') || doc.body || doc.documentElement;
       const fallbacks = [
         'div[role="textbox"][contenteditable="true"]',
         'div[role="textbox"]',
         '[contenteditable="true"]'
       ];
       for (const sel of fallbacks) {
-        const el = doc.querySelector(sel);
+        let el = null;
+        try {
+          el = scope.querySelector(sel);
+        } catch (_) {
+          el = null;
+        }
         if (__raVis(el)) {
           try {
             if (doc.defaultView) doc.defaultView.focus();
@@ -569,21 +700,166 @@ var COMPOSER_DOM_HELPERS = `
   }
 `;
 
-/** Click first matching visible element in the main document or nested same-origin iframes. */
+/** Shared in-page helpers: accessible name + shadow-safe activatable click (new chat, etc.). */
+var A11Y_CONTROL_HELPERS = `
+  function __raNameFromLabelledBy(el) {
+    try {
+      const id = el.getAttribute("aria-labelledby");
+      if (!id) return "";
+      const doc = el.ownerDocument || document;
+      const parts = id.split(/\\s+/).map((x) => x.trim()).filter(Boolean);
+      let t = "";
+      for (let i = 0; i < parts.length; i++) {
+        const ref = doc.getElementById(parts[i]);
+        if (ref) t += " " + (ref.textContent || "").trim();
+      }
+      return t;
+    } catch (_) {
+      return "";
+    }
+  }
+  function __raActivAccessibleName(el) {
+    if (!el || el.nodeType !== 1) return "";
+    return (
+      (el.getAttribute("aria-label") || "") +
+      " " +
+      __raNameFromLabelledBy(el) +
+      " " +
+      (el.getAttribute("title") || "") +
+      " " +
+      (el.getAttribute("name") || "")
+    )
+      .replace(/\\s+/g, " ")
+      .trim();
+  }
+  function __raActivOk(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.offsetParent === null) return false;
+    const st = getComputedStyle(el);
+    if (st.visibility === "hidden" || st.display === "none" || Number(st.opacity) === 0) return false;
+    if (el.getAttribute("aria-hidden") === "true") return false;
+    if (el.disabled) return false;
+    if (el.getAttribute("aria-disabled") === "true") return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return false;
+    return r.bottom > 1 && r.right > 1 && r.top < innerHeight - 1 && r.left < innerWidth - 1;
+  }
+  function __raIsActivatable(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const tag = el.tagName;
+    if (tag === "BUTTON") return true;
+    if (tag === "A" && el.getAttribute("href")) return true;
+    const role = el.getAttribute("role");
+    if (role === "button" || role === "menuitem" || role === "tab") return true;
+    return false;
+  }
+  function __raHintsMatch(nameLow, hints) {
+    for (let i = 0; i < hints.length; i++) {
+      if (nameLow.includes(hints[i])) return true;
+    }
+    return false;
+  }
+  function __raExcludesMatch(nameLow, ex) {
+    for (let i = 0; i < ex.length; i++) {
+      if (nameLow.includes(ex[i])) return true;
+    }
+    return false;
+  }
+  function __raWalkClickMatching(root, hints, excludes, depth) {
+    if (!root || depth > 22) return false;
+    if (root.nodeType === 1) {
+      if (__raIsActivatable(root)) {
+        const nameLow = __raActivAccessibleName(root).toLowerCase();
+        if (nameLow && __raHintsMatch(nameLow, hints) && !__raExcludesMatch(nameLow, excludes)) {
+          if (__raActivOk(root)) {
+            try { root.scrollIntoView({ block: "center", inline: "nearest" }); } catch (_) {}
+            root.click();
+            return true;
+          }
+        }
+      }
+      const kids = root.children || [];
+      for (let i = 0; i < kids.length; i++) {
+        if (__raWalkClickMatching(kids[i], hints, excludes, depth + 1)) return true;
+      }
+      if (root.shadowRoot) {
+        if (__raWalkClickMatching(root.shadowRoot, hints, excludes, depth + 1)) return true;
+      }
+    } else if (root.nodeType === 11) {
+      const kids = root.childNodes || [];
+      for (let i = 0; i < kids.length; i++) {
+        const n = kids[i];
+        if (n && (n.nodeType === 1 || n.nodeType === 11)) {
+          if (__raWalkClickMatching(n, hints, excludes, depth + 1)) return true;
+        }
+      }
+    } else if (root.nodeType === 9) {
+      if (__raWalkClickMatching(root.documentElement, hints, excludes, depth + 1)) return true;
+    }
+    return false;
+  }
+`;
+
+/**
+ * Click first matching visible element (open shadow roots included) in the document or same-origin iframes.
+ * `selector` may be a comma-separated list (tried as separate selectors, first match wins in tree order).
+ */
 async function clickFirstVisibleDeep(session, selector) {
-  const r = await session.evaluate(`((sel) => {
+  const parts =
+    typeof selector === "string"
+      ? selector
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : Array.isArray(selector)
+        ? selector
+        : [String(selector)];
+  const r = await session.evaluate(`((selectors) => {
     function vis(el) {
       return el && el.offsetParent !== null;
     }
+    function walkShadowTree(root, visit, depth) {
+      if (!root || depth > 22) return;
+      if (root.nodeType === 1) {
+        visit(root);
+        const kids = root.children || [];
+        for (let i = 0; i < kids.length; i++) walkShadowTree(kids[i], visit, depth + 1);
+        if (root.shadowRoot) walkShadowTree(root.shadowRoot, visit, depth + 1);
+      } else if (root.nodeType === 11) {
+        const kids = root.childNodes || [];
+        for (let i = 0; i < kids.length; i++) {
+          const n = kids[i];
+          if (n && (n.nodeType === 1 || n.nodeType === 11)) walkShadowTree(n, visit, depth + 1);
+        }
+      } else if (root.nodeType === 9) {
+        walkShadowTree(root.documentElement, visit, depth);
+      }
+    }
+    function firstVisibleMatch(doc, sels) {
+      const top = doc.documentElement || doc.body;
+      if (!top) return null;
+      let found = null;
+      walkShadowTree(
+        top,
+        (el) => {
+          if (found || el.nodeType !== 1) return;
+          for (let i = 0; i < sels.length; i++) {
+            try {
+              if (el.matches && el.matches(sels[i]) && vis(el)) {
+                found = el;
+                return;
+              }
+            } catch (_) {}
+          }
+        },
+        0,
+      );
+      return found;
+    }
     function walk(doc, depth) {
       if (!doc || depth > 14) return false;
-      let el;
-      try {
-        el = doc.querySelector(sel);
-      } catch (_) {
-        el = null;
-      }
-      if (vis(el)) {
+      const el = firstVisibleMatch(doc, selectors);
+      if (el) {
         try {
           el.scrollIntoView({ block: "center", inline: "nearest" });
         } catch (_) {}
@@ -605,8 +881,43 @@ async function clickFirstVisibleDeep(session, selector) {
       return false;
     }
     return walk(document, 0);
-  })(${JSON.stringify(selector)})`);
+  })(${JSON.stringify(parts)})`);
   return r?.value === true;
+}
+
+/** Click first control whose accessible name matches hint substrings (shadow + iframes). */
+async function clickLabeledControlDeep(session, hintsLower, excludeLower) {
+  const r = await session.evaluate(`((hints, excludes) => {
+    ${A11Y_CONTROL_HELPERS}
+    function tryDoc(doc, depth) {
+      if (!doc || depth > 14) return false;
+      const top = doc.documentElement || doc.body;
+      if (top && __raWalkClickMatching(top, hints, excludes, 0)) return true;
+      let frames;
+      try {
+        frames = doc.querySelectorAll("iframe");
+      } catch (_) {
+        return false;
+      }
+      for (let i = 0; i < frames.length; i++) {
+        try {
+          const c = frames[i].contentDocument;
+          if (c && tryDoc(c, depth + 1)) return true;
+        } catch (_) {}
+      }
+      return false;
+    }
+    return tryDoc(document, 0);
+  })(${JSON.stringify(hintsLower)}, ${JSON.stringify(excludeLower)})`);
+  return r?.value === true;
+}
+
+async function clickNewChatDeep(session) {
+  for (let i = 0; i < NEW_CHAT_BUTTON_SELECTORS.length; i++) {
+    const sel = NEW_CHAT_BUTTON_SELECTORS[i];
+    if (await clickFirstVisibleDeep(session, sel)) return true;
+  }
+  return await clickLabeledControlDeep(session, NEW_CHAT_A11Y_HINTS, NEW_CHAT_A11Y_EXCLUDE);
 }
 
 /**
@@ -1097,19 +1408,39 @@ function minComposerThresholdForSubmit(expectedPromptLen) {
   return Math.min(raw, 400);
 }
 
-async function trySubmitViaEnter(session) {
-  await cdpInputEnable(session);
-  await focusComposer(session);
-  await sleep(100);
+async function dispatchEnterKey(session, modifiers = 0) {
   for (const phase of ["keyDown", "keyUp"]) {
     await session.send("Input.dispatchKeyEvent", {
       type: phase,
       key: "Enter",
       code: "Enter",
+      modifiers,
       windowsVirtualKeyCode: 13,
       nativeVirtualKeyCode: 13
     });
   }
+}
+
+async function trySubmitViaEnter(session) {
+  await cdpInputEnable(session);
+  await focusComposer(session);
+  await sleep(100);
+  await dispatchEnterKey(session, 0);
+}
+
+/** Some builds use Ctrl+Enter to send while Enter inserts a newline. */
+async function trySubmitViaCtrlEnter(session) {
+  await cdpInputEnable(session);
+  await focusComposer(session);
+  await sleep(100);
+  await dispatchEnterKey(session, 2);
+}
+
+async function composerSubmitLooksSent(session, lenBefore) {
+  await sleep(700);
+  const generating = await isCopilotGenerating(session);
+  const lenNow = await getComposerTextLength(session);
+  return generating || lenNow + 25 < lenBefore;
 }
 
 /**
@@ -1268,11 +1599,20 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null) {
 
   const lenBefore = await getComposerTextLength(session);
 
+  // Prefer keyboard submit first (fewer brittle send-button selectors / layout deps).
+  console.error("[copilot:submit] trying keyboard (Enter)");
+  await trySubmitViaEnter(session);
+  let sendClicked = await composerSubmitLooksSent(session, lenBefore);
+  if (!sendClicked) {
+    console.error("[copilot:submit] Enter not confirmed; trying Ctrl+Enter");
+    await trySubmitViaCtrlEnter(session);
+    sendClicked = await composerSubmitLooksSent(session, lenBefore);
+  }
+
   // Wait for send button to become visible and enabled
   const deadline = Date.now() + 45e3;
   let stableSince = 0;
-  let sendClicked = false;
-  while (Date.now() < deadline) {
+  while (!sendClicked && Date.now() < deadline) {
     const pos = await findSendButtonCenter(session);
     if (pos.ok) {
       if (!stableSince) stableSince = Date.now();
@@ -1384,11 +1724,17 @@ async function isCopilotGenerating(session) {
           if (reallyVisible(el)) return true;
         }
       }
-      for (const b of queryDeepAll("button, [role='button']", doc)) {
+      for (const b of queryDeepAll("button, [role='button'], [role='menuitem']", doc)) {
         if (!reallyVisible(b)) continue;
-        const a = (b.getAttribute("aria-label") || "").toLowerCase();
+        const a = (b.getAttribute("aria-label") || b.getAttribute("title") || "").toLowerCase();
         if (!a) continue;
-        if (/\\bstop\\b/.test(a) && /generat|stream|response|応答|生成|回答/.test(a)) return true;
+        if (/\\bstop\\b/.test(a) && /generat|stream|response|応答|生成|回答|作成/.test(a)) return true;
+        if (/\\bcancel\\b/.test(a) && /response|応答|生成|回答|stream/.test(a)) return true;
+        if (
+          /arrêt|arret|interromp|interrupt|detener|detén|abbrechen/.test(a) &&
+          /génér|genér|generat|réponse|response|respuesta|stream|flux|応答|生成/.test(a)
+        )
+          return true;
       }
       return false;
     }
@@ -1436,6 +1782,10 @@ async function extractAssistantReplyText(session) {
         if (el.closest('[data-testid*="user-message"]')) return true;
         if (el.closest('[data-testid*="UserMessage"]')) return true;
         if (el.matches && el.matches('cib-message[type="user"]')) return true;
+        if (el.closest('[aria-label*="Your message"]')) return true;
+        if (el.closest('[aria-label*="your message"]')) return true;
+        if (el.closest('[aria-label*="送信した"]')) return true;
+        if (el.closest('[aria-label*="自分のメッセージ"]')) return true;
       } catch (_) {}
       return false;
     }
@@ -1553,7 +1903,15 @@ async function extractAssistantReplyStrict(session) {
       if (!el) return false;
       try {
         if (el.closest('[data-message-author-role="user"]')) return true;
+        if (el.closest('[data-message-author-role="User"]')) return true;
+        if (el.closest('[data-testid="userMessage"]')) return true;
         if (el.closest('[data-testid*="user-message"]')) return true;
+        if (el.closest('[data-testid*="UserMessage"]')) return true;
+        if (el.matches && el.matches('cib-message[type="user"]')) return true;
+        if (el.closest('[aria-label*="Your message"]')) return true;
+        if (el.closest('[aria-label*="your message"]')) return true;
+        if (el.closest('[aria-label*="送信した"]')) return true;
+        if (el.closest('[aria-label*="自分のメッセージ"]')) return true;
       } catch (_) {}
       return false;
     }
@@ -1620,8 +1978,15 @@ async function extractAssistantReplyHeuristic(session) {
       if (!el) return false;
       try {
         if (el.closest('[data-message-author-role="user"]')) return true;
+        if (el.closest('[data-message-author-role="User"]')) return true;
+        if (el.closest('[data-testid="userMessage"]')) return true;
         if (el.closest('[data-testid*="user-message"]')) return true;
         if (el.closest('[data-testid*="UserMessage"]')) return true;
+        if (el.matches && el.matches('cib-message[type="user"]')) return true;
+        if (el.closest('[aria-label*="Your message"]')) return true;
+        if (el.closest('[aria-label*="your message"]')) return true;
+        if (el.closest('[aria-label*="送信した"]')) return true;
+        if (el.closest('[aria-label*="自分のメッセージ"]')) return true;
       } catch (_) {}
       return false;
     }
