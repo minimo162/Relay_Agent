@@ -2,6 +2,7 @@
 // Works in VBS-restricted corporate environments where Playwright connectOverCDP hangs.
 import * as fs from "node:fs";
 import * as http from "node:http";
+import * as os from "node:os";
 import * as path from "node:path";
 
 // Use Node 22+ built-in WebSocket. If unavailable, fall back to bare-net via http upgrade.
@@ -72,6 +73,34 @@ var STREAMING_STOP_SELECTORS = [
   '[class*="stopGenerating"]'
 ];
 var SEND_BUTTON_ANY_SELECTOR = '.fai-SendButton, button[aria-label*="Send"], button[aria-label*="\u9001\u4FE1"], button[aria-label="Reply"], button[data-testid="sendButton"]';
+/** Kiroku / M365: reveal upload UI before file input appears. */
+var PLUS_BUTTON_SELECTORS = [
+  '[data-testid="PlusMenuButton"]',
+  'button[aria-label*="Add"]',
+  'button[aria-label*="Upload"]',
+  'button[aria-label*="添付"]',
+  'button[aria-label*="アップロード"]',
+];
+var FILE_INPUT_SELECTORS = [
+  '[data-testid="uploadFileDialogInput"]',
+  'input[type="file"][accept*="image"]',
+  'input[type="file"]',
+];
+var ATTACHMENT_READY_SELECTORS = [
+  '[data-testid*="attachment"]',
+  '[data-testid*="upload"]',
+  '[data-testid*="image"]',
+  '[aria-label*="Remove attachment"]',
+  '[aria-label*="添付を削除"]',
+];
+var ATTACHMENT_PENDING_SELECTORS = [
+  '[role="progressbar"]',
+  '[aria-busy="true"]',
+  '[data-testid*="progress"]',
+  '[data-testid*="loading"]',
+];
+var SEND_BUTTON_STABLE_MS_DEFAULT = 500;
+var SEND_BUTTON_STABLE_MS_AFTER_ATTACH = 750;
 var ASSISTANT_REPLY_DOM_SELECTORS = [
   '[data-testid="markdown-reply"]',
   '[data-testid*="message-content"]',
@@ -421,36 +450,63 @@ class CopilotSession {
   }
 
   async inspectStatus() {
+    let pageSession = null;
     try {
       await this.connect(globalOptions.cdpPort);
       const page = await this.findOrCreatePage();
       if (!page) {
         return { connected: false, loginRequired: false, error: "Copilot page not available" };
       }
+      await this.cdpSession.send("Target.activateTarget", { targetId: page.targetId }).catch(() => {});
+      pageSession = await this.navigateToPage(page);
+      await pageSession.send("Page.enable", {}).catch(() => {});
+      await pageSession.send("Page.bringToFront", {}).catch(() => {});
+
+      let url = page.url || "";
+      if (!isCopilotUrl(url) && !isLoginUrl(url)) {
+        await pageSession.send("Page.navigate", { url: COPILOT_URL });
+        try {
+          await waitForTargetUrl(
+            this.cdpSession,
+            page.targetId,
+            (u) => isCopilotUrl(u) || isLoginUrl(u),
+            25e3,
+          );
+        } catch {
+          /* listPages below */
+        }
+      }
+      const pages = await this.cdpSession.listPages();
+      const p2 = pages.find((x) => x.targetId === page.targetId);
+      const finalUrl = p2?.url || url;
+      const login = isLoginUrl(finalUrl);
       return {
-        connected: true,
-        loginRequired: isLoginUrl(page.url),
-        url: page.url
+        connected: !login,
+        loginRequired: login,
+        url: finalUrl,
       };
     } catch (error) {
       return {
         connected: false,
         loginRequired: false,
-        error: error instanceof Error ? error.message : String(error)
+        error: error instanceof Error ? error.message : String(error),
       };
+    } finally {
+      if (pageSession) pageSession.close();
     }
   }
 
-  async describe(systemPrompt, userPrompt, imageB64) {
+  async describe(systemPrompt, userPrompt, imageB64, attachmentPaths) {
     const pending = this._describeChain.then(() =>
-      this.describeImpl(systemPrompt, userPrompt, imageB64),
+      this.describeImpl(systemPrompt, userPrompt, imageB64, attachmentPaths || []),
     );
     this._describeChain = pending.catch(() => {});
     return pending;
   }
 
-  async describeImpl(systemPrompt, userPrompt, imageB64) {
+  async describeImpl(systemPrompt, userPrompt, imageB64, attachmentPaths = []) {
     let pageSession = null;
+    let attachmentTempFiles = [];
     try {
       console.error("[copilot:describe] connecting...");
       await this.connect(globalOptions.cdpPort);
@@ -493,6 +549,7 @@ class CopilotSession {
       const netCapture = createCopilotNetworkCapture(pageSession);
       await netCapture.enable();
 
+      let hadAttachments = false;
       try {
         console.error("[copilot:describe] starting new chat...");
         const newChatOk = await clickNewChatDeep(pageSession);
@@ -502,17 +559,28 @@ class CopilotSession {
         }
         await sleep(2800);
 
+        const upload = await uploadCopilotAttachments(pageSession, attachmentPaths, imageB64);
+        attachmentTempFiles = upload.tempFiles;
+        hadAttachments = upload.hadAttachments;
+
         console.error("[copilot:describe] pasting prompt...");
         const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${userPrompt}` : userPrompt;
         await pastePromptRaw(pageSession, fullPrompt);
 
         console.error("[copilot:describe] submitting prompt...");
-        return await submitPromptRaw(pageSession, fullPrompt.length, netCapture);
+        return await submitPromptRaw(pageSession, fullPrompt.length, netCapture, { hadAttachments });
       } finally {
         await netCapture.disable().catch(() => {});
       }
     } finally {
-      if (pageSession) { pageSession.close(); }
+      for (const tf of attachmentTempFiles) {
+        setTimeout(() => {
+          fs.promises.unlink(tf).catch(() => {});
+        }, 5000);
+      }
+      if (pageSession) {
+        pageSession.close();
+      }
     }
   }
 }
@@ -925,6 +993,150 @@ async function clickNewChatDeep(session) {
   return await clickLabeledControlDeep(session, NEW_CHAT_A11Y_HINTS, NEW_CHAT_A11Y_EXCLUDE);
 }
 
+function normalizeTextContent(content) {
+  if (typeof content === "string") return (content || "").trim();
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((part) => part && part.type === "text" && part.text)
+    .map((part) => String(part.text || "").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** Kiroku: ClipboardEvent("paste") on outer Lexical shell only (no beforeinput). */
+async function pasteViaKirokuOuterClipboardOnly(session, text) {
+  const r = await session.evaluate(`((fullText) => {
+    const el =
+      document.querySelector("#m365-chat-editor-target-element") ??
+      document.querySelector('[data-lexical-editor="true"]');
+    if (!el) return false;
+    try {
+      el.focus();
+      const dt = new DataTransfer();
+      dt.setData("text/plain", fullText);
+      el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true }));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  })(${JSON.stringify(text)})`);
+  return r.value === true;
+}
+
+async function copilotAttachmentStillPending(session) {
+  const r = await session.evaluate(`(() => {
+    const sels = ${JSON.stringify(ATTACHMENT_PENDING_SELECTORS)};
+    for (let i = 0; i < sels.length; i++) {
+      let els;
+      try {
+        els = document.querySelectorAll(sels[i]);
+      } catch (_) {
+        continue;
+      }
+      for (let j = 0; j < els.length; j++) {
+        const el = els[j];
+        if (el && el.offsetParent !== null) return true;
+      }
+    }
+    return false;
+  })()`);
+  return r.value === true;
+}
+
+async function clickPlusMenuForUpload(session) {
+  for (let i = 0; i < PLUS_BUTTON_SELECTORS.length; i++) {
+    if (await clickFirstVisibleDeep(session, PLUS_BUTTON_SELECTORS[i])) return true;
+  }
+  return false;
+}
+
+async function setCopilotFileInputFilesViaDom(session, absolutePaths) {
+  await session.send("DOM.enable", {}).catch(() => {});
+  const docRes = await session.send("DOM.getDocument", { depth: -1, pierce: true }, 30e3);
+  const rootId = docRes.root?.nodeId;
+  if (!rootId) throw new Error("DOM.getDocument missing root nodeId");
+  for (let si = 0; si < FILE_INPUT_SELECTORS.length; si++) {
+    const sel = FILE_INPUT_SELECTORS[si];
+    let q;
+    try {
+      q = await session.send("DOM.querySelector", { nodeId: rootId, selector: sel }, 10e3);
+    } catch {
+      continue;
+    }
+    const nodeId = q.nodeId;
+    if (!nodeId || nodeId === 0) continue;
+    try {
+      await session.send("DOM.setFileInputFiles", { nodeId, files: absolutePaths }, 30e3);
+      return sel;
+    } catch (e) {
+      console.error("[copilot:attach] DOM.setFileInputFiles failed for", sel, e?.message || e);
+    }
+  }
+  throw new Error("Copilot file input not found or setFileInputFiles failed");
+}
+
+async function waitForCopilotAttachmentReady(session, fileNameHint, timeoutMs = 18e3) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const ok = await session.evaluate(
+      `((hint) => {
+        function vis(el) {
+          return el && el.offsetParent !== null;
+        }
+        if (hint) {
+          const body = document.body;
+          const t = (body && (body.innerText || body.textContent)) || "";
+          if (t.includes(hint)) return true;
+        }
+        const sels = ${JSON.stringify(ATTACHMENT_READY_SELECTORS)};
+        for (let i = 0; i < sels.length; i++) {
+          const el = document.querySelector(sels[i]);
+          if (vis(el)) return true;
+        }
+        return false;
+      })(${JSON.stringify(fileNameHint || "")})`,
+    );
+    if (ok.value === true) return;
+    await sleep(250);
+  }
+  throw new Error("Copilot attachment could not be confirmed");
+}
+
+/**
+ * Kiroku-style uploads: one local file per pick (M365 often replaces prior attachment).
+ * @returns {{ tempFiles: string[], hadAttachments: boolean }}
+ */
+async function uploadCopilotAttachments(session, attachmentPaths, imageB64) {
+  const tempFiles = [];
+  const toUpload = [];
+  if (imageB64) {
+    const tmpPng = path.join(
+      os.tmpdir(),
+      `relay-copilot-${Date.now()}-${Math.random().toString(16).slice(2)}.png`,
+    );
+    await fs.promises.writeFile(tmpPng, Buffer.from(imageB64, "base64"));
+    tempFiles.push(tmpPng);
+    toUpload.push(path.resolve(tmpPng));
+  }
+  const extra = Array.isArray(attachmentPaths) ? attachmentPaths : [];
+  for (let i = 0; i < extra.length; i++) {
+    const p = path.resolve(String(extra[i]));
+    if (!fs.existsSync(p)) throw new Error(`Attachment not found: ${p}`);
+    toUpload.push(p);
+  }
+  if (toUpload.length === 0) return { tempFiles, hadAttachments: false };
+
+  for (let i = 0; i < toUpload.length; i++) {
+    const abs = toUpload[i];
+    await clickPlusMenuForUpload(session);
+    await sleep(350);
+    await setCopilotFileInputFilesViaDom(session, [abs]);
+    await waitForCopilotAttachmentReady(session, path.basename(abs), 18e3);
+    await sleep(200);
+  }
+  return { tempFiles, hadAttachments: true };
+}
+
 /**
  * Lexical often nests the real editor: outer #m365-chat-editor-target-element vs inner [contenteditable="true"].
  * CDP Input.insertText targets the focused node; focusing only the outer shell can paste "nowhere".
@@ -1261,19 +1473,32 @@ async function pastePromptRaw(session, text) {
   const needMin = pasteNeedMinChars(text.length);
 
   let skipBulkFallbacks = false;
-  try {
-    console.error("[copilot:paste] trying sync in-page execCommand (single evaluate, ~1200 code units/step)…");
-    const syncRes = await pasteViaSyncBrowserExecCommand(session, text);
-    console.error("[copilot:paste] sync in-page execCommand result:", JSON.stringify(syncRes));
-  } catch (e) {
-    console.error("[copilot:paste] sync in-page execCommand threw:", e?.message || e);
+  if (text.length <= 16_000) {
+    const kOuter = await pasteViaKirokuOuterClipboardOnly(session, text);
+    if (kOuter) {
+      await sleep(280);
+      len = await getComposerTextLength(session);
+      if (pasteLooksComplete(len, text.length)) {
+        skipBulkFallbacks = true;
+        console.error("[copilot:paste] kiroku outer ClipboardEvent satisfied pasteLooksComplete");
+      }
+    }
   }
-  await sleep(450);
-  len = await getComposerTextLength(session);
-  console.error("[copilot:paste] visible len after sync in-page:", len);
-  if (pasteLooksComplete(len, text.length)) {
-    skipBulkFallbacks = true;
-    console.error("[copilot:paste] pasteLooksComplete after sync in-page");
+  if (!skipBulkFallbacks) {
+    try {
+      console.error("[copilot:paste] trying sync in-page execCommand (single evaluate, ~1200 code units/step)…");
+      const syncRes = await pasteViaSyncBrowserExecCommand(session, text);
+      console.error("[copilot:paste] sync in-page execCommand result:", JSON.stringify(syncRes));
+    } catch (e) {
+      console.error("[copilot:paste] sync in-page execCommand threw:", e?.message || e);
+    }
+    await sleep(450);
+    len = await getComposerTextLength(session);
+    console.error("[copilot:paste] visible len after sync in-page:", len);
+    if (pasteLooksComplete(len, text.length)) {
+      skipBulkFallbacks = true;
+      console.error("[copilot:paste] pasteLooksComplete after sync in-page");
+    }
   }
 
   /** Very long prompts: synthetic multi-part paste often drops text; stream via CDP first. */
@@ -1591,12 +1816,19 @@ async function clickSendViaCdpMouse(session) {
   return true;
 }
 
-async function submitPromptRaw(session, expectedPromptLen, netCapture = null) {
+async function submitPromptRaw(session, expectedPromptLen, netCapture = null, opts = {}) {
+  const hadAttachments = opts.hadAttachments === true;
+  const stableMs = hadAttachments ? SEND_BUTTON_STABLE_MS_AFTER_ATTACH : SEND_BUTTON_STABLE_MS_DEFAULT;
+
   const minComposer = minComposerThresholdForSubmit(expectedPromptLen);
 
   // Until composer shows our text, Send often stays disabled
   const composeDeadline = Date.now() + 15e3;
   while (Date.now() < composeDeadline) {
+    if (await copilotAttachmentStillPending(session)) {
+      await sleep(200);
+      continue;
+    }
     const n = await getComposerTextLength(session);
     if (n >= minComposer || expectedPromptLen < 20) break;
     await sleep(200);
@@ -1619,9 +1851,10 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null) {
   let stableSince = 0;
   while (!sendClicked && Date.now() < deadline) {
     const pos = await findSendButtonCenter(session);
-    if (pos.ok) {
+    const pending = await copilotAttachmentStillPending(session);
+    if (pos.ok && !pending) {
       if (!stableSince) stableSince = Date.now();
-      if (Date.now() - stableSince >= 500) {
+      if (Date.now() - stableSince >= stableMs) {
         console.error("[copilot:submit] clicking send (DOM)");
         const domOk = await clickSendViaDom(session);
         if (!domOk) {
@@ -3402,7 +3635,10 @@ function createServer(session) {
           (prompt.systemPrompt || "").length,
         );
         const description = await session.describe(
-          prompt.systemPrompt, prompt.userPrompt, prompt.imageB64
+          prompt.systemPrompt,
+          prompt.userPrompt,
+          prompt.imageB64,
+          prompt.attachmentPaths,
         );
         return writeJson(res, 200, {
           choices: [{ message: { role: "assistant", content: description } }]
@@ -3429,21 +3665,30 @@ async function readJsonBody(req) {
 
 function parseOpenAiRequest(payload) {
   const msgs = payload.messages ?? [];
-  const systemPrompt = msgs.filter((m) => m.role === "system").map((m) => m.content?.trim()).filter(Boolean).join("\n\n");
+  const systemPrompt = msgs
+    .filter((m) => m.role === "system")
+    .map((m) => normalizeTextContent(m.content))
+    .filter(Boolean)
+    .join("\n\n");
   let userPrompt = "";
   let imageB64;
   for (const m of msgs) {
     if (m.role !== "user") continue;
-    if (typeof m.content === "string") { userPrompt = `${userPrompt}\n${m.content}`.trim(); continue; }
+    if (typeof m.content === "string") {
+      userPrompt = `${userPrompt}\n${m.content}`.trim();
+      continue;
+    }
     if (Array.isArray(m.content)) {
       for (const p of m.content) {
-        if (p.type === "text") userPrompt = `${userPrompt}\n${p.text}`.trim();
+        if (p.type === "text" && p.text) userPrompt = `${userPrompt}\n${p.text}`.trim();
         if (p.type === "image_url" && p.image_url?.url) imageB64 = extractBase64(p.image_url.url);
       }
     }
   }
+  const ra = payload.relay_attachments;
+  const attachmentPaths = Array.isArray(ra) ? ra.map((x) => String(x || "").trim()).filter(Boolean) : [];
   if (!userPrompt.trim()) throw new Error("User prompt is empty");
-  return { systemPrompt, userPrompt, imageB64 };
+  return { systemPrompt, userPrompt, imageB64, attachmentPaths };
 }
 
 function extractBase64(url) { const m = url.match(/^data:[^;]+;base64,(.+)$/); return m ? m[1] : url; }

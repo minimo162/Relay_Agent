@@ -24,6 +24,10 @@ const COPILOT_HTTP_PORT_FALLBACKS: u16 = 32;
 pub struct CopilotStatusResponse {
     pub connected: bool,
     pub login_required: bool,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 pub struct CopilotServer {
@@ -331,25 +335,31 @@ impl CopilotServer {
         system_prompt: &str,
         user_prompt: &str,
         timeout_secs: u64,
+        attachment_paths: &[String],
     ) -> Result<String, CopilotError> {
         let url = format!("{}/v1/chat/completions", self.server_url());
         info!(
-            "[copilot] POST {} (timeout {}s, user_prompt_chars={}, system_chars={})",
+            "[copilot] POST {} (timeout {}s, user_prompt_chars={}, system_chars={}, attachments={})",
             url,
             timeout_secs,
             user_prompt.len(),
-            system_prompt.len()
+            system_prompt.len(),
+            attachment_paths.len()
         );
         let t0 = Instant::now();
+        let mut body = json!({
+            "messages": [
+                { "role": "system", "content": system_prompt },
+                { "role": "user", "content": user_prompt }
+            ]
+        });
+        if !attachment_paths.is_empty() {
+            body["relay_attachments"] = json!(attachment_paths);
+        }
         let response = self
             .client
             .post(url)
-            .json(&json!({
-                "messages": [
-                    { "role": "system", "content": system_prompt },
-                    { "role": "user", "content": user_prompt }
-                ]
-            }))
+            .json(&body)
             .timeout(Duration::from_secs(timeout_secs))
             .send()
             .await
@@ -410,9 +420,10 @@ impl CopilotServer {
         system_prompt: &str,
         user_prompt: &str,
         timeout_secs: u64,
+        attachment_paths: &[String],
     ) -> Result<String, CopilotError> {
         match self
-            .send_prompt_once(system_prompt, user_prompt, timeout_secs)
+            .send_prompt_once(system_prompt, user_prompt, timeout_secs, attachment_paths)
             .await
         {
             Ok(t) => Ok(t),
@@ -421,7 +432,7 @@ impl CopilotServer {
                     "[copilot] chat/completions failed ({e}); restarting Node bridge and retrying once"
                 );
                 self.start().await?;
-                self.send_prompt_once(system_prompt, user_prompt, timeout_secs)
+                self.send_prompt_once(system_prompt, user_prompt, timeout_secs, attachment_paths)
                     .await
             }
             Err(e) => Err(e),

@@ -402,8 +402,7 @@ fn read_pdf_as_text(path: &Path, pages: Option<&str>) -> io::Result<String> {
         .extract_text(&sorted)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     let header = format!(
-        "[PDF text extraction — pages {:?}; quality varies by file.]\n\n",
-        sorted
+        "[PDF text extraction — pages {sorted:?}; quality varies by file.]\n\n"
     );
     Ok(header + &extracted)
 }
@@ -415,8 +414,7 @@ fn read_image_summary(path: &Path) -> io::Result<String> {
         .map_err(|e| io::Error::other(e.to_string()))?;
     let format = reader
         .format()
-        .map(|f| format!("{f:?}"))
-        .unwrap_or_else(|| "unknown".into());
+        .map_or_else(|| "unknown".into(), |f| format!("{f:?}"));
     let img = reader.decode().map_err(|e| io::Error::other(e.to_string()))?;
     let (w, h) = img.dimensions();
     Ok(format!(

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -10,6 +11,22 @@ use uuid::Uuid;
 
 /// M365 Copilot (CDP) cannot take API `tools`; model must emit this fenced JSON for invocations.
 const CDP_TOOL_FENCE: &str = "```relay_tool";
+
+/// Composer text when the full turn payload is sent as an attached file (see `CdpApiClient::stream`).
+/// Keep short; the attachment holds system + conversation + tool catalog.
+const CDP_FILE_DELIVERY_USER_MESSAGE: &str = "The attached text file contains the full instructions for this turn (system context, conversation, and the Relay Agent tool catalog with `relay_tool` protocol). Read the file and follow it. When calling tools, use Markdown fenced blocks whose info string is exactly `relay_tool` as described in the file.\n\n（添付ファイルに今ターンの全文指示・ツール一覧・relay_tool 規約が含まれます。ファイルを読み、従ってください。）";
+
+/// Undocumented: set to `1` or `true` to paste the full prompt into the composer instead of file attach (local debugging only).
+fn cdp_legacy_composer_full_paste() -> bool {
+    std::env::var("RELAY_CDP_LEGACY_COMPOSER")
+        .map(|v| {
+            matches!(
+                v.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
 
 use runtime::{
     self, ApiClient, ApiRequest, AssistantEvent, ContentBlock, ConversationMessage, McpServerManager,
@@ -265,8 +282,38 @@ impl ApiClient for CdpApiClient {
     fn stream(&mut self, request: &ApiRequest<'_>) -> Result<Vec<AssistantEvent>, RuntimeError> {
         let prompt = build_cdp_prompt(request);
 
-        let prompt_preview = &prompt[..prompt.len().min(80)];
-        tracing::info!("[CdpApiClient] sending prompt: {prompt_preview}…");
+        let legacy_composer = cdp_legacy_composer_full_paste();
+        if legacy_composer {
+            tracing::info!(
+                "[CdpApiClient] RELAY_CDP_LEGACY_COMPOSER: full composer paste ({} chars)",
+                prompt.len()
+            );
+        } else {
+            tracing::info!(
+                "[CdpApiClient] sending prompt via file attachment ({} chars)",
+                prompt.len()
+            );
+        }
+
+        let mut temp_prompt_file: Option<PathBuf> = None;
+        let (user_message, attachment_paths): (&str, Vec<String>) = if legacy_composer {
+            (prompt.as_str(), vec![])
+        } else {
+            let path = std::env::temp_dir().join(format!(
+                "relay-cdp-prompt-{}.txt",
+                Uuid::new_v4()
+            ));
+            std::fs::write(&path, prompt.as_str()).map_err(|e| {
+                RuntimeError::new(format!("failed to write temp Copilot prompt file: {e}"))
+            })?;
+            let path_for_attach = path
+                .canonicalize()
+                .unwrap_or_else(|_| path.clone())
+                .to_string_lossy()
+                .into_owned();
+            temp_prompt_file = Some(path);
+            (CDP_FILE_DELIVERY_USER_MESSAGE, vec![path_for_attach])
+        };
 
         let t0 = Instant::now();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -281,11 +328,22 @@ impl ApiClient for CdpApiClient {
                 .map_err(|e| RuntimeError::new(format!("copilot server lock poisoned: {e}")))?;
             rt.block_on(async {
                 srv
-                    .send_prompt("", &prompt, self.response_timeout_secs)
+                    .send_prompt(
+                        "",
+                        user_message,
+                        self.response_timeout_secs,
+                        &attachment_paths,
+                    )
                     .await
             })
             .map_err(|e| RuntimeError::new(format!("Copilot request failed: {e}")))?
         };
+
+        if let Some(path) = temp_prompt_file {
+            if let Err(e) = std::fs::remove_file(&path) {
+                tracing::debug!(path = %path.display(), error = %e, "temp Copilot prompt file cleanup");
+            }
+        }
 
         tracing::info!(
             "[CdpApiClient] response {} chars in {:?}",

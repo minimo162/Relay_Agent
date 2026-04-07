@@ -272,6 +272,7 @@ fn read_git_output(cwd: &Path, args: &[&str]) -> Option<String> {
     String::from_utf8(output.stdout).ok()
 }
 
+#[must_use]
 pub fn render_project_context(project_context: &ProjectContext) -> String {
     let mut lines = vec!["# Project context".to_string()];
     let mut bullets = vec![
@@ -298,6 +299,7 @@ pub fn render_project_context(project_context: &ProjectContext) -> String {
     lines.join("\n")
 }
 
+#[must_use]
 pub fn render_instruction_files(files: &[ContextFile]) -> String {
     let mut sections = vec!["# Workspace instructions".to_string()];
     let mut remaining_chars = MAX_TOTAL_INSTRUCTION_CHARS;
