@@ -391,7 +391,7 @@ class CopilotSession {
         console.error("[copilot:describe] starting new chat...");
         const newChatOk = await clickFirstVisibleDeep(pageSession, NEW_CHAT_BUTTON_SELECTOR);
         if (!newChatOk) await pageSession.click(NEW_CHAT_BUTTON_SELECTOR).catch(() => {});
-        await sleep(1800);
+        await sleep(2800);
 
         console.error("[copilot:describe] pasting prompt...");
         const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${userPrompt}` : userPrompt;
@@ -626,8 +626,61 @@ function pasteLooksComplete(visibleLen, fullLen) {
 }
 
 /**
+ * Single Runtime.evaluate: run many execCommand("insertText") slices in one synchronous turn.
+ * Often works when CDP Input.insertText never reaches Lexical (focus/session quirks on M365).
+ */
+async function pasteViaSyncBrowserExecCommand(session, text) {
+  const res = await session.evaluate(
+    `((fullText) => {
+      ${COMPOSER_DOM_HELPERS}
+      function lenOf(el) {
+        if (!el) return 0;
+        const raw = el.innerText || el.textContent || "";
+        const t = raw.replace(new RegExp(String.fromCharCode(0x200b), "g"), "");
+        return t.trim().length;
+      }
+      const el = __raFindComposerEditable();
+      if (!el) return { ok: false, reason: "no_composer", visibleLen: 0 };
+      el.focus();
+      const doc = el.ownerDocument;
+      try {
+        doc.defaultView && doc.defaultView.focus();
+      } catch (_) {}
+      try {
+        const sel = doc.getSelection();
+        const range = doc.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch (_) {}
+      const units = Array.from(fullText);
+      const step = 1200;
+      let execTrue = 0;
+      for (let i = 0; i < units.length; i += step) {
+        const slice = units.slice(i, i + step).join("");
+        try {
+          if (doc.execCommand("insertText", false, slice)) execTrue++;
+        } catch (e) {
+          return { ok: false, reason: String(e && e.message ? e.message : e), visibleLen: lenOf(el), execTrue };
+        }
+      }
+      return {
+        ok: true,
+        visibleLen: lenOf(el),
+        codeUnits: units.length,
+        execTrue,
+      };
+    })(${JSON.stringify(text)})`,
+    120e3,
+  );
+  const v = res?.value;
+  return v && typeof v === "object" ? v : { ok: false, reason: "bad_eval_return", raw: v };
+}
+
+/**
  * Lexical often ingests full payloads correctly from a single synthetic paste (one transaction).
- * Chunked CDP insertText / per-chunk execCommand+focus can leave only the last fragment visible.
+ * Chunked CDP Input.insertText / per-chunk execCommand+focus can leave only the last fragment visible.
  */
 async function pasteViaSyntheticClipboard(session, text) {
   const maxPerPaste = 12e3;
@@ -657,7 +710,7 @@ async function pasteViaSyntheticClipboard(session, text) {
             bubbles: true,
             cancelable: true,
             inputType: 'insertFromPaste',
-            data: null
+            data: payload
           }));
           el.dispatchEvent(new ClipboardEvent('paste', {
             clipboardData: dt,
@@ -805,6 +858,8 @@ async function insertTextViaKeyChars(session, text) {
 
 async function pastePromptRaw(session, text) {
   console.error("[copilot:paste] begin (", text.length, "chars )");
+  await session.send("Runtime.enable", {}).catch(() => {});
+  await session.send("DOM.enable", {}).catch(() => {});
   await cdpInputEnable(session);
   await waitForComposer(session);
   await sleep(550);
@@ -822,8 +877,24 @@ async function pastePromptRaw(session, text) {
   let pasted = false;
   const needMin = pasteNeedMinChars(text.length);
 
+  let skipBulkFallbacks = false;
+  try {
+    console.error("[copilot:paste] trying sync in-page execCommand (single evaluate, ~1200 code units/step)…");
+    const syncRes = await pasteViaSyncBrowserExecCommand(session, text);
+    console.error("[copilot:paste] sync in-page execCommand result:", JSON.stringify(syncRes));
+  } catch (e) {
+    console.error("[copilot:paste] sync in-page execCommand threw:", e?.message || e);
+  }
+  await sleep(450);
+  len = await getComposerTextLength(session);
+  console.error("[copilot:paste] visible len after sync in-page:", len);
+  if (pasteLooksComplete(len, text.length)) {
+    skipBulkFallbacks = true;
+    console.error("[copilot:paste] pasteLooksComplete after sync in-page");
+  }
+
   /** Very long prompts: synthetic multi-part paste often drops text; stream via CDP first. */
-  if (text.length > 12_000) {
+  if (!skipBulkFallbacks && text.length > 12_000) {
     console.error("[copilot:paste] long prompt — CDP Input.insertText first (", text.length, "chars )");
     try {
       await insertTextViaCdp(session, text);
@@ -848,7 +919,7 @@ async function pastePromptRaw(session, text) {
     }
   }
 
-  if (!pasteLooksComplete(len, text.length)) {
+  if (!skipBulkFallbacks && !pasteLooksComplete(len, text.length)) {
     console.error("[copilot:paste] trying synthetic Clipboard paste…");
     try {
       pasted = await pasteViaSyntheticClipboard(session, text);
@@ -857,9 +928,10 @@ async function pastePromptRaw(session, text) {
     }
     await sleep(pasted ? 500 : 0);
     len = await getComposerTextLength(session);
+    if (pasteLooksComplete(len, text.length)) skipBulkFallbacks = true;
   }
 
-  if (!pasteLooksComplete(len, text.length)) {
+  if (!skipBulkFallbacks && !pasteLooksComplete(len, text.length)) {
     if (pasted && len > 0) {
       console.error("[copilot:paste] incomplete after synthetic (visible", len, "), clear + CDP Input.insertText");
       await clearComposerViaKeyboard(session);
@@ -876,6 +948,9 @@ async function pastePromptRaw(session, text) {
     }
     await sleep(400);
     len = await getComposerTextLength(session);
+    if (pasteLooksComplete(len, text.length)) skipBulkFallbacks = true;
+  } else if (skipBulkFallbacks) {
+    /* already satisfied */
   } else {
     console.error("[copilot:paste] pasteLooksComplete OK, visible len:", len);
   }
@@ -883,7 +958,7 @@ async function pastePromptRaw(session, text) {
   await sleep(200);
   len = await getComposerTextLength(session);
 
-  if (len < needMin && text.length >= 20) {
+  if (!skipBulkFallbacks && len < needMin && text.length >= 20) {
     console.error("[copilot:paste] composer still short (", len, "), trying execCommand insertText");
     await focusComposer(session);
     if ((await getComposerTextLength(session)) > 0) {
@@ -897,7 +972,7 @@ async function pastePromptRaw(session, text) {
     len = await getComposerTextLength(session);
   }
 
-  if (len < needMin && text.length >= 20) {
+  if (!skipBulkFallbacks && len < needMin && text.length >= 20) {
     console.error("[copilot:paste] composer still short (", len, "), trying InputEvent fallback");
     await focusComposer(session);
     if ((await getComposerTextLength(session)) > 0) {
@@ -911,7 +986,7 @@ async function pastePromptRaw(session, text) {
     len = await getComposerTextLength(session);
   }
 
-  if (len < needMin && text.length >= 20) {
+  if (!skipBulkFallbacks && len < needMin && text.length >= 20) {
     console.error("[copilot:paste] composer still short (", len, "), trying keyChar fallback");
     await focusComposer(session);
     if ((await getComposerTextLength(session)) > 0) {
