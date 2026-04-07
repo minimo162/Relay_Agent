@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -164,6 +165,7 @@ impl ApiClient for CdpApiClient {
         let prompt_preview = &prompt[..prompt.len().min(80)];
         tracing::info!("[CdpApiClient] sending prompt: {prompt_preview}…");
 
+        let t0 = Instant::now();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -182,7 +184,11 @@ impl ApiClient for CdpApiClient {
             .map_err(|e| RuntimeError::new(format!("Copilot request failed: {e}")))?
         };
 
-        tracing::info!("[CdpApiClient] response {} chars", response_text.len());
+        tracing::info!(
+            "[CdpApiClient] response {} chars in {:?}",
+            response_text.len(),
+            t0.elapsed()
+        );
 
         let (mut visible_text, tool_calls) = parse_copilot_tool_response(&response_text);
         if visible_text.trim().is_empty() && !response_text.trim().is_empty() {

@@ -332,9 +332,18 @@ impl CopilotServer {
         user_prompt: &str,
         timeout_secs: u64,
     ) -> Result<String, CopilotError> {
+        let url = format!("{}/v1/chat/completions", self.server_url());
+        info!(
+            "[copilot] POST {} (timeout {}s, user_prompt_chars={}, system_chars={})",
+            url,
+            timeout_secs,
+            user_prompt.len(),
+            system_prompt.len()
+        );
+        let t0 = Instant::now();
         let response = self
             .client
-            .post(format!("{}/v1/chat/completions", self.server_url()))
+            .post(url)
             .json(&json!({
                 "messages": [
                     { "role": "system", "content": system_prompt },
@@ -344,11 +353,29 @@ impl CopilotServer {
             .timeout(Duration::from_secs(timeout_secs))
             .send()
             .await
-            .map_err(CopilotError::Http)?;
+            .map_err(|e| {
+                warn!(
+                    "[copilot] POST failed after {:?}: {}",
+                    t0.elapsed(),
+                    e
+                );
+                CopilotError::Http(e)
+            })?;
+
+        let status = response.status();
+        info!(
+            "[copilot] HTTP status {} after {:?} (before body read)",
+            status,
+            t0.elapsed()
+        );
 
         if !response.status().is_success() {
-            let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            warn!(
+                "[copilot] error body ({} bytes) after {:?}",
+                body.len(),
+                t0.elapsed()
+            );
             return Err(CopilotError::PromptError(format!(
                 "copilot returned {status}: {body}"
             )));
@@ -367,6 +394,12 @@ impl CopilotServer {
             .and_then(|c| c.as_str())
             .unwrap_or_default()
             .to_string();
+
+        info!(
+            "[copilot] completion OK content_len={} total_elapsed={:?}",
+            content.len(),
+            t0.elapsed()
+        );
 
         Ok(content)
     }

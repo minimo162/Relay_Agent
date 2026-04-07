@@ -1114,7 +1114,11 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null) {
     );
   }
 
-  // Wait for response
+  console.error(
+    "[copilot:describe] send OK; waiting for Copilot reply (DOM/network, timeout",
+    RESPONSE_TIMEOUT_MS / 1000,
+    "s)…",
+  );
   return await waitForDomResponse(session, netCapture);
 }
 
@@ -1475,7 +1479,8 @@ async function waitForDomResponse(session, netCapture = null) {
 
   await sleep(2e3);
   let baselineLen = (await extractAssistantReplyText(session)).trim().length;
-  const deadline = Date.now() + RESPONSE_TIMEOUT_MS;
+  const waitStarted = Date.now();
+  const deadline = waitStarted + RESPONSE_TIMEOUT_MS;
   let prev = baselineLen;
   let stable = 0;
   let streamed = false;
@@ -1498,10 +1503,10 @@ async function waitForDomResponse(session, netCapture = null) {
     } else {
       genStreak = 0;
     }
-    if (generating) quietGen = 0;
-    else quietGen++;
     const ignorePhantomStop = genStreak >= 55;
     const generating = generatingRaw && !ignorePhantomStop;
+    if (generating) quietGen = 0;
+    else quietGen++;
     if (ignorePhantomStop && genStreak === 55) {
       console.error(
         "[copilot:response] stop-button heuristic stuck ~55s; ignoring so completion can be detected",
@@ -1510,8 +1515,20 @@ async function waitForDomResponse(session, netCapture = null) {
 
     if (Date.now() - lastDiag > 12e3) {
       lastDiag = Date.now();
+      let bodyLen = 0;
+      try {
+        const br = await session.evaluate(
+          `(() => (document.body && document.body.innerText) ? document.body.innerText.length : 0)()`,
+        );
+        bodyLen = Number(br.value) || 0;
+      } catch {
+        /* ignore */
+      }
       console.error("[copilot:response] poll", {
+        elapsedSec: Math.floor((Date.now() - waitStarted) / 1000),
+        timeoutInSec: Math.max(0, Math.floor((deadline - Date.now()) / 1000)),
         len,
+        bodyLen,
         generating,
         generatingRaw,
         genStreak,
@@ -1775,13 +1792,33 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
   }
 
   const dl = Date.now() + EDGE_LAUNCH_TIMEOUT_MS;
+  const edgeWaitStarted = Date.now();
   let loggedMismatch = false;
+  let lastProgressLog = Date.now();
   while (Date.now() < dl) {
+    if (Date.now() - lastProgressLog >= 5e3) {
+      console.error(
+        "[copilot:ensureEdge] waiting for Edge CDP on port",
+        actualPort,
+        "…",
+        Math.ceil((dl - Date.now()) / 1000),
+        "s left (started",
+        Math.round((Date.now() - edgeWaitStarted) / 1000),
+        "s ago)",
+      );
+      lastProgressLog = Date.now();
+    }
     const info = await probeCdpVersion(actualPort);
     if (info && cdpVersionLooksLikeEdge(info)) {
       globalOptions.cdpPort = actualPort;
       writeCdpPortMarker(profileDir, actualPort);
-      console.error("[copilot:ensureEdge] CDP ready on port", actualPort);
+      console.error(
+        "[copilot:ensureEdge] CDP ready on port",
+        actualPort,
+        "after ~",
+        Math.round((Date.now() - edgeWaitStarted) / 1000),
+        "s",
+      );
       return;
     }
     if (info && !loggedMismatch && Date.now() > dl - 12e3) {
@@ -1857,9 +1894,27 @@ async function ensureEdgeLegacyAttach(edgePath, cdpPort) {
   }
 
   const dl = Date.now() + EDGE_LAUNCH_TIMEOUT_MS;
+  const legacyWaitStarted = Date.now();
+  let lastLegacyLog = Date.now();
   while (Date.now() < dl) {
+    if (Date.now() - lastLegacyLog >= 5e3) {
+      console.error(
+        "[copilot:ensureEdge] legacy: waiting for CDP on port",
+        actualPort,
+        "…",
+        Math.ceil((dl - Date.now()) / 1000),
+        "s left",
+      );
+      lastLegacyLog = Date.now();
+    }
     if ((await probeCdpVersion(actualPort)) && (await cdpPortIsMicrosoftEdge(actualPort))) {
-      console.error("[copilot:ensureEdge] CDP ready on port", actualPort);
+      console.error(
+        "[copilot:ensureEdge] CDP ready on port",
+        actualPort,
+        "after ~",
+        Math.round((Date.now() - legacyWaitStarted) / 1000),
+        "s",
+      );
       return;
     }
     await sleep(EDGE_LAUNCH_POLL_INTERVAL_MS);
@@ -1951,6 +2006,12 @@ function createServer(session) {
       if (req.method === "POST" && req.url === "/v1/chat/completions") {
         const payload = await readJsonBody(req);
         const prompt = parseOpenAiRequest(payload);
+        console.error(
+          "[copilot:http] POST /v1/chat/completions user_chars=",
+          (prompt.userPrompt || "").length,
+          "system_chars=",
+          (prompt.systemPrompt || "").length,
+        );
         const description = await session.describe(
           prompt.systemPrompt, prompt.userPrompt, prompt.imageB64
         );
