@@ -203,6 +203,14 @@ function normalizeWebSocketUrl(url) {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+function withTimeout(promise, ms, label) {
+  let t;
+  const timeout = new Promise((_, reject) => {
+    t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
+
 /* ─── Copilot session ─── */
 
 class CopilotSession {
@@ -1822,6 +1830,7 @@ async function launchEdgeMsedgeWin32(edgePath, argv) {
   const comspec = process.env.ComSpec || "cmd.exe";
   /** `start "" app` — first quoted arg is window title; `""` = empty title (two quote chars). */
   const startArgs = ["/d", "/c", "start", '""', edgePath, ...argv];
+  console.error("[copilot:ensureEdge] Win32 cmd /c start… (execFile, 15s timeout)");
   await new Promise((resolve, reject) => {
     execFile(
       comspec,
@@ -1830,6 +1839,7 @@ async function launchEdgeMsedgeWin32(edgePath, argv) {
         windowsHide: false,
         cwd: path.dirname(edgePath),
         env: process.env,
+        timeout: 15_000,
       },
       (err, _stdout, stderr) => {
         if (stderr && String(stderr).trim()) {
@@ -1840,6 +1850,25 @@ async function launchEdgeMsedgeWin32(edgePath, argv) {
       },
     );
   });
+  console.error("[copilot:ensureEdge] Win32 cmd /c start execFile callback returned");
+}
+
+/** Detached msedge — reliable under Tauri; `cmd start` can hang without invoking the execFile callback on some PCs. */
+async function spawnEdgeDetached(edgePath, argv, tag = "") {
+  const { spawn } = await import("node:child_process");
+  const t = tag ? ` (${tag})` : "";
+  console.error("[copilot:ensureEdge] spawn msedge" + t + "…");
+  const child = spawn(edgePath, argv, {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false,
+  });
+  child.on("error", (err) => {
+    console.error("[copilot:ensureEdge] spawn error" + t + ":", err?.message || err);
+  });
+  child.unref();
+  console.error("[copilot:ensureEdge] spawn issued" + t + " pid=", child.pid ?? "(none)");
+  await sleep(400);
 }
 
 /** Dedicated profile: do not attach to arbitrary CDP on 9333–9342 (user's manual Edge). */
@@ -1870,10 +1899,15 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
         `--user-data-dir=${profileDir}`,
       ];
       try {
-        await launchEdgeMsedgeWin32(edgePath, nudgeArgs);
+        await withTimeout(launchEdgeMsedgeWin32(edgePath, nudgeArgs), 12e3, "nudge cmd start");
         console.error("[copilot:ensureEdge] Win32: nudge start dispatched (foreground existing Edge)");
       } catch (e) {
-        console.error("[copilot:ensureEdge] nudge start failed (continuing with CDP reuse):", e?.message || e);
+        console.error("[copilot:ensureEdge] nudge cmd start skipped/failed (continuing with CDP reuse):", e?.message || e);
+        try {
+          await spawnEdgeDetached(edgePath, nudgeArgs, "nudge-spawn");
+        } catch (e2) {
+          console.error("[copilot:ensureEdge] nudge spawn failed:", e2?.message || e2);
+        }
       }
     }
     return;
@@ -1922,40 +1956,35 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
     `--user-data-dir=${profileDir}`,
     COPILOT_URL,
   ];
+  console.error("[copilot:ensureEdge] starting Edge process…");
   if (process.platform === "win32") {
-    try {
-      await launchEdgeMsedgeWin32(edgePath, args);
-      console.error("[copilot:ensureEdge] Win32: cmd start dispatched for msedge (port", actualPort, ")");
-    } catch (e) {
-      console.error("[copilot:ensureEdge] cmd start failed, falling back to spawn:", e?.message || e);
-      const { spawn } = await import("node:child_process");
-      const child = spawn(edgePath, args, {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: false,
-      });
-      child.on("error", (err) => {
-        console.error("[copilot:ensureEdge] spawn error:", err?.message || err);
-      });
-      child.unref();
-      if (child.pid) console.error("[copilot:ensureEdge] spawn fallback pid=", child.pid);
+    const useCmdStart = process.env.RELAY_COPILOT_WIN32_CMD_START === "1";
+    if (useCmdStart) {
+      console.error("[copilot:ensureEdge] RELAY_COPILOT_WIN32_CMD_START=1 — trying cmd /c start (12s cap)…");
+      try {
+        await withTimeout(launchEdgeMsedgeWin32(edgePath, args), 12e3, "dedicated cmd start");
+        console.error("[copilot:ensureEdge] Win32 cmd start returned OK");
+      } catch (e) {
+        console.error("[copilot:ensureEdge] cmd start failed or timed out:", e?.message || e);
+        await spawnEdgeDetached(edgePath, args, "after-cmd-timeout");
+      }
+    } else {
+      console.error(
+        "[copilot:ensureEdge] default: spawn() (set RELAY_COPILOT_WIN32_CMD_START=1 to use cmd start first)",
+      );
+      await spawnEdgeDetached(edgePath, args, "dedicated-primary");
     }
   } else {
-    const { spawn } = await import("node:child_process");
-    const child = spawn(edgePath, args, {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: false,
-    });
-    child.unref();
+    await spawnEdgeDetached(edgePath, args, "non-win32");
   }
 
   const dl = Date.now() + EDGE_LAUNCH_TIMEOUT_MS;
   const edgeWaitStarted = Date.now();
   let loggedMismatch = false;
-  let lastProgressLog = Date.now();
+  let lastProgressLog = Date.now() - 4e3;
+  console.error("[copilot:ensureEdge] polling for CDP /json/version on port", actualPort, "…");
   while (Date.now() < dl) {
-    if (Date.now() - lastProgressLog >= 5e3) {
+    if (Date.now() - lastProgressLog >= 2e3) {
       console.error(
         "[copilot:ensureEdge] waiting for Edge CDP on port",
         actualPort,
@@ -2039,25 +2068,26 @@ async function ensureEdgeLegacyAttach(edgePath, cdpPort) {
     COPILOT_URL,
   ];
   if (process.platform === "win32") {
-    try {
-      await launchEdgeMsedgeWin32(edgePath, args);
-    } catch (e) {
-      console.error("[copilot:ensureEdge] cmd start failed, spawn fallback:", e?.message || e);
-      const { spawn } = await import("node:child_process");
-      const child = spawn(edgePath, args, { detached: true, stdio: "ignore", windowsHide: false });
-      child.unref();
+    const useCmdStart = process.env.RELAY_COPILOT_WIN32_CMD_START === "1";
+    if (useCmdStart) {
+      try {
+        await withTimeout(launchEdgeMsedgeWin32(edgePath, args), 12e3, "legacy cmd start");
+      } catch (e) {
+        console.error("[copilot:ensureEdge] legacy cmd start failed:", e?.message || e);
+        await spawnEdgeDetached(edgePath, args, "legacy-after-cmd");
+      }
+    } else {
+      await spawnEdgeDetached(edgePath, args, "legacy-primary");
     }
   } else {
-    const { spawn } = await import("node:child_process");
-    const child = spawn(edgePath, args, { detached: true, stdio: "ignore", windowsHide: false });
-    child.unref();
+    await spawnEdgeDetached(edgePath, args, "legacy-non-win32");
   }
 
   const dl = Date.now() + EDGE_LAUNCH_TIMEOUT_MS;
   const legacyWaitStarted = Date.now();
-  let lastLegacyLog = Date.now();
+  let lastLegacyLog = Date.now() - 4e3;
   while (Date.now() < dl) {
-    if (Date.now() - lastLegacyLog >= 5e3) {
+    if (Date.now() - lastLegacyLog >= 2e3) {
       console.error(
         "[copilot:ensureEdge] legacy: waiting for CDP on port",
         actualPort,
