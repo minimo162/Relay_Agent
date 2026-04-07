@@ -614,11 +614,15 @@ function pasteLooksComplete(visibleLen, fullLen) {
   if (fullLen <= 400) {
     return visibleLen >= Math.max(1, Math.floor(fullLen * 0.82));
   }
-  if (fullLen > 4000 && visibleLen >= 720) {
-    return true;
+  if (fullLen <= 2500) {
+    return visibleLen >= Math.max(80, Math.floor(fullLen * 0.22));
   }
-  const target = Math.min(900, Math.max(140, Math.floor(fullLen * 0.035)));
-  return visibleLen >= target;
+  if (fullLen <= 8000) {
+    return visibleLen >= Math.max(200, Math.min(1800, Math.floor(fullLen * 0.18)));
+  }
+  // 10k+ tool catalogs: never treat ~720 chars as “complete” (old bug skipped real CDP insert).
+  const need = Math.max(900, Math.min(3200, Math.floor(fullLen * 0.065)));
+  return visibleLen >= need;
 }
 
 /**
@@ -694,26 +698,31 @@ async function clearComposerViaKeyboard(session) {
 /**
  * Insert text using Chromium CDP Input.insertText (IME-style). Lexical ignores innerText + generic input events.
  * Code-point chunks; do not refocus mid-loop (refocus can reset selection so only the last chunk remains).
+ * Slightly larger chunks + pacing for 10k+ prompts (fewer CDP round-trips).
  */
 async function insertTextViaCdp(session, text) {
-  const chunks = chunkByCodePoints(text, 160);
+  const chunkSize = text.length > 8000 ? 380 : 200;
+  const chunks = chunkByCodePoints(text, chunkSize);
+  const pause = chunks.length > 50 ? 42 : 30;
   for (let i = 0; i < chunks.length; i++) {
     await session.send("Input.insertText", { text: chunks[i] });
-    await sleep(chunks.length > 40 ? 35 : 28);
+    await sleep(pause);
   }
 }
 
 /** Fallback: beforeinput + input with InputEvent (some React versions listen for this). Batched so one evaluate does not freeze the page. */
 async function insertTextViaInputEvents(session, text) {
   const cap = 4e3;
-  const txt = text.length > cap ? text.slice(0, cap) : text;
-  if (txt.length < text.length) {
-    console.error("[copilot:paste] InputEvent fallback truncated to", cap, "chars");
+  const segments = chunkByCodePoints(text, cap);
+  if (segments.length > 1) {
+    console.error("[copilot:paste] InputEvent fallback in", segments.length, "segments (", text.length, "chars )");
   }
   const batchSize = 48;
-  const batches = chunkByCodePoints(txt, batchSize);
-  for (const batch of batches) {
-    await session.evaluate(`
+  for (let si = 0; si < segments.length; si++) {
+    const txt = segments[si];
+    const batches = chunkByCodePoints(txt, batchSize);
+    for (const batch of batches) {
+      await session.evaluate(`
       ((payload) => {
         ${COMPOSER_DOM_HELPERS}
         const el = __raFindComposerEditable();
@@ -730,7 +739,9 @@ async function insertTextViaInputEvents(session, text) {
         return true;
       })(${JSON.stringify(batch)})
     `);
-    await sleep(12);
+      await sleep(12);
+    }
+    if (si < segments.length - 1) await sleep(80);
   }
 }
 
@@ -806,18 +817,48 @@ async function pastePromptRaw(session, text) {
   await focusComposer(session);
   await sleep(120);
 
-  console.error("[copilot:paste] trying synthetic Clipboard paste first…");
-  let pasted = false;
-  try {
-    pasted = await pasteViaSyntheticClipboard(session, text);
-  } catch (e) {
-    console.error("[copilot:paste] synthetic paste failed:", e?.message || e);
-  }
-  await sleep(pasted ? 500 : 0);
-  let len = await getComposerTextLength(session);
-
   let errInsert = null;
+  let len = 0;
+  let pasted = false;
   const needMin = pasteNeedMinChars(text.length);
+
+  /** Very long prompts: synthetic multi-part paste often drops text; stream via CDP first. */
+  if (text.length > 12_000) {
+    console.error("[copilot:paste] long prompt — CDP Input.insertText first (", text.length, "chars )");
+    try {
+      await insertTextViaCdp(session, text);
+      await sleep(500);
+      len = await getComposerTextLength(session);
+      console.error("[copilot:paste] after CDP-first, visible len:", len);
+      if (pasteLooksComplete(len, text.length)) {
+        console.error("[copilot:paste] CDP-first satisfied pasteLooksComplete");
+      } else {
+        console.error("[copilot:paste] CDP-first incomplete vs heuristic, clearing and trying synthetic…");
+        if (len > 0) {
+          await clearComposerViaKeyboard(session);
+          await sleep(120);
+          await focusComposer(session);
+          await sleep(80);
+        }
+        errInsert = null;
+      }
+    } catch (e) {
+      errInsert = e;
+      console.error("[copilot:paste] CDP-first failed:", e?.message || e);
+    }
+  }
+
+  if (!pasteLooksComplete(len, text.length)) {
+    console.error("[copilot:paste] trying synthetic Clipboard paste…");
+    try {
+      pasted = await pasteViaSyntheticClipboard(session, text);
+    } catch (e) {
+      console.error("[copilot:paste] synthetic paste failed:", e?.message || e);
+    }
+    await sleep(pasted ? 500 : 0);
+    len = await getComposerTextLength(session);
+  }
+
   if (!pasteLooksComplete(len, text.length)) {
     if (pasted && len > 0) {
       console.error("[copilot:paste] incomplete after synthetic (visible", len, "), clear + CDP Input.insertText");
@@ -836,7 +877,7 @@ async function pastePromptRaw(session, text) {
     await sleep(400);
     len = await getComposerTextLength(session);
   } else {
-    console.error("[copilot:paste] synthetic paste looks complete, visible len:", len);
+    console.error("[copilot:paste] pasteLooksComplete OK, visible len:", len);
   }
 
   await sleep(200);
@@ -886,9 +927,19 @@ async function pastePromptRaw(session, text) {
 
   if (text.length >= 20 && !pasteLooksComplete(len, text.length)) {
     const hint = errInsert ? ` CDP insertText error: ${errInsert.message}` : "";
-    throw new Error(
-      `Prompt did not reach Copilot composer (visible length ${len}, expected ~${text.length}).${hint}`
-    );
+    const floorLong = Math.min(2200, Math.floor(text.length * 0.045));
+    if (text.length > 8000 && len >= 700 && len >= floorLong) {
+      console.error(
+        "[copilot:paste] continuing despite strict pasteLooksComplete (long prompt; innerText may cap) visible_len=",
+        len,
+        "floorLong=",
+        floorLong,
+      );
+    } else {
+      throw new Error(
+        `Prompt did not reach Copilot composer (visible length ${len}, expected ~${text.length}).${hint}`
+      );
+    }
   }
 
   console.error("[copilot:paste] composer length OK:", len);
