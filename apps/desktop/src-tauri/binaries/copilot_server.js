@@ -1654,7 +1654,7 @@ function shouldCaptureNetworkUrl(url) {
   if (!url || !RESPONSE_URL_PATTERN.test(url)) return false;
   const low = url.toLowerCase();
   if (
-    /telemetry|metrics|favicon|clarity|onecollector|browserpipe|\.png(\?|$)|\.gif|\.woff|\.svg|chunk\.|webpack/i.test(
+    /telemetry|metrics|favicon|clarity|onecollector|browserpipe|clientevents|pacman\/api\/clientevents|\.png(\?|$)|\.gif|\.woff|\.svg|chunk\.|webpack/i.test(
       low,
     )
   ) {
@@ -1709,6 +1709,27 @@ function stringLooksLikeJwt(t) {
   return false;
 }
 
+/**
+ * Substrate Pacman clientevents / card-render bundles (not chat prose).
+ * Matches telemetry JSON like browserName + SubstrateTraceId + cardCount.
+ */
+function stringLooksLikeM365ClientTelemetry(text) {
+  const t = String(text || "").trim();
+  if (t.length < 50) return false;
+  let score = 0;
+  if (/SubstrateTraceId/i.test(t)) score += 2;
+  if (/SubstrateLogicalId/i.test(t)) score += 2;
+  if (/browserName/i.test(t) && /browserVersion/i.test(t)) score += 2;
+  if (/cardCount/i.test(t)) score += 1;
+  if (/cardReferenceIds/i.test(t) || /cardIds/i.test(t)) score += 1;
+  if (/substrateLatency/i.test(t)) score += 1;
+  if (/renderLatency/i.test(t)) score += 1;
+  if (/isFallbackCards/i.test(t)) score += 1;
+  if (/hasGptSelected/i.test(t)) score += 1;
+  if (/displayType/i.test(t) && /"value"\s*:\s*"(grid|list)"/i.test(t)) score += 1;
+  return score >= 4;
+}
+
 /** Longest usable string from network JSON/SSE; skips JWTs, garbage, and token-shaped blobs. */
 function pickBestAssistantStringFromCandidates(candidates) {
   const sorted = [...candidates].sort((a, b) => String(b).length - String(a).length);
@@ -1716,6 +1737,7 @@ function pickBestAssistantStringFromCandidates(candidates) {
     const t = String(c || "").trim();
     if (t.length < 8) continue;
     if (stringLooksLikeJwt(t)) continue;
+    if (stringLooksLikeM365ClientTelemetry(t)) continue;
     if (networkExtractLooksLikeGarbage(t)) continue;
     return t;
   }
@@ -1725,6 +1747,8 @@ function pickBestAssistantStringFromCandidates(candidates) {
 /** HTML shell / static assets — not chat API bodies; scanning them yields huge junk (e.g. embedded base64). */
 function skipNetworkBodyForAssistantExtraction(url, mimeType) {
   const m = (mimeType || "").toLowerCase();
+  const low = (url || "").toLowerCase();
+  if (/pacman\/api\/clientevents|\/clientevents\?/i.test(low)) return true;
   if (m.startsWith("text/html")) return true;
   if (m.includes("javascript") || m.startsWith("text/css")) return true;
   try {
@@ -1750,6 +1774,7 @@ function networkExtractLooksLikeGarbage(text) {
   const t = (text || "").trim();
   if (t.length < 1) return true;
   if (stringLooksLikeJwt(t)) return true;
+  if (stringLooksLikeM365ClientTelemetry(t)) return true;
   if (/data:image\/[^;]+;base64,/i.test(t)) return true;
   if (t.length > 6_000) {
     const sample = t.slice(0, 12_000);
