@@ -165,7 +165,7 @@ pub fn run_agent_loop_impl(
 
     let tool_executor = build_tool_executor(app, session_id, cwd.clone());
     let permission_policy = desktop_permission_policy();
-    let system_prompt = vec![build_system_prompt(&goal)];
+    let system_prompt = build_desktop_system_prompt(&goal, cwd.as_deref());
     let config = crate::config::AgentConfig::global();
     let max_turns = max_turns.unwrap_or(config.max_turns);
 
@@ -992,7 +992,9 @@ pub fn msg_to_relay(msg: &ConversationMessage) -> RelayMessage {
     RelayMessage { role, content }
 }
 
-pub fn build_system_prompt(goal: &str) -> String {
+/// System prompt sections for the desktop agent loop: Relay identity, Claw-style discipline
+/// blocks, goal/constraints, and optional workspace context when `cwd` is set.
+pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String> {
     if let Some(path) = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from)
@@ -1001,21 +1003,31 @@ pub fn build_system_prompt(goal: &str) -> String {
         if let Ok(contents) = std::fs::read_to_string(path) {
             let custom = contents.trim();
             if !custom.is_empty() {
-                return if custom.contains("{goal}") {
+                let block = if custom.contains("{goal}") {
                     custom.replace("{goal}", goal)
                 } else {
                     format!("{custom}\n\nGoal:\n{goal}")
                 };
+                return vec![block];
             }
         }
     }
 
-    format!(
+    let mut sections = Vec::new();
+    sections.push(
         concat!(
             "You are Relay Agent running inside a Tauri desktop app.\n",
             "Use only the registered tools.\n",
             "Read state first, then write only when necessary.\n",
             "For file access use read_file / write_file / edit_file; do not substitute shell or REPL for file I/O when those tools apply.\n\n",
+            "IMPORTANT: Do not generate or guess URLs unless they clearly help with the user's programming task. ",
+            "You may use URLs the user provided or that appear in local files.",
+        )
+        .to_string(),
+    );
+    sections.extend(runtime::claw_style_discipline_sections());
+    sections.push(format!(
+        concat!(
             "Goal:\n{goal}\n\n",
             "Constraints:\n",
             "- Prefer read-only tools before mutating tools.\n",
@@ -1024,7 +1036,22 @@ pub fn build_system_prompt(goal: &str) -> String {
             "- read_file returns UTF-8 text only. PDF and other binaries are not parsed; if the tool errors or output is unusable, ask for extracted text or a converted .txt/.md file."
         ),
         goal = goal,
-    )
+    ));
+
+    if let Some(cwd) = cwd {
+        if !cwd.is_empty() {
+            let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+            let path = std::path::PathBuf::from(cwd);
+            if let Ok(ctx) = runtime::ProjectContext::discover_with_git(path, date) {
+                sections.push(runtime::render_project_context(&ctx));
+                if !ctx.instruction_files.is_empty() {
+                    sections.push(runtime::render_instruction_files(&ctx.instruction_files));
+                }
+            }
+        }
+    }
+
+    sections
 }
 
 /* ── Event types ─── */

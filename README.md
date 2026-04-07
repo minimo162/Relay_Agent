@@ -154,7 +154,7 @@ Relay_Agent/
   - `/cost` — Show estimated session token usage
   - `/memory` — Inspect loaded instruction memory files
   - `/config` — Inspect config sections (env, model)
-  - `/init` — Generate starter CLAUDE.md guidance
+  - `/init` — Generate starter CLAW.md guidance
   - `/diff` — Show git diff for workspace changes
   - `/export` — Export the conversation to JSON
   - `/session` — List or switch managed sessions
@@ -236,6 +236,24 @@ Application-level defaults in `config.rs`:
 | `compact_max_tokens` | 4,000 | Token threshold for triggering compaction |
 | `max_concurrent_sessions` | 4 | Max simultaneous agent sessions |
 | `session_cleanup_ttl_minutes` | 30 | TTL for session cleanup |
+
+### Runtime and workspace files (`.claw`)
+
+The Rust `runtime` crate loads **Claw-style** settings and merges **workspace instructions** into the system prompt. Paths use **`.claw`** only (not `.claude`).
+
+| Location | Role |
+|----------|------|
+| `CLAW_CONFIG_HOME` | Optional override for the user config directory (default: `$HOME/.claw`, or a relative `.claw` directory if `HOME` is unset) |
+| `~/.claw/settings.json` | User-level settings |
+| `~/.claw.json` | Optional legacy JSON next to the home directory (same merge rules as before; invalid JSON is skipped) |
+| `<project>/.claw.json` | Project-level settings |
+| `<project>/.claw/settings.json` | Project settings |
+| `<project>/.claw/settings.local.json` | Machine-local project overrides |
+| `CLAW.md` / `CLAW.local.md` | Per-directory instruction files (ancestor chain from session `cwd`) |
+| `<dir>/.claw/CLAW.md` / `instructions.md` | Nested instruction files under `.claw` |
+| `~/.relay-agent/SYSTEM_PROMPT.md` | Optional full system prompt override for the desktop agent (`{goal}` placeholder supported) |
+
+OAuth credential storage uses the same config home as `CLAW_CONFIG_HOME` / `~/.claw`.
 
 ## Development
 

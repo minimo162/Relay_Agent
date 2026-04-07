@@ -163,7 +163,7 @@
   ■ TypeScript 側
     - agent-loop.ts → Rust 側の claw-core ループに移行
     - agent-loop-core.ts → 同上
-    - agent-loop-prompts.ts → claw-core のシステムプロンプト + CLAUDE.md
+    - agent-loop-prompts.ts → claw-core のシステムプロンプト + CLAW.md
     - tool-runtime.ts → claw-tools が担当
     - copilot-browser.ts → copilot_provider.rs に統合
 

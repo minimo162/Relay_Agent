@@ -65,13 +65,40 @@
 
 ### 2026-04-07 CDP `relay_tool` dedupe and catalog prompt tightening
 
-**Outcome:** `parse_copilot_tool_response` now drops duplicate tool invocations that share the same tool name and normalized input (sorted JSON keys; `read_file` treats `path` and `file_path` as the same for comparison only—executed payloads are unchanged). This prevents repeated user approvals when Copilot emits the same `write_file` (or other) call across multiple `relay_tool` fences or twice in one array. The CDP tool-catalog section documents a single-fence + array preference, no shell/REPL for file I/O when file tools apply, and points to [Claw Code tool-system](https://claw-code.codes/tool-system) as the conceptual model. Default `build_system_prompt` adds one line reinforcing file tools over shell for file access.
+**Outcome:** `parse_copilot_tool_response` now drops duplicate tool invocations that share the same tool name and normalized input (sorted JSON keys; `read_file` treats `path` and `file_path` as the same for comparison only—executed payloads are unchanged). This prevents repeated user approvals when Copilot emits the same `write_file` (or other) call across multiple `relay_tool` fences or twice in one array. The CDP tool-catalog section documents a single-fence + array preference, no shell/REPL for file I/O when file tools apply, and points to [Claw Code tool-system](https://claw-code.codes/tool-system) as the conceptual model. The default system prompt reinforced file tools over shell for file access (later expanded; see “Desktop system prompt” entry below).
 
 **Artifacts:** `apps/desktop/src-tauri/src/agent_loop.rs`
 
 **Verification:**
 
 - `cargo test -p relay-agent-desktop cdp_copilot_tool` — pass (13 tests)
+
+### 2026-04-07 Desktop system prompt (Claw-style harness)
+
+**Outcome:** Replaced monolithic `build_system_prompt` with `build_desktop_system_prompt(goal, cwd)` returning multiple sections: Relay/Tauri identity (including URL caution aligned with upstream harness wording), `runtime::claw_style_discipline_sections()` (`# System`, `# Doing tasks`, `# Executing actions with care`), goal/constraints, and when `cwd` is set, `ProjectContext::discover_with_git` plus `render_project_context` / `render_instruction_files`. Instruction discovery uses `CLAW.md` / `CLAW.local.md` at each ancestor and `.claw/CLAW.md` / `.claw/instructions.md` only (Relay naming; settings still live under `.claw/`). Runtime settings load from `CLAW_CONFIG_HOME` (default `~/.claw`), project `.claw.json`, and `.claw/settings.json` / `.claw/settings.local.json`. `SYSTEM_PROMPT.md` override behavior unchanged (single block).
+
+**Artifacts:** `apps/desktop/src-tauri/src/agent_loop.rs`, `apps/desktop/src-tauri/crates/runtime/src/prompt.rs`, `apps/desktop/src-tauri/crates/runtime/src/lib.rs`
+
+### 2026-04-07 Consolidate config and instructions under `.claw`
+
+**Outcome:** Removed `.claude/` paths and `CLAUDE_CONFIG_HOME` from Relay: user config dir is `~/.claw` (override with `CLAW_CONFIG_HOME`), project settings under `.claw/` and optional `.claw.json`; OAuth credentials follow the same home. Instruction file discovery no longer checks `.claude/`.
+
+**Artifacts:** `apps/desktop/src-tauri/crates/runtime/src/config.rs`, `oauth.rs`, `prompt.rs`, `apps/desktop/src-tauri/crates/tools/src/lib.rs`, `apps/desktop/src-tauri/crates/api/src/client.rs`, `apps/desktop/src-tauri/crates/commands/src/lib.rs`
+
+**Verification:** `cargo test -p runtime`, `cargo test -p tools`, `cargo test -p commands`, `cargo test -p relay-agent-desktop` (the `api` crate shares `CLAW_CONFIG_HOME` in tests but is not a workspace member; run with `--manifest-path` if needed).
+
+### 2026-04-07 Instruction files: `CLAW.md` instead of `CLAUDE.md`
+
+**Outcome:** Workspace instruction discovery now uses `CLAW.md`, `CLAW.local.md`, `.claw/CLAW.md`, and `.claw/instructions.md` only (no `CLAUDE*.md`). Slash `/init` and `/memory` help text updated accordingly.
+
+**Artifacts:** `apps/desktop/src-tauri/crates/runtime/src/prompt.rs`, `apps/desktop/src-tauri/crates/commands/src/lib.rs`, `README.md`
+
+**Verification:** `cargo test -p runtime`, `cargo test -p commands`
+
+**Verification:**
+
+- `cargo test -p runtime` — pass (89 tests)
+- `cargo check -p relay-agent-desktop` — pass
 
 ### 2026-04-06 Edge CDP connection hardening
 

@@ -174,18 +174,18 @@ impl ConfigLoader {
     #[must_use]
     pub fn default_for(cwd: impl Into<PathBuf>) -> Self {
         let cwd = cwd.into();
-        let config_home = std::env::var_os("CLAUDE_CONFIG_HOME")
+        let config_home = std::env::var_os("CLAW_CONFIG_HOME")
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
-            .unwrap_or_else(|| PathBuf::from(".claude"));
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claw")))
+            .unwrap_or_else(|| PathBuf::from(".claw"));
         Self { cwd, config_home }
     }
 
     #[must_use]
     pub fn discover(&self) -> Vec<ConfigEntry> {
         let user_legacy_path = self.config_home.parent().map_or_else(
-            || PathBuf::from(".claude.json"),
-            |parent| parent.join(".claude.json"),
+            || PathBuf::from(".claw.json"),
+            |parent| parent.join(".claw.json"),
         );
         vec![
             ConfigEntry {
@@ -198,15 +198,15 @@ impl ConfigLoader {
             },
             ConfigEntry {
                 source: ConfigSource::Project,
-                path: self.cwd.join(".claude.json"),
+                path: self.cwd.join(".claw.json"),
             },
             ConfigEntry {
                 source: ConfigSource::Project,
-                path: self.cwd.join(".claude").join("settings.json"),
+                path: self.cwd.join(".claw").join("settings.json"),
             },
             ConfigEntry {
                 source: ConfigSource::Local,
-                path: self.cwd.join(".claude").join("settings.local.json"),
+                path: self.cwd.join(".claw").join("settings.local.json"),
             },
         ]
     }
@@ -406,7 +406,7 @@ impl McpServerConfig {
 fn read_optional_json_object(
     path: &Path,
 ) -> Result<Option<BTreeMap<String, JsonValue>>, ConfigError> {
-    let is_legacy_config = path.file_name().and_then(|name| name.to_str()) == Some(".claude.json");
+    let is_legacy_config = path.file_name().and_then(|name| name.to_str()) == Some(".claw.json");
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -813,7 +813,7 @@ mod tests {
     fn rejects_non_object_settings_files() {
         let root = temp_dir();
         let cwd = root.join("project");
-        let home = root.join("home").join(".claude");
+        let home = root.join("home").join(".claw");
         fs::create_dir_all(&home).expect("home config dir");
         fs::create_dir_all(&cwd).expect("project dir");
         fs::write(home.join("settings.json"), "[]").expect("write bad settings");
@@ -832,12 +832,12 @@ mod tests {
     fn loads_and_merges_claude_code_config_files_by_precedence() {
         let root = temp_dir();
         let cwd = root.join("project");
-        let home = root.join("home").join(".claude");
-        fs::create_dir_all(cwd.join(".claude")).expect("project config dir");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(cwd.join(".claw")).expect("project config dir");
         fs::create_dir_all(&home).expect("home config dir");
 
         fs::write(
-            home.parent().expect("home parent").join(".claude.json"),
+            home.parent().expect("home parent").join(".claw.json"),
             r#"{"model":"haiku","env":{"A":"1"},"mcpServers":{"home":{"command":"uvx","args":["home"]}}}"#,
         )
         .expect("write user compat config");
@@ -847,17 +847,17 @@ mod tests {
         )
         .expect("write user settings");
         fs::write(
-            cwd.join(".claude.json"),
+            cwd.join(".claw.json"),
             r#"{"model":"project-compat","env":{"B":"2"}}"#,
         )
         .expect("write project compat config");
         fs::write(
-            cwd.join(".claude").join("settings.json"),
+            cwd.join(".claw").join("settings.json"),
             r#"{"env":{"C":"3"},"hooks":{"PostToolUse":["project"]},"mcpServers":{"project":{"command":"uvx","args":["project"]}}}"#,
         )
         .expect("write project settings");
         fs::write(
-            cwd.join(".claude").join("settings.local.json"),
+            cwd.join(".claw").join("settings.local.json"),
             r#"{"model":"opus","permissionMode":"acceptEdits"}"#,
         )
         .expect("write local settings");
@@ -908,12 +908,12 @@ mod tests {
     fn parses_sandbox_config() {
         let root = temp_dir();
         let cwd = root.join("project");
-        let home = root.join("home").join(".claude");
-        fs::create_dir_all(cwd.join(".claude")).expect("project config dir");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(cwd.join(".claw")).expect("project config dir");
         fs::create_dir_all(&home).expect("home config dir");
 
         fs::write(
-            cwd.join(".claude").join("settings.local.json"),
+            cwd.join(".claw").join("settings.local.json"),
             r#"{
               "sandbox": {
                 "enabled": true,
@@ -946,8 +946,8 @@ mod tests {
     fn parses_typed_mcp_and_oauth_config() {
         let root = temp_dir();
         let cwd = root.join("project");
-        let home = root.join("home").join(".claude");
-        fs::create_dir_all(cwd.join(".claude")).expect("project config dir");
+        let home = root.join("home").join(".claw");
+        fs::create_dir_all(cwd.join(".claw")).expect("project config dir");
         fs::create_dir_all(&home).expect("home config dir");
 
         fs::write(
@@ -984,7 +984,7 @@ mod tests {
         )
         .expect("write user settings");
         fs::write(
-            cwd.join(".claude").join("settings.local.json"),
+            cwd.join(".claw").join("settings.local.json"),
             r#"{
               "mcpServers": {
                 "remote-server": {
@@ -1037,7 +1037,7 @@ mod tests {
     fn rejects_invalid_mcp_server_shapes() {
         let root = temp_dir();
         let cwd = root.join("project");
-        let home = root.join("home").join(".claude");
+        let home = root.join("home").join(".claw");
         fs::create_dir_all(&home).expect("home config dir");
         fs::create_dir_all(&cwd).expect("project dir");
         fs::write(

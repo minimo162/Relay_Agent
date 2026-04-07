@@ -137,9 +137,7 @@ impl SystemPromptBuilder {
         if let (Some(name), Some(prompt)) = (&self.output_style_name, &self.output_style_prompt) {
             sections.push(format!("# Output Style: {name}\n{prompt}"));
         }
-        sections.push(get_simple_system_section());
-        sections.push(get_simple_doing_tasks_section());
-        sections.push(get_actions_section());
+        sections.extend(claw_style_discipline_sections());
         sections.push(SYSTEM_PROMPT_DYNAMIC_BOUNDARY.to_string());
         sections.push(self.environment_section());
         if let Some(project_context) = &self.project_context {
@@ -201,10 +199,10 @@ fn discover_instruction_files(cwd: &Path) -> std::io::Result<Vec<ContextFile>> {
     let mut files = Vec::new();
     for dir in directories {
         for candidate in [
-            dir.join("CLAUDE.md"),
-            dir.join("CLAUDE.local.md"),
-            dir.join(".claude").join("CLAUDE.md"),
-            dir.join(".claude").join("instructions.md"),
+            dir.join("CLAW.md"),
+            dir.join("CLAW.local.md"),
+            dir.join(".claw").join("CLAW.md"),
+            dir.join(".claw").join("instructions.md"),
         ] {
             push_context_file(&mut files, candidate)?;
         }
@@ -274,7 +272,7 @@ fn read_git_output(cwd: &Path, args: &[&str]) -> Option<String> {
     String::from_utf8(output.stdout).ok()
 }
 
-fn render_project_context(project_context: &ProjectContext) -> String {
+pub fn render_project_context(project_context: &ProjectContext) -> String {
     let mut lines = vec!["# Project context".to_string()];
     let mut bullets = vec![
         format!("Today's date is {}.", project_context.current_date),
@@ -282,7 +280,7 @@ fn render_project_context(project_context: &ProjectContext) -> String {
     ];
     if !project_context.instruction_files.is_empty() {
         bullets.push(format!(
-            "Claude instruction files discovered: {}.",
+            "Workspace instruction files discovered: {}.",
             project_context.instruction_files.len()
         ));
     }
@@ -300,8 +298,8 @@ fn render_project_context(project_context: &ProjectContext) -> String {
     lines.join("\n")
 }
 
-fn render_instruction_files(files: &[ContextFile]) -> String {
-    let mut sections = vec!["# Claude instructions".to_string()];
+pub fn render_instruction_files(files: &[ContextFile]) -> String {
+    let mut sections = vec!["# Workspace instructions".to_string()];
     let mut remaining_chars = MAX_TOTAL_INSTRUCTION_CHARS;
     for file in files {
         if remaining_chars == 0 {
@@ -489,6 +487,16 @@ fn get_actions_section() -> String {
     .join("\n")
 }
 
+/// Claw-style harness sections (`# System`, `# Doing tasks`, `# Executing actions with care`) for reuse outside `SystemPromptBuilder`.
+#[must_use]
+pub fn claw_style_discipline_sections() -> Vec<String> {
+    vec![
+        get_simple_system_section(),
+        get_simple_doing_tasks_section(),
+        get_actions_section(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -517,23 +525,23 @@ mod tests {
     fn discovers_instruction_files_from_ancestor_chain() {
         let root = temp_dir();
         let nested = root.join("apps").join("api");
-        fs::create_dir_all(nested.join(".claude")).expect("nested claude dir");
-        fs::write(root.join("CLAUDE.md"), "root instructions").expect("write root instructions");
-        fs::write(root.join("CLAUDE.local.md"), "local instructions")
+        fs::create_dir_all(nested.join(".claw")).expect("nested claw dir");
+        fs::write(root.join("CLAW.md"), "root instructions").expect("write root instructions");
+        fs::write(root.join("CLAW.local.md"), "local instructions")
             .expect("write local instructions");
         fs::create_dir_all(root.join("apps")).expect("apps dir");
-        fs::create_dir_all(root.join("apps").join(".claude")).expect("apps claude dir");
-        fs::write(root.join("apps").join("CLAUDE.md"), "apps instructions")
+        fs::create_dir_all(root.join("apps").join(".claw")).expect("apps claw dir");
+        fs::write(root.join("apps").join("CLAW.md"), "apps instructions")
             .expect("write apps instructions");
         fs::write(
-            root.join("apps").join(".claude").join("instructions.md"),
-            "apps dot claude instructions",
+            root.join("apps").join(".claw").join("instructions.md"),
+            "apps dot claw instructions",
         )
-        .expect("write apps dot claude instructions");
-        fs::write(nested.join(".claude").join("CLAUDE.md"), "nested rules")
+        .expect("write apps dot claw instructions");
+        fs::write(nested.join(".claw").join("CLAW.md"), "nested rules")
             .expect("write nested rules");
         fs::write(
-            nested.join(".claude").join("instructions.md"),
+            nested.join(".claw").join("instructions.md"),
             "nested instructions",
         )
         .expect("write nested instructions");
@@ -551,7 +559,7 @@ mod tests {
                 "root instructions",
                 "local instructions",
                 "apps instructions",
-                "apps dot claude instructions",
+                "apps dot claw instructions",
                 "nested rules",
                 "nested instructions"
             ]
@@ -564,8 +572,8 @@ mod tests {
         let root = temp_dir();
         let nested = root.join("apps").join("api");
         fs::create_dir_all(&nested).expect("nested dir");
-        fs::write(root.join("CLAUDE.md"), "same rules\n\n").expect("write root");
-        fs::write(nested.join("CLAUDE.md"), "same rules\n").expect("write nested");
+        fs::write(root.join("CLAW.md"), "same rules\n\n").expect("write root");
+        fs::write(nested.join("CLAW.md"), "same rules\n").expect("write nested");
 
         let context = ProjectContext::discover(&nested, "2026-03-31").expect("context should load");
         assert_eq!(context.instruction_files.len(), 1);
@@ -593,8 +601,8 @@ mod tests {
     #[test]
     fn displays_context_paths_compactly() {
         assert_eq!(
-            display_context_path(Path::new("/tmp/project/.claude/CLAUDE.md")),
-            "CLAUDE.md"
+            display_context_path(Path::new("/tmp/project/.claw/CLAW.md")),
+            "CLAW.md"
         );
     }
 
@@ -607,7 +615,7 @@ mod tests {
             .current_dir(&root)
             .status()
             .expect("git init should run");
-        fs::write(root.join("CLAUDE.md"), "rules").expect("write instructions");
+        fs::write(root.join("CLAW.md"), "rules").expect("write instructions");
         fs::write(root.join("tracked.txt"), "hello").expect("write tracked file");
 
         let context =
@@ -615,7 +623,7 @@ mod tests {
 
         let status = context.git_status.expect("git status should be present");
         assert!(status.contains("## No commits yet on") || status.contains("## "));
-        assert!(status.contains("?? CLAUDE.md"));
+        assert!(status.contains("?? CLAW.md"));
         assert!(status.contains("?? tracked.txt"));
         assert!(context.git_diff.is_none());
 
@@ -665,12 +673,12 @@ mod tests {
     }
 
     #[test]
-    fn load_system_prompt_reads_claude_files_and_config() {
+    fn load_system_prompt_reads_instruction_files_and_config() {
         let root = temp_dir();
-        fs::create_dir_all(root.join(".claude")).expect("claude dir");
-        fs::write(root.join("CLAUDE.md"), "Project rules").expect("write instructions");
+        fs::create_dir_all(root.join(".claw")).expect("claw dir");
+        fs::write(root.join("CLAW.md"), "Project rules").expect("write instructions");
         fs::write(
-            root.join(".claude").join("settings.json"),
+            root.join(".claw").join("settings.json"),
             r#"{"permissionMode":"acceptEdits"}"#,
         )
         .expect("write settings");
@@ -678,9 +686,9 @@ mod tests {
         let _guard = env_lock();
         let previous = std::env::current_dir().expect("cwd");
         let original_home = std::env::var("HOME").ok();
-        let original_claude_home = std::env::var("CLAUDE_CONFIG_HOME").ok();
+        let original_claw_home = std::env::var("CLAW_CONFIG_HOME").ok();
         std::env::set_var("HOME", &root);
-        std::env::set_var("CLAUDE_CONFIG_HOME", root.join("missing-home"));
+        std::env::set_var("CLAW_CONFIG_HOME", root.join("missing-home"));
         std::env::set_current_dir(&root).expect("change cwd");
         let prompt = super::load_system_prompt(&root, "2026-03-31", "linux", "6.8")
             .expect("system prompt should load")
@@ -695,10 +703,10 @@ mod tests {
         } else {
             std::env::remove_var("HOME");
         }
-        if let Some(value) = original_claude_home {
-            std::env::set_var("CLAUDE_CONFIG_HOME", value);
+        if let Some(value) = original_claw_home {
+            std::env::set_var("CLAW_CONFIG_HOME", value);
         } else {
-            std::env::remove_var("CLAUDE_CONFIG_HOME");
+            std::env::remove_var("CLAW_CONFIG_HOME");
         }
 
         assert!(prompt.contains("Project rules"));
@@ -707,12 +715,12 @@ mod tests {
     }
 
     #[test]
-    fn renders_claude_code_style_sections_with_project_context() {
+    fn renders_claw_style_sections_with_project_context() {
         let root = temp_dir();
-        fs::create_dir_all(root.join(".claude")).expect("claude dir");
-        fs::write(root.join("CLAUDE.md"), "Project rules").expect("write CLAUDE.md");
+        fs::create_dir_all(root.join(".claw")).expect("claw dir");
+        fs::write(root.join("CLAW.md"), "Project rules").expect("write CLAW.md");
         fs::write(
-            root.join(".claude").join("settings.json"),
+            root.join(".claw").join("settings.json"),
             r#"{"permissionMode":"acceptEdits"}"#,
         )
         .expect("write settings");
@@ -731,7 +739,7 @@ mod tests {
 
         assert!(prompt.contains("# System"));
         assert!(prompt.contains("# Project context"));
-        assert!(prompt.contains("# Claude instructions"));
+        assert!(prompt.contains("# Workspace instructions"));
         assert!(prompt.contains("Project rules"));
         assert!(prompt.contains("permissionMode"));
         assert!(prompt.contains(SYSTEM_PROMPT_DYNAMIC_BOUNDARY));
@@ -748,23 +756,23 @@ mod tests {
     }
 
     #[test]
-    fn discovers_dot_claude_instructions_markdown() {
+    fn discovers_dot_claw_instructions_markdown() {
         let root = temp_dir();
         let nested = root.join("apps").join("api");
-        fs::create_dir_all(nested.join(".claude")).expect("nested claude dir");
+        fs::create_dir_all(nested.join(".claw")).expect("nested claw dir");
         fs::write(
-            nested.join(".claude").join("instructions.md"),
-            "instruction markdown",
+            nested.join(".claw").join("instructions.md"),
+            "claw instruction markdown",
         )
-        .expect("write instructions.md");
+        .expect("write .claw instructions.md");
 
         let context = ProjectContext::discover(&nested, "2026-03-31").expect("context should load");
         assert!(context
             .instruction_files
             .iter()
-            .any(|file| file.path.ends_with(".claude/instructions.md")));
+            .any(|file| file.path.ends_with(".claw/instructions.md")));
         assert!(
-            render_instruction_files(&context.instruction_files).contains("instruction markdown")
+            render_instruction_files(&context.instruction_files).contains("claw instruction markdown")
         );
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
@@ -773,10 +781,10 @@ mod tests {
     #[test]
     fn renders_instruction_file_metadata() {
         let rendered = render_instruction_files(&[ContextFile {
-            path: PathBuf::from("/tmp/project/CLAUDE.md"),
+            path: PathBuf::from("/tmp/project/CLAW.md"),
             content: "Project rules".to_string(),
         }]);
-        assert!(rendered.contains("# Claude instructions"));
+        assert!(rendered.contains("# Workspace instructions"));
         assert!(rendered.contains("scope: /tmp/project"));
         assert!(rendered.contains("Project rules"));
     }

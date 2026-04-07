@@ -95,13 +95,13 @@ const SLASH_COMMAND_SPECS: &[SlashCommandSpec] = &[
     },
     SlashCommandSpec {
         name: "memory",
-        summary: "Inspect loaded Claude instruction memory files",
+        summary: "Inspect loaded workspace instruction memory files",
         argument_hint: None,
         resume_supported: true,
     },
     SlashCommandSpec {
         name: "init",
-        summary: "Create a starter CLAUDE.md for this repo",
+        summary: "Create a starter CLAW.md for this repo",
         argument_hint: None,
         resume_supported: true,
     },
@@ -418,8 +418,8 @@ fn handle_cost(session: &Session) -> SlashCommandResult {
 }
 
 fn handle_memory(session: &Session) -> SlashCommandResult {
-    let message = "Memory inspection is available via AGENTS.md, CLAUDE.md, \
-        and .claude/ files in the workspace root."
+    let message = "Memory inspection is available via AGENTS.md, CLAW.md, \
+        and .claw/ files in the workspace root."
         .to_string();
     SlashCommandResult {
         message,
@@ -448,7 +448,7 @@ fn handle_config(section: Option<&str>, session: &Session) -> SlashCommandResult
 
 fn handle_init(session: &Session) -> SlashCommandResult {
     let message = concat!(
-        "To create a CLAUDE.md for this repo, write a file at the workspace root\n",
+        "To create a CLAW.md for this repo, write a file at the workspace root\n",
         "describing: project structure, key conventions, testing commands, and\n",
         "any AI-assistant-specific guidance."
     )
@@ -775,7 +775,7 @@ mod tests {
         let result =
             handle_slash_command("/init", &session, CompactionConfig::default())
                 .expect("init should be handled");
-        assert!(result.message.contains("CLAUDE.md"));
+        assert!(result.message.contains("CLAW.md"));
     }
 
     #[test]
