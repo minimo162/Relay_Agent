@@ -17,6 +17,7 @@ import {
   cancelAgent,
   chunksFromHistory,
   compactAgentSession,
+  friendlyToolActivityLabel,
   getSessionHistory,
   mcpAddServer,
   mcpListServers,
@@ -35,6 +36,26 @@ import {
   type Policy,
   type UiChunk,
 } from "./lib/ipc";
+
+const LS_SHOW_TOOL_ACTIVITY = "relay.showToolActivity";
+
+function readShowToolActivity(): boolean {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem(LS_SHOW_TOOL_ACTIVITY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeShowToolActivity(on: boolean): void {
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(LS_SHOW_TOOL_ACTIVITY, on ? "1" : "0");
+    }
+  } catch {
+    /* ignore */
+  }
+}
 import {
   detectSlashMode,
   executeSlashCommand,
@@ -127,15 +148,40 @@ function ToolCallRow(props: {
   );
 }
 
-/** Message feed */
-function MessageFeed(props: { chunks: UiChunk[]; sessionState: SessionState }) {
+/** Message feed — chat-first; tool rows optional or behind “Technical activity”. */
+function MessageFeed(props: {
+  chunks: UiChunk[];
+  sessionState: SessionState;
+  showToolActivityInline: boolean;
+}) {
   let container!: HTMLDivElement;
+
+  const chatChunks = createMemo(() =>
+    props.chunks.filter((c) => c.kind === "user" || c.kind === "assistant"),
+  );
+  const toolChunks = createMemo(() =>
+    props.chunks.filter((c): c is Extract<UiChunk, { kind: "tool_call" }> => c.kind === "tool_call"),
+  );
+  const feedChunks = createMemo(() =>
+    props.showToolActivityInline ? props.chunks : chatChunks(),
+  );
+  const runningToolName = createMemo(() => {
+    for (let i = props.chunks.length - 1; i >= 0; i--) {
+      const c = props.chunks[i]!;
+      if (c.kind === "tool_call" && c.status === "running") return c.toolName;
+    }
+    return null as string | null;
+  });
+  const statusLine = createMemo(() => {
+    if (props.sessionState !== "running") return null;
+    const name = runningToolName();
+    return name ? friendlyToolActivityLabel(name) : "Working on your request…";
+  });
 
   createEffect(
     on(
       () => props.chunks.length,
       () => {
-        // Auto-scroll to bottom on new messages
         requestAnimationFrame(() => {
           container.scrollTop = container.scrollHeight;
         });
@@ -143,12 +189,14 @@ function MessageFeed(props: { chunks: UiChunk[]; sessionState: SessionState }) {
     ),
   );
 
+  const empty = createMemo(() => feedChunks().length === 0);
+
   return (
     <div
       ref={container!}
       class="flex-1 overflow-y-auto px-6 py-4"
     >
-      <Show when={props.chunks.length === 0}>
+      <Show when={empty() && props.chunks.length === 0}>
         <div class="flex h-full items-center justify-center text-center">
           <div>
             <div class="text-3xl mb-3">🧸</div>
@@ -159,7 +207,7 @@ function MessageFeed(props: { chunks: UiChunk[]; sessionState: SessionState }) {
           </div>
         </div>
       </Show>
-      <For each={props.chunks}>
+      <For each={feedChunks()}>
         {(chunk) => {
           if (chunk.kind === "tool_call") {
             return (
@@ -175,21 +223,46 @@ function MessageFeed(props: { chunks: UiChunk[]; sessionState: SessionState }) {
         }}
       </For>
 
-      {/* Running indicator */}
-      <Show when={props.sessionState === "running"}>
+      <Show when={!props.showToolActivityInline && toolChunks().length > 0}>
+        <details
+          class={`mt-3 rounded-lg border ${C.border} ${C.surfaceElevated} px-3 py-2`}
+          data-ra-activity-details
+        >
+          <summary
+            class={`text-xs ${C.mutedText} cursor-pointer select-none`}
+            data-ra-activity-summary
+          >
+            Technical activity ({toolChunks().length})
+          </summary>
+          <div class="mt-2 border-t border-[var(--ra-border)] pt-2">
+            <For each={toolChunks()}>
+              {(chunk) => (
+                <ToolCallRow
+                  toolUseId={chunk.toolUseId}
+                  toolName={chunk.toolName}
+                  status={chunk.status}
+                  result={chunk.result}
+                />
+              )}
+            </For>
+          </div>
+        </details>
+      </Show>
+
+      <Show when={statusLine()}>
         <div
           class={`flex items-center gap-2 text-xs ${C.mutedText} mt-2`}
           data-ra-agent-thinking
         >
           <span class="inline-block w-2 h-2 rounded-full bg-[var(--ra-yellow)] animate-pulse" />
-          Agent is thinking…
+          {statusLine()}
         </div>
       </Show>
     </div>
   );
 }
 
-/** Approval request card — pops up when the agent needs permission */
+/** Approval request card — action-first copy; tool name is technical detail only */
 function ApprovalOverlay(props: {
   approvals: Approval[];
   onApprove: (id: string) => void;
@@ -203,13 +276,20 @@ function ApprovalOverlay(props: {
             <div class="flex items-start gap-3">
               <span class="text-amber-400 text-lg mt-0.5">⚠️</span>
               <div class="flex-1 min-w-0">
-                <p class={`text-sm font-medium ${C.textPrimary}`}>
-                  Tool: {approval.toolName}
-                </p>
-                <p class={`text-xs ${C.mutedText} mt-1`}>{approval.description}</p>
-                <Show when={approval.target}>
-                  <p class={`text-xs ${C.mutedText} mt-0.5 font-mono`}>{approval.target}</p>
-                </Show>
+                <p class={`text-sm font-medium ${C.textPrimary}`}>{approval.description}</p>
+                <details class="mt-2">
+                  <summary class={`text-[11px] ${C.mutedText} cursor-pointer`}>
+                    Technical details
+                  </summary>
+                  <p class={`text-[11px] ${C.mutedText} mt-1 font-mono break-all`}>
+                    {approval.toolName}
+                  </p>
+                  <Show when={approval.target}>
+                    <p class={`text-[11px] ${C.mutedText} mt-0.5 font-mono break-all`}>
+                      {approval.target}
+                    </p>
+                  </Show>
+                </details>
               </div>
             </div>
             <div class="flex gap-2 mt-3 justify-end">
@@ -218,14 +298,14 @@ function ApprovalOverlay(props: {
                 onClick={() => props.onReject(approval.approvalId)}
                 class="px-4 py-1.5 text-xs"
               >
-                Reject
+                Don&apos;t allow
               </Button>
               <Button
                 variant="primary"
                 onClick={() => props.onApprove(approval.approvalId)}
                 class="px-4 py-1.5 text-xs"
               >
-                Approve
+                Allow
               </Button>
             </div>
           </div>
@@ -849,7 +929,7 @@ function StatusBar(props: { sessionState: SessionState; sessionCount: number }) 
     : "connected";
 
   const label =
-    props.sessionState === "running" ? "Agent running"
+    props.sessionState === "running" ? "Working"
     : props.sessionState === "error" ? "Error"
     : "Ready";
 
@@ -881,6 +961,9 @@ export default function Shell(): JSX.Element {
 
   // Messages rendered as flat chunks
   const [chunks, setChunks] = createSignal<UiChunk[]>([]);
+
+  /** When true, tool rows appear inline in the feed (persisted). Default: chat-only. */
+  const [showToolActivityInline, setShowToolActivityInline] = createSignal(readShowToolActivity());
 
   // Pending approval queue
   const [approvals, setApprovals] = createSignal<Approval[]>([]);
@@ -1143,8 +1226,26 @@ export default function Shell(): JSX.Element {
         <span class="font-bold text-sm tracking-wide">Relay Agent</span>
         <div class="flex-1" />
         <StatusDot status={sessionRunning() ? "connecting" : "connected"} label="Copilot" />
+        <label
+          class={`flex items-center gap-2 px-2 py-1 text-xs ${C.mutedText} cursor-pointer select-none`}
+          title="Show tool names and raw results in the main chat"
+        >
+          <input
+            type="checkbox"
+            class="rounded border-[var(--ra-border)]"
+            checked={showToolActivityInline()}
+            onChange={(e) => {
+              const v = e.currentTarget.checked;
+              setShowToolActivityInline(v);
+              writeShowToolActivity(v);
+            }}
+            data-ra-toggle-tool-activity
+          />
+          <span>Show tool activity in chat</span>
+        </label>
         <button
           class={`px-3 py-1 text-xs rounded-full border ${C.border} ${C.mutedText} ${C.hover} transition-colors`}
+          type="button"
         >
           ⚙ Settings
         </button>
@@ -1168,7 +1269,11 @@ export default function Shell(): JSX.Element {
             {sessionError()}
           </div>
         </Show>
-        <MessageFeed chunks={chunks()} sessionState={sessionState()} />
+        <MessageFeed
+          chunks={chunks()}
+          sessionState={sessionState()}
+          showToolActivityInline={showToolActivityInline()}
+        />
         <Composer
           onSend={handleSend}
           disabled={sessionRunning()}

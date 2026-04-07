@@ -352,6 +352,44 @@ export type UiChunk =
       result: string | null;
     };
 
+/** User-facing status while a tool runs (no internal tool names in the main line). */
+export function friendlyToolActivityLabel(toolName: string): string {
+  const labels: Record<string, string> = {
+    read_file: "Reading a file…",
+    glob_search: "Searching the workspace for files…",
+    grep_search: "Searching file contents…",
+    write_file: "Writing a file…",
+    edit_file: "Updating a file…",
+    bash: "Running a shell command…",
+    PowerShell: "Running PowerShell…",
+    REPL: "Running code…",
+    WebFetch: "Fetching web content…",
+    WebSearch: "Searching the web…",
+    TodoWrite: "Updating tasks…",
+    NotebookEdit: "Editing a notebook…",
+    Config: "Changing settings…",
+    Agent: "Running a sub-task…",
+    Skill: "Loading instructions…",
+    ToolSearch: "Looking up tools…",
+    Sleep: "Waiting briefly…",
+    SendUserMessage: "Preparing a message…",
+    Brief: "Preparing a message…",
+    StructuredOutput: "Formatting a response…",
+    CliList: "Listing command-line tools…",
+    CliDiscover: "Discovering command-line tools…",
+    CliRegister: "Registering a CLI…",
+    CliUnregister: "Removing a CLI registration…",
+    CliRun: "Running an external command…",
+    ElectronApps: "Checking desktop apps…",
+    ElectronLaunch: "Launching an app…",
+    ElectronEval: "Inspecting an app…",
+    ElectronGetText: "Reading app content…",
+    ElectronClick: "Automating a click…",
+    ElectronTypeText: "Typing into an app…",
+  };
+  return labels[toolName] ?? "Working on your request…";
+}
+
 /* ============================================================
    MCP Server Management
    ============================================================ */

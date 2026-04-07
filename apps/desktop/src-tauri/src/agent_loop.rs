@@ -21,6 +21,108 @@ use crate::error::AgentLoopError;
 use crate::registry::SessionRegistry;
 use crate::tauri_bridge;
 
+/// Active clearance: read-only and inspection tools run without interrupting the user;
+/// anything that needs workspace write in the catalog is escalated to danger tier so the
+/// user is prompted (writes, shell, sub-agents, etc.).
+fn desktop_permission_policy() -> PermissionPolicy {
+    let mut policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite);
+    for spec in tools::mvp_tool_specs() {
+        let required = if spec.required_permission == PermissionMode::WorkspaceWrite {
+            PermissionMode::DangerFullAccess
+        } else {
+            spec.required_permission
+        };
+        policy = policy.with_tool_requirement(spec.name, required);
+    }
+    policy
+}
+
+/// One-line + optional path/command context for the approval UI (no raw tool jargon in the title).
+fn human_approval_summary(tool_name: &str, input: &str) -> String {
+    let v: Value = serde_json::from_str(input).unwrap_or_else(|_| json!({}));
+    let path = v.get("path").and_then(|p| p.as_str());
+    let notebook_path = v.get("notebook_path").and_then(|p| p.as_str());
+    let cmd = v.get("command").and_then(|c| c.as_str());
+    let url = v.get("url").and_then(|u| u.as_str());
+
+    match tool_name {
+        "read_file" => path
+            .map(|p| format!("Allow reading this file?\n{p}"))
+            .unwrap_or_else(|| "Allow reading a file?".into()),
+        "glob_search" => {
+            let pat = v.get("pattern").and_then(|x| x.as_str()).unwrap_or("*");
+            format!("Search the workspace for files matching “{pat}”?")
+        }
+        "grep_search" => {
+            let pat = v.get("pattern").and_then(|x| x.as_str()).unwrap_or("pattern");
+            format!("Search file contents for “{pat}”?")
+        }
+        "write_file" => path
+            .map(|p| format!("Create or overwrite this file?\n{p}"))
+            .unwrap_or_else(|| "Create or overwrite a file?".into()),
+        "edit_file" => path
+            .map(|p| format!("Edit this file?\n{p}"))
+            .unwrap_or_else(|| "Edit a file?".into()),
+        "bash" | "PowerShell" => cmd
+            .map(|c| {
+                let preview: String = c.chars().take(120).collect();
+                format!("Run this command?\n{preview}")
+            })
+            .unwrap_or_else(|| format!("Run a {tool_name} command?")),
+        "WebFetch" => url
+            .map(|u| format!("Fetch content from this URL?\n{u}"))
+            .unwrap_or_else(|| "Fetch content from a URL?".into()),
+        "WebSearch" => {
+            let q = v.get("query").and_then(|x| x.as_str()).unwrap_or("…");
+            format!("Search the web for “{q}”?")
+        }
+        "TodoWrite" => "Update the task list?".to_string(),
+        "NotebookEdit" => notebook_path
+            .map(|p| format!("Edit this notebook?\n{p}"))
+            .unwrap_or_else(|| "Edit a notebook?".into()),
+        "Config" => {
+            let s = v.get("setting").and_then(|x| x.as_str()).unwrap_or("settings");
+            format!("Change configuration: {s}?")
+        }
+        "Agent" => "Run a delegated sub-task?".to_string(),
+        "REPL" => "Run code in a REPL?".to_string(),
+        "CliRun" => {
+            let cli = v.get("cli").and_then(|x| x.as_str()).unwrap_or("program");
+            format!("Run external program “{cli}”?")
+        }
+        "CliRegister" | "CliUnregister" => {
+            format!("Change registered CLI tools ({tool_name})?")
+        }
+        "ElectronLaunch" | "ElectronEval" | "ElectronClick" | "ElectronTypeText" => {
+            "Control a desktop app through automation?".to_string()
+        }
+        name if name.starts_with("mcp__") => format!("Allow connected integration “{name}”?"),
+        _ => {
+            if let Some(p) = path {
+                format!("Allow this action on {p}?")
+            } else if let Some(c) = cmd {
+                let preview: String = c.chars().take(80).collect();
+                format!("Allow this command?\n{preview}")
+            } else {
+                format!("Allow “{tool_name}”?")
+            }
+        }
+    }
+}
+
+fn approval_target_hint(input: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(input).ok()?;
+    v.get("path")
+        .and_then(|p| p.as_str())
+        .map(String::from)
+        .or_else(|| {
+            v.get("notebook_path")
+                .and_then(|p| p.as_str())
+                .map(String::from)
+        })
+        .or_else(|| v.get("url").and_then(|p| p.as_str()).map(String::from))
+}
+
 /* ── Event name constants ─── */
 
 pub(crate) const E_TOOL_START: &str = "agent:tool_start";
@@ -61,7 +163,7 @@ pub fn run_agent_loop_impl(
     let api_client = CdpApiClient::new(server);
 
     let tool_executor = build_tool_executor(app, session_id, cwd.clone());
-    let permission_policy = PermissionPolicy::new(PermissionMode::Prompt);
+    let permission_policy = desktop_permission_policy();
     let system_prompt = vec![build_system_prompt(&goal)];
     let config = crate::config::AgentConfig::global();
     let max_turns = max_turns.unwrap_or(config.max_turns);
@@ -538,23 +640,8 @@ impl PermissionPrompter for TauriApprovalPrompter {
 
         let approval_id = Uuid::new_v4().to_string();
 
-        // Build a human-readable description from input JSON
-        let description = match serde_json::from_str::<serde_json::Value>(&request.input) {
-            Ok(v) => {
-                if let Some(path) = v.get("path").and_then(|p| p.as_str()) {
-                    format!("{} on {}", request.tool_name, path)
-                } else if let Some(cmd) = v.get("command").and_then(|c| c.as_str()) {
-                    format!(
-                        "{}: {}",
-                        request.tool_name,
-                        cmd.chars().take(60).collect::<String>()
-                    )
-                } else {
-                    format!("{} request", request.tool_name)
-                }
-            }
-            Err(_) => format!("{} request", request.tool_name),
-        };
+        let description = human_approval_summary(&request.tool_name, &request.input);
+        let target = approval_target_hint(&request.input);
 
         // Parse input for the event
         let input_obj = serde_json::from_str(&request.input).unwrap_or(serde_json::json!({}));
@@ -566,7 +653,7 @@ impl PermissionPrompter for TauriApprovalPrompter {
                 approval_id: approval_id.clone(),
                 tool_name: request.tool_name.clone(),
                 description,
-                target: None,
+                target,
                 input: input_obj,
             },
         ) {
@@ -1046,5 +1133,59 @@ mod cdp_copilot_tool_tests {
         assert!(vis.is_empty());
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].1, "read_file");
+    }
+}
+
+#[cfg(test)]
+mod desktop_permission_tests {
+    use super::desktop_permission_policy;
+    use runtime::{
+        PermissionOutcome, PermissionPromptDecision, PermissionPrompter, PermissionRequest,
+    };
+
+    struct AllowPrompter;
+
+    impl PermissionPrompter for AllowPrompter {
+        fn decide(&mut self, _request: &PermissionRequest) -> PermissionPromptDecision {
+            PermissionPromptDecision::Allow
+        }
+    }
+
+    #[test]
+    fn allows_read_tools_without_prompt() {
+        let p = desktop_permission_policy();
+        assert_eq!(
+            p.authorize("read_file", r#"{"path":"a.txt"}"#, None),
+            PermissionOutcome::Allow
+        );
+        assert_eq!(
+            p.authorize("glob_search", r#"{"pattern":"*.rs"}"#, None),
+            PermissionOutcome::Allow
+        );
+    }
+
+    #[test]
+    fn write_requires_prompter_or_denies() {
+        let p = desktop_permission_policy();
+        let out = p.authorize("write_file", r#"{"path":"x","content":"y"}"#, None);
+        assert!(matches!(out, PermissionOutcome::Deny { .. }));
+
+        let mut pr = AllowPrompter;
+        let out2 = p.authorize("write_file", r#"{"path":"x","content":"y"}"#, Some(&mut pr));
+        assert_eq!(out2, PermissionOutcome::Allow);
+    }
+
+    #[test]
+    fn bash_prompts_until_allowed() {
+        let p = desktop_permission_policy();
+        assert!(matches!(
+            p.authorize("bash", r#"{"command":"echo hi"}"#, None),
+            PermissionOutcome::Deny { .. }
+        ));
+        let mut pr = AllowPrompter;
+        assert_eq!(
+            p.authorize("bash", r#"{"command":"echo hi"}"#, Some(&mut pr)),
+            PermissionOutcome::Allow
+        );
     }
 }
