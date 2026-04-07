@@ -16,6 +16,17 @@
 
 ## Milestone Log
 
+### 2026-04-07 M365 Copilot Chathub WebSocket (assistant text)
+
+**Finding:** M365 BizChat streams assistant `messages[].text` (author `bot`, `contentOrigin` e.g. `DeepLeo`) over **SignalR** on  
+`wss://substrate.office.com/m365Copilot/Chathub/...` (frames use ASCII RS `\\u001e` record separators). HTTP XHR allowlist alone misses this channel.
+
+**Implementation:** `createCopilotNetworkCapture` subscribes to CDP `Network.webSocketCreated` / `Network.webSocketFrameReceived` for that URL pattern, parses frames, and prefers extracted bot text in `pickBestOver`, `pickBestShortAssistant`, and `resolveAssistantReplyForReturn`.
+
+**Security:** HAR/WebSocket URLs may contain `access_token` query params — never commit or paste raw; redact before sharing.
+
+**Artifacts:** `apps/desktop/src-tauri/binaries/copilot_server.js`
+
 ### 2026-04-07 Copilot network capture: allowlist-first policy
 
 **Problem:** `copilot_server.js` captured every response under broad Copilot-related hosts, then tried to reject bad bodies with growing string heuristics (JWT, Pacman telemetry, UUIDs, HTML shell, etc.). That does not scale: new endpoints kept leaking into “assistant text.”

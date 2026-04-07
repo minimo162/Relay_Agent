@@ -84,6 +84,7 @@ function isAllowedChatNetworkUrl(url) {
   }
   if (/\/harmony\//i.test(pathQ) && /\/events/i.test(pathQ)) return false;
   const pathHints = [
+    /\/m365copilot\/chathub\//i,
     /\/chat\/completions/,
     /\/completions(?:\/|\?|$)/,
     /\/openai\//,
@@ -1890,6 +1891,88 @@ function networkExtractLooksLikeGarbage(text) {
   return false;
 }
 
+/** BizChat / M365 Copilot assistant stream (SignalR over WebSocket). */
+function isM365ChathubWebSocketUrl(url) {
+  const u = (url || "").toLowerCase();
+  return (
+    (u.startsWith("wss://") || u.startsWith("ws://")) &&
+    /substrate\.office\.com\/m365copilot\/chathub\//i.test(u)
+  );
+}
+
+function deepExtractTextBlocksFromAdaptive(card, depth) {
+  if (depth > 14 || !card || typeof card !== "object") return [];
+  const out = [];
+  if (card.type === "TextBlock" && typeof card.text === "string") {
+    const t = card.text.trim();
+    if (t.length >= 2) out.push(t);
+  }
+  if (Array.isArray(card.body)) {
+    for (const b of card.body) out.push(...deepExtractTextBlocksFromAdaptive(b, depth + 1));
+  }
+  return out;
+}
+
+function collectBotTextsFromChathubMessage(m) {
+  if (!m || typeof m !== "object") return [];
+  const out = [];
+  const auth = String(m.author || "").toLowerCase();
+  if ((auth === "bot" || auth === "assistant") && typeof m.text === "string") {
+    const t = m.text.trim();
+    if (t.length >= 2 && !stringLooksLikeJwt(t) && !stringLooksLikeBareUuidOrHexId(t)) out.push(t);
+  }
+  if (Array.isArray(m.adaptiveCards)) {
+    for (const c of m.adaptiveCards) out.push(...deepExtractTextBlocksFromAdaptive(c, 0));
+  }
+  return out;
+}
+
+function collectBotTextsFromChathubJson(v, depth) {
+  if (depth > 28 || v == null) return [];
+  if (Array.isArray(v)) {
+    const out = [];
+    for (const x of v) out.push(...collectBotTextsFromChathubJson(x, depth + 1));
+    return out;
+  }
+  if (typeof v !== "object") return [];
+  const out = [];
+  if (v.result && typeof v.result === "object" && typeof v.result.message === "string") {
+    const t = v.result.message.trim();
+    if (t.length >= 2 && !stringLooksLikeJwt(t)) out.push(t);
+  }
+  if (Array.isArray(v.messages)) {
+    for (const m of v.messages) out.push(...collectBotTextsFromChathubMessage(m));
+  }
+  for (const k of Object.keys(v)) {
+    out.push(...collectBotTextsFromChathubJson(v[k], depth + 1));
+  }
+  return out;
+}
+
+/**
+ * One or more SignalR JSON records separated by ASCII RS (\\u001e).
+ */
+function extractAssistantFromChathubWsFramePayload(raw) {
+  const s = typeof raw === "string" ? raw : "";
+  if (!s) return "";
+  const parts = s.split("\x1e");
+  let best = "";
+  for (const chunk of parts) {
+    const part = chunk.trim();
+    if (!part) continue;
+    let j;
+    try {
+      j = JSON.parse(part);
+    } catch {
+      continue;
+    }
+    for (const t of collectBotTextsFromChathubJson(j, 0)) {
+      if (t.length > best.length) best = t;
+    }
+  }
+  return best;
+}
+
 function deepExtractAssistantStrings(v, depth) {
   if (depth > 14) return [];
   if (typeof v === "string") {
@@ -1970,6 +2053,29 @@ function extractAssistantFromNetworkPayload(raw) {
  */
 function createCopilotNetworkCapture(session) {
   const metas = [];
+  const chathubRequestIds = new Set();
+  const chathubFramePayloads = [];
+  const maxChathubBufferChars = 2_500_000;
+
+  const pickAssistantFromChathubWsSync = () => {
+    let best = "";
+    for (let i = chathubFramePayloads.length - 1; i >= 0; i--) {
+      const t = extractAssistantFromChathubWsFramePayload(chathubFramePayloads[i]).trim();
+      if (!t || networkExtractLooksLikeGarbage(t)) continue;
+      if (t.length > best.length) best = t;
+    }
+    return best;
+  };
+
+  const trimChathubBuffer = () => {
+    let total = 0;
+    for (const x of chathubFramePayloads) total += x.length;
+    while (total > maxChathubBufferChars && chathubFramePayloads.length > 2) {
+      const rm = chathubFramePayloads.shift();
+      total -= rm.length;
+    }
+  };
+
   const onResponse = (params) => {
     const r = params.response;
     if (!r || r.status < 200 || r.status >= 400) return;
@@ -1983,9 +2089,30 @@ function createCopilotNetworkCapture(session) {
         .trim(),
     });
   };
+
+  const onWebSocketCreated = (params) => {
+    const u = params.url || "";
+    if (isM365ChathubWebSocketUrl(u)) {
+      chathubRequestIds.add(params.requestId);
+      console.error("[copilot:network] M365 Chathub WebSocket:", u.split("?")[0].slice(0, 120));
+    }
+  };
+
+  const onWebSocketFrameReceived = (params) => {
+    if (!chathubRequestIds.has(params.requestId)) return;
+    const r = params.response;
+    if (!r || r.opcode !== 1) return;
+    const data = r.payloadData;
+    if (typeof data !== "string" || !data.length) return;
+    chathubFramePayloads.push(data);
+    trimChathubBuffer();
+  };
+
   return {
     async enable() {
       session.on("Network.responseReceived", onResponse);
+      session.on("Network.webSocketCreated", onWebSocketCreated);
+      session.on("Network.webSocketFrameReceived", onWebSocketFrameReceived);
       await session.send("Page.enable", {}).catch(() => {});
       await session
         .send("Network.enable", {
@@ -2004,6 +2131,11 @@ function createCopilotNetworkCapture(session) {
     async pickBestOver(domText) {
       const dom = (domText || "").trim();
       let best = dom;
+      const ch = pickAssistantFromChathubWsSync().trim();
+      if (ch.length > best.length && ch.length >= 8 && !networkExtractLooksLikeGarbage(ch)) {
+        best = ch;
+        console.error("[copilot:network] Chathub WS seed pickBestOver len=", ch.length);
+      }
       await sleep(1500);
       const recent = metas.slice(-35);
       if (dom.length < 20 && metas.length) {
@@ -2045,6 +2177,13 @@ function createCopilotNetworkCapture(session) {
         }
         if (best.length > 12_000) break;
       }
+      const chEnd = pickAssistantFromChathubWsSync().trim();
+      if (chEnd.length >= 12 && !networkExtractLooksLikeGarbage(chEnd)) {
+        if (networkExtractLooksLikeGarbage(best) || chEnd.length > best.length) {
+          best = chEnd;
+          console.error("[copilot:network] Chathub WS final pickBestOver len=", chEnd.length);
+        }
+      }
       if (best.length > dom.length) {
         console.error("[copilot:network] using network text over DOM (dom len=", dom.length, ")");
       }
@@ -2056,6 +2195,13 @@ function createCopilotNetworkCapture(session) {
      */
     async pickBestShortAssistant(domEchoLen, submittedLen) {
       await sleep(500);
+      const ch = pickAssistantFromChathubWsSync().trim();
+      if (ch.length >= 12 && !networkExtractLooksLikeGarbage(ch)) {
+        if (!(submittedLen >= 1200 && domExtractLooksLikeSubmittedPrompt(ch.length, submittedLen))) {
+          console.error("[copilot:network] Chathub WS assistant (short path) len=", ch.length);
+          return ch;
+        }
+      }
       const recent = metas.slice(-50);
       let best = "";
       const low = submittedLen ? submittedLen * 0.68 : domEchoLen * 0.8;
@@ -2093,8 +2239,14 @@ function createCopilotNetworkCapture(session) {
       }
       return best;
     },
+    /** Best-effort assistant prose from M365 Chathub WebSocket frames (SignalR). */
+    pickAssistantFromChathubWs: pickAssistantFromChathubWsSync,
     async disable() {
       session.off("Network.responseReceived", onResponse);
+      session.off("Network.webSocketCreated", onWebSocketCreated);
+      session.off("Network.webSocketFrameReceived", onWebSocketFrameReceived);
+      chathubRequestIds.clear();
+      chathubFramePayloads.length = 0;
       await session.send("Network.disable", {}).catch(() => {});
     },
   };
@@ -2143,6 +2295,18 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
   }
   if (netCapture) {
     try {
+      if (typeof netCapture.pickAssistantFromChathubWs === "function") {
+        const chw = netCapture.pickAssistantFromChathubWs().trim();
+        if (
+          chw.length >= 12 &&
+          !networkExtractLooksLikeGarbage(chw) &&
+          (!domExtractLooksLikeSubmittedPrompt(chw.length, submittedPromptLen) ||
+            chw.length < submittedPromptLen * 0.42)
+        ) {
+          console.error("[copilot:response] M365 Chathub WebSocket assistant len=", chw.length);
+          return chw;
+        }
+      }
       const shortN = (await netCapture.pickBestShortAssistant(loose.length, submittedPromptLen)).trim();
       if (shortN.length >= 20) {
         console.error("[copilot:response] network short-assistant len=", shortN.length);
