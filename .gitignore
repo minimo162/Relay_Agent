@@ -42,6 +42,7 @@ apps/desktop/src-tauri/gen/schemas/windows-schema.json
 # OS specific
 .DS_Store
 test-results/
+apps/desktop/test-results-cdp/
 
 # Playwright saved Microsoft session (sensitive)
 apps/desktop/tests/.auth/*.json
