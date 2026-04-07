@@ -1,12 +1,17 @@
 use std::cmp::Reverse;
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use glob::Pattern;
+use image::GenericImageView;
+use image::ImageReader;
+use lopdf::Document;
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -129,30 +134,295 @@ pub struct GrepSearchOutput {
     pub applied_offset: Option<usize>,
 }
 
+/// Read a file as text for the agent. Plain UTF-8 text uses line-based `offset` / `limit`.
+/// `.ipynb` is rendered as numbered plain text. `.pdf` uses `pages` (1-based, e.g. `"1-3"` or `"5"`).
+/// Common image formats return dimensions and format metadata (pixels are not passed to the LLM in this build).
 pub fn read_file(
     path: &str,
     offset: Option<usize>,
     limit: Option<usize>,
+    pages: Option<&str>,
 ) -> io::Result<ReadFileOutput> {
     let absolute_path = normalize_path(path)?;
-    let content = fs::read_to_string(&absolute_path)?;
-    let lines: Vec<&str> = content.lines().collect();
+    let lossy_path = absolute_path.to_string_lossy().into_owned();
+
+    let ext = absolute_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+
+    let full_text = match ext.as_deref() {
+        Some("ipynb") => {
+            let raw = fs::read_to_string(&absolute_path)?;
+            format_ipynb_text(&raw)?
+        }
+        Some("pdf") => read_pdf_as_text(&absolute_path, pages)?,
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") => {
+            if pages.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "`pages` applies only to PDF files",
+                ));
+            }
+            read_image_summary(&absolute_path)?
+        }
+        _ => {
+            if pages.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "`pages` applies only to PDF files",
+                ));
+            }
+            let bytes = fs::read(&absolute_path)?;
+            String::from_utf8(bytes).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "file is not valid UTF-8; try a supported type (.pdf, .ipynb, png/jpg/gif/webp/bmp) or convert to text first",
+                )
+            })?
+        }
+    };
+
+    Ok(slice_text_payload(lossy_path, &full_text, offset, limit))
+}
+
+fn slice_text_payload(
+    file_path: String,
+    full_text: &str,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> ReadFileOutput {
+    let lines: Vec<&str> = full_text.lines().collect();
     let start_index = offset.unwrap_or(0).min(lines.len());
     let end_index = limit.map_or(lines.len(), |limit| {
         start_index.saturating_add(limit).min(lines.len())
     });
     let selected = lines[start_index..end_index].join("\n");
 
-    Ok(ReadFileOutput {
+    ReadFileOutput {
         kind: String::from("text"),
         file: TextFilePayload {
-            file_path: absolute_path.to_string_lossy().into_owned(),
+            file_path,
             content: selected,
             num_lines: end_index.saturating_sub(start_index),
             start_line: start_index.saturating_add(1),
             total_lines: lines.len(),
         },
-    })
+    }
+}
+
+fn cell_source_as_string(source: &Value) -> String {
+    match source {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<String>(),
+        _ => String::new(),
+    }
+}
+
+fn summarize_notebook_outputs(outputs: &[Value]) -> String {
+    let mut lines = Vec::new();
+    for output in outputs {
+        let kind = output
+            .get("output_type")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        match kind {
+            "stream" => {
+                let name = output
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("stream");
+                let text = output
+                    .get("text")
+                    .map(cell_source_as_string)
+                    .unwrap_or_default();
+                let preview: String = text.chars().take(500).collect();
+                let ellipses = if text.len() > 500 { "…" } else { "" };
+                lines.push(format!("    [{name}] {preview}{ellipses}"));
+            }
+            "execute_result" | "display_data" => {
+                let mime_keys = output
+                    .get("data")
+                    .and_then(Value::as_object)
+                    .map(|m| {
+                        m.keys()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                lines.push(format!("    [data] {mime_keys}"));
+            }
+            "error" => {
+                let ename = output
+                    .get("ename")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Error");
+                let evalue = output
+                    .get("evalue")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                lines.push(format!("    [error] {ename}: {evalue}"));
+            }
+            other => lines.push(format!("    [{other}]")),
+        }
+    }
+    lines.join("\n")
+}
+
+fn format_ipynb_text(raw: &str) -> io::Result<String> {
+    let notebook: Value =
+        serde_json::from_str(raw).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let cells = notebook
+        .get("cells")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "notebook JSON missing cells array",
+            )
+        })?;
+
+    let mut out = Vec::new();
+    let mut line_no = 1usize;
+    for (i, cell) in cells.iter().enumerate() {
+        let cell_type = cell
+            .get("cell_type")
+            .and_then(Value::as_str)
+            .unwrap_or("?");
+        let source = cell_source_as_string(cell.get("source").unwrap_or(&Value::Null));
+        out.push(format!("{line_no:6}\t### Cell[{i}] ({cell_type})"));
+        line_no += 1;
+        for line in source.lines() {
+            out.push(format!("{line_no:6}\t{line}"));
+            line_no += 1;
+        }
+        if cell_type == "code" {
+            if let Some(outputs) = cell.get("outputs").and_then(Value::as_array) {
+                if !outputs.is_empty() {
+                    out.push(format!("{line_no:6}\t### outputs"));
+                    line_no += 1;
+                    for summary_line in summarize_notebook_outputs(outputs).lines() {
+                        out.push(format!("{line_no:6}\t{summary_line}"));
+                        line_no += 1;
+                    }
+                }
+            }
+        }
+    }
+    Ok(out.join("\n"))
+}
+
+fn parse_pdf_page_spec(spec: &str, max_page: u32) -> io::Result<Vec<u32>> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "pages string must not be empty",
+        ));
+    }
+    let mut pages = BTreeSet::new();
+    for part in spec.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if let Some((a, b)) = part.split_once('-') {
+            let start: u32 = a.trim().parse().map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid page range start in {part:?}"),
+                )
+            })?;
+            let end: u32 = b.trim().parse().map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid page range end in {part:?}"),
+                )
+            })?;
+            if start < 1 || end < start {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid page range {part:?} (use 1-based pages, start <= end)"),
+                ));
+            }
+            for p in start..=end {
+                if p <= max_page {
+                    pages.insert(p);
+                }
+            }
+        } else {
+            let p: u32 = part.parse().map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid page number in {part:?}"),
+                )
+            })?;
+            if p < 1 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "page numbers must be >= 1",
+                ));
+            }
+            if p <= max_page {
+                pages.insert(p);
+            }
+        }
+    }
+    if pages.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no pages matched the document (check page numbers and range)",
+        ));
+    }
+    Ok(pages.into_iter().collect())
+}
+
+fn read_pdf_as_text(path: &Path, pages: Option<&str>) -> io::Result<String> {
+    let doc = Document::load(path).map_err(|e| io::Error::other(e.to_string()))?;
+    let page_map = doc.get_pages();
+    let max_page = *page_map.keys().max().unwrap_or(&0);
+    if max_page == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "PDF contains no pages",
+        ));
+    }
+    let page_nums: Vec<u32> = if let Some(spec) = pages {
+        parse_pdf_page_spec(spec, max_page)?
+    } else {
+        page_map.keys().copied().collect()
+    };
+    let mut sorted = page_nums;
+    sorted.sort_unstable();
+    let extracted = doc
+        .extract_text(&sorted)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    let header = format!(
+        "[PDF text extraction — pages {:?}; quality varies by file.]\n\n",
+        sorted
+    );
+    Ok(header + &extracted)
+}
+
+fn read_image_summary(path: &Path) -> io::Result<String> {
+    let reader = ImageReader::open(path).map_err(|e| io::Error::other(e.to_string()))?;
+    let reader = reader
+        .with_guessed_format()
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    let format = reader
+        .format()
+        .map(|f| format!("{f:?}"))
+        .unwrap_or_else(|| "unknown".into());
+    let img = reader.decode().map_err(|e| io::Error::other(e.to_string()))?;
+    let (w, h) = img.dimensions();
+    Ok(format!(
+        "[Image file — multimodal LLM attachment is not wired through tool results in this build.]\npath: {}\nformat: {format}\nwidth: {w}\nheight: {h}\n",
+        path.display()
+    ))
 }
 
 pub fn write_file(path: &str, content: &str) -> io::Result<WriteFileOutput> {
@@ -191,10 +461,19 @@ pub fn edit_file(
             "old_string and new_string must differ",
         ));
     }
-    if !original_file.contains(old_string) {
+    let occurrences = original_file.matches(old_string).count();
+    if occurrences == 0 {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             "old_string not found in file",
+        ));
+    }
+    if !replace_all && occurrences != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "old_string must match exactly once when replace_all is false (found {occurrences} occurrences); add context or set replace_all"
+            ),
         ));
     }
 
@@ -479,6 +758,8 @@ fn normalize_path_allow_missing(path: &str) -> io::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::io;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{edit_file, glob_search, grep_search, read_file, write_file, GrepSearchInput};
@@ -498,7 +779,7 @@ mod tests {
             .expect("write should succeed");
         assert_eq!(write_output.kind, "create");
 
-        let read_output = read_file(path.to_string_lossy().as_ref(), Some(1), Some(1))
+        let read_output = read_file(path.to_string_lossy().as_ref(), Some(1), Some(1), None)
             .expect("read should succeed");
         assert_eq!(read_output.file.content, "two");
     }
@@ -511,6 +792,26 @@ mod tests {
         let output = edit_file(path.to_string_lossy().as_ref(), "alpha", "omega", true)
             .expect("edit should succeed");
         assert!(output.replace_all);
+    }
+
+    #[test]
+    fn edit_rejects_ambiguous_old_string_without_replace_all() {
+        let path = temp_path("edit-amb.txt");
+        write_file(path.to_string_lossy().as_ref(), "alpha beta alpha")
+            .expect("initial write should succeed");
+        let err = edit_file(path.to_string_lossy().as_ref(), "alpha", "omega", false)
+            .expect_err("ambiguous replace should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn reads_ipynb_as_numbered_text() {
+        let path = temp_path("notebook").with_extension("ipynb");
+        let nb = r#"{"cells":[{"cell_type":"code","metadata":{},"source":["print(1)"],"outputs":[]}],"metadata":{},"nbformat":4,"nbformat_minor":5}"#;
+        fs::write(&path, nb).expect("write ipynb");
+        let out = read_file(path.to_string_lossy().as_ref(), None, None, None).expect("read ipynb");
+        assert!(out.file.content.contains("Cell[0]"));
+        assert!(out.file.content.contains("print(1)"));
     }
 
     #[test]

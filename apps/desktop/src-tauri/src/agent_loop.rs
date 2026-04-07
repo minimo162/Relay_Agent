@@ -752,6 +752,7 @@ impl ToolExecutor for TauriToolExecutor {
         if tool_name == "bash" {
             if let Some(obj) = input_value.as_object_mut() {
                 obj.remove("dangerouslyDisableSandbox");
+                obj.remove("dangerously_disable_sandbox");
             }
             // Fix #4 — prepend cwd to bash commands instead of mutating process-global CWD
             if let Some(ref cwd) = self.cwd {
@@ -948,7 +949,9 @@ pub fn build_system_prompt(goal: &str) -> String {
             "Goal:\n{goal}\n\n",
             "Constraints:\n",
             "- Prefer read-only tools before mutating tools.\n",
-            "- When modifying files, prefer saving copies."
+            "- When modifying files, prefer saving copies.\n",
+            "- Local files: read_file, glob_search, and grep_search accept absolute paths on this machine (e.g. Windows C:\\Users\\...\\file.pdf) wherever the OS user can read them. Do not tell the user the app lacks permission to their user profile; call read_file and surface the tool's error if access fails.\n",
+            "- read_file returns UTF-8 text only. PDF and other binaries are not parsed; if the tool errors or output is unusable, ask for extracted text or a converted .txt/.md file."
         ),
         goal = goal,
     )

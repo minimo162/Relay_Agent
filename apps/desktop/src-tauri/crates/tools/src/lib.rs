@@ -54,7 +54,7 @@ pub struct ToolSpec {
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn mvp_tool_specs() -> Vec<ToolSpec> {
-    vec![
+    let mut specs = vec![
         ToolSpec {
             name: "bash",
             description: "Execute a shell command in the current workspace.",
@@ -65,7 +65,8 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     "timeout": { "type": "integer", "minimum": 1 },
                     "description": { "type": "string" },
                     "run_in_background": { "type": "boolean" },
-                    "dangerouslyDisableSandbox": { "type": "boolean" }
+                    "dangerouslyDisableSandbox": { "type": "boolean" },
+                    "dangerously_disable_sandbox": { "type": "boolean", "description": "Claw-style alias (stripped before execution in Relay for security)" }
                 },
                 "required": ["command"],
                 "additionalProperties": false
@@ -74,15 +75,20 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "read_file",
-            description: "Read a text file from the workspace.",
+            description: "Read a file by path: UTF-8 text (line offset/limit), .ipynb as numbered text, .pdf with optional pages (1-based, e.g. \"1-3\" or \"5\"), common images as metadata only (no multimodal tool result yet).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "path": { "type": "string" },
+                    "file_path": { "type": "string", "description": "Claw-style alias for path" },
                     "offset": { "type": "integer", "minimum": 0 },
-                    "limit": { "type": "integer", "minimum": 1 }
+                    "limit": { "type": "integer", "minimum": 1 },
+                    "pages": { "type": "string", "description": "PDF only: page range such as \"1-5\", \"3\", or \"10-20\" (1-based)" }
                 },
-                "required": ["path"],
+                "anyOf": [
+                    { "required": ["path"] },
+                    { "required": ["file_path"] }
+                ],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
@@ -204,11 +210,16 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                         "items": {
                             "type": "object",
                             "properties": {
+                                "id": { "type": "string" },
                                 "content": { "type": "string" },
                                 "activeForm": { "type": "string" },
                                 "status": {
                                     "type": "string",
                                     "enum": ["pending", "in_progress", "completed"]
+                                },
+                                "priority": {
+                                    "type": "string",
+                                    "enum": ["high", "medium", "low"]
                                 }
                             },
                             "required": ["content", "activeForm", "status"],
@@ -245,7 +256,9 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     "prompt": { "type": "string" },
                     "subagent_type": { "type": "string" },
                     "name": { "type": "string" },
-                    "model": { "type": "string" }
+                    "model": { "type": "string" },
+                    "run_in_background": { "type": "boolean" },
+                    "isolation": { "type": "string", "description": "e.g. worktree (not supported in Relay)" }
                 },
                 "required": ["description", "prompt"],
                 "additionalProperties": false
@@ -276,7 +289,13 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     "cell_id": { "type": "string" },
                     "new_source": { "type": "string" },
                     "cell_type": { "type": "string", "enum": ["code", "markdown"] },
-                    "edit_mode": { "type": "string", "enum": ["replace", "insert", "delete"] }
+                    "edit_mode": { "type": "string", "enum": ["replace", "insert", "delete"] },
+                    "command": {
+                        "type": "string",
+                        "enum": ["replace", "insert_above", "insert_below", "delete"],
+                        "description": "Claw-style; when set, index is required (0-based cell index)"
+                    },
+                    "index": { "type": "integer", "minimum": 0 }
                 },
                 "required": ["notebook_path"],
                 "additionalProperties": false
@@ -324,11 +343,16 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "setting": { "type": "string" },
+                    "key": { "type": "string", "description": "Claw-style alias for setting name" },
+                    "action": { "type": "string", "enum": ["get", "set"] },
                     "value": {
                         "type": ["string", "boolean", "number"]
                     }
                 },
-                "required": ["setting"],
+                "anyOf": [
+                    { "required": ["setting"] },
+                    { "required": ["key"] }
+                ],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::WorkspaceWrite,
@@ -338,6 +362,9 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             description: "Return structured output in the requested format.",
             input_schema: json!({
                 "type": "object",
+                "properties": {
+                    "data": { "description": "Primary JSON payload (Claw-style)" }
+                },
                 "additionalProperties": true
             }),
             required_permission: PermissionMode::ReadOnly,
@@ -357,22 +384,25 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             }),
             required_permission: PermissionMode::DangerFullAccess,
         },
-        ToolSpec {
-            name: "PowerShell",
-            description: "Execute a PowerShell command with optional timeout.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "command": { "type": "string" },
-                    "timeout": { "type": "integer", "minimum": 1 },
-                    "description": { "type": "string" },
-                    "run_in_background": { "type": "boolean" }
-                },
-                "required": ["command"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::DangerFullAccess,
-        },
+    ];
+    #[cfg(windows)]
+    specs.push(ToolSpec {
+        name: "PowerShell",
+        description: "Execute a PowerShell command with optional timeout.",
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "command": { "type": "string" },
+                "timeout": { "type": "integer", "minimum": 1 },
+                "description": { "type": "string" },
+                "run_in_background": { "type": "boolean" }
+            },
+            "required": ["command"],
+            "additionalProperties": false
+        }),
+        required_permission: PermissionMode::DangerFullAccess,
+    });
+    specs.extend(vec![
         // ── CLI Hub (OpenCLI-inspired) ──
         ToolSpec {
             name: "CliList",
@@ -521,7 +551,8 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             }),
             required_permission: PermissionMode::DangerFullAccess,
         },
-    ]
+    ]);
+    specs
 }
 
 pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
@@ -546,6 +577,7 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
             from_value::<StructuredOutputInput>(input).and_then(run_structured_output)
         }
         "REPL" => from_value::<ReplInput>(input).and_then(run_repl),
+        #[cfg(windows)]
         "PowerShell" => from_value::<PowerShellInput>(input).and_then(run_powershell),
         // CLI Hub
         "CliList" => to_pretty_json(cli_hub::cli_list()),
@@ -591,7 +623,19 @@ fn run_bash(input: BashCommandInput) -> Result<String, String> {
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_read_file(input: ReadFileInput) -> Result<String, String> {
-    to_pretty_json(read_file(&input.path, input.offset, input.limit).map_err(io_to_string)?)
+    let path = input
+        .path
+        .or(input.file_path)
+        .ok_or_else(|| String::from("read_file requires path or file_path"))?;
+    to_pretty_json(
+        read_file(
+            &path,
+            input.offset,
+            input.limit,
+            input.pages.as_deref(),
+        )
+        .map_err(io_to_string)?,
+    )
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -640,8 +684,24 @@ fn run_skill(input: SkillInput) -> Result<String, String> {
     to_pretty_json(execute_skill(input)?)
 }
 
-fn run_agent(_input: AgentInput) -> Result<String, String> {
-    Err(String::from("sub-agent is not available (CDP-only mode)"))
+fn run_agent(input: AgentInput) -> Result<String, String> {
+    if input.run_in_background == Some(true) {
+        return Err(String::from(
+            "Agent run_in_background is not supported in Relay (sub-agents unavailable)",
+        ));
+    }
+    if input
+        .isolation
+        .as_deref()
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("worktree"))
+    {
+        return Err(String::from(
+            "Agent isolation \"worktree\" is not supported in Relay (sub-agents unavailable)",
+        ));
+    }
+    Err(String::from(
+        "sub-agent is not available (CDP-only mode)",
+    ))
 }
 
 fn run_tool_search(input: ToolSearchInput) -> Result<String, String> {
@@ -661,6 +721,7 @@ fn run_brief(input: BriefInput) -> Result<String, String> {
 }
 
 fn run_config(input: ConfigInput) -> Result<String, String> {
+    let input = normalize_config_input(input)?;
     to_pretty_json(execute_config(input)?)
 }
 
@@ -672,6 +733,7 @@ fn run_repl(input: ReplInput) -> Result<String, String> {
     to_pretty_json(execute_repl(input)?)
 }
 
+#[cfg(windows)]
 fn run_powershell(input: PowerShellInput) -> Result<String, String> {
     to_pretty_json(execute_powershell(input).map_err(|error| error.to_string())?)
 }
@@ -743,9 +805,13 @@ fn io_to_string(error: std::io::Error) -> String {
 
 #[derive(Debug, Deserialize)]
 struct ReadFileInput {
-    path: String,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    file_path: Option<String>,
     offset: Option<usize>,
     limit: Option<usize>,
+    pages: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -788,10 +854,12 @@ struct TodoWriteInput {
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 struct TodoItem {
+    id: Option<String>,
     content: String,
     #[serde(rename = "activeForm")]
     active_form: String,
     status: TodoStatus,
+    priority: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
@@ -815,6 +883,8 @@ struct AgentInput {
     subagent_type: Option<String>,
     name: Option<String>,
     model: Option<String>,
+    run_in_background: Option<bool>,
+    isolation: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -830,6 +900,8 @@ struct NotebookEditInput {
     new_source: Option<String>,
     cell_type: Option<NotebookCellType>,
     edit_mode: Option<NotebookEditMode>,
+    command: Option<String>,
+    index: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
@@ -868,7 +940,12 @@ enum BriefStatus {
 
 #[derive(Debug, Deserialize)]
 struct ConfigInput {
-    setting: String,
+    #[serde(default)]
+    setting: Option<String>,
+    #[serde(default)]
+    key: Option<String>,
+    #[serde(default)]
+    action: Option<String>,
     value: Option<ConfigValue>,
 }
 
@@ -881,8 +958,12 @@ enum ConfigValue {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(transparent)]
-struct StructuredOutputInput(BTreeMap<String, Value>);
+struct StructuredOutputInput {
+    #[serde(default)]
+    data: Option<Value>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, Value>,
+}
 
 #[derive(Debug, Deserialize)]
 struct ReplInput {
@@ -891,6 +972,7 @@ struct ReplInput {
     timeout_ms: Option<u64>,
 }
 
+#[cfg(windows)]
 #[derive(Debug, Deserialize)]
 struct PowerShellInput {
     command: String,
@@ -1540,6 +1622,14 @@ fn validate_todos(todos: &[TodoItem]) -> Result<(), String> {
     if todos.iter().any(|todo| todo.active_form.trim().is_empty()) {
         return Err(String::from("todo activeForm must not be empty"));
     }
+    for todo in todos {
+        if let Some(ref p) = todo.priority {
+            let p = p.trim();
+            if !matches!(p, "high" | "medium" | "low") {
+                return Err(format!("todo priority must be high, medium, or low (got {p:?})"));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1757,17 +1847,85 @@ fn execute_notebook_edit(input: NotebookEditInput) -> Result<NotebookEditOutput,
         .and_then(serde_json::Value::as_array_mut)
         .ok_or_else(|| String::from("Notebook cells array not found"))?;
 
-    let edit_mode = input.edit_mode.unwrap_or(NotebookEditMode::Replace);
-    let target_index = match input.cell_id.as_deref() {
-        Some(cell_id) => Some(resolve_cell_index(cells, Some(cell_id), edit_mode)?),
-        None if matches!(
-            edit_mode,
-            NotebookEditMode::Replace | NotebookEditMode::Delete
-        ) =>
-        {
-            Some(resolve_cell_index(cells, None, edit_mode)?)
+    let mut claw_target_index: Option<usize> = None;
+    let mut claw_insert_at: Option<usize> = None;
+    let mut effective_edit_mode = input.edit_mode;
+
+    if let Some(cmd) = input.command.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        let idx = input
+            .index
+            .ok_or_else(|| String::from("NotebookEdit: command requires index"))?;
+        match cmd {
+            "replace" => {
+                if idx >= cells.len() {
+                    return Err(format!(
+                        "cell index {idx} out of range (len {})",
+                        cells.len()
+                    ));
+                }
+                claw_target_index = Some(idx);
+                effective_edit_mode = Some(NotebookEditMode::Replace);
+            }
+            "delete" => {
+                if idx >= cells.len() {
+                    return Err(format!(
+                        "cell index {idx} out of range (len {})",
+                        cells.len()
+                    ));
+                }
+                claw_target_index = Some(idx);
+                effective_edit_mode = Some(NotebookEditMode::Delete);
+            }
+            "insert_above" => {
+                if idx > cells.len() {
+                    return Err(format!(
+                        "insert_above index {idx} out of range (max {})",
+                        cells.len()
+                    ));
+                }
+                claw_insert_at = Some(idx);
+                effective_edit_mode = Some(NotebookEditMode::Insert);
+            }
+            "insert_below" => {
+                if idx > cells.len() {
+                    return Err(format!(
+                        "insert_below index {idx} out of range (max {})",
+                        cells.len()
+                    ));
+                }
+                let at = if idx == cells.len() {
+                    cells.len()
+                } else {
+                    idx + 1
+                };
+                claw_insert_at = Some(at);
+                effective_edit_mode = Some(NotebookEditMode::Insert);
+            }
+            other => {
+                return Err(format!(
+                    "unknown NotebookEdit command: {other} (use replace, delete, insert_above, insert_below)"
+                ));
+            }
         }
-        None => None,
+    }
+
+    let edit_mode = effective_edit_mode.unwrap_or(NotebookEditMode::Replace);
+    let target_index = if claw_insert_at.is_some() {
+        None
+    } else if let Some(i) = claw_target_index {
+        Some(i)
+    } else {
+        match input.cell_id.as_deref() {
+            Some(cell_id) => Some(resolve_cell_index(cells, Some(cell_id), edit_mode)?),
+            None if matches!(
+                edit_mode,
+                NotebookEditMode::Replace | NotebookEditMode::Delete
+            ) =>
+            {
+                Some(resolve_cell_index(cells, None, edit_mode)?)
+            }
+            None => None,
+        }
     };
     let resolved_cell_type = match edit_mode {
         NotebookEditMode::Delete => None,
@@ -1786,7 +1944,9 @@ fn execute_notebook_edit(input: NotebookEditInput) -> Result<NotebookEditOutput,
             let resolved_cell_type = resolved_cell_type.expect("insert cell type");
             let new_id = make_cell_id(cells.len());
             let new_cell = build_notebook_cell(&new_id, resolved_cell_type, &new_source);
-            let insert_at = target_index.map_or(cells.len(), |index| index + 1);
+            let insert_at = claw_insert_at.unwrap_or_else(|| {
+                target_index.map_or(cells.len(), |index| index + 1)
+            });
             cells.insert(insert_at, new_cell);
             cells
                 .get(insert_at)
@@ -1951,8 +2111,57 @@ fn is_image_path(path: &Path) -> bool {
     )
 }
 
+fn normalize_config_input(input: ConfigInput) -> Result<ConfigInput, String> {
+    let setting = input
+        .setting
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| {
+            input
+                .key
+                .as_ref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+        })
+        .ok_or_else(|| String::from("Config requires setting or key"))?;
+
+    let action = input
+        .action
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase());
+
+    let value = match action.as_deref() {
+        Some("get") => None,
+        Some("set") => Some(
+            input
+                .value
+                .ok_or_else(|| String::from("Config action set requires value"))?,
+        ),
+        Some(other) => {
+            return Err(format!("unknown Config action: {other}"));
+        }
+        None => input.value,
+    };
+
+    Ok(ConfigInput {
+        setting: Some(setting),
+        key: None,
+        action: None,
+        value,
+    })
+}
+
 fn execute_config(input: ConfigInput) -> Result<ConfigOutput, String> {
-    let setting = input.setting.trim();
+    let setting = input
+        .setting
+        .as_deref()
+        .ok_or_else(|| String::from("internal: config setting missing"))?
+        .trim();
     if setting.is_empty() {
         return Err(String::from("setting must not be empty"));
     }
@@ -1999,9 +2208,13 @@ fn execute_config(input: ConfigInput) -> Result<ConfigOutput, String> {
 }
 
 fn execute_structured_output(input: StructuredOutputInput) -> StructuredOutputResult {
+    let mut structured_output = input.extra;
+    if let Some(data) = input.data {
+        structured_output.insert("data".to_string(), data);
+    }
     StructuredOutputResult {
         data: String::from("Structured output provided successfully"),
-        structured_output: input.0,
+        structured_output,
     }
 }
 
@@ -2300,6 +2513,7 @@ fn iso8601_timestamp() -> String {
     iso8601_now()
 }
 
+#[cfg(windows)]
 #[allow(clippy::needless_pass_by_value)]
 fn execute_powershell(input: PowerShellInput) -> std::io::Result<runtime::BashCommandOutput> {
     let _ = &input.description;
@@ -2312,6 +2526,7 @@ fn execute_powershell(input: PowerShellInput) -> std::io::Result<runtime::BashCo
     )
 }
 
+#[cfg(windows)]
 fn detect_powershell_shell() -> std::io::Result<&'static str> {
     if command_exists("pwsh") {
         Ok("pwsh")
@@ -2334,6 +2549,7 @@ fn command_exists(command: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(windows)]
 #[allow(clippy::too_many_lines)]
 fn execute_shell_command(
     shell: &str,
@@ -2526,7 +2742,7 @@ fn parse_skill_description(contents: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpListener};
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex, OnceLock};
@@ -2571,7 +2787,10 @@ mod tests {
         assert!(names.contains(&"Config"));
         assert!(names.contains(&"StructuredOutput"));
         assert!(names.contains(&"REPL"));
+        #[cfg(windows)]
         assert!(names.contains(&"PowerShell"));
+        #[cfg(not(windows))]
+        assert!(!names.contains(&"PowerShell"));
     }
 
     #[test]
@@ -2851,6 +3070,19 @@ mod tests {
 
     #[test]
     fn skill_loads_local_skill_prompt() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let codex_home = temp_path("codex-home");
+        let skill_dir = codex_home.join("skills").join("help");
+        fs::create_dir_all(&skill_dir).expect("skill dir");
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "description: test help skill\n\nGuide on using oh-my-codex plugin (fixture).\n",
+        )
+        .expect("write SKILL.md");
+        std::env::set_var("CODEX_HOME", &codex_home);
+
         let result = execute_tool(
             "Skill",
             &json!({
@@ -2885,6 +3117,9 @@ mod tests {
             .as_str()
             .expect("path")
             .ends_with("/help/SKILL.md"));
+
+        std::env::remove_var("CODEX_HOME");
+        let _ = fs::remove_dir_all(&codex_home);
     }
 
     #[test]
@@ -2949,6 +3184,19 @@ mod tests {
         let replaced_output: serde_json::Value = serde_json::from_str(&replaced).expect("json");
         assert_eq!(replaced_output["cell_id"], "cell-a");
         assert_eq!(replaced_output["cell_type"], "code");
+
+        let claw_replace = execute_tool(
+            "NotebookEdit",
+            &json!({
+                "notebook_path": path.display().to_string(),
+                "command": "replace",
+                "index": 0,
+                "new_source": "print(9)\n"
+            }),
+        )
+        .expect("NotebookEdit Claw-style replace");
+        let claw_out: serde_json::Value = serde_json::from_str(&claw_replace).expect("json");
+        assert_eq!(claw_out["new_source"], "print(9)\n");
 
         let inserted = execute_tool(
             "NotebookEdit",
@@ -3046,14 +3294,36 @@ mod tests {
 
     #[test]
     fn bash_tool_reports_success_exit_failure_timeout_and_background() {
-        let success = execute_tool("bash", &json!({ "command": "printf 'hello'" }))
-            .expect("bash should succeed");
+        let success = execute_tool(
+            "bash",
+            &json!({
+                "command": "printf 'hello'",
+                "timeout": 1000,
+                "run_in_background": false,
+                "dangerouslyDisableSandbox": false,
+                "namespaceRestrictions": false,
+                "isolateNetwork": false,
+                "filesystemMode": "workspace-only"
+            }),
+        )
+        .expect("bash should succeed");
         let success_output: serde_json::Value = serde_json::from_str(&success).expect("json");
         assert_eq!(success_output["stdout"], "hello");
         assert_eq!(success_output["interrupted"], false);
 
-        let failure = execute_tool("bash", &json!({ "command": "printf 'oops' >&2; exit 7" }))
-            .expect("bash failure should still return structured output");
+        let failure = execute_tool(
+            "bash",
+            &json!({
+                "command": "printf 'oops' >&2; exit 7",
+                "timeout": 1000,
+                "run_in_background": false,
+                "dangerouslyDisableSandbox": false,
+                "namespaceRestrictions": false,
+                "isolateNetwork": false,
+                "filesystemMode": "workspace-only"
+            }),
+        )
+        .expect("bash failure should still return structured output");
         let failure_output: serde_json::Value = serde_json::from_str(&failure).expect("json");
         assert_eq!(failure_output["returnCodeInterpretation"], "exit_code:7");
         assert!(failure_output["stderr"]
@@ -3061,8 +3331,19 @@ mod tests {
             .expect("stderr")
             .contains("oops"));
 
-        let timeout = execute_tool("bash", &json!({ "command": "sleep 1", "timeout": 10 }))
-            .expect("bash timeout should return output");
+        let timeout = execute_tool(
+            "bash",
+            &json!({
+                "command": "sleep 1",
+                "timeout": 10,
+                "run_in_background": false,
+                "dangerouslyDisableSandbox": false,
+                "namespaceRestrictions": false,
+                "isolateNetwork": false,
+                "filesystemMode": "workspace-only"
+            }),
+        )
+        .expect("bash timeout should return output");
         let timeout_output: serde_json::Value = serde_json::from_str(&timeout).expect("json");
         assert_eq!(timeout_output["interrupted"], true);
         assert_eq!(timeout_output["returnCodeInterpretation"], "timeout");
@@ -3073,7 +3354,14 @@ mod tests {
 
         let background = execute_tool(
             "bash",
-            &json!({ "command": "sleep 1", "run_in_background": true }),
+            &json!({
+                "command": "sleep 1",
+                "run_in_background": true,
+                "dangerouslyDisableSandbox": false,
+                "namespaceRestrictions": false,
+                "isolateNetwork": false,
+                "filesystemMode": "workspace-only"
+            }),
         )
         .expect("bash background should succeed");
         let background_output: serde_json::Value = serde_json::from_str(&background).expect("json");
@@ -3116,6 +3404,16 @@ mod tests {
         let read_full_output: serde_json::Value = serde_json::from_str(&read_full).expect("json");
         assert_eq!(read_full_output["file"]["content"], "alpha\nbeta\ngamma");
         assert_eq!(read_full_output["file"]["startLine"], 1);
+
+        let read_via_file_path = execute_tool(
+            "read_file",
+            &json!({ "file_path": "nested/demo.txt", "offset": 0, "limit": 2 }),
+        )
+        .expect("read via file_path should succeed");
+        let read_via_file_path_output: serde_json::Value =
+            serde_json::from_str(&read_via_file_path).expect("json");
+        assert_eq!(read_via_file_path_output["file"]["content"], "alpha\nbeta");
+        assert_eq!(read_via_file_path_output["file"]["startLine"], 1);
 
         let read_slice = execute_tool(
             "read_file",
@@ -3396,6 +3694,7 @@ mod tests {
         assert!(output["stdout"].as_str().expect("stdout").contains('2'));
     }
 
+    #[cfg(windows)]
     #[test]
     fn powershell_runs_via_stub_shell() {
         let _guard = env_lock()
@@ -3452,6 +3751,7 @@ printf 'pwsh:%s' "$1"
         assert_eq!(background_output["assistantAutoBackgrounded"], false);
     }
 
+    #[cfg(windows)]
     #[test]
     fn powershell_errors_when_shell_is_missing() {
         let _guard = env_lock()

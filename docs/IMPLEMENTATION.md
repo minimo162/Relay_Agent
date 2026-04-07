@@ -16,6 +16,18 @@
 
 ## Milestone Log
 
+### 2026-04-07 Claw-style agent tools (read_file / schemas / Windows PowerShell)
+
+**Outcome:** Brought built-in tools closer to the [Claw Code tool-system](https://claw-code.codes/tool-system) shape: `read_file` supports `file_path`, optional PDF `pages` (via `lopdf`), `.ipynb` text rendering, image metadata; `edit_file` rejects non-unique `old_string` when `replace_all` is false; `NotebookEdit` accepts Claw `command` + `index`; `Config` accepts `key`/`action`; `StructuredOutput` accepts `data` plus extra keys; `TodoWrite` todos may include `id`/`priority`; `Agent` documents `run_in_background` / `isolation` with explicit unsupported errors; `bash` schema documents `dangerously_disable_sandbox` (alias on `BashCommandInput`; still stripped in `agent_loop`); `PowerShell` is registered and implemented only on Windows.
+
+**Artifacts:** `apps/desktop/src-tauri/crates/runtime/src/file_ops.rs`, `apps/desktop/src-tauri/crates/runtime/Cargo.toml`, `apps/desktop/src-tauri/crates/tools/src/lib.rs`, `apps/desktop/src-tauri/crates/runtime/src/bash.rs`, `apps/desktop/src-tauri/src/agent_loop.rs`
+
+**Verification (Linux):**
+
+- `cargo test -p runtime` — pass (88 tests)
+- `cargo test -p tools` — pass (28 tests)
+- `cargo check -p relay-agent-desktop` — pass
+
 ### 2026-04-07 M365 Copilot Chathub WebSocket (assistant text)
 
 **Finding:** M365 BizChat streams assistant `messages[].text` (author `bot`, `contentOrigin` e.g. `DeepLeo`) over **SignalR** on  

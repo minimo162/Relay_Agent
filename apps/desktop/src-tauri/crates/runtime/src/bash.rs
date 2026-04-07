@@ -21,7 +21,10 @@ pub struct BashCommandInput {
     pub description: Option<String>,
     #[serde(rename = "run_in_background")]
     pub run_in_background: Option<bool>,
-    #[serde(rename = "dangerouslyDisableSandbox")]
+    #[serde(
+        rename = "dangerouslyDisableSandbox",
+        alias = "dangerously_disable_sandbox"
+    )]
     pub dangerously_disable_sandbox: Option<bool>,
     #[serde(rename = "namespaceRestrictions")]
     pub namespace_restrictions: Option<bool>,
