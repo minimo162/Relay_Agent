@@ -1367,6 +1367,19 @@ async function extractAssistantReplyText(session) {
     function inComposer(el) {
       return !!(el && el.closest('#m365-chat-editor-target-element, [data-lexical-editor="true"]'));
     }
+    /** User bubbles often match generic markdown/article selectors — never treat as assistant reply. */
+    function inUserTurn(el) {
+      if (!el) return false;
+      try {
+        if (el.closest('[data-message-author-role="user"]')) return true;
+        if (el.closest('[data-message-author-role="User"]')) return true;
+        if (el.closest('[data-testid="userMessage"]')) return true;
+        if (el.closest('[data-testid*="user-message"]')) return true;
+        if (el.closest('[data-testid*="UserMessage"]')) return true;
+        if (el.matches && el.matches('cib-message[type="user"]')) return true;
+      } catch (_) {}
+      return false;
+    }
     function nodeText(el) {
       const t = (el.innerText || el.textContent || "").trim();
       return t;
@@ -1398,7 +1411,7 @@ async function extractAssistantReplyText(session) {
       ])];
       const roots = [];
       for (const el of byRole) {
-        if (!visible(el) || inComposer(el)) continue;
+        if (!visible(el) || inComposer(el) || inUserTurn(el)) continue;
         const inner = byRole.some((other) => other !== el && other.contains(el));
         if (inner) continue;
         roots.push(el);
@@ -1422,7 +1435,7 @@ async function extractAssistantReplyText(session) {
         for (const el of queryDeepAll(s, doc)) {
           if (!el || dedup.has(el)) continue;
           dedup.add(el);
-          if (!visible(el) || inComposer(el)) continue;
+          if (!visible(el) || inComposer(el) || inUserTurn(el)) continue;
           const t = nodeText(el);
           if (!t) continue;
           els.push(el);
@@ -1442,6 +1455,70 @@ async function extractAssistantReplyText(session) {
         if (t.length > best.length) best = t;
       }
       return best;
+    }
+    function bestAcrossIframes(doc, depth) {
+      let best = extractFromDoc(doc);
+      if (depth > 8) return best;
+      let frames;
+      try {
+        frames = doc.querySelectorAll("iframe");
+      } catch (_) {
+        return best;
+      }
+      for (const f of frames) {
+        try {
+          const c = f.contentDocument;
+          if (c) {
+            const inner = bestAcrossIframes(c, depth + 1);
+            if (inner.length > best.length) best = inner;
+          }
+        } catch (_) {}
+      }
+      return best;
+    }
+    return bestAcrossIframes(document, 0);
+  })()`).catch(() => ({ value: "" }));
+  return typeof r?.value === "string" ? r.value : "";
+}
+
+/** Last assistant turn by ARIA role only (avoids picking user text from generic markdown selectors). */
+async function extractAssistantReplyStrict(session) {
+  const r = await session.evaluate(`(() => {
+    function visible(el) {
+      return el && el.offsetParent !== null;
+    }
+    function inComposer(el) {
+      return !!(el && el.closest('#m365-chat-editor-target-element, [data-lexical-editor="true"]'));
+    }
+    function inUserTurn(el) {
+      if (!el) return false;
+      try {
+        if (el.closest('[data-message-author-role="user"]')) return true;
+        if (el.closest('[data-testid*="user-message"]')) return true;
+      } catch (_) {}
+      return false;
+    }
+    function extractFromDoc(doc) {
+      const byRole = [
+        ...doc.querySelectorAll('[data-message-author-role="assistant"]'),
+        ...doc.querySelectorAll('article[data-message-author-role="assistant"]'),
+      ];
+      const roots = [];
+      for (const el of byRole) {
+        if (!visible(el) || inComposer(el) || inUserTurn(el)) continue;
+        const inner = byRole.some((other) => other !== el && other.contains(el));
+        if (inner) continue;
+        roots.push(el);
+      }
+      roots.sort((a, b) => {
+        const p = a.compareDocumentPosition(b);
+        if (p & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+        return 0;
+      });
+      if (!roots.length) return "";
+      const lastTurn = roots[roots.length - 1];
+      return (lastTurn.innerText || lastTurn.textContent || "").trim();
     }
     function bestAcrossIframes(doc, depth) {
       let best = extractFromDoc(doc);
@@ -1645,6 +1722,14 @@ async function waitForDomResponse(session, netCapture = null) {
 
   await sleep(2e3);
   let baselineLen = (await extractAssistantReplyText(session)).trim().length;
+  /** If we captured the user's long prompt as "assistant", minDoneLen becomes unreachable (baseline+2 > len forever). */
+  if (baselineLen > 12_000) {
+    console.error(
+      "[copilot:response] baseline assistant extract is huge (likely user bubble); resetting baseline for completion logic, was",
+      baselineLen,
+    );
+    baselineLen = 0;
+  }
   const waitStarted = Date.now();
   const deadline = waitStarted + RESPONSE_TIMEOUT_MS;
   let prev = baselineLen;
@@ -1761,6 +1846,22 @@ async function waitForDomResponse(session, netCapture = null) {
     } else {
       stable = 0;
     }
+
+    /** Generation ended long ago but len stayed at a huge false positive — finish and return best strict assistant extract. */
+    if (streamed && !generating && quietGen >= 14 && len > 8_000) {
+      const strict = await extractAssistantReplyStrict(session);
+      if (strict.length >= 12 && strict.length < len * 0.85) {
+        console.error(
+          "[copilot:response] done (quiet + strict assistant shorter than bogus len)",
+          "strictLen=",
+          strict.length,
+          "domLen=",
+          len,
+        );
+        return await wire(strict);
+      }
+    }
+
     prev = len;
   }
 
