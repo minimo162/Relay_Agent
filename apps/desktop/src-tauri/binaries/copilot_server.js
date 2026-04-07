@@ -1654,7 +1654,7 @@ function shouldCaptureNetworkUrl(url) {
   if (!url || !RESPONSE_URL_PATTERN.test(url)) return false;
   const low = url.toLowerCase();
   if (
-    /telemetry|metrics|favicon|clarity|onecollector|browserpipe|clientevents|pacman\/api\/clientevents|\.png(\?|$)|\.gif|\.woff|\.svg|chunk\.|webpack/i.test(
+    /telemetry|metrics|favicon|clarity|onecollector|browserpipe|clientevents|pacman\/api\/clientevents|search\/api\/v\d+\/events|\/events\?scenario=|\.png(\?|$)|\.gif|\.woff|\.svg|chunk\.|webpack/i.test(
       low,
     )
   ) {
@@ -1730,6 +1730,34 @@ function stringLooksLikeM365ClientTelemetry(text) {
   return score >= 4;
 }
 
+/** Correlation / trace / event IDs from telemetry APIs — not user-visible Copilot text. */
+function stringLooksLikeBareUuidOrHexId(text) {
+  const t = String(text || "").trim();
+  if (!t) return true;
+  /** 8-4-4-4-12 hex (incl. non-RFC correlation IDs from M365 telemetry). */
+  const uuidShape = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (uuidShape.test(t)) return true;
+  if (/^[0-9a-f]{32}$/i.test(t)) return true;
+  const lines = t.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length && lines.every((l) => uuidShape.test(l) || /^[0-9a-f]{32}$/i.test(l))) return true;
+  const parts = t.split(/,\s*/).map((l) => l.trim()).filter(Boolean);
+  if (
+    parts.length >= 1 &&
+    parts.length <= 6 &&
+    parts.every((l) => uuidShape.test(l) || /^[0-9a-f]{32}$/i.test(l))
+  )
+    return true;
+  if (t.startsWith("{") && t.length < 280) {
+    if (
+      /"(trace|correlation|event|request|session|logical)?id"\s*:\s*"[0-9a-f-]{32,36}"/i.test(t) &&
+      !/"(text|content|message|markdown|answer)"\s*:/i.test(t)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Longest usable string from network JSON/SSE; skips JWTs, garbage, and token-shaped blobs. */
 function pickBestAssistantStringFromCandidates(candidates) {
   const sorted = [...candidates].sort((a, b) => String(b).length - String(a).length);
@@ -1738,6 +1766,7 @@ function pickBestAssistantStringFromCandidates(candidates) {
     if (t.length < 8) continue;
     if (stringLooksLikeJwt(t)) continue;
     if (stringLooksLikeM365ClientTelemetry(t)) continue;
+    if (stringLooksLikeBareUuidOrHexId(t)) continue;
     if (networkExtractLooksLikeGarbage(t)) continue;
     return t;
   }
@@ -1749,6 +1778,7 @@ function skipNetworkBodyForAssistantExtraction(url, mimeType) {
   const m = (mimeType || "").toLowerCase();
   const low = (url || "").toLowerCase();
   if (/pacman\/api\/clientevents|\/clientevents\?/i.test(low)) return true;
+  if (/search\/api\/v\d+\/events|\/events\?scenario=/i.test(low)) return true;
   if (m.startsWith("text/html")) return true;
   if (m.includes("javascript") || m.startsWith("text/css")) return true;
   try {
@@ -1775,6 +1805,7 @@ function networkExtractLooksLikeGarbage(text) {
   if (t.length < 1) return true;
   if (stringLooksLikeJwt(t)) return true;
   if (stringLooksLikeM365ClientTelemetry(t)) return true;
+  if (stringLooksLikeBareUuidOrHexId(t)) return true;
   if (/data:image\/[^;]+;base64,/i.test(t)) return true;
   if (t.length > 6_000) {
     const sample = t.slice(0, 12_000);
@@ -1804,6 +1835,7 @@ function deepExtractAssistantStrings(v, depth) {
     if (t.length < 8) return [];
     if (/^[\d.,\s\-:+TZ]+$/.test(t)) return [];
     if (stringLooksLikeJwt(t)) return [];
+    if (stringLooksLikeBareUuidOrHexId(t)) return [];
     return [t];
   }
   if (!v || typeof v !== "object") return [];
