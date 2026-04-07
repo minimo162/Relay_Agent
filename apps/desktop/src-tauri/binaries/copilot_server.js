@@ -2308,10 +2308,38 @@ function collectBotTextsFromChathubJson(v, depth) {
   if (Array.isArray(v.messages)) {
     for (const m of v.messages) out.push(...collectBotTextsFromChathubMessage(m));
   }
+  if (Array.isArray(v.arguments)) {
+    for (const arg of v.arguments) out.push(...collectBotTextsFromChathubJson(arg, depth + 1));
+  }
   for (const k of Object.keys(v)) {
+    if (k === "arguments") continue;
     out.push(...collectBotTextsFromChathubJson(v[k], depth + 1));
   }
   return out;
+}
+
+/**
+ * Merge ordered bot text chunks (streaming deltas or multi-record frames).
+ * Prefer monotonic prefix extension; otherwise append (SignalR often sends growing `text`).
+ */
+function mergeChathubBotTextPieces(pieces) {
+  const arr = pieces.map((p) => String(p || "").trim()).filter((p) => p.length >= 1);
+  if (!arr.length) return "";
+  let cur = arr[0];
+  for (let i = 1; i < arr.length; i++) {
+    const p = arr[i];
+    if (p.startsWith(cur)) {
+      cur = p;
+      continue;
+    }
+    if (cur.startsWith(p)) continue;
+    if (p.length > cur.length && p.includes(cur)) {
+      cur = p;
+      continue;
+    }
+    cur += p;
+  }
+  return cur;
 }
 
 /**
@@ -2321,7 +2349,8 @@ function extractAssistantFromChathubWsFramePayload(raw) {
   const s = typeof raw === "string" ? raw : "";
   if (!s) return "";
   const parts = s.split("\x1e");
-  let best = "";
+  const collected = [];
+  let bestSingle = "";
   for (const chunk of parts) {
     const part = chunk.trim();
     if (!part) continue;
@@ -2332,10 +2361,16 @@ function extractAssistantFromChathubWsFramePayload(raw) {
       continue;
     }
     for (const t of collectBotTextsFromChathubJson(j, 0)) {
-      if (t.length > best.length) best = t;
+      const u = String(t || "").trim();
+      if (!u) continue;
+      collected.push(u);
+      if (u.length > bestSingle.length) bestSingle = u;
     }
   }
-  return best;
+  if (!collected.length) return "";
+  const merged = mergeChathubBotTextPieces(collected);
+  if (merged.length > bestSingle.length) return merged;
+  return bestSingle;
 }
 
 function deepExtractAssistantStrings(v, depth) {
@@ -2423,13 +2458,31 @@ function createCopilotNetworkCapture(session) {
   const maxChathubBufferChars = 2_500_000;
 
   const pickAssistantFromChathubWsSync = () => {
-    let best = "";
-    for (let i = chathubFramePayloads.length - 1; i >= 0; i--) {
-      const t = extractAssistantFromChathubWsFramePayload(chathubFramePayloads[i]).trim();
-      if (!t || networkExtractLooksLikeGarbage(t)) continue;
-      if (t.length > best.length) best = t;
+    const allPieces = [];
+    for (let i = 0; i < chathubFramePayloads.length; i++) {
+      const raw = chathubFramePayloads[i];
+      const s = typeof raw === "string" ? raw : "";
+      for (const chunk of s.split("\x1e")) {
+        const part = chunk.trim();
+        if (!part) continue;
+        let j;
+        try {
+          j = JSON.parse(part);
+        } catch {
+          continue;
+        }
+        for (const piece of collectBotTextsFromChathubJson(j, 0)) {
+          const u = String(piece || "").trim();
+          if (u) allPieces.push(u);
+        }
+      }
     }
-    return best;
+    if (!allPieces.length) return "";
+    const merged = mergeChathubBotTextPieces(allPieces).trim();
+    const bestSingle = allPieces.reduce((a, b) => (b.length > a.length ? b : a), "");
+    const cand = merged.length >= bestSingle.length ? merged : bestSingle;
+    if (!cand || networkExtractLooksLikeGarbage(cand)) return "";
+    return cand;
   };
 
   const trimChathubBuffer = () => {
@@ -2492,11 +2545,13 @@ function createCopilotNetworkCapture(session) {
     /**
      * After Copilot has responded, try to beat DOM extraction using API / SSE payloads.
      * @param {string} domText
+     * @param {number} [submittedPromptLen] when set, skip HTTP bodies whose length matches pasted prompt (user echo from REST).
      */
-    async pickBestOver(domText) {
+    async pickBestOver(domText, submittedPromptLen = 0) {
       const dom = (domText || "").trim();
       let best = dom;
       const ch = pickAssistantFromChathubWsSync().trim();
+      /* 8 chars: valid short replies (e.g. ja greeting + emoji is often .length === 8 in JS). */
       if (ch.length > best.length && ch.length >= 8 && !networkExtractLooksLikeGarbage(ch)) {
         best = ch;
         console.error("[copilot:network] Chathub WS seed pickBestOver len=", ch.length);
@@ -2528,6 +2583,18 @@ function createCopilotNetworkCapture(session) {
             );
             continue;
           }
+          if (
+            submittedPromptLen >= 1200 &&
+            domExtractLooksLikeSubmittedPrompt(t.length, submittedPromptLen)
+          ) {
+            console.error(
+              "[copilot:network] skip HTTP extract in submitted-prompt length band len=",
+              t.length,
+              "url=",
+              url.slice(0, 100),
+            );
+            continue;
+          }
           if (t.length > best.length && t.length >= 8) {
             console.error(
               "[copilot:network] candidate len=",
@@ -2543,7 +2610,7 @@ function createCopilotNetworkCapture(session) {
         if (best.length > 12_000) break;
       }
       const chEnd = pickAssistantFromChathubWsSync().trim();
-      if (chEnd.length >= 12 && !networkExtractLooksLikeGarbage(chEnd)) {
+      if (chEnd.length >= 8 && !networkExtractLooksLikeGarbage(chEnd)) {
         if (networkExtractLooksLikeGarbage(best) || chEnd.length > best.length) {
           best = chEnd;
           console.error("[copilot:network] Chathub WS final pickBestOver len=", chEnd.length);
@@ -2561,7 +2628,7 @@ function createCopilotNetworkCapture(session) {
     async pickBestShortAssistant(domEchoLen, submittedLen) {
       await sleep(500);
       const ch = pickAssistantFromChathubWsSync().trim();
-      if (ch.length >= 12 && !networkExtractLooksLikeGarbage(ch)) {
+      if (ch.length >= 8 && !networkExtractLooksLikeGarbage(ch)) {
         if (!(submittedLen >= 1200 && domExtractLooksLikeSubmittedPrompt(ch.length, submittedLen))) {
           console.error("[copilot:network] Chathub WS assistant (short path) len=", ch.length);
           return ch;
@@ -2662,12 +2729,7 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
     try {
       if (typeof netCapture.pickAssistantFromChathubWs === "function") {
         const chw = netCapture.pickAssistantFromChathubWs().trim();
-        if (
-          chw.length >= 12 &&
-          !networkExtractLooksLikeGarbage(chw) &&
-          (!domExtractLooksLikeSubmittedPrompt(chw.length, submittedPromptLen) ||
-            chw.length < submittedPromptLen * 0.42)
-        ) {
+        if (chw.length >= 8 && !networkExtractLooksLikeGarbage(chw)) {
           console.error("[copilot:response] M365 Chathub WebSocket assistant len=", chw.length);
           return chw;
         }
@@ -2677,8 +2739,12 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
         console.error("[copilot:response] network short-assistant len=", shortN.length);
         return shortN;
       }
-      const nw = (await netCapture.pickBestOver("")).trim();
-      if (nw.length >= 20 && (!domExtractLooksLikeSubmittedPrompt(nw.length, submittedPromptLen) || nw.length < loose.length * 0.88)) {
+      const nw = (await netCapture.pickBestOver("", submittedPromptLen)).trim();
+      if (
+        nw.length >= 8 &&
+        !networkExtractLooksLikeGarbage(nw) &&
+        (!domExtractLooksLikeSubmittedPrompt(nw.length, submittedPromptLen) || nw.length < loose.length * 0.88)
+      ) {
         console.error("[copilot:response] network pickBestOver(\"\") len=", nw.length);
         return nw;
       }
@@ -2691,7 +2757,7 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
 
 async function waitForDomResponse(session, netCapture = null, submittedPromptLen = 0) {
   const wire = async (s) =>
-    netCapture ? await netCapture.pickBestOver(s) : s;
+    netCapture ? await netCapture.pickBestOver(s, submittedPromptLen) : s;
 
   await sleep(2e3);
   let baselineLen = (await extractAssistantReplyText(session)).trim().length;
@@ -2903,12 +2969,12 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
   }
   if (netCapture) {
     const sn = (await netCapture.pickBestShortAssistant(fbLoose.length, submittedPromptLen)).trim();
-    if (sn.length >= 12) {
+    if (sn.length >= 8) {
       console.error("[copilot:response] DOM empty; using network short-assistant len=", sn.length);
       return await wire(sn);
     }
-    const nw = await netCapture.pickBestOver("");
-    if (nw.trim().length >= 12) {
+    const nw = await netCapture.pickBestOver("", submittedPromptLen);
+    if (nw.trim().length >= 8 && !networkExtractLooksLikeGarbage(nw.trim())) {
       console.error("[copilot:response] DOM empty; using network-only len=", nw.length);
       return await wire(nw);
     }
