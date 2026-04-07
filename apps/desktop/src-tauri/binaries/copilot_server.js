@@ -152,6 +152,11 @@ var EDGE_LAUNCH_POLL_INTERVAL_MS = 500;
 var CDP_PORT_SCAN_RANGE = 20;
 /** Written under the dedicated Edge profile dir so we reconnect to Relay's instance, not a manually debugged personal Edge on 9333. */
 var RELAY_CDP_PORT_MARKER = ".relay-agent-cdp-port";
+/**
+ * Chathub / author=bot strings only (JS String.length). "こんにちは" = 5; "Hi" = 2.
+ * Emoji can add UTF-16 units. HTTP JSON scanning keeps a higher minimum separately.
+ */
+var CHATHUB_ASSISTANT_MIN_CHARS = 2;
 
 var CopilotLoginRequiredError = class extends Error {};
 
@@ -2551,8 +2556,11 @@ function createCopilotNetworkCapture(session) {
       const dom = (domText || "").trim();
       let best = dom;
       const ch = pickAssistantFromChathubWsSync().trim();
-      /* 8 chars: valid short replies (e.g. ja greeting + emoji is often .length === 8 in JS). */
-      if (ch.length > best.length && ch.length >= 8 && !networkExtractLooksLikeGarbage(ch)) {
+      if (
+        ch.length > best.length &&
+        ch.length >= CHATHUB_ASSISTANT_MIN_CHARS &&
+        !networkExtractLooksLikeGarbage(ch)
+      ) {
         best = ch;
         console.error("[copilot:network] Chathub WS seed pickBestOver len=", ch.length);
       }
@@ -2610,7 +2618,7 @@ function createCopilotNetworkCapture(session) {
         if (best.length > 12_000) break;
       }
       const chEnd = pickAssistantFromChathubWsSync().trim();
-      if (chEnd.length >= 8 && !networkExtractLooksLikeGarbage(chEnd)) {
+      if (chEnd.length >= CHATHUB_ASSISTANT_MIN_CHARS && !networkExtractLooksLikeGarbage(chEnd)) {
         if (networkExtractLooksLikeGarbage(best) || chEnd.length > best.length) {
           best = chEnd;
           console.error("[copilot:network] Chathub WS final pickBestOver len=", chEnd.length);
@@ -2628,7 +2636,7 @@ function createCopilotNetworkCapture(session) {
     async pickBestShortAssistant(domEchoLen, submittedLen) {
       await sleep(500);
       const ch = pickAssistantFromChathubWsSync().trim();
-      if (ch.length >= 8 && !networkExtractLooksLikeGarbage(ch)) {
+      if (ch.length >= CHATHUB_ASSISTANT_MIN_CHARS && !networkExtractLooksLikeGarbage(ch)) {
         if (!(submittedLen >= 1200 && domExtractLooksLikeSubmittedPrompt(ch.length, submittedLen))) {
           console.error("[copilot:network] Chathub WS assistant (short path) len=", ch.length);
           return ch;
@@ -2729,7 +2737,7 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
     try {
       if (typeof netCapture.pickAssistantFromChathubWs === "function") {
         const chw = netCapture.pickAssistantFromChathubWs().trim();
-        if (chw.length >= 8 && !networkExtractLooksLikeGarbage(chw)) {
+        if (chw.length >= CHATHUB_ASSISTANT_MIN_CHARS && !networkExtractLooksLikeGarbage(chw)) {
           console.error("[copilot:response] M365 Chathub WebSocket assistant len=", chw.length);
           return chw;
         }
@@ -2741,7 +2749,7 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
       }
       const nw = (await netCapture.pickBestOver("", submittedPromptLen)).trim();
       if (
-        nw.length >= 8 &&
+        nw.length >= CHATHUB_ASSISTANT_MIN_CHARS &&
         !networkExtractLooksLikeGarbage(nw) &&
         (!domExtractLooksLikeSubmittedPrompt(nw.length, submittedPromptLen) || nw.length < loose.length * 0.88)
       ) {
@@ -2969,14 +2977,15 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
   }
   if (netCapture) {
     const sn = (await netCapture.pickBestShortAssistant(fbLoose.length, submittedPromptLen)).trim();
-    if (sn.length >= 8) {
+    if (sn.length >= CHATHUB_ASSISTANT_MIN_CHARS) {
       console.error("[copilot:response] DOM empty; using network short-assistant len=", sn.length);
       return await wire(sn);
     }
     const nw = await netCapture.pickBestOver("", submittedPromptLen);
-    if (nw.trim().length >= 8 && !networkExtractLooksLikeGarbage(nw.trim())) {
-      console.error("[copilot:response] DOM empty; using network-only len=", nw.length);
-      return await wire(nw);
+    const nwTrim = nw.trim();
+    if (nwTrim.length >= CHATHUB_ASSISTANT_MIN_CHARS && !networkExtractLooksLikeGarbage(nwTrim)) {
+      console.error("[copilot:response] DOM empty; using network-only len=", nwTrim.length);
+      return await wire(nwTrim);
     }
   }
   throw new Error("Copilot response not found in DOM");
