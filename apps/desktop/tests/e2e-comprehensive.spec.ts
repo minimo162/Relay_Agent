@@ -26,6 +26,8 @@ async function injectMock(page: any, autoComplete = true) {
 
 /** The actual mock setup that runs in the browser context */
 function mockSetup(autoComplete: boolean) {
+  (window as unknown as { __RELAY_E2E_AUTOCOMPLETE: boolean }).__RELAY_E2E_AUTOCOMPLETE = autoComplete;
+
   const _mock = {
     sessionCounter: 0,
     sessions: new Map(),
@@ -52,17 +54,6 @@ function mockSetup(autoComplete: boolean) {
         _mock.sessionCounter += 1;
         const id = "session-e2e-" + _mock.sessionCounter;
         _mock.sessions.set(id, { running: true });
-        if (autoComplete) {
-          setTimeout(() => {
-            _mock.sessions.get(id).running = false;
-            _mock.emit("agent:turn_complete", {
-              sessionId: id,
-              stopReason: "end_turn",
-              assistantMessage: "Task completed.",
-              messageCount: 2,
-            });
-          }, 150);
-        }
         return id;
       }
       case "respond_approval": return undefined;
@@ -130,6 +121,11 @@ async function sendPrompt(page: any, text: string) {
   await expect(page.getByText(text, { exact: false })).toBeVisible({ timeout: 5000 });
 }
 
+/** Wait until auto-complete mock has returned the shell to idle (footer session state). */
+async function waitForAgentIdle(page: any) {
+  await expect(page.locator('[data-ra-footer-session="idle"]')).toBeVisible({ timeout: 10000 });
+}
+
 /* ══════════════════════════════════════════════════════════════
  * Test Suites
  * ══════════════════════════════════════════════════════════════ */
@@ -147,8 +143,7 @@ test.describe("Session Lifecycle", () => {
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "first task");
-    // Wait for auto-complete to re-enable textarea
-    await page.waitForTimeout(300);
+    await waitForAgentIdle(page);
     await sendPrompt(page, "second task");
   });
 
@@ -157,7 +152,7 @@ test.describe("Session Lifecycle", () => {
     await openApp(page);
     await expect(page.locator("text=0 sessions")).toBeVisible();
     await sendPrompt(page, "session A");
-    await page.waitForTimeout(300);
+    await waitForAgentIdle(page);
     await expect(page.locator("text=1 session")).toBeVisible({ timeout: 5000 });
   });
 });
@@ -220,57 +215,84 @@ const STREAM_TEST_TIMEOUT = 200; // Wait time after actions for renders
 
 test.describe("Streaming & Tool Events", () => {
   test("text_delta event populates assistant bubble", async ({ page }) => {
-    await injectMock(page, true);
+    await injectMock(page, false);
     await openApp(page);
     await sendPrompt(page, "stream test");
-    await page.waitForTimeout(200); // Wait for turn_complete to clear running state
     await emitEvent(page, "agent:text_delta", {
       sessionId: "session-e2e-1",
       text: "Hello from agent",
       isComplete: false,
     });
     await expect(page.getByText("Hello from agent")).toBeVisible({ timeout: 3000 });
+    await emitEvent(page, "agent:turn_complete", {
+      sessionId: "session-e2e-1",
+      stopReason: "end_turn",
+      assistantMessage: "",
+      messageCount: 2,
+    });
+    await waitForAgentIdle(page);
   });
 
   test("multiple text_delta events append", async ({ page }) => {
-    await injectMock(page, true);
+    await injectMock(page, false);
     await openApp(page);
     await sendPrompt(page, "concat test");
-    await page.waitForTimeout(200);
     await emitEvent(page, "agent:text_delta", { sessionId: "session-e2e-1", text: "Part A ", isComplete: false });
     await page.waitForTimeout(50);
     await emitEvent(page, "agent:text_delta", { sessionId: "session-e2e-1", text: "Part B", isComplete: false });
     await expect(page.getByText("Part A")).toBeVisible({ timeout: 3000 });
+    await emitEvent(page, "agent:turn_complete", {
+      sessionId: "session-e2e-1",
+      stopReason: "end_turn",
+      assistantMessage: "",
+      messageCount: 2,
+    });
+    await waitForAgentIdle(page);
   });
 
   test("tool_start shows tool name and running indicator", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "tool test");
-    await page.waitForTimeout(200);
+    await waitForAgentIdle(page);
     await emitEvent(page, "agent:tool_start", { sessionId: "session-e2e-1", toolUseId: "t-1", toolName: "read_file" });
+    await page.locator("[data-ra-activity-summary]").click();
     await expect(page.getByText("read_file")).toBeVisible({ timeout: 3000 });
     await expect(page.getByText("running\u2026")).toBeVisible({ timeout: 3000 });
   });
 
   test("tool_result shows content", async ({ page }) => {
-    await injectMock(page, true);
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("relay.showToolActivity", "1");
+      } catch {
+        /* ignore */
+      }
+    });
+    await injectMock(page, false);
     await openApp(page);
     await sendPrompt(page, "result test");
-    await page.waitForTimeout(200);
     await emitEvent(page, "agent:tool_start", { sessionId: "session-e2e-1", toolUseId: "t-2", toolName: "search_files" });
-    await page.waitForTimeout(50);
+    await page.waitForTimeout(100);
     await emitEvent(page, "agent:tool_result", { sessionId: "session-e2e-1", toolUseId: "t-2", toolName: "search_files", content: "Found 3 files", isError: false });
     await expect(page.getByText("search_files")).toBeVisible({ timeout: 3000 });
-    await expect(page.getByText("Found 3 files")).toBeVisible({ timeout: 3000 });
+    await expect(page.locator("main")).toContainText("Found 3 files", { timeout: 5000 });
+    await emitEvent(page, "agent:turn_complete", {
+      sessionId: "session-e2e-1",
+      stopReason: "end_turn",
+      assistantMessage: "Done.",
+      messageCount: 2,
+    });
+    await expect(page.locator("textarea")).toBeEditable({ timeout: 5000 });
   });
 
   test("tool_result with isError shows error styling", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "tool error test");
-    await page.waitForTimeout(200);
+    await waitForAgentIdle(page);
     await emitEvent(page, "agent:tool_result", { sessionId: "session-e2e-1", toolUseId: "t-3", toolName: "write_file", content: "Permission denied", isError: true });
+    await page.locator("[data-ra-activity-summary]").click();
     await expect(page.getByText("write_file")).toBeVisible({ timeout: 3000 });
     await expect(page.getByText("Permission denied")).toBeVisible({ timeout: 3000 });
   });
@@ -283,7 +305,7 @@ test.describe("Approval Flow", () => {
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "approval test");
-    await page.waitForTimeout(200);
+    await waitForAgentIdle(page);
     await emitEvent(page, "agent:approval_needed", {
       sessionId: "session-e2e-1",
       approvalId: "a-1",
@@ -292,14 +314,14 @@ test.describe("Approval Flow", () => {
       target: "/tmp/out.csv",
       input: { path: "/tmp/out.csv", content: "data" },
     });
-    await expect(page.getByText("Tool: write_file")).toBeVisible({ timeout: 3000 });
+    await expect(page.getByText("write_file on /tmp/out.csv")).toBeVisible({ timeout: 3000 });
   });
 
-  test("Approve button dismisses overlay", async ({ page }) => {
+  test("Allow button dismisses overlay", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "approve test");
-    await page.waitForTimeout(200);
+    await waitForAgentIdle(page);
     await emitEvent(page, "agent:approval_needed", {
       sessionId: "session-e2e-1",
       approvalId: "a-2",
@@ -307,17 +329,17 @@ test.describe("Approval Flow", () => {
       description: "rm -rf /tmp/old",
       input: { command: "rm -rf /tmp/old" },
     });
-    await expect(page.getByRole("button", { name: "Approve" })).toBeVisible({ timeout: 3000 });
-    await page.getByRole("button", { name: "Approve" }).click();
+    await expect(page.getByRole("button", { name: "Allow", exact: true })).toBeVisible({ timeout: 3000 });
+    await page.getByRole("button", { name: "Allow", exact: true }).click();
     await page.waitForTimeout(200);
-    await expect(page.getByRole("button", { name: "Approve" })).not.toBeVisible({ timeout: 2000 });
+    await expect(page.getByRole("button", { name: "Allow", exact: true })).not.toBeVisible({ timeout: 2000 });
   });
 
-  test("Reject button dismisses overlay", async ({ page }) => {
+  test("Don't allow button dismisses overlay", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "reject test");
-    await page.waitForTimeout(200);
+    await waitForAgentIdle(page);
     await emitEvent(page, "agent:approval_needed", {
       sessionId: "session-e2e-1",
       approvalId: "a-3",
@@ -326,21 +348,21 @@ test.describe("Approval Flow", () => {
       target: "/etc/shadow",
       input: { path: "/etc/shadow" },
     });
-    await expect(page.getByRole("button", { name: "Reject" })).toBeVisible({ timeout: 3000 });
-    await page.getByRole("button", { name: "Reject" }).click();
+    await expect(page.getByRole("button", { name: "Don't allow" })).toBeVisible({ timeout: 3000 });
+    await page.getByRole("button", { name: "Don't allow" }).click();
     await page.waitForTimeout(200);
-    await expect(page.getByRole("button", { name: "Reject" })).not.toBeVisible({ timeout: 2000 });
+    await expect(page.getByRole("button", { name: "Don't allow" })).not.toBeVisible({ timeout: 2000 });
   });
 
   test("multiple approvals render as separate cards", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "multi approval");
-    await page.waitForTimeout(200);
+    await waitForAgentIdle(page);
     await emitEvent(page, "agent:approval_needed", { sessionId: "session-e2e-1", approvalId: "a-4", toolName: "write_file", description: "First", input: {} });
     await emitEvent(page, "agent:approval_needed", { sessionId: "session-e2e-1", approvalId: "a-5", toolName: "bash", description: "Second", input: {} });
-    await expect(page.getByText("Tool: write_file")).toBeVisible({ timeout: 3000 });
-    await expect(page.getByText("Tool: bash")).toBeVisible({ timeout: 3000 });
+    await expect(page.getByText("First")).toBeVisible({ timeout: 3000 });
+    await expect(page.getByText("Second")).toBeVisible({ timeout: 3000 });
   });
 });
 
@@ -353,7 +375,8 @@ test.describe("Error Handling", () => {
     await sendPrompt(page, "error test");
     await page.waitForTimeout(200);
     await emitEvent(page, "agent:error", { sessionId: "session-e2e-1", error: "Connection failed", cancelled: false });
-    await expect(page.getByText("Error")).toBeVisible({ timeout: 2000 });
+    await expect(page.locator('[data-ra-footer-session="error"]')).toBeVisible({ timeout: 2000 });
+    await expect(page.getByText("Connection failed")).toBeVisible({ timeout: 2000 });
   });
 
   test("cancelled error does not show error state", async ({ page }) => {
@@ -381,28 +404,28 @@ test.describe("Context Panel", () => {
   test("files tab shows default files", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("tab", { name: "Files" }).click();
     await expect(page.getByText("README.md").first()).toBeVisible({ timeout: 2000 });
   });
 
   test("file count displays correctly", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
-    await page.getByRole("button", { name: "Files" }).click();
+    await page.getByRole("tab", { name: "Files" }).click();
     await expect(page.getByText("2 files")).toBeVisible({ timeout: 2000 });
   });
 
   test("servers tab shows empty state", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
-    await page.getByRole("button", { name: "Servers" }).click();
+    await page.getByRole("tab", { name: "Servers" }).click();
     await expect(page.getByText("No MCP servers connected")).toBeVisible({ timeout: 2000 });
   });
 
   test("add server interface appears", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
-    await page.getByRole("button", { name: "Servers" }).click();
+    await page.getByRole("tab", { name: "Servers" }).click();
     await page.getByText("+ Add Server").click();
     await expect(page.getByPlaceholder("Server name")).toBeVisible({ timeout: 2000 });
   });
@@ -410,19 +433,19 @@ test.describe("Context Panel", () => {
   test("policy tab shows default policies", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
-    await page.getByRole("button", { name: "Policy" }).click();
+    await page.getByRole("tab", { name: "Policy" }).click();
     await expect(page.getByText("Bash")).toBeVisible({ timeout: 2000 });
     await expect(page.getByText("File write")).toBeVisible({ timeout: 2000 });
     await expect(page.getByText("File read")).toBeVisible({ timeout: 2000 });
   });
 
-  test("policy badges: Require Approval, Allow, Deny", async ({ page }) => {
+  test("policy badges: Needs approval, Allowed, Blocked", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
-    await page.getByRole("button", { name: "Policy" }).click();
-    await expect(page.getByText("\u26a1 Approve").first()).toBeVisible({ timeout: 2000 });
-    await expect(page.getByText("\u2713 Allow")).toBeVisible({ timeout: 2000 });
-    await expect(page.getByText("\u26d4 Deny")).toBeVisible({ timeout: 2000 });
+    await page.getByRole("tab", { name: "Policy" }).click();
+    await expect(page.getByText("Needs approval").first()).toBeVisible({ timeout: 2000 });
+    await expect(page.getByText("Allowed").first()).toBeVisible({ timeout: 2000 });
+    await expect(page.getByText("Blocked").first()).toBeVisible({ timeout: 2000 });
   });
 });
 
@@ -461,8 +484,7 @@ test.describe("Composer Input Behaviors", () => {
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "disabled test");
-    // Auto-complete fires after 150ms, re-enabling textarea
-    await page.waitForTimeout(300);
+    await waitForAgentIdle(page);
     await expect(page.locator("textarea")).toBeEditable({ timeout: 5000 });
   });
 });
@@ -483,7 +505,7 @@ test.describe("Layout Integrity", () => {
     await openApp(page);
     await expect(page.locator("header")).toBeVisible();
     await expect(page.getByText("Relay Agent", { exact: true })).toBeVisible();
-    await expect(page.getByText("\u2699 Settings")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
   });
 
   test("footer shows version and session count", async ({ page }) => {
@@ -497,7 +519,7 @@ test.describe("Layout Integrity", () => {
     await injectMock(page, true);
     await openApp(page);
     await expect(page.getByText("Relay Agent is ready")).toBeVisible();
-    await expect(page.getByText("\ud83e\uddf8")).toBeVisible();
+    await expect(page.getByText("Workspace")).toBeVisible();
   });
 });
 

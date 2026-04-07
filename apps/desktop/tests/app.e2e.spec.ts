@@ -32,9 +32,9 @@ test("app shell renders 3-pane layout", async ({ page }) => {
   await openApp(page);
   await expect(page.getByText("Relay Agent", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Sessions" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Files" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Servers" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Policy" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Files" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Servers" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Policy" })).toBeVisible();
   await expect(page.locator("text=Relay Agent v0.1.0")).toBeVisible();
 });
 
@@ -74,11 +74,11 @@ test("session appears in sidebar after sending prompt", async ({ page }) => {
 
 test("context panel tabs are switchable", async ({ page }) => {
   await openApp(page);
-  await page.getByRole("button", { name: "Servers" }).click();
+  await page.getByRole("tab", { name: "Servers" }).click();
   await expect(page.locator("text=No MCP servers connected")).toBeVisible();
-  await page.getByRole("button", { name: "Policy" }).click();
+  await page.getByRole("tab", { name: "Policy" }).click();
   await expect(page.locator("text=policies")).toBeVisible();
-  await page.getByRole("button", { name: "Files" }).click();
+  await page.getByRole("tab", { name: "Files" }).click();
   // Files tab shows file list or placeholder depending on state
   await expect(page.locator("text=Add File").first()).toBeVisible({ timeout: 2000 }).catch(async () => {
     await expect(page.locator("text=files").first()).toBeVisible();
@@ -145,8 +145,8 @@ test("approval_needed event handled", async ({ page }) => {
     target: "/tmp/output.csv",
     input: { path: "/tmp/output.csv", content: "data" },
   });
-  await expect(page.locator("text=Approve").first()).toBeVisible();
-  await expect(page.locator("text=Reject").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Allow", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Don't allow", exact: true }).first()).toBeVisible();
 });
 
 test("dark mode is default", async ({ page }) => {

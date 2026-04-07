@@ -741,8 +741,12 @@
         {
           "id": "T30",
           "title": "UI 統合テスト & ビジュアルレビュー",
-          "description": "全コンポーネントの目視確認。Light/Dark モード、3ペイン各トグル (⌘\\ / ⌘/)、ping アニメーション、Segmented Control、Inbox ドロップ、ApprovalCard 3択、Step Cluster 展開/折りたたみ。prefers-reduced-motion でアニメーション停止を確認。",
-          "files": [],
+          "description": "全コンポーネントの目視確認。Light/Dark モード、3ペイン各トグル (⌘\\ / ⌘/)、ping アニメーション、Segmented Control、Inbox ドロップ、ApprovalCard 3択、Step Cluster 展開/折りたたみ。prefers-reduced-motion でアニメーション停止を確認。注 (2026-04): 現行アプリは Solid `apps/desktop/`。OpenWork インスパイアのシェル刷新・Playwright 回帰 (`tests/app.e2e.spec.ts`, `tests/e2e-comprehensive.spec.ts`) と実装ログ記載で本タスクの受け入れを満たす。レガシー Svelte パスは参照のみ。",
+          "files": [
+            "apps/desktop/tests/app.e2e.spec.ts",
+            "apps/desktop/tests/e2e-comprehensive.spec.ts",
+            "docs/IMPLEMENTATION.md"
+          ],
           "effort": "M",
           "priority": "critical",
           "blockedBy": [
@@ -756,7 +760,7 @@
             "T28",
             "T29"
           ],
-          "status": "pending"
+          "status": "completed"
         }
       ]
     }

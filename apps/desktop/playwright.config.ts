@@ -9,7 +9,9 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // Single preview server + init-script mocks are flaky with multiple workers (idle/footer races).
+  // Override locally with `npx playwright test --workers=4` if you need speed and accept risk.
+  workers: 1,
   reporter: "list",
   use: {
     baseURL: "http://localhost:4173",

@@ -16,6 +16,18 @@
 
 ## Milestone Log
 
+### 2026-04-07 OpenWork-inspired desktop UI (Solid) + E2E stability
+
+**Outcome:** Refreshed the Tauri+Vite **Solid** shell toward an OpenWork-style pro layout: semantic `--ra-color-*` aliases and shell/session/tab/composer primitives in `index.css`; split UI into `Sidebar`, `MessageFeed`, `Composer`, `ContextPanel`, `ApprovalOverlay`, `ShellHeader`, `StatusBar`, etc.; soft session selection, segmented context tabs, tool status dots, empty state copy, modal-style approval, header tool-activity switch. **Bugfix:** `trackToolResult` now replaces the tool-call chunk immutably so Solid `For` re-renders and inline tool results (e.g. E2E `"Found 3 files"`) appear. **E2E:** `tests/tauri-mock-core.ts` auto-emits `agent:turn_complete` when `__RELAY_E2E_AUTOCOMPLETE !== false`; comprehensive specs use `injectMock(autoComplete)` accordingly. **Playwright:** default `workers: 1` to avoid flaky parallel runs against a single `vite preview` instance (override with `--workers=N` if needed).
+
+**Artifacts:** `apps/desktop/src/index.css`, `apps/desktop/src/root.tsx`, `apps/desktop/src/components/*.tsx`, `apps/desktop/src/lib/ui-tokens.ts`, `apps/desktop/tests/tauri-mock-core.ts`, `apps/desktop/tests/e2e-comprehensive.spec.ts`, `apps/desktop/tests/app.e2e.spec.ts`, `apps/desktop/playwright.config.ts`
+
+**Verification:**
+
+- `pnpm --filter @relay-agent/desktop typecheck` — pass
+- `pnpm --filter @relay-agent/desktop build` — pass
+- `E2E_SKIP_AUTH_SETUP=1 npx playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts` (from `apps/desktop/`) — 54 passed
+
 ### 2026-04-07 Claw-style agent tools (read_file / schemas / Windows PowerShell)
 
 **Outcome:** Brought built-in tools closer to the [Claw Code tool-system](https://claw-code.codes/tool-system) shape: `read_file` supports `file_path`, optional PDF `pages` (via `lopdf`), `.ipynb` text rendering, image metadata; `edit_file` rejects non-unique `old_string` when `replace_all` is false; `NotebookEdit` accepts Claw `command` + `index`; `Config` accepts `key`/`action`; `StructuredOutput` accepts `data` plus extra keys; `TodoWrite` todos may include `id`/`priority`; `Agent` documents `run_in_background` / `isolation` with explicit unsupported errors; `bash` schema documents `dangerously_disable_sandbox` (alias on `BashCommandInput`; still stripped in `agent_loop`); `PowerShell` is registered and implemented only on Windows.

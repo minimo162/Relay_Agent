@@ -20,6 +20,19 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
       state.sessionCounter += 1;
       const id = `session-e2e-${state.sessionCounter}`;
       state.sessions.set(id, { running: true });
+      const win = window as unknown as { __RELAY_E2E_AUTOCOMPLETE?: boolean };
+      if (win.__RELAY_E2E_AUTOCOMPLETE !== false) {
+        setTimeout(() => {
+          const s = state.sessions.get(id);
+          if (s) s.running = false;
+          state.emit("agent:turn_complete", {
+            sessionId: id,
+            stopReason: "end_turn",
+            assistantMessage: "Task completed.",
+            messageCount: 2,
+          });
+        }, 200);
+      }
       return id;
     }
     case "respond_approval":

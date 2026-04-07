@@ -1,4 +1,4 @@
-import { type JSX } from "solid-js";
+import { splitProps, type JSX } from "solid-js";
 
 /**
  * Minimal button component — OpenWork-style pill button
@@ -15,6 +15,34 @@ export function Button(props: ButtonProps) {
       class={`ra-button ra-button-${variant} ${className ?? ""}`}
       {...rest}
     />
+  );
+}
+
+interface TextareaProps extends JSX.TextareaHTMLAttributes<HTMLTextAreaElement> {}
+
+export function Textarea(props: TextareaProps) {
+  const [local, rest] = splitProps(props, ["class"]);
+  return <textarea class={`ra-textarea ${local.class ?? ""}`} {...rest} />;
+}
+
+interface IconButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
+  variant?: "default" | "danger";
+  label: string;
+  children: JSX.Element;
+}
+
+export function IconButton(props: IconButtonProps) {
+  const { variant = "default", class: className, label, children, ...rest } = props;
+  return (
+    <button
+      type="button"
+      class={`ra-icon-button ${variant === "danger" ? "ra-icon-button--danger" : ""} ${className ?? ""}`}
+      aria-label={label}
+      title={label}
+      {...rest}
+    >
+      {children}
+    </button>
   );
 }
 
