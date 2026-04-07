@@ -1668,6 +1668,60 @@ function clipNetworkText(s, max = 120_000) {
   return t.length <= max ? t : t.slice(0, max);
 }
 
+function decodeJwtSegmentBase64Url(seg) {
+  if (!seg || typeof seg !== "string") return "";
+  try {
+    const pad = (x) => x + "=".repeat((4 - (x.length % 4)) % 4);
+    const b64 = pad(seg.replace(/-/g, "+").replace(/_/g, "/"));
+    return Buffer.from(b64, "base64").toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Detect JWS / OAuth access tokens so they are never shown as Copilot reply text.
+ * Uses segment shape plus decoded header/payload heuristics (AAD / M365 issuers).
+ */
+function stringLooksLikeJwt(t) {
+  const s = String(t || "").trim();
+  const parts = s.split(".");
+  if (parts.length !== 3) return false;
+  const [h, p, sig] = parts;
+  if (h.length < 10 || p.length < 40 || sig.length < 10) return false;
+  if (!parts.every((x) => /^[A-Za-z0-9_-]+$/.test(x))) return false;
+  if (s.length < 100) return false;
+  const header = decodeJwtSegmentBase64Url(h);
+  const payload = decodeJwtSegmentBase64Url(p);
+  if (header && /"alg"\s*:/.test(header) && /"(typ|kid)"\s*:/.test(header)) {
+    if (/"typ"\s*:\s*"JWT"/i.test(header) || /"typ"\s*:\s*"at\+jwt"/i.test(header)) return true;
+  }
+  if (payload && payload.startsWith("{")) {
+    if (
+      /"(aud|iss|exp|iat|nbf|sub|oid|tid)"\s*:/.test(payload) &&
+      (/"iss"\s*:\s*"https:\/\/(sts\.windows\.net|login\.microsoftonline\.com)/i.test(payload) ||
+        /substrate\.office\.com/i.test(payload) ||
+        /graph\.microsoft\.com/i.test(payload))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Longest usable string from network JSON/SSE; skips JWTs, garbage, and token-shaped blobs. */
+function pickBestAssistantStringFromCandidates(candidates) {
+  const sorted = [...candidates].sort((a, b) => String(b).length - String(a).length);
+  for (const c of sorted) {
+    const t = String(c || "").trim();
+    if (t.length < 8) continue;
+    if (stringLooksLikeJwt(t)) continue;
+    if (networkExtractLooksLikeGarbage(t)) continue;
+    return t;
+  }
+  return "";
+}
+
 /** HTML shell / static assets — not chat API bodies; scanning them yields huge junk (e.g. embedded base64). */
 function skipNetworkBodyForAssistantExtraction(url, mimeType) {
   const m = (mimeType || "").toLowerCase();
@@ -1695,6 +1749,7 @@ function skipNetworkBodyForAssistantExtraction(url, mimeType) {
 function networkExtractLooksLikeGarbage(text) {
   const t = (text || "").trim();
   if (t.length < 1) return true;
+  if (stringLooksLikeJwt(t)) return true;
   if (/data:image\/[^;]+;base64,/i.test(t)) return true;
   if (t.length > 6_000) {
     const sample = t.slice(0, 12_000);
@@ -1723,6 +1778,7 @@ function deepExtractAssistantStrings(v, depth) {
     const t = v.trim();
     if (t.length < 8) return [];
     if (/^[\d.,\s\-:+TZ]+$/.test(t)) return [];
+    if (stringLooksLikeJwt(t)) return [];
     return [t];
   }
   if (!v || typeof v !== "object") return [];
@@ -1751,6 +1807,8 @@ function deepExtractAssistantStrings(v, depth) {
   if (!out.length) {
     for (const k of Object.keys(v)) {
       if (k === "headers" || k === "cookies") continue;
+      if (/^(access|id|refresh)(_|)?token$/i.test(k)) continue;
+      if (/authorization|client_secret|password|credential|bearer$/i.test(k)) continue;
       out.push(...deepExtractAssistantStrings(v[k], depth + 1));
     }
   }
@@ -1769,10 +1827,10 @@ function extractAssistantFromNetworkPayload(raw) {
       try {
         const j = JSON.parse(payload);
         const parts = deepExtractAssistantStrings(j, 0);
-        acc += parts.sort((a, b) => b.length - a.length)[0] || "";
-        acc += "\n";
+        const best = pickBestAssistantStringFromCandidates(parts);
+        if (best) acc += `${best}\n`;
       } catch {
-        acc += `${payload}\n`;
+        if (!stringLooksLikeJwt(payload)) acc += `${payload}\n`;
       }
     }
     return clipNetworkText(acc.replace(/\n+$/, ""));
@@ -1780,9 +1838,8 @@ function extractAssistantFromNetworkPayload(raw) {
   try {
     const j = JSON.parse(rawTrim);
     const parts = deepExtractAssistantStrings(j, 0);
-    if (!parts.length) return "";
-    parts.sort((a, b) => b.length - a.length);
-    return clipNetworkText(parts[0]);
+    const best = pickBestAssistantStringFromCandidates(parts);
+    return best ? clipNetworkText(best) : "";
   } catch {
     return "";
   }
