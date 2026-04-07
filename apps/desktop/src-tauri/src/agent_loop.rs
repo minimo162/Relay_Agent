@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -356,7 +357,8 @@ When you need to call one or more tools, you may write a short user-facing expla
 
 - **Single tool:** one JSON object: `{{ "name": "<tool_name>", "input": {{ ... }} }}`
 - **Optional:** `"id": "<string>"` — omit if unsure; the host will assign one.
-- **Multiple tools:** either one JSON **array** of such objects inside a single `relay_tool` fence, or several separate `relay_tool` fences in order.
+- **Multiple tools:** prefer **one** `relay_tool` fence with a JSON **array** of tool objects. Use multiple fences only when unavoidable. Repeating the same tool with identical `input` across fences wastes user approvals (the host dedupes, but you should not rely on it).
+- **File I/O:** use `read_file`, `write_file`, and `edit_file` for local files. Do **not** use `bash`, `PowerShell`, or `REPL` to read or write files when a file tool applies—prose Python/shell examples are not executed and encourage duplicate `relay_tool` calls. This matches the explicit, permission-gated tool model described at https://claw-code.codes/tool-system
 
 Example:
 
@@ -372,7 +374,74 @@ Example:
 fn parse_copilot_tool_response(raw: &str) -> (String, Vec<(String, String, String)>) {
     let (stripped, payloads) = extract_relay_tool_fences(raw);
     let calls = parse_tool_payloads(&payloads);
-    (stripped, calls)
+    (stripped, dedupe_relay_tool_calls(calls))
+}
+
+/// Recursively sort JSON object keys so equivalent objects produce one dedupe key.
+fn sort_json_value_for_dedup(v: Value) -> Value {
+    match v {
+        Value::Object(map) => {
+            let mut keys: Vec<String> = map.keys().cloned().collect();
+            keys.sort();
+            let mut out = serde_json::Map::new();
+            for k in keys {
+                if let Some(val) = map.get(&k) {
+                    out.insert(k, sort_json_value_for_dedup(val.clone()));
+                }
+            }
+            Value::Object(out)
+        }
+        Value::Array(arr) => Value::Array(arr.into_iter().map(sort_json_value_for_dedup).collect()),
+        other => other,
+    }
+}
+
+/// Clone of tool `input` used only for duplicate detection (does not change executed payloads).
+fn normalize_tool_input_for_dedup_key(tool_name: &str, input: &Value) -> Value {
+    let mut v = input.clone();
+    if tool_name == "read_file" {
+        if let Some(obj) = v.as_object_mut() {
+            let merged_path = obj
+                .get("path")
+                .cloned()
+                .or_else(|| obj.get("file_path").cloned());
+            if let Some(p) = merged_path {
+                obj.remove("file_path");
+                obj.insert("path".to_string(), p);
+            }
+        }
+    }
+    sort_json_value_for_dedup(v)
+}
+
+/// Drop repeated tool calls that would trigger redundant approvals (same tool + same normalized input).
+fn dedupe_relay_tool_calls(calls: Vec<(String, String, String)>) -> Vec<(String, String, String)> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::with_capacity(calls.len());
+    for (id, name, input_str) in calls {
+        let key = match serde_json::from_str::<Value>(&input_str) {
+            Ok(input_val) => {
+                let key_val = normalize_tool_input_for_dedup_key(&name, &input_val);
+                format!(
+                    "{}|{}",
+                    name,
+                    serde_json::to_string(&key_val).unwrap_or_default()
+                )
+            }
+            Err(_) => {
+                out.push((id, name, input_str));
+                continue;
+            }
+        };
+        if seen.insert(key) {
+            out.push((id, name, input_str));
+        } else {
+            tracing::info!(
+                "[CdpApiClient] dropped duplicate relay_tool call: {name} (same normalized input)"
+            );
+        }
+    }
+    out
 }
 
 fn extract_relay_tool_fences(text: &str) -> (String, Vec<String>) {
@@ -945,7 +1014,8 @@ pub fn build_system_prompt(goal: &str) -> String {
         concat!(
             "You are Relay Agent running inside a Tauri desktop app.\n",
             "Use only the registered tools.\n",
-            "Read state first, then write only when necessary.\n\n",
+            "Read state first, then write only when necessary.\n",
+            "For file access use read_file / write_file / edit_file; do not substitute shell or REPL for file I/O when those tools apply.\n\n",
             "Goal:\n{goal}\n\n",
             "Constraints:\n",
             "- Prefer read-only tools before mutating tools.\n",
@@ -1136,6 +1206,67 @@ mod cdp_copilot_tool_tests {
         assert!(vis.is_empty());
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].1, "read_file");
+    }
+
+    #[test]
+    fn parse_dedupes_repeated_write_file_fences() {
+        let raw = r#"```relay_tool
+{"name":"write_file","input":{"path":"C:\\a.txt","content":"x"}}
+```
+```relay_tool
+{"name":"write_file","input":{"path":"C:\\a.txt","content":"x"}}
+```
+```relay_tool
+{"name":"write_file","input":{"path":"C:\\a.txt","content":"x"}}
+```"#;
+        let (_vis, tools) = parse_copilot_tool_response(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "write_file");
+    }
+
+    #[test]
+    fn parse_keeps_distinct_write_file_content() {
+        let raw = r#"```relay_tool
+{"name":"write_file","input":{"path":"p","content":"a"}}
+```
+```relay_tool
+{"name":"write_file","input":{"path":"p","content":"b"}}
+```"#;
+        let (_vis, tools) = parse_copilot_tool_response(raw);
+        assert_eq!(tools.len(), 2);
+    }
+
+    #[test]
+    fn parse_dedupes_read_file_path_aliases() {
+        let raw = r#"```relay_tool
+{"name":"read_file","input":{"path":"README.md"}}
+```
+```relay_tool
+{"name":"read_file","input":{"file_path":"README.md"}}
+```"#;
+        let (_vis, tools) = parse_copilot_tool_response(raw);
+        assert_eq!(tools.len(), 1);
+    }
+
+    #[test]
+    fn parse_dedupes_duplicate_tools_inside_one_array_fence() {
+        let raw = r#"```relay_tool
+[{"name":"read_file","input":{"path":"a.txt"}},{"name":"read_file","input":{"path":"a.txt"}}]
+```"#;
+        let (_vis, tools) = parse_copilot_tool_response(raw);
+        assert_eq!(tools.len(), 1);
+    }
+
+    #[test]
+    fn parse_dedupes_identical_calls_key_order_differs() {
+        let raw = r#"```relay_tool
+{"name":"write_file","input":{"content":"z","path":"p"}}
+```
+```relay_tool
+{"name":"write_file","input":{"path":"p","content":"z"}}
+```"#;
+        let (_vis, tools) = parse_copilot_tool_response(raw);
+        assert_eq!(tools.len(), 1);
     }
 }
 

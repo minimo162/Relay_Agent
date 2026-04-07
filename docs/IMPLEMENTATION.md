@@ -51,6 +51,28 @@
 
 **Artifacts:** `apps/desktop/src-tauri/binaries/copilot_server.js`
 
+### 2026-04-07 M365 Copilot: multiple approvals for one file-write intent
+
+**Finding:** In Microsoft Copilot (agent / tool-approval UX), a single instruction—for example, write `テスト` to `C:\Users\...\Downloads\テスト.txt`—can require **several separate approvals**. Typical assistant output mixes: (1) comments plus Python `path = ...`, (2) a `with open(..., "w")` block (surfaced as **code execution**), (3) `print("written")`, (4) `pass` / `# noop` and an inline switch from Python to the **`write_file` tool**, (5) a JSON-style `write_file` payload (**dedicated tool call**). The model often **self-corrects** from “write in Python” to “use the file tool”; the host then treats each executable fragment or tool invocation as its own approval card.
+
+**Why it happens:** Agent UIs usually gate **different risk surfaces** separately (e.g. code run vs. file tool). **Streaming / parsing** can also finalize partial output as multiple actionable steps. Non-ASCII paths are not the primary cause but can correlate with longer, more fragmented replies.
+
+**Mitigation (prompting):** Specify a **single mechanism** (e.g. “use `write_file` only; do not use Python”) and keep the task to **one step** (path, content, encoding in one line of instruction; avoid extra `print` / `pass`).
+
+**Relay_Agent:** This is governed by **how the Copilot client maps streamed model output into approval UI**, not something diagnosable as a Relay defect from a pasted trace alone. Reducing **Relay’s** approval prompts is a separate concern: see `apps/desktop/src-tauri/src/agent_loop.rs` and smart-approval notes elsewhere in this log. Changing **Copilot’s** approval granularity is product-side or CDP-drive scope, to be scoped as its own milestone if needed.
+
+**Artifacts:** operational note (this entry); no code change required for the observation itself.
+
+### 2026-04-07 CDP `relay_tool` dedupe and catalog prompt tightening
+
+**Outcome:** `parse_copilot_tool_response` now drops duplicate tool invocations that share the same tool name and normalized input (sorted JSON keys; `read_file` treats `path` and `file_path` as the same for comparison only—executed payloads are unchanged). This prevents repeated user approvals when Copilot emits the same `write_file` (or other) call across multiple `relay_tool` fences or twice in one array. The CDP tool-catalog section documents a single-fence + array preference, no shell/REPL for file I/O when file tools apply, and points to [Claw Code tool-system](https://claw-code.codes/tool-system) as the conceptual model. Default `build_system_prompt` adds one line reinforcing file tools over shell for file access.
+
+**Artifacts:** `apps/desktop/src-tauri/src/agent_loop.rs`
+
+**Verification:**
+
+- `cargo test -p relay-agent-desktop cdp_copilot_tool` — pass (13 tests)
+
 ### 2026-04-06 Edge CDP connection hardening
 
 Completed.
