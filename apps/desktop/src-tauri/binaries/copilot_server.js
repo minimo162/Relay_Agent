@@ -1545,6 +1545,110 @@ async function extractAssistantReplyStrict(session) {
   return typeof r?.value === "string" ? r.value : "";
 }
 
+/**
+ * M365 often omits role="assistant" on the visible node; try Copilot / Fluent / cib patterns.
+ * Returns the *last* substantial match in document order (reply is usually below the user prompt).
+ */
+async function extractAssistantReplyHeuristic(session) {
+  const r = await session.evaluate(`(() => {
+    function visible(el) {
+      return el && el.offsetParent !== null;
+    }
+    function inComposer(el) {
+      return !!(el && el.closest('#m365-chat-editor-target-element, [data-lexical-editor="true"]'));
+    }
+    function inUserTurn(el) {
+      if (!el) return false;
+      try {
+        if (el.closest('[data-message-author-role="user"]')) return true;
+        if (el.closest('[data-testid*="user-message"]')) return true;
+        if (el.closest('[data-testid*="UserMessage"]')) return true;
+      } catch (_) {}
+      return false;
+    }
+    function nodeText(el) {
+      return (el.innerText || el.textContent || "").trim();
+    }
+    function walkElements(root, visit) {
+      if (!root) return;
+      if (root.nodeType === 1) visit(root);
+      const tree = root.nodeType === 9 ? root.documentElement : root;
+      if (!tree) return;
+      const kids = tree.children || [];
+      for (let i = 0; i < kids.length; i++) walkElements(kids[i], visit);
+      if (tree.shadowRoot) walkElements(tree.shadowRoot, visit);
+    }
+    function queryDeepAll(selector, doc) {
+      const top = doc.documentElement || doc.body;
+      if (!top) return [];
+      const out = [];
+      walkElements(top, (el) => {
+        try {
+          if (el.matches && el.matches(selector)) out.push(el);
+        } catch (_) {}
+      });
+      return out;
+    }
+    const selectors = [
+      '[data-testid*="assistant-message"]',
+      '[data-testid*="AssistantMessage"]',
+      '[data-testid*="bot-message"]',
+      '[data-conversation-role="assistant"]',
+      '[data-participant="assistant"]',
+      'cib-message[type="response"]',
+      'cib-message[conversation="response"]',
+      'cib-turn[type="response"]',
+      '[class*="assistantMessage"]',
+      '[class*="BotMessage"]',
+    ];
+    function extractFromDoc(doc) {
+      const dedup = new Set();
+      const candidates = [];
+      for (const s of selectors) {
+        for (const el of queryDeepAll(s, doc)) {
+          if (!el || dedup.has(el)) continue;
+          dedup.add(el);
+          if (!visible(el) || inComposer(el) || inUserTurn(el)) continue;
+          const t = nodeText(el);
+          if (t.length < 12) continue;
+          candidates.push(el);
+        }
+      }
+      if (!candidates.length) return "";
+      candidates.sort((a, b) => {
+        const p = a.compareDocumentPosition(b);
+        if (p & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+        return 0;
+      });
+      const last = candidates[candidates.length - 1];
+      return nodeText(last);
+    }
+    function bestAcrossIframes(doc, depth) {
+      let best = extractFromDoc(doc);
+      if (depth > 8) return best;
+      let frames;
+      try {
+        frames = doc.querySelectorAll("iframe");
+      } catch (_) {
+        return best;
+      }
+      for (const f of frames) {
+        try {
+          const c = f.contentDocument;
+          if (c) {
+            const inner = bestAcrossIframes(c, depth + 1);
+            if (inner.length > best.length) best = inner;
+          }
+        } catch (_) {}
+      }
+      return best;
+    }
+    return bestAcrossIframes(document, 0);
+  })()`).catch(() => ({ value: "" }));
+  return typeof r?.value === "string" ? r.value : "";
+}
+
 /** Skip noisy CDP responses so we only scan likely Copilot payloads. */
 function shouldCaptureNetworkUrl(url) {
   if (!url || !RESPONSE_URL_PATTERN.test(url)) return false;
@@ -1709,6 +1813,47 @@ function createCopilotNetworkCapture(session) {
       }
       return best;
     },
+    /**
+     * DOM is prompt-echo sized; pick the longest extracted network string that is NOT in that length band.
+     * (pickBestOver only replaces when network is longer than dom, so short replies never win over a 15k echo.)
+     */
+    async pickBestShortAssistant(domEchoLen, submittedLen) {
+      await sleep(500);
+      const recent = metas.slice(-50);
+      let best = "";
+      const low = submittedLen ? submittedLen * 0.68 : domEchoLen * 0.8;
+      const high = submittedLen ? submittedLen * 1.18 : domEchoLen * 1.05;
+      for (let i = recent.length - 1; i >= 0; i--) {
+        const { requestId, url } = recent[i];
+        try {
+          const rb = await session.send(
+            "Network.getResponseBody",
+            { requestId },
+            12e3,
+          );
+          const raw = rb.base64Encoded
+            ? Buffer.from(rb.body, "base64").toString("utf8")
+            : rb.body;
+          const t = extractAssistantFromNetworkPayload(raw).trim();
+          if (t.length < 16) continue;
+          if (t.length >= low && t.length <= high) continue;
+          if (t.length >= domEchoLen * 0.94) continue;
+          if (t.length > best.length) {
+            console.error(
+              "[copilot:network] short-assistant candidate len=",
+              t.length,
+              "url=",
+              url.slice(0, 120),
+            );
+            best = t;
+          }
+        } catch {
+          /* ignore */
+        }
+        if (best.length > 8_000) break;
+      }
+      return best;
+    },
     async disable() {
       session.off("Network.responseReceived", onResponse);
       await session.send("Network.disable", {}).catch(() => {});
@@ -1728,11 +1873,11 @@ function domExtractLooksLikeSubmittedPrompt(textLen, submittedLen) {
  * If loose text is prompt-sized garbage, require a shorter role=assistant extract or refuse to return
  * (prevents agent-loop feedback that doubles prompt size every turn).
  */
-async function resolveAssistantReplyForReturn(session, looseText, submittedPromptLen) {
+async function resolveAssistantReplyForReturn(session, looseText, submittedPromptLen, netCapture = null) {
   const loose = (looseText || "").trim();
   if (!domExtractLooksLikeSubmittedPrompt(loose.length, submittedPromptLen)) return loose;
   const strict = (await extractAssistantReplyStrict(session)).trim();
-  if (strict.length >= 25 && strict.length < loose.length * 0.88) {
+  if (strict.length >= 20 && strict.length < loose.length * 0.88) {
     console.error(
       "[copilot:response] prefer strict assistant over prompt-length loose extract strictLen=",
       strict.length,
@@ -1742,6 +1887,36 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
       submittedPromptLen,
     );
     return strict;
+  }
+  const heur = (await extractAssistantReplyHeuristic(session)).trim();
+  if (heur.length >= 15) {
+    if (!domExtractLooksLikeSubmittedPrompt(heur.length, submittedPromptLen)) {
+      console.error("[copilot:response] prefer heuristic assistant extract len=", heur.length);
+      return heur;
+    }
+    if (heur.length < submittedPromptLen * 0.38) {
+      console.error(
+        "[copilot:response] heuristic assistant short vs submitted — accepting len=",
+        heur.length,
+      );
+      return heur;
+    }
+  }
+  if (netCapture) {
+    try {
+      const shortN = (await netCapture.pickBestShortAssistant(loose.length, submittedPromptLen)).trim();
+      if (shortN.length >= 20) {
+        console.error("[copilot:response] network short-assistant len=", shortN.length);
+        return shortN;
+      }
+      const nw = (await netCapture.pickBestOver("")).trim();
+      if (nw.length >= 20 && (!domExtractLooksLikeSubmittedPrompt(nw.length, submittedPromptLen) || nw.length < loose.length * 0.88)) {
+        console.error("[copilot:response] network pickBestOver(\"\") len=", nw.length);
+        return nw;
+      }
+    } catch (e) {
+      console.error("[copilot:response] network extract error:", e?.message || e);
+    }
   }
   return null;
 }
@@ -1870,7 +2045,7 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
           continue;
         }
         const candidate = replyLate.length >= len ? replyLate : reply;
-        const out = await resolveAssistantReplyForReturn(session, candidate, submittedPromptLen);
+        const out = await resolveAssistantReplyForReturn(session, candidate, submittedPromptLen, netCapture);
         if (out == null) {
           console.error(
             "[copilot:response] refuse false done: loose extract matches submitted prompt length but no strict assistant yet (submitted=",
@@ -1909,11 +2084,27 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
       }
     }
 
+    /** DOM still looks like prompt echo — retry network/heuristic while Copilot has finished streaming. */
+    if (
+      netCapture &&
+      streamed &&
+      !generating &&
+      domExtractLooksLikeSubmittedPrompt(len, submittedPromptLen) &&
+      quietGen >= 4 &&
+      quietGen % 4 === 0
+    ) {
+      const early = await resolveAssistantReplyForReturn(session, reply, submittedPromptLen, netCapture);
+      if (early != null) {
+        console.error("[copilot:response] done (resolved during echo wait) len=", early.length);
+        return await wire(early);
+      }
+    }
+
     prev = len;
   }
 
   const fbLoose = (await extractAssistantReplyText(session)).trim();
-  const fbResolved = await resolveAssistantReplyForReturn(session, fbLoose, submittedPromptLen);
+  const fbResolved = await resolveAssistantReplyForReturn(session, fbLoose, submittedPromptLen, netCapture);
   if (fbResolved != null) {
     console.error("[copilot:response] timeout, using resolved assistant len=", fbResolved.length);
     return await wire(fbResolved);
@@ -1943,10 +2134,15 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
     return await wire(bodyStr);
   }
   if (netCapture) {
+    const sn = (await netCapture.pickBestShortAssistant(fbLoose.length, submittedPromptLen)).trim();
+    if (sn.length >= 12) {
+      console.error("[copilot:response] DOM empty; using network short-assistant len=", sn.length);
+      return await wire(sn);
+    }
     const nw = await netCapture.pickBestOver("");
     if (nw.trim().length >= 12) {
       console.error("[copilot:response] DOM empty; using network-only len=", nw.length);
-      return nw;
+      return await wire(nw);
     }
   }
   throw new Error("Copilot response not found in DOM");
