@@ -567,7 +567,7 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "WebSearch" => from_value::<WebSearchInput>(input).and_then(run_web_search),
         "TodoWrite" => from_value::<TodoWriteInput>(input).and_then(run_todo_write),
         "Skill" => from_value::<SkillInput>(input).and_then(run_skill),
-        "Agent" => from_value::<AgentInput>(input).and_then(run_agent),
+        "Agent" => from_value::<AgentInput>(input).and_then(|i| run_agent(&i)),
         "ToolSearch" => from_value::<ToolSearchInput>(input).and_then(run_tool_search),
         "NotebookEdit" => from_value::<NotebookEditInput>(input).and_then(run_notebook_edit),
         "Sleep" => from_value::<SleepInput>(input).and_then(run_sleep),
@@ -684,7 +684,7 @@ fn run_skill(input: SkillInput) -> Result<String, String> {
     to_pretty_json(execute_skill(input)?)
 }
 
-fn run_agent(input: AgentInput) -> Result<String, String> {
+fn run_agent(input: &AgentInput) -> Result<String, String> {
     if input.run_in_background == Some(true) {
         return Err(String::from(
             "Agent run_in_background is not supported in Relay (sub-agents unavailable)",
@@ -2133,7 +2133,7 @@ fn normalize_config_input(input: ConfigInput) -> Result<ConfigInput, String> {
         .as_ref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_ascii_lowercase());
+        .map(str::to_ascii_lowercase);
 
     let value = match action.as_deref() {
         Some("get") => None,
