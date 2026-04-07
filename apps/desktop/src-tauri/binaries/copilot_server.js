@@ -1668,6 +1668,55 @@ function clipNetworkText(s, max = 120_000) {
   return t.length <= max ? t : t.slice(0, max);
 }
 
+/** HTML shell / static assets — not chat API bodies; scanning them yields huge junk (e.g. embedded base64). */
+function skipNetworkBodyForAssistantExtraction(url, mimeType) {
+  const m = (mimeType || "").toLowerCase();
+  if (m.startsWith("text/html")) return true;
+  if (m.includes("javascript") || m.startsWith("text/css")) return true;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    const path = (u.pathname || "/").replace(/\/+$/, "") || "/";
+    if (
+      (host === "m365.cloud.microsoft" || host.endsWith(".m365.cloud.microsoft")) &&
+      path === "/chat"
+    ) {
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+/**
+ * Network extract that is not usable assistant prose (images, minified data URLs, near-pure base64).
+ */
+function networkExtractLooksLikeGarbage(text) {
+  const t = (text || "").trim();
+  if (t.length < 1) return true;
+  if (/data:image\/[^;]+;base64,/i.test(t)) return true;
+  if (t.length > 6_000) {
+    const sample = t.slice(0, 12_000);
+    let b64ish = 0;
+    for (let i = 0; i < sample.length; i++) {
+      const c = sample.charCodeAt(i);
+      if (
+        (c >= 65 && c <= 90) ||
+        (c >= 97 && c <= 122) ||
+        (c >= 48 && c <= 57) ||
+        c === 43 ||
+        c === 47 ||
+        c === 61
+      ) {
+        b64ish++;
+      }
+    }
+    if (b64ish / sample.length > 0.9) return true;
+  }
+  return false;
+}
+
 function deepExtractAssistantStrings(v, depth) {
   if (depth > 14) return [];
   if (typeof v === "string") {
@@ -1753,7 +1802,9 @@ function createCopilotNetworkCapture(session) {
     metas.push({
       requestId: params.requestId,
       url: u,
-      mimeType: r.mimeType || "",
+      mimeType: String(r.mimeType || "")
+        .split(";")[0]
+        .trim(),
     });
   };
   return {
@@ -1783,7 +1834,8 @@ function createCopilotNetworkCapture(session) {
         console.error("[copilot:network] captured responses=", metas.length, "scanning last", recent.length);
       }
       for (let i = recent.length - 1; i >= 0; i--) {
-        const { requestId, url } = recent[i];
+        const { requestId, url, mimeType } = recent[i];
+        if (skipNetworkBodyForAssistantExtraction(url, mimeType)) continue;
         try {
           const rb = await session.send(
             "Network.getResponseBody",
@@ -1794,6 +1846,15 @@ function createCopilotNetworkCapture(session) {
             ? Buffer.from(rb.body, "base64").toString("utf8")
             : rb.body;
           const t = extractAssistantFromNetworkPayload(raw).trim();
+          if (networkExtractLooksLikeGarbage(t)) {
+            console.error(
+              "[copilot:network] skip garbage extract len=",
+              t.length,
+              "url=",
+              url.slice(0, 120),
+            );
+            continue;
+          }
           if (t.length > best.length && t.length >= 8) {
             console.error(
               "[copilot:network] candidate len=",
@@ -1824,7 +1885,8 @@ function createCopilotNetworkCapture(session) {
       const low = submittedLen ? submittedLen * 0.68 : domEchoLen * 0.8;
       const high = submittedLen ? submittedLen * 1.18 : domEchoLen * 1.05;
       for (let i = recent.length - 1; i >= 0; i--) {
-        const { requestId, url } = recent[i];
+        const { requestId, url, mimeType } = recent[i];
+        if (skipNetworkBodyForAssistantExtraction(url, mimeType)) continue;
         try {
           const rb = await session.send(
             "Network.getResponseBody",
@@ -1835,6 +1897,7 @@ function createCopilotNetworkCapture(session) {
             ? Buffer.from(rb.body, "base64").toString("utf8")
             : rb.body;
           const t = extractAssistantFromNetworkPayload(raw).trim();
+          if (networkExtractLooksLikeGarbage(t)) continue;
           if (t.length < 16) continue;
           if (t.length >= low && t.length <= high) continue;
           if (t.length >= domEchoLen * 0.94) continue;
