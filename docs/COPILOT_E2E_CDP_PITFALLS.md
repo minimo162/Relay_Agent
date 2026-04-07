@@ -18,9 +18,10 @@ Microsoft 365 CopilotのE2Eテストを、実際にログインしたMicrosoft E
 
 | ファイル | 役割 |
 |----------|------|
-| `playwright-cdp.config.ts` | CDP接続用Playwright設定 (`connectOverCDP`使用) |
-| `tests/m365-copilot-capabilities-v2.spec.ts` | E2Eテスト本体（10テスト、シリアル実行） |
-| `playwright-capabilities.config.ts` | Webアプリ統合テスト用（別コンフィグ） |
+| `apps/desktop/playwright-cdp.config.ts` | CDP接続用 Playwright 設定（`connectOverCDP` / プロジェクト分離） |
+| `apps/desktop/tests/m365-copilot-capabilities-v2.spec.ts` | 能力検証 E2E（T1–T10、`cdp-connect` プロジェクト） |
+| `apps/desktop/tests/m365-copilot-cdp.spec.ts` | M365 チャット **スモーク**（新規チャット・送信・マルチターン、`m365-cdp-chat` プロジェクト） |
+| `playwright-capabilities.config.ts` | Web アプリ統合テスト用（別コンフィグ） |
 
 ## 実行手順
 
@@ -37,16 +38,82 @@ microsoft-edge --remote-debugging-port=9222
 
 ### 3. テスト実行
 
+**能力検証スイート（`cdp-connect`）:**
+
 ```bash
 cd apps/desktop
-npx playwright test --config=playwright-cdp.config.ts
+npx playwright test --config=playwright-cdp.config.ts --project=cdp-connect
 ```
+
+**M365 チャットスモーク（`m365-cdp-chat`、実 CDP での接続・送信・マルチターン確認向け）:**
+
+```bash
+cd apps/desktop
+CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat
+```
+
+Relay 既定の Edge CDP ポートは **9333** のことが多い（スクリプト例: `scripts/start-relay-edge-cdp.sh`）。環境に合わせて `CDP_ENDPOINT` を変える。
 
 ### 環境変数
 
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
-| `CDP_ENDPOINT` | `http://localhost:9222` | CDPのエンドポイントURL |
+| `CDP_ENDPOINT` | `playwright-cdp.config.ts` 内は `http://localhost:9222`（`m365-cdp-chat` はテスト内で `9333` をデフォルト指定） | CDP の HTTP ベース URL（`/json/version` が取れること） |
+
+---
+
+## 実 CDP 検証手順（`m365-cdp-chat`）
+
+### 目的
+
+- ローカルで **既に M365 Copilot にサインイン済みの Edge** に CDP で繋ぎ、UI 上で **コンポーザ入力・Enter 送信・2 通目以降（マルチターン）** が再現できることを確認する。
+- `copilot_server.js` と同系の送信経路（`Input.dispatchKeyEvent` など）がテスト側でも再現できるかを確認する。
+
+### 前提条件
+
+1. Edge をリモートデバッグ付きで起動（例: `--remote-debugging-port=9333`）。
+2. 同一プロファイルで `https://m365.cloud.microsoft/chat` を開き、**Copilot にログイン済み**であること（未ログインだとログイン画面だけが対象になり、意味のある検証にならない）。
+3. `apps/desktop` で Playwright 依存が入っていること（通常はリポジトリの `pnpm install` 済み）。
+
+### CDP 到達性の確認（任意）
+
+エンドポイントが生きていれば HTTP 200 で JSON が返る:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:9333/json/version
+# 期待: 200
+```
+
+### 実行コマンド
+
+```bash
+cd apps/desktop
+CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat
+```
+
+- `workers: 1`・`test.describe.configure({ mode: "serial" })` のため、**同一ブラウザタブ上で順に** 00→05 が走る。
+- 成果物（失敗時の trace 等）の出力先: `apps/desktop/test-results-cdp/`（`.gitignore` 済み）。
+
+### 実検証結果の例（2026-04 時点・代表環境）
+
+以下は **実機 Edge + サインイン済み M365** に CDP で接続して実行したときの **ログから抽出した要約**である。応答時間は Copilot 側の負荷により変動する。
+
+| 項目 | 結果 |
+|------|------|
+| 接続 | `connectOverCDP(CDP_ENDPOINT)` で既存の `m365.cloud.microsoft` タブを検出して利用 |
+| 00 新規チャット | サイドバー「新しいチャット」でスレッド初期化、コンポーザ空を確認 |
+| 03 初回送信 | 日本語プロンプト入力後、**`Input.dispatchKeyEvent(Enter)` のみ**で送信・コンポーザクリアまで成功 |
+| 04 マルチターン（2 通目） | **フォーカス調整だけの素の CDP Enter** は送信に至らないことがある。`#m365-chat-editor-target-element` 等の **外殻をクリックしてから** 再度 CDP Enter を送ると送信に成功（ログ上 `CDP Enter after shell click`）。 |
+| フォールバック | Enter 段階で複数戦略（CDP → 外殻クリック+CDP → keyboard → inner `press`）を試し、Ctrl+Enter も同様の段階を持つ。 |
+| 添付・送信ゲート | サーバの `copilotAttachmentStillPending` に倣い、**コンポーザ周辺ドック内**の progress 系のみを待機（ドキュメント全体の `aria-busy` は誤検知になりやすいためテストでは除外）。送信ボタンが押下可能に見えるまでの待機も併用。 |
+| 全体 | **6 tests passed**（1 ワーカー・シリアル、合計実行時間は Copilot 応答に依存し約 1〜2 分程度のことが多い） |
+
+### 実装参照（送信まわり）
+
+- テスト: `apps/desktop/tests/m365-copilot-cdp.spec.ts`（`dispatchEnterViaCdp`、`tryEnterStrategies` / `tryCtrlEnterStrategies`、`focusM365ComposerDeep`、添付・送信待機ヘルパ）。
+- 本番 CDP サーバ: `apps/desktop/src-tauri/binaries/copilot_server.js`（`dispatchEnterKey`、`focusComposer`、`copilotAttachmentStillPending`、`submitPromptRaw`）。
+
+---
 
 ## テストスイート（T1-T10）
 
@@ -94,6 +161,18 @@ npx playwright test --config=playwright-cdp.config.ts
 **現象**: 各テストが独立したページを開くと、会話のコンテキスト（`convId`）が失われる。
 
 **解決策**: `test.describe.configure({ mode: "serial" })` + `test.beforeAll()`で1つのページ/セッションを共有し、`findOrCreateCopilotPage()`で既存のCopilotタブを再利用する。
+
+### 課題5: マルチターン後に「素の」CDP Enter だけでは送信されないことがある
+
+**現象**: 1 通目は `Input.dispatchKeyEvent(Enter)` が通るが、Copilot 応答後の 2 通目で同じ手順だけではコンポーザがクリアされず、送信できないように見える。
+
+**原因**: Lexical コンポーザでは、応答後にフォーカスやイベントターゲットが **外殻（`#m365-chat-editor-target-element` 等）と内側 `contenteditable` でずれる**ことがあり、CDP のキーイベントが編集ツリーに届かない場合がある（「改行だけ」ではなく、**キーが編集対象に入っていない**状態に近い）。
+
+**解決策（テスト・本番の考え方）**:
+
+- `focusComposer` 相当（内側への `scrollIntoView` / `click` / `focus`）を行ったうえで送信する。
+- それでも足りない場合は **コンポーザ外殻をユーザー操作相当でクリックしてから** 再度 `Input.dispatchKeyEvent(Enter)` を送る（`m365-copilot-cdp.spec.ts` の `CDP Enter after shell click` 戦略）。
+- 送信ボタンが無効の間は Enter も効かないことがあるため、**添付・progress 系の UI がコンポーザ付近に残っていないこと**と、**送信コントロールが有効に見えること**の待機を `submitPromptRaw` に倣って入れる（テストではコンポーザ周辺にスコープしたセレクタで誤検知を抑える）。
 
 ## トラブルシューティング
 
