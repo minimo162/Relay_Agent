@@ -20,7 +20,8 @@
     "test:e2e:agent-browser": "node ./scripts/e2e-agent-browser.mjs",
     "test:e2e:agent-browser:with-app": "node ./scripts/e2e-agent-browser.mjs --with-app",
     "test:e2e:agent-browser:with-app:keep": "node ./scripts/e2e-agent-browser.mjs --with-app --keep-app",
-    "test:e2e:agent-browser:with-app:demo": "node ./scripts/e2e-agent-browser.mjs --with-app --keep-app --ui-demo"
+    "test:e2e:agent-browser:with-app:demo": "node ./scripts/e2e-agent-browser.mjs --with-app --keep-app --ui-demo",
+    "inspect:copilot-dom": "node ./scripts/inspect-copilot-dom.mjs"
   },
   "dependencies": {
     "@solidjs/router": "0.15.4",

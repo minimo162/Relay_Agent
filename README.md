@@ -88,6 +88,9 @@ This launches the Tauri dev environment with hot-reloading for both the SolidJS 
 Relay_Agent/
 ├── Cargo.toml                    # Workspace root
 ├── package.json                  # Root pnpm workspace config
+├── scripts/                      # Linux relay helpers (Edge CDP prestart)
+│   ├── relay-copilot-linux.sh
+│   └── start-relay-edge-cdp.sh
 │
 └── apps/desktop/
     ├── src/                      # SolidJS frontend
@@ -116,7 +119,12 @@ Relay_Agent/
     │   │   ├── onyx-concept/     # RAG engine (SQLite FTS5, Context Router, MCP)
     │   │   └── compat-harness/   # Upstream manifest extraction
     │   ├── capabilities/         # Tauri v2 capability files
+    │   ├── binaries/
+    │   │   └── copilot_server.js # M365 Copilot bridge (pure CDP; DOM + network extract)
     │   └── tauri.conf.json       # App configuration
+    │
+    ├── scripts/                  # Desktop dev helpers (Playwright, CDP)
+    │   └── inspect-copilot-dom.mjs  # Dump M365 chat DOM hints over CDP
     │
     └── tests/                    # E2E tests (Playwright)
         ├── app.e2e.spec.ts       # Core UI + agent flow tests
@@ -139,8 +147,9 @@ Relay_Agent/
 - **CDP Browser Automation** — Sole AI backend: M365 Copilot via Chrome DevTools Protocol:
   - Auto-launches dedicated Edge instance (separate user data dir)
   - Free port scanning, screenshot, prompt sending, new chat
-  - Streaming detection and response wait logic
+  - Streaming detection and response wait logic (hot path uses one `Runtime.evaluate` for “generating” + reply text to halve CDP round-trips)
   - Agent loop sends conversation context as text prompts, receives complete responses
+  - **`copilot_server.js`** (under `apps/desktop/src-tauri/binaries/`) implements DOM extraction with a **single source of truth**: `copilotDomGeneratingIifeExpression()` and `copilotDomReplyExtractIifeExpression()` build the in-page scripts; `isCopilotGenerating`, `extractAssistantReplyText`, and `pollCopilotGeneratingAndReply` all reuse them. M365 Copilot Web (Fluent) replies are read preferentially from **`[data-testid="copilot-message-reply-div"]`**, with user bubbles excluded via **`fai-UserMessage`** / **`chatQuestion`** heuristics; `stripM365CopilotReplyChrome` removes “Copilot said:” UI chrome from text.
 - **MCP Server Integration** — Full support for standard MCP servers via stdio transport:
   - Add/remove/list MCP servers with real-time status monitoring
   - Health check command (`mcp_check_server_status`) with live status reporting
@@ -312,9 +321,42 @@ npx vitest run
 npx playwright test
 ```
 
+### Inspect M365 Copilot DOM over CDP (Playwright)
+
+Use this when tuning selectors or debugging extract/wait behavior. Start Edge with remote debugging (e.g. port **9333**), open **M365 Chat**, then:
+
+```bash
+cd apps/desktop
+pnpm inspect:copilot-dom
+# or: pnpm exec node scripts/inspect-copilot-dom.mjs
+# optional CDP URL: CDP_HTTP=http://127.0.0.1:9333 pnpm inspect:copilot-dom
+```
+
+From the monorepo root:
+
+```bash
+pnpm --filter @relay-agent/desktop inspect:copilot-dom
+```
+
+The script connects with Playwright `connectOverCDP`, walks frames, reports `data-testid` hints, **`copilot-message-reply-div`** counts / last sample, and an accessibility snapshot when the API is available. Align changes with **`copilot_server.js`** (same reply-div-first strategy).
+
 ## Environment
 
 - **M365 Copilot (CDP):** Sole AI backend. Edge auto-launches on free port with isolated profile. Configurable timeout (default: 120s). Login via browser UI on first use.
+
+### Linux / ヘッドレス（Copilot 接続の進め方）
+
+1. **Microsoft Edge for Linux** を入れる（`microsoft-edge-stable` が `PATH` にあること）。
+2. **`DISPLAY` が必要** — Edge はウィンドウを開きます。Xvfb + 軽量 WM なら例: `export DISPLAY=:1`（先に Xvfb / fluxbox を起動）。
+3. **専用プロファイル** `~/RelayAgentEdgeProfile` — アプリと同梱の `copilot_server.js` がここで Edge を起動します。**noVNC 用 Chromium の `~/chrome-m365-profile` とは別**です。初回はこの Edge で **M365 にサインイン**してください。
+4. 開発起動の補助: リポジトリ直下で  
+   `chmod +x scripts/relay-copilot-linux.sh && ./scripts/relay-copilot-linux.sh`  
+   （`$HOME/novnc-m365/start-x11-desktop.sh` があれば `DISPLAY` 未設定時に自動実行します。パスは `RELAY_START_X11` で変更可）  
+   既定で **`scripts/start-relay-edge-cdp.sh`** により Edge（CDP **9333**）を先起動します。無効化: `RELAY_PRESTART_EDGE=0`  
+   手動だけ先に Edge を立てる場合: `pnpm relay:edge`（`DISPLAY` 必須）
+5. **Relay 用 Edge を noVNC で表示**する（Chromium 版 noVNC とは別）:  
+   `~/novnc-m365/start-novnc-relay.sh`  
+   同じ **~/RelayAgentEdgeProfile** と **CDP 9333** で起動するため、アプリ／`copilot_server` と画面が一致します。
 
 ## License
 

@@ -1,5 +1,6 @@
 // copilot_server.js — pure CDP (HTTP + WebSocket), no Playwright
 // Works in VBS-restricted corporate environments where Playwright connectOverCDP hangs.
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
@@ -102,6 +103,9 @@ var ATTACHMENT_PENDING_SELECTORS = [
 var SEND_BUTTON_STABLE_MS_DEFAULT = 500;
 var SEND_BUTTON_STABLE_MS_AFTER_ATTACH = 750;
 var ASSISTANT_REPLY_DOM_SELECTORS = [
+  /** M365 Copilot web (Fluent): narrow reply body; prefer over generic article/markdown hits. */
+  '[data-testid="copilot-message-reply-div"]',
+  '[class*="fai-CopilotMessage"]',
   '[data-testid="markdown-reply"]',
   '[data-testid*="message-content"]',
   '[data-testid*="message-body"]',
@@ -122,6 +126,15 @@ var ASSISTANT_REPLY_DOM_SELECTORS = [
 ];
 var RESPONSE_URL_PATTERN =
   /substrate\.office\.com|copilot\.microsoft\.com|m365\.cloud\.microsoft|api\.bing\.microsoft\.com|services\.actions\.ms|graph\.microsoft\.com|teams\.live\.com/i;
+
+/** Strip M365 Copilot Web UI a11y chrome from innerText ("Copilot said:", branding line). */
+function stripM365CopilotReplyChrome(text) {
+  let s = String(text || "").trim();
+  if (!s) return s;
+  s = s.replace(/^Copilot said:\s*/i, "");
+  s = s.replace(/^Copilot\s*(\n+|$)/im, "");
+  return s.trim();
+}
 
 /**
  * Paths we never treat as chat model output (telemetry, shell assets, metrics).
@@ -172,6 +185,12 @@ function isAllowedChatNetworkUrl(url) {
   return fullUrlHints.some((re) => re.test(low));
 }
 var RESPONSE_TIMEOUT_MS = 18e4;
+/** Main loop sleep in waitForDomResponse (was 1000ms → ~3min wall time on phantom “generating”). */
+var RESPONSE_POLL_INTERVAL_MS = 500;
+/** Consecutive polls with raw generating=true before treating “stop” UI as phantom (was 55 @ 1s ≈ 55s lost). */
+var RESPONSE_PHANTOM_GENERATING_POLLS = 22;
+/** After DOM looks stable, pause before re-extract (was 2800ms). */
+var RESPONSE_POST_STABLE_MS = 1000;
 var CDP_PROBE_TIMEOUT_MS = 2e3;
 var CDP_COMMAND_TIMEOUT_MS = 5e3;
 /** Runtime.evaluate can run long synchronous DOM work; default CDP timeout was killing large execCommand pastes. */
@@ -543,7 +562,7 @@ class CopilotSession {
           currentUrl = await waitForTargetUrl(this.cdpSession, page.targetId, isCopilotUrl, 30e3);
           console.error("[copilot:describe] Copilot URL after retry:", currentUrl?.slice(0, 120));
         }
-        await sleep(1200);
+        await sleep(700);
       }
 
       const netCapture = createCopilotNetworkCapture(pageSession);
@@ -557,7 +576,7 @@ class CopilotSession {
           console.error("[copilot:describe] new chat not found (css+shadow+a11y); last-chance CDP click");
           await pageSession.click(NEW_CHAT_BUTTON_SELECTORS[0]).catch(() => {});
         }
-        await sleep(2800);
+        await sleep(1600);
 
         const upload = await uploadCopilotAttachments(pageSession, attachmentPaths, imageB64);
         attachmentTempFiles = upload.tempFiles;
@@ -1457,7 +1476,7 @@ async function pastePromptRaw(session, text) {
   await session.send("DOM.enable", {}).catch(() => {});
   await cdpInputEnable(session);
   await waitForComposer(session);
-  await sleep(550);
+  await sleep(420);
 
   const preClearLen = await getComposerTextLength(session);
   if (preClearLen > 0) {
@@ -1626,7 +1645,7 @@ async function pastePromptRaw(session, text) {
   }
 
   console.error("[copilot:paste] composer length OK:", len);
-  await sleep(300);
+  await sleep(220);
 }
 
 /** Lexical often does not expose the full prompt in innerText — cap so we do not spin 15s waiting. */
@@ -1860,14 +1879,14 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
         if (!domOk) {
           await session.click(SEND_BUTTON_ANY_SELECTOR).catch(() => {});
         }
-        await sleep(700);
+        await sleep(520);
         let generating = await isCopilotGenerating(session);
         let lenNow = await getComposerTextLength(session);
         let looksSent = generating || lenNow + 25 < lenBefore;
         if (!looksSent) {
           console.error("[copilot:submit] DOM click did not dispatch; trying CDP mouse");
           await clickSendViaCdpMouse(session);
-          await sleep(700);
+          await sleep(520);
           generating = await isCopilotGenerating(session);
           lenNow = await getComposerTextLength(session);
           looksSent = generating || lenNow + 25 < lenBefore;
@@ -1925,8 +1944,8 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
   return await waitForDomResponse(session, netCapture, expectedPromptLen);
 }
 
-async function isCopilotGenerating(session) {
-  const r = await session.evaluate(`(() => {
+function copilotDomGeneratingIifeExpression() {
+  return `(() => {
     function reallyVisible(el) {
       if (!el || el.offsetParent === null) return false;
       const st = getComputedStyle(el);
@@ -1994,7 +2013,11 @@ async function isCopilotGenerating(session) {
       return false;
     }
     return scanDocs(document, 0);
-  })()`).catch(() => ({ value: false }));
+  })()`;
+}
+
+async function isCopilotGenerating(session) {
+  const r = await session.evaluate(copilotDomGeneratingIifeExpression()).catch(() => ({ value: false }));
   return r?.value === true;
 }
 
@@ -2002,8 +2025,8 @@ async function isCopilotGenerating(session) {
  * Prefer the outermost last assistant *turn*. Walks open shadow roots and same-origin iframes
  * (M365 often hosts the transcript in an embedded frame).
  */
-async function extractAssistantReplyText(session) {
-  const r = await session.evaluate(`(() => {
+function copilotDomReplyExtractIifeExpression() {
+  return `(() => {
     function visible(el) {
       return el && el.offsetParent !== null;
     }
@@ -2024,6 +2047,8 @@ async function extractAssistantReplyText(session) {
         if (el.closest('[aria-label*="your message"]')) return true;
         if (el.closest('[aria-label*="送信した"]')) return true;
         if (el.closest('[aria-label*="自分のメッセージ"]')) return true;
+        if (el.closest('[class*="fai-UserMessage"]')) return true;
+        if (el.closest('[data-testid="chatQuestion"]')) return true;
       } catch (_) {}
       return false;
     }
@@ -2052,6 +2077,20 @@ async function extractAssistantReplyText(session) {
       return out;
     }
     function extractFromDoc(doc) {
+      const m365Replies = queryDeepAll('[data-testid="copilot-message-reply-div"]', doc).filter(
+        (el) => visible(el) && !inComposer(el) && !inUserTurn(el),
+      );
+      if (m365Replies.length) {
+        m365Replies.sort((a, b) => {
+          const p = a.compareDocumentPosition(b);
+          if (p & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+          if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+          return 0;
+        });
+        const lastM365 = m365Replies[m365Replies.length - 1];
+        const tm = nodeText(lastM365);
+        if (tm.length > 0) return tm;
+      }
       const byRole = [...new Set([
         ...queryDeepAll('[data-message-author-role="assistant"]', doc),
         ...queryDeepAll('article[data-message-author-role="assistant"]', doc)
@@ -2124,8 +2163,34 @@ async function extractAssistantReplyText(session) {
       return best;
     }
     return bestAcrossIframes(document, 0);
-  })()`).catch(() => ({ value: "" }));
-  return typeof r?.value === "string" ? r.value : "";
+  })()`;
+}
+
+async function extractAssistantReplyText(session) {
+  const r = await session.evaluate(copilotDomReplyExtractIifeExpression()).catch(() => ({ value: "" }));
+  return stripM365CopilotReplyChrome(typeof r?.value === "string" ? r.value : "");
+}
+
+/**
+ * Single Runtime.evaluate for the hot wait loop: avoids doubling CDP latency vs separate
+ * isCopilotGenerating + extractAssistantReplyText (Playwright-tuned M365 path uses the same extract).
+ */
+function copilotDomPollGeneratingAndReplyExpression() {
+  return `(() => {
+    const generating = ${copilotDomGeneratingIifeExpression()};
+    const replyRaw = ${copilotDomReplyExtractIifeExpression()};
+    return { generating, reply: replyRaw };
+  })()`;
+}
+
+async function pollCopilotGeneratingAndReply(session) {
+  const r = await session
+    .evaluate(copilotDomPollGeneratingAndReplyExpression())
+    .catch(() => ({ value: { generating: false, reply: "" } }));
+  const v = r?.value;
+  const gen = v?.generating === true;
+  const reply = stripM365CopilotReplyChrome(typeof v?.reply === "string" ? v.reply : "");
+  return { generating: gen, reply };
 }
 
 /** Last assistant turn by ARIA role only (avoids picking user text from generic markdown selectors). */
@@ -2150,13 +2215,49 @@ async function extractAssistantReplyStrict(session) {
         if (el.closest('[aria-label*="your message"]')) return true;
         if (el.closest('[aria-label*="送信した"]')) return true;
         if (el.closest('[aria-label*="自分のメッセージ"]')) return true;
+        if (el.closest('[class*="fai-UserMessage"]')) return true;
+        if (el.closest('[data-testid="chatQuestion"]')) return true;
       } catch (_) {}
       return false;
     }
+    function walkElements(root, visit) {
+      if (!root) return;
+      if (root.nodeType === 1) visit(root);
+      const tree = root.nodeType === 9 ? root.documentElement : root;
+      if (!tree) return;
+      const kids = tree.children || [];
+      for (let i = 0; i < kids.length; i++) walkElements(kids[i], visit);
+      if (tree.shadowRoot) walkElements(tree.shadowRoot, visit);
+    }
+    function queryDeepAll(selector, doc) {
+      const top = doc.documentElement || doc.body;
+      if (!top) return [];
+      const out = [];
+      walkElements(top, (el) => {
+        try {
+          if (el.matches && el.matches(selector)) out.push(el);
+        } catch (_) {}
+      });
+      return out;
+    }
     function extractFromDoc(doc) {
+      const m365Replies = queryDeepAll('[data-testid="copilot-message-reply-div"]', doc).filter(
+        (el) => visible(el) && !inComposer(el) && !inUserTurn(el),
+      );
+      if (m365Replies.length) {
+        m365Replies.sort((a, b) => {
+          const p = a.compareDocumentPosition(b);
+          if (p & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+          if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+          return 0;
+        });
+        const lastM365 = m365Replies[m365Replies.length - 1];
+        const tm = (lastM365.innerText || lastM365.textContent || "").trim();
+        if (tm.length > 0) return tm;
+      }
       const byRole = [
-        ...doc.querySelectorAll('[data-message-author-role="assistant"]'),
-        ...doc.querySelectorAll('article[data-message-author-role="assistant"]'),
+        ...queryDeepAll('[data-message-author-role="assistant"]', doc),
+        ...queryDeepAll('article[data-message-author-role="assistant"]', doc),
       ];
       const roots = [];
       for (const el of byRole) {
@@ -2197,7 +2298,7 @@ async function extractAssistantReplyStrict(session) {
     }
     return bestAcrossIframes(document, 0);
   })()`).catch(() => ({ value: "" }));
-  return typeof r?.value === "string" ? r.value : "";
+  return stripM365CopilotReplyChrome(typeof r?.value === "string" ? r.value : "");
 }
 
 /**
@@ -2225,6 +2326,8 @@ async function extractAssistantReplyHeuristic(session) {
         if (el.closest('[aria-label*="your message"]')) return true;
         if (el.closest('[aria-label*="送信した"]')) return true;
         if (el.closest('[aria-label*="自分のメッセージ"]')) return true;
+        if (el.closest('[class*="fai-UserMessage"]')) return true;
+        if (el.closest('[data-testid="chatQuestion"]')) return true;
       } catch (_) {}
       return false;
     }
@@ -2252,6 +2355,7 @@ async function extractAssistantReplyHeuristic(session) {
       return out;
     }
     const selectors = [
+      '[data-testid="copilot-message-reply-div"]',
       '[data-testid*="assistant-message"]',
       '[data-testid*="AssistantMessage"]',
       '[data-testid*="bot-message"]',
@@ -2264,6 +2368,20 @@ async function extractAssistantReplyHeuristic(session) {
       '[class*="BotMessage"]',
     ];
     function extractFromDoc(doc) {
+      const m365Replies = queryDeepAll('[data-testid="copilot-message-reply-div"]', doc).filter(
+        (el) => visible(el) && !inComposer(el) && !inUserTurn(el),
+      );
+      if (m365Replies.length) {
+        m365Replies.sort((a, b) => {
+          const p = a.compareDocumentPosition(b);
+          if (p & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+          if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+          return 0;
+        });
+        const lastM365 = m365Replies[m365Replies.length - 1];
+        const tm = nodeText(lastM365);
+        if (tm.length > 0) return tm;
+      }
       const dedup = new Set();
       const candidates = [];
       for (const s of selectors) {
@@ -2308,7 +2426,7 @@ async function extractAssistantReplyHeuristic(session) {
     }
     return bestAcrossIframes(document, 0);
   })()`).catch(() => ({ value: "" }));
-  return typeof r?.value === "string" ? r.value : "";
+  return stripM365CopilotReplyChrome(typeof r?.value === "string" ? r.value : "");
 }
 
 /** Whether to buffer a response body for assistant-text extraction (CDP Network). */
@@ -3000,8 +3118,8 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
   const wire = async (s) =>
     netCapture ? await netCapture.pickBestOver(s, submittedPromptLen) : s;
 
-  await sleep(2e3);
-  let baselineLen = (await extractAssistantReplyText(session)).trim().length;
+  await sleep(550);
+  let baselineLen = (await pollCopilotGeneratingAndReply(session)).reply.trim().length;
   /** If we captured the user's long prompt as "assistant", minDoneLen becomes unreachable (baseline+2 > len forever). */
   if (baselineLen > 12_000) {
     console.error(
@@ -3020,13 +3138,14 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
   let quietGen = 0;
   /** Phantom “stop generating” in DOM keeps this true forever — ignore after N seconds. */
   let genStreak = 0;
+  /** M365 reply-div yields short answers (e.g. "OK"); keep floor low but still require growth vs baseline. */
   const minDoneLen = () =>
-    Math.max(streamed ? 6 : 22, baselineLen + (streamed ? 2 : 14));
+    Math.max(streamed ? 2 : 5, baselineLen + (streamed ? 1 : 5));
 
   while (Date.now() < deadline) {
-    await sleep(1e3);
-    const generatingRaw = await isCopilotGenerating(session);
-    const reply = (await extractAssistantReplyText(session)).trim();
+    await sleep(RESPONSE_POLL_INTERVAL_MS);
+    const { generating: generatingRaw, reply: replyRaw } = await pollCopilotGeneratingAndReply(session);
+    const reply = replyRaw.trim();
     const len = reply.length;
 
     if (generatingRaw) {
@@ -3034,17 +3153,23 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
     } else {
       genStreak = 0;
     }
-    const ignorePhantomStop = genStreak >= 55;
+    const ignorePhantomStop = genStreak >= RESPONSE_PHANTOM_GENERATING_POLLS;
     const generating = generatingRaw && !ignorePhantomStop;
     if (generating) quietGen = 0;
     else quietGen++;
-    if (ignorePhantomStop && genStreak === 55) {
+    if (ignorePhantomStop && genStreak === RESPONSE_PHANTOM_GENERATING_POLLS) {
       console.error(
-        "[copilot:response] stop-button heuristic stuck ~55s; ignoring so completion can be detected",
+        "[copilot:response] stop-button heuristic stuck; ignoring phantom generating after",
+        RESPONSE_PHANTOM_GENERATING_POLLS,
+        "polls (~",
+        Math.round(
+          (RESPONSE_PHANTOM_GENERATING_POLLS * RESPONSE_POLL_INTERVAL_MS) / 1000,
+        ),
+        "s)",
       );
     }
 
-    if (Date.now() - lastDiag > 12e3) {
+    if (Date.now() - lastDiag > 10e3) {
       lastDiag = Date.now();
       let bodyLen = 0;
       try {
@@ -3097,22 +3222,27 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
       streamed ||
       len >= baselineLen + 10 ||
       len >= 120 ||
-      len >= minDoneLen();
+      len >= minDoneLen() ||
+      (quietGen >= 5 && !generating && len > baselineLen && len >= 1);
     const settled = Math.abs(len - prev) <= 12;
-    let needStableTicks = len > 220 ? 2 : len < 550 ? 4 : 3;
+    let needStableTicks = len > 220 ? 2 : 3;
     if (
       !generating &&
-      quietGen >= 8 &&
+      quietGen >= 5 &&
       len >= Math.max(baselineLen + 6, 18) &&
       (streamed || len >= baselineLen + 8)
     ) {
       needStableTicks = Math.min(needStableTicks, 2);
     }
-    if (settled && len >= minDoneLen() && grewEnough) {
+    const lengthOkForDone =
+      len >= minDoneLen() ||
+      (quietGen >= 5 && !generating && len > baselineLen && len >= 1);
+    if (settled && grewEnough && lengthOkForDone) {
       stable++;
       if (stable >= needStableTicks) {
-        await sleep(2800);
-        const replyLate = (await extractAssistantReplyText(session)).trim();
+        const postStableMs = len < 500 ? Math.min(750, RESPONSE_POST_STABLE_MS) : RESPONSE_POST_STABLE_MS;
+        await sleep(postStableMs);
+        const replyLate = (await pollCopilotGeneratingAndReply(session)).reply.trim();
         if (replyLate.length > len + 40) {
           console.error("[copilot:response] post-stable growth, keep waiting", len, "->", replyLate.length);
           stable = 0;
@@ -3353,6 +3483,21 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
   }
   if (marked != null) clearCdpPortMarker(profileDir);
 
+  // start-novnc-relay.sh 等で --remote-debugging-port=9333 だけ付けて起動した Edge は
+  // .relay-agent-cdp-port を書かない。既に CDP が Edge なら追加起動せず再利用する。
+  if (
+    (await probeCdpVersion(cdpPort)) &&
+    (await cdpPortIsMicrosoftEdge(cdpPort))
+  ) {
+    globalOptions.cdpPort = cdpPort;
+    writeCdpPortMarker(profileDir, cdpPort);
+    console.error(
+      "[copilot:ensureEdge] reusing existing Edge CDP on requested port",
+      cdpPort,
+    );
+    return;
+  }
+
   const preExisting = new Set();
   for (let port = cdpPort; port < cdpPort + CDP_PORT_SCAN_RANGE; port++) {
     if (await probeCdpVersion(port)) preExisting.add(port);
@@ -3590,22 +3735,44 @@ async function cdpPortIsMicrosoftEdge(port) {
 }
 
 function defaultRelayEdgeProfileDir() {
-  if (process.platform !== "win32") return null;
-  const home = process.env.USERPROFILE || process.env.HOME;
+  const home = process.platform === "win32" ? process.env.USERPROFILE || process.env.HOME : process.env.HOME;
   if (!home) return null;
   return path.join(home, "RelayAgentEdgeProfile");
 }
 
 function findEdgePath() {
-  if (process.platform !== "win32") return null;
-  const local = process.env.LOCALAPPDATA;
-  const candidates = [];
-  if (local) candidates.push(`${local}\\Microsoft\\Edge\\Application\\msedge.exe`);
-  for (const root of [process.env["PROGRAMFILES(X86)"], process.env.PROGRAMFILES].filter(Boolean)) {
-    candidates.push(`${root}\\Microsoft\\Edge\\Application\\msedge.exe`);
+  if (process.platform === "win32") {
+    const local = process.env.LOCALAPPDATA;
+    const candidates = [];
+    if (local) candidates.push(`${local}\\Microsoft\\Edge\\Application\\msedge.exe`);
+    for (const root of [process.env["PROGRAMFILES(X86)"], process.env.PROGRAMFILES].filter(Boolean)) {
+      candidates.push(`${root}\\Microsoft\\Edge\\Application\\msedge.exe`);
+    }
+    for (const p of candidates) {
+      if (p && fs.existsSync(p)) return p;
+    }
+    return null;
   }
-  for (const p of candidates) {
+  if (process.platform === "darwin") {
+    const p = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge";
+    return fs.existsSync(p) ? p : null;
+  }
+  // Linux / BSD: match Rust `cdp_copilot::find_edge_path` behavior
+  const linuxCandidates = [
+    "/usr/bin/microsoft-edge-stable",
+    "/usr/bin/microsoft-edge",
+    "/opt/microsoft/msedge/microsoft-edge",
+  ];
+  for (const p of linuxCandidates) {
     if (p && fs.existsSync(p)) return p;
+  }
+  for (const name of ["microsoft-edge-stable", "microsoft-edge", "msedge"]) {
+    try {
+      const out = execFileSync("which", [name], { encoding: "utf8" }).trim();
+      if (out && fs.existsSync(out)) return out;
+    } catch {
+      /* ignore */
+    }
   }
   return null;
 }
@@ -3714,7 +3881,7 @@ function parseArgs(argv) {
 }
 
 var globalOptions = parseArgs(process.argv.slice(2));
-if (!globalOptions.userDataDir && process.platform === "win32") {
+if (!globalOptions.userDataDir) {
   const d = defaultRelayEdgeProfileDir();
   if (d) globalOptions.userDataDir = d;
 }

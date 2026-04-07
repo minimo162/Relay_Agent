@@ -13,7 +13,9 @@
     "startup:test": "pnpm --filter @relay-agent/desktop startup:test",
     "test:e2e:local": "pnpm --filter @relay-agent/desktop test:e2e:local",
     "test:e2e:auth-save": "pnpm --filter @relay-agent/desktop test:e2e:auth-save",
-    "dev": "pnpm --filter @relay-agent/desktop dev"
+    "dev": "pnpm --filter @relay-agent/desktop dev",
+    "relay:dev:linux": "bash scripts/relay-copilot-linux.sh",
+    "relay:edge": "bash scripts/start-relay-edge-cdp.sh"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
