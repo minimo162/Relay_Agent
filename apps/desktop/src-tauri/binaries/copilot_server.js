@@ -11,9 +11,17 @@ if (!WS) throw new Error("WebSocket is not available. Use Node.js 22+ or install
 var DEFAULT_PORT = 18080;
 var DEFAULT_CDP_PORT = 9333;
 var COPILOT_URL = "https://m365.cloud.microsoft/chat/";
-var INPUT_SELECTOR = '#m365-chat-editor-target-element, [data-lexical-editor="true"]';
+/**
+ * Composer boundary for focus/paste and for excluding transcript nodes (inComposer).
+ * Aligns with agent-browser accessibility snapshot on M365 Copilot (ja): textbox
+ * "Copilot にメッセージを送信する" (e.g. ref e110); EN uses "Send a message…" on role=textbox.
+ */
+var COMPOSER_ANCESTOR_CLOSEST =
+  '#m365-chat-editor-target-element, [data-lexical-editor="true"], [role="textbox"][aria-label*="メッセージを送信"], [role="textbox"][aria-label*="Send a message"]';
+var INPUT_SELECTOR = COMPOSER_ANCESTOR_CLOSEST;
 var COMPOSER_WAIT_MS = 25e3;
-var NEW_CHAT_BUTTON_SELECTOR = '[data-testid="newChatButton"]';
+var NEW_CHAT_BUTTON_SELECTOR =
+  '[data-testid="newChatButton"], button[aria-label*="新しいチャット"], button[aria-label*="New chat"]';
 /** Any visible “stop generating” control (M365 UI varies by locale/build). */
 var STREAMING_STOP_SELECTORS = [
   ".fai-SendButton__stopBackground",
@@ -514,7 +522,9 @@ var COMPOSER_DOM_HELPERS = `
       if (!doc || depth > 14) return null;
       const roots = [
         doc.querySelector("#m365-chat-editor-target-element"),
-        doc.querySelector('[data-lexical-editor="true"]')
+        doc.querySelector('[data-lexical-editor="true"]'),
+        doc.querySelector('[role="textbox"][aria-label*="メッセージを送信"]'),
+        doc.querySelector('[role="textbox"][aria-label*="Send a message"]'),
       ].filter(Boolean);
       for (const root of roots) {
         if (!__raVis(root)) continue;
@@ -1413,7 +1423,7 @@ async function extractAssistantReplyText(session) {
       return el && el.offsetParent !== null;
     }
     function inComposer(el) {
-      return !!(el && el.closest('#m365-chat-editor-target-element, [data-lexical-editor="true"]'));
+      return !!(el && el.closest(${JSON.stringify(COMPOSER_ANCESTOR_CLOSEST)}));
     }
     /** User bubbles often match generic markdown/article selectors — never treat as assistant reply. */
     function inUserTurn(el) {
@@ -1536,7 +1546,7 @@ async function extractAssistantReplyStrict(session) {
       return el && el.offsetParent !== null;
     }
     function inComposer(el) {
-      return !!(el && el.closest('#m365-chat-editor-target-element, [data-lexical-editor="true"]'));
+      return !!(el && el.closest(${JSON.stringify(COMPOSER_ANCESTOR_CLOSEST)}));
     }
     function inUserTurn(el) {
       if (!el) return false;
@@ -1603,7 +1613,7 @@ async function extractAssistantReplyHeuristic(session) {
       return el && el.offsetParent !== null;
     }
     function inComposer(el) {
-      return !!(el && el.closest('#m365-chat-editor-target-element, [data-lexical-editor="true"]'));
+      return !!(el && el.closest(${JSON.stringify(COMPOSER_ANCESTOR_CLOSEST)}));
     }
     function inUserTurn(el) {
       if (!el) return false;
