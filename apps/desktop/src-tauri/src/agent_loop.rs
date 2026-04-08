@@ -87,8 +87,7 @@ fn human_approval_summary(tool_name: &str, input: &str) -> String {
             let n = v
                 .get("input_paths")
                 .and_then(|x| x.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0);
+                .map_or(0, Vec::len);
             format!("Merge {n} PDF files into this output?\n{out}")
         }
         "pdf_split" => {
@@ -99,8 +98,7 @@ fn human_approval_summary(tool_name: &str, input: &str) -> String {
             let n = v
                 .get("segments")
                 .and_then(|x| x.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0);
+                .map_or(0, Vec::len);
             format!("Split PDF into {n} output file(s)?\n{inp}")
         }
         "bash" => cmd.map_or_else(
@@ -493,8 +491,6 @@ Example:
 {{"name":"read_file","input":{{"path":"README.md"}}}}
 ```
 "#,
-        json_pretty = json_pretty,
-        win_addon = win_addon,
     )
 }
 

@@ -2,7 +2,7 @@
 
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -95,16 +95,13 @@ fn liteparse_runner_root() -> Option<PathBuf> {
     None
 }
 
-pub(crate) fn read_pdf_as_text(path: &Path, pages: Option<&str>) -> io::Result<String> {
-    if let Some(spec) = pages {
-        if spec.trim().is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "pages string must not be empty",
-            ));
-        }
-    }
+struct LiteparsePaths {
+    runner: PathBuf,
+    parse_mjs: PathBuf,
+    node: PathBuf,
+}
 
+fn resolve_liteparse_paths() -> io::Result<LiteparsePaths> {
     let runner = liteparse_runner_root().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
@@ -118,49 +115,46 @@ pub(crate) fn read_pdf_as_text(path: &Path, pages: Option<&str>) -> io::Result<S
             "Node.js not found for PDF parsing (set RELAY_BUNDLED_NODE or install `node` on PATH, or run apps/desktop/scripts/fetch-bundled-node.mjs before tauri build)",
         )
     })?;
+    Ok(LiteparsePaths {
+        runner,
+        parse_mjs,
+        node,
+    })
+}
 
-    let pages_arg = pages.unwrap_or("");
-
-    let mut cmd = Command::new(&node);
-    cmd.arg(&parse_mjs);
-    cmd.arg(path.as_os_str());
+fn run_liteparse_child(
+    paths: &LiteparsePaths,
+    pdf_path: &Path,
+    pages_arg: &str,
+) -> io::Result<(Vec<u8>, Vec<u8>, ExitStatus)> {
+    let mut cmd = Command::new(&paths.node);
+    cmd.arg(&paths.parse_mjs);
+    cmd.arg(pdf_path.as_os_str());
     cmd.arg(pages_arg);
-    cmd.current_dir(&runner);
+    cmd.current_dir(&paths.runner);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.env("NODE_NO_WARNINGS", "1");
 
-    let mut child = cmd.spawn().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("failed to spawn PDF parser: {e}"),
-        )
-    })?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| io::Error::other(format!("failed to spawn PDF parser: {e}")))?;
 
     let mut stdout_pipe = child.stdout.take().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            "PDF parser child has no stdout handle",
-        )
+        io::Error::other("PDF parser child has no stdout handle")
     })?;
     let mut stderr_pipe = child.stderr.take().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            "PDF parser child has no stderr handle",
-        )
+        io::Error::other("PDF parser child has no stderr handle")
     })?;
 
     let out_handle = thread::spawn(move || read_limited(&mut stdout_pipe, MAX_PDF_TEXT_BYTES));
     let err_handle = thread::spawn(move || read_limited(&mut stderr_pipe, MAX_PDF_STDERR_BYTES));
 
     let timeout = parse_timeout();
-    let wait_result = child.wait_timeout(timeout).map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("waiting for PDF parser: {e}"),
-        )
-    })?;
+    let wait_result = child
+        .wait_timeout(timeout)
+        .map_err(|e| io::Error::other(format!("waiting for PDF parser: {e}")))?;
 
     let Some(status) = wait_result else {
         let _ = child.kill();
@@ -171,24 +165,36 @@ pub(crate) fn read_pdf_as_text(path: &Path, pages: Option<&str>) -> io::Result<S
             io::ErrorKind::TimedOut,
             format!(
                 "PDF parse exceeded RELAY_PDF_PARSE_TIMEOUT_SECS (default 120s); path={}",
-                path.display()
+                pdf_path.display()
             ),
         ));
     };
 
-    let stdout_bytes = out_handle.join().map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            "PDF parser stdout reader thread panicked",
-        )
-    })??;
+    let stdout_bytes = out_handle
+        .join()
+        .map_err(|_| io::Error::other("PDF parser stdout reader thread panicked"))??;
 
-    let stderr_bytes = err_handle.join().map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            "PDF parser stderr reader thread panicked",
-        )
-    })??;
+    let stderr_bytes = err_handle
+        .join()
+        .map_err(|_| io::Error::other("PDF parser stderr reader thread panicked"))??;
+
+    Ok((stdout_bytes, stderr_bytes, status))
+}
+
+pub(crate) fn read_pdf_as_text(path: &Path, pages: Option<&str>) -> io::Result<String> {
+    if let Some(spec) = pages {
+        if spec.trim().is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "pages string must not be empty",
+            ));
+        }
+    }
+
+    let lite_paths = resolve_liteparse_paths()?;
+    let pages_arg = pages.unwrap_or("");
+    let (stdout_bytes, stderr_bytes, status) =
+        run_liteparse_child(&lite_paths, path, pages_arg)?;
 
     if !status.success() {
         let msg = String::from_utf8_lossy(&stderr_bytes);
@@ -204,8 +210,7 @@ pub(crate) fn read_pdf_as_text(path: &Path, pages: Option<&str>) -> io::Result<S
                 "LiteParse exited with {}; stderr: {}",
                 status
                     .code()
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "signal".into()),
+                    .map_or_else(|| "signal".into(), |c| c.to_string()),
                 if tail.is_empty() { "(empty)" } else { tail }
             ),
         ));

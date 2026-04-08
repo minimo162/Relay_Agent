@@ -33,7 +33,7 @@ fn copilot_server_slot() -> &'static Mutex<Option<CopilotServerState>> {
 }
 
 const COPILOT_HTTP_PORT: u16 = 18080;
-/// M365 Copilot Edge CDP base port: must match `scripts/start-relay-edge-cdp.sh`, `copilot_server.js`, and Playwright defaults (YakuLingo uses 9333; Relay avoids collision).
+/// M365 Copilot Edge CDP base port: must match `scripts/start-relay-edge-cdp.sh`, `copilot_server.js`, and Playwright defaults (`YakuLingo` uses 9333; Relay avoids collision).
 const COPILOT_JS_CDP_PORT: u16 = 9360;
 
 pub fn ensure_copilot_server() -> Result<Arc<Mutex<crate::copilot_server::CopilotServer>>, String> {
@@ -957,9 +957,9 @@ pub fn mcp_check_server_status(name: String) -> Result<McpServerInfo, String> {
         .ok_or_else(|| format!("server `{name}` not found"))
 }
 
-/// JSON-friendly runtime facts for bug reports (mirrors OpenWork debug export, reduced scope).
+/// JSON-friendly runtime facts for bug reports (mirrors `OpenWork` debug export, reduced scope).
 #[tauri::command]
-pub fn get_relay_diagnostics() -> Result<RelayDiagnostics, String> {
+pub fn get_relay_diagnostics() -> RelayDiagnostics {
     let dev = std::env::var("RELAY_AGENT_DEV_MODE")
         .map(|v| {
             matches!(
@@ -968,12 +968,12 @@ pub fn get_relay_diagnostics() -> Result<RelayDiagnostics, String> {
             )
         })
         .unwrap_or(false);
-    Ok(RelayDiagnostics {
+    RelayDiagnostics {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         target_os: std::env::consts::OS.to_string(),
         copilot_node_bridge_port: COPILOT_HTTP_PORT,
         default_edge_cdp_port: COPILOT_JS_CDP_PORT,
         relay_agent_dev_mode: dev,
         architecture_notes: "Copilot path uses the bundled Node bridge on copilot_node_bridge_port; Edge CDP defaults to default_edge_cdp_port (see scripts/start-relay-edge-cdp.sh).".to_string(),
-    })
+    }
 }

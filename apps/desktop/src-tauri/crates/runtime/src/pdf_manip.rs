@@ -39,7 +39,7 @@ fn ensure_not_encrypted(doc: &Document) -> io::Result<()> {
     Ok(())
 }
 
-/// Parse a 1-based page list like `read_file` / LiteParse: `"1"`, `"1-3,5"` (comma-separated, ranges inclusive).
+/// Parse a 1-based page list like `read_file` / `LiteParse`: `"1"`, `"1-3,5"` (comma-separated, ranges inclusive).
 pub(crate) fn parse_pdf_pages_spec(spec: &str, max_page: u32) -> io::Result<BTreeSet<u32>> {
     let spec = spec.trim();
     if spec.is_empty() {
@@ -118,14 +118,112 @@ fn total_input_bytes(paths: &[PathBuf]) -> io::Result<u64> {
         if sum > MAX_TOTAL_INPUT_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!(
-                    "total input size exceeds limit of {} bytes",
-                    MAX_TOTAL_INPUT_BYTES
-                ),
+                format!("total input size exceeds limit of {MAX_TOTAL_INPUT_BYTES} bytes"),
             ));
         }
     }
     Ok(sum)
+}
+
+fn merge_load_input_documents(
+    paths: &[PathBuf],
+) -> io::Result<(
+    BTreeMap<lopdf::ObjectId, Object>,
+    BTreeMap<lopdf::ObjectId, Object>,
+)> {
+    let mut max_id = 1_u32;
+    let mut documents_pages = BTreeMap::new();
+    let mut documents_objects = BTreeMap::new();
+
+    for path in paths {
+        let mut doc = Document::load(path).map_err(map_lopdf)?;
+        ensure_not_encrypted(&doc)?;
+
+        doc.renumber_objects_with(max_id);
+        max_id = doc.max_id + 1;
+
+        let pages = doc.get_pages();
+        pages
+            .into_values()
+            .map(|object_id| {
+                let value = doc
+                    .get_object(object_id)
+                    .map_err(map_lopdf)?
+                    .clone();
+                Ok::<_, io::Error>((object_id, value))
+            })
+            .try_for_each(|res| {
+                let (key, value) = res?;
+                documents_pages.insert(key, value);
+                Ok::<_, io::Error>(())
+            })?;
+
+        documents_objects.extend(doc.objects);
+    }
+
+    Ok((documents_pages, documents_objects))
+}
+
+fn merge_partition_catalog_and_pages(
+    document: &mut Document,
+    documents_objects: BTreeMap<lopdf::ObjectId, Object>,
+) -> io::Result<(
+    (lopdf::ObjectId, Object),
+    (lopdf::ObjectId, Object),
+)> {
+    let mut catalog_object: Option<(lopdf::ObjectId, Object)> = None;
+    let mut pages_object: Option<(lopdf::ObjectId, Object)> = None;
+
+    for (object_id, object) in documents_objects {
+        match object.type_name().unwrap_or(b"") {
+            b"Catalog" => {
+                catalog_object = Some((
+                    if let Some((id, _)) = catalog_object {
+                        id
+                    } else {
+                        object_id
+                    },
+                    object,
+                ));
+            }
+            b"Pages" => {
+                if let Ok(dictionary) = object.as_dict() {
+                    let mut dictionary = dictionary.clone();
+                    if let Some((_, ref prev_pages)) = pages_object {
+                        if let Ok(old_dictionary) = prev_pages.as_dict() {
+                            dictionary.extend(old_dictionary);
+                        }
+                    }
+                    pages_object = Some((
+                        if let Some((id, _)) = pages_object {
+                            id
+                        } else {
+                            object_id
+                        },
+                        Object::Dictionary(dictionary),
+                    ));
+                }
+            }
+            b"Page" | b"Outlines" | b"Outline" => {}
+            _ => {
+                document.objects.insert(object_id, object);
+            }
+        }
+    }
+
+    let pages_root = pages_object.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "merged PDFs: Pages root not found",
+        )
+    })?;
+    let catalog_root = catalog_object.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "merged PDFs: Catalog root not found",
+        )
+    })?;
+    Ok((pages_root, catalog_root))
 }
 
 /// Concatenate PDFs in order into `output_path`. Inputs must exist; parent dirs for output are created.
@@ -158,91 +256,10 @@ pub fn merge_pdfs(output_path: &str, input_paths: &[String]) -> io::Result<PathB
         fs::create_dir_all(parent)?;
     }
 
-    let mut max_id = 1_u32;
-    let mut documents_pages = BTreeMap::new();
-    let mut documents_objects = BTreeMap::new();
-
     let mut document = Document::with_version("1.5");
-
-    for path in &resolved_inputs {
-        let mut doc = Document::load(path).map_err(map_lopdf)?;
-        ensure_not_encrypted(&doc)?;
-
-        doc.renumber_objects_with(max_id);
-        max_id = doc.max_id + 1;
-
-        let pages = doc.get_pages();
-        pages
-            .into_values()
-            .map(|object_id| {
-                let value = doc
-                    .get_object(object_id)
-                    .map_err(map_lopdf)?
-                    .clone();
-                Ok::<_, io::Error>((object_id, value))
-            })
-            .try_for_each(|res| {
-                let (key, value) = res?;
-                documents_pages.insert(key, value);
-                Ok::<_, io::Error>(())
-            })?;
-
-        documents_objects.extend(doc.objects);
-    }
-
-    let mut catalog_object: Option<(lopdf::ObjectId, Object)> = None;
-    let mut pages_object: Option<(lopdf::ObjectId, Object)> = None;
-
-    for (object_id, object) in documents_objects {
-        match object.type_name().unwrap_or(b"") {
-            b"Catalog" => {
-                catalog_object = Some((
-                    if let Some((id, _)) = catalog_object {
-                        id
-                    } else {
-                        object_id
-                    },
-                    object,
-                ));
-            }
-            b"Pages" => {
-                if let Ok(dictionary) = object.as_dict() {
-                    let mut dictionary = dictionary.clone();
-                    if let Some((_, ref object)) = pages_object {
-                        if let Ok(old_dictionary) = object.as_dict() {
-                            dictionary.extend(old_dictionary);
-                        }
-                    }
-                    pages_object = Some((
-                        if let Some((id, _)) = pages_object {
-                            id
-                        } else {
-                            object_id
-                        },
-                        Object::Dictionary(dictionary),
-                    ));
-                }
-            }
-            b"Page" => {}
-            b"Outlines" | b"Outline" => {}
-            _ => {
-                document.objects.insert(object_id, object);
-            }
-        }
-    }
-
-    let Some((page_id, page_object)) = pages_object else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "merged PDFs: Pages root not found",
-        ));
-    };
-    let Some((catalog_id, catalog_object)) = catalog_object else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "merged PDFs: Catalog root not found",
-        ));
-    };
+    let (documents_pages, documents_objects) = merge_load_input_documents(&resolved_inputs)?;
+    let ((page_id, pages_root_obj), (catalog_id, catalog_object)) =
+        merge_partition_catalog_and_pages(&mut document, documents_objects)?;
 
     for (object_id, object) in &documents_pages {
         if let Ok(dictionary) = object.as_dict() {
@@ -254,15 +271,21 @@ pub fn merge_pdfs(output_path: &str, input_paths: &[String]) -> io::Result<PathB
         }
     }
 
-    if let Ok(dictionary) = page_object.as_dict() {
+    if let Ok(dictionary) = pages_root_obj.as_dict() {
         let mut dictionary = dictionary.clone();
-        dictionary.set("Count", documents_pages.len() as u32);
+        let page_count = u32::try_from(documents_pages.len()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "merged PDF: page count does not fit in u32",
+            )
+        })?;
+        dictionary.set("Count", page_count);
         dictionary.set(
             "Kids",
             documents_pages
                 .keys()
                 .copied()
-                .map(|object_id| Object::Reference(object_id))
+                .map(Object::Reference)
                 .collect::<Vec<_>>(),
         );
         document
@@ -280,7 +303,12 @@ pub fn merge_pdfs(output_path: &str, input_paths: &[String]) -> io::Result<PathB
     }
 
     document.trailer.set("Root", catalog_id);
-    document.max_id = document.objects.len() as u32;
+    document.max_id = u32::try_from(document.objects.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "merged PDF: object count does not fit in u32",
+        )
+    })?;
     document.renumber_objects();
     document.compress();
 
@@ -323,7 +351,12 @@ pub fn split_pdf(input_path: &str, segments: &[PdfSplitSegment]) -> io::Result<V
     for seg in segments {
         let doc = Document::load(&input).map_err(map_lopdf)?;
         ensure_not_encrypted(&doc)?;
-        let max_page = doc.get_pages().len() as u32;
+        let max_page = u32::try_from(doc.get_pages().len()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "input PDF: page count does not fit in u32",
+            )
+        })?;
         if max_page == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -350,7 +383,12 @@ pub fn split_pdf(input_path: &str, segments: &[PdfSplitSegment]) -> io::Result<V
 
         let mut doc = Document::load(&input).map_err(map_lopdf)?;
         ensure_not_encrypted(&doc)?;
-        let max_page = doc.get_pages().len() as u32;
+        let max_page = u32::try_from(doc.get_pages().len()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "input PDF: page count does not fit in u32",
+            )
+        })?;
         let wanted = parse_pdf_pages_spec(&seg.pages, max_page)?;
         let to_delete: Vec<u32> = (1..=max_page).filter(|p| !wanted.contains(p)).collect();
         doc.delete_pages(&to_delete);
@@ -406,7 +444,7 @@ mod tests {
             dictionary! {},
             content.encode().expect("encode content"),
         ));
-        let page_id = doc.add_object(dictionary! {
+        let page_object_id = doc.add_object(dictionary! {
             "Type" => "Page",
             "Parent" => pages_id,
             "Contents" => content_id,
@@ -415,7 +453,7 @@ mod tests {
         });
         let pages = dictionary! {
             "Type" => "Pages",
-            "Kids" => vec![page_id.into()],
+            "Kids" => vec![page_object_id.into()],
             "Count" => 1,
         };
         doc.objects.insert(pages_id, Object::Dictionary(pages));

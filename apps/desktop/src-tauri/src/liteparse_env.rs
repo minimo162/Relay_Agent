@@ -1,4 +1,4 @@
-//! Set `RELAY_LITEPARSE_RUNNER_ROOT` and `RELAY_BUNDLED_NODE` before tools run (PDF via LiteParse).
+//! Set `RELAY_LITEPARSE_RUNNER_ROOT` and `RELAY_BUNDLED_NODE` before tools run (PDF via `LiteParse`).
 
 use tauri::Manager;
 

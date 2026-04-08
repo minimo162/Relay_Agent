@@ -96,13 +96,16 @@ fn read_relay_cdp_port_marker(profile_dir: &std::path::Path) -> Option<u16> {
     let path = profile_dir.join(RELAY_CDP_PORT_MARKER);
     let raw = std::fs::read_to_string(&path).ok()?;
     let n: u32 = raw.trim().parse().ok()?;
-    (n >= 1 && n <= 65535).then_some(n as u16)
+    (1..=65535)
+        .contains(&n)
+        .then(|| u16::try_from(n).ok())
+        .flatten()
 }
 
 /// CDP HTTP port when attaching with `auto_launch: false` and no explicit `base_port`.
 ///
 /// Resolution order: **`.relay-agent-cdp-port`** (if `/json/version` succeeds) →
-/// **`DevToolsActivePort`** (if live) → **`preferred`** (Relay default **9360**; override with env / legacy 9333 Edge via DevTools file).
+/// **`DevToolsActivePort`** (if live) → **`preferred`** (Relay default **9360**; override with env / legacy 9333 Edge via `DevTools` file).
 pub async fn resolve_cdp_attachment_port(preferred: u16) -> u16 {
     let profile_dir = relay_agent_edge_profile_dir();
     if let Some(p) = read_relay_cdp_port_marker(&profile_dir) {
