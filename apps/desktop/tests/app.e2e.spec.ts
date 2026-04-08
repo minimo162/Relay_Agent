@@ -55,14 +55,18 @@ test("enter key sends message and adds user bubble", async ({ page }) => {
   await openApp(page);
   await composerInput(page).fill("analyze this data");
   await composerInput(page).press("Enter");
-  await expect(page.locator("text=analyze this data")).toBeVisible({ timeout: 5000 });
+  await expect(
+    page.locator("main").locator('[data-ra-bubble-role="user"]').filter({ hasText: "analyze this data" }),
+  ).toBeVisible({ timeout: 5000 });
 });
 
 test("clicking Send button sends message", async ({ page }) => {
   await openApp(page);
   await composerInput(page).fill("summarize results");
   await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.locator("text=summarize results")).toBeVisible({ timeout: 5000 });
+  await expect(
+    page.locator("main").locator('[data-ra-bubble-role="user"]').filter({ hasText: "summarize results" }),
+  ).toBeVisible({ timeout: 5000 });
 });
 
 test("session appears in sidebar after sending prompt", async ({ page }) => {

@@ -130,7 +130,7 @@ export function ContextPanel(props: {
               <Show
                 when={props.contextFiles().length > 0}
                 fallback={
-                  <div class={`text-xs ${ui.mutedText} text-center py-8`}>No files in context</div>
+                  <div class={`text-xs ${ui.mutedText} text-center py-8`}>No context files</div>
                 }
               >
                 <For each={props.contextFiles()}>
@@ -257,7 +257,7 @@ export function ContextPanel(props: {
               <Show
                 when={props.policies().length > 0}
                 fallback={
-                  <div class={`text-xs ${ui.mutedText} text-center py-8`}>No active policies</div>
+                  <div class={`text-xs ${ui.mutedText} text-center py-8`}>No policies yet</div>
                 }
               >
                 <For each={props.policies()}>
@@ -277,7 +277,7 @@ export function ContextPanel(props: {
                           : "Allowed";
 
                     return (
-                      <div class={`flex items-center gap-2 px-3 py-2.5 rounded-xl border ${ui.border}`}>
+                      <div class="ra-quiet-row ra-quiet-row--align-center gap-2">
                         <div class="flex-1 min-w-0">
                           <div class={`text-xs font-medium ${ui.textPrimary}`}>{policy.name}</div>
                           <Show when={policy.description}>
@@ -285,7 +285,7 @@ export function ContextPanel(props: {
                           </Show>
                         </div>
                         <span
-                          class={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${badgeColor}`}
+                          class={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap shrink-0 ${badgeColor}`}
                         >
                           {badgeLabel}
                         </span>

@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import { Show, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js";
+import { truncatePromptPreview, type SessionMeta } from "./lib/session-display";
 import {
   cancelAgent,
   chunksFromHistory,
@@ -57,6 +58,11 @@ function writeShowToolActivity(on: boolean): void {
 export default function Shell(): JSX.Element {
   const [activeSessionId, setActiveSessionId] = createSignal<string | null>(null);
   const [sessionIds, setSessionIds] = createSignal<string[]>([]);
+  const [sessionMeta, setSessionMeta] = createSignal<Record<string, SessionMeta>>({});
+
+  const sessionEntries = createMemo(() =>
+    sessionIds().map((id) => ({ id, meta: sessionMeta()[id] })),
+  );
   const [sessionRunning, setSessionRunning] = createSignal(false);
   const [sessionError, setSessionError] = createSignal<string | null>(null);
   const [copilotBridgeHint, setCopilotBridgeHint] = createSignal<string | null>(null);
@@ -90,7 +96,7 @@ export default function Shell(): JSX.Element {
     void warmupCopilotBridge()
       .then((r) => {
         if (r.loginRequired) {
-          setCopilotBridgeHint("Sign in to Microsoft Copilot in the Edge window, then return here.");
+          setCopilotBridgeHint("Sign in to Copilot in Edge, then return here.");
         } else if (r.error) {
           setCopilotBridgeHint(`Copilot: ${r.error}`);
         } else if (r.connected) {
@@ -100,7 +106,7 @@ export default function Shell(): JSX.Element {
       .catch((err) => {
         console.error("[Copilot] warmup failed:", err);
         const msg = err instanceof Error ? err.message : String(err);
-        setCopilotBridgeHint(`Copilot warmup failed: ${msg}`);
+        setCopilotBridgeHint(`Copilot: ${msg}`);
       });
   });
 
@@ -283,6 +289,13 @@ export default function Shell(): JSX.Element {
       });
       setActiveSessionId(sessionId);
       setSessionIds((prev) => [...prev, sessionId]);
+      setSessionMeta((m) => ({
+        ...m,
+        [sessionId]: {
+          createdAt: Date.now(),
+          preview: truncatePromptPreview(text, 52),
+        },
+      }));
       setSessionRunning(true);
       setCopilotBridgeHint(null);
     } catch (err) {
@@ -334,16 +347,18 @@ export default function Shell(): JSX.Element {
         }}
       />
 
-      <Sidebar sessionIds={sessionIds()} activeSessionId={activeSessionId()} onSelect={selectSession} />
+      <Sidebar sessions={sessionEntries()} activeSessionId={activeSessionId()} onSelect={selectSession} />
 
       <main class="ra-shell-main">
         <Show when={sessionError()}>
           <div
             role="alert"
             data-ra-session-error
-            class="shrink-0 px-6 py-2.5 text-xs border-b border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] text-[var(--ra-red)] whitespace-pre-wrap break-words"
+            class="shrink-0 px-6 py-2.5 text-xs border-b border-[var(--ra-border)] bg-[var(--ra-surface-elevated)]"
           >
-            {sessionError()}
+            <p class="font-semibold text-[var(--ra-text-primary)]">Couldn&apos;t complete that request</p>
+            <p class="mt-0.5 text-[var(--ra-red)] whitespace-pre-wrap break-words">{sessionError()}</p>
+            <p class="mt-1.5 text-[var(--ra-text-secondary)]">Try editing your prompt or switching sessions.</p>
           </div>
         </Show>
         <MessageFeed

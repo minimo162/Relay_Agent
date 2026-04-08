@@ -1,4 +1,14 @@
-import { For, Show, createEffect, createMemo, on, type JSX } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createSignal,
+  on,
+  onCleanup,
+  onMount,
+  type JSX,
+} from "solid-js";
 import { friendlyToolActivityLabel, type UiChunk } from "../lib/ipc";
 import { EmptyState } from "./primitives";
 import { MessageBubble } from "./MessageBubble";
@@ -6,12 +16,16 @@ import { ToolCallRow } from "./ToolCallRow";
 import type { SessionState } from "./shell-types";
 import { ui } from "../lib/ui-tokens";
 
+/** Pixels from bottom to treat as "following" the stream (sticky scroll). */
+const NEAR_BOTTOM_PX = 80;
+
 export function MessageFeed(props: {
   chunks: UiChunk[];
   sessionState: SessionState;
   showToolActivityInline: boolean;
 }): JSX.Element {
   let container!: HTMLDivElement;
+  const [stickToBottom, setStickToBottom] = createSignal(true);
 
   const chatChunks = createMemo(() =>
     props.chunks.filter((c) => c.kind === "user" || c.kind === "assistant"),
@@ -32,18 +46,48 @@ export function MessageFeed(props: {
   const statusLine = createMemo(() => {
     if (props.sessionState !== "running") return null;
     const name = runningToolName();
-    return name ? friendlyToolActivityLabel(name) : "Working on your request…";
+    return name ? friendlyToolActivityLabel(name) : "Working…";
+  });
+
+  /** Fingerprint of visible feed content so streaming text deltas retrigger effects. */
+  const feedScrollSignature = createMemo(() => {
+    const parts: string[] = [String(props.chunks.length), props.sessionState, statusLine() ?? ""];
+    for (const c of props.chunks) {
+      if (c.kind === "user" || c.kind === "assistant") {
+        parts.push(`${c.kind}:${c.text.length}`);
+      } else {
+        parts.push(`tool:${c.toolUseId}:${c.status}:${String(c.result ?? "").length}`);
+      }
+    }
+    return parts.join("\u001f");
+  });
+
+  function distanceFromBottom(el: HTMLElement) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight;
+  }
+
+  function scrollToBottomIfStuck() {
+    if (!stickToBottom()) return;
+    const el = container;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+    });
+  }
+
+  onMount(() => {
+    const el = container;
+    const onScroll = () => {
+      setStickToBottom(distanceFromBottom(el) <= NEAR_BOTTOM_PX);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    onCleanup(() => el.removeEventListener("scroll", onScroll));
   });
 
   createEffect(
-    on(
-      () => props.chunks.length,
-      () => {
-        requestAnimationFrame(() => {
-          container.scrollTop = container.scrollHeight;
-        });
-      },
-    ),
+    on(feedScrollSignature, () => {
+      scrollToBottomIfStuck();
+    }),
   );
 
   const empty = createMemo(() => feedChunks().length === 0);
@@ -53,8 +97,8 @@ export function MessageFeed(props: {
       <Show when={empty() && props.chunks.length === 0}>
         <EmptyState
           eyebrow="Workspace"
-          title="Relay Agent is ready"
-          subtitle="Describe your task in the composer below to get started."
+          title="Ready when you are"
+          subtitle="Describe your task in the box below."
         />
       </Show>
       <For each={feedChunks()}>
@@ -81,8 +125,9 @@ export function MessageFeed(props: {
           <summary
             class={`text-xs ${ui.mutedText} cursor-pointer select-none`}
             data-ra-activity-summary
+            title="Tool names and output; expand to inspect"
           >
-            Technical activity ({toolChunks().length})
+            Tool runs ({toolChunks().length})
           </summary>
           <div class="mt-2 border-t border-[var(--ra-border)] pt-2">
             <For each={toolChunks()}>

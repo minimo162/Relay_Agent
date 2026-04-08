@@ -1,10 +1,38 @@
-import { Show, createSignal, type JSX } from "solid-js";
-import { Button, Textarea } from "./ui";
+import { Show, createEffect, createSignal, onMount, type JSX } from "solid-js";
+import { Textarea } from "./ui";
 import {
   detectSlashMode,
   findSlashCommands,
   type SlashCommand,
 } from "../lib/slash-commands";
+
+/** Matches `.ra-composer-shell textarea` max-height in index.css */
+const COMPOSER_TEXTAREA_MAX_PX = 200;
+
+function adjustComposerTextareaHeight(el: HTMLTextAreaElement) {
+  el.style.height = "auto";
+  const next = Math.min(el.scrollHeight, COMPOSER_TEXTAREA_MAX_PX);
+  el.style.height = `${next}px`;
+}
+
+function SendArrowIcon() {
+  return (
+    <svg
+      class="ra-composer-send__icon"
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 19V5M5 12l7-7 7 7" />
+    </svg>
+  );
+}
 
 function SlashAutocomplete(props: {
   commands: SlashCommand[];
@@ -14,7 +42,7 @@ function SlashAutocomplete(props: {
 }) {
   return (
     <div
-      class="absolute left-0 bottom-full mb-1 min-w-full w-64 rounded-xl py-1 overflow-hidden z-50 border border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] shadow-[var(--ra-shadow-md)]"
+      class="absolute left-0 bottom-full mb-1 min-w-full w-64 rounded-xl py-1 overflow-hidden z-50 border border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] shadow-[var(--ra-shadow-sm)]"
       role="listbox"
       aria-label="Slash commands"
     >
@@ -62,6 +90,19 @@ export function Composer(props: {
 
   let textareaRef!: HTMLTextAreaElement;
 
+  createEffect(() => {
+    text();
+    queueMicrotask(() => {
+      if (textareaRef) adjustComposerTextareaHeight(textareaRef);
+    });
+  });
+
+  onMount(() => {
+    queueMicrotask(() => {
+      if (textareaRef) adjustComposerTextareaHeight(textareaRef);
+    });
+  });
+
   const closeSlashDropdown = () => setSlashMode(null);
 
   const selectCommand = (cmd: SlashCommand) => {
@@ -77,6 +118,9 @@ export function Composer(props: {
     if (value.startsWith("/") && props.onSlashCommand) {
       const response = await props.onSlashCommand(value);
       setText("");
+      queueMicrotask(() => {
+        if (textareaRef) adjustComposerTextareaHeight(textareaRef);
+      });
       if (response && props.onAppendAssistant) {
         props.onAppendAssistant(response);
       }
@@ -86,11 +130,15 @@ export function Composer(props: {
 
     props.onSend(value);
     setText("");
+    queueMicrotask(() => {
+      if (textareaRef) adjustComposerTextareaHeight(textareaRef);
+    });
   };
 
   const onInput = (e: InputEvent & { currentTarget: HTMLTextAreaElement }) => {
     const newVal = e.currentTarget.value;
     setText(newVal);
+    adjustComposerTextareaHeight(e.currentTarget);
 
     const detection = detectSlashMode(newVal, newVal.length);
     if (detection) {
@@ -149,41 +197,61 @@ export function Composer(props: {
     }
   };
 
+  const canSend = () => text().trim().length > 0 && !props.running;
+
   return (
     <div class="ra-composer relative shrink-0">
-      <div class="relative">
-        <Textarea
-          ref={textareaRef}
-          rows={1}
-          placeholder="What would you like to do? (type / for commands)"
-          value={text()}
-          onInput={onInput}
-          onKeyDown={onKey}
-          disabled={props.disabled}
-          class="resize-none w-full !min-h-[44px] !py-2.5"
-        />
-        <Show when={slashMode()}>
-          {(m) => (
-            <SlashAutocomplete
-              commands={m().commands}
-              selectedIndex={m().selectedIndex}
-              onSelect={selectCommand}
-              onSelectIndex={(index) => setSlashMode({ ...m(), selectedIndex: index })}
+      <div class="ra-composer-inner">
+        <div class="ra-composer-shell relative">
+          <div class="ra-composer-input-wrap">
+            <Textarea
+              ref={textareaRef}
+              rows={1}
+              placeholder="What would you like to do? (type / for commands)"
+              value={text()}
+              onInput={onInput}
+              onKeyDown={onKey}
+              disabled={props.disabled}
+              class="ra-composer-input resize-none w-full"
             />
-          )}
-        </Show>
-      </div>
-      <div class="flex justify-end mt-2 gap-2">
-        <Show when={props.running}>
-          <Button variant="secondary" onClick={props.onCancel} class="px-4 py-1.5 text-xs">
-            Cancel
-          </Button>
-        </Show>
-        <Show when={text().trim().length > 0 && !props.running}>
-          <Button variant="primary" disabled={props.disabled} onClick={() => void send()} class="px-4 py-1.5 text-xs">
-            Send
-          </Button>
-        </Show>
+            <Show when={slashMode()}>
+              {(m) => (
+                <SlashAutocomplete
+                  commands={m().commands}
+                  selectedIndex={m().selectedIndex}
+                  onSelect={selectCommand}
+                  onSelectIndex={(index) => setSlashMode({ ...m(), selectedIndex: index })}
+                />
+              )}
+            </Show>
+          </div>
+          <div class="ra-composer-toolbar">
+            <p class="ra-composer-hint">Enter to send · Shift+Enter for new line</p>
+            <div class="ra-composer-toolbar-actions">
+              <Show when={props.running}>
+                <button
+                  type="button"
+                  class="ra-composer-cancel"
+                  onClick={props.onCancel}
+                >
+                  Cancel
+                </button>
+              </Show>
+              <Show when={canSend()}>
+                <button
+                  type="button"
+                  class="ra-composer-send"
+                  disabled={props.disabled}
+                  aria-label="Send"
+                  onClick={() => void send()}
+                >
+                  <SendArrowIcon />
+                  <span>Send</span>
+                </button>
+              </Show>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

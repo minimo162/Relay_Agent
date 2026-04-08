@@ -40,10 +40,14 @@
   --ra-radius-lg: 1rem;
   --ra-radius-xl: 1.5rem;
 
-  /* Shadows */
-  --ra-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
-  --ra-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.3);
-  --ra-shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.4);
+  /* Shadows — flat-first; reserve stronger tiers for overlays / popovers */
+  --ra-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.14);
+  --ra-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.22);
+  --ra-shadow-lg: 0 12px 36px rgba(0, 0, 0, 0.35);
+
+  /* Keyboard focus (distinct from soft selection fills) */
+  --ra-focus-ring: 2px solid var(--ra-border-focus);
+  --ra-focus-ring-offset: 2px;
 
   /* Selection / emphasis (OpenWork-style soft row, dark) */
   --ra-surface-selected: #242424;
@@ -86,9 +90,9 @@
   --ra-hover: #f3f4f6;
   --ra-active: #e5e7eb;
 
-  --ra-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
-  --ra-shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
-  --ra-shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.1);
+  --ra-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --ra-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.07);
+  --ra-shadow-lg: 0 12px 36px rgba(0, 0, 0, 0.1);
 
   --ra-surface-selected: #e2e8f0;
   --ra-border-strong: #d1d5db;
@@ -222,7 +226,7 @@ body {
   border: 1px solid var(--ra-border);
   background: var(--ra-surface-elevated);
   border-radius: var(--ra-radius);
-  box-shadow: var(--ra-shadow-sm);
+  box-shadow: none;
 }
 
 .ra-button {
@@ -236,13 +240,13 @@ body {
   font-size: 0.8125rem;
   font-weight: 500;
   cursor: pointer;
-  transition: background-color 150ms ease, transform 150ms ease, opacity 150ms ease;
+  transition: background-color 150ms ease, opacity 150ms ease;
 }
 
 .ra-button-primary {
   background: var(--ra-accent);
   color: #ffffff;
-  box-shadow: 0 4px 16px -8px rgba(var(--ra-accent-rgb), 0.5);
+  box-shadow: none;
 }
 
 .ra-button-primary:hover:not(:disabled) {
@@ -280,7 +284,7 @@ body {
 }
 
 .ra-button:active:not(:disabled) {
-  transform: scale(0.97);
+  opacity: 0.92;
 }
 
 .ra-input {
@@ -331,33 +335,139 @@ body {
   50% { opacity: 1; transform: scale(1.2); }
 }
 
-/* Composer (task input area) */
+/* Composer (task input area) — flat surface */
 .ra-composer {
   border-top: 1px solid var(--ra-border);
-  padding: 0.75rem 1rem;
+  padding: 0.75rem 1rem 0.85rem;
   background: var(--ra-surface-elevated);
 }
 
-.ra-composer textarea {
+.ra-composer-inner {
   width: 100%;
+  max-width: 48rem;
+  margin-inline: auto;
+}
+
+.ra-composer-shell {
   border: 1px solid var(--ra-border);
-  border-radius: var(--ra-radius-lg);
+  border-radius: 1.5rem;
   background: var(--ra-surface);
-  color: var(--ra-text-primary);
-  padding: 0.75rem 1rem;
-  font-size: 0.875rem;
-  line-height: 1.5;
-  resize: none;
-  font-family: inherit;
-  min-height: 48px;
-  max-height: 200px;
+  padding: 0.65rem 0.85rem 0.55rem;
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
-.ra-composer textarea:focus {
+.ra-composer-shell:focus-within {
+  border-color: var(--ra-border-strong);
+  box-shadow: none;
+}
+
+.ra-composer-input-wrap {
+  position: relative;
+}
+
+.ra-composer-shell textarea.ra-composer-input {
+  width: 100%;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ra-text-primary);
+  padding: 0.2rem 0.1rem 0.45rem;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  resize: none;
+  font-family: inherit;
+  min-height: 4.5rem;
+  max-height: 200px;
+  box-shadow: none;
+  transition: none;
+}
+
+.ra-composer-shell textarea.ra-composer-input:focus {
   outline: none;
-  border-color: var(--ra-border-focus);
-  box-shadow: 0 0 0 2px rgba(var(--ra-accent-rgb), 0.15);
+  border: none;
+  box-shadow: none;
+}
+
+.ra-composer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+  padding-top: 0.4rem;
+  margin-top: 0.1rem;
+  border-top: 1px solid var(--ra-border);
+}
+
+.ra-composer-hint {
+  margin: 0;
+  font-size: 0.6875rem;
+  color: var(--ra-text-muted);
+  line-height: 1.35;
+  flex: 1;
+  min-width: 9rem;
+}
+
+.ra-composer-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.ra-composer-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 2.25rem;
+  padding: 0 1rem;
+  border: none;
+  border-radius: 9999px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  background: var(--ra-accent);
+  color: #fff;
+  box-shadow: none;
+  transition: background-color 150ms ease, opacity 150ms ease;
+}
+
+.ra-composer-send:hover:not(:disabled) {
+  background: var(--ra-accent-hover);
+}
+
+.ra-composer-send:active:not(:disabled) {
+  opacity: 0.92;
+}
+
+.ra-composer-send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ra-composer-send__icon {
+  flex-shrink: 0;
+}
+
+.ra-composer-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.25rem;
+  padding: 0 1rem;
+  border: 1px solid var(--ra-border);
+  border-radius: 9999px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  background: var(--ra-surface-elevated);
+  color: var(--ra-text-primary);
+  transition: background-color 150ms ease;
+}
+
+.ra-composer-cancel:hover {
+  background: var(--ra-hover);
 }
 
 /* Standalone textarea (same as composer field) */
@@ -425,6 +535,16 @@ body {
   cursor: not-allowed;
 }
 
+.ra-icon-button:focus-visible {
+  outline: var(--ra-focus-ring);
+  outline-offset: var(--ra-focus-ring-offset);
+}
+
+.ra-button:focus-visible {
+  outline: var(--ra-focus-ring);
+  outline-offset: var(--ra-focus-ring-offset);
+}
+
 /* Sidebar shell — rounded inset panel */
 .ra-sidebar-shell {
   flex: 1;
@@ -456,9 +576,10 @@ body {
   text-align: left;
   border: none;
   border-radius: 0.75rem;
-  padding: 0.5rem 0.75rem;
+  padding: 0.55rem 0.75rem;
   margin-bottom: 0.125rem;
   font-size: 0.75rem;
+  line-height: 1.25;
   cursor: pointer;
   background: transparent;
   color: var(--ra-text-secondary);
@@ -477,8 +598,8 @@ body {
 }
 
 .ra-session-row:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(var(--ra-accent-rgb), 0.35);
+  outline: var(--ra-focus-ring);
+  outline-offset: var(--ra-focus-ring-offset);
 }
 
 /* Segmented tab track (context panel) */
@@ -528,8 +649,23 @@ body {
 }
 
 .ra-tab-track__btn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(var(--ra-accent-rgb), 0.35);
+  outline: var(--ra-focus-ring);
+  outline-offset: var(--ra-focus-ring-offset);
+  z-index: 1;
+}
+
+/* Compact segmented control for shell header (matches context TabTrack) */
+.ra-tab-track--header {
+  margin: 0;
+  flex-shrink: 0;
+  padding: 0.2rem;
+  gap: 0.2rem;
+}
+
+.ra-tab-track--header .ra-tab-track__btn {
+  padding: 0.28rem 0.65rem;
+  font-size: 0.6875rem;
+  white-space: nowrap;
 }
 
 /* List row (files, servers, policy) */
@@ -552,14 +688,14 @@ body {
   align-items: center;
 }
 
-/* File list icon tile */
+/* File list icon tile — soft fill, no heavy outline */
 .ra-file-icon {
   width: 1.25rem;
   height: 1.55rem;
   margin-top: 0.125rem;
   border-radius: 0.25rem;
-  border: 1px solid var(--ra-border);
-  background: var(--ra-hover);
+  border: none;
+  background: var(--ra-active);
   flex-shrink: 0;
 }
 
@@ -618,7 +754,7 @@ body {
   border: 1px solid var(--ra-border);
   border-radius: 1rem;
   background: var(--ra-surface-elevated);
-  box-shadow: var(--ra-shadow-lg);
+  box-shadow: var(--ra-shadow-md);
   padding: 1.1rem 1.25rem;
 }
 
@@ -631,31 +767,6 @@ body {
   margin-bottom: 0.35rem;
 }
 
-/* Header switch */
-.ra-header-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.25rem 0.5rem;
-  border-radius: 9999px;
-  cursor: pointer;
-  user-select: none;
-  color: var(--ra-text-muted);
-  font-size: 0.75rem;
-  transition: background-color 150ms ease;
-}
-
-.ra-header-switch:hover {
-  background: var(--ra-hover);
-  color: var(--ra-text-secondary);
-}
-
-.ra-header-switch input {
-  width: 1rem;
-  height: 1rem;
-  accent-color: var(--ra-accent);
-  cursor: pointer;
-}
 
 /* ============================================================
  * Scrollbar

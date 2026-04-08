@@ -1,18 +1,27 @@
 import { For, Show, createMemo, createSignal, type JSX } from "solid-js";
+import type { SessionMeta } from "../lib/session-display";
+import { formatSessionSubtitle, sessionPrimaryLine } from "../lib/session-display";
 import { Input } from "./ui";
 import { ui } from "../lib/ui-tokens";
 
+export type SessionListEntry = { id: string; meta?: SessionMeta };
+
 export function Sidebar(props: {
-  sessionIds: string[];
+  sessions: SessionListEntry[];
   activeSessionId: string | null;
   onSelect: (id: string) => void;
 }): JSX.Element {
   const [search, setSearch] = createSignal("");
 
   const filtered = createMemo(() => {
-    const q = search().toLowerCase();
-    if (!q) return props.sessionIds;
-    return props.sessionIds.filter((id) => id.toLowerCase().includes(q));
+    const q = search().toLowerCase().trim();
+    const list = props.sessions;
+    if (!q) return list;
+    return list.filter(({ id, meta }) => {
+      if (id.toLowerCase().includes(q)) return true;
+      if (sessionPrimaryLine(meta).toLowerCase().includes(q)) return true;
+      return formatSessionSubtitle(id, meta).toLowerCase().includes(q);
+    });
   });
 
   return (
@@ -33,20 +42,27 @@ export function Sidebar(props: {
             <div class={`text-xs ${ui.mutedText} text-center py-8`}>No matching sessions</div>
           </Show>
           <For each={filtered()}>
-            {(id) => (
-              <button
-                type="button"
-                classList={{
-                  "ra-session-row": true,
-                  "ra-session-row--selected": props.activeSessionId === id,
-                }}
-                aria-current={props.activeSessionId === id ? "true" : undefined}
-                aria-label={id}
-                onClick={() => props.onSelect(id)}
-              >
-                {id.slice(0, 8)}…
-              </button>
-            )}
+            {(entry) => {
+              const id = entry.id;
+              const primaryLabel = sessionPrimaryLine(entry.meta);
+              const subLabel = formatSessionSubtitle(id, entry.meta);
+              return (
+                <button
+                  type="button"
+                  classList={{
+                    "ra-session-row": true,
+                    "ra-session-row--selected": props.activeSessionId === id,
+                  }}
+                  aria-current={props.activeSessionId === id ? "true" : undefined}
+                  aria-label={`${id}. ${primaryLabel}`}
+                  title={id}
+                  onClick={() => props.onSelect(id)}
+                >
+                  <span class="block font-medium truncate">{primaryLabel}</span>
+                  <span class={`block text-[10px] mt-0.5 truncate ${ui.mutedText}`}>{subLabel}</span>
+                </button>
+              );
+            }}
           </For>
         </div>
       </div>
