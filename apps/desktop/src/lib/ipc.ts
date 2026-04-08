@@ -32,10 +32,28 @@ export interface StartAgentRequest {
   maxTurns?: number | null;
 }
 
+/**
+ * Tool approvals (OpenWork-style): `approved` unblocks one execution; `rememberForSession`
+ * adds the tool name to a session allow-list so the host skips further prompts for that tool
+ * until the session ends. Static Policy rows in the context panel describe defaults only;
+ * this request drives interactive prompts from the agent loop.
+ */
 export interface RespondAgentApprovalRequest {
   sessionId: string;
   approvalId: string;
   approved: boolean;
+  /** When true with approved, auto-allow this tool for the rest of the session (Rust `SessionEntry.auto_allowed_tools`). */
+  rememberForSession?: boolean;
+}
+
+/** `get_relay_diagnostics` payload (camelCase from Rust). */
+export interface RelayDiagnostics {
+  appVersion: string;
+  targetOs: string;
+  copilotNodeBridgePort: number;
+  defaultEdgeCdpPort: number;
+  relayAgentDevMode: boolean;
+  architectureNotes: string;
 }
 
 export interface CancelAgentRequest {
@@ -128,6 +146,10 @@ export async function startAgent(request: StartAgentRequest): Promise<string> {
 
 export async function respondApproval(request: RespondAgentApprovalRequest): Promise<void> {
   return invoke<void>("respond_approval", { request });
+}
+
+export async function getRelayDiagnostics(): Promise<RelayDiagnostics> {
+  return invoke<RelayDiagnostics>("get_relay_diagnostics");
 }
 
 export async function cancelAgent(request: CancelAgentRequest): Promise<void> {

@@ -34,6 +34,7 @@ test("app shell renders 3-pane layout", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Sessions" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Files" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Servers" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Plan" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Policy" })).toBeVisible();
   await expect(page.locator("text=Relay Agent v0.1.0")).toBeVisible();
 });
@@ -149,7 +150,7 @@ test("approval_needed event handled", async ({ page }) => {
     target: "/tmp/output.csv",
     input: { path: "/tmp/output.csv", content: "data" },
   });
-  await expect(page.getByRole("button", { name: "Allow", exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Allow once" }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "Don't allow", exact: true }).first()).toBeVisible();
 });
 

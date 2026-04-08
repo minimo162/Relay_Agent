@@ -1,5 +1,17 @@
 use serde::{Deserialize, Serialize};
 
+/// Debug / support bundle fields (OpenWork-style Settings → Debug export).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayDiagnostics {
+    pub app_version: String,
+    pub target_os: String,
+    pub copilot_node_bridge_port: u16,
+    pub default_edge_cdp_port: u16,
+    pub relay_agent_dev_mode: bool,
+    pub architecture_notes: String,
+}
+
 /// Settings for M365 Copilot browser automation via Chrome `DevTools` Protocol.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +44,9 @@ pub struct RespondAgentApprovalRequest {
     pub session_id: String,
     pub approval_id: String,
     pub approved: bool,
+    /// When `true` with `approved`, add this tool name to the session allow-list (no further prompts for that tool this session).
+    #[serde(default)]
+    pub remember_for_session: Option<bool>,
 }
 
 /// Request to cancel a running agent session.

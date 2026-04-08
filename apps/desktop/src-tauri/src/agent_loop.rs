@@ -829,6 +829,31 @@ impl PermissionPrompter for TauriApprovalPrompter {
             };
         }
 
+        // User chose "allow for this session" for this tool earlier in the same session.
+        let session_allows_tool = match self.registry.data.lock() {
+            Ok(data) => data
+                .get(&self.session_id)
+                .and_then(|entry| {
+                    entry
+                        .auto_allowed_tools
+                        .lock()
+                        .ok()
+                        .map(|set| set.contains(&request.tool_name))
+                })
+                .unwrap_or(false),
+            Err(e) => {
+                tracing::error!(
+                    "[RelayAgent] registry lock poisoned during auto-allow check: {e}"
+                );
+                return PermissionPromptDecision::Deny {
+                    reason: "registry lock poisoned".into(),
+                };
+            }
+        };
+        if session_allows_tool {
+            return PermissionPromptDecision::Allow;
+        }
+
         let approval_id = Uuid::new_v4().to_string();
 
         let description = human_approval_summary(&request.tool_name, &request.input);
@@ -870,7 +895,13 @@ impl PermissionPrompter for TauriApprovalPrompter {
                     tracing::error!("[RelayAgent] approvals lock poisoned: {e}");
                     e.into_inner()
                 });
-                approvals.insert(approval_id.clone(), tx);
+                approvals.insert(
+                    approval_id.clone(),
+                    crate::registry::PendingApproval {
+                        tx,
+                        tool_name: request.tool_name.clone(),
+                    },
+                );
             }
             drop(data);
         }

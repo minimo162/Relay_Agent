@@ -1,10 +1,15 @@
-import { Show, createEffect, createSignal, onMount, type JSX } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onMount, type JSX } from "solid-js";
 import { Textarea } from "./ui";
 import {
   detectSlashMode,
   findSlashCommands,
   type SlashCommand,
 } from "../lib/slash-commands";
+import {
+  addPromptTemplate,
+  listPromptTemplates,
+  removePromptTemplate,
+} from "../lib/prompt-templates-store";
 
 /** Matches `.ra-composer-shell textarea` max-height in index.css */
 const COMPOSER_TEXTAREA_MAX_PX = 200;
@@ -82,6 +87,12 @@ export function Composer(props: {
   onAppendAssistant?: (text: string) => void;
 }): JSX.Element {
   const [text, setText] = createSignal("");
+  const [templatesOpen, setTemplatesOpen] = createSignal(false);
+  const [templateRev, setTemplateRev] = createSignal(0);
+  const savedTemplates = createMemo(() => {
+    void templateRev();
+    return listPromptTemplates();
+  });
   const [slashMode, setSlashMode] = createSignal<{
     query: string;
     commands: SlashCommand[];
@@ -226,7 +237,83 @@ export function Composer(props: {
             </Show>
           </div>
           <div class="ra-composer-toolbar">
-            <p class="ra-composer-hint">Enter to send · Shift+Enter for new line</p>
+            <div class="flex items-center gap-2 min-w-0 flex-wrap">
+              <p class="ra-composer-hint shrink-0">Enter to send · Shift+Enter for new line</p>
+              <div class="relative shrink-0">
+                <button
+                  type="button"
+                  class="text-[11px] px-2 py-0.5 rounded-md border border-[var(--ra-border)] text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
+                  aria-expanded={templatesOpen()}
+                  aria-haspopup="listbox"
+                  data-ra-templates-trigger
+                  onClick={() => setTemplatesOpen((o) => !o)}
+                >
+                  Templates
+                </button>
+                <Show when={templatesOpen()}>
+                  <div
+                    class="absolute left-0 bottom-full mb-1 z-50 min-w-[220px] max-w-[min(100vw-2rem,320px)] rounded-xl border border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] shadow-[var(--ra-shadow-sm)] py-1 max-h-56 overflow-y-auto"
+                    role="listbox"
+                    aria-label="Prompt templates"
+                  >
+                    <Show
+                      when={savedTemplates().length > 0}
+                      fallback={
+                        <div class="px-3 py-2 text-[11px] text-[var(--ra-text-muted)]">
+                          No saved templates yet.
+                        </div>
+                      }
+                    >
+                      <For each={savedTemplates()}>
+                        {(t) => (
+                          <div class="flex items-start gap-1 px-2 py-1 hover:bg-[var(--ra-hover)]">
+                            <button
+                              type="button"
+                              role="option"
+                              class="flex-1 text-left text-xs text-[var(--ra-text-primary)] truncate"
+                              onClick={() => {
+                                setText(t.body);
+                                setTemplatesOpen(false);
+                                queueMicrotask(() => textareaRef?.focus());
+                              }}
+                            >
+                              {t.title}
+                            </button>
+                            <button
+                              type="button"
+                              class="text-[10px] text-[var(--ra-text-muted)] px-1"
+                              title="Remove template"
+                              onClick={() => {
+                                removePromptTemplate(t.id);
+                                setTemplateRev((n) => n + 1);
+                              }}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        )}
+                      </For>
+                    </Show>
+                    <div class="border-t border-[var(--ra-border)] mt-1 pt-1 px-2 pb-1">
+                      <button
+                        type="button"
+                        class="text-[11px] w-full text-left text-[var(--ra-accent)] disabled:opacity-40"
+                        disabled={!text().trim()}
+                        onClick={() => {
+                          const title = window.prompt("Name this template");
+                          if (!title?.trim() || !text().trim()) return;
+                          addPromptTemplate(title.trim(), text());
+                          setTemplateRev((n) => n + 1);
+                          setTemplatesOpen(false);
+                        }}
+                      >
+                        Save current as template…
+                      </button>
+                    </div>
+                  </div>
+                </Show>
+              </div>
+            </div>
             <div class="ra-composer-toolbar-actions">
               <Show when={props.running}>
                 <button

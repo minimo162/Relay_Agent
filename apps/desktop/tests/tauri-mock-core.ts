@@ -2,6 +2,10 @@
  * E2E mock for @tauri-apps/api/core
  */
 
+export function isTauri(): boolean {
+  return false;
+}
+
 const state = (window as any).__RELAY_MOCK__ ??= {
   sessionCounter: 0,
   sessions: new Map(),
@@ -52,6 +56,15 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
     }
     case "warmup_copilot_bridge":
       return { connected: true, loginRequired: false, url: null, error: null };
+    case "get_relay_diagnostics":
+      return {
+        appVersion: "0.0.0-mock",
+        targetOs: "linux",
+        copilotNodeBridgePort: 18080,
+        defaultEdgeCdpPort: 9360,
+        relayAgentDevMode: false,
+        architectureNotes: "mock",
+      };
     default:
       throw new Error(`[E2E mock] Unknown command: ${cmd}`);
   }

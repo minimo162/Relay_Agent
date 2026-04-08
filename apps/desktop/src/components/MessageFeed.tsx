@@ -10,6 +10,7 @@ import {
   type JSX,
 } from "solid-js";
 import { friendlyToolActivityLabel, type UiChunk } from "../lib/ipc";
+import { ellipsisPath, workspaceBasename } from "../lib/workspace-display";
 import { EmptyState } from "./primitives";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCallRow } from "./ToolCallRow";
@@ -23,6 +24,8 @@ export function MessageFeed(props: {
   chunks: UiChunk[];
   sessionState: SessionState;
   showToolActivityInline: boolean;
+  /** Saved workspace cwd (empty = unset). */
+  workspacePath: () => string;
 }): JSX.Element {
   let container!: HTMLDivElement;
   const [stickToBottom, setStickToBottom] = createSignal(true);
@@ -92,13 +95,26 @@ export function MessageFeed(props: {
 
   const empty = createMemo(() => feedChunks().length === 0);
 
+  const emptyEyebrow = createMemo(() => {
+    const p = props.workspacePath().trim();
+    return p ? workspaceBasename(p) : "Workspace";
+  });
+
+  const emptySubtitle = createMemo(() => {
+    const p = props.workspacePath().trim();
+    if (p) {
+      return `${ellipsisPath(p, 72)} — describe your task in the box below.`;
+    }
+    return "Open Settings to set a workspace folder (cwd) so file tools use the right project root. Then describe your task below.";
+  });
+
   return (
     <div ref={container!} class="flex-1 min-h-0 overflow-y-auto px-6 py-4">
       <Show when={empty() && props.chunks.length === 0}>
         <EmptyState
-          eyebrow="Workspace"
+          eyebrow={emptyEyebrow()}
           title="Ready when you are"
-          subtitle="Describe your task in the box below."
+          subtitle={emptySubtitle()}
         />
       </Show>
       <For each={feedChunks()}>

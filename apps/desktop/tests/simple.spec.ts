@@ -22,6 +22,7 @@ test('page loads HTML', async ({ page }) => {
         if (cmd === 'cancel_agent') { const s = mock.sessions.get(req.sessionId); if (s) s.running = false; return undefined; }
         if (cmd === 'get_session_history') { const s = mock.sessions.get(req.sessionId); return { sessionId: req.sessionId, running: s?.running ?? false, messages: [] }; }
         if (cmd === 'warmup_copilot_bridge') return { connected: true, loginRequired: false, url: null, error: null };
+        if (cmd === 'get_relay_diagnostics') return { appVersion: '0', targetOs: 'linux', copilotNodeBridgePort: 18080, defaultEdgeCdpPort: 9360, relayAgentDevMode: false, architectureNotes: 'mock' };
         throw new Error(`Unknown: ${cmd}`);
       }
     };

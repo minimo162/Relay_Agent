@@ -47,6 +47,7 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             liteparse_env::apply(app);
@@ -73,6 +74,7 @@ pub fn run() {
             tauri_bridge::cdp_screenshot,
             tauri_bridge::disconnect_cdp,
             tauri_bridge::warmup_copilot_bridge,
+            tauri_bridge::get_relay_diagnostics,
             tauri_bridge::mcp_list_servers,
             tauri_bridge::mcp_add_server,
             tauri_bridge::mcp_remove_server,

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::cdp_copilot;
 use crate::models::{
     CancelAgentRequest, GetAgentSessionHistoryRequest, McpAddServerRequest, McpServerInfo,
-    RespondAgentApprovalRequest, StartAgentRequest,
+    RelayDiagnostics, RespondAgentApprovalRequest, StartAgentRequest,
 };
 use crate::registry::SessionRegistry;
 
@@ -182,6 +182,7 @@ pub async fn start_agent(
         running: true,
         cancelled: Arc::new(AtomicBool::new(false)),
         approvals: Mutex::new(HashMap::new()),
+        auto_allowed_tools: Mutex::new(HashSet::new()),
         finished_at: None,
     };
     let cancelled = Arc::clone(&entry.cancelled);
@@ -274,24 +275,34 @@ pub async fn respond_approval(
     registry: State<'_, SessionRegistry>,
     request: RespondAgentApprovalRequest,
 ) -> Result<(), String> {
-    let data = registry
+    let mut data = registry
         .data
         .lock()
         .map_err(|e| format!("registry lock poisoned: {e}"))?;
     let entry = data
-        .get(&request.session_id)
+        .get_mut(&request.session_id)
         .ok_or_else(|| format!("session `{}` not found", request.session_id))?;
 
-    let tx = entry
+    let pending = entry
         .approvals
         .lock()
         .map_err(|e| format!("approvals lock poisoned: {e}"))?
         .remove(&request.approval_id)
         .ok_or_else(|| format!("approval `{}` not pending", request.approval_id))?;
 
+    if request.approved && request.remember_for_session == Some(true) {
+        let mut auto = entry
+            .auto_allowed_tools
+            .lock()
+            .map_err(|e| format!("auto_allowed_tools lock poisoned: {e}"))?;
+        auto.insert(pending.tool_name.clone());
+    }
+
     drop(data);
 
-    tx.send(request.approved)
+    pending
+        .tx
+        .send(request.approved)
         .map_err(|_| "approval channel closed — session may have ended".into())
 }
 
@@ -944,4 +955,25 @@ pub fn mcp_check_server_status(name: String) -> Result<McpServerInfo, String> {
     data.get(&name)
         .cloned()
         .ok_or_else(|| format!("server `{name}` not found"))
+}
+
+/// JSON-friendly runtime facts for bug reports (mirrors OpenWork debug export, reduced scope).
+#[tauri::command]
+pub fn get_relay_diagnostics() -> Result<RelayDiagnostics, String> {
+    let dev = std::env::var("RELAY_AGENT_DEV_MODE")
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false);
+    Ok(RelayDiagnostics {
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        target_os: std::env::consts::OS.to_string(),
+        copilot_node_bridge_port: COPILOT_HTTP_PORT,
+        default_edge_cdp_port: COPILOT_JS_CDP_PORT,
+        relay_agent_dev_mode: dev,
+        architecture_notes: "Copilot path uses the bundled Node bridge on copilot_node_bridge_port; Edge CDP defaults to default_edge_cdp_port (see scripts/start-relay-edge-cdp.sh).".to_string(),
+    })
 }

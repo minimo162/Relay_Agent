@@ -109,6 +109,15 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
     }
     case "warmup_copilot_bridge":
       return { connected: true, loginRequired: false, url: null, error: null };
+    case "get_relay_diagnostics":
+      return {
+        appVersion: "0.0.0-mock",
+        targetOs: "linux",
+        copilotNodeBridgePort: 18080,
+        defaultEdgeCdpPort: 9360,
+        relayAgentDevMode: false,
+        architectureNotes: "mock",
+      };
     case "mcp_list_servers":
       return s.mcpServers;
     case "mcp_add_server": {

@@ -20,6 +20,7 @@ export default defineConfig({
         ? {
             "@tauri-apps/api/core": path.resolve(__dirname, "tests/tauri-mock-core.ts"),
             "@tauri-apps/api/event": path.resolve(__dirname, "tests/tauri-mock-event.ts"),
+            "@tauri-apps/plugin-dialog": path.resolve(__dirname, "tests/tauri-mock-dialog.ts"),
           }
         : {}),
     },

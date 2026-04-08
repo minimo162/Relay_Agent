@@ -27,7 +27,8 @@ The Relay window stays always on top.
 │  │  - Message feed with text & tool calls    │  │
 │  │  - Real-time streaming (text_delta)       │  │
 │  │  - Approval overlay for tool permissions  │  │
-│  │  - Session sidebar & context panel        │  │
+  │  │  - Session sidebar & context panel        │  │
+  │  │  - Workspace chip, Settings, Plan tab     │  │
 │  │  - Tauri IPC event listeners              │  │
 │  └──────────────┬────────────────────────────┘  │
 │                 │ Tauri invoke/listen           │
@@ -98,16 +99,20 @@ Relay_Agent/
     │   ├── index.tsx             # Entry point
     │   ├── root.tsx              # Main shell (3-pane layout)
     │   ├── index.css             # Global styles
-    │   ├── components/ui.tsx     # Reusable UI components
+    │   ├── components/
+    │   │   ├── ui.tsx            # Reusable UI primitives
+    │   │   ├── SettingsModal.tsx # Workspace, limits, diagnostics, folder browse
+    │   │   └── …                 # Shell, feed, composer, context panel, etc.
     │   ├── lib/
     │   │   ├── ipc.ts            # Tauri IPC bridge + event types
-    │   │   └── tauri-mock-*.ts   # Mocks for browser development
-    │   └── tests/                # E2E tests (Playwright)
+    │   │   ├── settings-storage.ts  # localStorage: cwd, maxTurns, browser hints
+    │   │   ├── workspace-display.ts # Basename / ellipsis for path UI
+    │   │   ├── prompt-templates-store.ts, todo-write-parse.ts, session-display, slash-commands, …
     │
     ├── src-tauri/
     │   ├── src/
-    │   │   ├── lib.rs            # Tauri app entry + setup
-    │   │   ├── tauri_bridge.rs   # IPC commands (8 commands)
+    │   │   ├── lib.rs            # Tauri app entry (shell + dialog plugins, session registry)
+    │   │   ├── tauri_bridge.rs   # IPC commands (agent, CDP, MCP, diagnostics)
     │   │   ├── agent_loop.rs     # Agent execution loop
     │   │   ├── registry.rs       # Session registry (TTL cleanup)
     │   │   ├── cdp_copilot.rs    # M365 Copilot via Edge CDP
@@ -132,7 +137,8 @@ Relay_Agent/
     └── tests/                    # E2E tests (Playwright)
         ├── app.e2e.spec.ts       # Core UI + agent flow tests
         ├── mock-tauri.ts         # Tauri API mock for browser
-        ├── tauri-mock-core.ts    # IPC invoke mock
+        ├── tauri-mock-core.ts    # IPC invoke mock (+ isTauri for E2E build)
+        ├── tauri-mock-dialog.ts  # Stub @tauri-apps/plugin-dialog when RELAY_E2E=1
         └── tauri-mock-event.ts   # Event listen/emit mock
 ```
 
@@ -142,7 +148,7 @@ Relay_Agent/
 
 - **AI Agent Loop** — Send a goal → agent processes autonomously → returns results with tool call details
 - **Real-time Streaming** — `agent:text_delta` events for live text output as the agent generates it
-- **Tool Approval System** — Approve or reject individual tool executions in real-time
+- **Tool Approval System** — **Allow once**, **Allow for session** (skips further prompts for that tool until the session ends), or **Don’t allow**; backed by `SessionEntry.auto_allowed_tools` and `rememberForSession` on `respond_approval`
 - **Session Management** — Multiple concurrent agent sessions (default: 4) with semaphore-based concurrency control
 - **Session History** — Full message history with text and tool call/result blocks
 - **Session Compaction** — Compresses long sessions into resumable system summaries (configurable thresholds)
@@ -181,10 +187,14 @@ Relay_Agent/
   - Tools discovered from registered MCP servers are available in the tool index
   - MCP tool calls share a single `tokio::runtime::Runtime` via `block_on()` for efficient async bridging
   - MCP results are formatted into human-readable text for the assistant
+- **Workspace (cwd)** — Header chip shows the folder **basename** (or “Workspace not set”); status bar shows an **ellipsis path**, **Copy**, or a hint to configure. **Settings** stores workspace path, `maxTurns`, and browser hints in **localStorage**; passes `cwd` to `start_agent`. In the **desktop app**, **Browse…** opens a **native folder dialog** (`tauri-plugin-dialog`); in Vite/Playwright (non-Tauri) the button is hidden.
+- **Settings & diagnostics** — Modal for workspace path, limits, stored browser automation fields, and **Copy diagnostics** (JSON: `get_relay_diagnostics` + local settings).
+- **Composer templates** — Save and reuse prompt snippets (localStorage); **Templates** menu in the composer toolbar.
 - **Context Panel Data Binding** — Fully reactive right panel with live data:
   - **Files** — View, add, and remove context files with size info
   - **MCP Servers** — Server status, tool counts, and management UI
-  - **Policy** — Permission policies (approve/deny/allow) with colored badges
+  - **Plan** — Latest **TodoWrite** task list for the active session (parsed from tool results)
+  - **Policy** — Illustrative permission rows (runtime gating uses Rust + interactive approvals)
 - **3-Pane Desktop Layout** — Sidebar (sessions), Main (chat + composer), Right panel (context tabs)
 - **Auth Token Resolution** — Reads from `.auth_key`, `.agent_auth_key`, or direct token
 - **Config System** — Centralized `AgentConfig` with adjustable parameters
@@ -215,6 +225,7 @@ Relay_Agent/
 | `cancel_agent` | Cancel a running agent session |
 | `get_session_history` | Load full message history for a session |
 | `warmup_copilot_bridge` | On startup: ensure the Node Copilot bridge is running and call `GET /status` (Edge launch, Copilot tab, login detection; long timeout) |
+| `get_relay_diagnostics` | JSON bundle for support: app version, OS, Copilot bridge ports, dev-mode flag, architecture notes |
 | `connect_cdp` | Connect to M365 Copilot via CDP |
 | `cdp_send_prompt` | Send a prompt to M365 Copilot |
 | `cdp_start_new_chat` | Start a new chat in M365 Copilot |

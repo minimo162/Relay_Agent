@@ -1,12 +1,35 @@
-import { type JSX } from "solid-js";
+import { createMemo, type JSX } from "solid-js";
 import { ui } from "../lib/ui-tokens";
 import { Button, StatusDot } from "./ui";
+import { workspaceBasename } from "../lib/workspace-display";
 
 export function ShellHeader(props: {
   sessionRunning: boolean;
   showToolActivityInline: boolean;
   onToolActivityChange: (value: boolean) => void;
+  onOpenSettings: () => void;
+  /** Configured workspace root (trimmed empty = unset). */
+  workspacePath: () => string;
+  /** Opens Settings (same as header Settings); used by workspace chip. */
+  onWorkspaceChipClick: () => void;
 }): JSX.Element {
+  const pathTrimmed = createMemo(() => props.workspacePath().trim());
+  const hasWorkspace = createMemo(() => pathTrimmed().length > 0);
+  const chipLabel = createMemo(() =>
+    hasWorkspace() ? workspaceBasename(pathTrimmed()) : "Workspace not set",
+  );
+  const chipTitle = createMemo(() =>
+    hasWorkspace()
+      ? pathTrimmed()
+      : "No workspace folder set. Click to open the settings panel and choose a folder or enter a path.",
+  );
+
+  const chipAriaLabel = createMemo(() =>
+    hasWorkspace()
+      ? `Workspace folder: ${pathTrimmed()}. Click to change.`
+      : "Workspace folder not set. Click to configure.",
+  );
+
   const onToolKeyDown = (e: KeyboardEvent) => {
     if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
       e.preventDefault();
@@ -20,6 +43,20 @@ export function ShellHeader(props: {
   return (
     <header class="ra-shell-header">
       <span class={`font-semibold text-sm tracking-tight ${ui.textPrimary}`}>Relay Agent</span>
+      <button
+        type="button"
+        class={`ml-2 max-w-[min(40vw,14rem)] shrink min-w-0 rounded-full border px-2.5 py-0.5 text-left text-[11px] transition-colors ${
+          hasWorkspace()
+            ? "border-[var(--ra-border-strong)] bg-[var(--ra-surface-elevated)] text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
+            : "border-dashed border-[var(--ra-border)] text-[var(--ra-text-muted)] hover:border-[var(--ra-text-muted)] hover:text-[var(--ra-text-secondary)]"
+        }`}
+        data-ra-workspace-chip
+        title={chipTitle()}
+        aria-label={chipAriaLabel()}
+        onClick={() => props.onWorkspaceChipClick()}
+      >
+        <span class="block truncate font-medium">{chipLabel()}</span>
+      </button>
       <div class="flex-1" />
       <div
         class="flex items-center gap-2 shrink-0"
@@ -63,7 +100,13 @@ export function ShellHeader(props: {
           With tools
         </button>
       </div>
-      <Button variant="ghost" type="button" disabled class="!px-3 !py-1 !text-xs opacity-60" title="Coming soon">
+      <Button
+        variant="ghost"
+        type="button"
+        class="!px-3 !py-1 !text-xs"
+        title="Workspace, limits, diagnostics"
+        onClick={() => props.onOpenSettings()}
+      >
         Settings
       </Button>
     </header>

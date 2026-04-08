@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -7,6 +7,12 @@ use chrono::Utc;
 use runtime::Session as RuntimeSession;
 
 use crate::error::AgentLoopError;
+
+/// Pending UI approval: unblock channel plus tool name for session-scoped allow rules.
+pub struct PendingApproval {
+    pub tx: std::sync::mpsc::Sender<bool>,
+    pub tool_name: String,
+}
 
 /// Shared state for an active agent session.
 /// The approval channel map lets `respond_approval()` unblock the agent loop.
@@ -17,8 +23,10 @@ pub struct SessionEntry {
     /// Timestamp (UTC epoch seconds) when the session completed or was cancelled.
     /// Used for TTL-based eviction.
     pub finished_at: Option<i64>,
-    /// `approval_id` → oneshot Sender<bool>
-    pub approvals: Mutex<HashMap<String, std::sync::mpsc::Sender<bool>>>,
+    /// `approval_id` → pending approval (channel + tool for policy memory)
+    pub approvals: Mutex<HashMap<String, PendingApproval>>,
+    /// Tool names the user chose "allow for this session" for (OpenWork-style).
+    pub auto_allowed_tools: Mutex<HashSet<String>>,
 }
 
 impl SessionEntry {
@@ -114,7 +122,7 @@ impl SessionRegistry {
             .approvals
             .lock()
             .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
-        Ok(approvals.drain().map(|(_, tx)| tx).collect())
+        Ok(approvals.drain().map(|(_, p)| p.tx).collect())
     }
 
     /// Evict completed/cancelled sessions older than `ttl_seconds`.

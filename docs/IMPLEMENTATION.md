@@ -16,6 +16,22 @@
 
 ## Milestone Log
 
+### 2026-04-08 Workspace display + native folder picker
+
+**Outcome:** Centralized path formatting in **`apps/desktop/src/lib/workspace-display.ts`** (`workspaceBasename`, `ellipsisPath`). **`ShellHeader`** shows a clickable workspace chip (`data-ra-workspace-chip`) with basename or “Workspace not set”. **`StatusBar`** always shows workspace status: ellipsis path + **Copy** when set, otherwise a short hint to use Settings (`data-ra-workspace-label`). **`MessageFeed`** empty state uses the configured path in eyebrow/subtitle or prompts for Settings. **`tauri-plugin-dialog`** + **`@tauri-apps/plugin-dialog`** with **`dialog:default`** in **`capabilities/default.json`**; **Settings** workspace row includes **Browse…** when `isTauri()` (hidden in Vite/Playwright). Choosing a folder saves cwd immediately and refreshes the shell label via **`onSaved`**.
+
+**Verification:** `cargo check -p relay-agent-desktop` (from `apps/desktop/src-tauri/`) — pass. `pnpm --filter @relay-agent/desktop typecheck` / `build` — pass. `E2E_SKIP_AUTH_SETUP=1 playwright test app.e2e.spec.ts` (from `apps/desktop/`) — pass. Native folder dialog: manual `pnpm --filter @relay-agent/desktop tauri:dev`.
+
+### 2026-04-08 OpenWork-inspired shell UX
+
+**Outcome:** Brought several [openwork](https://github.com/different-ai/openwork)-style product surfaces into the Solid shell without changing the Copilot CDP agent core. **Settings** (header) edits workspace path (`cwd` passed to `start_agent`), `maxTurns`, and stored `BrowserAutomationSettings` (persistence only until the loop consumes them beyond defaults), and **Copy diagnostics** builds a JSON blob from `get_relay_diagnostics` plus those local fields. **Approvals:** `RespondAgentApprovalRequest.remember_for_session` + `SessionEntry.auto_allowed_tools` + `PendingApproval` let the user allow a tool once or for the rest of the session (`TauriApprovalPrompter` short-circuits before emitting `agent:approval_needed`). **Plan** tab parses `TodoWrite` tool results (`newTodos`) into a task list per session. **Templates** in the composer save/load prompt snippets via `relay.promptTemplates.v1` in `localStorage`. **Status bar** shows the configured workspace path when set.
+
+**Artifacts:** `apps/desktop/src/components/SettingsModal.tsx`, `ShellHeader.tsx`, `ApprovalOverlay.tsx`, `ContextPanel.tsx`, `StatusBar.tsx`, `Composer.tsx`, `root.tsx`, `lib/ipc.ts`, `lib/settings-storage.ts`, `lib/todo-write-parse.ts`, `lib/prompt-templates-store.ts`, `apps/desktop/src-tauri/src/models.rs` (`RelayDiagnostics`, `remember_for_session`), `registry.rs` (`PendingApproval`, `auto_allowed_tools`), `tauri_bridge.rs` (`get_relay_diagnostics`, `respond_approval`), `agent_loop.rs`, `lib.rs` (invoke handler), Playwright mocks for `get_relay_diagnostics`, `PLANS.md`.
+
+**Verification:** `cargo check -p relay-agent-desktop` (from `apps/desktop/src-tauri/`) — pass. `pnpm --filter @relay-agent/desktop typecheck` — pass. `pnpm --filter @relay-agent/desktop build` — run as follow-up in CI/local.
+
+**Gap audit (Policy vs approval):** Context **Policy** tab remains illustrative defaults (`require_approval` / `auto_allow` / `auto_deny`); runtime gating is `PermissionPolicy` in Rust plus interactive approvals. `TodoWrite` events are `agent:tool_start` / `agent:tool_result` with tool name `TodoWrite`; the Plan tab listens on `tool_result` content JSON.
+
 ### 2026-04-08 Remove `onyx-concept` workspace crate
 
 **Outcome:** Deleted the unused **`apps/desktop/src-tauri/crates/onyx-concept`** package (SQLite FTS5 knowledge index prototype). It was never a dependency of `relay-agent-desktop` or other workspace members. Workspace retrieval remains **`glob_search`**, **`grep_search`**, and **`read_file`** in the agent tool loop.

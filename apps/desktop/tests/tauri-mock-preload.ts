@@ -49,6 +49,15 @@ const tauriCore = {
       }
       case "warmup_copilot_bridge":
         return { connected: true, loginRequired: false, url: null, error: null };
+      case "get_relay_diagnostics":
+        return {
+          appVersion: "0.0.0-mock",
+          targetOs: "linux",
+          copilotNodeBridgePort: 18080,
+          defaultEdgeCdpPort: 9360,
+          relayAgentDevMode: false,
+          architectureNotes: "mock",
+        };
       default:
         throw new Error(`[mock] Unknown invoke: ${cmd}`);
     }

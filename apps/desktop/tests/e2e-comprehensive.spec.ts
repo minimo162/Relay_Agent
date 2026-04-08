@@ -319,7 +319,7 @@ test.describe("Approval Flow", () => {
     await expect(page.getByText("write_file on /tmp/out.csv")).toBeVisible({ timeout: 3000 });
   });
 
-  test("Allow button dismisses overlay", async ({ page }) => {
+  test("Allow once button dismisses overlay", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "approve test");
@@ -331,10 +331,10 @@ test.describe("Approval Flow", () => {
       description: "rm -rf /tmp/old",
       input: { command: "rm -rf /tmp/old" },
     });
-    await expect(page.getByRole("button", { name: "Allow", exact: true })).toBeVisible({ timeout: 3000 });
-    await page.getByRole("button", { name: "Allow", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Allow once" })).toBeVisible({ timeout: 3000 });
+    await page.getByRole("button", { name: "Allow once" }).click();
     await page.waitForTimeout(200);
-    await expect(page.getByRole("button", { name: "Allow", exact: true })).not.toBeVisible({ timeout: 2000 });
+    await expect(page.getByRole("button", { name: "Allow once" })).not.toBeVisible({ timeout: 2000 });
   });
 
   test("Don't allow button dismisses overlay", async ({ page }) => {

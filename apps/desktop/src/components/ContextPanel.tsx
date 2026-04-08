@@ -1,17 +1,30 @@
-import { For, Match, Show, Switch, createSignal, type JSX } from "solid-js";
+import { For, Match, Show, Switch, createMemo, createSignal, type JSX } from "solid-js";
 import type { ContextFile, McpServer, Policy } from "../lib/ipc";
+import type { PlanTodoItem } from "../lib/todo-write-parse";
 import { mcpAddServer, mcpRemoveServer } from "../lib/ipc";
 import { Button, IconButton, Input } from "./ui";
 import { TabTrack } from "./primitives";
 import { ui } from "../lib/ui-tokens";
 
-type TabId = "files" | "servers" | "policy";
+type TabId = "files" | "servers" | "plan" | "policy";
 
 const tabs: { id: TabId; label: string }[] = [
   { id: "files", label: "Files" },
   { id: "servers", label: "Servers" },
+  { id: "plan", label: "Plan" },
   { id: "policy", label: "Policy" },
 ];
+
+function planStatusLabel(status: PlanTodoItem["status"]): string {
+  switch (status) {
+    case "completed":
+      return "Done";
+    case "in_progress":
+      return "In progress";
+    default:
+      return "Pending";
+  }
+}
 
 export function ContextPanel(props: {
   contextFiles: () => ContextFile[];
@@ -19,8 +32,14 @@ export function ContextPanel(props: {
   mcpServers: () => McpServer[];
   setMcpServers: (fn: (prev: McpServer[]) => McpServer[]) => void;
   policies: () => Policy[];
+  /** Latest TodoWrite snapshot for the active session (OpenWork-style execution plan). */
+  executionPlan: () => PlanTodoItem[] | null;
 }): JSX.Element {
   const [activeTab, setActiveTab] = createSignal<TabId>("files");
+  const planItemsOrFalse = createMemo(() => {
+    const p = props.executionPlan();
+    return p != null && p.length > 0 ? p : false;
+  });
   const [showAddFile, setShowAddFile] = createSignal(false);
   const [showAddServer, setShowAddServer] = createSignal(false);
   const [newFilePath, setNewFilePath] = createSignal("");
@@ -244,6 +263,46 @@ export function ContextPanel(props: {
                     </div>
                   )}
                 </For>
+              </Show>
+            </div>
+          </Match>
+
+          <Match when={activeTab() === "plan"}>
+            <div class="flex flex-col gap-2" data-ra-execution-plan>
+              <span class={`text-[11px] font-medium ${ui.mutedText} uppercase tracking-wide`}>
+                Agent task list
+              </span>
+              <Show
+                when={planItemsOrFalse()}
+                fallback={
+                  <div class={`text-xs ${ui.mutedText} text-center py-6 leading-relaxed`}>
+                    No task list yet. When the agent uses{" "}
+                    <span class="font-mono text-[10px]">TodoWrite</span>, steps appear here.
+                  </div>
+                }
+              >
+                {(items) => (
+                  <ol class="list-decimal list-inside space-y-2 pl-0.5">
+                    <For each={items()}>
+                      {(item) => (
+                        <li class="text-xs text-[var(--ra-text-primary)] leading-snug">
+                          <span class="font-medium">{item.activeForm || item.content}</span>
+                          <span
+                            class={`ml-2 text-[10px] px-1.5 py-0.5 rounded-md ${
+                              item.status === "completed"
+                                ? "bg-[var(--ra-green)]/15 text-[var(--ra-green)]"
+                                : item.status === "in_progress"
+                                  ? "bg-[var(--ra-accent)]/15 text-[var(--ra-accent)]"
+                                  : "bg-[var(--ra-surface-elevated)] text-[var(--ra-text-muted)]"
+                            }`}
+                          >
+                            {planStatusLabel(item.status)}
+                          </span>
+                        </li>
+                      )}
+                    </For>
+                  </ol>
+                )}
               </Show>
             </div>
           </Match>

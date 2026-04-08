@@ -30,10 +30,18 @@ import { ApprovalOverlay } from "./components/ApprovalOverlay";
 import { Composer } from "./components/Composer";
 import { ContextPanel } from "./components/ContextPanel";
 import { MessageFeed } from "./components/MessageFeed";
+import { SettingsModal } from "./components/SettingsModal";
 import { ShellHeader } from "./components/ShellHeader";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import type { Approval } from "./components/shell-types";
+import {
+  loadBrowserSettings,
+  loadMaxTurns,
+  loadWorkspacePath,
+} from "./lib/settings-storage";
+import { parseTodoWriteToolResult } from "./lib/todo-write-parse";
+import type { PlanTodoItem } from "./lib/todo-write-parse";
 
 const LS_SHOW_TOOL_ACTIVITY = "relay.showToolActivity";
 
@@ -72,6 +80,16 @@ export default function Shell(): JSX.Element {
   const [showToolActivityInline, setShowToolActivityInline] = createSignal(readShowToolActivity());
 
   const [approvals, setApprovals] = createSignal<Approval[]>([]);
+  const [settingsOpen, setSettingsOpen] = createSignal(false);
+  const [planBySession, setPlanBySession] = createSignal<Record<string, PlanTodoItem[]>>({});
+  const [workspaceLabel, setWorkspaceLabel] = createSignal(loadWorkspacePath().trim());
+
+  const executionPlanForActiveSession = createMemo(() => {
+    const id = activeSessionId();
+    if (!id) return null;
+    const m = planBySession();
+    return m[id] ?? null;
+  });
 
   const [contextFiles, setContextFiles] = createSignal<ContextFile[]>([
     { name: "README.md", path: "/tmp/Relay_Agent/README.md", size: 1024 },
@@ -185,6 +203,13 @@ export default function Shell(): JSX.Element {
     };
 
     const trackToolResult = (sessionId: string, event: AgentToolResultEvent) => {
+      if (event.toolName === "TodoWrite" && !event.isError) {
+        const todos = parseTodoWriteToolResult(event.content);
+        if (todos) {
+          setPlanBySession((prev) => ({ ...prev, [sessionId]: todos }));
+        }
+      }
+
       if (activeSessionId() !== sessionId) return;
       setChunks((prev) => {
         const idx = prev.findIndex(
@@ -283,9 +308,13 @@ export default function Shell(): JSX.Element {
     setChunks((prev) => [...prev, { kind: "user" as const, text }]);
 
     try {
+      const cwd = loadWorkspacePath().trim();
       const sessionId = await startAgent({
         goal: text,
         files: [],
+        cwd: cwd || null,
+        maxTurns: loadMaxTurns(),
+        browserSettings: loadBrowserSettings(),
       });
       setActiveSessionId(sessionId);
       setSessionIds((prev) => [...prev, sessionId]);
@@ -305,10 +334,17 @@ export default function Shell(): JSX.Element {
     }
   };
 
-  const handleApprove = async (approvalId: string) => {
+  const handleApproveOnce = async (approvalId: string) => {
     const sid = activeSessionId();
     if (!sid) return;
-    await respondApproval({ sessionId: sid, approvalId, approved: true });
+    await respondApproval({ sessionId: sid, approvalId, approved: true, rememberForSession: false });
+    setApprovals((prev) => prev.filter((a) => a.approvalId !== approvalId));
+  };
+
+  const handleApproveForSession = async (approvalId: string) => {
+    const sid = activeSessionId();
+    if (!sid) return;
+    await respondApproval({ sessionId: sid, approvalId, approved: true, rememberForSession: true });
     setApprovals((prev) => prev.filter((a) => a.approvalId !== approvalId));
   };
 
@@ -345,6 +381,9 @@ export default function Shell(): JSX.Element {
           setShowToolActivityInline(v);
           writeShowToolActivity(v);
         }}
+        onOpenSettings={() => setSettingsOpen(true)}
+        workspacePath={workspaceLabel}
+        onWorkspaceChipClick={() => setSettingsOpen(true)}
       />
 
       <Sidebar sessions={sessionEntries()} activeSessionId={activeSessionId()} onSelect={selectSession} />
@@ -365,6 +404,7 @@ export default function Shell(): JSX.Element {
           chunks={chunks()}
           sessionState={sessionState()}
           showToolActivityInline={showToolActivityInline()}
+          workspacePath={workspaceLabel}
         />
         <Composer
           onSend={handleSend}
@@ -385,7 +425,17 @@ export default function Shell(): JSX.Element {
             setChunks((prev) => [...prev, { kind: "assistant", text }]);
           }}
         />
-        <ApprovalOverlay approvals={approvals()} onApprove={handleApprove} onReject={handleReject} />
+        <ApprovalOverlay
+          approvals={approvals()}
+          onApproveOnce={handleApproveOnce}
+          onApproveForSession={handleApproveForSession}
+          onReject={handleReject}
+        />
+        <SettingsModal
+          open={settingsOpen()}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={() => setWorkspaceLabel(loadWorkspacePath().trim())}
+        />
       </main>
 
       <ContextPanel
@@ -394,6 +444,7 @@ export default function Shell(): JSX.Element {
         mcpServers={mcpServers}
         setMcpServers={setMcpServers}
         policies={policies}
+        executionPlan={executionPlanForActiveSession}
       />
 
       <div class="col-span-full">
@@ -401,6 +452,7 @@ export default function Shell(): JSX.Element {
           sessionState={sessionState()}
           sessionCount={sessionIds().length}
           copilotBridgeHint={copilotBridgeHint()}
+          workspaceFullPath={workspaceLabel() || null}
         />
       </div>
     </div>

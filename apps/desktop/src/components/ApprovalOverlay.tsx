@@ -4,7 +4,10 @@ import type { Approval } from "./shell-types";
 
 export function ApprovalOverlay(props: {
   approvals: Approval[];
-  onApprove: (id: string) => void;
+  /** Approve this request only (default OpenWork-style once). */
+  onApproveOnce: (id: string) => void;
+  /** Approve and skip further prompts for this tool name until the session ends. */
+  onApproveForSession: (id: string) => void;
   onReject: (id: string) => void;
 }): JSX.Element {
   return (
@@ -33,20 +36,27 @@ export function ApprovalOverlay(props: {
                     </p>
                   </Show>
                 </details>
-                <div class="flex gap-2 mt-4 justify-end">
+                <div class="flex flex-wrap gap-2 mt-4 justify-end">
                   <Button
                     variant="secondary"
                     onClick={() => props.onReject(approval.approvalId)}
-                    class="px-4 py-1.5 text-xs"
+                    class="px-3 py-1.5 text-xs"
                   >
                     Don&apos;t allow
                   </Button>
                   <Button
-                    variant="primary"
-                    onClick={() => props.onApprove(approval.approvalId)}
-                    class="px-4 py-1.5 text-xs"
+                    variant="secondary"
+                    onClick={() => props.onApproveOnce(approval.approvalId)}
+                    class="px-3 py-1.5 text-xs"
                   >
-                    Allow
+                    Allow once
+                  </Button>
+                  <Button
+                    variant="primary"
+                    onClick={() => props.onApproveForSession(approval.approvalId)}
+                    class="px-3 py-1.5 text-xs"
+                  >
+                    Allow for session
                   </Button>
                 </div>
               </div>
