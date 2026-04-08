@@ -2,7 +2,7 @@
 
 ## Status
 
-- Current phase: the browser automation, agent loop, CDP auto-launch, and autonomous-planning slices through plan approval, plan execution UI, persistence, and settings are implemented in source; the remaining open work is the manual Windows + M365 verification backlog
+- Current phase: the browser automation, agent loop, CDP auto-launch, and autonomous-planning slices through plan approval, plan execution UI, persistence, and settings are implemented in source; **M365 Copilot CDP smoke** (`m365-cdp-chat`) was verified on 2026-04-08 against a live signed-in Edge/Chromium endpoint (see Milestone Log). The **Tauri desktop + CSV + full checklist** items in `docs/*_E2E_VERIFICATION.md` remain manual or environment-specific.
 - Repository state: pnpm workspace, SvelteKit SPA shell, Tauri v2 shell, and shared contracts package are now bootstrapped and verification-clean
 - Active source-of-truth documents:
   - `PLANS.md`
@@ -12,9 +12,24 @@
 - Follow-up planning input: `.taskmaster/docs/prd.txt` now acts as the integrated PRD for the UI, browser automation, agent loop, CDP auto-launch, and autonomous-planning follow-ups, while the earlier simplification, startup, launch, workflow, artifact-browser, turn-lifecycle, and signing references remain preserved under `.taskmaster/docs/archive/`
 - Follow-up task graph: `.taskmaster/tasks/tasks.json` now covers the completed guided-flow work, the browser automation follow-up (`76` through `83`), the agent-loop follow-up (`84` through `95`), the CDP auto-launch follow-up (`104` through `108`), and the autonomous-planning follow-up (`109` through `123`), with implementation-backed work closed where artifacts exist and manual Windows/M365 verification left pending
 - Follow-up packaging policy: `docs/PACKAGING_POLICY.md` now fixes the first packaged end-user release path to Windows 10/11 x64 via NSIS, with manual installer-driven updates and preserved app-local storage across upgrades as the current expectation
-- Follow-up implementation status: browser automation source, multi-turn agent-loop source, CDP auto-launch source, and the autonomous execution flow through plan approval, progress tracking, write-step gating, persistence, replan, and settings are in place. Task `84` is backed by `docs/AGENT_LOOP_DESIGN.md`, task `109` is backed by `docs/AUTONOMOUS_EXECUTION_DESIGN.md`, and task `123` is now backed by `docs/AUTONOMOUS_EXECUTION_E2E_VERIFICATION.md` as the remaining manual checklist. The remaining open items are the live selector checks and the Windows/M365 manual walkthroughs.
+- Follow-up implementation status: browser automation source, multi-turn agent-loop source, CDP auto-launch source, and the autonomous execution flow through plan approval, progress tracking, write-step gating, persistence, replan, and settings are in place. Task `84` is backed by `docs/AGENT_LOOP_DESIGN.md`, task `109` is backed by `docs/AUTONOMOUS_EXECUTION_DESIGN.md`, and task `123` is now backed by `docs/AUTONOMOUS_EXECUTION_E2E_VERIFICATION.md` as the remaining manual checklist. **Recorded 2026-04-08:** Playwright `m365-cdp-chat` (six tests, serial) passed against `CDP_ENDPOINT=http://127.0.0.1:9333` with an existing `m365.cloud.microsoft/chat` tab (Japanese UI). Remaining gap: full desktop-app E2E checklists and Windows-specific packaging walks unless run separately.
 
 ## Milestone Log
+
+### 2026-04-08 M365 Copilot CDP smoke (`m365-cdp-chat`)
+
+**Outcome:** Ran the **logged-in Copilot + CDP** Playwright suite against a live browser (`connectOverCDP`). Confirms composer visibility, Japanese prompt send (CDP `Input.dispatchKeyEvent` and shell-click fallback on turn 2), streaming completion via stop button, and multi-turn body growth. Documents that this slice does **not** require the Tauri app or CSV workbook path.
+
+**Artifacts:** `docs/IMPLEMENTATION.md`, `docs/COPILOT_E2E_CDP_PITFALLS.md` (dated verification row)
+
+**Verification:**
+
+- Preconditions: `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9333/json/version` → `200`; Edge/Chromium with M365 Copilot signed in on `m365.cloud.microsoft/chat`.
+- `CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat` (from `apps/desktop/`) — **6 passed** (~1.6 min).
+- `pnpm typecheck` (repo root) — pass
+- `cargo test -p relay-agent-desktop --lib` (from `apps/desktop/src-tauri/`) — pass (38 tests)
+- `cargo check -p relay-agent-desktop` (from `apps/desktop/src-tauri/`) — pass
+- `pnpm check` (repo root) — **no `check` script** on `@relay-agent/desktop` (command exits non-zero); not used for this milestone.
 
 ### 2026-04-08 Windows Office COM guidance + PowerShell UTF-8 preamble
 

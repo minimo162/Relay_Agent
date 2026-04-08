@@ -108,6 +108,16 @@ CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test --config=playwright-cdp.c
 | 添付・送信ゲート | サーバの `copilotAttachmentStillPending` に倣い、**コンポーザ周辺ドック内**の progress 系のみを待機（ドキュメント全体の `aria-busy` は誤検知になりやすいためテストでは除外）。送信ボタンが押下可能に見えるまでの待機も併用。 |
 | 全体 | **6 tests passed**（1 ワーカー・シリアル、合計実行時間は Copilot 応答に依存し約 1〜2 分程度のことが多い） |
 
+### 検証記録（2026-04-08・リポジトリ実行）
+
+| 項目 | 結果 |
+|------|------|
+| ホスト | Linux（開発環境）。CDP HTTP `http://127.0.0.1:9333/json/version` → **200**。 |
+| UI 言語 | M365 チャット UI が **日本語**（ページタイトル `チャット \| M365 Copilot`、`button[aria-label="新しいチャット"]`、`生成を停止` など）。 |
+| コマンド | `cd apps/desktop && CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat` |
+| 結果 | **6 passed**（合計 ~1.6 min）。04 は 1 通目は素の CDP Enter、2 通目は `CDP Enter after shell click` で送信。 |
+| 同時実施 | リポジトリ整合: `pnpm typecheck`（root）、`cargo test -p relay-agent-desktop --lib`、`cargo check -p relay-agent-desktop`（`apps/desktop/src-tauri`）— いずれも成功。 |
+
 ### 実装参照（送信まわり）
 
 - テスト: `apps/desktop/tests/m365-copilot-cdp.spec.ts`（`dispatchEnterViaCdp`、`tryEnterStrategies` / `tryCtrlEnterStrategies`、`focusM365ComposerDeep`、添付・送信待機ヘルパ）。
