@@ -12,19 +12,25 @@
 - Follow-up planning input: `.taskmaster/docs/prd.txt` now acts as the integrated PRD for the UI, browser automation, agent loop, CDP auto-launch, and autonomous-planning follow-ups, while the earlier simplification, startup, launch, workflow, artifact-browser, turn-lifecycle, and signing references remain preserved under `.taskmaster/docs/archive/`
 - Follow-up task graph: `.taskmaster/tasks/tasks.json` now covers the completed guided-flow work, the browser automation follow-up (`76` through `83`), the agent-loop follow-up (`84` through `95`), the CDP auto-launch follow-up (`104` through `108`), and the autonomous-planning follow-up (`109` through `123`), with implementation-backed work closed where artifacts exist and manual Windows/M365 verification left pending
 - Follow-up packaging policy: `docs/PACKAGING_POLICY.md` now fixes the first packaged end-user release path to Windows 10/11 x64 via NSIS, with manual installer-driven updates and preserved app-local storage across upgrades as the current expectation
-- Follow-up implementation status: browser automation source, multi-turn agent-loop source, CDP auto-launch source, and the autonomous execution flow through plan approval, progress tracking, write-step gating, persistence, replan, and settings are in place. Task `84` is backed by `docs/AGENT_LOOP_DESIGN.md`, task `109` is backed by `docs/AUTONOMOUS_EXECUTION_DESIGN.md`, and task `123` is now backed by `docs/AUTONOMOUS_EXECUTION_E2E_VERIFICATION.md` as the remaining manual checklist. **Recorded 2026-04-08:** Playwright `m365-cdp-chat` (six tests, serial) passed against `CDP_ENDPOINT=http://127.0.0.1:9333` with an existing `m365.cloud.microsoft/chat` tab (Japanese UI). Remaining gap: full desktop-app E2E checklists and Windows-specific packaging walks unless run separately.
+- Follow-up implementation status: browser automation source, multi-turn agent-loop source, CDP auto-launch source, and the autonomous execution flow through plan approval, progress tracking, write-step gating, persistence, replan, and settings are in place. Task `84` is backed by `docs/AGENT_LOOP_DESIGN.md`, task `109` is backed by `docs/AUTONOMOUS_EXECUTION_DESIGN.md`, and task `123` is now backed by `docs/AUTONOMOUS_EXECUTION_E2E_VERIFICATION.md` as the remaining manual checklist. **Recorded 2026-04-08:** Playwright `m365-cdp-chat` (six tests, serial) passed against a live CDP endpoint (当時 **9333**; リポ既定は後述のとおり **9360** へ移行) with an existing `m365.cloud.microsoft/chat` tab (Japanese UI). Remaining gap: full desktop-app E2E checklists and Windows-specific packaging walks unless run separately.
 
 ## Milestone Log
 
+### 2026-04-08 Relay default CDP base **9360** (YakuLingo coexistence)
+
+**Outcome:** Relay の既定 CDP 基底を **9333 → 9360** に変更（**YakuLingo** は **9333** 固定のため衝突回避）。`copilot_server.js` は基底から 20 ポートをスキャン（**9360–9379**）。`scripts/start-relay-edge-cdp.sh` は既定 **9360** とし、**`DevToolsActivePort` が `/json/version` で生きていれば**（例: 既存 Edge が **9333**）**二重起動しない**。レガシー運用は **`RELAY_EDGE_CDP_PORT=9333`** / **`CDP_ENDPOINT`**。Rust・Node・Playwright・IPC JSDoc・E2E モックを同期。
+
+**Verification:** `cargo test -p relay-agent-desktop --lib` — pass (42 tests). `cargo check -p relay-agent-desktop` — pass. `pnpm typecheck`（repo root）— pass.
+
 ### 2026-04-08 Hybrid CDP: attach IPC resolves marker / DevToolsActivePort
 
-**Outcome:** Added `cdp_copilot::resolve_cdp_attachment_port(preferred)` — probes **`.relay-agent-cdp-port`** then **`DevToolsActivePort`** under `relay_agent_edge_profile_dir()` with `/json/version`, else returns **9333**. Wired into **`cdp_send_prompt`**, **`cdp_screenshot`**, and **`connect_cdp` / `cdp_start_new_chat`** when **`auto_launch` is false** and **`base_port` is omitted**. Explicit **`base_port`** still wins. Unit tests for marker and `DevToolsActivePort` file parsing. Documented hybrid model in **`docs/COPILOT_E2E_CDP_PITFALLS.md`** and **`README.md`**.
+**Outcome:** Added `cdp_copilot::resolve_cdp_attachment_port(preferred)` — probes **`.relay-agent-cdp-port`** then **`DevToolsActivePort`** under `relay_agent_edge_profile_dir()` with `/json/version`, else returns **`preferred`**（現在の既定 **9360**）。Wired into **`cdp_send_prompt`**, **`cdp_screenshot`**, and **`connect_cdp` / `cdp_start_new_chat`** when **`auto_launch` is false** and **`base_port` is omitted**. Explicit **`base_port`** still wins. Unit tests for marker and `DevToolsActivePort` file parsing. Documented hybrid model in **`docs/COPILOT_E2E_CDP_PITFALLS.md`** and **`README.md`**.
 
 **Verification:** `cargo test -p relay-agent-desktop --lib` — pass (42 tests).
 
 ### 2026-04-08 Always-on CDP workflow wired into dev + IPC defaults
 
-**Outcome:** Unified **M365 Copilot CDP default port 9333** across Tauri IPC (`connect_cdp`, `cdp_send_prompt`, `cdp_start_new_chat`, `cdp_screenshot`), `cdp_copilot` parse fallbacks, `playwright-cdp.config.ts`, and `m365-copilot-capabilities-v2.spec.ts`. **`pnpm tauri:dev`** (`apps/desktop`) runs **`prestart-relay-edge.mjs`** on Unix to invoke `scripts/start-relay-edge-cdp.sh` first (skip: `RELAY_SKIP_PRESTART_EDGE=1`; Windows prints manual hint). Documented in `README.md`, `docs/COPILOT_E2E_CDP_PITFALLS.md`, `DEV_NOTES.md`.
+**Outcome:** Unified **M365 Copilot CDP default port 9360** across Tauri IPC (`connect_cdp`, `cdp_send_prompt`, `cdp_start_new_chat`, `cdp_screenshot`), `cdp_copilot` parse fallbacks, `playwright-cdp.config.ts`, and `m365-copilot-capabilities-v2.spec.ts`. **`pnpm tauri:dev`** (`apps/desktop`) runs **`prestart-relay-edge.mjs`** on Unix to invoke `scripts/start-relay-edge-cdp.sh` first (skip: `RELAY_SKIP_PRESTART_EDGE=1`; Windows prints manual hint). Documented in `README.md`, `docs/COPILOT_E2E_CDP_PITFALLS.md`, `DEV_NOTES.md`.
 
 **Verification:** `cargo check -p relay-agent-desktop`, `pnpm typecheck` — pass.
 
@@ -36,8 +42,8 @@
 
 **Verification:**
 
-- Preconditions: `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9333/json/version` → `200`; Edge/Chromium with M365 Copilot signed in on `m365.cloud.microsoft/chat`.
-- `CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat` (from `apps/desktop/`) — **6 passed** (~1.6 min).
+- Preconditions: live CDP（例: `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9360/json/version` → `200`；レガシー **9333** ならその URL）; Edge/Chromium with M365 Copilot signed in on `m365.cloud.microsoft/chat`.
+- `CDP_ENDPOINT=http://127.0.0.1:9360 npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat` (from `apps/desktop/`) — **6 passed** (~1.6 min)（当時のログは **9333** 向け）。
 - `pnpm typecheck` (repo root) — pass
 - `cargo test -p relay-agent-desktop --lib` (from `apps/desktop/src-tauri/`) — pass (38 tests)
 - `cargo check -p relay-agent-desktop` (from `apps/desktop/src-tauri/`) — pass
@@ -2776,12 +2782,12 @@ git diff --check
 
 Observed result:
 
-- `apps/desktop/scripts/copilot-browser.ts` now scans `9333-9342`, detects an already-running CDP Edge, auto-launches `msedge.exe` on a free port when needed, waits for `/json/version`, and emits stdout progress events plus the resolved `cdpPort` in the final JSON result.
+- `apps/desktop/scripts/copilot-browser.ts` now scans `9333-9342`, detects an already-running CDP Edge, auto-launches `msedge.exe` on a free port when needed, waits for `/json/version`, and emits stdout progress events plus the resolved `cdpPort` in the final JSON result. *(Later: Relay default base moved to **9360**; `copilot_server.js` scans **9360–9379**; `--auto-launch` path prefers **DevToolsActivePort**.)*
 - `apps/desktop/src/lib/copilot-browser.ts` now passes `--auto-launch` when `autoLaunchEdge` is enabled, filters progress JSON lines from stdout, forwards progress callbacks to the UI, and logs the resolved CDP port from the script result.
-- `apps/desktop/src/lib/continuity.ts` now persists `autoLaunchEdge: true` by default and keeps manual-port mode available with the new `9333` default port.
+- `apps/desktop/src/lib/continuity.ts` now persists `autoLaunchEdge: true` by default and keeps manual-port mode available with the new `9333` default port. *(Current repo default CDP hint: **9360**.)*
 - `apps/desktop/src/lib/agent-loop.ts` and `apps/desktop/src/routes/+page.svelte` now surface browser progress messages during both one-shot sends and agent-loop sends, add the new auto-launch toggle in settings, hide the manual port input when auto-launch is enabled, and update the in-app Edge launch guide to the current command.
 - `apps/desktop/src/lib/error-messages.ts` now adds friendly messages for the all-ports-in-use case, Edge launch timeout, and missing `msedge.exe`, while keeping the generic CDP-unavailable path aligned with the new auto-launch flow.
-- `docs/BROWSER_AUTOMATION.md` and `docs/BROWSER_AUTOMATION_VERIFICATION.md` now describe the `--auto-launch` workflow, the `9333-9342` scan range, and the revised manual verification expectations.
+- `docs/BROWSER_AUTOMATION.md` and `docs/BROWSER_AUTOMATION_VERIFICATION.md` now describe the `--auto-launch` workflow, the `9333-9342` scan range, and the revised manual verification expectations. *(See current docs for **9360–9379** / **9360** default.)*
 - `pnpm --filter @relay-agent/contracts typecheck`, `pnpm --filter @relay-agent/desktop check`, `pnpm --filter @relay-agent/desktop copilot-browser:build`, `pnpm --filter @relay-agent/desktop build`, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `git diff --check` all pass after the CDP auto-launch changes.
 - `node apps/desktop/scripts/dist/copilot-browser.js --action connect --auto-launch` now emits progress JSON lines and then returns `{"status":"error","errorCode":"CDP_UNAVAILABLE","message":"Failed to launch Edge: spawn msedge.exe ENOENT"}` in this Linux environment, which confirms the new auto-launch path and the missing-Edge error handling without requiring a Windows Edge install.
 - Task Master now records tasks `104` through `108` as implemented; the remaining browser-automation manual M365 verification tasks stay open separately.

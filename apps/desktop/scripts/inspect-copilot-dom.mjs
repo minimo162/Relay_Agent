@@ -2,14 +2,14 @@
 /**
  * Playwright + CDP: dump M365 Copilot chat DOM hints for copilot_server.js tuning.
  *
- *   CDP_HTTP=http://127.0.0.1:9333 node scripts/inspect-copilot-dom.mjs
+ *   CDP_HTTP=http://127.0.0.1:9360 node scripts/inspect-copilot-dom.mjs
  *
  * Requires Edge (or Chrome) with --remote-debugging-port and an open m365.cloud.microsoft/chat tab.
  * The browser profile must already be signed in to M365 (same as Relay / `m365-cdp-chat` E2E).
  */
 import { chromium } from "playwright";
 
-const CDP = process.env.CDP_HTTP || "http://127.0.0.1:9333";
+const CDP = process.env.CDP_HTTP || "http://127.0.0.1:9360";
 
 const PROBE_JS = `(() => {
   function walk(root, visit, depth = 0) {
@@ -87,7 +87,7 @@ async function main() {
     browser = await chromium.connectOverCDP(CDP);
   } catch (e) {
     console.error("connectOverCDP failed:", e.message);
-    console.error("Start Edge with: --remote-debugging-port=9333 and open M365 Copilot chat.");
+    console.error("Start Edge with: --remote-debugging-port=9360 (or set CDP_HTTP) and open M365 Copilot chat.");
     process.exit(1);
   }
   try {

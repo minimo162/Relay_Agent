@@ -102,7 +102,7 @@ fn read_relay_cdp_port_marker(profile_dir: &std::path::Path) -> Option<u16> {
 /// CDP HTTP port when attaching with `auto_launch: false` and no explicit `base_port`.
 ///
 /// Resolution order: **`.relay-agent-cdp-port`** (if `/json/version` succeeds) →
-/// **`DevToolsActivePort`** (if live) → **`preferred`** (use **9333** for manual/docs default).
+/// **`DevToolsActivePort`** (if live) → **`preferred`** (Relay default **9360**; override with env / legacy 9333 Edge via DevTools file).
 pub async fn resolve_cdp_attachment_port(preferred: u16) -> u16 {
     let profile_dir = relay_agent_edge_profile_dir();
     if let Some(p) = read_relay_cdp_port_marker(&profile_dir) {
@@ -295,10 +295,10 @@ pub struct CdpConfig {
 impl Default for CdpConfig {
     fn default() -> Self {
         Self {
-            debug_url: "http://127.0.0.1:9333".into(),
+            debug_url: "http://127.0.0.1:9360".into(),
             copilot_url: "https://m365.cloud.microsoft/chat".into(),
             auto_launch: false,
-            base_port: 9333,
+            base_port: 9360,
         }
     }
 }
@@ -1110,7 +1110,7 @@ async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
                 url: p.url,
                 title: p.title,
             },
-            port: parse_port(debug_url).unwrap_or(9333),
+            port: parse_port(debug_url).unwrap_or(9360),
             launched: false,
             edge_process: None,
         }));
@@ -1136,7 +1136,7 @@ async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
                         url: first.url.clone(),
                         title: first.title.clone(),
                     },
-                    port: parse_port(debug_url).unwrap_or(9333),
+                    port: parse_port(debug_url).unwrap_or(9360),
                     launched: false,
                     edge_process: None,
                 }));

@@ -11,7 +11,7 @@ const WS = globalThis.WebSocket ?? globalThis.ws;
 if (!WS) throw new Error("WebSocket is not available. Use Node.js 22+ or install the 'ws' package.");
 
 var DEFAULT_PORT = 18080;
-var DEFAULT_CDP_PORT = 9333;
+var DEFAULT_CDP_PORT = 9360;
 var COPILOT_URL = "https://m365.cloud.microsoft/chat/";
 /**
  * Composer boundary for focus/paste and for excluding transcript nodes (inComposer).
@@ -198,7 +198,7 @@ var CDP_RUNTIME_EVALUATE_TIMEOUT_MS = 90e3;
 var EDGE_LAUNCH_TIMEOUT_MS = 45e3;
 var EDGE_LAUNCH_POLL_INTERVAL_MS = 500;
 var CDP_PORT_SCAN_RANGE = 20;
-/** Written under the dedicated Edge profile dir so we reconnect to Relay's instance, not a manually debugged personal Edge on 9333. */
+/** Written under the dedicated Edge profile dir so we reconnect to Relay's instance, not an arbitrary manual CDP port. */
 var RELAY_CDP_PORT_MARKER = ".relay-agent-cdp-port";
 /**
  * Chathub / author=bot strings only (JS String.length). "こんにちは" = 5; "Hi" = 2.
@@ -3504,7 +3504,7 @@ async function spawnEdgeDetached(edgePath, argv, tag = "") {
   await sleep(400);
 }
 
-/** Dedicated profile: do not attach to arbitrary CDP on 9333–9342 (user's manual Edge). */
+/** Dedicated profile: do not attach to arbitrary CDP in [cdpPort, cdpPort+scan) outside our launch/marker path. */
 async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
   if (process.env.RELAY_COPILOT_ALWAYS_LAUNCH_EDGE === "1") {
     clearCdpPortMarker(profileDir);
@@ -3554,7 +3554,7 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
   }
   if (marked != null) clearCdpPortMarker(profileDir);
 
-  // start-novnc-relay.sh 等で --remote-debugging-port=9333 だけ付けて起動した Edge は
+  // 手動スクリプトで固定ポートだけ付けて起動した Edge は
   // .relay-agent-cdp-port を書かない。既に CDP が Edge なら追加起動せず再利用する。
   if (
     (await probeCdpVersion(cdpPort)) &&
@@ -3959,7 +3959,7 @@ if (!globalOptions.userDataDir) {
 
 async function main() {
   if (globalOptions.help) {
-    console.error("Usage: node copilot_server.js [--port 18080] [--cdp-port 9333] [--user-data-dir <path>] [--boot-token <uuid>]");
+    console.error("Usage: node copilot_server.js [--port 18080] [--cdp-port 9360] [--user-data-dir <path>] [--boot-token <uuid>]");
     return;
   }
   const session = new CopilotSession();

@@ -4,13 +4,13 @@
 #
 # 環境変数:
 #   DISPLAY              既定 :1
-#   RELAY_EDGE_CDP_PORT  既定 9333（agent_loop の既定と一致）
+#   RELAY_EDGE_CDP_PORT  既定 9360（YakuLingo 等の 9333 と衝突回避; 既存 Edge は DevToolsActivePort で検出）
 #   RELAY_EDGE_PROFILE   既定 ~/RelayAgentEdgeProfile
 set -euo pipefail
 
 DISPLAY="${DISPLAY:-:1}"
 export DISPLAY
-PORT="${RELAY_EDGE_CDP_PORT:-9333}"
+PORT="${RELAY_EDGE_CDP_PORT:-9360}"
 PROFILE="${RELAY_EDGE_PROFILE:-$HOME/RelayAgentEdgeProfile}"
 LOG="${RELAY_EDGE_LOG:-$HOME/.local/log/relay-edge-cdp.log}"
 
@@ -19,6 +19,18 @@ mkdir -p "$(dirname "$LOG")" "$PROFILE"
 if ! xdpyinfo >/dev/null 2>&1; then
   echo "[start-relay-edge-cdp] DISPLAY=$DISPLAY に接続できません。先に Xvfb 等を起動してください。" >&2
   exit 1
+fi
+
+# 既にこのプロファイルで Edge が CDP 応答していれば（例: 旧既定 9333 のまま）二重起動しない
+DEVTOOLS_PORT_FILE="$PROFILE/DevToolsActivePort"
+if [[ -f "$DEVTOOLS_PORT_FILE" ]]; then
+  EXISTING_PORT=$(head -1 "$DEVTOOLS_PORT_FILE" | tr -d '\r\n' | tr -d ' ')
+  if [[ "$EXISTING_PORT" =~ ^[0-9]+$ ]] && (( EXISTING_PORT > 0 && EXISTING_PORT <= 65535 )); then
+    if curl -sS -m 1 "http://127.0.0.1:${EXISTING_PORT}/json/version" 2>/dev/null | grep -qi edg; then
+      echo "[start-relay-edge-cdp] 既存 CDP: http://127.0.0.1:${EXISTING_PORT} (DevToolsActivePort) — 起動をスキップ"
+      exit 0
+    fi
+  fi
 fi
 
 if curl -sS -m 1 "http://127.0.0.1:${PORT}/json/version" 2>/dev/null | grep -qi edg; then

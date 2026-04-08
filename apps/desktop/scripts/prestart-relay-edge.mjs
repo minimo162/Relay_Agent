@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Before `tauri dev`, try to start Edge with CDP on RELAY_EDGE_CDP_PORT (default 9333)
+ * Before `tauri dev`, try to start Edge with CDP on RELAY_EDGE_CDP_PORT (default 9360)
  * and RelayAgentEdgeProfile — same as `scripts/start-relay-edge-cdp.sh` at repo root.
  *
  * Skip entirely: RELAY_SKIP_PRESTART_EDGE=1
@@ -17,7 +17,7 @@ if (process.env.RELAY_SKIP_PRESTART_EDGE === "1") {
 
 if (process.platform === "win32") {
   console.log(
-    "[prestart-relay-edge] Windows: start msedge with --remote-debugging-port=9333 and RelayAgentEdgeProfile (see docs/COPILOT_E2E_CDP_PITFALLS.md).",
+    "[prestart-relay-edge] Windows: start msedge with --remote-debugging-port=9360 (or 9333 if legacy) and RelayAgentEdgeProfile (see docs/COPILOT_E2E_CDP_PITFALLS.md).",
   );
   process.exit(0);
 }

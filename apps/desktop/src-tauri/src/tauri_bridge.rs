@@ -33,8 +33,8 @@ fn copilot_server_slot() -> &'static Mutex<Option<CopilotServerState>> {
 }
 
 const COPILOT_HTTP_PORT: u16 = 18080;
-/// M365 Copilot Edge CDP port: must match `scripts/start-relay-edge-cdp.sh`, Playwright `m365-cdp-chat`, and `copilot_server.js`.
-const COPILOT_JS_CDP_PORT: u16 = 9333;
+/// M365 Copilot Edge CDP base port: must match `scripts/start-relay-edge-cdp.sh`, `copilot_server.js`, and Playwright defaults (YakuLingo uses 9333; Relay avoids collision).
+const COPILOT_JS_CDP_PORT: u16 = 9360;
 
 pub fn ensure_copilot_server() -> Result<Arc<Mutex<crate::copilot_server::CopilotServer>>, String> {
     let server_arc = {
@@ -492,7 +492,7 @@ pub fn ensure_cdp_connected() -> Result<cdp_copilot::CopilotPage, String> {
     }
 
     // Slow path: auto-connect CDP
-    let debug_url = get_cdp_debug_url(9333);
+    let debug_url = get_cdp_debug_url(COPILOT_JS_CDP_PORT);
     tracing::info!("[CDP] auto-connecting to {} (start_agent)…", debug_url);
 
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -502,7 +502,7 @@ pub fn ensure_cdp_connected() -> Result<cdp_copilot::CopilotPage, String> {
 
     let result = rt
         .block_on(async {
-            cdp_copilot::connect_copilot_page(&debug_url, true, 9333).await
+            cdp_copilot::connect_copilot_page(&debug_url, true, COPILOT_JS_CDP_PORT).await
         })
         .map_err(|e| {
             let msg = e.to_string();
@@ -535,7 +535,7 @@ pub struct ConnectCdpRequest {
     #[serde(default)]
     pub auto_launch: Option<bool>,
     /// When `auto_launch` is false: explicit CDP port, or omit to resolve from
-    /// `.relay-agent-cdp-port` / `DevToolsActivePort` then fall back to 9333.
+    /// `.relay-agent-cdp-port` / `DevToolsActivePort` then fall back to 9360.
     /// When `auto_launch` is true: hint only; OS-assigned port via profile is used for launch.
     #[serde(default)]
     pub base_port: Option<u16>,

@@ -324,16 +324,16 @@ npx playwright test
 
 ### Inspect M365 Copilot DOM over CDP (Playwright)
 
-**Reminder (このリポ／開発環境):** `connectOverCDP` や下記スモークは、**既に M365 にサインイン済みの Edge**（Relay 用プロファイル例: `~/RelayAgentEdgeProfile`、CDP 例: **9333**）に繋ぐ前提です。未ログインだとログイン画面だけが取れ、DOM 調査・`m365-cdp-chat` テストは意味がありません。  
+**Reminder (このリポ／開発環境):** `connectOverCDP` や下記スモークは、**既に M365 にサインイン済みの Edge**（Relay 用プロファイル例: `~/RelayAgentEdgeProfile`、CDP 既定: **9360**；旧環境や手動は **9333** も可）に繋ぐ前提です。未ログインだとログイン画面だけが取れ、DOM 調査・`m365-cdp-chat` テストは意味がありません。  
 **いつでも同じ条件で使う手順**（固定ポート・固定プロファイル・Linux `pnpm relay:edge`・Windows ショートカット例・自動起動のヒント）は [`docs/COPILOT_E2E_CDP_PITFALLS.md` の「Always-on CDP」節](docs/COPILOT_E2E_CDP_PITFALLS.md#always-on-cdp-signed-in-copilot-browser)を参照してください。
 
-Use this when tuning selectors or debugging extract/wait behavior. Start Edge with remote debugging (e.g. port **9333**), open **M365 Chat** (signed in), then:
+Use this when tuning selectors or debugging extract/wait behavior. Start Edge with remote debugging (e.g. port **9360**, or **9333** if you still use that), open **M365 Chat** (signed in), then:
 
 ```bash
 cd apps/desktop
 pnpm inspect:copilot-dom
 # or: pnpm exec node scripts/inspect-copilot-dom.mjs
-# optional CDP URL: CDP_HTTP=http://127.0.0.1:9333 pnpm inspect:copilot-dom
+# optional CDP URL: CDP_HTTP=http://127.0.0.1:9360 pnpm inspect:copilot-dom
 ```
 
 From the monorepo root:
@@ -348,12 +348,12 @@ Authenticated Copilot smoke (Enter / Ctrl+Enter first, same composer selectors a
 
 ```bash
 cd apps/desktop
-CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat
+CDP_ENDPOINT=http://127.0.0.1:9360 npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat
 ```
 
 ## Environment
 
-- **M365 Copilot (CDP):** Sole AI backend. Edge auto-launches with isolated profile; runtime CDP port may be **OS-assigned** (`DevToolsActivePort`) or chosen in a scan range and recorded in **`.relay-agent-cdp-port`** under `~/RelayAgentEdgeProfile`. **手動検証の既定ポートは 9333**（`CDP_ENDPOINT`、`pnpm relay:edge`、README の `curl` 例）。Tauri の **attach 系 IPC**（`cdp_send_prompt`、`cdp_screenshot`、`connect_cdp` with `auto_launch: false` and no `basePort`）はマーカー／`DevToolsActivePort` を優先し、無ければ 9333 にフォールバック。Configurable timeout (default: 120s). Login via browser UI on first use. **手動で CDP に繋ぐ検証**（`inspect:copilot-dom`、`m365-cdp-chat` など）は、その Edge プロファイルで **M365 Copilot に既にサインイン済み**であることが前提（セッション切れ時はブラウザで再ログイン）。
+- **M365 Copilot (CDP):** Sole AI backend. Edge auto-launches with isolated profile; runtime CDP port may be **OS-assigned** (`DevToolsActivePort`) or chosen in a scan range and recorded in **`.relay-agent-cdp-port`** under `~/RelayAgentEdgeProfile`. **Relay 既定 CDP は 9360**（YakuLingo 等の **9333** と衝突回避）。`CDP_ENDPOINT` / `RELAY_EDGE_CDP_PORT` / `pnpm relay:edge` で上書き可。`start-relay-edge-cdp.sh` は **`DevToolsActivePort` が生きていれば**（例: 既存 Edge が 9333）**二重起動しない**。Tauri **attach 系 IPC**はマーカー／`DevToolsActivePort` を優先し、無ければ **9360** にフォールバック。Configurable timeout (default: 120s). Login via browser UI on first use. **手動で CDP に繋ぐ検証**は、その Edge プロファイルで **M365 にサインイン済み**であることが前提（セッション切れ時はブラウザで再ログイン）。
 - **`RELAY_COPILOT_DEBUG_POLL=1`:** When set, `copilot_server.js` logs a `[copilot:response] poll` diagnostic every ~10s during `waitForDomResponse` (off by default to reduce noise).
 
 ### Linux / ヘッドレス（Copilot 接続の進め方）
@@ -364,12 +364,12 @@ CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test --config=playwright-cdp.c
 4. 開発起動の補助: リポジトリ直下で  
    `chmod +x scripts/relay-copilot-linux.sh && ./scripts/relay-copilot-linux.sh`  
    （`$HOME/novnc-m365/start-x11-desktop.sh` があれば `DISPLAY` 未設定時に自動実行します。パスは `RELAY_START_X11` で変更可）  
-   既定で **`scripts/start-relay-edge-cdp.sh`** により Edge（CDP **9333**）を先起動します。無効化: `RELAY_PRESTART_EDGE=0`  
+   既定で **`scripts/start-relay-edge-cdp.sh`** により Edge（CDP 既定 **9360**）を先起動します。無効化: `RELAY_PRESTART_EDGE=0`  
    手動だけ先に Edge を立てる場合: `pnpm relay:edge`（`DISPLAY` 必須）  
    **`apps/desktop` で `pnpm tauri:dev` だけ** でも、Unix では同じ先起動スクリプトが自動実行されます（`RELAY_SKIP_PRESTART_EDGE=1` で省略。Windows は手動 Edge 起動の案内のみ）。
 5. **Relay 用 Edge を noVNC で表示**する（Chromium 版 noVNC とは別）:  
    `~/novnc-m365/start-novnc-relay.sh`  
-   同じ **~/RelayAgentEdgeProfile** と **CDP 9333** で起動するため、アプリ／`copilot_server` と画面が一致します。
+   同じ **~/RelayAgentEdgeProfile** と **CDP（既定 9360、スクリプトに合わせる）** で起動するため、アプリ／`copilot_server` と画面が一致します。
 
 ## License
 

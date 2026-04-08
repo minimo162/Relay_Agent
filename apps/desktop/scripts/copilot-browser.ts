@@ -6,7 +6,7 @@ import { chromium, errors, type Browser, type Locator, type Page, type Response 
 
 const COPILOT_URL = "https://m365.cloud.microsoft/chat/";
 /** Default when not using `--auto-launch` (attach to existing browser). */
-const DEFAULT_CDP_PORT = 9333;
+const DEFAULT_CDP_PORT = 9360;
 const NEW_CHAT_SELECTOR = '[data-testid="newChatButton"]';
 const EDITOR_SELECTOR = "#m365-chat-editor-target-element";
 const SEND_READY_SEL = ".fai-SendButton:not([disabled])";

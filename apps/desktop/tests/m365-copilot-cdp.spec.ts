@@ -3,9 +3,9 @@ import { test, expect, chromium } from "@playwright/test";
 /* ── Constants ────────────────────────────────────────────────── */
 
 const M365_COPILOT_URL = "https://m365.cloud.microsoft/chat";
-/** Relay / noVNC Edge scripts default to 9333; override with CDP_ENDPOINT. */
+/** Relay default CDP 9360 (YakuLingo uses 9333); override with CDP_ENDPOINT. */
 const CDP_ENDPOINT =
-  process.env.CDP_ENDPOINT ?? "http://127.0.0.1:9333";
+  process.env.CDP_ENDPOINT ?? "http://127.0.0.1:9360";
 
 /** Same priority as `copilot_server.js` / `COMPOSER_ANCESTOR_CLOSEST` — avoids wrong `role=textbox`. */
 const M365_COMPOSER_SELECTORS = [
