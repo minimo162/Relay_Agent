@@ -33,3 +33,9 @@ cargo check
 - **Dev setup** (from `apps/desktop`): run `pnpm run prep:liteparse-runner` once so `liteparse-runner/node_modules` exists. Optionally `pnpm run prep:bundled-node` to populate `binaries/relay-node-*`; otherwise the host `node` on `PATH` is used when the sidecar is absent.
 - **Packaged app:** `lib.rs` `liteparse_env` sets `RELAY_LITEPARSE_RUNNER_ROOT` (bundle resources) and `RELAY_BUNDLED_NODE` (sidecar next to the executable). **`pnpm tauri build`** runs `beforeBuildCommand`: fetch Node for `TAURI_ENV_TARGET_TRIPLE`, `npm ci` in `liteparse-runner`, then Vite build.
 - **Tuning:** `RELAY_PDF_PARSE_TIMEOUT_SECS` (default 120), `RELAY_LITEPARSE_MAX_PAGES` (passed to the runner).
+
+## Windows Office hybrid read (COM + temp PDF + `read_file`)
+
+- **Prompts:** `agent_loop` CDP catalog and desktop system prompt describe **one `PowerShell`** command (COM: `Value2`/CSV + `ExportAsFixedFormat`) → stdout JSON with **`pdfPath`** → second tool **`read_file`** on `pdfPath` in the **same** `relay_tool` array.
+- **Sample:** `apps/desktop/scripts/office-hybrid-read-sample.ps1` — run on a Windows machine with Office, e.g. `pwsh -File scripts/office-hybrid-read-sample.ps1 -Path C:\path\book.xlsx -Mode Excel`, then `read_file` the printed `pdfPath` inside Relay (requires `prep:liteparse-runner` / bundled Node for PDF).
+- **Manual verification:** documented in `docs/FILE_OPS_E2E_VERIFICATION.md` (*Office hybrid read*).

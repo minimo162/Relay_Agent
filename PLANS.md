@@ -29,6 +29,7 @@ MVP guardrails (authoritative summary: `AGENTS.md`):
 ### Windows desktop Office automation (PowerShell + COM)
 
 - **Scope:** On Windows builds, **Word, Excel, PowerPoint**, and **`.msg`** are driven primarily via the **`PowerShell` tool** and **COM** (`.msg` through `Outlook.Application` when Outlook is installed). Live Outlook inbox automation is out of scope for this slice.
+- **Hybrid read (data + layout):** **COM** emits **structured** table/cell data and a **temp PDF** under `%TEMP%\RelayAgent\office-layout\`; **`read_file` on that PDF** supplies **LiteParse** layout text in the **same** tool batch. See `docs/IMPLEMENTATION.md` milestone **2026-04-08 Windows Office hybrid read** and `apps/desktop/scripts/office-hybrid-read-sample.ps1`.
 - **Performance:** Copilot turns are expensive—prefer **one PowerShell `command` per batch** (open → work → save → `Quit()`). **Excel:** no per-cell COM loops; use **2D array / `Range.Value2`**, block ranges, CSV import, etc.; `ScreenUpdating` off in try/finally when appropriate.
 - **Console UTF-8:** The `tools` crate prepends `chcp 65001` and output-encoding setup to every PowerShell invocation unless **`RELAY_POWERSHELL_NO_UTF8_PREAMBLE`** is set (`1`/`true`/`yes`/`on`), so the host’s UTF-8-oriented decoding is less likely to mojibake Japanese output on CP932 consoles.
 - **Prompts:** `agent_loop` adds Windows-only system and CDP catalog sections describing the above; the `PowerShell` tool description documents the contract.

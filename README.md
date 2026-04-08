@@ -126,6 +126,7 @@ Relay_Agent/
     │
     ├── scripts/                  # Desktop dev helpers (Playwright, CDP, bundled Node fetch)
     │   ├── fetch-bundled-node.mjs   # Populates src-tauri/binaries/relay-node-* for tauri build
+    │   ├── office-hybrid-read-sample.ps1  # Windows COM + temp PDF template (Office + read_file)
     │   └── inspect-copilot-dom.mjs  # Dump M365 chat DOM hints over CDP
     │
     └── tests/                    # E2E tests (Playwright)
@@ -154,6 +155,7 @@ Relay_Agent/
   - **`copilot_server.js`** (under `apps/desktop/src-tauri/binaries/`) implements DOM extraction with a **single source of truth**: `copilotDomGeneratingIifeExpression()` and `copilotDomReplyExtractIifeExpression()` build the in-page scripts; `isCopilotGenerating`, `extractAssistantReplyText`, and `pollCopilotGeneratingAndReply` all reuse them. M365 Copilot Web (Fluent) replies are read preferentially from **`[data-testid="copilot-message-reply-div"]`**, with user bubbles excluded via **`fai-UserMessage`** / **`chatQuestion`** heuristics; `stripM365CopilotReplyChrome` removes “Copilot said:” UI chrome from text.
   - **Composer paste:** `waitForComposerPasteSettle` polls visible length until `pasteLooksComplete` (with a short deadline) instead of a single long fixed sleep after kiroku / `execCommand` / CDP insert paths. **Submit:** `getComposerLenAndCopilotGenerating` returns composer length and the generating scan in one `evaluate` after send clicks.
 - **PDF reading (`read_file`)** — Text-layer PDFs are parsed with **LiteParse** (spatial text, **OCR off**) via **Node**. For desktop development from `apps/desktop`, run `pnpm run prep:liteparse-runner` once so `src-tauri/liteparse-runner/node_modules` exists; `pnpm tauri build` runs this automatically in `beforeBuildCommand`. Release bundles include a **target-specific Node** sidecar (`relay-node`) fetched by `scripts/fetch-bundled-node.mjs`.
+- **Windows Office hybrid read** — On **Windows + Office**, agents are guided to use **`PowerShell` + COM** for **structured data** (e.g. Excel `Range.Value2` as JSON) and **`ExportAsFixedFormat`** to a temp PDF under `%TEMP%\RelayAgent\office-layout\`, then **`read_file` on that PDF** in the same tool batch for **LiteParse layout text**. Template: `apps/desktop/scripts/office-hybrid-read-sample.ps1`. Details: `docs/IMPLEMENTATION.md` (2026-04-08 hybrid milestone), `docs/FILE_OPS_E2E_VERIFICATION.md` item 7.
 - **MCP Server Integration** — Full support for standard MCP servers via stdio transport:
   - Add/remove/list MCP servers with real-time status monitoring
   - Health check command (`mcp_check_server_status`) with live status reporting

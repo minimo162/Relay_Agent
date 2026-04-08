@@ -401,7 +401,19 @@ fn cdp_windows_office_catalog_addon() -> &'static str {
 
 On **Windows**, for **desktop Word, Excel, PowerPoint**, and **`.msg`**, use the **`PowerShell` tool** with COM (`Word.Application`, `Excel.Application`, `PowerPoint.Application`; `.msg` via `Outlook.Application` when Outlook is installed). Prefer COM over using `read_file`/`write_file`/`edit_file` on those binary formats unless the user has exported plain text or CSV.
 
-**Copilot latency:** Each model turn is expensive. Prefer **one `PowerShell` invocation** per batch: open → edit → save → `Quit()` in a **single** `command` string. Avoid many small `PowerShell` calls for one spreadsheet or document in the same turn.
+### Hybrid read (data + layout)
+
+When the user needs **accurate numbers/tables** and **layout-oriented text** for the model:
+
+1. In **one `PowerShell` `command`**: open the Office file (read-only where possible); set `$excel.DisplayAlerts = $false` / `$word.DisplayAlerts = $false` (and `$ppt` equivalent); `$excel.ScreenUpdating = $false` in `try`/`finally` for Excel.
+2. **Structured data (source of truth for Excel):** batch-read **`Range.Value2`** into a PowerShell array and emit **`ConvertTo-Json -Compress`** (or `Export-Csv` for a defined range to a temp path). **Never** per-cell COM loops.
+3. **Layout PDF:** COM **`ExportAsFixedFormat`** (Excel/Word) or the presentation export equivalent for PowerPoint; use **`OpenAfterPublish=$false`** / **`OpenAfterExport=$false`**. Write to a **unique path** under **`$env:TEMP\RelayAgent\office-layout\`** (create the folder; use a new GUID in the filename). **`Quit()`** hosts in `finally`.
+4. Print **one JSON object** to stdout with at least **`structured`** (or embed 2D data inline) and **`pdfPath`** (absolute path to the temp PDF). Optionally **`csvPath`** if you exported CSV.
+5. In the **same** `relay_tool` fence, include a second tool: **`read_file`** with **`path`** = `pdfPath` (and optional `pages` for large PDFs). **Two tools in one array** is intentional; still avoid splitting **one workbook** across many separate PowerShell invocations in one turn.
+6. **Excel:** treat **LiteParse text from the PDF** as **layout hints only**; **numeric truth** is **`Value2` / CSV**. Scope PDF export to **one sheet or a defined print area** when workbooks are large (PDF parse timeouts and size limits apply).
+7. After use, you may **`Remove-Item`** the temp PDF (and CSV) if policy allows; otherwise rely on `%TEMP%` cleanup.
+
+**Copilot latency:** Each model turn is expensive. Prefer **one `PowerShell` invocation** per batch: open → extract + export PDF → `Quit()` in a **single** `command` string. Avoid many small `PowerShell` calls for one spreadsheet or document in the same turn.
 
 **Excel:** **Never** loop COM cell-by-cell. Use **2D arrays** with `Range.Value2`, block `Range` writes, CSV import, or similar batch APIs. Use `$excel.ScreenUpdating = $false` in `try`/`finally` when appropriate.
 
@@ -449,6 +461,7 @@ When you need to call one or more tools, you may write a short user-facing expla
 - **Optional:** `"id": "<string>"` — omit if unsure; the host will assign one.
 - **Multiple tools:** prefer **one** `relay_tool` fence with a JSON **array** of tool objects. Use multiple fences only when unavoidable. Repeating the same tool with identical `input` across fences wastes user approvals (the host dedupes, but you should not rely on it).
 - **File I/O:** use `read_file`, `write_file`, and `edit_file` for local files. Do **not** use `bash`, `PowerShell`, or `REPL` to read or write files when a file tool applies—prose Python/shell examples are not executed and encourage duplicate `relay_tool` calls. This matches the explicit, permission-gated tool model described at https://claw-code.codes/tool-system
+- **Windows Office exception:** For **`.docx` / `.xlsx` / `.pptx` / `.msg`**, do **not** use `read_file` on the Office file itself. For **layout text**, you may use **`PowerShell` + COM** to write a **temporary `.pdf`**, then **`read_file` on that PDF** (LiteParse). See **Hybrid read** under the Windows desktop Office section below; put `PowerShell` and `read_file` in **one** `relay_tool` JSON **array** when both are needed in the same turn.
 {win_addon}
 Example:
 
@@ -1080,6 +1093,8 @@ fn windows_desktop_office_system_prompt_addon() -> &'static str {
 
 Use the **PowerShell** tool for **Word, Excel, PowerPoint**, and **`.msg`** (via `Outlook.Application` when Outlook is installed). Prefer COM for those formats over `read_file`/`write_file`/`edit_file` unless the user provided plain text or CSV.
 
+**Hybrid read (data + layout):** For **`.xlsx`/`.docx`/`.pptx`**, combine (a) **COM batch extraction** (`Range.Value2` → JSON, or `Export-Csv`) as the **numeric/table source of truth** for Excel, with (b) **COM `ExportAsFixedFormat`** to a **unique file under `%TEMP%\RelayAgent\office-layout\`**, then **`read_file` on that `.pdf`** in the **same** turn (same `relay_tool` JSON **array**: `PowerShell` then `read_file`). PowerShell stdout should be **one JSON** including **`pdfPath`**. PDF/LiteParse text is **layout hints** for Excel, not authoritative numbers. Use `OpenAfterPublish`/`OpenAfterExport` `$false`; `Quit()` in `finally`. Optional: `Remove-Item` temp files after.
+
 **Speed:** Copilot turns are slow—prefer **one PowerShell `command`** that does open → work → save → `Quit()` instead of splitting across many tool calls in one turn.
 
 **Excel:** Do **not** use per-cell COM loops. Assign **2D arrays** to `Range.Value2`, use block ranges or CSV import, etc. Use `$excel.ScreenUpdating = $false` with `try`/`finally` to restore.
@@ -1267,6 +1282,8 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("Windows desktop Office"));
         assert!(s.contains("PowerShell"));
         assert!(s.contains("Range.Value2"));
+        assert!(s.contains("Hybrid read"));
+        assert!(s.contains("pdfPath"));
     }
 
     #[test]

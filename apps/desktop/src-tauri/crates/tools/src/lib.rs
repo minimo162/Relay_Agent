@@ -396,6 +396,7 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             "Performance: Copilot turns are slow—put Open→work→Save→Quit in ONE command string; do not split the same workbook across multiple PowerShell tool calls in one turn. ",
             "Excel: NEVER loop COM per-cell; use 2D array assignment to Range.Value2, block ranges, CSV import, or similar batch APIs; prefer Application.ScreenUpdating=$false in try/finally. ",
             "Word/PowerPoint: prefer batch Find/Replace, range-level edits; avoid Select/Activate. ",
+            "Hybrid Office read: in one command, batch-extract data (Value2 as JSON or Export-Csv) plus COM ExportAsFixedFormat to a unique PDF under %TEMP%\\RelayAgent\\office-layout\\; stdout one JSON with pdfPath; pair with read_file on that PDF in the same relay_tool array for LiteParse layout text (Excel: PDF is layout hints only; numbers from Value2/CSV). ",
             "Return structured results with ConvertTo-Json -Compress on stdout when useful."
         ),
         input_schema: json!({

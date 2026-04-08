@@ -26,6 +26,14 @@
 
 **Build note:** `pnpm tauri build` runs `beforeBuildCommand` (fetch Node for `TAURI_ENV_TARGET_TRIPLE`, `npm ci` in `liteparse-runner`, Vite build). For **`tauri dev`**, run once: `pnpm run prep:liteparse-runner` (and optionally `pnpm run prep:bundled-node` if not using system Node). Native addons in `liteparse-runner/node_modules` must be installed on the OS/arch that produces the bundle.
 
+### 2026-04-08 Windows Office hybrid read (COM data + temp PDF + `read_file` / LiteParse)
+
+**Outcome:** Documented agent workflow on **Windows + Office**: **one `PowerShell` COM command** batch-extracts **structured data** (`Range.Value2` → JSON or `Export-Csv`) and **`ExportAsFixedFormat`** to a **unique PDF** under `%TEMP%\RelayAgent\office-layout\` with **`OpenAfterPublish`/`OpenAfterExport` false** and **`Quit()` in `finally`**. Stdout contract: **one JSON** including **`pdfPath`**. The model then uses **`read_file` on that `.pdf`** (same `relay_tool` JSON **array** as `PowerShell`) for **LiteParse layout text**. **Excel:** PDF text is **layout hints only**; **numbers** come from **Value2/CSV**. **Tool catalog** adds a **Windows Office exception** to the generic “no shell for file I/O” rule for this pattern only. **`PowerShell` tool description** updated in `crates/tools`. **Template script:** `apps/desktop/scripts/office-hybrid-read-sample.ps1` (`-Mode Excel|Word|Ppt`, optional `-SheetName`, `-RangeAddress`).
+
+**Artifacts:** `apps/desktop/src-tauri/src/agent_loop.rs`, `apps/desktop/src-tauri/crates/tools/src/lib.rs`, `apps/desktop/scripts/office-hybrid-read-sample.ps1`
+
+**Verification:** `cargo test -p relay-agent-desktop --lib`, `cargo check -p relay-agent-desktop` — pass (Linux). **Manual (Windows + Office):** see `docs/FILE_OPS_E2E_VERIFICATION.md` row *Office hybrid read*.
+
 ### 2026-04-08 Relay default CDP base **9360** (YakuLingo coexistence)
 
 **Outcome:** Relay の既定 CDP 基底を **9333 → 9360** に変更（**YakuLingo** は **9333** 固定のため衝突回避）。`copilot_server.js` は基底から 20 ポートをスキャン（**9360–9379**）。`scripts/start-relay-edge-cdp.sh` は既定 **9360** とし、**`DevToolsActivePort` が `/json/version` で生きていれば**（例: 既存 Edge が **9333**）**二重起動しない**。レガシー運用は **`RELAY_EDGE_CDP_PORT=9333`** / **`CDP_ENDPOINT`**。Rust・Node・Playwright・IPC JSDoc・E2E モックを同期。

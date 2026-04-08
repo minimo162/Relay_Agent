@@ -41,6 +41,13 @@ Task `149` remains manual-only because this environment cannot drive the Windows
    - Ask Copilot to read text from `.docx`, `.pptx`, and `.pdf` fixtures.
    - Verify the read tool executes automatically and returns extracted plain text without requiring approval.
 
+7. **Office hybrid read** (Windows + desktop Office; `PowerShell` + `read_file`)
+   - **Script smoke:** From `apps/desktop`, run  
+     `pwsh -File scripts/office-hybrid-read-sample.ps1 -Path <absolute-path-to.xlsx> -Mode Excel`  
+     (or `-Mode Word` / `Ppt` with a matching file). Confirm stdout is **one JSON line** with `pdfPath`, `structured`, and `sourcePath`.
+   - **PDF step:** Ensure LiteParse is available (`prep:liteparse-runner` / bundled app). Invoke **`read_file`** with `path` = the `pdfPath` value (or ask the desktop agent to do so in the same turn after PowerShell). Confirm returned text includes the LiteParse header and layout-oriented content.
+   - **Agent turn (optional):** Ask Copilot to use the hybrid pattern (COM extract + temp PDF under `%TEMP%\RelayAgent\office-layout\` + `read_file` on the PDF) for a small `.xlsx` fixture. Approve **`PowerShell`** as needed; confirm **`read_file`** runs on the emitted `.pdf` and that numeric answers match **`structured.value2`** from the PowerShell JSON, not inferred from PDF text alone.
+
 ## Expected Outcome
 
 - Read tools (`file.list`, `file.read_text`, `file.stat`, `text.search`, `document.read_text`) auto-run inside the agent loop.
