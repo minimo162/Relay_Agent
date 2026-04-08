@@ -50,6 +50,8 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
         messages: [],
       };
     }
+    case "warmup_copilot_bridge":
+      return { connected: true, loginRequired: false, url: null, error: null };
     default:
       throw new Error(`[E2E mock] Unknown command: ${cmd}`);
   }

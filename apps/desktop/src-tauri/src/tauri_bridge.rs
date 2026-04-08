@@ -122,6 +122,34 @@ pub fn ensure_copilot_server() -> Result<Arc<Mutex<crate::copilot_server::Copilo
     Ok(server_arc)
 }
 
+/// Ensure Node `copilot_server.js` is up and run `GET /status` (Edge launch + Copilot tab + login probe).
+#[tauri::command]
+pub async fn warmup_copilot_bridge() -> Result<crate::copilot_server::CopilotStatusResponse, String> {
+    let server_arc = ensure_copilot_server()?;
+    let srv_clone = Arc::clone(&server_arc);
+    tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("copilot warmup runtime: {e}"))?;
+        let guard = srv_clone
+            .lock()
+            .map_err(|e| format!("copilot server mutex poisoned: {e}"))?;
+        let out = rt.block_on(guard.warmup_status());
+        Ok(match out {
+            Ok(resp) => resp,
+            Err(e) => crate::copilot_server::CopilotStatusResponse {
+                connected: false,
+                login_required: false,
+                url: None,
+                error: Some(e.to_string()),
+            },
+        })
+    })
+    .await
+    .map_err(|e| format!("copilot warmup task: {e}"))?
+}
+
 // Re-export registry and agent_loop types for external consumers
 pub use crate::agent_loop::{AgentErrorEvent, AgentSessionHistoryResponse};
 pub use crate::registry::SessionEntry;

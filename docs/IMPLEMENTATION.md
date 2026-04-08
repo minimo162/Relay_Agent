@@ -16,6 +16,12 @@
 
 ## Milestone Log
 
+### 2026-04-08 Copilot bridge startup prewarm (`warmup_copilot_bridge`)
+
+**Outcome:** On shell mount, the UI calls **`warmup_copilot_bridge`**, which runs **`ensure_copilot_server`** then Node **`GET /status`** with a **120s** per-request timeout (`CopilotServer::warmup_status`). That path already launches Edge, ensures a Copilot tab, and sets **`loginRequired`** when the URL is a login page. **`inspectStatus`** in **`copilot_server.js`** now queues on the same **`_describeChain`** as **`describe`** to avoid CDP races with the first chat completion. Footer **`StatusBar`** shows a short hint when login is required or warmup fails. E2E mocks implement **`warmup_copilot_bridge`**.
+
+**Verification:** `cargo test -p relay-agent-desktop --lib` — pass. `pnpm typecheck` (repo root) — pass. `E2E_SKIP_AUTH_SETUP=1 npx playwright test app.e2e.spec.ts` (from `apps/desktop/`) — 14 passed.
+
 ### 2026-04-08 PDF merge/split (`lopdf` + `pdf_merge` / `pdf_split`)
 
 **Outcome:** Added **`runtime::pdf_manip`** (`merge_pdfs`, `split_pdf`, `PdfSplitSegment`) using **`lopdf` 0.35**. **Merge** follows the object-renumber + rebuilt catalog/pages pattern from the upstream `lopdf` merge example (no bookmarks in merged output). **Split** loads the input once per segment, selects pages via the same **1-based comma/range grammar** as `read_file` PDF `pages`, deletes other pages, prunes, renumbers, compresses, and saves. **Tools** `pdf_merge` / `pdf_split` are **`WorkspaceWrite`** (desktop policy still escalates writes to danger approval). **`human_approval_summary`** covers both tools. System prompt **Constraints** remind the model to use these tools instead of **bash** for PDF merge/split. **v1:** encrypted PDFs are rejected if **`/Encrypt`** is present in the trailer after load; no guarantee for forms-heavy or annotation-heavy fidelity (focus on page content).

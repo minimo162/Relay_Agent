@@ -107,6 +107,8 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
       if (!s.sessions.has(req.sessionId)) throw new Error("session not found");
       return { message: "Session compacted", removedMessageCount: 3 };
     }
+    case "warmup_copilot_bridge":
+      return { connected: true, loginRequired: false, url: null, error: null };
     case "mcp_list_servers":
       return s.mcpServers;
     case "mcp_add_server": {

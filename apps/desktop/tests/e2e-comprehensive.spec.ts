@@ -75,6 +75,8 @@ function mockSetup(autoComplete: boolean) {
       }
       case "mcp_remove_server": return true;
       case "mcp_check_server_status": return { name: req.name, command: "", args: [], connected: false, tools: [] };
+      case "warmup_copilot_bridge":
+        return { connected: true, loginRequired: false, url: null, error: null };
       case "connect_cdp": case "cdp_start_new_chat":
         return { ok: true, debugUrl: "", pageUrl: "", pageTitle: "", port: 9360, launched: false, error: null };
       case "cdp_send_prompt":

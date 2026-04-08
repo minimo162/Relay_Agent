@@ -8,15 +8,17 @@
 - No Playwright dependency — raw CDP WebSocket protocol
 
 ### Tauri Commands
+- `warmup_copilot_bridge` — Ensures `copilot_server.js` is up, then `GET /status` (Edge via `ensureEdgeConnected`, Copilot tab, login URL detection). Used by the Solid shell on mount; serializes with `describe` in JS via `_describeChain`.
 - `connect_cdp` — Connect to browser, find Copilot page
 - `cdp_send_prompt` — Send prompt → wait for streaming → return response
 - `cdp_start_new_chat` — Navigate to /chat (creates new conversation)
 - `cdp_screenshot` — Take PNG screenshot
 
 ### How to Use
-1. Launch Edge: `pnpm relay:edge` from repo root, or `microsoft-edge --remote-debugging-port=9360 --remote-allow-origins=* …` with `~/RelayAgentEdgeProfile` (legacy **9333**: set `RELAY_EDGE_CDP_PORT=9333`)
-2. Sign in to M365 Copilot
-3. Frontend calls `connect_cdp()` → then `cdp_send_prompt()`
+1. **App path:** Opening the desktop app triggers `warmup_copilot_bridge`, which starts or attaches Edge and opens Copilot when needed (footer may prompt to sign in).
+2. **Manual Edge:** Alternatively launch Edge: `pnpm relay:edge` from repo root, or `microsoft-edge --remote-debugging-port=9360 --remote-allow-origins=* …` with `~/RelayAgentEdgeProfile` (legacy **9333**: set `RELAY_EDGE_CDP_PORT=9333`)
+3. Sign in to M365 Copilot in the browser if prompted
+4. For direct CDP tooling only: frontend can call `connect_cdp()` → then `cdp_send_prompt()`
 
 ### E2E Tests
 See `tests/m365-copilot-cdp.spec.ts` — Playwright-based CDP tests

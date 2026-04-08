@@ -469,6 +469,12 @@ class CopilotSession {
   }
 
   async inspectStatus() {
+    const pending = this._describeChain.then(() => this.inspectStatusImpl());
+    this._describeChain = pending.catch(() => {});
+    return pending;
+  }
+
+  async inspectStatusImpl() {
     let pageSession = null;
     try {
       await this.connect(globalOptions.cdpPort);

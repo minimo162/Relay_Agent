@@ -9,6 +9,7 @@ import {
   onAgentEvent,
   respondApproval,
   startAgent,
+  warmupCopilotBridge,
   type AgentApprovalNeededEvent,
   type AgentErrorEvent,
   type AgentTextDeltaEvent,
@@ -58,6 +59,7 @@ export default function Shell(): JSX.Element {
   const [sessionIds, setSessionIds] = createSignal<string[]>([]);
   const [sessionRunning, setSessionRunning] = createSignal(false);
   const [sessionError, setSessionError] = createSignal<string | null>(null);
+  const [copilotBridgeHint, setCopilotBridgeHint] = createSignal<string | null>(null);
 
   const [chunks, setChunks] = createSignal<UiChunk[]>([]);
 
@@ -84,6 +86,22 @@ export default function Shell(): JSX.Element {
     } catch (err) {
       console.error("[MCP] Failed to load servers:", err);
     }
+
+    void warmupCopilotBridge()
+      .then((r) => {
+        if (r.loginRequired) {
+          setCopilotBridgeHint("Sign in to Microsoft Copilot in the Edge window, then return here.");
+        } else if (r.error) {
+          setCopilotBridgeHint(`Copilot: ${r.error}`);
+        } else if (r.connected) {
+          setCopilotBridgeHint(null);
+        }
+      })
+      .catch((err) => {
+        console.error("[Copilot] warmup failed:", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        setCopilotBridgeHint(`Copilot warmup failed: ${msg}`);
+      });
   });
 
   const sessionState = createMemo(() => {
@@ -266,6 +284,7 @@ export default function Shell(): JSX.Element {
       setActiveSessionId(sessionId);
       setSessionIds((prev) => [...prev, sessionId]);
       setSessionRunning(true);
+      setCopilotBridgeHint(null);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setSessionError(msg);
@@ -363,7 +382,11 @@ export default function Shell(): JSX.Element {
       />
 
       <div class="col-span-full">
-        <StatusBar sessionState={sessionState()} sessionCount={sessionIds().length} />
+        <StatusBar
+          sessionState={sessionState()}
+          sessionCount={sessionIds().length}
+          copilotBridgeHint={copilotBridgeHint()}
+        />
       </div>
     </div>
   );

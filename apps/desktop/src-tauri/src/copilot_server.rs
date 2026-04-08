@@ -16,10 +16,12 @@ use tracing::{info, warn};
 
 const READY_TIMEOUT_SECS: u64 = 30;
 const HEALTH_POLL_INTERVAL_MS: u64 = 500;
+/// `GET /status` drives Edge launch + navigation; allow longer than default HTTP client timeout.
+const WARMUP_STATUS_TIMEOUT_SECS: u64 = 120;
 /// If `127.0.0.1:18080` is held by a stray `node copilot_server.js` (e.g. after `--keep-app`), try the next ports.
 const COPILOT_HTTP_PORT_FALLBACKS: u16 = 32;
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CopilotStatusResponse {
     pub connected: bool,
@@ -304,9 +306,18 @@ impl CopilotServer {
     }
 
     pub async fn status(&self) -> Result<CopilotStatusResponse, CopilotError> {
+        self.status_with_timeout(30).await
+    }
+
+    /// Same as [`Self::status`] but with an explicit per-request timeout (warmup / Edge cold start).
+    pub async fn status_with_timeout(
+        &self,
+        timeout_secs: u64,
+    ) -> Result<CopilotStatusResponse, CopilotError> {
         let response = self
             .client
             .get(format!("{}/status", self.server_url()))
+            .timeout(Duration::from_secs(timeout_secs))
             .send()
             .await
             .map_err(CopilotError::Http)?;
@@ -322,6 +333,11 @@ impl CopilotServer {
                 response.status()
             )))
         }
+    }
+
+    /// Startup warmup: long-timeout `/status` (Edge + Copilot tab + login probe).
+    pub async fn warmup_status(&self) -> Result<CopilotStatusResponse, CopilotError> {
+        self.status_with_timeout(WARMUP_STATUS_TIMEOUT_SECS).await
     }
 
     fn http_error_recoverable(err: &CopilotError) -> bool {

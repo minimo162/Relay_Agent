@@ -47,6 +47,8 @@ const tauriCore = {
         const entry = mock.sessions.get(req.sessionId) || {};
         return { sessionId: req.sessionId, running: false, messages: [] };
       }
+      case "warmup_copilot_bridge":
+        return { connected: true, loginRequired: false, url: null, error: null };
       default:
         throw new Error(`[mock] Unknown invoke: ${cmd}`);
     }

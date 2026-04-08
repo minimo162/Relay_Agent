@@ -130,6 +130,9 @@ export async function mockInvoke(
       };
     }
 
+    case "warmup_copilot_bridge":
+      return { connected: true, loginRequired: false, url: null, error: null };
+
     default:
       throw new Error(`Unknown mock command: ${cmd}`);
   }

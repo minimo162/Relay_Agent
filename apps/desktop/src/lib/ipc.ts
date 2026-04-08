@@ -3,7 +3,7 @@
  *
  * Commands (tauri_bridge.rs):
  *   start_agent, respond_approval, cancel_agent, get_session_history,
- *   compact_agent_session,
+ *   compact_agent_session, warmup_copilot_bridge,
  *   connect_cdp, cdp_send_prompt, cdp_start_new_chat, cdp_screenshot
  *
  * Events:
@@ -153,6 +153,18 @@ export async function compactAgentSession(
   request: CompactAgentSessionRequest,
 ): Promise<CompactAgentSessionResponse> {
   return invoke<CompactAgentSessionResponse>("compact_agent_session", { request });
+}
+
+/** Node bridge `GET /status` after ensuring Edge/Copilot tab (startup prewarm). */
+export interface CopilotWarmupResult {
+  connected: boolean;
+  loginRequired: boolean;
+  url?: string | null;
+  error?: string | null;
+}
+
+export async function warmupCopilotBridge(): Promise<CopilotWarmupResult> {
+  return invoke<CopilotWarmupResult>("warmup_copilot_bridge");
 }
 
 /* ============================================================

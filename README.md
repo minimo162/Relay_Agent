@@ -189,6 +189,7 @@ Relay_Agent/
 - **Auth Token Resolution** — Reads from `.auth_key`, `.agent_auth_key`, or direct token
 - **Config System** — Centralized `AgentConfig` with adjustable parameters
 - **CDP Session State** — Connected CopilotPage is cached in shared state for reuse across agent loop runs (no reconnection per turn)
+- **Copilot prewarm** — The desktop shell calls `warmup_copilot_bridge` after load so Edge and the M365 Copilot tab are ready (or the UI shows a login hint) before the first `start_agent` send
 - **Shared Tokio Runtime** — MCP tool execution reuses a single `tokio::runtime::Runtime` instead of creating a new one per call
 - **POSIX Shell Escaping** — Secure shell argument escaping for bash tool execution
 - **Session TTL Cleanup** — Auto-eviction of completed sessions after configurable TTL (default: 30 min)
@@ -219,6 +220,7 @@ Relay_Agent/
 | `compact_agent_session` | Compress a long session into a resumable summary |
 | `cancel_agent` | Cancel a running agent session |
 | `get_session_history` | Load full message history for a session |
+| `warmup_copilot_bridge` | On startup: ensure the Node Copilot bridge is running and call `GET /status` (Edge launch, Copilot tab, login detection; long timeout) |
 | `connect_cdp` | Connect to M365 Copilot via CDP |
 | `cdp_send_prompt` | Send a prompt to M365 Copilot |
 | `cdp_start_new_chat` | Start a new chat in M365 Copilot |
