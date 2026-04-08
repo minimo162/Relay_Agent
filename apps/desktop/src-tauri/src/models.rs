@@ -10,6 +10,14 @@ pub struct RelayDiagnostics {
     pub default_edge_cdp_port: u16,
     pub relay_agent_dev_mode: bool,
     pub architecture_notes: String,
+    /// Process current directory (may differ from session workspace `cwd`).
+    pub process_cwd: String,
+    /// Effective Claw-style config home hint (`CLAW_CONFIG_HOME` or default `~/.claw`).
+    pub claw_config_home_display: String,
+    /// Plain-text `read_file` byte cap (claw-style large-file guard).
+    pub max_text_file_read_bytes: u64,
+    /// Short preflight strings (claw `doctor`-style hints for support bundles).
+    pub doctor_hints: Vec<String>,
 }
 
 /// Settings for M365 Copilot browser automation via Chrome `DevTools` Protocol.

@@ -57,6 +57,10 @@ const tauriCore = {
           defaultEdgeCdpPort: 9360,
           relayAgentDevMode: false,
           architectureNotes: "mock",
+          processCwd: "/mock",
+          clawConfigHomeDisplay: "~/.claw (mock)",
+          maxTextFileReadBytes: 10485760,
+          doctorHints: ["mock"],
         };
       default:
         throw new Error(`[mock] Unknown invoke: ${cmd}`);

@@ -8,6 +8,7 @@ use tokio::process::Command as TokioCommand;
 use tokio::runtime::Builder;
 use tokio::time::timeout;
 
+use crate::bash_validation::validate_bash_against_config_permission;
 use crate::sandbox::{
     build_linux_sandbox_command, resolve_sandbox_status_for_request, FilesystemIsolationMode,
     SandboxConfig, SandboxStatus,
@@ -69,6 +70,7 @@ pub struct BashCommandOutput {
 
 pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
     let cwd = env::current_dir()?;
+    validate_bash_against_config_permission(&input.command)?;
     let sandbox_status = sandbox_status_for_input(&input, &cwd);
 
     if input.run_in_background.unwrap_or(false) {
@@ -243,6 +245,8 @@ fn prepare_sandbox_dirs(cwd: &std::path::Path) {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use super::{execute_bash, BashCommandInput};
     use crate::sandbox::FilesystemIsolationMode;
 
@@ -282,5 +286,33 @@ mod tests {
         .expect("bash command should execute");
 
         assert!(!output.sandbox_status.expect("sandbox status").enabled);
+    }
+
+    #[test]
+    fn read_only_settings_block_mutating_bash() {
+        let _lock = crate::test_env_lock();
+        let root = std::env::temp_dir().join(format!("relay-bash-ro-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".claw")).expect("claw dir");
+        std::fs::write(
+            root.join(".claw/settings.json"),
+            r#"{"permissionMode":"read-only"}"#,
+        )
+        .expect("write settings");
+        let _guard = crate::BashConfigCwdGuard::set(Some(root.clone()));
+        let err = execute_bash(BashCommandInput {
+            command: String::from("rm -f scratch.txt"),
+            timeout: Some(1_000),
+            description: None,
+            run_in_background: Some(false),
+            dangerously_disable_sandbox: Some(false),
+            namespace_restrictions: Some(false),
+            isolate_network: Some(false),
+            filesystem_mode: Some(FilesystemIsolationMode::WorkspaceOnly),
+            allowed_mounts: None,
+        })
+        .expect_err("read-only should reject rm");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -14,6 +14,9 @@ use walkdir::WalkDir;
 
 use crate::pdf_liteparse;
 
+/// Upper bound for loading a single file as UTF-8 text in `read_file` (plain text and `.ipynb` raw JSON).
+pub const MAX_TEXT_FILE_READ_BYTES: u64 = 10 * 1024 * 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TextFilePayload {
     #[serde(rename = "filePath")]
@@ -153,7 +156,18 @@ pub fn read_file(
 
     let full_text = match ext.as_deref() {
         Some("ipynb") => {
-            let raw = fs::read_to_string(&absolute_path)?;
+            let raw = fs::read(&absolute_path)?;
+            if raw.len() as u64 > MAX_TEXT_FILE_READ_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "notebook file too large (limit {MAX_TEXT_FILE_READ_BYTES} bytes)"
+                    ),
+                ));
+            }
+            let raw = String::from_utf8(raw).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "notebook is not valid UTF-8")
+            })?;
             format_ipynb_text(&raw)?
         }
         Some("pdf") => pdf_liteparse::read_pdf_as_text(&absolute_path, pages)?,
@@ -174,6 +188,20 @@ pub fn read_file(
                 ));
             }
             let bytes = fs::read(&absolute_path)?;
+            if bytes.len() as u64 > MAX_TEXT_FILE_READ_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "file too large to read as text (limit {MAX_TEXT_FILE_READ_BYTES} bytes); use a smaller file or split the content"
+                    ),
+                ));
+            }
+            if bytes.iter().any(|&b| b == 0) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "file appears binary (NUL byte); not read as UTF-8 text",
+                ));
+            }
             String::from_utf8(bytes).map_err(|_| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -669,7 +697,10 @@ mod tests {
     use std::io;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{edit_file, glob_search, grep_search, read_file, write_file, GrepSearchInput};
+    use super::{
+        edit_file, glob_search, grep_search, read_file, write_file, GrepSearchInput,
+        MAX_TEXT_FILE_READ_BYTES,
+    };
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         let unique = SystemTime::now()
@@ -719,6 +750,17 @@ mod tests {
         let out = read_file(path.to_string_lossy().as_ref(), None, None, None).expect("read ipynb");
         assert!(out.file.content.contains("Cell[0]"));
         assert!(out.file.content.contains("print(1)"));
+    }
+
+    #[test]
+    fn read_rejects_oversized_plain_text_file() {
+        let path = temp_path("huge.txt");
+        let size = (MAX_TEXT_FILE_READ_BYTES as usize).saturating_add(1);
+        let big = vec![b'n'; size];
+        fs::write(&path, &big).expect("write");
+        let err = read_file(path.to_string_lossy().as_ref(), None, None, None)
+            .expect_err("oversized read should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]

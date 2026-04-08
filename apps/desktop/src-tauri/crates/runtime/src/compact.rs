@@ -1,3 +1,7 @@
+//! Conversation compaction and token estimates for long sessions.
+//! Relay defaults live in [`CompactionConfig`]. Parity tracking vs claw-code `PARITY.md` (compaction / token accuracy)
+//! is documented under `docs/IMPLEMENTATION.md` — milestone **2026-04-10 claw-code reference adoption**.
+
 use crate::session::{ContentBlock, ConversationMessage, MessageRole, Session};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

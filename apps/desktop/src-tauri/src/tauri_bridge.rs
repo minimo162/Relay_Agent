@@ -13,6 +13,7 @@ use crate::models::{
     RelayDiagnostics, RespondAgentApprovalRequest, StartAgentRequest,
 };
 use crate::registry::SessionRegistry;
+use runtime::MAX_TEXT_FILE_READ_BYTES;
 
 /* ── Copilot Node bridge (copilot_server.js) ───────────────── *
  * Spawns Node + copilot_server.js, which attaches to Edge via *
@@ -954,7 +955,58 @@ pub fn mcp_check_server_status(name: String) -> Result<McpServerInfo, String> {
         .map_err(|e| format!("registry lock poisoned: {e}"))?;
     data.get(&name)
         .cloned()
-        .ok_or_else(|| format!("server `{name}` not found"))
+        .ok_or_else(|| {
+            format!("MCP server `{name}` not found — register it via Settings or `mcp_add_server`")
+        })
+}
+
+fn relay_doctor_hints() -> Vec<String> {
+    let mut hints = Vec::new();
+    hints.push(format!(
+        "Copilot Node bridge port {COPILOT_HTTP_PORT}; default Edge CDP target port {COPILOT_JS_CDP_PORT} (see scripts/start-relay-edge-cdp.sh and docs/COPILOT_E2E_CDP_PITFALLS.md)."
+    ));
+    if let Ok(v) = std::env::var("RELAY_CDP_LEGACY_COMPOSER") {
+        if matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ) {
+            hints.push(
+                "RELAY_CDP_LEGACY_COMPOSER is on: full prompt is pasted into the composer instead of file attach."
+                    .into(),
+            );
+        }
+    }
+    if std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .is_some()
+    {
+        hints.push(
+            "ANTHROPIC_API_KEY is set. The M365 Copilot CDP path does not use it; direct Anthropic APIs are out of scope for this surface."
+                .into(),
+        );
+    }
+    for (key, label) in [
+        ("HTTP_PROXY", "HTTP_PROXY"),
+        ("HTTPS_PROXY", "HTTPS_PROXY"),
+        ("NO_PROXY", "NO_PROXY"),
+    ] {
+        if std::env::var(key)
+            .ok()
+            .or_else(|| std::env::var(key.to_lowercase()).ok())
+            .filter(|s| !s.trim().is_empty())
+            .is_some()
+        {
+            hints.push(format!(
+                "{label} is set; ensure proxies allow localhost CDP/WebSocket to Edge if connections fail."
+            ));
+        }
+    }
+    hints.push(
+        "PDF read_file uses LiteParse via bundled relay-node when present (see README / AGENTS.md)."
+            .into(),
+    );
+    hints
 }
 
 /// JSON-friendly runtime facts for bug reports (mirrors `OpenWork` debug export, reduced scope).
@@ -968,6 +1020,19 @@ pub fn get_relay_diagnostics() -> RelayDiagnostics {
             )
         })
         .unwrap_or(false);
+    let process_cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|e| format!("(unavailable: {e})"));
+    let claw_config_home_display = std::env::var("CLAW_CONFIG_HOME")
+        .map(|s| {
+            let t = s.trim();
+            if t.is_empty() {
+                "~/.claw (default)".to_string()
+            } else {
+                t.to_string()
+            }
+        })
+        .unwrap_or_else(|_| "~/.claw (default; set CLAW_CONFIG_HOME to override)".to_string());
     RelayDiagnostics {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         target_os: std::env::consts::OS.to_string(),
@@ -975,5 +1040,9 @@ pub fn get_relay_diagnostics() -> RelayDiagnostics {
         default_edge_cdp_port: COPILOT_JS_CDP_PORT,
         relay_agent_dev_mode: dev,
         architecture_notes: "Copilot path uses the bundled Node bridge on copilot_node_bridge_port; Edge CDP defaults to default_edge_cdp_port (see scripts/start-relay-edge-cdp.sh).".to_string(),
+        process_cwd,
+        claw_config_home_display,
+        max_text_file_read_bytes: MAX_TEXT_FILE_READ_BYTES,
+        doctor_hints: relay_doctor_hints(),
     }
 }

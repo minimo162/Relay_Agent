@@ -57,7 +57,7 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
     let mut specs = vec![
         ToolSpec {
             name: "bash",
-            description: "Execute a shell command in the current workspace.",
+            description: "Execute a shell command (sandboxed on supported hosts). When project `.claw` settings set permission mode to read-only, obviously mutating commands (e.g. rm, cp, git commit) are rejected before run—claw-style guard; prefer read_file/write_file/edit_file for file I/O when those tools apply.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -3101,6 +3101,9 @@ mod tests {
 
     #[test]
     fn web_search_extracts_and_filters_results() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let server = TestServer::spawn(Arc::new(|request_line: &str| {
             assert!(request_line.contains("GET /search?q=rust+web+search "));
             HttpResponse::html(

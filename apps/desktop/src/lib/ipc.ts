@@ -54,6 +54,10 @@ export interface RelayDiagnostics {
   defaultEdgeCdpPort: number;
   relayAgentDevMode: boolean;
   architectureNotes: string;
+  processCwd: string;
+  clawConfigHomeDisplay: string;
+  maxTextFileReadBytes: number;
+  doctorHints: string[];
 }
 
 export interface CancelAgentRequest {

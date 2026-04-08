@@ -29,9 +29,11 @@ fn cdp_legacy_composer_full_paste() -> bool {
 }
 
 use runtime::{
-    self, ApiClient, ApiRequest, AssistantEvent, ContentBlock, ConversationMessage, McpServerManager,
-    PermissionMode, PermissionPolicy, PermissionPromptDecision, PermissionPrompter,
-    PermissionRequest, RuntimeError, Session as RuntimeSession, TokenUsage, ToolExecutor,
+    self, assert_path_in_workspace, lexical_normalize, resolve_against_workspace, ApiClient,
+    BashConfigCwdGuard,
+    ApiRequest, AssistantEvent, ContentBlock, ConversationMessage, McpServerManager, PermissionMode,
+    PermissionPolicy, PermissionPromptDecision, PermissionPrompter, PermissionRequest, RuntimeError,
+    Session as RuntimeSession, TokenUsage, ToolExecutor,
 };
 
 use crate::copilot_persistence::{self, PersistedSessionConfig};
@@ -917,6 +919,91 @@ impl PermissionPrompter for TauriApprovalPrompter {
 
 /* ── Tool executor ─── */
 
+/// When a session workspace (`cwd`) is set, require file-tool paths to resolve inside it
+/// (claw-code PARITY-style workspace boundary).
+fn enforce_workspace_tool_paths(
+    tool_name: &str,
+    input: &mut Value,
+    workspace: &std::path::Path,
+) -> Result<(), runtime::ToolError> {
+    let normalize_key =
+        |obj: &mut serde_json::Map<String, Value>, key: &str| -> Result<(), runtime::ToolError> {
+            let Some(Value::String(s)) = obj.get(key) else {
+                return Ok(());
+            };
+            let joined = resolve_against_workspace(s, workspace);
+            let norm = lexical_normalize(joined);
+            assert_path_in_workspace(&norm, workspace)
+                .map_err(|e| runtime::ToolError::new(e.to_string()))?;
+            obj.insert(
+                key.to_string(),
+                Value::String(norm.to_string_lossy().into_owned()),
+            );
+            Ok(())
+        };
+
+    let Some(obj) = input.as_object_mut() else {
+        return Ok(());
+    };
+
+    match tool_name {
+        "read_file" => {
+            for key in ["path", "file_path"] {
+                normalize_key(obj, key)?;
+            }
+        }
+        "write_file" | "edit_file" => {
+            normalize_key(obj, "path")?;
+        }
+        "glob_search" | "grep_search" => {
+            let has_path = obj
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            if !has_path {
+                let root = workspace
+                    .canonicalize()
+                    .map_err(|e| runtime::ToolError::new(e.to_string()))?;
+                obj.insert(
+                    "path".to_string(),
+                    Value::String(root.to_string_lossy().into_owned()),
+                );
+            }
+            normalize_key(obj, "path")?;
+        }
+        "pdf_merge" => {
+            normalize_key(obj, "output_path")?;
+            if let Some(Value::Array(paths)) = obj.get_mut("input_paths") {
+                for p in paths.iter_mut() {
+                    if let Value::String(s) = p {
+                        let joined = resolve_against_workspace(s, workspace);
+                        let norm = lexical_normalize(joined);
+                        assert_path_in_workspace(&norm, workspace)
+                            .map_err(|e| runtime::ToolError::new(e.to_string()))?;
+                        *p = Value::String(norm.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+        "pdf_split" => {
+            normalize_key(obj, "input_path")?;
+            if let Some(Value::Array(segs)) = obj.get_mut("segments") {
+                for seg in segs.iter_mut() {
+                    if let Some(om) = seg.as_object_mut() {
+                        normalize_key(om, "output_path")?;
+                    }
+                }
+            }
+        }
+        "NotebookEdit" => {
+            normalize_key(obj, "notebook_path")?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 pub fn build_tool_executor(
     app: &AppHandle,
     session_id: &str,
@@ -966,6 +1053,17 @@ impl ToolExecutor for TauriToolExecutor {
         let mut input_value: Value =
             serde_json::from_str(input).unwrap_or_else(|_| serde_json::json!({}));
 
+        let _bash_config_cwd = if tool_name == "bash" {
+            let root = self
+                .cwd
+                .as_ref()
+                .map(|s| PathBuf::from(s.trim()))
+                .filter(|p| !p.as_os_str().is_empty());
+            Some(BashConfigCwdGuard::set(root))
+        } else {
+            None
+        };
+
         // Fix #2 — prevent AI from disabling the sandbox via input JSON
         if tool_name == "bash" {
             if let Some(obj) = input_value.as_object_mut() {
@@ -980,6 +1078,13 @@ impl ToolExecutor for TauriToolExecutor {
                     let prefixed = format!("cd '{escaped}' && ( {cmd} )");
                     input_value["command"] = Value::String(prefixed);
                 }
+            }
+        }
+
+        if let Some(ref cwd) = self.cwd {
+            let trimmed = cwd.trim();
+            if !trimmed.is_empty() {
+                enforce_workspace_tool_paths(tool_name, &mut input_value, std::path::Path::new(trimmed))?;
             }
         }
 

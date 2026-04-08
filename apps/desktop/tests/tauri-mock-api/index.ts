@@ -117,6 +117,10 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
         defaultEdgeCdpPort: 9360,
         relayAgentDevMode: false,
         architectureNotes: "mock",
+        processCwd: "/mock",
+        clawConfigHomeDisplay: "~/.claw (mock)",
+        maxTextFileReadBytes: 10485760,
+        doctorHints: ["mock"],
       };
     case "mcp_list_servers":
       return s.mcpServers;

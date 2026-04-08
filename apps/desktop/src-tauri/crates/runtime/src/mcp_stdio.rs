@@ -241,7 +241,10 @@ pub enum McpServerManagerError {
 impl std::fmt::Display for McpServerManagerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Io(error) => write!(f, "{error}"),
+            Self::Io(error) => write!(
+                f,
+                "MCP I/O error: {error}. If a stdio server exited immediately, verify its command and args in MCP settings."
+            ),
             Self::JsonRpc {
                 server_name,
                 method,
@@ -259,10 +262,14 @@ impl std::fmt::Display for McpServerManagerError {
                 f,
                 "MCP server `{server_name}` returned invalid response for {method}: {details}"
             ),
-            Self::UnknownTool { qualified_name } => {
-                write!(f, "unknown MCP tool `{qualified_name}`")
-            }
-            Self::UnknownServer { server_name } => write!(f, "unknown MCP server `{server_name}`"),
+            Self::UnknownTool { qualified_name } => write!(
+                f,
+                "unknown MCP tool `{qualified_name}` (not in the current tool index; rediscover tools or reconnect the server)"
+            ),
+            Self::UnknownServer { server_name } => write!(
+                f,
+                "unknown MCP server `{server_name}` (not registered in the active MCP configuration)"
+            ),
         }
     }
 }
@@ -1699,5 +1706,15 @@ mod tests {
 
             cleanup_script(&script_path);
         });
+    }
+
+    #[test]
+    fn unknown_server_display_hints_registration() {
+        let err = McpServerManagerError::UnknownServer {
+            server_name: "demo".to_string(),
+        };
+        let s = err.to_string();
+        assert!(s.contains("demo"));
+        assert!(s.contains("not registered"));
     }
 }

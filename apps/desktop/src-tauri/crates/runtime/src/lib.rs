@@ -1,4 +1,5 @@
 mod bash;
+mod bash_validation;
 mod bootstrap;
 mod compact;
 mod config;
@@ -19,8 +20,10 @@ mod remote;
 pub mod sandbox;
 mod session;
 mod usage;
+mod workspace_path;
 
 pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
+pub use bash_validation::BashConfigCwdGuard;
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
 pub use compact::{
     compact_session, estimate_session_tokens, format_compact_summary,
@@ -40,7 +43,7 @@ pub use conversation::{
 pub use file_ops::{
     edit_file, glob_search, grep_search, read_file, write_file, EditFileOutput, GlobSearchOutput,
     GrepSearchInput, GrepSearchOutput, ReadFileOutput, StructuredPatchHunk, TextFilePayload,
-    WriteFileOutput,
+    WriteFileOutput, MAX_TEXT_FILE_READ_BYTES,
 };
 pub use hooks::{HookEvent, HookRunResult, HookRunner};
 pub use mcp::{
@@ -84,6 +87,9 @@ pub use remote::{
 pub use session::{ContentBlock, ConversationMessage, MessageRole, Session, SessionError};
 pub use usage::{
     format_usd, pricing_for_model, ModelPricing, TokenUsage, UsageCostEstimate, UsageTracker,
+};
+pub use workspace_path::{
+    assert_path_in_workspace, lexical_normalize, resolve_against_workspace,
 };
 
 #[cfg(test)]

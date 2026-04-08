@@ -355,3 +355,108 @@ mod tests {
         assert!(names.contains(&"BashTool"));
     }
 }
+
+/// Deterministic scenarios inspired by claw-code mock parity (tool + permission + workspace).
+#[cfg(test)]
+mod parity_style {
+    use std::fs;
+
+    use runtime::{
+        assert_path_in_workspace, BashConfigCwdGuard, PermissionMode, PermissionOutcome,
+        PermissionPolicy, PermissionPromptDecision, PermissionPrompter, PermissionRequest,
+    };
+    use serde_json::json;
+    use tools::execute_tool;
+
+    #[test]
+    fn read_file_roundtrip_under_temp_workspace() {
+        let dir = std::env::temp_dir().join(format!("relay-parity-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("hello.txt");
+        fs::write(&f, "parity").unwrap();
+        let v = json!({ "path": f.to_string_lossy() });
+        let out = execute_tool("read_file", &v).expect("read_file");
+        assert!(out.contains("parity"), "{out}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_file_denied_under_read_only_policy() {
+        let policy = PermissionPolicy::new(PermissionMode::ReadOnly)
+            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite);
+        assert!(matches!(
+            policy.authorize("write_file", "{}", None),
+            PermissionOutcome::Deny { .. }
+        ));
+    }
+
+    #[test]
+    fn bash_escalation_prompts_under_workspace_write_policy() {
+        let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("bash", PermissionMode::DangerFullAccess);
+        struct AllowPrompter;
+        impl PermissionPrompter for AllowPrompter {
+            fn decide(&mut self, _request: &PermissionRequest) -> PermissionPromptDecision {
+                PermissionPromptDecision::Allow
+            }
+        }
+        let mut p = AllowPrompter;
+        assert_eq!(
+            policy.authorize("bash", r#"{"command":"echo hi"}"#, Some(&mut p)),
+            PermissionOutcome::Allow
+        );
+    }
+
+    #[test]
+    fn workspace_boundary_rejects_outside_path() {
+        let dir = std::env::temp_dir().join(format!("relay-ws-parity-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let outside = dir
+            .parent()
+            .expect("parent")
+            .join("relay_ws_outside_probe.txt");
+        let err = assert_path_in_workspace(&outside, &dir).expect_err("outside workspace");
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bash_read_only_project_rejects_rm_via_execute_tool() {
+        let root = std::env::temp_dir().join(format!("relay-parity-bash-ro-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".claw")).expect("claw dir");
+        std::fs::write(
+            root.join(".claw/settings.json"),
+            r#"{"permissionMode":"read-only"}"#,
+        )
+        .expect("settings");
+        let _guard = BashConfigCwdGuard::set(Some(root.clone()));
+        let err = execute_tool("bash", &json!({ "command": "rm -f x.txt" })).expect_err("rm blocked");
+        assert!(
+            err.to_ascii_lowercase().contains("read-only")
+                || err.to_ascii_lowercase().contains("permission"),
+            "{err}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn glob_and_read_multi_step_style() {
+        let dir = std::env::temp_dir().join(format!("relay-multi-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.rs"), "fn x() {}").unwrap();
+        let glob = execute_tool(
+            "glob_search",
+            &json!({
+                "pattern": "*.rs",
+                "path": dir.to_string_lossy(),
+            }),
+        )
+        .expect("glob");
+        assert!(
+            glob.contains("a.rs") || glob.contains("numFiles"),
+            "{glob}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

@@ -14,6 +14,7 @@
   1. `PLANS.md`
   2. `AGENTS.md`
   3. `docs/IMPLEMENTATION.md`
+  4. `docs/CLAW_CODE_ALIGNMENT.md` (claw-code reference pin, parity checklist, tool-catalog notes — optional for features unrelated to that alignment)
 - The Rust crate types and IPC command signatures in `src-tauri/` are the source of truth for contracts.
 - The frontend types in `src/lib/ipc.ts` must stay in sync with the Rust IPC layer.
 

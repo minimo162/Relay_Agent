@@ -16,6 +16,34 @@
 
 ## Milestone Log
 
+### 2026-04-09 Claw-code alignment baseline (docs + integration stance)
+
+**Source of truth (current tree):** The desktop crate [`apps/desktop/src-tauri/Cargo.toml`](apps/desktop/src-tauri/Cargo.toml) has **no** `claw-*` git/path dependencies. The agent loop is [`apps/desktop/src-tauri/src/agent_loop.rs`](apps/desktop/src-tauri/src/agent_loop.rs) plus internal crates [`runtime`](apps/desktop/src-tauri/crates/runtime), [`tools`](apps/desktop/src-tauri/crates/tools), [`commands`](apps/desktop/src-tauri/crates/commands). Session/history types are **in-repo** (e.g. [`storage.rs`](apps/desktop/src-tauri/src/storage.rs), [`registry.rs`](apps/desktop/src-tauri/src/registry.rs)); they are **not** `claw_core::SessionState`.
+
+**Historical note:** Older log entries below that mention `claw-core`, `claw_tools::ToolRegistry`, or pins to `claw-cli/claw-code-rust` describe a **superseded or unmerged experiment**. Treat them as archive context unless a future milestone reintroduces those crates and updates this baseline.
+
+**Integration decision (see `PLANS.md` — Claw-code integration):** Continue **in-repo** agent/runtime/tools aligned with [Claw Code](https://github.com/ultraworkers/claw-code) behavior and [tool-system](https://claw-code.codes/tool-system) docs; use **ultraworkers/claw-code** `rust/` as the reference for parity and selective ports. **Optional later:** add a `git` dependency on upstream crates if API stability and license review allow. Relay-specific layers stay: M365 Copilot + CDP bridge (`copilot_*`, `agent_loop` CDP client), Tauri IPC, LiteParse/Office/PDF desktop glue.
+
+**Artifacts this milestone:** `PLANS.md` (integration subsection), `docs/IMPLEMENTATION.md` (this entry), `docs/CLAW_CODE_ALIGNMENT.md` (module boundaries + parity checklist), `runtime` workspace path policy + read size cap, extended `RelayDiagnostics` / `get_relay_diagnostics`, `compat-harness` parity-style tests.
+
+**Verification:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace` — pass (2026-04-09). `pnpm --filter @relay-agent/desktop typecheck` — pass (2026-04-09).
+
+### 2026-04-10 claw-code reference adoption (selective port)
+
+**Upstream pin:** [ultraworkers/claw-code](https://github.com/ultraworkers/claw-code) `main` at **`e4c38718824bda32c054664d1a01e591b489f635`** (recorded when porting this batch; refresh on future diffs).
+
+**Bash (read-only guard):** Added [`runtime/src/bash_validation.rs`](apps/desktop/src-tauri/crates/runtime/src/bash_validation.rs) — when merged `.claw` settings resolve to **read-only**, shell commands that *appear* mutating (`rm`, `cp`, `git commit`, `> ` redirects, etc.) are rejected before spawn. Session workspace for config discovery uses [`BashConfigCwdGuard`](apps/desktop/src-tauri/crates/runtime/src/bash_validation.rs) set from [`TauriToolExecutor`](apps/desktop/src-tauri/src/agent_loop.rs) during `bash` tool calls (not process CWD). Subset of claw PARITY bash-validation intent, not the full upstream matrix.
+
+**MCP messages:** Clearer user-facing strings for [`McpServerManagerError`](apps/desktop/src-tauri/crates/runtime/src/mcp_stdio.rs) (`Display`) and [`mcp_check_server_status`](apps/desktop/src-tauri/src/tauri_bridge.rs) when a server name is missing.
+
+**Tool catalog copy:** [`bash`](apps/desktop/src-tauri/crates/tools/src/lib.rs) tool description documents read-only rejection and file-tool preference.
+
+**Compaction (design only this milestone):** claw `PARITY.md` still lists session compaction / token accuracy as open parity items. Relay keeps [`CompactionConfig`](apps/desktop/src-tauri/crates/runtime/src/compact.rs) defaults (`preserve_recent_messages: 4`, `max_estimated_tokens: 10_000`) and auto-compaction env `CLAUDE_CODE_AUTO_COMPACT_INPUT_TOKENS`. **Next implementation step (when prioritized):** diff claw `rust/` compaction triggers and summary shape, then adjust thresholds or formatting behind a single config surface; avoid changing Copilot CDP message packaging without an explicit milestone.
+
+**Docs:** [`docs/CLAW_CODE_ALIGNMENT.md`](docs/CLAW_CODE_ALIGNMENT.md) — upstream pin procedure, Relay vs claw tool list, mock-parity scenario map.
+
+**Verification:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace` — pass (2026-04-10).
+
 ### 2026-04-08 Workspace display + native folder picker
 
 **Outcome:** Centralized path formatting in **`apps/desktop/src/lib/workspace-display.ts`** (`workspaceBasename`, `ellipsisPath`). **`ShellHeader`** shows a clickable workspace chip (`data-ra-workspace-chip`) with basename or “Workspace not set”. **`StatusBar`** always shows workspace status: ellipsis path + **Copy** when set, otherwise a short hint to use Settings (`data-ra-workspace-label`). **`MessageFeed`** empty state uses the configured path in eyebrow/subtitle or prompts for Settings. **`tauri-plugin-dialog`** + **`@tauri-apps/plugin-dialog`** with **`dialog:default`** in **`capabilities/default.json`**; **Settings** workspace row includes **Browse…** when `isTauri()` (hidden in Vite/Playwright). Choosing a folder saves cwd immediately and refreshes the shell label via **`onSaved`**.

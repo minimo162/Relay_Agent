@@ -10,5 +10,8 @@ commands = { path = "../commands" }
 tools = { path = "../tools" }
 runtime = { path = "../runtime" }
 
+[dev-dependencies]
+serde_json = "1"
+
 [lints]
 workspace = true
