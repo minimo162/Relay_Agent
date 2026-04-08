@@ -324,7 +324,8 @@ npx playwright test
 
 ### Inspect M365 Copilot DOM over CDP (Playwright)
 
-**Reminder (このリポ／開発環境):** `connectOverCDP` や下記スモークは、**既に M365 にサインイン済みの Edge**（Relay 用プロファイル例: `~/RelayAgentEdgeProfile`、CDP 例: **9333**）に繋ぐ前提です。未ログインだとログイン画面だけが取れ、DOM 調査・`m365-cdp-chat` テストは意味がありません。
+**Reminder (このリポ／開発環境):** `connectOverCDP` や下記スモークは、**既に M365 にサインイン済みの Edge**（Relay 用プロファイル例: `~/RelayAgentEdgeProfile`、CDP 例: **9333**）に繋ぐ前提です。未ログインだとログイン画面だけが取れ、DOM 調査・`m365-cdp-chat` テストは意味がありません。  
+**いつでも同じ条件で使う手順**（固定ポート・固定プロファイル・Linux `pnpm relay:edge`・Windows ショートカット例・自動起動のヒント）は [`docs/COPILOT_E2E_CDP_PITFALLS.md` の「Always-on CDP」節](docs/COPILOT_E2E_CDP_PITFALLS.md#always-on-cdp-signed-in-copilot-browser)を参照してください。
 
 Use this when tuning selectors or debugging extract/wait behavior. Start Edge with remote debugging (e.g. port **9333**), open **M365 Chat** (signed in), then:
 
@@ -364,7 +365,8 @@ CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test --config=playwright-cdp.c
    `chmod +x scripts/relay-copilot-linux.sh && ./scripts/relay-copilot-linux.sh`  
    （`$HOME/novnc-m365/start-x11-desktop.sh` があれば `DISPLAY` 未設定時に自動実行します。パスは `RELAY_START_X11` で変更可）  
    既定で **`scripts/start-relay-edge-cdp.sh`** により Edge（CDP **9333**）を先起動します。無効化: `RELAY_PRESTART_EDGE=0`  
-   手動だけ先に Edge を立てる場合: `pnpm relay:edge`（`DISPLAY` 必須）
+   手動だけ先に Edge を立てる場合: `pnpm relay:edge`（`DISPLAY` 必須）  
+   **`apps/desktop` で `pnpm tauri:dev` だけ** でも、Unix では同じ先起動スクリプトが自動実行されます（`RELAY_SKIP_PRESTART_EDGE=1` で省略。Windows は手動 Edge 起動の案内のみ）。
 5. **Relay 用 Edge を noVNC で表示**する（Chromium 版 noVNC とは別）:  
    `~/novnc-m365/start-novnc-relay.sh`  
    同じ **~/RelayAgentEdgeProfile** と **CDP 9333** で起動するため、アプリ／`copilot_server` と画面が一致します。

@@ -129,7 +129,7 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
     }
     case "connect_cdp":
     case "cdp_start_new_chat":
-      return { ok: true, debugUrl: "", pageUrl: "", pageTitle: "", port: 9222, launched: false, error: null };
+      return { ok: true, debugUrl: "", pageUrl: "", pageTitle: "", port: 9333, launched: false, error: null };
     case "cdp_send_prompt":
       return { ok: true, responseText: "", bodyLength: 0, error: null };
     case "cdp_screenshot":

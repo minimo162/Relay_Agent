@@ -1036,7 +1036,7 @@ async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
                 url: p.url,
                 title: p.title,
             },
-            port: parse_port(debug_url).unwrap_or(9222),
+            port: parse_port(debug_url).unwrap_or(9333),
             launched: false,
             edge_process: None,
         }));
@@ -1062,7 +1062,7 @@ async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
                         url: first.url.clone(),
                         title: first.title.clone(),
                     },
-                    port: parse_port(debug_url).unwrap_or(9222),
+                    port: parse_port(debug_url).unwrap_or(9333),
                     launched: false,
                     edge_process: None,
                 }));

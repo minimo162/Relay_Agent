@@ -23,7 +23,8 @@ import { defineConfig } from "@playwright/test";
  *     and re-authenticate via MFA when tests start redirecting to login.microsoftonline.com.
  */
 
-const CDP_ENDPOINT = process.env.CDP_ENDPOINT || "http://localhost:9222";
+const CDP_ENDPOINT =
+  process.env.CDP_ENDPOINT || "http://127.0.0.1:9333";
 
 export default defineConfig({
   testDir: "./tests",

@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "tauri:dev": "tauri dev",
+    "tauri:dev": "node ./scripts/prestart-relay-edge.mjs && tauri dev",
     "tauri:dev:cdp": "node ./scripts/tauri-dev-cdp.mjs",
     "tauri:build": "tauri build",
     "test:e2e": "playwright test",

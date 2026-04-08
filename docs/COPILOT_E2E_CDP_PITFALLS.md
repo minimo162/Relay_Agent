@@ -184,11 +184,81 @@ CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test --config=playwright-cdp.c
 - それでも足りない場合は **コンポーザ外殻をユーザー操作相当でクリックしてから** 再度 `Input.dispatchKeyEvent(Enter)` を送る（`m365-copilot-cdp.spec.ts` の `CDP Enter after shell click` 戦略）。
 - 送信ボタンが無効の間は Enter も効かないことがあるため、**添付・progress 系の UI がコンポーザ付近に残っていないこと**と、**送信コントロールが有効に見えること**の待機を `submitPromptRaw` に倣って入れる（テストではコンポーザ周辺にスコープしたセレクタで誤検知を抑える）。
 
+## Always-on CDP (signed-in Copilot browser)
+
+**目的:** `connectOverCDP`・`m365-cdp-chat`・`inspect:copilot-dom`・アプリの「Copilot に自動送信」と **同じ条件**（固定ポート + ログイン状態が残るプロファイル）を、毎回迷わず再現する。
+
+### 原則（ここを外すと「サインイン済みなのに繋がらない」になる）
+
+1. **常に同じ `--user-data-dir` を使う。** クッキーと M365 セッションはプロファイル単位。別ディレクトリで起動すると未ログイン扱いになる。
+2. **常に同じ `--remote-debugging-port` を使う（例: 9333）。** Relay・Playwright・検証スクリプトの既定が揃っている。
+3. **`--remote-allow-origins=*` を付ける。** Chromium 111+ で CDP WebSocket が弾かれないようにする（`start-relay-edge-cdp.sh` と Rust 側の起動引数と同趣旨）。
+
+### 推奨プロファイル（Relay と一致）
+
+- **既定パス:** `~/RelayAgentEdgeProfile`（Windows では `%USERPROFILE%\RelayAgentEdgeProfile` に相当するホーム配下）。
+- Tauri の `cdp_copilot::relay_agent_edge_profile_dir()`、ルートの **`scripts/start-relay-edge-cdp.sh`**、環境変数 **`RELAY_EDGE_PROFILE`**（未設定時は上記）が同じ場所を指す。
+- **初回だけ** その Edge で `https://m365.cloud.microsoft/chat` を開き、M365 にサインイン（MFA 含む）。以降はプロファイルに保存される。
+
+### Linux（X11 / デスクトップあり）
+
+```bash
+# リポジトリルート — CDP 9333、プロファイル ~/RelayAgentEdgeProfile
+pnpm relay:edge
+# または
+bash scripts/start-relay-edge-cdp.sh
+```
+
+- **`pnpm tauri:dev`（`apps/desktop`）** は Unix 上で上記と同じ **`scripts/start-relay-edge-cdp.sh`** を **先に**実行する（`apps/desktop/scripts/prestart-relay-edge.mjs`）。既に CDP が応答していればスクリプトは即終了。**無効化:** `RELAY_SKIP_PRESTART_EDGE=1`。**Windows** ではプレースホルダのみ（手動で Edge を 9333 起動）。
+- **`DISPLAY` が必要**（ローカルデスクトップまたは Xvfb 等）。スクリプトが `xdpyinfo` で確認する。
+- 既に `http://127.0.0.1:9333/json/version` が応答していれば **二重起動しない**（そのまま終了コード 0）。
+- 開発用ワンショット: `./scripts/relay-copilot-linux.sh` が（既定で）同スクリプトで Edge を先起動する。無効化: **`RELAY_PRESTART_EDGE=0`**。
+
+環境変数でポート・プロファイルを上書きできる:
+
+| 変数 | 既定 | 意味 |
+|------|------|------|
+| `RELAY_EDGE_CDP_PORT` | `9333` | CDP HTTP のポート |
+| `RELAY_EDGE_PROFILE` | `~/RelayAgentEdgeProfile` | Edge のユーザーデータディレクトリ |
+
+### Windows
+
+1. **専用プロファイル**（例 `%USERPROFILE%\RelayAgentEdgeProfile`）を決め、**いつも同じ** `--user-data-dir=...` で起動する。
+2. ショートカットや `.bat` の例（ポートは Relay 既定に合わせる）:
+
+```text
+msedge.exe --remote-debugging-port=9333 --remote-allow-origins=* ^
+  --user-data-dir=%USERPROFILE%\RelayAgentEdgeProfile ^
+  --no-first-run --no-default-browser-check ^
+  https://m365.cloud.microsoft/chat/
+```
+
+- **注意:** 同じ `--user-data-dir` で **通常の Edge がすでに起動している**と、プロファイルロックで二重起動できない。Relay 用は **このショートカット専用**にするか、作業中は通常 Edge を閉じる。
+
+### Relay デスクトップアプリと揃える
+
+- 設定の **`autoLaunchEdge`**（既定オン）と **`cdpPort`**（既定 9333）が、上記の手動 Edge と **同じポート**になるようにする。
+- そうすると「手動で立てた CDP Edge」と「アプリからの `copilot-browser.js` / `copilot_server`」が **同じブラウザ**に付きやすい。
+
+### 接続できているかの確認
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:9333/json/version
+# 期待: 200
+```
+
+### 「ログイン時にいつも立ち上げたい」場合（任意）
+
+- **Linux:** `~/.config/autostart/` に `.desktop` を置き、`Exec=` に `bash /path/to/Relay_Agent/scripts/start-relay-edge-cdp.sh`（または `env RELAY_EDGE_PROFILE=...` を付与）。
+- **Windows:** タスク スケジューラでログオン時に上記 `msedge.exe` 行を実行。
+
+セッションの有効期限や組織ポリシーで再ログインが必要になったら、**同じプロファイルの Edge** を開いてブラウザから更新する（CDP だけではログイン操作を自動化しない前提）。
+
 ## トラブルシューティング
 
 | 現象 | 対処 |
 |------|------|
-| `CDP connection refused` | `microsoft-edge --remote-debugging-port=9222` が起動しているか確認 |
+| `CDP connection refused` | Edge が **`--remote-debugging-port=9333`**（または `RELAY_EDGE_CDP_PORT`）で起動しているか確認 |
 | サインイン画面にリダイレクト | Edgeを再起動（`pkill -f microsoft-edge`）して再認証 |
 | 送信ボタンが有効にならない | `page.keyboard.type()`を使用（`page.fill()`ではない） |
 | テストがタイムアウト | `timeout: 180_000`に設定済み。AI応答に60秒以上かかる場合はさらに拡張 |

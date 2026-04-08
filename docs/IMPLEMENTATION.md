@@ -16,6 +16,12 @@
 
 ## Milestone Log
 
+### 2026-04-08 Always-on CDP workflow wired into dev + IPC defaults
+
+**Outcome:** Unified **M365 Copilot CDP default port 9333** across Tauri IPC (`connect_cdp`, `cdp_send_prompt`, `cdp_start_new_chat`, `cdp_screenshot`), `cdp_copilot` parse fallbacks, `playwright-cdp.config.ts`, and `m365-copilot-capabilities-v2.spec.ts`. **`pnpm tauri:dev`** (`apps/desktop`) runs **`prestart-relay-edge.mjs`** on Unix to invoke `scripts/start-relay-edge-cdp.sh` first (skip: `RELAY_SKIP_PRESTART_EDGE=1`; Windows prints manual hint). Documented in `README.md`, `docs/COPILOT_E2E_CDP_PITFALLS.md`, `DEV_NOTES.md`.
+
+**Verification:** `cargo check -p relay-agent-desktop`, `pnpm typecheck` — pass.
+
 ### 2026-04-08 M365 Copilot CDP smoke (`m365-cdp-chat`)
 
 **Outcome:** Ran the **logged-in Copilot + CDP** Playwright suite against a live browser (`connectOverCDP`). Confirms composer visibility, Japanese prompt send (CDP `Input.dispatchKeyEvent` and shell-click fallback on turn 2), streaming completion via stop button, and multi-turn body growth. Documents that this slice does **not** require the Tauri app or CSV workbook path.

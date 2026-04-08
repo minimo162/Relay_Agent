@@ -33,6 +33,7 @@ fn copilot_server_slot() -> &'static Mutex<Option<CopilotServerState>> {
 }
 
 const COPILOT_HTTP_PORT: u16 = 18080;
+/// M365 Copilot Edge CDP port: must match `scripts/start-relay-edge-cdp.sh`, Playwright `m365-cdp-chat`, and `copilot_server.js`.
 const COPILOT_JS_CDP_PORT: u16 = 9333;
 
 pub fn ensure_copilot_server() -> Result<Arc<Mutex<crate::copilot_server::CopilotServer>>, String> {
@@ -582,7 +583,7 @@ pub async fn connect_cdp(
             return Ok(CdpConnectResult {
                 ok: true,
                 debug_url: state.cdp_port.map_or_else(
-                    || format!("http://127.0.0.1:{}", request.base_port.unwrap_or(9222)),
+                    || format!("http://127.0.0.1:{}", request.base_port.unwrap_or(COPILOT_JS_CDP_PORT)),
                     |p| format!("http://127.0.0.1:{p}"),
                 ),
                 page_url: state.page_url.clone().unwrap_or_default(),
@@ -595,7 +596,7 @@ pub async fn connect_cdp(
     }
 
     let auto_launch = request.auto_launch.unwrap_or(true);
-    let base_port = request.base_port.unwrap_or(9222);
+    let base_port = request.base_port.unwrap_or(COPILOT_JS_CDP_PORT);
     let debug_url = get_cdp_debug_url(base_port);
 
     tracing::info!(
@@ -640,14 +641,14 @@ pub async fn cdp_send_prompt(
     _app: AppHandle,
     request: CdpSendPromptRequest,
 ) -> Result<CdpPromptResult, String> {
-    let debug_url = get_cdp_debug_url(9222);
+    let debug_url = get_cdp_debug_url(COPILOT_JS_CDP_PORT);
     let timeout_secs = request.wait_response_secs.unwrap_or(120);
 
     let prompt_preview = &request.prompt[..request.prompt.len().min(60)];
     tracing::info!("[CDP] send prompt: {prompt_preview}…");
 
     // Use existing connection if available, otherwise connect fresh
-    let page = match cdp_copilot::connect_copilot_page(&debug_url, false, 9222).await {
+    let page = match cdp_copilot::connect_copilot_page(&debug_url, false, COPILOT_JS_CDP_PORT).await {
         Ok(r) => r.page.clone(),
         Err(e) => {
             return Ok(CdpPromptResult {
@@ -696,7 +697,7 @@ pub async fn cdp_start_new_chat(
     request: ConnectCdpRequest,
 ) -> Result<CdpConnectResult, String> {
     let auto_launch = request.auto_launch.unwrap_or(true);
-    let base_port = request.base_port.unwrap_or(9222);
+    let base_port = request.base_port.unwrap_or(COPILOT_JS_CDP_PORT);
     let debug_url = get_cdp_debug_url(base_port);
 
     let res = match cdp_copilot::connect_copilot_page(&debug_url, auto_launch, base_port).await {
@@ -804,10 +805,10 @@ pub async fn disconnect_cdp(_app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn cdp_screenshot(_app: AppHandle) -> Result<serde_json::Value, String> {
-    let debug_url = get_cdp_debug_url(9222);
+    let debug_url = get_cdp_debug_url(COPILOT_JS_CDP_PORT);
 
     // If already connected, reuse the session; otherwise do a fresh lookup
-    let page = match cdp_copilot::connect_copilot_page(&debug_url, false, 9222).await {
+    let page = match cdp_copilot::connect_copilot_page(&debug_url, false, COPILOT_JS_CDP_PORT).await {
         Ok(r) => r.page.clone(),
         Err(e) => return Err(format!("CDP connect: {e}")),
     };

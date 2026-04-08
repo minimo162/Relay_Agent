@@ -23,7 +23,9 @@ export default defineConfig({
         ...devices["Desktop Chrome"],
         // CDP connection mode
         connectOptions: {
-          wsEndpoint: process.env.CDP_WS_ENDPOINT || "ws://127.0.0.1:9222/devtools/browser/",
+          wsEndpoint:
+            process.env.CDP_WS_ENDPOINT ||
+            "ws://127.0.0.1:9333/devtools/browser/",
         },
       },
     },
