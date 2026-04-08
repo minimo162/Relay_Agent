@@ -4,7 +4,7 @@ Date: 2026-04-06
 
 ## Planning Baseline
 
-The repository now contains a **working Tauri v2 + SolidJS desktop application** under `apps/desktop/`, with the Rust backend in `apps/desktop/src-tauri/` and internal crates under `apps/desktop/src-tauri/crates/` (including `api`, `runtime`, `tools`, `commands`, `compat-harness`, `onyx-concept`; see `AGENTS.md` and the workspace manifests).
+The repository now contains a **working Tauri v2 + SolidJS desktop application** under `apps/desktop/`, with the Rust backend in `apps/desktop/src-tauri/` and internal crates under `apps/desktop/src-tauri/crates/` (including `runtime`, `tools`, `commands`, and `compat-harness`; see `AGENTS.md` and the workspace manifests). The experimental **`onyx-concept`** SQLite FTS5 crate was removed in favor of agent-driven workspace search via **`glob_search`** / **`grep_search`** until a future indexed-retrieval milestone is justified.
 
 Practical implication:
 

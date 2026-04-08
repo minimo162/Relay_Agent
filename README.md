@@ -48,7 +48,6 @@ The Relay window stays always on top.
 │  │  │  crates/runtime/   – Session core   │  │  │
 │  │  │  crates/tools/     – Tool registry  │  │  │
 │  │  │  crates/commands/  – Slash cmds     │  │  │
-│  │  │  crates/onyx-concept/ – RAG engine   │  │  │
 │  │  │  crates/compat-harness/             │  │  │
 │  │  └─────────────────────────────────────┘  │  │
 │  └───────────────────────────────────────────┘  │
@@ -118,7 +117,6 @@ Relay_Agent/
     │   │   ├── runtime/          # Session core, permissions, MCP
     │   │   ├── tools/            # Tool registry definitions
     │   │   ├── commands/         # Slash command handling
-    │   │   ├── onyx-concept/     # RAG engine (SQLite FTS5, Context Router, MCP)
     │   │   └── compat-harness/   # Upstream manifest extraction
     │   ├── capabilities/         # Tauri v2 capability files
     │   ├── binaries/
@@ -200,12 +198,6 @@ Relay_Agent/
 - **Panic Safety** — `catch_unwind` wrapper on the agent loop to prevent silent thread death and stuck sessions
 - **Session Search** — Sidebar session filtering with live search input
 - **CI Pipeline** — GitHub Actions workflow that fetches the bundled Node sidecar for Tauri `externalBin`, then runs `cargo check`, `cargo clippy`, and `pnpm typecheck` on every PR/push
-- **Onyx RAG Engine** — Internalized RAG architecture replacing external Docker/Vespa dependencies:
-  - `DataSource` trait abstraction for pluggable data connectors
-  - SQLite FTS5 hybrid search index for fast full-text retrieval
-  - Context Router for intelligent query routing and document ranking
-  - MCP Server integration for tool-based data access
-  - Built-in connectors for file system and git repositories
 
 ### 🚧 Planned / Partially Implemented
 

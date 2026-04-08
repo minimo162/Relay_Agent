@@ -16,6 +16,14 @@
 
 ## Milestone Log
 
+### 2026-04-08 Remove `onyx-concept` workspace crate
+
+**Outcome:** Deleted the unused **`apps/desktop/src-tauri/crates/onyx-concept`** package (SQLite FTS5 knowledge index prototype). It was never a dependency of `relay-agent-desktop` or other workspace members. Workspace retrieval remains **`glob_search`**, **`grep_search`**, and **`read_file`** in the agent tool loop.
+
+**Artifacts:** Root `Cargo.toml` (workspace members), `README.md`, `PLANS.md`, `Cargo.lock`
+
+**Verification:** `cargo check --workspace` (repo root) — pass.
+
 ### 2026-04-08 Main window always-on-top (`lib.rs` setup)
 
 **Outcome:** On startup, the **`main`** [`WebviewWindow`](https://docs.rs/tauri/latest/tauri/webview/struct.WebviewWindow.html) calls **`set_always_on_top(true)`** once. Missing window or platform errors are **`tracing::warn!`** only; the app still runs. Actual z-order stacking depends on the OS/window manager and is not asserted in CI.
