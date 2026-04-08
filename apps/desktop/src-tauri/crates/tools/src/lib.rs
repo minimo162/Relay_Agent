@@ -388,7 +388,16 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
     #[cfg(windows)]
     specs.push(ToolSpec {
         name: "PowerShell",
-        description: "Execute a PowerShell command with optional timeout.",
+        description: concat!(
+            "Windows only. Run PowerShell (prefers `pwsh`, else `powershell.exe`). ",
+            "Primary path for desktop Office automation via COM: Word, Excel, PowerPoint, and .msg files (open/read/save via Outlook.Application when Outlook is installed). ",
+            "Trust Center / programmatic access may block Outlook COM on locked-down PCs. ",
+            "The host prepends UTF-8 console setup (chcp 65001, OutputEncoding) unless RELAY_POWERSHELL_NO_UTF8_PREAMBLE is set. ",
+            "Performance: Copilot turns are slow—put Open→work→Save→Quit in ONE command string; do not split the same workbook across multiple PowerShell tool calls in one turn. ",
+            "Excel: NEVER loop COM per-cell; use 2D array assignment to Range.Value2, block ranges, CSV import, or similar batch APIs; prefer Application.ScreenUpdating=$false in try/finally. ",
+            "Word/PowerPoint: prefer batch Find/Replace, range-level edits; avoid Select/Activate. ",
+            "Return structured results with ConvertTo-Json -Compress on stdout when useful."
+        ),
         input_schema: json!({
             "type": "object",
             "properties": {
@@ -2513,14 +2522,34 @@ fn iso8601_timestamp() -> String {
     iso8601_now()
 }
 
+/// Prepends console UTF-8 setup so child stdout is less likely to be CP932 when the host decodes as UTF-8.
+/// Skip with `RELAY_POWERSHELL_NO_UTF8_PREAMBLE=1|true|yes|on`.
+#[cfg(windows)]
+fn prepend_powershell_utf8_console_setup(command: &str) -> String {
+    let skip = std::env::var("RELAY_POWERSHELL_NO_UTF8_PREAMBLE")
+        .map(|v| {
+            matches!(
+                v.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false);
+    if skip {
+        return command.to_string();
+    }
+    const PREAMBLE: &str = "chcp 65001 | Out-Null;[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);$OutputEncoding = [System.Text.UTF8Encoding]::new($false);";
+    format!("{PREAMBLE}{command}")
+}
+
 #[cfg(windows)]
 #[allow(clippy::needless_pass_by_value)]
 fn execute_powershell(input: PowerShellInput) -> std::io::Result<runtime::BashCommandOutput> {
     let _ = &input.description;
     let shell = detect_powershell_shell()?;
+    let command = prepend_powershell_utf8_console_setup(&input.command);
     execute_shell_command(
         shell,
-        &input.command,
+        &command,
         input.timeout,
         input.run_in_background,
     )
@@ -3696,6 +3725,26 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn powershell_utf8_preamble_inserts_console_setup() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = std::env::remove_var("RELAY_POWERSHELL_NO_UTF8_PREAMBLE");
+        let wrapped = super::prepend_powershell_utf8_console_setup("Write-Output 1");
+        assert!(wrapped.contains("chcp 65001"));
+        assert!(wrapped.contains("OutputEncoding"));
+        assert!(wrapped.ends_with("Write-Output 1"));
+
+        std::env::set_var("RELAY_POWERSHELL_NO_UTF8_PREAMBLE", "1");
+        assert_eq!(
+            super::prepend_powershell_utf8_console_setup("Write-Output 1"),
+            "Write-Output 1"
+        );
+        std::env::remove_var("RELAY_POWERSHELL_NO_UTF8_PREAMBLE");
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn powershell_runs_via_stub_shell() {
         let _guard = env_lock()
             .lock()
@@ -3741,8 +3790,13 @@ printf 'pwsh:%s' "$1"
         std::env::set_var("PATH", original_path);
         let _ = std::fs::remove_dir_all(dir);
 
+        let expected_cmd = super::prepend_powershell_utf8_console_setup("Write-Output hello");
         let output: serde_json::Value = serde_json::from_str(&result).expect("json");
-        assert_eq!(output["stdout"], "pwsh:Write-Output hello");
+        assert_eq!(
+            output["stdout"],
+            format!("pwsh:{expected_cmd}"),
+            "stub should receive UTF-8 preamble plus user command"
+        );
         assert!(output["stderr"].as_str().expect("stderr").is_empty());
 
         let background_output: serde_json::Value = serde_json::from_str(&background).expect("json");

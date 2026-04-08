@@ -21,6 +21,13 @@ MVP guardrails (authoritative summary: `AGENTS.md`):
 - **Priority B:** Harden MCP server integration, tool approval, and session management.
 - **Priority C:** Expand CDP browser automation and context-aware execution.
 
+### Windows desktop Office automation (PowerShell + COM)
+
+- **Scope:** On Windows builds, **Word, Excel, PowerPoint**, and **`.msg`** are driven primarily via the **`PowerShell` tool** and **COM** (`.msg` through `Outlook.Application` when Outlook is installed). Live Outlook inbox automation is out of scope for this slice.
+- **Performance:** Copilot turns are expensive—prefer **one PowerShell `command` per batch** (open → work → save → `Quit()`). **Excel:** no per-cell COM loops; use **2D array / `Range.Value2`**, block ranges, CSV import, etc.; `ScreenUpdating` off in try/finally when appropriate.
+- **Console UTF-8:** The `tools` crate prepends `chcp 65001` and output-encoding setup to every PowerShell invocation unless **`RELAY_POWERSHELL_NO_UTF8_PREAMBLE`** is set (`1`/`true`/`yes`/`on`), so the host’s UTF-8-oriented decoding is less likely to mojibake Japanese output on CP932 consoles.
+- **Prompts:** `agent_loop` adds Windows-only system and CDP catalog sections describing the above; the `PowerShell` tool description documents the contract.
+
 Additional product principles (spreadsheet-era PRD and reduction goals):
 - Minimize custom implementation. Prefer claw-code for behavior and system flow, and preserve custom code only where Relay must mediate M365 Copilot.
 - Current reduction rule: treat the in-repo workbook engine, workbook context inspection, and workbook-specific prompt shaping as removal targets. The desired end state is upstream `claw-code` / `claw-code-parity` for behavior and `openwork` for UI direction, with custom Relay code limited to M365 Copilot interop.

@@ -79,11 +79,18 @@ fn human_approval_summary(tool_name: &str, input: &str) -> String {
             format!("Create or overwrite this file?\n{p}")
         }),
         "edit_file" => path.map_or_else(|| "Edit a file?".into(), |p| format!("Edit this file?\n{p}")),
-        "bash" | "PowerShell" => cmd.map_or_else(
-            || format!("Run a {tool_name} command?"),
+        "bash" => cmd.map_or_else(
+            || "Run a bash command?".into(),
             |c| {
                 let preview: String = c.chars().take(120).collect();
                 format!("Run this command?\n{preview}")
+            },
+        ),
+        "PowerShell" => cmd.map_or_else(
+            || "Run PowerShell (may batch Office COM: Word, Excel, PowerPoint, .msg)?".into(),
+            |c| {
+                let preview: String = c.chars().take(120).collect();
+                format!("Allow this PowerShell command (Office COM possible)?\n{preview}")
             },
         ),
         "WebFetch" => url.map_or_else(|| "Fetch content from a URL?".into(), |u| {
@@ -386,6 +393,31 @@ impl ApiClient for CdpApiClient {
     }
 }
 
+#[cfg(windows)]
+fn cdp_windows_office_catalog_addon() -> &'static str {
+    r#"
+
+## Windows desktop Office and .msg (PowerShell + COM)
+
+On **Windows**, for **desktop Word, Excel, PowerPoint**, and **`.msg`**, use the **`PowerShell` tool** with COM (`Word.Application`, `Excel.Application`, `PowerPoint.Application`; `.msg` via `Outlook.Application` when Outlook is installed). Prefer COM over using `read_file`/`write_file`/`edit_file` on those binary formats unless the user has exported plain text or CSV.
+
+**Copilot latency:** Each model turn is expensive. Prefer **one `PowerShell` invocation** per batch: open → edit → save → `Quit()` in a **single** `command` string. Avoid many small `PowerShell` calls for one spreadsheet or document in the same turn.
+
+**Excel:** **Never** loop COM cell-by-cell. Use **2D arrays** with `Range.Value2`, block `Range` writes, CSV import, or similar batch APIs. Use `$excel.ScreenUpdating = $false` in `try`/`finally` when appropriate.
+
+**Word / PowerPoint:** Prefer batch Find/Replace and range-level edits; avoid unnecessary `Select`/`Activate`.
+
+**.msg / Outlook:** Trust Center or policy may block programmatic access; if COM fails, explain and ask the user to adjust policy or provide an export.
+
+Prefer **`ConvertTo-Json -Compress`** on stdout for structured results. The host prepends UTF-8 console setup to PowerShell unless `RELAY_POWERSHELL_NO_UTF8_PREAMBLE` is set.
+"#
+}
+
+#[cfg(not(windows))]
+fn cdp_windows_office_catalog_addon() -> &'static str {
+    ""
+}
+
 /// Serialize built-in tool specs for the Copilot text prompt.
 fn cdp_tool_catalog_section() -> String {
     let catalog: Vec<Value> = tools::mvp_tool_specs()
@@ -399,6 +431,7 @@ fn cdp_tool_catalog_section() -> String {
         })
         .collect();
     let json_pretty = serde_json::to_string_pretty(&catalog).unwrap_or_else(|_| "[]".to_string());
+    let win_addon = cdp_windows_office_catalog_addon();
     format!(
         r#"## Relay Agent tools
 
@@ -416,13 +449,15 @@ When you need to call one or more tools, you may write a short user-facing expla
 - **Optional:** `"id": "<string>"` — omit if unsure; the host will assign one.
 - **Multiple tools:** prefer **one** `relay_tool` fence with a JSON **array** of tool objects. Use multiple fences only when unavoidable. Repeating the same tool with identical `input` across fences wastes user approvals (the host dedupes, but you should not rely on it).
 - **File I/O:** use `read_file`, `write_file`, and `edit_file` for local files. Do **not** use `bash`, `PowerShell`, or `REPL` to read or write files when a file tool applies—prose Python/shell examples are not executed and encourage duplicate `relay_tool` calls. This matches the explicit, permission-gated tool model described at https://claw-code.codes/tool-system
-
+{win_addon}
 Example:
 
 ```relay_tool
 {{"name":"read_file","input":{{"path":"README.md"}}}}
 ```
 "#,
+        json_pretty = json_pretty,
+        win_addon = win_addon,
     )
 }
 
@@ -1039,6 +1074,24 @@ pub fn msg_to_relay(msg: &ConversationMessage) -> RelayMessage {
     RelayMessage { role, content }
 }
 
+#[cfg(windows)]
+fn windows_desktop_office_system_prompt_addon() -> &'static str {
+    r#"## Windows: desktop Office and .msg (PowerShell + COM)
+
+Use the **PowerShell** tool for **Word, Excel, PowerPoint**, and **`.msg`** (via `Outlook.Application` when Outlook is installed). Prefer COM for those formats over `read_file`/`write_file`/`edit_file` unless the user provided plain text or CSV.
+
+**Speed:** Copilot turns are slow—prefer **one PowerShell `command`** that does open → work → save → `Quit()` instead of splitting across many tool calls in one turn.
+
+**Excel:** Do **not** use per-cell COM loops. Assign **2D arrays** to `Range.Value2`, use block ranges or CSV import, etc. Use `$excel.ScreenUpdating = $false` with `try`/`finally` to restore.
+
+**Word / PowerPoint:** Batch edits (e.g. Find/Replace, range operations); avoid unnecessary `Select`/`Activate`.
+
+**.msg:** May fail if Trust Center blocks automation; ask the user to change policy or export if needed.
+
+Return structured output with **`ConvertTo-Json -Compress`** on stdout when helpful. The host prepends UTF-8 console setup (`chcp 65001`, output encodings) unless `RELAY_POWERSHELL_NO_UTF8_PREAMBLE` is set.
+"#
+}
+
 /// System prompt sections for the desktop agent loop: Relay identity, Claw-style discipline
 /// blocks, goal/constraints, and optional workspace context when `cwd` is set.
 pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String> {
@@ -1073,6 +1126,8 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
         .to_string(),
     );
     sections.extend(runtime::claw_style_discipline_sections());
+    #[cfg(windows)]
+    sections.push(windows_desktop_office_system_prompt_addon().to_string());
     sections.push(format!(
         concat!(
             "Goal:\n{goal}\n\n",
@@ -1203,6 +1258,15 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("read_file"));
         assert!(s.contains("relay_tool"));
         assert!(s.contains("input_schema"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn catalog_includes_windows_office_powershell_guidance() {
+        let s = cdp_tool_catalog_section();
+        assert!(s.contains("Windows desktop Office"));
+        assert!(s.contains("PowerShell"));
+        assert!(s.contains("Range.Value2"));
     }
 
     #[test]

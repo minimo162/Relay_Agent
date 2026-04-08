@@ -16,6 +16,19 @@
 
 ## Milestone Log
 
+### 2026-04-08 Windows Office COM guidance + PowerShell UTF-8 preamble
+
+**Outcome:** Narrowed **Windows** agent guidance for **Word, Excel, PowerPoint, and `.msg`**: `PowerShell` tool description documents COM-first automation, batch Excel rules (no per-cell loops, `Range.Value2` / block writes), one-invocation-per-batch to reduce Copilot round-trips, and `ConvertTo-Json` on stdout. **`prepend_powershell_utf8_console_setup`** in `crates/tools` prepends `chcp 65001` and `[Console]::OutputEncoding` / `$OutputEncoding` to every PowerShell `-Command` (foreground and background) unless **`RELAY_POWERSHELL_NO_UTF8_PREAMBLE`** is set. **`agent_loop`**: `#[cfg(windows)]` blocks add the same policy to `build_desktop_system_prompt` and `cdp_tool_catalog_section`; PowerShell approval copy mentions possible Office COM. **`PLANS.md`**: new subsection documents scope, performance, and UTF-8 preamble.
+
+**Artifacts:** `apps/desktop/src-tauri/crates/tools/src/lib.rs`, `apps/desktop/src-tauri/src/agent_loop.rs`, `PLANS.md`, `docs/IMPLEMENTATION.md`
+
+**Verification:**
+
+- `cargo test -p tools` (from `apps/desktop/src-tauri/`) — pass
+- `cargo test -p relay-agent-desktop --lib` (from `apps/desktop/src-tauri/`) — pass
+- `cargo check -p relay-agent-desktop` (from `apps/desktop/src-tauri/`) — pass
+- `pnpm typecheck` (repo root) — pass
+
 ### 2026-04-07 OpenWork-inspired desktop UI (Solid) + E2E stability
 
 **Outcome:** Refreshed the Tauri+Vite **Solid** shell toward an OpenWork-style pro layout: semantic `--ra-color-*` aliases and shell/session/tab/composer primitives in `index.css`; split UI into `Sidebar`, `MessageFeed`, `Composer`, `ContextPanel`, `ApprovalOverlay`, `ShellHeader`, `StatusBar`, etc.; soft session selection, segmented context tabs, tool status dots, empty state copy, modal-style approval, header tool-activity switch. **Bugfix:** `trackToolResult` now replaces the tool-call chunk immutably so Solid `For` re-renders and inline tool results (e.g. E2E `"Found 3 files"`) appear. **E2E:** `tests/tauri-mock-core.ts` auto-emits `agent:turn_complete` when `__RELAY_E2E_AUTOCOMPLETE !== false`; comprehensive specs use `injectMock(autoComplete)` accordingly. **Playwright:** default `workers: 1` to avoid flaky parallel runs against a single `vite preview` instance (override with `--workers=N` if needed).
