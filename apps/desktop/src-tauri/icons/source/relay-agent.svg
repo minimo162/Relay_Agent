@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <!-- Relay motif: two nodes + dual arc link (flat, high legibility at small sizes) -->
+  <path
+    d="M 396 428 Q 512 312 628 428"
+    stroke="#2563eb"
+    stroke-width="84"
+    stroke-linecap="round"
+  />
+  <path
+    d="M 396 596 Q 512 712 628 596"
+    stroke="#2563eb"
+    stroke-width="84"
+    stroke-linecap="round"
+  />
+  <circle cx="268" cy="512" r="148" fill="#2563eb" />
+  <circle cx="756" cy="512" r="148" fill="#2563eb" />
+</svg>

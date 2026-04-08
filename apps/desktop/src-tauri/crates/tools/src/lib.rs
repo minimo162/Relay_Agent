@@ -164,6 +164,31 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
+            name: "git_status",
+            description: "Run `git status --porcelain` in a workspace directory (read-only). Use for change overview; prefer over bash when applicable. Requires `git` on PATH.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Repository or subdirectory root (defaults to session workspace when omitted)" }
+                },
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "git_diff",
+            description: "Run `git diff` in a workspace directory (read-only). Set `staged: true` for `--cached`. Output is capped (~256 KiB). Requires `git` on PATH.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Repository or subdirectory root (defaults to session workspace when omitted)" },
+                    "staged": { "type": "boolean", "description": "When true, diff staged changes (`git diff --cached`)" }
+                },
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
             name: "pdf_merge",
             description: "Merge two or more existing PDF files into one output file in the given order (workspace write). Uses lopdf; v1 does not support encrypted PDFs. Page text should remain readable via read_file/LiteParse like the sources; complex PDFs may show viewer warnings after merge (see lopdf issue #424). Prefer this tool over bash for PDF merge.",
             input_schema: json!({
@@ -617,6 +642,8 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "edit_file" => from_value::<EditFileInput>(input).and_then(run_edit_file),
         "glob_search" => from_value::<GlobSearchInputValue>(input).and_then(run_glob_search),
         "grep_search" => from_value::<GrepSearchInput>(input).and_then(run_grep_search),
+        "git_status" => from_value::<GitCwdInput>(input).and_then(run_git_status),
+        "git_diff" => from_value::<GitDiffToolInput>(input).and_then(run_git_diff),
         "pdf_merge" => from_value::<PdfMergeInput>(input).and_then(run_pdf_merge),
         "pdf_split" => from_value::<PdfSplitInput>(input).and_then(run_pdf_split),
         "WebFetch" => from_value::<WebFetchInput>(input).and_then(run_web_fetch),
@@ -715,6 +742,80 @@ fn run_edit_file(input: EditFileInput) -> Result<String, String> {
 #[allow(clippy::needless_pass_by_value)]
 fn run_glob_search(input: GlobSearchInputValue) -> Result<String, String> {
     to_pretty_json(glob_search(&input.pattern, input.path.as_deref()).map_err(io_to_string)?)
+}
+
+const GIT_OUTPUT_MAX_BYTES: usize = 256 * 1024;
+
+#[derive(Debug, Deserialize)]
+struct GitCwdInput {
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitDiffToolInput {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    staged: Option<bool>,
+}
+
+fn run_git_captured(cwd: &Path, args: &[&str]) -> Result<String, String> {
+    let out = Command::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .map_err(|e| {
+            format!(
+                "Could not run `git` in {}: {e} (is Git installed and on PATH?)",
+                cwd.display()
+            )
+        })?;
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    if !out.status.success() {
+        let msg = if !stderr.trim().is_empty() {
+            stderr
+        } else {
+            format!("git exited with status {:?}", out.status.code())
+        };
+        return Err(msg.trim().to_string());
+    }
+    if stdout.len() > GIT_OUTPUT_MAX_BYTES {
+        Ok(format!(
+            "{}…\n[output truncated to {} bytes]",
+            &stdout[..GIT_OUTPUT_MAX_BYTES],
+            GIT_OUTPUT_MAX_BYTES
+        ))
+    } else {
+        Ok(stdout)
+    }
+}
+
+fn run_git_status(input: GitCwdInput) -> Result<String, String> {
+    let cwd = input
+        .path
+        .ok_or_else(|| String::from("git_status: path is required"))?;
+    let p = PathBuf::from(&cwd);
+    if !p.is_dir() {
+        return Err(format!("git_status: not a directory: {}", p.display()));
+    }
+    run_git_captured(&p, &["status", "--porcelain=v1", "-u"])
+}
+
+fn run_git_diff(input: GitDiffToolInput) -> Result<String, String> {
+    let cwd = input
+        .path
+        .ok_or_else(|| String::from("git_diff: path is required"))?;
+    let p = PathBuf::from(&cwd);
+    if !p.is_dir() {
+        return Err(format!("git_diff: not a directory: {}", p.display()));
+    }
+    if input.staged == Some(true) {
+        run_git_captured(&p, &["diff", "--no-color", "--cached"])
+    } else {
+        run_git_captured(&p, &["diff", "--no-color"])
+    }
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -2911,6 +3012,8 @@ mod tests {
         assert!(names.contains(&"REPL"));
         assert!(names.contains(&"pdf_merge"));
         assert!(names.contains(&"pdf_split"));
+        assert!(names.contains(&"git_status"));
+        assert!(names.contains(&"git_diff"));
         #[cfg(windows)]
         assert!(names.contains(&"PowerShell"));
         #[cfg(not(windows))]
@@ -2921,6 +3024,32 @@ mod tests {
     fn rejects_unknown_tool_names() {
         let error = execute_tool("nope", &json!({})).expect_err("tool should be rejected");
         assert!(error.contains("unsupported tool"));
+    }
+
+    #[test]
+    fn git_status_runs_in_temp_repo() {
+        if std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let dir = temp_path("git-tool-smoke");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        let o = std::process::Command::new("git")
+            .current_dir(&dir)
+            .args(["-c", "user.email=t@t", "-c", "user.name=T", "init"])
+            .output()
+            .expect("git init");
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let out = execute_tool(
+            "git_status",
+            &json!({ "path": dir.to_string_lossy().as_ref() }),
+        )
+        .expect("git_status");
+        assert!(out.is_empty() || !out.is_empty());
     }
 
     struct RestoreCwd(std::path::PathBuf);

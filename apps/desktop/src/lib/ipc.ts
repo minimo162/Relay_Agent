@@ -24,12 +24,40 @@ export interface BrowserAutomationSettings {
   timeoutMs: number;
 }
 
+/** OpenCode-style session posture (see `SessionPreset` in `models.rs`). */
+export type SessionPreset = "build" | "plan" | "explore";
+
+const LS_SESSION_PRESET = "relay.sessionPreset.v1";
+
+/** Last-composer session mode (Build / Plan / Explore). */
+export function readStoredSessionPreset(): SessionPreset {
+  try {
+    const v = typeof localStorage !== "undefined" ? localStorage.getItem(LS_SESSION_PRESET) : null;
+    if (v === "plan" || v === "build" || v === "explore") return v;
+  } catch {
+    /* ignore */
+  }
+  return "build";
+}
+
+export function writeStoredSessionPreset(p: SessionPreset): void {
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(LS_SESSION_PRESET, p);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 export interface StartAgentRequest {
   goal: string;
   files?: string[];
   cwd?: string | null;
   browserSettings?: BrowserAutomationSettings | null;
   maxTurns?: number | null;
+  /** Default on the host is `build` when omitted. */
+  sessionPreset?: SessionPreset;
 }
 
 /**
@@ -164,6 +192,46 @@ export async function getSessionHistory(
   request: GetAgentSessionHistoryRequest,
 ): Promise<AgentSessionHistoryResponse> {
   return invoke<AgentSessionHistoryResponse>("get_session_history", { request });
+}
+
+export interface SessionWriteUndoRequest {
+  sessionId: string;
+}
+
+export interface SessionWriteUndoStatusResponse {
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+export async function undoSessionWrite(request: SessionWriteUndoRequest): Promise<void> {
+  return invoke<void>("undo_session_write", { request });
+}
+
+export async function redoSessionWrite(request: SessionWriteUndoRequest): Promise<void> {
+  return invoke<void>("redo_session_write", { request });
+}
+
+export async function getSessionWriteUndoStatus(
+  request: SessionWriteUndoRequest,
+): Promise<SessionWriteUndoStatusResponse> {
+  return invoke<SessionWriteUndoStatusResponse>("get_session_write_undo_status", { request });
+}
+
+export interface RustAnalyzerProbeRequest {
+  workspacePath?: string | null;
+}
+
+export interface RustAnalyzerProbeResponse {
+  ok: boolean;
+  versionLine?: string | null;
+  error?: string | null;
+}
+
+/** Minimal LSP milestone: runs `rust-analyzer --version` in the given folder (`docs/LSP_MILESTONE.md`). */
+export async function probeRustAnalyzer(
+  request: RustAnalyzerProbeRequest,
+): Promise<RustAnalyzerProbeResponse> {
+  return invoke<RustAnalyzerProbeResponse>("probe_rust_analyzer", { request });
 }
 
 export interface CompactAgentSessionRequest {

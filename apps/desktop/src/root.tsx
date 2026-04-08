@@ -1,16 +1,22 @@
 /// <reference types="vite/client" />
-import { Show, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { truncatePromptPreview, type SessionMeta } from "./lib/session-display";
 import {
   cancelAgent,
   chunksFromHistory,
   compactAgentSession,
   getSessionHistory,
+  getSessionWriteUndoStatus,
   mcpListServers,
   onAgentEvent,
+  redoSessionWrite,
   respondApproval,
   startAgent,
+  undoSessionWrite,
   warmupCopilotBridge,
+  readStoredSessionPreset,
+  writeStoredSessionPreset,
+  type SessionPreset,
   type AgentApprovalNeededEvent,
   type AgentErrorEvent,
   type AgentTextDeltaEvent,
@@ -83,6 +89,28 @@ export default function Shell(): JSX.Element {
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [planBySession, setPlanBySession] = createSignal<Record<string, PlanTodoItem[]>>({});
   const [workspaceLabel, setWorkspaceLabel] = createSignal(loadWorkspacePath().trim());
+  const [sessionPreset, setSessionPreset] = createSignal<SessionPreset>(readStoredSessionPreset());
+  const [writeUndoStatus, setWriteUndoStatus] = createSignal({ canUndo: false, canRedo: false });
+
+  const refreshWriteUndoStatus = async () => {
+    const sid = activeSessionId();
+    if (!sid) {
+      setWriteUndoStatus({ canUndo: false, canRedo: false });
+      return;
+    }
+    try {
+      const s = await getSessionWriteUndoStatus({ sessionId: sid });
+      setWriteUndoStatus({ canUndo: s.canUndo, canRedo: s.canRedo });
+    } catch {
+      setWriteUndoStatus({ canUndo: false, canRedo: false });
+    }
+  };
+
+  createEffect(() => {
+    activeSessionId();
+    if (sessionRunning()) return;
+    void refreshWriteUndoStatus();
+  });
 
   const executionPlanForActiveSession = createMemo(() => {
     const id = activeSessionId();
@@ -315,6 +343,7 @@ export default function Shell(): JSX.Element {
         cwd: cwd || null,
         maxTurns: loadMaxTurns(),
         browserSettings: loadBrowserSettings(),
+        sessionPreset: sessionPreset(),
       });
       setActiveSessionId(sessionId);
       setSessionIds((prev) => [...prev, sessionId]);
@@ -384,6 +413,30 @@ export default function Shell(): JSX.Element {
         onOpenSettings={() => setSettingsOpen(true)}
         workspacePath={workspaceLabel}
         onWorkspaceChipClick={() => setSettingsOpen(true)}
+        canUndo={writeUndoStatus().canUndo}
+        canRedo={writeUndoStatus().canRedo}
+        onUndo={async () => {
+          const sid = activeSessionId();
+          if (!sid) return;
+          try {
+            await undoSessionWrite({ sessionId: sid });
+            await refreshWriteUndoStatus();
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            setSessionError(msg);
+          }
+        }}
+        onRedo={async () => {
+          const sid = activeSessionId();
+          if (!sid) return;
+          try {
+            await redoSessionWrite({ sessionId: sid });
+            await refreshWriteUndoStatus();
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            setSessionError(msg);
+          }
+        }}
       />
 
       <Sidebar sessions={sessionEntries()} activeSessionId={activeSessionId()} onSelect={selectSession} />
@@ -405,8 +458,14 @@ export default function Shell(): JSX.Element {
           sessionState={sessionState()}
           showToolActivityInline={showToolActivityInline()}
           workspacePath={workspaceLabel}
+          sessionPreset={sessionPreset()}
         />
         <Composer
+          sessionPreset={sessionPreset()}
+          onSessionPresetChange={(p) => {
+            setSessionPreset(p);
+            writeStoredSessionPreset(p);
+          }}
           onSend={handleSend}
           disabled={sessionRunning()}
           running={sessionRunning()}

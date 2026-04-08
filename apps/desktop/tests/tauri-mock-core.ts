@@ -54,6 +54,13 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
         messages: [],
       };
     }
+    case "undo_session_write":
+    case "redo_session_write":
+      return undefined;
+    case "get_session_write_undo_status":
+      return { canUndo: false, canRedo: false };
+    case "probe_rust_analyzer":
+      return { ok: false, versionLine: null, error: "mock: rust-analyzer not available" };
     case "warmup_copilot_bridge":
       return { connected: true, loginRequired: false, url: null, error: null };
     case "get_relay_diagnostics":

@@ -10,7 +10,8 @@ use uuid::Uuid;
 use crate::cdp_copilot;
 use crate::models::{
     CancelAgentRequest, GetAgentSessionHistoryRequest, McpAddServerRequest, McpServerInfo,
-    RelayDiagnostics, RespondAgentApprovalRequest, StartAgentRequest,
+    RelayDiagnostics, RespondAgentApprovalRequest,     RustAnalyzerProbeRequest, RustAnalyzerProbeResponse, SessionWriteUndoRequest,
+    SessionWriteUndoStatusResponse, StartAgentRequest,
 };
 use crate::registry::SessionRegistry;
 use runtime::MAX_TEXT_FILE_READ_BYTES;
@@ -185,6 +186,7 @@ pub async fn start_agent(
         approvals: Mutex::new(HashMap::new()),
         auto_allowed_tools: Mutex::new(HashSet::new()),
         finished_at: None,
+        write_undo: Mutex::new(crate::session_write_undo::WriteUndoStacks::default()),
     };
     let cancelled = Arc::clone(&entry.cancelled);
     registry
@@ -221,6 +223,7 @@ pub async fn start_agent(
                 goal,
                 request.cwd,
                 request.max_turns,
+                request.session_preset,
                 cancelled,
             )
         }));
@@ -433,6 +436,71 @@ pub async fn get_session_history(
         running: false,
         messages,
     })
+}
+
+#[tauri::command]
+pub fn undo_session_write(
+    registry: State<'_, SessionRegistry>,
+    request: SessionWriteUndoRequest,
+) -> Result<(), String> {
+    registry
+        .with_data(|m| {
+            let entry = m
+                .get_mut(&request.session_id)
+                .ok_or_else(|| "Unknown session.".to_string())?;
+            let mut stack = entry
+                .write_undo
+                .lock()
+                .map_err(|_| "Undo state lock poisoned.".to_string())?;
+            stack.undo()
+        })
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn redo_session_write(
+    registry: State<'_, SessionRegistry>,
+    request: SessionWriteUndoRequest,
+) -> Result<(), String> {
+    registry
+        .with_data(|m| {
+            let entry = m
+                .get_mut(&request.session_id)
+                .ok_or_else(|| "Unknown session.".to_string())?;
+            let mut stack = entry
+                .write_undo
+                .lock()
+                .map_err(|_| "Undo state lock poisoned.".to_string())?;
+            stack.redo()
+        })
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn get_session_write_undo_status(
+    registry: State<'_, SessionRegistry>,
+    request: SessionWriteUndoRequest,
+) -> Result<SessionWriteUndoStatusResponse, String> {
+    registry
+        .with_data(|m| {
+            let entry = m
+                .get(&request.session_id)
+                .ok_or_else(|| "Unknown session.".to_string())?;
+            let stack = entry
+                .write_undo
+                .lock()
+                .map_err(|_| "Undo state lock poisoned.".to_string())?;
+            Ok(SessionWriteUndoStatusResponse {
+                can_undo: stack.can_undo(),
+                can_redo: stack.can_redo(),
+            })
+        })
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn probe_rust_analyzer(request: RustAnalyzerProbeRequest) -> RustAnalyzerProbeResponse {
+    crate::lsp_probe::probe_rust_analyzer(request.workspace_path.as_deref())
 }
 
 /* ── CDP Copilot Tauri commands ────────────────────────────── */

@@ -914,7 +914,9 @@ mod tests {
         assert_eq!(
             summary.auto_compaction,
             Some(AutoCompactionEvent {
-                removed_message_count: 2,
+                // `CompactionConfig::default().preserve_recent_messages` is 5; with four turns worth of
+                // history this removes one block versus two when preserve was 4.
+                removed_message_count: 1,
             })
         );
         assert_eq!(runtime.session().messages[0].role, MessageRole::System);

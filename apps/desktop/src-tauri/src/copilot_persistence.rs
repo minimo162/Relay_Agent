@@ -4,9 +4,11 @@ use std::path::PathBuf;
 use runtime::{ContentBlock, ConversationMessage, RuntimeError, Session, TokenUsage};
 use serde::{Deserialize, Serialize};
 
+use crate::models::SessionPreset;
+
 /* ── Session persistence types ─── */
 
-/// Configuration for a persisted session (`goal`, `cwd`, `max_turns`).
+/// Configuration for a persisted session (`goal`, `cwd`, `max_turns`, optional `session_preset`).
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedSessionConfig {
@@ -16,6 +18,8 @@ pub struct PersistedSessionConfig {
     pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_preset: Option<SessionPreset>,
 }
 
 /// A session loaded from disk with its configuration.

@@ -413,6 +413,63 @@ That UI follow-up preserves the current safety model:
 
 The remaining UI follow-up emphasis is on the Windows Tauri walkthrough verification, while the shipped UI scope now includes always-visible guided steps, compact Step 1 editing, workbook-column-aware Copilot instructions, dynamic save-copy path guidance, template-specific examples, stronger auto-fix handling, and level-specific retry prompts without relaxing those guardrails.
 
+## Milestone: OpenCode-style session presets (Plan / Build)
+
+**Status:** Implemented (2026-04-09).
+
+### Goal
+
+Offer an [OpenCode](https://github.com/anomalyco/opencode)-style **Build** vs **Plan** posture at session start without replacing the Copilot/CDP stack: **Build** keeps the existing desktop permission ladder (read tools auto-allow; workspace writes and shell escalate to approval). **Plan** sets the host `PermissionPolicy` active mode to **read-only** so mutating tools are **rejected without prompts**; the model is instructed to analyze and propose changes in prose/markdown only.
+
+### Change targets
+
+- `apps/desktop/src-tauri/src/models.rs` — `SessionPreset`, `StartAgentRequest.session_preset`
+- `apps/desktop/src-tauri/src/agent_loop.rs` — `desktop_permission_policy(preset)`, `build_desktop_system_prompt(..., preset)`, `run_agent_loop_impl` threading
+- `apps/desktop/src-tauri/src/tauri_bridge.rs` — pass preset into the agent loop
+- `apps/desktop/src-tauri/src/copilot_persistence.rs` — optional `session_preset` on `PersistedSessionConfig`
+- `apps/desktop/src/lib/ipc.ts`, `apps/desktop/src/components/Composer.tsx`, `apps/desktop/src/root.tsx` — UI segmented control + IPC
+
+### `.claw` interaction
+
+- **Plan** does not rewrite files on disk; it is a **per-session host policy** layered on top of merged `.claw` settings.
+- **Bash** still uses `ConfigLoader` + `bash_validation` for read-only heuristics when bash would run; in Plan mode most mutating tools never reach execution because `authorize` denies first.
+- To **apply** file changes after planning, the user starts a **Build** session (or adjusts project permissions and uses Build).
+
+### Acceptance criteria
+
+- `start_agent` accepts optional `sessionPreset` (`build` | `plan`, default `build`); Plan denies `write_file` / `bash` / etc. without approval prompts (regression test in `agent_loop` tests).
+- Composer exposes **Build** / **Plan** toggle; choice is persisted in `localStorage` (`relay.sessionPreset.v1`).
+- Saved session JSON may include `sessionPreset` for support/debug continuity.
+
+### Verification commands
+
+```bash
+pnpm --filter @relay-agent/desktop typecheck
+cd apps/desktop/src-tauri && cargo test --workspace
+```
+
+---
+
+## Milestone (deferred): LSP-backed code intelligence
+
+**Status:** Planned only — **not** part of MVP completion gates.
+
+### Goal
+
+Optional **Language Server Protocol** integration (definitions/references or diagnostics) to complement `glob_search` / `grep_search`, inspired by OpenCode’s LSP emphasis.
+
+### Scope guardrails
+
+- **Separate milestone** from Priority A/B: no Copilot/CDP behavior change required to close this.
+- Start with **one or two** languages (e.g. Rust + TypeScript) or opt-in configuration; process lifecycle, binary discovery, and tool approval policy must be specified before implementation.
+- Security: LSP subprocesses run with workspace-scoped roots; document data sent to language servers.
+
+### Outcome of planning gate
+
+This file records the **decision** to track LSP as **Priority C / future indexed-retrieval class work**, not as a current vertical-slice requirement. Implementation starts only after an explicit milestone update here and a design note in `docs/IMPLEMENTATION.md`.
+
+---
+
 ## Global Scope Exclusions
 
 These items remain outside the MVP unless explicitly pulled in later:

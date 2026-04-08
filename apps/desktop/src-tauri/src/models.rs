@@ -20,6 +20,20 @@ pub struct RelayDiagnostics {
     pub doctor_hints: Vec<String>,
 }
 
+/// OpenCode-style session posture: **Build** matches the default desktop permission ladder
+/// (read tools auto, writes/shell escalate to approval). **Plan** uses a read-only host policy
+/// so mutating tools are rejected without prompts—start a Build session to apply changes.
+/// **Explore** is read-only like Plan but only exposes `read_file` / `glob_search` / `grep_search`
+/// in the Copilot tool catalog (OpenCode-style fast codebase exploration).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionPreset {
+    #[default]
+    Build,
+    Plan,
+    Explore,
+}
+
 /// Settings for M365 Copilot browser automation via Chrome `DevTools` Protocol.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +57,8 @@ pub struct StartAgentRequest {
     pub browser_settings: Option<BrowserAutomationSettings>,
     #[serde(default)]
     pub max_turns: Option<usize>,
+    #[serde(default)]
+    pub session_preset: SessionPreset,
 }
 
 /// Request to approve or reject a pending tool execution.
@@ -69,6 +85,36 @@ pub struct CancelAgentRequest {
 #[serde(rename_all = "camelCase")]
 pub struct GetAgentSessionHistoryRequest {
     pub session_id: String,
+}
+
+/// Undo/redo for session write stack (same `session_id` shape as history).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionWriteUndoRequest {
+    pub session_id: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionWriteUndoStatusResponse {
+    pub can_undo: bool,
+    pub can_redo: bool,
+}
+
+/// Optional workspace folder for `rust-analyzer --version` probe (`docs/LSP_MILESTONE.md`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RustAnalyzerProbeRequest {
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RustAnalyzerProbeResponse {
+    pub ok: bool,
+    pub version_line: Option<String>,
+    pub error: Option<String>,
 }
 
 /// Information about a registered MCP server.

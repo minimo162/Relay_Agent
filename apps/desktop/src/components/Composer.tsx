@@ -10,6 +10,7 @@ import {
   listPromptTemplates,
   removePromptTemplate,
 } from "../lib/prompt-templates-store";
+import type { SessionPreset } from "../lib/ipc";
 
 /** Matches `.ra-composer-shell textarea` max-height in index.css */
 const COMPOSER_TEXTAREA_MAX_PX = 200;
@@ -79,6 +80,8 @@ function SlashAutocomplete(props: {
 }
 
 export function Composer(props: {
+  sessionPreset: SessionPreset;
+  onSessionPresetChange: (preset: SessionPreset) => void;
   onSend: (text: string) => void;
   disabled: boolean;
   running: boolean;
@@ -239,6 +242,51 @@ export function Composer(props: {
           <div class="ra-composer-toolbar">
             <div class="flex items-center gap-2 min-w-0 flex-wrap">
               <p class="ra-composer-hint shrink-0">Enter to send · Shift+Enter for new line</p>
+              <div
+                class="flex shrink-0 rounded-md border border-[var(--ra-border)] overflow-hidden text-[11px]"
+                role="group"
+                aria-label="Session mode"
+              >
+                <button
+                  type="button"
+                  class={`px-2 py-0.5 transition-colors ${
+                    props.sessionPreset === "build"
+                      ? "bg-[var(--ra-accent)] text-white"
+                      : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
+                  }`}
+                  aria-pressed={props.sessionPreset === "build"}
+                  title="Full tool access; writes and shell may ask for approval"
+                  onClick={() => props.onSessionPresetChange("build")}
+                >
+                  Build
+                </button>
+                <button
+                  type="button"
+                  class={`px-2 py-0.5 border-l border-[var(--ra-border)] transition-colors ${
+                    props.sessionPreset === "plan"
+                      ? "bg-[var(--ra-accent)] text-white"
+                      : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
+                  }`}
+                  aria-pressed={props.sessionPreset === "plan"}
+                  title="Read-only host: no file/shell writes—use Build to apply changes"
+                  onClick={() => props.onSessionPresetChange("plan")}
+                >
+                  Plan
+                </button>
+                <button
+                  type="button"
+                  class={`px-2 py-0.5 border-l border-[var(--ra-border)] transition-colors ${
+                    props.sessionPreset === "explore"
+                      ? "bg-[var(--ra-accent)] text-white"
+                      : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
+                  }`}
+                  aria-pressed={props.sessionPreset === "explore"}
+                  title="Only read_file, glob_search, grep_search—fast codebase scan; use Plan or Build for more"
+                  onClick={() => props.onSessionPresetChange("explore")}
+                >
+                  Explore
+                </button>
+              </div>
               <div class="relative shrink-0">
                 <button
                   type="button"
@@ -314,6 +362,13 @@ export function Composer(props: {
                 </Show>
               </div>
             </div>
+            <Show when={props.sessionPreset === "plan" || props.sessionPreset === "explore"}>
+              <p class="text-[10px] text-[var(--ra-text-muted)] mt-1.5 max-w-[52rem] leading-snug">
+                {props.sessionPreset === "explore"
+                  ? "Explore uses only workspace read/search tools. Switch to Build to edit files, or Plan for broader read-only analysis (e.g. task list)."
+                  : "Plan is read-only on the host—ideas and diffs stay in chat until you start a new session with Build to apply changes."}
+              </p>
+            </Show>
             <div class="ra-composer-toolbar-actions">
               <Show when={props.running}>
                 <button

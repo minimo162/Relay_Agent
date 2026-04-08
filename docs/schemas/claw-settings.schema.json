@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relay-agent.local/schemas/claw-settings.schema.json",
+  "title": "Claw-style merged settings (partial)",
+  "description": "Subset of JSON keys merged by runtime ConfigLoader from user ~/.claw/settings.json, project .claw/settings.json, .claw/settings.local.json, and legacy .claw.json paths. additionalProperties is true at the root: unknown keys are preserved for forward compatibility.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "permissionMode": {
+      "type": "string",
+      "description": "Top-level permission mode string (e.g. read-only, workspace-write, danger-full-access) when not using permissions.defaultMode."
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "defaultMode": {
+          "type": "string",
+          "description": "Claw-style nested default permission mode."
+        }
+      }
+    },
+    "mcpServers": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "MCP server registry; values are transport-specific objects (command/args for stdio, url for remote, etc.)."
+    },
+    "model": {
+      "type": "string",
+      "description": "Optional default model id when applicable."
+    },
+    "hooks": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

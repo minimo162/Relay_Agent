@@ -16,6 +16,56 @@
 
 ## Milestone Log
 
+### 2026-04-09 Relay Agent app icon and favicon
+
+**Problem:** The bundled `apps/desktop/src-tauri/icons/icon.png` was a minimal 32×32 placeholder (~100 bytes), so the window/taskbar icon often appeared as a flat dark square when scaled.
+
+**Source:** [`apps/desktop/src-tauri/icons/source/relay-agent.svg`](apps/desktop/src-tauri/icons/source/relay-agent.svg) — original flat “relay” mark (two nodes + dual arc), accent `#2563eb` aligned with `--ra-accent` (dark theme). Visual tone follows the style of [developer-icons](https://github.com/xandemon/developer-icons) (MIT); no third-party paths were copied.
+
+**Generation:** From `apps/desktop`, `pnpm exec tauri icon src-tauri/icons/source/relay-agent.svg -o src-tauri/icons` regenerates `icon.icns`, `icon.ico`, `32x32.png`, `128x128.png`, `128x128@2x.png`, `icon.png` (512×512), plus Store/Android/iOS assets under `icons/`.
+
+**Bundle config:** [`apps/desktop/src-tauri/tauri.conf.json`](apps/desktop/src-tauri/tauri.conf.json) `bundle.icon` lists the [Tauri v2 recommended](https://v2.tauri.app/develop/icons) desktop set: `32x32.png`, `128x128.png`, `128x128@2x.png`, `icon.icns`, `icon.ico`.
+
+**Web:** [`apps/desktop/public/favicon.svg`](apps/desktop/public/favicon.svg) and [`apps/desktop/index.html`](apps/desktop/index.html) `<link rel="icon" …>` for the Vite dev server tab.
+
+**Verification:** `cargo check` from `apps/desktop/src-tauri/` — pass (2026-04-09).
+
+### 2026-04-09 OpenCode plan implementation batch (Explore, undo, git, LSP probe)
+
+**Explore preset:** [`SessionPreset::Explore`](apps/desktop/src-tauri/src/models.rs) — read-only host with only `read_file` / `glob_search` / `grep_search` in [`cdp_tool_catalog_section`](apps/desktop/src-tauri/src/agent_loop.rs) and in [`desktop_permission_policy`](apps/desktop/src-tauri/src/agent_loop.rs) (`EXPLORE_TOOL_NAMES`). UI: third composer segment + [`MessageFeed`](apps/desktop/src/components/MessageFeed.tsx) empty-state copy; [`ipc.ts`](apps/desktop/src/lib/ipc.ts) `SessionPreset` + `readStoredSessionPreset`.
+
+**Undo / redo:** [`WriteUndoStacks`](apps/desktop/src-tauri/src/session_write_undo.rs) on [`SessionEntry`](apps/desktop/src-tauri/src/registry.rs); snapshots before `write_file` / `edit_file` / `NotebookEdit` / `pdf_merge` / `pdf_split` in [`TauriToolExecutor`](apps/desktop/src-tauri/src/agent_loop.rs). IPC: `undo_session_write`, `redo_session_write`, `get_session_write_undo_status`. UI: **Undo** / **Redo** in [`ShellHeader`](apps/desktop/src/components/ShellHeader.tsx).
+
+**Git tools:** [`git_status`](apps/desktop/src-tauri/crates/tools/src/lib.rs), [`git_diff`](apps/desktop/src-tauri/crates/tools/src/lib.rs) (read-only, output cap ~256 KiB, `git` on PATH).
+
+**Compaction default:** [`CompactionConfig::default().preserve_recent_messages`](apps/desktop/src-tauri/crates/runtime/src/compact.rs) is **5** (was 4); [`auto_compacts_when_cumulative_input_threshold_is_crossed`](apps/desktop/src-tauri/crates/runtime/src/conversation.rs) expectation updated.
+
+**LSP milestone:** Design [`docs/LSP_MILESTONE.md`](LSP_MILESTONE.md); minimal IPC [`probe_rust_analyzer`](apps/desktop/src-tauri/src/tauri_bridge.rs) + [`lsp_probe.rs`](apps/desktop/src-tauri/src/lsp_probe.rs); frontend [`probeRustAnalyzer`](apps/desktop/src/lib/ipc.ts).
+
+**Custom slash/templates:** Design only [`docs/CUSTOM_SLASH_AND_TEMPLATES.md`](CUSTOM_SLASH_AND_TEMPLATES.md).
+
+**Verification:** `pnpm --filter @relay-agent/desktop exec tsc --noEmit` — pass. `cargo test --workspace` from `apps/desktop/src-tauri/` — pass (2026-04-09).
+
+### 2026-04-09 OpenCode-inspired improvements (session presets, config DX, planning artifacts)
+
+**Session presets (Plan / Build):** [`SessionPreset`](apps/desktop/src-tauri/src/models.rs) on [`StartAgentRequest`](apps/desktop/src-tauri/src/models.rs) maps to [`desktop_permission_policy(preset)`](apps/desktop/src-tauri/src/agent_loop.rs): **Build** = existing `WorkspaceWrite` base with danger-tier prompts for mutating tools; **Plan** = `ReadOnly` base so mutating tools are denied without prompts (OpenCode-style plan agent). [`build_desktop_system_prompt`](apps/desktop/src-tauri/src/agent_loop.rs) appends a Plan-mode instruction block. **UI:** [`Composer`](apps/desktop/src/components/Composer.tsx) Build/Plan toggle (persists `relay.sessionPreset.v1`); [`startAgent`](apps/desktop/src/lib/ipc.ts) sends `sessionPreset`. **Persistence:** [`PersistedSessionConfig.session_preset`](apps/desktop/src-tauri/src/copilot_persistence.rs) records the choice in saved session JSON.
+
+**`.claw`:** Plan preset is a per-session host overlay; merged `.claw` still applies to bash validation and instructions when those paths run.
+
+**Claw settings DX:** [`read_optional_json_object`](apps/desktop/src-tauri/crates/runtime/src/config.rs) and [`expect_object`](apps/desktop/src-tauri/crates/runtime/src/config.rs) now emit clearer parse errors (file path, JSON syntax hints, pointer to partial schema). **Partial JSON Schema:** [`docs/schemas/claw-settings.schema.json`](schemas/claw-settings.schema.json) documents a subset of merged settings keys for editors and humans; the runtime merger remains authoritative and allows unknown keys.
+
+**Session write undo / redo:** Implemented in the **2026-04-09 OpenCode plan implementation batch** entry above (per-tool snapshot stack + IPC + header UI). The bullets below were the original design notes:
+
+- **Unit of undo:** One logical **write** outcome: successful `write_file`, `edit_file`, `NotebookEdit`, `pdf_merge` / `pdf_split`, and similar workspace-mutating tools (not reads, not `TodoWrite`).
+- **Stack:** Per `session_id`, push `{ tool, input_summary, revert_ops }` after successful apply; `revert_ops` might be `restore_previous_bytes` (if captured before write) or `delete_if_created` for new files.
+- **Alignment with approvals:** Prefer **one undo step per user-approved batch** when multiple tools ran under a single approval flow, or **one step per successful mutating tool** — product choice; document in UI copy (`Undo last change` vs `Undo last batch`).
+- **Scope:** File-backed workspace paths only first; Git `checkout` fallback is optional and policy-sensitive.
+- **IPC:** e.g. `undo_last_session_write` / `redo...` commands + UI affordance; gated behind explicit milestone in `PLANS.md`.
+
+**LSP milestone gate:** Subprocess/security design + minimal `rust-analyzer` probe landed in **`docs/LSP_MILESTONE.md`** and `probe_rust_analyzer` (see batch entry above). Full JSON-RPC LSP integration remains future work.
+
+**Verification:** `pnpm --filter @relay-agent/desktop typecheck` — pass (2026-04-09). `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace` — pass (2026-04-09).
+
 ### 2026-04-09 Claw-code alignment baseline (docs + integration stance)
 
 **Source of truth (current tree):** The desktop crate [`apps/desktop/src-tauri/Cargo.toml`](apps/desktop/src-tauri/Cargo.toml) has **no** `claw-*` git/path dependencies. The agent loop is [`apps/desktop/src-tauri/src/agent_loop.rs`](apps/desktop/src-tauri/src/agent_loop.rs) plus internal crates [`runtime`](apps/desktop/src-tauri/crates/runtime), [`tools`](apps/desktop/src-tauri/crates/tools), [`commands`](apps/desktop/src-tauri/crates/commands). Session/history types are **in-repo** (e.g. [`storage.rs`](apps/desktop/src-tauri/src/storage.rs), [`registry.rs`](apps/desktop/src-tauri/src/registry.rs)); they are **not** `claw_core::SessionState`.

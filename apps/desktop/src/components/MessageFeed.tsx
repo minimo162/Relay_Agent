@@ -9,7 +9,7 @@ import {
   onMount,
   type JSX,
 } from "solid-js";
-import { friendlyToolActivityLabel, type UiChunk } from "../lib/ipc";
+import { friendlyToolActivityLabel, type SessionPreset, type UiChunk } from "../lib/ipc";
 import { ellipsisPath, workspaceBasename } from "../lib/workspace-display";
 import { EmptyState } from "./primitives";
 import { MessageBubble } from "./MessageBubble";
@@ -26,6 +26,8 @@ export function MessageFeed(props: {
   showToolActivityInline: boolean;
   /** Saved workspace cwd (empty = unset). */
   workspacePath: () => string;
+  /** Composer session mode (empty-state copy for Plan / Explore). */
+  sessionPreset: SessionPreset;
 }): JSX.Element {
   let container!: HTMLDivElement;
   const [stickToBottom, setStickToBottom] = createSignal(true);
@@ -102,10 +104,17 @@ export function MessageFeed(props: {
 
   const emptySubtitle = createMemo(() => {
     const p = props.workspacePath().trim();
-    if (p) {
-      return `${ellipsisPath(p, 72)} — describe your task in the box below.`;
+    const base =
+      p.length > 0
+        ? `${ellipsisPath(p, 72)} — describe your task in the box below.`
+        : "Open Settings to set a workspace folder (cwd) so file tools use the right project root. Then describe your task below.";
+    if (props.sessionPreset === "plan") {
+      return `${base} Plan mode stays read-only; use Build when you want the agent to apply file changes.`;
     }
-    return "Open Settings to set a workspace folder (cwd) so file tools use the right project root. Then describe your task below.";
+    if (props.sessionPreset === "explore") {
+      return `${base} Explore mode only runs read_file, glob_search, and grep_search—switch to Plan or Build for more tools.`;
+    }
+    return base;
   });
 
   return (

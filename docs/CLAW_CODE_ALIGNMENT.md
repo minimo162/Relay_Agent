@@ -27,7 +27,7 @@ Reference: [ultraworkers/claw-code](https://github.com/ultraworkers/claw-code) (
 
 ## Tool catalog: Relay `mvp_tool_specs` vs claw
 
-claw-code `rust/` exposes on the order of **~40** tools in `mvp_tool_specs()` (per `PARITY.md`). Relay’s [`mvp_tool_specs()`](apps/desktop/src-tauri/crates/tools/src/lib.rs) is smaller: **31** names on Unix targets, **32** with Windows-only `PowerShell` (see source for the authoritative list).
+claw-code `rust/` exposes on the order of **~40** tools in `mvp_tool_specs()` (per `PARITY.md`). Relay’s [`mvp_tool_specs()`](apps/desktop/src-tauri/crates/tools/src/lib.rs) is smaller: **33** names on Unix targets (includes read-only **`git_status`** / **`git_diff`**), **34** with Windows-only `PowerShell` (see source for the authoritative list).
 
 **Diff policy:** When adding or renaming tools, cross-check claw `rust/crates/tools` schemas and descriptions so Copilot-facing JSON stays compatible with the [tool-system](https://claw-code.codes/tool-system) model. Relay-only tools (Electron CDP, `pdf_*`, Copilot hints) stay documented in tool descriptions.
 

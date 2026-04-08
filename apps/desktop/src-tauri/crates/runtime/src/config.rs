@@ -420,14 +420,19 @@ fn read_optional_json_object(
     let parsed = match JsonValue::parse(&contents) {
         Ok(parsed) => parsed,
         Err(_error) if is_legacy_config => return Ok(None),
-        Err(error) => return Err(ConfigError::Parse(format!("{}: {error}", path.display()))),
+        Err(error) => {
+            return Err(ConfigError::Parse(format!(
+                "Invalid JSON in Claw settings file {}: {error}. Fix the syntax (commas, quotes, braces) or remove/rename the file if it is not meant to be Claw settings.",
+                path.display()
+            )));
+        }
     };
     let Some(object) = parsed.as_object() else {
         if is_legacy_config {
             return Ok(None);
         }
         return Err(ConfigError::Parse(format!(
-            "{}: top-level settings value must be a JSON object",
+            "Claw settings at {} must be a JSON object at the top level (e.g. {{ \"permissionMode\": \"read-only\" }}), not an array or string.",
             path.display()
         )));
     };
@@ -651,9 +656,11 @@ fn expect_object<'a>(
     value: &'a JsonValue,
     context: &str,
 ) -> Result<&'a BTreeMap<String, JsonValue>, ConfigError> {
-    value
-        .as_object()
-        .ok_or_else(|| ConfigError::Parse(format!("{context}: expected JSON object")))
+    value.as_object().ok_or_else(|| {
+        ConfigError::Parse(format!(
+            "{context}: expected a JSON object {{ ... }} here (check nesting and trailing commas). See docs/schemas/claw-settings.schema.json for a partial shape."
+        ))
+    })
 }
 
 fn expect_string<'a>(
@@ -823,7 +830,7 @@ mod tests {
             .expect_err("config should fail");
         assert!(error
             .to_string()
-            .contains("top-level settings value must be a JSON object"));
+            .contains("must be a JSON object at the top level"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

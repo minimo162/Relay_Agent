@@ -3,12 +3,14 @@ mod agent_browser_daemon;
 mod agent_loop;
 mod copilot_server;
 mod liteparse_env;
+mod lsp_probe;
 mod cdp_copilot;
 mod config;
 mod copilot_persistence;
 mod error;
 mod models;
 mod registry;
+mod session_write_undo;
 mod tauri_bridge;
 
 use tauri::Manager;
@@ -74,6 +76,10 @@ pub fn run() {
             tauri_bridge::disconnect_cdp,
             tauri_bridge::warmup_copilot_bridge,
             tauri_bridge::get_relay_diagnostics,
+            tauri_bridge::undo_session_write,
+            tauri_bridge::redo_session_write,
+            tauri_bridge::get_session_write_undo_status,
+            tauri_bridge::probe_rust_analyzer,
             tauri_bridge::mcp_list_servers,
             tauri_bridge::mcp_add_server,
             tauri_bridge::mcp_remove_server,

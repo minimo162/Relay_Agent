@@ -32,7 +32,8 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 - **Approvals** — **Allow once**, **Allow for session**, or **Don’t allow** for gated tools.
 - **Workspace** — Header chip + status line for **cwd**; **Settings** (path, **Browse…** folder picker on desktop, `maxTurns`, stored browser hints); **Copy diagnostics**.
 - **Context panel** — Files, MCP servers, **Plan** (latest `TodoWrite`), policy hints.
-- **Composer** — **Templates** (saved prompts), slash commands (`/help`, `/compact`, …).
+- **Composer** — **Templates** (saved prompts), slash commands (`/help`, `/compact`, …), session mode **Build** / **Plan** / **Explore** (Explore = `read_file` / `glob_search` / `grep_search` only in the Copilot tool list).
+- **Undo / Redo** — Header actions reverse the last successful workspace writes from the active session (`write_file`, `edit_file`, `NotebookEdit`, PDF tools), when the agent is idle.
 - **Extras** — PDF via LiteParse + bundled Node; Windows Office hybrid read (COM + PDF); MCP over stdio.
 
 Details, limits, and milestone notes: **[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)**. Roadmap and guardrails: **[PLANS.md](PLANS.md)**. Repo rules: **[AGENTS.md](AGENTS.md)**. Claw-code selective alignment (upstream pin, parity checklist, tool diff notes): **[docs/CLAW_CODE_ALIGNMENT.md](docs/CLAW_CODE_ALIGNMENT.md)**.
@@ -55,19 +56,24 @@ Relay_Agent/
 ├── scripts/                     # Linux Edge / CDP helpers
 ├── apps/desktop/
 │   ├── src/                     # SolidJS app (root.tsx, components/, lib/)
+│   ├── public/                  # Static assets (e.g. favicon.svg for Vite)
 │   ├── src-tauri/               # Tauri + Rust workspace crates
 │   ├── scripts/                 # fetch-bundled-node, inspect-copilot-dom, …
 │   └── tests/                   # Playwright + Tauri mocks (RELAY_E2E=1 build)
 └── Cargo.toml, package.json, pnpm-workspace.yaml
 ```
 
+**App icons:** Vector source is `apps/desktop/src-tauri/icons/source/relay-agent.svg`. From `apps/desktop/`, run `pnpm exec tauri icon src-tauri/icons/source/relay-agent.svg -o src-tauri/icons` to refresh `icon.ico`, `icon.icns`, and PNGs referenced in `tauri.conf.json`. Details: `docs/IMPLEMENTATION.md` (Milestone Log, 2026-04-09 Relay Agent app icon and favicon).
+
 ## IPC (commands you invoke)
 
 | Command | Purpose |
 |---------|---------|
-| `start_agent` | New session (`goal`, optional `cwd`, `files`, `maxTurns`, `browserSettings`) |
+| `start_agent` | New session (`goal`, optional `cwd`, `files`, `maxTurns`, `browserSettings`, `sessionPreset`: `build` \| `plan` \| `explore`) |
 | `respond_approval` | Approve/deny; optional `rememberForSession` |
 | `cancel_agent`, `get_session_history`, `compact_agent_session` | Session control |
+| `undo_session_write`, `redo_session_write`, `get_session_write_undo_status` | Per-session file-write undo stack |
+| `probe_rust_analyzer` | LSP milestone probe: `rust-analyzer --version` in a folder (`docs/LSP_MILESTONE.md`) |
 | `warmup_copilot_bridge`, `get_relay_diagnostics` | Copilot readiness / support bundle |
 | `connect_cdp`, `cdp_*`, `disconnect_cdp` | Direct CDP helpers |
 | `mcp_*` | MCP server registry |

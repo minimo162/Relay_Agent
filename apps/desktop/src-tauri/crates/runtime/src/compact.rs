@@ -13,7 +13,8 @@ pub struct CompactionConfig {
 impl Default for CompactionConfig {
     fn default() -> Self {
         Self {
-            preserve_recent_messages: 4,
+            // Slightly more headroom vs earlier 4 — closer to claw-style “keep a bit more tail” before summarizing.
+            preserve_recent_messages: 5,
             max_estimated_tokens: 10_000,
         }
     }

@@ -7,6 +7,7 @@ use chrono::Utc;
 use runtime::Session as RuntimeSession;
 
 use crate::error::AgentLoopError;
+use crate::session_write_undo::WriteUndoStacks;
 
 /// Pending UI approval: unblock channel plus tool name for session-scoped allow rules.
 pub struct PendingApproval {
@@ -27,6 +28,8 @@ pub struct SessionEntry {
     pub approvals: Mutex<HashMap<String, PendingApproval>>,
     /// Tool names the user chose "allow for this session" for (OpenWork-style).
     pub auto_allowed_tools: Mutex<HashSet<String>>,
+    /// Stack of successful workspace writes for OpenCode-style undo/redo.
+    pub write_undo: Mutex<WriteUndoStacks>,
 }
 
 impl SessionEntry {

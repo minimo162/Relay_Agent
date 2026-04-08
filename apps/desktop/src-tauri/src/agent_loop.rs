@@ -38,23 +38,55 @@ use runtime::{
 
 use crate::copilot_persistence::{self, PersistedSessionConfig};
 use crate::error::AgentLoopError;
+use crate::models::SessionPreset;
 use crate::registry::SessionRegistry;
+use crate::session_write_undo;
 use crate::tauri_bridge;
 
-/// Active clearance: read-only and inspection tools run without interrupting the user;
-/// anything that needs workspace write in the catalog is escalated to danger tier so the
-/// user is prompted (writes, shell, sub-agents, etc.).
-fn desktop_permission_policy() -> PermissionPolicy {
-    let mut policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite);
+/// Tools allowed in **Explore** preset (narrow read-only catalog + policy).
+const EXPLORE_TOOL_NAMES: &[&str] = &["read_file", "glob_search", "grep_search"];
+
+/// **Build:** read/search tools run freely; workspace writes map to danger tier so the user is
+/// prompted (writes, shell, MCP, etc.). **Plan:** host active mode is read-only so mutating tools
+/// are denied without prompts (OpenCode-style plan agent); `.claw` permission heuristics for bash
+/// still apply in addition. **Explore:** same read-only host as Plan, but every tool outside
+/// `EXPLORE_TOOL_NAMES` requires danger tier so only file discovery reads run.
+fn desktop_permission_policy(preset: SessionPreset) -> PermissionPolicy {
+    let base = match preset {
+        SessionPreset::Build => PermissionMode::WorkspaceWrite,
+        SessionPreset::Plan | SessionPreset::Explore => PermissionMode::ReadOnly,
+    };
+    let mut policy = PermissionPolicy::new(base);
     for spec in tools::mvp_tool_specs() {
-        let required = if spec.required_permission == PermissionMode::WorkspaceWrite {
+        let mut required = if spec.required_permission == PermissionMode::WorkspaceWrite {
             PermissionMode::DangerFullAccess
         } else {
             spec.required_permission
         };
+        if preset == SessionPreset::Explore && !EXPLORE_TOOL_NAMES.contains(&spec.name) {
+            required = PermissionMode::DangerFullAccess;
+        }
         policy = policy.with_tool_requirement(spec.name, required);
     }
     policy
+}
+
+fn session_preset_system_addon(preset: SessionPreset) -> Option<&'static str> {
+    match preset {
+        SessionPreset::Build => None,
+        SessionPreset::Plan => Some(
+            r#"## Session mode: Plan (read-only host)
+
+This session uses **Plan** preset: the host blocks **file writes**, **shell**, **PDF merge/split**, **WebFetch/WebSearch**, and other tools that require more than read-only permission. Use **read_file**, **glob_search**, **grep_search**, and **TodoWrite** to analyze the workspace and return **plans or proposed edits as markdown only**. To apply file or shell changes, start a **new session** with the **Build** preset (Composer → Build).
+
+Project **`.claw`** settings still apply for bash validation and merged instructions when those tools would run."#,
+        ),
+        SessionPreset::Explore => Some(
+            r#"## Session mode: Explore (narrow read-only)
+
+This session uses **Explore** preset: only **read_file**, **glob_search**, and **grep_search** are available—no web, no shell, no MCP, no task list updates, no writes. Map the codebase quickly; for broader read-only analysis (including **TodoWrite**), use **Plan**; to **apply edits**, start a **new session** with **Build**."#,
+        ),
+    }
 }
 
 /// One-line + optional path/command context for the approval UI (no raw tool jargon in the title).
@@ -124,6 +156,12 @@ fn human_approval_summary(tool_name: &str, input: &str) -> String {
             let q = v.get("query").and_then(|x| x.as_str()).unwrap_or("…");
             format!("Search the web for “{q}”?")
         }
+        "git_status" => path.map_or_else(|| "Run git status in the workspace?".into(), |p| {
+            format!("Run git status in this folder?\n{p}")
+        }),
+        "git_diff" => path.map_or_else(|| "Run git diff in the workspace?".into(), |p| {
+            format!("Run git diff in this folder?\n{p}")
+        }),
         "TodoWrite" => "Update the task list?".to_string(),
         "NotebookEdit" => notebook_path.map_or_else(|| "Edit a notebook?".into(), |p| {
             format!("Edit this notebook?\n{p}")
@@ -204,15 +242,16 @@ pub fn run_agent_loop_impl(
     goal: String,
     cwd: Option<String>,
     max_turns: Option<usize>,
+    session_preset: SessionPreset,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(), AgentLoopError> {
     let server = tauri_bridge::ensure_copilot_server()
         .map_err(AgentLoopError::InitializationError)?;
-    let api_client = CdpApiClient::new(server);
+    let api_client = CdpApiClient::new(server, session_preset);
 
-    let tool_executor = build_tool_executor(app, session_id, cwd.clone());
-    let permission_policy = desktop_permission_policy();
-    let system_prompt = build_desktop_system_prompt(&goal, cwd.as_deref());
+    let tool_executor = build_tool_executor(app, session_id, cwd.clone(), registry.clone());
+    let permission_policy = desktop_permission_policy(session_preset);
+    let system_prompt = build_desktop_system_prompt(&goal, cwd.as_deref(), session_preset);
     let config = crate::config::AgentConfig::global();
     let max_turns = max_turns.unwrap_or(config.max_turns);
 
@@ -247,7 +286,16 @@ pub fn run_agent_loop_impl(
             }
         };
 
-        persist_turn(app, registry, &runtime_session, session_id, &goal, cwd.as_ref(), max_turns)?;
+        persist_turn(
+            app,
+            registry,
+            &runtime_session,
+            session_id,
+            &goal,
+            cwd.as_ref(),
+            max_turns,
+            session_preset,
+        )?;
 
         let needs_more_turns = summary.assistant_messages.last().is_some_and(|message| {
             message
@@ -281,6 +329,7 @@ pub fn run_agent_loop_impl(
             goal: Some(goal),
             cwd,
             max_turns: Some(max_turns),
+            session_preset: Some(session_preset),
         },
     )
     .map_err(|error| AgentLoopError::PersistenceError(error.to_string()))?;
@@ -297,20 +346,25 @@ pub fn run_agent_loop_impl(
 pub struct CdpApiClient {
     server: std::sync::Arc<std::sync::Mutex<crate::copilot_server::CopilotServer>>,
     response_timeout_secs: u64,
+    session_preset: SessionPreset,
 }
 
 impl CdpApiClient {
-    fn new(server: std::sync::Arc<std::sync::Mutex<crate::copilot_server::CopilotServer>>) -> Self {
+    fn new(
+        server: std::sync::Arc<std::sync::Mutex<crate::copilot_server::CopilotServer>>,
+        session_preset: SessionPreset,
+    ) -> Self {
         Self {
             server,
             response_timeout_secs: 120,
+            session_preset,
         }
     }
 }
 
 impl ApiClient for CdpApiClient {
     fn stream(&mut self, request: &ApiRequest<'_>) -> Result<Vec<AssistantEvent>, RuntimeError> {
-        let prompt = build_cdp_prompt(request);
+        let prompt = build_cdp_prompt(request, self.session_preset);
 
         let legacy_composer = cdp_legacy_composer_full_paste();
         if legacy_composer {
@@ -455,9 +509,11 @@ fn cdp_windows_office_catalog_addon() -> &'static str {
 }
 
 /// Serialize built-in tool specs for the Copilot text prompt.
-fn cdp_tool_catalog_section() -> String {
+fn cdp_tool_catalog_section(preset: SessionPreset) -> String {
+    let explore_only = preset == SessionPreset::Explore;
     let catalog: Vec<Value> = tools::mvp_tool_specs()
         .iter()
+        .filter(|s| !explore_only || EXPLORE_TOOL_NAMES.contains(&s.name))
         .map(|s| {
             json!({
                 "name": s.name,
@@ -468,11 +524,16 @@ fn cdp_tool_catalog_section() -> String {
         .collect();
     let json_pretty = serde_json::to_string_pretty(&catalog).unwrap_or_else(|_| "[]".to_string());
     let win_addon = cdp_windows_office_catalog_addon();
+    let mode_note = if explore_only {
+        "\n\n**Session mode:** This list is **Explore-only**—you may invoke **only** `read_file`, `glob_search`, and `grep_search`. Do not assume any other tools exist.\n"
+    } else {
+        ""
+    };
     format!(
         r#"## Relay Agent tools
 
 The JSON array below lists every tool you may invoke. Each entry has `name`, `description`, and `input_schema` (JSON Schema for the tool's `input` object).
-
+{mode_note}
 ```json
 {json_pretty}
 ```
@@ -493,6 +554,9 @@ Example:
 {{"name":"read_file","input":{{"path":"README.md"}}}}
 ```
 "#,
+        mode_note = mode_note,
+        json_pretty = json_pretty,
+        win_addon = win_addon,
     )
 }
 
@@ -669,7 +733,7 @@ fn parse_one_tool_call(v: &Value) -> Option<(String, String, String)> {
 }
 
 /// Convert an `ApiRequest` into a human-readable text prompt for CDP.
-fn build_cdp_prompt(request: &ApiRequest<'_>) -> String {
+fn build_cdp_prompt(request: &ApiRequest<'_>, preset: SessionPreset) -> String {
     let mut parts = Vec::new();
 
     if !request.system_prompt.is_empty() {
@@ -708,7 +772,7 @@ fn build_cdp_prompt(request: &ApiRequest<'_>) -> String {
 
     let mut out = parts.join("\n\n");
     out.push_str("\n\n");
-    out.push_str(&cdp_tool_catalog_section());
+    out.push_str(&cdp_tool_catalog_section(preset));
     out
 }
 
@@ -721,6 +785,7 @@ fn persist_turn(
     goal: &str,
     cwd: Option<&String>,
     max_turns: usize,
+    session_preset: SessionPreset,
 ) -> Result<(), AgentLoopError> {
     let _ignore = registry.mutate_session(session_id, |entry| {
         entry.session = runtime_session.session().clone();
@@ -732,6 +797,7 @@ fn persist_turn(
             goal: Some(goal.to_string()),
             cwd: cwd.cloned(),
             max_turns: Some(max_turns),
+            session_preset: Some(session_preset),
         },
     )
     .map_err(|error| {
@@ -955,7 +1021,7 @@ fn enforce_workspace_tool_paths(
         "write_file" | "edit_file" => {
             normalize_key(obj, "path")?;
         }
-        "glob_search" | "grep_search" => {
+        "glob_search" | "grep_search" | "git_status" | "git_diff" => {
             let has_path = obj
                 .get("path")
                 .and_then(|v| v.as_str())
@@ -1008,11 +1074,13 @@ pub fn build_tool_executor(
     app: &AppHandle,
     session_id: &str,
     cwd: Option<String>,
+    registry: SessionRegistry,
 ) -> TauriToolExecutor {
     TauriToolExecutor {
         app: app.clone(),
         session_id: session_id.to_string(),
         cwd,
+        registry,
         mcp_manager: runtime::McpServerManager::from_servers(&std::collections::BTreeMap::new()),
         runtime: tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1025,6 +1093,7 @@ pub struct TauriToolExecutor {
     app: AppHandle,
     session_id: String,
     cwd: Option<String>,
+    registry: SessionRegistry,
     mcp_manager: McpServerManager,
     runtime: tokio::runtime::Runtime,
 }
@@ -1088,8 +1157,23 @@ impl ToolExecutor for TauriToolExecutor {
             }
         }
 
+        let undo_snap = match tool_name {
+            "write_file" | "edit_file" | "NotebookEdit" | "pdf_merge" | "pdf_split" => {
+                session_write_undo::snapshots_before_mutation(tool_name, &input_value)
+            }
+            _ => None,
+        };
+
         let result =
             tools::execute_tool(tool_name, &input_value).map_err(runtime::ToolError::new)?;
+
+        if let Some(ops) = undo_snap {
+            let _ignore = self.registry.mutate_session(&self.session_id, |entry| {
+                if let Ok(mut g) = entry.write_undo.lock() {
+                    g.push_mutation(ops);
+                }
+            });
+        }
 
         if let Err(e) = self.app.emit(
             E_TOOL_RESULT,
@@ -1265,7 +1349,11 @@ Return structured output with **`ConvertTo-Json -Compress`** on stdout when help
 
 /// System prompt sections for the desktop agent loop: Relay identity, Claw-style discipline
 /// blocks, goal/constraints, and optional workspace context when `cwd` is set.
-pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String> {
+pub fn build_desktop_system_prompt(
+    goal: &str,
+    cwd: Option<&str>,
+    session_preset: SessionPreset,
+) -> Vec<String> {
     if let Some(path) = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from)
@@ -1274,11 +1362,15 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
         if let Ok(contents) = std::fs::read_to_string(path) {
             let custom = contents.trim();
             if !custom.is_empty() {
-                let block = if custom.contains("{goal}") {
+                let mut block = if custom.contains("{goal}") {
                     custom.replace("{goal}", goal)
                 } else {
                     format!("{custom}\n\nGoal:\n{goal}")
                 };
+                if let Some(addon) = session_preset_system_addon(session_preset) {
+                    block.push_str("\n\n");
+                    block.push_str(addon);
+                }
                 return vec![block];
             }
         }
@@ -1296,6 +1388,9 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
         )
         .to_string(),
     );
+    if let Some(addon) = session_preset_system_addon(session_preset) {
+        sections.push(addon.to_string());
+    }
     sections.extend(runtime::claw_style_discipline_sections());
     #[cfg(windows)]
     sections.push(windows_desktop_office_system_prompt_addon().to_string());
@@ -1423,19 +1518,31 @@ pub struct AgentSessionHistoryResponse {
 #[cfg(test)]
 mod cdp_copilot_tool_tests {
     use super::*;
+    use crate::models::SessionPreset;
 
     #[test]
     fn catalog_lists_builtin_tools_and_protocol() {
-        let s = cdp_tool_catalog_section();
+        let s = cdp_tool_catalog_section(SessionPreset::Build);
         assert!(s.contains("read_file"));
         assert!(s.contains("relay_tool"));
         assert!(s.contains("input_schema"));
     }
 
+    #[test]
+    fn explore_catalog_lists_only_workspace_read_tools() {
+        let s = cdp_tool_catalog_section(SessionPreset::Explore);
+        assert!(s.contains("read_file"));
+        assert!(s.contains("glob_search"));
+        assert!(s.contains("grep_search"));
+        assert!(s.contains("Explore-only"));
+        assert!(!s.contains("\"name\": \"write_file\""));
+        assert!(!s.contains("\"name\": \"bash\""));
+    }
+
     #[cfg(windows)]
     #[test]
     fn catalog_includes_windows_office_powershell_guidance() {
-        let s = cdp_tool_catalog_section();
+        let s = cdp_tool_catalog_section(SessionPreset::Build);
         assert!(s.contains("Windows desktop Office"));
         assert!(s.contains("PowerShell"));
         assert!(s.contains("Range.Value2"));
@@ -1584,7 +1691,7 @@ mod cdp_copilot_tool_tests {
 
 #[cfg(test)]
 mod desktop_permission_tests {
-    use super::desktop_permission_policy;
+    use super::{desktop_permission_policy, SessionPreset};
     use runtime::{
         PermissionOutcome, PermissionPromptDecision, PermissionPrompter, PermissionRequest,
     };
@@ -1599,7 +1706,7 @@ mod desktop_permission_tests {
 
     #[test]
     fn allows_read_tools_without_prompt() {
-        let p = desktop_permission_policy();
+        let p = desktop_permission_policy(SessionPreset::Build);
         assert_eq!(
             p.authorize("read_file", r#"{"path":"a.txt"}"#, None),
             PermissionOutcome::Allow
@@ -1612,7 +1719,7 @@ mod desktop_permission_tests {
 
     #[test]
     fn write_requires_prompter_or_denies() {
-        let p = desktop_permission_policy();
+        let p = desktop_permission_policy(SessionPreset::Build);
         let out = p.authorize("write_file", r#"{"path":"x","content":"y"}"#, None);
         assert!(matches!(out, PermissionOutcome::Deny { .. }));
 
@@ -1623,7 +1730,7 @@ mod desktop_permission_tests {
 
     #[test]
     fn bash_prompts_until_allowed() {
-        let p = desktop_permission_policy();
+        let p = desktop_permission_policy(SessionPreset::Build);
         assert!(matches!(
             p.authorize("bash", r#"{"command":"echo hi"}"#, None),
             PermissionOutcome::Deny { .. }
@@ -1633,5 +1740,29 @@ mod desktop_permission_tests {
             p.authorize("bash", r#"{"command":"echo hi"}"#, Some(&mut pr)),
             PermissionOutcome::Allow
         );
+    }
+
+    #[test]
+    fn plan_preset_denies_writes_even_with_prompter() {
+        let p = desktop_permission_policy(SessionPreset::Plan);
+        let mut pr = AllowPrompter;
+        let out = p.authorize("write_file", r#"{"path":"x","content":"y"}"#, Some(&mut pr));
+        assert!(matches!(out, PermissionOutcome::Deny { reason } if reason.contains("read-only")));
+    }
+
+    #[test]
+    fn explore_preset_denies_web_even_though_readonly_spec() {
+        let p = desktop_permission_policy(SessionPreset::Explore);
+        assert_eq!(
+            p.authorize("read_file", r#"{"path":"a.txt"}"#, None),
+            PermissionOutcome::Allow
+        );
+        let mut pr = AllowPrompter;
+        let out = p.authorize(
+            "WebFetch",
+            r#"{"url":"https://example.com","prompt":"x"}"#,
+            Some(&mut pr),
+        );
+        assert!(matches!(out, PermissionOutcome::Deny { .. }));
     }
 }

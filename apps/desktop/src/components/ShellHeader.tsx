@@ -12,6 +12,10 @@ export function ShellHeader(props: {
   workspacePath: () => string;
   /** Opens Settings (same as header Settings); used by workspace chip. */
   onWorkspaceChipClick: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
 }): JSX.Element {
   const pathTrimmed = createMemo(() => props.workspacePath().trim());
   const hasWorkspace = createMemo(() => pathTrimmed().length > 0);
@@ -67,6 +71,29 @@ export function ShellHeader(props: {
           label={props.sessionRunning ? "Agent running" : "Agent idle"}
         />
         <span class={`text-xs ${ui.mutedText} hidden sm:inline`}>Agent</span>
+      </div>
+      <div
+        class="flex items-center gap-0.5 shrink-0 border-l border-[var(--ra-border)] pl-2 ml-1"
+        title="Undo or redo the last workspace file change from this session"
+      >
+        <Button
+          variant="ghost"
+          type="button"
+          class="!px-2 !py-1 !text-[11px] min-w-0"
+          disabled={props.sessionRunning || !props.canUndo}
+          onClick={() => props.onUndo()}
+        >
+          Undo
+        </Button>
+        <Button
+          variant="ghost"
+          type="button"
+          class="!px-2 !py-1 !text-[11px] min-w-0"
+          disabled={props.sessionRunning || !props.canRedo}
+          onClick={() => props.onRedo()}
+        >
+          Redo
+        </Button>
       </div>
       <div
         role="radiogroup"
