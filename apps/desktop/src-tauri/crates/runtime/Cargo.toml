@@ -15,6 +15,7 @@ tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "rt-m
 walkdir = "2"
 wait-timeout = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+lopdf = "0.35"
 
 [lints]
 workspace = true

@@ -79,6 +79,30 @@ fn human_approval_summary(tool_name: &str, input: &str) -> String {
             format!("Create or overwrite this file?\n{p}")
         }),
         "edit_file" => path.map_or_else(|| "Edit a file?".into(), |p| format!("Edit this file?\n{p}")),
+        "pdf_merge" => {
+            let out = v
+                .get("output_path")
+                .and_then(|x| x.as_str())
+                .unwrap_or("(output)");
+            let n = v
+                .get("input_paths")
+                .and_then(|x| x.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            format!("Merge {n} PDF files into this output?\n{out}")
+        }
+        "pdf_split" => {
+            let inp = v
+                .get("input_path")
+                .and_then(|x| x.as_str())
+                .unwrap_or("(input)");
+            let n = v
+                .get("segments")
+                .and_then(|x| x.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            format!("Split PDF into {n} output file(s)?\n{inp}")
+        }
         "bash" => cmd.map_or_else(
             || "Run a bash command?".into(),
             |c| {
@@ -1134,7 +1158,7 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
             "You are Relay Agent running inside a Tauri desktop app.\n",
             "Use only the registered tools.\n",
             "Read state first, then write only when necessary.\n",
-            "For file access use read_file / write_file / edit_file; do not substitute shell or REPL for file I/O when those tools apply.\n\n",
+            "For file access use read_file / write_file / edit_file; for PDF merge or split in the workspace use pdf_merge / pdf_split (not bash). Do not substitute shell or REPL for file I/O when those tools apply.\n\n",
             "IMPORTANT: Do not generate or guess URLs unless they clearly help with the user's programming task. ",
             "You may use URLs the user provided or that appear in local files.",
         )
@@ -1150,7 +1174,8 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
             "- Prefer read-only tools before mutating tools.\n",
             "- When modifying files, prefer saving copies.\n",
             "- Local files: read_file, glob_search, and grep_search accept absolute paths on this machine (e.g. Windows C:\\Users\\...\\file.pdf) wherever the OS user can read them. Do not tell the user the app lacks permission to their user profile; call read_file and surface the tool's error if access fails.\n",
-            "- read_file returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted .txt/.md file."
+            "- read_file returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted .txt/.md file.\n",
+            "- To combine or split PDF files, use pdf_merge / pdf_split (workspace write); do not use bash for that."
         ),
         goal = goal,
     ));

@@ -25,6 +25,7 @@ MVP guardrails (authoritative summary: `AGENTS.md`):
 
 - **Scope:** `read_file` on `.pdf` uses **`@llamaindex/liteparse`** with **OCR disabled**, spawned by **Node** (bundled per target via Tauri `externalBin` as `relay-node`, or system `node` in dev). Runner assets live under `apps/desktop/src-tauri/liteparse-runner/` and are copied into the app bundle as resources. **Builders** run `npm ci --omit=dev` in that folder on the **same OS/arch** as the installer being produced (native modules). **Scanned PDFs** are out of scope while OCR remains off.
 - **Docs / verification:** See `docs/IMPLEMENTATION.md` milestone **2026-04-08 PDF read_file via LiteParse + bundled Node**.
+- **Merge / split:** Dedicated tools **`pdf_merge`** and **`pdf_split`** in the `tools` crate call **`runtime::pdf_manip`** (`lopdf` 0.35): concatenate PDFs in order, or write segment outputs with **1-based `pages`** strings matching `read_file` grammar. Limits, encryption stance, and verification commands are logged under **`docs/IMPLEMENTATION.md`** (PDF manip milestone).
 
 ### Windows desktop Office automation (PowerShell + COM)
 

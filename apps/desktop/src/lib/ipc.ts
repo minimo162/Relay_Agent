@@ -361,6 +361,8 @@ export function friendlyToolActivityLabel(toolName: string): string {
     grep_search: "Searching file contents…",
     write_file: "Writing a file…",
     edit_file: "Updating a file…",
+    pdf_merge: "Merging PDFs…",
+    pdf_split: "Splitting a PDF…",
     bash: "Running a shell command…",
     PowerShell: "Running PowerShell…",
     REPL: "Running code…",

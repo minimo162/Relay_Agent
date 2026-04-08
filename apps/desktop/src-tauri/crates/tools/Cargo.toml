@@ -14,5 +14,8 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 dirs = "6"
 tracing = "0.1"
 
+[dev-dependencies]
+lopdf = "0.35"
+
 [lints]
 workspace = true

@@ -8,8 +8,8 @@ mod electron_cdp;
 
 use reqwest::blocking::Client;
 use runtime::{
-    edit_file, execute_bash, glob_search, grep_search, read_file, write_file,
-    BashCommandInput, GrepSearchInput, PermissionMode,
+    edit_file, execute_bash, glob_search, grep_search, merge_pdfs, read_file, split_pdf, write_file,
+    BashCommandInput, GrepSearchInput, PdfSplitSegment, PermissionMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -162,6 +162,50 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "pdf_merge",
+            description: "Merge two or more existing PDF files into one output file in the given order (workspace write). Uses lopdf; v1 does not support encrypted PDFs. Page text should remain readable via read_file/LiteParse like the sources; complex PDFs may show viewer warnings after merge (see lopdf issue #424). Prefer this tool over bash for PDF merge.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "output_path": { "type": "string" },
+                    "input_paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "minItems": 2
+                    }
+                },
+                "required": ["output_path", "input_paths"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::WorkspaceWrite,
+        },
+        ToolSpec {
+            name: "pdf_split",
+            description: "Split one PDF into multiple output files. Each segment has output_path and pages (1-based, same grammar as read_file for PDFs, e.g. \"1-3,5\"). Workspace write. v1 does not support encrypted PDFs; focuses on page content rather than full ISO fidelity for annotations/forms. Prefer this tool over bash for PDF split.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "input_path": { "type": "string" },
+                    "segments": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "output_path": { "type": "string" },
+                                "pages": { "type": "string" }
+                            },
+                            "required": ["output_path", "pages"],
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "required": ["input_path", "segments"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::WorkspaceWrite,
         },
         ToolSpec {
             name: "WebFetch",
@@ -573,6 +617,8 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "edit_file" => from_value::<EditFileInput>(input).and_then(run_edit_file),
         "glob_search" => from_value::<GlobSearchInputValue>(input).and_then(run_glob_search),
         "grep_search" => from_value::<GrepSearchInput>(input).and_then(run_grep_search),
+        "pdf_merge" => from_value::<PdfMergeInput>(input).and_then(run_pdf_merge),
+        "pdf_split" => from_value::<PdfSplitInput>(input).and_then(run_pdf_split),
         "WebFetch" => from_value::<WebFetchInput>(input).and_then(run_web_fetch),
         "WebSearch" => from_value::<WebSearchInput>(input).and_then(run_web_search),
         "TodoWrite" => from_value::<TodoWriteInput>(input).and_then(run_todo_write),
@@ -674,6 +720,33 @@ fn run_glob_search(input: GlobSearchInputValue) -> Result<String, String> {
 #[allow(clippy::needless_pass_by_value)]
 fn run_grep_search(input: GrepSearchInput) -> Result<String, String> {
     to_pretty_json(grep_search(&input).map_err(io_to_string)?)
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_pdf_merge(input: PdfMergeInput) -> Result<String, String> {
+    let output_path =
+        merge_pdfs(&input.output_path, &input.input_paths).map_err(io_to_string)?;
+    to_pretty_json(json!({
+        "output_path": output_path.to_string_lossy(),
+    }))
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_pdf_split(input: PdfSplitInput) -> Result<String, String> {
+    let segments: Vec<PdfSplitSegment> = input
+        .segments
+        .into_iter()
+        .map(|s| PdfSplitSegment {
+            output_path: s.output_path,
+            pages: s.pages,
+        })
+        .collect();
+    let outputs = split_pdf(&input.input_path, &segments).map_err(io_to_string)?;
+    let paths: Vec<String> = outputs
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    to_pretty_json(json!({ "outputs": paths }))
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -828,6 +901,24 @@ struct ReadFileInput {
 struct WriteFileInput {
     path: String,
     content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PdfMergeInput {
+    output_path: String,
+    input_paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PdfSplitSegmentInput {
+    output_path: String,
+    pages: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PdfSplitInput {
+    input_path: String,
+    segments: Vec<PdfSplitSegmentInput>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1713,6 +1804,7 @@ fn deferred_tool_specs() -> Vec<ToolSpec> {
             !matches!(
                 spec.name,
                 "bash" | "read_file" | "write_file" | "edit_file" | "glob_search" | "grep_search"
+                    | "pdf_merge" | "pdf_split"
             )
         })
         .collect()
@@ -2817,6 +2909,8 @@ mod tests {
         assert!(names.contains(&"Config"));
         assert!(names.contains(&"StructuredOutput"));
         assert!(names.contains(&"REPL"));
+        assert!(names.contains(&"pdf_merge"));
+        assert!(names.contains(&"pdf_split"));
         #[cfg(windows)]
         assert!(names.contains(&"PowerShell"));
         #[cfg(not(windows))]
@@ -2827,6 +2921,108 @@ mod tests {
     fn rejects_unknown_tool_names() {
         let error = execute_tool("nope", &json!({})).expect_err("tool should be rejected");
         assert!(error.contains("unsupported tool"));
+    }
+
+    struct RestoreCwd(std::path::PathBuf);
+    impl Drop for RestoreCwd {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+
+    fn minimal_one_page_pdf(label: &str) -> lopdf::Document {
+        use lopdf::content::{Content, Operation};
+        use lopdf::{dictionary, Object, Stream};
+
+        let mut doc = lopdf::Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let font_id = doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Courier",
+        });
+        let resources_id = doc.add_object(dictionary! {
+            "Font" => dictionary! {
+                "F1" => font_id,
+            },
+        });
+        let content = Content {
+            operations: vec![
+                Operation::new("BT", vec![]),
+                Operation::new("Tf", vec!["F1".into(), 48.into()]),
+                Operation::new("Td", vec![100.into(), 600.into()]),
+                Operation::new("Tj", vec![Object::string_literal(label)]),
+                Operation::new("ET", vec![]),
+            ],
+        };
+        let content_id = doc.add_object(Stream::new(
+            dictionary! {},
+            content.encode().expect("encode"),
+        ));
+        let page_id = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "Contents" => content_id,
+            "Resources" => resources_id,
+            "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+        });
+        let pages = dictionary! {
+            "Type" => "Pages",
+            "Kids" => vec![page_id.into()],
+            "Count" => 1,
+        };
+        doc.objects.insert(pages_id, Object::Dictionary(pages));
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+        doc
+    }
+
+    #[test]
+    fn pdf_merge_and_split_round_trip_via_execute_tool() {
+        let _guard = env_lock().lock().expect("env lock");
+        let dir = temp_path("pdf-tools");
+        fs::create_dir_all(&dir).expect("mkdir");
+        let a = dir.join("a.pdf");
+        let b = dir.join("b.pdf");
+        minimal_one_page_pdf("A").save(&a).expect("save a");
+        minimal_one_page_pdf("B").save(&b).expect("save b");
+
+        let before = std::env::current_dir().expect("cwd");
+        let _restore = RestoreCwd(before.clone());
+        std::env::set_current_dir(&dir).expect("chdir");
+
+        let merge_json = execute_tool(
+            "pdf_merge",
+            &json!({
+                "output_path": "merged.pdf",
+                "input_paths": ["a.pdf", "b.pdf"],
+            }),
+        )
+        .expect("pdf_merge");
+        let merged_val: serde_json::Value = serde_json::from_str(&merge_json).expect("json");
+        let out = merged_val["output_path"].as_str().expect("output_path");
+        assert!(out.ends_with("merged.pdf"));
+        assert!(dir.join("merged.pdf").is_file());
+
+        let split_json = execute_tool(
+            "pdf_split",
+            &json!({
+                "input_path": "merged.pdf",
+                "segments": [
+                    { "output_path": "out1.pdf", "pages": "1" },
+                    { "output_path": "out2.pdf", "pages": "2" },
+                ],
+            }),
+        )
+        .expect("pdf_split");
+        let split_val: serde_json::Value = serde_json::from_str(&split_json).expect("json");
+        let outs = split_val["outputs"].as_array().expect("outputs");
+        assert_eq!(outs.len(), 2);
+        assert!(dir.join("out1.pdf").is_file());
+        assert!(dir.join("out2.pdf").is_file());
     }
 
     #[test]

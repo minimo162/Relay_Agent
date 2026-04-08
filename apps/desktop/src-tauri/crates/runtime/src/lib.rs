@@ -12,6 +12,7 @@ mod mcp_registry;
 mod mcp_stdio;
 mod oauth;
 mod pdf_liteparse;
+mod pdf_manip;
 mod permissions;
 mod prompt;
 mod remote;
@@ -65,6 +66,7 @@ pub use oauth::{
     OAuthCallbackParams, OAuthRefreshRequest, OAuthTokenExchangeRequest, OAuthTokenSet,
     PkceChallengeMethod, PkceCodePair,
 };
+pub use pdf_manip::{merge_pdfs, split_pdf, PdfSplitSegment};
 pub use permissions::{
     PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,
     PermissionPrompter, PermissionRequest,

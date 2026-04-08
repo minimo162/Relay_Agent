@@ -631,7 +631,7 @@ fn make_patch(original: &str, updated: &str) -> Vec<StructuredPatchHunk> {
     }]
 }
 
-fn normalize_path(path: &str) -> io::Result<PathBuf> {
+pub(crate) fn normalize_path(path: &str) -> io::Result<PathBuf> {
     let candidate = if Path::new(path).is_absolute() {
         PathBuf::from(path)
     } else {
@@ -640,7 +640,7 @@ fn normalize_path(path: &str) -> io::Result<PathBuf> {
     candidate.canonicalize()
 }
 
-fn normalize_path_allow_missing(path: &str) -> io::Result<PathBuf> {
+pub(crate) fn normalize_path_allow_missing(path: &str) -> io::Result<PathBuf> {
     let candidate = if Path::new(path).is_absolute() {
         PathBuf::from(path)
     } else {

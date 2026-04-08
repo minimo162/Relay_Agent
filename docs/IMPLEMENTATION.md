@@ -16,6 +16,20 @@
 
 ## Milestone Log
 
+### 2026-04-08 PDF merge/split (`lopdf` + `pdf_merge` / `pdf_split`)
+
+**Outcome:** Added **`runtime::pdf_manip`** (`merge_pdfs`, `split_pdf`, `PdfSplitSegment`) using **`lopdf` 0.35**. **Merge** follows the object-renumber + rebuilt catalog/pages pattern from the upstream `lopdf` merge example (no bookmarks in merged output). **Split** loads the input once per segment, selects pages via the same **1-based comma/range grammar** as `read_file` PDF `pages`, deletes other pages, prunes, renumbers, compresses, and saves. **Tools** `pdf_merge` / `pdf_split` are **`WorkspaceWrite`** (desktop policy still escalates writes to danger approval). **`human_approval_summary`** covers both tools. System prompt **Constraints** remind the model to use these tools instead of **bash** for PDF merge/split. **v1:** encrypted PDFs are rejected if **`/Encrypt`** is present in the trailer after load; no guarantee for forms-heavy or annotation-heavy fidelity (focus on page content).
+
+**Artifacts:** `apps/desktop/src-tauri/crates/runtime/Cargo.toml` (`lopdf`), `crates/runtime/src/pdf_manip.rs`, `crates/runtime/src/lib.rs`, `crates/runtime/src/file_ops.rs` (`pub(crate)` path normalizers for reuse), `crates/tools/src/lib.rs`, `apps/desktop/src-tauri/src/agent_loop.rs`, `PLANS.md`
+
+**Limits (constants in `pdf_manip.rs`):** max **32** merge inputs; max **16** split segments; max **64** total page selections across segments (each page counted per segment); max **200 MiB** combined input file size per operation; duplicate `output_path` values in one `pdf_split` call are rejected.
+
+**Risks:** Some real-world PDFs may trigger viewer warnings after merge; see [lopdf#424](https://github.com/J-F-Liu/lopdf/issues/424). Splitting complex PDFs may drop non-page objects; errors from `lopdf` are surfaced as tool failures.
+
+**Verification (2026-04-08):** `cargo test -p runtime` — pass. `cargo test -p tools` — pass. `cargo check -p relay-agent-desktop` (from `apps/desktop/src-tauri/`) — pass.
+
+**Manual smoke:** Merge two known PDFs with `pdf_merge`, split one with `pdf_split` and open outputs in a viewer; optional: `read_file` on outputs to confirm LiteParse still returns text for simple pages.
+
 ### 2026-04-08 PDF `read_file` via LiteParse + bundled Node
 
 **Outcome:** Replaced Rust `lopdf` PDF text extraction with **`@llamaindex/liteparse`** (OCR off) invoked by a **Node** subprocess. Added `apps/desktop/src-tauri/liteparse-runner/` (`parse.mjs`, `package-lock.json`). **Tauri** `bundle.externalBin` embeds **`relay-node`** (official Node 20.x per target triple; downloaded by `apps/desktop/scripts/fetch-bundled-node.mjs`). **`bundle.resources`** ships `liteparse-runner/` (including `node_modules` from `npm ci --omit=dev` on the build host). **`liteparse_env`** sets `RELAY_LITEPARSE_RUNNER_ROOT` and `RELAY_BUNDLED_NODE` at app startup; `runtime::pdf_liteparse` falls back to PATH `node` and compile-time `liteparse-runner` path for dev/tests. Limits: `RELAY_PDF_PARSE_TIMEOUT_SECS` (default 120), 16 MiB stdout cap. **`agent_loop`** system copy updated so PDF parsing is described accurately.
