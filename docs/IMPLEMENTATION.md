@@ -16,6 +16,14 @@
 
 ## Milestone Log
 
+### 2026-04-08 Main window always-on-top (`lib.rs` setup)
+
+**Outcome:** On startup, the **`main`** [`WebviewWindow`](https://docs.rs/tauri/latest/tauri/webview/struct.WebviewWindow.html) calls **`set_always_on_top(true)`** once. Missing window or platform errors are **`tracing::warn!`** only; the app still runs. Actual z-order stacking depends on the OS/window manager and is not asserted in CI.
+
+**Artifacts:** `apps/desktop/src-tauri/src/lib.rs`, `README.md` (one-line user note)
+
+**Verification:** `cargo check -p relay-agent-desktop` (from `apps/desktop/src-tauri/`) — pass.
+
 ### 2026-04-08 Copilot bridge startup prewarm (`warmup_copilot_bridge`)
 
 **Outcome:** On shell mount, the UI calls **`warmup_copilot_bridge`**, which runs **`ensure_copilot_server`** then Node **`GET /status`** with a **120s** per-request timeout (`CopilotServer::warmup_status`). That path already launches Edge, ensures a Copilot tab, and sets **`loginRequired`** when the URL is a login page. **`inspectStatus`** in **`copilot_server.js`** now queues on the same **`_describeChain`** as **`describe`** to avoid CDP races with the first chat completion. Footer **`StatusBar`** shows a short hint when login is required or warmup fails. E2E mocks implement **`warmup_copilot_bridge`**.

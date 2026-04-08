@@ -6,6 +6,8 @@ An AI-powered desktop agent application built with Tauri v2, SolidJS, and Rust.
 
 Relay Agent bridges a Tauri desktop application with an AI agent backend. You describe a goal, the agent works autonomously, and you approve or reject actions in real-time — all from a native desktop UI. Uses **M365 Copilot via CDP** (browser automation through Edge).
 
+The Relay window stays always on top.
+
 ## Stack
 
 - **Desktop UI:** SolidJS + Vite (TypeScript)
@@ -197,7 +199,7 @@ Relay_Agent/
 - **Structured Concurrency** — `tokio::task::spawn_blocking` + semaphore-based concurrency limits for agent sessions
 - **Panic Safety** — `catch_unwind` wrapper on the agent loop to prevent silent thread death and stuck sessions
 - **Session Search** — Sidebar session filtering with live search input
-- **CI Pipeline** — GitHub Actions workflow for `cargo check`, `cargo clippy`, and `pnpm typecheck` on every PR/push
+- **CI Pipeline** — GitHub Actions workflow that fetches the bundled Node sidecar for Tauri `externalBin`, then runs `cargo check`, `cargo clippy`, and `pnpm typecheck` on every PR/push
 - **Onyx RAG Engine** — Internalized RAG architecture replacing external Docker/Vespa dependencies:
   - `DataSource` trait abstraction for pluggable data connectors
   - SQLite FTS5 hybrid search index for fast full-text retrieval
@@ -333,8 +335,8 @@ npx playwright test
 
 ### Inspect M365 Copilot DOM over CDP (Playwright)
 
-**Reminder (このリポ／開発環境):** `connectOverCDP` や下記スモークは、**既に M365 にサインイン済みの Edge**（Relay 用プロファイル例: `~/RelayAgentEdgeProfile`、CDP 既定: **9360**；旧環境や手動は **9333** も可）に繋ぐ前提です。未ログインだとログイン画面だけが取れ、DOM 調査・`m365-cdp-chat` テストは意味がありません。  
-**いつでも同じ条件で使う手順**（固定ポート・固定プロファイル・Linux `pnpm relay:edge`・Windows ショートカット例・自動起動のヒント）は [`docs/COPILOT_E2E_CDP_PITFALLS.md` の「Always-on CDP」節](docs/COPILOT_E2E_CDP_PITFALLS.md#always-on-cdp-signed-in-copilot-browser)を参照してください。
+**Reminder (this repo / dev setup):** Playwright `connectOverCDP` and the smoke tests below assume Edge is **already signed in to M365** (Relay profile example: `~/RelayAgentEdgeProfile`, default CDP port **9360**; legacy or manual setups may still use **9333**). If you are not signed in, you only capture the login page DOM, so DOM inspection and `m365-cdp-chat` tests are not meaningful.  
+For a **repeatable setup** (fixed port, fixed profile, Linux `pnpm relay:edge`, Windows shortcut examples, auto-launch hints), see the [“Always-on CDP” section in `docs/COPILOT_E2E_CDP_PITFALLS.md`](docs/COPILOT_E2E_CDP_PITFALLS.md#always-on-cdp-signed-in-copilot-browser).
 
 Use this when tuning selectors or debugging extract/wait behavior. Start Edge with remote debugging (e.g. port **9360**, or **9333** if you still use that), open **M365 Chat** (signed in), then:
 
@@ -362,23 +364,23 @@ CDP_ENDPOINT=http://127.0.0.1:9360 npx playwright test --config=playwright-cdp.c
 
 ## Environment
 
-- **M365 Copilot (CDP):** Sole AI backend. Edge auto-launches with isolated profile; runtime CDP port may be **OS-assigned** (`DevToolsActivePort`) or chosen in a scan range and recorded in **`.relay-agent-cdp-port`** under `~/RelayAgentEdgeProfile`. **Relay 既定 CDP は 9360**（YakuLingo 等の **9333** と衝突回避）。`CDP_ENDPOINT` / `RELAY_EDGE_CDP_PORT` / `pnpm relay:edge` で上書き可。`start-relay-edge-cdp.sh` は **`DevToolsActivePort` が生きていれば**（例: 既存 Edge が 9333）**二重起動しない**。Tauri **attach 系 IPC**はマーカー／`DevToolsActivePort` を優先し、無ければ **9360** にフォールバック。Configurable timeout (default: 120s). Login via browser UI on first use. **手動で CDP に繋ぐ検証**は、その Edge プロファイルで **M365 にサインイン済み**であることが前提（セッション切れ時はブラウザで再ログイン）。
+- **M365 Copilot (CDP):** Sole AI backend. Edge auto-launches with isolated profile; runtime CDP port may be **OS-assigned** (`DevToolsActivePort`) or chosen in a scan range and recorded in **`.relay-agent-cdp-port`** under `~/RelayAgentEdgeProfile`. **Relay’s default CDP base port is 9360** (avoids collision with e.g. YakuLingo on **9333**). Override with `CDP_ENDPOINT`, `RELAY_EDGE_CDP_PORT`, or `pnpm relay:edge`. **`start-relay-edge-cdp.sh` does not start a second Edge** when **`DevToolsActivePort` is already live** (e.g. existing Edge on 9333). Tauri **attach-style IPC** prefers the marker file / `DevToolsActivePort`, then falls back to **9360**. Configurable timeout (default: 120s). Sign in via the browser UI on first use. **Manual CDP verification** requires that Edge profile to be **signed in to M365** (re-authenticate in the browser if the session expires).
 - **`RELAY_COPILOT_DEBUG_POLL=1`:** When set, `copilot_server.js` logs a `[copilot:response] poll` diagnostic every ~10s during `waitForDomResponse` (off by default to reduce noise).
 
-### Linux / ヘッドレス（Copilot 接続の進め方）
+### Linux / headless (Copilot connectivity)
 
-1. **Microsoft Edge for Linux** を入れる（`microsoft-edge-stable` が `PATH` にあること）。
-2. **`DISPLAY` が必要** — Edge はウィンドウを開きます。Xvfb + 軽量 WM なら例: `export DISPLAY=:1`（先に Xvfb / fluxbox を起動）。
-3. **専用プロファイル** `~/RelayAgentEdgeProfile` — アプリと同梱の `copilot_server.js` がここで Edge を起動します。**noVNC 用 Chromium の `~/chrome-m365-profile` とは別**です。初回はこの Edge で **M365 にサインイン**してください。
-4. 開発起動の補助: リポジトリ直下で  
+1. Install **Microsoft Edge for Linux** (`microsoft-edge-stable` on `PATH`).
+2. **`DISPLAY` is required** — Edge opens a window. For Xvfb + a lightweight WM, e.g. `export DISPLAY=:1` (start Xvfb / fluxbox first).
+3. **Dedicated profile** `~/RelayAgentEdgeProfile` — the bundled `copilot_server.js` launches Edge with this profile. **This is separate** from Chromium’s `~/chrome-m365-profile` used for noVNC demos. Sign in to **M365** in this Edge on first use.
+4. Dev helpers: from the repo root run  
    `chmod +x scripts/relay-copilot-linux.sh && ./scripts/relay-copilot-linux.sh`  
-   （`$HOME/novnc-m365/start-x11-desktop.sh` があれば `DISPLAY` 未設定時に自動実行します。パスは `RELAY_START_X11` で変更可）  
-   既定で **`scripts/start-relay-edge-cdp.sh`** により Edge（CDP 既定 **9360**）を先起動します。無効化: `RELAY_PRESTART_EDGE=0`  
-   手動だけ先に Edge を立てる場合: `pnpm relay:edge`（`DISPLAY` 必須）  
-   **`apps/desktop` で `pnpm tauri:dev` だけ** でも、Unix では同じ先起動スクリプトが自動実行されます（`RELAY_SKIP_PRESTART_EDGE=1` で省略。Windows は手動 Edge 起動の案内のみ）。
-5. **Relay 用 Edge を noVNC で表示**する（Chromium 版 noVNC とは別）:  
+   (if `$HOME/novnc-m365/start-x11-desktop.sh` exists, it runs when `DISPLAY` is unset; override the path with `RELAY_START_X11`).  
+   By default **`scripts/start-relay-edge-cdp.sh`** starts Edge first (default CDP **9360**). Disable with `RELAY_PRESTART_EDGE=0`.  
+   To start Edge yourself only: `pnpm relay:edge` (**`DISPLAY` required**).  
+   **`pnpm tauri:dev` from `apps/desktop` alone** still runs the same prestart on Unix (`RELAY_SKIP_PRESTART_EDGE=1` to skip; Windows shows manual Edge instructions only).
+5. **Show Relay’s Edge in noVNC** (distinct from Chromium noVNC):  
    `~/novnc-m365/start-novnc-relay.sh`  
-   同じ **~/RelayAgentEdgeProfile** と **CDP（既定 9360、スクリプトに合わせる）** で起動するため、アプリ／`copilot_server` と画面が一致します。
+   Uses the same **`~/RelayAgentEdgeProfile`** and **CDP (default 9360; match the scripts)** so the UI matches the app / `copilot_server`.
 
 ## License
 

@@ -51,6 +51,14 @@ pub fn run() {
         .setup(|app| {
             liteparse_env::apply(app);
             app.manage(SessionRegistry::new());
+            match app.get_webview_window("main") {
+                Some(win) => {
+                    if let Err(e) = win.set_always_on_top(true) {
+                        tracing::warn!("failed to set main window always-on-top: {e}");
+                    }
+                }
+                None => tracing::warn!("main webview window not found for always-on-top"),
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
