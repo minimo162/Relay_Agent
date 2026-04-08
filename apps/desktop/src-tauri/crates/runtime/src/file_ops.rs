@@ -1,5 +1,4 @@
 use std::cmp::Reverse;
-use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -8,11 +7,12 @@ use std::time::Instant;
 use glob::Pattern;
 use image::GenericImageView;
 use image::ImageReader;
-use lopdf::Document;
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use walkdir::WalkDir;
+
+use crate::pdf_liteparse;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TextFilePayload {
@@ -156,7 +156,7 @@ pub fn read_file(
             let raw = fs::read_to_string(&absolute_path)?;
             format_ipynb_text(&raw)?
         }
-        Some("pdf") => read_pdf_as_text(&absolute_path, pages)?,
+        Some("pdf") => pdf_liteparse::read_pdf_as_text(&absolute_path, pages)?,
         Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") => {
             if pages.is_some() {
                 return Err(io::Error::new(
@@ -314,97 +314,6 @@ fn format_ipynb_text(raw: &str) -> io::Result<String> {
         }
     }
     Ok(out.join("\n"))
-}
-
-fn parse_pdf_page_spec(spec: &str, max_page: u32) -> io::Result<Vec<u32>> {
-    let spec = spec.trim();
-    if spec.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "pages string must not be empty",
-        ));
-    }
-    let mut pages = BTreeSet::new();
-    for part in spec.split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        if let Some((a, b)) = part.split_once('-') {
-            let start: u32 = a.trim().parse().map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("invalid page range start in {part:?}"),
-                )
-            })?;
-            let end: u32 = b.trim().parse().map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("invalid page range end in {part:?}"),
-                )
-            })?;
-            if start < 1 || end < start {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("invalid page range {part:?} (use 1-based pages, start <= end)"),
-                ));
-            }
-            for p in start..=end {
-                if p <= max_page {
-                    pages.insert(p);
-                }
-            }
-        } else {
-            let p: u32 = part.parse().map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("invalid page number in {part:?}"),
-                )
-            })?;
-            if p < 1 {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "page numbers must be >= 1",
-                ));
-            }
-            if p <= max_page {
-                pages.insert(p);
-            }
-        }
-    }
-    if pages.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "no pages matched the document (check page numbers and range)",
-        ));
-    }
-    Ok(pages.into_iter().collect())
-}
-
-fn read_pdf_as_text(path: &Path, pages: Option<&str>) -> io::Result<String> {
-    let doc = Document::load(path).map_err(|e| io::Error::other(e.to_string()))?;
-    let page_map = doc.get_pages();
-    let max_page = *page_map.keys().max().unwrap_or(&0);
-    if max_page == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "PDF contains no pages",
-        ));
-    }
-    let page_nums: Vec<u32> = if let Some(spec) = pages {
-        parse_pdf_page_spec(spec, max_page)?
-    } else {
-        page_map.keys().copied().collect()
-    };
-    let mut sorted = page_nums;
-    sorted.sort_unstable();
-    let extracted = doc
-        .extract_text(&sorted)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-    let header = format!(
-        "[PDF text extraction — pages {sorted:?}; quality varies by file.]\n\n"
-    );
-    Ok(header + &extracted)
 }
 
 fn read_image_summary(path: &Path) -> io::Result<String> {

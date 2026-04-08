@@ -2,6 +2,7 @@
 mod agent_browser_daemon;
 mod agent_loop;
 mod copilot_server;
+mod liteparse_env;
 mod cdp_copilot;
 mod config;
 mod copilot_persistence;
@@ -48,6 +49,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            liteparse_env::apply(app);
             app.manage(SessionRegistry::new());
             Ok(())
         })

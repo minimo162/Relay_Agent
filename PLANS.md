@@ -21,6 +21,11 @@ MVP guardrails (authoritative summary: `AGENTS.md`):
 - **Priority B:** Harden MCP server integration, tool approval, and session management.
 - **Priority C:** Expand CDP browser automation and context-aware execution.
 
+### PDF reading (LiteParse + bundled Node)
+
+- **Scope:** `read_file` on `.pdf` uses **`@llamaindex/liteparse`** with **OCR disabled**, spawned by **Node** (bundled per target via Tauri `externalBin` as `relay-node`, or system `node` in dev). Runner assets live under `apps/desktop/src-tauri/liteparse-runner/` and are copied into the app bundle as resources. **Builders** run `npm ci --omit=dev` in that folder on the **same OS/arch** as the installer being produced (native modules). **Scanned PDFs** are out of scope while OCR remains off.
+- **Docs / verification:** See `docs/IMPLEMENTATION.md` milestone **2026-04-08 PDF read_file via LiteParse + bundled Node**.
+
 ### Windows desktop Office automation (PowerShell + COM)
 
 - **Scope:** On Windows builds, **Word, Excel, PowerPoint**, and **`.msg`** are driven primarily via the **`PowerShell` tool** and **COM** (`.msg` through `Outlook.Application` when Outlook is installed). Live Outlook inbox automation is out of scope for this slice.

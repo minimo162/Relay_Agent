@@ -1,0 +1,10 @@
+{
+  "name": "@relay-agent/liteparse-runner",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Sidecar script: PDF to text via @llamaindex/liteparse (OCR off)",
+  "dependencies": {
+    "@llamaindex/liteparse": "1.4.6"
+  }
+}

@@ -16,6 +16,16 @@
 
 ## Milestone Log
 
+### 2026-04-08 PDF `read_file` via LiteParse + bundled Node
+
+**Outcome:** Replaced Rust `lopdf` PDF text extraction with **`@llamaindex/liteparse`** (OCR off) invoked by a **Node** subprocess. Added `apps/desktop/src-tauri/liteparse-runner/` (`parse.mjs`, `package-lock.json`). **Tauri** `bundle.externalBin` embeds **`relay-node`** (official Node 20.x per target triple; downloaded by `apps/desktop/scripts/fetch-bundled-node.mjs`). **`bundle.resources`** ships `liteparse-runner/` (including `node_modules` from `npm ci --omit=dev` on the build host). **`liteparse_env`** sets `RELAY_LITEPARSE_RUNNER_ROOT` and `RELAY_BUNDLED_NODE` at app startup; `runtime::pdf_liteparse` falls back to PATH `node` and compile-time `liteparse-runner` path for dev/tests. Limits: `RELAY_PDF_PARSE_TIMEOUT_SECS` (default 120), 16 MiB stdout cap. **`agent_loop`** system copy updated so PDF parsing is described accurately.
+
+**Artifacts:** `apps/desktop/src-tauri/crates/runtime/src/pdf_liteparse.rs`, `liteparse-runner/`, `scripts/fetch-bundled-node.mjs`, `tauri.conf.json`, `src-tauri/.gitignore`, `liteparse_env.rs`, `package.json` prep scripts
+
+**Verification:** `cargo test -p runtime` — pass (88 tests). `cargo check -p relay-agent-desktop` (from `apps/desktop/src-tauri/`) — pass.
+
+**Build note:** `pnpm tauri build` runs `beforeBuildCommand` (fetch Node for `TAURI_ENV_TARGET_TRIPLE`, `npm ci` in `liteparse-runner`, Vite build). For **`tauri dev`**, run once: `pnpm run prep:liteparse-runner` (and optionally `pnpm run prep:bundled-node` if not using system Node). Native addons in `liteparse-runner/node_modules` must be installed on the OS/arch that produces the bundle.
+
 ### 2026-04-08 Relay default CDP base **9360** (YakuLingo coexistence)
 
 **Outcome:** Relay の既定 CDP 基底を **9333 → 9360** に変更（**YakuLingo** は **9333** 固定のため衝突回避）。`copilot_server.js` は基底から 20 ポートをスキャン（**9360–9379**）。`scripts/start-relay-edge-cdp.sh` は既定 **9360** とし、**`DevToolsActivePort` が `/json/version` で生きていれば**（例: 既存 Edge が **9333**）**二重起動しない**。レガシー運用は **`RELAY_EDGE_CDP_PORT=9333`** / **`CDP_ENDPOINT`**。Rust・Node・Playwright・IPC JSDoc・E2E モックを同期。
@@ -76,7 +86,7 @@
 
 ### 2026-04-07 Claw-style agent tools (read_file / schemas / Windows PowerShell)
 
-**Outcome:** Brought built-in tools closer to the [Claw Code tool-system](https://claw-code.codes/tool-system) shape: `read_file` supports `file_path`, optional PDF `pages` (via `lopdf`), `.ipynb` text rendering, image metadata; `edit_file` rejects non-unique `old_string` when `replace_all` is false; `NotebookEdit` accepts Claw `command` + `index`; `Config` accepts `key`/`action`; `StructuredOutput` accepts `data` plus extra keys; `TodoWrite` todos may include `id`/`priority`; `Agent` documents `run_in_background` / `isolation` with explicit unsupported errors; `bash` schema documents `dangerously_disable_sandbox` (alias on `BashCommandInput`; still stripped in `agent_loop`); `PowerShell` is registered and implemented only on Windows.
+**Outcome:** Brought built-in tools closer to the [Claw Code tool-system](https://claw-code.codes/tool-system) shape: `read_file` supports `file_path`, optional PDF `pages` (later migrated to LiteParse via Node; see 2026-04-08 PDF milestone), `.ipynb` text rendering, image metadata; `edit_file` rejects non-unique `old_string` when `replace_all` is false; `NotebookEdit` accepts Claw `command` + `index`; `Config` accepts `key`/`action`; `StructuredOutput` accepts `data` plus extra keys; `TodoWrite` todos may include `id`/`priority`; `Agent` documents `run_in_background` / `isolation` with explicit unsupported errors; `bash` schema documents `dangerously_disable_sandbox` (alias on `BashCommandInput`; still stripped in `agent_loop`); `PowerShell` is registered and implemented only on Windows.
 
 **Artifacts:** `apps/desktop/src-tauri/crates/runtime/src/file_ops.rs`, `apps/desktop/src-tauri/crates/runtime/Cargo.toml`, `apps/desktop/src-tauri/crates/tools/src/lib.rs`, `apps/desktop/src-tauri/crates/runtime/src/bash.rs`, `apps/desktop/src-tauri/src/agent_loop.rs`
 
@@ -3771,7 +3781,7 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run
 
 Observed result:
 
-- `apps/desktop/src-tauri/Cargo.toml` no longer declares `quick-xml` as a direct dependency. The current Rust code paths use `reqwest`, `shell-words`, `trash`, `csv`, `regex`, `lopdf`, `zip`, and `calamine` directly, but there is no in-repo `quick_xml::...` usage left after the relay-flow cleanup.
+- `apps/desktop/src-tauri/Cargo.toml` no longer declares `quick-xml` as a direct dependency. The current Rust code paths use `reqwest`, `shell-words`, `trash`, `csv`, `regex`, `zip`, and `calamine` directly (PDF text uses Node + LiteParse, not `lopdf`), but there is no in-repo `quick_xml::...` usage left after the relay-flow cleanup.
 - `Cargo.lock` was refreshed accordingly, so `quick-xml` remains only as a transitive dependency from other crates, not as a direct dependency of `relay-agent-desktop`.
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed after removing the direct dependency.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run` passed, confirming the Rust test targets still compile after the dependency prune.

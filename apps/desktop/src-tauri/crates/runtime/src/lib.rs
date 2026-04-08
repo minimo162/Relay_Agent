@@ -11,6 +11,7 @@ mod mcp_client;
 mod mcp_registry;
 mod mcp_stdio;
 mod oauth;
+mod pdf_liteparse;
 mod permissions;
 mod prompt;
 mod remote;

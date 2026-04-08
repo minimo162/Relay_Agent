@@ -1,0 +1,2 @@
+# Tauri externalBin sidecar (downloaded by apps/desktop/scripts/fetch-bundled-node.mjs)
+binaries/relay-node-*

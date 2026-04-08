@@ -75,7 +75,7 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "read_file",
-            description: "Read a file by path: UTF-8 text (line offset/limit), .ipynb as numbered text, .pdf with optional pages (1-based, e.g. \"1-3\" or \"5\"), common images as metadata only (no multimodal tool result yet).",
+            description: "Read a file by path: UTF-8 text (line offset/limit), .ipynb as numbered text, .pdf via LiteParse spatial text with optional pages (1-based, e.g. \"1-3\" or \"5\"; OCR off), common images as metadata only (no multimodal tool result yet).",
             input_schema: json!({
                 "type": "object",
                 "properties": {

@@ -1135,7 +1135,7 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
             "- Prefer read-only tools before mutating tools.\n",
             "- When modifying files, prefer saving copies.\n",
             "- Local files: read_file, glob_search, and grep_search accept absolute paths on this machine (e.g. Windows C:\\Users\\...\\file.pdf) wherever the OS user can read them. Do not tell the user the app lacks permission to their user profile; call read_file and surface the tool's error if access fails.\n",
-            "- read_file returns UTF-8 text only. PDF and other binaries are not parsed; if the tool errors or output is unusable, ask for extracted text or a converted .txt/.md file."
+            "- read_file returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted .txt/.md file."
         ),
         goal = goal,
     ));
