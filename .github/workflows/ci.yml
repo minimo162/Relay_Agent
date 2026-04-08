@@ -30,6 +30,11 @@ jobs:
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
+      # tauri-build validates externalBin paths; binaries/ is gitignored.
+      - name: Fetch Tauri externalBin (relay-node)
+        working-directory: apps/desktop
+        run: node ./scripts/fetch-bundled-node.mjs
+
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
