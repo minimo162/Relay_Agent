@@ -534,8 +534,9 @@ pub struct ConnectCdpRequest {
     /// If true and no existing browser is found, auto-launch a dedicated Edge.
     #[serde(default)]
     pub auto_launch: Option<bool>,
-    /// Ignored when `auto_launch` is true (OS-assigned CDP port via `DevToolsActivePort`).
-    /// Used only when attaching to an existing browser at a known port (`auto_launch: false`).
+    /// When `auto_launch` is false: explicit CDP port, or omit to resolve from
+    /// `.relay-agent-cdp-port` / `DevToolsActivePort` then fall back to 9333.
+    /// When `auto_launch` is true: hint only; OS-assigned port via profile is used for launch.
     #[serde(default)]
     pub base_port: Option<u16>,
 }
@@ -596,7 +597,13 @@ pub async fn connect_cdp(
     }
 
     let auto_launch = request.auto_launch.unwrap_or(true);
-    let base_port = request.base_port.unwrap_or(COPILOT_JS_CDP_PORT);
+    let base_port = if auto_launch {
+        request.base_port.unwrap_or(COPILOT_JS_CDP_PORT)
+    } else if let Some(p) = request.base_port {
+        p
+    } else {
+        cdp_copilot::resolve_cdp_attachment_port(COPILOT_JS_CDP_PORT).await
+    };
     let debug_url = get_cdp_debug_url(base_port);
 
     tracing::info!(
@@ -641,14 +648,15 @@ pub async fn cdp_send_prompt(
     _app: AppHandle,
     request: CdpSendPromptRequest,
 ) -> Result<CdpPromptResult, String> {
-    let debug_url = get_cdp_debug_url(COPILOT_JS_CDP_PORT);
+    let port = cdp_copilot::resolve_cdp_attachment_port(COPILOT_JS_CDP_PORT).await;
+    let debug_url = get_cdp_debug_url(port);
     let timeout_secs = request.wait_response_secs.unwrap_or(120);
 
     let prompt_preview = &request.prompt[..request.prompt.len().min(60)];
     tracing::info!("[CDP] send prompt: {prompt_preview}…");
 
     // Use existing connection if available, otherwise connect fresh
-    let page = match cdp_copilot::connect_copilot_page(&debug_url, false, COPILOT_JS_CDP_PORT).await {
+    let page = match cdp_copilot::connect_copilot_page(&debug_url, false, port).await {
         Ok(r) => r.page.clone(),
         Err(e) => {
             return Ok(CdpPromptResult {
@@ -697,7 +705,13 @@ pub async fn cdp_start_new_chat(
     request: ConnectCdpRequest,
 ) -> Result<CdpConnectResult, String> {
     let auto_launch = request.auto_launch.unwrap_or(true);
-    let base_port = request.base_port.unwrap_or(COPILOT_JS_CDP_PORT);
+    let base_port = if auto_launch {
+        request.base_port.unwrap_or(COPILOT_JS_CDP_PORT)
+    } else if let Some(p) = request.base_port {
+        p
+    } else {
+        cdp_copilot::resolve_cdp_attachment_port(COPILOT_JS_CDP_PORT).await
+    };
     let debug_url = get_cdp_debug_url(base_port);
 
     let res = match cdp_copilot::connect_copilot_page(&debug_url, auto_launch, base_port).await {
@@ -805,10 +819,11 @@ pub async fn disconnect_cdp(_app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn cdp_screenshot(_app: AppHandle) -> Result<serde_json::Value, String> {
-    let debug_url = get_cdp_debug_url(COPILOT_JS_CDP_PORT);
+    let port = cdp_copilot::resolve_cdp_attachment_port(COPILOT_JS_CDP_PORT).await;
+    let debug_url = get_cdp_debug_url(port);
 
     // If already connected, reuse the session; otherwise do a fresh lookup
-    let page = match cdp_copilot::connect_copilot_page(&debug_url, false, COPILOT_JS_CDP_PORT).await {
+    let page = match cdp_copilot::connect_copilot_page(&debug_url, false, port).await {
         Ok(r) => r.page.clone(),
         Err(e) => return Err(format!("CDP connect: {e}")),
     };

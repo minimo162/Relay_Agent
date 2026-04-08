@@ -194,6 +194,12 @@ CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test --config=playwright-cdp.c
 2. **常に同じ `--remote-debugging-port` を使う（例: 9333）。** Relay・Playwright・検証スクリプトの既定が揃っている。
 3. **`--remote-allow-origins=*` を付ける。** Chromium 111+ で CDP WebSocket が弾かれないようにする（`start-relay-edge-cdp.sh` と Rust 側の起動引数と同趣旨）。
 
+### ハイブリッド: 手動既定 9333 vs アプリ実行時の動的ポート
+
+- **人間向けの既定（ドキュメント・Playwright・`curl`・`pnpm relay:edge`）** は引き続き **9333** を指す。手動で「いつもここ」と決めておきやすい。
+- **パッケージドアプリ／Tauri IPC** は、`auto_launch` で Edge を立てる経路では **`--remote-debugging-port=0` + `DevToolsActivePort`**（または既存プロセス再利用）で **実ポートが可変**になり得る。`copilot_server.js` は空きポートを選ぶと **`~/RelayAgentEdgeProfile/.relay-agent-cdp-port`** に記録する。
+- **`connect_cdp` / `cdp_start_new_chat` で `auto_launch: false` かつ `base_port` 未指定**、または **`cdp_send_prompt` / `cdp_screenshot`** のとき、Rust は **`.relay-agent-cdp-port`（`/json/version` が成功する場合）→ `DevToolsActivePort`（同様）→ なければ 9333** の順で接続先ポートを決める（`cdp_copilot::resolve_cdp_attachment_port`）。マーカーが古く CDP が死んでいれば自動で次候補へ落ちる。
+
 ### 推奨プロファイル（Relay と一致）
 
 - **既定パス:** `~/RelayAgentEdgeProfile`（Windows では `%USERPROFILE%\RelayAgentEdgeProfile` に相当するホーム配下）。

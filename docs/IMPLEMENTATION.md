@@ -16,6 +16,12 @@
 
 ## Milestone Log
 
+### 2026-04-08 Hybrid CDP: attach IPC resolves marker / DevToolsActivePort
+
+**Outcome:** Added `cdp_copilot::resolve_cdp_attachment_port(preferred)` — probes **`.relay-agent-cdp-port`** then **`DevToolsActivePort`** under `relay_agent_edge_profile_dir()` with `/json/version`, else returns **9333**. Wired into **`cdp_send_prompt`**, **`cdp_screenshot`**, and **`connect_cdp` / `cdp_start_new_chat`** when **`auto_launch` is false** and **`base_port` is omitted**. Explicit **`base_port`** still wins. Unit tests for marker and `DevToolsActivePort` file parsing. Documented hybrid model in **`docs/COPILOT_E2E_CDP_PITFALLS.md`** and **`README.md`**.
+
+**Verification:** `cargo test -p relay-agent-desktop --lib` — pass (42 tests).
+
 ### 2026-04-08 Always-on CDP workflow wired into dev + IPC defaults
 
 **Outcome:** Unified **M365 Copilot CDP default port 9333** across Tauri IPC (`connect_cdp`, `cdp_send_prompt`, `cdp_start_new_chat`, `cdp_screenshot`), `cdp_copilot` parse fallbacks, `playwright-cdp.config.ts`, and `m365-copilot-capabilities-v2.spec.ts`. **`pnpm tauri:dev`** (`apps/desktop`) runs **`prestart-relay-edge.mjs`** on Unix to invoke `scripts/start-relay-edge-cdp.sh` first (skip: `RELAY_SKIP_PRESTART_EDGE=1`; Windows prints manual hint). Documented in `README.md`, `docs/COPILOT_E2E_CDP_PITFALLS.md`, `DEV_NOTES.md`.

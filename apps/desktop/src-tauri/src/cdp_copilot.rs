@@ -89,6 +89,80 @@ async fn cdp_http_ready(debug_url: &str) -> bool {
     )
 }
 
+/// Same relative path as `copilot_server.js` `RELAY_CDP_PORT_MARKER` under the Edge profile dir.
+const RELAY_CDP_PORT_MARKER: &str = ".relay-agent-cdp-port";
+
+fn read_relay_cdp_port_marker(profile_dir: &std::path::Path) -> Option<u16> {
+    let path = profile_dir.join(RELAY_CDP_PORT_MARKER);
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let n: u32 = raw.trim().parse().ok()?;
+    (n >= 1 && n <= 65535).then_some(n as u16)
+}
+
+/// CDP HTTP port when attaching with `auto_launch: false` and no explicit `base_port`.
+///
+/// Resolution order: **`.relay-agent-cdp-port`** (if `/json/version` succeeds) →
+/// **`DevToolsActivePort`** (if live) → **`preferred`** (use **9333** for manual/docs default).
+pub async fn resolve_cdp_attachment_port(preferred: u16) -> u16 {
+    let profile_dir = relay_agent_edge_profile_dir();
+    if let Some(p) = read_relay_cdp_port_marker(&profile_dir) {
+        let url = format!("http://127.0.0.1:{p}");
+        if cdp_http_ready(&url).await {
+            info!("[CDP] resolve_cdp_attachment_port: using marker port {p}");
+            return p;
+        }
+    }
+    if let Some(p) = read_devtools_active_port(&profile_dir) {
+        let url = format!("http://127.0.0.1:{p}");
+        if cdp_http_ready(&url).await {
+            info!("[CDP] resolve_cdp_attachment_port: using DevToolsActivePort {p}");
+            return p;
+        }
+    }
+    debug!("[CDP] resolve_cdp_attachment_port: fallback to preferred port {preferred}");
+    preferred
+}
+
+#[cfg(test)]
+mod attachment_port_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn read_relay_cdp_port_marker_valid() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut f = std::fs::File::create(dir.path().join(RELAY_CDP_PORT_MARKER)).unwrap();
+        writeln!(f, "9340").unwrap();
+        assert_eq!(read_relay_cdp_port_marker(dir.path()), Some(9340));
+    }
+
+    #[test]
+    fn read_relay_cdp_port_marker_whitespace_trimmed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(RELAY_CDP_PORT_MARKER), " 9335 \n").unwrap();
+        assert_eq!(read_relay_cdp_port_marker(dir.path()), Some(9335));
+    }
+
+    #[test]
+    fn read_relay_cdp_port_marker_invalid_or_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert_eq!(read_relay_cdp_port_marker(dir.path()), None);
+        std::fs::write(dir.path().join(RELAY_CDP_PORT_MARKER), "0").unwrap();
+        assert_eq!(read_relay_cdp_port_marker(dir.path()), None);
+        std::fs::write(dir.path().join(RELAY_CDP_PORT_MARKER), "70000").unwrap();
+        assert_eq!(read_relay_cdp_port_marker(dir.path()), None);
+        std::fs::write(dir.path().join(RELAY_CDP_PORT_MARKER), "not-a-port").unwrap();
+        assert_eq!(read_relay_cdp_port_marker(dir.path()), None);
+    }
+
+    #[test]
+    fn read_devtools_active_port_first_line() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("DevToolsActivePort"), "9444\nsecond\n").unwrap();
+        assert_eq!(read_devtools_active_port(dir.path()), Some(9444));
+    }
+}
+
 /* ── Edge auto-launch ────────────────────────────────────────── */
 
 /// Launch a dedicated Edge instance for CDP control.

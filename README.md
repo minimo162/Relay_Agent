@@ -353,7 +353,7 @@ CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test --config=playwright-cdp.c
 
 ## Environment
 
-- **M365 Copilot (CDP):** Sole AI backend. Edge auto-launches on free port with isolated profile. Configurable timeout (default: 120s). Login via browser UI on first use. **手動で CDP に繋ぐ検証**（`inspect:copilot-dom`、`playwright-cdp.config.ts` の `m365-cdp-chat` など）は、その Edge プロファイルで **M365 Copilot に既にサインイン済み**であることが前提（セッション切れ時はブラウザで再ログイン）。
+- **M365 Copilot (CDP):** Sole AI backend. Edge auto-launches with isolated profile; runtime CDP port may be **OS-assigned** (`DevToolsActivePort`) or chosen in a scan range and recorded in **`.relay-agent-cdp-port`** under `~/RelayAgentEdgeProfile`. **手動検証の既定ポートは 9333**（`CDP_ENDPOINT`、`pnpm relay:edge`、README の `curl` 例）。Tauri の **attach 系 IPC**（`cdp_send_prompt`、`cdp_screenshot`、`connect_cdp` with `auto_launch: false` and no `basePort`）はマーカー／`DevToolsActivePort` を優先し、無ければ 9333 にフォールバック。Configurable timeout (default: 120s). Login via browser UI on first use. **手動で CDP に繋ぐ検証**（`inspect:copilot-dom`、`m365-cdp-chat` など）は、その Edge プロファイルで **M365 Copilot に既にサインイン済み**であることが前提（セッション切れ時はブラウザで再ログイン）。
 - **`RELAY_COPILOT_DEBUG_POLL=1`:** When set, `copilot_server.js` logs a `[copilot:response] poll` diagnostic every ~10s during `waitForDomResponse` (off by default to reduce noise).
 
 ### Linux / ヘッドレス（Copilot 接続の進め方）
