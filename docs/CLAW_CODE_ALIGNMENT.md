@@ -42,19 +42,30 @@ Dynamic **`mcp__<server>__<tool>`** names remain the primary MCP surface alongsi
 
 ## Mock parity scenario map (claw harness ↔ Relay)
 
-claw uses scripted scenarios in `rust/mock_parity_scenarios.json` and `mock_parity_harness.rs` (see claw `PARITY.md`). Relay [`compat-harness` `parity_style`](apps/desktop/src-tauri/crates/compat-harness/src/lib.rs) tests are intentionally smaller but map as follows:
+claw uses scripted scenarios in `rust/mock_parity_scenarios.json` and `rust/crates/rusty-claude-cli/tests/mock_parity_harness.rs` with the **`claw` binary** and **`mock-anthropic-service`** (see claw `PARITY.md`). Relay vendors a copy of the scenario manifest at [`apps/desktop/src-tauri/crates/compat-harness/fixtures/mock_parity_scenarios.json`](apps/desktop/src-tauri/crates/compat-harness/fixtures/mock_parity_scenarios.json); sync instructions are in `fixtures/SYNC.txt`. The test `mock_parity_scenario_manifest_matches_claw_canonical_order` keeps the **scenario name list and order** aligned with upstream.
 
-| claw-style scenario | Relay test (compat-harness) |
-|---------------------|----------------------------|
+The `compat-harness` crate no longer parses a legacy Claude Code **TypeScript** upstream (`src/commands.ts` / `src/tools.ts`); that surface does not exist on ultraworkers/claw-code.
+
+Relay [`compat-harness` `parity_style`](apps/desktop/src-tauri/crates/compat-harness/src/lib.rs) exercises **direct `tools::execute_tool` and `PermissionPolicy`** where possible. It does **not** replace the full CLI mock-API harness. Scenarios below marked *not in desktop harness* need a follow-up (subprocess `claw` + mock service, or desktop JSON output parity).
+
+| claw-style scenario | Relay coverage (`compat-harness`) |
+|---------------------|-----------------------------------|
+| `streaming_text` | *Not in desktop harness* (needs mock Anthropic + agent turn) |
 | `read_file_roundtrip` | `read_file_roundtrip_under_temp_workspace` |
-| `write_file_denied` (permission) | `write_file_denied_under_read_only_policy` |
-| `bash_permission_prompt_*` (escalation) | `bash_escalation_prompts_under_workspace_write_policy` |
-| Workspace path safety | `workspace_boundary_rejects_outside_path` |
-| Multi-tool / search flow (partial) | `glob_and_read_multi_step_style` |
-| Read-only bash rejection (Relay + claw intent) | `bash_read_only_project_rejects_rm_via_execute_tool` |
+| `grep_chunk_assembly` | `grep_search_finds_match_in_workspace_file` (content); `grep_search_count_mode_finds_expected_matches` (count, claw-style fixture text) |
 | `write_file_allowed` | `write_file_allowed_under_temp_workspace` |
-| `grep_chunk_assembly` (simplified) | `grep_search_finds_match_in_workspace_file` |
-| `bash_stdout_roundtrip` | `bash_stdout_roundtrip_echo` |
+| `write_file_denied` | `write_file_denied_under_read_only_policy` (policy only; `execute_tool` does not enforce desktop `PermissionEnforcer`) |
+| `multi_tool_turn_roundtrip` | `multi_tool_read_file_then_grep_in_same_workspace` (behavioral; not a single model turn) |
+| `bash_stdout_roundtrip` | `bash_stdout_roundtrip_echo` (workspace-write); `bash_stdout_roundtrip_echo_danger_full_access` (claw permission string) |
+| `bash_permission_prompt_approved` | `bash_escalation_prompts_under_workspace_write_policy` |
+| `bash_permission_prompt_denied` | `bash_permission_prompt_denied_under_workspace_write_policy` |
+| `plugin_tool_roundtrip` | *Not in desktop harness* |
+| `auto_compact_triggered` | *Not in desktop harness* |
+| `token_cost_reporting` | *Not in desktop harness* |
+| (extra) Workspace path safety | `workspace_boundary_rejects_outside_path` |
+| (extra) Glob + read flow | `glob_and_read_multi_step_style` |
+| (extra) Read-only bash | `bash_read_only_project_rejects_rm_via_execute_tool` |
+| (extra) Hard denylist | `bash_hard_denylist_blocks_sudo_even_when_workspace_write`, `read_file_hard_denylist_blocks_dot_env` |
 
 ## Parity-style checklist (from claw `PARITY.md`)
 

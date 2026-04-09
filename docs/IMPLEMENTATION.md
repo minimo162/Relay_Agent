@@ -16,6 +16,14 @@
 
 ## Milestone Log
 
+### 2026-04-09 compat-harness: claw `mock_parity_scenarios.json` + parity tests
+
+**Change:** Removed legacy TypeScript upstream manifest parsing from [`crates/compat-harness`](apps/desktop/src-tauri/crates/compat-harness) (claw-code does not ship `src/commands.ts`). Vendored [`fixtures/mock_parity_scenarios.json`](apps/desktop/src-tauri/crates/compat-harness/fixtures/mock_parity_scenarios.json) from claw-code `rust/mock_parity_scenarios.json` with `fixtures/SYNC.txt` for refresh steps. Added manifest order test and expanded `parity_style`: bash prompt deny path, multi-tool read+grep, grep **count** mode, bash echo under **danger-full-access** `.claw` settings. Dropped `commands` crate dependency from `compat-harness`.
+
+**Docs:** [`docs/CLAW_CODE_ALIGNMENT.md`](CLAW_CODE_ALIGNMENT.md) — updated scenario map and fixture pointer.
+
+**Verification:** `cargo test -p compat-harness --lib` from `apps/desktop/src-tauri/` — pass (2026-04-09).
+
 ### 2026-04-09 Desktop UI: Cursor alignment (type scale, borders, editorial)
 
 **Change:** [`apps/desktop/src/index.css`](../apps/desktop/src/index.css) — `.ra-type-*` utilities (§3 display through mono), `--ra-text-button` 14px / weight 400 on `.ra-button` and composer actions, `--ra-border-strong` **0.55** (light + dark paired), ghost button base fill `var(--ra-ghost-bg)`, editorial **`cswh` on**, assistant markdown = Body Serif SM + mono body/small, input/textarea/composer focus border `var(--ra-border-focus)`, `.ra-card--interactive` hover elevation; nested `pre code` inherits block size. Components: [`ShellHeader`](../apps/desktop/src/components/ShellHeader.tsx), [`Sidebar`](../apps/desktop/src/components/Sidebar.tsx), [`MessageBubble`](../apps/desktop/src/components/MessageBubble.tsx), [`ToolCallRow`](../apps/desktop/src/components/ToolCallRow.tsx), [`Composer`](../apps/desktop/src/components/Composer.tsx), [`primitives`](../apps/desktop/src/components/primitives.tsx), [`ApprovalOverlay`](../apps/desktop/src/components/ApprovalOverlay.tsx), [`Shell`](../apps/desktop/src/shell/Shell.tsx); [`ui-tokens.ts`](../apps/desktop/src/lib/ui-tokens.ts); [`DESIGN.md`](../apps/desktop/DESIGN.md) implementation blurb.
@@ -204,7 +212,7 @@
 
 **MCP:** `McpServerManager::call_tool` performs **one reconnect retry** after a recoverable stdio transport `Io` failure (process reset + re-init).
 
-**Harness:** `compat-harness` parity-style tests added for `write_file` success, `grep_search` content hit, and `bash` stdout roundtrip (when policy allows).
+**Harness:** `compat-harness` parity-style tests (initial batch). **Superseded in detail** by milestone **2026-04-09 compat-harness: claw `mock_parity_scenarios.json` + parity tests** (vendored manifest, manifest order test, expanded `parity_style`).
 
 **Docs:** `docs/CLAW_CODE_ALIGNMENT.md` — tool-surface policy for omitted claw tools; compaction checklist updated; last `ls-remote` verification row.
 

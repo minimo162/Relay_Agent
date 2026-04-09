@@ -409,7 +409,6 @@ dependencies = [
 name = "compat-harness"
 version = "0.1.0"
 dependencies = [
- "commands",
  "runtime",
  "serde_json",
  "tools",

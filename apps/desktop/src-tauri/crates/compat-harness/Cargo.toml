@@ -6,7 +6,6 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-commands = { path = "../commands" }
 tools = { path = "../tools" }
 runtime = { path = "../runtime" }
 

@@ -1,358 +1,49 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-
-use commands::{CommandManifestEntry, CommandRegistry, CommandSource};
-use runtime::{BootstrapPhase, BootstrapPlan};
-use tools::{ToolManifestEntry, ToolRegistry, ToolSource};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UpstreamPaths {
-    repo_root: PathBuf,
-}
-
-impl UpstreamPaths {
-    #[must_use]
-    pub fn from_repo_root(repo_root: impl Into<PathBuf>) -> Self {
-        Self {
-            repo_root: repo_root.into(),
-        }
-    }
-
-    #[must_use]
-    pub fn from_workspace_dir(workspace_dir: impl AsRef<Path>) -> Self {
-        let workspace_dir = workspace_dir
-            .as_ref()
-            .canonicalize()
-            .unwrap_or_else(|_| workspace_dir.as_ref().to_path_buf());
-        let primary_repo_root = workspace_dir
-            .parent()
-            .map_or_else(|| PathBuf::from(".."), Path::to_path_buf);
-        let repo_root = resolve_upstream_repo_root(&primary_repo_root);
-        Self { repo_root }
-    }
-
-    #[must_use]
-    pub fn commands_path(&self) -> PathBuf {
-        self.repo_root.join("src/commands.ts")
-    }
-
-    #[must_use]
-    pub fn tools_path(&self) -> PathBuf {
-        self.repo_root.join("src/tools.ts")
-    }
-
-    #[must_use]
-    pub fn cli_path(&self) -> PathBuf {
-        self.repo_root.join("src/entrypoints/cli.tsx")
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExtractedManifest {
-    pub commands: CommandRegistry,
-    pub tools: ToolRegistry,
-    pub bootstrap: BootstrapPlan,
-}
-
-fn resolve_upstream_repo_root(primary_repo_root: &Path) -> PathBuf {
-    let candidates = upstream_repo_candidates(primary_repo_root);
-    candidates
-        .into_iter()
-        .find(|candidate| candidate.join("src/commands.ts").is_file())
-        .unwrap_or_else(|| primary_repo_root.to_path_buf())
-}
-
-fn upstream_repo_candidates(primary_repo_root: &Path) -> Vec<PathBuf> {
-    let mut candidates = vec![primary_repo_root.to_path_buf()];
-
-    if let Some(explicit) = std::env::var_os("CLAUDE_CODE_UPSTREAM") {
-        candidates.push(PathBuf::from(explicit));
-    }
-
-    for ancestor in primary_repo_root.ancestors().take(4) {
-        candidates.push(ancestor.join("claw-code"));
-        candidates.push(ancestor.join("clawd-code"));
-    }
-
-    candidates.push(primary_repo_root.join("reference-source").join("claw-code"));
-    candidates.push(primary_repo_root.join("vendor").join("claw-code"));
-
-    let mut deduped = Vec::new();
-    for candidate in candidates {
-        if !deduped.iter().any(|seen: &PathBuf| seen == &candidate) {
-            deduped.push(candidate);
-        }
-    }
-    deduped
-}
-
-pub fn extract_manifest(paths: &UpstreamPaths) -> std::io::Result<ExtractedManifest> {
-    let commands_source = fs::read_to_string(paths.commands_path())?;
-    let tools_source = fs::read_to_string(paths.tools_path())?;
-    let cli_source = fs::read_to_string(paths.cli_path())?;
-
-    Ok(ExtractedManifest {
-        commands: extract_commands(&commands_source),
-        tools: extract_tools(&tools_source),
-        bootstrap: extract_bootstrap_plan(&cli_source),
-    })
-}
-
-#[must_use]
-pub fn extract_commands(source: &str) -> CommandRegistry {
-    let mut entries = Vec::new();
-    let mut in_internal_block = false;
-
-    for raw_line in source.lines() {
-        let line = raw_line.trim();
-
-        if line.starts_with("export const INTERNAL_ONLY_COMMANDS = [") {
-            in_internal_block = true;
-            continue;
-        }
-
-        if in_internal_block {
-            if line.starts_with(']') {
-                in_internal_block = false;
-                continue;
-            }
-            if let Some(name) = first_identifier(line) {
-                entries.push(CommandManifestEntry {
-                    name,
-                    source: CommandSource::InternalOnly,
-                });
-            }
-            continue;
-        }
-
-        if line.starts_with("import ") {
-            for imported in imported_symbols(line) {
-                entries.push(CommandManifestEntry {
-                    name: imported,
-                    source: CommandSource::Builtin,
-                });
-            }
-        }
-
-        if line.contains("feature('") && line.contains("./commands/") {
-            if let Some(name) = first_assignment_identifier(line) {
-                entries.push(CommandManifestEntry {
-                    name,
-                    source: CommandSource::FeatureGated,
-                });
-            }
-        }
-    }
-
-    dedupe_commands(entries)
-}
-
-#[must_use]
-pub fn extract_tools(source: &str) -> ToolRegistry {
-    let mut entries = Vec::new();
-
-    for raw_line in source.lines() {
-        let line = raw_line.trim();
-        if line.starts_with("import ") && line.contains("./tools/") {
-            for imported in imported_symbols(line) {
-                if imported.ends_with("Tool") {
-                    entries.push(ToolManifestEntry {
-                        name: imported,
-                        source: ToolSource::Base,
-                    });
-                }
-            }
-        }
-
-        if line.contains("feature('") && line.contains("Tool") {
-            if let Some(name) = first_assignment_identifier(line) {
-                if name.ends_with("Tool") || name.ends_with("Tools") {
-                    entries.push(ToolManifestEntry {
-                        name,
-                        source: ToolSource::Conditional,
-                    });
-                }
-            }
-        }
-    }
-
-    dedupe_tools(entries)
-}
-
-#[must_use]
-pub fn extract_bootstrap_plan(source: &str) -> BootstrapPlan {
-    let mut phases = vec![BootstrapPhase::CliEntry];
-
-    if source.contains("--version") {
-        phases.push(BootstrapPhase::FastPathVersion);
-    }
-    if source.contains("startupProfiler") {
-        phases.push(BootstrapPhase::StartupProfiler);
-    }
-    if source.contains("--dump-system-prompt") {
-        phases.push(BootstrapPhase::SystemPromptFastPath);
-    }
-    if source.contains("--claude-in-chrome-mcp") {
-        phases.push(BootstrapPhase::ChromeMcpFastPath);
-    }
-    if source.contains("--daemon-worker") {
-        phases.push(BootstrapPhase::DaemonWorkerFastPath);
-    }
-    if source.contains("remote-control") {
-        phases.push(BootstrapPhase::BridgeFastPath);
-    }
-    if source.contains("args[0] === 'daemon'") {
-        phases.push(BootstrapPhase::DaemonFastPath);
-    }
-    if source.contains("args[0] === 'ps'") || source.contains("args.includes('--bg')") {
-        phases.push(BootstrapPhase::BackgroundSessionFastPath);
-    }
-    if source.contains("args[0] === 'new' || args[0] === 'list' || args[0] === 'reply'") {
-        phases.push(BootstrapPhase::TemplateFastPath);
-    }
-    if source.contains("environment-runner") {
-        phases.push(BootstrapPhase::EnvironmentRunnerFastPath);
-    }
-    phases.push(BootstrapPhase::MainRuntime);
-
-    BootstrapPlan::from_phases(phases)
-}
-
-fn imported_symbols(line: &str) -> Vec<String> {
-    let Some(after_import) = line.strip_prefix("import ") else {
-        return Vec::new();
-    };
-
-    let before_from = after_import
-        .split(" from ")
-        .next()
-        .unwrap_or_default()
-        .trim();
-    if before_from.starts_with('{') {
-        return before_from
-            .trim_matches(|c| c == '{' || c == '}')
-            .split(',')
-            .filter_map(|part| {
-                let trimmed = part.trim();
-                if trimmed.is_empty() {
-                    return None;
-                }
-                Some(trimmed.split_whitespace().next()?.to_string())
-            })
-            .collect();
-    }
-
-    let first = before_from.split(',').next().unwrap_or_default().trim();
-    if first.is_empty() {
-        Vec::new()
-    } else {
-        vec![first.to_string()]
-    }
-}
-
-fn first_assignment_identifier(line: &str) -> Option<String> {
-    let trimmed = line.trim_start();
-    let candidate = trimmed.split('=').next()?.trim();
-    first_identifier(candidate)
-}
-
-fn first_identifier(line: &str) -> Option<String> {
-    let mut out = String::new();
-    for ch in line.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
-            out.push(ch);
-        } else if !out.is_empty() {
-            break;
-        }
-    }
-    (!out.is_empty()).then_some(out)
-}
-
-fn dedupe_commands(entries: Vec<CommandManifestEntry>) -> CommandRegistry {
-    let mut deduped = Vec::new();
-    for entry in entries {
-        let exists = deduped.iter().any(|seen: &CommandManifestEntry| {
-            seen.name == entry.name && seen.source == entry.source
-        });
-        if !exists {
-            deduped.push(entry);
-        }
-    }
-    CommandRegistry::new(deduped)
-}
-
-fn dedupe_tools(entries: Vec<ToolManifestEntry>) -> ToolRegistry {
-    let mut deduped = Vec::new();
-    for entry in entries {
-        let exists = deduped
-            .iter()
-            .any(|seen: &ToolManifestEntry| seen.name == entry.name && seen.source == entry.source);
-        if !exists {
-            deduped.push(entry);
-        }
-    }
-    ToolRegistry::new(deduped)
-}
+//! Claw-code mock parity–style tests and vendored [`mock_parity_scenarios.json`](fixtures/mock_parity_scenarios.json).
+//! Sync the fixture with ultraworkers/claw-code `rust/mock_parity_scenarios.json` when refreshing the upstream pin
+//! (see `docs/CLAW_CODE_ALIGNMENT.md`).
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod mock_parity_manifest {
+    use serde_json::Value;
 
-    fn fixture_paths() -> UpstreamPaths {
-        let workspace_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        UpstreamPaths::from_workspace_dir(workspace_dir)
-    }
+    const FIXTURE: &str = include_str!("../fixtures/mock_parity_scenarios.json");
 
-    fn has_upstream_fixture(paths: &UpstreamPaths) -> bool {
-        paths.commands_path().is_file()
-            && paths.tools_path().is_file()
-            && paths.cli_path().is_file()
-    }
-
-    #[test]
-    fn extracts_non_empty_manifests_from_upstream_repo() {
-        let paths = fixture_paths();
-        if !has_upstream_fixture(&paths) {
-            return;
-        }
-        let manifest = extract_manifest(&paths).expect("manifest should load");
-        assert!(!manifest.commands.entries().is_empty());
-        assert!(!manifest.tools.entries().is_empty());
-        assert!(!manifest.bootstrap.phases().is_empty());
-    }
+    /// Must match [ultraworkers/claw-code](https://github.com/ultraworkers/claw-code) `rust/mock_parity_scenarios.json` array order.
+    const EXPECTED_SCENARIO_NAMES: &[&str] = &[
+        "streaming_text",
+        "read_file_roundtrip",
+        "grep_chunk_assembly",
+        "write_file_allowed",
+        "write_file_denied",
+        "multi_tool_turn_roundtrip",
+        "bash_stdout_roundtrip",
+        "bash_permission_prompt_approved",
+        "bash_permission_prompt_denied",
+        "plugin_tool_roundtrip",
+        "auto_compact_triggered",
+        "token_cost_reporting",
+    ];
 
     #[test]
-    fn detects_known_upstream_command_symbols() {
-        let paths = fixture_paths();
-        if !paths.commands_path().is_file() {
-            return;
-        }
-        let commands =
-            extract_commands(&fs::read_to_string(paths.commands_path()).expect("commands.ts"));
-        let names: Vec<_> = commands
-            .entries()
+    fn mock_parity_scenario_manifest_matches_claw_canonical_order() {
+        let entries: Vec<Value> = serde_json::from_str(FIXTURE).expect("fixture JSON");
+        let names: Vec<String> = entries
             .iter()
-            .map(|entry| entry.name.as_str())
+            .map(|e| {
+                e.get("name")
+                    .and_then(Value::as_str)
+                    .expect("scenario name")
+                    .to_string()
+            })
             .collect();
-        assert!(names.contains(&"addDir"));
-        assert!(names.contains(&"review"));
-        assert!(!names.contains(&"INTERNAL_ONLY_COMMANDS"));
-    }
-
-    #[test]
-    fn detects_known_upstream_tool_symbols() {
-        let paths = fixture_paths();
-        if !paths.tools_path().is_file() {
-            return;
-        }
-        let tools = extract_tools(&fs::read_to_string(paths.tools_path()).expect("tools.ts"));
-        let names: Vec<_> = tools
-            .entries()
+        let expected: Vec<String> = EXPECTED_SCENARIO_NAMES
             .iter()
-            .map(|entry| entry.name.as_str())
+            .map(|s| (*s).to_string())
             .collect();
-        assert!(names.contains(&"AgentTool"));
-        assert!(names.contains(&"BashTool"));
+        assert_eq!(
+            names, expected,
+            "update fixtures/mock_parity_scenarios.json and EXPECTED_SCENARIO_NAMES from claw-code rust/mock_parity_scenarios.json"
+        );
     }
 }
 
@@ -405,6 +96,26 @@ mod parity_style {
             policy.authorize("bash", r#"{"command":"echo hi"}"#, Some(&mut p)),
             PermissionOutcome::Allow
         );
+    }
+
+    /// claw `mock_parity_scenarios.json`: `bash_permission_prompt_denied` (policy layer; no interactive stdin in tests).
+    #[test]
+    fn bash_permission_prompt_denied_under_workspace_write_policy() {
+        let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("bash", PermissionMode::DangerFullAccess);
+        struct DenyPrompter;
+        impl PermissionPrompter for DenyPrompter {
+            fn decide(&mut self, _request: &PermissionRequest) -> PermissionPromptDecision {
+                PermissionPromptDecision::Deny {
+                    reason: "n".into(),
+                }
+            }
+        }
+        let mut p = DenyPrompter;
+        assert!(matches!(
+            policy.authorize("bash", r#"{"command":"echo nope"}"#, Some(&mut p)),
+            PermissionOutcome::Deny { .. }
+        ));
     }
 
     #[test]
@@ -480,7 +191,33 @@ mod parity_style {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// claw `mock_parity_scenarios.json`: `grep_chunk_assembly` (simplified: single-shot grep content)
+    /// claw `mock_parity_scenarios.json`: `grep_chunk_assembly` — count mode (mock harness expects 2 "parity" hits in fixture.txt).
+    #[test]
+    fn grep_search_count_mode_finds_expected_matches() {
+        let dir = std::env::temp_dir().join(format!("relay-grep-count-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("fixture.txt"),
+            "alpha parity line\nbeta line\ngamma parity line\n",
+        )
+        .unwrap();
+        let out = execute_tool(
+            "grep_search",
+            &json!({
+                "pattern": "parity",
+                "path": dir.join("fixture.txt").to_string_lossy(),
+                "output_mode": "count",
+            }),
+        )
+        .expect("grep_search");
+        assert!(
+            out.contains("\"numMatches\":2") || out.contains(r#""numMatches": 2"#),
+            "expected 2 matches in count output: {out}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// claw `mock_parity_scenarios.json`: `grep_chunk_assembly` (content mode)
     #[test]
     fn grep_search_finds_match_in_workspace_file() {
         let dir = std::env::temp_dir().join(format!("relay-grep-parity-{}", std::process::id()));
@@ -500,7 +237,44 @@ mod parity_style {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// claw `mock_parity_scenarios.json`: `bash_stdout_roundtrip` (non-destructive echo)
+    /// claw `mock_parity_scenarios.json`: `multi_tool_turn_roundtrip` — behavioral: read_file then grep_search in one workspace.
+    #[test]
+    fn multi_tool_read_file_then_grep_in_same_workspace() {
+        let dir =
+            std::env::temp_dir().join(format!("relay-multi-tool-parity-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let fixture = dir.join("fixture.txt");
+        fs::write(
+            &fixture,
+            "alpha parity line\nbeta line\ngamma parity line\n",
+        )
+        .unwrap();
+
+        let read_out = execute_tool(
+            "read_file",
+            &json!({ "path": fixture.to_string_lossy() }),
+        )
+        .expect("read_file");
+        assert!(read_out.contains("alpha parity line"), "{read_out}");
+
+        let grep_out = execute_tool(
+            "grep_search",
+            &json!({
+                "pattern": "parity",
+                "path": fixture.to_string_lossy(),
+                "output_mode": "count",
+            }),
+        )
+        .expect("grep_search");
+        assert!(
+            grep_out.contains("\"numMatches\":2") || grep_out.contains(r#""numMatches": 2"#),
+            "{grep_out}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// claw `mock_parity_scenarios.json`: `bash_stdout_roundtrip` (workspace-write still allows non-destructive echo).
     #[test]
     fn bash_stdout_roundtrip_echo() {
         let root = std::env::temp_dir().join(format!("relay-bash-parity-{}", std::process::id()));
@@ -515,6 +289,24 @@ mod parity_style {
         let out = execute_tool("bash", &json!({ "command": "printf 'parity-bash'" }))
             .expect("bash echo");
         assert!(out.contains("parity-bash"), "{out}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Same scenario with claw CLI `danger-full-access` permission mode string.
+    #[test]
+    fn bash_stdout_roundtrip_echo_danger_full_access() {
+        let root = std::env::temp_dir().join(format!("relay-bash-dfa-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".claw")).unwrap();
+        fs::write(
+            root.join(".claw/settings.json"),
+            r#"{"permissionMode":"danger-full-access"}"#,
+        )
+        .unwrap();
+        let _guard = BashConfigCwdGuard::set(Some(root.clone()));
+        let out = execute_tool("bash", &json!({ "command": "printf 'parity-bash-dfa'" }))
+            .expect("bash echo");
+        assert!(out.contains("parity-bash-dfa"), "{out}");
         let _ = fs::remove_dir_all(&root);
     }
 
