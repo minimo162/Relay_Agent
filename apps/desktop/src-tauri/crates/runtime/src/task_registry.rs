@@ -23,13 +23,34 @@ fn registry() -> &'static Mutex<HashMap<String, TaskRecord>> {
     REG.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn task_id_str(input: &Value) -> Option<&str> {
+    input
+        .get("id")
+        .or_else(|| input.get("task_id"))
+        .and_then(|v| v.as_str())
+}
+
 pub fn task_create(input: &Value) -> Result<String, String> {
     let id = Uuid::new_v4().to_string();
-    let name = input.get("name").and_then(|v| v.as_str()).map(String::from);
-    let description = input
+    let prompt = input.get("prompt").and_then(|v| v.as_str());
+    let mut name = input.get("name").and_then(|v| v.as_str()).map(String::from);
+    let mut description = input
         .get("description")
         .and_then(|v| v.as_str())
         .map(String::from);
+    if description.is_none() {
+        description = prompt.map(String::from);
+    }
+    if name.is_none() {
+        name = prompt.map(|p| {
+            let line = p.lines().next().unwrap_or(p).trim();
+            if line.chars().count() > 80 {
+                line.chars().take(80).collect()
+            } else {
+                line.to_string()
+            }
+        });
+    }
     let rec = TaskRecord {
         id: id.clone(),
         name,
@@ -46,10 +67,7 @@ pub fn task_create(input: &Value) -> Result<String, String> {
 }
 
 pub fn task_get(input: &Value) -> Result<String, String> {
-    let id = input
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "TaskGet requires id".to_string())?;
+    let id = task_id_str(input).ok_or_else(|| "TaskGet requires id or task_id".to_string())?;
     let g = registry().lock().map_err(|e| e.to_string())?;
     let rec = g
         .get(id)
@@ -65,10 +83,7 @@ pub fn task_list() -> Result<String, String> {
 }
 
 pub fn task_stop(input: &Value) -> Result<String, String> {
-    let id = input
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "TaskStop requires id".to_string())?;
+    let id = task_id_str(input).ok_or_else(|| "TaskStop requires id or task_id".to_string())?;
     let mut g = registry().lock().map_err(|e| e.to_string())?;
     let Some(rec) = g.get_mut(id) else {
         return Err(format!("unknown task id `{id}`"));
@@ -78,10 +93,7 @@ pub fn task_stop(input: &Value) -> Result<String, String> {
 }
 
 pub fn task_update(input: &Value) -> Result<String, String> {
-    let id = input
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "TaskUpdate requires id".to_string())?;
+    let id = task_id_str(input).ok_or_else(|| "TaskUpdate requires id or task_id".to_string())?;
     let mut g = registry().lock().map_err(|e| e.to_string())?;
     let Some(rec) = g.get_mut(id) else {
         return Err(format!("unknown task id `{id}`"));
@@ -92,14 +104,19 @@ pub fn task_update(input: &Value) -> Result<String, String> {
     if let Some(o) = input.get("output").and_then(|v| v.as_str()) {
         rec.output = o.to_string();
     }
+    if let Some(m) = input.get("message").and_then(|v| v.as_str()) {
+        if !m.is_empty() {
+            if !rec.output.is_empty() && !rec.output.ends_with('\n') {
+                rec.output.push('\n');
+            }
+            rec.output.push_str(m);
+        }
+    }
     serde_json::to_string_pretty(rec).map_err(|e| e.to_string())
 }
 
 pub fn task_output(input: &Value) -> Result<String, String> {
-    let id = input
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "TaskOutput requires id".to_string())?;
+    let id = task_id_str(input).ok_or_else(|| "TaskOutput requires id or task_id".to_string())?;
     let mut g = registry().lock().map_err(|e| e.to_string())?;
     let Some(rec) = g.get_mut(id) else {
         return Err(format!("unknown task id `{id}`"));

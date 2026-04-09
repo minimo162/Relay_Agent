@@ -69,7 +69,11 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     "description": { "type": "string" },
                     "run_in_background": { "type": "boolean" },
                     "dangerouslyDisableSandbox": { "type": "boolean" },
-                    "dangerously_disable_sandbox": { "type": "boolean", "description": "Claw-style alias (stripped before execution in Relay for security)" }
+                    "dangerously_disable_sandbox": { "type": "boolean", "description": "Claw-style alias (stripped before execution in Relay for security)" },
+                    "namespaceRestrictions": { "type": "boolean" },
+                    "isolateNetwork": { "type": "boolean" },
+                    "filesystemMode": { "type": "string", "enum": ["off", "workspace-only", "allow-list"] },
+                    "allowedMounts": { "type": "array", "items": { "type": "string" } }
                 },
                 "required": ["command"],
                 "additionalProperties": false
@@ -430,6 +434,26 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             required_permission: PermissionMode::WorkspaceWrite,
         },
         ToolSpec {
+            name: "EnterPlanMode",
+            description: "Claw-style planning mode hook. On Relay, Build / Plan / Explore is chosen when **starting** a session — this tool does not switch live policy (see tool result notice).",
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::WorkspaceWrite,
+        },
+        ToolSpec {
+            name: "ExitPlanMode",
+            description: "Claw-style exit from planning mode. On Relay, start a **Build** session to apply changes; session posture is fixed for the running loop.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::WorkspaceWrite,
+        },
+        ToolSpec {
             name: "StructuredOutput",
             description: "Return structured output in the requested format.",
             input_schema: json!({
@@ -698,7 +722,7 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "AskUserQuestion",
-            description: "Ask the user one or more questions and wait for answers via the desktop UI (text reply). Use for clarification when required.",
+            description: "Ask the user one or more questions and wait for answers via the desktop UI (text reply). Supports Relay `questions[]` or claw-style single `question` plus optional `options` (string array).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -726,36 +750,49 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                             "required": ["question"],
                             "additionalProperties": false
                         }
+                    },
+                    "question": { "type": "string", "description": "Claw-style single question (alternative to questions[])" },
+                    "options": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Claw-style choices when using top-level question"
                     }
                 },
-                "required": ["questions"],
+                "anyOf": [
+                    { "required": ["questions"] },
+                    { "required": ["question"] }
+                ],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
             name: "LSP",
-            description: "Language server (LSP over stdio). Action `diagnostics` runs pull diagnostics for a workspace file via rust-analyzer when available.",
+            description: "Language server (claw-style catalog). Relay implements `diagnostics` only (rust-analyzer pull diagnostics for a workspace file). Other actions return a clear error.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["diagnostics"] },
-                    "path": { "type": "string", "description": "File path under the session workspace" },
-                    "languageId": { "type": "string", "description": "Defaults to rust for .rs files" }
+                    "action": { "type": "string", "enum": ["symbols", "references", "diagnostics", "definition", "hover"] },
+                    "path": { "type": "string", "description": "File path (required for diagnostics in Relay)" },
+                    "languageId": { "type": "string", "description": "Defaults to rust for .rs files" },
+                    "line": { "type": "integer", "minimum": 0 },
+                    "character": { "type": "integer", "minimum": 0 },
+                    "query": { "type": "string" }
                 },
-                "required": ["action", "path"],
+                "required": ["action"],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
             name: "TaskCreate",
-            description: "Create an in-memory task record (claw-style parity; no external worker).",
+            description: "Create an in-memory task record (claw-style parity; no external worker). Accepts Relay `name`/`description` and/or claw `prompt` (mapped into description when name/description absent).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "name": { "type": "string" },
-                    "description": { "type": "string" }
+                    "description": { "type": "string" },
+                    "prompt": { "type": "string", "description": "Claw-style task text; used as description when description is omitted" }
                 },
                 "additionalProperties": true
             }),
@@ -763,11 +800,17 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "TaskGet",
-            description: "Get a task by id.",
+            description: "Get a task by id (`id` or claw `task_id`).",
             input_schema: json!({
                 "type": "object",
-                "properties": { "id": { "type": "string" } },
-                "required": ["id"],
+                "properties": {
+                    "id": { "type": "string" },
+                    "task_id": { "type": "string", "description": "Claw-style alias for id" }
+                },
+                "anyOf": [
+                    { "required": ["id"] },
+                    { "required": ["task_id"] }
+                ],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
@@ -784,46 +827,72 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "TaskStop",
-            description: "Mark a task stopped.",
+            description: "Mark a task stopped (`id` or `task_id`).",
             input_schema: json!({
                 "type": "object",
-                "properties": { "id": { "type": "string" } },
-                "required": ["id"],
+                "properties": {
+                    "id": { "type": "string" },
+                    "task_id": { "type": "string" }
+                },
+                "anyOf": [
+                    { "required": ["id"] },
+                    { "required": ["task_id"] }
+                ],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
             name: "TaskUpdate",
-            description: "Update task fields.",
+            description: "Update task fields. Accepts `id` or `task_id`; claw `message` appends to task output.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "id": { "type": "string" },
+                    "task_id": { "type": "string" },
                     "status": { "type": "string" },
-                    "output": { "type": "string" }
+                    "output": { "type": "string" },
+                    "message": { "type": "string", "description": "Claw-style update payload; appended to output" }
                 },
-                "required": ["id"],
+                "anyOf": [
+                    { "required": ["id"] },
+                    { "required": ["task_id"] }
+                ],
                 "additionalProperties": true
             }),
             required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
             name: "TaskOutput",
-            description: "Append or read task output.",
+            description: "Append or read task output (`id` or `task_id`).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "id": { "type": "string" },
+                    "task_id": { "type": "string" },
                     "append": { "type": "string" }
                 },
-                "required": ["id"],
+                "anyOf": [
+                    { "required": ["id"] },
+                    { "required": ["task_id"] }
+                ],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
         },
     ]);
     specs
+}
+
+/// JSON for claw-style `EnterPlanMode` / `ExitPlanMode` when session posture cannot change mid-loop.
+#[must_use]
+pub fn plan_mode_tool_json(entering: bool) -> Value {
+    json!({
+        "ok": true,
+        "entering": entering,
+        "relayNotice": "Relay Agent: Build / Plan / Explore is selected when you **start** a session, not via this tool. For read-only analysis without applying edits, start a new session with **Plan** (or **Explore** for a narrow read-only tool catalog). To apply changes, use **Build**.",
+        "relayNoticeJa": "Relay Agent: Build / Plan / Explore はセッション**開始時**に選びます。このツールでは実行中に切り替わりません。編集せずに分析だけする場合は **Plan**（読み取り専用ツールだけなら **Explore**）で新規セッションを開始してください。変更を適用する場合は **Build** を使います。"
+    })
 }
 
 pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
@@ -848,6 +917,10 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "Sleep" => from_value::<SleepInput>(input).and_then(run_sleep),
         "SendUserMessage" | "Brief" => from_value::<BriefInput>(input).and_then(run_brief),
         "Config" => from_value::<ConfigInput>(input).and_then(run_config),
+        "EnterPlanMode" => serde_json::to_string_pretty(&plan_mode_tool_json(true))
+            .map_err(|e| e.to_string()),
+        "ExitPlanMode" => serde_json::to_string_pretty(&plan_mode_tool_json(false))
+            .map_err(|e| e.to_string()),
         "StructuredOutput" => {
             from_value::<StructuredOutputInput>(input).and_then(run_structured_output)
         }
@@ -903,7 +976,9 @@ fn run_lsp_tool(input: &Value) -> Result<String, String> {
         .and_then(|a| a.as_str())
         .ok_or_else(|| "LSP requires action".to_string())?;
     if action != "diagnostics" {
-        return Err(format!("unsupported LSP action: {action}"));
+        return Err(format!(
+            "Relay LSP: only `diagnostics` is implemented (got `{action}`); symbols/references/definition/hover are not available yet"
+        ));
     }
     let path = input
         .get("path")
@@ -3235,6 +3310,8 @@ mod tests {
         assert!(names.contains(&"Sleep"));
         assert!(names.contains(&"SendUserMessage"));
         assert!(names.contains(&"Config"));
+        assert!(names.contains(&"EnterPlanMode"));
+        assert!(names.contains(&"ExitPlanMode"));
         assert!(names.contains(&"StructuredOutput"));
         assert!(names.contains(&"REPL"));
         assert!(names.contains(&"pdf_merge"));

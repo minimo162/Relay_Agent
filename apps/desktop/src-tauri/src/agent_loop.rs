@@ -1626,6 +1626,12 @@ impl ToolExecutor for TauriToolExecutor {
             return r;
         }
 
+        if tool_name == "EnterPlanMode" || tool_name == "ExitPlanMode" {
+            let body = tools::plan_mode_tool_json(tool_name == "EnterPlanMode");
+            return serde_json::to_string_pretty(&body)
+                .map_err(|e| runtime::ToolError::new(e.to_string()));
+        }
+
         if tool_name == "AskUserQuestion" {
             return execute_ask_user_question_tool(&self.app, &self.registry, &self.session_id, input);
         }
@@ -1633,6 +1639,16 @@ impl ToolExecutor for TauriToolExecutor {
         if tool_name == "LSP" {
             let mut input_value: Value =
                 serde_json::from_str(input).unwrap_or_else(|_| serde_json::json!({}));
+            let action = input_value
+                .get("action")
+                .and_then(|a| a.as_str())
+                .unwrap_or("")
+                .trim();
+            if action != "diagnostics" {
+                return Err(runtime::ToolError::new(format!(
+                    "Relay LSP: only `diagnostics` is implemented (got `{action}`); symbols/references/definition/hover are not available yet"
+                )));
+            }
             if let Some(ref cwd) = self.cwd {
                 let trimmed = cwd.trim();
                 if !trimmed.is_empty() {
@@ -1940,16 +1956,38 @@ fn try_execute_mcp_meta_tool(
     }
 }
 
+fn normalize_claw_ask_user_question_payload(v: &mut Value) {
+    if v.get("questions").is_some() {
+        return;
+    }
+    let Some(q) = v.get("question").and_then(|x| x.as_str()) else {
+        return;
+    };
+    let mut qobj = json!({ "question": q });
+    if let Some(arr) = v.get("options").and_then(|o| o.as_array()) {
+        let opts: Vec<Value> = arr
+            .iter()
+            .filter_map(|x| x.as_str())
+            .map(|s| json!({ "label": s, "value": s }))
+            .collect();
+        if !opts.is_empty() {
+            qobj["options"] = json!(opts);
+        }
+    }
+    *v = json!({ "questions": [qobj] });
+}
+
 fn execute_ask_user_question_tool(
     app: &AppHandle,
     registry: &SessionRegistry,
     session_id: &str,
     input: &str,
 ) -> Result<String, runtime::ToolError> {
-    let v: Value = serde_json::from_str(input).unwrap_or_else(|_| json!({}));
+    let mut v: Value = serde_json::from_str(input).unwrap_or_else(|_| json!({}));
+    normalize_claw_ask_user_question_payload(&mut v);
     let Some(qarr) = v.get("questions").and_then(|q| q.as_array()) else {
         return Err(runtime::ToolError::new(
-            "AskUserQuestion requires a questions array",
+            "AskUserQuestion requires `questions` or claw-style `question` (optional `options` string array)",
         ));
     };
     if qarr.is_empty() {

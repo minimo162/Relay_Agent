@@ -16,6 +16,12 @@
 
 ## Milestone Log
 
+### 2026-04-09 tools: claw-code JSON compatibility (schemas + aliases)
+
+**Change:** [`crates/tools/src/lib.rs`](apps/desktop/src-tauri/crates/tools/src/lib.rs) — `bash` / `LSP` / `Task*` / `AskUserQuestion` schemas aligned with claw-shaped inputs; `EnterPlanMode` / `ExitPlanMode` added with `plan_mode_tool_json` (session posture fixed at start). [`task_registry.rs`](apps/desktop/src-tauri/crates/runtime/src/task_registry.rs) — `task_id`, `prompt`, `message` handling. [`agent_loop.rs`](apps/desktop/src-tauri/src/agent_loop.rs) — claw `AskUserQuestion` normalization, LSP non-`diagnostics` errors, plan-mode tools in `TauriToolExecutor`. [`docs/CLAW_CODE_ALIGNMENT.md`](CLAW_CODE_ALIGNMENT.md) — tool count + compat notes.
+
+**Verification:** `cargo test -p tools -p runtime -p relay-agent-desktop` from `apps/desktop/src-tauri/` — pass (2026-04-09).
+
 ### 2026-04-09 compat-harness: claw `mock_parity_scenarios.json` + parity tests
 
 **Change:** Removed legacy TypeScript upstream manifest parsing from [`crates/compat-harness`](apps/desktop/src-tauri/crates/compat-harness) (claw-code does not ship `src/commands.ts`). Vendored [`fixtures/mock_parity_scenarios.json`](apps/desktop/src-tauri/crates/compat-harness/fixtures/mock_parity_scenarios.json) from claw-code `rust/mock_parity_scenarios.json` with `fixtures/SYNC.txt` for refresh steps. Added manifest order test and expanded `parity_style`: bash prompt deny path, multi-tool read+grep, grep **count** mode, bash echo under **danger-full-access** `.claw` settings. Dropped `commands` crate dependency from `compat-harness`.

@@ -28,13 +28,15 @@ Reference: [ultraworkers/claw-code](https://github.com/ultraworkers/claw-code) (
 
 ## Tool catalog: Relay `mvp_tool_specs` vs claw
 
-claw-code `rust/` exposes on the order of **~40** tools in `mvp_tool_specs()` (per `PARITY.md`). Relay’s [`mvp_tool_specs()`](apps/desktop/src-tauri/crates/tools/src/lib.rs) lists **45** names on Unix targets (includes read-only **`git_status`** / **`git_diff`** and claw-parity stubs below), **46** with Windows-only `PowerShell` (see source for the authoritative list).
+claw-code `rust/` exposes on the order of **~40** tools in `mvp_tool_specs()` (per `PARITY.md`). Relay’s [`mvp_tool_specs()`](apps/desktop/src-tauri/crates/tools/src/lib.rs) lists **47** names on Unix targets (includes read-only **`git_status`** / **`git_diff`**, **`EnterPlanMode` / `ExitPlanMode`** catalog stubs, and Relay-only tools below), **48** with Windows-only `PowerShell` (see source for the authoritative list).
 
 **Diff policy:** When adding or renaming tools, cross-check claw `rust/crates/tools` schemas and descriptions so Copilot-facing JSON stays compatible with the [tool-system](https://claw-code.codes/tool-system) model. Relay-only tools (Electron CDP, `pdf_*`, Copilot hints) stay documented in tool descriptions.
 
+**Claw-shaped JSON (compat layer):** `bash` catalog schema includes claw sandbox fields (`namespaceRestrictions`, `isolateNetwork`, `filesystemMode`, `allowedMounts`) — runtime already accepts them via [`BashCommandInput`](apps/desktop/src-tauri/crates/runtime/src/bash.rs). **`Task*`** accept `task_id` as an alias for `id`; `TaskCreate` accepts `prompt`; `TaskUpdate` appends claw `message` into task output. **`AskUserQuestion`** accepts claw single `question` + `options: string[]` (normalized to Relay `questions[]` in [`agent_loop.rs`](apps/desktop/src-tauri/src/agent_loop.rs)). **`LSP`** catalog lists claw actions; only **`diagnostics`** runs (rust-analyzer); other actions error clearly. **`EnterPlanMode` / `ExitPlanMode`** return a success JSON notice that session posture is chosen at session start (`tools::plan_mode_tool_json`, also handled in `TauriToolExecutor`).
+
 ### Tools present in claw `mvp_tool_specs` but not in Relay (desktop product policy)
 
-Relay still omits **`Team*`**, **`Cron*`**, **`EnterPlanMode` / `ExitPlanMode`**, **`RemoteTrigger`**, and similar CLI-oriented specs.
+Relay still omits **`Team*`**, **`Cron*`**, **`RemoteTrigger`**, **`Worker*`**, **`RunTaskPacket`**, and similar CLI-oriented specs.
 
 **Recently ported for Copilot/claw name compatibility:** MCP meta-tools (`ListMcpResources`, `ReadMcpResource`, `McpAuth`, unified `MCP` with `list_resources` / `read_resource` / `list_tools` / `call_tool`) — desktop executor only, delegating to session [`McpServerManager`](apps/desktop/src-tauri/crates/runtime/src/mcp_stdio.rs); **`AskUserQuestion`** — UI overlay + `respond_user_question` IPC; **`LSP`** — `pull_diagnostics` via `rust-analyzer` stdio ([`lsp_diagnostics.rs`](apps/desktop/src-tauri/crates/runtime/src/lsp_diagnostics.rs)); in-memory **`TaskCreate` / `TaskGet` / `TaskList` / `TaskStop` / `TaskUpdate` / `TaskOutput`** ([`task_registry.rs`](apps/desktop/src-tauri/crates/runtime/src/task_registry.rs)).
 
