@@ -13,6 +13,15 @@ if (!WS) throw new Error("WebSocket is not available. Use Node.js 22+ or install
 var DEFAULT_PORT = 18080;
 var DEFAULT_CDP_PORT = 9360;
 var COPILOT_URL = "https://m365.cloud.microsoft/chat/";
+
+/**
+ * When RELAY_COPILOT_NO_WINDOW_FOCUS=1, skip CDP Target.activateTarget / Page.bringToFront
+ * so Edge does not steal OS focus. In-page focus()/click() for Lexical is unchanged.
+ */
+function copilotWindowFocusAllowed() {
+  return process.env.RELAY_COPILOT_NO_WINDOW_FOCUS !== "1";
+}
+
 /**
  * Composer boundary for focus/paste and for excluding transcript nodes (inComposer).
  * Aligns with agent-browser accessibility snapshot on M365 Copilot (ja): textbox
@@ -541,10 +550,14 @@ class CopilotSession {
       if (!page) {
         return { connected: false, loginRequired: false, error: "Copilot page not available" };
       }
-      await this.cdpSession.send("Target.activateTarget", { targetId: page.targetId }).catch(() => {});
+      if (copilotWindowFocusAllowed()) {
+        await this.cdpSession.send("Target.activateTarget", { targetId: page.targetId }).catch(() => {});
+      }
       pageSession = await this.navigateToPage(page);
       await pageSession.send("Page.enable", {}).catch(() => {});
-      await pageSession.send("Page.bringToFront", {}).catch(() => {});
+      if (copilotWindowFocusAllowed()) {
+        await pageSession.send("Page.bringToFront", {}).catch(() => {});
+      }
 
       let url = page.url || "";
       if (!isCopilotUrl(url) && !isLoginUrl(url)) {
@@ -604,15 +617,19 @@ class CopilotSession {
         );
       }
 
-      await this.cdpSession.send("Target.activateTarget", { targetId: page.targetId }).catch((e) => {
-        console.error("[copilot:describe] Target.activateTarget:", e?.message || e);
-      });
+      if (copilotWindowFocusAllowed()) {
+        await this.cdpSession.send("Target.activateTarget", { targetId: page.targetId }).catch((e) => {
+          console.error("[copilot:describe] Target.activateTarget:", e?.message || e);
+        });
+      }
 
       pageSession = await this.navigateToPage(page);
       await pageSession.send("Page.enable", {}).catch(() => {});
-      await pageSession.send("Page.bringToFront", {}).catch((e) => {
-        console.error("[copilot:describe] Page.bringToFront:", e?.message || e);
-      });
+      if (copilotWindowFocusAllowed()) {
+        await pageSession.send("Page.bringToFront", {}).catch((e) => {
+          console.error("[copilot:describe] Page.bringToFront:", e?.message || e);
+        });
+      }
 
       let currentUrl = page.url || "";
       if (!isCopilotUrl(currentUrl)) {
@@ -1266,7 +1283,9 @@ async function getComposerTextLength(session) {
 }
 
 async function cdpInputEnable(session) {
-  await session.send("Page.bringToFront", {}).catch(() => {});
+  if (copilotWindowFocusAllowed()) {
+    await session.send("Page.bringToFront", {}).catch(() => {});
+  }
   await session.send("Input.enable", {}).catch(() => {});
 }
 
@@ -3849,10 +3868,7 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
   if (marked != null && (await probeCdpVersion(marked)) && (await cdpPortIsMicrosoftEdge(marked))) {
     globalOptions.cdpPort = marked;
     console.error("[copilot:ensureEdge] reusing Relay Edge (marker) on port", marked);
-    if (
-      process.platform === "win32" &&
-      process.env.RELAY_COPILOT_NUDGE_EDGE !== "0"
-    ) {
+    if (process.platform === "win32" && process.env.RELAY_COPILOT_NUDGE_EDGE === "1") {
       /** No trailing URL — passing COPILOT_URL here opened a duplicate Copilot tab on every reuse. */
       const nudgeArgs = [
         `--remote-debugging-port=${marked}`,

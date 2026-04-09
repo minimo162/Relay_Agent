@@ -16,6 +16,16 @@
 
 ## Milestone Log
 
+### 2026-04-09 Copilot CDP: background Edge env + Win32 nudge opt-in
+
+**Problem:** Each prompt could raise Microsoft Edge to the foreground (`Page.bringToFront` / `Target.activateTarget` in Node; Rust `send_prompt`; Windows reuse-path nudge via `cmd /c start` on every `connect` when marker reuse hit).
+
+**Fix:** [`copilot_server.js`](../apps/desktop/src-tauri/binaries/copilot_server.js) — `RELAY_COPILOT_NO_WINDOW_FOCUS=1` skips `Target.activateTarget` / `Page.bringToFront`; Win32 nudge runs only when `RELAY_COPILOT_NUDGE_EDGE=1` (default off). [`cdp_copilot.rs`](../apps/desktop/src-tauri/src/cdp_copilot.rs) — same env gates `Page.bringToFront` in `send_prompt`.
+
+**Doc:** [`docs/COPILOT_E2E_CDP_PITFALLS.md`](COPILOT_E2E_CDP_PITFALLS.md) (*Relay デスクトップ* section).
+
+**Verification:** `node --check` on `copilot_server.js`; `cargo check -p relay-agent-desktop` — pass (2026-04-09).
+
 ### 2026-04-09 Edge duplicate window: wait before second launch
 
 **Problem:** Two Edge windows (Copilot + blank) when the same `RelayAgentEdgeProfile` was reused — a race where `DevToolsActivePort` existed but CDP was not yet responding caused an extra `msedge` spawn (Rust `connect_copilot_page` and/or Node `ensureEdgeDedicated`). Rust also used `about:blank` for auto-launched Edge.

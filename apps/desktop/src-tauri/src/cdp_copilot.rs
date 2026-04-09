@@ -520,6 +520,14 @@ pub struct CopilotPage {
     pub title: String,
 }
 
+/// When `RELAY_COPILOT_NO_WINDOW_FOCUS=1`, skip CDP `Page.bringToFront` (aligns with `copilot_server.js`).
+fn copilot_window_focus_allowed() -> bool {
+    match std::env::var("RELAY_COPILOT_NO_WINDOW_FOCUS") {
+        Ok(v) if v == "1" => false,
+        _ => true,
+    }
+}
+
 impl CopilotPage {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     async fn cdp_composer_visible_len(ctx: &Ctx) -> Result<u64> {
@@ -639,7 +647,9 @@ impl CopilotPage {
         info!("[CDP] send: {preview}…");
         let ctx = self.connect_ctx().await?;
 
-        let _ = ctx.send("Page.bringToFront", json!({})).await;
+        if copilot_window_focus_allowed() {
+            let _ = ctx.send("Page.bringToFront", json!({})).await;
+        }
         let _ = ctx.send("Input.enable", json!({})).await;
 
         // 1. Focus inner Lexical surface when present (same strategy as copilot_server.js).
