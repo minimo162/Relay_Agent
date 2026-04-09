@@ -170,6 +170,13 @@ impl CopilotServer {
             let boot_token = Uuid::new_v4().to_string();
             self.boot_token = Some(boot_token.clone());
 
+            crate::copilot_port_reclaim::maybe_reclaim_stale_copilot_http_port(
+                &self.client,
+                self.port,
+                &boot_token,
+            )
+            .await;
+
             let mut args = vec![
                 "--no-warnings".to_string(), // suppress ESM warnings
                 script_path.to_string_lossy().to_string(),

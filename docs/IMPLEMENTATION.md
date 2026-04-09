@@ -16,6 +16,16 @@
 
 ## Milestone Log
 
+### 2026-04-09 Copilot HTTP port: reclaim stale `copilot_server` listeners
+
+**Problem:** A stray `node copilot_server.js` left on `127.0.0.1:18080` (or the next fallback ports) made `/health` return an old `bootToken` while a newly spawned child failed `listen` with **EADDRINUSE**, forcing the desktop to walk ports (e.g. 18080→18081→18082).
+
+**Fix:** [`copilot_port_reclaim.rs`](../apps/desktop/src-tauri/src/copilot_port_reclaim.rs) — before each spawn, `GET /health` with a short timeout; if `status` is `ok` but `bootToken` is missing or not the session token, kill the listener on that port (Windows: `Get-NetTCPConnection` + `Stop-Process`, fallback `netstat`/`taskkill`; Unix: `fuser -k` or `lsof` + `kill -9`). **`RELAY_COPILOT_RECLAIM_STALE_HTTP=0`** disables reclaim. [`copilot_server.js`](../apps/desktop/src-tauri/binaries/copilot_server.js) logs a one-line **EADDRINUSE** hint. Wired from [`copilot_server.rs`](../apps/desktop/src-tauri/src/copilot_server.rs) `CopilotServer::start`.
+
+**Doc:** [`docs/COPILOT_E2E_CDP_PITFALLS.md`](COPILOT_E2E_CDP_PITFALLS.md) (*Relay デスクトップ* section).
+
+**Verification:** `cargo check -p relay-agent-desktop`; `node --check` on `copilot_server.js` — pass (2026-04-09).
+
 ### 2026-04-09 Windows Copilot bridge: CDP probe + no site-isolation flag
 
 **Problem:** With Edge already running, `ensureEdge` could wait 30s then spawn `remote-debugging-port=0`, leaving CDP stuck; Edge warned that `--disable-site-isolation-trials` is unsupported on Windows. Stray Node on HTTP 18080 caused `EADDRINUSE` and bootToken mismatch.

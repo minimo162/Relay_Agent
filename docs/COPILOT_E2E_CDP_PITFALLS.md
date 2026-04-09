@@ -26,7 +26,7 @@ Microsoft 365 CopilotのE2Eテストを、実際にログインしたMicrosoft E
 
 **運用:** `pnpm tauri:dev` 前の `prestart-relay-edge.mjs` とアプリ内の `copilot_server.js` が同じプロファイルを使うが、上記で二重起動を抑える。Edge は手動だけで立ち上げたい場合は `RELAY_SKIP_PRESTART_EDGE=1` も利用できる。Win32 で以前どおり nudge したい場合のみ `RELAY_COPILOT_NUDGE_EDGE=1`。
 
-**Windows: 待ち続け / 二重 Edge:** `127.0.0.1:18080` が **EADDRINUSE** のときは、前回の `node copilot_server.js` が残っていることが多い — タスクマネージャー等で終了するか、Relay を一度閉じる。`DevToolsActivePort` と実際の CDP がずれた場合は、Relay 用 Edge を **1 プロセスだけ**にしてから再起動する。遅い PC では **`RELAY_CDP_PROBE_TIMEOUT_MS`**（500〜120000、ミリ秒）で `/json/version` の待ちを延ばせる。Edge 起動引数 **`--disable-site-isolation-trials`** は Windows では付けない（Linux のみ; 未サポート警告の回避）。
+**Windows: 待ち続け / 二重 Edge:** `127.0.0.1:18080` が **EADDRINUSE** のときは、前回の `node copilot_server.js` が残っていることが多い。デスクトップ起動時、Rust が **`/health` の `bootToken` がセッションと一致しない**リスナーを検出したら、そのポートのプロセスを終了してから `copilot_server` を起動し直す（自動リカバリ）。意図的にポートを共有するなどで無効化する場合は **`RELAY_COPILOT_RECLAIM_STALE_HTTP=0`**。手動対処はタスクマネージャーで該当 `node` を終了するか Relay を閉じる。`DevToolsActivePort` と実際の CDP がずれた場合は、Relay 用 Edge を **1 プロセスだけ**にしてから再起動する。遅い PC では **`RELAY_CDP_PROBE_TIMEOUT_MS`**（500〜120000、ミリ秒）で `/json/version` の待ちを延ばせる。Edge 起動引数 **`--disable-site-isolation-trials`** は Windows では付けない（Linux のみ; 未サポート警告の回避）。
 
 ## 重要ファイル
 

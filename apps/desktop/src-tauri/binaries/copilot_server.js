@@ -4289,6 +4289,15 @@ async function main() {
   }
   const session = new CopilotSession();
   const server = createServer(session);
+  server.on("error", (err) => {
+    if (err && err.code === "EADDRINUSE") {
+      console.error(
+        `[copilot] EADDRINUSE 127.0.0.1:${globalOptions.port} — port held (orphan node or other process). Desktop reclaims stale listeners before spawn unless RELAY_COPILOT_RECLAIM_STALE_HTTP=0.`
+      );
+      process.exit(1);
+    }
+    throw err;
+  });
   server.listen(globalOptions.port, "127.0.0.1", () => {
     console.error(`[copilot] listening on http://127.0.0.1:${globalOptions.port} (cdp:${globalOptions.cdpPort})`);
   });
