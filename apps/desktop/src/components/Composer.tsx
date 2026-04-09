@@ -67,13 +67,13 @@ function SlashAutocomplete(props: {
             onClick={() => props.onSelect(cmd)}
             onMouseEnter={() => props.onSelectIndex(i)}
           >
-            <span class="font-mono font-medium">{cmd.command}</span>
+            <span class="ra-type-mono-small">{cmd.command}</span>
             <span class="opacity-70 ml-auto truncate max-w-[120px]">{cmd.description}</span>
           </div>
         ))
       )}
       <div class="px-3 py-1 text-[10px] text-[var(--ra-text-muted)] border-t border-[var(--ra-border)]">
-        <kbd class="font-mono">Tab</kbd> or <kbd class="font-mono">Enter</kbd> to select
+        <kbd class="ra-type-mono-small">Tab</kbd> or <kbd class="ra-type-mono-small">Enter</kbd> to select
       </div>
     </div>
   );

@@ -21,7 +21,7 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 
 | Layer | Technology |
 |-------|------------|
-| UI | SolidJS, Vite, TypeScript, Tailwind — **Cursor Inspiration** tokens in [`apps/desktop/src/index.css`](apps/desktop/src/index.css): light theme matches [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md) (Surface scale, oklab borders, cream primary buttons); dark theme is a paired warm-charcoal scale. **Default theme is light** (`data-theme` + optional `relay-agent/theme` in `localStorage`). Proprietary Cursor fonts are not bundled (system fallbacks). Milestone: `docs/IMPLEMENTATION.md` (2026-04-09 Desktop UI) |
+| UI | SolidJS, Vite, TypeScript, Tailwind — **Cursor Inspiration** in [`apps/desktop/src/index.css`](apps/desktop/src/index.css) + [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md): Surface scale, oklab borders (including **strong** borders at 55% opacity), cream primary buttons, **`.ra-type-*`** typography utilities, editorial **`cswh`** on serif markdown, mono scale for tools/code. Dark theme uses a paired warm-charcoal scale. **Default theme is light** (`data-theme` + `localStorage` `relay-agent/theme`). Proprietary Cursor fonts are not bundled (system fallbacks). Details: `docs/IMPLEMENTATION.md` (Milestone Log, 2026-04-09 Desktop UI entries) |
 | Shell | Tauri v2, `tauri-plugin-shell`, `tauri-plugin-dialog` |
 | Agent / tools | Rust (`apps/desktop/src-tauri/`, internal crates) |
 | AI surface | M365 Copilot in Edge via **Node** `copilot_server.js` + CDP; the host parses tool calls from **` ```relay_tool `** JSON and, if none, from **` ```json `** / generic fenced JSON or bounded inline tool-shaped objects ([`agent_loop.rs`](apps/desktop/src-tauri/src/agent_loop.rs)) |
@@ -56,7 +56,7 @@ Relay_Agent/
 ├── scripts/                     # Linux Edge / CDP helpers
 ├── apps/desktop/
 │   ├── src/                     # SolidJS app (root.tsx, components/, lib/)
-│   ├── DESIGN.md                # Cursor Inspiration reference (spec); live tokens in src/index.css
+│   ├── DESIGN.md                # Cursor Inspiration spec; live tokens + .ra-type-* in src/index.css
 │   ├── public/                  # Static assets (e.g. favicon.svg for Vite)
 │   ├── src-tauri/               # Tauri + Rust workspace crates
 │   ├── scripts/                 # fetch-bundled-node, inspect-copilot-dom, …

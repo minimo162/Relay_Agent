@@ -16,6 +16,12 @@
 
 ## Milestone Log
 
+### 2026-04-09 Desktop UI: Cursor alignment (type scale, borders, editorial)
+
+**Change:** [`apps/desktop/src/index.css`](../apps/desktop/src/index.css) — `.ra-type-*` utilities (§3 display through mono), `--ra-text-button` 14px / weight 400 on `.ra-button` and composer actions, `--ra-border-strong` **0.55** (light + dark paired), ghost button base fill `var(--ra-ghost-bg)`, editorial **`cswh` on**, assistant markdown = Body Serif SM + mono body/small, input/textarea/composer focus border `var(--ra-border-focus)`, `.ra-card--interactive` hover elevation; nested `pre code` inherits block size. Components: [`ShellHeader`](../apps/desktop/src/components/ShellHeader.tsx), [`Sidebar`](../apps/desktop/src/components/Sidebar.tsx), [`MessageBubble`](../apps/desktop/src/components/MessageBubble.tsx), [`ToolCallRow`](../apps/desktop/src/components/ToolCallRow.tsx), [`Composer`](../apps/desktop/src/components/Composer.tsx), [`primitives`](../apps/desktop/src/components/primitives.tsx), [`ApprovalOverlay`](../apps/desktop/src/components/ApprovalOverlay.tsx), [`Shell`](../apps/desktop/src/shell/Shell.tsx); [`ui-tokens.ts`](../apps/desktop/src/lib/ui-tokens.ts); [`DESIGN.md`](../apps/desktop/DESIGN.md) implementation blurb.
+
+**Verification:** `pnpm run build` + `pnpm run typecheck` (apps/desktop) — pass; `E2E_SKIP_AUTH_SETUP=1 RELAY_E2E=1 pnpm exec playwright test tests/app.e2e.spec.ts --grep "light mode is default" tests/e2e-comprehensive.spec.ts --grep "light mode is default"` — pass (2026-04-09).
+
 ### 2026-04-09 Desktop UI: Cursor Inspiration tokens (light spec + paired dark)
 
 **Change:** [`apps/desktop/src/index.css`](../apps/desktop/src/index.css) — Surface 100–500, oklab borders (light), warm-charcoal paired dark, primary buttons = cream Surface 300 + crimson hover text, timeline CSS vars; [`tool-timeline.ts`](../apps/desktop/src/lib/tool-timeline.ts) + `ToolCallRow` / `MessageFeed` / `MessageBubble` / `Composer` alignment.

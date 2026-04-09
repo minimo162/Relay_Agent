@@ -1,6 +1,6 @@
 # Design System Inspiration of Cursor
 
-> **Relay Agent implementation:** CSS variables and component classes live in [`src/index.css`](src/index.css). The **light** theme uses the Surface / border / interaction values from this document; **dark** uses the same token names with a paired warm-charcoal scale. The app **defaults to light** theme (`<html data-theme="light">` and `localStorage` key `relay-agent/theme`). CursorGothic, jjannon, and berkeleyMono are **not** shipped; the repo uses the fallback stacks defined in `index.css`. Verification notes: [`../../docs/IMPLEMENTATION.md`](../../docs/IMPLEMENTATION.md) (Milestone Log, 2026-04-09 Desktop UI).
+> **Relay Agent implementation:** CSS variables and component classes live in [`src/index.css`](src/index.css). **Typography:** `.ra-type-*` utilities map §3 (display hero through mono small); editorial markdown and `.ra-body-editorial` enable **`cswh`** on the serif stack. **Light** theme uses the Surface / border / interaction values from this document; **dark** uses the same token names with a paired warm-charcoal scale (`--ra-border-strong` mirrors spec opacity on cream text). The app **defaults to light** (`<html data-theme="light">`, `localStorage` `relay-agent/theme`). CursorGothic, jjannon, and berkeleyMono are **not** shipped; fallbacks match §3. Verification: [`../../docs/IMPLEMENTATION.md`](../../docs/IMPLEMENTATION.md).
 
 ## 1. Visual Theme & Atmosphere
 

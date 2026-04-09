@@ -37,7 +37,7 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
   return (
     <div class={`flex ${isUser ? "justify-end" : "justify-start"} mb-3`}>
       <div
-        class={`group relative max-w-[min(80%,42rem)] rounded-xl text-base leading-relaxed ${
+        class={`group relative max-w-[min(80%,42rem)] rounded-xl ${
           isUser
             ? "ra-bubble-user"
             : `${ui.surfaceCard} ${ui.border} border text-[var(--ra-text-primary)]`
@@ -62,7 +62,7 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
           when={isUser}
           fallback={
             <div
-              class={`ra-md-assistant px-4 py-2.5 break-words text-base leading-relaxed ${
+              class={`ra-md-assistant px-4 py-2.5 break-words ${
                 collapsed() ? "max-h-48 overflow-hidden" : ""
               }`}
               innerHTML={assistantHtml()}
@@ -70,7 +70,7 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
           }
         >
           <div
-            class={`px-4 py-2.5 whitespace-pre-wrap break-words ${
+            class={`ra-type-body-serif-sm px-4 py-2.5 whitespace-pre-wrap break-words ${
               collapsed() ? "max-h-48 overflow-hidden" : ""
             }`}
           >
@@ -81,7 +81,7 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
           <div class="px-4 pb-2 -mt-1">
             <button
               type="button"
-              class="text-sm font-medium text-[var(--ra-accent)] underline-offset-2 hover:underline"
+              class="text-sm font-normal text-[var(--ra-accent)] underline-offset-2 hover:underline"
               onClick={() => setExpanded(!expanded())}
             >
               {expanded() ? "Show less" : "Show more"}

@@ -46,7 +46,7 @@ export function ShellHeader(props: {
 
   return (
     <header class="ra-shell-header">
-      <span class={`ra-display-title font-semibold text-base tracking-tight ${ui.textPrimary}`}>Relay Agent</span>
+      <span class={`ra-display-title ra-type-body-sans ${ui.textPrimary}`}>Relay Agent</span>
       <button
         type="button"
         class={`ml-2 max-w-[min(40vw,14rem)] shrink min-w-0 rounded-full border px-2.5 py-0.5 text-left text-xs transition-colors ${

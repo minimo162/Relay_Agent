@@ -18,10 +18,10 @@ export function ToolCallRow(props: {
     >
       <ToolStatusDot status={props.status} />
       <div class="flex-1 min-w-0">
-        <span class="font-medium text-[var(--ra-text-primary)]">{props.toolName}</span>
+        <span class="ra-type-mono-small text-[var(--ra-text-primary)]">{props.toolName}</span>
         {props.status === "running" && <span class="ml-2 animate-pulse">running…</span>}
         <Show when={props.result}>
-          <pre class="mt-1 text-xs opacity-70 overflow-x-auto whitespace-pre-wrap font-mono">
+          <pre class="ra-type-mono-body mt-1 opacity-70 overflow-x-auto whitespace-pre-wrap">
             {props.result!.slice(0, 300)}
             {props.result!.length > 300 ? "…" : ""}
           </pre>

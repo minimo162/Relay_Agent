@@ -13,4 +13,10 @@ export const ui = {
   surfaceCard: "bg-[var(--ra-surface-card)]",
   hover: "hover:bg-[var(--ra-hover)]",
   mutedText: "text-[var(--ra-text-muted)]",
+  /** DESIGN.md §3 type utilities (see `index.css`) */
+  typeBodySans: "ra-type-body-sans",
+  typeBodySerifSm: "ra-type-body-serif-sm",
+  typeMonoSmall: "ra-type-mono-small",
+  typeMonoBody: "ra-type-mono-body",
+  typeTitleSm: "ra-type-title-sm",
 } as const;

@@ -548,7 +548,7 @@ export default function Shell(): JSX.Element {
             data-ra-session-error
             class="shrink-0 px-6 py-2.5 text-sm border-b border-[var(--ra-border)] bg-[var(--ra-surface-elevated)]"
           >
-            <p class="font-semibold text-[var(--ra-text-primary)]">Couldn&apos;t complete that request</p>
+            <p class="ra-type-title-sm text-[var(--ra-text-primary)]">Couldn&apos;t complete that request</p>
             <p class="mt-0.5 text-[var(--ra-red)] whitespace-pre-wrap break-words">{sessionError()}</p>
             <p class="mt-1.5 text-[var(--ra-text-secondary)]">Try editing your prompt or switching sessions.</p>
           </div>

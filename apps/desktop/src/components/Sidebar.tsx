@@ -30,7 +30,7 @@ export function Sidebar(props: {
     <aside class="ra-shell-sidebar" aria-label="Sessions">
       <div class="ra-sidebar-shell">
         <div class="ra-sidebar-shell__header">
-          <h2 class={`ra-display-title text-base font-semibold ${ui.textPrimary} mb-2`}>Sessions</h2>
+          <h2 class={`ra-display-title ra-type-body-sans ${ui.textPrimary} mb-2`}>Sessions</h2>
           <Input
             type="search"
             placeholder="Search sessions…"

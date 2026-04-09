@@ -22,18 +22,18 @@ export function ApprovalOverlay(props: {
             {(approval) => (
               <div class="ra-modal-panel mb-3 last:mb-0">
                 <p class="ra-modal-panel__title">Permission required</p>
-                <p class="text-base font-medium text-[var(--ra-text-primary)] leading-snug">
+                <p class="ra-type-body-sans text-[var(--ra-text-primary)] leading-snug">
                   {approval.description}
                 </p>
                 <details class="mt-3">
                   <summary class="text-xs text-[var(--ra-text-muted)] cursor-pointer select-none">
                     Technical details
                   </summary>
-                  <p class="text-xs text-[var(--ra-text-muted)] mt-1 font-mono break-all">
+                  <p class="ra-type-mono-small text-[var(--ra-text-muted)] mt-1 break-all">
                     {approval.toolName}
                   </p>
                   <Show when={approval.target}>
-                    <p class="text-xs text-[var(--ra-text-muted)] mt-0.5 font-mono break-all">
+                    <p class="ra-type-mono-small text-[var(--ra-text-muted)] mt-0.5 break-all">
                       {approval.target}
                     </p>
                   </Show>

@@ -42,9 +42,9 @@ export function EmptyState(props: {
         <Show when={props.eyebrow}>
           <p class="ra-empty-state__eyebrow">{props.eyebrow}</p>
         </Show>
-        <p class={`text-base font-medium ${ui.textPrimary}`}>{props.title}</p>
+        <p class={`ra-type-title-sm ${ui.textPrimary}`}>{props.title}</p>
         <Show when={props.subtitle}>
-          <p class={`text-sm ${ui.mutedText} mt-1 max-w-[18rem] mx-auto leading-relaxed`}>{props.subtitle}</p>
+          <p class={`ra-type-body-serif-sm ${ui.mutedText} mt-1 max-w-[18rem] mx-auto`}>{props.subtitle}</p>
         </Show>
       </div>
     </div>
