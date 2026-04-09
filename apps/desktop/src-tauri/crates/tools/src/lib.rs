@@ -8,7 +8,8 @@ mod electron_cdp;
 
 use reqwest::blocking::Client;
 use runtime::{
-    edit_file, execute_bash, glob_search, grep_search, merge_pdfs, read_file, split_pdf, write_file,
+    edit_file, execute_bash, glob_search, grep_search, merge_pdfs, read_file, reject_sensitive_file_path,
+    split_pdf, write_file,
     pull_rust_diagnostics_blocking, task_create, task_get, task_list, task_output, task_stop,
     task_update,
     BashCommandInput, GrepSearchInput, PdfSplitSegment, PermissionMode,
@@ -59,7 +60,7 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
     let mut specs = vec![
         ToolSpec {
             name: "bash",
-            description: "Execute a shell command (sandboxed on supported hosts). When project `.claw` settings set permission mode to read-only, obviously mutating commands (e.g. rm, cp, git commit) are rejected before run—claw-style guard; prefer read_file/write_file/edit_file for file I/O when those tools apply.",
+            description: "Execute a shell command (sandboxed on supported hosts). A host **hard denylist** always blocks high-risk commands (e.g. `sudo`, `rm -r`/`rm -rf`/`rm -f`, `rmdir`, destructive `find`, `xargs rm`, `git config`/`push`/`commit`/`reset`/`rebase`, `brew install`, `chmod` with `777`) regardless of permission mode. When `.claw` is read-only, additional mutating commands (e.g. `cp`, `mv`) are rejected—claw-style guard. Prefer read_file/write_file/edit_file for file I/O when those tools apply.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1046,6 +1047,7 @@ fn run_grep_search(input: GrepSearchInput) -> Result<String, String> {
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_pdf_merge(input: PdfMergeInput) -> Result<String, String> {
+    reject_sensitive_file_path(Path::new(&input.output_path)).map_err(io_to_string)?;
     let output_path =
         merge_pdfs(&input.output_path, &input.input_paths).map_err(io_to_string)?;
     to_pretty_json(json!({
@@ -1055,6 +1057,9 @@ fn run_pdf_merge(input: PdfMergeInput) -> Result<String, String> {
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_pdf_split(input: PdfSplitInput) -> Result<String, String> {
+    for s in &input.segments {
+        reject_sensitive_file_path(Path::new(&s.output_path)).map_err(io_to_string)?;
+    }
     let segments: Vec<PdfSplitSegment> = input
         .segments
         .into_iter()
@@ -2250,6 +2255,7 @@ fn iso8601_now() -> String {
 #[allow(clippy::too_many_lines)]
 fn execute_notebook_edit(input: NotebookEditInput) -> Result<NotebookEditOutput, String> {
     let path = std::path::PathBuf::from(&input.notebook_path);
+    reject_sensitive_file_path(&path).map_err(io_to_string)?;
     if path.extension().and_then(|ext| ext.to_str()) != Some("ipynb") {
         return Err(String::from(
             "File must be a Jupyter notebook (.ipynb file).",

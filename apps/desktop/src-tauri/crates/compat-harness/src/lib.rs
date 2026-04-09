@@ -434,7 +434,8 @@ mod parity_style {
         let err = execute_tool("bash", &json!({ "command": "rm -f x.txt" })).expect_err("rm blocked");
         assert!(
             err.to_ascii_lowercase().contains("read-only")
-                || err.to_ascii_lowercase().contains("permission"),
+                || err.to_ascii_lowercase().contains("permission")
+                || err.to_ascii_lowercase().contains("denylist"),
             "{err}"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -515,5 +516,40 @@ mod parity_style {
             .expect("bash echo");
         assert!(out.contains("parity-bash"), "{out}");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn bash_hard_denylist_blocks_sudo_even_when_workspace_write() {
+        let root = std::env::temp_dir().join(format!("relay-bash-deny-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".claw")).unwrap();
+        fs::write(
+            root.join(".claw/settings.json"),
+            r#"{"permissionMode":"workspace-write"}"#,
+        )
+        .unwrap();
+        let _guard = BashConfigCwdGuard::set(Some(root.clone()));
+        let err = execute_tool("bash", &json!({ "command": "sudo ls /" })).expect_err("sudo blocked");
+        assert!(
+            err.to_ascii_lowercase().contains("denylist"),
+            "unexpected err: {err}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_file_hard_denylist_blocks_dot_env() {
+        let dir = std::env::temp_dir().join(format!("relay-env-deny-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join(".env.local");
+        fs::write(&f, "SECRET=x\n").unwrap();
+        let err = execute_tool("read_file", &json!({ "path": f.to_string_lossy() }))
+            .expect_err(".env blocked");
+        assert!(
+            err.to_ascii_lowercase().contains("denylist")
+                || err.to_ascii_lowercase().contains(".env"),
+            "{err}"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 }

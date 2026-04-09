@@ -16,6 +16,16 @@
 
 ## Milestone Log
 
+### 2026-04-09 Tool hard denylist (bash + sensitive file paths)
+
+**Goal:** Block a fixed set of high-risk shell commands **regardless of** `.claw` permission mode, and block `read_file` / `write_file` / `edit_file` (plus PDF merge/split outputs and `NotebookEdit` targets) for secret-like filenames.
+
+**Rust:** [`crates/runtime/src/tool_hard_denylist.rs`](../apps/desktop/src-tauri/crates/runtime/src/tool_hard_denylist.rs) — `validate_bash_hard_deny` (called from [`bash.rs`](../apps/desktop/src-tauri/crates/runtime/src/bash.rs) before read-only validation) and `reject_sensitive_file_path` (called from [`file_ops.rs`](../apps/desktop/src-tauri/crates/runtime/src/file_ops.rs)). **Bash rules include:** any `sudo`; `rmdir`; `rm` with destructive short flags (`-r`/`-R`/`-f`/`rf`/etc.) or `--recursive`/`--force`; `find` with `-delete` or `-exec rm`; `xargs` … `rm`; `git config` / `git push` / `git commit` / `git reset` / `git rebase`; `brew install`; `chmod` with token `777`. **Path rules (case-insensitive basename/extension):** names starting with `.env` or `id_rsa`; extensions `.key` / `.pem`. **Tools crate:** [`tools/src/lib.rs`](../apps/desktop/src-tauri/crates/tools/src/lib.rs) applies the same path check to `pdf_merge` output, `pdf_split` segment outputs, and `NotebookEdit` notebook path.
+
+**Not in scope:** Windows `PowerShell` tool does not yet mirror this list (documented here for operators).
+
+**Verification:** `cargo test -p runtime --lib`, `cargo test -p tools --lib`, `cargo test -p compat-harness --lib` from `apps/desktop/src-tauri/` — pass (2026-04-09).
+
 ### 2026-04-09 Desktop UI: Cursor-inspired tokens (`DESIGN.md`)
 
 **Source:** `npx getdesign@latest add cursor` → [`apps/desktop/DESIGN.md`](../apps/desktop/DESIGN.md) (see [VoltAgent/awesome-design-md](https://github.com/VoltAgent/awesome-design-md) / [getdesign.md Cursor](https://getdesign.md/cursor/design-md)).

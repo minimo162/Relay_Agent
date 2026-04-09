@@ -13,6 +13,7 @@ use serde_json::Value;
 use walkdir::WalkDir;
 
 use crate::pdf_liteparse;
+use crate::tool_hard_denylist::reject_sensitive_file_path;
 
 /// Upper bound for loading a single file as UTF-8 text in `read_file` (plain text and `.ipynb` raw JSON).
 pub const MAX_TEXT_FILE_READ_BYTES: u64 = 10 * 1024 * 1024;
@@ -150,6 +151,7 @@ pub fn read_file(
     pages: Option<&str>,
 ) -> io::Result<ReadFileOutput> {
     let absolute_path = normalize_path(path)?;
+    reject_sensitive_file_path(&absolute_path)?;
     let lossy_path = absolute_path.to_string_lossy().into_owned();
 
     let ext = absolute_path
@@ -376,6 +378,7 @@ pub fn write_file(path: &str, content: &str) -> io::Result<WriteFileOutput> {
     }
 
     let absolute_path = normalize_path_allow_missing(path)?;
+    reject_sensitive_file_path(&absolute_path)?;
     let original_file = fs::read_to_string(&absolute_path).ok();
     if let Some(parent) = absolute_path.parent() {
         fs::create_dir_all(parent)?;
@@ -403,6 +406,7 @@ pub fn edit_file(
     replace_all: bool,
 ) -> io::Result<EditFileOutput> {
     let absolute_path = normalize_path(path)?;
+    reject_sensitive_file_path(&absolute_path)?;
     let original_file = fs::read_to_string(&absolute_path)?;
     if old_string == new_string {
         return Err(io::Error::new(

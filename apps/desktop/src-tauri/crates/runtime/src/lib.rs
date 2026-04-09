@@ -21,6 +21,7 @@ mod remote;
 pub mod sandbox;
 mod session;
 mod task_registry;
+mod tool_hard_denylist;
 mod usage;
 mod workspace_path;
 
@@ -90,6 +91,7 @@ pub use remote::{
 pub use task_registry::{
     task_create, task_get, task_list, task_output, task_stop, task_update,
 };
+pub use tool_hard_denylist::{reject_sensitive_file_path, validate_bash_hard_deny};
 pub use session::{ContentBlock, ConversationMessage, MessageRole, Session, SessionError};
 pub use usage::{
     format_usd, pricing_for_model, ModelPricing, TokenUsage, UsageCostEstimate, UsageTracker,
