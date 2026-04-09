@@ -3593,6 +3593,29 @@ async function waitForDevToolsActivePort(profileDir, maxWaitMs) {
   return null;
 }
 
+const EXISTING_CDP_POLL_MS = 300;
+const EXISTING_CDP_WAIT_MS = 30_000;
+
+/**
+ * After an immediate probe miss, poll so prestart/Chromium can finish binding CDP
+ * (avoids spawning a second Edge on the same profile).
+ */
+async function pollForExistingDedicatedCdp(profileDir, preferredPort) {
+  const deadline = Date.now() + EXISTING_CDP_WAIT_MS;
+  while (Date.now() < deadline) {
+    const ports = new Set([preferredPort]);
+    const fromFile = readDevToolsActivePortSync(profileDir);
+    if (fromFile != null) ports.add(fromFile);
+    for (const port of ports) {
+      if ((await probeCdpVersion(port)) && (await cdpPortIsMicrosoftEdge(port))) {
+        return port;
+      }
+    }
+    await sleep(EXISTING_CDP_POLL_MS);
+  }
+  return null;
+}
+
 function relayDedicatedEdgeBaseArgv(profileDir) {
   return [
     "--remote-allow-origins=*",
@@ -3846,12 +3869,9 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
         await withTimeout(launchEdgeMsedgeWin32(edgePath, nudgeArgs), 12e3, "nudge cmd start");
         console.error("[copilot:ensureEdge] Win32: nudge start dispatched (foreground existing Edge)");
       } catch (e) {
+        // Do not spawn a second msedge here — same profile often opens an extra blank window;
+        // CDP reuse is already valid without a nudge.
         console.error("[copilot:ensureEdge] nudge cmd start skipped/failed (continuing with CDP reuse):", e?.message || e);
-        try {
-          await spawnEdgeForDedicated(edgePath, nudgeArgs, "nudge-spawn");
-        } catch (e2) {
-          console.error("[copilot:ensureEdge] nudge spawn failed:", e2?.message || e2);
-        }
       }
     }
     return;
@@ -3876,6 +3896,18 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
     console.error(
       "[copilot:ensureEdge] reusing existing Edge CDP on requested port",
       cdpPort,
+    );
+    return;
+  }
+
+  const polled = await pollForExistingDedicatedCdp(profileDir, cdpPort);
+  if (polled != null) {
+    globalOptions.cdpPort = polled;
+    writeCdpPortMarker(profileDir, polled);
+    console.error(
+      "[copilot:ensureEdge] reusing Edge CDP on port",
+      polled,
+      "(after race wait; DevToolsActivePort / preferred port)",
     );
     return;
   }

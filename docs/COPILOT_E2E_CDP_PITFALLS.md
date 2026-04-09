@@ -14,6 +14,16 @@ Microsoft 365 CopilotのE2Eテストを、実際にログインしたMicrosoft E
 +-------------------+      ws://localhost:9222       +-------------------+
 ```
 
+## Relay デスクトップ: Edge が二重に開く（Copilot + ブランク）
+
+**症状:** 同じ `RelayAgentEdgeProfile` でウィンドウが2つ、片方は Copilot、もう片方が空白や新規タブに見える。
+
+**原因:** `DevToolsActivePort` は既に存在するが、CDP の `/json/version` がまだ応答しない短いレースの間に、Rust の `connect_copilot_page` や Node の `ensureEdgeDedicated` が **2 台目の `msedge`** を起動していた。Chromium は同一 `--user-data-dir` での再実行で **別ウィンドウ** が付くことが多い。Rust 側の起動 URL が `about:blank` だとブランクに見えやすかった。
+
+**対策（実装）:** Rust は `DevToolsActivePort` があるが一発で CDP に繋がらない場合、新規起動の前に最大約 30 秒 `wait_for_cdp_ready` で待機。どうしても自前起動する場合は Node の `COPILOT_URL` と同じ Copilot URL を開く。Node は固定ポートの即時プローブが失敗したあと、`DevToolsActivePort` と設定ポートを最大約 30 秒ポーリングしてから `tryDedicatedLaunchPortZero` へ進む。Windows の nudge で `cmd /c start` が失敗したとき、同じ引数の `spawnEdgeForDedicated` に **フォールバックしない**（CDP 再利用だけで継続）。
+
+**運用:** `pnpm tauri:dev` 前の `prestart-relay-edge.mjs` とアプリ内の `copilot_server.js` が同じプロファイルを使うが、上記で二重起動を抑える。Edge は手動だけで立ち上げたい場合は `RELAY_SKIP_PRESTART_EDGE=1` も利用できる。
+
 ## 重要ファイル
 
 | ファイル | 役割 |

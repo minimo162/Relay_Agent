@@ -16,6 +16,22 @@
 
 ## Milestone Log
 
+### 2026-04-09 Edge duplicate window: wait before second launch
+
+**Problem:** Two Edge windows (Copilot + blank) when the same `RelayAgentEdgeProfile` was reused — a race where `DevToolsActivePort` existed but CDP was not yet responding caused an extra `msedge` spawn (Rust `connect_copilot_page` and/or Node `ensureEdgeDedicated`). Rust also used `about:blank` for auto-launched Edge.
+
+**Fix:** [`cdp_copilot.rs`](../apps/desktop/src-tauri/src/cdp_copilot.rs) — poll `wait_for_cdp_ready` up to 30s on the profile port before `launch_dedicated_edge`; initial tab uses `https://m365.cloud.microsoft/chat/`. [`copilot_server.js`](../apps/desktop/src-tauri/binaries/copilot_server.js) — `pollForExistingDedicatedCdp` after a failed immediate probe; Win32 nudge no longer falls back to `spawnEdgeForDedicated`. **Doc:** [`docs/COPILOT_E2E_CDP_PITFALLS.md`](COPILOT_E2E_CDP_PITFALLS.md) section *Relay デスクトップ: Edge が二重に開く*.
+
+**Verification:** `cargo check -p relay-agent-desktop`; `node --check` on `copilot_server.js` — pass (2026-04-09).
+
+### 2026-04-09 Composer keyboard: Enter newline, Ctrl+Enter send
+
+**Goal:** Make multi-line prompts easy in the Solid composer: **Enter** inserts a newline; **Ctrl+Enter** sends (and **⌘+Enter** on macOS via `metaKey`). Plain **Enter** no longer submits (previous behavior was Enter send / Shift+Enter newline).
+
+**Artifacts:** [`Composer.tsx`](../apps/desktop/src/components/Composer.tsx) (`onKeyDown`); inline hint `⌘/Ctrl+Enter to send · Enter for new line`. Playwright: [`app.e2e.spec.ts`](../apps/desktop/tests/app.e2e.spec.ts) and [`e2e-comprehensive.spec.ts`](../apps/desktop/tests/e2e-comprehensive.spec.ts) use `Control+Enter` for send; `sendPrompt` and related assertions scope user bubbles to `getByRole("main")` so session-list labels do not trip strict-mode duplicate matches.
+
+**Verification:** From `apps/desktop/`, `E2E_SKIP_AUTH_SETUP=1 pnpm exec playwright test app.e2e.spec.ts e2e-comprehensive.spec.ts` — pass (2026-04-09).
+
 ### 2026-04-09 Desktop startup: main window after Copilot warmup (no always-on-top)
 
 **Goal:** Stop pinning the main window with `set_always_on_top(true)`; start with the window hidden until `warmupCopilotBridge` finishes (Edge/Copilot cold start), then `show` + `setFocus` so the Relay UI typically ends in front without staying above all other apps.

@@ -32,7 +32,7 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 - **Approvals** — **Allow once**, **Allow for session**, or **Don’t allow** for gated tools.
 - **Workspace** — Header chip + status line for **cwd**; **Settings** (path, **Browse…** folder picker on desktop, `maxTurns`, stored browser hints); **Copy diagnostics**.
 - **Context panel** — Files, MCP servers, **Plan** (latest `TodoWrite`), policy hints.
-- **Composer** — **Templates** (saved prompts), slash commands (`/help`, `/compact`, …), session mode **Build** / **Plan** / **Explore** (Explore = `read_file` / `glob_search` / `grep_search` only in the Copilot tool list).
+- **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or the **Send** button submits. **Templates** (saved prompts), slash commands (`/help`, `/compact`, …), session mode **Build** / **Plan** / **Explore** (Explore = `read_file` / `glob_search` / `grep_search` only in the Copilot tool list).
 - **Undo / Redo** — Header actions reverse the last successful workspace writes from the active session (`write_file`, `edit_file`, `NotebookEdit`, PDF tools), when the agent is idle.
 - **Extras** — PDF via LiteParse + bundled Node; Windows Office hybrid read (COM + PDF); MCP over stdio.
 

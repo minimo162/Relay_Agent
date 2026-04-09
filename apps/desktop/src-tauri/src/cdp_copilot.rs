@@ -168,6 +168,9 @@ mod attachment_port_tests {
 
 /* ── Edge auto-launch ────────────────────────────────────────── */
 
+/// Initial tab when Relay spawns Edge (trailing slash matches Node `COPILOT_URL`).
+const COPILOT_CHAT_LAUNCH_URL: &str = "https://m365.cloud.microsoft/chat/";
+
 /// Launch a dedicated Edge instance for CDP control.
 /// Uses a separate user-data-dir so it doesn't conflict with
 /// the user's personal browser.
@@ -183,8 +186,9 @@ pub fn launch_dedicated_edge(debug_port: u16) -> Result<std::process::Child> {
         debug_port, profile_dir
     );
 
-    // Launch Edge with a blank start page. Use flags to avoid VBS/Code
-    // Integrity issues (error 577) on Windows corporate environments.
+    // Open Copilot directly (matches Node `copilot_server.js`) so a rare second spawn
+    // is not an extra blank window. Use flags to avoid VBS/Code Integrity issues (error 577)
+    // on Windows corporate environments.
     // `--no-sandbox` is omitted on Windows/macOS: Microsoft Edge reports it as unsupported there; keep on Linux (and optional override).
     let mut cmd = std::process::Command::new(&edge_path);
     cmd.arg("--remote-debugging-port")
@@ -214,7 +218,7 @@ pub fn launch_dedicated_edge(debug_port: u16) -> Result<std::process::Child> {
         "--disable-breakpad",
         "--disable-crashpad",
         "--disable-features=RendererCodeIntegrity,EdgeEnclave,VbsEnclave",
-        "about:blank",
+        COPILOT_CHAT_LAUNCH_URL,
     ]);
 
     let child = cmd
@@ -948,14 +952,26 @@ pub async fn connect_copilot_page(
     let (debug_url_new, child, launched) =
         if let Some(p) = read_devtools_active_port(&profile_dir) {
             let url = format!("http://127.0.0.1:{p}");
-            if cdp_http_ready(&url).await {
+            let reuse_existing = if cdp_http_ready(&url).await {
+                true
+            } else {
+                info!(
+                    "[CDP] DevToolsActivePort on {} but CDP not up yet — waiting before any new launch…",
+                    p
+                );
+                wait_for_cdp_ready(&url, 30).await.is_ok()
+            };
+
+            if reuse_existing {
                 info!(
                     "[CDP] Reusing live Edge CDP on port {} (RelayAgentEdgeProfile)",
                     p
                 );
                 (url, None, false)
             } else {
-                info!("[CDP] DevToolsActivePort present but CDP dead; launching new Edge…");
+                warn!(
+                    "[CDP] DevToolsActivePort present but CDP unreachable after wait; launching new Edge…"
+                );
                 let spawned = launch_dedicated_edge(0)?;
                 let p2 = wait_for_devtools_active_port(&profile_dir, 30).await?;
                 (
