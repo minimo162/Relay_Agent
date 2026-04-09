@@ -3462,9 +3462,68 @@ function clearCdpPortMarker(profileDir) {
 
 /** Match `cdp_copilot::launch_dedicated_edge` / `start-relay-edge-cdp.sh` so Node-spawned Edge exposes CDP reliably (esp. Linux). */
 function relayEdgeChromiumHardeningArgv() {
-  const out = ["--no-sandbox", "--disable-gpu", "--disable-gpu-compositing"];
+  const out = [
+    "--no-sandbox",
+    "--disable-gpu",
+    "--disable-gpu-compositing",
+    "--disable-hang-monitor",
+    "--disable-site-isolation-trials",
+    "--disable-breakpad",
+    "--disable-crashpad",
+  ];
   if (process.platform === "linux") out.push("--disable-dev-shm-usage");
   return out;
+}
+
+/** Log file for Edge stderr/stdout from Node spawns; empty string or `0` disables. */
+function defaultRelayEdgeLogPath() {
+  const fromEnv = process.env.RELAY_EDGE_LOG;
+  if (fromEnv === "" || fromEnv === "0") return null;
+  if (fromEnv) return fromEnv;
+  const home =
+    process.platform === "win32"
+      ? process.env.USERPROFILE || process.env.HOME
+      : process.env.HOME;
+  if (!home) return null;
+  return path.join(home, ".local", "log", "relay-edge-copilot.log");
+}
+
+function readDevToolsActivePortSync(profileDir) {
+  try {
+    const fp = path.join(profileDir, "DevToolsActivePort");
+    const data = fs.readFileSync(fp, "utf8");
+    const line = (data.split(/\r?\n/)[0] ?? "").trim();
+    const n = Number.parseInt(line, 10);
+    if (Number.isFinite(n) && n > 0 && n <= 65535) return n;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+async function waitForDevToolsActivePort(profileDir, maxWaitMs) {
+  const interval = 100;
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    const p = readDevToolsActivePortSync(profileDir);
+    if (p != null) return p;
+    await sleep(interval);
+  }
+  return null;
+}
+
+function relayDedicatedEdgeBaseArgv(profileDir) {
+  return [
+    "--remote-allow-origins=*",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-infobars",
+    "--disable-restore-session-state",
+    "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
+    ...relayEdgeChromiumHardeningArgv(),
+    `--user-data-dir=${profileDir}`,
+    COPILOT_URL,
+  ];
 }
 
 /**
@@ -3499,22 +3558,179 @@ async function launchEdgeMsedgeWin32(edgePath, argv) {
   console.error("[copilot:ensureEdge] Win32 cmd /c start execFile callback returned");
 }
 
-/** Detached msedge — reliable under Tauri; `cmd start` can hang without invoking the execFile callback on some PCs. */
-async function spawnEdgeDetached(edgePath, argv, tag = "") {
+/**
+ * Detached msedge — reliable under Tauri; `cmd start` can hang without invoking the execFile callback on some PCs.
+ * @param {string | null} [logPath] — override log target; `null` disables file logging.
+ */
+async function spawnEdgeDetached(edgePath, argv, tag = "", logPath) {
   const { spawn } = await import("node:child_process");
   const t = tag ? ` (${tag})` : "";
+  const resolvedLog = logPath === undefined ? defaultRelayEdgeLogPath() : logPath;
   console.error("[copilot:ensureEdge] spawn msedge" + t + "…");
+  let logFd = null;
+  let stdio = "ignore";
+  if (resolvedLog) {
+    try {
+      fs.mkdirSync(path.dirname(resolvedLog), { recursive: true });
+      logFd = fs.openSync(resolvedLog, "a");
+      const banner = `\n--- [copilot ${new Date().toISOString()}] spawn${t} ${edgePath} ---\n`;
+      fs.writeSync(logFd, banner);
+      stdio = ["ignore", logFd, logFd];
+    } catch (e) {
+      console.error("[copilot:ensureEdge] log open failed:", resolvedLog, e?.message || e);
+      stdio = "ignore";
+    }
+  }
   const child = spawn(edgePath, argv, {
     detached: true,
-    stdio: "ignore",
+    stdio,
     windowsHide: false,
   });
   child.on("error", (err) => {
     console.error("[copilot:ensureEdge] spawn error" + t + ":", err?.message || err);
   });
+  const fdToClose = logFd;
+  child.once("exit", (code, signal) => {
+    if (fdToClose != null) {
+      try {
+        fs.closeSync(fdToClose);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (code != null && code !== 0) {
+      console.error(
+        "[copilot:ensureEdge] Edge child exited early" + t + ": code=",
+        code,
+        "signal=",
+        signal,
+        resolvedLog ? `(stderr log: ${resolvedLog})` : "",
+      );
+    }
+  });
   child.unref();
   console.error("[copilot:ensureEdge] spawn issued" + t + " pid=", child.pid ?? "(none)");
   await sleep(400);
+}
+
+/** Win32: optional cmd /c start first; always ends in spawnEdgeDetached for resilience. */
+async function spawnEdgeForDedicated(edgePath, argv, tag) {
+  if (process.platform === "win32") {
+    const useCmdStart = process.env.RELAY_COPILOT_WIN32_CMD_START === "1";
+    if (useCmdStart) {
+      console.error("[copilot:ensureEdge] RELAY_COPILOT_WIN32_CMD_START=1 — trying cmd /c start (12s cap)…");
+      try {
+        await withTimeout(launchEdgeMsedgeWin32(edgePath, argv), 12e3, `${tag} cmd start`);
+        console.error("[copilot:ensureEdge] Win32 cmd start returned OK");
+        return;
+      } catch (e) {
+        console.error("[copilot:ensureEdge] cmd start failed or timed out:", e?.message || e);
+      }
+    } else {
+      console.error(
+        "[copilot:ensureEdge] default: spawn() (set RELAY_COPILOT_WIN32_CMD_START=1 to use cmd start first)",
+      );
+    }
+  }
+  await spawnEdgeDetached(edgePath, argv, tag);
+}
+
+async function waitUntilDedicatedCdpResponds(actualPort, profileDir) {
+  const dl = Date.now() + EDGE_LAUNCH_TIMEOUT_MS;
+  const edgeWaitStarted = Date.now();
+  let loggedMismatch = false;
+  let lastProgressLog = Date.now() - 4e3;
+  console.error("[copilot:ensureEdge] polling for CDP /json/version on port", actualPort, "…");
+  while (Date.now() < dl) {
+    if (Date.now() - lastProgressLog >= 2e3) {
+      console.error(
+        "[copilot:ensureEdge] waiting for Edge CDP on port",
+        actualPort,
+        "…",
+        Math.ceil((dl - Date.now()) / 1000),
+        "s left (started",
+        Math.round((Date.now() - edgeWaitStarted) / 1000),
+        "s ago)",
+      );
+      lastProgressLog = Date.now();
+    }
+    const info = await probeCdpVersion(actualPort);
+    if (info && cdpVersionLooksLikeEdge(info)) {
+      globalOptions.cdpPort = actualPort;
+      writeCdpPortMarker(profileDir, actualPort);
+      console.error(
+        "[copilot:ensureEdge] CDP ready on port",
+        actualPort,
+        "after ~",
+        Math.round((Date.now() - edgeWaitStarted) / 1000),
+        "s",
+      );
+      return true;
+    }
+    if (info && !loggedMismatch && Date.now() > dl - 12e3) {
+      loggedMismatch = true;
+      console.error(
+        "[copilot:ensureEdge] port",
+        actualPort,
+        "responds but not classified as Edge yet:",
+        JSON.stringify({ Browser: info.Browser, UserAgent: info["User-Agent"] }).slice(0, 400),
+      );
+    }
+    await sleep(EDGE_LAUNCH_POLL_INTERVAL_MS);
+  }
+  return false;
+}
+
+/** Rust-aligned: OS-assigned CDP port via DevToolsActivePort (remote-debugging-port=0). */
+async function tryDedicatedLaunchPortZero(edgePath, profileDir) {
+  const argv = ["--remote-debugging-port=0", ...relayDedicatedEdgeBaseArgv(profileDir)];
+  console.error("[copilot:ensureEdge] trying remote-debugging-port=0 + DevToolsActivePort (Rust-aligned)…");
+  await spawnEdgeForDedicated(edgePath, argv, "dedicated-port0");
+  const discovered = await waitForDevToolsActivePort(profileDir, 30_000);
+  if (discovered == null) {
+    console.error("[copilot:ensureEdge] DevToolsActivePort missing after port=0 launch; using fixed-port fallback");
+    return false;
+  }
+  console.error("[copilot:ensureEdge] DevToolsActivePort reports port", discovered);
+  if (await waitUntilDedicatedCdpResponds(discovered, profileDir)) return true;
+  console.error("[copilot:ensureEdge] CDP on DevToolsActivePort port did not become ready; using fixed-port fallback");
+  return false;
+}
+
+/** Legacy: scan cdpPort..cdpPort+range for a free TCP listener slot, fixed --remote-debugging-port. */
+async function launchDedicatedFixedPortScan(edgePath, profileDir, cdpPort) {
+  const preExisting = new Set();
+  for (let port = cdpPort; port < cdpPort + CDP_PORT_SCAN_RANGE; port++) {
+    if (await probeCdpVersion(port)) preExisting.add(port);
+  }
+
+  let actualPort = cdpPort;
+  for (let port = cdpPort; port < cdpPort + CDP_PORT_SCAN_RANGE; port++) {
+    if (!preExisting.has(port)) {
+      actualPort = port;
+      break;
+    }
+    if (port === cdpPort + CDP_PORT_SCAN_RANGE - 1) {
+      throw new Error(
+        `CDPポート ${cdpPort}〜${port} はすべて使用中です。手動デバッグの Edge を閉じるか、別のポート範囲を空けてください。`,
+      );
+    }
+  }
+  if (actualPort !== cdpPort) {
+    console.error(`[copilot:ensureEdge] port ${cdpPort} has foreign CDP; launching Relay Edge on ${actualPort}`);
+  }
+
+  globalOptions.cdpPort = actualPort;
+  console.error("[copilot:ensureEdge] launching Relay Edge (isolated profile) on port", actualPort);
+  const args = [`--remote-debugging-port=${actualPort}`, ...relayDedicatedEdgeBaseArgv(profileDir)];
+  console.error("[copilot:ensureEdge] starting Edge process (fixed port)…");
+  await spawnEdgeForDedicated(edgePath, args, "dedicated-fixed");
+
+  if (await waitUntilDedicatedCdpResponds(actualPort, profileDir)) return;
+
+  throw new Error(
+    `Edgeのデバッグ接続が開始できません (port ${actualPort})。msedge の起動ブロック、プロファイルロック、または企業ポリシーを確認してください。`,
+  );
 }
 
 /** Dedicated profile: do not attach to arbitrary CDP in [cdpPort, cdpPort+scan) outside our launch/marker path. */
@@ -3551,7 +3767,7 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
       } catch (e) {
         console.error("[copilot:ensureEdge] nudge cmd start skipped/failed (continuing with CDP reuse):", e?.message || e);
         try {
-          await spawnEdgeDetached(edgePath, nudgeArgs, "nudge-spawn");
+          await spawnEdgeForDedicated(edgePath, nudgeArgs, "nudge-spawn");
         } catch (e2) {
           console.error("[copilot:ensureEdge] nudge spawn failed:", e2?.message || e2);
         }
@@ -3583,109 +3799,8 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
     return;
   }
 
-  const preExisting = new Set();
-  for (let port = cdpPort; port < cdpPort + CDP_PORT_SCAN_RANGE; port++) {
-    if (await probeCdpVersion(port)) preExisting.add(port);
-  }
-
-  let actualPort = cdpPort;
-  for (let port = cdpPort; port < cdpPort + CDP_PORT_SCAN_RANGE; port++) {
-    if (!preExisting.has(port)) {
-      actualPort = port;
-      break;
-    }
-    if (port === cdpPort + CDP_PORT_SCAN_RANGE - 1) {
-      throw new Error(
-        `CDPポート ${cdpPort}〜${port} はすべて使用中です。手動デバッグの Edge を閉じるか、別のポート範囲を空けてください。`
-      );
-    }
-  }
-  if (actualPort !== cdpPort) {
-    console.error(`[copilot:ensureEdge] port ${cdpPort} has foreign CDP; launching Relay Edge on ${actualPort}`);
-  }
-
-  globalOptions.cdpPort = actualPort;
-  console.error("[copilot:ensureEdge] launching Relay Edge (isolated profile) on port", actualPort);
-  /** Open Copilot immediately so the window is not stuck on NTP/home; describeImpl still normalizes URL. */
-  const args = [
-    `--remote-debugging-port=${actualPort}`,
-    "--remote-allow-origins=*",
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-infobars",
-    "--disable-restore-session-state",
-    "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
-    ...relayEdgeChromiumHardeningArgv(),
-    `--user-data-dir=${profileDir}`,
-    COPILOT_URL,
-  ];
-  console.error("[copilot:ensureEdge] starting Edge process…");
-  if (process.platform === "win32") {
-    const useCmdStart = process.env.RELAY_COPILOT_WIN32_CMD_START === "1";
-    if (useCmdStart) {
-      console.error("[copilot:ensureEdge] RELAY_COPILOT_WIN32_CMD_START=1 — trying cmd /c start (12s cap)…");
-      try {
-        await withTimeout(launchEdgeMsedgeWin32(edgePath, args), 12e3, "dedicated cmd start");
-        console.error("[copilot:ensureEdge] Win32 cmd start returned OK");
-      } catch (e) {
-        console.error("[copilot:ensureEdge] cmd start failed or timed out:", e?.message || e);
-        await spawnEdgeDetached(edgePath, args, "after-cmd-timeout");
-      }
-    } else {
-      console.error(
-        "[copilot:ensureEdge] default: spawn() (set RELAY_COPILOT_WIN32_CMD_START=1 to use cmd start first)",
-      );
-      await spawnEdgeDetached(edgePath, args, "dedicated-primary");
-    }
-  } else {
-    await spawnEdgeDetached(edgePath, args, "non-win32");
-  }
-
-  const dl = Date.now() + EDGE_LAUNCH_TIMEOUT_MS;
-  const edgeWaitStarted = Date.now();
-  let loggedMismatch = false;
-  let lastProgressLog = Date.now() - 4e3;
-  console.error("[copilot:ensureEdge] polling for CDP /json/version on port", actualPort, "…");
-  while (Date.now() < dl) {
-    if (Date.now() - lastProgressLog >= 2e3) {
-      console.error(
-        "[copilot:ensureEdge] waiting for Edge CDP on port",
-        actualPort,
-        "…",
-        Math.ceil((dl - Date.now()) / 1000),
-        "s left (started",
-        Math.round((Date.now() - edgeWaitStarted) / 1000),
-        "s ago)",
-      );
-      lastProgressLog = Date.now();
-    }
-    const info = await probeCdpVersion(actualPort);
-    if (info && cdpVersionLooksLikeEdge(info)) {
-      globalOptions.cdpPort = actualPort;
-      writeCdpPortMarker(profileDir, actualPort);
-      console.error(
-        "[copilot:ensureEdge] CDP ready on port",
-        actualPort,
-        "after ~",
-        Math.round((Date.now() - edgeWaitStarted) / 1000),
-        "s",
-      );
-      return;
-    }
-    if (info && !loggedMismatch && Date.now() > dl - 12e3) {
-      loggedMismatch = true;
-      console.error(
-        "[copilot:ensureEdge] port",
-        actualPort,
-        "responds but not classified as Edge yet:",
-        JSON.stringify({ Browser: info.Browser, UserAgent: info["User-Agent"] }).slice(0, 400),
-      );
-    }
-    await sleep(EDGE_LAUNCH_POLL_INTERVAL_MS);
-  }
-  throw new Error(
-    `Edgeのデバッグ接続が開始できません (port ${actualPort})。msedge の起動ブロック、プロファイルロック、または企業ポリシーを確認してください。`,
-  );
+  if (await tryDedicatedLaunchPortZero(edgePath, profileDir)) return;
+  await launchDedicatedFixedPortScan(edgePath, profileDir, cdpPort);
 }
 
 /** No dedicated profile: keep legacy attach-to-any-CDP-in-range behavior. */
@@ -3731,21 +3846,7 @@ async function ensureEdgeLegacyAttach(edgePath, cdpPort) {
     ...relayEdgeChromiumHardeningArgv(),
     COPILOT_URL,
   ];
-  if (process.platform === "win32") {
-    const useCmdStart = process.env.RELAY_COPILOT_WIN32_CMD_START === "1";
-    if (useCmdStart) {
-      try {
-        await withTimeout(launchEdgeMsedgeWin32(edgePath, args), 12e3, "legacy cmd start");
-      } catch (e) {
-        console.error("[copilot:ensureEdge] legacy cmd start failed:", e?.message || e);
-        await spawnEdgeDetached(edgePath, args, "legacy-after-cmd");
-      }
-    } else {
-      await spawnEdgeDetached(edgePath, args, "legacy-primary");
-    }
-  } else {
-    await spawnEdgeDetached(edgePath, args, "legacy-non-win32");
-  }
+  await spawnEdgeForDedicated(edgePath, args, "legacy");
 
   const dl = Date.now() + EDGE_LAUNCH_TIMEOUT_MS;
   const legacyWaitStarted = Date.now();
@@ -3828,12 +3929,19 @@ function defaultRelayEdgeProfileDir() {
 }
 
 function findEdgePath() {
+  const envExe = process.env.RELAY_EDGE_EXECUTABLE?.trim();
+  if (envExe && fs.existsSync(envExe)) return envExe;
+
   if (process.platform === "win32") {
     const local = process.env.LOCALAPPDATA;
     const candidates = [];
     if (local) candidates.push(`${local}\\Microsoft\\Edge\\Application\\msedge.exe`);
     for (const root of [process.env["PROGRAMFILES(X86)"], process.env.PROGRAMFILES].filter(Boolean)) {
-      candidates.push(`${root}\\Microsoft\\Edge\\Application\\msedge.exe`);
+      candidates.push(
+        `${root}\\Microsoft\\Edge\\Application\\msedge.exe`,
+        `${root}\\Microsoft\\Edge Beta\\Application\\msedge.exe`,
+        `${root}\\Microsoft\\Edge Dev\\Application\\msedge.exe`,
+      );
     }
     for (const p of candidates) {
       if (p && fs.existsSync(p)) return p;

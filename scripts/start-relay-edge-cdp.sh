@@ -3,22 +3,29 @@
 # Rust 側は ~/RelayAgentEdgeProfile/DevToolsActivePort を読み既存 CDP を再利用する。
 #
 # 環境変数:
-#   DISPLAY              既定 :1
+#   DISPLAY              X11 のみ: 未設定時は :0（Wayland のときは WAYLAND_DISPLAY があれば xdpyinfo をスキップ）
 #   RELAY_EDGE_CDP_PORT  既定 9360（YakuLingo 等の 9333 と衝突回避; 既存 Edge は DevToolsActivePort で検出）
 #   RELAY_EDGE_PROFILE   既定 ~/RelayAgentEdgeProfile
 set -euo pipefail
 
-DISPLAY="${DISPLAY:-:1}"
-export DISPLAY
 PORT="${RELAY_EDGE_CDP_PORT:-9360}"
 PROFILE="${RELAY_EDGE_PROFILE:-$HOME/RelayAgentEdgeProfile}"
 LOG="${RELAY_EDGE_LOG:-$HOME/.local/log/relay-edge-cdp.log}"
 
 mkdir -p "$(dirname "$LOG")" "$PROFILE"
 
-if ! xdpyinfo >/dev/null 2>&1; then
-  echo "[start-relay-edge-cdp] DISPLAY=$DISPLAY に接続できません。先に Xvfb 等を起動してください。" >&2
-  exit 1
+# Wayland: do not default DISPLAY=:1 (broke local sessions). X11-only: default :0 and require xdpyinfo.
+if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+  export WAYLAND_DISPLAY
+  [[ -n "${DISPLAY:-}" ]] && export DISPLAY
+  echo "[start-relay-edge-cdp] Wayland session (WAYLAND_DISPLAY set); skipping xdpyinfo check"
+else
+  DISPLAY="${DISPLAY:-:0}"
+  export DISPLAY
+  if ! xdpyinfo >/dev/null 2>&1; then
+    echo "[start-relay-edge-cdp] DISPLAY=$DISPLAY に接続できません。正しい DISPLAY を設定するか Xvfb を起動してください。" >&2
+    exit 1
+  fi
 fi
 
 # 既にこのプロファイルで Edge が CDP 応答していれば（例: 旧既定 9333 のまま）二重起動しない
