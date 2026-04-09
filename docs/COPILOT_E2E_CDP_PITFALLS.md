@@ -30,11 +30,15 @@ Microsoft 365 CopilotのE2Eテストを、実際にログインしたMicrosoft E
 
 **Windows: 待ち続け / 二重 Edge:** `127.0.0.1:18080` が **EADDRINUSE** のときは、前回の `node copilot_server.js` が残っていることが多い。デスクトップ起動時、Rust が **`/health` の `bootToken` がセッションと一致しない**リスナーを検出したら、そのポートのプロセスを終了してから `copilot_server` を起動し直す（自動リカバリ）。意図的にポートを共有するなどで無効化する場合は **`RELAY_COPILOT_RECLAIM_STALE_HTTP=0`**。手動対処はタスクマネージャーで該当 `node` を終了するか Relay を閉じる。`DevToolsActivePort` と実際の CDP がずれた場合は、Relay 用 Edge を **1 プロセスだけ**にしてから再起動する。遅い PC では **`RELAY_CDP_PROBE_TIMEOUT_MS`**（500〜120000、ミリ秒）で `/json/version` の待ちを延ばせる。Edge 起動引数 **`--disable-site-isolation-trials`** は Windows では付けない（Linux のみ; 未サポート警告の回避）。
 
+**起動時間（Cold start）:** Windows では既定で **`--remote-debugging-port=0` の試行を省略**し、固定 CDP ポート（例: 9360）へ直行する（従来挙動は **`RELAY_COPILOT_TRY_PORT_ZERO=1`**）。既存 CDP 待ちの **`RELAY_EXISTING_CDP_WAIT_MS`** は既定 **10000** ms（Win）、**30000** ms（それ以外）— prestart が遅い場合は増やす。port=0 を使う場合の DevTools ポート上の CDP 待ち上限は **`RELAY_EDGE_PORT0_CDP_WAIT_MS`**（既定 **12000** ms、2〜120000）。HTTP ポート再利用時、遅い **`netstat`** フォールバックは **`RELAY_COPILOT_RECLAIM_NETSTAT=1`** のときのみ（既定オフ）。
+
 ## Relay デスクトップ: Copilot 応答とツール実行（relay_tool）
 
 **症状:** モデルがツール呼び出しを文章や「Plain Text」ブロックで説明するだけで、**` ```relay_tool `** 形式のフェンスを出さない／**` ```json `** だけで JSON を出すと、応答にツールが含まれず **1 ターンで終了**し、`read_file` などが実行されないことがあった。
 
 **対策（実装）:** デスクトップ Rust [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) の `parse_copilot_tool_response` は、まず **` ```relay_tool `** を解析し、**ツールが 0 件のとき**に限り、(1) 通常の Markdown コードフェンス（`json`・無言語など）内の JSON、(2) 本文中の `{"name":"<MVPツール名>","input":{…}}` を限定的に抽出する。フォールバックは **MVP カタログに載っているツール名のみ**（それ以外は無視）。プロンプト（ツールカタログ節）に「説明だけでは実行されない」「UI が Plain Text と表示しても `relay_tool` または `json` フェンスで JSON を出す」旨を記載。
+
+**誤拒否（「この Copilot では relay_tool 不可」）:** モデルが一般のブラウザ Copilot向けに「ツールは実行できない」と答えることがある。Relay では **CDP 経由の応答はデスクトップがパースしてツール実行する**ため、プロンプト先頭に **CDP session / Relay host execution** の説明と、添付ファイル用ショートメッセージ（`CDP_FILE_DELIVERY_USER_MESSAGE`）で「フェンスは Relay が実行する」「このチャットでは不可と断らない」旨を明示している（[`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs)）。
 
 ## 重要ファイル
 

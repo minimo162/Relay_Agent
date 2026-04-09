@@ -20,6 +20,7 @@ struct HealthBody {
 /// match `expected_boot_token`, terminates the process listening on that port (platform-specific).
 ///
 /// Set `RELAY_COPILOT_RECLAIM_STALE_HTTP=0` to skip (e.g. shared-port debugging).
+/// On Windows, **`RELAY_COPILOT_RECLAIM_NETSTAT=1`** enables a slow `netstat`/`taskkill` fallback after PowerShell (default off for faster startup).
 pub(crate) async fn maybe_reclaim_stale_copilot_http_port(
     client: &Client,
     port: u16,
@@ -108,6 +109,14 @@ fn kill_listen_port_windows(port: u16) -> std::io::Result<()> {
         .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
         .creation_flags(CREATE_NO_WINDOW)
         .status();
+
+    // Full `netstat` scan is slow on cold start; opt-in via env when Get-NetTCPConnection misses.
+    let netstat_fallback = env::var("RELAY_COPILOT_RECLAIM_NETSTAT")
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
+    if !netstat_fallback {
+        return Ok(());
+    }
 
     let output = Command::new("cmd")
         .args(["/C", "netstat", "-ano"])

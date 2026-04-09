@@ -16,6 +16,26 @@
 
 ## Milestone Log
 
+### 2026-04-09 CDP prompt: Relay runtime identity (stop false `relay_tool` refusals)
+
+**Problem:** M365 Copilot sometimes replied that it could not act as Relay Agent or that `relay_tool` blocks do not execute “in this Copilot environment,” contradicting the desktop host which parses the model reply and runs tools.
+
+**Fix:** [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) — `CDP_RELAY_RUNTIME_CATALOG_LEAD` prepended to `cdp_tool_catalog_section` (CDP session, Relay host parses fences, do not claim tools unavailable); `CDP_FILE_DELIVERY_USER_MESSAGE` states fenced JSON is executed by Relay; default `build_desktop_system_prompt` reminds not to refuse tool fences as “browser Copilot can’t run tools.”
+
+**Doc:** [`docs/COPILOT_E2E_CDP_PITFALLS.md`](COPILOT_E2E_CDP_PITFALLS.md) (*Relay デスクトップ: Copilot 応答とツール実行*).
+
+**Verification:** `cargo test -p relay-agent-desktop cdp_copilot_tool` — pass (2026-04-09).
+
+### 2026-04-09 Copilot / Edge: faster cold start (Windows skips port=0, shorter polls, optional netstat)
+
+**Problem:** App startup could spend ~30s in `pollForExistingDedicatedCdp`, ~45s waiting on CDP for a `DevToolsActivePort` after `--remote-debugging-port=0` before fixed-port Edge succeeded quickly; HTTP reclaim always ran a full Windows `netstat` pass after PowerShell.
+
+**Fix:** [`copilot_server.js`](../apps/desktop/src-tauri/binaries/copilot_server.js) — on **win32**, skip `tryDedicatedLaunchPortZero` unless **`RELAY_COPILOT_TRY_PORT_ZERO=1`**; **`RELAY_EXISTING_CDP_WAIT_MS`** (default 10s Win / 30s else, clamp 1–120s); **`waitUntilDedicatedCdpResponds(..., timeoutMs)`** with **`RELAY_EDGE_PORT0_CDP_WAIT_MS`** (default 12s, 2–120s) when port=0 is used; fixed-port path keeps 45s. [`copilot_port_reclaim.rs`](../apps/desktop/src-tauri/src/copilot_port_reclaim.rs) — **`RELAY_COPILOT_RECLAIM_NETSTAT=1`** gates the `netstat`/`taskkill` fallback (default off).
+
+**Doc:** [`docs/COPILOT_E2E_CDP_PITFALLS.md`](COPILOT_E2E_CDP_PITFALLS.md); [`README.md`](../README.md) Environment (Copilot).
+
+**Verification:** `node --check` on `copilot_server.js`; `cargo check -p relay-agent-desktop` — pass (2026-04-09).
+
 ### 2026-04-09 CDP agent loop: parse `relay_tool` fallbacks (`json` fences, unfenced tool JSON)
 
 **Problem:** M365 Copilot often answered with prose plus tool JSON in **` ```json `** or “Plain Text” blocks, or bare `{"name":"read_file","input":{…}}`, instead of **` ```relay_tool `**. The host only parsed `relay_tool`, so **no `ToolUse` events** were emitted and `ConversationRuntime::run_turn` stopped after one assistant message without running tools.

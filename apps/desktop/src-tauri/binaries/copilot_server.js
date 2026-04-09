@@ -3623,8 +3623,22 @@ async function waitForDevToolsActivePort(profileDir, maxWaitMs) {
   return null;
 }
 
+/** Parse `process.env[name]` as milliseconds; clamp to `[minMs, maxMs]`. Empty/unset uses `defaultVal`. */
+function relayEnvPositiveIntMs(name, defaultVal, minMs, maxMs) {
+  const raw = process.env[name];
+  if (raw == null || String(raw).trim() === "") return defaultVal;
+  const n = Number.parseInt(String(raw).trim(), 10);
+  if (!Number.isFinite(n)) return defaultVal;
+  return Math.min(maxMs, Math.max(minMs, n));
+}
+
 const EXISTING_CDP_POLL_MS = 300;
-const EXISTING_CDP_WAIT_MS = 30_000;
+const EXISTING_CDP_WAIT_MS = relayEnvPositiveIntMs(
+  "RELAY_EXISTING_CDP_WAIT_MS",
+  process.platform === "win32" ? 10_000 : 30_000,
+  1_000,
+  120_000,
+);
 
 /**
  * After an immediate probe miss, poll so prestart/Chromium can finish binding CDP
@@ -3822,8 +3836,8 @@ async function spawnEdgeForDedicated(edgePath, argv, tag, opts = {}) {
   return await spawnEdgeDetached(edgePath, argv, tag, undefined, { retainChild });
 }
 
-async function waitUntilDedicatedCdpResponds(actualPort, profileDir) {
-  const dl = Date.now() + EDGE_LAUNCH_TIMEOUT_MS;
+async function waitUntilDedicatedCdpResponds(actualPort, profileDir, timeoutMs = EDGE_LAUNCH_TIMEOUT_MS) {
+  const dl = Date.now() + timeoutMs;
   const edgeWaitStarted = Date.now();
   let loggedMismatch = false;
   let lastProgressLog = Date.now() - 4e3;
@@ -3870,6 +3884,12 @@ async function waitUntilDedicatedCdpResponds(actualPort, profileDir) {
 
 /** Rust-aligned: OS-assigned CDP port via DevToolsActivePort (remote-debugging-port=0). */
 async function tryDedicatedLaunchPortZero(edgePath, profileDir) {
+  const port0CdpWaitMs = relayEnvPositiveIntMs(
+    "RELAY_EDGE_PORT0_CDP_WAIT_MS",
+    12_000,
+    2_000,
+    120_000,
+  );
   const argv = ["--remote-debugging-port=0", ...relayDedicatedEdgeBaseArgv(profileDir)];
   console.error("[copilot:ensureEdge] trying remote-debugging-port=0 + DevToolsActivePort (Rust-aligned)…");
   const child = await spawnEdgeForDedicated(edgePath, argv, "dedicated-port0", { retainChild: true });
@@ -3895,7 +3915,7 @@ async function tryDedicatedLaunchPortZero(edgePath, profileDir) {
       return false;
     }
     console.error("[copilot:ensureEdge] DevToolsActivePort reports port", discovered);
-    if (await waitUntilDedicatedCdpResponds(discovered, profileDir)) {
+    if (await waitUntilDedicatedCdpResponds(discovered, profileDir, port0CdpWaitMs)) {
       if (child) child.unref();
       return true;
     }
@@ -4017,7 +4037,15 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
 
   if (await tryReuseDevtoolsPortBeforePortZero(profileDir, cdpPort)) return;
 
-  if (await tryDedicatedLaunchPortZero(edgePath, profileDir)) return;
+  const tryPortZero =
+    process.platform !== "win32" || process.env.RELAY_COPILOT_TRY_PORT_ZERO === "1";
+  if (!tryPortZero) {
+    console.error(
+      "[copilot:ensureEdge] skipping port=0 trial on win32 (set RELAY_COPILOT_TRY_PORT_ZERO=1 to enable)",
+    );
+  } else if (await tryDedicatedLaunchPortZero(edgePath, profileDir)) {
+    return;
+  }
   await launchDedicatedFixedPortScan(edgePath, profileDir, cdpPort);
 }
 

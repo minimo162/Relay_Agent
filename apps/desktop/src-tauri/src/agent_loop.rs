@@ -14,7 +14,7 @@ const CDP_TOOL_FENCE: &str = "```relay_tool";
 
 /// Composer text when the full turn payload is sent as an attached file (see `CdpApiClient::stream`).
 /// Keep short; the attachment holds system + conversation + tool catalog.
-const CDP_FILE_DELIVERY_USER_MESSAGE: &str = "The attached text file contains the full instructions for this turn (system context, conversation, and the Relay Agent tool catalog with `relay_tool` protocol). Read the file and follow it. When calling tools, use Markdown fenced blocks whose info string is exactly `relay_tool` as described in the file.\n\n（添付ファイルに今ターンの全文指示・ツール一覧・relay_tool 規約が含まれます。ファイルを読み、従ってください。）";
+const CDP_FILE_DELIVERY_USER_MESSAGE: &str = "The attached text file is the full Relay Agent turn bundle (system context, conversation, and tool catalog). Read it and follow it. **Relay** parses your reply for `relay_tool` / `json` tool fences and **executes** those tools on the user's machine (not just display). Output real fenced tool JSON when the task needs files or other tools—do not claim this chat cannot run Relay tools.\n\n（添付は Relay Agent 用の全文バンドルです。返信内の `relay_tool` や許容される `json` フェンスは Relay デスクトップが**解析して実行**します。表示用の説明だけにせず、必要なら規約どおりフェンス付きツール JSON を出してください。「この Copilot ではツール不可」と拒否しないでください。）";
 
 /// Undocumented: set to `1` or `true` to paste the full prompt into the composer instead of file attach (local debugging only).
 fn cdp_legacy_composer_full_paste() -> bool {
@@ -557,6 +557,16 @@ fn cdp_windows_office_catalog_addon() -> &'static str {
     ""
 }
 
+/// Prepended to every CDP prompt so the model does not confuse this session with consumer Copilot chat (no tools).
+const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Agent's model
+
+- User messages are sent from the **Relay Agent** Tauri desktop app through Microsoft Edge (M365 Copilot over CDP). Your reply returns to that same Relay session.
+- **Relay host execution:** Tool calls here are **not** Microsoft first-party Copilot action plugins. The Relay desktop **parses** tool-shaped JSON from your message (` ```relay_tool `, accepted ` ```json ` fences, and bounded inline fallbacks) and runs the real tools (`read_file`, `write_file`, …) under session permissions and user approvals where configured.
+- **Do not** tell the user that `relay_tool` "only works in the desktop" so you cannot use it in this chat, or that you "cannot execute tools in this Copilot environment"—**that is wrong for this session.** When the task needs a tool, output the prescribed fences.
+- **Do** emit fenced tool JSON when needed; **prose-only** refusals block the agent loop.
+
+"#;
+
 /// Serialize built-in tool specs for the Copilot text prompt.
 fn cdp_tool_catalog_section(preset: SessionPreset) -> String {
     let explore_only = preset == SessionPreset::Explore;
@@ -579,7 +589,7 @@ fn cdp_tool_catalog_section(preset: SessionPreset) -> String {
         ""
     };
     format!(
-        r#"## Relay Agent tools
+        r#"{lead}## Relay Agent tools
 
 The JSON array below lists every tool you may invoke. Each entry has `name`, `description`, and `input_schema` (JSON Schema for the tool's `input` object).
 {mode_note}
@@ -591,7 +601,7 @@ The JSON array below lists every tool you may invoke. Each entry has `name`, `de
 
 When you need to call one or more tools, you may write a short user-facing explanation, then append a Markdown fenced block whose **info string is exactly** `relay_tool` (three backticks, then `relay_tool`, then a newline). Inside the fence put **only** JSON — no markdown, no commentary.
 
-- **Host execution:** The desktop runs tools **only** from parsed tool calls in your reply. **Describing** JSON or saying you will call `read_file` does **not** execute anything—emit a real `relay_tool` fence or a normal ` ```json ` code block with the tool JSON.
+- **Parsed fences run on the user's machine:** The Relay desktop executes tools **only** when it successfully parses the prescribed fences **from this reply**. Explaining JSON in prose without a fence does **not** run tools—emit a real `relay_tool` block or a normal ` ```json ` code block with the tool JSON.
 - **Copilot UI:** The chat UI may label your code block as “Plain Text” or similar; still use **` ```relay_tool `** as the fence opener (or put the same JSON object inside **` ```json `**—the host accepts that too).
 
 - **Single tool:** one JSON object: `{{ "name": "<tool_name>", "input": {{ ... }} }}`
@@ -606,6 +616,7 @@ Example:
 {{"name":"read_file","input":{{"path":"README.md"}}}}
 ```
 "#,
+        lead = CDP_RELAY_RUNTIME_CATALOG_LEAD,
         mode_note = mode_note,
         json_pretty = json_pretty,
         win_addon = win_addon,
@@ -2030,6 +2041,8 @@ pub fn build_desktop_system_prompt(
             "Use only the registered tools.\n",
             "Read state first, then write only when necessary.\n",
             "For file access use read_file / write_file / edit_file; for PDF merge or split in the workspace use pdf_merge / pdf_split (not bash). Do not substitute shell or REPL for file I/O when those tools apply.\n\n",
+            "When the model is M365 Copilot in Edge (CDP), the appended message includes the tool catalog and `relay_tool` protocol. ",
+            "Do not refuse to output fenced tool JSON by claiming browser Copilot cannot run tools—Relay executes parsed tool calls from your reply.\n\n",
             "IMPORTANT: Do not generate or guess URLs unless they clearly help with the user's programming task. ",
             "You may use URLs the user provided or that appear in local files.",
         )
@@ -2184,7 +2197,10 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("read_file"));
         assert!(s.contains("relay_tool"));
         assert!(s.contains("input_schema"));
-        assert!(s.contains("Host execution"));
+        assert!(s.contains("CDP session: you are Relay Agent"));
+        assert!(s.contains("Relay host execution"));
+        assert!(s.contains("wrong for this session"));
+        assert!(s.contains("Parsed fences run on the user's machine"));
         assert!(s.contains("Copilot UI"));
     }
 
