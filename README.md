@@ -21,18 +21,18 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 
 | Layer | Technology |
 |-------|------------|
-| UI | SolidJS, Vite, TypeScript, Tailwind — **Cursor Inspiration** in [`apps/desktop/src/index.css`](apps/desktop/src/index.css) + [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md): Surface scale, oklab borders (including **strong** borders at 55% opacity), cream primary buttons, **`.ra-type-*`** typography utilities, editorial **`cswh`** on serif markdown, mono scale for tools/code. Dark theme uses a paired warm-charcoal scale. **Default theme is light** (`data-theme` + `localStorage` `relay-agent/theme`). Proprietary Cursor fonts are not bundled (system fallbacks). Details: `docs/IMPLEMENTATION.md` (Milestone Log, 2026-04-09 Desktop UI entries) |
+| UI | SolidJS, Vite, TypeScript, Tailwind — **Cursor Inspiration** in [`apps/desktop/src/index.css`](apps/desktop/src/index.css) + [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md): Surface scale, oklab borders (including **strong** borders at 55% opacity), cream primary buttons, **`.ra-type-*`** typography utilities, editorial **`cswh`** on serif markdown, mono scale for tools/code. Dark theme uses a paired warm-charcoal scale. **Default theme is light** (`data-theme` + `localStorage` `relay-agent/theme`). Proprietary Cursor fonts are not bundled (system fallbacks). Details: `docs/IMPLEMENTATION.md` (Milestone Log, **2026-04-10** OpenWork second pass + earlier Desktop UI milestones) |
 | Shell | Tauri v2, `tauri-plugin-shell`, `tauri-plugin-dialog` |
 | Agent / tools | Rust (`apps/desktop/src-tauri/`, internal crates) |
 | AI surface | M365 Copilot in Edge via **Node** `copilot_server.js` + CDP; the host parses tool calls from **` ```relay_tool `** JSON and, if none, from **` ```json `** / generic fenced JSON or bounded inline tool-shaped objects ([`agent_loop.rs`](apps/desktop/src-tauri/src/agent_loop.rs)) |
 
 ## What the app does
 
-- **Sessions** — Sidebar, history, streaming assistant text; tool steps show **inline in chat** by default (toggle under **Settings → Advanced**).
+- **Sessions** — Sidebar, history, streaming assistant text; tool steps always show **inline in chat**.
 - **Approvals** — **Allow once**, **Allow for session**, or **Don’t allow** for gated tools.
-- **Workspace** — Header chip (basename / “not set”); **Settings** primary = folder + **Save**; **Advanced** = `maxTurns`, browser CDP hints, clear saved workspace tool permissions, diagnostics export. **Browse…** folder picker on desktop.
-- **Context panel** — Files, MCP, **Plan** (`TodoWrite` timeline), policy hints (short copy).
-- **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or **Send** submits. **Mode** dropdown (**Build** / **Plan** / **Explore**). **Templates** in a disclosure; slash commands (`/help`, `/compact`, …). Explore = `read_file` / `glob_search` / `grep_search` only in the Copilot tool list.
+- **Workspace** — Header chip (basename / “not set”) opens a small **Workspace** modal: path + **Browse…** + **Done** on desktop. `maxTurns` / browser CDP hints are **not** edited in-app (existing `localStorage` values still apply if set earlier).
+- **Context panel** — **Plan** (default): `TodoWrite` timeline + **Tool rules** disclosure; **MCP** servers and workspace instruction surfaces when `cwd` is set.
+- **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or **Send** submits. **Session mode** (**Build** / **Plan** / **Explore**) in a **Session mode** disclosure; slash commands (`/help`, `/compact`, …). Explore = `read_file` / `glob_search` / `grep_search` only in the Copilot tool list.
 - **Undo / Redo** — Header actions reverse the last successful workspace writes from the active session (`write_file`, `edit_file`, `NotebookEdit`, PDF tools), when the agent is idle.
 - **Extras** — PDF via LiteParse + bundled Node; Windows Office hybrid read (COM + PDF); MCP over stdio.
 
@@ -87,7 +87,7 @@ Relay_Agent/
 
 **Claw-style paths** (instructions + settings): `.claw`, `CLAW.md`, optional `~/.relay-agent/SYSTEM_PROMPT.md` — see [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) and runtime crate docs. When `.claw` sets permission mode to **read-only**, the **bash** tool rejects commands that look mutating (e.g. `rm`, `git commit`, shell redirects); use file tools where applicable.
 
-**Diagnostics:** **Settings → Advanced** → Copy / save diagnostics (`get_relay_diagnostics` plus local settings snapshot: ports, `processCwd`, Claw config home hint, `maxTextFileReadBytes`, `doctorHints`).
+**Diagnostics:** `get_relay_diagnostics` (and related IPC) remain in the backend for tooling; there is **no in-app diagnostics export** in the simplified UI (2026-04-10). Use devtools / future automation if you need a JSON bundle.
 
 **Environment (Copilot):** Default CDP base **9360**; overrides `CDP_ENDPOINT`, `RELAY_EDGE_CDP_PORT`. Linux: Edge + `DISPLAY`; profile `~/RelayAgentEdgeProfile`. Dedicated Edge is started **without** a trailing Copilot URL; the Node bridge navigates over CDP (`Page.navigate` / tab reuse) so a cold **`Target.createTarget`** race does not open **two** `m365.cloud.microsoft/chat` tabs. Optional: `RELAY_CDP_PROBE_TIMEOUT_MS` (slow Windows CDP), `RELAY_COPILOT_NO_WINDOW_FOCUS=1` (do not raise Edge via CDP), `RELAY_COPILOT_NUDGE_EDGE=1` (Win32 nudge, off by default). **Startup tuning:** Windows skips **`--remote-debugging-port=0`** unless **`RELAY_COPILOT_TRY_PORT_ZERO=1`**; **`RELAY_EXISTING_CDP_WAIT_MS`** (default 10s Win / 30s else) waits for CDP after a probe miss; **`RELAY_EDGE_PORT0_CDP_WAIT_MS`** (2–120s, default 12s) limits CDP wait when port=0 is used; **`RELAY_COPILOT_RECLAIM_NETSTAT=1`** enables slow Windows `netstat` fallback during HTTP port reclaim (default off). Stale **`copilot_server`** on **18080+** is reclaimed via `/health` + `bootToken`; **`RELAY_COPILOT_RECLAIM_STALE_HTTP=0`** disables. **CDP prompts** tell Copilot that Relay **parses and executes** `relay_tool` / accepted fenced JSON from each reply (mitigates false “tools unavailable here” refusals). Details: [docs/COPILOT_E2E_CDP_PITFALLS.md](docs/COPILOT_E2E_CDP_PITFALLS.md).
 

@@ -1,6 +1,6 @@
 # Project-scoped slash commands and prompt templates (design)
 
-**Status:** workspace slash commands (`.relay/commands`) implemented in the Tauri host + composer merge; `.relay/templates/*.md` and `commands.json`-only flows remain future work.
+**Status:** workspace slash commands (`.relay/commands`) implemented in the Tauri host + composer merge; `.relay/templates/*.md` and `commands.json`-only flows remain future work. The desktop **composer no longer has a Templates picker** (removed 2026-04-10); merging `.relay/templates/*.md` into the UI is still future work if desired.
 
 ## Goals
 
@@ -11,7 +11,7 @@
 
 1. **Discovery:** When the user sets `cwd` or starts a session, the Rust host (or a dedicated `load_workspace_prompt_assets` command) reads:
    - `.relay/commands/*.md` or `.relay/commands.json` — body = expanded text after `/name `.
-   - `.relay/templates/*.md` — frontmatter `title:` + body, merged into the composer Templates list.
+   - `.relay/templates/*.md` — frontmatter `title:` + body (planned merge into composer or slash expansion; not wired in the minimal UI as of 2026-04-10).
 2. **IPC:** New invoke e.g. `list_workspace_slash_commands` / `list_workspace_templates` taking `cwd`; returns `{ name, description?, body }[]`.
 3. **UI:** Composer merges **built-in** slash commands with **workspace** entries (workspace wins on name conflict, or prefix `ws/`).
 4. **Pros:** Works in packaged Tauri; respects OS file permissions; easy to cap file size (e.g. 64 KiB per file).
