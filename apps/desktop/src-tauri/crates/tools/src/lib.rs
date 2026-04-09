@@ -985,10 +985,10 @@ fn run_lsp_tool(input: &Value) -> Result<String, String> {
         .and_then(|p| p.as_str())
         .ok_or_else(|| "LSP requires path".to_string())?;
     let file = std::path::PathBuf::from(path);
-    let workspace = file
-        .parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let workspace = file.parent().map_or_else(
+        || std::path::PathBuf::from("."),
+        std::path::Path::to_path_buf,
+    );
     pull_rust_diagnostics_blocking(&workspace, &file)
 }
 
@@ -1071,10 +1071,10 @@ fn run_git_captured(cwd: &Path, args: &[&str]) -> Result<String, String> {
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     if !out.status.success() {
-        let msg = if !stderr.trim().is_empty() {
-            stderr
-        } else {
+        let msg = if stderr.trim().is_empty() {
             format!("git exited with status {:?}", out.status.code())
+        } else {
+            stderr
         };
         return Err(msg.trim().to_string());
     }
