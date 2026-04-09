@@ -8,7 +8,7 @@
 - No Playwright dependency — raw CDP WebSocket protocol
 
 ### Tauri Commands
-- `warmup_copilot_bridge` — Ensures `copilot_server.js` is up, then `GET /status` (Edge via `ensureEdgeConnected`, Copilot tab, login URL detection). Used by the Solid shell on mount; serializes with `describe` in JS via `_describeChain`.
+- `warmup_copilot_bridge` — Ensures `copilot_server.js` is up, then `GET /status` (Edge via `ensureEdgeConnected`, Copilot tab, login URL detection). Used by the Solid shell on mount; serializes with `describe` in JS via `_describeChain`. **Rust:** the command runs **`ensure_copilot_server`** and the **`warmup_status`** `block_on` inside **`tokio::task::spawn_blocking`** so `ensure_copilot_server`’s temporary runtime is not nested on a Tokio worker (avoids *“Cannot start a runtime from within a runtime”*).
 - `connect_cdp` — Connect to browser, find Copilot page
 - `cdp_send_prompt` — Send prompt → wait for streaming → return response
 - `cdp_start_new_chat` — Navigate to /chat (creates new conversation)

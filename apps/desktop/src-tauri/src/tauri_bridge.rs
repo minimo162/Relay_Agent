@@ -131,9 +131,11 @@ pub fn ensure_copilot_server() -> Result<Arc<Mutex<crate::copilot_server::Copilo
 /// Ensure Node `copilot_server.js` is up and run `GET /status` (Edge launch + Copilot tab + login probe).
 #[tauri::command]
 pub async fn warmup_copilot_bridge() -> Result<crate::copilot_server::CopilotStatusResponse, String> {
-    let server_arc = ensure_copilot_server()?;
-    let srv_clone = Arc::clone(&server_arc);
+    // `ensure_copilot_server` builds a temporary runtime and uses `block_on`; it must not run on a
+    // Tokio worker thread (nested runtime panic: "Cannot start a runtime from within a runtime").
     tokio::task::spawn_blocking(move || {
+        let server_arc = ensure_copilot_server()?;
+        let srv_clone = Arc::clone(&server_arc);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

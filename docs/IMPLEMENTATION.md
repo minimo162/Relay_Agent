@@ -26,6 +26,16 @@
 
 **Verification:** `cargo test -p runtime --lib`, `cargo test -p tools --lib`, `cargo test -p compat-harness --lib` from `apps/desktop/src-tauri/` — pass (2026-04-09).
 
+### 2026-04-09 Copilot warmup: nested Tokio runtime panic (Windows / Tauri worker)
+
+**Problem:** The async Tauri command **`warmup_copilot_bridge`** called **`ensure_copilot_server()`** on the **Tokio async worker** before **`spawn_blocking`**. **`ensure_copilot_server`** builds a temporary **`current_thread`** runtime and uses **`block_on`** for **`CopilotServer::start`** and **`health_check`**. Running that from inside another runtime’s worker thread triggers Tokio’s panic: *“Cannot start a runtime from within a runtime”* (seen on Windows when the shell mounts and prewarms the bridge).
+
+**Fix:** Run **`ensure_copilot_server`** and the **`warmup_status`** **`block_on`** entirely inside **`tokio::task::spawn_blocking`**, so nested runtimes are created only on the **blocking thread pool**. **`run_agent_loop_impl`** already invoked **`ensure_copilot_server`** from **`spawn_blocking`** and did not need a change.
+
+**Artifacts:** [`apps/desktop/src-tauri/src/tauri_bridge.rs`](../apps/desktop/src-tauri/src/tauri_bridge.rs) (`warmup_copilot_bridge`).
+
+**Verification:** `cargo check -p relay-agent-desktop` (from `apps/desktop/src-tauri/`) — pass.
+
 ### 2026-04-09 Desktop UI: Cursor-inspired tokens (`DESIGN.md`)
 
 **Source:** `npx getdesign@latest add cursor` → [`apps/desktop/DESIGN.md`](../apps/desktop/DESIGN.md) (see [VoltAgent/awesome-design-md](https://github.com/VoltAgent/awesome-design-md) / [getdesign.md Cursor](https://getdesign.md/cursor/design-md)).
@@ -240,7 +250,7 @@
 
 ### 2026-04-08 Copilot bridge startup prewarm (`warmup_copilot_bridge`)
 
-**Outcome:** On shell mount, the UI calls **`warmup_copilot_bridge`**, which runs **`ensure_copilot_server`** then Node **`GET /status`** with a **120s** per-request timeout (`CopilotServer::warmup_status`). That path already launches Edge, ensures a Copilot tab, and sets **`loginRequired`** when the URL is a login page. **`inspectStatus`** in **`copilot_server.js`** now queues on the same **`_describeChain`** as **`describe`** to avoid CDP races with the first chat completion. Footer **`StatusBar`** shows a short hint when login is required or warmup fails. E2E mocks implement **`warmup_copilot_bridge`**.
+**Outcome:** On shell mount, the UI calls **`warmup_copilot_bridge`**, which runs **`ensure_copilot_server`** then Node **`GET /status`** with a **120s** per-request timeout (`CopilotServer::warmup_status`). That path already launches Edge, ensures a Copilot tab, and sets **`loginRequired`** when the URL is a login page. **`inspectStatus`** in **`copilot_server.js`** now queues on the same **`_describeChain`** as **`describe`** to avoid CDP races with the first chat completion. Footer **`StatusBar`** shows a short hint when login is required or warmup fails. E2E mocks implement **`warmup_copilot_bridge`**. **2026-04-09 follow-up:** `warmup_copilot_bridge` must run **`ensure_copilot_server`** on **`spawn_blocking`** so Tokio does not nest runtimes on the async worker (see Milestone Log entry *Copilot warmup: nested Tokio runtime panic*).
 
 **Verification:** `cargo test -p relay-agent-desktop --lib` — pass. `pnpm typecheck` (repo root) — pass. `E2E_SKIP_AUTH_SETUP=1 npx playwright test app.e2e.spec.ts` (from `apps/desktop/`) — 14 passed.
 
