@@ -9,6 +9,8 @@ mod electron_cdp;
 use reqwest::blocking::Client;
 use runtime::{
     edit_file, execute_bash, glob_search, grep_search, merge_pdfs, read_file, split_pdf, write_file,
+    pull_rust_diagnostics_blocking, task_create, task_get, task_list, task_output, task_stop,
+    task_update,
     BashCommandInput, GrepSearchInput, PdfSplitSegment, PermissionMode,
 };
 use serde::{Deserialize, Serialize};
@@ -630,6 +632,195 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             }),
             required_permission: PermissionMode::DangerFullAccess,
         },
+        // Claw-style MCP meta tools (executed in desktop `TauriToolExecutor`, not here).
+        ToolSpec {
+            name: "ListMcpResources",
+            description: "List MCP resources from configured stdio servers (merged `.claw` / user settings). Optional `server` or `serverName` filters to one server.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "server": { "type": "string" },
+                    "serverName": { "type": "string" }
+                },
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "ReadMcpResource",
+            description: "Read an MCP resource by URI from a named stdio server.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "server": { "type": "string" },
+                    "serverName": { "type": "string" },
+                    "uri": { "type": "string" }
+                },
+                "required": ["uri"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "McpAuth",
+            description: "Relay desktop: reports MCP OAuth / remote transport status. Does not run a browser OAuth flow inside the tool — configure transports in merged settings.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "server": { "type": "string" },
+                    "serverName": { "type": "string" }
+                },
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "MCP",
+            description: "Unified MCP control surface (claw-style): `action` list_resources | read_resource | list_tools | call_tool. Uses the same stdio MCP servers as `mcp__*` qualified tool names.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "list_resources | read_resource | list_tools | call_tool"
+                    },
+                    "server": { "type": "string" },
+                    "serverName": { "type": "string" },
+                    "uri": { "type": "string" },
+                    "name": { "type": "string", "description": "Qualified tool name for call_tool (e.g. mcp__server__tool)" },
+                    "arguments": { "type": "object" }
+                },
+                "required": ["action"],
+                "additionalProperties": true
+            }),
+            required_permission: PermissionMode::DangerFullAccess,
+        },
+        ToolSpec {
+            name: "AskUserQuestion",
+            description: "Ask the user one or more questions and wait for answers via the desktop UI (text reply). Use for clarification when required.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "questions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "question": { "type": "string" },
+                                "header": { "type": "string" },
+                                "options": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "label": { "type": "string" },
+                                            "value": { "type": "string" }
+                                        },
+                                        "required": ["label"],
+                                        "additionalProperties": false
+                                    }
+                                },
+                                "multiSelect": { "type": "boolean" }
+                            },
+                            "required": ["question"],
+                            "additionalProperties": false
+                        }
+                    }
+                },
+                "required": ["questions"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "LSP",
+            description: "Language server (LSP over stdio). Action `diagnostics` runs pull diagnostics for a workspace file via rust-analyzer when available.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["diagnostics"] },
+                    "path": { "type": "string", "description": "File path under the session workspace" },
+                    "languageId": { "type": "string", "description": "Defaults to rust for .rs files" }
+                },
+                "required": ["action", "path"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "TaskCreate",
+            description: "Create an in-memory task record (claw-style parity; no external worker).",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "description": { "type": "string" }
+                },
+                "additionalProperties": true
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "TaskGet",
+            description: "Get a task by id.",
+            input_schema: json!({
+                "type": "object",
+                "properties": { "id": { "type": "string" } },
+                "required": ["id"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "TaskList",
+            description: "List in-memory tasks.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "TaskStop",
+            description: "Mark a task stopped.",
+            input_schema: json!({
+                "type": "object",
+                "properties": { "id": { "type": "string" } },
+                "required": ["id"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "TaskUpdate",
+            description: "Update task fields.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "status": { "type": "string" },
+                    "output": { "type": "string" }
+                },
+                "required": ["id"],
+                "additionalProperties": true
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "TaskOutput",
+            description: "Append or read task output.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "append": { "type": "string" }
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
     ]);
     specs
 }
@@ -691,8 +882,38 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "ElectronTypeText" => {
             from_value::<ElectronTypeTextInput>(input).and_then(run_electron_type_text)
         }
+        "ListMcpResources" | "ReadMcpResource" | "McpAuth" | "MCP" | "AskUserQuestion" => Err(
+            format!("{name} runs only in the Relay desktop agent (Tauri tool executor)"),
+        ),
+        "LSP" => run_lsp_tool(input),
+        "TaskCreate" => task_create(input),
+        "TaskGet" => task_get(input),
+        "TaskList" => task_list(),
+        "TaskStop" => task_stop(input),
+        "TaskUpdate" => task_update(input),
+        "TaskOutput" => task_output(input),
         _ => Err(format!("unsupported tool: {name}")),
     }
+}
+
+fn run_lsp_tool(input: &Value) -> Result<String, String> {
+    let action = input
+        .get("action")
+        .and_then(|a| a.as_str())
+        .ok_or_else(|| "LSP requires action".to_string())?;
+    if action != "diagnostics" {
+        return Err(format!("unsupported LSP action: {action}"));
+    }
+    let path = input
+        .get("path")
+        .and_then(|p| p.as_str())
+        .ok_or_else(|| "LSP requires path".to_string())?;
+    let file = std::path::PathBuf::from(path);
+    let workspace = file
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    pull_rust_diagnostics_blocking(&workspace, &file)
 }
 
 fn from_value<T: for<'de> Deserialize<'de>>(input: &Value) -> Result<T, String> {
@@ -3014,6 +3235,13 @@ mod tests {
         assert!(names.contains(&"pdf_split"));
         assert!(names.contains(&"git_status"));
         assert!(names.contains(&"git_diff"));
+        assert!(names.contains(&"ListMcpResources"));
+        assert!(names.contains(&"ReadMcpResource"));
+        assert!(names.contains(&"McpAuth"));
+        assert!(names.contains(&"MCP"));
+        assert!(names.contains(&"AskUserQuestion"));
+        assert!(names.contains(&"LSP"));
+        assert!(names.contains(&"TaskCreate"));
         #[cfg(windows)]
         assert!(names.contains(&"PowerShell"));
         #[cfg(not(windows))]

@@ -1,7 +1,22 @@
-import { For, Match, Show, Switch, createMemo, createSignal, type JSX } from "solid-js";
-import type { ContextFile, McpServer, Policy } from "../lib/ipc";
-import type { PlanTodoItem } from "../lib/todo-write-parse";
-import { mcpAddServer, mcpRemoveServer } from "../lib/ipc";
+import {
+  For,
+  Match,
+  Show,
+  Switch,
+  createEffect,
+  createMemo,
+  createSignal,
+  type JSX,
+} from "solid-js";
+import type { ContextFile, McpServer, Policy, SessionPreset } from "../lib/ipc";
+import type { PlanTimelineEntry, PlanTodoItem } from "../context/todo-write-parse";
+import {
+  fetchWorkspaceInstructionSurfaces,
+  getDesktopPermissionSummary,
+  mcpAddServer,
+  mcpRemoveServer,
+  type WorkspaceInstructionSurfaces,
+} from "../lib/ipc";
 import { Button, IconButton, Input } from "./ui";
 import { TabTrack } from "./primitives";
 import { ui } from "../lib/ui-tokens";
@@ -10,7 +25,7 @@ type TabId = "files" | "servers" | "plan" | "policy";
 
 const tabs: { id: TabId; label: string }[] = [
   { id: "files", label: "Files" },
-  { id: "servers", label: "Servers" },
+  { id: "servers", label: "MCP" },
   { id: "plan", label: "Plan" },
   { id: "policy", label: "Policy" },
 ];
@@ -31,14 +46,51 @@ export function ContextPanel(props: {
   setContextFiles: (fn: (prev: ContextFile[]) => ContextFile[]) => void;
   mcpServers: () => McpServer[];
   setMcpServers: (fn: (prev: McpServer[]) => McpServer[]) => void;
-  policies: () => Policy[];
-  /** Latest TodoWrite snapshot for the active session (OpenWork-style execution plan). */
-  executionPlan: () => PlanTodoItem[] | null;
+  workspacePath: () => string;
+  sessionPreset: () => SessionPreset;
+  /** TodoWrite snapshots in order; UI shows newest first (OpenWork-style plan timeline). */
+  planTimeline: () => PlanTimelineEntry[];
 }): JSX.Element {
   const [activeTab, setActiveTab] = createSignal<TabId>("files");
-  const planItemsOrFalse = createMemo(() => {
-    const p = props.executionPlan();
-    return p != null && p.length > 0 ? p : false;
+  const [instructionSurfaces, setInstructionSurfaces] = createSignal<WorkspaceInstructionSurfaces | null>(
+    null,
+  );
+  const [permissionRows, setPermissionRows] = createSignal<Policy[]>([]);
+
+  createEffect(() => {
+    const cwd = props.workspacePath()?.trim();
+    if (!cwd) {
+      setInstructionSurfaces(null);
+      return;
+    }
+    void fetchWorkspaceInstructionSurfaces(cwd)
+      .then(setInstructionSurfaces)
+      .catch((err) => {
+        console.error("[Context] workspace surfaces failed", err);
+        setInstructionSurfaces(null);
+      });
+  });
+
+  createEffect(() => {
+    const preset = props.sessionPreset();
+    void getDesktopPermissionSummary(preset)
+      .then((rows) =>
+        setPermissionRows(
+          rows.map((r) => ({
+            name: r.name,
+            requirement: r.requirement,
+            description: r.description,
+          })),
+        ),
+      )
+      .catch((err) => {
+        console.error("[Context] permission summary failed", err);
+        setPermissionRows([]);
+      });
+  });
+  const planNewestFirst = createMemo(() => {
+    const t = props.planTimeline();
+    return t.length > 0 ? [...t].reverse() : false;
   });
   const [showAddFile, setShowAddFile] = createSignal(false);
   const [showAddServer, setShowAddServer] = createSignal(false);
@@ -178,6 +230,67 @@ export function ContextPanel(props: {
 
           <Match when={activeTab() === "servers"}>
             <div class="flex flex-col gap-2">
+              <p class={`text-[11px] leading-relaxed ${ui.mutedText}`}>
+                MCP servers extend the agent like skills/plugins. Below: read-only checks for Claw-style
+                instruction files under your configured workspace path (Settings).
+              </p>
+              <Show
+                when={!props.workspacePath()?.trim()}
+                fallback={
+                  <Show
+                    when={instructionSurfaces()}
+                    fallback={
+                      <p class={`text-[11px] ${ui.mutedText}`}>Scanning workspace instructions…</p>
+                    }
+                  >
+                    {(surf) => (
+                      <div
+                        class={`rounded-lg border ${ui.border} p-2 space-y-1.5`}
+                        data-ra-workspace-instructions
+                      >
+                        <span class={`text-[11px] font-medium ${ui.mutedText} uppercase tracking-wide`}>
+                          Workspace instructions
+                        </span>
+                        <Show when={surf().workspaceRoot}>
+                          <p class={`text-[10px] font-mono ${ui.mutedText} break-all`}>
+                            {surf().workspaceRoot}
+                          </p>
+                        </Show>
+                        <For each={surf().surfaces}>
+                          {(s) => (
+                            <div class="flex items-start gap-2 text-[11px]">
+                              <span
+                                class={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${
+                                  s.exists ? "bg-[var(--ra-green)]" : "bg-[var(--ra-text-muted)]"
+                                }`}
+                                aria-hidden
+                              />
+                              <div class="min-w-0 flex-1">
+                                <div class={`font-medium ${ui.textPrimary}`}>{s.label}</div>
+                                <div class={`text-[10px] font-mono ${ui.mutedText} break-all`}>
+                                  {s.path}
+                                </div>
+                                <div class={`text-[10px] ${ui.mutedText}`}>
+                                  {s.exists
+                                    ? s.isDirectory
+                                      ? "Present (directory)"
+                                      : "Present"
+                                    : "Not found"}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </For>
+                      </div>
+                    )}
+                  </Show>
+                }
+              >
+                <p class={`text-[11px] ${ui.mutedText}`}>
+                  Set a workspace path in Settings to scan for <span class="font-mono">CLAW.md</span> /{" "}
+                  <span class="font-mono">.claw</span>.
+                </p>
+              </Show>
               <div class="flex items-center justify-between gap-2">
                 <span class={`text-[11px] font-medium ${ui.mutedText} uppercase tracking-wide`}>
                   {props.mcpServers().length} server{props.mcpServers().length !== 1 ? "s" : ""}
@@ -231,7 +344,10 @@ export function ContextPanel(props: {
               <Show
                 when={props.mcpServers().length > 0}
                 fallback={
-                  <div class={`text-xs ${ui.mutedText} text-center py-8`}>No MCP servers connected</div>
+                  <div class={`text-xs ${ui.mutedText} text-center py-8 leading-relaxed px-1`}>
+                    No MCP servers yet. Add one to expose external tools (similar to installing skills in
+                    OpenWork).
+                  </div>
                 }
               >
                 <For each={props.mcpServers()}>
@@ -270,10 +386,14 @@ export function ContextPanel(props: {
           <Match when={activeTab() === "plan"}>
             <div class="flex flex-col gap-2" data-ra-execution-plan>
               <span class={`text-[11px] font-medium ${ui.mutedText} uppercase tracking-wide`}>
-                Agent task list
+                Plan timeline
               </span>
+              <p class={`text-[11px] leading-relaxed ${ui.mutedText}`}>
+                Each <span class="font-mono text-[10px]">TodoWrite</span> update is a section; newest on
+                top.
+              </p>
               <Show
-                when={planItemsOrFalse()}
+                when={planNewestFirst()}
                 fallback={
                   <div class={`text-xs ${ui.mutedText} text-center py-6 leading-relaxed`}>
                     No task list yet. When the agent uses{" "}
@@ -281,27 +401,62 @@ export function ContextPanel(props: {
                   </div>
                 }
               >
-                {(items) => (
-                  <ol class="list-decimal list-inside space-y-2 pl-0.5">
-                    <For each={items()}>
-                      {(item) => (
-                        <li class="text-xs text-[var(--ra-text-primary)] leading-snug">
-                          <span class="font-medium">{item.activeForm || item.content}</span>
-                          <span
-                            class={`ml-2 text-[10px] px-1.5 py-0.5 rounded-md ${
-                              item.status === "completed"
-                                ? "bg-[var(--ra-green)]/15 text-[var(--ra-green)]"
-                                : item.status === "in_progress"
-                                  ? "bg-[var(--ra-accent)]/15 text-[var(--ra-accent)]"
-                                  : "bg-[var(--ra-surface-elevated)] text-[var(--ra-text-muted)]"
-                            }`}
+                {(entries) => (
+                  <div class="flex flex-col gap-1.5">
+                    <For each={entries()}>
+                      {(entry, snapIdx) => {
+                        const total = props.planTimeline().length;
+                        const chronologicalIndex = total - 1 - snapIdx();
+                        const summaryLabel =
+                          entry.atMs > 0
+                            ? new Date(entry.atMs).toLocaleTimeString(undefined, {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                second: "2-digit",
+                              })
+                            : `Step ${chronologicalIndex + 1}`;
+                        return (
+                          <details
+                            class={`rounded-lg border ${ui.border} bg-[var(--ra-surface-elevated)]/40 px-2 py-1.5`}
+                            open={snapIdx() === 0}
                           >
-                            {planStatusLabel(item.status)}
-                          </span>
-                        </li>
-                      )}
+                            <summary class="cursor-pointer text-xs text-[var(--ra-text-primary)] list-none flex items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
+                              <span class="font-medium">
+                                {summaryLabel}
+                                <span class={`font-normal ${ui.mutedText}`}>
+                                  {" "}
+                                  · {entry.todos.length} task{entry.todos.length !== 1 ? "s" : ""}
+                                </span>
+                              </span>
+                              <span class={`text-[10px] font-mono ${ui.mutedText} truncate max-w-[40%]`}>
+                                {entry.toolUseId}
+                              </span>
+                            </summary>
+                            <ol class="list-decimal list-inside space-y-1.5 pl-0.5 mt-2 mb-0.5">
+                              <For each={entry.todos}>
+                                {(item: PlanTodoItem) => (
+                                  <li class="text-xs text-[var(--ra-text-primary)] leading-snug">
+                                    <span class="font-medium">{item.activeForm || item.content}</span>
+                                    <span
+                                      class={`ml-2 text-[10px] px-1.5 py-0.5 rounded-md ${
+                                        item.status === "completed"
+                                          ? "bg-[var(--ra-green)]/15 text-[var(--ra-green)]"
+                                          : item.status === "in_progress"
+                                            ? "bg-[var(--ra-accent)]/15 text-[var(--ra-accent)]"
+                                            : "bg-[var(--ra-surface-elevated)] text-[var(--ra-text-muted)]"
+                                      }`}
+                                    >
+                                      {planStatusLabel(item.status)}
+                                    </span>
+                                  </li>
+                                )}
+                              </For>
+                            </ol>
+                          </details>
+                        );
+                      }}
                     </For>
-                  </ol>
+                  </div>
                 )}
               </Show>
             </div>
@@ -309,17 +464,22 @@ export function ContextPanel(props: {
 
           <Match when={activeTab() === "policy"}>
             <div class="flex flex-col gap-2">
+              <p class={`text-[11px] leading-relaxed ${ui.mutedText}`}>
+                Effective tool gating for composer mode <span class="font-mono">{props.sessionPreset()}</span>.
+                Interactive approvals and project <span class="font-mono">.claw</span> still apply (e.g. bash
+                read-only guard).
+              </p>
               <span class={`text-[11px] font-medium ${ui.mutedText} uppercase tracking-wide`}>
-                {props.policies().length} active polic{props.policies().length !== 1 ? "ies" : "y"}
+                {permissionRows().length} tool{permissionRows().length !== 1 ? "s" : ""}
               </span>
 
               <Show
-                when={props.policies().length > 0}
+                when={permissionRows().length > 0}
                 fallback={
-                  <div class={`text-xs ${ui.mutedText} text-center py-8`}>No policies yet</div>
+                  <div class={`text-xs ${ui.mutedText} text-center py-8`}>Loading policy…</div>
                 }
               >
-                <For each={props.policies()}>
+                <For each={permissionRows()}>
                   {(policy) => {
                     const badgeColor =
                       policy.requirement === "require_approval"

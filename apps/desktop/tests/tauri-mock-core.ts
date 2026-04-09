@@ -41,6 +41,8 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
     }
     case "respond_approval":
       return undefined;
+    case "respond_user_question":
+      return undefined;
     case "cancel_agent": {
       const s = state.sessions.get(req.sessionId);
       if (s) s.running = false;
@@ -75,7 +77,21 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
         clawConfigHomeDisplay: "~/.claw (mock)",
         maxTextFileReadBytes: 10485760,
         doctorHints: ["mock"],
+        predictabilityNotes: ["mock predictability"],
       };
+    case "get_workspace_allowlist":
+      return { storePath: "/mock/.relay-agent/workspace_allowed_tools.json", entries: [] };
+    case "remove_workspace_allowlist_tool":
+    case "clear_workspace_allowlist":
+      return undefined;
+    case "list_workspace_slash_commands":
+      return [];
+    case "write_text_export":
+      return undefined;
+    case "workspace_instruction_surfaces":
+      return { workspaceRoot: null, surfaces: [] };
+    case "get_desktop_permission_summary":
+      return [];
     default:
       throw new Error(`[E2E mock] Unknown command: ${cmd}`);
   }

@@ -9,9 +9,13 @@ use uuid::Uuid;
 
 use crate::cdp_copilot;
 use crate::models::{
-    CancelAgentRequest, GetAgentSessionHistoryRequest, McpAddServerRequest, McpServerInfo,
-    RelayDiagnostics, RespondAgentApprovalRequest,     RustAnalyzerProbeRequest, RustAnalyzerProbeResponse, SessionWriteUndoRequest,
-    SessionWriteUndoStatusResponse, StartAgentRequest,
+    CancelAgentRequest, DesktopPermissionSummaryRow, GetAgentSessionHistoryRequest,
+    GetPermissionSummaryRequest, ListWorkspaceSlashCommandsRequest, McpAddServerRequest,
+    McpServerInfo, RelayDiagnostics, RespondAgentApprovalRequest, RespondUserQuestionRequest,
+    RustAnalyzerProbeRequest,
+    RustAnalyzerProbeResponse, SessionWriteUndoRequest, SessionWriteUndoStatusResponse,
+    StartAgentRequest, WorkspaceAllowlistCwdRequest, WorkspaceAllowlistRemoveToolRequest,
+    WorkspaceAllowlistSnapshot, WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
 };
 use crate::registry::SessionRegistry;
 use runtime::MAX_TEXT_FILE_READ_BYTES;
@@ -179,14 +183,25 @@ pub async fn start_agent(
 
     let session_id = format!("session-{}", Uuid::new_v4());
 
+    let workspace_cwd = request
+        .cwd
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let auto_initial: HashSet<String> =
+        crate::workspace_allowlist::load_for_cwd(workspace_cwd.as_deref());
+
     let entry = SessionEntry {
         session: runtime::Session::new(),
         running: true,
         cancelled: Arc::new(AtomicBool::new(false)),
         approvals: Mutex::new(HashMap::new()),
-        auto_allowed_tools: Mutex::new(HashSet::new()),
+        user_questions: Mutex::new(HashMap::new()),
+        auto_allowed_tools: Mutex::new(auto_initial),
         finished_at: None,
         write_undo: Mutex::new(crate::session_write_undo::WriteUndoStacks::default()),
+        workspace_cwd,
     };
     let cancelled = Arc::clone(&entry.cancelled);
     registry
@@ -294,12 +309,26 @@ pub async fn respond_approval(
         .remove(&request.approval_id)
         .ok_or_else(|| format!("approval `{}` not pending", request.approval_id))?;
 
-    if request.approved && request.remember_for_session == Some(true) {
+    if request.approved
+        && (request.remember_for_session == Some(true)
+            || request.remember_for_workspace == Some(true))
+    {
         let mut auto = entry
             .auto_allowed_tools
             .lock()
             .map_err(|e| format!("auto_allowed_tools lock poisoned: {e}"))?;
         auto.insert(pending.tool_name.clone());
+    }
+
+    if request.approved && request.remember_for_workspace == Some(true) {
+        if let Some(ref cwd) = entry.workspace_cwd {
+            if let Err(e) = crate::workspace_allowlist::remember_tool_for_workspace(
+                cwd,
+                &pending.tool_name,
+            ) {
+                tracing::warn!("[RelayAgent] workspace allowlist persist failed: {e}");
+            }
+        }
     }
 
     drop(data);
@@ -308,6 +337,34 @@ pub async fn respond_approval(
         .tx
         .send(request.approved)
         .map_err(|_| "approval channel closed — session may have ended".into())
+}
+
+#[tauri::command]
+pub async fn respond_user_question(
+    registry: State<'_, SessionRegistry>,
+    request: RespondUserQuestionRequest,
+) -> Result<(), String> {
+    let mut data = registry
+        .data
+        .lock()
+        .map_err(|e| format!("registry lock poisoned: {e}"))?;
+    let entry = data
+        .get_mut(&request.session_id)
+        .ok_or_else(|| format!("session `{}` not found", request.session_id))?;
+
+    let pending = entry
+        .user_questions
+        .lock()
+        .map_err(|e| format!("user_questions lock poisoned: {e}"))?
+        .remove(&request.question_id)
+        .ok_or_else(|| format!("question `{}` not pending", request.question_id))?;
+
+    drop(data);
+
+    pending
+        .tx
+        .send(request.answer)
+        .map_err(|_| "question channel closed — session may have ended".into())
 }
 
 #[derive(serde::Deserialize)]
@@ -387,6 +444,16 @@ pub async fn cancel_agent(
         }
         Err(e) => {
             tracing::error!("[RelayAgent] drain approvals failed during cancel: {e}");
+        }
+    }
+    match registry.drain_user_questions(&request.session_id) {
+        Ok(senders) => {
+            for tx in senders {
+                let _ = tx.send(String::new());
+            }
+        }
+        Err(e) => {
+            tracing::error!("[RelayAgent] drain user questions failed during cancel: {e}");
         }
     }
 
@@ -1028,6 +1095,27 @@ pub fn mcp_check_server_status(name: String) -> Result<McpServerInfo, String> {
         })
 }
 
+fn relay_predictability_notes() -> Vec<String> {
+    let mut n = Vec::new();
+    n.push(
+        "Edge CDP defaults to port 9360 for the Copilot bridge unless you change “CDP port hint” in Settings (Browser automation)."
+            .into(),
+    );
+    n.push(
+        "The workspace path (cwd) in Settings is sent per agent run and may differ from the app process working directory (see diagnostics processCwd)."
+            .into(),
+    );
+    n.push(
+        "“Allow for this workspace” persists tool names under ~/.relay-agent/workspace_allowed_tools.json (normalized folder keys)."
+            .into(),
+    );
+    n.push(
+        "Optional project slash commands: add .relay/commands/<name>.md or .relay/commands/commands.json (see PLANS.md)."
+            .into(),
+    );
+    n
+}
+
 fn relay_doctor_hints() -> Vec<String> {
     let mut hints = Vec::new();
     hints.push(format!(
@@ -1112,5 +1200,57 @@ pub fn get_relay_diagnostics() -> RelayDiagnostics {
         claw_config_home_display,
         max_text_file_read_bytes: MAX_TEXT_FILE_READ_BYTES,
         doctor_hints: relay_doctor_hints(),
+        predictability_notes: relay_predictability_notes(),
     }
+}
+
+/// Writes UTF-8 text to a path chosen by the user (e.g. diagnostics JSON export).
+#[tauri::command]
+pub fn write_text_export(path: String, contents: String) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("path is empty".to_string());
+    }
+    let p = std::path::Path::new(&path);
+    if let Some(parent) = p.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+    }
+    std::fs::write(p, contents).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_instruction_surfaces(
+    request: WorkspaceInstructionSurfacesRequest,
+) -> crate::workspace_surfaces::WorkspaceInstructionSurfaces {
+    crate::workspace_surfaces::scan_workspace_instructions(request.cwd)
+}
+
+#[tauri::command]
+pub fn get_desktop_permission_summary(
+    request: GetPermissionSummaryRequest,
+) -> Vec<DesktopPermissionSummaryRow> {
+    crate::agent_loop::desktop_permission_summary_rows(request.session_preset)
+}
+
+#[tauri::command]
+pub fn get_workspace_allowlist() -> Result<WorkspaceAllowlistSnapshot, String> {
+    crate::workspace_allowlist::snapshot()
+}
+
+#[tauri::command]
+pub fn remove_workspace_allowlist_tool(request: WorkspaceAllowlistRemoveToolRequest) -> Result<(), String> {
+    crate::workspace_allowlist::remove_tool_for_cwd(&request.cwd, &request.tool_name)
+}
+
+#[tauri::command]
+pub fn clear_workspace_allowlist(request: WorkspaceAllowlistCwdRequest) -> Result<(), String> {
+    crate::workspace_allowlist::clear_cwd(&request.cwd)
+}
+
+#[tauri::command]
+pub fn list_workspace_slash_commands(
+    request: ListWorkspaceSlashCommandsRequest,
+) -> Result<Vec<WorkspaceSlashCommandRow>, String> {
+    crate::workspace_slash_commands::list_for_cwd(request.cwd.as_deref())
 }

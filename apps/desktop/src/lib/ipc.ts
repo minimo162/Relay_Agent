@@ -3,11 +3,13 @@
  *
  * Commands (tauri_bridge.rs):
  *   start_agent, respond_approval, cancel_agent, get_session_history,
- *   compact_agent_session, warmup_copilot_bridge,
+ *   compact_agent_session, warmup_copilot_bridge, get_relay_diagnostics,
+ *   get_workspace_allowlist, remove_workspace_allowlist_tool, clear_workspace_allowlist,
+ *   list_workspace_slash_commands,
  *   connect_cdp, cdp_send_prompt, cdp_start_new_chat, cdp_screenshot
  *
  * Events:
- *   agent:tool_start | agent:tool_result | agent:approval_needed
+ *   agent:tool_start | agent:tool_result | agent:approval_needed | agent:user_question
  *   agent:turn_complete | agent:text_delta | agent:error
  */
 
@@ -63,8 +65,8 @@ export interface StartAgentRequest {
 /**
  * Tool approvals (OpenWork-style): `approved` unblocks one execution; `rememberForSession`
  * adds the tool name to a session allow-list so the host skips further prompts for that tool
- * until the session ends. Static Policy rows in the context panel describe defaults only;
- * this request drives interactive prompts from the agent loop.
+ * until the session ends. Context **Policy** lists effective gating per composer preset via
+ * `get_desktop_permission_summary`; this request drives interactive prompts from the agent loop.
  */
 export interface RespondAgentApprovalRequest {
   sessionId: string;
@@ -72,6 +74,15 @@ export interface RespondAgentApprovalRequest {
   approved: boolean;
   /** When true with approved, auto-allow this tool for the rest of the session (Rust `SessionEntry.auto_allowed_tools`). */
   rememberForSession?: boolean;
+  /** When true with approved, persist per normalized workspace cwd and merge into session allow-list. */
+  rememberForWorkspace?: boolean;
+}
+
+/** Answer a pending `AskUserQuestion` tool invocation. */
+export interface RespondUserQuestionRequest {
+  sessionId: string;
+  questionId: string;
+  answer: string;
 }
 
 /** `get_relay_diagnostics` payload (camelCase from Rust). */
@@ -86,6 +97,8 @@ export interface RelayDiagnostics {
   clawConfigHomeDisplay: string;
   maxTextFileReadBytes: number;
   doctorHints: string[];
+  /** Short bullets: defaults vs Settings (OpenWork-style predictability). */
+  predictabilityNotes: string[];
 }
 
 export interface CancelAgentRequest {
@@ -138,6 +151,14 @@ export interface AgentApprovalNeededEvent {
   description: string;
   target?: string;
   input: Record<string, unknown>;
+  /** When true, UI may offer "Allow for this workspace" (session started with cwd). */
+  workspaceCwdConfigured?: boolean;
+}
+
+export interface AgentUserQuestionNeededEvent {
+  sessionId: string;
+  questionId: string;
+  prompt: string;
 }
 
 export interface AgentTurnCompleteEvent {
@@ -164,6 +185,7 @@ export type AgentEvent =
   | { type: "tool_start"; data: AgentToolStartEvent }
   | { type: "tool_result"; data: AgentToolResultEvent }
   | { type: "approval_needed"; data: AgentApprovalNeededEvent }
+  | { type: "user_question"; data: AgentUserQuestionNeededEvent }
   | { type: "text_delta"; data: AgentTextDeltaEvent }
   | { type: "turn_complete"; data: AgentTurnCompleteEvent }
   | { type: "error"; data: AgentErrorEvent };
@@ -180,8 +202,129 @@ export async function respondApproval(request: RespondAgentApprovalRequest): Pro
   return invoke<void>("respond_approval", { request });
 }
 
+export async function respondUserQuestion(request: RespondUserQuestionRequest): Promise<void> {
+  return invoke<void>("respond_user_question", { request });
+}
+
 export async function getRelayDiagnostics(): Promise<RelayDiagnostics> {
   return invoke<RelayDiagnostics>("get_relay_diagnostics");
+}
+
+/** Write support text (e.g. diagnostics JSON) to a path from the native save dialog. */
+export async function writeTextExport(path: string, contents: string): Promise<void> {
+  return invoke<void>("write_text_export", { path, contents });
+}
+
+export interface WorkspaceAllowlistEntryRow {
+  workspaceKey: string;
+  tools: string[];
+}
+
+export interface WorkspaceAllowlistSnapshot {
+  storePath: string;
+  entries: WorkspaceAllowlistEntryRow[];
+}
+
+export async function getWorkspaceAllowlist(): Promise<WorkspaceAllowlistSnapshot> {
+  return invoke<WorkspaceAllowlistSnapshot>("get_workspace_allowlist");
+}
+
+export async function removeWorkspaceAllowlistTool(cwd: string, toolName: string): Promise<void> {
+  return invoke<void>("remove_workspace_allowlist_tool", {
+    request: { cwd, toolName },
+  });
+}
+
+export async function clearWorkspaceAllowlist(cwd: string): Promise<void> {
+  return invoke<void>("clear_workspace_allowlist", { request: { cwd } });
+}
+
+export interface WorkspaceSlashCommandRow {
+  name: string;
+  description?: string;
+  body: string;
+  source: string;
+}
+
+export async function listWorkspaceSlashCommands(cwd: string | null): Promise<WorkspaceSlashCommandRow[]> {
+  return invoke<WorkspaceSlashCommandRow[]>("list_workspace_slash_commands", {
+    request: { cwd: cwd?.trim() || null },
+  });
+}
+
+export interface InstructionSurface {
+  label: string;
+  path: string;
+  exists: boolean;
+  isDirectory: boolean;
+}
+
+export interface WorkspaceInstructionSurfaces {
+  workspaceRoot: string | null;
+  surfaces: InstructionSurface[];
+}
+
+/** Read-only Claw-style instruction paths under workspace `cwd`. */
+export async function fetchWorkspaceInstructionSurfaces(
+  cwd: string | null,
+): Promise<WorkspaceInstructionSurfaces> {
+  return invoke<WorkspaceInstructionSurfaces>("workspace_instruction_surfaces", {
+    request: { cwd: cwd?.trim() || null },
+  });
+}
+
+export interface DesktopPermissionSummaryRow {
+  name: string;
+  hostMode: string;
+  requiredMode: string;
+  requirement: "auto_allow" | "require_approval" | "auto_deny";
+  description: string;
+}
+
+/** Effective tool gating for the composer session preset (Context → Policy). */
+export async function getDesktopPermissionSummary(
+  sessionPreset: SessionPreset,
+): Promise<DesktopPermissionSummaryRow[]> {
+  return invoke<DesktopPermissionSummaryRow[]>("get_desktop_permission_summary", {
+    request: { sessionPreset },
+  });
+}
+
+const AUDIT_SUMMARY_LINE_MAX = 280;
+
+function trimAuditText(s: string, max: number): string {
+  const t = s.replace(/\s+/g, " ").trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, max - 1)}…`;
+}
+
+/** Compact, copy-paste friendly audit trail from session history (tools + truncated text). */
+export function formatSessionAuditSummary(res: AgentSessionHistoryResponse): string {
+  const lines: string[] = [];
+  lines.push("Relay Agent — session audit summary");
+  lines.push(`sessionId: ${res.sessionId}`);
+  lines.push(`running: ${res.running}`);
+  lines.push("");
+  let mi = 0;
+  for (const msg of res.messages) {
+    mi += 1;
+    lines.push(`--- Message ${mi} (${msg.role}) ---`);
+    for (const block of msg.content) {
+      if (block.type === "text") {
+        const t = block.text.trim();
+        if (t) lines.push(trimAuditText(t, AUDIT_SUMMARY_LINE_MAX));
+      } else if (block.type === "tool_use") {
+        lines.push(`tool: ${block.name}  [${block.id}]`);
+      } else if (block.type === "tool_result") {
+        const flag = block.is_error ? " (error)" : "";
+        lines.push(`tool_result: ${block.tool_use_id}${flag}`);
+        const c = block.content.trim();
+        if (c) lines.push(`  ${trimAuditText(c, AUDIT_SUMMARY_LINE_MAX)}`);
+      }
+    }
+    lines.push("");
+  }
+  return lines.join("\n").trimEnd();
 }
 
 export async function cancelAgent(request: CancelAgentRequest): Promise<void> {
@@ -332,6 +475,7 @@ export async function disconnectCdp(): Promise<void> {
 const E_TOOL_START = "agent:tool_start";
 const E_TOOL_RESULT = "agent:tool_result";
 const E_APPROVAL_NEEDED = "agent:approval_needed";
+const E_USER_QUESTION = "agent:user_question";
 const E_TEXT_DELTA = "agent:text_delta";
 const E_TURN_COMPLETE = "agent:turn_complete";
 const E_ERROR = "agent:error";
@@ -348,6 +492,9 @@ export function onAgentEvent(
     ),
     listen<AgentApprovalNeededEvent>(E_APPROVAL_NEEDED, (e) =>
       callback({ type: "approval_needed", data: e.payload }),
+    ),
+    listen<AgentUserQuestionNeededEvent>(E_USER_QUESTION, (e) =>
+      callback({ type: "user_question", data: e.payload }),
     ),
     listen<AgentTextDeltaEvent>(E_TEXT_DELTA, (e) =>
       callback({ type: "text_delta", data: e.payload }),

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -31,14 +31,15 @@ fn cdp_legacy_composer_full_paste() -> bool {
 use runtime::{
     self, assert_path_in_workspace, lexical_normalize, resolve_against_workspace, ApiClient,
     BashConfigCwdGuard,
-    ApiRequest, AssistantEvent, ContentBlock, ConversationMessage, McpServerManager, PermissionMode,
-    PermissionPolicy, PermissionPromptDecision, PermissionPrompter, PermissionRequest, RuntimeError,
-    Session as RuntimeSession, TokenUsage, ToolExecutor,
+    ApiRequest, AssistantEvent, ConfigLoader, ContentBlock, ConversationMessage, McpServerManager,
+    PermissionMode, PermissionPolicy, PermissionPromptDecision, PermissionPrompter,
+    PermissionRequest, RuntimeError, Session as RuntimeSession, TokenUsage, ToolExecutor,
+    pull_rust_diagnostics_blocking,
 };
 
 use crate::copilot_persistence::{self, PersistedSessionConfig};
 use crate::error::AgentLoopError;
-use crate::models::SessionPreset;
+use crate::models::{DesktopPermissionSummaryRow, SessionPreset};
 use crate::registry::SessionRegistry;
 use crate::session_write_undo;
 use crate::tauri_bridge;
@@ -69,6 +70,53 @@ fn desktop_permission_policy(preset: SessionPreset) -> PermissionPolicy {
         policy = policy.with_tool_requirement(spec.name, required);
     }
     policy
+}
+
+fn classify_permission_ui_requirement(
+    host: PermissionMode,
+    required: PermissionMode,
+) -> &'static str {
+    if host == PermissionMode::Allow || host >= required {
+        return "auto_allow";
+    }
+    if host == PermissionMode::WorkspaceWrite && required == PermissionMode::DangerFullAccess {
+        return "require_approval";
+    }
+    if host == PermissionMode::Prompt {
+        return "require_approval";
+    }
+    "auto_deny"
+}
+
+fn permission_row_description(tool: &str, requirement: &str) -> String {
+    match requirement {
+        "auto_allow" => format!("{tool} runs without a prompt in this session mode."),
+        "require_approval" => format!("{tool} may show an approval prompt before running."),
+        _ => format!("{tool} is blocked in this session mode."),
+    }
+}
+
+/// Effective tool gating for the given composer preset (Context → Policy).
+pub fn desktop_permission_summary_rows(preset: SessionPreset) -> Vec<DesktopPermissionSummaryRow> {
+    let policy = desktop_permission_policy(preset);
+    let host = policy.active_mode();
+    let host_label = host.as_str().to_string();
+    tools::mvp_tool_specs()
+        .into_iter()
+        .map(|spec| {
+            let required = policy.required_mode_for(&spec.name);
+            let req_label = required.as_str().to_string();
+            let requirement = classify_permission_ui_requirement(host, required).to_string();
+            let description = permission_row_description(&spec.name, &requirement);
+            DesktopPermissionSummaryRow {
+                name: spec.name.to_string(),
+                host_mode: host_label.clone(),
+                required_mode: req_label,
+                requirement,
+                description,
+            }
+        })
+        .collect()
 }
 
 fn session_preset_system_addon(preset: SessionPreset) -> Option<&'static str> {
@@ -214,6 +262,7 @@ fn approval_target_hint(input: &str) -> Option<String> {
 pub(crate) const E_TOOL_START: &str = "agent:tool_start";
 pub(crate) const E_TOOL_RESULT: &str = "agent:tool_result";
 pub(crate) const E_APPROVAL_NEEDED: &str = "agent:approval_needed";
+pub(crate) const E_USER_QUESTION: &str = "agent:user_question";
 pub(crate) const E_TURN_COMPLETE: &str = "agent:turn_complete";
 pub(crate) const E_ERROR: &str = "agent:error";
 pub(crate) const E_TEXT_DELTA: &str = "agent:text_delta";
@@ -926,6 +975,16 @@ impl PermissionPrompter for TauriApprovalPrompter {
         // Parse input for the event
         let input_obj = serde_json::from_str(&request.input).unwrap_or(serde_json::json!({}));
 
+        let workspace_cwd_configured = match self.registry.data.lock() {
+            Ok(data) => data
+                .get(&self.session_id)
+                .and_then(|e| e.workspace_cwd.as_deref())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .is_some(),
+            Err(_) => false,
+        };
+
         if let Err(e) = self.app.emit(
             E_APPROVAL_NEEDED,
             AgentApprovalNeededEvent {
@@ -935,6 +994,7 @@ impl PermissionPrompter for TauriApprovalPrompter {
                 description,
                 target,
                 input: input_obj,
+                workspace_cwd_configured,
             },
         ) {
             tracing::warn!("[RelayAgent] emit failed ({E_APPROVAL_NEEDED}): {e}");
@@ -1065,6 +1125,9 @@ fn enforce_workspace_tool_paths(
         "NotebookEdit" => {
             normalize_key(obj, "notebook_path")?;
         }
+        "LSP" => {
+            normalize_key(obj, "path")?;
+        }
         _ => {}
     }
     Ok(())
@@ -1076,16 +1139,37 @@ pub fn build_tool_executor(
     cwd: Option<String>,
     registry: SessionRegistry,
 ) -> TauriToolExecutor {
+    let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to create tokio runtime for tool executor");
+
+    let cwd_path = cwd
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let mut mcp_manager = match ConfigLoader::default_for(&cwd_path).load() {
+        Ok(cfg) => McpServerManager::from_runtime_config(&cfg),
+        Err(e) => {
+            tracing::warn!("[RelayAgent] merged .claw load for MCP skipped: {e}");
+            McpServerManager::from_servers(&BTreeMap::new())
+        }
+    };
+
+    if let Err(e) = tokio_runtime.block_on(mcp_manager.discover_tools()) {
+        tracing::warn!("[RelayAgent] MCP discover_tools: {e}");
+    }
+
     TauriToolExecutor {
         app: app.clone(),
         session_id: session_id.to_string(),
         cwd,
         registry,
-        mcp_manager: runtime::McpServerManager::from_servers(&std::collections::BTreeMap::new()),
-        runtime: tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("failed to create tokio runtime for tool executor"),
+        mcp_manager,
+        runtime: tokio_runtime,
     }
 }
 
@@ -1100,6 +1184,42 @@ pub struct TauriToolExecutor {
 
 impl ToolExecutor for TauriToolExecutor {
     fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, runtime::ToolError> {
+        if let Some(r) = try_execute_mcp_meta_tool(&mut self.mcp_manager, &self.runtime, tool_name, input)
+        {
+            return r;
+        }
+
+        if tool_name == "AskUserQuestion" {
+            return execute_ask_user_question_tool(&self.app, &self.registry, &self.session_id, input);
+        }
+
+        if tool_name == "LSP" {
+            let mut input_value: Value =
+                serde_json::from_str(input).unwrap_or_else(|_| serde_json::json!({}));
+            if let Some(ref cwd) = self.cwd {
+                let trimmed = cwd.trim();
+                if !trimmed.is_empty() {
+                    enforce_workspace_tool_paths(
+                        "LSP",
+                        &mut input_value,
+                        std::path::Path::new(trimmed),
+                    )?;
+                }
+            }
+            let ws = self
+                .cwd
+                .as_ref()
+                .map(|s| PathBuf::from(s.trim()))
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            let path_str = input_value
+                .get("path")
+                .and_then(|p| p.as_str())
+                .ok_or_else(|| runtime::ToolError::new("LSP requires path".to_string()))?;
+            let file = PathBuf::from(path_str);
+            return pull_rust_diagnostics_blocking(&ws, &file).map_err(runtime::ToolError::new);
+        }
+
         // Phase 1: Route MCP tool calls (prefixed with `mcp__`) to the MCP server manager
         if let Some(mcp_result) =
             try_execute_mcp_tool(&mut self.mcp_manager, &self.runtime, tool_name, input)
@@ -1189,6 +1309,284 @@ impl ToolExecutor for TauriToolExecutor {
         }
 
         Ok(result)
+    }
+}
+
+fn mcp_meta_server_filter(input: &Value) -> Option<&str> {
+    input
+        .get("server")
+        .or_else(|| input.get("serverName"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+}
+
+fn resolve_mcp_server_for_read(
+    mcp_manager: &McpServerManager,
+    input: &Value,
+) -> Result<String, runtime::ToolError> {
+    if let Some(s) = mcp_meta_server_filter(input) {
+        return Ok(s.to_string());
+    }
+    let names = mcp_manager.stdio_server_names();
+    match names.len() {
+        0 => Err(runtime::ToolError::new(
+            "no stdio MCP servers configured in merged .claw settings",
+        )),
+        1 => Ok(names[0].clone()),
+        _ => Err(runtime::ToolError::new(format!(
+            "ReadMcpResource requires `server` when multiple MCP servers exist ({})",
+            names.len()
+        ))),
+    }
+}
+
+fn try_execute_mcp_meta_tool(
+    mcp_manager: &mut McpServerManager,
+    runtime: &tokio::runtime::Runtime,
+    tool_name: &str,
+    input: &str,
+) -> Option<Result<String, runtime::ToolError>> {
+    let v: Value = serde_json::from_str(input).unwrap_or_else(|_| json!({}));
+    match tool_name {
+        "ListMcpResources" => {
+            let filter = mcp_meta_server_filter(&v);
+            Some(
+                runtime
+                    .block_on(mcp_manager.list_resources_all_servers(filter))
+                    .map_err(|e| runtime::ToolError::new(e.to_string()))
+                    .and_then(|j| {
+                        serde_json::to_string_pretty(&j)
+                            .map_err(|e| runtime::ToolError::new(e.to_string()))
+                    }),
+            )
+        }
+        "ReadMcpResource" => {
+            let Some(uri) = v.get("uri").and_then(|u| u.as_str()) else {
+                return Some(Err(runtime::ToolError::new(
+                    "ReadMcpResource requires uri",
+                )));
+            };
+            let server = match resolve_mcp_server_for_read(mcp_manager, &v) {
+                Ok(s) => s,
+                Err(e) => return Some(Err(e)),
+            };
+            Some(
+                runtime
+                    .block_on(mcp_manager.read_resource_for_server(&server, uri))
+                    .map_err(|e| runtime::ToolError::new(e.to_string()))
+                    .and_then(|resp| {
+                        if let Some(err) = resp.error {
+                            return Err(runtime::ToolError::new(format!(
+                                "MCP resources/read error: {} ({})",
+                                err.message, err.code
+                            )));
+                        }
+                        let Some(result) = resp.result else {
+                            return Err(runtime::ToolError::new(
+                                "MCP resources/read missing result",
+                            ));
+                        };
+                        serde_json::to_string_pretty(&result)
+                            .map_err(|e| runtime::ToolError::new(e.to_string()))
+                    }),
+            )
+        }
+        "McpAuth" => {
+            let target = mcp_meta_server_filter(&v);
+            let unsupported: Vec<Value> = mcp_manager
+                .unsupported_servers()
+                .iter()
+                .map(|u| {
+                    json!({
+                        "server": u.server_name,
+                        "transport": format!("{:?}", u.transport),
+                        "reason": u.reason,
+                    })
+                })
+                .collect();
+            let body = json!({
+                "message": "Relay does not run browser OAuth from this tool. Configure MCP servers in merged .claw (stdio command/env or remote URLs).",
+                "requestedServer": target,
+                "stdioServers": mcp_manager.stdio_server_names(),
+                "unsupportedServers": unsupported,
+            });
+            Some(
+                serde_json::to_string_pretty(&body)
+                    .map_err(|e| runtime::ToolError::new(e.to_string())),
+            )
+        }
+        "MCP" => {
+            let action = v
+                .get("action")
+                .and_then(|a| a.as_str())
+                .unwrap_or("")
+                .trim();
+            let result = match action {
+                "list_resources" => {
+                    let filter = mcp_meta_server_filter(&v);
+                    runtime
+                        .block_on(mcp_manager.list_resources_all_servers(filter))
+                        .map_err(|e| runtime::ToolError::new(e.to_string()))
+                        .and_then(|j| {
+                            serde_json::to_string_pretty(&j)
+                                .map_err(|e| runtime::ToolError::new(e.to_string()))
+                        })
+                }
+                "read_resource" => {
+                    let Some(uri) = v.get("uri").and_then(|u| u.as_str()) else {
+                        return Some(Err(runtime::ToolError::new(
+                            "read_resource requires uri",
+                        )));
+                    };
+                    let server = match resolve_mcp_server_for_read(mcp_manager, &v) {
+                        Ok(s) => s,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    runtime
+                        .block_on(mcp_manager.read_resource_for_server(&server, uri))
+                        .map_err(|e| runtime::ToolError::new(e.to_string()))
+                        .and_then(|resp| {
+                            if let Some(err) = resp.error {
+                                return Err(runtime::ToolError::new(format!(
+                                    "resources/read: {} ({})",
+                                    err.message, err.code
+                                )));
+                            }
+                            let Some(result) = resp.result else {
+                                return Err(runtime::ToolError::new(
+                                    "resources/read missing result",
+                                ));
+                            };
+                            serde_json::to_string_pretty(&result)
+                                .map_err(|e| runtime::ToolError::new(e.to_string()))
+                        })
+                }
+                "list_tools" => {
+                    let mut names: Vec<String> =
+                        mcp_manager.tool_index().keys().cloned().collect();
+                    names.sort();
+                    serde_json::to_string_pretty(&json!({ "qualifiedToolNames": names }))
+                        .map_err(|e| runtime::ToolError::new(e.to_string()))
+                }
+                "call_tool" => {
+                    let Some(qualified) = v.get("name").and_then(|n| n.as_str()) else {
+                        return Some(Err(runtime::ToolError::new(
+                            "call_tool requires name (qualified tool)",
+                        )));
+                    };
+                    let args = v.get("arguments").cloned().or_else(|| v.get("input").cloned());
+                    runtime
+                        .block_on(mcp_manager.call_tool(qualified, args))
+                        .map_err(|e| runtime::ToolError::new(e.to_string()))
+                        .and_then(|resp| {
+                            if let Some(err) = resp.error {
+                                return Err(runtime::ToolError::new(format!(
+                                    "tools/call: {} ({})",
+                                    err.message, err.code
+                                )));
+                            }
+                            let Some(result_data) = resp.result else {
+                                return Err(runtime::ToolError::new(
+                                    "tools/call missing result",
+                                ));
+                            };
+                            Ok(format_mcp_tool_call_result(&result_data))
+                        })
+                }
+                _ => Err(runtime::ToolError::new(format!(
+                    "unknown MCP action `{action}` (use list_resources, read_resource, list_tools, call_tool)"
+                ))),
+            };
+            Some(result)
+        }
+        _ => None,
+    }
+}
+
+fn execute_ask_user_question_tool(
+    app: &AppHandle,
+    registry: &SessionRegistry,
+    session_id: &str,
+    input: &str,
+) -> Result<String, runtime::ToolError> {
+    let v: Value = serde_json::from_str(input).unwrap_or_else(|_| json!({}));
+    let Some(qarr) = v.get("questions").and_then(|q| q.as_array()) else {
+        return Err(runtime::ToolError::new(
+            "AskUserQuestion requires a questions array",
+        ));
+    };
+    if qarr.is_empty() {
+        return Err(runtime::ToolError::new(
+            "AskUserQuestion.questions must be non-empty",
+        ));
+    }
+    let mut lines: Vec<String> = Vec::new();
+    for (i, q) in qarr.iter().enumerate() {
+        let text = q
+            .get("question")
+            .or_else(|| q.get("header"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("");
+        lines.push(format!("{}. {}", i + 1, text.trim()));
+        if let Some(opts) = q.get("options").and_then(|o| o.as_array()) {
+            for o in opts {
+                let label = o.get("label").and_then(|l| l.as_str()).unwrap_or("");
+                lines.push(format!("   • {label}"));
+            }
+        }
+    }
+    let prompt = lines.join("\n");
+    if prompt.len() > 12_000 {
+        return Err(runtime::ToolError::new(
+            "AskUserQuestion prompt exceeds 12KB",
+        ));
+    }
+
+    let question_id = Uuid::new_v4().to_string();
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+
+    {
+        let mut data = registry
+            .data
+            .lock()
+            .map_err(|e| runtime::ToolError::new(format!("registry lock poisoned: {e}")))?;
+        let Some(entry) = data.get_mut(session_id) else {
+            return Err(runtime::ToolError::new(format!(
+                "session `{session_id}` not found for AskUserQuestion"
+            )));
+        };
+        let mut qs = entry
+            .user_questions
+            .lock()
+            .map_err(|e| runtime::ToolError::new(format!("user_questions lock poisoned: {e}")))?;
+        qs.insert(
+            question_id.clone(),
+            crate::registry::PendingUserQuestion { tx },
+        );
+    }
+
+    let evt = AgentUserQuestionNeededEvent {
+        session_id: session_id.to_string(),
+        question_id: question_id.clone(),
+        prompt: prompt.clone(),
+    };
+    if let Err(e) = app.emit(E_USER_QUESTION, &evt) {
+        tracing::warn!("[RelayAgent] emit failed ({E_USER_QUESTION}): {e}");
+    }
+
+    match rx.recv() {
+        Ok(answer) => {
+            if answer.trim().is_empty() {
+                return Err(runtime::ToolError::new(
+                    "user cancelled or submitted an empty answer",
+                ));
+            }
+            serde_json::to_string_pretty(&json!({ "answer": answer }))
+                .map_err(|e| runtime::ToolError::new(e.to_string()))
+        }
+        Err(_) => Err(runtime::ToolError::new(
+            "user question channel closed",
+        )),
     }
 }
 
@@ -1445,6 +1843,15 @@ pub struct AgentToolResultEvent {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentUserQuestionNeededEvent {
+    pub session_id: String,
+    pub question_id: String,
+    /// Plain text prompt (questions and optional option labels).
+    pub prompt: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentApprovalNeededEvent {
     pub session_id: String,
     pub approval_id: String,
@@ -1453,6 +1860,8 @@ pub struct AgentApprovalNeededEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
     pub input: serde_json::Value,
+    /// True when the session was started with a non-empty workspace `cwd` (enables "allow for workspace").
+    pub workspace_cwd_configured: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

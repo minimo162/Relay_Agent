@@ -15,6 +15,11 @@ pub struct PendingApproval {
     pub tool_name: String,
 }
 
+/// Pending `AskUserQuestion`: user text answer.
+pub struct PendingUserQuestion {
+    pub tx: std::sync::mpsc::Sender<String>,
+}
+
 /// Shared state for an active agent session.
 /// The approval channel map lets `respond_approval()` unblock the agent loop.
 pub struct SessionEntry {
@@ -26,8 +31,12 @@ pub struct SessionEntry {
     pub finished_at: Option<i64>,
     /// `approval_id` → pending approval (channel + tool for policy memory)
     pub approvals: Mutex<HashMap<String, PendingApproval>>,
+    /// `question_id` → pending AskUserQuestion (text answer)
+    pub user_questions: Mutex<HashMap<String, PendingUserQuestion>>,
     /// Tool names the user chose "allow for this session" for (OpenWork-style).
     pub auto_allowed_tools: Mutex<HashSet<String>>,
+    /// Workspace `cwd` from `start_agent` (trimmed), for workspace-scoped allowlist persistence.
+    pub workspace_cwd: Option<String>,
     /// Stack of successful workspace writes for OpenCode-style undo/redo.
     pub write_undo: Mutex<WriteUndoStacks>,
 }
@@ -126,6 +135,24 @@ impl SessionRegistry {
             .lock()
             .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
         Ok(approvals.drain().map(|(_, p)| p.tx).collect())
+    }
+
+    pub fn drain_user_questions(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<std::sync::mpsc::Sender<String>>, AgentLoopError> {
+        let mut data = self
+            .data
+            .lock()
+            .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
+        let Some(entry) = data.get_mut(session_id) else {
+            return Ok(Vec::new());
+        };
+        let mut q = entry
+            .user_questions
+            .lock()
+            .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
+        Ok(q.drain().map(|(_, p)| p.tx).collect())
     }
 
     /// Evict completed/cancelled sessions older than `ttl_seconds`.

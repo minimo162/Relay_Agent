@@ -1,6 +1,6 @@
 import { For, Show, createMemo, createSignal, type JSX } from "solid-js";
-import type { SessionMeta } from "../lib/session-display";
-import { formatSessionSubtitle, sessionPrimaryLine } from "../lib/session-display";
+import type { SessionMeta } from "../session/session-display";
+import { formatSessionSubtitle, sessionPrimaryLine } from "../session/session-display";
 import { Input } from "./ui";
 import { ui } from "../lib/ui-tokens";
 
@@ -15,7 +15,9 @@ export function Sidebar(props: {
 
   const filtered = createMemo(() => {
     const q = search().toLowerCase().trim();
-    const list = props.sessions;
+    const list = [...props.sessions].sort(
+      (a, b) => (b.meta?.createdAt ?? 0) - (a.meta?.createdAt ?? 0),
+    );
     if (!q) return list;
     return list.filter(({ id, meta }) => {
       if (id.toLowerCase().includes(q)) return true;

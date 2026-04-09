@@ -18,6 +18,9 @@ pub struct RelayDiagnostics {
     pub max_text_file_read_bytes: u64,
     /// Short preflight strings (claw `doctor`-style hints for support bundles).
     pub doctor_hints: Vec<String>,
+    /// Short bullets explaining defaults vs Settings (OpenWork-style predictability).
+    #[serde(default)]
+    pub predictability_notes: Vec<String>,
 }
 
 /// OpenCode-style session posture: **Build** matches the default desktop permission ladder
@@ -71,6 +74,18 @@ pub struct RespondAgentApprovalRequest {
     /// When `true` with `approved`, add this tool name to the session allow-list (no further prompts for that tool this session).
     #[serde(default)]
     pub remember_for_session: Option<bool>,
+    /// When `true` with `approved`, persist for normalized workspace `cwd` and merge into session allow-list.
+    #[serde(default)]
+    pub remember_for_workspace: Option<bool>,
+}
+
+/// Answer for a pending `AskUserQuestion` tool call.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RespondUserQuestionRequest {
+    pub session_id: String,
+    pub question_id: String,
+    pub answer: String,
 }
 
 /// Request to cancel a running agent session.
@@ -117,6 +132,31 @@ pub struct RustAnalyzerProbeResponse {
     pub error: Option<String>,
 }
 
+/// One tool row for the desktop permission summary (Context → Policy).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopPermissionSummaryRow {
+    pub name: String,
+    pub host_mode: String,
+    pub required_mode: String,
+    /// `auto_allow` | `require_approval` | `auto_deny`
+    pub requirement: String,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPermissionSummaryRequest {
+    pub session_preset: SessionPreset,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceInstructionSurfacesRequest {
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
 /// Information about a registered MCP server.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -138,4 +178,50 @@ pub struct McpAddServerRequest {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+}
+
+/// One persisted workspace → allowed tools row (`~/.relay-agent/workspace_allowed_tools.json`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceAllowlistEntryRow {
+    pub workspace_key: String,
+    pub tools: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceAllowlistSnapshot {
+    pub store_path: String,
+    pub entries: Vec<WorkspaceAllowlistEntryRow>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceAllowlistRemoveToolRequest {
+    pub cwd: String,
+    pub tool_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceAllowlistCwdRequest {
+    pub cwd: String,
+}
+
+/// Workspace-defined slash command (`.relay/commands/*.md` or `commands.json`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSlashCommandRow {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub body: String,
+    pub source: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListWorkspaceSlashCommandsRequest {
+    #[serde(default)]
+    pub cwd: Option<String>,
 }

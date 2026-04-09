@@ -1,6 +1,6 @@
 # Project-scoped slash commands and prompt templates (design)
 
-**Status:** design only — OpenCode-style `/command` and reusable prompts, aligned with Relay’s Solid composer and `slash-commands.ts`.
+**Status:** workspace slash commands (`.relay/commands`) implemented in the Tauri host + composer merge; `.relay/templates/*.md` and `commands.json`-only flows remain future work.
 
 ## Goals
 

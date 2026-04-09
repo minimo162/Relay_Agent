@@ -8,6 +8,8 @@ export function ApprovalOverlay(props: {
   onApproveOnce: (id: string) => void;
   /** Approve and skip further prompts for this tool name until the session ends. */
   onApproveForSession: (id: string) => void;
+  /** Persist allow for this tool for the current workspace folder (requires cwd on session). */
+  onApproveForWorkspace?: (id: string) => void;
   onReject: (id: string) => void;
 }): JSX.Element {
   return (
@@ -58,6 +60,16 @@ export function ApprovalOverlay(props: {
                   >
                     Allow for session
                   </Button>
+                  <Show when={approval.workspaceCwdConfigured && props.onApproveForWorkspace}>
+                    <Button
+                      variant="secondary"
+                      onClick={() => props.onApproveForWorkspace!(approval.approvalId)}
+                      class="px-3 py-1.5 text-xs"
+                      title="Saved per workspace in ~/.relay-agent/workspace_allowed_tools.json (manage in Settings)"
+                    >
+                      Allow for workspace
+                    </Button>
+                  </Show>
                 </div>
               </div>
             )}

@@ -3317,6 +3317,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "uuid",
  "wait-timeout",
  "walkdir",
 ]

@@ -12,6 +12,9 @@ mod models;
 mod registry;
 mod session_write_undo;
 mod tauri_bridge;
+mod workspace_allowlist;
+mod workspace_slash_commands;
+mod workspace_surfaces;
 
 use tauri::Manager;
 
@@ -66,6 +69,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             tauri_bridge::start_agent,
             tauri_bridge::respond_approval,
+            tauri_bridge::respond_user_question,
             tauri_bridge::cancel_agent,
             tauri_bridge::get_session_history,
             tauri_bridge::compact_agent_session,
@@ -84,6 +88,13 @@ pub fn run() {
             tauri_bridge::mcp_add_server,
             tauri_bridge::mcp_remove_server,
             tauri_bridge::mcp_check_server_status,
+            tauri_bridge::write_text_export,
+            tauri_bridge::workspace_instruction_surfaces,
+            tauri_bridge::get_desktop_permission_summary,
+            tauri_bridge::get_workspace_allowlist,
+            tauri_bridge::remove_workspace_allowlist_tool,
+            tauri_bridge::clear_workspace_allowlist,
+            tauri_bridge::list_workspace_slash_commands,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

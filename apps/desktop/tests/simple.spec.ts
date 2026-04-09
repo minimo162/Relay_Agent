@@ -19,10 +19,16 @@ test('page loads HTML', async ({ page }) => {
         const req = args?.request ?? args ?? {};
         if (cmd === 'start_agent') { mock.sessionCounter++; const id = `session-e2e-${mock.sessionCounter}`; mock.sessions.set(id, {running: true}); return id; }
         if (cmd === 'respond_approval') return undefined;
+        if (cmd === 'respond_user_question') return undefined;
         if (cmd === 'cancel_agent') { const s = mock.sessions.get(req.sessionId); if (s) s.running = false; return undefined; }
         if (cmd === 'get_session_history') { const s = mock.sessions.get(req.sessionId); return { sessionId: req.sessionId, running: s?.running ?? false, messages: [] }; }
         if (cmd === 'warmup_copilot_bridge') return { connected: true, loginRequired: false, url: null, error: null };
-        if (cmd === 'get_relay_diagnostics') return { appVersion: '0', targetOs: 'linux', copilotNodeBridgePort: 18080, defaultEdgeCdpPort: 9360, relayAgentDevMode: false, architectureNotes: 'mock', processCwd: '/mock', clawConfigHomeDisplay: '~/.claw (mock)', maxTextFileReadBytes: 10485760, doctorHints: [] };
+        if (cmd === 'get_relay_diagnostics') return { appVersion: '0', targetOs: 'linux', copilotNodeBridgePort: 18080, defaultEdgeCdpPort: 9360, relayAgentDevMode: false, architectureNotes: 'mock', processCwd: '/mock', clawConfigHomeDisplay: '~/.claw (mock)', maxTextFileReadBytes: 10485760, doctorHints: [], predictabilityNotes: [] };
+        if (cmd === 'get_workspace_allowlist') return { storePath: '/mock/store.json', entries: [] };
+        if (cmd === 'remove_workspace_allowlist_tool' || cmd === 'clear_workspace_allowlist') return undefined;
+        if (cmd === 'list_workspace_slash_commands') return [];
+        if (cmd === 'workspace_instruction_surfaces') return { workspaceRoot: null, surfaces: [] };
+        if (cmd === 'get_desktop_permission_summary') return [];
         throw new Error(`Unknown: ${cmd}`);
       }
     };

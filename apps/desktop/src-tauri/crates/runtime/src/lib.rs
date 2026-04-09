@@ -7,6 +7,7 @@ mod conversation;
 mod file_ops;
 mod hooks;
 mod json;
+mod lsp_diagnostics;
 mod mcp;
 mod mcp_client;
 mod mcp_registry;
@@ -19,6 +20,7 @@ mod prompt;
 mod remote;
 pub mod sandbox;
 mod session;
+mod task_registry;
 mod usage;
 mod workspace_path;
 
@@ -43,9 +45,10 @@ pub use conversation::{
 pub use file_ops::{
     edit_file, glob_search, grep_search, read_file, write_file, EditFileOutput, GlobSearchOutput,
     GrepSearchInput, GrepSearchOutput, ReadFileOutput, StructuredPatchHunk, TextFilePayload,
-    WriteFileOutput, MAX_TEXT_FILE_READ_BYTES,
+    WriteFileOutput, MAX_TEXT_FILE_READ_BYTES, MAX_WRITE_FILE_BYTES,
 };
 pub use hooks::{HookEvent, HookRunResult, HookRunner};
+pub use lsp_diagnostics::pull_rust_diagnostics_blocking;
 pub use mcp::{
     mcp_server_signature, mcp_tool_name, mcp_tool_prefix, normalize_name_for_mcp,
     scoped_mcp_config_hash, unwrap_ccr_proxy_url,
@@ -83,6 +86,9 @@ pub use remote::{
     inherited_upstream_proxy_env, no_proxy_list, read_token, upstream_proxy_ws_url,
     RemoteSessionContext, UpstreamProxyBootstrap, UpstreamProxyState, DEFAULT_REMOTE_BASE_URL,
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
+};
+pub use task_registry::{
+    task_create, task_get, task_list, task_output, task_stop, task_update,
 };
 pub use session::{ContentBlock, ConversationMessage, MessageRole, Session, SessionError};
 pub use usage::{

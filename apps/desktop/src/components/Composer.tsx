@@ -67,7 +67,7 @@ function SlashAutocomplete(props: {
             onClick={() => props.onSelect(cmd)}
             onMouseEnter={() => props.onSelectIndex(i)}
           >
-            <span class="font-mono font-medium">/{cmd.command}</span>
+            <span class="font-mono font-medium">{cmd.command}</span>
             <span class="opacity-70 ml-auto truncate max-w-[120px]">{cmd.description}</span>
           </div>
         ))
@@ -120,7 +120,7 @@ export function Composer(props: {
   const closeSlashDropdown = () => setSlashMode(null);
 
   const selectCommand = (cmd: SlashCommand) => {
-    setText(`/${cmd.command} `);
+    setText(`${cmd.command} `);
     closeSlashDropdown();
     textareaRef.focus();
   };

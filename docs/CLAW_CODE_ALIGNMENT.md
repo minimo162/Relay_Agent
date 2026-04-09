@@ -9,6 +9,7 @@ Reference: [ultraworkers/claw-code](https://github.com/ultraworkers/claw-code) (
 | Remote | `https://github.com/ultraworkers/claw-code.git` |
 | Branch | `main` |
 | Commit (last port batch) | `e4c38718824bda32c054664d1a01e591b489f635` |
+| Last `ls-remote` verification | 2026-04-09 (unchanged from pin above) |
 
 **Procedure:** On each selective port, update this table and add a line under `docs/IMPLEMENTATION.md` Milestone Log (same SHA). Re-resolve with:
 
@@ -27,9 +28,17 @@ Reference: [ultraworkers/claw-code](https://github.com/ultraworkers/claw-code) (
 
 ## Tool catalog: Relay `mvp_tool_specs` vs claw
 
-claw-code `rust/` exposes on the order of **~40** tools in `mvp_tool_specs()` (per `PARITY.md`). Relay’s [`mvp_tool_specs()`](apps/desktop/src-tauri/crates/tools/src/lib.rs) is smaller: **33** names on Unix targets (includes read-only **`git_status`** / **`git_diff`**), **34** with Windows-only `PowerShell` (see source for the authoritative list).
+claw-code `rust/` exposes on the order of **~40** tools in `mvp_tool_specs()` (per `PARITY.md`). Relay’s [`mvp_tool_specs()`](apps/desktop/src-tauri/crates/tools/src/lib.rs) lists **45** names on Unix targets (includes read-only **`git_status`** / **`git_diff`** and claw-parity stubs below), **46** with Windows-only `PowerShell` (see source for the authoritative list).
 
 **Diff policy:** When adding or renaming tools, cross-check claw `rust/crates/tools` schemas and descriptions so Copilot-facing JSON stays compatible with the [tool-system](https://claw-code.codes/tool-system) model. Relay-only tools (Electron CDP, `pdf_*`, Copilot hints) stay documented in tool descriptions.
+
+### Tools present in claw `mvp_tool_specs` but not in Relay (desktop product policy)
+
+Relay still omits **`Team*`**, **`Cron*`**, **`EnterPlanMode` / `ExitPlanMode`**, **`RemoteTrigger`**, and similar CLI-oriented specs.
+
+**Recently ported for Copilot/claw name compatibility:** MCP meta-tools (`ListMcpResources`, `ReadMcpResource`, `McpAuth`, unified `MCP` with `list_resources` / `read_resource` / `list_tools` / `call_tool`) — desktop executor only, delegating to session [`McpServerManager`](apps/desktop/src-tauri/crates/runtime/src/mcp_stdio.rs); **`AskUserQuestion`** — UI overlay + `respond_user_question` IPC; **`LSP`** — `pull_diagnostics` via `rust-analyzer` stdio ([`lsp_diagnostics.rs`](apps/desktop/src-tauri/crates/runtime/src/lsp_diagnostics.rs)); in-memory **`TaskCreate` / `TaskGet` / `TaskList` / `TaskStop` / `TaskUpdate` / `TaskOutput`** ([`task_registry.rs`](apps/desktop/src-tauri/crates/runtime/src/task_registry.rs)).
+
+Dynamic **`mcp__<server>__<tool>`** names remain the primary MCP surface alongside the meta tools above. If the model emits a claw-only name Relay still does not register, `execute_tool` / the agent executor returns an error until ported — document new names here when adding stubs.
 
 ## Mock parity scenario map (claw harness ↔ Relay)
 
@@ -43,15 +52,23 @@ claw uses scripted scenarios in `rust/mock_parity_scenarios.json` and `mock_pari
 | Workspace path safety | `workspace_boundary_rejects_outside_path` |
 | Multi-tool / search flow (partial) | `glob_and_read_multi_step_style` |
 | Read-only bash rejection (Relay + claw intent) | `bash_read_only_project_rejects_rm_via_execute_tool` |
+| `write_file_allowed` | `write_file_allowed_under_temp_workspace` |
+| `grep_chunk_assembly` (simplified) | `grep_search_finds_match_in_workspace_file` |
+| `bash_stdout_roundtrip` | `bash_stdout_roundtrip_echo` |
 
 ## Parity-style checklist (from claw `PARITY.md`)
 
 - [x] Workspace boundary for file tools when session `cwd` is set (`runtime::workspace_path`, enforced in `TauriToolExecutor`).
 - [x] Large plain-text read capped (`MAX_TEXT_FILE_READ_BYTES` in `file_ops::read_file`).
+- [x] Large `write_file` body capped (`MAX_WRITE_FILE_BYTES` in `file_ops::write_file`, aligned with claw `MAX_WRITE_SIZE`).
 - [x] NUL-byte rejection for plain-text reads (binary heuristic aligned with claw file-tool notes).
 - [x] Bash read-only heuristic guard when `.claw` permission mode is read-only (`bash_validation` + `BashConfigCwdGuard`); not the full claw bash-validation submodule matrix.
-- [x] MCP operator-facing errors: clearer `Display` for unknown server/tool and Tauri `mcp_check_server_status` hint (full multi-transport lifecycle still shared “remaining work” with claw).
-- [ ] Session compaction / token counting parity with claw (tracked in claw `PARITY.md` “Still open”; Relay `compact.rs` defaults documented in `IMPLEMENTATION.md` 2026-04-10).
+- [x] MCP operator-facing errors: clearer `Display` for unknown server/tool and Tauri `mcp_check_server_status` hint; **`McpServerManager::call_tool` retries once** after recoverable stdio `Io` failures (process reset + re-init). Full multi-transport lifecycle remains shared “remaining work” with claw.
+- [x] Claw-style MCP meta tool names (`ListMcpResources`, `ReadMcpResource`, `McpAuth`, `MCP` JSON `action`) routed through `TauriToolExecutor` to the session `McpServerManager` (stdio servers from merged `.claw`).
+- [x] **`AskUserQuestion`**: `agent:user_question` event + `respond_user_question` + Solid `UserQuestionOverlay`.
+- [x] **`LSP`**: first slice = pull diagnostics for a workspace file via `rust-analyzer` stdio (`runtime::pull_rust_diagnostics_blocking`).
+- [x] **`Task*`** (in-memory registry; no external worker): `TaskCreate`, `TaskGet`, `TaskList`, `TaskStop`, `TaskUpdate`, `TaskOutput`.
+- [x] Session compaction / token counting parity with claw (`should_compact` / re-compact / merged summaries aligned with claw-code `rust/crates/runtime/src/compact.rs` at pin SHA; Relay keeps `CompactionConfig::default().preserve_recent_messages == 5` vs upstream 4 — documented in `IMPLEMENTATION.md` 2026-04-09 batch).
 
 ## Upstream revision pin (optional ports)
 

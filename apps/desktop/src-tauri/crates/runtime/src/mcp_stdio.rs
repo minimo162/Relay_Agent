@@ -4,7 +4,7 @@ use std::process::Stdio;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
+use serde_json::{json, Value as JsonValue};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
@@ -238,6 +238,14 @@ pub enum McpServerManagerError {
     },
 }
 
+impl McpServerManagerError {
+    /// True when the stdio transport likely broke (e.g. server exit); one reconnect retry may recover.
+    #[must_use]
+    pub fn is_stdio_transport_io_failure(&self) -> bool {
+        matches!(self, Self::Io(_))
+    }
+}
+
 impl std::fmt::Display for McpServerManagerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -437,6 +445,120 @@ impl McpServerManager {
         Ok(discovered_tools)
     }
 
+    /// List MCP resources for one server (handles pagination).
+    pub async fn list_resources_for_server(
+        &mut self,
+        server_name: &str,
+    ) -> Result<Vec<McpResource>, McpServerManagerError> {
+        self.ensure_server_ready(server_name).await?;
+        let mut all = Vec::new();
+        let mut cursor = None;
+        loop {
+            let request_id = self.take_request_id();
+            let response = {
+                let server = self.server_mut(server_name)?;
+                let process = server.process.as_mut().ok_or_else(|| {
+                    McpServerManagerError::InvalidResponse {
+                        server_name: server_name.to_string(),
+                        method: "resources/list",
+                        details: "server process missing after initialization".to_string(),
+                    }
+                })?;
+                process
+                    .list_resources(
+                        request_id,
+                        Some(McpListResourcesParams {
+                            cursor: cursor.clone(),
+                        }),
+                    )
+                    .await?
+            };
+
+            if let Some(error) = response.error {
+                return Err(McpServerManagerError::JsonRpc {
+                    server_name: server_name.to_string(),
+                    method: "resources/list",
+                    error,
+                });
+            }
+
+            let result = response
+                .result
+                .ok_or_else(|| McpServerManagerError::InvalidResponse {
+                    server_name: server_name.to_string(),
+                    method: "resources/list",
+                    details: "missing result payload".to_string(),
+                })?;
+
+            all.extend(result.resources);
+            match result.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        Ok(all)
+    }
+
+    /// List resources from all configured stdio servers, optionally filtered by name.
+    pub async fn list_resources_all_servers(
+        &mut self,
+        server_filter: Option<&str>,
+    ) -> Result<JsonValue, McpServerManagerError> {
+        let names: Vec<String> = self.servers.keys().cloned().collect();
+        let mut servers_out = Vec::new();
+        for name in names {
+            if let Some(f) = server_filter {
+                if name != f {
+                    continue;
+                }
+            }
+            match self.list_resources_for_server(&name).await {
+                Ok(resources) => {
+                    servers_out.push(json!({
+                        "server": name,
+                        "resources": resources,
+                    }));
+                }
+                Err(e) => {
+                    servers_out.push(json!({
+                        "server": name,
+                        "error": e.to_string(),
+                    }));
+                }
+            }
+        }
+        Ok(json!({ "servers": servers_out }))
+    }
+
+    pub async fn read_resource_for_server(
+        &mut self,
+        server_name: &str,
+        uri: &str,
+    ) -> Result<JsonRpcResponse<McpReadResourceResult>, McpServerManagerError> {
+        self.ensure_server_ready(server_name).await?;
+        let request_id = self.take_request_id();
+        let uri_owned = uri.to_string();
+        let response = {
+            let server = self.server_mut(server_name)?;
+            let process = server.process.as_mut().ok_or_else(|| {
+                McpServerManagerError::InvalidResponse {
+                    server_name: server_name.to_string(),
+                    method: "resources/read",
+                    details: "server process missing after initialization".to_string(),
+                }
+            })?;
+            process
+                .read_resource(
+                    request_id,
+                    McpReadResourceParams {
+                        uri: uri_owned,
+                    },
+                )
+                .await?
+        };
+        Ok(response)
+    }
+
     pub async fn call_tool(
         &mut self,
         qualified_tool_name: &str,
@@ -450,30 +572,59 @@ impl McpServerManager {
                 qualified_name: qualified_tool_name.to_string(),
             })?;
 
+        match self
+            .call_tool_once(&route, arguments.clone())
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(err) if err.is_stdio_transport_io_failure() => {
+                self.force_restart_stdio_server(&route.server_name).await?;
+                self.call_tool_once(&route, arguments).await
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn call_tool_once(
+        &mut self,
+        route: &ToolRoute,
+        arguments: Option<JsonValue>,
+    ) -> Result<JsonRpcResponse<McpToolCallResult>, McpServerManagerError> {
         self.ensure_server_ready(&route.server_name).await?;
         let request_id = self.take_request_id();
-        let response =
-            {
-                let server = self.server_mut(&route.server_name)?;
-                let process = server.process.as_mut().ok_or_else(|| {
-                    McpServerManagerError::InvalidResponse {
-                        server_name: route.server_name.clone(),
-                        method: "tools/call",
-                        details: "server process missing after initialization".to_string(),
-                    }
-                })?;
-                process
-                    .call_tool(
-                        request_id,
-                        McpToolCallParams {
-                            name: route.raw_name,
-                            arguments,
-                            meta: None,
-                        },
-                    )
-                    .await?
-            };
+        let response = {
+            let server = self.server_mut(&route.server_name)?;
+            let process = server.process.as_mut().ok_or_else(|| {
+                McpServerManagerError::InvalidResponse {
+                    server_name: route.server_name.clone(),
+                    method: "tools/call",
+                    details: "server process missing after initialization".to_string(),
+                }
+            })?;
+            process
+                .call_tool(
+                    request_id,
+                    McpToolCallParams {
+                        name: route.raw_name.clone(),
+                        arguments,
+                        meta: None,
+                    },
+                )
+                .await?
+        };
         Ok(response)
+    }
+
+    async fn force_restart_stdio_server(
+        &mut self,
+        server_name: &str,
+    ) -> Result<(), McpServerManagerError> {
+        let server = self.server_mut(server_name)?;
+        if let Some(mut process) = server.process.take() {
+            let _ = process.shutdown().await;
+        }
+        server.initialized = false;
+        Ok(())
     }
 
     pub async fn shutdown(&mut self) -> Result<(), McpServerManagerError> {
@@ -493,6 +644,12 @@ impl McpServerManager {
     #[must_use]
     pub fn tool_index(&self) -> &BTreeMap<String, ToolRoute> {
         &self.tool_index
+    }
+
+    /// Configured stdio MCP server names (from merged settings).
+    #[must_use]
+    pub fn stdio_server_names(&self) -> Vec<String> {
+        self.servers.keys().cloned().collect()
     }
 
     fn clear_routes_for_server(&mut self, server_name: &str) {

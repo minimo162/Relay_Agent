@@ -17,6 +17,9 @@ use crate::pdf_liteparse;
 /// Upper bound for loading a single file as UTF-8 text in `read_file` (plain text and `.ipynb` raw JSON).
 pub const MAX_TEXT_FILE_READ_BYTES: u64 = 10 * 1024 * 1024;
 
+/// Upper bound for `write_file` body size (aligned with claw-code `MAX_WRITE_SIZE` at the pinned SHA).
+pub const MAX_WRITE_FILE_BYTES: usize = 10 * 1024 * 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TextFilePayload {
     #[serde(rename = "filePath")]
@@ -361,6 +364,17 @@ fn read_image_summary(path: &Path) -> io::Result<String> {
 }
 
 pub fn write_file(path: &str, content: &str) -> io::Result<WriteFileOutput> {
+    if content.len() > MAX_WRITE_FILE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "content is too large ({} bytes, max {} bytes)",
+                content.len(),
+                MAX_WRITE_FILE_BYTES
+            ),
+        ));
+    }
+
     let absolute_path = normalize_path_allow_missing(path)?;
     let original_file = fs::read_to_string(&absolute_path).ok();
     if let Some(parent) = absolute_path.parent() {
@@ -699,7 +713,7 @@ mod tests {
 
     use super::{
         edit_file, glob_search, grep_search, read_file, write_file, GrepSearchInput,
-        MAX_TEXT_FILE_READ_BYTES,
+        MAX_TEXT_FILE_READ_BYTES, MAX_WRITE_FILE_BYTES,
     };
 
     fn temp_path(name: &str) -> std::path::PathBuf {
@@ -761,6 +775,15 @@ mod tests {
         let err = read_file(path.to_string_lossy().as_ref(), None, None, None)
             .expect_err("oversized read should fail");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn write_rejects_oversized_content() {
+        let path = temp_path("oversize-write.txt");
+        let huge = "x".repeat(MAX_WRITE_FILE_BYTES + 1);
+        let err = write_file(path.to_string_lossy().as_ref(), &huge).expect_err("oversized write");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("too large"));
     }
 
     #[test]

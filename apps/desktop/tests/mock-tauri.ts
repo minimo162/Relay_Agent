@@ -110,6 +110,9 @@ export async function mockInvoke(
       return undefined;
     }
 
+    case "respond_user_question":
+      return undefined;
+
     case "cancel_agent": {
       const { sessionId } = req as any;
       const entry = _sessions.get(sessionId);
@@ -145,7 +148,25 @@ export async function mockInvoke(
         clawConfigHomeDisplay: "~/.claw (mock)",
         maxTextFileReadBytes: 10485760,
         doctorHints: ["mock"],
+        predictabilityNotes: ["mock predictability"],
       };
+
+    case "get_workspace_allowlist":
+      return { storePath: "/mock/.relay-agent/workspace_allowed_tools.json", entries: [] };
+    case "remove_workspace_allowlist_tool":
+    case "clear_workspace_allowlist":
+      return undefined;
+    case "list_workspace_slash_commands":
+      return [];
+
+    case "write_text_export":
+      return undefined;
+
+    case "workspace_instruction_surfaces":
+      return { workspaceRoot: null, surfaces: [] };
+
+    case "get_desktop_permission_summary":
+      return [];
 
     default:
       throw new Error(`Unknown mock command: ${cmd}`);

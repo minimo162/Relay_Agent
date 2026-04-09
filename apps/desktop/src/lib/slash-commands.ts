@@ -26,15 +26,35 @@ export interface SlashCommand {
   handler: (args: string, ctx: SlashCommandContext) => Promise<string | null>;
 }
 
+/** Workspace `.relay/commands` entries (set from shell when cwd changes). */
+let workspaceSlashCommands: SlashCommand[] = [];
+
+export function setWorkspaceSlashCommands(cmds: SlashCommand[]): void {
+  workspaceSlashCommands = cmds;
+}
+
+function mergedCommands(): SlashCommand[] {
+  const out = [...builtinCommands];
+  for (const w of workspaceSlashCommands) {
+    const i = out.findIndex((c) => c.command === w.command);
+    if (i >= 0) {
+      out[i] = w;
+    } else {
+      out.push(w);
+    }
+  }
+  return out;
+}
+
 /* ── Registered commands ───────────────────────────────────── */
 
-const commands: SlashCommand[] = [
+const builtinCommands: SlashCommand[] = [
   {
     command: "/help",
     description: "Show available slash commands",
     handler: async (_args, _ctx) => {
-      const list = commands
-        .map((c) => `  ${c.command.padEnd(12)} — ${c.description}`)
+      const list = mergedCommands()
+        .map((c) => `  ${c.command.padEnd(14)} — ${c.description}`)
         .join("\n");
       return `Available commands:\n\n${list}`;
     },
@@ -85,8 +105,9 @@ const commands: SlashCommand[] = [
  */
 export function findSlashCommands(query: string): SlashCommand[] {
   const q = query.trim().toLowerCase();
-  if (!q) return commands;
-  return commands.filter((c) => c.command.slice(1).startsWith(q));
+  const all = mergedCommands();
+  if (!q) return all;
+  return all.filter((c) => c.command.slice(1).startsWith(q));
 }
 
 /**
@@ -102,7 +123,7 @@ export async function executeSlashCommand(
   const cmdName = parts[0].toLowerCase();
   const args = parts.slice(1).join(" ");
 
-  const cmd = commands.find((c) => c.command === cmdName);
+  const cmd = mergedCommands().find((c) => c.command === cmdName);
   if (!cmd) return null;
 
   try {

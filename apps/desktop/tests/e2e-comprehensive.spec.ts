@@ -57,6 +57,7 @@ function mockSetup(autoComplete: boolean) {
         return id;
       }
       case "respond_approval": return undefined;
+      case "respond_user_question": return undefined;
       case "cancel_agent": {
         const s = _mock.sessions.get(req.sessionId);
         if (s) s.running = false;
@@ -77,6 +78,10 @@ function mockSetup(autoComplete: boolean) {
       case "mcp_check_server_status": return { name: req.name, command: "", args: [], connected: false, tools: [] };
       case "warmup_copilot_bridge":
         return { connected: true, loginRequired: false, url: null, error: null };
+      case "workspace_instruction_surfaces":
+        return { workspaceRoot: null, surfaces: [] };
+      case "get_desktop_permission_summary":
+        return [];
       case "connect_cdp": case "cdp_start_new_chat":
         return { ok: true, debugUrl: "", pageUrl: "", pageTitle: "", port: 9360, launched: false, error: null };
       case "cdp_send_prompt":

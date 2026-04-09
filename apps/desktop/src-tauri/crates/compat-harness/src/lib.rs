@@ -459,4 +459,61 @@ mod parity_style {
         );
         let _ = fs::remove_dir_all(&dir);
     }
+
+    /// claw `mock_parity_scenarios.json`: `write_file_allowed`
+    #[test]
+    fn write_file_allowed_under_temp_workspace() {
+        let dir = std::env::temp_dir().join(format!("relay-write-parity-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("out.txt");
+        let v = json!({
+            "path": f.to_string_lossy(),
+            "content": "parity-write-ok\n",
+        });
+        let out = execute_tool("write_file", &v).expect("write_file");
+        assert!(
+            out.contains("parity-write-ok") || out.contains("create") || out.contains("update"),
+            "{out}"
+        );
+        assert_eq!(fs::read_to_string(&f).unwrap(), "parity-write-ok\n");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// claw `mock_parity_scenarios.json`: `grep_chunk_assembly` (simplified: single-shot grep content)
+    #[test]
+    fn grep_search_finds_match_in_workspace_file() {
+        let dir = std::env::temp_dir().join(format!("relay-grep-parity-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("needle.rs"), "fn find_me() {}\n").unwrap();
+        let out = execute_tool(
+            "grep_search",
+            &json!({
+                "pattern": "find_me",
+                "path": dir.to_string_lossy(),
+                "glob": "**/*.rs",
+                "output_mode": "content",
+            }),
+        )
+        .expect("grep_search");
+        assert!(out.contains("find_me"), "{out}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// claw `mock_parity_scenarios.json`: `bash_stdout_roundtrip` (non-destructive echo)
+    #[test]
+    fn bash_stdout_roundtrip_echo() {
+        let root = std::env::temp_dir().join(format!("relay-bash-parity-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".claw")).unwrap();
+        fs::write(
+            root.join(".claw/settings.json"),
+            r#"{"permissionMode":"workspace-write"}"#,
+        )
+        .unwrap();
+        let _guard = BashConfigCwdGuard::set(Some(root.clone()));
+        let out = execute_tool("bash", &json!({ "command": "printf 'parity-bash'" }))
+            .expect("bash echo");
+        assert!(out.contains("parity-bash"), "{out}");
+        let _ = fs::remove_dir_all(&root);
+    }
 }

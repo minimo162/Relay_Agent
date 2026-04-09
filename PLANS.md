@@ -41,13 +41,37 @@ Additional product principles (spreadsheet-era PRD and reduction goals):
 - Current reduction rule: treat the in-repo workbook engine, workbook context inspection, and workbook-specific prompt shaping as removal targets. The desired end state is upstream `claw-code` / `claw-code-parity` for behavior and `openwork` for UI direction, with custom Relay code limited to M365 Copilot interop.
 - Final reduction acceptance is architectural, not a raw byte cap: `T20` is satisfied only when no TypeScript agent-loop/orchestration remains, no in-repo workbook or relay-tool runtime remains, and the remaining custom Rust is limited to M365 Copilot interop plus thin desktop glue. Byte counts are still recorded as telemetry, but they are no longer the primary gate.
 - Preserve the openwork-inspired UI/UX direction, but do not keep compatibility shims just to protect earlier internal flows.
-- **OpenWork-style UX (2026-04-08):** Settings modal (workspace `cwd`, `maxTurns`, stored browser automation hints, **Copy diagnostics** via `get_relay_diagnostics` + local settings JSON), approval UI **Allow once** vs **Allow for session** (`SessionEntry.auto_allowed_tools` + `rememberForSession` on `respond_approval`), context **Plan** tab showing latest `TodoWrite` snapshot per session, composer **Templates** (local prompt templates in `localStorage`). Details: `docs/IMPLEMENTATION.md` milestone **2026-04-08 OpenWork-inspired shell UX**.
+- **OpenWork-style UX (2026-04-08, Plan timeline 2026-04-09):** Settings modal (workspace `cwd`, `maxTurns`, stored browser automation hints, **Copy diagnostics** / **Save diagnostics** via `get_relay_diagnostics` + local settings JSON), approval UI **Allow once** vs **Allow for session** (and optional **Allow for this workspace** — persisted per normalized `cwd`), context **Plan** tab showing a **timeline** of `TodoWrite` snapshots per session (newest first; see **2026-04-09 OpenWork reference batch** in `docs/IMPLEMENTATION.md`), composer **Templates** (local prompt templates in `localStorage`). Earlier milestone copy: **2026-04-08 OpenWork-inspired shell UX**.
 - **Workspace UI + folder picker (2026-04-08):** Header workspace chip, status-bar path (ellipsis + copy), `MessageFeed` empty-state copy tied to cwd, **Browse…** in Settings via **`tauri-plugin-dialog`** (`dialog:default` capability). Details: `docs/IMPLEMENTATION.md` milestone **2026-04-08 Workspace display + native folder picker**.
 - Compatibility is not a release requirement for the current pre-distribution phase. Prefer deleting obsolete paths over maintaining dual flows.
 - Save-copy only is the default write model.
 - Original spreadsheet inputs are treated as read-only.
 - No arbitrary code execution, shell execution, VBA, or external network access in the product flow.
 - Planning and implementation artifacts must be left in files, not only in task status changes.
+
+## OpenWork-derived follow-through (2026-04-09)
+
+### Workspace descriptor (`relay.workspace.json`)
+
+**Status:** Documented only (host does not read the file yet).
+
+**Goal:** Optional JSON at the workspace root for documented defaults (e.g. suggested session preset, browser hints) without duplicating Settings.
+
+**Precedence (when implemented):** Values from Settings and the `start_agent` request override any keys from `relay.workspace.json`. The file applies only for keys the user has not set in the UI for that run.
+
+**Artifacts:** Schema sketch in `docs/IMPLEMENTATION.md` (milestone log); future merge point: `start_agent` / config loader in `apps/desktop/src-tauri/`.
+
+### Project-scoped slash commands (`.relay/commands`)
+
+**Status:** Implemented (Option A in `docs/CUSTOM_SLASH_AND_TEMPLATES.md`).
+
+**Discovery:** Under the configured workspace `cwd`, read `.relay/commands/commands.json` (array of `{ name, description?, body }`) and `.relay/commands/*.md` (stem = command name, body = template). Same-named `.md` overrides JSON.
+
+**Limits:** 64 KiB per file, up to 64 markdown files; paths must stay under canonical `cwd`.
+
+**IPC / UI:** `list_workspace_slash_commands`; Solid composer merges with built-in slash commands (workspace wins on name conflict).
+
+**Verification:** `pnpm typecheck`, `cargo test -p relay-agent-desktop workspace_slash`, manual check with a sample `.relay/commands/foo.md`.
 
 ## Draft Completion Conditions
 

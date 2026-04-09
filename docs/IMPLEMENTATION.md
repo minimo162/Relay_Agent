@@ -16,6 +16,98 @@
 
 ## Milestone Log
 
+### 2026-04-09 Claw tool parity (MCP meta, AskUserQuestion, LSP diagnostics, Task*)
+
+**MCP (claw-style names):** `ListMcpResources`, `ReadMcpResource`, `McpAuth`, and unified `MCP` (`action`: `list_resources`, `read_resource`, `list_tools`, `call_tool`) dispatch from `TauriToolExecutor` to the session `McpServerManager` (merged `.claw` stdio servers). `McpAuth` returns a JSON status payload (no in-tool browser OAuth).
+
+**AskUserQuestion:** `execute_ask_user_question_tool` emits `agent:user_question`; IPC `respond_user_question` unblocks the tool. UI: `UserQuestionOverlay` + `shell/Shell.tsx` handler; cancel sends an empty answer and the tool errors (agent continues with that result).
+
+**LSP:** `runtime::lsp_diagnostics` — stdio JSON-RPC to `rust-analyzer` for `textDocument/diagnostic` pull; `LSP` tool `action: diagnostics` with workspace path checks in `agent_loop`.
+
+**Task*:** In-memory registry in `runtime::task_registry` (`TaskCreate` / `Get` / `List` / `Stop` / `Update` / `Output`); `execute_tool` + catalog entries.
+
+**Deps / fixes:** `uuid` added to `crates/runtime` for task ids. `agent_loop`: `let`-`else` terminator for AskUserQuestion; avoid `?` on `Result` inside `try_execute_mcp_meta_tool` (`Option` return); drop ambiguous `.into()` on string literals for `ToolError::new`.
+
+**Verification:** `cargo test --workspace` from `apps/desktop/src-tauri/` — pass (2026-04-09). `pnpm exec tsc --noEmit` from `apps/desktop/` — pass (2026-04-09).
+
+### 2026-04-09 E2E / Vite: `plugin-dialog` mock exports `save`
+
+**Problem:** [`SettingsModal.tsx`](apps/desktop/src/components/SettingsModal.tsx) imports `open` and `save` from `@tauri-apps/plugin-dialog`. The desktop Vite config aliases that package to [`tests/tauri-mock-dialog.ts`](apps/desktop/tests/tauri-mock-dialog.ts) for browser builds and Playwright’s `webServer` pipeline; the mock only exported `open`, so `vite build` failed with “save is not exported”.
+
+**Fix:** Export an async `save` stub (returns `null`, same contract as `open` for non-Tauri runs).
+
+**Verification:** `pnpm run build` from `apps/desktop/` — pass (2026-04-09).
+
+### 2026-04-09 Claw-code alignment implementation batch
+
+**Upstream pin:** `git ls-remote https://github.com/ultraworkers/claw-code.git refs/heads/main` → **`e4c38718824bda32c054664d1a01e591b489f635`** (matches `docs/CLAW_CODE_ALIGNMENT.md`; no drift on this date).
+
+**Compaction:** `runtime::compact` now matches claw-code `compact.rs` at that pin for `should_compact` (token budget applies only after an optional leading compaction system message), merged summaries on second compaction, and `extract_existing_compacted_summary` / `merge_compact_summaries` behavior. Relay retains **`preserve_recent_messages: 5`** in `CompactionConfig::default()` (claw default remains 4).
+
+**Sandbox:** Linux namespace support uses **`unshare_user_namespace_works()`** (probe `unshare --user --map-root-user true`) instead of binary presence only — same approach as claw `sandbox.rs` at the pin.
+
+**MCP:** `McpServerManager::call_tool` performs **one reconnect retry** after a recoverable stdio transport `Io` failure (process reset + re-init).
+
+**Harness:** `compat-harness` parity-style tests added for `write_file` success, `grep_search` content hit, and `bash` stdout roundtrip (when policy allows).
+
+**Docs:** `docs/CLAW_CODE_ALIGNMENT.md` — tool-surface policy for omitted claw tools; compaction checklist updated; last `ls-remote` verification row.
+
+**Verification:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace` — pass (2026-04-09). `pnpm typecheck` — pass (2026-04-09).
+
+### 2026-04-09 OpenWork plan implementation (allowlist UI, predictability notes, `.relay/commands`, shell layout)
+
+**Workspace allowlist UI:** IPC `get_workspace_allowlist`, `remove_workspace_allowlist_tool`, `clear_workspace_allowlist` (`workspace_allowlist.rs`); Settings lists persisted tools per normalized folder, **Remove** per tool, **Clear all for path above**, **Copy / Save allow list JSON**. Replaces hand-editing `~/.relay-agent/workspace_allowed_tools.json` as the only revocation path.
+
+**Predictability:** `RelayDiagnostics.predictability_notes` from `get_relay_diagnostics` plus a short **How connections use your settings** block in Settings (cwd vs process, CDP port, allow-list file path).
+
+**`.relay/commands`:** New `workspace_slash_commands.rs`, command `list_workspace_slash_commands`; composer loads workspace commands when `cwd` changes (`shell/Shell.tsx` + `setWorkspaceSlashCommands`). Slash autocomplete fixed (`Composer` used to double the `/` prefix).
+
+**Frontend domains:** `shell/Shell.tsx` (main app), `session/session-display.ts`, `context/todo-write-parse.ts`; `root.tsx` re-exports the shell.
+
+**`relay.workspace.json` (proposed, not loaded yet):** Optional file at the workspace root. Example shape for future implementation:
+
+```json
+{
+  "sessionPresetDefault": "plan",
+  "browserAutomation": { "cdpPort": 9360, "autoLaunchEdge": true, "timeoutMs": 30000 },
+  "maxTurns": 32
+}
+```
+
+**Precedence:** Settings UI and `start_agent` fields override keys present in this file when both are set.
+
+**Verification:** `pnpm typecheck` — pass. `cargo test -p relay-agent-desktop` — pass (includes `workspace_slash_commands::tests::md_and_json_merge_md_wins_on_name`).
+
+### 2026-04-09 OpenWork round-two (instruction surfaces, live Policy summary, session JSON export, workspace allowlist, sidebar sort)
+
+**PLANS.md:** OpenWork-style UX bullet updated for **Plan timeline**, **Save diagnostics**, and **Allow for this workspace**.
+
+**Workspace instructions (read-only):** IPC `workspace_instruction_surfaces` lists `CLAW.md`, `.claw/`, nested instruction files, and settings JSON under the configured workspace `cwd` with existence flags (OpenWork-style skills/instructions visibility).
+
+**Policy tab:** Replaces illustrative defaults with **`get_desktop_permission_summary`** rows derived from `desktop_permission_policy` for the current **session preset** (Build / Plan / Explore).
+
+**Debug:** **Save session JSON…** in Settings writes `get_session_history` for the active session via `write_text_export`.
+
+**Approvals:** **`remember_for_workspace`** on `respond_approval` persists tool names in `~/.relay-agent/workspace_allowed_tools.json` (normalized cwd keys); new sessions preload into `auto_allowed_tools`. **Allow for this workspace** button in the approval overlay (only when workspace `cwd` was set for the session).
+
+**Sidebar:** Session list sorted **newest first** by `createdAt` (search unchanged).
+
+**Workspace allowlist (Allow for this workspace):** Stored at `~/.relay-agent/workspace_allowed_tools.json` (or `%USERPROFILE%\.relay-agent\` on Windows). Keys are normalized workspace roots. Revoke via **Settings → Workspace tool allow list** (2026-04-09 batch) or by editing/deleting that file.
+
+**Verification:** `pnpm typecheck` — pass. `cargo check` / `cargo test -p relay-agent-desktop --lib` — pass (recorded with this batch).
+
+### 2026-04-09 OpenWork reference batch (plan timeline, diagnostics export, MCP copy, audit summary)
+
+**Plan timeline:** Each successful `TodoWrite` appends a snapshot per session (`PlanTimelineEntry`: `toolUseId`, `atMs`, `todos`). Loading history rebuilds the timeline from `chunksFromHistory` via `buildPlanTimelineFromUiChunks` (`apps/desktop/src/context/todo-write-parse.ts`). **Context → Plan** shows newest-first collapsible sections (`apps/desktop/src/components/ContextPanel.tsx`); state in `apps/desktop/src/shell/Shell.tsx`.
+
+**Diagnostics export:** `write_text_export` Tauri command (`apps/desktop/src-tauri/src/tauri_bridge.rs`) + `writeTextExport` in `ipc.ts`. **Settings → Debug:** **Save diagnostics…** uses `@tauri-apps/plugin-dialog` `save` then writes JSON (bundle includes `activeSessionId` when set). **Copy diagnostics** unchanged aside from bundle field rename `exportedAt` / `activeSessionId`.
+
+**MCP / extensions copy:** Context tab label **MCP** (was Servers); intro text references `.claw`, `CLAW.md`, and OpenWork-style skills analogy; empty state clarified.
+
+**Session audit:** `formatSessionAuditSummary` in `ipc.ts`; **Copy session audit** in Settings copies a compact tool/text timeline from `get_session_history` for the active session (requires sidebar selection).
+
+**Verification:** `pnpm exec tsc -p apps/desktop/tsconfig.json --noEmit` — pass (2026-04-09). `cargo check` from `apps/desktop/src-tauri/` — pass (2026-04-09).
+
 ### 2026-04-09 Relay Agent app icon and favicon
 
 **Problem:** The bundled `apps/desktop/src-tauri/icons/icon.png` was a minimal 32×32 placeholder (~100 bytes), so the window/taskbar icon often appeared as a flat dark square when scaled.
