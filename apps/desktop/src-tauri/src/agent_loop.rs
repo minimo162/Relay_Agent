@@ -605,6 +605,7 @@ When you need to call one or more tools, you may write a short user-facing expla
 
 - **Parsed fences run on the user's machine:** The Relay desktop executes tools **only** when it successfully parses the prescribed fences **from this reply**. Explaining JSON in prose without a fence does **not** run tools—emit a real `relay_tool` block or a normal ` ```json ` code block with the tool JSON.
 - **Copilot UI:** The chat UI may label your code block as “Plain Text” or similar; still use **` ```relay_tool `** as the fence opener (or put the same JSON object inside **` ```json `**—the host accepts that too).
+- **Prefer a clean fence body:** Put **only** tool JSON (object or array) inside each tool fence when you can—do not interleave Copilot UI disclaimer lines with the JSON (Relay can still extract embedded tool objects from mixed “Plain Text” blocks, but a single JSON payload is most reliable).
 - **Do not defer concrete requests:** If the user already named files and an action, **call tools now** in this turn; asking them to repeat the instruction wastes a turn and blocks the agent.
 
 - **Single tool:** one JSON object: `{{ "name": "<tool_name>", "input": {{ ... }} }}`
@@ -643,7 +644,7 @@ fn parse_copilot_tool_response(raw: &str) -> (String, Vec<(String, String, Strin
     let mut calls = parse_tool_payloads(&payloads);
     let mut display = stripped;
     if calls.is_empty() {
-        let (d, fb_payloads) = extract_fallback_markdown_fences(&display);
+        let (d, fb_payloads) = extract_fallback_markdown_fences(&display, &whitelist);
         display = d;
         calls.extend(filter_whitelisted_tool_calls(
             parse_tool_payloads(&fb_payloads),
@@ -692,9 +693,85 @@ fn find_generic_markdown_fence_inner_end(body: &str) -> Option<usize> {
     body.rfind("```")
 }
 
+fn skip_json_whitespace(s: &str, mut i: usize) -> usize {
+    let bytes = s.as_bytes();
+    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
+        i += 1;
+    }
+    i
+}
+
+/// True if `s[brace_idx..]` starts with `{` and the first JSON key (after whitespace) is `"name"`.
+fn brace_open_followed_by_name_key(s: &str, brace_idx: usize) -> bool {
+    let bytes = s.as_bytes();
+    if brace_idx >= bytes.len() || bytes[brace_idx] != b'{' {
+        return false;
+    }
+    let after = skip_json_whitespace(s, brace_idx + 1);
+    s.get(after..).is_some_and(|t| t.starts_with("\"name\""))
+}
+
+/// Scan `text` for balanced `{…}` objects whose first key is `"name"` and that pass MVP tool validation.
+fn extract_mvp_tool_object_spans(
+    text: &str,
+    whitelist: &HashSet<String>,
+) -> Vec<(usize, usize, String)> {
+    const MAX_OBJECT_LEN: usize = 32_768;
+    const MAX_MATCHES: usize = 12;
+    let mut out = Vec::new();
+    let mut search_start = 0usize;
+
+    while search_start < text.len() && out.len() < MAX_MATCHES {
+        let Some(rel) = text[search_start..].find('{') else {
+            break;
+        };
+        let abs = search_start + rel;
+        if !brace_open_followed_by_name_key(text, abs) {
+            search_start = abs + 1;
+            continue;
+        }
+        let Some(sub) = extract_balanced_json_object(text, abs) else {
+            search_start = abs + 1;
+            continue;
+        };
+        if sub.len() > MAX_OBJECT_LEN {
+            search_start = abs + 1;
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(sub) else {
+            search_start = abs + 1;
+            continue;
+        };
+        let Some(obj) = v.as_object() else {
+            search_start = abs + 1;
+            continue;
+        };
+        let Some(name) = obj.get("name").and_then(|x| x.as_str()) else {
+            search_start = abs + 1;
+            continue;
+        };
+        if !whitelist.contains(name) {
+            search_start = abs + 1;
+            continue;
+        }
+        if !obj.get("input").map_or(true, Value::is_object) {
+            search_start = abs + 1;
+            continue;
+        }
+        if parse_one_tool_call(&v).is_none() {
+            search_start = abs + 1;
+            continue;
+        }
+        let end = abs + sub.len();
+        out.push((abs, end, sub.to_string()));
+        search_start = end;
+    }
+    out
+}
+
 /// Strip normal Markdown code fences and return JSON bodies that may contain tool calls.
 /// Skips `relay_tool` fences (payloads already taken by [`extract_relay_tool_fences`]); strips them from display.
-fn extract_fallback_markdown_fences(text: &str) -> (String, Vec<String>) {
+fn extract_fallback_markdown_fences(text: &str, whitelist: &HashSet<String>) -> (String, Vec<String>) {
     const OPEN: &str = "```";
     let mut display = String::new();
     let mut payloads = Vec::new();
@@ -756,8 +833,14 @@ fn extract_fallback_markdown_fences(text: &str) -> (String, Vec<String>) {
             continue;
         }
 
-        if !inner.is_empty() && serde_json::from_str::<Value>(inner).is_ok() {
-            payloads.push(inner.to_string());
+        if !inner.is_empty() {
+            if serde_json::from_str::<Value>(inner).is_ok() {
+                payloads.push(inner.to_string());
+            } else {
+                for (_, _, p) in extract_mvp_tool_object_spans(inner, whitelist) {
+                    payloads.push(p);
+                }
+            }
         }
 
         rest = rest_after_fence;
@@ -766,55 +849,14 @@ fn extract_fallback_markdown_fences(text: &str) -> (String, Vec<String>) {
     (display, payloads)
 }
 
-/// Pull `{"name":"…","input":{…}}` objects from prose (Copilot "Plain Text" without fences). Bounded scan.
+/// Pull `{"name":"…","input":{…}}` objects from prose (Copilot "Plain Text" without fences, or pretty-printed `{` + newline + `"name"`). Bounded scan.
 fn extract_unfenced_tool_json_candidates(text: &str, whitelist: &HashSet<String>) -> (String, Vec<String>) {
-    const MAX_OBJECT_LEN: usize = 32_768;
-    const MAX_MATCHES: usize = 12;
-    let mut payloads = Vec::new();
-    let mut ranges: Vec<(usize, usize)> = Vec::new();
-    let mut search_start = 0usize;
-
-    while search_start < text.len() && ranges.len() < MAX_MATCHES {
-        let slice = &text[search_start..];
-        let rel = slice
-            .find("{\"name\"")
-            .or_else(|| slice.find("{ \"name\""));
-        let Some(rel) = rel else {
-            break;
-        };
-        let abs = search_start + rel;
-        let Some(sub) = extract_balanced_json_object(text, abs) else {
-            search_start = abs.saturating_add(1);
-            continue;
-        };
-        if sub.len() > MAX_OBJECT_LEN {
-            search_start = abs.saturating_add(1);
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<Value>(sub) else {
-            search_start = abs.saturating_add(1);
-            continue;
-        };
-        if let Some(obj) = v.as_object() {
-            let Some(name) = obj.get("name").and_then(|x| x.as_str()) else {
-                search_start = abs.saturating_add(1);
-                continue;
-            };
-            if !whitelist.contains(name) {
-                search_start = abs.saturating_add(1);
-                continue;
-            }
-            if !obj.get("input").map_or(true, Value::is_object) {
-                search_start = abs.saturating_add(1);
-                continue;
-            }
-            if parse_one_tool_call(&v).is_some() {
-                let end = abs + sub.len();
-                ranges.push((abs, end));
-                payloads.push(sub.to_string());
-            }
-        }
-        search_start = abs.saturating_add(1);
+    let spans = extract_mvp_tool_object_spans(text, whitelist);
+    let mut ranges = Vec::with_capacity(spans.len());
+    let mut payloads = Vec::with_capacity(spans.len());
+    for (a, b, p) in spans {
+        ranges.push((a, b));
+        payloads.push(p);
     }
 
     ranges.sort_by_key(|(a, _)| *a);
@@ -2209,6 +2251,7 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("Action in the same turn"));
         assert!(s.contains("No meta-only stall"));
         assert!(s.contains("Do not defer concrete requests"));
+        assert!(s.contains("Prefer a clean fence body"));
     }
 
     #[test]
@@ -2315,6 +2358,66 @@ Tail"#;
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].1, "read_file");
         assert!(!vis.contains("read_file"));
+    }
+
+    #[test]
+    fn unfenced_pretty_printed_read_file() {
+        let raw = r#"了解。
+
+{
+  "name": "read_file",
+  "input": {
+    "path": "C:\\Users\\x\\Downloads\\テトリス.html"
+  }
+}
+"#;
+        let (vis, tools) = parse_copilot_tool_response(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "read_file");
+        assert!(tools[0].2.contains("テトリス.html"));
+        assert!(!vis.contains("\"name\""));
+    }
+
+    #[test]
+    fn fallback_plain_text_labeled_fence_mixed_inner() {
+        let raw = r#"了解。以下で読みます。
+
+```Plain Text
+relay_tool は完全にはサポートされていません。
+{
+  "name": "read_file",
+  "input": {
+    "path": "C:\\Users\\m242054\\Downloads\\テトリス.html"
+  }
+}
+```
+
+次に編集します。"#;
+        let (vis, tools) = parse_copilot_tool_response(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "read_file");
+        assert!(tools[0].2.contains("テトリス.html"));
+        assert!(vis.contains("了解"));
+        assert!(vis.contains("次に編集"));
+        assert!(!vis.contains("```Plain Text"));
+    }
+
+    #[test]
+    fn fallback_text_fence_mixed_inner() {
+        let raw = r#"pre
+```text
+Note line.
+{
+  "name": "glob_search",
+  "input": { "pattern": "*.rs" }
+}
+```
+post"#;
+        let (vis, tools) = parse_copilot_tool_response(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "glob_search");
+        assert!(vis.contains("pre"));
+        assert!(vis.contains("post"));
     }
 
     #[test]

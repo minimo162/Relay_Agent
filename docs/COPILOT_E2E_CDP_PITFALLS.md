@@ -36,7 +36,9 @@ Microsoft 365 CopilotのE2Eテストを、実際にログインしたMicrosoft E
 
 **症状:** モデルがツール呼び出しを文章や「Plain Text」ブロックで説明するだけで、**` ```relay_tool `** 形式のフェンスを出さない／**` ```json `** だけで JSON を出すと、応答にツールが含まれず **1 ターンで終了**し、`read_file` などが実行されないことがあった。
 
-**対策（実装）:** デスクトップ Rust [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) の `parse_copilot_tool_response` は、まず **` ```relay_tool `** を解析し、**ツールが 0 件のとき**に限り、(1) 通常の Markdown コードフェンス（`json`・無言語など）内の JSON、(2) 本文中の `{"name":"<MVPツール名>","input":{…}}` を限定的に抽出する。フォールバックは **MVP カタログに載っているツール名のみ**（それ以外は無視）。プロンプト（ツールカタログ節）に「説明だけでは実行されない」「UI が Plain Text と表示しても `relay_tool` または `json` フェンスで JSON を出す」旨を記載。
+**対策（実装）:** デスクトップ Rust [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) の `parse_copilot_tool_response` は、まず **` ```relay_tool `** を解析し、**ツールが 0 件のとき**に限り、(1) 通常の Markdown コードフェンス（`json`・`Plain Text`・無言語など）で **フェンス全体が JSON** のとき、(2) 同じフェンス内に **UI 注意書きとツール JSON が混在**するときは **MVP 形のオブジェクトだけ**を走査して抽出、(3) 本文中の未フェンス JSON について **`{` の直後に改行して `"name"` がある整形 JSON** も含めて抽出する。フォールバックは **MVP カタログに載っているツール名のみ**（それ以外は無視）。プロンプト（ツールカタログ節）に「説明だけでは実行されない」「UI が Plain Text と表示しても `relay_tool` または `json` フェンスで JSON を出す」「可能ならフェンス内はツール JSON のみ」旨を記載。
+
+**「Plain Text」ブロック内の混在:** Copilot がラベルや注意文と **同じコードブロック**にツール JSON を入れると、旧実装はフェンス本文を **1 つの JSON として**解釈できずツール 0 件になり得た。現在は `extract_fallback_markdown_fences` が **本文からツールオブジェクトを列挙**する。
 
 **誤拒否（「この Copilot では relay_tool 不可」）:** モデルが一般のブラウザ Copilot向けに「ツールは実行できない」と答えることがある。Relay では **CDP 経由の応答はデスクトップがパースしてツール実行する**ため、プロンプト先頭に **CDP session / Relay host execution** の説明と、添付ファイル用ショートメッセージ（`CDP_FILE_DELIVERY_USER_MESSAGE`）で「フェンスは Relay が実行する」「このチャットでは不可と断らない」旨を明示している（[`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs)）。
 
