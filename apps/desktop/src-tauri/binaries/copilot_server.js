@@ -3460,6 +3460,13 @@ function clearCdpPortMarker(profileDir) {
   try { fs.unlinkSync(cdpMarkerFile(profileDir)); } catch { /* ignore */ }
 }
 
+/** Match `cdp_copilot::launch_dedicated_edge` / `start-relay-edge-cdp.sh` so Node-spawned Edge exposes CDP reliably (esp. Linux). */
+function relayEdgeChromiumHardeningArgv() {
+  const out = ["--no-sandbox", "--disable-gpu", "--disable-gpu-compositing"];
+  if (process.platform === "linux") out.push("--disable-dev-shm-usage");
+  return out;
+}
+
 /**
  * Launch msedge with a visible window from Node spawned under Tauri.
  * Raw `spawn(msedge)` can leave the browser off-screen or in the wrong session on Windows.
@@ -3535,6 +3542,7 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
         "--disable-infobars",
         "--disable-restore-session-state",
         "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
+        ...relayEdgeChromiumHardeningArgv(),
         `--user-data-dir=${profileDir}`,
       ];
       try {
@@ -3607,6 +3615,7 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
     "--disable-infobars",
     "--disable-restore-session-state",
     "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
+    ...relayEdgeChromiumHardeningArgv(),
     `--user-data-dir=${profileDir}`,
     COPILOT_URL,
   ];
@@ -3719,6 +3728,7 @@ async function ensureEdgeLegacyAttach(edgePath, cdpPort) {
     "--disable-infobars",
     "--disable-restore-session-state",
     "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
+    ...relayEdgeChromiumHardeningArgv(),
     COPILOT_URL,
   ];
   if (process.platform === "win32") {
@@ -3835,15 +3845,24 @@ function findEdgePath() {
     return fs.existsSync(p) ? p : null;
   }
   // Linux / BSD: match Rust `cdp_copilot::find_edge_path` behavior
+  const home = process.env.HOME || "";
   const linuxCandidates = [
     "/usr/bin/microsoft-edge-stable",
     "/usr/bin/microsoft-edge",
     "/opt/microsoft/msedge/microsoft-edge",
-  ];
+    home && path.join(home, ".local/share/flatpak/exports/bin/com.microsoft.Edge"),
+    "/var/lib/flatpak/exports/bin/com.microsoft.Edge",
+  ].filter(Boolean);
   for (const p of linuxCandidates) {
     if (p && fs.existsSync(p)) return p;
   }
-  for (const name of ["microsoft-edge-stable", "microsoft-edge", "msedge"]) {
+  for (const name of [
+    "microsoft-edge-stable",
+    "microsoft-edge",
+    "microsoft-edge-dev",
+    "microsoft-edge-beta",
+    "msedge",
+  ]) {
     try {
       const out = execFileSync("which", [name], { encoding: "utf8" }).trim();
       if (out && fs.existsSync(out)) return out;
