@@ -136,6 +136,65 @@ function stripM365CopilotReplyChrome(text) {
   return s.trim();
 }
 
+/** Last-line / tail matches while Copilot is still streaming (Stop button may not be visible yet). */
+var COPILOT_STREAMING_PLACEHOLDER_LAST_LINES = [
+  "応答を生成しています",
+  "応答を作成しています",
+  "生成しています",
+  "作成しています",
+  "考えています",
+  "処理しています",
+  "しばらくお待ちください",
+  "Generating response",
+  "Creating response",
+  "Please wait",
+];
+
+function normalizeStreamingLine(line) {
+  return String(line || "")
+    .replace(/\u2026/g, "...")
+    .replace(/\u00a0/g, " ")
+    .trim();
+}
+
+function lineMatchesStreamingPlaceholder(line) {
+  const n = normalizeStreamingLine(line).toLowerCase();
+  if (!n) return false;
+  for (const p of COPILOT_STREAMING_PLACEHOLDER_LAST_LINES) {
+    if (n === p.toLowerCase()) return true;
+  }
+  if (/^thinking[.\u2026…\s]*$/i.test(n)) return true;
+  if (/^generating[.\u2026…\s]*$/i.test(n)) return true;
+  return false;
+}
+
+function replyEndsWithStreamingPlaceholder(text) {
+  const s = String(text || "").trimEnd();
+  if (!s) return false;
+  const parts = s.split(/\r?\n/);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const t = parts[i].trim();
+    if (!t) continue;
+    return lineMatchesStreamingPlaceholder(t);
+  }
+  return false;
+}
+
+/** Remove trailing placeholder lines Copilot appends to innerText during streaming. */
+function stripStreamingPlaceholderTail(text) {
+  let s = String(text || "");
+  for (let guard = 0; guard < 48; guard++) {
+    const lines = s.split(/\r?\n/);
+    let lastIdx = lines.length - 1;
+    while (lastIdx >= 0 && !lines[lastIdx].trim()) lastIdx--;
+    if (lastIdx < 0) break;
+    if (!lineMatchesStreamingPlaceholder(lines[lastIdx])) break;
+    lines.splice(lastIdx, 1);
+    s = lines.join("\n");
+  }
+  return s.trim();
+}
+
 /**
  * Paths we never treat as chat model output (telemetry, shell assets, metrics).
  * Used by allowlist mode; legacy broad capture uses a separate deny regex.
@@ -2216,7 +2275,9 @@ function copilotDomReplyExtractIifeExpression() {
 
 async function extractAssistantReplyText(session) {
   const r = await session.evaluate(copilotDomReplyExtractIifeExpression()).catch(() => ({ value: "" }));
-  return stripM365CopilotReplyChrome(typeof r?.value === "string" ? r.value : "");
+  return stripStreamingPlaceholderTail(
+    stripM365CopilotReplyChrome(typeof r?.value === "string" ? r.value : ""),
+  );
 }
 
 /**
@@ -3132,9 +3193,9 @@ function domExtractLooksLikeSubmittedPrompt(textLen, submittedLen) {
  * (prevents agent-loop feedback that doubles prompt size every turn).
  */
 async function resolveAssistantReplyForReturn(session, looseText, submittedPromptLen, netCapture = null) {
-  const loose = (looseText || "").trim();
+  const loose = stripStreamingPlaceholderTail((looseText || "").trim());
   if (!domExtractLooksLikeSubmittedPrompt(loose.length, submittedPromptLen)) return loose;
-  const strict = (await extractAssistantReplyStrict(session)).trim();
+  const strict = stripStreamingPlaceholderTail((await extractAssistantReplyStrict(session)).trim());
   if (strict.length >= 20 && strict.length < loose.length * 0.88) {
     console.error(
       "[copilot:response] prefer strict assistant over prompt-length loose extract strictLen=",
@@ -3146,7 +3207,7 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
     );
     return strict;
   }
-  const heur = (await extractAssistantReplyHeuristic(session)).trim();
+  const heur = stripStreamingPlaceholderTail((await extractAssistantReplyHeuristic(session)).trim());
   if (heur.length >= 15) {
     if (!domExtractLooksLikeSubmittedPrompt(heur.length, submittedPromptLen)) {
       console.error("[copilot:response] prefer heuristic assistant extract len=", heur.length);
@@ -3163,18 +3224,22 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
   if (netCapture) {
     try {
       if (typeof netCapture.pickAssistantFromChathubWs === "function") {
-        const chw = netCapture.pickAssistantFromChathubWs().trim();
+        const chw = stripStreamingPlaceholderTail(netCapture.pickAssistantFromChathubWs().trim());
         if (chw.length >= CHATHUB_ASSISTANT_MIN_CHARS && !networkExtractLooksLikeGarbage(chw)) {
           console.error("[copilot:response] M365 Chathub WebSocket assistant len=", chw.length);
           return chw;
         }
       }
-      const shortN = (await netCapture.pickBestShortAssistant(loose.length, submittedPromptLen)).trim();
+      const shortN = stripStreamingPlaceholderTail(
+        (await netCapture.pickBestShortAssistant(loose.length, submittedPromptLen)).trim(),
+      );
       if (shortN.length >= 20) {
         console.error("[copilot:response] network short-assistant len=", shortN.length);
         return shortN;
       }
-      const nw = (await netCapture.pickBestOver("", submittedPromptLen)).trim();
+      const nw = stripStreamingPlaceholderTail(
+        (await netCapture.pickBestOver("", submittedPromptLen)).trim(),
+      );
       if (
         nw.length >= CHATHUB_ASSISTANT_MIN_CHARS &&
         !networkExtractLooksLikeGarbage(nw) &&
@@ -3191,8 +3256,11 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
 }
 
 async function waitForDomResponse(session, netCapture = null, submittedPromptLen = 0) {
-  const wire = async (s) =>
-    netCapture ? await netCapture.pickBestOver(s, submittedPromptLen) : s;
+  const wire = async (s) => {
+    let t = stripStreamingPlaceholderTail(String(s ?? "").trim());
+    if (netCapture) t = stripStreamingPlaceholderTail(String(await netCapture.pickBestOver(t, submittedPromptLen) ?? "").trim());
+    return t;
+  };
 
   await sleep(520);
   let baselineLen = (await pollCopilotGeneratingAndReply(session)).reply.trim().length;
@@ -3231,7 +3299,9 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
       genStreak = 0;
     }
     const ignorePhantomStop = genStreak >= RESPONSE_PHANTOM_GENERATING_POLLS;
-    const generating = generatingRaw && !ignorePhantomStop;
+    const streamingPlaceholderTail = replyEndsWithStreamingPlaceholder(reply);
+    const generating =
+      streamingPlaceholderTail || (generatingRaw && !ignorePhantomStop);
     if (generating) quietGen = 0;
     else quietGen++;
     if (ignorePhantomStop && genStreak === RESPONSE_PHANTOM_GENERATING_POLLS) {
@@ -3264,6 +3334,7 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
         bodyLen,
         generating,
         generatingRaw,
+        streamingPlaceholderTail,
         genStreak,
         streamed,
         stable,
@@ -3312,8 +3383,9 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
       needStableTicks = Math.min(needStableTicks, 2);
     }
     const lengthOkForDone =
-      len >= minDoneLen() ||
-      (quietGen >= 5 && !generating && len > baselineLen && len >= 1);
+      (len >= minDoneLen() ||
+        (quietGen >= 5 && !generating && len > baselineLen && len >= 1)) &&
+      !streamingPlaceholderTail;
     if (settled && grewEnough && lengthOkForDone) {
       stable++;
       if (stable >= needStableTicks) {
@@ -3327,6 +3399,12 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
           continue;
         }
         const candidate = replyLate.length >= len ? replyLate : reply;
+        if (replyEndsWithStreamingPlaceholder(candidate)) {
+          console.error("[copilot:response] post-stable reply still ends with streaming placeholder; keep waiting");
+          stable = 0;
+          prev = len;
+          continue;
+        }
         const out = await resolveAssistantReplyForReturn(session, candidate, submittedPromptLen, netCapture);
         if (out == null) {
           console.error(
@@ -3463,7 +3541,6 @@ function clearCdpPortMarker(profileDir) {
 /** Match `cdp_copilot::launch_dedicated_edge` / `start-relay-edge-cdp.sh` so Node-spawned Edge exposes CDP reliably (esp. Linux). */
 function relayEdgeChromiumHardeningArgv() {
   const out = [
-    "--no-sandbox",
     "--disable-gpu",
     "--disable-gpu-compositing",
     "--disable-hang-monitor",
@@ -3471,6 +3548,10 @@ function relayEdgeChromiumHardeningArgv() {
     "--disable-breakpad",
     "--disable-crashpad",
   ];
+  // Edge on Windows/macOS often reports `--no-sandbox` as unsupported; Chromium on Linux still benefits (CI/containers).
+  if (process.platform === "linux" || process.env.RELAY_EDGE_FORCE_NO_SANDBOX === "1") {
+    out.unshift("--no-sandbox");
+  }
   if (process.platform === "linux") out.push("--disable-dev-shm-usage");
   return out;
 }

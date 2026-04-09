@@ -1,5 +1,6 @@
-import { Show, createSignal, type JSX } from "solid-js";
+import { Show, createMemo, createSignal, type JSX } from "solid-js";
 import { IconButton } from "./ui";
+import { assistantMarkdownToSafeHtml } from "../lib/assistant-markdown";
 import { ui } from "../lib/ui-tokens";
 
 const COLLAPSE_CHAR_THRESHOLD = 480;
@@ -21,6 +22,7 @@ function CopyIcon() {
 export function MessageBubble(props: { role: "user" | "assistant"; text: string }): JSX.Element {
   const isUser = props.role === "user";
   const [expanded, setExpanded] = createSignal(false);
+  const assistantHtml = createMemo(() => assistantMarkdownToSafeHtml(props.text));
   const long = () => props.text.length > COLLAPSE_CHAR_THRESHOLD;
   const collapsed = () => long() && !expanded();
 
@@ -56,13 +58,25 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
             <CopyIcon />
           </IconButton>
         </div>
-        <div
-          class={`px-4 py-2.5 whitespace-pre-wrap break-words ${
-            collapsed() ? "max-h-48 overflow-hidden" : ""
-          }`}
+        <Show
+          when={isUser}
+          fallback={
+            <div
+              class={`ra-md-assistant px-4 py-2.5 break-words text-sm leading-relaxed ${
+                collapsed() ? "max-h-48 overflow-hidden" : ""
+              }`}
+              innerHTML={assistantHtml()}
+            />
+          }
         >
-          {props.text}
-        </div>
+          <div
+            class={`px-4 py-2.5 whitespace-pre-wrap break-words ${
+              collapsed() ? "max-h-48 overflow-hidden" : ""
+            }`}
+          >
+            {props.text}
+          </div>
+        </Show>
         <Show when={long()}>
           <div class="px-4 pb-2 -mt-1">
             <button

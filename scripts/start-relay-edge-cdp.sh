@@ -6,6 +6,7 @@
 #   DISPLAY              X11 のみ: 未設定時は :0（Wayland のときは WAYLAND_DISPLAY があれば xdpyinfo をスキップ）
 #   RELAY_EDGE_CDP_PORT  既定 9360（YakuLingo 等の 9333 と衝突回避; 既存 Edge は DevToolsActivePort で検出）
 #   RELAY_EDGE_PROFILE   既定 ~/RelayAgentEdgeProfile
+#   RELAY_EDGE_FORCE_NO_SANDBOX=1  Linux 以外でも --no-sandbox を付ける（通常は Linux のみ）
 set -euo pipefail
 
 PORT="${RELAY_EDGE_CDP_PORT:-9360}"
@@ -55,13 +56,18 @@ if [[ -z "$EDGE" ]]; then
 fi
 
 echo "[start-relay-edge-cdp] Edge を起動します (CDP ${PORT}, profile ${PROFILE})…"
+# Linux: --no-sandbox helps containers/low /dev/shm; macOS Edge often flags it unsupported.
+NO_SANDBOX=()
+if [[ "$(uname -s)" == "Linux" ]] || [[ "${RELAY_EDGE_FORCE_NO_SANDBOX:-}" == "1" ]]; then
+  NO_SANDBOX=(--no-sandbox)
+fi
 nohup "$EDGE" \
   --user-data-dir="$PROFILE" \
   --remote-debugging-port="$PORT" \
   --remote-allow-origins=* \
   --no-first-run \
   --no-default-browser-check \
-  --no-sandbox \
+  "${NO_SANDBOX[@]}" \
   --disable-gpu \
   --disable-gpu-compositing \
   --disable-restore-session-state \

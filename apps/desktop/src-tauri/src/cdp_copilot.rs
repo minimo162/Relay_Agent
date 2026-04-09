@@ -185,21 +185,31 @@ pub fn launch_dedicated_edge(debug_port: u16) -> Result<std::process::Child> {
 
     // Launch Edge with a blank start page. Use flags to avoid VBS/Code
     // Integrity issues (error 577) on Windows corporate environments.
+    // `--no-sandbox` is omitted on Windows/macOS: Microsoft Edge reports it as unsupported there; keep on Linux (and optional override).
     let mut cmd = std::process::Command::new(&edge_path);
-    cmd.args([
-        "--remote-debugging-port",
-        &debug_port.to_string(),
+    cmd.arg("--remote-debugging-port")
+        .arg(debug_port.to_string())
         // Chromium 111+ restricts DevTools/WebSocket origins without this; Edge needs it for CDP clients.
-        "--remote-allow-origins=*",
-        &format!("--user-data-dir={}", profile_dir.to_str().unwrap()),
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-infobars",
-        "--disable-hang-monitor",
-        "--disable-restore-session-state",
-        "--disable-gpu",
-        "--disable-gpu-compositing",
-        "--no-sandbox",
+        .arg("--remote-allow-origins=*")
+        .arg(format!(
+            "--user-data-dir={}",
+            profile_dir.to_str().unwrap()
+        ))
+        .args([
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-infobars",
+            "--disable-hang-monitor",
+            "--disable-restore-session-state",
+            "--disable-gpu",
+            "--disable-gpu-compositing",
+        ]);
+    if cfg!(target_os = "linux")
+        || std::env::var("RELAY_EDGE_FORCE_NO_SANDBOX").as_deref() == Ok("1")
+    {
+        cmd.arg("--no-sandbox");
+    }
+    cmd.args([
         "--disable-site-isolation-trials",
         "--disable-breakpad",
         "--disable-crashpad",

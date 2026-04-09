@@ -31,6 +31,8 @@
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
     "@tauri-apps/plugin-shell": "^2.3.5",
+    "dompurify": "^3.3.3",
+    "marked": "^18.0.0",
     "solid-js": "^1.9.0"
   },
   "devDependencies": {

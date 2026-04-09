@@ -783,6 +783,67 @@ body {
 
 
 /* ============================================================
+ * Assistant markdown (MessageBubble; DOMPurify-sanitized HTML)
+ * ============================================================ */
+
+.ra-md-assistant :first-child {
+  margin-top: 0;
+}
+
+.ra-md-assistant :last-child {
+  margin-bottom: 0;
+}
+
+.ra-md-assistant p {
+  margin: 0.35em 0;
+}
+
+.ra-md-assistant ul,
+.ra-md-assistant ol {
+  margin: 0.35em 0;
+  padding-left: 1.25rem;
+}
+
+.ra-md-assistant li {
+  margin: 0.15em 0;
+}
+
+.ra-md-assistant pre {
+  margin: 0.5em 0;
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--ra-radius);
+  background: var(--ra-hover);
+  font-family: var(--ra-font-mono);
+  font-size: 0.9em;
+  overflow-x: auto;
+}
+
+.ra-md-assistant code {
+  font-family: var(--ra-font-mono);
+  font-size: 0.9em;
+}
+
+.ra-md-assistant p code,
+.ra-md-assistant li code {
+  padding: 0.1em 0.35em;
+  border-radius: 0.25rem;
+  background: var(--ra-hover);
+}
+
+.ra-md-assistant a {
+  color: var(--ra-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ra-md-assistant blockquote {
+  margin: 0.35em 0;
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--ra-border);
+  color: var(--ra-text-secondary);
+}
+
+/* ============================================================
  * Scrollbar
  * ============================================================ */
 

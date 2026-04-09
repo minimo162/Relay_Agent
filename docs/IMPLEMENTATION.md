@@ -36,6 +36,16 @@
 
 **Verification:** `cargo check -p relay-agent-desktop` (from `apps/desktop/src-tauri/`) — pass.
 
+### 2026-04-09 Copilot reply capture + assistant markdown UI
+
+**Problem:** M365 DOM `innerText` often appends streaming placeholders (e.g. Japanese **「応答を生成しています」**) while the Stop-button heuristic still reports idle, so [`waitForDomResponse`](apps/desktop/src-tauri/binaries/copilot_server.js) could settle early and return truncated prose. The shell showed Copilot markdown as plain text (`**` literals).
+
+**Node bridge:** Added [`replyEndsWithStreamingPlaceholder`](apps/desktop/src-tauri/binaries/copilot_server.js) / [`stripStreamingPlaceholderTail`](apps/desktop/src-tauri/binaries/copilot_server.js) (locale-aware last-line tails). Completion uses `generating = streamingPlaceholderTail || (generatingRaw && !ignorePhantomStop)`; [`lengthOkForDone`](apps/desktop/src-tauri/binaries/copilot_server.js) requires `!streamingPlaceholderTail`; post-stable path refuses candidates that still end with a placeholder. [`wire`](apps/desktop/src-tauri/binaries/copilot_server.js) and [`resolveAssistantReplyForReturn`](apps/desktop/src-tauri/binaries/copilot_server.js) strip tails before/after network merge.
+
+**Desktop UI:** [`assistant-markdown.ts`](apps/desktop/src/lib/assistant-markdown.ts) — `marked` (GFM + breaks) + `DOMPurify` whitelist; [`MessageBubble.tsx`](apps/desktop/src/components/MessageBubble.tsx) renders **assistant** bubbles as sanitized HTML, user bubbles unchanged. Styles in [`index.css`](apps/desktop/src/index.css) (`.ra-md-assistant`).
+
+**Verification:** `node --check` on `copilot_server.js`; `pnpm run typecheck` and `pnpm run build` in `apps/desktop/` — pass.
+
 ### 2026-04-09 Desktop UI: Cursor-inspired tokens (`DESIGN.md`)
 
 **Source:** `npx getdesign@latest add cursor` → [`apps/desktop/DESIGN.md`](../apps/desktop/DESIGN.md) (see [VoltAgent/awesome-design-md](https://github.com/VoltAgent/awesome-design-md) / [getdesign.md Cursor](https://getdesign.md/cursor/design-md)).
