@@ -28,7 +28,6 @@ import {
   type AgentToolResultEvent,
   type AgentToolStartEvent,
   type AgentTurnCompleteEvent,
-  type ContextFile,
   type McpServer,
   type UiChunk,
   type WorkspaceSlashCommandRow,
@@ -49,12 +48,7 @@ import { ShellHeader } from "../components/ShellHeader";
 import { Sidebar } from "../components/Sidebar";
 import { StatusBar } from "../components/StatusBar";
 import type { Approval, UserQuestion } from "../components/shell-types";
-import {
-  loadBrowserSettings,
-  loadMaxTurns,
-  loadShowToolActivityInChat,
-  loadWorkspacePath,
-} from "../lib/settings-storage";
+import { loadBrowserSettings, loadMaxTurns, loadWorkspacePath } from "../lib/settings-storage";
 import {
   buildPlanTimelineFromUiChunks,
   parseTodoWriteToolResult,
@@ -86,8 +80,6 @@ export default function Shell(): JSX.Element {
   const [copilotBridgeHint, setCopilotBridgeHint] = createSignal<string | null>(null);
 
   const [chunks, setChunks] = createSignal<UiChunk[]>([]);
-
-  const [showToolActivityInline, setShowToolActivityInline] = createSignal(loadShowToolActivityInChat());
 
   const [approvals, setApprovals] = createSignal<Approval[]>([]);
   const [userQuestions, setUserQuestions] = createSignal<UserQuestion[]>([]);
@@ -134,10 +126,6 @@ export default function Shell(): JSX.Element {
     return planBySession()[id] ?? [];
   });
 
-  const [contextFiles, setContextFiles] = createSignal<ContextFile[]>([
-    { name: "README.md", path: "/tmp/Relay_Agent/README.md", size: 1024 },
-    { name: "package.json", path: "/tmp/Relay_Agent/package.json", size: 2048 },
-  ]);
   const [mcpServers, setMcpServers] = createSignal<McpServer[]>([]);
 
   onMount(async () => {
@@ -486,7 +474,6 @@ export default function Shell(): JSX.Element {
     <div class="ra-shell">
       <ShellHeader
         sessionRunning={sessionRunning()}
-        onOpenSettings={() => setSettingsOpen(true)}
         workspacePath={workspaceLabel}
         onWorkspaceChipClick={() => setSettingsOpen(true)}
         canUndo={writeUndoStatus().canUndo}
@@ -536,7 +523,6 @@ export default function Shell(): JSX.Element {
         <MessageFeed
           chunks={chunks()}
           sessionState={sessionState()}
-          showToolActivityInline={showToolActivityInline()}
           workspacePath={workspaceLabel}
           sessionPreset={sessionPreset()}
         />
@@ -582,14 +568,10 @@ export default function Shell(): JSX.Element {
           onSaved={() => {
             setWorkspaceLabel(loadWorkspacePath().trim());
           }}
-          activeSessionId={activeSessionId()}
-          onShowToolActivityInChatChange={(v) => setShowToolActivityInline(v)}
         />
       </main>
 
       <ContextPanel
-        contextFiles={contextFiles}
-        setContextFiles={setContextFiles}
         mcpServers={mcpServers}
         setMcpServers={setMcpServers}
         workspacePath={workspaceLabel}

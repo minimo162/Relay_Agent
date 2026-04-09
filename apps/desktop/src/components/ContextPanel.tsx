@@ -1,14 +1,5 @@
-import {
-  For,
-  Match,
-  Show,
-  Switch,
-  createEffect,
-  createMemo,
-  createSignal,
-  type JSX,
-} from "solid-js";
-import type { ContextFile, McpServer, Policy, SessionPreset } from "../lib/ipc";
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, type JSX } from "solid-js";
+import type { McpServer, Policy, SessionPreset } from "../lib/ipc";
 import type { PlanTimelineEntry, PlanTodoItem } from "../context/todo-write-parse";
 import {
   fetchWorkspaceInstructionSurfaces,
@@ -21,13 +12,11 @@ import { Button, IconButton, Input } from "./ui";
 import { TabTrack } from "./primitives";
 import { ui } from "../lib/ui-tokens";
 
-type TabId = "files" | "servers" | "plan" | "policy";
+type TabId = "plan" | "servers";
 
 const tabs: { id: TabId; label: string }[] = [
-  { id: "files", label: "Files" },
-  { id: "servers", label: "MCP" },
   { id: "plan", label: "Plan" },
-  { id: "policy", label: "Policy" },
+  { id: "servers", label: "MCP" },
 ];
 
 function planStatusLabel(status: PlanTodoItem["status"]): string {
@@ -42,8 +31,6 @@ function planStatusLabel(status: PlanTodoItem["status"]): string {
 }
 
 export function ContextPanel(props: {
-  contextFiles: () => ContextFile[];
-  setContextFiles: (fn: (prev: ContextFile[]) => ContextFile[]) => void;
   mcpServers: () => McpServer[];
   setMcpServers: (fn: (prev: McpServer[]) => McpServer[]) => void;
   workspacePath: () => string;
@@ -51,7 +38,7 @@ export function ContextPanel(props: {
   /** TodoWrite snapshots in order; UI shows newest first (OpenWork-style plan timeline). */
   planTimeline: () => PlanTimelineEntry[];
 }): JSX.Element {
-  const [activeTab, setActiveTab] = createSignal<TabId>("files");
+  const [activeTab, setActiveTab] = createSignal<TabId>("plan");
   const [instructionSurfaces, setInstructionSurfaces] = createSignal<WorkspaceInstructionSurfaces | null>(
     null,
   );
@@ -92,34 +79,10 @@ export function ContextPanel(props: {
     const t = props.planTimeline();
     return t.length > 0 ? [...t].reverse() : false;
   });
-  const [showAddFile, setShowAddFile] = createSignal(false);
   const [showAddServer, setShowAddServer] = createSignal(false);
-  const [newFilePath, setNewFilePath] = createSignal("");
   const [newServerName, setNewServerName] = createSignal("");
   const [newServerCommand, setNewServerCommand] = createSignal("");
   const [newServerArgs, setNewServerArgs] = createSignal("");
-
-  const formatSize = (bytes: number): string => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
-  const addFile = async () => {
-    const path = newFilePath().trim();
-    if (!path) return;
-    const name = path.split("/").pop() || path;
-    props.setContextFiles((prev) => [
-      ...prev,
-      { name, path, size: Math.floor(Math.random() * 50000) + 500 },
-    ]);
-    setNewFilePath("");
-    setShowAddFile(false);
-  };
-
-  const removeFile = (index: number) => {
-    props.setContextFiles((prev) => prev.filter((_, i) => i !== index));
-  };
 
   const addServer = async () => {
     const name = newServerName().trim();
@@ -158,90 +121,145 @@ export function ContextPanel(props: {
       <TabTrack tabs={tabs} active={activeTab()} onChange={setActiveTab} ariaLabel="Context panel" />
       <div class="flex-1 min-h-0 overflow-y-auto p-3 pt-2">
         <Switch>
-          <Match when={activeTab() === "files"}>
-            <div class="flex flex-col gap-2">
-              <div class="flex items-center justify-between gap-2">
-                <span class={`ra-type-system-micro ${ui.mutedText}`}>
-                  {props.contextFiles().length} file{props.contextFiles().length !== 1 ? "s" : ""}
-                </span>
-                <Show
-                  when={showAddFile()}
-                  fallback={
-                    <button
-                      type="button"
-                      class={`ra-type-button-label px-2.5 py-1 ${ui.radiusPill} border ${ui.border} ${ui.accent} hover:bg-[var(--ra-hover)] transition-colors`}
-                      onClick={() => setShowAddFile(true)}
-                    >
-                      + Add File
-                    </button>
-                  }
-                >
-                  <div class="flex gap-1 items-center flex-1 min-w-0">
-                    <Input
-                      type="text"
-                      placeholder="/path/to/file"
-                      value={newFilePath()}
-                      onInput={(e) => setNewFilePath(e.currentTarget.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") void addFile();
-                        if (e.key === "Escape") setShowAddFile(false);
-                      }}
-                      class="ra-type-button-label flex-1 !py-1 !px-2"
-                    />
-                    <IconButton label="Add file" onClick={() => void addFile()} class="opacity-100">
-                      ✓
-                    </IconButton>
-                    <IconButton label="Cancel" onClick={() => setShowAddFile(false)}>
-                      ×
-                    </IconButton>
-                  </div>
-                </Show>
-              </div>
-
+          <Match when={activeTab() === "plan"}>
+            <div class="flex flex-col gap-2" data-ra-execution-plan>
+              <span class={`ra-type-system-micro ${ui.mutedText}`}>Plan timeline</span>
+              <p class={`ra-type-system-caption leading-relaxed ${ui.mutedText}`}>
+                Task lists from the agent; newest first.
+              </p>
               <Show
-                when={props.contextFiles().length > 0}
+                when={planNewestFirst()}
                 fallback={
-                  <div class={`ra-type-button-label ${ui.mutedText} text-center py-8`}>No context files</div>
+                  <div class={`ra-type-button-label ${ui.mutedText} text-center py-6 leading-relaxed`}>
+                    No tasks yet. They appear when the agent updates its task list.
+                  </div>
                 }
               >
-                <For each={props.contextFiles()}>
-                  {(file, idx) => (
-                    <div class={`group ra-quiet-row`}>
-                      <span class="ra-file-icon" aria-hidden />
-                      <div class="flex-1 min-w-0">
-                        <div class={`ra-type-button-label font-medium ${ui.textPrimary} truncate`}>{file.name}</div>
-                        <div class={`ra-type-mono-small ${ui.mutedText} truncate`}>{file.path}</div>
-                        <div class={`ra-type-caption ${ui.mutedText} opacity-60`}>{formatSize(file.size)}</div>
-                      </div>
-                      <IconButton
-                        variant="danger"
-                        label="Remove file"
-                        class="opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={() => removeFile(idx())}
-                      >
-                        ×
-                      </IconButton>
-                    </div>
-                  )}
-                </For>
+                {(entries) => (
+                  <div class="flex flex-col gap-1.5">
+                    <For each={entries()}>
+                      {(entry, snapIdx) => {
+                        const total = props.planTimeline().length;
+                        const chronologicalIndex = total - 1 - snapIdx();
+                        const summaryLabel =
+                          entry.atMs > 0
+                            ? new Date(entry.atMs).toLocaleTimeString(undefined, {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                second: "2-digit",
+                              })
+                            : `Step ${chronologicalIndex + 1}`;
+                        return (
+                          <details
+                            class={`${ui.radiusFeatured} border ${ui.border} bg-[var(--ra-surface-elevated)]/40 px-2 py-1.5`}
+                            open={snapIdx() === 0}
+                          >
+                            <summary class={`cursor-pointer ra-type-button-label text-[var(--ra-text-primary)] list-none flex items-center justify-between gap-2 [&::-webkit-details-marker]:hidden`}>
+                              <span class="font-medium">
+                                {summaryLabel}
+                                <span class={`font-normal ${ui.mutedText}`}>
+                                  {" "}
+                                  · {entry.todos.length} task{entry.todos.length !== 1 ? "s" : ""}
+                                </span>
+                              </span>
+                              <span class={`ra-type-mono-small ${ui.mutedText} truncate max-w-[40%]`}>
+                                {entry.toolUseId}
+                              </span>
+                            </summary>
+                            <ol class="list-decimal list-inside space-y-1.5 pl-0.5 mt-2 mb-0.5">
+                              <For each={entry.todos}>
+                                {(item: PlanTodoItem) => (
+                                  <li class={`ra-type-button-label text-[var(--ra-text-primary)] leading-snug`}>
+                                    <span class="font-medium">{item.activeForm || item.content}</span>
+                                    <span
+                                      class={`ml-2 ra-type-caption px-1.5 py-0.5 ${ui.radiusCompact} ${
+                                        item.status === "completed"
+                                          ? "bg-[var(--ra-green)]/15 text-[var(--ra-green)]"
+                                          : item.status === "in_progress"
+                                            ? "bg-[var(--ra-accent)]/15 text-[var(--ra-accent)]"
+                                            : "bg-[var(--ra-surface-elevated)] text-[var(--ra-text-muted)]"
+                                      }`}
+                                    >
+                                      {planStatusLabel(item.status)}
+                                    </span>
+                                  </li>
+                                )}
+                              </For>
+                            </ol>
+                          </details>
+                        );
+                      }}
+                    </For>
+                  </div>
+                )}
               </Show>
+
+              <details class={`${ui.radiusFeatured} border ${ui.border} p-2 mt-2`} data-ra-tool-policy>
+                <summary class={`cursor-pointer ra-type-system-micro ${ui.mutedText} list-none [&::-webkit-details-marker]:hidden`}>
+                  Tool rules for current mode
+                </summary>
+                <div class="mt-2 pt-2 border-t border-[var(--ra-border)] space-y-2">
+                  <p class={`ra-type-caption leading-relaxed ${ui.mutedText}`}>
+                    <span class="ra-type-mono-small">{props.sessionPreset()}</span> mode. Approvals and{" "}
+                    <span class="ra-type-mono-small">.claw</span> still apply.
+                  </p>
+                  <Show
+                    when={permissionRows().length > 0}
+                    fallback={
+                      <div class={`ra-type-button-label ${ui.mutedText} text-center py-4`}>Loading policy…</div>
+                    }
+                  >
+                    <For each={permissionRows()}>
+                      {(policy) => {
+                        const badgeColor =
+                          policy.requirement === "require_approval"
+                            ? "bg-[var(--ra-yellow)]/20 text-[var(--ra-yellow)]"
+                            : policy.requirement === "auto_deny"
+                              ? "bg-[var(--ra-red)]/20 text-[var(--ra-red)]"
+                              : "bg-[var(--ra-green)]/20 text-[var(--ra-green)]";
+
+                        const badgeLabel =
+                          policy.requirement === "require_approval"
+                            ? "Needs approval"
+                            : policy.requirement === "auto_deny"
+                              ? "Blocked"
+                              : "Allowed";
+
+                        return (
+                          <div class="ra-quiet-row ra-quiet-row--align-center gap-2">
+                            <div class="flex-1 min-w-0">
+                              <div class={`ra-type-button-label font-medium ${ui.textPrimary}`}>{policy.name}</div>
+                              <Show when={policy.description}>
+                                <div class={`ra-type-caption ${ui.mutedText} truncate`}>{policy.description}</div>
+                              </Show>
+                            </div>
+                            <span
+                              class={`ra-type-caption px-2 py-0.5 ${ui.radiusPill} font-medium whitespace-nowrap shrink-0 ${badgeColor}`}
+                            >
+                              {badgeLabel}
+                            </span>
+                          </div>
+                        );
+                      }}
+                    </For>
+                  </Show>
+                </div>
+              </details>
             </div>
           </Match>
 
           <Match when={activeTab() === "servers"}>
             <div class="flex flex-col gap-2">
               <p class={`ra-type-system-caption leading-relaxed ${ui.mutedText}`}>
-                Connect MCP servers for extra tools. Instruction files under your workspace are listed below when a
-                folder is set in Settings.
+                Connect MCP servers for extra tools. Instruction files under your workspace appear below when a folder
+                is set in the header.
               </p>
               <Show
                 when={!props.workspacePath()?.trim()}
                 fallback={
                   <Show
                     when={instructionSurfaces()}
-                    fallback={
-                      <p class={`ra-type-caption ${ui.mutedText}`}>Scanning workspace instructions…</p>
-                    }
+                    fallback={<p class={`ra-type-caption ${ui.mutedText}`}>Scanning workspace instructions…</p>}
                   >
                     {(surf) => (
                       <div
@@ -265,11 +283,7 @@ export function ContextPanel(props: {
                                 <div class={`ra-type-button-label font-medium ${ui.textPrimary}`}>{s.label}</div>
                                 <div class={`ra-type-mono-small ${ui.mutedText} break-all`}>{s.path}</div>
                                 <div class={`ra-type-caption ${ui.mutedText}`}>
-                                  {s.exists
-                                    ? s.isDirectory
-                                      ? "Present (directory)"
-                                      : "Present"
-                                    : "Not found"}
+                                  {s.exists ? (s.isDirectory ? "Present (directory)" : "Present") : "Not found"}
                                 </div>
                               </div>
                             </div>
@@ -281,7 +295,7 @@ export function ContextPanel(props: {
                 }
               >
                 <p class={`ra-type-caption ${ui.mutedText}`}>
-                  Set a workspace in Settings to detect <span class="ra-type-mono-small">CLAW.md</span> and{" "}
+                  Choose a workspace from the header to detect <span class="ra-type-mono-small">CLAW.md</span> and{" "}
                   <span class="ra-type-mono-small">.claw</span>.
                 </p>
               </Show>
@@ -375,134 +389,6 @@ export function ContextPanel(props: {
                       </IconButton>
                     </div>
                   )}
-                </For>
-              </Show>
-            </div>
-          </Match>
-
-          <Match when={activeTab() === "plan"}>
-            <div class="flex flex-col gap-2" data-ra-execution-plan>
-              <span class={`ra-type-system-micro ${ui.mutedText}`}>Plan timeline</span>
-              <p class={`ra-type-system-caption leading-relaxed ${ui.mutedText}`}>
-                Task lists from the agent; newest first.
-              </p>
-              <Show
-                when={planNewestFirst()}
-                fallback={
-                  <div class={`ra-type-button-label ${ui.mutedText} text-center py-6 leading-relaxed`}>
-                    No tasks yet. They appear when the agent updates its task list.
-                  </div>
-                }
-              >
-                {(entries) => (
-                  <div class="flex flex-col gap-1.5">
-                    <For each={entries()}>
-                      {(entry, snapIdx) => {
-                        const total = props.planTimeline().length;
-                        const chronologicalIndex = total - 1 - snapIdx();
-                        const summaryLabel =
-                          entry.atMs > 0
-                            ? new Date(entry.atMs).toLocaleTimeString(undefined, {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                                second: "2-digit",
-                              })
-                            : `Step ${chronologicalIndex + 1}`;
-                        return (
-                          <details
-                            class={`${ui.radiusFeatured} border ${ui.border} bg-[var(--ra-surface-elevated)]/40 px-2 py-1.5`}
-                            open={snapIdx() === 0}
-                          >
-                            <summary class={`cursor-pointer ra-type-button-label text-[var(--ra-text-primary)] list-none flex items-center justify-between gap-2 [&::-webkit-details-marker]:hidden`}>
-                              <span class="font-medium">
-                                {summaryLabel}
-                                <span class={`font-normal ${ui.mutedText}`}>
-                                  {" "}
-                                  · {entry.todos.length} task{entry.todos.length !== 1 ? "s" : ""}
-                                </span>
-                              </span>
-                              <span class={`ra-type-mono-small ${ui.mutedText} truncate max-w-[40%]`}>
-                                {entry.toolUseId}
-                              </span>
-                            </summary>
-                            <ol class="list-decimal list-inside space-y-1.5 pl-0.5 mt-2 mb-0.5">
-                              <For each={entry.todos}>
-                                {(item: PlanTodoItem) => (
-                                  <li class={`ra-type-button-label text-[var(--ra-text-primary)] leading-snug`}>
-                                    <span class="font-medium">{item.activeForm || item.content}</span>
-                                    <span
-                                      class={`ml-2 ra-type-caption px-1.5 py-0.5 ${ui.radiusCompact} ${
-                                        item.status === "completed"
-                                          ? "bg-[var(--ra-green)]/15 text-[var(--ra-green)]"
-                                          : item.status === "in_progress"
-                                            ? "bg-[var(--ra-accent)]/15 text-[var(--ra-accent)]"
-                                            : "bg-[var(--ra-surface-elevated)] text-[var(--ra-text-muted)]"
-                                      }`}
-                                    >
-                                      {planStatusLabel(item.status)}
-                                    </span>
-                                  </li>
-                                )}
-                              </For>
-                            </ol>
-                          </details>
-                        );
-                      }}
-                    </For>
-                  </div>
-                )}
-              </Show>
-            </div>
-          </Match>
-
-          <Match when={activeTab() === "policy"}>
-            <div class="flex flex-col gap-2">
-              <p class={`ra-type-system-caption leading-relaxed ${ui.mutedText}`}>
-                Tool rules for <span class="ra-type-mono-small">{props.sessionPreset()}</span> mode. Approvals and{" "}
-                <span class="ra-type-mono-small">.claw</span> still apply.
-              </p>
-              <span class={`ra-type-system-micro ${ui.mutedText}`}>
-                {permissionRows().length} tool{permissionRows().length !== 1 ? "s" : ""}
-              </span>
-
-              <Show
-                when={permissionRows().length > 0}
-                fallback={
-                  <div class={`ra-type-button-label ${ui.mutedText} text-center py-8`}>Loading policy…</div>
-                }
-              >
-                <For each={permissionRows()}>
-                  {(policy) => {
-                    const badgeColor =
-                      policy.requirement === "require_approval"
-                        ? "bg-[var(--ra-yellow)]/20 text-[var(--ra-yellow)]"
-                        : policy.requirement === "auto_deny"
-                          ? "bg-[var(--ra-red)]/20 text-[var(--ra-red)]"
-                          : "bg-[var(--ra-green)]/20 text-[var(--ra-green)]";
-
-                    const badgeLabel =
-                      policy.requirement === "require_approval"
-                        ? "Needs approval"
-                        : policy.requirement === "auto_deny"
-                          ? "Blocked"
-                          : "Allowed";
-
-                    return (
-                      <div class="ra-quiet-row ra-quiet-row--align-center gap-2">
-                        <div class="flex-1 min-w-0">
-                          <div class={`ra-type-button-label font-medium ${ui.textPrimary}`}>{policy.name}</div>
-                          <Show when={policy.description}>
-                            <div class={`ra-type-caption ${ui.mutedText} truncate`}>{policy.description}</div>
-                          </Show>
-                        </div>
-                        <span
-                          class={`ra-type-caption px-2 py-0.5 ${ui.radiusPill} font-medium whitespace-nowrap shrink-0 ${badgeColor}`}
-                        >
-                          {badgeLabel}
-                        </span>
-                      </div>
-                    );
-                  }}
                 </For>
               </Show>
             </div>

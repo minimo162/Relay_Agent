@@ -5,10 +5,9 @@ import { workspaceBasename } from "../lib/workspace-display";
 
 export function ShellHeader(props: {
   sessionRunning: boolean;
-  onOpenSettings: () => void;
   /** Configured workspace root (trimmed empty = unset). */
   workspacePath: () => string;
-  /** Opens Settings (same as header Settings); used by workspace chip. */
+  /** Opens workspace folder dialog. */
   onWorkspaceChipClick: () => void;
   canUndo: boolean;
   canRedo: boolean;
@@ -83,15 +82,6 @@ export function ShellHeader(props: {
           Redo
         </Button>
       </div>
-      <Button
-        variant="ghost"
-        type="button"
-        class="ra-type-button-label !px-3 !py-1"
-        title="Workspace and advanced options"
-        onClick={() => props.onOpenSettings()}
-      >
-        Settings
-      </Button>
     </header>
   );
 }

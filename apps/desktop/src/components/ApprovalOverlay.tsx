@@ -65,7 +65,7 @@ export function ApprovalOverlay(props: {
                       variant="secondary"
                       onClick={() => props.onApproveForWorkspace!(approval.approvalId)}
                       class="ra-type-button-label px-3 py-1.5"
-                      title="Saved per workspace in ~/.relay-agent/workspace_allowed_tools.json (manage in Settings)"
+                      title="Saved per workspace in ~/.relay-agent/workspace_allowed_tools.json"
                     >
                       Allow for workspace
                     </Button>

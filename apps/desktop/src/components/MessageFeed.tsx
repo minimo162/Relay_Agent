@@ -15,7 +15,6 @@ import { EmptyState } from "./primitives";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCallRow } from "./ToolCallRow";
 import type { SessionState } from "./shell-types";
-import { ui } from "../lib/ui-tokens";
 
 /** Pixels from bottom to treat as "following" the stream (sticky scroll). */
 const NEAR_BOTTOM_PX = 80;
@@ -23,7 +22,6 @@ const NEAR_BOTTOM_PX = 80;
 export function MessageFeed(props: {
   chunks: UiChunk[];
   sessionState: SessionState;
-  showToolActivityInline: boolean;
   /** Saved workspace cwd (empty = unset). */
   workspacePath: () => string;
   /** Composer session mode (empty-state copy for Plan / Explore). */
@@ -32,15 +30,7 @@ export function MessageFeed(props: {
   let container!: HTMLDivElement;
   const [stickToBottom, setStickToBottom] = createSignal(true);
 
-  const chatChunks = createMemo(() =>
-    props.chunks.filter((c) => c.kind === "user" || c.kind === "assistant"),
-  );
-  const toolChunks = createMemo(() =>
-    props.chunks.filter((c): c is Extract<UiChunk, { kind: "tool_call" }> => c.kind === "tool_call"),
-  );
-  const feedChunks = createMemo(() =>
-    props.showToolActivityInline ? props.chunks : chatChunks(),
-  );
+  const feedChunks = createMemo(() => props.chunks);
   const runningToolName = createMemo(() => {
     for (let i = props.chunks.length - 1; i >= 0; i--) {
       const c = props.chunks[i]!;
@@ -107,7 +97,7 @@ export function MessageFeed(props: {
     const base =
       p.length > 0
         ? `${ellipsisPath(p, 72)} — describe your task in the box below.`
-        : "Open Settings to set a workspace folder (cwd) so file tools use the right project root. Then describe your task below.";
+        : "Click the workspace name in the header to set a project folder so file tools use the right root. Then describe your task below.";
     if (props.sessionPreset === "plan") {
       return `${base} Plan mode stays read-only; use Build when you want the agent to apply file changes.`;
     }
@@ -141,33 +131,6 @@ export function MessageFeed(props: {
           return <MessageBubble role={chunk.kind} text={chunk.text} />;
         }}
       </For>
-
-      <Show when={!props.showToolActivityInline && toolChunks().length > 0}>
-        <details
-          class={`mt-3 ${ui.radiusFeatured} border ${ui.border} ${ui.surfaceCard} px-3 py-2`}
-          data-ra-activity-details
-        >
-          <summary
-            class={`ra-type-button-label ${ui.mutedText} cursor-pointer select-none`}
-            data-ra-activity-summary
-            title="Tool names and output; expand to inspect"
-          >
-            Tool runs ({toolChunks().length})
-          </summary>
-          <div class="mt-2 border-t border-[var(--ra-border)] pt-2">
-            <For each={toolChunks()}>
-              {(chunk) => (
-                <ToolCallRow
-                  toolUseId={chunk.toolUseId}
-                  toolName={chunk.toolName}
-                  status={chunk.status}
-                  result={chunk.result}
-                />
-              )}
-            </For>
-          </div>
-        </details>
-      </Show>
 
       <Show when={statusLine()}>
         <div

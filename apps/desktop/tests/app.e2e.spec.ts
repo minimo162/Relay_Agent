@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
-const COMPOSER_PLACEHOLDER = "Describe what you want done — type / for commands";
+const COMPOSER_PLACEHOLDER = "What should the agent do? Type / for commands.";
 
 /** Send a Tauri event from the browser context */
 async function emitEvent(page: any, event: string, payload: any) {
@@ -32,10 +32,8 @@ test("app shell renders 3-pane layout", async ({ page }) => {
   await openApp(page);
   await expect(page.getByText("Relay Agent", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Sessions" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Files" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "MCP" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Plan" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Policy" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "MCP" })).toBeVisible();
   await expect(page.locator("text=Relay Agent v0.1.0")).toBeVisible();
 });
 
@@ -81,18 +79,17 @@ test("context panel tabs are switchable", async ({ page }) => {
   await openApp(page);
   await page.getByRole("tab", { name: "MCP" }).click();
   await expect(page.getByText(/No MCP servers yet/)).toBeVisible();
-  await page.getByRole("tab", { name: "Policy" }).click();
-  await expect(page.getByText(/Tool rules for/)).toBeVisible();
-  await page.getByRole("tab", { name: "Files" }).click();
-  // Files tab shows file list or placeholder depending on state
-  await expect(page.locator("text=Add File").first()).toBeVisible({ timeout: 2000 }).catch(async () => {
-    await expect(page.locator("text=files").first()).toBeVisible();
-  });
+  await page.getByRole("tab", { name: "Plan" }).click();
+  await expect(page.getByText("Plan timeline")).toBeVisible();
+  await page.locator("[data-ra-tool-policy] summary").click();
+  await expect(page.getByText(/Tool rules for current mode/)).toBeVisible();
 });
 
-test("settings button is in header", async ({ page }) => {
+test("workspace chip is in header", async ({ page }) => {
   await openApp(page);
-  await expect(page.getByRole("button", { name: /Settings/ })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Workspace folder not set\. Click to configure\.|Workspace folder:/ }),
+  ).toBeVisible();
 });
 
 test("turn_complete event handled without crash", async ({ page }) => {

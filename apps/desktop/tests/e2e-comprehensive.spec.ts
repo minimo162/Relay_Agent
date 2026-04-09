@@ -266,31 +266,16 @@ test.describe("Streaming & Tool Events", () => {
   });
 
   test("tool_start shows tool name and running indicator", async ({ page }) => {
-    await page.addInitScript(() => {
-      try {
-        localStorage.setItem("relay.showToolActivity", "0");
-      } catch {
-        /* ignore */
-      }
-    });
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "tool test");
     await waitForAgentIdle(page);
     await emitEvent(page, "agent:tool_start", { sessionId: "session-e2e-1", toolUseId: "t-1", toolName: "read_file" });
-    await page.locator("[data-ra-activity-summary]").click();
     await expect(page.getByText("read_file")).toBeVisible({ timeout: 3000 });
     await expect(page.getByText("running\u2026")).toBeVisible({ timeout: 3000 });
   });
 
   test("tool_result shows content", async ({ page }) => {
-    await page.addInitScript(() => {
-      try {
-        localStorage.setItem("relay.showToolActivity", "1");
-      } catch {
-        /* ignore */
-      }
-    });
     await injectMock(page, false);
     await openApp(page);
     await sendPrompt(page, "result test");
@@ -309,19 +294,11 @@ test.describe("Streaming & Tool Events", () => {
   });
 
   test("tool_result with isError shows error styling", async ({ page }) => {
-    await page.addInitScript(() => {
-      try {
-        localStorage.setItem("relay.showToolActivity", "0");
-      } catch {
-        /* ignore */
-      }
-    });
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "tool error test");
     await waitForAgentIdle(page);
     await emitEvent(page, "agent:tool_result", { sessionId: "session-e2e-1", toolUseId: "t-3", toolName: "write_file", content: "Permission denied", isError: true });
-    await page.locator("[data-ra-activity-summary]").click();
     await expect(page.getByText("write_file")).toBeVisible({ timeout: 3000 });
     await expect(page.getByText("Permission denied")).toBeVisible({ timeout: 3000 });
   });
@@ -390,8 +367,9 @@ test.describe("Approval Flow", () => {
     await waitForAgentIdle(page);
     await emitEvent(page, "agent:approval_needed", { sessionId: "session-e2e-1", approvalId: "a-4", toolName: "write_file", description: "First", input: {} });
     await emitEvent(page, "agent:approval_needed", { sessionId: "session-e2e-1", approvalId: "a-5", toolName: "bash", description: "Second", input: {} });
-    await expect(page.getByText("First")).toBeVisible({ timeout: 3000 });
-    await expect(page.getByText("Second")).toBeVisible({ timeout: 3000 });
+    const perm = page.getByRole("dialog", { name: "Permission required" });
+    await expect(perm.getByText("First", { exact: true })).toBeVisible({ timeout: 3000 });
+    await expect(perm.getByText("Second", { exact: true })).toBeVisible({ timeout: 3000 });
   });
 });
 
@@ -430,18 +408,11 @@ test.describe("Error Handling", () => {
 /* ── 6. Context Panel ─────────────────────────────────────── */
 
 test.describe("Context Panel", () => {
-  test("files tab shows default files", async ({ page }) => {
+  test("plan tab shows empty state before tasks", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
-    await page.getByRole("tab", { name: "Files" }).click();
-    await expect(page.getByText("README.md").first()).toBeVisible({ timeout: 2000 });
-  });
-
-  test("file count displays correctly", async ({ page }) => {
-    await injectMock(page, true);
-    await openApp(page);
-    await page.getByRole("tab", { name: "Files" }).click();
-    await expect(page.getByText("2 files")).toBeVisible({ timeout: 2000 });
+    await page.getByRole("tab", { name: "Plan" }).click();
+    await expect(page.getByText(/No tasks yet/)).toBeVisible({ timeout: 2000 });
   });
 
   test("servers tab shows empty state", async ({ page }) => {
@@ -459,19 +430,21 @@ test.describe("Context Panel", () => {
     await expect(page.getByPlaceholder("Server name")).toBeVisible({ timeout: 2000 });
   });
 
-  test("policy tab shows default policies", async ({ page }) => {
+  test("plan tab tool rules shows default policies", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
-    await page.getByRole("tab", { name: "Policy" }).click();
+    await page.getByRole("tab", { name: "Plan" }).click();
+    await page.locator("[data-ra-tool-policy] summary").click();
     await expect(page.getByText("Bash")).toBeVisible({ timeout: 2000 });
     await expect(page.getByText("File write")).toBeVisible({ timeout: 2000 });
     await expect(page.getByText("File read")).toBeVisible({ timeout: 2000 });
   });
 
-  test("policy badges: Needs approval, Allowed, Blocked", async ({ page }) => {
+  test("plan tab tool rules badges: Needs approval, Allowed, Blocked", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
-    await page.getByRole("tab", { name: "Policy" }).click();
+    await page.getByRole("tab", { name: "Plan" }).click();
+    await page.locator("[data-ra-tool-policy] summary").click();
     await expect(page.getByText("Needs approval").first()).toBeVisible({ timeout: 2000 });
     await expect(page.getByText("Allowed").first()).toBeVisible({ timeout: 2000 });
     await expect(page.getByText("Blocked").first()).toBeVisible({ timeout: 2000 });
@@ -529,12 +502,14 @@ test.describe("Layout Integrity", () => {
     await expect(page.locator("aside").last()).toBeVisible();
   });
 
-  test("header contains app name and settings", async ({ page }) => {
+  test("header contains app name and workspace chip", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
     await expect(page.locator("header")).toBeVisible();
     await expect(page.getByText("Relay Agent", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /Workspace folder not set\. Click to configure\.|Workspace folder:/ }),
+    ).toBeVisible();
   });
 
   test("footer shows version and session count", async ({ page }) => {
