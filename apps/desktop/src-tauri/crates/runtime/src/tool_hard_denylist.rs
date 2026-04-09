@@ -34,7 +34,7 @@ fn deny() -> io::Error {
 /// True if this `rm` invocation includes destructive flags (`-r`/`-f`/etc.) anywhere before `;|&` newline.
 fn rm_invocation_blocked(rest_after_rm: &str) -> bool {
     let stop = rest_after_rm
-        .find(|ch| ch == ';' || ch == '|' || ch == '&' || ch == '\n')
+        .find(|ch| [';', '|', '&', '\n'].contains(&ch))
         .unwrap_or(rest_after_rm.len());
     let seg = rest_after_rm[..stop].trim();
 
@@ -56,7 +56,7 @@ fn rm_invocation_blocked(rest_after_rm: &str) -> bool {
         }
         let cluster: String = rest
             .chars()
-            .take_while(|c| c.is_ascii_alphanumeric())
+            .take_while(char::is_ascii_alphanumeric)
             .collect();
         let lower = cluster.to_ascii_lowercase();
         if lower.contains('r') || lower.contains('f') {

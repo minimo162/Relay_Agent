@@ -49,6 +49,8 @@ pub struct RuntimeFeatureConfig {
 pub struct RuntimeHookConfig {
     pre_tool_use: Vec<String>,
     post_tool_use: Vec<String>,
+    /// Claw-code `hooks.PostToolUseFailure`: runs only when the tool executor returned an error.
+    post_tool_use_failure: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -356,6 +358,7 @@ impl RuntimeHookConfig {
         Self {
             pre_tool_use,
             post_tool_use,
+            post_tool_use_failure: Vec::new(),
         }
     }
 
@@ -367,6 +370,17 @@ impl RuntimeHookConfig {
     #[must_use]
     pub fn post_tool_use(&self) -> &[String] {
         &self.post_tool_use
+    }
+
+    #[must_use]
+    pub fn post_tool_use_failure(&self) -> &[String] {
+        &self.post_tool_use_failure
+    }
+
+    #[must_use]
+    pub fn with_post_tool_use_failure(mut self, commands: Vec<String>) -> Self {
+        self.post_tool_use_failure = commands;
+        self
     }
 }
 
@@ -486,6 +500,12 @@ fn parse_optional_hooks_config(root: &JsonValue) -> Result<RuntimeHookConfig, Co
             .unwrap_or_default(),
         post_tool_use: optional_string_array(hooks, "PostToolUse", "merged settings.hooks")?
             .unwrap_or_default(),
+        post_tool_use_failure: optional_string_array(
+            hooks,
+            "PostToolUseFailure",
+            "merged settings.hooks",
+        )?
+        .unwrap_or_default(),
     })
 }
 
@@ -860,7 +880,7 @@ mod tests {
         .expect("write project compat config");
         fs::write(
             cwd.join(".claw").join("settings.json"),
-            r#"{"env":{"C":"3"},"hooks":{"PostToolUse":["project"]},"mcpServers":{"project":{"command":"uvx","args":["project"]}}}"#,
+            r#"{"env":{"C":"3"},"hooks":{"PostToolUse":["project"],"PostToolUseFailure":["project-failure"]},"mcpServers":{"project":{"command":"uvx","args":["project"]}}}"#,
         )
         .expect("write project settings");
         fs::write(
@@ -905,6 +925,10 @@ mod tests {
             .contains_key("PostToolUse"));
         assert_eq!(loaded.hooks().pre_tool_use(), &["base".to_string()]);
         assert_eq!(loaded.hooks().post_tool_use(), &["project".to_string()]);
+        assert_eq!(
+            loaded.hooks().post_tool_use_failure(),
+            &["project-failure".to_string()]
+        );
         assert!(loaded.mcp().get("home").is_some());
         assert!(loaded.mcp().get("project").is_some());
 

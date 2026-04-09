@@ -197,16 +197,7 @@ where
             if let Some(usage) = usage {
                 self.usage_tracker.record(usage);
             }
-            let pending_tool_uses = assistant_message
-                .blocks
-                .iter()
-                .filter_map(|block| match block {
-                    ContentBlock::ToolUse { id, name, input } => {
-                        Some((id.clone(), name.clone(), input.clone()))
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
+            let pending_tool_uses = pending_tool_uses_from_message(&assistant_message);
 
             self.session.messages.push(assistant_message.clone());
             assistant_messages.push(assistant_message);
@@ -242,9 +233,13 @@ where
                                 };
                             output = merge_hook_feedback(pre_hook_result.messages(), output, false);
 
-                            let post_hook_result = self
-                                .hook_runner
-                                .run_post_tool_use(&tool_name, &input, &output, is_error);
+                            let post_hook_result = if is_error {
+                                self.hook_runner
+                                    .run_post_tool_use_failure(&tool_name, &input, &output)
+                            } else {
+                                self.hook_runner
+                                    .run_post_tool_use(&tool_name, &input, &output, false)
+                            };
                             if post_hook_result.is_denied() {
                                 is_error = true;
                             }
@@ -348,6 +343,18 @@ fn parse_auto_compaction_threshold(value: Option<&str>) -> u32 {
         .and_then(|raw| raw.trim().parse::<u32>().ok())
         .filter(|threshold| *threshold > 0)
         .unwrap_or(DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD)
+}
+
+fn pending_tool_uses_from_message(msg: &ConversationMessage) -> Vec<(String, String, String)> {
+    msg.blocks
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::ToolUse { id, name, input } => {
+                Some((id.clone(), name.clone(), input.clone()))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn build_assistant_message(
@@ -459,7 +466,7 @@ impl ToolExecutor for StaticToolExecutor {
 mod tests {
     use super::{
         parse_auto_compaction_threshold, ApiClient, ApiRequest, AssistantEvent,
-        AutoCompactionEvent, ConversationRuntime, RuntimeError, StaticToolExecutor,
+        AutoCompactionEvent, ConversationRuntime, RuntimeError, StaticToolExecutor, ToolError,
         DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD,
     };
     use crate::compact::CompactionConfig;
@@ -771,6 +778,71 @@ mod tests {
         assert!(
             output.contains("post hook ran"),
             "tool output missing post hook feedback: {output:?}"
+        );
+    }
+
+    #[test]
+    fn appends_post_tool_use_failure_hook_feedback_on_executor_error() {
+        struct TwoCallApiClient {
+            calls: usize,
+        }
+
+        impl ApiClient for TwoCallApiClient {
+            fn stream(&mut self, _request: &ApiRequest<'_>) -> Result<Vec<AssistantEvent>, RuntimeError> {
+                self.calls += 1;
+                match self.calls {
+                    1 => Ok(vec![
+                        AssistantEvent::ToolUse {
+                            id: "tool-1".to_string(),
+                            name: "fail".to_string(),
+                            input: "{}".to_string(),
+                        },
+                        AssistantEvent::MessageStop,
+                    ]),
+                    2 => Ok(vec![
+                        AssistantEvent::TextDelta("handled".to_string()),
+                        AssistantEvent::MessageStop,
+                    ]),
+                    _ => Err(RuntimeError::new("unexpected extra API call")),
+                }
+            }
+        }
+
+        let mut runtime = ConversationRuntime::new_with_features(
+            Session::new(),
+            TwoCallApiClient { calls: 0 },
+            StaticToolExecutor::new().register("fail", |_input| {
+                Err(ToolError::new("tool failed as expected"))
+            }),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec!["system".to_string()],
+            &RuntimeFeatureConfig::default().with_hooks(
+                RuntimeHookConfig::new(Vec::new(), vec![shell_snippet("printf 'post-success'")])
+                    .with_post_tool_use_failure(vec![shell_snippet("printf 'post-failure'")]),
+            ),
+        );
+
+        let summary = runtime.run_turn("invoke fail", None).expect("turn completes");
+
+        assert_eq!(summary.tool_results.len(), 1);
+        let ContentBlock::ToolResult {
+            is_error, output, ..
+        } = &summary.tool_results[0].blocks[0]
+        else {
+            panic!("expected tool result block");
+        };
+        assert!(*is_error, "executor error should mark tool result as error");
+        assert!(
+            output.contains("tool failed as expected"),
+            "missing tool error text: {output:?}"
+        );
+        assert!(
+            output.contains("post-failure"),
+            "PostToolUseFailure hook should run (claw-code parity): {output:?}"
+        );
+        assert!(
+            !output.contains("post-success"),
+            "PostToolUse should not run on executor error: {output:?}"
         );
     }
 

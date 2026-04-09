@@ -82,6 +82,8 @@ Relay [`compat-harness` `parity_style`](apps/desktop/src-tauri/crates/compat-har
 - [x] **`LSP`**: first slice = pull diagnostics for a workspace file via `rust-analyzer` stdio (`runtime::pull_rust_diagnostics_blocking`).
 - [x] **`Task*`** (in-memory registry; no external worker): `TaskCreate`, `TaskGet`, `TaskList`, `TaskStop`, `TaskUpdate`, `TaskOutput`.
 - [x] Session compaction / token counting parity with claw (`should_compact` / re-compact / merged summaries aligned with claw-code `rust/crates/runtime/src/compact.rs` at pin SHA; Relay keeps `CompactionConfig::default().preserve_recent_messages == 5` vs upstream 4 — documented in `IMPLEMENTATION.md` 2026-04-09 batch).
+- [x] **`PostToolUseFailure` hooks:** merged from `.claw` `hooks.PostToolUseFailure` (claw-shaped stdin JSON with `tool_error`); `HookRunner` runs these only after a tool executor error, not `PostToolUse`. Env: `HOOK_TOOL_ERROR` plus `HOOK_TOOL_OUTPUT` set to the error text.
+- [x] **Desktop CDP outer turn:** after `run_turn`, a follow-up Copilot round with user text `Continue.` runs at most once on **Build** when the first model round produced **no tool calls** (`iterations == 1`, empty `tool_results`)—recovery for meta-only stalls without the broken “last message still has ToolUse” check.
 
 ## Upstream revision pin (optional ports)
 

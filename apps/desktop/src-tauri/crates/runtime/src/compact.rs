@@ -83,7 +83,7 @@ pub fn get_compact_continuation_message(
     }
 
     if suppress_follow_up_questions {
-        base.push_str("\n");
+        base.push('\n');
         base.push_str(COMPACT_DIRECT_RESUME_INSTRUCTION);
     }
 

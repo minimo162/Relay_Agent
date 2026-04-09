@@ -18,7 +18,7 @@ pub fn resolve_against_workspace(user_path: &str, workspace_root: &Path) -> Path
 
 /// Collapse `.`, `..`, and duplicate separators without touching the filesystem.
 #[must_use]
-pub fn lexical_normalize(path: PathBuf) -> PathBuf {
+pub fn lexical_normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in path.components() {
         match c {
@@ -42,7 +42,7 @@ pub fn lexical_normalize(path: PathBuf) -> PathBuf {
 ///   rejected via [`lexical_normalize`] before existence checks.
 pub fn assert_path_in_workspace(full_path: &Path, workspace_root: &Path) -> io::Result<()> {
     let root = workspace_root.canonicalize()?;
-    let norm = lexical_normalize(full_path.to_path_buf());
+    let norm = lexical_normalize(full_path);
 
     if norm.exists() {
         let c = norm.canonicalize()?;
@@ -84,7 +84,7 @@ pub fn assert_path_in_workspace(full_path: &Path, workspace_root: &Path) -> io::
     }
 
     // Nothing on disk yet (e.g. deep new path): require lexical path to stay under root.
-    let root_norm = lexical_normalize(root.clone());
+    let root_norm = lexical_normalize(&root);
     if !(norm.starts_with(&root_norm) || norm == root_norm) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn lexical_normalize_collapses_dotdot() {
         let p = PathBuf::from("/a/b/../../etc/passwd");
-        let n = lexical_normalize(p);
+        let n = lexical_normalize(&p);
         assert!(n.ends_with("passwd"), "{n:?}");
     }
 

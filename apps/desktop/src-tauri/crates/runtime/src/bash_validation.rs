@@ -11,6 +11,37 @@ thread_local! {
     static RELAY_BASH_CONFIG_ROOT: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
+const MUTATING_COMMAND_SUBSTRINGS: &[&str] = &[
+    " rm ",
+    "\nrm ",
+    "\trm ",
+    ";rm ",
+    "&&rm ",
+    "||rm ",
+    " rmdir ",
+    ";rmdir ",
+    " chmod ",
+    ";chmod ",
+    " chown ",
+    ";chown ",
+    " mkdir ",
+    ";mkdir ",
+    " mv ",
+    ";mv ",
+    " cp ",
+    ";cp ",
+    " touch ",
+    ";touch ",
+    " tee ",
+    ";tee ",
+    "git commit",
+    "git push",
+    "git merge",
+    "git rebase",
+    "git reset",
+    "git stash",
+];
+
 /// Desktop agent loop sets this for the duration of one `bash` tool call so `.claw` settings
 /// resolve against the session workspace (not the process CWD). Dropped after the call.
 pub struct BashConfigCwdGuard {
@@ -78,38 +109,7 @@ fn command_appears_mutating(command: &str) -> bool {
         return true;
     }
 
-    const SUBSTRINGS: &[&str] = &[
-        " rm ",
-        "\nrm ",
-        "\trm ",
-        ";rm ",
-        "&&rm ",
-        "||rm ",
-        " rmdir ",
-        ";rmdir ",
-        " chmod ",
-        ";chmod ",
-        " chown ",
-        ";chown ",
-        " mkdir ",
-        ";mkdir ",
-        " mv ",
-        ";mv ",
-        " cp ",
-        ";cp ",
-        " touch ",
-        ";touch ",
-        " tee ",
-        ";tee ",
-        "git commit",
-        "git push",
-        "git merge",
-        "git rebase",
-        "git reset",
-        "git stash",
-    ];
-
-    for s in SUBSTRINGS {
+    for s in MUTATING_COMMAND_SUBSTRINGS {
         if c.contains(s) {
             return true;
         }

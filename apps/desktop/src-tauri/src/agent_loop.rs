@@ -478,16 +478,18 @@ pub fn run_agent_loop_impl(
             session_preset,
         )?;
 
-        let needs_more_turns = summary.assistant_messages.last().is_some_and(|message| {
-            message
-                .blocks
-                .iter()
-                .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
-        });
+        // Outer Copilot rounds: `run_turn` already loops until the model stops requesting tools.
+        // The old check (last assistant message still contains ToolUse) was never true at turn end,
+        // so multi-turn "Continue." never ran. Align with claw-code intent: optionally nudge Copilot
+        // once on Build when the first model round produced no tool calls at all (meta-only stall).
+        let needs_extra_copilot_round = session_preset == SessionPreset::Build
+            && turn == 0
+            && summary.tool_results.is_empty()
+            && summary.iterations == 1;
 
         final_summary = Some(summary);
 
-        if !needs_more_turns {
+        if !needs_extra_copilot_round {
             break;
         }
     }
@@ -1495,7 +1497,7 @@ fn enforce_workspace_tool_paths(
                 return Ok(());
             };
             let joined = resolve_against_workspace(s, workspace);
-            let norm = lexical_normalize(joined);
+            let norm = lexical_normalize(&joined);
             assert_path_in_workspace(&norm, workspace)
                 .map_err(|e| runtime::ToolError::new(e.to_string()))?;
             obj.insert(
@@ -1541,7 +1543,7 @@ fn enforce_workspace_tool_paths(
                 for p in paths.iter_mut() {
                     if let Value::String(s) = p {
                         let joined = resolve_against_workspace(s, workspace);
-                        let norm = lexical_normalize(joined);
+                        let norm = lexical_normalize(&joined);
                         assert_path_in_workspace(&norm, workspace)
                             .map_err(|e| runtime::ToolError::new(e.to_string()))?;
                         *p = Value::String(norm.to_string_lossy().into_owned());

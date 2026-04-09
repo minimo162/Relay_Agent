@@ -9,6 +9,7 @@ use crate::config::{RuntimeFeatureConfig, RuntimeHookConfig};
 pub enum HookEvent {
     PreToolUse,
     PostToolUse,
+    PostToolUseFailure,
 }
 
 impl HookEvent {
@@ -16,6 +17,7 @@ impl HookEvent {
         match self {
             Self::PreToolUse => "PreToolUse",
             Self::PostToolUse => "PostToolUse",
+            Self::PostToolUseFailure => "PostToolUseFailure",
         }
     }
 }
@@ -92,6 +94,53 @@ impl HookRunner {
         )
     }
 
+    /// Runs `hooks.PostToolUseFailure` from merged Claw settings (claw-code parity).
+    #[must_use]
+    pub fn run_post_tool_use_failure(
+        &self,
+        tool_name: &str,
+        tool_input: &str,
+        tool_error: &str,
+    ) -> HookRunResult {
+        Self::run_commands(
+            HookEvent::PostToolUseFailure,
+            self.config.post_tool_use_failure(),
+            tool_name,
+            tool_input,
+            Some(tool_error),
+            true,
+        )
+    }
+
+    fn hook_payload(
+        event: HookEvent,
+        tool_name: &str,
+        tool_input: &str,
+        tool_output: Option<&str>,
+        is_error: bool,
+    ) -> String {
+        match event {
+            HookEvent::PostToolUseFailure => json!({
+                "hook_event_name": event.as_str(),
+                "tool_name": tool_name,
+                "tool_input": parse_tool_input(tool_input),
+                "tool_input_json": tool_input,
+                "tool_error": tool_output.unwrap_or(""),
+                "tool_result_is_error": true,
+            })
+            .to_string(),
+            _ => json!({
+                "hook_event_name": event.as_str(),
+                "tool_name": tool_name,
+                "tool_input": parse_tool_input(tool_input),
+                "tool_input_json": tool_input,
+                "tool_output": tool_output,
+                "tool_result_is_error": is_error,
+            })
+            .to_string(),
+        }
+    }
+
     fn run_commands(
         event: HookEvent,
         commands: &[String],
@@ -104,15 +153,7 @@ impl HookRunner {
             return HookRunResult::allow(Vec::new());
         }
 
-        let payload = json!({
-            "hook_event_name": event.as_str(),
-            "tool_name": tool_name,
-            "tool_input": parse_tool_input(tool_input),
-            "tool_input_json": tool_input,
-            "tool_output": tool_output,
-            "tool_result_is_error": is_error,
-        })
-        .to_string();
+        let payload = Self::hook_payload(event, tool_name, tool_input, tool_output, is_error);
 
         let mut messages = Vec::new();
 
@@ -167,6 +208,9 @@ impl HookRunner {
         child.env("HOOK_TOOL_IS_ERROR", if is_error { "1" } else { "0" });
         if let Some(tool_output) = tool_output {
             child.env("HOOK_TOOL_OUTPUT", tool_output);
+            if matches!(event, HookEvent::PostToolUseFailure) {
+                child.env("HOOK_TOOL_ERROR", tool_output);
+            }
         }
 
         match child.output_with_stdin(payload.as_bytes()) {
@@ -333,6 +377,20 @@ mod tests {
             .messages()
             .iter()
             .any(|message| message.contains("allowing tool execution to continue")));
+    }
+
+    #[test]
+    fn post_tool_use_failure_hook_runs_separately_from_post_tool_use() {
+        let runner = HookRunner::new(
+            RuntimeHookConfig::new(Vec::new(), Vec::new()).with_post_tool_use_failure(vec![
+                shell_snippet("printf 'saw-failure'"),
+            ]),
+        );
+
+        let result = runner.run_post_tool_use_failure("bash", r#"{"command":"false"}"#, "command failed");
+
+        assert!(!result.is_denied());
+        assert_eq!(result.messages(), &["saw-failure".to_string()]);
     }
 
     #[cfg(windows)]

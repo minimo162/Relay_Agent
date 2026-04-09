@@ -201,7 +201,7 @@ pub fn read_file(
                     ),
                 ));
             }
-            if bytes.iter().any(|&b| b == 0) {
+            if bytes.contains(&0) {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "file appears binary (NUL byte); not read as UTF-8 text",
