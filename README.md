@@ -24,7 +24,7 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 | UI | SolidJS, Vite, TypeScript, Tailwind — design tokens follow **Cursor-inspired** palette from vendored [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md) ([getdesign](https://getdesign.md) `cursor` pack; see `docs/IMPLEMENTATION.md` milestone log) |
 | Shell | Tauri v2, `tauri-plugin-shell`, `tauri-plugin-dialog` |
 | Agent / tools | Rust (`apps/desktop/src-tauri/`, internal crates) |
-| AI surface | M365 Copilot in Edge via **Node** `copilot_server.js` + CDP |
+| AI surface | M365 Copilot in Edge via **Node** `copilot_server.js` + CDP; the host parses tool calls from **` ```relay_tool `** JSON and, if none, from **` ```json `** / generic fenced JSON or bounded inline tool-shaped objects ([`agent_loop.rs`](apps/desktop/src-tauri/src/agent_loop.rs)) |
 
 ## What the app does
 

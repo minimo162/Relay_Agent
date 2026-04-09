@@ -3693,11 +3693,51 @@ async function launchEdgeMsedgeWin32(edgePath, argv) {
   console.error("[copilot:ensureEdge] Win32 cmd /c start execFile callback returned");
 }
 
+/** Best-effort kill of Edge and subprocesses so a failed port=0 trial does not leave a second Copilot window. */
+async function terminateEdgeProcessTree(pid) {
+  if (pid == null || pid <= 0) return;
+  try {
+    if (process.platform === "win32") {
+      const { execFile } = await import("node:child_process");
+      await new Promise((resolve) => {
+        execFile(
+          "taskkill",
+          ["/F", "/T", "/PID", String(pid)],
+          { windowsHide: true },
+          () => resolve(),
+        );
+      });
+    } else {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        /* ESRCH etc. */
+      }
+      await sleep(500);
+      try {
+        process.kill(pid, 0);
+      } catch {
+        return;
+      }
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch (e) {
+    console.error("[copilot:ensureEdge] terminateEdgeProcessTree:", e?.message || e);
+  }
+}
+
 /**
  * Detached msedge — reliable under Tauri; `cmd start` can hang without invoking the execFile callback on some PCs.
  * @param {string | null} [logPath] — override log target; `null` disables file logging.
+ * @param {{ retainChild?: boolean }} [opts] — if `retainChild`, skip `unref()` and return the child for cleanup or later `unref()`.
+ * @returns {Promise<import("node:child_process").ChildProcess | undefined>}
  */
-async function spawnEdgeDetached(edgePath, argv, tag = "", logPath) {
+async function spawnEdgeDetached(edgePath, argv, tag = "", logPath, opts = {}) {
+  const retainChild = opts.retainChild === true;
   const { spawn } = await import("node:child_process");
   const t = tag ? ` (${tag})` : "";
   const resolvedLog = logPath === undefined ? defaultRelayEdgeLogPath() : logPath;
@@ -3743,21 +3783,33 @@ async function spawnEdgeDetached(edgePath, argv, tag = "", logPath) {
       );
     }
   });
-  child.unref();
+  if (!retainChild) {
+    child.unref();
+  }
   console.error("[copilot:ensureEdge] spawn issued" + t + " pid=", child.pid ?? "(none)");
   await sleep(400);
+  return retainChild ? child : undefined;
 }
 
-/** Win32: optional cmd /c start first; always ends in spawnEdgeDetached for resilience. */
-async function spawnEdgeForDedicated(edgePath, argv, tag) {
+/**
+ * Win32: optional cmd /c start first; always ends in spawnEdgeDetached for resilience.
+ * @param {{ retainChild?: boolean }} [opts] — port=0 trial: retain child PID so we can kill the tree if CDP fallback runs.
+ * @returns {Promise<import("node:child_process").ChildProcess | undefined>}
+ */
+async function spawnEdgeForDedicated(edgePath, argv, tag, opts = {}) {
+  const retainChild = opts.retainChild === true;
   if (process.platform === "win32") {
     const useCmdStart = process.env.RELAY_COPILOT_WIN32_CMD_START === "1";
-    if (useCmdStart) {
+    if (useCmdStart && retainChild) {
+      console.error(
+        "[copilot:ensureEdge] retainChild: skipping RELAY_COPILOT_WIN32_CMD_START so port=0 Edge pid can be tracked",
+      );
+    } else if (useCmdStart) {
       console.error("[copilot:ensureEdge] RELAY_COPILOT_WIN32_CMD_START=1 — trying cmd /c start (12s cap)…");
       try {
         await withTimeout(launchEdgeMsedgeWin32(edgePath, argv), 12e3, `${tag} cmd start`);
         console.error("[copilot:ensureEdge] Win32 cmd start returned OK");
-        return;
+        return undefined;
       } catch (e) {
         console.error("[copilot:ensureEdge] cmd start failed or timed out:", e?.message || e);
       }
@@ -3767,7 +3819,7 @@ async function spawnEdgeForDedicated(edgePath, argv, tag) {
       );
     }
   }
-  await spawnEdgeDetached(edgePath, argv, tag);
+  return await spawnEdgeDetached(edgePath, argv, tag, undefined, { retainChild });
 }
 
 async function waitUntilDedicatedCdpResponds(actualPort, profileDir) {
@@ -3820,16 +3872,40 @@ async function waitUntilDedicatedCdpResponds(actualPort, profileDir) {
 async function tryDedicatedLaunchPortZero(edgePath, profileDir) {
   const argv = ["--remote-debugging-port=0", ...relayDedicatedEdgeBaseArgv(profileDir)];
   console.error("[copilot:ensureEdge] trying remote-debugging-port=0 + DevToolsActivePort (Rust-aligned)…");
-  await spawnEdgeForDedicated(edgePath, argv, "dedicated-port0");
-  const discovered = await waitForDevToolsActivePort(profileDir, 30_000);
-  if (discovered == null) {
-    console.error("[copilot:ensureEdge] DevToolsActivePort missing after port=0 launch; using fixed-port fallback");
+  const child = await spawnEdgeForDedicated(edgePath, argv, "dedicated-port0", { retainChild: true });
+
+  const cleanupAbandonedPort0 = async () => {
+    const pid = child?.pid;
+    if (pid != null) {
+      console.error(
+        "[copilot:ensureEdge] terminating abandoned port=0 Edge pid=",
+        pid,
+        "before fixed-port launch",
+      );
+      await terminateEdgeProcessTree(pid);
+      await sleep(400);
+    }
+  };
+
+  try {
+    const discovered = await waitForDevToolsActivePort(profileDir, 30_000);
+    if (discovered == null) {
+      console.error("[copilot:ensureEdge] DevToolsActivePort missing after port=0 launch; using fixed-port fallback");
+      await cleanupAbandonedPort0();
+      return false;
+    }
+    console.error("[copilot:ensureEdge] DevToolsActivePort reports port", discovered);
+    if (await waitUntilDedicatedCdpResponds(discovered, profileDir)) {
+      if (child) child.unref();
+      return true;
+    }
+    console.error("[copilot:ensureEdge] CDP on DevToolsActivePort port did not become ready; using fixed-port fallback");
+    await cleanupAbandonedPort0();
     return false;
+  } catch (e) {
+    await cleanupAbandonedPort0();
+    throw e;
   }
-  console.error("[copilot:ensureEdge] DevToolsActivePort reports port", discovered);
-  if (await waitUntilDedicatedCdpResponds(discovered, profileDir)) return true;
-  console.error("[copilot:ensureEdge] CDP on DevToolsActivePort port did not become ready; using fixed-port fallback");
-  return false;
 }
 
 /** Legacy: scan cdpPort..cdpPort+range for a free TCP listener slot, fixed --remote-debugging-port. */

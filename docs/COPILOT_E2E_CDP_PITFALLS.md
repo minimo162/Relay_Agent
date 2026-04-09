@@ -22,16 +22,25 @@ Microsoft 365 CopilotのE2Eテストを、実際にログインしたMicrosoft E
 
 **対策（実装）:** Rust は `DevToolsActivePort` があるが一発で CDP に繋がらない場合、新規起動の前に最大約 30 秒 `wait_for_cdp_ready` で待機。どうしても自前起動する場合は Node の `COPILOT_URL` と同じ Copilot URL を開く。Node は固定ポートの即時プローブが失敗したあと、`DevToolsActivePort` と設定ポートを最大約 30 秒ポーリングしてから `tryDedicatedLaunchPortZero` へ進む。Windows の **Win32 nudge**（`cmd /c start`）は **既定オフ** — `RELAY_COPILOT_NUDGE_EDGE=1` のときだけ実行（毎回の前面化・余分なウィンドウを抑える）。nudge が失敗しても `spawnEdgeForDedicated` には **フォールバックしない**。
 
+**port=0 → 固定ポートフォールバック:** `--remote-debugging-port=0` で起動した Edge が `DevToolsActivePort` 上で CDP 応答にならず固定ポート（例: 9360）へ落ちる場合、**最初の Edge プロセスを終了**してから 2 台目を起動する（`terminateEdgeProcessTree` / `taskkill /T` 等）。これで同じプロファイルに Copilot タブが二重に残るのを防ぐ。`RELAY_COPILOT_WIN32_CMD_START=1` かつ port=0 試行では、PID を追跡するため **cmd start をスキップ**して `spawn` する。
+
 **前面化を抑える:** Relay / `copilot_server.js` のプロセス環境に **`RELAY_COPILOT_NO_WINDOW_FOCUS=1`** を設定すると、CDP の `Target.activateTarget` と `Page.bringToFront` を送らない（ページ内の `focus()` / `click()` は維持し、Lexical への入力は可能な限り継続）。Rust の `CopilotPage::send_prompt` も同じ変数名で `Page.bringToFront` をスキップする。
 
 **運用:** `pnpm tauri:dev` 前の `prestart-relay-edge.mjs` とアプリ内の `copilot_server.js` が同じプロファイルを使うが、上記で二重起動を抑える。Edge は手動だけで立ち上げたい場合は `RELAY_SKIP_PRESTART_EDGE=1` も利用できる。Win32 で以前どおり nudge したい場合のみ `RELAY_COPILOT_NUDGE_EDGE=1`。
 
 **Windows: 待ち続け / 二重 Edge:** `127.0.0.1:18080` が **EADDRINUSE** のときは、前回の `node copilot_server.js` が残っていることが多い。デスクトップ起動時、Rust が **`/health` の `bootToken` がセッションと一致しない**リスナーを検出したら、そのポートのプロセスを終了してから `copilot_server` を起動し直す（自動リカバリ）。意図的にポートを共有するなどで無効化する場合は **`RELAY_COPILOT_RECLAIM_STALE_HTTP=0`**。手動対処はタスクマネージャーで該当 `node` を終了するか Relay を閉じる。`DevToolsActivePort` と実際の CDP がずれた場合は、Relay 用 Edge を **1 プロセスだけ**にしてから再起動する。遅い PC では **`RELAY_CDP_PROBE_TIMEOUT_MS`**（500〜120000、ミリ秒）で `/json/version` の待ちを延ばせる。Edge 起動引数 **`--disable-site-isolation-trials`** は Windows では付けない（Linux のみ; 未サポート警告の回避）。
 
+## Relay デスクトップ: Copilot 応答とツール実行（relay_tool）
+
+**症状:** モデルがツール呼び出しを文章や「Plain Text」ブロックで説明するだけで、**` ```relay_tool `** 形式のフェンスを出さない／**` ```json `** だけで JSON を出すと、応答にツールが含まれず **1 ターンで終了**し、`read_file` などが実行されないことがあった。
+
+**対策（実装）:** デスクトップ Rust [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) の `parse_copilot_tool_response` は、まず **` ```relay_tool `** を解析し、**ツールが 0 件のとき**に限り、(1) 通常の Markdown コードフェンス（`json`・無言語など）内の JSON、(2) 本文中の `{"name":"<MVPツール名>","input":{…}}` を限定的に抽出する。フォールバックは **MVP カタログに載っているツール名のみ**（それ以外は無視）。プロンプト（ツールカタログ節）に「説明だけでは実行されない」「UI が Plain Text と表示しても `relay_tool` または `json` フェンスで JSON を出す」旨を記載。
+
 ## 重要ファイル
 
 | ファイル | 役割 |
 |----------|------|
+| `apps/desktop/src-tauri/src/agent_loop.rs` | CDP 経由の応答から `relay_tool` / フォールバック JSON を解析してツール実行へ渡す |
 | `apps/desktop/playwright-cdp.config.ts` | CDP接続用 Playwright 設定（`connectOverCDP` / プロジェクト分離） |
 | `apps/desktop/tests/m365-copilot-capabilities-v2.spec.ts` | 能力検証 E2E（T1–T10、`cdp-connect` プロジェクト） |
 | `apps/desktop/tests/m365-copilot-cdp.spec.ts` | M365 チャット **スモーク**（新規チャット・送信・マルチターン、`m365-cdp-chat` プロジェクト） |

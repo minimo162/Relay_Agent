@@ -16,6 +16,26 @@
 
 ## Milestone Log
 
+### 2026-04-09 CDP agent loop: parse `relay_tool` fallbacks (`json` fences, unfenced tool JSON)
+
+**Problem:** M365 Copilot often answered with prose plus tool JSON in **` ```json `** or “Plain Text” blocks, or bare `{"name":"read_file","input":{…}}`, instead of **` ```relay_tool `**. The host only parsed `relay_tool`, so **no `ToolUse` events** were emitted and `ConversationRuntime::run_turn` stopped after one assistant message without running tools.
+
+**Fix:** [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) — `parse_copilot_tool_response`: after the primary `relay_tool` pass, if there are no calls, **`extract_fallback_markdown_fences`** (generic Markdown fences with valid JSON bodies) then **`extract_unfenced_tool_json_candidates`** (bounded `{"name":…}` scan). Fallback calls are **whitelist-filtered** to `tools::mvp_tool_specs()` names only. **`cdp_tool_catalog_section`** documents that prose-only descriptions do not execute tools and that ` ```json ` is accepted.
+
+**Doc:** [`docs/COPILOT_E2E_CDP_PITFALLS.md`](COPILOT_E2E_CDP_PITFALLS.md) (*Relay デスクトップ: Copilot 応答とツール実行*).
+
+**Verification:** `cargo test -p relay-agent-desktop cdp_copilot_tool` — pass (2026-04-09).
+
+### 2026-04-09 Copilot Edge: kill abandoned port=0 instance before fixed-port fallback
+
+**Problem:** After `tryDedicatedLaunchPortZero`, CDP on `DevToolsActivePort` sometimes never became ready; `launchDedicatedFixedPortScan` then spawned a second `msedge` with the same profile and `COPILOT_URL`, leaving two Copilot tabs/windows. The first spawn used detached `unref()` so nothing terminated it.
+
+**Fix:** [`copilot_server.js`](../apps/desktop/src-tauri/binaries/copilot_server.js) — `spawnEdgeForDedicated` / `spawnEdgeDetached` optional `retainChild` for `dedicated-port0`; on fallback failure `terminateEdgeProcessTree` (Windows `taskkill /F /T`, Unix SIGTERM then SIGKILL); success path `child.unref()`. With `RELAY_COPILOT_WIN32_CMD_START=1`, port=0 trial skips cmd start so the child PID stays known.
+
+**Doc:** [`docs/COPILOT_E2E_CDP_PITFALLS.md`](COPILOT_E2E_CDP_PITFALLS.md) (*Relay デスクトップ: Edge が二重に開く*).
+
+**Verification:** `node --check` on `copilot_server.js` — pass (2026-04-09).
+
 ### 2026-04-09 Copilot HTTP port: reclaim stale `copilot_server` listeners
 
 **Problem:** A stray `node copilot_server.js` left on `127.0.0.1:18080` (or the next fallback ports) made `/health` return an old `bootToken` while a newly spawned child failed `listen` with **EADDRINUSE**, forcing the desktop to walk ports (e.g. 18080→18081→18082).

@@ -591,6 +591,9 @@ The JSON array below lists every tool you may invoke. Each entry has `name`, `de
 
 When you need to call one or more tools, you may write a short user-facing explanation, then append a Markdown fenced block whose **info string is exactly** `relay_tool` (three backticks, then `relay_tool`, then a newline). Inside the fence put **only** JSON — no markdown, no commentary.
 
+- **Host execution:** The desktop runs tools **only** from parsed tool calls in your reply. **Describing** JSON or saying you will call `read_file` does **not** execute anything—emit a real `relay_tool` fence or a normal ` ```json ` code block with the tool JSON.
+- **Copilot UI:** The chat UI may label your code block as “Plain Text” or similar; still use **` ```relay_tool `** as the fence opener (or put the same JSON object inside **` ```json `**—the host accepts that too).
+
 - **Single tool:** one JSON object: `{{ "name": "<tool_name>", "input": {{ ... }} }}`
 - **Optional:** `"id": "<string>"` — omit if unsure; the host will assign one.
 - **Multiple tools:** prefer **one** `relay_tool` fence with a JSON **array** of tool objects. Use multiple fences only when unavoidable. Repeating the same tool with identical `input` across fences wastes user approvals (the host dedupes, but you should not rely on it).
@@ -609,11 +612,257 @@ Example:
     )
 }
 
+fn mvp_tool_names_whitelist() -> HashSet<String> {
+    tools::mvp_tool_specs()
+        .into_iter()
+        .map(|s| s.name.to_string())
+        .collect()
+}
+
 /// Strip `relay_tool` fences and parse tool calls. Returns `(visible_text, Vec<(id, name, input_json)>)`.
+///
+/// M365 Copilot often emits tool JSON in ` ```json ` or bare ` ``` ` fences instead of ` ```relay_tool `;
+/// when the primary parse yields no calls, we run conservative fallbacks (whitelist MVP tool names only).
 fn parse_copilot_tool_response(raw: &str) -> (String, Vec<(String, String, String)>) {
+    let whitelist = mvp_tool_names_whitelist();
     let (stripped, payloads) = extract_relay_tool_fences(raw);
-    let calls = parse_tool_payloads(&payloads);
-    (stripped, dedupe_relay_tool_calls(calls))
+    let mut calls = parse_tool_payloads(&payloads);
+    let mut display = stripped;
+    if calls.is_empty() {
+        let (d, fb_payloads) = extract_fallback_markdown_fences(&display);
+        display = d;
+        calls.extend(filter_whitelisted_tool_calls(
+            parse_tool_payloads(&fb_payloads),
+            &whitelist,
+        ));
+    }
+    if calls.is_empty() {
+        let (d, uf_payloads) = extract_unfenced_tool_json_candidates(&display, &whitelist);
+        display = d;
+        calls.extend(filter_whitelisted_tool_calls(
+            parse_tool_payloads(&uf_payloads),
+            &whitelist,
+        ));
+    }
+    (display.trim().to_string(), dedupe_relay_tool_calls(calls))
+}
+
+fn filter_whitelisted_tool_calls(
+    calls: Vec<(String, String, String)>,
+    whitelist: &HashSet<String>,
+) -> Vec<(String, String, String)> {
+    calls
+        .into_iter()
+        .filter(|(_, name, _)| {
+            if whitelist.contains(name) {
+                true
+            } else {
+                tracing::debug!(
+                    name = %name,
+                    "[CdpApiClient] skipped fallback tool call: not in MVP catalog"
+                );
+                false
+            }
+        })
+        .collect()
+}
+
+/// After ` ``` `, find end of inner content (index in `body` before the closing fence).
+fn find_generic_markdown_fence_inner_end(body: &str) -> Option<usize> {
+    if let Some(i) = body.find("\n```") {
+        return Some(i);
+    }
+    if body.starts_with("```") {
+        return Some(0);
+    }
+    body.rfind("```")
+}
+
+/// Strip normal Markdown code fences and return JSON bodies that may contain tool calls.
+/// Skips `relay_tool` fences (payloads already taken by [`extract_relay_tool_fences`]); strips them from display.
+fn extract_fallback_markdown_fences(text: &str) -> (String, Vec<String>) {
+    const OPEN: &str = "```";
+    let mut display = String::new();
+    let mut payloads = Vec::new();
+    let mut rest = text;
+
+    while let Some(idx) = rest.find(OPEN) {
+        display.push_str(&rest[..idx]);
+        let after_ticks = &rest[idx + OPEN.len()..];
+
+        let (info, body_start) = match after_ticks.find('\n') {
+            Some(nl) => {
+                let fl = after_ticks[..nl].trim();
+                if fl.starts_with('{') {
+                    ("", 0usize)
+                } else {
+                    (fl, nl + 1)
+                }
+            }
+            None => {
+                if after_ticks.starts_with('{') {
+                    ("", 0usize)
+                } else {
+                    display.push_str(OPEN);
+                    display.push_str(after_ticks);
+                    rest = "";
+                    break;
+                }
+            }
+        };
+
+        let body_region = &after_ticks[body_start..];
+        let Some(inner_end) = find_generic_markdown_fence_inner_end(body_region) else {
+            display.push_str(OPEN);
+            display.push_str(after_ticks);
+            rest = "";
+            break;
+        };
+        let inner = body_region[..inner_end].trim();
+        let after_inner = &body_region[inner_end..];
+        let rest_after_fence = if let Some(tail) = after_inner.strip_prefix("\n```") {
+            tail
+        } else if let Some(tail) = after_inner.strip_prefix("\r\n```") {
+            tail
+        } else if let Some(tail) = after_inner.strip_prefix("```") {
+            tail
+        } else {
+            display.push_str(OPEN);
+            display.push_str(after_ticks);
+            rest = "";
+            break;
+        };
+        let rest_after_fence = rest_after_fence
+            .strip_prefix('\n')
+            .or_else(|| rest_after_fence.strip_prefix("\r\n"))
+            .unwrap_or(rest_after_fence);
+
+        if info == "relay_tool" {
+            rest = rest_after_fence;
+            continue;
+        }
+
+        if !inner.is_empty() && serde_json::from_str::<Value>(inner).is_ok() {
+            payloads.push(inner.to_string());
+        }
+
+        rest = rest_after_fence;
+    }
+    display.push_str(rest);
+    (display, payloads)
+}
+
+/// Pull `{"name":"…","input":{…}}` objects from prose (Copilot "Plain Text" without fences). Bounded scan.
+fn extract_unfenced_tool_json_candidates(text: &str, whitelist: &HashSet<String>) -> (String, Vec<String>) {
+    const MAX_OBJECT_LEN: usize = 32_768;
+    const MAX_MATCHES: usize = 12;
+    let mut payloads = Vec::new();
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut search_start = 0usize;
+
+    while search_start < text.len() && ranges.len() < MAX_MATCHES {
+        let slice = &text[search_start..];
+        let rel = slice
+            .find("{\"name\"")
+            .or_else(|| slice.find("{ \"name\""));
+        let Some(rel) = rel else {
+            break;
+        };
+        let abs = search_start + rel;
+        let Some(sub) = extract_balanced_json_object(text, abs) else {
+            search_start = abs.saturating_add(1);
+            continue;
+        };
+        if sub.len() > MAX_OBJECT_LEN {
+            search_start = abs.saturating_add(1);
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(sub) else {
+            search_start = abs.saturating_add(1);
+            continue;
+        };
+        if let Some(obj) = v.as_object() {
+            let Some(name) = obj.get("name").and_then(|x| x.as_str()) else {
+                search_start = abs.saturating_add(1);
+                continue;
+            };
+            if !whitelist.contains(name) {
+                search_start = abs.saturating_add(1);
+                continue;
+            }
+            if !obj.get("input").map_or(true, Value::is_object) {
+                search_start = abs.saturating_add(1);
+                continue;
+            }
+            if parse_one_tool_call(&v).is_some() {
+                let end = abs + sub.len();
+                ranges.push((abs, end));
+                payloads.push(sub.to_string());
+            }
+        }
+        search_start = abs.saturating_add(1);
+    }
+
+    ranges.sort_by_key(|(a, _)| *a);
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (a, b) in ranges {
+        if let Some(last) = merged.last_mut() {
+            if a <= last.1 {
+                last.1 = last.1.max(b);
+                continue;
+            }
+        }
+        merged.push((a, b));
+    }
+
+    let mut display = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+    for (a, b) in merged {
+        if a > cursor {
+            display.push_str(&text[cursor..a]);
+        }
+        cursor = b;
+    }
+    display.push_str(&text[cursor..]);
+    (display, payloads)
+}
+
+fn extract_balanced_json_object(s: &str, start: usize) -> Option<&str> {
+    let slice = s.get(start..)?;
+    if !slice.starts_with('{') {
+        return None;
+    }
+    let mut depth = 0u32;
+    let mut in_str = false;
+    let mut escape = false;
+    for (i, ch) in slice.char_indices() {
+        if in_str {
+            if escape {
+                escape = false;
+                continue;
+            }
+            if ch == '\\' {
+                escape = true;
+                continue;
+            }
+            if ch == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_str = true,
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(&slice[..=i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Recursively sort JSON object keys so equivalent objects produce one dedupe key.
@@ -1935,6 +2184,8 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("read_file"));
         assert!(s.contains("relay_tool"));
         assert!(s.contains("input_schema"));
+        assert!(s.contains("Host execution"));
+        assert!(s.contains("Copilot UI"));
     }
 
     #[test]
@@ -1964,6 +2215,83 @@ mod cdp_copilot_tool_tests {
         let (vis, tools) = parse_copilot_tool_response("Hello, no tools here.");
         assert_eq!(vis, "Hello, no tools here.");
         assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn fallback_json_fence_read_file() {
+        let raw = r#"了解。read-only で確認します。
+
+```json
+{"name":"read_file","input":{"path":"C:\\Users\\x\\Downloads\\テトリス.html"}}
+```
+"#;
+        let (vis, tools) = parse_copilot_tool_response(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "read_file");
+        assert!(tools[0].2.contains("テトリス.html"));
+        assert!(!vis.contains("read_file"));
+        assert!(!vis.contains("```json"));
+    }
+
+    #[test]
+    fn fallback_plain_triple_backtick_fence() {
+        let raw = r#"x
+```
+{"name":"glob_search","input":{"pattern":"*.toml"}}
+```
+y"#;
+        let (vis, tools) = parse_copilot_tool_response(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "glob_search");
+        assert!(vis.contains('x'));
+        assert!(vis.contains('y'));
+    }
+
+    #[test]
+    fn fallback_after_invalid_relay_fence() {
+        let raw = r#"Text
+```relay_tool
+not json
+```
+```json
+{"name":"read_file","input":{"path":"C:\\a.html"}}
+```
+Tail"#;
+        let (vis, tools) = parse_copilot_tool_response(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "read_file");
+        assert!(vis.contains("Text"));
+        assert!(vis.contains("Tail"));
+    }
+
+    #[test]
+    fn fallback_drops_unknown_tool_name() {
+        let raw = r#"```json
+{"name":"relay_absurd_tool_name_zz","input":{}}
+```"#;
+        let (_vis, tools) = parse_copilot_tool_response(raw);
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn fallback_duplicate_json_fences_deduped() {
+        let raw = r#"```json
+{"name":"read_file","input":{"path":"same.txt"}}
+```
+```json
+{"name":"read_file","input":{"path":"same.txt"}}
+```"#;
+        let (_vis, tools) = parse_copilot_tool_response(raw);
+        assert_eq!(tools.len(), 1);
+    }
+
+    #[test]
+    fn unfenced_tool_json_in_prose() {
+        let raw = "了解。\n\n{\"name\":\"read_file\",\"input\":{\"path\":\"C:\\\\x\\\\y.txt\"}}\n";
+        let (vis, tools) = parse_copilot_tool_response(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "read_file");
+        assert!(!vis.contains("read_file"));
     }
 
     #[test]
