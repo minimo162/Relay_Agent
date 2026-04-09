@@ -30,18 +30,17 @@ export function Sidebar(props: {
     <aside class="ra-shell-sidebar" aria-label="Sessions">
       <div class="ra-sidebar-shell">
         <div class="ra-sidebar-shell__header">
-          <h2 class={`text-sm font-semibold ${ui.textPrimary} mb-2`}>Sessions</h2>
+          <h2 class={`ra-display-title text-base font-semibold ${ui.textPrimary} mb-2`}>Sessions</h2>
           <Input
             type="search"
             placeholder="Search sessions…"
-            class="text-xs"
             aria-label="Search sessions"
             onInput={(e) => setSearch(e.currentTarget.value)}
           />
         </div>
         <div class="ra-sidebar-shell__list">
           <Show when={filtered().length === 0}>
-            <div class={`text-xs ${ui.mutedText} text-center py-8`}>No matching sessions</div>
+            <div class={`text-sm ${ui.mutedText} text-center py-8`}>No matching sessions</div>
           </Show>
           <For each={filtered()}>
             {(entry) => {

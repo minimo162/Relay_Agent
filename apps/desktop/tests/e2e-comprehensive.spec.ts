@@ -535,11 +535,11 @@ test.describe("Layout Integrity", () => {
 /* ── 9. Theme & Visual ───────────────────────────────────── */
 
 test.describe("Theme & Visual", () => {
-  test("dark mode is default", async ({ page }) => {
+  test("light mode is default", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
     const theme = await page.locator("html").getAttribute("data-theme");
-    expect(theme).toBe("dark");
+    expect(theme).toBe("light");
   });
 
   test("CSS custom properties are defined", async ({ page }) => {

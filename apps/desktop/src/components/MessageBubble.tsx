@@ -37,10 +37,10 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
   return (
     <div class={`flex ${isUser ? "justify-end" : "justify-start"} mb-3`}>
       <div
-        class={`group relative max-w-[min(80%,42rem)] rounded-xl text-sm leading-relaxed ${
+        class={`group relative max-w-[min(80%,42rem)] rounded-xl text-base leading-relaxed ${
           isUser
-            ? "ra-fill-accent ring-1 ring-inset ring-white/12"
-            : `${ui.surfaceElevated} ${ui.border} border text-[var(--ra-text-primary)]`
+            ? "ra-bubble-user"
+            : `${ui.surfaceCard} ${ui.border} border text-[var(--ra-text-primary)]`
         }`}
         data-ra-bubble-role={props.role}
       >
@@ -52,7 +52,7 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
           <IconButton
             label="Copy message"
             variant="default"
-            class={`!w-7 !h-7 ${isUser ? "!text-white/90 hover:!bg-white/15 hover:!text-white" : ""}`}
+            class={`!w-7 !h-7 ${isUser ? "!text-[var(--ra-text-muted)] hover:!bg-[var(--ra-hover)] hover:!text-[var(--ra-text-primary)]" : ""}`}
             onClick={() => void copy()}
           >
             <CopyIcon />
@@ -62,7 +62,7 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
           when={isUser}
           fallback={
             <div
-              class={`ra-md-assistant px-4 py-2.5 break-words text-sm leading-relaxed ${
+              class={`ra-md-assistant px-4 py-2.5 break-words text-base leading-relaxed ${
                 collapsed() ? "max-h-48 overflow-hidden" : ""
               }`}
               innerHTML={assistantHtml()}
@@ -81,9 +81,7 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
           <div class="px-4 pb-2 -mt-1">
             <button
               type="button"
-              class={`text-xs font-medium underline-offset-2 hover:underline ${
-                isUser ? "text-white/90" : "text-[var(--ra-accent)]"
-              }`}
+              class="text-sm font-medium text-[var(--ra-accent)] underline-offset-2 hover:underline"
               onClick={() => setExpanded(!expanded())}
             >
               {expanded() ? "Show less" : "Show more"}

@@ -22,18 +22,18 @@ export function ApprovalOverlay(props: {
             {(approval) => (
               <div class="ra-modal-panel mb-3 last:mb-0">
                 <p class="ra-modal-panel__title">Permission required</p>
-                <p class="text-sm font-medium text-[var(--ra-text-primary)] leading-snug">
+                <p class="text-base font-medium text-[var(--ra-text-primary)] leading-snug">
                   {approval.description}
                 </p>
                 <details class="mt-3">
-                  <summary class="text-[11px] text-[var(--ra-text-muted)] cursor-pointer select-none">
+                  <summary class="text-xs text-[var(--ra-text-muted)] cursor-pointer select-none">
                     Technical details
                   </summary>
-                  <p class="text-[11px] text-[var(--ra-text-muted)] mt-1 font-mono break-all">
+                  <p class="text-xs text-[var(--ra-text-muted)] mt-1 font-mono break-all">
                     {approval.toolName}
                   </p>
                   <Show when={approval.target}>
-                    <p class="text-[11px] text-[var(--ra-text-muted)] mt-0.5 font-mono break-all">
+                    <p class="text-xs text-[var(--ra-text-muted)] mt-0.5 font-mono break-all">
                       {approval.target}
                     </p>
                   </Show>
@@ -42,21 +42,21 @@ export function ApprovalOverlay(props: {
                   <Button
                     variant="secondary"
                     onClick={() => props.onReject(approval.approvalId)}
-                    class="px-3 py-1.5 text-xs"
+                    class="px-3 py-1.5 text-sm"
                   >
                     Don&apos;t allow
                   </Button>
                   <Button
                     variant="secondary"
                     onClick={() => props.onApproveOnce(approval.approvalId)}
-                    class="px-3 py-1.5 text-xs"
+                    class="px-3 py-1.5 text-sm"
                   >
                     Allow once
                   </Button>
                   <Button
                     variant="primary"
                     onClick={() => props.onApproveForSession(approval.approvalId)}
-                    class="px-3 py-1.5 text-xs"
+                    class="px-3 py-1.5 text-sm"
                   >
                     Allow for session
                   </Button>
@@ -64,7 +64,7 @@ export function ApprovalOverlay(props: {
                     <Button
                       variant="secondary"
                       onClick={() => props.onApproveForWorkspace!(approval.approvalId)}
-                      class="px-3 py-1.5 text-xs"
+                      class="px-3 py-1.5 text-sm"
                       title="Saved per workspace in ~/.relay-agent/workspace_allowed_tools.json (manage in Settings)"
                     >
                       Allow for workspace

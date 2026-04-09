@@ -46,10 +46,10 @@ export function ShellHeader(props: {
 
   return (
     <header class="ra-shell-header">
-      <span class={`font-semibold text-sm tracking-tight ${ui.textPrimary}`}>Relay Agent</span>
+      <span class={`ra-display-title font-semibold text-base tracking-tight ${ui.textPrimary}`}>Relay Agent</span>
       <button
         type="button"
-        class={`ml-2 max-w-[min(40vw,14rem)] shrink min-w-0 rounded-full border px-2.5 py-0.5 text-left text-[11px] transition-colors ${
+        class={`ml-2 max-w-[min(40vw,14rem)] shrink min-w-0 rounded-full border px-2.5 py-0.5 text-left text-xs transition-colors ${
           hasWorkspace()
             ? "border-[var(--ra-border-strong)] bg-[var(--ra-surface-elevated)] text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
             : "border-dashed border-[var(--ra-border)] text-[var(--ra-text-muted)] hover:border-[var(--ra-text-muted)] hover:text-[var(--ra-text-secondary)]"
@@ -70,7 +70,7 @@ export function ShellHeader(props: {
           status={props.sessionRunning ? "connecting" : "connected"}
           label={props.sessionRunning ? "Agent running" : "Agent idle"}
         />
-        <span class={`text-xs ${ui.mutedText} hidden sm:inline`}>Agent</span>
+        <span class={`text-sm ${ui.mutedText} hidden sm:inline`}>Agent</span>
       </div>
       <div
         class="flex items-center gap-0.5 shrink-0 border-l border-[var(--ra-border)] pl-2 ml-1"
@@ -79,7 +79,7 @@ export function ShellHeader(props: {
         <Button
           variant="ghost"
           type="button"
-          class="!px-2 !py-1 !text-[11px] min-w-0"
+          class="!px-2 !py-1 !text-xs min-w-0"
           disabled={props.sessionRunning || !props.canUndo}
           onClick={() => props.onUndo()}
         >
@@ -88,7 +88,7 @@ export function ShellHeader(props: {
         <Button
           variant="ghost"
           type="button"
-          class="!px-2 !py-1 !text-[11px] min-w-0"
+          class="!px-2 !py-1 !text-xs min-w-0"
           disabled={props.sessionRunning || !props.canRedo}
           onClick={() => props.onRedo()}
         >
@@ -130,7 +130,7 @@ export function ShellHeader(props: {
       <Button
         variant="ghost"
         type="button"
-        class="!px-3 !py-1 !text-xs"
+        class="!px-3 !py-1 !text-sm"
         title="Workspace, limits, diagnostics"
         onClick={() => props.onOpenSettings()}
       >

@@ -161,7 +161,7 @@ export function ContextPanel(props: {
           <Match when={activeTab() === "files"}>
             <div class="flex flex-col gap-2">
               <div class="flex items-center justify-between gap-2">
-                <span class={`text-[11px] font-medium ${ui.mutedText} uppercase tracking-wide`}>
+                <span class={`text-xs font-medium ${ui.mutedText} uppercase tracking-wide`}>
                   {props.contextFiles().length} file{props.contextFiles().length !== 1 ? "s" : ""}
                 </span>
                 <Show
@@ -169,7 +169,7 @@ export function ContextPanel(props: {
                   fallback={
                     <button
                       type="button"
-                      class={`text-xs px-2.5 py-1 rounded-full border ${ui.border} ${ui.accent} hover:bg-[var(--ra-hover)] transition-colors`}
+                      class={`text-sm px-2.5 py-1 rounded-full border ${ui.border} ${ui.accent} hover:bg-[var(--ra-hover)] transition-colors`}
                       onClick={() => setShowAddFile(true)}
                     >
                       + Add File
@@ -186,7 +186,7 @@ export function ContextPanel(props: {
                         if (e.key === "Enter") void addFile();
                         if (e.key === "Escape") setShowAddFile(false);
                       }}
-                      class="text-xs flex-1 !py-1 !px-2"
+                      class="text-sm flex-1 !py-1 !px-2"
                     />
                     <IconButton label="Add file" onClick={() => void addFile()} class="opacity-100">
                       ✓
@@ -201,7 +201,7 @@ export function ContextPanel(props: {
               <Show
                 when={props.contextFiles().length > 0}
                 fallback={
-                  <div class={`text-xs ${ui.mutedText} text-center py-8`}>No context files</div>
+                  <div class={`text-sm ${ui.mutedText} text-center py-8`}>No context files</div>
                 }
               >
                 <For each={props.contextFiles()}>
@@ -209,8 +209,8 @@ export function ContextPanel(props: {
                     <div class={`group ra-quiet-row`}>
                       <span class="ra-file-icon" aria-hidden />
                       <div class="flex-1 min-w-0">
-                        <div class={`text-xs font-medium ${ui.textPrimary} truncate`}>{file.name}</div>
-                        <div class={`text-[11px] ${ui.mutedText} truncate font-mono`}>{file.path}</div>
+                        <div class={`text-sm font-medium ${ui.textPrimary} truncate`}>{file.name}</div>
+                        <div class={`text-xs ${ui.mutedText} truncate font-mono`}>{file.path}</div>
                         <div class={`text-[10px] ${ui.mutedText} opacity-60`}>{formatSize(file.size)}</div>
                       </div>
                       <IconButton
@@ -230,7 +230,7 @@ export function ContextPanel(props: {
 
           <Match when={activeTab() === "servers"}>
             <div class="flex flex-col gap-2">
-              <p class={`text-[11px] leading-relaxed ${ui.mutedText}`}>
+              <p class={`text-xs leading-relaxed ${ui.mutedText}`}>
                 MCP servers extend the agent like skills/plugins. Below: read-only checks for Claw-style
                 instruction files under your configured workspace path (Settings).
               </p>
@@ -240,7 +240,7 @@ export function ContextPanel(props: {
                   <Show
                     when={instructionSurfaces()}
                     fallback={
-                      <p class={`text-[11px] ${ui.mutedText}`}>Scanning workspace instructions…</p>
+                      <p class={`text-xs ${ui.mutedText}`}>Scanning workspace instructions…</p>
                     }
                   >
                     {(surf) => (
@@ -248,7 +248,7 @@ export function ContextPanel(props: {
                         class={`rounded-lg border ${ui.border} p-2 space-y-1.5`}
                         data-ra-workspace-instructions
                       >
-                        <span class={`text-[11px] font-medium ${ui.mutedText} uppercase tracking-wide`}>
+                        <span class={`text-xs font-medium ${ui.mutedText} uppercase tracking-wide`}>
                           Workspace instructions
                         </span>
                         <Show when={surf().workspaceRoot}>
@@ -258,7 +258,7 @@ export function ContextPanel(props: {
                         </Show>
                         <For each={surf().surfaces}>
                           {(s) => (
-                            <div class="flex items-start gap-2 text-[11px]">
+                            <div class="flex items-start gap-2 text-xs">
                               <span
                                 class={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${
                                   s.exists ? "bg-[var(--ra-green)]" : "bg-[var(--ra-text-muted)]"
@@ -286,13 +286,13 @@ export function ContextPanel(props: {
                   </Show>
                 }
               >
-                <p class={`text-[11px] ${ui.mutedText}`}>
+                <p class={`text-xs ${ui.mutedText}`}>
                   Set a workspace path in Settings to scan for <span class="font-mono">CLAW.md</span> /{" "}
                   <span class="font-mono">.claw</span>.
                 </p>
               </Show>
               <div class="flex items-center justify-between gap-2">
-                <span class={`text-[11px] font-medium ${ui.mutedText} uppercase tracking-wide`}>
+                <span class={`text-xs font-medium ${ui.mutedText} uppercase tracking-wide`}>
                   {props.mcpServers().length} server{props.mcpServers().length !== 1 ? "s" : ""}
                 </span>
                 <Show
@@ -300,7 +300,7 @@ export function ContextPanel(props: {
                   fallback={
                     <button
                       type="button"
-                      class={`text-xs px-2.5 py-1 rounded-full border ${ui.border} ${ui.accent} hover:bg-[var(--ra-hover)] transition-colors`}
+                      class={`text-sm px-2.5 py-1 rounded-full border ${ui.border} ${ui.accent} hover:bg-[var(--ra-hover)] transition-colors`}
                       onClick={() => setShowAddServer(true)}
                     >
                       + Add Server
@@ -313,27 +313,27 @@ export function ContextPanel(props: {
                       placeholder="Server name"
                       value={newServerName()}
                       onInput={(e) => setNewServerName(e.currentTarget.value)}
-                      class="text-xs !py-1 !px-2"
+                      class="text-sm !py-1 !px-2"
                     />
                     <Input
                       type="text"
                       placeholder="Command (e.g. npx)"
                       value={newServerCommand()}
                       onInput={(e) => setNewServerCommand(e.currentTarget.value)}
-                      class="text-xs !py-1 !px-2"
+                      class="text-sm !py-1 !px-2"
                     />
                     <Input
                       type="text"
                       placeholder="Args (space-separated)"
                       value={newServerArgs()}
                       onInput={(e) => setNewServerArgs(e.currentTarget.value)}
-                      class="text-xs !py-1 !px-2"
+                      class="text-sm !py-1 !px-2"
                     />
                     <div class="flex gap-1">
-                      <Button variant="primary" onClick={() => void addServer()} class="flex-1 !py-1 !text-xs">
+                      <Button variant="primary" onClick={() => void addServer()} class="flex-1 !py-1 !text-sm">
                         Add
                       </Button>
-                      <Button variant="secondary" onClick={() => setShowAddServer(false)} class="flex-1 !py-1 !text-xs">
+                      <Button variant="secondary" onClick={() => setShowAddServer(false)} class="flex-1 !py-1 !text-sm">
                         Cancel
                       </Button>
                     </div>
@@ -344,7 +344,7 @@ export function ContextPanel(props: {
               <Show
                 when={props.mcpServers().length > 0}
                 fallback={
-                  <div class={`text-xs ${ui.mutedText} text-center py-8 leading-relaxed px-1`}>
+                  <div class={`text-sm ${ui.mutedText} text-center py-8 leading-relaxed px-1`}>
                     No MCP servers yet. Add one to expose external tools (similar to installing skills in
                     OpenWork).
                   </div>
@@ -360,8 +360,8 @@ export function ContextPanel(props: {
                         aria-hidden
                       />
                       <div class="flex-1 min-w-0">
-                        <div class={`text-xs font-medium ${ui.textPrimary}`}>{server.name}</div>
-                        <div class={`text-[11px] ${ui.mutedText} truncate font-mono`}>
+                        <div class={`text-sm font-medium ${ui.textPrimary}`}>{server.name}</div>
+                        <div class={`text-xs ${ui.mutedText} truncate font-mono`}>
                           {server.command} {server.args.join(" ")}
                         </div>
                         <div class={`text-[10px] ${ui.mutedText} opacity-60`}>
@@ -385,17 +385,17 @@ export function ContextPanel(props: {
 
           <Match when={activeTab() === "plan"}>
             <div class="flex flex-col gap-2" data-ra-execution-plan>
-              <span class={`text-[11px] font-medium ${ui.mutedText} uppercase tracking-wide`}>
+              <span class={`text-xs font-medium ${ui.mutedText} uppercase tracking-wide`}>
                 Plan timeline
               </span>
-              <p class={`text-[11px] leading-relaxed ${ui.mutedText}`}>
+              <p class={`text-xs leading-relaxed ${ui.mutedText}`}>
                 Each <span class="font-mono text-[10px]">TodoWrite</span> update is a section; newest on
                 top.
               </p>
               <Show
                 when={planNewestFirst()}
                 fallback={
-                  <div class={`text-xs ${ui.mutedText} text-center py-6 leading-relaxed`}>
+                  <div class={`text-sm ${ui.mutedText} text-center py-6 leading-relaxed`}>
                     No task list yet. When the agent uses{" "}
                     <span class="font-mono text-[10px]">TodoWrite</span>, steps appear here.
                   </div>
@@ -420,7 +420,7 @@ export function ContextPanel(props: {
                             class={`rounded-lg border ${ui.border} bg-[var(--ra-surface-elevated)]/40 px-2 py-1.5`}
                             open={snapIdx() === 0}
                           >
-                            <summary class="cursor-pointer text-xs text-[var(--ra-text-primary)] list-none flex items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
+                            <summary class="cursor-pointer text-sm text-[var(--ra-text-primary)] list-none flex items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
                               <span class="font-medium">
                                 {summaryLabel}
                                 <span class={`font-normal ${ui.mutedText}`}>
@@ -435,7 +435,7 @@ export function ContextPanel(props: {
                             <ol class="list-decimal list-inside space-y-1.5 pl-0.5 mt-2 mb-0.5">
                               <For each={entry.todos}>
                                 {(item: PlanTodoItem) => (
-                                  <li class="text-xs text-[var(--ra-text-primary)] leading-snug">
+                                  <li class="text-sm text-[var(--ra-text-primary)] leading-snug">
                                     <span class="font-medium">{item.activeForm || item.content}</span>
                                     <span
                                       class={`ml-2 text-[10px] px-1.5 py-0.5 rounded-md ${
@@ -464,19 +464,19 @@ export function ContextPanel(props: {
 
           <Match when={activeTab() === "policy"}>
             <div class="flex flex-col gap-2">
-              <p class={`text-[11px] leading-relaxed ${ui.mutedText}`}>
+              <p class={`text-xs leading-relaxed ${ui.mutedText}`}>
                 Effective tool gating for composer mode <span class="font-mono">{props.sessionPreset()}</span>.
                 Interactive approvals and project <span class="font-mono">.claw</span> still apply (e.g. bash
                 read-only guard).
               </p>
-              <span class={`text-[11px] font-medium ${ui.mutedText} uppercase tracking-wide`}>
+              <span class={`text-xs font-medium ${ui.mutedText} uppercase tracking-wide`}>
                 {permissionRows().length} tool{permissionRows().length !== 1 ? "s" : ""}
               </span>
 
               <Show
                 when={permissionRows().length > 0}
                 fallback={
-                  <div class={`text-xs ${ui.mutedText} text-center py-8`}>Loading policy…</div>
+                  <div class={`text-sm ${ui.mutedText} text-center py-8`}>Loading policy…</div>
                 }
               >
                 <For each={permissionRows()}>
@@ -498,9 +498,9 @@ export function ContextPanel(props: {
                     return (
                       <div class="ra-quiet-row ra-quiet-row--align-center gap-2">
                         <div class="flex-1 min-w-0">
-                          <div class={`text-xs font-medium ${ui.textPrimary}`}>{policy.name}</div>
+                          <div class={`text-sm font-medium ${ui.textPrimary}`}>{policy.name}</div>
                           <Show when={policy.description}>
-                            <div class={`text-[11px] ${ui.mutedText} truncate`}>{policy.description}</div>
+                            <div class={`text-xs ${ui.mutedText} truncate`}>{policy.description}</div>
                           </Show>
                         </div>
                         <span

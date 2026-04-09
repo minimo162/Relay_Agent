@@ -1,5 +1,7 @@
 # Design System Inspiration of Cursor
 
+> **Relay Agent implementation:** CSS variables and component classes live in [`src/index.css`](src/index.css). The **light** theme uses the Surface / border / interaction values from this document; **dark** uses the same token names with a paired warm-charcoal scale. The app **defaults to light** theme (`<html data-theme="light">` and `localStorage` key `relay-agent/theme`). CursorGothic, jjannon, and berkeleyMono are **not** shipped; the repo uses the fallback stacks defined in `index.css`. Verification notes: [`../../docs/IMPLEMENTATION.md`](../../docs/IMPLEMENTATION.md) (Milestone Log, 2026-04-09 Desktop UI).
+
 ## 1. Visual Theme & Atmosphere
 
 Cursor's website is a study in warm minimalism meets code-editor elegance. The entire experience is built on a warm off-white canvas (`#f2f1ed`) with dark warm-brown text (`#26251e`) -- not pure black, not neutral gray, but a deeply warm near-black with a yellowish undertone that evokes old paper, ink, and craft. This warmth permeates every surface: backgrounds lean toward cream (`#e6e5e0`, `#ebeae5`), borders dissolve into transparent warm overlays using `oklab` color space, and even the error state (`#cf2d56`) carries warmth rather than clinical red. The result feels more like a premium print publication than a tech website.

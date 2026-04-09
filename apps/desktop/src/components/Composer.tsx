@@ -53,15 +53,15 @@ function SlashAutocomplete(props: {
       aria-label="Slash commands"
     >
       {props.commands.length === 0 ? (
-        <div class="px-3 py-1.5 text-xs text-[var(--ra-text-muted)]">No matching commands</div>
+        <div class="px-3 py-1.5 text-sm text-[var(--ra-text-muted)]">No matching commands</div>
       ) : (
         props.commands.map((cmd, i) => (
           <div
             role="option"
             aria-selected={i === props.selectedIndex}
-            class={`flex items-center gap-2 px-3 py-1.5 cursor-pointer text-xs transition-colors ${
+            class={`flex items-center gap-2 px-3 py-1.5 cursor-pointer text-sm transition-colors ${
               i === props.selectedIndex
-                ? "ra-fill-accent"
+                ? "ra-surface-highlight"
                 : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
             }`}
             onClick={() => props.onSelect(cmd)}
@@ -243,7 +243,7 @@ export function Composer(props: {
             <div class="flex items-center gap-2 min-w-0 flex-wrap">
               <p class="ra-composer-hint shrink-0">⌘/Ctrl+Enter to send · Enter for new line</p>
               <div
-                class="flex shrink-0 rounded-md border border-[var(--ra-border)] overflow-hidden text-[11px]"
+                class="flex shrink-0 rounded-md border border-[var(--ra-border)] overflow-hidden text-xs"
                 role="group"
                 aria-label="Session mode"
               >
@@ -251,7 +251,7 @@ export function Composer(props: {
                   type="button"
                   class={`px-2 py-0.5 transition-colors ${
                     props.sessionPreset === "build"
-                      ? "ra-fill-accent"
+                      ? "ra-surface-highlight"
                       : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
                   }`}
                   aria-pressed={props.sessionPreset === "build"}
@@ -264,7 +264,7 @@ export function Composer(props: {
                   type="button"
                   class={`px-2 py-0.5 border-l border-[var(--ra-border)] transition-colors ${
                     props.sessionPreset === "plan"
-                      ? "ra-fill-accent"
+                      ? "ra-surface-highlight"
                       : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
                   }`}
                   aria-pressed={props.sessionPreset === "plan"}
@@ -277,7 +277,7 @@ export function Composer(props: {
                   type="button"
                   class={`px-2 py-0.5 border-l border-[var(--ra-border)] transition-colors ${
                     props.sessionPreset === "explore"
-                      ? "ra-fill-accent"
+                      ? "ra-surface-highlight"
                       : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
                   }`}
                   aria-pressed={props.sessionPreset === "explore"}
@@ -290,7 +290,7 @@ export function Composer(props: {
               <div class="relative shrink-0">
                 <button
                   type="button"
-                  class="text-[11px] px-2 py-0.5 rounded-md border border-[var(--ra-border)] text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
+                  class="text-xs px-2 py-0.5 rounded-md border border-[var(--ra-border)] text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
                   aria-expanded={templatesOpen()}
                   aria-haspopup="listbox"
                   data-ra-templates-trigger
@@ -307,7 +307,7 @@ export function Composer(props: {
                     <Show
                       when={savedTemplates().length > 0}
                       fallback={
-                        <div class="px-3 py-2 text-[11px] text-[var(--ra-text-muted)]">
+                        <div class="px-3 py-2 text-xs text-[var(--ra-text-muted)]">
                           No saved templates yet.
                         </div>
                       }
@@ -318,7 +318,7 @@ export function Composer(props: {
                             <button
                               type="button"
                               role="option"
-                              class="flex-1 text-left text-xs text-[var(--ra-text-primary)] truncate"
+                              class="flex-1 text-left text-sm text-[var(--ra-text-primary)] truncate"
                               onClick={() => {
                                 setText(t.body);
                                 setTemplatesOpen(false);
@@ -345,7 +345,7 @@ export function Composer(props: {
                     <div class="border-t border-[var(--ra-border)] mt-1 pt-1 px-2 pb-1">
                       <button
                         type="button"
-                        class="text-[11px] w-full text-left text-[var(--ra-accent)] disabled:opacity-40"
+                        class="text-xs w-full text-left text-[var(--ra-accent)] disabled:opacity-40"
                         disabled={!text().trim()}
                         onClick={() => {
                           const title = window.prompt("Name this template");

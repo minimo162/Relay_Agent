@@ -211,25 +211,25 @@ export function SettingsModal(props: {
               <p class="ra-modal-panel__title">Settings</p>
               <button
                 type="button"
-                class="text-[11px] text-[var(--ra-text-muted)] hover:text-[var(--ra-text-primary)]"
+                class="text-xs text-[var(--ra-text-muted)] hover:text-[var(--ra-text-primary)]"
                 onClick={() => props.onClose()}
               >
                 Close
               </button>
             </div>
-            <p class="text-xs text-[var(--ra-text-secondary)] mt-1">
+            <p class="text-sm text-[var(--ra-text-secondary)] mt-1">
               Workspace and limits apply to the next agent run. Browser automation fields are stored
               for diagnostics and future CDP wiring.
             </p>
 
             <div class="mt-4 space-y-3">
               <div class="block">
-                <span class="text-[11px] font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
+                <span class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
                   Workspace path (cwd)
                 </span>
                 <div class="flex gap-2 mt-1 items-stretch">
                   <Input
-                    class="flex-1 min-w-0 font-mono text-xs"
+                    class="flex-1 min-w-0 font-mono text-sm"
                     placeholder="/path/to/project"
                     value={workspace()}
                     onInput={(e) => setWorkspace(e.currentTarget.value)}
@@ -238,7 +238,7 @@ export function SettingsModal(props: {
                     <Button
                       variant="secondary"
                       type="button"
-                      class="!text-xs shrink-0 px-3"
+                      class="!text-sm shrink-0 px-3"
                       data-ra-workspace-browse
                       onClick={() => void pickWorkspaceFolder()}
                     >
@@ -249,14 +249,14 @@ export function SettingsModal(props: {
               </div>
 
               <label class="block">
-                <span class="text-[11px] font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
+                <span class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
                   Max turns per goal
                 </span>
                 <Input
                   type="number"
                   min={1}
                   max={256}
-                  class="mt-1 w-full text-xs"
+                  class="mt-1 w-full text-sm"
                   value={maxTurns()}
                   onInput={(e) => {
                     const n = parseInt(e.currentTarget.value, 10);
@@ -266,10 +266,10 @@ export function SettingsModal(props: {
               </label>
 
               <fieldset class="border border-[var(--ra-border)] rounded-lg p-3 space-y-2">
-                <legend class="text-[11px] font-medium text-[var(--ra-text-muted)] px-1">
+                <legend class="text-xs font-medium text-[var(--ra-text-muted)] px-1">
                   Browser automation (stored)
                 </legend>
-                <label class="flex items-center gap-2 text-xs">
+                <label class="flex items-center gap-2 text-sm">
                   <input
                     type="checkbox"
                     checked={b().autoLaunchEdge}
@@ -283,7 +283,7 @@ export function SettingsModal(props: {
                   <span class="text-[var(--ra-text-muted)]">CDP port hint</span>
                   <Input
                     type="number"
-                    class="mt-1 w-full text-xs"
+                    class="mt-1 w-full text-sm"
                     value={b().cdpPort}
                     onInput={(e) => {
                       const n = parseInt(e.currentTarget.value, 10);
@@ -295,7 +295,7 @@ export function SettingsModal(props: {
                   <span class="text-[var(--ra-text-muted)]">Timeout (ms)</span>
                   <Input
                     type="number"
-                    class="mt-1 w-full text-xs"
+                    class="mt-1 w-full text-sm"
                     value={b().timeoutMs}
                     onInput={(e) => {
                       const n = parseInt(e.currentTarget.value, 10);
@@ -306,17 +306,17 @@ export function SettingsModal(props: {
               </fieldset>
 
               <div class="rounded-lg border border-[var(--ra-border)] p-3 space-y-2">
-                <p class="text-[11px] font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
+                <p class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
                   How connections use your settings
                 </p>
-                <p class="text-xs text-[var(--ra-text-secondary)]">
+                <p class="text-sm text-[var(--ra-text-secondary)]">
                   Relay prefers explicit values over hidden guesses. The workspace path below is sent as{" "}
                   <span class="font-mono">cwd</span> on each agent run (may differ from the app process directory in
                   diagnostics). Copilot talks to Edge over CDP; the port hint defaults to 9360 unless you change it
                   above.
                 </p>
                 <Show when={predNotes().length > 0}>
-                  <ul class="text-xs text-[var(--ra-text-secondary)] list-disc pl-4 space-y-1">
+                  <ul class="text-sm text-[var(--ra-text-secondary)] list-disc pl-4 space-y-1">
                     <For each={predNotes()}>{(line) => <li>{line}</li>}</For>
                   </ul>
                 </Show>
@@ -325,24 +325,24 @@ export function SettingsModal(props: {
               <Show when={isTauri()}>
                 <div class="rounded-lg border border-[var(--ra-border)] p-3 space-y-2">
                   <div class="flex flex-wrap items-center justify-between gap-2">
-                    <p class="text-[11px] font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
+                    <p class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
                       Workspace tool allow list
                     </p>
                     <span class="text-[10px] text-[var(--ra-text-muted)] font-mono truncate max-w-[200px]">
                       {allowlist()?.storePath ?? ""}
                     </span>
                   </div>
-                  <p class="text-xs text-[var(--ra-text-secondary)]">
+                  <p class="text-sm text-[var(--ra-text-secondary)]">
                     Tools approved with &quot;Allow for this workspace&quot; are stored per normalized folder. Remove
                     entries here instead of editing JSON by hand.
                   </p>
                   <Show when={allowlistBusy()}>
-                    <p class="text-xs text-[var(--ra-text-muted)]">Loading…</p>
+                    <p class="text-sm text-[var(--ra-text-muted)]">Loading…</p>
                   </Show>
                   <Show
                     when={(allowlist()?.entries.length ?? 0) > 0}
                     fallback={
-                      <p class="text-xs text-[var(--ra-text-muted)]">No persisted workspace allows yet.</p>
+                      <p class="text-sm text-[var(--ra-text-muted)]">No persisted workspace allows yet.</p>
                     }
                   >
                     <div class="max-h-40 overflow-y-auto space-y-2">
@@ -355,7 +355,7 @@ export function SettingsModal(props: {
                             <ul class="space-y-1">
                               <For each={ent.tools}>
                                 {(tool) => (
-                                  <li class="flex items-center justify-between gap-2 text-xs">
+                                  <li class="flex items-center justify-between gap-2 text-sm">
                                     <span class="font-mono">{tool}</span>
                                     <button
                                       type="button"
@@ -388,7 +388,7 @@ export function SettingsModal(props: {
                     <Button
                       variant="secondary"
                       type="button"
-                      class="!text-xs"
+                      class="!text-sm"
                       disabled={!workspace().trim()}
                       onClick={async () => {
                         const cwd = workspace().trim();
@@ -410,7 +410,7 @@ export function SettingsModal(props: {
                     <Button
                       variant="secondary"
                       type="button"
-                      class="!text-xs"
+                      class="!text-sm"
                       disabled={!allowlist()}
                       onClick={async () => {
                         const snap = allowlist();
@@ -431,7 +431,7 @@ export function SettingsModal(props: {
                     <Button
                       variant="secondary"
                       type="button"
-                      class="!text-xs"
+                      class="!text-sm"
                       disabled={!allowlist()}
                       onClick={async () => {
                         const snap = allowlist();
@@ -461,25 +461,25 @@ export function SettingsModal(props: {
             </div>
 
             <Show when={saveHint()}>
-              <p class="mt-2 text-xs text-[var(--ra-accent)]">{saveHint()}</p>
+              <p class="mt-2 text-sm text-[var(--ra-accent)]">{saveHint()}</p>
             </Show>
             <Show when={copyHint()}>
-              <p class="mt-2 text-xs text-[var(--ra-text-secondary)]">{copyHint()}</p>
+              <p class="mt-2 text-sm text-[var(--ra-text-secondary)]">{copyHint()}</p>
             </Show>
 
             <div class="flex flex-col gap-2 mt-5">
-              <span class="text-[11px] font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
+              <span class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
                 Debug
               </span>
               <div class="flex flex-wrap gap-2 justify-end">
-                <Button variant="secondary" type="button" class="!text-xs" onClick={() => void copyDiagnostics()}>
+                <Button variant="secondary" type="button" class="!text-sm" onClick={() => void copyDiagnostics()}>
                   Copy diagnostics
                 </Button>
                 <Show when={isTauri()}>
                   <Button
                     variant="secondary"
                     type="button"
-                    class="!text-xs"
+                    class="!text-sm"
                     data-ra-export-diagnostics
                     onClick={() => void exportDiagnosticsFile()}
                   >
@@ -489,7 +489,7 @@ export function SettingsModal(props: {
                 <Button
                   variant="secondary"
                   type="button"
-                  class="!text-xs"
+                  class="!text-sm"
                   data-ra-copy-session-audit
                   onClick={() => void copySessionAuditSummary()}
                 >
@@ -499,14 +499,14 @@ export function SettingsModal(props: {
                   <Button
                     variant="secondary"
                     type="button"
-                    class="!text-xs"
+                    class="!text-sm"
                     data-ra-export-session-json
                     onClick={() => void exportSessionHistoryJson()}
                   >
                     Save session JSON…
                   </Button>
                 </Show>
-                <Button variant="primary" type="button" class="!text-xs" onClick={() => saveSettings()}>
+                <Button variant="primary" type="button" class="!text-sm" onClick={() => saveSettings()}>
                   Save
                 </Button>
               </div>

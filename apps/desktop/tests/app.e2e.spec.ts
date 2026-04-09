@@ -154,8 +154,8 @@ test("approval_needed event handled", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Don't allow", exact: true }).first()).toBeVisible();
 });
 
-test("dark mode is default", async ({ page }) => {
+test("light mode is default", async ({ page }) => {
   await openApp(page);
   const theme = await page.locator("html").getAttribute("data-theme");
-  expect(theme).toBe("dark");
+  expect(theme).toBe("light");
 });

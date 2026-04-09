@@ -144,11 +144,11 @@ export function MessageFeed(props: {
 
       <Show when={!props.showToolActivityInline && toolChunks().length > 0}>
         <details
-          class={`mt-3 rounded-xl border ${ui.border} ${ui.surfaceElevated} px-3 py-2`}
+          class={`mt-3 rounded-xl border ${ui.border} ${ui.surfaceCard} px-3 py-2`}
           data-ra-activity-details
         >
           <summary
-            class={`text-xs ${ui.mutedText} cursor-pointer select-none`}
+            class={`text-sm ${ui.mutedText} cursor-pointer select-none`}
             data-ra-activity-summary
             title="Tool names and output; expand to inspect"
           >
@@ -170,8 +170,11 @@ export function MessageFeed(props: {
       </Show>
 
       <Show when={statusLine()}>
-        <div class={`flex items-center gap-2 text-xs ${ui.mutedText} mt-2`} data-ra-agent-thinking>
-          <span class="inline-block w-2 h-2 rounded-full bg-[var(--ra-yellow)] animate-pulse" />
+        <div
+          class="flex items-center gap-2 text-sm mt-2 text-[var(--ra-timeline-thinking)]"
+          data-ra-agent-thinking
+        >
+          <span class="inline-block w-2 h-2 rounded-full bg-[var(--ra-timeline-thinking)] animate-pulse" />
           {statusLine()}
         </div>
       </Show>

@@ -37,7 +37,7 @@ export function StatusBar(props: {
 
   return (
     <footer
-      class={`ra-shell-footer px-3 py-1 flex flex-col gap-0.5 text-xs ${ui.mutedText}`}
+      class={`ra-shell-footer px-3 py-1 flex flex-col gap-0.5 text-sm ${ui.mutedText}`}
       style={{ "min-height": footerMinHeight }}
       data-ra-footer-session={props.sessionState}
     >
@@ -51,7 +51,7 @@ export function StatusBar(props: {
       {full ? (
         <div class="flex items-center gap-2 w-full min-h-[1.25rem]">
           <div
-            class="flex-1 min-w-0 font-mono text-[11px] text-[var(--ra-text-secondary)] truncate"
+            class="flex-1 min-w-0 font-mono text-xs text-[var(--ra-text-secondary)] truncate"
             title={full}
             data-ra-workspace-label
           >
@@ -69,7 +69,7 @@ export function StatusBar(props: {
         </div>
       ) : (
         <div
-          class="w-full text-[11px] text-[var(--ra-text-muted)] truncate"
+          class="w-full text-xs text-[var(--ra-text-muted)] truncate"
           data-ra-workspace-label
           title="Open Settings to set a workspace folder"
         >

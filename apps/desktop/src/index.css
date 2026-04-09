@@ -1,69 +1,89 @@
 @import "tailwindcss";
 
 /* ============================================================
- * Relay Agent — Cursor-inspired (getdesign "cursor" DESIGN.md)
- * Dark-first app chrome; light theme uses marketing cream palette.
+ * Relay Agent — Cursor Inspiration (DESIGN.md): light tokens = spec hex;
+ * dark = paired warm-charcoal scale. Proprietary fonts → fallback stacks.
  * ============================================================ */
 
 :root {
-  color-scheme: dark;
-
-  /* Typography (proprietary Cursor fonts omitted — system fallbacks per DESIGN.md) */
-  --ra-font-ui: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Helvetica, Arial, "Noto Sans JP",
+  /* Font stacks (CursorGothic / jjannon / berkeleyMono → fallbacks per DESIGN.md) */
+  --ra-font-display: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Helvetica, Arial, "Noto Sans JP",
     sans-serif;
-  --ra-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
+  --ra-font-editorial: ui-serif, "Iowan Old Style", "Palatino Linotype", "URW Palladio L", P052, Georgia, Cambria,
+    "Times New Roman", Times, serif;
+  --ra-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --ra-font-ui: var(--ra-font-display);
 
-  /* Surface — warm dark (inverse of Cursor Cream / Cursor Dark) */
-  --ra-surface: #131210;
-  --ra-surface-elevated: #1e1d1a;
-  --ra-sidebar: #171613;
-  --ra-border: rgba(242, 241, 237, 0.1);
+  /* Type scale — Body Sans ~16px, captions ~13px / 12px */
+  --ra-text-base: 1rem;
+  --ra-text-caption: 0.8125rem;
+  --ra-text-micro: 0.75rem;
+
+  --ra-radius: 0.5rem;
+  --ra-radius-lg: 0.625rem;
+  --ra-radius-xl: 0.625rem;
+  --ra-radius-pill: 9999px;
+
+  --ra-timeline-thinking: #dfa88f;
+  --ra-timeline-grep: #9fc9a2;
+  --ra-timeline-read: #9fbbe0;
+  --ra-timeline-edit: #c0a8dd;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --ra-surface-100: #f7f7f4;
+  --ra-surface-200: #f2f1ed;
+  --ra-surface-300: #ebeae5;
+  --ra-surface-400: #e6e5e0;
+  --ra-surface-500: #e1e0db;
+
+  --ra-surface: var(--ra-surface-200);
+  --ra-surface-elevated: var(--ra-surface-300);
+  --ra-sidebar: var(--ra-surface-100);
+  --ra-surface-card: var(--ra-surface-400);
+
+  --ra-border: oklab(0.263084 -0.00230259 0.0124794 / 0.1);
+  --ra-border-medium: oklab(0.263084 -0.00230259 0.0124794 / 0.2);
   --ra-border-focus: #f54e00;
+  --ra-border-strong: rgba(38, 37, 30, 0.2);
+  --ra-border-solid: #26251e;
 
-  /* Accent — Cursor Orange + optional gradient (filled CTAs) */
   --ra-accent: #f54e00;
-  --ra-accent-hover: #ff6b2b;
+  --ra-accent-hover: #e04600;
   --ra-accent-rgb: 245 78 0;
   --ra-accent-secondary: #c08532;
   --ra-accent-gradient: linear-gradient(135deg, #f54e00 0%, #ff6b35 52%, #c08532 100%);
 
-  /* Text — Cursor Cream tones on dark */
-  --ra-text-primary: #f2f1ed;
-  --ra-text-secondary: rgba(242, 241, 237, 0.62);
-  --ra-text-muted: rgba(242, 241, 237, 0.42);
+  --ra-text-primary: #26251e;
+  --ra-text-secondary: rgba(38, 37, 30, 0.55);
+  --ra-text-muted: rgba(38, 37, 30, 0.42);
+  --ra-secondary-pill-fg: oklab(0.263084 -0.00230259 0.0124794 / 0.6);
 
-  /* Interaction */
-  --ra-hover: rgba(242, 241, 237, 0.06);
-  --ra-active: rgba(242, 241, 237, 0.11);
+  --ra-hover: rgba(38, 37, 30, 0.06);
+  --ra-active: rgba(38, 37, 30, 0.1);
+  --ra-hover-text: #cf2d56;
+  --ra-ghost-bg: rgba(38, 37, 30, 0.06);
 
-  /* Status — Cursor semantic + readable operational hues */
   --ra-green: #1f8a65;
   --ra-green-rgb: 31 138 101;
   --ra-yellow: #dfa88f;
   --ra-red: #cf2d56;
 
-  /* Shapes — Cursor: 8px comfortable, pills for controls */
-  --ra-radius: 0.5rem;
-  --ra-radius-lg: 0.625rem;
-  --ra-radius-xl: 1rem;
+  --ra-shadow-sm: rgba(0, 0, 0, 0.02) 0px 0px 16px, rgba(0, 0, 0, 0.008) 0px 0px 8px;
+  --ra-shadow-md: rgba(0, 0, 0, 0.14) 0px 28px 70px, rgba(0, 0, 0, 0.1) 0px 14px 32px,
+    oklab(0.263084 -0.00230259 0.0124794 / 0.1) 0px 0px 0px 1px;
+  --ra-shadow-lg: rgba(0, 0, 0, 0.16) 0px 32px 80px, rgba(0, 0, 0, 0.12) 0px 16px 40px,
+    oklab(0.263084 -0.00230259 0.0124794 / 0.12) 0px 0px 0px 1px;
 
-  /* Shadows — diffused lift (adapted for dark UI) */
-  --ra-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
-  --ra-shadow-md: 0 8px 28px rgba(0, 0, 0, 0.42), 0 2px 10px rgba(0, 0, 0, 0.28);
-  --ra-shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.5), 0 10px 24px rgba(0, 0, 0, 0.35);
+  --ra-surface-selected: var(--ra-surface-500);
+  --ra-btn-primary-bg: var(--ra-surface-300);
+  --ra-btn-primary-fg: var(--ra-text-primary);
+  --ra-focus-elevated: 0 4px 12px rgba(0, 0, 0, 0.1);
 
-  /* Keyboard focus (distinct from soft selection fills) */
-  --ra-focus-ring: 2px solid var(--ra-border-focus);
-  --ra-focus-ring-offset: 2px;
-
-  /* Selection / emphasis */
-  --ra-surface-selected: rgba(245, 78, 0, 0.12);
-  --ra-border-strong: rgba(242, 241, 237, 0.2);
-
-  /* Semantic aliases — prefer in new styles (map to foundation tokens) */
   --ra-color-page: var(--ra-surface);
-  --ra-color-surface: var(--ra-surface-elevated);
+  --ra-color-surface: var(--ra-surface-card);
   --ra-color-surface-sidebar: var(--ra-sidebar);
   --ra-color-border: var(--ra-border);
   --ra-color-border-strong: var(--ra-border-strong);
@@ -78,38 +98,83 @@
   --ra-color-success: var(--ra-green);
   --ra-color-warning: var(--ra-yellow);
   --ra-color-danger: var(--ra-red);
+
+  --ra-focus-ring: 2px solid var(--ra-border-medium);
+  --ra-focus-ring-offset: 2px;
 }
 
-[data-theme="light"] {
-  color-scheme: light;
+[data-theme="dark"] {
+  color-scheme: dark;
 
-  /* Cursor marketing surfaces */
-  --ra-surface: #f2f1ed;
-  --ra-surface-elevated: #e6e5e0;
-  --ra-sidebar: #ebeae5;
-  --ra-border: rgba(38, 37, 30, 0.1);
+  /* Paired warm-charcoal: 100 brightest panel … 500 page (darkest) */
+  --ra-surface-100: #3a3834;
+  --ra-surface-200: #302e2a;
+  --ra-surface-300: #282622;
+  --ra-surface-400: #1e1c19;
+  --ra-surface-500: #141311;
+
+  --ra-surface: var(--ra-surface-500);
+  --ra-surface-elevated: var(--ra-surface-300);
+  --ra-sidebar: var(--ra-surface-400);
+  --ra-surface-card: var(--ra-surface-200);
+
+  --ra-border: color-mix(in oklab, #f2f1ed 12%, transparent);
+  --ra-border-medium: color-mix(in oklab, #f2f1ed 22%, transparent);
   --ra-border-focus: #f54e00;
+  --ra-border-strong: rgba(244, 243, 239, 0.22);
+  --ra-border-solid: #f2f1ed;
 
   --ra-accent: #f54e00;
-  --ra-accent-hover: #e04600;
+  --ra-accent-hover: #ff6b2b;
   --ra-accent-rgb: 245 78 0;
+  --ra-accent-secondary: #c08532;
   --ra-accent-gradient: linear-gradient(135deg, #f54e00 0%, #ff6b35 52%, #c08532 100%);
 
-  --ra-text-primary: #26251e;
-  --ra-text-secondary: rgba(38, 37, 30, 0.55);
-  --ra-text-muted: rgba(38, 37, 30, 0.42);
+  --ra-text-primary: #f2f1ed;
+  --ra-text-secondary: rgba(244, 243, 239, 0.55);
+  --ra-text-muted: rgba(244, 243, 239, 0.42);
+  --ra-secondary-pill-fg: color-mix(in oklab, #f2f1ed 65%, transparent);
 
-  --ra-hover: rgba(38, 37, 30, 0.06);
-  --ra-active: rgba(38, 37, 30, 0.1);
+  --ra-hover: rgba(244, 243, 239, 0.08);
+  --ra-active: rgba(244, 243, 239, 0.12);
+  --ra-hover-text: #f0718c;
+  --ra-ghost-bg: rgba(244, 243, 239, 0.06);
 
-  --ra-shadow-sm: rgba(0, 0, 0, 0.02) 0px 0px 16px, rgba(0, 0, 0, 0.008) 0px 0px 8px;
-  --ra-shadow-md: rgba(0, 0, 0, 0.14) 0px 28px 70px, rgba(0, 0, 0, 0.1) 0px 14px 32px,
-    oklab(0.263084 -0.00230259 0.0124794 / 0.1) 0px 0px 0px 1px;
-  --ra-shadow-lg: rgba(0, 0, 0, 0.16) 0px 32px 80px, rgba(0, 0, 0, 0.12) 0px 16px 40px,
-    oklab(0.263084 -0.00230259 0.0124794 / 0.12) 0px 0px 0px 1px;
+  --ra-green: #1f8a65;
+  --ra-green-rgb: 31 138 101;
+  --ra-yellow: #dfa88f;
+  --ra-red: #cf2d56;
 
-  --ra-surface-selected: #e1e0db;
-  --ra-border-strong: rgba(38, 37, 30, 0.2);
+  --ra-shadow-sm: rgba(0, 0, 0, 0.35) 0px 0px 20px, rgba(0, 0, 0, 0.2) 0px 0px 8px;
+  --ra-shadow-md: rgba(0, 0, 0, 0.45) 0px 28px 70px, rgba(0, 0, 0, 0.3) 0px 14px 32px,
+    color-mix(in oklab, #f2f1ed 14%, transparent) 0px 0px 0px 1px;
+  --ra-shadow-lg: rgba(0, 0, 0, 0.5) 0px 32px 80px, rgba(0, 0, 0, 0.35) 0px 16px 40px,
+    color-mix(in oklab, #f2f1ed 16%, transparent) 0px 0px 0px 1px;
+
+  --ra-surface-selected: var(--ra-surface-300);
+  --ra-btn-primary-bg: var(--ra-surface-100);
+  --ra-btn-primary-fg: var(--ra-text-primary);
+  --ra-focus-elevated: 0 4px 12px rgba(0, 0, 0, 0.45);
+
+  --ra-color-page: var(--ra-surface);
+  --ra-color-surface: var(--ra-surface-card);
+  --ra-color-surface-sidebar: var(--ra-sidebar);
+  --ra-color-border: var(--ra-border);
+  --ra-color-border-strong: var(--ra-border-strong);
+  --ra-color-text: var(--ra-text-primary);
+  --ra-color-text-muted: var(--ra-text-secondary);
+  --ra-color-text-subtle: var(--ra-text-muted);
+  --ra-color-accent: var(--ra-accent);
+  --ra-color-accent-hover: var(--ra-accent-hover);
+  --ra-color-hover: var(--ra-hover);
+  --ra-color-active: var(--ra-active);
+  --ra-color-selected: var(--ra-surface-selected);
+  --ra-color-success: var(--ra-green);
+  --ra-color-warning: var(--ra-yellow);
+  --ra-color-danger: var(--ra-red);
+
+  --ra-focus-ring: 2px solid var(--ra-border-medium);
+  --ra-focus-ring-offset: 2px;
 }
 
 /* ============================================================
@@ -143,12 +208,42 @@ body {
 
 body {
   font-family: var(--ra-font-ui);
-  font-size: 0.875rem;
+  font-size: var(--ra-text-base);
   line-height: 1.5;
+  font-weight: 400;
   color: var(--ra-text-primary);
   background-color: var(--ra-surface);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+.ra-display-title {
+  font-family: var(--ra-font-display);
+  letter-spacing: -0.02em;
+}
+
+/* Selected row / active segment — warm tertiary surface */
+.ra-surface-highlight {
+  background: var(--ra-surface-500);
+  color: var(--ra-text-primary);
+}
+
+[data-theme="dark"] .ra-surface-highlight {
+  background: var(--ra-surface-100);
+  color: var(--ra-text-primary);
+}
+
+/* User chat bubble — Surface 300 + accent rail */
+.ra-bubble-user {
+  background: var(--ra-surface-300);
+  border: 1px solid var(--ra-border);
+  border-left: 3px solid var(--ra-accent);
+  color: var(--ra-text-primary);
+}
+
+.ra-body-editorial {
+  font-family: var(--ra-font-editorial);
+  font-feature-settings: "cswh" 0;
 }
 
 /* ============================================================
@@ -169,10 +264,10 @@ body {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.5rem 1rem;
+  padding: 0.55rem 1.1rem;
   border-bottom: 1px solid var(--ra-border);
   background: var(--ra-surface-elevated);
-  min-height: 48px;
+  min-height: 52px;
 }
 
 .ra-shell-sidebar {
@@ -213,11 +308,11 @@ body {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.35rem 1rem;
+  padding: 0.4rem 1.1rem;
   border-top: 1px solid var(--ra-border);
   background: var(--ra-surface-elevated);
-  min-height: 28px;
-  font-size: 0.75rem;
+  min-height: 30px;
+  font-size: var(--ra-text-caption);
   color: var(--ra-text-secondary);
 }
 
@@ -227,7 +322,7 @@ body {
 
 .ra-card {
   border: 1px solid var(--ra-border);
-  background: var(--ra-surface-elevated);
+  background: var(--ra-surface-card);
   border-radius: var(--ra-radius);
   box-shadow: none;
 }
@@ -238,38 +333,78 @@ body {
   justify-content: center;
   gap: 0.5rem;
   border: none;
-  border-radius: 9999px;
-  padding: 0.5rem 1rem;
-  font-size: 0.8125rem;
+  font-family: var(--ra-font-ui);
+  font-size: var(--ra-text-caption);
   font-weight: 500;
   cursor: pointer;
-  transition: background-color 150ms ease, opacity 150ms ease;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease,
+    opacity 150ms ease;
 }
 
-/* Filled accent surfaces (also use `.ra-fill-accent` in TSX where Tailwind bg-* is used) */
-.ra-fill-accent {
+/* Default pill radius — primary / accent use 8px */
+.ra-button:not(.ra-button-primary):not(.ra-button-accent):not(.ra-fill-accent) {
+  border-radius: var(--ra-radius-pill);
+  padding: 0.5rem 1.05rem;
+}
+
+/* Brand / marketing CTA — orange fill + white text (use sparingly) */
+.ra-fill-accent,
+.ra-button-accent {
   background: var(--ra-accent-gradient);
   color: #ffffff;
+  border-radius: var(--ra-radius);
+  padding: 0.625rem 0.75rem 0.625rem 0.875rem;
 }
 
+.ra-button-accent:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.ra-button-accent:focus-visible {
+  outline: none;
+  box-shadow: var(--ra-focus-elevated);
+}
+
+/* Primary — warm surface (DESIGN.md §4 Buttons) */
 .ra-button-primary {
-  background: var(--ra-accent-gradient);
-  color: #ffffff;
+  border-radius: var(--ra-radius);
+  padding: 0.625rem 0.75rem 0.625rem 0.875rem;
+  background: var(--ra-btn-primary-bg);
+  color: var(--ra-btn-primary-fg);
   box-shadow: none;
 }
 
 .ra-button-primary:hover:not(:disabled) {
-  filter: brightness(1.07);
+  color: var(--ra-hover-text);
 }
 
+.ra-button-primary:focus-visible {
+  outline: none;
+  box-shadow: var(--ra-focus-elevated);
+}
+
+/* Secondary — pill, Surface 400 + warm brown ~60% text (tags use .ra-button--pill-tight) */
 .ra-button-secondary {
-  background: var(--ra-surface-elevated);
-  color: var(--ra-text-primary);
-  border: 1px solid var(--ra-border);
+  background: var(--ra-surface-400);
+  color: var(--ra-secondary-pill-fg);
+  border: 1px solid transparent;
+  padding: 0.5rem 1rem;
+}
+
+.ra-button--pill-tight {
+  padding: 0.2rem 0.5rem;
 }
 
 .ra-button-secondary:hover:not(:disabled) {
-  background: var(--ra-hover);
+  color: var(--ra-hover-text);
+}
+
+.ra-button-secondary:focus-visible {
+  outline: none;
+  box-shadow: var(--ra-focus-elevated);
 }
 
 .ra-button-ghost {
@@ -279,8 +414,8 @@ body {
 }
 
 .ra-button-ghost:hover:not(:disabled) {
-  background: var(--ra-hover);
-  color: var(--ra-text-primary);
+  background: var(--ra-ghost-bg);
+  color: var(--ra-hover-text);
 }
 
 .ra-button-ghost:disabled {
@@ -298,7 +433,6 @@ body {
 
 .ra-button-primary:active:not(:disabled) {
   opacity: 1;
-  filter: brightness(0.94);
 }
 
 .ra-input {
@@ -307,15 +441,15 @@ body {
   border-radius: var(--ra-radius);
   background: var(--ra-surface);
   color: var(--ra-text-primary);
-  padding: 0.5rem 0.75rem;
-  font-size: 0.875rem;
+  padding: 0.55rem 0.85rem;
+  font-size: var(--ra-text-base);
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
 .ra-input:focus {
   outline: none;
-  border-color: var(--ra-border-focus);
-  box-shadow: 0 0 0 2px rgba(var(--ra-accent-rgb), 0.22);
+  border-color: var(--ra-border-medium);
+  box-shadow: var(--ra-focus-elevated);
 }
 
 .ra-input::placeholder {
@@ -352,7 +486,7 @@ body {
 /* Composer (task input area) — flat surface */
 .ra-composer {
   border-top: 1px solid var(--ra-border);
-  padding: 0.75rem 1rem 0.85rem;
+  padding: 0.85rem 1.1rem 0.95rem;
   background: var(--ra-surface-elevated);
 }
 
@@ -364,15 +498,15 @@ body {
 
 .ra-composer-shell {
   border: 1px solid var(--ra-border);
-  border-radius: 1.5rem;
+  border-radius: var(--ra-radius);
   background: var(--ra-surface);
   padding: 0.65rem 0.85rem 0.55rem;
-  transition: border-color 150ms ease, box-shadow 150ms ease;
+  transition: border-color 150ms ease, box-shadow 200ms ease;
 }
 
 .ra-composer-shell:focus-within {
-  border-color: rgba(var(--ra-accent-rgb), 0.35);
-  box-shadow: 0 0 0 1px rgba(var(--ra-accent-rgb), 0.12);
+  border-color: var(--ra-border-medium);
+  box-shadow: var(--ra-focus-elevated);
 }
 
 .ra-composer-input-wrap {
@@ -385,9 +519,9 @@ body {
   border-radius: 0;
   background: transparent;
   color: var(--ra-text-primary);
-  padding: 0.2rem 0.1rem 0.45rem;
-  font-size: 0.9375rem;
-  line-height: 1.5;
+  padding: 0.25rem 0.1rem 0.5rem;
+  font-size: 1rem;
+  line-height: 1.55;
   resize: none;
   font-family: inherit;
   min-height: 4.5rem;
@@ -415,9 +549,9 @@ body {
 
 .ra-composer-hint {
   margin: 0;
-  font-size: 0.6875rem;
+  font-size: var(--ra-text-micro);
   color: var(--ra-text-muted);
-  line-height: 1.35;
+  line-height: 1.4;
   flex: 1;
   min-width: 9rem;
 }
@@ -434,25 +568,35 @@ body {
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  min-height: 2.25rem;
-  padding: 0 1rem;
+  min-height: 2.375rem;
+  padding: 0.625rem 0.875rem;
   border: none;
-  border-radius: 9999px;
-  font-size: 0.8125rem;
+  border-radius: var(--ra-radius);
+  font-family: var(--ra-font-ui);
+  font-size: var(--ra-text-caption);
   font-weight: 500;
   cursor: pointer;
-  background: var(--ra-accent-gradient);
-  color: #fff;
+  background: var(--ra-btn-primary-bg);
+  color: var(--ra-btn-primary-fg);
   box-shadow: none;
-  transition: filter 150ms ease, opacity 150ms ease;
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease,
+    opacity 150ms ease;
 }
 
 .ra-composer-send:hover:not(:disabled) {
-  filter: brightness(1.07);
+  color: var(--ra-hover-text);
+}
+
+.ra-composer-send:focus-visible {
+  outline: none;
+  box-shadow: var(--ra-focus-elevated);
 }
 
 .ra-composer-send:active:not(:disabled) {
-  filter: brightness(0.96);
+  opacity: 0.92;
 }
 
 .ra-composer-send:disabled {
@@ -468,20 +612,24 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 2.25rem;
-  padding: 0 1rem;
+  min-height: 2.375rem;
+  padding: 0.625rem 0.875rem;
   border: 1px solid var(--ra-border);
-  border-radius: 9999px;
-  font-size: 0.8125rem;
+  border-radius: var(--ra-radius-pill);
+  font-family: var(--ra-font-ui);
+  font-size: var(--ra-text-caption);
   font-weight: 500;
   cursor: pointer;
-  background: var(--ra-surface-elevated);
-  color: var(--ra-text-primary);
-  transition: background-color 150ms ease;
+  background: var(--ra-surface-400);
+  color: var(--ra-secondary-pill-fg);
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
 }
 
 .ra-composer-cancel:hover {
   background: var(--ra-hover);
+  color: var(--ra-hover-text);
 }
 
 /* Standalone textarea (same as composer field) */
@@ -491,9 +639,9 @@ body {
   border-radius: var(--ra-radius-lg);
   background: var(--ra-surface);
   color: var(--ra-text-primary);
-  padding: 0.75rem 1rem;
-  font-size: 0.875rem;
-  line-height: 1.5;
+  padding: 0.8rem 1.05rem;
+  font-size: var(--ra-text-base);
+  line-height: 1.55;
   resize: none;
   font-family: inherit;
   min-height: 48px;
@@ -503,8 +651,8 @@ body {
 
 .ra-textarea:focus {
   outline: none;
-  border-color: var(--ra-border-focus);
-  box-shadow: 0 0 0 2px rgba(var(--ra-accent-rgb), 0.22);
+  border-color: var(--ra-border-medium);
+  box-shadow: var(--ra-focus-elevated);
 }
 
 .ra-textarea::placeholder {
@@ -521,14 +669,14 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 1.85rem;
+  height: 1.85rem;
   padding: 0;
   border: none;
   border-radius: var(--ra-radius);
   background: transparent;
   color: var(--ra-text-muted);
-  font-size: 0.875rem;
+  font-size: var(--ra-text-base);
   line-height: 1;
   cursor: pointer;
   transition: background-color 150ms ease, color 150ms ease;
@@ -554,7 +702,8 @@ body {
   outline-offset: var(--ra-focus-ring-offset);
 }
 
-.ra-button:focus-visible {
+.ra-button-secondary:focus-visible,
+.ra-button-ghost:focus-visible {
   outline: var(--ra-focus-ring);
   outline-offset: var(--ra-focus-ring-offset);
 }
@@ -590,10 +739,10 @@ body {
   text-align: left;
   border: none;
   border-radius: 0.75rem;
-  padding: 0.55rem 0.75rem;
+  padding: 0.6rem 0.8rem;
   margin-bottom: 0.125rem;
-  font-size: 0.75rem;
-  line-height: 1.25;
+  font-size: var(--ra-text-caption);
+  line-height: 1.35;
   cursor: pointer;
   background: transparent;
   color: var(--ra-text-secondary);
@@ -632,8 +781,8 @@ body {
   flex: 1;
   border: none;
   border-radius: 9999px;
-  padding: 0.35rem 0.4rem;
-  font-size: 0.75rem;
+  padding: 0.4rem 0.5rem;
+  font-size: var(--ra-text-caption);
   font-weight: 500;
   cursor: pointer;
   background: transparent;
@@ -649,17 +798,21 @@ body {
 }
 
 .ra-tab-track__btn--active {
-  background: var(--ra-surface-elevated);
   color: var(--ra-text-primary);
   box-shadow:
-    0 0 0 1px rgba(var(--ra-accent-rgb), 0.2),
-    0 1px 3px rgba(0, 0, 0, 0.2);
+    0 0 0 1px var(--ra-border-medium),
+    0 1px 3px rgba(0, 0, 0, 0.12);
 }
 
 [data-theme="light"] .ra-tab-track__btn--active {
+  background: var(--ra-surface-500);
+}
+
+[data-theme="dark"] .ra-tab-track__btn--active {
+  background: var(--ra-surface-100);
   box-shadow:
-    0 0 0 1px rgba(38, 37, 30, 0.08),
-    0 1px 2px rgba(0, 0, 0, 0.05);
+    0 0 0 1px var(--ra-border-medium),
+    0 1px 3px rgba(0, 0, 0, 0.35);
 }
 
 .ra-tab-track__btn:focus-visible {
@@ -677,8 +830,8 @@ body {
 }
 
 .ra-tab-track--header .ra-tab-track__btn {
-  padding: 0.28rem 0.65rem;
-  font-size: 0.6875rem;
+  padding: 0.32rem 0.7rem;
+  font-size: var(--ra-text-micro);
   white-space: nowrap;
 }
 
@@ -724,7 +877,7 @@ body {
 }
 
 .ra-empty-state__eyebrow {
-  font-size: 0.6875rem;
+  font-size: var(--ra-text-micro);
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -754,6 +907,23 @@ body {
   background: var(--ra-red);
 }
 
+/* AI timeline — running dot hue by tool category (DESIGN.md) */
+.ra-tool-row--thinking .ra-tool-status--running {
+  background: var(--ra-timeline-thinking);
+}
+
+.ra-tool-row--grep .ra-tool-status--running {
+  background: var(--ra-timeline-grep);
+}
+
+.ra-tool-row--read .ra-tool-status--running {
+  background: var(--ra-timeline-read);
+}
+
+.ra-tool-row--edit .ra-tool-status--running {
+  background: var(--ra-timeline-edit);
+}
+
 /* Modal / approval layer */
 .ra-modal-backdrop {
   position: absolute;
@@ -766,14 +936,14 @@ body {
   position: relative;
   z-index: 10;
   border: 1px solid var(--ra-border);
-  border-radius: 1rem;
-  background: var(--ra-surface-elevated);
+  border-radius: var(--ra-radius);
+  background: var(--ra-surface-card);
   box-shadow: var(--ra-shadow-md);
   padding: 1.1rem 1.25rem;
 }
 
 .ra-modal-panel__title {
-  font-size: 0.6875rem;
+  font-size: var(--ra-text-micro);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -785,6 +955,12 @@ body {
 /* ============================================================
  * Assistant markdown (MessageBubble; DOMPurify-sanitized HTML)
  * ============================================================ */
+
+.ra-md-assistant {
+  font-family: var(--ra-font-editorial);
+  line-height: 1.35;
+  font-feature-settings: "cswh" 0;
+}
 
 .ra-md-assistant :first-child {
   margin-top: 0;

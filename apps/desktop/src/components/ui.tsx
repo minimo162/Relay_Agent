@@ -4,15 +4,16 @@ import { splitProps, type JSX } from "solid-js";
  * Minimal button component — OpenWork-style pill button
  */
 interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "primary" | "secondary" | "ghost";
+  variant?: "primary" | "secondary" | "ghost" | "accent";
   children: JSX.Element;
 }
 
 export function Button(props: ButtonProps) {
   const { variant = "secondary", class: className, ...rest } = props;
+  const v = variant === "accent" ? "accent" : variant;
   return (
     <button
-      class={`ra-button ra-button-${variant} ${className ?? ""}`}
+      class={`ra-button ra-button-${v} ${className ?? ""}`}
       {...rest}
     />
   );

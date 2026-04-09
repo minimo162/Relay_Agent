@@ -5,10 +5,12 @@ export const ui = {
   textSecondary: "text-[var(--ra-text-secondary)]",
   textMuted: "text-[var(--ra-text-muted)]",
   accent: "text-[var(--ra-accent)]",
-  /** Gradient fill + white text — see `.ra-fill-accent` in `index.css` */
+  /** Orange gradient marketing CTA — use sparingly; see `.ra-button-accent` / `.ra-fill-accent` */
   fillAccent: "ra-fill-accent",
   surface: "bg-[var(--ra-surface)]",
   surfaceElevated: "bg-[var(--ra-surface-elevated)]",
+  /** Card / assistant bubble fill (Surface 400 light / paired dark) */
+  surfaceCard: "bg-[var(--ra-surface-card)]",
   hover: "hover:bg-[var(--ra-hover)]",
   mutedText: "text-[var(--ra-text-muted)]",
 } as const;
