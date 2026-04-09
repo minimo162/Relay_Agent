@@ -3,7 +3,7 @@
  *
  * Commands (tauri_bridge.rs):
  *   start_agent, respond_approval, cancel_agent, get_session_history,
- *   compact_agent_session, warmup_copilot_bridge, get_relay_diagnostics,
+ *   compact_agent_session, warmup_copilot_bridge (optional browserSettings), get_relay_diagnostics,
  *   get_workspace_allowlist, remove_workspace_allowlist_tool, clear_workspace_allowlist,
  *   list_workspace_slash_commands,
  *   connect_cdp, cdp_send_prompt, cdp_start_new_chat, cdp_screenshot
@@ -400,8 +400,12 @@ export interface CopilotWarmupResult {
   error?: string | null;
 }
 
-export async function warmupCopilotBridge(): Promise<CopilotWarmupResult> {
-  return invoke<CopilotWarmupResult>("warmup_copilot_bridge");
+export async function warmupCopilotBridge(
+  browserSettings?: BrowserAutomationSettings | null,
+): Promise<CopilotWarmupResult> {
+  return invoke<CopilotWarmupResult>("warmup_copilot_bridge", {
+    browserSettings: browserSettings ?? null,
+  });
 }
 
 /* ============================================================

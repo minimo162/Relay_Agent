@@ -65,7 +65,7 @@ use runtime::{
 
 use crate::copilot_persistence::{self, PersistedSessionConfig};
 use crate::error::AgentLoopError;
-use crate::models::{DesktopPermissionSummaryRow, SessionPreset};
+use crate::models::{BrowserAutomationSettings, DesktopPermissionSummaryRow, SessionPreset};
 use crate::registry::SessionRegistry;
 use crate::session_write_undo;
 use crate::tauri_bridge;
@@ -412,6 +412,12 @@ pub(crate) fn posix_shell_escape(s: &str) -> Result<String, String> {
 /* ── Agent loop ─── */
 
 #[allow(clippy::needless_pass_by_value)]
+fn timeout_secs_from_browser_settings(bs: Option<&BrowserAutomationSettings>) -> u64 {
+    let ms = bs.map(|b| b.timeout_ms).unwrap_or(120_000);
+    let secs = (u64::from(ms).div_ceil(1000)).max(1);
+    secs.clamp(10, 900)
+}
+
 pub fn run_agent_loop_impl(
     app: &AppHandle,
     registry: &SessionRegistry,
@@ -420,14 +426,20 @@ pub fn run_agent_loop_impl(
     cwd: Option<String>,
     max_turns: Option<usize>,
     session_preset: SessionPreset,
+    browser_settings: Option<BrowserAutomationSettings>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(), AgentLoopError> {
-    let server = tauri_bridge::ensure_copilot_server()
-        .map_err(AgentLoopError::InitializationError)?;
+    let server = tauri_bridge::ensure_copilot_server(
+        tauri_bridge::effective_cdp_port(browser_settings.as_ref()),
+        true,
+        Some(registry),
+    )
+    .map_err(AgentLoopError::InitializationError)?;
     let api_client = CdpApiClient::new(
         server,
         session_preset,
         Some((app.clone(), session_id.to_string())),
+        timeout_secs_from_browser_settings(browser_settings.as_ref()),
     );
 
     let tool_executor = build_tool_executor(app, session_id, cwd.clone(), registry.clone());
@@ -539,10 +551,11 @@ impl CdpApiClient {
         server: std::sync::Arc<std::sync::Mutex<crate::copilot_server::CopilotServer>>,
         session_preset: SessionPreset,
         progress_emit: Option<(AppHandle, String)>,
+        response_timeout_secs: u64,
     ) -> Self {
         Self {
             server,
-            response_timeout_secs: 120,
+            response_timeout_secs,
             session_preset,
             progress_emit,
         }

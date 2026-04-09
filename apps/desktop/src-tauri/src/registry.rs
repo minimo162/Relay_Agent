@@ -155,6 +155,15 @@ impl SessionRegistry {
         Ok(q.drain().map(|(_, p)| p.tx).collect())
     }
 
+    /// Count sessions whose agent loop is still marked running (includes in-flight work).
+    pub fn running_session_count(&self) -> Result<usize, AgentLoopError> {
+        let data = self
+            .data
+            .lock()
+            .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
+        Ok(data.values().filter(|e| e.running).count())
+    }
+
     /// Evict completed/cancelled sessions older than `ttl_seconds`.
     /// Call this periodically (e.g. on each new session start, or via a timer).
     pub fn cleanup_stale_sessions(&self, ttl_seconds: i64) -> Result<usize, AgentLoopError> {

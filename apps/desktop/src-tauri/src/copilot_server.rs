@@ -107,6 +107,15 @@ impl CopilotServer {
         })
     }
 
+    pub fn cdp_port(&self) -> u16 {
+        self.cdp_port
+    }
+
+    /// Update CDP port before a restart (`stop` + `start`); does not affect the HTTP listen port.
+    pub fn set_cdp_port(&mut self, port: u16) {
+        self.cdp_port = port;
+    }
+
     pub fn is_running(&self) -> bool {
         if let Some(arc_child) = &self.process {
             match arc_child.lock() {

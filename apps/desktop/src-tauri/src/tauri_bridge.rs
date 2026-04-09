@@ -9,13 +9,13 @@ use uuid::Uuid;
 
 use crate::cdp_copilot;
 use crate::models::{
-    CancelAgentRequest, DesktopPermissionSummaryRow, GetAgentSessionHistoryRequest,
-    GetPermissionSummaryRequest, ListWorkspaceSlashCommandsRequest, McpAddServerRequest,
-    McpServerInfo, RelayDiagnostics, RespondAgentApprovalRequest, RespondUserQuestionRequest,
-    RustAnalyzerProbeRequest,
-    RustAnalyzerProbeResponse, SessionWriteUndoRequest, SessionWriteUndoStatusResponse,
-    StartAgentRequest, WorkspaceAllowlistCwdRequest, WorkspaceAllowlistRemoveToolRequest,
-    WorkspaceAllowlistSnapshot, WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
+    BrowserAutomationSettings, CancelAgentRequest, DesktopPermissionSummaryRow,
+    GetAgentSessionHistoryRequest, GetPermissionSummaryRequest, ListWorkspaceSlashCommandsRequest,
+    McpAddServerRequest, McpServerInfo, RelayDiagnostics, RespondAgentApprovalRequest,
+    RespondUserQuestionRequest, RustAnalyzerProbeRequest, RustAnalyzerProbeResponse,
+    SessionWriteUndoRequest, SessionWriteUndoStatusResponse, StartAgentRequest,
+    WorkspaceAllowlistCwdRequest, WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
+    WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
 };
 use crate::registry::SessionRegistry;
 use runtime::MAX_TEXT_FILE_READ_BYTES;
@@ -42,7 +42,33 @@ const COPILOT_HTTP_PORT: u16 = 18080;
 /// M365 Copilot Edge CDP base port: must match `scripts/start-relay-edge-cdp.sh`, `copilot_server.js`, and Playwright defaults (`YakuLingo` uses 9333; Relay avoids collision).
 const COPILOT_JS_CDP_PORT: u16 = 9360;
 
-pub fn ensure_copilot_server() -> Result<Arc<Mutex<crate::copilot_server::CopilotServer>>, String> {
+fn env_cdp_port_override() -> Option<u16> {
+    std::env::var("RELAY_EDGE_CDP_PORT")
+        .ok()
+        .and_then(|s| s.trim().parse::<u16>().ok())
+        .filter(|&p| p > 0)
+}
+
+/// Effective CDP port: session `browser_settings` (if present) wins, then `RELAY_EDGE_CDP_PORT`, then default **9360**.
+pub fn effective_cdp_port(browser_settings: Option<&BrowserAutomationSettings>) -> u16 {
+    if let Some(bs) = browser_settings {
+        if bs.cdp_port > 0 {
+            return bs.cdp_port;
+        }
+    }
+    env_cdp_port_override().unwrap_or(COPILOT_JS_CDP_PORT)
+}
+
+/// Spawns or reuses the Node `copilot_server.js` bridge with `--cdp-port` matching `desired_cdp_port`.
+///
+/// When the port must change and the bridge was already running, the Node process is stopped and
+/// restarted unless `block_port_change_on_concurrent_sessions` is true **and** more than one agent
+/// session is running (returns an error).
+pub fn ensure_copilot_server(
+    desired_cdp_port: u16,
+    block_port_change_on_concurrent_sessions: bool,
+    registry: Option<&SessionRegistry>,
+) -> Result<Arc<Mutex<crate::copilot_server::CopilotServer>>, String> {
     let server_arc = {
         let mut slot = copilot_server_slot()
             .lock()
@@ -52,7 +78,7 @@ pub fn ensure_copilot_server() -> Result<Arc<Mutex<crate::copilot_server::Copilo
             let _ = std::fs::create_dir_all(&edge_profile);
             let server = crate::copilot_server::CopilotServer::new(
                 COPILOT_HTTP_PORT,
-                COPILOT_JS_CDP_PORT,
+                desired_cdp_port,
                 Some(edge_profile),
                 None,
             )
@@ -62,6 +88,28 @@ pub fn ensure_copilot_server() -> Result<Arc<Mutex<crate::copilot_server::Copilo
                 server: Arc::clone(&arc),
                 started: false,
             });
+        } else if let Some(st) = slot.as_mut() {
+            let mut srv = st
+                .server
+                .lock()
+                .map_err(|e| format!("copilot server mutex poisoned: {e}"))?;
+            if srv.cdp_port() != desired_cdp_port {
+                if st.started {
+                    if block_port_change_on_concurrent_sessions {
+                        if let Some(reg) = registry {
+                            let n = reg
+                                .running_session_count()
+                                .map_err(|e| e.to_string())?;
+                            if n > 1 {
+                                return Err("Cannot change Copilot CDP port while multiple agent sessions are running. Wait for sessions to finish or restart the app.".to_string());
+                            }
+                        }
+                    }
+                    srv.stop();
+                    st.started = false;
+                }
+                srv.set_cdp_port(desired_cdp_port);
+            }
         }
         if let Some(st) = slot.as_mut() {
             if st.started {
@@ -130,11 +178,16 @@ pub fn ensure_copilot_server() -> Result<Arc<Mutex<crate::copilot_server::Copilo
 
 /// Ensure Node `copilot_server.js` is up and run `GET /status` (Edge launch + Copilot tab + login probe).
 #[tauri::command]
-pub async fn warmup_copilot_bridge() -> Result<crate::copilot_server::CopilotStatusResponse, String> {
+pub async fn warmup_copilot_bridge(
+    registry: State<'_, SessionRegistry>,
+    browser_settings: Option<BrowserAutomationSettings>,
+) -> Result<crate::copilot_server::CopilotStatusResponse, String> {
+    let reg = registry.inner().clone();
+    let cdp = effective_cdp_port(browser_settings.as_ref());
     // `ensure_copilot_server` builds a temporary runtime and uses `block_on`; it must not run on a
     // Tokio worker thread (nested runtime panic: "Cannot start a runtime from within a runtime").
     tokio::task::spawn_blocking(move || {
-        let server_arc = ensure_copilot_server()?;
+        let server_arc = ensure_copilot_server(cdp, true, Some(&reg))?;
         let srv_clone = Arc::clone(&server_arc);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -241,6 +294,7 @@ pub async fn start_agent(
                 request.cwd,
                 request.max_turns,
                 request.session_preset,
+                request.browser_settings,
                 cancelled,
             )
         }));

@@ -78,6 +78,46 @@ export default function Shell(): JSX.Element {
   const [sessionRunning, setSessionRunning] = createSignal(false);
   const [sessionError, setSessionError] = createSignal<string | null>(null);
   const [copilotBridgeHint, setCopilotBridgeHint] = createSignal<string | null>(null);
+  const [copilotSuccessFlash, setCopilotSuccessFlash] = createSignal<string | null>(null);
+  const copilotFlashTimer: { id?: ReturnType<typeof setTimeout> } = {};
+
+  const runCopilotWarmup = (focusMainWindow: boolean) => {
+    if (copilotFlashTimer.id) {
+      clearTimeout(copilotFlashTimer.id);
+      copilotFlashTimer.id = undefined;
+    }
+    void warmupCopilotBridge(loadBrowserSettings())
+      .then((r) => {
+        if (r.loginRequired) {
+          setCopilotBridgeHint("Sign in to Copilot in Edge, then return here.");
+          setCopilotSuccessFlash(null);
+        } else if (r.error) {
+          setCopilotBridgeHint(`Copilot: ${r.error}`);
+          setCopilotSuccessFlash(null);
+        } else if (r.connected) {
+          setCopilotBridgeHint(null);
+          setCopilotSuccessFlash("Copilot ready.");
+          copilotFlashTimer.id = setTimeout(() => {
+            setCopilotSuccessFlash(null);
+            copilotFlashTimer.id = undefined;
+          }, 3500);
+        }
+      })
+      .catch((err) => {
+        console.error("[Copilot] warmup failed:", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        setCopilotBridgeHint(`Copilot: ${msg}`);
+        setCopilotSuccessFlash(null);
+      })
+      .finally(() => {
+        if (!focusMainWindow || !isTauri()) return;
+        const win = getCurrentWindow();
+        void win
+          .show()
+          .then(() => win.setFocus())
+          .catch((e) => console.error("[Shell] window show/focus failed:", e));
+      });
+  };
 
   const [chunks, setChunks] = createSignal<UiChunk[]>([]);
 
@@ -128,6 +168,10 @@ export default function Shell(): JSX.Element {
 
   const [mcpServers, setMcpServers] = createSignal<McpServer[]>([]);
 
+  onCleanup(() => {
+    if (copilotFlashTimer.id) clearTimeout(copilotFlashTimer.id);
+  });
+
   onMount(async () => {
     try {
       const servers = await mcpListServers();
@@ -136,29 +180,7 @@ export default function Shell(): JSX.Element {
       console.error("[MCP] Failed to load servers:", err);
     }
 
-    void warmupCopilotBridge()
-      .then((r) => {
-        if (r.loginRequired) {
-          setCopilotBridgeHint("Sign in to Copilot in Edge, then return here.");
-        } else if (r.error) {
-          setCopilotBridgeHint(`Copilot: ${r.error}`);
-        } else if (r.connected) {
-          setCopilotBridgeHint(null);
-        }
-      })
-      .catch((err) => {
-        console.error("[Copilot] warmup failed:", err);
-        const msg = err instanceof Error ? err.message : String(err);
-        setCopilotBridgeHint(`Copilot: ${msg}`);
-      })
-      .finally(() => {
-        if (!isTauri()) return;
-        const win = getCurrentWindow();
-        void win
-          .show()
-          .then(() => win.setFocus())
-          .catch((e) => console.error("[Shell] window show/focus failed:", e));
-      });
+    runCopilotWarmup(true);
   });
 
   const sessionState = createMemo(() => {
@@ -388,7 +410,6 @@ export default function Shell(): JSX.Element {
         },
       }));
       setSessionRunning(true);
-      setCopilotBridgeHint(null);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setSessionError(msg);
@@ -584,6 +605,9 @@ export default function Shell(): JSX.Element {
           sessionState={sessionState()}
           sessionCount={sessionIds().length}
           copilotBridgeHint={copilotBridgeHint()}
+          copilotSuccessFlash={copilotSuccessFlash()}
+          onRetryCopilot={isTauri() ? () => runCopilotWarmup(false) : undefined}
+          copilotRetryDisabled={sessionRunning()}
           workspaceFullPath={workspaceLabel() || null}
         />
       </div>

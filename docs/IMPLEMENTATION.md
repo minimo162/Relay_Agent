@@ -16,6 +16,14 @@
 
 ## Milestone Log
 
+### 2026-04-10 Copilot connection: `browser_settings` + warmup UX
+
+**Problem:** The desktop sent `browserSettings` with `start_agent` (`localStorage` `relay.settings.browser`) but Rust ignored it; the Node bridge always used CDP **9360** and a fixed **120s** Copilot reply timeout. Warmup could not align with the same port hints, and the footer cleared Copilot hints on send.
+
+**Fix:** [`tauri_bridge.rs`](../apps/desktop/src-tauri/src/tauri_bridge.rs) — `effective_cdp_port` (session `browser_settings.cdpPort` → `RELAY_EDGE_CDP_PORT` → **9360**); `ensure_copilot_server(desired_cdp_port, block_on_concurrent_sessions, registry)` restarts the bridge when the port changes, and returns an error if more than one agent session is running when a port change would be required. [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) — `run_agent_loop_impl` receives `browser_settings`, passes `effective_cdp_port` into `ensure_copilot_server`, and sets `CdpApiClient` reply timeout from `timeoutMs` (clamped **10–900** seconds). [`copilot_server.rs`](../apps/desktop/src-tauri/src/copilot_server.rs) — `cdp_port()` / `set_cdp_port`. [`registry.rs`](../apps/desktop/src-tauri/src/registry.rs) — `running_session_count`. [`warmup_copilot_bridge`](../apps/desktop/src-tauri/src/tauri_bridge.rs) — optional `browserSettings` + `SessionRegistry` for the same rules. [`ipc.ts`](../apps/desktop/src/lib/ipc.ts) / [`Shell.tsx`](../apps/desktop/src/shell/Shell.tsx) / [`StatusBar.tsx`](../apps/desktop/src/components/StatusBar.tsx) — pass `loadBrowserSettings()` into warmup; **Reconnect Copilot** (disabled while a session is running); brief **Copilot ready.** flash on success; no longer clear the Copilot hint when sending a message.
+
+**Verification:** `pnpm typecheck` (repo root); `cargo test -p relay-agent-desktop` from `apps/desktop/src-tauri/` — pass (2026-04-10).
+
 ### 2026-04-10 Desktop UI: Cursor design system gap closure
 
 **Change:** [`apps/desktop/src/index.css`](../apps/desktop/src/index.css) — brand-first `--ra-font-*` stacks (no font files shipped), full §5 radius scale (`--ra-radius-micro` … `--ra-radius-featured`), `.ra-type-button-label` / `.ra-type-button-caption` (`ss09`) / `.ra-type-caption`, system + optional Lato utilities, responsive display letter-spacing (§8), global link tokens + `body a` hover, `.ra-button-tertiary`, ghost padding 6×12, warm `.ra-icon-button--danger` hover, sticky blurred `.ra-shell-header`, combo rules for `.ra-button`/`.ra-input` + type utilities. [`ui.tsx`](../apps/desktop/src/components/ui.tsx) — `tertiary` button variant. [`ui-tokens.ts`](../apps/desktop/src/lib/ui-tokens.ts) — radius + type fragments. Components: Composer, ContextPanel, SettingsModal, ShellHeader, MessageBubble, MessageFeed, Sidebar, StatusBar, Shell, ToolCallRow, UserQuestionOverlay, ApprovalOverlay — `ra-type-*`, `ui.radius*`, fewer raw Tailwind font sizes.
