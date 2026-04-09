@@ -56,6 +56,8 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
         messages: [],
       };
     }
+    case "compact_agent_session":
+      return { message: "Session compacted", removedMessageCount: 0 };
     case "undo_session_write":
     case "redo_session_write":
       return undefined;
@@ -90,8 +92,15 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
       return undefined;
     case "workspace_instruction_surfaces":
       return { workspaceRoot: null, surfaces: [] };
-    case "get_desktop_permission_summary":
+    case "mcp_list_servers":
       return [];
+    case "get_desktop_permission_summary":
+      return [
+        { name: "Bash", requirement: "require_approval", description: "Shell commands" },
+        { name: "File write", requirement: "require_approval", description: "Write files" },
+        { name: "File read", requirement: "auto_allow", description: "Read files" },
+        { name: "Network", requirement: "auto_deny", description: "Outbound HTTP" },
+      ];
     default:
       throw new Error(`[E2E mock] Unknown command: ${cmd}`);
   }

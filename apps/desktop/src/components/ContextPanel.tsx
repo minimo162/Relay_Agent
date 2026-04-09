@@ -231,8 +231,8 @@ export function ContextPanel(props: {
           <Match when={activeTab() === "servers"}>
             <div class="flex flex-col gap-2">
               <p class={`text-xs leading-relaxed ${ui.mutedText}`}>
-                MCP servers extend the agent like skills/plugins. Below: read-only checks for Claw-style
-                instruction files under your configured workspace path (Settings).
+                Connect MCP servers for extra tools. Instruction files under your workspace are listed below when a
+                folder is set in Settings.
               </p>
               <Show
                 when={!props.workspacePath()?.trim()}
@@ -287,7 +287,7 @@ export function ContextPanel(props: {
                 }
               >
                 <p class={`text-xs ${ui.mutedText}`}>
-                  Set a workspace path in Settings to scan for <span class="font-mono">CLAW.md</span> /{" "}
+                  Set a workspace in Settings to detect <span class="font-mono">CLAW.md</span> and{" "}
                   <span class="font-mono">.claw</span>.
                 </p>
               </Show>
@@ -345,8 +345,7 @@ export function ContextPanel(props: {
                 when={props.mcpServers().length > 0}
                 fallback={
                   <div class={`text-sm ${ui.mutedText} text-center py-8 leading-relaxed px-1`}>
-                    No MCP servers yet. Add one to expose external tools (similar to installing skills in
-                    OpenWork).
+                    No MCP servers yet. Add one to connect external tools.
                   </div>
                 }
               >
@@ -389,15 +388,13 @@ export function ContextPanel(props: {
                 Plan timeline
               </span>
               <p class={`text-xs leading-relaxed ${ui.mutedText}`}>
-                Each <span class="font-mono text-[10px]">TodoWrite</span> update is a section; newest on
-                top.
+                Task lists from the agent; newest first.
               </p>
               <Show
                 when={planNewestFirst()}
                 fallback={
                   <div class={`text-sm ${ui.mutedText} text-center py-6 leading-relaxed`}>
-                    No task list yet. When the agent uses{" "}
-                    <span class="font-mono text-[10px]">TodoWrite</span>, steps appear here.
+                    No tasks yet. They appear when the agent updates its task list.
                   </div>
                 }
               >
@@ -465,9 +462,8 @@ export function ContextPanel(props: {
           <Match when={activeTab() === "policy"}>
             <div class="flex flex-col gap-2">
               <p class={`text-xs leading-relaxed ${ui.mutedText}`}>
-                Effective tool gating for composer mode <span class="font-mono">{props.sessionPreset()}</span>.
-                Interactive approvals and project <span class="font-mono">.claw</span> still apply (e.g. bash
-                read-only guard).
+                Tool rules for <span class="font-mono">{props.sessionPreset()}</span> mode. Approvals and{" "}
+                <span class="font-mono">.claw</span> still apply.
               </p>
               <span class={`text-xs font-medium ${ui.mutedText} uppercase tracking-wide`}>
                 {permissionRows().length} tool{permissionRows().length !== 1 ? "s" : ""}

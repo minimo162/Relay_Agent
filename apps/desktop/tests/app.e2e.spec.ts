@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 /* ── Helpers ─────────────────────────────────────────────── */
 
-const COMPOSER_PLACEHOLDER = "What would you like to do? (type / for commands)";
+const COMPOSER_PLACEHOLDER = "Describe what you want done — type / for commands";
 
 /** Send a Tauri event from the browser context */
 async function emitEvent(page: any, event: string, payload: any) {
@@ -33,7 +33,7 @@ test("app shell renders 3-pane layout", async ({ page }) => {
   await expect(page.getByText("Relay Agent", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Sessions" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Files" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Servers" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "MCP" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Plan" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Policy" })).toBeVisible();
   await expect(page.locator("text=Relay Agent v0.1.0")).toBeVisible();
@@ -79,10 +79,10 @@ test("session appears in sidebar after sending prompt", async ({ page }) => {
 
 test("context panel tabs are switchable", async ({ page }) => {
   await openApp(page);
-  await page.getByRole("tab", { name: "Servers" }).click();
-  await expect(page.locator("text=No MCP servers connected")).toBeVisible();
+  await page.getByRole("tab", { name: "MCP" }).click();
+  await expect(page.getByText(/No MCP servers yet/)).toBeVisible();
   await page.getByRole("tab", { name: "Policy" }).click();
-  await expect(page.locator("text=policies")).toBeVisible();
+  await expect(page.getByText(/Tool rules for/)).toBeVisible();
   await page.getByRole("tab", { name: "Files" }).click();
   // Files tab shows file list or placeholder depending on state
   await expect(page.locator("text=Add File").first()).toBeVisible({ timeout: 2000 }).catch(async () => {

@@ -69,7 +69,8 @@ function mockSetup(autoComplete: boolean) {
       }
       case "compact_agent_session":
         return { message: "Session compacted", removedMessageCount: 3 };
-      case "mcp_list_servers": return [];
+      case "mcp_list_servers":
+        return [];
       case "mcp_add_server": {
         const srv = { name: req.name, command: req.command, args: req.args || [], connected: true, tools: ["a","b"] };
         return srv;
@@ -81,7 +82,12 @@ function mockSetup(autoComplete: boolean) {
       case "workspace_instruction_surfaces":
         return { workspaceRoot: null, surfaces: [] };
       case "get_desktop_permission_summary":
-        return [];
+        return [
+          { name: "Bash", requirement: "require_approval", description: "Shell commands" },
+          { name: "File write", requirement: "require_approval", description: "Write files" },
+          { name: "File read", requirement: "auto_allow", description: "Read files" },
+          { name: "Network", requirement: "auto_deny", description: "Outbound HTTP" },
+        ];
       case "connect_cdp": case "cdp_start_new_chat":
         return { ok: true, debugUrl: "", pageUrl: "", pageTitle: "", port: 9360, launched: false, error: null };
       case "cdp_send_prompt":
@@ -260,6 +266,13 @@ test.describe("Streaming & Tool Events", () => {
   });
 
   test("tool_start shows tool name and running indicator", async ({ page }) => {
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("relay.showToolActivity", "0");
+      } catch {
+        /* ignore */
+      }
+    });
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "tool test");
@@ -296,6 +309,13 @@ test.describe("Streaming & Tool Events", () => {
   });
 
   test("tool_result with isError shows error styling", async ({ page }) => {
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("relay.showToolActivity", "0");
+      } catch {
+        /* ignore */
+      }
+    });
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "tool error test");
@@ -427,14 +447,14 @@ test.describe("Context Panel", () => {
   test("servers tab shows empty state", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
-    await page.getByRole("tab", { name: "Servers" }).click();
-    await expect(page.getByText("No MCP servers connected")).toBeVisible({ timeout: 2000 });
+    await page.getByRole("tab", { name: "MCP" }).click();
+    await expect(page.getByText(/No MCP servers yet/)).toBeVisible({ timeout: 2000 });
   });
 
   test("add server interface appears", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
-    await page.getByRole("tab", { name: "Servers" }).click();
+    await page.getByRole("tab", { name: "MCP" }).click();
     await page.getByText("+ Add Server").click();
     await expect(page.getByPlaceholder("Server name")).toBeVisible({ timeout: 2000 });
   });
@@ -527,8 +547,8 @@ test.describe("Layout Integrity", () => {
   test("empty state shows welcome message", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
-    await expect(page.getByText("Relay Agent is ready")).toBeVisible();
-    await expect(page.getByText("Workspace")).toBeVisible();
+    await expect(page.getByText("Ready when you are")).toBeVisible();
+    await expect(page.locator(".ra-empty-state__eyebrow").getByText("Workspace", { exact: true })).toBeVisible();
   });
 });
 

@@ -28,11 +28,11 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 
 ## What the app does
 
-- **Sessions** — Sidebar, history, streaming assistant text, tool activity (optional inline).
+- **Sessions** — Sidebar, history, streaming assistant text; tool steps show **inline in chat** by default (toggle under **Settings → Advanced**).
 - **Approvals** — **Allow once**, **Allow for session**, or **Don’t allow** for gated tools.
-- **Workspace** — Header chip + status line for **cwd**; **Settings** (path, **Browse…** folder picker on desktop, `maxTurns`, stored browser hints); **Copy diagnostics**.
-- **Context panel** — Files, MCP servers, **Plan** (latest `TodoWrite`), policy hints.
-- **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or the **Send** button submits. **Templates** (saved prompts), slash commands (`/help`, `/compact`, …), session mode **Build** / **Plan** / **Explore** (Explore = `read_file` / `glob_search` / `grep_search` only in the Copilot tool list).
+- **Workspace** — Header chip (basename / “not set”); **Settings** primary = folder + **Save**; **Advanced** = `maxTurns`, browser CDP hints, clear saved workspace tool permissions, diagnostics export. **Browse…** folder picker on desktop.
+- **Context panel** — Files, MCP, **Plan** (`TodoWrite` timeline), policy hints (short copy).
+- **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or **Send** submits. **Mode** dropdown (**Build** / **Plan** / **Explore**). **Templates** in a disclosure; slash commands (`/help`, `/compact`, …). Explore = `read_file` / `glob_search` / `grep_search` only in the Copilot tool list.
 - **Undo / Redo** — Header actions reverse the last successful workspace writes from the active session (`write_file`, `edit_file`, `NotebookEdit`, PDF tools), when the agent is idle.
 - **Extras** — PDF via LiteParse + bundled Node; Windows Office hybrid read (COM + PDF); MCP over stdio.
 
@@ -87,7 +87,7 @@ Relay_Agent/
 
 **Claw-style paths** (instructions + settings): `.claw`, `CLAW.md`, optional `~/.relay-agent/SYSTEM_PROMPT.md` — see [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) and runtime crate docs. When `.claw` sets permission mode to **read-only**, the **bash** tool rejects commands that look mutating (e.g. `rm`, `git commit`, shell redirects); use file tools where applicable.
 
-**Diagnostics:** Settings → Copy diagnostics includes `get_relay_diagnostics` (ports, `processCwd`, Claw config home hint, `maxTextFileReadBytes`, `doctorHints`).
+**Diagnostics:** **Settings → Advanced** → Copy / save diagnostics (`get_relay_diagnostics` plus local settings snapshot: ports, `processCwd`, Claw config home hint, `maxTextFileReadBytes`, `doctorHints`).
 
 **Environment (Copilot):** Default CDP base **9360**; overrides `CDP_ENDPOINT`, `RELAY_EDGE_CDP_PORT`. Linux: Edge + `DISPLAY`; profile `~/RelayAgentEdgeProfile`. Optional: `RELAY_CDP_PROBE_TIMEOUT_MS` (slow Windows CDP), `RELAY_COPILOT_NO_WINDOW_FOCUS=1` (do not raise Edge via CDP), `RELAY_COPILOT_NUDGE_EDGE=1` (Win32 nudge, off by default). **Startup tuning:** Windows skips **`--remote-debugging-port=0`** unless **`RELAY_COPILOT_TRY_PORT_ZERO=1`**; **`RELAY_EXISTING_CDP_WAIT_MS`** (default 10s Win / 30s else) waits for CDP after a probe miss; **`RELAY_EDGE_PORT0_CDP_WAIT_MS`** (2–120s, default 12s) limits CDP wait when port=0 is used; **`RELAY_COPILOT_RECLAIM_NETSTAT=1`** enables slow Windows `netstat` fallback during HTTP port reclaim (default off). Stale **`copilot_server`** on **18080+** is reclaimed via `/health` + `bootToken`; **`RELAY_COPILOT_RECLAIM_STALE_HTTP=0`** disables. **CDP prompts** tell Copilot that Relay **parses and executes** `relay_tool` / accepted fenced JSON from each reply (mitigates false “tools unavailable here” refusals). Details: [docs/COPILOT_E2E_CDP_PITFALLS.md](docs/COPILOT_E2E_CDP_PITFALLS.md).
 
@@ -100,7 +100,7 @@ pnpm --filter @relay-agent/desktop build
 cd apps/desktop/src-tauri && cargo check && cargo test -p relay-agent-desktop --lib
 ```
 
-**E2E (mock Tauri, browser only):** from `apps/desktop`, `E2E_SKIP_AUTH_SETUP=1 pnpm exec playwright test app.e2e.spec.ts`.
+**E2E (mock Tauri, browser only):** from `apps/desktop`, `E2E_SKIP_AUTH_SETUP=1 pnpm exec playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts`. Use `CI=1` if `vite preview` might reuse a stale build after changing `tests/tauri-mock-core.ts`.
 
 **Inspect Copilot DOM (real CDP):** `pnpm --filter @relay-agent/desktop inspect:copilot-dom` (signed-in Edge on 9360).
 

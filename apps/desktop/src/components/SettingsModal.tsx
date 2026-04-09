@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createSignal, type JSX } from "solid-js";
+import { Show, createEffect, createSignal, type JSX } from "solid-js";
 import { isTauri } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Button, Input } from "./ui";
@@ -7,19 +7,18 @@ import {
   formatSessionAuditSummary,
   getRelayDiagnostics,
   getSessionHistory,
-  getWorkspaceAllowlist,
-  removeWorkspaceAllowlistTool,
   writeTextExport,
   type BrowserAutomationSettings,
-  type WorkspaceAllowlistSnapshot,
 } from "../lib/ipc";
 import {
   DEFAULT_MAX_TURNS,
   loadBrowserSettings,
   loadMaxTurns,
+  loadShowToolActivityInChat,
   loadWorkspacePath,
   saveBrowserSettings,
   saveMaxTurns,
+  saveShowToolActivityInChat,
   saveWorkspacePath,
 } from "../lib/settings-storage";
 
@@ -30,40 +29,24 @@ export function SettingsModal(props: {
   onSaved?: () => void;
   /** When set, Settings can copy an audit summary for this session. */
   activeSessionId?: string | null;
+  /** Keep message feed in sync when user toggles tool visibility in Advanced. */
+  onShowToolActivityInChatChange?: (showInline: boolean) => void;
 }): JSX.Element {
   const [workspace, setWorkspace] = createSignal("");
   const [maxTurns, setMaxTurns] = createSignal(DEFAULT_MAX_TURNS);
   const [browser, setBrowser] = createSignal<BrowserAutomationSettings>(loadBrowserSettings());
   const [copyHint, setCopyHint] = createSignal<string | null>(null);
   const [saveHint, setSaveHint] = createSignal<string | null>(null);
-  const [allowlist, setAllowlist] = createSignal<WorkspaceAllowlistSnapshot | null>(null);
-  const [allowlistBusy, setAllowlistBusy] = createSignal(false);
-  const [predNotes, setPredNotes] = createSignal<string[]>([]);
-
-  const refreshAllowlist = async () => {
-    if (!isTauri()) return;
-    setAllowlistBusy(true);
-    try {
-      const s = await getWorkspaceAllowlist();
-      setAllowlist(s);
-    } catch {
-      setAllowlist(null);
-    } finally {
-      setAllowlistBusy(false);
-    }
-  };
+  const [toolActivityInChat, setToolActivityInChat] = createSignal(true);
 
   createEffect(() => {
     if (!props.open) return;
     setWorkspace(loadWorkspacePath());
     setMaxTurns(loadMaxTurns());
     setBrowser(loadBrowserSettings());
+    setToolActivityInChat(loadShowToolActivityInChat());
     setCopyHint(null);
     setSaveHint(null);
-    void getRelayDiagnostics()
-      .then((d) => setPredNotes(d.predictabilityNotes ?? []))
-      .catch(() => setPredNotes([]));
-    void refreshAllowlist();
   });
 
   const saveSettings = () => {
@@ -194,6 +177,21 @@ export function SettingsModal(props: {
     }
   };
 
+  const clearAllowlistForWorkspace = async () => {
+    if (!isTauri()) return;
+    const cwd = workspace().trim();
+    if (!cwd) return;
+    try {
+      await clearWorkspaceAllowlist(cwd);
+      setCopyHint("Cleared saved tool permissions for this workspace path.");
+      setTimeout(() => setCopyHint(null), 2500);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setCopyHint(`Clear failed: ${msg}`);
+      setTimeout(() => setCopyHint(null), 4000);
+    }
+  };
+
   const b = () => browser();
 
   return (
@@ -218,14 +216,13 @@ export function SettingsModal(props: {
               </button>
             </div>
             <p class="text-sm text-[var(--ra-text-secondary)] mt-1">
-              Workspace and limits apply to the next agent run. Browser automation fields are stored
-              for diagnostics and future CDP wiring.
+              Choose the project folder the agent uses as its working directory.
             </p>
 
             <div class="mt-4 space-y-3">
               <div class="block">
                 <span class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
-                  Workspace path (cwd)
+                  Workspace
                 </span>
                 <div class="flex gap-2 mt-1 items-stretch">
                   <Input
@@ -247,217 +244,6 @@ export function SettingsModal(props: {
                   </Show>
                 </div>
               </div>
-
-              <label class="block">
-                <span class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
-                  Max turns per goal
-                </span>
-                <Input
-                  type="number"
-                  min={1}
-                  max={256}
-                  class="mt-1 w-full text-sm"
-                  value={maxTurns()}
-                  onInput={(e) => {
-                    const n = parseInt(e.currentTarget.value, 10);
-                    if (Number.isFinite(n)) setMaxTurns(n);
-                  }}
-                />
-              </label>
-
-              <fieldset class="border border-[var(--ra-border)] rounded-lg p-3 space-y-2">
-                <legend class="text-xs font-medium text-[var(--ra-text-muted)] px-1">
-                  Browser automation (stored)
-                </legend>
-                <label class="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={b().autoLaunchEdge}
-                    onChange={(e) =>
-                      setBrowser({ ...b(), autoLaunchEdge: e.currentTarget.checked })
-                    }
-                  />
-                  Auto-launch Edge when connecting
-                </label>
-                <label class="block">
-                  <span class="text-[var(--ra-text-muted)]">CDP port hint</span>
-                  <Input
-                    type="number"
-                    class="mt-1 w-full text-sm"
-                    value={b().cdpPort}
-                    onInput={(e) => {
-                      const n = parseInt(e.currentTarget.value, 10);
-                      if (Number.isFinite(n) && n > 0) setBrowser({ ...b(), cdpPort: n });
-                    }}
-                  />
-                </label>
-                <label class="block">
-                  <span class="text-[var(--ra-text-muted)]">Timeout (ms)</span>
-                  <Input
-                    type="number"
-                    class="mt-1 w-full text-sm"
-                    value={b().timeoutMs}
-                    onInput={(e) => {
-                      const n = parseInt(e.currentTarget.value, 10);
-                      if (Number.isFinite(n) && n > 0) setBrowser({ ...b(), timeoutMs: n });
-                    }}
-                  />
-                </label>
-              </fieldset>
-
-              <div class="rounded-lg border border-[var(--ra-border)] p-3 space-y-2">
-                <p class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
-                  How connections use your settings
-                </p>
-                <p class="text-sm text-[var(--ra-text-secondary)]">
-                  Relay prefers explicit values over hidden guesses. The workspace path below is sent as{" "}
-                  <span class="font-mono">cwd</span> on each agent run (may differ from the app process directory in
-                  diagnostics). Copilot talks to Edge over CDP; the port hint defaults to 9360 unless you change it
-                  above.
-                </p>
-                <Show when={predNotes().length > 0}>
-                  <ul class="text-sm text-[var(--ra-text-secondary)] list-disc pl-4 space-y-1">
-                    <For each={predNotes()}>{(line) => <li>{line}</li>}</For>
-                  </ul>
-                </Show>
-              </div>
-
-              <Show when={isTauri()}>
-                <div class="rounded-lg border border-[var(--ra-border)] p-3 space-y-2">
-                  <div class="flex flex-wrap items-center justify-between gap-2">
-                    <p class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
-                      Workspace tool allow list
-                    </p>
-                    <span class="text-[10px] text-[var(--ra-text-muted)] font-mono truncate max-w-[200px]">
-                      {allowlist()?.storePath ?? ""}
-                    </span>
-                  </div>
-                  <p class="text-sm text-[var(--ra-text-secondary)]">
-                    Tools approved with &quot;Allow for this workspace&quot; are stored per normalized folder. Remove
-                    entries here instead of editing JSON by hand.
-                  </p>
-                  <Show when={allowlistBusy()}>
-                    <p class="text-sm text-[var(--ra-text-muted)]">Loading…</p>
-                  </Show>
-                  <Show
-                    when={(allowlist()?.entries.length ?? 0) > 0}
-                    fallback={
-                      <p class="text-sm text-[var(--ra-text-muted)]">No persisted workspace allows yet.</p>
-                    }
-                  >
-                    <div class="max-h-40 overflow-y-auto space-y-2">
-                      <For each={allowlist()?.entries ?? []}>
-                        {(ent) => (
-                          <div class="rounded border border-[var(--ra-border)] p-2 space-y-1">
-                            <p class="text-[10px] font-mono text-[var(--ra-text-secondary)] break-all">
-                              {ent.workspaceKey}
-                            </p>
-                            <ul class="space-y-1">
-                              <For each={ent.tools}>
-                                {(tool) => (
-                                  <li class="flex items-center justify-between gap-2 text-sm">
-                                    <span class="font-mono">{tool}</span>
-                                    <button
-                                      type="button"
-                                      class="text-[10px] text-[var(--ra-accent)] hover:underline shrink-0"
-                                      onClick={async () => {
-                                        try {
-                                          await removeWorkspaceAllowlistTool(ent.workspaceKey, tool);
-                                          await refreshAllowlist();
-                                          setCopyHint(`Removed ${tool} for one workspace.`);
-                                          setTimeout(() => setCopyHint(null), 2200);
-                                        } catch (e) {
-                                          const msg = e instanceof Error ? e.message : String(e);
-                                          setCopyHint(`Remove failed: ${msg}`);
-                                          setTimeout(() => setCopyHint(null), 4000);
-                                        }
-                                      }}
-                                    >
-                                      Remove
-                                    </button>
-                                  </li>
-                                )}
-                              </For>
-                            </ul>
-                          </div>
-                        )}
-                      </For>
-                    </div>
-                  </Show>
-                  <div class="flex flex-wrap gap-2 pt-1">
-                    <Button
-                      variant="secondary"
-                      type="button"
-                      class="!text-sm"
-                      disabled={!workspace().trim()}
-                      onClick={async () => {
-                        const cwd = workspace().trim();
-                        if (!cwd) return;
-                        try {
-                          await clearWorkspaceAllowlist(cwd);
-                          await refreshAllowlist();
-                          setCopyHint("Cleared allows for the workspace path above.");
-                          setTimeout(() => setCopyHint(null), 2500);
-                        } catch (e) {
-                          const msg = e instanceof Error ? e.message : String(e);
-                          setCopyHint(`Clear failed: ${msg}`);
-                          setTimeout(() => setCopyHint(null), 4000);
-                        }
-                      }}
-                    >
-                      Clear all for path above
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      type="button"
-                      class="!text-sm"
-                      disabled={!allowlist()}
-                      onClick={async () => {
-                        const snap = allowlist();
-                        if (!snap) return;
-                        try {
-                          await navigator.clipboard.writeText(JSON.stringify(snap, null, 2));
-                          setCopyHint("Allow list copied.");
-                          setTimeout(() => setCopyHint(null), 2500);
-                        } catch (e) {
-                          const msg = e instanceof Error ? e.message : String(e);
-                          setCopyHint(`Copy failed: ${msg}`);
-                          setTimeout(() => setCopyHint(null), 4000);
-                        }
-                      }}
-                    >
-                      Copy allow list JSON
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      type="button"
-                      class="!text-sm"
-                      disabled={!allowlist()}
-                      onClick={async () => {
-                        const snap = allowlist();
-                        if (!snap) return;
-                        try {
-                          const day = new Date().toISOString().slice(0, 10);
-                          const path = await save({
-                            filters: [{ name: "JSON", extensions: ["json"] }],
-                            defaultPath: `relay-workspace-allowlist-${day}.json`,
-                          });
-                          if (path == null) return;
-                          await writeTextExport(path, JSON.stringify(snap, null, 2));
-                          setCopyHint("Allow list saved to file.");
-                          setTimeout(() => setCopyHint(null), 2500);
-                        } catch (e) {
-                          const msg = e instanceof Error ? e.message : String(e);
-                          setCopyHint(`Save failed: ${msg}`);
-                          setTimeout(() => setCopyHint(null), 4000);
-                        }
-                      }}
-                    >
-                      Save allow list…
-                    </Button>
-                  </div>
-                </div>
-              </Show>
             </div>
 
             <Show when={saveHint()}>
@@ -467,50 +253,158 @@ export function SettingsModal(props: {
               <p class="mt-2 text-sm text-[var(--ra-text-secondary)]">{copyHint()}</p>
             </Show>
 
-            <div class="flex flex-col gap-2 mt-5">
-              <span class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
-                Debug
-              </span>
-              <div class="flex flex-wrap gap-2 justify-end">
-                <Button variant="secondary" type="button" class="!text-sm" onClick={() => void copyDiagnostics()}>
-                  Copy diagnostics
-                </Button>
-                <Show when={isTauri()}>
-                  <Button
-                    variant="secondary"
-                    type="button"
-                    class="!text-sm"
-                    data-ra-export-diagnostics
-                    onClick={() => void exportDiagnosticsFile()}
-                  >
-                    Save diagnostics…
-                  </Button>
-                </Show>
-                <Button
-                  variant="secondary"
-                  type="button"
-                  class="!text-sm"
-                  data-ra-copy-session-audit
-                  onClick={() => void copySessionAuditSummary()}
-                >
-                  Copy session audit
-                </Button>
-                <Show when={isTauri()}>
-                  <Button
-                    variant="secondary"
-                    type="button"
-                    class="!text-sm"
-                    data-ra-export-session-json
-                    onClick={() => void exportSessionHistoryJson()}
-                  >
-                    Save session JSON…
-                  </Button>
-                </Show>
-                <Button variant="primary" type="button" class="!text-sm" onClick={() => saveSettings()}>
-                  Save
-                </Button>
-              </div>
+            <div class="flex flex-wrap gap-2 justify-end mt-5">
+              <Button variant="primary" type="button" class="!text-sm" onClick={() => saveSettings()}>
+                Save
+              </Button>
             </div>
+
+            <details class="mt-5 rounded-lg border border-[var(--ra-border)] p-3" data-ra-settings-advanced>
+              <summary class="cursor-pointer text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide list-none flex items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
+                <span>Advanced</span>
+                <span class="text-[10px] font-normal normal-case text-[var(--ra-text-muted)]">
+                  Limits, browser, permissions, diagnostics
+                </span>
+              </summary>
+              <div class="mt-3 space-y-3 pt-1 border-t border-[var(--ra-border)]">
+                <label class="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={toolActivityInChat()}
+                    onChange={(e) => {
+                      const on = e.currentTarget.checked;
+                      setToolActivityInChat(on);
+                      saveShowToolActivityInChat(on);
+                      props.onShowToolActivityInChatChange?.(on);
+                    }}
+                  />
+                  <span>Show tool steps inline in chat</span>
+                </label>
+
+                <label class="block">
+                  <span class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
+                    Max turns per goal
+                  </span>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={256}
+                    class="mt-1 w-full text-sm"
+                    value={maxTurns()}
+                    onInput={(e) => {
+                      const n = parseInt(e.currentTarget.value, 10);
+                      if (Number.isFinite(n)) setMaxTurns(n);
+                    }}
+                  />
+                </label>
+
+                <fieldset class="border border-[var(--ra-border)] rounded-lg p-3 space-y-2">
+                  <legend class="text-xs font-medium text-[var(--ra-text-muted)] px-1">
+                    Browser (CDP)
+                  </legend>
+                  <label class="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={b().autoLaunchEdge}
+                      onChange={(e) =>
+                        setBrowser({ ...b(), autoLaunchEdge: e.currentTarget.checked })
+                      }
+                    />
+                    Auto-launch Edge when connecting
+                  </label>
+                  <label class="block">
+                    <span class="text-[var(--ra-text-muted)] text-sm">CDP port</span>
+                    <Input
+                      type="number"
+                      class="mt-1 w-full text-sm"
+                      value={b().cdpPort}
+                      onInput={(e) => {
+                        const n = parseInt(e.currentTarget.value, 10);
+                        if (Number.isFinite(n) && n > 0) setBrowser({ ...b(), cdpPort: n });
+                      }}
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="text-[var(--ra-text-muted)] text-sm">Timeout (ms)</span>
+                    <Input
+                      type="number"
+                      class="mt-1 w-full text-sm"
+                      value={b().timeoutMs}
+                      onInput={(e) => {
+                        const n = parseInt(e.currentTarget.value, 10);
+                        if (Number.isFinite(n) && n > 0) setBrowser({ ...b(), timeoutMs: n });
+                      }}
+                    />
+                  </label>
+                </fieldset>
+
+                <Show when={isTauri()}>
+                  <div class="rounded-lg border border-[var(--ra-border)] p-3 space-y-2">
+                    <p class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
+                      Tool permissions
+                    </p>
+                    <p class="text-sm text-[var(--ra-text-secondary)]">
+                      Remove every &quot;allow for this workspace&quot; entry for the path above.
+                    </p>
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      class="!text-sm"
+                      disabled={!workspace().trim()}
+                      onClick={() => void clearAllowlistForWorkspace()}
+                    >
+                      Clear saved permissions for this workspace
+                    </Button>
+                  </div>
+                </Show>
+
+                <div class="space-y-2">
+                  <p class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
+                    Diagnostics
+                  </p>
+                  <div class="flex flex-wrap gap-2">
+                    <Button variant="secondary" type="button" class="!text-sm" onClick={() => void copyDiagnostics()}>
+                      Copy diagnostics
+                    </Button>
+                    <Show when={isTauri()}>
+                      <Button
+                        variant="secondary"
+                        type="button"
+                        class="!text-sm"
+                        data-ra-export-diagnostics
+                        onClick={() => void exportDiagnosticsFile()}
+                      >
+                        Save diagnostics…
+                      </Button>
+                    </Show>
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      class="!text-sm"
+                      data-ra-copy-session-audit
+                      onClick={() => void copySessionAuditSummary()}
+                    >
+                      Copy session audit
+                    </Button>
+                    <Show when={isTauri()}>
+                      <Button
+                        variant="secondary"
+                        type="button"
+                        class="!text-sm"
+                        data-ra-export-session-json
+                        onClick={() => void exportSessionHistoryJson()}
+                      >
+                        Save session JSON…
+                      </Button>
+                    </Show>
+                  </div>
+                </div>
+
+                <p class="text-xs text-[var(--ra-text-muted)]">
+                  Apply limits and browser values with <span class="font-medium">Save</span> above.
+                </p>
+              </div>
+            </details>
           </div>
         </div>
       </div>

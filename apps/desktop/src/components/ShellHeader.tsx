@@ -5,8 +5,6 @@ import { workspaceBasename } from "../lib/workspace-display";
 
 export function ShellHeader(props: {
   sessionRunning: boolean;
-  showToolActivityInline: boolean;
-  onToolActivityChange: (value: boolean) => void;
   onOpenSettings: () => void;
   /** Configured workspace root (trimmed empty = unset). */
   workspacePath: () => string;
@@ -25,7 +23,7 @@ export function ShellHeader(props: {
   const chipTitle = createMemo(() =>
     hasWorkspace()
       ? pathTrimmed()
-      : "No workspace folder set. Click to open the settings panel and choose a folder or enter a path.",
+      : "No workspace folder set. Click to choose a folder.",
   );
 
   const chipAriaLabel = createMemo(() =>
@@ -33,16 +31,6 @@ export function ShellHeader(props: {
       ? `Workspace folder: ${pathTrimmed()}. Click to change.`
       : "Workspace folder not set. Click to configure.",
   );
-
-  const onToolKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-      e.preventDefault();
-      props.onToolActivityChange(false);
-    } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-      e.preventDefault();
-      props.onToolActivityChange(true);
-    }
-  };
 
   return (
     <header class="ra-shell-header">
@@ -95,43 +83,11 @@ export function ShellHeader(props: {
           Redo
         </Button>
       </div>
-      <div
-        role="radiogroup"
-        aria-label="Tool activity in chat"
-        class="ra-tab-track ra-tab-track--header"
-        data-ra-toggle-tool-activity
-        onKeyDown={onToolKeyDown}
-      >
-        <button
-          type="button"
-          role="radio"
-          aria-checked={!props.showToolActivityInline}
-          classList={{
-            "ra-tab-track__btn": true,
-            "ra-tab-track__btn--active": !props.showToolActivityInline,
-          }}
-          onClick={() => props.onToolActivityChange(false)}
-        >
-          Chat only
-        </button>
-        <button
-          type="button"
-          role="radio"
-          aria-checked={props.showToolActivityInline}
-          classList={{
-            "ra-tab-track__btn": true,
-            "ra-tab-track__btn--active": props.showToolActivityInline,
-          }}
-          onClick={() => props.onToolActivityChange(true)}
-        >
-          With tools
-        </button>
-      </div>
       <Button
         variant="ghost"
         type="button"
         class="!px-3 !py-1 !text-sm"
-        title="Workspace, limits, diagnostics"
+        title="Workspace and advanced options"
         onClick={() => props.onOpenSettings()}
       >
         Settings

@@ -3,6 +3,8 @@ import type { BrowserAutomationSettings } from "./ipc";
 const LS_WORKSPACE = "relay.settings.workspacePath";
 const LS_BROWSER = "relay.settings.browser";
 const LS_MAX_TURNS = "relay.settings.maxTurns";
+/** When unset, tool steps show inline in the chat stream (OpenWork-style default). */
+const LS_SHOW_TOOL_ACTIVITY = "relay.showToolActivity";
 
 const DEFAULT_BROWSER: BrowserAutomationSettings = {
   cdpPort: 9360,
@@ -73,6 +75,28 @@ export function saveMaxTurns(n: number): void {
   try {
     if (typeof localStorage !== "undefined") {
       localStorage.setItem(LS_MAX_TURNS, String(n));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadShowToolActivityInChat(): boolean {
+  try {
+    if (typeof localStorage === "undefined") return true;
+    const v = localStorage.getItem(LS_SHOW_TOOL_ACTIVITY);
+    if (v === "0") return false;
+    if (v === "1") return true;
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+export function saveShowToolActivityInChat(on: boolean): void {
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(LS_SHOW_TOOL_ACTIVITY, on ? "1" : "0");
     }
   } catch {
     /* ignore */

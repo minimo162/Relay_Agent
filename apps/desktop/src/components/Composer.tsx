@@ -90,7 +90,6 @@ export function Composer(props: {
   onAppendAssistant?: (text: string) => void;
 }): JSX.Element {
   const [text, setText] = createSignal("");
-  const [templatesOpen, setTemplatesOpen] = createSignal(false);
   const [templateRev, setTemplateRev] = createSignal(0);
   const savedTemplates = createMemo(() => {
     void templateRev();
@@ -221,7 +220,7 @@ export function Composer(props: {
             <Textarea
               ref={textareaRef}
               rows={1}
-              placeholder="What would you like to do? (type / for commands)"
+              placeholder="Describe what you want done — type / for commands"
               value={text()}
               onInput={onInput}
               onKeyDown={onKey}
@@ -242,131 +241,103 @@ export function Composer(props: {
           <div class="ra-composer-toolbar">
             <div class="flex items-center gap-2 min-w-0 flex-wrap">
               <p class="ra-composer-hint shrink-0">⌘/Ctrl+Enter to send · Enter for new line</p>
-              <div
-                class="flex shrink-0 rounded-md border border-[var(--ra-border)] overflow-hidden text-xs"
-                role="group"
-                aria-label="Session mode"
-              >
-                <button
-                  type="button"
-                  class={`px-2 py-0.5 transition-colors ${
-                    props.sessionPreset === "build"
-                      ? "ra-surface-highlight"
-                      : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
-                  }`}
-                  aria-pressed={props.sessionPreset === "build"}
-                  title="Full tool access; writes and shell may ask for approval"
-                  onClick={() => props.onSessionPresetChange("build")}
+              <label class="flex items-center gap-1.5 shrink-0 text-xs text-[var(--ra-text-secondary)]">
+                <span class="sr-only">Session mode</span>
+                <span class="text-[var(--ra-text-muted)] whitespace-nowrap" aria-hidden>
+                  Mode
+                </span>
+                <select
+                  class="rounded-md border border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] text-[var(--ra-text-primary)] py-0.5 pl-1.5 pr-6 text-xs max-w-[11rem] sm:max-w-[14rem]"
+                  aria-label="Session mode"
+                  value={props.sessionPreset}
+                  onChange={(e) =>
+                    props.onSessionPresetChange(e.currentTarget.value as SessionPreset)
+                  }
                 >
-                  Build
-                </button>
-                <button
-                  type="button"
-                  class={`px-2 py-0.5 border-l border-[var(--ra-border)] transition-colors ${
-                    props.sessionPreset === "plan"
-                      ? "ra-surface-highlight"
-                      : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
-                  }`}
-                  aria-pressed={props.sessionPreset === "plan"}
-                  title="Read-only host: no file/shell writes—use Build to apply changes"
-                  onClick={() => props.onSessionPresetChange("plan")}
-                >
-                  Plan
-                </button>
-                <button
-                  type="button"
-                  class={`px-2 py-0.5 border-l border-[var(--ra-border)] transition-colors ${
-                    props.sessionPreset === "explore"
-                      ? "ra-surface-highlight"
-                      : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
-                  }`}
-                  aria-pressed={props.sessionPreset === "explore"}
-                  title="Only read_file, glob_search, grep_search—fast codebase scan; use Plan or Build for more"
-                  onClick={() => props.onSessionPresetChange("explore")}
-                >
-                  Explore
-                </button>
-              </div>
-              <div class="relative shrink-0">
-                <button
-                  type="button"
-                  class="text-xs px-2 py-0.5 rounded-md border border-[var(--ra-border)] text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
-                  aria-expanded={templatesOpen()}
-                  aria-haspopup="listbox"
+                  <option value="build" title="Full tools; writes may need approval">
+                    Build
+                  </option>
+                  <option value="plan" title="Read-only on disk">
+                    Plan
+                  </option>
+                  <option value="explore" title="Read/search only">
+                    Explore
+                  </option>
+                </select>
+              </label>
+              <details class="relative shrink-0">
+                <summary
+                  class="cursor-pointer text-xs px-2 py-0.5 rounded-md border border-[var(--ra-border)] text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)] list-none [&::-webkit-details-marker]:hidden"
                   data-ra-templates-trigger
-                  onClick={() => setTemplatesOpen((o) => !o)}
                 >
                   Templates
-                </button>
-                <Show when={templatesOpen()}>
-                  <div
-                    class="absolute left-0 bottom-full mb-1 z-50 min-w-[220px] max-w-[min(100vw-2rem,320px)] rounded-xl border border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] shadow-[var(--ra-shadow-sm)] py-1 max-h-56 overflow-y-auto"
-                    role="listbox"
-                    aria-label="Prompt templates"
+                </summary>
+                <div
+                  class="absolute left-0 bottom-full mb-1 z-50 min-w-[220px] max-w-[min(100vw-2rem,320px)] rounded-xl border border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] shadow-[var(--ra-shadow-sm)] py-1 max-h-56 overflow-y-auto"
+                  role="listbox"
+                  aria-label="Prompt templates"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <Show
+                    when={savedTemplates().length > 0}
+                    fallback={
+                      <div class="px-3 py-2 text-xs text-[var(--ra-text-muted)]">
+                        No saved templates yet.
+                      </div>
+                    }
                   >
-                    <Show
-                      when={savedTemplates().length > 0}
-                      fallback={
-                        <div class="px-3 py-2 text-xs text-[var(--ra-text-muted)]">
-                          No saved templates yet.
+                    <For each={savedTemplates()}>
+                      {(t) => (
+                        <div class="flex items-start gap-1 px-2 py-1 hover:bg-[var(--ra-hover)]">
+                          <button
+                            type="button"
+                            role="option"
+                            class="flex-1 text-left text-sm text-[var(--ra-text-primary)] truncate"
+                            onClick={() => {
+                              setText(t.body);
+                              queueMicrotask(() => textareaRef?.focus());
+                            }}
+                          >
+                            {t.title}
+                          </button>
+                          <button
+                            type="button"
+                            class="text-[10px] text-[var(--ra-text-muted)] px-1"
+                            title="Remove template"
+                            onClick={() => {
+                              removePromptTemplate(t.id);
+                              setTemplateRev((n) => n + 1);
+                            }}
+                          >
+                            ×
+                          </button>
                         </div>
-                      }
+                      )}
+                    </For>
+                  </Show>
+                  <div class="border-t border-[var(--ra-border)] mt-1 pt-1 px-2 pb-1">
+                    <button
+                      type="button"
+                      class="text-xs w-full text-left text-[var(--ra-accent)] disabled:opacity-40"
+                      disabled={!text().trim()}
+                      onClick={() => {
+                        const title = window.prompt("Name this template");
+                        if (!title?.trim() || !text().trim()) return;
+                        addPromptTemplate(title.trim(), text());
+                        setTemplateRev((n) => n + 1);
+                      }}
                     >
-                      <For each={savedTemplates()}>
-                        {(t) => (
-                          <div class="flex items-start gap-1 px-2 py-1 hover:bg-[var(--ra-hover)]">
-                            <button
-                              type="button"
-                              role="option"
-                              class="flex-1 text-left text-sm text-[var(--ra-text-primary)] truncate"
-                              onClick={() => {
-                                setText(t.body);
-                                setTemplatesOpen(false);
-                                queueMicrotask(() => textareaRef?.focus());
-                              }}
-                            >
-                              {t.title}
-                            </button>
-                            <button
-                              type="button"
-                              class="text-[10px] text-[var(--ra-text-muted)] px-1"
-                              title="Remove template"
-                              onClick={() => {
-                                removePromptTemplate(t.id);
-                                setTemplateRev((n) => n + 1);
-                              }}
-                            >
-                              ×
-                            </button>
-                          </div>
-                        )}
-                      </For>
-                    </Show>
-                    <div class="border-t border-[var(--ra-border)] mt-1 pt-1 px-2 pb-1">
-                      <button
-                        type="button"
-                        class="text-xs w-full text-left text-[var(--ra-accent)] disabled:opacity-40"
-                        disabled={!text().trim()}
-                        onClick={() => {
-                          const title = window.prompt("Name this template");
-                          if (!title?.trim() || !text().trim()) return;
-                          addPromptTemplate(title.trim(), text());
-                          setTemplateRev((n) => n + 1);
-                          setTemplatesOpen(false);
-                        }}
-                      >
-                        Save current as template…
-                      </button>
-                    </div>
+                      Save current as template…
+                    </button>
                   </div>
-                </Show>
-              </div>
+                </div>
+              </details>
             </div>
             <Show when={props.sessionPreset === "plan" || props.sessionPreset === "explore"}>
               <p class="text-[10px] text-[var(--ra-text-muted)] mt-1.5 max-w-[52rem] leading-snug">
                 {props.sessionPreset === "explore"
-                  ? "Explore uses only workspace read/search tools. Switch to Build to edit files, or Plan for broader read-only analysis (e.g. task list)."
-                  : "Plan is read-only on the host—ideas and diffs stay in chat until you start a new session with Build to apply changes."}
+                  ? "Explore: read/search only. Use Build to edit files."
+                  : "Plan: read-only — use Build to apply changes."}
               </p>
             </Show>
             <div class="ra-composer-toolbar-actions">

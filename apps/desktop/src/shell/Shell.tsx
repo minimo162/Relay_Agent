@@ -52,6 +52,7 @@ import type { Approval, UserQuestion } from "../components/shell-types";
 import {
   loadBrowserSettings,
   loadMaxTurns,
+  loadShowToolActivityInChat,
   loadWorkspacePath,
 } from "../lib/settings-storage";
 import {
@@ -72,26 +73,6 @@ function workspaceSlashRowsToCommands(rows: WorkspaceSlashCommandRow[]): SlashCo
   }));
 }
 
-const LS_SHOW_TOOL_ACTIVITY = "relay.showToolActivity";
-
-function readShowToolActivity(): boolean {
-  try {
-    return typeof localStorage !== "undefined" && localStorage.getItem(LS_SHOW_TOOL_ACTIVITY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function writeShowToolActivity(on: boolean): void {
-  try {
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem(LS_SHOW_TOOL_ACTIVITY, on ? "1" : "0");
-    }
-  } catch {
-    /* ignore */
-  }
-}
-
 export default function Shell(): JSX.Element {
   const [activeSessionId, setActiveSessionId] = createSignal<string | null>(null);
   const [sessionIds, setSessionIds] = createSignal<string[]>([]);
@@ -106,7 +87,7 @@ export default function Shell(): JSX.Element {
 
   const [chunks, setChunks] = createSignal<UiChunk[]>([]);
 
-  const [showToolActivityInline, setShowToolActivityInline] = createSignal(readShowToolActivity());
+  const [showToolActivityInline, setShowToolActivityInline] = createSignal(loadShowToolActivityInChat());
 
   const [approvals, setApprovals] = createSignal<Approval[]>([]);
   const [userQuestions, setUserQuestions] = createSignal<UserQuestion[]>([]);
@@ -505,11 +486,6 @@ export default function Shell(): JSX.Element {
     <div class="ra-shell">
       <ShellHeader
         sessionRunning={sessionRunning()}
-        showToolActivityInline={showToolActivityInline()}
-        onToolActivityChange={(v) => {
-          setShowToolActivityInline(v);
-          writeShowToolActivity(v);
-        }}
         onOpenSettings={() => setSettingsOpen(true)}
         workspacePath={workspaceLabel}
         onWorkspaceChipClick={() => setSettingsOpen(true)}
@@ -603,6 +579,7 @@ export default function Shell(): JSX.Element {
             setWorkspaceLabel(loadWorkspacePath().trim());
           }}
           activeSessionId={activeSessionId()}
+          onShowToolActivityInChatChange={(v) => setShowToolActivityInline(v)}
         />
       </main>
 
