@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,11 +28,37 @@ fn cdp_legacy_composer_full_paste() -> bool {
         .unwrap_or(false)
 }
 
+/// Replace typographic Unicode so M365/Windows is less likely to mojibake the `.txt` bundle if UTF-8 is mis-detected.
+fn normalize_prompt_for_cdp_file_attachment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\u{2014}' | '\u{2013}' => out.push_str(" - "),
+            '\u{2192}' => out.push_str("->"),
+            '\u{2190}' => out.push_str("<-"),
+            '\u{2026}' => out.push_str("..."),
+            '\u{2018}' | '\u{2019}' => out.push('\''),
+            '\u{201C}' | '\u{201D}' => out.push('"'),
+            '\u{00A0}' => out.push(' '),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Write UTF-8 text with a BOM so Japanese Windows / M365 often treat the attachment as UTF-8, not CP932.
+fn write_utf8_file_with_bom(path: &Path, content: &str) -> std::io::Result<()> {
+    let mut bytes = Vec::with_capacity(3 + content.len());
+    bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+    bytes.extend_from_slice(content.as_bytes());
+    std::fs::write(path, bytes)
+}
+
 use runtime::{
     self, assert_path_in_workspace, lexical_normalize, resolve_against_workspace, ApiClient,
     BashConfigCwdGuard,
     ApiRequest, AssistantEvent, ConfigLoader, ContentBlock, ConversationMessage, McpServerManager,
-    PermissionMode, PermissionPolicy, PermissionPromptDecision, PermissionPrompter,
+    MessageRole, PermissionMode, PermissionPolicy, PermissionPromptDecision, PermissionPrompter,
     PermissionRequest, RuntimeError, Session as RuntimeSession, TokenUsage, ToolExecutor,
     pull_rust_diagnostics_blocking,
 };
@@ -267,6 +293,108 @@ pub(crate) const E_TURN_COMPLETE: &str = "agent:turn_complete";
 pub(crate) const E_ERROR: &str = "agent:error";
 pub(crate) const E_TEXT_DELTA: &str = "agent:text_delta";
 
+/// Remove M365 Copilot bracketed markers such as `【richwebanswer-…】` from visible prose.
+fn strip_richwebanswer_spans(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '【' {
+            out.push(c);
+            continue;
+        }
+        let mut inner = String::new();
+        inner.push(c);
+        let mut closed = false;
+        while let Some(c2) = chars.next() {
+            inner.push(c2);
+            if c2 == '】' {
+                closed = true;
+                break;
+            }
+        }
+        if closed && inner.contains("richwebanswer") {
+            continue;
+        }
+        out.push_str(&inner);
+    }
+    out
+}
+
+/// Drop consecutive duplicate paragraphs (Copilot sometimes pastes the same block many times).
+fn dedupe_consecutive_paragraphs(s: &str) -> String {
+    let parts: Vec<&str> = s.split("\n\n").collect();
+    let mut out: Vec<String> = Vec::new();
+    for p in parts {
+        let t = p.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if out.last().is_some_and(|prev| prev.as_str() == t) {
+            continue;
+        }
+        out.push(t.to_string());
+    }
+    out.join("\n\n")
+}
+
+/// Normalize Copilot assistant-visible text before persisting and before UI emission.
+fn sanitize_copilot_visible_text(s: &str) -> String {
+    let s = strip_richwebanswer_spans(s);
+    dedupe_consecutive_paragraphs(&s)
+}
+
+const COPILOT_UI_TEXT_CHUNK: usize = 320;
+
+fn emit_copilot_text_deltas_for_ui(app: &AppHandle, session_id: &str, visible_text: &str) {
+    let v = visible_text.trim();
+    if v.is_empty() {
+        return;
+    }
+    let mut start = 0usize;
+    for (i, _) in v.char_indices() {
+        if i > start && (i - start) >= COPILOT_UI_TEXT_CHUNK {
+            let evt = AgentTextDeltaEvent {
+                session_id: session_id.to_string(),
+                text: v[start..i].to_string(),
+                is_complete: false,
+            };
+            if let Err(e) = app.emit(E_TEXT_DELTA, &evt) {
+                tracing::warn!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
+            }
+            start = i;
+        }
+    }
+    let evt = AgentTextDeltaEvent {
+        session_id: session_id.to_string(),
+        text: v[start..].to_string(),
+        is_complete: true,
+    };
+    if let Err(e) = app.emit(E_TEXT_DELTA, &evt) {
+        tracing::warn!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
+    }
+}
+
+fn collect_all_assistant_text_for_ui(session: &RuntimeSession) -> String {
+    session
+        .messages
+        .iter()
+        .filter(|m| m.role == MessageRole::Assistant)
+        .flat_map(|m| m.blocks.iter())
+        .filter_map(|b| match b {
+            ContentBlock::Text { text } => {
+                let t = text.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(text.clone())
+                }
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 /* ── POSIX shell escaping ─── */
 
 /// POSIX-compliant shell escaping for use in `sh -c` contexts.
@@ -296,7 +424,11 @@ pub fn run_agent_loop_impl(
 ) -> Result<(), AgentLoopError> {
     let server = tauri_bridge::ensure_copilot_server()
         .map_err(AgentLoopError::InitializationError)?;
-    let api_client = CdpApiClient::new(server, session_preset);
+    let api_client = CdpApiClient::new(
+        server,
+        session_preset,
+        Some((app.clone(), session_id.to_string())),
+    );
 
     let tool_executor = build_tool_executor(app, session_id, cwd.clone(), registry.clone());
     let permission_policy = desktop_permission_policy(session_preset);
@@ -396,24 +528,31 @@ pub struct CdpApiClient {
     server: std::sync::Arc<std::sync::Mutex<crate::copilot_server::CopilotServer>>,
     response_timeout_secs: u64,
     session_preset: SessionPreset,
+    /// When set, each Copilot reply emits `agent:text_delta` so the UI updates during tool loops.
+    progress_emit: Option<(AppHandle, String)>,
 }
 
 impl CdpApiClient {
     fn new(
         server: std::sync::Arc<std::sync::Mutex<crate::copilot_server::CopilotServer>>,
         session_preset: SessionPreset,
+        progress_emit: Option<(AppHandle, String)>,
     ) -> Self {
         Self {
             server,
             response_timeout_secs: 120,
             session_preset,
+            progress_emit,
         }
     }
 }
 
 impl ApiClient for CdpApiClient {
     fn stream(&mut self, request: &ApiRequest<'_>) -> Result<Vec<AssistantEvent>, RuntimeError> {
-        let prompt = build_cdp_prompt(request, self.session_preset);
+        let prompt = normalize_prompt_for_cdp_file_attachment(&build_cdp_prompt(
+            request,
+            self.session_preset,
+        ));
 
         let legacy_composer = cdp_legacy_composer_full_paste();
         if legacy_composer {
@@ -436,7 +575,7 @@ impl ApiClient for CdpApiClient {
                 "relay-cdp-prompt-{}.txt",
                 Uuid::new_v4()
             ));
-            std::fs::write(&path, prompt.as_str()).map_err(|e| {
+            write_utf8_file_with_bom(&path, prompt.as_str()).map_err(|e| {
                 RuntimeError::new(format!("failed to write temp Copilot prompt file: {e}"))
             })?;
             let path_for_attach = path
@@ -489,13 +628,19 @@ impl ApiClient for CdpApiClient {
             // Copilot may return prose that ends up empty after relay_tool stripping (or odd fences).
             visible_text = response_text.trim().to_string();
         }
+        let visible_text = sanitize_copilot_visible_text(&visible_text);
+
+        if let Some((app, sid)) = &self.progress_emit {
+            emit_copilot_text_deltas_for_ui(app, sid, &visible_text);
+        }
 
         let mut events = Vec::new();
         if !visible_text.is_empty() {
-            // Chunk the response into TextDelta events for UI progress display
+            // Chunk the response into TextDelta events for the runtime transcript (tests / parity).
+            const RUNTIME_TEXT_CHUNK: usize = 200;
             let mut start = 0;
             for (i, _) in visible_text.char_indices() {
-                if i > start && (i - start) >= 200 {
+                if i > start && (i - start) >= RUNTIME_TEXT_CHUNK {
                     events.push(AssistantEvent::TextDelta(visible_text[start..i].to_string()));
                     start = i;
                 }
@@ -566,6 +711,9 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - **Do** emit fenced tool JSON when needed; **prose-only** refusals block the agent loop.
 - **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read_file` first** before edits. Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
 - **No meta-only stall:** When the work clearly needs tools, do **not** answer with only protocol checklists or promises; the host needs **parsed fences** in this message.
+- **Single copy of prose:** Do **not** repeat the same paragraph, checklist, or “了解しました” block multiple times in one reply. One clear statement is enough.
+- **No Copilot chrome in prose:** Do **not** paste internal UI markers, search preambles, or bracketed IDs (e.g. `【richwebanswer-…】`) into the user-visible answer—omit them entirely.
+- **This turn, not “next message”:** Do **not** defer all tools to a follow-up assistant message when the current turn can already run `read_file` / `write_file` / `edit_file`. If you must wait for tool output, say so **once** briefly—do not duplicate the same “next turn” plan many times.
 
 "#;
 
@@ -1164,27 +1312,11 @@ fn persist_turn(
 fn emit_turn_complete(
     app: &AppHandle,
     session_id: &str,
-    summary: &runtime::TurnSummary,
+    _summary: &runtime::TurnSummary,
     runtime_session: &runtime::ConversationRuntime<CdpApiClient, TauriToolExecutor>,
     cancelled: &AtomicBool,
 ) {
-    let last_text = summary
-        .assistant_messages
-        .iter()
-        .flat_map(|msg| msg.blocks.iter())
-        .filter_map(|b| match b {
-            ContentBlock::Text { text } => {
-                let t = text.trim();
-                if t.is_empty() {
-                    None
-                } else {
-                    Some(text.clone())
-                }
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    let last_text = collect_all_assistant_text_for_ui(runtime_session.session());
 
     if !cancelled.load(Ordering::SeqCst) {
         if let Err(e) = app.emit(
@@ -2252,6 +2384,50 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("No meta-only stall"));
         assert!(s.contains("Do not defer concrete requests"));
         assert!(s.contains("Prefer a clean fence body"));
+        assert!(s.contains("Single copy of prose"));
+        assert!(s.contains("No Copilot chrome in prose"));
+    }
+
+    #[test]
+    fn sanitize_strips_richwebanswer_markers() {
+        let raw = "Hello 【richwebanswer-ac461e】 world";
+        let s = sanitize_copilot_visible_text(raw);
+        assert!(!s.to_lowercase().contains("richwebanswer"));
+        assert!(s.contains("Hello"));
+        assert!(s.contains("world"));
+    }
+
+    #[test]
+    fn sanitize_dedupes_consecutive_paragraphs() {
+        let raw = "A\n\nB\n\nB\n\nB\n\nC";
+        let s = sanitize_copilot_visible_text(raw);
+        assert_eq!(s, "A\n\nB\n\nC");
+    }
+
+    #[test]
+    fn normalize_cdp_prompt_replaces_typographic_punctuation() {
+        let s = normalize_prompt_for_cdp_file_attachment(
+            "a — b – c → d ← e … f ‘g’ “h”\u{00A0}i",
+        );
+        assert!(s.contains(" - "));
+        assert!(!s.contains('—'));
+        assert!(!s.contains('–'));
+        assert!(s.contains("->"));
+        assert!(s.contains("<-"));
+        assert!(s.contains("..."));
+        assert!(s.contains("'g'"));
+        assert!(s.contains("\"h\""));
+        assert!(s.contains(" i"));
+    }
+
+    #[test]
+    fn write_utf8_file_with_bom_starts_with_ef_bb_bf() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("relay-cdp-prompt-test.txt");
+        write_utf8_file_with_bom(&path, "テスト").expect("write");
+        let raw = std::fs::read(&path).expect("read");
+        assert_eq!(&raw[..3], &[0xEF, 0xBB, 0xBF]);
+        assert_eq!(std::str::from_utf8(&raw[3..]).expect("utf8"), "テスト");
     }
 
     #[test]

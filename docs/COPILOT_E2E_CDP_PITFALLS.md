@@ -44,6 +44,10 @@ Microsoft 365 CopilotのE2Eテストを、実際にログインしたMicrosoft E
 
 **メタ応答で停滞（「規約に従う」→ 次の具体的指示を求める）:** ユーザーメッセージに **パスと作業内容が既にある** のに、モデルがチェックリストやコンプライアンス表明だけ返し **`read_file` 等のフェンスを同じターンで出さず**、指示の再入力を求めると **ツールが 0 件でループが止まる**。対策として、同じ [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) の CDP カタログ／添付メッセージ／既定 Constraints に **「具体的要求は同一ターンでツールを出す」「再入力を求めない」** 旨を追記している。
 
+**UI が最後まで空に見える／同文の大量コピペ:** Copilot の 1 応答は Node 経由で **丸ごと**返るため、以前はデスクトップが **`agent:text_delta` を送らず**、ツールループ中のアシスタント本文が **`turn_complete` まで画面上に出ない**ことがあった。また `【richwebanswer-…】` や同一段落の繰り返しが紛れ込むことがある。**対策:** `CdpApiClient::stream` が Copilot 返信を正規化（マーカー除去・連続重複段落の圧縮）したうえで **`agent:text_delta` を逐次 emit** し、ループ中もバブルが更新される。`turn_complete` のフォールバック本文は **セッション内の全アシスタント発話**を結合する。
+
+**添付 `relay-cdp-prompt-*.txt` の文字化け（日本語パス・記号）:** 日本語環境の Windows では `.txt` が **CP932（ANSI）** として解釈され、UTF-8 のまま書いたバンドルが **ユーザ文言や `—` / `→` などでモジバケ**することがある。**対策:** [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) の `CdpApiClient::stream` が、書き込み前に **タイポグラフィ用 Unicode を ASCII 互換に正規化**し、ファイル先頭に **UTF-8 BOM（EF BB BF）** を付けて保存する。
+
 ## 重要ファイル
 
 | ファイル | 役割 |
