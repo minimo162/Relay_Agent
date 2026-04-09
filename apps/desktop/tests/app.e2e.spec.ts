@@ -52,10 +52,10 @@ test("typing in composer shows Send button", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Send" })).toBeVisible({ timeout: 3000 });
 });
 
-test("enter key sends message and adds user bubble", async ({ page }) => {
+test("ctrl+enter sends message and adds user bubble", async ({ page }) => {
   await openApp(page);
   await composerInput(page).fill("analyze this data");
-  await composerInput(page).press("Enter");
+  await composerInput(page).press("Control+Enter");
   await expect(
     page.locator("main").locator('[data-ra-bubble-role="user"]').filter({ hasText: "analyze this data" }),
   ).toBeVisible({ timeout: 5000 });
@@ -73,7 +73,7 @@ test("clicking Send button sends message", async ({ page }) => {
 test("session appears in sidebar after sending prompt", async ({ page }) => {
   await openApp(page);
   await composerInput(page).fill("test session");
-  await composerInput(page).press("Enter");
+  await composerInput(page).press("Control+Enter");
   await expect(page.getByRole("button", { name: /session-/ })).toBeVisible({ timeout: 5000 });
 });
 
@@ -98,7 +98,7 @@ test("settings button is in header", async ({ page }) => {
 test("turn_complete event handled without crash", async ({ page }) => {
   await openApp(page);
   await composerInput(page).fill("process workbook");
-  await composerInput(page).press("Enter");
+  await composerInput(page).press("Control+Enter");
   await emitEvent(page, "agent:turn_complete", {
     sessionId: "session-e2e-1",
     stopReason: "end_turn",

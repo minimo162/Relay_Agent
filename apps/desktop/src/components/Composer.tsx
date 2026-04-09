@@ -205,7 +205,7 @@ export function Composer(props: {
       }
     }
 
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       void send();
     }
@@ -241,7 +241,7 @@ export function Composer(props: {
           </div>
           <div class="ra-composer-toolbar">
             <div class="flex items-center gap-2 min-w-0 flex-wrap">
-              <p class="ra-composer-hint shrink-0">Enter to send · Shift+Enter for new line</p>
+              <p class="ra-composer-hint shrink-0">⌘/Ctrl+Enter to send · Enter for new line</p>
               <div
                 class="flex shrink-0 rounded-md border border-[var(--ra-border)] overflow-hidden text-[11px]"
                 role="group"

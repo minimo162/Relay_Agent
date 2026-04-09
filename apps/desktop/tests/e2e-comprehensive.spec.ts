@@ -123,9 +123,11 @@ async function sendPrompt(page: any, text: string) {
   const textarea = page.locator("textarea");
   await expect(textarea).toBeEditable({ timeout: 5000 });
   await textarea.fill(text);
-  await textarea.press("Enter");
-  // Wait for the user message to appear as a bubble
-  await expect(page.getByText(text, { exact: false })).toBeVisible({ timeout: 5000 });
+  await textarea.press("Control+Enter");
+  // Wait for the user message bubble (scope to main — same text also appears in session list)
+  await expect(page.getByRole("main").getByText(text, { exact: false })).toBeVisible({
+    timeout: 5000,
+  });
 }
 
 /** Wait until auto-complete mock has returned the shell to idle (footer session state). */
@@ -472,7 +474,7 @@ test.describe("Composer Input Behaviors", () => {
     await expect(page.getByRole("button", { name: "Send" })).not.toBeVisible({ timeout: 2000 });
   });
 
-  test("Enter key sends message and clears textarea", async ({ page }) => {
+  test("Ctrl+Enter sends message and clears textarea", async ({ page }) => {
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "test message");
@@ -484,7 +486,7 @@ test.describe("Composer Input Behaviors", () => {
     await openApp(page);
     await page.locator("textarea").fill("click send");
     await page.getByRole("button", { name: "Send" }).click();
-    await expect(page.getByText("click send")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("main").getByText("click send")).toBeVisible({ timeout: 5000 });
   });
 
   test("disabled when agent is running, then recovers after auto-complete", async ({ page }) => {
@@ -567,8 +569,8 @@ test.describe("Edge Cases & Robustness", () => {
     await openApp(page);
     const long = "A".repeat(500);
     await page.locator("textarea").fill(long);
-    await page.locator("textarea").press("Enter");
-    await expect(page.getByText("AAAAA")).toBeVisible({ timeout: 5000 });
+    await page.locator("textarea").press("Control+Enter");
+    await expect(page.getByRole("main").getByText("AAAAA")).toBeVisible({ timeout: 5000 });
   });
 
   test("special characters render correctly", async ({ page }) => {
@@ -576,8 +578,8 @@ test.describe("Edge Cases & Robustness", () => {
     await openApp(page);
     const special = "Hello <>&\"\' \u65e5\u672c\u8a9e \ud83c\udf89";
     await page.locator("textarea").fill(special);
-    await page.locator("textarea").press("Enter");
-    await expect(page.getByText("Hello")).toBeVisible({ timeout: 5000 });
+    await page.locator("textarea").press("Control+Enter");
+    await expect(page.getByRole("main").getByText("Hello")).toBeVisible({ timeout: 5000 });
   });
 
   test("unknown event type does not crash the app", async ({ page }) => {
