@@ -15,7 +15,7 @@
 - `cdp_screenshot` — Take PNG screenshot
 
 ### How to Use
-1. **App path:** Opening the desktop app triggers `warmup_copilot_bridge`, which starts or attaches Edge and opens Copilot when needed (footer may prompt to sign in).
+1. **App path:** Opening the desktop app triggers `warmup_copilot_bridge`, which starts or attaches Edge and reaches Copilot via CDP (**`Page.navigate`**, not a Copilot URL on the Edge command line — avoids duplicate m365 tabs when `Target.getTargets` is briefly empty). Footer may prompt to sign in.
 2. **Manual Edge:** Alternatively launch Edge: `pnpm relay:edge` from repo root, or `microsoft-edge --remote-debugging-port=9360 --remote-allow-origins=* …` with `~/RelayAgentEdgeProfile` (legacy **9333**: set `RELAY_EDGE_CDP_PORT=9333`)
 3. Sign in to M365 Copilot in the browser if prompted
 4. For direct CDP tooling only: frontend can call `connect_cdp()` → then `cdp_send_prompt()`

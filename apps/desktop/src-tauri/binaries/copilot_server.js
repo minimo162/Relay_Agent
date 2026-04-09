@@ -481,7 +481,12 @@ class CopilotSession {
 
     // List existing pages and find the Copilot one. Prefer the *last* match so CDP attaches to the
     // newest chat tab (a duplicate m365 tab from an extra Edge launch would otherwise stay stale).
-    const pages = await session.listPages();
+    let pages = await session.listPages();
+    const emptyPollDeadline = Date.now() + 3e3;
+    while (pages.length === 0 && Date.now() < emptyPollDeadline) {
+      await sleep(200);
+      pages = await session.listPages();
+    }
     const copilots = pages.filter((p) => p.url.includes("m365.cloud.microsoft/chat"));
     let copilotPage = copilots.length ? copilots[copilots.length - 1] : undefined;
     if (copilots.length > 1) {
@@ -3661,6 +3666,7 @@ async function pollForExistingDedicatedCdp(profileDir, preferredPort) {
   return null;
 }
 
+/** No trailing Copilot URL — passing it here plus Target.createTarget produced duplicate m365 tabs on cold CDP. */
 function relayDedicatedEdgeBaseArgv(profileDir) {
   return [
     "--remote-allow-origins=*",
@@ -3671,7 +3677,6 @@ function relayDedicatedEdgeBaseArgv(profileDir) {
     "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
     ...relayEdgeChromiumHardeningArgv(),
     `--user-data-dir=${profileDir}`,
-    COPILOT_URL,
   ];
 }
 
@@ -4090,7 +4095,6 @@ async function ensureEdgeLegacyAttach(edgePath, cdpPort) {
     "--disable-restore-session-state",
     "--disable-features=EdgeEnclave,VbsEnclave,RendererCodeIntegrity",
     ...relayEdgeChromiumHardeningArgv(),
-    COPILOT_URL,
   ];
   await spawnEdgeForDedicated(edgePath, args, "legacy");
 

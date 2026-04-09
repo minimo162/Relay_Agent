@@ -16,6 +16,16 @@
 
 ## Milestone Log
 
+### 2026-04-10 Copilot / Edge: single m365 tab (no Copilot URL on spawn)
+
+**Problem:** On Copilot connect / warmup, **two tabs** both opened `m365.cloud.microsoft/chat` — Edge was started with **Copilot as a trailing URL argument** while cold CDP sometimes saw **zero page targets** (or URLs not yet committed), so `findOrCreatePage` also called **`Target.createTarget({ url: COPILOT_URL })`**. Rust `launch_dedicated_edge` passed the same launch URL, which could contribute to inconsistent behavior when both paths touched the dedicated profile.
+
+**Fix:** [`copilot_server.js`](../apps/desktop/src-tauri/binaries/copilot_server.js) — removed **`COPILOT_URL`** from **`relayDedicatedEdgeBaseArgv`** and from **`ensureEdgeLegacyAttach`** spawn args; Copilot is reached via existing **`Page.navigate`** / disposable-tab reuse. **`findOrCreatePage`** polls **`listPages()`** for up to **~3s** when empty before **`createTarget`**. [`cdp_copilot.rs`](../apps/desktop/src-tauri/src/cdp_copilot.rs) — removed launch URL from **`launch_dedicated_edge`**; **`connect_copilot_page`** already navigates the first tab with **`Page.navigate`**.
+
+**Doc:** [`docs/COPILOT_E2E_CDP_PITFALLS.md`](COPILOT_E2E_CDP_PITFALLS.md) (*Copilot タブが二重*); [`README.md`](../README.md) Environment (Copilot); [`apps/desktop/src-tauri/DEV_NOTES.md`](../apps/desktop/src-tauri/DEV_NOTES.md).
+
+**Verification:** `node --check` on `copilot_server.js`; `cargo check` and `cargo test -p relay-agent-desktop cdp_copilot` from `apps/desktop/src-tauri/` — pass (2026-04-10).
+
 ### 2026-04-09 Desktop UI: OpenWork-style simplification (settings + chrome)
 
 **Change:** [`SettingsModal.tsx`](../apps/desktop/src/components/SettingsModal.tsx) — primary surface is **Workspace** + **Save**; **Advanced** `<details>` holds max turns, browser (CDP), “show tool steps inline in chat”, clear saved workspace permissions, and diagnostics exports. [`ShellHeader.tsx`](../apps/desktop/src/components/ShellHeader.tsx) — removed header **Chat only / With tools** toggle (preference lives in Settings Advanced; default inline tools on). [`settings-storage.ts`](../apps/desktop/src/lib/settings-storage.ts) — `loadShowToolActivityInChat` / `saveShowToolActivityInChat` (default **on** when unset). [`Composer.tsx`](../apps/desktop/src/components/Composer.tsx) — shorter placeholder, **Mode** `<select>`, **Templates** in `<details>`. [`ContextPanel.tsx`](../apps/desktop/src/components/ContextPanel.tsx) — shorter copy. [`StatusBar.tsx`](../apps/desktop/src/components/StatusBar.tsx) — dropped duplicate workspace path row (path on header chip + footer `title`; `data-ra-workspace-label` = `set`/`unset`). E2E: [`app.e2e.spec.ts`](../apps/desktop/tests/app.e2e.spec.ts), [`e2e-comprehensive.spec.ts`](../apps/desktop/tests/e2e-comprehensive.spec.ts) (MCP tab label, empty state title, tool-activity tests set `relay.showToolActivity=0`); [`tauri-mock-core.ts`](../apps/desktop/tests/tauri-mock-core.ts) — `mcp_list_servers`, `get_desktop_permission_summary` fixture rows.

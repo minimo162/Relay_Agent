@@ -14,13 +14,21 @@ Microsoft 365 CopilotのE2Eテストを、実際にログインしたMicrosoft E
 +-------------------+      ws://localhost:9222       +-------------------+
 ```
 
+## Relay デスクトップ: Copilot タブが二重（両方 m365 chat）
+
+**症状:** 接続直後に **`m365.cloud.microsoft/chat` のタブが二つ**、どちらも Copilot に見える。
+
+**原因:** Edge 起動コマンドの末尾に **Copilot URL** を渡すと 1 枚目が開く一方、CDP の **`Target.getTargets`** がごく短い間 **空**（またはタブ URL が未反映）だと、Node の **`findOrCreatePage`** が **ページなし**と判断して **`Target.createTarget({ url: COPILOT_URL })`** で 2 枚目を作っていた。Rust の **`launch_dedicated_edge`** にも同様の起動 URL が付いており、専用プロファイルまわりで挙動のずれの元になった。
+
+**対策（実装）:** **`relayDedicatedEdgeBaseArgv`**／**レガシー Edge 起動**／**`launch_dedicated_edge`** から **Copilot URL を渡さない**。Copilot は **`Page.navigate`** と「使い捨て」開始 URL タブの再利用（既存 `inspectStatus` / `describe` 経路）で開く。Node 側は **`listPages()` が空のとき最大約 3 秒ポーリング**してから **`createTarget`** する。
+
 ## Relay デスクトップ: Edge が二重に開く（Copilot + ブランク）
 
 **症状:** 同じ `RelayAgentEdgeProfile` でウィンドウが2つ、片方は Copilot、もう片方が空白や新規タブに見える。
 
 **原因:** `DevToolsActivePort` は既に存在するが、CDP の `/json/version` がまだ応答しない短いレースの間に、Rust の `connect_copilot_page` や Node の `ensureEdgeDedicated` が **2 台目の `msedge`** を起動していた。Chromium は同一 `--user-data-dir` での再実行で **別ウィンドウ** が付くことが多い。Rust 側の起動 URL が `about:blank` だとブランクに見えやすかった。
 
-**対策（実装）:** Rust は `DevToolsActivePort` があるが一発で CDP に繋がらない場合、新規起動の前に最大約 30 秒 `wait_for_cdp_ready` で待機。どうしても自前起動する場合は Node の `COPILOT_URL` と同じ Copilot URL を開く。Node は固定ポートの即時プローブが失敗したあと、`DevToolsActivePort` と設定ポートを最大約 30 秒ポーリングしてから `tryDedicatedLaunchPortZero` へ進む。Windows の **Win32 nudge**（`cmd /c start`）は **既定オフ** — `RELAY_COPILOT_NUDGE_EDGE=1` のときだけ実行（毎回の前面化・余分なウィンドウを抑える）。nudge が失敗しても `spawnEdgeForDedicated` には **フォールバックしない**。
+**対策（実装）:** Rust は `DevToolsActivePort` があるが一発で CDP に繋がらない場合、新規起動の前に最大約 30 秒 `wait_for_cdp_ready` で待機。どうしても Rust が自前で Edge を起動するときは **コマンドラインに Copilot URL を付けず**、`connect_copilot_page` が **`Page.navigate`** で 1 タブに載せる（上記「Copilot タブが二重」と整合）。Node は固定ポートの即時プローブが失敗したあと、`DevToolsActivePort` と設定ポートを最大約 30 秒ポーリングしてから `tryDedicatedLaunchPortZero` へ進む。Windows の **Win32 nudge**（`cmd /c start`）は **既定オフ** — `RELAY_COPILOT_NUDGE_EDGE=1` のときだけ実行（毎回の前面化・余分なウィンドウを抑える）。nudge が失敗しても `spawnEdgeForDedicated` には **フォールバックしない**。
 
 **port=0 → 固定ポートフォールバック:** `--remote-debugging-port=0` で起動した Edge が `DevToolsActivePort` 上で CDP 応答にならず固定ポート（例: 9360）へ落ちる場合、**最初の Edge プロセスを終了**してから 2 台目を起動する（`terminateEdgeProcessTree` / `taskkill /T` 等）。これで同じプロファイルに Copilot タブが二重に残るのを防ぐ。`RELAY_COPILOT_WIN32_CMD_START=1` かつ port=0 試行では、PID を追跡するため **cmd start をスキップ**して `spawn` する。
 
