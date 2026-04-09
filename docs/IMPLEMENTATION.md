@@ -16,6 +16,16 @@
 
 ## Milestone Log
 
+### 2026-04-09 CDP prompt: same-turn tools (stop “restate task” meta stall)
+
+**Problem:** For concrete user turns (paths plus verbs like improve/edit/fix), M365 Copilot sometimes answered with protocol checklists or “I will follow the rules” prose and asked for a “next concrete step” **without** emitting `relay_tool` / `read_file` in **that** reply. The host parsed **zero** tools and the agent loop stalled despite an already-specific request.
+
+**Fix:** [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) — `CDP_RELAY_RUNTIME_CATALOG_LEAD` adds **Action in the same turn** (paths + action → fences now, usually `read_file` first; do not ask to restate) and **No meta-only stall** (host needs parsed fences, not compliance-only replies). `cdp_tool_catalog_section` adds **Do not defer concrete requests**. `CDP_FILE_DELIVERY_USER_MESSAGE` (English + Japanese) tells the model to run tools in this reply when paths and task are already in the bundle. Default `build_desktop_system_prompt` **Constraints** require tools in the **first** response when the request is concrete. `catalog_lists_builtin_tools_and_protocol` asserts stable substrings for the new guidance.
+
+**Doc:** [`docs/COPILOT_E2E_CDP_PITFALLS.md`](COPILOT_E2E_CDP_PITFALLS.md) (*メタ応答で停滞*).
+
+**Verification:** `cargo test -p relay-agent-desktop cdp_copilot_tool`; `cargo check -p relay-agent-desktop` — pass (2026-04-09).
+
 ### 2026-04-09 CDP prompt: Relay runtime identity (stop false `relay_tool` refusals)
 
 **Problem:** M365 Copilot sometimes replied that it could not act as Relay Agent or that `relay_tool` blocks do not execute “in this Copilot environment,” contradicting the desktop host which parses the model reply and runs tools.

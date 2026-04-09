@@ -14,7 +14,7 @@ const CDP_TOOL_FENCE: &str = "```relay_tool";
 
 /// Composer text when the full turn payload is sent as an attached file (see `CdpApiClient::stream`).
 /// Keep short; the attachment holds system + conversation + tool catalog.
-const CDP_FILE_DELIVERY_USER_MESSAGE: &str = "The attached text file is the full Relay Agent turn bundle (system context, conversation, and tool catalog). Read it and follow it. **Relay** parses your reply for `relay_tool` / `json` tool fences and **executes** those tools on the user's machine (not just display). Output real fenced tool JSON when the task needs files or other tools—do not claim this chat cannot run Relay tools.\n\n（添付は Relay Agent 用の全文バンドルです。返信内の `relay_tool` や許容される `json` フェンスは Relay デスクトップが**解析して実行**します。表示用の説明だけにせず、必要なら規約どおりフェンス付きツール JSON を出してください。「この Copilot ではツール不可」と拒否しないでください。）";
+const CDP_FILE_DELIVERY_USER_MESSAGE: &str = "The attached text file is the full Relay Agent turn bundle (system context, conversation, and tool catalog). Read it and follow it. **Relay** parses your reply for `relay_tool` / `json` tool fences and **executes** those tools on the user's machine (not just display). Output real fenced tool JSON when the task needs files or other tools—do not claim this chat cannot run Relay tools. If the conversation **already** states concrete paths and what to do (e.g. improve/edit a named file), **emit tool calls in this reply**—do **not** ask the user to restate or give a “next step” you already have.\n\n（添付は Relay Agent 用の全文バンドルです。返信内の `relay_tool` や許容される `json` フェンスは Relay デスクトップが**解析して実行**します。表示用の説明だけにせず、必要なら規約どおりフェンス付きツール JSON を出してください。「この Copilot ではツール不可」と拒否しないでください。**パスと作業内容が既にユーザーメッセージにある場合は、この返信でツールを実行**し、同じ指示の再入力を求めないでください。）";
 
 /// Undocumented: set to `1` or `true` to paste the full prompt into the composer instead of file attach (local debugging only).
 fn cdp_legacy_composer_full_paste() -> bool {
@@ -564,6 +564,8 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - **Relay host execution:** Tool calls here are **not** Microsoft first-party Copilot action plugins. The Relay desktop **parses** tool-shaped JSON from your message (` ```relay_tool `, accepted ` ```json ` fences, and bounded inline fallbacks) and runs the real tools (`read_file`, `write_file`, …) under session permissions and user approvals where configured.
 - **Do not** tell the user that `relay_tool` "only works in the desktop" so you cannot use it in this chat, or that you "cannot execute tools in this Copilot environment"—**that is wrong for this session.** When the task needs a tool, output the prescribed fences.
 - **Do** emit fenced tool JSON when needed; **prose-only** refusals block the agent loop.
+- **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read_file` first** before edits. Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
+- **No meta-only stall:** When the work clearly needs tools, do **not** answer with only protocol checklists or promises; the host needs **parsed fences** in this message.
 
 "#;
 
@@ -603,6 +605,7 @@ When you need to call one or more tools, you may write a short user-facing expla
 
 - **Parsed fences run on the user's machine:** The Relay desktop executes tools **only** when it successfully parses the prescribed fences **from this reply**. Explaining JSON in prose without a fence does **not** run tools—emit a real `relay_tool` block or a normal ` ```json ` code block with the tool JSON.
 - **Copilot UI:** The chat UI may label your code block as “Plain Text” or similar; still use **` ```relay_tool `** as the fence opener (or put the same JSON object inside **` ```json `**—the host accepts that too).
+- **Do not defer concrete requests:** If the user already named files and an action, **call tools now** in this turn; asking them to repeat the instruction wastes a turn and blocks the agent.
 
 - **Single tool:** one JSON object: `{{ "name": "<tool_name>", "input": {{ ... }} }}`
 - **Optional:** `"id": "<string>"` — omit if unsure; the host will assign one.
@@ -2062,6 +2065,7 @@ pub fn build_desktop_system_prompt(
             "- When modifying files, prefer saving copies.\n",
             "- Local files: read_file, glob_search, and grep_search accept absolute paths on this machine (e.g. Windows C:\\Users\\...\\file.pdf) wherever the OS user can read them. Do not tell the user the app lacks permission to their user profile; call read_file and surface the tool's error if access fails.\n",
             "- read_file returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted .txt/.md file.\n",
+            "- If the user's request is already concrete (paths, files, stated action), use tools in your **first** response; do not ask them to rephrase unless something essential is missing (no path, no goal, or true ambiguity).\n",
             "- To combine or split PDF files, use pdf_merge / pdf_split (workspace write); do not use bash for that."
         ),
         goal = goal,
@@ -2202,6 +2206,9 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("wrong for this session"));
         assert!(s.contains("Parsed fences run on the user's machine"));
         assert!(s.contains("Copilot UI"));
+        assert!(s.contains("Action in the same turn"));
+        assert!(s.contains("No meta-only stall"));
+        assert!(s.contains("Do not defer concrete requests"));
     }
 
     #[test]

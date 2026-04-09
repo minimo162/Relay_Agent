@@ -40,6 +40,8 @@ Microsoft 365 CopilotのE2Eテストを、実際にログインしたMicrosoft E
 
 **誤拒否（「この Copilot では relay_tool 不可」）:** モデルが一般のブラウザ Copilot向けに「ツールは実行できない」と答えることがある。Relay では **CDP 経由の応答はデスクトップがパースしてツール実行する**ため、プロンプト先頭に **CDP session / Relay host execution** の説明と、添付ファイル用ショートメッセージ（`CDP_FILE_DELIVERY_USER_MESSAGE`）で「フェンスは Relay が実行する」「このチャットでは不可と断らない」旨を明示している（[`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs)）。
 
+**メタ応答で停滞（「規約に従う」→ 次の具体的指示を求める）:** ユーザーメッセージに **パスと作業内容が既にある** のに、モデルがチェックリストやコンプライアンス表明だけ返し **`read_file` 等のフェンスを同じターンで出さず**、指示の再入力を求めると **ツールが 0 件でループが止まる**。対策として、同じ [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) の CDP カタログ／添付メッセージ／既定 Constraints に **「具体的要求は同一ターンでツールを出す」「再入力を求めない」** 旨を追記している。
+
 ## 重要ファイル
 
 | ファイル | 役割 |
