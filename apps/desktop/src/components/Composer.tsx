@@ -61,7 +61,7 @@ function SlashAutocomplete(props: {
             aria-selected={i === props.selectedIndex}
             class={`flex items-center gap-2 px-3 py-1.5 cursor-pointer text-xs transition-colors ${
               i === props.selectedIndex
-                ? "bg-[var(--ra-accent)] text-white"
+                ? "ra-fill-accent"
                 : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
             }`}
             onClick={() => props.onSelect(cmd)}
@@ -251,7 +251,7 @@ export function Composer(props: {
                   type="button"
                   class={`px-2 py-0.5 transition-colors ${
                     props.sessionPreset === "build"
-                      ? "bg-[var(--ra-accent)] text-white"
+                      ? "ra-fill-accent"
                       : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
                   }`}
                   aria-pressed={props.sessionPreset === "build"}
@@ -264,7 +264,7 @@ export function Composer(props: {
                   type="button"
                   class={`px-2 py-0.5 border-l border-[var(--ra-border)] transition-colors ${
                     props.sessionPreset === "plan"
-                      ? "bg-[var(--ra-accent)] text-white"
+                      ? "ra-fill-accent"
                       : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
                   }`}
                   aria-pressed={props.sessionPreset === "plan"}
@@ -277,7 +277,7 @@ export function Composer(props: {
                   type="button"
                   class={`px-2 py-0.5 border-l border-[var(--ra-border)] transition-colors ${
                     props.sessionPreset === "explore"
-                      ? "bg-[var(--ra-accent)] text-white"
+                      ? "ra-fill-accent"
                       : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
                   }`}
                   aria-pressed={props.sessionPreset === "explore"}

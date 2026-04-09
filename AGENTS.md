@@ -3,6 +3,7 @@
 ## Repository State
 
 - This repository contains a working Tauri v2 + SolidJS desktop agent application under `apps/desktop/`.
+- Desktop **visual design** is driven by CSS variables in `apps/desktop/src/index.css` (`--ra-*`), aligned with vendored **`apps/desktop/DESIGN.md`** (getdesign `cursor` pack). Prefer tokens and `.ra-*` utilities over ad hoc colors; see `docs/IMPLEMENTATION.md` (2026-04-09 Desktop UI milestone).
 - Rust backend lives in `apps/desktop/src-tauri/` with internal crates under `crates/{api,runtime,tools,commands,compat-harness}`.
 - Desktop **`read_file`** on `.pdf` uses **LiteParse** (`liteparse-runner/`, OCR off) via **Node**; release bundles include a **Tauri `externalBin`** sidecar (`relay-node`). See `README.md`, `PLANS.md` (PDF reading), and `docs/IMPLEMENTATION.md` (2026-04-08 milestone).
 - The legacy `packages/contracts` directory has been removed; contracts are now defined inline within the Rust crates.

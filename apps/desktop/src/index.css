@@ -1,57 +1,65 @@
 @import "tailwindcss";
 
 /* ============================================================
- * Relay Agent Design System (inspired by OpenWork)
- * Dark-mode first — M365 Copilot companion app
+ * Relay Agent — Cursor-inspired (getdesign "cursor" DESIGN.md)
+ * Dark-first app chrome; light theme uses marketing cream palette.
  * ============================================================ */
 
 :root {
   color-scheme: dark;
 
-  /* Surface */
-  --ra-surface: #121212;
-  --ra-surface-elevated: #1a1a1a;
-  --ra-sidebar: #161616;
-  --ra-border: #262626;
-  --ra-border-focus: #3b82f6;
+  /* Typography (proprietary Cursor fonts omitted — system fallbacks per DESIGN.md) */
+  --ra-font-ui: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Helvetica, Arial, "Noto Sans JP",
+    sans-serif;
+  --ra-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
 
-  /* Accent */
-  --ra-accent: #3b82f6;
-  --ra-accent-hover: #2563eb;
-  --ra-accent-rgb: 59 130 246;
+  /* Surface — warm dark (inverse of Cursor Cream / Cursor Dark) */
+  --ra-surface: #131210;
+  --ra-surface-elevated: #1e1d1a;
+  --ra-sidebar: #171613;
+  --ra-border: rgba(242, 241, 237, 0.1);
+  --ra-border-focus: #f54e00;
 
-  /* Text */
-  --ra-text-primary: #ededed;
-  --ra-text-secondary: #9ca3af;
-  --ra-text-muted: #6b7280;
+  /* Accent — Cursor Orange + optional gradient (filled CTAs) */
+  --ra-accent: #f54e00;
+  --ra-accent-hover: #ff6b2b;
+  --ra-accent-rgb: 245 78 0;
+  --ra-accent-secondary: #c08532;
+  --ra-accent-gradient: linear-gradient(135deg, #f54e00 0%, #ff6b35 52%, #c08532 100%);
+
+  /* Text — Cursor Cream tones on dark */
+  --ra-text-primary: #f2f1ed;
+  --ra-text-secondary: rgba(242, 241, 237, 0.62);
+  --ra-text-muted: rgba(242, 241, 237, 0.42);
 
   /* Interaction */
-  --ra-hover: #1f1f1f;
-  --ra-active: #2d2d2d;
+  --ra-hover: rgba(242, 241, 237, 0.06);
+  --ra-active: rgba(242, 241, 237, 0.11);
 
-  /* Status */
-  --ra-green: #10b981;
-  --ra-green-rgb: 16 185 129;
-  --ra-yellow: #f59e0b;
-  --ra-red: #ef4444;
+  /* Status — Cursor semantic + readable operational hues */
+  --ra-green: #1f8a65;
+  --ra-green-rgb: 31 138 101;
+  --ra-yellow: #dfa88f;
+  --ra-red: #cf2d56;
 
-  /* Shapes */
-  --ra-radius: 0.75rem;
-  --ra-radius-lg: 1rem;
-  --ra-radius-xl: 1.5rem;
+  /* Shapes — Cursor: 8px comfortable, pills for controls */
+  --ra-radius: 0.5rem;
+  --ra-radius-lg: 0.625rem;
+  --ra-radius-xl: 1rem;
 
-  /* Shadows — flat-first; reserve stronger tiers for overlays / popovers */
-  --ra-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.14);
-  --ra-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.22);
-  --ra-shadow-lg: 0 12px 36px rgba(0, 0, 0, 0.35);
+  /* Shadows — diffused lift (adapted for dark UI) */
+  --ra-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --ra-shadow-md: 0 8px 28px rgba(0, 0, 0, 0.42), 0 2px 10px rgba(0, 0, 0, 0.28);
+  --ra-shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.5), 0 10px 24px rgba(0, 0, 0, 0.35);
 
   /* Keyboard focus (distinct from soft selection fills) */
   --ra-focus-ring: 2px solid var(--ra-border-focus);
   --ra-focus-ring-offset: 2px;
 
-  /* Selection / emphasis (OpenWork-style soft row, dark) */
-  --ra-surface-selected: #242424;
-  --ra-border-strong: #383838;
+  /* Selection / emphasis */
+  --ra-surface-selected: rgba(245, 78, 0, 0.12);
+  --ra-border-strong: rgba(242, 241, 237, 0.2);
 
   /* Semantic aliases — prefer in new styles (map to foundation tokens) */
   --ra-color-page: var(--ra-surface);
@@ -75,27 +83,33 @@
 [data-theme="light"] {
   color-scheme: light;
 
-  --ra-surface: #ffffff;
-  --ra-surface-elevated: #f9fafb;
-  --ra-sidebar: #f3f4f6;
-  --ra-border: #e5e7eb;
+  /* Cursor marketing surfaces */
+  --ra-surface: #f2f1ed;
+  --ra-surface-elevated: #e6e5e0;
+  --ra-sidebar: #ebeae5;
+  --ra-border: rgba(38, 37, 30, 0.1);
+  --ra-border-focus: #f54e00;
 
-  --ra-accent: #2563eb;
-  --ra-accent-hover: #1d4ed8;
+  --ra-accent: #f54e00;
+  --ra-accent-hover: #e04600;
+  --ra-accent-rgb: 245 78 0;
+  --ra-accent-gradient: linear-gradient(135deg, #f54e00 0%, #ff6b35 52%, #c08532 100%);
 
-  --ra-text-primary: #111827;
-  --ra-text-secondary: #6b7280;
-  --ra-text-muted: #9ca3af;
+  --ra-text-primary: #26251e;
+  --ra-text-secondary: rgba(38, 37, 30, 0.55);
+  --ra-text-muted: rgba(38, 37, 30, 0.42);
 
-  --ra-hover: #f3f4f6;
-  --ra-active: #e5e7eb;
+  --ra-hover: rgba(38, 37, 30, 0.06);
+  --ra-active: rgba(38, 37, 30, 0.1);
 
-  --ra-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --ra-shadow-md: 0 4px 14px rgba(0, 0, 0, 0.07);
-  --ra-shadow-lg: 0 12px 36px rgba(0, 0, 0, 0.1);
+  --ra-shadow-sm: rgba(0, 0, 0, 0.02) 0px 0px 16px, rgba(0, 0, 0, 0.008) 0px 0px 8px;
+  --ra-shadow-md: rgba(0, 0, 0, 0.14) 0px 28px 70px, rgba(0, 0, 0, 0.1) 0px 14px 32px,
+    oklab(0.263084 -0.00230259 0.0124794 / 0.1) 0px 0px 0px 1px;
+  --ra-shadow-lg: rgba(0, 0, 0, 0.16) 0px 32px 80px, rgba(0, 0, 0, 0.12) 0px 16px 40px,
+    oklab(0.263084 -0.00230259 0.0124794 / 0.12) 0px 0px 0px 1px;
 
-  --ra-surface-selected: #e2e8f0;
-  --ra-border-strong: #d1d5db;
+  --ra-surface-selected: #e1e0db;
+  --ra-border-strong: rgba(38, 37, 30, 0.2);
 }
 
 /* ============================================================
@@ -128,18 +142,7 @@ body {
 }
 
 body {
-  font-family:
-    "Inter",
-    "Noto Sans JP",
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    Roboto,
-    "Helvetica Neue",
-    Arial,
-    sans-serif;
+  font-family: var(--ra-font-ui);
   font-size: 0.875rem;
   line-height: 1.5;
   color: var(--ra-text-primary);
@@ -243,14 +246,20 @@ body {
   transition: background-color 150ms ease, opacity 150ms ease;
 }
 
+/* Filled accent surfaces (also use `.ra-fill-accent` in TSX where Tailwind bg-* is used) */
+.ra-fill-accent {
+  background: var(--ra-accent-gradient);
+  color: #ffffff;
+}
+
 .ra-button-primary {
-  background: var(--ra-accent);
+  background: var(--ra-accent-gradient);
   color: #ffffff;
   box-shadow: none;
 }
 
 .ra-button-primary:hover:not(:disabled) {
-  background: var(--ra-accent-hover);
+  filter: brightness(1.07);
 }
 
 .ra-button-secondary {
@@ -287,6 +296,11 @@ body {
   opacity: 0.92;
 }
 
+.ra-button-primary:active:not(:disabled) {
+  opacity: 1;
+  filter: brightness(0.94);
+}
+
 .ra-input {
   width: 100%;
   border: 1px solid var(--ra-border);
@@ -301,7 +315,7 @@ body {
 .ra-input:focus {
   outline: none;
   border-color: var(--ra-border-focus);
-  box-shadow: 0 0 0 2px rgba(var(--ra-accent-rgb), 0.15);
+  box-shadow: 0 0 0 2px rgba(var(--ra-accent-rgb), 0.22);
 }
 
 .ra-input::placeholder {
@@ -357,8 +371,8 @@ body {
 }
 
 .ra-composer-shell:focus-within {
-  border-color: var(--ra-border-strong);
-  box-shadow: none;
+  border-color: rgba(var(--ra-accent-rgb), 0.35);
+  box-shadow: 0 0 0 1px rgba(var(--ra-accent-rgb), 0.12);
 }
 
 .ra-composer-input-wrap {
@@ -427,18 +441,18 @@ body {
   font-size: 0.8125rem;
   font-weight: 500;
   cursor: pointer;
-  background: var(--ra-accent);
+  background: var(--ra-accent-gradient);
   color: #fff;
   box-shadow: none;
-  transition: background-color 150ms ease, opacity 150ms ease;
+  transition: filter 150ms ease, opacity 150ms ease;
 }
 
 .ra-composer-send:hover:not(:disabled) {
-  background: var(--ra-accent-hover);
+  filter: brightness(1.07);
 }
 
 .ra-composer-send:active:not(:disabled) {
-  opacity: 0.92;
+  filter: brightness(0.96);
 }
 
 .ra-composer-send:disabled {
@@ -490,7 +504,7 @@ body {
 .ra-textarea:focus {
   outline: none;
   border-color: var(--ra-border-focus);
-  box-shadow: 0 0 0 2px rgba(var(--ra-accent-rgb), 0.15);
+  box-shadow: 0 0 0 2px rgba(var(--ra-accent-rgb), 0.22);
 }
 
 .ra-textarea::placeholder {
@@ -638,14 +652,14 @@ body {
   background: var(--ra-surface-elevated);
   color: var(--ra-text-primary);
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.06),
-    0 1px 2px rgba(0, 0, 0, 0.25);
+    0 0 0 1px rgba(var(--ra-accent-rgb), 0.2),
+    0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 [data-theme="light"] .ra-tab-track__btn--active {
   box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.06),
-    0 1px 2px rgba(0, 0, 0, 0.04);
+    0 0 0 1px rgba(38, 37, 30, 0.08),
+    0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
 .ra-tab-track__btn:focus-visible {

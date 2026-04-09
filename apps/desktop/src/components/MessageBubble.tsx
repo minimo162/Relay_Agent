@@ -37,7 +37,7 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
       <div
         class={`group relative max-w-[min(80%,42rem)] rounded-xl text-sm leading-relaxed ${
           isUser
-            ? "bg-[var(--ra-accent)] text-white ring-1 ring-inset ring-white/12"
+            ? "ra-fill-accent ring-1 ring-inset ring-white/12"
             : `${ui.surfaceElevated} ${ui.border} border text-[var(--ra-text-primary)]`
         }`}
         data-ra-bubble-role={props.role}

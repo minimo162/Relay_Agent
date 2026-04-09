@@ -16,6 +16,16 @@
 
 ## Milestone Log
 
+### 2026-04-09 Desktop UI: Cursor-inspired tokens (`DESIGN.md`)
+
+**Source:** `npx getdesign@latest add cursor` → [`apps/desktop/DESIGN.md`](../apps/desktop/DESIGN.md) (see [VoltAgent/awesome-design-md](https://github.com/VoltAgent/awesome-design-md) / [getdesign.md Cursor](https://getdesign.md/cursor/design-md)).
+
+**Implementation:** [`apps/desktop/src/index.css`](../apps/desktop/src/index.css) maps `--ra-*` to the Cursor palette. **Dark (default):** warm dark surfaces (`#131210`, `#1e1d1a`), cream-toned text (`#f2f1ed`), **Cursor Orange** accent `#f54e00`, `--ra-accent-gradient` for filled CTAs, semantic success `#1f8a65` and error `#cf2d56`, warm focus (no blue ring). **Light:** cream page/elevated surfaces (`#f2f1ed`, `#e6e5e0`, `#ebeae5`) and `rgba(38, 37, 30, …)` borders per the marketing-site extraction; modal shadows use the documented `oklab` ring where supported. **Typography:** system-ui / mono stacks per DESIGN.md fallbacks (proprietary display fonts not bundled).
+
+**UI code:** `.ra-fill-accent` for gradient + white text on user bubbles, composer accent rows, and `.ra-button-primary` / `.ra-composer-send`. [`StatusBar.tsx`](../apps/desktop/src/components/StatusBar.tsx) Copilot hint uses `--ra-accent` for readability on light cream.
+
+**Verification:** `npm run typecheck` and `npm run build` in `apps/desktop/` — pass (2026-04-09).
+
 ### 2026-04-09 Claw tool parity (MCP meta, AskUserQuestion, LSP diagnostics, Task*)
 
 **MCP (claw-style names):** `ListMcpResources`, `ReadMcpResource`, `McpAuth`, and unified `MCP` (`action`: `list_resources`, `read_resource`, `list_tools`, `call_tool`) dispatch from `TauriToolExecutor` to the session `McpServerManager` (merged `.claw` stdio servers). `McpAuth` returns a JSON status payload (no in-tool browser OAuth).

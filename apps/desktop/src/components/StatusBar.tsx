@@ -80,7 +80,7 @@ export function StatusBar(props: {
         <div
           role="status"
           data-ra-copilot-warmup-hint
-          class="w-full truncate text-[var(--ra-yellow)] opacity-95"
+          class="w-full truncate text-[var(--ra-accent)] opacity-95"
           title={hint}
         >
           {hint}

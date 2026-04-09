@@ -21,7 +21,7 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 
 | Layer | Technology |
 |-------|------------|
-| UI | SolidJS, Vite, TypeScript, Tailwind |
+| UI | SolidJS, Vite, TypeScript, Tailwind — design tokens follow **Cursor-inspired** palette from vendored [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md) ([getdesign](https://getdesign.md) `cursor` pack; see `docs/IMPLEMENTATION.md` milestone log) |
 | Shell | Tauri v2, `tauri-plugin-shell`, `tauri-plugin-dialog` |
 | Agent / tools | Rust (`apps/desktop/src-tauri/`, internal crates) |
 | AI surface | M365 Copilot in Edge via **Node** `copilot_server.js` + CDP |
@@ -56,6 +56,7 @@ Relay_Agent/
 ├── scripts/                     # Linux Edge / CDP helpers
 ├── apps/desktop/
 │   ├── src/                     # SolidJS app (root.tsx, components/, lib/)
+│   ├── DESIGN.md                # Cursor-inspired design system (getdesign `cursor`) for UI tokens
 │   ├── public/                  # Static assets (e.g. favicon.svg for Vite)
 │   ├── src-tauri/               # Tauri + Rust workspace crates
 │   ├── scripts/                 # fetch-bundled-node, inspect-copilot-dom, …
