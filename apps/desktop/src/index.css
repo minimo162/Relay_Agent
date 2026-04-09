@@ -6,13 +6,16 @@
  * ============================================================ */
 
 :root {
-  /* Font stacks (CursorGothic / jjannon / berkeleyMono → fallbacks per DESIGN.md) */
-  --ra-font-display: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Helvetica, Arial, "Noto Sans JP",
-    sans-serif;
-  --ra-font-editorial: ui-serif, "Iowan Old Style", "Palatino Linotype", "URW Palladio L", P052, Georgia, Cambria,
-    "Times New Roman", Times, serif;
-  --ra-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  --ra-font-ui: var(--ra-font-display);
+  /* Font stacks: brand names first (no files shipped; fallbacks per DESIGN.md §3) */
+  --ra-font-display: "CursorGothic", "CursorGothic Fallback", system-ui, -apple-system, "Segoe UI", "Helvetica Neue",
+    Helvetica, Arial, "Noto Sans JP", sans-serif;
+  --ra-font-editorial: jjannon, ui-serif, "Iowan Old Style", "Palatino Linotype", "URW Palladio L", P052, Georgia,
+    Cambria, "Times New Roman", Times, serif;
+  --ra-font-mono: berkeleyMono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
+  --ra-font-ui: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  /* Optional; Lato not bundled — stack resolves to ui if absent */
+  --ra-font-lato: Lato, var(--ra-font-ui);
 
   /* Type scale (DESIGN.md §3) — Body Sans ~16px; system caption ~13px; mono 11–12px */
   --ra-text-base: 1rem;
@@ -28,11 +31,16 @@
   --ra-text-display-section: 2.25rem;
   --ra-text-display-sub: 1.625rem;
   --ra-text-display-title-sm: 1.375rem;
-
+  /* §5 radius scale (8px base comfortable = standard card/button) */
+  --ra-radius-micro: 1.5px;
+  --ra-radius-2: 2px;
+  --ra-radius-compact: 4px;
   --ra-radius: 0.5rem;
-  --ra-radius-lg: 0.625rem;
-  --ra-radius-xl: 0.625rem;
+  --ra-radius-featured: 0.625rem;
   --ra-radius-pill: 9999px;
+  /* Aliases */
+  --ra-radius-lg: var(--ra-radius-featured);
+  --ra-radius-xl: var(--ra-radius-featured);
 
   --ra-timeline-thinking: #dfa88f;
   --ra-timeline-grep: #9fc9a2;
@@ -111,6 +119,10 @@
 
   --ra-focus-ring: 2px solid var(--ra-border-medium);
   --ra-focus-ring-offset: 2px;
+
+  --ra-link-color: var(--ra-accent);
+  --ra-link-hover: var(--ra-accent-hover);
+  --ra-link-underline: rgba(38, 37, 30, 0.4);
 }
 
 [data-theme="dark"] {
@@ -185,6 +197,10 @@
 
   --ra-focus-ring: 2px solid var(--ra-border-medium);
   --ra-focus-ring-offset: 2px;
+
+  --ra-link-color: var(--ra-accent);
+  --ra-link-hover: var(--ra-accent-hover);
+  --ra-link-underline: color-mix(in oklab, #f2f1ed 40%, transparent);
 }
 
 /* ============================================================
@@ -217,7 +233,7 @@ body {
 }
 
 body {
-  font-family: var(--ra-font-ui);
+  font-family: var(--ra-font-display);
   font-size: var(--ra-text-base);
   line-height: 1.5;
   font-weight: 400;
@@ -225,6 +241,23 @@ body {
   background-color: var(--ra-surface);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+body a {
+  color: var(--ra-link-color);
+  text-underline-offset: 2px;
+  transition: color 150ms ease, text-decoration-color 150ms ease;
+}
+
+body a:hover {
+  color: var(--ra-link-hover);
+  text-decoration: underline;
+  text-decoration-color: var(--ra-link-underline);
+}
+
+body a:focus-visible {
+  outline: var(--ra-focus-ring);
+  outline-offset: var(--ra-focus-ring-offset);
 }
 
 .ra-display-title {
@@ -304,6 +337,106 @@ body {
   letter-spacing: -0.275px;
 }
 
+.ra-type-button-label {
+  font-family: var(--ra-font-display);
+  font-size: var(--ra-text-button);
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: normal;
+}
+
+.ra-type-button-caption {
+  font-family: var(--ra-font-display);
+  font-size: var(--ra-text-button);
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0.14px;
+  font-feature-settings: "ss09" 1;
+}
+
+.ra-type-caption {
+  font-family: var(--ra-font-display);
+  font-size: var(--ra-text-caption-gothic);
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: normal;
+}
+
+.ra-type-system-heading {
+  font-family: var(--ra-font-ui);
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.55;
+  letter-spacing: normal;
+}
+
+.ra-type-system-caption {
+  font-family: var(--ra-font-ui);
+  font-size: var(--ra-text-caption);
+  font-weight: 500;
+  line-height: 1.33;
+  letter-spacing: normal;
+}
+
+.ra-type-system-micro {
+  font-family: var(--ra-font-ui);
+  font-size: var(--ra-text-caption-gothic);
+  font-weight: 500;
+  line-height: 1.27;
+  letter-spacing: 0.048px;
+  text-transform: uppercase;
+}
+
+/* DESIGN.md §3 Lato roles — optional if Lato is installed */
+.ra-type-lato-heading {
+  font-family: var(--ra-font-lato);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.33;
+  letter-spacing: normal;
+}
+
+.ra-type-lato-caption {
+  font-family: var(--ra-font-lato);
+  font-size: var(--ra-text-button);
+  font-weight: 400;
+  line-height: 1.33;
+  letter-spacing: normal;
+}
+
+.ra-type-lato-micro {
+  font-family: var(--ra-font-lato);
+  font-size: var(--ra-text-micro);
+  font-weight: 400;
+  line-height: 1.27;
+  letter-spacing: 0.053px;
+}
+
+/* §8 display tracking steps down with viewport */
+@media (max-width: 900px) {
+  .ra-type-display-hero {
+    font-size: var(--ra-text-display-section);
+    letter-spacing: -0.72px;
+  }
+
+  .ra-type-section-heading {
+    font-size: var(--ra-text-display-sub);
+    letter-spacing: -0.325px;
+  }
+}
+
+@media (max-width: 600px) {
+  .ra-type-display-hero {
+    font-size: var(--ra-text-display-sub);
+    letter-spacing: -0.325px;
+  }
+
+  .ra-type-section-heading {
+    font-size: var(--ra-text-display-title-sm);
+    letter-spacing: -0.11px;
+  }
+}
+
 /* Selected row / active segment — warm tertiary surface */
 .ra-surface-highlight {
   background: var(--ra-surface-500);
@@ -348,8 +481,16 @@ body {
   gap: 0.75rem;
   padding: 0.55rem 1.1rem;
   border-bottom: 1px solid var(--ra-border);
-  background: var(--ra-surface-elevated);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  backdrop-filter: blur(12px);
+  background: color-mix(in oklab, var(--ra-surface-elevated) 86%, transparent);
   min-height: 52px;
+}
+
+[data-theme="dark"] .ra-shell-header {
+  background: color-mix(in oklab, var(--ra-surface-elevated) 82%, transparent);
 }
 
 .ra-shell-sidebar {
@@ -439,8 +580,10 @@ body {
     opacity 150ms ease;
 }
 
-/* Default pill radius — primary / accent use 8px */
-.ra-button:not(.ra-button-primary):not(.ra-button-accent):not(.ra-fill-accent) {
+/* Default pill radius — primary / accent / tertiary use explicit rules below */
+.ra-button:not(.ra-button-primary):not(.ra-button-accent):not(.ra-fill-accent):not(.ra-button-tertiary):not(
+    .ra-button-ghost
+  ) {
   border-radius: var(--ra-radius-pill);
   padding: 0.5rem 1.05rem;
 }
@@ -502,10 +645,29 @@ body {
   box-shadow: var(--ra-focus-elevated);
 }
 
+/* Tertiary pill — Surface 500, active tags/filters (DESIGN.md §4) */
+.ra-button-tertiary {
+  border-radius: var(--ra-radius-pill);
+  padding: 0.1875rem 0.5rem;
+  background: var(--ra-surface-500);
+  color: var(--ra-secondary-pill-fg);
+  border: 1px solid transparent;
+}
+
+.ra-button-tertiary:hover:not(:disabled) {
+  color: var(--ra-hover-text);
+}
+
+.ra-button-tertiary:focus-visible {
+  outline: none;
+  box-shadow: var(--ra-focus-elevated);
+}
+
 .ra-button-ghost {
   background: var(--ra-ghost-bg);
   color: var(--ra-text-secondary);
   border: none;
+  padding: 0.375rem 0.75rem;
 }
 
 .ra-button-ghost:hover:not(:disabled) {
@@ -515,6 +677,18 @@ body {
 
 .ra-button-ghost:disabled {
   opacity: 0.45;
+}
+
+.ra-button.ra-type-caption {
+  font-size: var(--ra-text-caption-gothic);
+  line-height: 1.5;
+  letter-spacing: normal;
+}
+
+.ra-button.ra-type-button-label {
+  font-size: var(--ra-text-button);
+  line-height: 1;
+  letter-spacing: normal;
 }
 
 .ra-button:disabled {
@@ -549,6 +723,18 @@ body {
 
 .ra-input::placeholder {
   color: var(--ra-text-muted);
+}
+
+.ra-input.ra-type-button-label {
+  font-size: var(--ra-text-button);
+  line-height: 1;
+}
+
+.ra-input.ra-type-mono-small {
+  font-family: var(--ra-font-mono);
+  font-size: var(--ra-text-mono-small);
+  line-height: 1.33;
+  letter-spacing: -0.275px;
 }
 
 /* Status dot */
@@ -785,7 +971,7 @@ body {
 }
 
 .ra-icon-button--danger:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.12);
+  background: color-mix(in oklab, var(--ra-red) 14%, transparent);
   color: var(--ra-red);
 }
 
@@ -1112,7 +1298,7 @@ body {
 .ra-md-assistant p code,
 .ra-md-assistant li code {
   padding: 0.1em 0.35em;
-  border-radius: 0.25rem;
+  border-radius: var(--ra-radius-compact);
   background: var(--ra-hover);
 }
 

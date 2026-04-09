@@ -12,7 +12,7 @@ export function ToolCallRow(props: {
   const tl = () => toolTimelineKind(props.toolName);
   return (
     <div
-      class={`my-2 text-sm ${ui.mutedText} flex items-start gap-2 ra-tool-row ra-tool-row--${tl()}`}
+      class={`my-2 ra-type-button-label ${ui.mutedText} flex items-start gap-2 ra-tool-row ra-tool-row--${tl()}`}
       data-ra-tool-row
       data-ra-tool-use-id={props.toolUseId}
     >

@@ -4,7 +4,7 @@ import { splitProps, type JSX } from "solid-js";
  * Minimal button component — OpenWork-style pill button
  */
 interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "primary" | "secondary" | "ghost" | "accent";
+  variant?: "primary" | "secondary" | "tertiary" | "ghost" | "accent";
   children: JSX.Element;
 }
 

@@ -1,4 +1,5 @@
 import { For, Show, createSignal, type JSX } from "solid-js";
+import { ui } from "../lib/ui-tokens";
 import { Button } from "./ui";
 import type { UserQuestion } from "./shell-types";
 
@@ -19,11 +20,11 @@ export function UserQuestionOverlay(props: {
               {(q) => (
                 <div class="ra-modal-panel mb-3 last:mb-0">
                   <p class="ra-modal-panel__title">Agent question</p>
-                  <pre class="text-base font-sans whitespace-pre-wrap text-[var(--ra-text-primary)] leading-snug mt-2">
+                  <pre class={`ra-type-body-sans whitespace-pre-wrap text-[var(--ra-text-primary)] leading-snug mt-2`}>
                     {q.prompt}
                   </pre>
                   <textarea
-                    class="mt-3 w-full min-h-[5rem] rounded border border-[var(--ra-border)] bg-[var(--ra-surface)] text-base p-2 text-[var(--ra-text-primary)]"
+                    class={`mt-3 w-full min-h-[5rem] ${ui.radius} border border-[var(--ra-border)] bg-[var(--ra-surface)] ra-type-body-sans p-2 text-[var(--ra-text-primary)]`}
                     placeholder="Your answer…"
                     value={drafts()[q.questionId] ?? ""}
                     onInput={(e) =>
@@ -34,7 +35,7 @@ export function UserQuestionOverlay(props: {
                     <Button
                       variant="secondary"
                       onClick={() => props.onCancel(q.questionId)}
-                      class="px-3 py-1.5 text-sm"
+                      class="ra-type-button-label px-3 py-1.5"
                     >
                       Cancel
                     </Button>
@@ -43,7 +44,7 @@ export function UserQuestionOverlay(props: {
                       onClick={() =>
                         props.onSubmit(q.questionId, (drafts()[q.questionId] ?? "").trim())
                       }
-                      class="px-3 py-1.5 text-sm"
+                      class="ra-type-button-label px-3 py-1.5"
                     >
                       Submit answer
                     </Button>

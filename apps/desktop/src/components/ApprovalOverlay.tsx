@@ -26,7 +26,7 @@ export function ApprovalOverlay(props: {
                   {approval.description}
                 </p>
                 <details class="mt-3">
-                  <summary class="text-xs text-[var(--ra-text-muted)] cursor-pointer select-none">
+                  <summary class={`ra-type-caption text-[var(--ra-text-muted)] cursor-pointer select-none`}>
                     Technical details
                   </summary>
                   <p class="ra-type-mono-small text-[var(--ra-text-muted)] mt-1 break-all">
@@ -42,21 +42,21 @@ export function ApprovalOverlay(props: {
                   <Button
                     variant="secondary"
                     onClick={() => props.onReject(approval.approvalId)}
-                    class="px-3 py-1.5 text-sm"
+                    class="ra-type-button-label px-3 py-1.5"
                   >
                     Don&apos;t allow
                   </Button>
                   <Button
                     variant="secondary"
                     onClick={() => props.onApproveOnce(approval.approvalId)}
-                    class="px-3 py-1.5 text-sm"
+                    class="ra-type-button-label px-3 py-1.5"
                   >
                     Allow once
                   </Button>
                   <Button
                     variant="primary"
                     onClick={() => props.onApproveForSession(approval.approvalId)}
-                    class="px-3 py-1.5 text-sm"
+                    class="ra-type-button-label px-3 py-1.5"
                   >
                     Allow for session
                   </Button>
@@ -64,7 +64,7 @@ export function ApprovalOverlay(props: {
                     <Button
                       variant="secondary"
                       onClick={() => props.onApproveForWorkspace!(approval.approvalId)}
-                      class="px-3 py-1.5 text-sm"
+                      class="ra-type-button-label px-3 py-1.5"
                       title="Saved per workspace in ~/.relay-agent/workspace_allowed_tools.json (manage in Settings)"
                     >
                       Allow for workspace

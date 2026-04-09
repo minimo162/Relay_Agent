@@ -25,7 +25,7 @@ export function StatusBar(props: {
 
   return (
     <footer
-      class={`ra-shell-footer px-3 py-1 flex flex-col gap-0.5 text-sm ${ui.mutedText}`}
+      class={`ra-shell-footer px-3 py-1 flex flex-col gap-0.5 ra-type-button-label ${ui.mutedText}`}
       style={{ "min-height": hint ? "36px" : "28px" }}
       data-ra-footer-session={props.sessionState}
       title={full || undefined}

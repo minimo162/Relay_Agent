@@ -16,6 +16,12 @@
 
 ## Milestone Log
 
+### 2026-04-10 Desktop UI: Cursor design system gap closure
+
+**Change:** [`apps/desktop/src/index.css`](../apps/desktop/src/index.css) — brand-first `--ra-font-*` stacks (no font files shipped), full §5 radius scale (`--ra-radius-micro` … `--ra-radius-featured`), `.ra-type-button-label` / `.ra-type-button-caption` (`ss09`) / `.ra-type-caption`, system + optional Lato utilities, responsive display letter-spacing (§8), global link tokens + `body a` hover, `.ra-button-tertiary`, ghost padding 6×12, warm `.ra-icon-button--danger` hover, sticky blurred `.ra-shell-header`, combo rules for `.ra-button`/`.ra-input` + type utilities. [`ui.tsx`](../apps/desktop/src/components/ui.tsx) — `tertiary` button variant. [`ui-tokens.ts`](../apps/desktop/src/lib/ui-tokens.ts) — radius + type fragments. Components: Composer, ContextPanel, SettingsModal, ShellHeader, MessageBubble, MessageFeed, Sidebar, StatusBar, Shell, ToolCallRow, UserQuestionOverlay, ApprovalOverlay — `ra-type-*`, `ui.radius*`, fewer raw Tailwind font sizes.
+
+**Verification:** `pnpm run typecheck` and `pnpm run build` (apps/desktop) — pass (2026-04-10).
+
 ### 2026-04-10 Copilot / Edge: single m365 tab (no Copilot URL on spawn)
 
 **Problem:** On Copilot connect / warmup, **two tabs** both opened `m365.cloud.microsoft/chat` — Edge was started with **Copilot as a trailing URL argument** while cold CDP sometimes saw **zero page targets** (or URLs not yet committed), so `findOrCreatePage` also called **`Target.createTarget({ url: COPILOT_URL })`**. Rust `launch_dedicated_edge` passed the same launch URL, which could contribute to inconsistent behavior when both paths touched the dedicated profile.

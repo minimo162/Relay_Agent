@@ -10,6 +10,7 @@ import {
   writeTextExport,
   type BrowserAutomationSettings,
 } from "../lib/ipc";
+import { ui } from "../lib/ui-tokens";
 import {
   DEFAULT_MAX_TURNS,
   loadBrowserSettings,
@@ -209,24 +210,22 @@ export function SettingsModal(props: {
               <p class="ra-modal-panel__title">Settings</p>
               <button
                 type="button"
-                class="text-xs text-[var(--ra-text-muted)] hover:text-[var(--ra-text-primary)]"
+                class={`ra-type-caption text-[var(--ra-text-muted)] hover:text-[var(--ra-text-primary)]`}
                 onClick={() => props.onClose()}
               >
                 Close
               </button>
             </div>
-            <p class="text-sm text-[var(--ra-text-secondary)] mt-1">
+            <p class={`ra-type-button-label text-[var(--ra-text-secondary)] mt-1`}>
               Choose the project folder the agent uses as its working directory.
             </p>
 
             <div class="mt-4 space-y-3">
               <div class="block">
-                <span class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
-                  Workspace
-                </span>
+                <span class={`ra-type-system-micro text-[var(--ra-text-muted)]`}>Workspace</span>
                 <div class="flex gap-2 mt-1 items-stretch">
                   <Input
-                    class="flex-1 min-w-0 font-mono text-sm"
+                    class="ra-type-mono-small flex-1 min-w-0"
                     placeholder="/path/to/project"
                     value={workspace()}
                     onInput={(e) => setWorkspace(e.currentTarget.value)}
@@ -235,7 +234,7 @@ export function SettingsModal(props: {
                     <Button
                       variant="secondary"
                       type="button"
-                      class="!text-sm shrink-0 px-3"
+                      class="ra-type-button-label shrink-0 px-3"
                       data-ra-workspace-browse
                       onClick={() => void pickWorkspaceFolder()}
                     >
@@ -247,27 +246,27 @@ export function SettingsModal(props: {
             </div>
 
             <Show when={saveHint()}>
-              <p class="mt-2 text-sm text-[var(--ra-accent)]">{saveHint()}</p>
+              <p class={`mt-2 ra-type-button-label text-[var(--ra-accent)]`}>{saveHint()}</p>
             </Show>
             <Show when={copyHint()}>
-              <p class="mt-2 text-sm text-[var(--ra-text-secondary)]">{copyHint()}</p>
+              <p class={`mt-2 ra-type-button-label text-[var(--ra-text-secondary)]`}>{copyHint()}</p>
             </Show>
 
             <div class="flex flex-wrap gap-2 justify-end mt-5">
-              <Button variant="primary" type="button" class="!text-sm" onClick={() => saveSettings()}>
+              <Button variant="primary" type="button" class="ra-type-button-label" onClick={() => saveSettings()}>
                 Save
               </Button>
             </div>
 
-            <details class="mt-5 rounded-lg border border-[var(--ra-border)] p-3" data-ra-settings-advanced>
-              <summary class="cursor-pointer text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide list-none flex items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
+            <details class={`mt-5 ${ui.radiusFeatured} border border-[var(--ra-border)] p-3`} data-ra-settings-advanced>
+              <summary class={`cursor-pointer ra-type-system-micro text-[var(--ra-text-muted)] list-none flex items-center justify-between gap-2 [&::-webkit-details-marker]:hidden`}>
                 <span>Advanced</span>
-                <span class="text-[10px] font-normal normal-case text-[var(--ra-text-muted)]">
+                <span class={`ra-type-caption font-normal normal-case text-[var(--ra-text-muted)]`}>
                   Limits, browser, permissions, diagnostics
                 </span>
               </summary>
               <div class="mt-3 space-y-3 pt-1 border-t border-[var(--ra-border)]">
-                <label class="flex items-center gap-2 text-sm cursor-pointer">
+                <label class={`flex items-center gap-2 ra-type-button-label cursor-pointer`}>
                   <input
                     type="checkbox"
                     checked={toolActivityInChat()}
@@ -282,14 +281,12 @@ export function SettingsModal(props: {
                 </label>
 
                 <label class="block">
-                  <span class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
-                    Max turns per goal
-                  </span>
+                  <span class={`ra-type-system-micro text-[var(--ra-text-muted)]`}>Max turns per goal</span>
                   <Input
                     type="number"
                     min={1}
                     max={256}
-                    class="mt-1 w-full text-sm"
+                    class="ra-type-button-label mt-1 w-full"
                     value={maxTurns()}
                     onInput={(e) => {
                       const n = parseInt(e.currentTarget.value, 10);
@@ -298,11 +295,9 @@ export function SettingsModal(props: {
                   />
                 </label>
 
-                <fieldset class="border border-[var(--ra-border)] rounded-lg p-3 space-y-2">
-                  <legend class="text-xs font-medium text-[var(--ra-text-muted)] px-1">
-                    Browser (CDP)
-                  </legend>
-                  <label class="flex items-center gap-2 text-sm">
+                <fieldset class={`border border-[var(--ra-border)] ${ui.radiusFeatured} p-3 space-y-2`}>
+                  <legend class={`ra-type-system-micro text-[var(--ra-text-muted)] px-1`}>Browser (CDP)</legend>
+                  <label class={`flex items-center gap-2 ra-type-button-label`}>
                     <input
                       type="checkbox"
                       checked={b().autoLaunchEdge}
@@ -313,10 +308,10 @@ export function SettingsModal(props: {
                     Auto-launch Edge when connecting
                   </label>
                   <label class="block">
-                    <span class="text-[var(--ra-text-muted)] text-sm">CDP port</span>
+                    <span class={`text-[var(--ra-text-muted)] ra-type-button-label`}>CDP port</span>
                     <Input
                       type="number"
-                      class="mt-1 w-full text-sm"
+                      class="ra-type-button-label mt-1 w-full"
                       value={b().cdpPort}
                       onInput={(e) => {
                         const n = parseInt(e.currentTarget.value, 10);
@@ -325,10 +320,10 @@ export function SettingsModal(props: {
                     />
                   </label>
                   <label class="block">
-                    <span class="text-[var(--ra-text-muted)] text-sm">Timeout (ms)</span>
+                    <span class={`text-[var(--ra-text-muted)] ra-type-button-label`}>Timeout (ms)</span>
                     <Input
                       type="number"
-                      class="mt-1 w-full text-sm"
+                      class="ra-type-button-label mt-1 w-full"
                       value={b().timeoutMs}
                       onInput={(e) => {
                         const n = parseInt(e.currentTarget.value, 10);
@@ -339,17 +334,15 @@ export function SettingsModal(props: {
                 </fieldset>
 
                 <Show when={isTauri()}>
-                  <div class="rounded-lg border border-[var(--ra-border)] p-3 space-y-2">
-                    <p class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
-                      Tool permissions
-                    </p>
-                    <p class="text-sm text-[var(--ra-text-secondary)]">
+                  <div class={`${ui.radiusFeatured} border border-[var(--ra-border)] p-3 space-y-2`}>
+                    <p class={`ra-type-system-micro text-[var(--ra-text-muted)]`}>Tool permissions</p>
+                    <p class={`ra-type-button-label text-[var(--ra-text-secondary)]`}>
                       Remove every &quot;allow for this workspace&quot; entry for the path above.
                     </p>
                     <Button
                       variant="secondary"
                       type="button"
-                      class="!text-sm"
+                      class="ra-type-button-label"
                       disabled={!workspace().trim()}
                       onClick={() => void clearAllowlistForWorkspace()}
                     >
@@ -359,18 +352,21 @@ export function SettingsModal(props: {
                 </Show>
 
                 <div class="space-y-2">
-                  <p class="text-xs font-medium text-[var(--ra-text-muted)] uppercase tracking-wide">
-                    Diagnostics
-                  </p>
+                  <p class={`ra-type-system-micro text-[var(--ra-text-muted)]`}>Diagnostics</p>
                   <div class="flex flex-wrap gap-2">
-                    <Button variant="secondary" type="button" class="!text-sm" onClick={() => void copyDiagnostics()}>
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      class="ra-type-button-label"
+                      onClick={() => void copyDiagnostics()}
+                    >
                       Copy diagnostics
                     </Button>
                     <Show when={isTauri()}>
                       <Button
                         variant="secondary"
                         type="button"
-                        class="!text-sm"
+                        class="ra-type-button-label"
                         data-ra-export-diagnostics
                         onClick={() => void exportDiagnosticsFile()}
                       >
@@ -380,7 +376,7 @@ export function SettingsModal(props: {
                     <Button
                       variant="secondary"
                       type="button"
-                      class="!text-sm"
+                      class="ra-type-button-label"
                       data-ra-copy-session-audit
                       onClick={() => void copySessionAuditSummary()}
                     >
@@ -390,7 +386,7 @@ export function SettingsModal(props: {
                       <Button
                         variant="secondary"
                         type="button"
-                        class="!text-sm"
+                        class="ra-type-button-label"
                         data-ra-export-session-json
                         onClick={() => void exportSessionHistoryJson()}
                       >
@@ -400,7 +396,7 @@ export function SettingsModal(props: {
                   </div>
                 </div>
 
-                <p class="text-xs text-[var(--ra-text-muted)]">
+                <p class={`ra-type-caption text-[var(--ra-text-muted)]`}>
                   Apply limits and browser values with <span class="font-medium">Save</span> above.
                 </p>
               </div>

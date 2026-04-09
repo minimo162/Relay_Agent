@@ -11,6 +11,7 @@ import {
   removePromptTemplate,
 } from "../lib/prompt-templates-store";
 import type { SessionPreset } from "../lib/ipc";
+import { ui } from "../lib/ui-tokens";
 
 /** Matches `.ra-composer-shell textarea` max-height in index.css */
 const COMPOSER_TEXTAREA_MAX_PX = 200;
@@ -48,18 +49,20 @@ function SlashAutocomplete(props: {
 }) {
   return (
     <div
-      class="absolute left-0 bottom-full mb-1 min-w-full w-64 rounded-xl py-1 overflow-hidden z-50 border border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] shadow-[var(--ra-shadow-sm)]"
+      class={`absolute left-0 bottom-full mb-1 min-w-full w-64 ${ui.radiusFeatured} py-1 overflow-hidden z-50 border border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] shadow-[var(--ra-shadow-sm)]`}
       role="listbox"
       aria-label="Slash commands"
     >
       {props.commands.length === 0 ? (
-        <div class="px-3 py-1.5 text-sm text-[var(--ra-text-muted)]">No matching commands</div>
+        <div class={`px-3 py-1.5 ra-type-button-label text-[var(--ra-text-muted)]`}>
+          No matching commands
+        </div>
       ) : (
         props.commands.map((cmd, i) => (
           <div
             role="option"
             aria-selected={i === props.selectedIndex}
-            class={`flex items-center gap-2 px-3 py-1.5 cursor-pointer text-sm transition-colors ${
+            class={`flex items-center gap-2 px-3 py-1.5 cursor-pointer ra-type-button-label transition-colors ${
               i === props.selectedIndex
                 ? "ra-surface-highlight"
                 : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
@@ -72,7 +75,7 @@ function SlashAutocomplete(props: {
           </div>
         ))
       )}
-      <div class="px-3 py-1 text-[10px] text-[var(--ra-text-muted)] border-t border-[var(--ra-border)]">
+      <div class={`px-3 py-1 ra-type-caption text-[var(--ra-text-muted)] border-t border-[var(--ra-border)]`}>
         <kbd class="ra-type-mono-small">Tab</kbd> or <kbd class="ra-type-mono-small">Enter</kbd> to select
       </div>
     </div>
@@ -241,13 +244,13 @@ export function Composer(props: {
           <div class="ra-composer-toolbar">
             <div class="flex items-center gap-2 min-w-0 flex-wrap">
               <p class="ra-composer-hint shrink-0">⌘/Ctrl+Enter to send · Enter for new line</p>
-              <label class="flex items-center gap-1.5 shrink-0 text-xs text-[var(--ra-text-secondary)]">
+              <label class={`flex items-center gap-1.5 shrink-0 ra-type-system-caption text-[var(--ra-text-secondary)]`}>
                 <span class="sr-only">Session mode</span>
                 <span class="text-[var(--ra-text-muted)] whitespace-nowrap" aria-hidden>
                   Mode
                 </span>
                 <select
-                  class="rounded-md border border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] text-[var(--ra-text-primary)] py-0.5 pl-1.5 pr-6 text-xs max-w-[11rem] sm:max-w-[14rem]"
+                  class={`${ui.radiusCompact} border border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] text-[var(--ra-text-primary)] py-0.5 pl-1.5 pr-6 ra-type-caption max-w-[11rem] sm:max-w-[14rem]`}
                   aria-label="Session mode"
                   value={props.sessionPreset}
                   onChange={(e) =>
@@ -267,13 +270,13 @@ export function Composer(props: {
               </label>
               <details class="relative shrink-0">
                 <summary
-                  class="cursor-pointer text-xs px-2 py-0.5 rounded-md border border-[var(--ra-border)] text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)] list-none [&::-webkit-details-marker]:hidden"
+                  class={`cursor-pointer ra-type-caption px-2 py-0.5 ${ui.radiusCompact} border border-[var(--ra-border)] text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)] list-none [&::-webkit-details-marker]:hidden`}
                   data-ra-templates-trigger
                 >
                   Templates
                 </summary>
                 <div
-                  class="absolute left-0 bottom-full mb-1 z-50 min-w-[220px] max-w-[min(100vw-2rem,320px)] rounded-xl border border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] shadow-[var(--ra-shadow-sm)] py-1 max-h-56 overflow-y-auto"
+                  class={`absolute left-0 bottom-full mb-1 z-50 min-w-[220px] max-w-[min(100vw-2rem,320px)] ${ui.radiusFeatured} border border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] shadow-[var(--ra-shadow-sm)] py-1 max-h-56 overflow-y-auto`}
                   role="listbox"
                   aria-label="Prompt templates"
                   onClick={(e) => e.stopPropagation()}
@@ -281,7 +284,7 @@ export function Composer(props: {
                   <Show
                     when={savedTemplates().length > 0}
                     fallback={
-                      <div class="px-3 py-2 text-xs text-[var(--ra-text-muted)]">
+                      <div class={`px-3 py-2 ra-type-caption text-[var(--ra-text-muted)]`}>
                         No saved templates yet.
                       </div>
                     }
@@ -292,7 +295,7 @@ export function Composer(props: {
                           <button
                             type="button"
                             role="option"
-                            class="flex-1 text-left text-sm text-[var(--ra-text-primary)] truncate"
+                            class={`flex-1 text-left ra-type-button-label text-[var(--ra-text-primary)] truncate`}
                             onClick={() => {
                               setText(t.body);
                               queueMicrotask(() => textareaRef?.focus());
@@ -302,7 +305,7 @@ export function Composer(props: {
                           </button>
                           <button
                             type="button"
-                            class="text-[10px] text-[var(--ra-text-muted)] px-1"
+                            class={`ra-type-caption text-[var(--ra-text-muted)] px-1`}
                             title="Remove template"
                             onClick={() => {
                               removePromptTemplate(t.id);
@@ -318,7 +321,7 @@ export function Composer(props: {
                   <div class="border-t border-[var(--ra-border)] mt-1 pt-1 px-2 pb-1">
                     <button
                       type="button"
-                      class="text-xs w-full text-left text-[var(--ra-accent)] disabled:opacity-40"
+                      class={`ra-type-caption w-full text-left text-[var(--ra-accent)] disabled:opacity-40`}
                       disabled={!text().trim()}
                       onClick={() => {
                         const title = window.prompt("Name this template");
@@ -334,7 +337,7 @@ export function Composer(props: {
               </details>
             </div>
             <Show when={props.sessionPreset === "plan" || props.sessionPreset === "explore"}>
-              <p class="text-[10px] text-[var(--ra-text-muted)] mt-1.5 max-w-[52rem] leading-snug">
+              <p class={`ra-type-caption text-[var(--ra-text-muted)] mt-1.5 max-w-[52rem] leading-snug`}>
                 {props.sessionPreset === "explore"
                   ? "Explore: read/search only. Use Build to edit files."
                   : "Plan: read-only — use Build to apply changes."}

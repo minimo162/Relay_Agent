@@ -37,7 +37,7 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
   return (
     <div class={`flex ${isUser ? "justify-end" : "justify-start"} mb-3`}>
       <div
-        class={`group relative max-w-[min(80%,42rem)] rounded-xl ${
+        class={`group relative max-w-[min(80%,42rem)] ${ui.radiusFeatured} ${
           isUser
             ? "ra-bubble-user"
             : `${ui.surfaceCard} ${ui.border} border text-[var(--ra-text-primary)]`
@@ -81,7 +81,7 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
           <div class="px-4 pb-2 -mt-1">
             <button
               type="button"
-              class="text-sm font-normal text-[var(--ra-accent)] underline-offset-2 hover:underline"
+              class={`ra-type-button-label font-normal text-[var(--ra-accent)] underline-offset-2 hover:underline`}
               onClick={() => setExpanded(!expanded())}
             >
               {expanded() ? "Show less" : "Show more"}

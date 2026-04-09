@@ -161,7 +161,7 @@ export function ContextPanel(props: {
           <Match when={activeTab() === "files"}>
             <div class="flex flex-col gap-2">
               <div class="flex items-center justify-between gap-2">
-                <span class={`text-xs font-medium ${ui.mutedText} uppercase tracking-wide`}>
+                <span class={`ra-type-system-micro ${ui.mutedText}`}>
                   {props.contextFiles().length} file{props.contextFiles().length !== 1 ? "s" : ""}
                 </span>
                 <Show
@@ -169,7 +169,7 @@ export function ContextPanel(props: {
                   fallback={
                     <button
                       type="button"
-                      class={`text-sm px-2.5 py-1 rounded-full border ${ui.border} ${ui.accent} hover:bg-[var(--ra-hover)] transition-colors`}
+                      class={`ra-type-button-label px-2.5 py-1 ${ui.radiusPill} border ${ui.border} ${ui.accent} hover:bg-[var(--ra-hover)] transition-colors`}
                       onClick={() => setShowAddFile(true)}
                     >
                       + Add File
@@ -186,7 +186,7 @@ export function ContextPanel(props: {
                         if (e.key === "Enter") void addFile();
                         if (e.key === "Escape") setShowAddFile(false);
                       }}
-                      class="text-sm flex-1 !py-1 !px-2"
+                      class="ra-type-button-label flex-1 !py-1 !px-2"
                     />
                     <IconButton label="Add file" onClick={() => void addFile()} class="opacity-100">
                       ✓
@@ -201,7 +201,7 @@ export function ContextPanel(props: {
               <Show
                 when={props.contextFiles().length > 0}
                 fallback={
-                  <div class={`text-sm ${ui.mutedText} text-center py-8`}>No context files</div>
+                  <div class={`ra-type-button-label ${ui.mutedText} text-center py-8`}>No context files</div>
                 }
               >
                 <For each={props.contextFiles()}>
@@ -209,9 +209,9 @@ export function ContextPanel(props: {
                     <div class={`group ra-quiet-row`}>
                       <span class="ra-file-icon" aria-hidden />
                       <div class="flex-1 min-w-0">
-                        <div class={`text-sm font-medium ${ui.textPrimary} truncate`}>{file.name}</div>
-                        <div class={`text-xs ${ui.mutedText} truncate font-mono`}>{file.path}</div>
-                        <div class={`text-[10px] ${ui.mutedText} opacity-60`}>{formatSize(file.size)}</div>
+                        <div class={`ra-type-button-label font-medium ${ui.textPrimary} truncate`}>{file.name}</div>
+                        <div class={`ra-type-mono-small ${ui.mutedText} truncate`}>{file.path}</div>
+                        <div class={`ra-type-caption ${ui.mutedText} opacity-60`}>{formatSize(file.size)}</div>
                       </div>
                       <IconButton
                         variant="danger"
@@ -230,7 +230,7 @@ export function ContextPanel(props: {
 
           <Match when={activeTab() === "servers"}>
             <div class="flex flex-col gap-2">
-              <p class={`text-xs leading-relaxed ${ui.mutedText}`}>
+              <p class={`ra-type-system-caption leading-relaxed ${ui.mutedText}`}>
                 Connect MCP servers for extra tools. Instruction files under your workspace are listed below when a
                 folder is set in Settings.
               </p>
@@ -240,25 +240,21 @@ export function ContextPanel(props: {
                   <Show
                     when={instructionSurfaces()}
                     fallback={
-                      <p class={`text-xs ${ui.mutedText}`}>Scanning workspace instructions…</p>
+                      <p class={`ra-type-caption ${ui.mutedText}`}>Scanning workspace instructions…</p>
                     }
                   >
                     {(surf) => (
                       <div
-                        class={`rounded-lg border ${ui.border} p-2 space-y-1.5`}
+                        class={`${ui.radiusFeatured} border ${ui.border} p-2 space-y-1.5`}
                         data-ra-workspace-instructions
                       >
-                        <span class={`text-xs font-medium ${ui.mutedText} uppercase tracking-wide`}>
-                          Workspace instructions
-                        </span>
+                        <span class={`ra-type-system-micro ${ui.mutedText}`}>Workspace instructions</span>
                         <Show when={surf().workspaceRoot}>
-                          <p class={`text-[10px] font-mono ${ui.mutedText} break-all`}>
-                            {surf().workspaceRoot}
-                          </p>
+                          <p class={`ra-type-mono-small ${ui.mutedText} break-all`}>{surf().workspaceRoot}</p>
                         </Show>
                         <For each={surf().surfaces}>
                           {(s) => (
-                            <div class="flex items-start gap-2 text-xs">
+                            <div class={`flex items-start gap-2 ra-type-caption`}>
                               <span
                                 class={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${
                                   s.exists ? "bg-[var(--ra-green)]" : "bg-[var(--ra-text-muted)]"
@@ -266,11 +262,9 @@ export function ContextPanel(props: {
                                 aria-hidden
                               />
                               <div class="min-w-0 flex-1">
-                                <div class={`font-medium ${ui.textPrimary}`}>{s.label}</div>
-                                <div class={`text-[10px] font-mono ${ui.mutedText} break-all`}>
-                                  {s.path}
-                                </div>
-                                <div class={`text-[10px] ${ui.mutedText}`}>
+                                <div class={`ra-type-button-label font-medium ${ui.textPrimary}`}>{s.label}</div>
+                                <div class={`ra-type-mono-small ${ui.mutedText} break-all`}>{s.path}</div>
+                                <div class={`ra-type-caption ${ui.mutedText}`}>
                                   {s.exists
                                     ? s.isDirectory
                                       ? "Present (directory)"
@@ -286,13 +280,13 @@ export function ContextPanel(props: {
                   </Show>
                 }
               >
-                <p class={`text-xs ${ui.mutedText}`}>
-                  Set a workspace in Settings to detect <span class="font-mono">CLAW.md</span> and{" "}
-                  <span class="font-mono">.claw</span>.
+                <p class={`ra-type-caption ${ui.mutedText}`}>
+                  Set a workspace in Settings to detect <span class="ra-type-mono-small">CLAW.md</span> and{" "}
+                  <span class="ra-type-mono-small">.claw</span>.
                 </p>
               </Show>
               <div class="flex items-center justify-between gap-2">
-                <span class={`text-xs font-medium ${ui.mutedText} uppercase tracking-wide`}>
+                <span class={`ra-type-system-micro ${ui.mutedText}`}>
                   {props.mcpServers().length} server{props.mcpServers().length !== 1 ? "s" : ""}
                 </span>
                 <Show
@@ -300,7 +294,7 @@ export function ContextPanel(props: {
                   fallback={
                     <button
                       type="button"
-                      class={`text-sm px-2.5 py-1 rounded-full border ${ui.border} ${ui.accent} hover:bg-[var(--ra-hover)] transition-colors`}
+                      class={`ra-type-button-label px-2.5 py-1 ${ui.radiusPill} border ${ui.border} ${ui.accent} hover:bg-[var(--ra-hover)] transition-colors`}
                       onClick={() => setShowAddServer(true)}
                     >
                       + Add Server
@@ -313,27 +307,31 @@ export function ContextPanel(props: {
                       placeholder="Server name"
                       value={newServerName()}
                       onInput={(e) => setNewServerName(e.currentTarget.value)}
-                      class="text-sm !py-1 !px-2"
+                      class="ra-type-button-label !py-1 !px-2"
                     />
                     <Input
                       type="text"
                       placeholder="Command (e.g. npx)"
                       value={newServerCommand()}
                       onInput={(e) => setNewServerCommand(e.currentTarget.value)}
-                      class="text-sm !py-1 !px-2"
+                      class="ra-type-button-label !py-1 !px-2"
                     />
                     <Input
                       type="text"
                       placeholder="Args (space-separated)"
                       value={newServerArgs()}
                       onInput={(e) => setNewServerArgs(e.currentTarget.value)}
-                      class="text-sm !py-1 !px-2"
+                      class="ra-type-button-label !py-1 !px-2"
                     />
                     <div class="flex gap-1">
-                      <Button variant="primary" onClick={() => void addServer()} class="flex-1 !py-1 !text-sm">
+                      <Button variant="primary" onClick={() => void addServer()} class="ra-type-button-label flex-1 !py-1">
                         Add
                       </Button>
-                      <Button variant="secondary" onClick={() => setShowAddServer(false)} class="flex-1 !py-1 !text-sm">
+                      <Button
+                        variant="secondary"
+                        onClick={() => setShowAddServer(false)}
+                        class="ra-type-button-label flex-1 !py-1"
+                      >
                         Cancel
                       </Button>
                     </div>
@@ -344,7 +342,7 @@ export function ContextPanel(props: {
               <Show
                 when={props.mcpServers().length > 0}
                 fallback={
-                  <div class={`text-sm ${ui.mutedText} text-center py-8 leading-relaxed px-1`}>
+                  <div class={`ra-type-button-label ${ui.mutedText} text-center py-8 leading-relaxed px-1`}>
                     No MCP servers yet. Add one to connect external tools.
                   </div>
                 }
@@ -359,11 +357,11 @@ export function ContextPanel(props: {
                         aria-hidden
                       />
                       <div class="flex-1 min-w-0">
-                        <div class={`text-sm font-medium ${ui.textPrimary}`}>{server.name}</div>
-                        <div class={`text-xs ${ui.mutedText} truncate font-mono`}>
+                        <div class={`ra-type-button-label font-medium ${ui.textPrimary}`}>{server.name}</div>
+                        <div class={`ra-type-mono-small ${ui.mutedText} truncate`}>
                           {server.command} {server.args.join(" ")}
                         </div>
-                        <div class={`text-[10px] ${ui.mutedText} opacity-60`}>
+                        <div class={`ra-type-caption ${ui.mutedText} opacity-60`}>
                           {server.toolCount} tool{server.toolCount !== 1 ? "s" : ""}
                         </div>
                       </div>
@@ -384,16 +382,14 @@ export function ContextPanel(props: {
 
           <Match when={activeTab() === "plan"}>
             <div class="flex flex-col gap-2" data-ra-execution-plan>
-              <span class={`text-xs font-medium ${ui.mutedText} uppercase tracking-wide`}>
-                Plan timeline
-              </span>
-              <p class={`text-xs leading-relaxed ${ui.mutedText}`}>
+              <span class={`ra-type-system-micro ${ui.mutedText}`}>Plan timeline</span>
+              <p class={`ra-type-system-caption leading-relaxed ${ui.mutedText}`}>
                 Task lists from the agent; newest first.
               </p>
               <Show
                 when={planNewestFirst()}
                 fallback={
-                  <div class={`text-sm ${ui.mutedText} text-center py-6 leading-relaxed`}>
+                  <div class={`ra-type-button-label ${ui.mutedText} text-center py-6 leading-relaxed`}>
                     No tasks yet. They appear when the agent updates its task list.
                   </div>
                 }
@@ -414,10 +410,10 @@ export function ContextPanel(props: {
                             : `Step ${chronologicalIndex + 1}`;
                         return (
                           <details
-                            class={`rounded-lg border ${ui.border} bg-[var(--ra-surface-elevated)]/40 px-2 py-1.5`}
+                            class={`${ui.radiusFeatured} border ${ui.border} bg-[var(--ra-surface-elevated)]/40 px-2 py-1.5`}
                             open={snapIdx() === 0}
                           >
-                            <summary class="cursor-pointer text-sm text-[var(--ra-text-primary)] list-none flex items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
+                            <summary class={`cursor-pointer ra-type-button-label text-[var(--ra-text-primary)] list-none flex items-center justify-between gap-2 [&::-webkit-details-marker]:hidden`}>
                               <span class="font-medium">
                                 {summaryLabel}
                                 <span class={`font-normal ${ui.mutedText}`}>
@@ -425,17 +421,17 @@ export function ContextPanel(props: {
                                   · {entry.todos.length} task{entry.todos.length !== 1 ? "s" : ""}
                                 </span>
                               </span>
-                              <span class={`text-[10px] font-mono ${ui.mutedText} truncate max-w-[40%]`}>
+                              <span class={`ra-type-mono-small ${ui.mutedText} truncate max-w-[40%]`}>
                                 {entry.toolUseId}
                               </span>
                             </summary>
                             <ol class="list-decimal list-inside space-y-1.5 pl-0.5 mt-2 mb-0.5">
                               <For each={entry.todos}>
                                 {(item: PlanTodoItem) => (
-                                  <li class="text-sm text-[var(--ra-text-primary)] leading-snug">
+                                  <li class={`ra-type-button-label text-[var(--ra-text-primary)] leading-snug`}>
                                     <span class="font-medium">{item.activeForm || item.content}</span>
                                     <span
-                                      class={`ml-2 text-[10px] px-1.5 py-0.5 rounded-md ${
+                                      class={`ml-2 ra-type-caption px-1.5 py-0.5 ${ui.radiusCompact} ${
                                         item.status === "completed"
                                           ? "bg-[var(--ra-green)]/15 text-[var(--ra-green)]"
                                           : item.status === "in_progress"
@@ -461,18 +457,18 @@ export function ContextPanel(props: {
 
           <Match when={activeTab() === "policy"}>
             <div class="flex flex-col gap-2">
-              <p class={`text-xs leading-relaxed ${ui.mutedText}`}>
-                Tool rules for <span class="font-mono">{props.sessionPreset()}</span> mode. Approvals and{" "}
-                <span class="font-mono">.claw</span> still apply.
+              <p class={`ra-type-system-caption leading-relaxed ${ui.mutedText}`}>
+                Tool rules for <span class="ra-type-mono-small">{props.sessionPreset()}</span> mode. Approvals and{" "}
+                <span class="ra-type-mono-small">.claw</span> still apply.
               </p>
-              <span class={`text-xs font-medium ${ui.mutedText} uppercase tracking-wide`}>
+              <span class={`ra-type-system-micro ${ui.mutedText}`}>
                 {permissionRows().length} tool{permissionRows().length !== 1 ? "s" : ""}
               </span>
 
               <Show
                 when={permissionRows().length > 0}
                 fallback={
-                  <div class={`text-sm ${ui.mutedText} text-center py-8`}>Loading policy…</div>
+                  <div class={`ra-type-button-label ${ui.mutedText} text-center py-8`}>Loading policy…</div>
                 }
               >
                 <For each={permissionRows()}>
@@ -494,13 +490,13 @@ export function ContextPanel(props: {
                     return (
                       <div class="ra-quiet-row ra-quiet-row--align-center gap-2">
                         <div class="flex-1 min-w-0">
-                          <div class={`text-sm font-medium ${ui.textPrimary}`}>{policy.name}</div>
+                          <div class={`ra-type-button-label font-medium ${ui.textPrimary}`}>{policy.name}</div>
                           <Show when={policy.description}>
-                            <div class={`text-xs ${ui.mutedText} truncate`}>{policy.description}</div>
+                            <div class={`ra-type-caption ${ui.mutedText} truncate`}>{policy.description}</div>
                           </Show>
                         </div>
                         <span
-                          class={`text-[10px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap shrink-0 ${badgeColor}`}
+                          class={`ra-type-caption px-2 py-0.5 ${ui.radiusPill} font-medium whitespace-nowrap shrink-0 ${badgeColor}`}
                         >
                           {badgeLabel}
                         </span>

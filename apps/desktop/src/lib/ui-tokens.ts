@@ -19,4 +19,13 @@ export const ui = {
   typeMonoSmall: "ra-type-mono-small",
   typeMonoBody: "ra-type-mono-body",
   typeTitleSm: "ra-type-title-sm",
+  typeCaption: "ra-type-caption",
+  typeSystemCaption: "ra-type-system-caption",
+  typeSystemMicro: "ra-type-system-micro",
+  typeButtonCaption: "ra-type-button-caption",
+  /** Radii — use with `rounded-[…]` */
+  radius: "rounded-[var(--ra-radius)]",
+  radiusFeatured: "rounded-[var(--ra-radius-featured)]",
+  radiusCompact: "rounded-[var(--ra-radius-compact)]",
+  radiusPill: "rounded-[var(--ra-radius-pill)]",
 } as const;

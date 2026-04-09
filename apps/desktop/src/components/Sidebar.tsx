@@ -40,7 +40,7 @@ export function Sidebar(props: {
         </div>
         <div class="ra-sidebar-shell__list">
           <Show when={filtered().length === 0}>
-            <div class={`text-sm ${ui.mutedText} text-center py-8`}>No matching sessions</div>
+            <div class={`ra-type-button-label ${ui.mutedText} text-center py-8`}>No matching sessions</div>
           </Show>
           <For each={filtered()}>
             {(entry) => {
@@ -60,7 +60,7 @@ export function Sidebar(props: {
                   onClick={() => props.onSelect(id)}
                 >
                   <span class="block font-medium truncate">{primaryLabel}</span>
-                  <span class={`block text-[10px] mt-0.5 truncate ${ui.mutedText}`}>{subLabel}</span>
+                  <span class={`block ra-type-caption mt-0.5 truncate ${ui.mutedText}`}>{subLabel}</span>
                 </button>
               );
             }}
