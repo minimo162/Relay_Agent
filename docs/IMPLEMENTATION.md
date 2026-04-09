@@ -16,6 +16,14 @@
 
 ## Milestone Log
 
+### 2026-04-09 Desktop startup: main window after Copilot warmup (no always-on-top)
+
+**Goal:** Stop pinning the main window with `set_always_on_top(true)`; start with the window hidden until `warmupCopilotBridge` finishes (Edge/Copilot cold start), then `show` + `setFocus` so the Relay UI typically ends in front without staying above all other apps.
+
+**Artifacts:** [`apps/desktop/src-tauri/tauri.conf.json`](../apps/desktop/src-tauri/tauri.conf.json) (`visible: false` on `main`); [`apps/desktop/src-tauri/src/lib.rs`](../apps/desktop/src-tauri/src/lib.rs) (removed always-on-top setup); [`apps/desktop/src-tauri/capabilities/default.json`](../apps/desktop/src-tauri/capabilities/default.json) (`core:window:allow-show`, `core:window:allow-set-focus`); [`apps/desktop/src/shell/Shell.tsx`](../apps/desktop/src/shell/Shell.tsx) (`getCurrentWindow().show()` / `setFocus()` in `warmupCopilotBridge` `finally` when `isTauri()`).
+
+**Verification:** `pnpm exec tsc --noEmit` and `cargo check` from `apps/desktop/` and `apps/desktop/src-tauri/` respectively — pass (2026-04-09). Full `tauri dev` UI smoke is environment-specific (Wayland focus policies may vary).
+
 ### 2026-04-09 Tool hard denylist (bash + sensitive file paths)
 
 **Goal:** Block a fixed set of high-risk shell commands **regardless of** `.claw` permission mode, and block `read_file` / `write_file` / `edit_file` (plus PDF merge/split outputs and `NotebookEdit` targets) for secret-like filenames.

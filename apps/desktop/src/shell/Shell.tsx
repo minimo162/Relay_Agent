@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { truncatePromptPreview, type SessionMeta } from "../session/session-display";
 import {
@@ -180,6 +181,14 @@ export default function Shell(): JSX.Element {
         console.error("[Copilot] warmup failed:", err);
         const msg = err instanceof Error ? err.message : String(err);
         setCopilotBridgeHint(`Copilot: ${msg}`);
+      })
+      .finally(() => {
+        if (!isTauri()) return;
+        const win = getCurrentWindow();
+        void win
+          .show()
+          .then(() => win.setFocus())
+          .catch((e) => console.error("[Shell] window show/focus failed:", e));
       });
   });
 
