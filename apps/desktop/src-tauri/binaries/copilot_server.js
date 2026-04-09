@@ -259,7 +259,15 @@ var RESPONSE_POLL_INTERVAL_MS = 500;
 var RESPONSE_PHANTOM_GENERATING_POLLS = 22;
 /** After DOM looks stable, pause before re-extract (was 2800ms). */
 var RESPONSE_POST_STABLE_MS = 1000;
-var CDP_PROBE_TIMEOUT_MS = 2e3;
+/** Override with RELAY_CDP_PROBE_TIMEOUT_MS (500–120000). Win32 default is higher for slow CDP bind. */
+var CDP_PROBE_TIMEOUT_MS = (() => {
+  const raw = process.env.RELAY_CDP_PROBE_TIMEOUT_MS;
+  if (raw) {
+    const n = Number.parseInt(String(raw).trim(), 10);
+    if (Number.isFinite(n) && n >= 500 && n <= 120_000) return n;
+  }
+  return process.platform === "win32" ? 8e3 : 2e3;
+})();
 var CDP_COMMAND_TIMEOUT_MS = 5e3;
 /** Runtime.evaluate can run long synchronous DOM work; default CDP timeout was killing large execCommand pastes. */
 var CDP_RUNTIME_EVALUATE_TIMEOUT_MS = 90e3;
@@ -3563,10 +3571,13 @@ function relayEdgeChromiumHardeningArgv() {
     "--disable-gpu",
     "--disable-gpu-compositing",
     "--disable-hang-monitor",
-    "--disable-site-isolation-trials",
     "--disable-breakpad",
     "--disable-crashpad",
   ];
+  // `--disable-site-isolation-trials` is unsupported on Windows Edge (warning) and omitted on macOS; keep on Linux only.
+  if (process.platform === "linux") {
+    out.splice(3, 0, "--disable-site-isolation-trials");
+  }
   // Edge on Windows/macOS often reports `--no-sandbox` as unsupported; Chromium on Linux still benefits (CI/containers).
   if (process.platform === "linux" || process.env.RELAY_EDGE_FORCE_NO_SANDBOX === "1") {
     out.unshift("--no-sandbox");
@@ -3626,7 +3637,8 @@ async function pollForExistingDedicatedCdp(profileDir, preferredPort) {
     const fromFile = readDevToolsActivePortSync(profileDir);
     if (fromFile != null) ports.add(fromFile);
     for (const port of ports) {
-      if ((await probeCdpVersion(port)) && (await cdpPortIsMicrosoftEdge(port))) {
+      const info = await probeCdpVersion(port);
+      if (info && cdpDedicatedRelayProfileCdpOk(info)) {
         return port;
       }
     }
@@ -3778,7 +3790,7 @@ async function waitUntilDedicatedCdpResponds(actualPort, profileDir) {
       lastProgressLog = Date.now();
     }
     const info = await probeCdpVersion(actualPort);
-    if (info && cdpVersionLooksLikeEdge(info)) {
+    if (info && cdpDedicatedRelayProfileCdpOk(info)) {
       globalOptions.cdpPort = actualPort;
       writeCdpPortMarker(profileDir, actualPort);
       console.error(
@@ -3795,7 +3807,7 @@ async function waitUntilDedicatedCdpResponds(actualPort, profileDir) {
       console.error(
         "[copilot:ensureEdge] port",
         actualPort,
-        "responds but not classified as Edge yet:",
+        "responds but not accepted as Relay dedicated CDP yet:",
         JSON.stringify({ Browser: info.Browser, UserAgent: info["User-Agent"] }).slice(0, 400),
       );
     }
@@ -3865,7 +3877,8 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
     );
   }
   const marked = readCdpPortMarker(profileDir);
-  if (marked != null && (await probeCdpVersion(marked)) && (await cdpPortIsMicrosoftEdge(marked))) {
+  const markedProbe = marked != null ? await probeCdpVersion(marked) : null;
+  if (marked != null && markedProbe && cdpDedicatedRelayProfileCdpOk(markedProbe)) {
     globalOptions.cdpPort = marked;
     console.error("[copilot:ensureEdge] reusing Relay Edge (marker) on port", marked);
     if (process.platform === "win32" && process.env.RELAY_COPILOT_NUDGE_EDGE === "1") {
@@ -3892,21 +3905,19 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
     }
     return;
   }
-  if (marked != null && (await probeCdpVersion(marked)) && !(await cdpPortIsMicrosoftEdge(marked))) {
+  if (marked != null && markedProbe && !cdpDedicatedRelayProfileCdpOk(markedProbe)) {
     console.error(
       "[copilot:ensureEdge] marker port",
       marked,
-      "has CDP but is not Microsoft Edge — clearing marker and launching Edge",
+      "has CDP Relay will not attach to — clearing marker and launching Edge",
     );
   }
   if (marked != null) clearCdpPortMarker(profileDir);
 
   // 手動スクリプトで固定ポートだけ付けて起動した Edge は
   // .relay-agent-cdp-port を書かない。既に CDP が Edge なら追加起動せず再利用する。
-  if (
-    (await probeCdpVersion(cdpPort)) &&
-    (await cdpPortIsMicrosoftEdge(cdpPort))
-  ) {
+  const preferredProbe = await probeCdpVersion(cdpPort);
+  if (preferredProbe && cdpDedicatedRelayProfileCdpOk(preferredProbe)) {
     globalOptions.cdpPort = cdpPort;
     writeCdpPortMarker(profileDir, cdpPort);
     console.error(
@@ -3927,6 +3938,8 @@ async function ensureEdgeDedicated(edgePath, profileDir, cdpPort) {
     );
     return;
   }
+
+  if (await tryReuseDevtoolsPortBeforePortZero(profileDir, cdpPort)) return;
 
   if (await tryDedicatedLaunchPortZero(edgePath, profileDir)) return;
   await launchDedicatedFixedPortScan(edgePath, profileDir, cdpPort);
@@ -4044,6 +4057,56 @@ function cdpVersionLooksLikeEdge(info) {
   if (b.includes("google chrome")) return false;
   if (b.includes("chrome/") && !b.includes("edg")) return false;
   return true;
+}
+
+/** True when /json/version clearly indicates Google Chrome (not Edge) — used to reject wrong browser on marker port. */
+function cdpDefinitelyGoogleChromeOnly(info) {
+  if (!info) return false;
+  const b = `${info.Browser || ""} ${info["User-Agent"] || ""}`.toLowerCase();
+  if (b.includes("edg")) return false;
+  if (b.includes("microsoft edge")) return false;
+  if (b.includes("google chrome")) return true;
+  if (/\bchrome\/[\d.]/.test(b)) return true;
+  return false;
+}
+
+/**
+ * Accept CDP for Relay's dedicated Edge profile: strict Edge match, or any Chromium with a debugger WS
+ * that is not clearly stock Chrome (Windows Edge sometimes omits strings our strict check expects).
+ */
+function cdpDedicatedRelayProfileCdpOk(info) {
+  if (!info) return false;
+  if (cdpVersionLooksLikeEdge(info)) return true;
+  if (!info.webSocketDebuggerUrl) return false;
+  return !cdpDefinitelyGoogleChromeOnly(info);
+}
+
+async function cdpPortUsableRelayDedicated(port) {
+  const info = await probeCdpVersion(port);
+  return !!(info && cdpDedicatedRelayProfileCdpOk(info));
+}
+
+async function tryReuseDevtoolsPortBeforePortZero(profileDir, preferredPort) {
+  const fromFile = readDevToolsActivePortSync(profileDir);
+  const candidates = new Set(
+    [preferredPort, fromFile].filter((p) => p != null && p >= 1 && p <= 65535),
+  );
+  for (let attempt = 0; attempt < 6; attempt++) {
+    for (const port of candidates) {
+      if (await cdpPortUsableRelayDedicated(port)) {
+        globalOptions.cdpPort = port;
+        writeCdpPortMarker(profileDir, port);
+        console.error(
+          "[copilot:ensureEdge] reusing existing CDP before port=0 spawn, port",
+          port,
+          attempt > 0 ? `(retry ${attempt})` : "",
+        );
+        return true;
+      }
+    }
+    await sleep(400);
+  }
+  return false;
 }
 
 async function cdpPortIsMicrosoftEdge(port) {

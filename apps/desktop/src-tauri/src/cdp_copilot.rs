@@ -213,8 +213,11 @@ pub fn launch_dedicated_edge(debug_port: u16) -> Result<std::process::Child> {
     {
         cmd.arg("--no-sandbox");
     }
+    // `--disable-site-isolation-trials` is unsupported on Windows Edge (warning); keep on Linux only (matches Node).
+    if cfg!(target_os = "linux") {
+        cmd.arg("--disable-site-isolation-trials");
+    }
     cmd.args([
-        "--disable-site-isolation-trials",
         "--disable-breakpad",
         "--disable-crashpad",
         "--disable-features=RendererCodeIntegrity,EdgeEnclave,VbsEnclave",

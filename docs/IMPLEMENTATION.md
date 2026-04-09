@@ -16,6 +16,16 @@
 
 ## Milestone Log
 
+### 2026-04-09 Windows Copilot bridge: CDP probe + no site-isolation flag
+
+**Problem:** With Edge already running, `ensureEdge` could wait 30s then spawn `remote-debugging-port=0`, leaving CDP stuck; Edge warned that `--disable-site-isolation-trials` is unsupported on Windows. Stray Node on HTTP 18080 caused `EADDRINUSE` and bootToken mismatch.
+
+**Fix:** [`copilot_server.js`](../apps/desktop/src-tauri/binaries/copilot_server.js) — `RELAY_CDP_PROBE_TIMEOUT_MS` override; longer default probe on `win32`; `cdpDedicatedRelayProfileCdpOk` + `tryReuseDevtoolsPortBeforePortZero` before port-0 spawn; `--disable-site-isolation-trials` only on Linux in `relayEdgeChromiumHardeningArgv`. [`cdp_copilot.rs`](../apps/desktop/src-tauri/src/cdp_copilot.rs) — same site-isolation rule for `launch_dedicated_edge`.
+
+**Doc:** [`docs/COPILOT_E2E_CDP_PITFALLS.md`](COPILOT_E2E_CDP_PITFALLS.md).
+
+**Verification:** `node --check` on `copilot_server.js`; `cargo check -p relay-agent-desktop` — pass (2026-04-09).
+
 ### 2026-04-09 Copilot CDP: background Edge env + Win32 nudge opt-in
 
 **Problem:** Each prompt could raise Microsoft Edge to the foreground (`Page.bringToFront` / `Target.activateTarget` in Node; Rust `send_prompt`; Windows reuse-path nudge via `cmd /c start` on every `connect` when marker reuse hit).
