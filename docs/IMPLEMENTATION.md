@@ -16,6 +16,10 @@
 
 ## Milestone Log
 
+### 2026-04-10 CDP: composer message grounding (anti-template checklist)
+
+**Change:** [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) — `CDP_FILE_DELIVERY_USER_MESSAGE` adds mandatory grounding: claims about syntax/HTML/identifiers/`drawBlock` must trace to bundle `read_file` content; no generic “fatal syntax + structure” plans when absent. [`AGENT_EVALUATION_CRITERIA.md`](AGENT_EVALUATION_CRITERIA.md) — **Copilot thread vs Relay session** (context continuity).
+
 ### 2026-04-10 Agent evaluation: authoritative file text + partial reads (prompt)
 
 **Change:** [`prompt.rs`](../apps/desktop/src-tauri/crates/runtime/src/prompt.rs) — `get_simple_doing_tasks_section` adds bullets: treat tool/bundle file text as source of truth (traceable claims); use `read_file` **`offset`/`limit`** when only a slice was seen.
