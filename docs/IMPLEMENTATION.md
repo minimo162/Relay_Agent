@@ -16,6 +16,14 @@
 
 ## Milestone Log
 
+### 2026-04-10 CDP: grounding prefix + Copilot wait abort + cancel wiring
+
+**Change:** [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) — `build_cdp_prompt` prepends **CDP bundle grounding** (no invented identifiers; quote Tool Result). [`copilot_server.js`](../apps/desktop/src-tauri/binaries/copilot_server.js) — `POST /v1/chat/abort` sets `abortDescribe`; `waitForDomResponse` / `submitPromptRaw` throw `relay_copilot_aborted`; HTTP **499** with `{ error: relay_copilot_aborted }`. [`copilot_server.rs`](../apps/desktop/src-tauri/src/copilot_server.rs) maps that body to `PromptError`. [`tauri_bridge.rs`](../apps/desktop/src-tauri/src/tauri_bridge.rs) `cancel_agent` → `request_copilot_bridge_abort`. Agent loop maps `relay_copilot_aborted` to `emit_error(..., cancelled: true)`.
+
+**Troubleshoot:** If Copilot still starts a **new chat every turn**, check no orphan `node copilot_server.js` on the HTTP port, and unset env `RELAY_COPILOT_NEW_CHAT_EACH_TURN`. Logs show `wantNewChat=` / `RELAY_COPILOT_NEW_CHAT_EACH_TURN=`.
+
+**Verification:** `cargo test -p relay-agent-desktop --lib`, `cargo test -p runtime --lib`.
+
 ### 2026-04-10 CDP: stop new-chat click every agent turn (Node bridge)
 
 **Problem:** [`copilot_server.js`](../apps/desktop/src-tauri/binaries/copilot_server.js) `describeImpl` called `clickNewChatDeep` before every `POST /v1/chat/completions`, so Copilot reset the thread each turn even inside one Relay session.

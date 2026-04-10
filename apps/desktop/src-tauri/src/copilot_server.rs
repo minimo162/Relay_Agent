@@ -424,6 +424,9 @@ impl CopilotServer {
                 body.len(),
                 t0.elapsed()
             );
+            if body.contains("relay_copilot_aborted") {
+                return Err(CopilotError::PromptError("relay_copilot_aborted".into()));
+            }
             return Err(CopilotError::PromptError(format!(
                 "copilot returned {status}: {body}"
             )));

@@ -7,6 +7,8 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
+use std::time::Duration;
+
 use crate::cdp_copilot;
 use crate::models::{
     BrowserAutomationSettings, CancelAgentRequest, DesktopPermissionSummaryRow,
@@ -36,6 +38,33 @@ static COPILOT_SERVER_SLOT: OnceLock<Mutex<Option<CopilotServerState>>> = OnceLo
 
 fn copilot_server_slot() -> &'static Mutex<Option<CopilotServerState>> {
     COPILOT_SERVER_SLOT.get_or_init(|| Mutex::new(None))
+}
+
+/// Notify the Node `copilot_server.js` bridge to abort an in-flight `describe` wait loop (best-effort).
+async fn request_copilot_bridge_abort() {
+    let url = match copilot_server_slot().lock().ok().and_then(|g| {
+        g.as_ref().and_then(|st| {
+            st.server
+                .lock()
+                .ok()
+                .map(|srv| format!("{}/v1/chat/abort", srv.server_url()))
+        })
+    }) {
+        Some(u) => u,
+        None => return,
+    };
+    match reqwest::Client::new()
+        .post(url)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(resp) => tracing::info!(
+            "[RelayAgent] copilot bridge abort POST status={}",
+            resp.status()
+        ),
+        Err(e) => tracing::warn!("[RelayAgent] copilot bridge abort POST failed: {e}"),
+    }
 }
 
 const COPILOT_HTTP_PORT: u16 = 18080;
@@ -512,6 +541,8 @@ pub async fn cancel_agent(
             tracing::error!("[RelayAgent] drain user questions failed during cancel: {e}");
         }
     }
+
+    request_copilot_bridge_abort().await;
 
     let evt = AgentErrorEvent {
         session_id: request.session_id.clone(),

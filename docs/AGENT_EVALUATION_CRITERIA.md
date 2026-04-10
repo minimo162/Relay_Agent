@@ -45,13 +45,16 @@ When the session log still contains the full **`read_file` Tool Result** with `f
 
 M365 Copilot in the browser **does not** automatically carry your **Relay workspace session** when you open a **new Copilot chat** or paste into a fresh thread: each Copilot thread has its own UI history, while Relay persists **session JSON** (messages, tool results) on the host. For **continuous** file/task context, prefer **multiple turns in the same Relay session** (same desktop session) so each CDP turn’s attached bundle includes prior `read_file` / tool results. Starting a **new** Copilot-only chat each time makes “grounding” harder for the model because prior tool evidence is not in that thread unless Relay sends it again in the bundle.
 
-**Implementation note:** The Node `copilot_server.js` path (HTTP `/v1/chat/completions`) **defaults to continuing the current Copilot thread** (no automatic “new chat” click each turn). Use JSON `relay_new_chat: true` or env `RELAY_COPILOT_NEW_CHAT_EACH_TURN=1` only when you need the old per-turn reset behavior.
+**Implementation note:** The Node `copilot_server.js` path (HTTP `/v1/chat/completions`) **defaults to continuing the current Copilot thread** (no automatic “new chat” click each turn). Use JSON `relay_new_chat: true` or env `RELAY_COPILOT_NEW_CHAT_EACH_TURN=1` only when you need the old per-turn reset behavior. If new chat still appears every turn, verify stderr logs include `wantNewChat=false` and no stale `node` process is serving an old script on the Copilot HTTP port.
+
+**Cancel:** Desktop `cancel_agent` triggers `POST /v1/chat/abort` so the Node wait loop can exit with `relay_copilot_aborted` instead of blocking until the Copilot timeout.
 
 ## Implementation reference
 
 - System prompt addition: `apps/desktop/src-tauri/crates/runtime/src/prompt.rs` — `get_simple_doing_tasks_section`, bullets on **grounded assertions**, **authoritative file text** (read_file / Tool Result / bundle as source of truth; traceable claims), and **partial reads** (state when only a slice was seen; use `offset`/`limit` before asserting unseen regions).
 - CDP composer hint (file-attach path): `apps/desktop/src-tauri/src/agent_loop.rs` — `CDP_FILE_DELIVERY_USER_MESSAGE`, **grounding** paragraph: forbid generic “fatal syntax / missing HTML / drawBlock” checklists unless those issues appear in the attached bundle; require traceability to `read_file` content.
-- Node CDP bridge: `apps/desktop/src-tauri/binaries/copilot_server.js` — optional `relay_new_chat` on chat completions; default **append** to current Copilot thread (not a new chat every turn).
+- Node CDP bridge: `apps/desktop/src-tauri/binaries/copilot_server.js` — optional `relay_new_chat` on chat completions; default **append** to current Copilot thread (not a new chat every turn); `POST /v1/chat/abort` cooperates with **Cancel**.
+- CDP bundle prefix: `apps/desktop/src-tauri/src/agent_loop.rs` — `build_cdp_prompt` prepends `CDP_BUNDLE_GROUNDING_BLOCK` (identifiers must appear in Tool Result; quote or line numbers).
 
 ## Fixture (optional smoke)
 

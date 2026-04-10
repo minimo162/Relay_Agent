@@ -447,6 +447,8 @@ class CopilotSession {
   cdpTargetId = null;
   cdpSession = null;
   cdpPort = null;
+  /** Set by POST /v1/chat/abort; `waitForDomResponse` / `submitPromptRaw` poll to exit early. */
+  abortDescribe = false;
   /** Serialize /v1/chat/completions — overlapping POSTs (e.g. Rust retry while Copilot still runs) must wait, not 500 "busy". */
   _describeChain = Promise.resolve();
 
@@ -626,6 +628,7 @@ class CopilotSession {
     let pageSession = null;
     let attachmentTempFiles = [];
     try {
+      this.abortDescribe = false;
       console.error("[copilot:describe] connecting...");
       await this.connect(globalOptions.cdpPort);
       console.error("[copilot:describe] finding copilot page...");
@@ -674,6 +677,8 @@ class CopilotSession {
       let hadAttachments = false;
       try {
         const wantNewChat = envNewChatEachTurn() || options.relayNewChat === true;
+        const envEach = envNewChatEachTurn();
+        console.error("[copilot:describe] wantNewChat=", wantNewChat, "RELAY_COPILOT_NEW_CHAT_EACH_TURN=", envEach ? "on" : "off", "relayNewChat=", options.relayNewChat === true);
         if (wantNewChat) {
           console.error("[copilot:describe] starting new chat...");
           const newChatOk = await clickNewChatDeep(pageSession);
@@ -696,11 +701,15 @@ class CopilotSession {
         await pastePromptRaw(pageSession, fullPrompt);
 
         console.error("[copilot:describe] submitting prompt...");
-        return await submitPromptRaw(pageSession, fullPrompt.length, netCapture, { hadAttachments });
+        return await submitPromptRaw(pageSession, fullPrompt.length, netCapture, {
+          hadAttachments,
+          abortCheck: () => this.abortDescribe,
+        });
       } finally {
         await netCapture.disable().catch(() => {});
       }
     } finally {
+      this.abortDescribe = false;
       for (const tf of attachmentTempFiles) {
         setTimeout(() => {
           fs.promises.unlink(tf).catch(() => {});
@@ -1994,6 +2003,7 @@ async function clickSendViaCdpMouse(session) {
 
 async function submitPromptRaw(session, expectedPromptLen, netCapture = null, opts = {}) {
   const hadAttachments = opts.hadAttachments === true;
+  const abortCheck = typeof opts.abortCheck === "function" ? opts.abortCheck : null;
   const stableMs = hadAttachments ? SEND_BUTTON_STABLE_MS_AFTER_ATTACH : SEND_BUTTON_STABLE_MS_DEFAULT;
 
   const minComposer = minComposerThresholdForSubmit(expectedPromptLen);
@@ -2001,6 +2011,9 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
   // Until composer shows our text, Send often stays disabled
   const composeDeadline = Date.now() + 15e3;
   while (Date.now() < composeDeadline) {
+    if (abortCheck && abortCheck()) {
+      throw new Error("relay_copilot_aborted");
+    }
     if (await copilotAttachmentStillPending(session)) {
       await sleep(200);
       continue;
@@ -2026,6 +2039,9 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
   const deadline = Date.now() + 45e3;
   let stableSince = 0;
   while (!sendClicked && Date.now() < deadline) {
+    if (abortCheck && abortCheck()) {
+      throw new Error("relay_copilot_aborted");
+    }
     const pos = await findSendButtonCenter(session);
     const pending = await copilotAttachmentStillPending(session);
     if (pos.ok && !pending) {
@@ -2094,7 +2110,7 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
     RESPONSE_TIMEOUT_MS / 1000,
     "s)…",
   );
-  return await waitForDomResponse(session, netCapture, expectedPromptLen);
+  return await waitForDomResponse(session, netCapture, expectedPromptLen, abortCheck);
 }
 
 function copilotDomGeneratingIifeExpression() {
@@ -3301,7 +3317,7 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
   return null;
 }
 
-async function waitForDomResponse(session, netCapture = null, submittedPromptLen = 0) {
+async function waitForDomResponse(session, netCapture = null, submittedPromptLen = 0, abortCheck = null) {
   const wire = async (s) => {
     let t = stripStreamingPlaceholderTail(String(s ?? "").trim());
     if (netCapture) t = stripStreamingPlaceholderTail(String(await netCapture.pickBestOver(t, submittedPromptLen) ?? "").trim());
@@ -3334,6 +3350,9 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
     Math.max(streamed ? 2 : 5, baselineLen + (streamed ? 1 : 5));
 
   while (Date.now() < deadline) {
+    if (abortCheck && abortCheck()) {
+      throw new Error("relay_copilot_aborted");
+    }
     await sleep(RESPONSE_POLL_INTERVAL_MS);
     const { generating: generatingRaw, reply: replyRaw } = await pollCopilotGeneratingAndReply(session);
     const reply = replyRaw.trim();
@@ -4310,7 +4329,12 @@ function createServer(session) {
         const status = await session.inspectStatus();
         return writeJson(res, 200, status);
       }
-      if (req.method === "POST" && req.url === "/v1/chat/completions") {
+      if (req.method === "POST" && reqUrl.pathname === "/v1/chat/abort") {
+        session.abortDescribe = true;
+        console.error("[copilot:http] POST /v1/chat/abort — abortDescribe set");
+        return writeJson(res, 200, { ok: true, aborted: true });
+      }
+      if (req.method === "POST" && reqUrl.pathname === "/v1/chat/completions") {
         const payload = await readJsonBody(req);
         const prompt = parseOpenAiRequest(payload);
         console.error(
@@ -4336,6 +4360,9 @@ function createServer(session) {
       console.error("[copilot] request failed:", error);
       if (error instanceof CopilotLoginRequiredError) {
         return writeJson(res, 401, { error: "login_required", message });
+      }
+      if (message === "relay_copilot_aborted") {
+        return writeJson(res, 499, { error: "relay_copilot_aborted" });
       }
       return writeJson(res, 500, { error: message });
     }

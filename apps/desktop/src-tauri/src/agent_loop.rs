@@ -474,7 +474,14 @@ pub fn run_agent_loop_impl(
         let summary = match runtime_session.run_turn(turn_input, Some(&mut prompter)) {
             Ok(summary) => summary,
             Err(error) => {
-                emit_error(app, session_id, &format!("agent loop failed: {error}"), false);
+                let err_str = error.to_string();
+                let cancelled = err_str.contains("relay_copilot_aborted");
+                emit_error(
+                    app,
+                    session_id,
+                    &format!("agent loop failed: {error}"),
+                    cancelled,
+                );
                 break;
             }
         };
@@ -624,7 +631,14 @@ impl ApiClient for CdpApiClient {
                     )
                     .await
             })
-            .map_err(|e| RuntimeError::new(format!("Copilot request failed: {e}")))?
+            .map_err(|e| {
+                let es = e.to_string();
+                if es.contains("relay_copilot_aborted") {
+                    RuntimeError::new("relay_copilot_aborted")
+                } else {
+                    RuntimeError::new(format!("Copilot request failed: {e}"))
+                }
+            })?
         };
 
         if let Some(path) = temp_prompt_file {
@@ -1250,9 +1264,16 @@ fn parse_one_tool_call(v: &Value) -> Option<(String, String, String)> {
     Some((id, name, input_str))
 }
 
+/// Short CDP-only rules (prefix of the bundle) so the model lists concrete bugs only when they appear in Tool Result / read_file text above.
+const CDP_BUNDLE_GROUNDING_BLOCK: &str = "## CDP bundle (read before you reply)\n\
+Do not list line-level bugs, missing tags, or identifiers (e.g. `x_size`, `bag.length0`) unless they appear verbatim in a `read_file` or Tool Result in this bundle. If you cite a problem, quote a short substring or line numbers from that text.\n\
+If the bundle contradicts a generic fix checklist, describe what the bundle actually contains instead of inventing errors.";
+
 /// Convert an `ApiRequest` into a human-readable text prompt for CDP.
 fn build_cdp_prompt(request: &ApiRequest<'_>, preset: SessionPreset) -> String {
     let mut parts = Vec::new();
+
+    parts.push(CDP_BUNDLE_GROUNDING_BLOCK.to_string());
 
     if !request.system_prompt.is_empty() {
         parts.push(request.system_prompt.join("\n\n"));
