@@ -473,6 +473,7 @@ fn get_simple_doing_tasks_section() -> String {
         "If an approach fails, diagnose the failure before switching tactics.".to_string(),
         "Be careful not to introduce security vulnerabilities such as command injection, XSS, or SQL injection.".to_string(),
         "Report outcomes faithfully: if verification fails or was not run, say so explicitly.".to_string(),
+        "Do not assert that something exists, occurred, or was fixed unless it is grounded in tool output, user messages, or file contents you read—never invent plausible-sounding bugs, identifiers, numbers, events, or edits (code or otherwise).".to_string(),
     ]);
 
     std::iter::once("# Doing tasks".to_string())

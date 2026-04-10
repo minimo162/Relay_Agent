@@ -16,6 +16,14 @@
 
 ## Milestone Log
 
+### 2026-04-10 Agent evaluation: grounding prompt + fixture + criteria doc
+
+**Intent:** Reduce ungrounded “fix lists” and strengthen honest reporting for any domain (not only code).
+
+**Change:** [`prompt.rs`](../apps/desktop/src-tauri/crates/runtime/src/prompt.rs) — `get_simple_doing_tasks_section` adds a bullet: do not assert existence of bugs, identifiers, numbers, events, or edits unless grounded in tool output, user messages, or read files. New doc [`AGENT_EVALUATION_CRITERIA.md`](AGENT_EVALUATION_CRITERIA.md) — manual/regression checklist. Fixture [`tests/fixtures/tetris_canvas.html`](../tests/fixtures/tetris_canvas.html) — sample single-file Tetris (UTF-8 hints) for optional offline checks.
+
+**Verification:** `cargo test -p runtime --lib` (apps/desktop/src-tauri) — pass. Fixture script: extract `<script>` inner text and `node --check` — pass (2026-04-10).
+
 ### 2026-04-10 Copilot connection: `browser_settings` + warmup UX
 
 **Problem:** The desktop sent `browserSettings` with `start_agent` (`localStorage` `relay.settings.browser`) but Rust ignored it; the Node bridge always used CDP **9360** and a fixed **120s** Copilot reply timeout. Warmup could not align with the same port hints, and the footer cleared Copilot hints on send.

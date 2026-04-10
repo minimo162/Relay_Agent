@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<title>Canvas Tetris (単一HTML)</title>
+<style>
+  body {
+    background:#111; color:#eee; font-family:system-ui, -apple-system, "Segoe UI", sans-serif;
+    display:flex; justify-content:center; align-items:flex-start; gap:16px; padding:16px;
+  }
+  canvas { background:#000; border:1px solid #444; }
+  .panel { width:260px; }
+  .box { border:1px solid #444; padding:8px; margin-bottom:8px; }
+  .title { font-weight:bold; margin-bottom:6px; }
+  .stat { display:flex; justify-content:space-between; }
+  .hint { font-size:12px; line-height:1.4; color:#ccc; }
+  .state { font-weight:bold; }
+</style>
+</head>
+<body>
+  <canvas id="game" width="300" height="600"></canvas>
+
+  <div class="panel">
+    <div class="box">
+      <div class="title">NEXT</div>
+      <canvas id="next" width="120" height="240"></canvas>
+    </div>
+    <div class="box">
+      <div class="title">HOLD</div>
+      <canvas id="hold" width="120" height="120"></canvas>
+    </div>
+    <div class="box">
+      <div class="title">STATUS</div>
+      <div class="stat"><span>Score</span><span id="score">0</span></div>
+      <div class="stat"><span>Level</span><span id="level">1</span></div>
+      <div class="stat"><span>Lines</span><span id="lines">0</span></div>
+      <div class="stat state" id="state">PLAYING</div>
+    </div>
+    <div class="box hint">
+      <div class="title">操作</div>
+      ←/→：移動　↓：ソフトドロップ<br/>
+      Space：ハードドロップ<br/>
+      Z：反時計回り　X / ↑：時計回り<br/>
+      C：ホールド（1回/1ミノ）<br/>
+      P：一時停止　R：リスタート
+    </div>
+  </div>
+
+<script>
+// ============================
+// 基本定数・描画設定
+// ============================
+const COLS = 10, ROWS = 20, BLOCK = 30;
+const COLORS = {
+  I:"#00f0f0", O:"#f0f000", T:"#a000f0",
+  S:"#00f000", Z:"#f00000", J:"#0000f0", L:"#f0a000"
+};
+
+// ミノ定義（回転は行列）
+const SHAPES = {
+  I:[[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
+  O:[[1,1],[1,1]],
+  T:[[0,1,0],[1,1,1],[0,0,0]],
+  S:[[0,1,1],[1,1,0],[0,0,0]],
+  Z:[[1,1,0],[0,1,1],[0,0,0]],
+  J:[[1,0,0],[1,1,1],[0,0,0]],
+  L:[[0,0,1],[1,1,1],[0,0,0]]
+};
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const nextCanvas = document.getElementById("next");
+const nextCtx = nextCanvas.getContext("2d");
+const holdCanvas = document.getElementById("hold");
+const holdCtx = holdCanvas.getContext("2d");
+
+// ============================
+// ユーティリティ
+// ============================
+const clone = m => m.map(r=>r.slice());
+const rotateCW  = m => m[0].map((_,i)=>m.map(r=>r[i]).reverse());
+const rotateCCW = m => rotateCW(rotateCW(rotateCW(m)));
+
+function drawBlock(c, x, y, size, color){
+  c.fillStyle = color;
+  c.fillRect(x*size, y*size, size, size);
+  c.strokeStyle="#111";
+  c.strokeRect(x*size, y*size, size, size);
+}
+
+// ============================
+// 7バッグ生成
+// ============================
+let bag = [];
+function refillBag(){
+  const types = Object.keys(SHAPES);
+  for (let i=types.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [types[i],types[j]]=[types[j],types[i]];
+  }
+  bag = bag.concat(types);
+}
+function nextType(){
+  if (bag.length===0) refillBag();
+  return bag.shift();
+}
+
+// ============================
+// ゲーム状態
+// ============================
+let board, cur, nextQueue, holdType=null, holdUsed=false;
+let score=0, level=1, lines=0;
+let paused=false, gameOver=false;
+
+// 落下制御
+let dropInterval = 1000; // ms
+let dropTimer = 0;
+let lastTime = 0;
+
+// ============================
+// 初期化
+// ============================
+function reset(){
+  board = Array.from({length:ROWS},()=>Array(COLS).fill(null));
+  bag = [];
+  nextQueue = [];
+  holdType=null; holdUsed=false;
+  score=0; level=1; lines=0;
+  paused=false; gameOver=false;
+  updateSpeed();
+  for(let i=0;i<5;i++) nextQueue.push(nextType());
+  spawn();
+  updateUI();
+}
+function spawn(){
+  const type = nextQueue.shift();
+  nextQueue.push(nextType());
+  cur = {
+    type,
+    matrix: clone(SHAPES[type]),
+    x: Math.floor(COLS/2)-2,
+    y: -1
+  };
+  holdUsed=false;
+  if (collide(cur.matrix, cur.x, cur.y)) {
+    gameOver=true;
+  }
+}
+function updateSpeed(){
+  dropInterval = Math.max(100, 1000 - (level-1)*100);
+}
+
+// ============================
+// 衝突判定・固定・消去
+// ============================
+function collide(mat, ox, oy){
+  for(let y=0;y<mat.length;y++){
+    for(let x=0;x<mat[y].length;x++){
+      if(!mat[y][x]) continue;
+      const nx = ox+x, ny = oy+y;
+      if(nx<0 || nx>=COLS || ny>=ROWS) return true;
+      if(ny>=0 && board[ny][nx]) return true;
+    }
+  }
+  return false;
+}
+function merge(){
+  const {matrix, x:ox, y:oy, type} = cur;
+  for(let y=0;y<matrix.length;y++){
+    for(let x=0;x<matrix[y].length;x++){
+      if(matrix[y][x]){
+        const ny = oy+y;
+        if(ny>=0) board[ny][ox+x]=type;
+      }
+    }
+  }
+}
+function clearLines(){
+  let cleared=0;
+  outer: for(let y=ROWS-1;y>=0;y--){
+    for(let x=0;x<COLS;x++) if(!board[y][x]) continue outer;
+    board.splice(y,1);
+    board.unshift(Array(COLS).fill(null));
+    cleared++; y++;
+  }
+  if(cleared){
+    const pts = [0,100,300,500,800][cleared];
+    score += pts * level;
+    lines += cleared;
+    level = Math.floor(lines/10)+1;
+    updateSpeed();
+  }
+}
+
+// ============================
+// 回転（簡易SRS：左右・床キック）
+// ============================
+function rotate(dir){
+  const nextMat = dir==="CW" ? rotateCW(cur.matrix) : rotateCCW(cur.matrix);
+  const kicks = [{x:0,y:0},{x:-1,y:0},{x:1,y:0},{x:0,y:-1},{x:-2,y:0},{x:2,y:0}];
+  for(const k of kicks){
+    if(!collide(nextMat, cur.x+k.x, cur.y+k.y)){
+      cur.matrix = nextMat;
+      cur.x += k.x; cur.y += k.y;
+      return;
+    }
+  }
+}
+
+// ============================
+// 入力
+// ============================
+document.addEventListener("keydown", e=>{
+  if(gameOver && e.key!=="r" && e.key!=="R") return;
+  if(e.key==="p"||e.key==="P"){ paused=!paused; return; }
+  if(paused) return;
+
+  switch(e.key){
+    case "ArrowLeft":
+      if(!collide(cur.matrix, cur.x-1, cur.y)) cur.x--;
+      break;
+    case "ArrowRight":
+      if(!collide(cur.matrix, cur.x+1, cur.y)) cur.x++;
+      break;
+    case "ArrowDown":
+      softDrop(); break;
+    case " ":
+      hardDrop(); break;
+    case "z": case "Z":
+      rotate("CCW"); break;
+    case "x": case "X": case "ArrowUp":
+      rotate("CW"); break;
+    case "c": case "C":
+      hold(); break;
+    case "r": case "R":
+      reset(); break;
+  }
+});
+
+function softDrop(){
+  if(!collide(cur.matrix, cur.x, cur.y+1)){
+    cur.y++; score+=1;
+  } else lock();
+}
+function hardDrop(){
+  let d=0;
+  while(!collide(cur.matrix, cur.x, cur.y+1)){ cur.y++; d++; }
+  score += d*2;
+  lock();
+}
+function hold(){
+  if(holdUsed) return;
+  holdUsed=true;
+  if(!holdType){
+    holdType = cur.type;
+    spawn();
+  }else{
+    [holdType, cur.type] = [cur.type, holdType];
+    cur.matrix = clone(SHAPES[cur.type]);
+    cur.x = Math.floor(COLS/2)-2; cur.y=-1;
+    if(collide(cur.matrix, cur.x, cur.y)) gameOver=true;
+  }
+}
+function lock(){
+  merge();
+  clearLines();
+  spawn();
+  updateUI();
+}
+
+// ============================
+// 描画
+// ============================
+function drawBoard(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  for(let y=0;y<ROWS;y++) for(let x=0;x<COLS;x++){
+    if(board[y][x]) drawBlock(ctx,x,y,BLOCK,COLORS[board[y][x]]);
+  }
+}
+function drawCurrent(){
+  const {matrix, x:ox, y:oy, type} = cur;
+  for(let y=0;y<matrix.length;y++) for(let x=0;x<matrix[y].length;x++){
+    if(matrix[y][x] && oy+y>=0)
+      drawBlock(ctx,ox+x,oy+y,BLOCK,COLORS[type]);
+  }
+}
+function drawNext(){
+  nextCtx.clearRect(0,0,nextCanvas.width,nextCanvas.height);
+  nextQueue.slice(0,3).forEach((t,i)=>{
+    const m = SHAPES[t];
+    for(let y=0;y<m.length;y++) for(let x=0;x<m[y].length;x++){
+      if(m[y][x]) drawBlock(nextCtx,x+1,y+i*4+1,20,COLORS[t]);
+    }
+  });
+}
+function drawHold(){
+  holdCtx.clearRect(0,0,holdCanvas.width,holdCanvas.height);
+  if(!holdType) return;
+  const m = SHAPES[holdType];
+  for(let y=0;y<m.length;y++) for(let x=0;x<m[y].length;x++){
+    if(m[y][x]) drawBlock(holdCtx,x+1,y+1,20,COLORS[holdType]);
+  }
+}
+function updateUI(){
+  document.getElementById("score").textContent = score;
+  document.getElementById("level").textContent = level;
+  document.getElementById("lines").textContent = lines;
+  document.getElementById("state").textContent =
+    gameOver ? "GAME OVER" : (paused ? "PAUSED" : "PLAYING");
+}
+
+// ============================
+// ゲームループ（60fps + 落下タイマー）
+// ============================
+function loop(time=0){
+  const dt = time-lastTime; lastTime=time;
+  if(!paused && !gameOver){
+    dropTimer += dt;
+    if(dropTimer>dropInterval){
+      dropTimer=0;
+      if(!collide(cur.matrix, cur.x, cur.y+1)) cur.y++;
+      else lock();
+    }
+  }
+  drawBoard(); if(cur && !gameOver) drawCurrent();
+  drawNext(); drawHold(); updateUI();
+  requestAnimationFrame(loop);
+}
+
+// ============================
+reset();
+loop();
+// ============================
+</script>
+</body>
+</html>
