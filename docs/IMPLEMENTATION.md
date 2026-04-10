@@ -16,6 +16,22 @@
 
 ## Milestone Log
 
+### 2026-04-10 Agent evaluation: authoritative file text + partial reads (prompt)
+
+**Change:** [`prompt.rs`](../apps/desktop/src-tauri/crates/runtime/src/prompt.rs) — `get_simple_doing_tasks_section` adds bullets: treat tool/bundle file text as source of truth (traceable claims); use `read_file` **`offset`/`limit`** when only a slice was seen.
+
+**Verification:** `cargo test -p runtime --lib` (apps/desktop/src-tauri) — pass (2026-04-10).
+
+### 2026-04-10 Agent evaluation: attachment vs grounding (A vs B)
+
+**Change:** [`AGENT_EVALUATION_CRITERIA.md`](AGENT_EVALUATION_CRITERIA.md) — subsection **“Not reading the attachment” — two meanings** (input not delivered vs delivered but not grounded); triage note when Tool Result contains full `content`.
+
+### 2026-04-10 Agent evaluation: Tool Result vs narration (criteria doc)
+
+**Change:** [`AGENT_EVALUATION_CRITERIA.md`](AGENT_EVALUATION_CRITERIA.md) — new section **Example: contradiction with Tool Result (not a host read failure)**; fixture bullet for `rg x_size|y_size` spot-check on `tests/fixtures/tetris_canvas.html` (no matches).
+
+**Verification:** `rg 'x_size|y_size' tests/fixtures/tetris_canvas.html` — no matches (2026-04-10).
+
 ### 2026-04-10 Agent evaluation: grounding prompt + fixture + criteria doc
 
 **Intent:** Reduce ungrounded “fix lists” and strengthen honest reporting for any domain (not only code).

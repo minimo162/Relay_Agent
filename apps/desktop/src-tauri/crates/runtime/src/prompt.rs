@@ -474,6 +474,8 @@ fn get_simple_doing_tasks_section() -> String {
         "Be careful not to introduce security vulnerabilities such as command injection, XSS, or SQL injection.".to_string(),
         "Report outcomes faithfully: if verification fails or was not run, say so explicitly.".to_string(),
         "Do not assert that something exists, occurred, or was fixed unless it is grounded in tool output, user messages, or file contents you read—never invent plausible-sounding bugs, identifiers, numbers, events, or edits (code or otherwise).".to_string(),
+        "When read_file output, Tool Result content, or file text in the session bundle is present, treat it as the source of truth for that file: claims about syntax, structure, bugs, or symbols must be traceable to those strings (quote a short substring, cite line numbers from the tool output, or paraphrase only what appears there).".to_string(),
+        "If a file is large or you only saw a slice, say so; use read_file with offset/limit (line-based) or a follow-up read before claiming behavior in parts you have not read.".to_string(),
     ]);
 
     std::iter::once("# Doing tasks".to_string())
