@@ -425,6 +425,14 @@ function normalizeWebSocketUrl(url) {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+/** When truthy, every /v1/chat/completions runs clickNewChatDeep before paste (legacy; default off). */
+function envNewChatEachTurn() {
+  const v = process.env.RELAY_COPILOT_NEW_CHAT_EACH_TURN;
+  if (!v) return false;
+  const s = String(v).toLowerCase();
+  return s === "1" || s === "true" || s === "yes" || s === "on";
+}
+
 function withTimeout(promise, ms, label) {
   let t;
   const timeout = new Promise((_, reject) => {
@@ -606,15 +614,15 @@ class CopilotSession {
     }
   }
 
-  async describe(systemPrompt, userPrompt, imageB64, attachmentPaths) {
+  async describe(systemPrompt, userPrompt, imageB64, attachmentPaths, options = {}) {
     const pending = this._describeChain.then(() =>
-      this.describeImpl(systemPrompt, userPrompt, imageB64, attachmentPaths || []),
+      this.describeImpl(systemPrompt, userPrompt, imageB64, attachmentPaths || [], options),
     );
     this._describeChain = pending.catch(() => {});
     return pending;
   }
 
-  async describeImpl(systemPrompt, userPrompt, imageB64, attachmentPaths = []) {
+  async describeImpl(systemPrompt, userPrompt, imageB64, attachmentPaths = [], options = {}) {
     let pageSession = null;
     let attachmentTempFiles = [];
     try {
@@ -665,13 +673,19 @@ class CopilotSession {
 
       let hadAttachments = false;
       try {
-        console.error("[copilot:describe] starting new chat...");
-        const newChatOk = await clickNewChatDeep(pageSession);
-        if (!newChatOk) {
-          console.error("[copilot:describe] new chat not found (css+shadow+a11y); last-chance CDP click");
-          await pageSession.click(NEW_CHAT_BUTTON_SELECTORS[0]).catch(() => {});
+        const wantNewChat = envNewChatEachTurn() || options.relayNewChat === true;
+        if (wantNewChat) {
+          console.error("[copilot:describe] starting new chat...");
+          const newChatOk = await clickNewChatDeep(pageSession);
+          if (!newChatOk) {
+            console.error("[copilot:describe] new chat not found (css+shadow+a11y); last-chance CDP click");
+            await pageSession.click(NEW_CHAT_BUTTON_SELECTORS[0]).catch(() => {});
+          }
+          await sleep(1600);
+        } else {
+          console.error("[copilot:describe] continuing in current Copilot thread (no new chat click)");
+          await sleep(500);
         }
-        await sleep(1600);
 
         const upload = await uploadCopilotAttachments(pageSession, attachmentPaths, imageB64);
         attachmentTempFiles = upload.tempFiles;
@@ -4310,6 +4324,7 @@ function createServer(session) {
           prompt.userPrompt,
           prompt.imageB64,
           prompt.attachmentPaths,
+          { relayNewChat: prompt.relayNewChat },
         );
         return writeJson(res, 200, {
           choices: [{ message: { role: "assistant", content: description } }]
@@ -4359,7 +4374,8 @@ function parseOpenAiRequest(payload) {
   const ra = payload.relay_attachments;
   const attachmentPaths = Array.isArray(ra) ? ra.map((x) => String(x || "").trim()).filter(Boolean) : [];
   if (!userPrompt.trim()) throw new Error("User prompt is empty");
-  return { systemPrompt, userPrompt, imageB64, attachmentPaths };
+  const relayNewChat = payload.relay_new_chat === true;
+  return { systemPrompt, userPrompt, imageB64, attachmentPaths, relayNewChat };
 }
 
 function extractBase64(url) { const m = url.match(/^data:[^;]+;base64,(.+)$/); return m ? m[1] : url; }

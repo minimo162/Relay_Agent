@@ -16,6 +16,14 @@
 
 ## Milestone Log
 
+### 2026-04-10 CDP: stop new-chat click every agent turn (Node bridge)
+
+**Problem:** [`copilot_server.js`](../apps/desktop/src-tauri/binaries/copilot_server.js) `describeImpl` called `clickNewChatDeep` before every `POST /v1/chat/completions`, so Copilot reset the thread each turn even inside one Relay session.
+
+**Change:** Default is **no** new-chat click (append in current Copilot thread). JSON field `relay_new_chat: true` requests a new thread before paste. Env `RELAY_COPILOT_NEW_CHAT_EACH_TURN=1` restores legacy per-turn new chat. [`copilot_server.rs`](../apps/desktop/src-tauri/src/copilot_server.rs) `send_prompt(..., new_chat)` sends `relay_new_chat` when true; agent loop passes `false`.
+
+**Verification:** `cargo test -p relay-agent-desktop --lib` — pass (2026-04-10).
+
 ### 2026-04-10 CDP: composer message grounding (anti-template checklist)
 
 **Change:** [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) — `CDP_FILE_DELIVERY_USER_MESSAGE` adds mandatory grounding: claims about syntax/HTML/identifiers/`drawBlock` must trace to bundle `read_file` content; no generic “fatal syntax + structure” plans when absent. [`AGENT_EVALUATION_CRITERIA.md`](AGENT_EVALUATION_CRITERIA.md) — **Copilot thread vs Relay session** (context continuity).

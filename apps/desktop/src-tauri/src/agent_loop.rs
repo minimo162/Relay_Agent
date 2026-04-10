@@ -620,6 +620,7 @@ impl ApiClient for CdpApiClient {
                         user_message,
                         self.response_timeout_secs,
                         &attachment_paths,
+                        false,
                     )
                     .await
             })
