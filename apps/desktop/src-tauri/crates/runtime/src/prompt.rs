@@ -38,6 +38,9 @@ pub const SYSTEM_PROMPT_DYNAMIC_BOUNDARY: &str = "__SYSTEM_PROMPT_DYNAMIC_BOUNDA
 pub const FRONTIER_MODEL_NAME: &str = "Claude Opus 4.6";
 const MAX_INSTRUCTION_FILE_CHARS: usize = 4_000;
 const MAX_TOTAL_INSTRUCTION_CHARS: usize = 12_000;
+const MAX_GIT_STATUS_CHARS: usize = 2_000;
+const MAX_GIT_DIFF_SECTION_CHARS: usize = 4_000;
+const MAX_GIT_DIFF_TOTAL_CHARS: usize = 8_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextFile {
@@ -236,28 +239,63 @@ fn read_git_status(cwd: &Path) -> Option<String> {
     if trimmed.is_empty() {
         None
     } else {
-        Some(trimmed.to_string())
+        Some(truncate_prompt_snapshot(
+            trimmed,
+            MAX_GIT_STATUS_CHARS,
+            "git status snapshot truncated to fit prompt budget",
+        ))
     }
 }
 
 fn read_git_diff(cwd: &Path) -> Option<String> {
     let mut sections = Vec::new();
 
-    let staged = read_git_output(cwd, &["diff", "--cached"])?;
-    if !staged.trim().is_empty() {
-        sections.push(format!("Staged changes:\n{}", staged.trim_end()));
-    }
-
-    let unstaged = read_git_output(cwd, &["diff"])?;
-    if !unstaged.trim().is_empty() {
-        sections.push(format!("Unstaged changes:\n{}", unstaged.trim_end()));
-    }
+    push_git_diff_section(cwd, "Staged", &["diff", "--cached", "--stat"], &["diff", "--cached"], &mut sections);
+    push_git_diff_section(cwd, "Unstaged", &["diff", "--stat"], &["diff"], &mut sections);
 
     if sections.is_empty() {
         None
     } else {
-        Some(sections.join("\n\n"))
+        Some(truncate_prompt_snapshot(
+            &sections.join("\n\n"),
+            MAX_GIT_DIFF_TOTAL_CHARS,
+            "git diff snapshot truncated to fit prompt budget",
+        ))
     }
+}
+
+fn push_git_diff_section(
+    cwd: &Path,
+    label: &str,
+    stat_args: &[&str],
+    patch_args: &[&str],
+    sections: &mut Vec<String>,
+) {
+    let stat = read_git_output(cwd, stat_args).unwrap_or_default();
+    let patch = read_git_output(cwd, patch_args).unwrap_or_default();
+    if stat.trim().is_empty() && patch.trim().is_empty() {
+        return;
+    }
+
+    let mut lines = vec![format!("{label} changes:")];
+    if !stat.trim().is_empty() {
+        lines.push("Summary:".to_string());
+        lines.push(truncate_prompt_snapshot(
+            stat.trim_end(),
+            MAX_GIT_DIFF_SECTION_CHARS,
+            "diff summary truncated to fit prompt budget",
+        ));
+    }
+    if !patch.trim().is_empty() {
+        lines.push("Patch excerpt:".to_string());
+        lines.push(truncate_prompt_snapshot(
+            patch.trim_end(),
+            MAX_GIT_DIFF_SECTION_CHARS,
+            "patch excerpt truncated to fit prompt budget",
+        ));
+    }
+
+    sections.push(lines.join("\n"));
 }
 
 fn read_git_output(cwd: &Path, args: &[&str]) -> Option<String> {
@@ -293,10 +331,21 @@ pub fn render_project_context(project_context: &ProjectContext) -> String {
     }
     if let Some(diff) = &project_context.git_diff {
         lines.push(String::new());
-        lines.push("Git diff snapshot:".to_string());
+        lines.push("Git diff snapshot (budgeted):".to_string());
         lines.push(diff.clone());
     }
     lines.join("\n")
+}
+
+fn truncate_prompt_snapshot(content: &str, limit: usize, reason: &str) -> String {
+    let trimmed = content.trim();
+    if trimmed.chars().count() <= limit {
+        return trimmed.to_string();
+    }
+
+    let mut output = trimmed.chars().take(limit).collect::<String>();
+    output.push_str(&format!("\n\n[{reason}]"));
+    output
 }
 
 #[must_use]
@@ -506,8 +555,9 @@ pub fn claw_style_discipline_sections() -> Vec<String> {
 mod tests {
     use super::{
         collapse_blank_lines, display_context_path, normalize_instruction_content,
-        render_instruction_content, render_instruction_files, truncate_instruction_content,
-        ContextFile, ProjectContext, SystemPromptBuilder, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+        render_instruction_content, render_instruction_files, render_project_context,
+        truncate_instruction_content, truncate_prompt_snapshot, ContextFile, ProjectContext,
+        SystemPromptBuilder, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
     };
     use crate::config::ConfigLoader;
     use std::fs;
@@ -791,5 +841,26 @@ mod tests {
         assert!(rendered.contains("# Workspace instructions"));
         assert!(rendered.contains("scope: /tmp/project"));
         assert!(rendered.contains("Project rules"));
+    }
+
+    #[test]
+    fn truncates_project_context_git_snapshots_to_budget() {
+        let rendered = render_project_context(&ProjectContext {
+            cwd: PathBuf::from("/tmp/project"),
+            current_date: "2026-04-11".to_string(),
+            git_status: Some("s".repeat(3_000)),
+            git_diff: Some("d".repeat(10_000)),
+            instruction_files: Vec::new(),
+        });
+        assert!(rendered.contains("git diff snapshot (budgeted)"));
+        assert!(rendered.contains("git diff snapshot truncated to fit prompt budget"));
+        assert!(rendered.contains("s"));
+    }
+
+    #[test]
+    fn truncate_prompt_snapshot_marks_omitted_content() {
+        let rendered = truncate_prompt_snapshot(&"x".repeat(64), 16, "snapshot truncated");
+        assert!(rendered.contains("[snapshot truncated]"));
+        assert!(rendered.starts_with("xxxxxxxxxxxxxxxx"));
     }
 }

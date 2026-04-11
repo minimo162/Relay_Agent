@@ -48,7 +48,7 @@
 - `docs/IMPLEMENTATION.md` holds progress notes, decisions, verification runs, and known limitations.
 - `docs/AGENT_EVALUATION_CRITERIA.md` holds manual/regression criteria for model grounding and Relay tool protocol (independent of a specific user task).
 - `README.md` should reflect the current implemented behavior and setup instructions.
-- Archived planning docs (`docs/archive/`) contain historical CODEX_PROMPT files from early development.
+- Archived planning docs (`docs/archive/`) contain historical CODEX/Codex prompt files from early development; runtime prompt behavior is defined in the Rust source, not those archived artifacts.
 
 ## Task Master Usage
 
