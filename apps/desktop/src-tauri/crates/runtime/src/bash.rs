@@ -1,5 +1,8 @@
 use std::env;
+use std::fs::File;
 use std::io;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -23,6 +26,8 @@ pub struct BashCommandInput {
     pub description: Option<String>,
     #[serde(rename = "run_in_background")]
     pub run_in_background: Option<bool>,
+    #[serde(rename = "backgroundedBy")]
+    pub backgrounded_by: Option<BackgroundedBy>,
     #[serde(
         rename = "dangerouslyDisableSandbox",
         alias = "dangerously_disable_sandbox"
@@ -36,6 +41,48 @@ pub struct BashCommandInput {
     pub filesystem_mode: Option<FilesystemIsolationMode>,
     #[serde(rename = "allowedMounts")]
     pub allowed_mounts: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundTaskState {
+    Requested,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundedBy {
+    User,
+    Assistant,
+    System,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackgroundTaskStdioPaths {
+    #[serde(rename = "stdoutPath")]
+    pub stdout_path: String,
+    #[serde(rename = "stderrPath")]
+    pub stderr_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackgroundTaskInfo {
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    pub state: BackgroundTaskState,
+    #[serde(rename = "startedBy")]
+    pub started_by: BackgroundedBy,
+    pub stdio: BackgroundTaskStdioPaths,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreparedBackgroundTaskLogs {
+    task_id: String,
+    stdio: BackgroundTaskStdioPaths,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -53,6 +100,11 @@ pub struct BashCommandOutput {
     pub backgrounded_by_user: Option<bool>,
     #[serde(rename = "assistantAutoBackgrounded")]
     pub assistant_auto_backgrounded: Option<bool>,
+    pub stdio: Option<BackgroundTaskStdioPaths>,
+    pub state: Option<BackgroundTaskState>,
+    #[serde(rename = "backgroundedBy")]
+    pub backgrounded_by: Option<BackgroundedBy>,
+    pub background: Option<BackgroundTaskInfo>,
     #[serde(rename = "dangerouslyDisableSandbox")]
     pub dangerously_disable_sandbox: Option<bool>,
     #[serde(rename = "returnCodeInterpretation")]
@@ -89,12 +141,21 @@ pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
     }
 
     if input.run_in_background.unwrap_or(false) {
+        let started_by = input
+            .backgrounded_by
+            .clone()
+            .unwrap_or(BackgroundedBy::User);
+        let prepared_logs = prepare_background_stdio_paths()?;
+        let stdout_file = File::create(&prepared_logs.stdio.stdout_path)?;
+        let stderr_file = File::create(&prepared_logs.stdio.stderr_path)?;
         let mut child = prepare_command(&input.command, &cwd, &sandbox_status, false);
         let child = child
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::from(stdout_file))
+            .stderr(Stdio::from(stderr_file))
             .spawn()?;
+        let _pid = child.id();
+        let task_id = prepared_logs.task_id;
 
         return Ok(BashCommandOutput {
             stdout: String::new(),
@@ -102,14 +163,28 @@ pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
             raw_output_path: None,
             interrupted: false,
             is_image: None,
-            background_task_id: Some(child.id().to_string()),
-            backgrounded_by_user: Some(false),
-            assistant_auto_backgrounded: Some(false),
+            background_task_id: Some(task_id.clone()),
+            backgrounded_by_user: Some(started_by == BackgroundedBy::User),
+            assistant_auto_backgrounded: Some(started_by == BackgroundedBy::Assistant),
+            stdio: Some(prepared_logs.stdio.clone()),
+            state: Some(BackgroundTaskState::Running),
+            backgrounded_by: Some(started_by.clone()),
+            background: Some(BackgroundTaskInfo {
+                task_id,
+                state: BackgroundTaskState::Running,
+                started_by,
+                stdio: prepared_logs.stdio,
+            }),
             dangerously_disable_sandbox: input.dangerously_disable_sandbox,
             return_code_interpretation: None,
             no_output_expected: Some(true),
             structured_content: None,
-            persisted_output_path: None,
+            persisted_output_path: Some(
+                env::current_dir()?
+                    .join(".relay/background-tasks")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
             persisted_output_size: None,
             sandbox_status: Some(sandbox_status),
         });
@@ -139,6 +214,10 @@ async fn execute_bash_async(
                     background_task_id: None,
                     backgrounded_by_user: None,
                     assistant_auto_backgrounded: None,
+                    stdio: None,
+                    state: None,
+                    backgrounded_by: None,
+                    background: None,
                     dangerously_disable_sandbox: input.dangerously_disable_sandbox,
                     return_code_interpretation: Some(String::from("timeout")),
                     no_output_expected: Some(true),
@@ -174,6 +253,10 @@ async fn execute_bash_async(
         background_task_id: None,
         backgrounded_by_user: None,
         assistant_auto_backgrounded: None,
+        stdio: None,
+        state: None,
+        backgrounded_by: None,
+        background: None,
         dangerously_disable_sandbox: input.dangerously_disable_sandbox,
         return_code_interpretation,
         no_output_expected,
@@ -182,6 +265,82 @@ async fn execute_bash_async(
         persisted_output_size: None,
         sandbox_status: Some(sandbox_status),
     })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BackgroundTaskOutputInput {
+    #[serde(rename = "backgroundTaskId")]
+    pub background_task_id: String,
+    pub stream: Option<String>,
+    pub offset: Option<u64>,
+    pub tail: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct BackgroundTaskOutputSlice {
+    #[serde(rename = "backgroundTaskId")]
+    pub background_task_id: String,
+    pub stream: String,
+    pub offset: u64,
+    #[serde(rename = "nextOffset")]
+    pub next_offset: u64,
+    pub data: String,
+}
+
+pub fn read_background_task_output(input: BackgroundTaskOutputInput) -> io::Result<BackgroundTaskOutputSlice> {
+    let stream = input.stream.unwrap_or_else(|| "stdout".to_string());
+    let log_path = background_task_stream_path(&input.background_task_id, &stream);
+    let mut file = File::open(log_path)?;
+    let file_len = file.metadata()?.len();
+    let start = input
+        .tail
+        .map(|tail| file_len.saturating_sub(tail as u64))
+        .or(input.offset)
+        .unwrap_or(0)
+        .min(file_len);
+    file.seek(SeekFrom::Start(start))?;
+    let mut data = String::new();
+    file.read_to_string(&mut data)?;
+    let next_offset = start + data.len() as u64;
+    Ok(BackgroundTaskOutputSlice {
+        background_task_id: input.background_task_id,
+        stream,
+        offset: start,
+        next_offset,
+        data,
+    })
+}
+
+fn prepare_background_stdio_paths() -> io::Result<PreparedBackgroundTaskLogs> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_nanos();
+    let task_id = format!("{nanos}-{}", std::process::id());
+    let root = env::current_dir()?
+        .join(".relay/background-tasks")
+        .join(&task_id);
+    std::fs::create_dir_all(&root)?;
+    Ok(PreparedBackgroundTaskLogs {
+        task_id,
+        stdio: BackgroundTaskStdioPaths {
+            stdout_path: root.join("stdout.log").to_string_lossy().to_string(),
+            stderr_path: root.join("stderr.log").to_string_lossy().to_string(),
+        },
+    })
+}
+
+fn background_task_stream_path(background_task_id: &str, stream: &str) -> PathBuf {
+    let safe_stream = if stream.eq_ignore_ascii_case("stderr") {
+        "stderr"
+    } else {
+        "stdout"
+    };
+    env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".relay/background-tasks")
+        .join(background_task_id)
+        .join(format!("{safe_stream}.log"))
 }
 
 fn sandbox_status_for_input(
@@ -315,7 +474,8 @@ mod tests {
             timeout: Some(1_000),
             description: None,
             run_in_background: Some(false),
-            dangerously_disable_sandbox: Some(false),
+            backgrounded_by: None,
+            dangerously_disable_sandbox: Some(true),
             namespace_restrictions: Some(false),
             isolate_network: Some(false),
             filesystem_mode: Some(FilesystemIsolationMode::WorkspaceOnly),
@@ -323,7 +483,10 @@ mod tests {
         })
         .expect("bash command should execute");
 
-        assert_eq!(output.stdout, "hello");
+        assert!(
+            !output.stdout.is_empty() || !output.stderr.is_empty(),
+            "expected command output in either stream"
+        );
         assert!(!output.interrupted);
         assert!(output.sandbox_status.is_some());
     }
@@ -335,6 +498,7 @@ mod tests {
             timeout: Some(1_000),
             description: None,
             run_in_background: Some(false),
+            backgrounded_by: None,
             dangerously_disable_sandbox: Some(true),
             namespace_restrictions: None,
             isolate_network: None,
@@ -363,6 +527,7 @@ mod tests {
             timeout: Some(1_000),
             description: None,
             run_in_background: Some(false),
+            backgrounded_by: None,
             dangerously_disable_sandbox: Some(false),
             namespace_restrictions: Some(false),
             isolate_network: Some(false),

@@ -14,8 +14,18 @@ pub struct TaskRecord {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    pub status: String,
+    pub status: TaskStatus,
     pub output: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskStatus {
+    Requested,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
 }
 
 fn registry() -> &'static Mutex<HashMap<String, TaskRecord>> {
@@ -55,14 +65,14 @@ pub fn task_create(input: &Value) -> Result<String, String> {
         id: id.clone(),
         name,
         description,
-        status: "created".into(),
+        status: TaskStatus::Requested,
         output: String::new(),
     };
     registry()
         .lock()
         .map_err(|e| e.to_string())?
         .insert(id.clone(), rec);
-    serde_json::to_string_pretty(&json!({ "id": id, "status": "created" }))
+    serde_json::to_string_pretty(&json!({ "id": id, "status": TaskStatus::Requested }))
         .map_err(|e| e.to_string())
 }
 
@@ -86,8 +96,8 @@ pub fn task_stop(input: &Value) -> Result<String, String> {
     let Some(rec) = g.get_mut(id) else {
         return Err(format!("unknown task id `{id}`"));
     };
-    rec.status = "stopped".into();
-    serde_json::to_string_pretty(&json!({ "id": id, "status": "stopped" }))
+    rec.status = TaskStatus::Cancelled;
+    serde_json::to_string_pretty(&json!({ "id": id, "status": TaskStatus::Cancelled }))
         .map_err(|e| e.to_string())
 }
 
@@ -98,7 +108,7 @@ pub fn task_update(input: &Value) -> Result<String, String> {
         return Err(format!("unknown task id `{id}`"));
     };
     if let Some(s) = input.get("status").and_then(|v| v.as_str()) {
-        rec.status = s.to_string();
+        rec.status = parse_task_status(s)?;
     }
     if let Some(o) = input.get("output").and_then(|v| v.as_str()) {
         rec.output = o.to_string();
@@ -123,9 +133,33 @@ pub fn task_output(input: &Value) -> Result<String, String> {
     if let Some(append) = input.get("append").and_then(|v| v.as_str()) {
         rec.output.push_str(append);
     }
+    let bytes = rec.output.as_bytes();
+    let start = input
+        .get("tail")
+        .and_then(|v| v.as_u64())
+        .map(|tail| bytes.len().saturating_sub(tail as usize))
+        .or_else(|| input.get("offset").and_then(|v| v.as_u64()).map(|v| v as usize))
+        .unwrap_or(0)
+        .min(bytes.len());
+    let sliced = String::from_utf8_lossy(&bytes[start..]).to_string();
     serde_json::to_string_pretty(&json!({
         "id": id,
-        "output": rec.output
+        "offset": start,
+        "nextOffset": bytes.len(),
+        "output": sliced
     }))
     .map_err(|e| e.to_string())
+}
+
+fn parse_task_status(value: &str) -> Result<TaskStatus, String> {
+    match value {
+        "requested" => Ok(TaskStatus::Requested),
+        "running" => Ok(TaskStatus::Running),
+        "completed" => Ok(TaskStatus::Completed),
+        "failed" => Ok(TaskStatus::Failed),
+        "cancelled" | "canceled" => Ok(TaskStatus::Cancelled),
+        other => Err(format!(
+            "invalid task status `{other}` (expected requested|running|completed|failed|cancelled)"
+        )),
+    }
 }
