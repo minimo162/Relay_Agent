@@ -38,38 +38,46 @@ export function ApprovalOverlay(props: {
                     </p>
                   </Show>
                 </details>
-                <div class="flex flex-wrap gap-2 mt-4 justify-end">
-                  <Button
-                    variant="secondary"
-                    onClick={() => props.onReject(approval.approvalId)}
-                    class="ra-type-button-label px-3 py-1.5"
-                  >
-                    Don&apos;t allow
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => props.onApproveOnce(approval.approvalId)}
-                    class="ra-type-button-label px-3 py-1.5"
-                  >
-                    Allow once
-                  </Button>
-                  <Button
-                    variant="primary"
-                    onClick={() => props.onApproveForSession(approval.approvalId)}
-                    class="ra-type-button-label px-3 py-1.5"
-                  >
-                    Allow for session
-                  </Button>
-                  <Show when={approval.workspaceCwdConfigured && props.onApproveForWorkspace}>
+                <div class="mt-4 flex flex-col items-end gap-2">
+                  <div class="flex flex-wrap gap-2 justify-end">
                     <Button
                       variant="secondary"
-                      onClick={() => props.onApproveForWorkspace!(approval.approvalId)}
+                      onClick={() => props.onReject(approval.approvalId)}
                       class="ra-type-button-label px-3 py-1.5"
-                      title="Saved per workspace in ~/.relay-agent/workspace_allowed_tools.json"
                     >
-                      Allow for workspace
+                      Don&apos;t allow
                     </Button>
-                  </Show>
+                    <Button
+                      variant="primary"
+                      onClick={() => props.onApproveOnce(approval.approvalId)}
+                      class="ra-type-button-label px-3 py-1.5"
+                    >
+                      Allow once
+                    </Button>
+                  </div>
+                  <div class="flex flex-col items-end gap-1">
+                    <p class="ra-type-caption text-[var(--ra-text-muted)]">次回以降も許可</p>
+                    <div class="flex flex-wrap gap-2 justify-end">
+                      <Button
+                        variant="secondary"
+                        onClick={() => props.onApproveForSession(approval.approvalId)}
+                        class="ra-type-button-label px-3 py-1.5"
+                        title="Current session only"
+                      >
+                        Allow for session
+                      </Button>
+                      <Show when={approval.workspaceCwdConfigured && props.onApproveForWorkspace}>
+                        <Button
+                          variant="secondary"
+                          onClick={() => props.onApproveForWorkspace!(approval.approvalId)}
+                          class="ra-type-button-label px-3 py-1.5"
+                          title="Saved per workspace in ~/.relay-agent/workspace_allowed_tools.json"
+                        >
+                          Allow for workspace
+                        </Button>
+                      </Show>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
