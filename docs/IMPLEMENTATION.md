@@ -4674,3 +4674,17 @@ Observed result:
 - [apps/desktop/src-tauri/src/integration_tests.rs](/workspace/relay-agent-main/apps/desktop/src-tauri/src/integration_tests.rs) dropped the read-side `text.search` helper coverage and now only keeps file mutation / project / MCP coverage that still exists in the current runtime.
 - Authored Rust source under `apps/desktop/src-tauri/src` dropped from `530980` bytes to `522347` bytes after this slice.
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` and `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-run` passed.
+
+Plan preset permission matrix unification (2026-04-11):
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml plan_prompt_and_runtime_policy_have_zero_diff_snapshot -- --exact
+```
+
+Observed result:
+
+- [apps/desktop/src-tauri/src/agent_loop.rs](/workspace/Relay_Agent/apps/desktop/src-tauri/src/agent_loop.rs) now derives Plan-mode prompt guidance and desktop permission summary rows from a shared per-tool permission matrix generated from `mvp_tool_specs()` + `desktop_permission_policy`, so model guidance/UI text/runtime gating use one source.
+- Added a Plan snapshot test that stringifies the full Plan-mode tool matrix (`tool|host|required`) and verifies the generated Plan addon includes matching allowed/blocked guidance.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml` passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml plan_prompt_and_runtime_policy_have_zero_diff_snapshot -- --exact` could not run in this container because `glib-2.0` dev package is missing for `glib-sys` during build.
