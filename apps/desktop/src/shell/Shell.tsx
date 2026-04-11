@@ -665,6 +665,7 @@ export default function Shell(): JSX.Element {
           onSaved={() => {
             setWorkspaceLabel(loadWorkspacePath().trim());
           }}
+          sessionCount={sessionIds().length}
         />
       </main>
 
@@ -680,13 +681,10 @@ export default function Shell(): JSX.Element {
 
       <div class="col-span-full">
         <StatusBar
-          sessionStatus={activeSessionStatus()}
-          sessionCount={sessionIds().length}
           copilotBridgeHint={copilotBridgeHint()}
           copilotSuccessFlash={copilotSuccessFlash()}
           onRetryCopilot={isTauri() ? () => runCopilotWarmup(false) : undefined}
           copilotRetryDisabled={sessionBusy()}
-          workspaceFullPath={workspaceLabel() || null}
         />
       </div>
     </div>

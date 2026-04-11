@@ -9,6 +9,7 @@ export function SettingsModal(props: {
   onClose: () => void;
   /** Called after workspace is saved so the shell can refresh workspace label. */
   onSaved?: () => void;
+  sessionCount: number;
 }): JSX.Element {
   const [workspace, setWorkspace] = createSignal("");
   const [hint, setHint] = createSignal<string | null>(null);
@@ -92,6 +93,16 @@ export function SettingsModal(props: {
                     </Button>
                   </Show>
                 </div>
+              </div>
+
+              <div class="pt-2 border-t border-[var(--ra-border)]">
+                <p class="ra-type-system-micro text-[var(--ra-text-muted)]">About</p>
+                <p class="ra-type-button-label text-[var(--ra-text-secondary)] mt-1">
+                  Relay Agent v0.1.0
+                </p>
+                <p class="ra-type-caption text-[var(--ra-text-muted)] mt-0.5">
+                  {props.sessionCount} session{props.sessionCount !== 1 ? "s" : ""} this launch
+                </p>
               </div>
             </div>
 
