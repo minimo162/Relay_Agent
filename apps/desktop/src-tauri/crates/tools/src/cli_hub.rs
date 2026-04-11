@@ -13,6 +13,11 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use runtime::sandbox::{
+    build_linux_sandbox_command, resolve_sandbox_status_for_request, FilesystemIsolationMode,
+    SandboxConfig,
+};
+use runtime::{ConfigLoader, ResolvedPermissionMode, validate_bash_hard_deny};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -280,13 +285,70 @@ pub fn cli_execute(name: &str, args: &[&str], timeout_ms: Option<u64>) -> Value 
         });
     }
 
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let read_only_mode = ConfigLoader::default_for(&cwd)
+        .load()
+        .ok()
+        .and_then(|cfg| cfg.permission_mode())
+        == Some(ResolvedPermissionMode::ReadOnly);
+    let sandbox_status = resolve_sandbox_status_for_request(
+        &SandboxConfig::default().resolve_request(
+            read_only_mode.then_some(true),
+            read_only_mode.then_some(true),
+            read_only_mode.then_some(false),
+            read_only_mode.then_some(FilesystemIsolationMode::WorkspaceOnly),
+            None,
+        ),
+        &cwd,
+    );
+    if read_only_mode && !sandbox_status.active {
+        warn!(
+            "[cli_hub] sandbox-deny (read-only requires OS sandbox): {:?}",
+            sandbox_status.fallback_reason
+        );
+        return json!({
+            "error": format!(
+                "CliRun blocked: read-only session requires OS sandbox, but sandbox startup is unavailable. {}",
+                sandbox_status
+                    .fallback_reason
+                    .clone()
+                    .unwrap_or_else(|| "No fallback available (fail-closed).".to_string())
+            ),
+            "sandbox_status": sandbox_status,
+        });
+    }
+
+    let command_line = std::iter::once(name)
+        .chain(args.iter().copied())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if let Err(error) = validate_bash_hard_deny(&command_line) {
+        warn!("[cli_hub] heuristic-deny (hard denylist): {command_line}");
+        return json!({
+            "error": error.to_string(),
+            "blocked_by": "heuristic",
+        });
+    }
+
     info!("[cli_hub] executing: {name} {}", args.join(" "));
 
     let timeout = timeout_ms.unwrap_or(30_000);
     #[allow(unused_variables)]
     let _timeout = std::time::Duration::from_millis(timeout);
 
-    let output = Command::new(name).args(args).output();
+    let output = if read_only_mode {
+        if let Some(launcher) = build_linux_sandbox_command(&command_line, &cwd, &sandbox_status) {
+            let mut cmd = Command::new(launcher.program);
+            cmd.args(launcher.args)
+                .current_dir(&cwd)
+                .envs(launcher.env)
+                .output()
+        } else {
+            Command::new(name).args(args).output()
+        }
+    } else {
+        Command::new(name).args(args).output()
+    };
 
     match output {
         Ok(output) => {
@@ -353,6 +415,7 @@ pub fn cli_discover() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use runtime::validate_bash_hard_deny;
 
     #[test]
     fn test_known_clis_not_empty() {
@@ -388,5 +451,29 @@ mod tests {
     fn test_cli_register_valid() {
         let result = cli_register("my-custom-tool".into());
         assert!(result.get("message").is_some());
+    }
+
+    #[test]
+    fn test_clirun_denylist_blocks_obfuscated_payloads() {
+        for command in [
+            "SuDo whoami",
+            "/bin/RM -Rf ./tmp",
+            "find . -name x -DeLeTe",
+        ] {
+            assert!(
+                validate_bash_hard_deny(command).is_err(),
+                "obfuscated command should be denied: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_clirun_denylist_keeps_safe_commands() {
+        for command in ["gh --version", "git status --short", "docker ps", "rg relay ."] {
+            assert!(
+                validate_bash_hard_deny(command).is_ok(),
+                "safe command should not be denied: {command}"
+            );
+        }
     }
 }
