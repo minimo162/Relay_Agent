@@ -9,9 +9,9 @@ mod electron_cdp;
 use reqwest::blocking::Client;
 use runtime::{
     edit_file, execute_bash, glob_search, grep_search, merge_pdfs, pull_rust_diagnostics_blocking,
-    read_file, reject_sensitive_file_path, split_pdf, task_create, task_get, task_list,
-    task_output, task_stop, task_update, write_file, BashCommandInput, GrepSearchInput,
-    PdfSplitSegment, PermissionMode,
+    read_background_task_output, read_file, reject_sensitive_file_path, split_pdf, task_create,
+    task_get, task_list, task_output, task_stop, task_update, write_file,
+    BackgroundTaskOutputInput, BashCommandInput, GrepSearchInput, PdfSplitSegment, PermissionMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -146,6 +146,7 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     "timeout": { "type": "integer", "minimum": 1 },
                     "description": { "type": "string" },
                     "run_in_background": { "type": "boolean" },
+                    "backgroundedBy": { "type": "string", "enum": ["user", "assistant", "system"] },
                     "dangerouslyDisableSandbox": { "type": "boolean" },
                     "dangerously_disable_sandbox": { "type": "boolean", "description": "Claw-style alias (stripped before execution in Relay for security)" },
                     "namespaceRestrictions": { "type": "boolean" },
@@ -928,7 +929,7 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                 "properties": {
                     "id": { "type": "string" },
                     "task_id": { "type": "string" },
-                    "status": { "type": "string" },
+                    "status": { "type": "string", "enum": ["requested", "running", "completed", "failed", "cancelled"] },
                     "output": { "type": "string" },
                     "message": { "type": "string", "description": "Claw-style update payload; appended to output" }
                 },
@@ -948,12 +949,30 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                 "properties": {
                     "id": { "type": "string" },
                     "task_id": { "type": "string" },
-                    "append": { "type": "string" }
+                    "append": { "type": "string" },
+                    "offset": { "type": "integer", "minimum": 0 },
+                    "tail": { "type": "integer", "minimum": 1 }
                 },
                 "anyOf": [
                     { "required": ["id"] },
                     { "required": ["task_id"] }
                 ],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "BackgroundTaskOutput",
+            description: "Read persisted stdout/stderr for a background task using `backgroundTaskId` with optional `offset` or `tail`.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "backgroundTaskId": { "type": "string" },
+                    "stream": { "type": "string", "enum": ["stdout", "stderr"] },
+                    "offset": { "type": "integer", "minimum": 0 },
+                    "tail": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["backgroundTaskId"],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
@@ -1168,6 +1187,10 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "TaskStop" => task_stop(input),
         "TaskUpdate" => task_update(input),
         "TaskOutput" => task_output(input),
+        "BackgroundTaskOutput" => from_value::<BackgroundTaskOutputInput>(input).and_then(|req| {
+            let output = read_background_task_output(req).map_err(|e| e.to_string())?;
+            serde_json::to_string_pretty(&output).map_err(|e| e.to_string())
+        }),
         _ => Err(format!("unsupported tool: {name}")),
     }
 }
@@ -3297,6 +3320,10 @@ fn execute_shell_command(
             background_task_id: Some(child.id().to_string()),
             backgrounded_by_user: Some(true),
             assistant_auto_backgrounded: Some(false),
+            stdio: None,
+            state: None,
+            backgrounded_by: None,
+            background: None,
             dangerously_disable_sandbox: None,
             return_code_interpretation: None,
             no_output_expected: Some(true),
@@ -3332,6 +3359,10 @@ fn execute_shell_command(
                     background_task_id: None,
                     backgrounded_by_user: None,
                     assistant_auto_backgrounded: None,
+                    stdio: None,
+                    state: None,
+                    backgrounded_by: None,
+                    background: None,
                     dangerously_disable_sandbox: None,
                     return_code_interpretation: status
                         .code()
@@ -3366,6 +3397,10 @@ Command exceeded timeout of {timeout_ms} ms",
                     background_task_id: None,
                     backgrounded_by_user: None,
                     assistant_auto_backgrounded: None,
+                    stdio: None,
+                    state: None,
+                    backgrounded_by: None,
+                    background: None,
                     dangerously_disable_sandbox: None,
                     return_code_interpretation: Some(String::from("timeout")),
                     no_output_expected: Some(false),
@@ -3389,6 +3424,10 @@ Command exceeded timeout of {timeout_ms} ms",
         background_task_id: None,
         backgrounded_by_user: None,
         assistant_auto_backgrounded: None,
+        stdio: None,
+        state: None,
+        backgrounded_by: None,
+        background: None,
         dangerously_disable_sandbox: None,
         return_code_interpretation: output
             .status

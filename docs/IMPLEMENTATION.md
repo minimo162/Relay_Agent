@@ -4705,3 +4705,19 @@ Observed result:
 - `apps/desktop/src-tauri/crates/tools/src/cli_hub.rs` now applies the same ReadOnly fail-closed sandbox policy to `CliRun`, and records `sandbox-deny` / `heuristic-deny` separately in logs and JSON errors.
 - Regression coverage for obfuscated destructive command bypass and safe-command false positives was added in `apps/desktop/src-tauri/crates/runtime/src/tool_hard_denylist.rs` and `apps/desktop/src-tauri/crates/tools/src/cli_hub.rs` tests.
 - All listed commands passed in this environment.
+
+Background run_in_background canonicalization + persisted stdio logs (2026-04-11):
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test -p runtime bash::tests::executes_simple_command -- --exact
+cargo test -p tools bash_tool_reports_success_exit_failure_timeout_and_background -- --exact
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/crates/runtime/src/bash.rs` now requires persisted per-task stdout/stderr files for `run_in_background`, introduces canonical background metadata (`background.taskId/state/startedBy/stdio`) with compatibility aliases (`backgroundTaskId`, `backgroundedByUser`, `assistantAutoBackgrounded`), and adds typed state enum values (`requested|running|completed|failed|cancelled`) plus starter-reason enum (`user|assistant|system`).
+- Added runtime API `read_background_task_output` with `offset`/`tail` semantics for persisted background logs.
+- `apps/desktop/src-tauri/crates/tools/src/lib.rs` exposes the new `BackgroundTaskOutput` tool, expands `TaskOutput` schema with `offset`/`tail`, and constrains `TaskUpdate.status` to canonical enum states.
+- `apps/desktop/src-tauri/crates/runtime/src/task_registry.rs` now uses an enum-backed task state machine and offset/tail output slicing.
+- All listed commands passed in this environment (the tools command selected 0 filtered tests because that exact test name does not exist in this crate).

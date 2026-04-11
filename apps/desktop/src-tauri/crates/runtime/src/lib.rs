@@ -25,7 +25,10 @@ mod tool_hard_denylist;
 mod usage;
 mod workspace_path;
 
-pub use bash::{execute_bash, BashCommandInput, BashCommandOutput};
+pub use bash::{
+    execute_bash, read_background_task_output, BackgroundTaskOutputInput, BashCommandInput,
+    BashCommandOutput,
+};
 pub use bash_validation::BashConfigCwdGuard;
 pub use bootstrap::{BootstrapPhase, BootstrapPlan};
 pub use compact::{
