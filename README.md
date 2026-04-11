@@ -15,7 +15,7 @@ pnpm install
 - **Full desktop (Tauri + Rust):** `pnpm --filter @relay-agent/desktop tauri:dev` (Unix prestarts Edge/Copilot helper; see package script).
 - **Frontend only (Vite):** `pnpm dev` (same as `vite` in `apps/desktop`; no native shell).
 
-Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E2E_CDP_PITFALLS.md](docs/COPILOT_E2E_CDP_PITFALLS.md) (port **9360**).
+Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E2E_CDP_PITFALLS.md](docs/COPILOT_E2E_CDP_PITFALLS.md) (Relay / `pnpm relay:edge`: **9360**; Playwright CDP tests: default **9333** — override with `CDP_ENDPOINT`).
 
 ## Stack
 
@@ -24,15 +24,16 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 | UI | SolidJS, Vite, TypeScript, Tailwind — **Cursor Inspiration** in [`apps/desktop/src/index.css`](apps/desktop/src/index.css) + [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md): Surface scale, oklab borders (including **strong** borders at 55% opacity), cream primary buttons, **`.ra-type-*`** typography utilities, editorial **`cswh`** on serif markdown, mono scale for tools/code. Dark theme uses a paired warm-charcoal scale. **Default theme is light** (`data-theme` + `localStorage` `relay-agent/theme`). Proprietary Cursor fonts are not bundled (system fallbacks). Details: `docs/IMPLEMENTATION.md` (Milestone Log, **2026-04-10** OpenWork second pass + earlier Desktop UI milestones) |
 | Shell | Tauri v2, `tauri-plugin-shell`, `tauri-plugin-dialog` |
 | Agent / tools | Rust (`apps/desktop/src-tauri/`, internal crates) |
-| AI surface | M365 Copilot in Edge via **Node** `copilot_server.js` + CDP; the host parses tool calls from **` ```relay_tool `** JSON and, if none, from **` ```json `** / generic fenced JSON or bounded inline tool-shaped objects ([`agent_loop.rs`](apps/desktop/src-tauri/src/agent_loop.rs)) |
+| AI surface | M365 Copilot in Edge via **Node** `copilot_server.js` + CDP; the desktop sends the Relay turn bundle **inline in the prompt body** for the paid-license path, compacting context before the effective **128000-token** ceiling when needed. The host parses tool calls from **` ```relay_tool `** JSON and, if none, from **` ```json `** / generic fenced JSON or bounded inline tool-shaped objects ([`agent_loop.rs`](apps/desktop/src-tauri/src/agent_loop.rs)) |
 
 ## What the app does
 
 - **Sessions** — Sidebar, history, streaming assistant text; tool steps always show **inline in chat**.
+- **First run** — The initial screen centers a **workspace chooser** and the **first request** composer in the main pane; the right-side **Plan / MCP** panel stays hidden until the first session starts.
 - **Approvals** — **Allow once**, **Allow for session**, or **Don’t allow** for gated tools.
 - **Workspace** — Header chip (basename / “not set”) opens a small **Workspace** modal: path + **Browse…** + **Done** on desktop. `maxTurns` / browser CDP hints are **not** edited in-app (existing `localStorage` `relay.settings.browser` / `relay.settings.maxTurns` still apply when set). The footer offers **Reconnect Copilot** (uses the same stored browser hints as `start_agent` / `warmup_copilot_bridge`).
-- **Context panel** — **Plan** (default): `TodoWrite` timeline + **Tool rules** disclosure; **MCP** servers and workspace instruction surfaces when `cwd` is set.
-- **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or **Send** submits. **Session mode** (**Build** / **Plan** / **Explore**) in a **Session mode** disclosure; slash commands (`/help`, `/compact`, …). Explore = `read_file` / `glob_search` / `grep_search` only in the Copilot tool list.
+- **Context panel** — **Plan** (default): `TodoWrite` timeline + **Tool rules** disclosure; **MCP** servers and workspace instruction surfaces when `cwd` is set. The panel is suppressed on the zero-session first-run screen so the initial task flow stays focused.
+- **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or **Send** submits. **Work mode** disclosure controls whether Relay can edit files or stay read-only; slash commands (`/help`, `/compact`, …). Explore = `read_file` / `glob_search` / `grep_search` only in the Copilot tool list.
 - **Undo / Redo** — Header actions reverse the last successful workspace writes from the active session (`write_file`, `edit_file`, `NotebookEdit`, PDF tools), when the agent is idle.
 - **Extras** — PDF via LiteParse + bundled Node; Windows Office hybrid read (COM + PDF); MCP over stdio.
 
@@ -99,6 +100,8 @@ pnpm --filter @relay-agent/desktop build
 
 cd apps/desktop/src-tauri && cargo check && cargo test -p relay-agent-desktop --lib
 ```
+
+**Grounding / CDP checks:** `pnpm run test:grounding-fixture`; `pnpm run test:e2e:m365-cdp`; opt-in real Copilot grounding checks: `pnpm run test:e2e:copilot-grounding`.
 
 **E2E (mock Tauri, browser only):** from `apps/desktop`, `E2E_SKIP_AUTH_SETUP=1 pnpm exec playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts`. Use `CI=1` if `vite preview` might reuse a stale build after changing `tests/tauri-mock-core.ts`.
 

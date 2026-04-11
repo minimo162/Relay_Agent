@@ -3,7 +3,7 @@
 ## Status
 
 - Current phase: the browser automation, agent loop, CDP auto-launch, and autonomous-planning slices through plan approval, plan execution UI, persistence, and settings are implemented in source; **M365 Copilot CDP smoke** (`m365-cdp-chat`) was verified on 2026-04-08 against a live signed-in Edge/Chromium endpoint (see Milestone Log). The **Tauri desktop + CSV + full checklist** items in `docs/*_E2E_VERIFICATION.md` remain manual or environment-specific.
-- Repository state: pnpm workspace, SvelteKit SPA shell, Tauri v2 shell, and shared contracts package are now bootstrapped and verification-clean
+- Repository state: pnpm workspace, SolidJS + Vite desktop shell, Tauri v2 shell, and inline Rust ↔ TS IPC contracts are in source and verification-clean
 - Active source-of-truth documents:
   - `PLANS.md`
   - `AGENTS.md`
@@ -15,6 +15,64 @@
 - Follow-up implementation status: browser automation source, multi-turn agent-loop source, CDP auto-launch source, and the autonomous execution flow through plan approval, progress tracking, write-step gating, persistence, replan, and settings are in place. Task `84` is backed by `docs/AGENT_LOOP_DESIGN.md`, task `109` is backed by `docs/AUTONOMOUS_EXECUTION_DESIGN.md`, and task `123` is now backed by `docs/AUTONOMOUS_EXECUTION_E2E_VERIFICATION.md` as the remaining manual checklist. **Recorded 2026-04-08:** Playwright `m365-cdp-chat` (six tests, serial) passed against a live CDP endpoint (当時 **9333**; リポ既定は後述のとおり **9360** へ移行) with an existing `m365.cloud.microsoft/chat` tab (Japanese UI). Remaining gap: full desktop-app E2E checklists and Windows-specific packaging walks unless run separately.
 
 ## Milestone Log
+
+### 2026-04-11 Desktop UI: first-run hierarchy and zero-session shell cleanup
+
+**Problem:** The desktop’s initial screen spread the first action across the header, empty chat pane, bottom composer, and right-side Plan/MCP panel. The result was visually quiet but cognitively noisy: the primary action had weak hierarchy, zero-session copy was misleading, and the first impression still carried a few generic agent-shell tells.
+
+**Change:** [`Shell.tsx`](../apps/desktop/src/shell/Shell.tsx) now detects the zero-session first-run state and swaps the main pane to a focused onboarding layout while hiding the right-side context panel until the first session exists. New [`FirstRunPanel.tsx`](../apps/desktop/src/components/FirstRunPanel.tsx) centers workspace selection and the first request composer in one flow. [`Composer.tsx`](../apps/desktop/src/components/Composer.tsx) now keeps **Send** visible in a disabled state, supports a hero variant for first run, and renames the disclosure copy from **Session mode** to plain-language **Work mode** text. [`Sidebar.tsx`](../apps/desktop/src/components/Sidebar.tsx) separates true zero-session copy from search-empty copy and suppresses the search field until sessions exist. [`MessageBubble.tsx`](../apps/desktop/src/components/MessageBubble.tsx) and [`index.css`](../apps/desktop/src/index.css) remove the user-bubble accent rail and convert assistant markdown blockquotes away from side-border styling so the deterministic anti-pattern scan is clean.
+
+**Verification:** `pnpm --filter @relay-agent/desktop typecheck`; `pnpm --filter @relay-agent/desktop build`; `npx impeccable --json apps/desktop/src` — pass (2026-04-11).
+
+### 2026-04-11 Desktop UI: normal-state density cleanup
+
+**Problem:** After the first-run cleanup, the remaining design debt was mostly in the always-visible support chrome: the right-side panel still front-loaded too much explanation before any live plan data existed, the header actions were visually louder than necessary, and the first-run screen still hid the default mode behavior entirely.
+
+**Change:** [`ContextPanel.tsx`](../apps/desktop/src/components/ContextPanel.tsx) now leads with a short **Current mode** summary, uses a simpler **No plan yet** empty state, shortens MCP/workspace copy, and makes **Tool rules** read like a quieter disclosure instead of a permanent block of system detail. [`ShellHeader.tsx`](../apps/desktop/src/components/ShellHeader.tsx) and [`index.css`](../apps/desktop/src/index.css) tone down the status / undo-redo chrome so the main work area stays visually primary. [`FirstRunPanel.tsx`](../apps/desktop/src/components/FirstRunPanel.tsx) now includes a one-line summary of the current default mode without reintroducing the selector into the first-run flow.
+
+**Verification:** `pnpm --filter @relay-agent/desktop typecheck`; `pnpm --filter @relay-agent/desktop build`; `npx impeccable --json apps/desktop/src`; local Playwright screenshot of the first-run screen via `pnpm --filter @relay-agent/desktop dev --host 127.0.0.1 --port 4173` + `pnpm --filter @relay-agent/desktop exec playwright screenshot --device="Desktop Chrome" http://127.0.0.1:4173 /tmp/relay-first-run-final.png` — pass (2026-04-11).
+
+### 2026-04-11 CDP: paid-license inline prompt delivery + pre-send compaction
+
+**Problem:** The attachment-based desktop delivery path was measurably unreliable against live M365 Copilot. We needed to switch the supported runtime to the paid-license inline path, but still avoid overrunning the effective **128000-token** prompt ceiling.
+
+**Change:** [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) now sends the Relay turn bundle inline by default in `CdpApiClient::stream` instead of creating a temp attached `.txt`. Before each CDP request, Relay builds the actual prompt text, estimates tokens from that final inline payload, and repeatedly applies existing session compaction until the prompt estimate drops below **128000** or fails explicitly if the preserved recent tail is still too large. Compaction summaries are now rendered as **`System:`** in the CDP prompt so the compacted continuation message is not mislabeled as user text. [`tauri_bridge.rs`](../apps/desktop/src-tauri/src/tauri_bridge.rs) no longer reports `RELAY_CDP_LEGACY_COMPOSER` as a normal diagnostic mode. [`README.md`](../README.md) and grounding docs now describe the inline paid-license path as the default runtime behavior.
+
+**Verification:** `cargo test -p relay-agent-desktop --lib`; `pnpm --filter @relay-agent/desktop typecheck` — pass (2026-04-11).
+
+### 2026-04-11 Copilot grounding: inline vs attachment comparison harness
+
+**Problem:** We needed a repeatable way to compare real M365 Copilot quality when the same file content is delivered inline in the prompt body versus through `relay_attachments`, because free-user limits force the attachment path while paid licenses can keep the full bundle in-body.
+
+**Change:** [`copilot-server-http.ts`](../apps/desktop/tests/copilot-server-http.ts) now accepts optional `relayAttachments`, matching the desktop app HTTP path. [`m365-copilot-cdp.spec.ts`](../apps/desktop/tests/m365-copilot-cdp.spec.ts) adds **`08 — tetris_grounding: compare inline delivery vs attachment delivery`** under the existing opt-in grounding suite. The test sends the same `tetris_grounding.html` fixture once inline and once as a temporary attached `.txt`, records both replies as a JSON artifact, and keeps only conservative assertions (non-empty replies; no hallucinated fixture tokens).
+
+**Observed live run (2026-04-11):** In an ad hoc 3-vs-3 run against the live `copilot_server` on `18080` / CDP `9333`, inline delivery produced grounded answers in all 3 runs. Attachment delivery produced 0 grounded answers in 3 runs: 2 replies said the attachment was missing, and 1 reply confused the target with other recent attachments.
+
+**Verification:** `pnpm --filter @relay-agent/desktop typecheck` — pass (2026-04-11).
+
+### 2026-04-10 CDP: inline grounding recap for attached turn bundles
+
+**Problem:** When the desktop sent the full turn as an attached text file, M365 Copilot could still answer with generic file-review prose that was not grounded in the bundled `read_file` result. The attachment path preserved full context, but the composer body itself did not repeat the latest user ask or any authoritative file excerpt.
+
+**Change:** [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) now builds the attachment delivery message dynamically instead of using only a fixed constant. The composer body still tells Copilot to read the attached Relay bundle, but it also repeats the latest user request and up to two truncated successful `read_file` Tool Result excerpts inline. This keeps the full bundle in the attachment while giving Copilot a short, in-band grounding anchor that is harder to ignore than attachment-only context.
+
+**Follow-up:** The inline composer text is now hard-capped at **8000 characters** for free-user Copilot limits. If the dynamic summary would exceed that cap, Relay truncates only the composer text and keeps the full bundle in the attachment.
+
+**Verification:** `cargo test -p relay-agent-desktop --lib build_cdp_prompt_includes_grounding_block_and_tool_result_body`; `cargo test -p relay-agent-desktop --lib file_delivery_message_repeats_latest_user_request_and_read_file_excerpt`; `cargo test -p relay-agent-desktop --lib cdp_composer_message_limit_clips_to_8000_chars` (apps/desktop/src-tauri) — pass (2026-04-10).
+
+### 2026-04-10 Playwright: `test:e2e:m365-cdp`（9333 明示・`m365-cdp-chat`）
+
+**Change:** [`package.json`](../apps/desktop/package.json) — `test:e2e:m365-cdp` runs `CDP_ENDPOINT=http://127.0.0.1:9333 playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat`. Root [`package.json`](../package.json) forwards via `pnpm run test:e2e:m365-cdp`. [`docs/COPILOT_E2E_CDP_PITFALLS.md`](COPILOT_E2E_CDP_PITFALLS.md) — subsection **9333 プロファイル** (Edge + `copilot_server --cdp-port 9333` + same script). [`playwright-cdp.config.ts`](../apps/desktop/playwright-cdp.config.ts) — usage comment updated.
+
+### 2026-04-10 Playwright: real Copilot grounding E2E (opt-in)
+
+**Change:** [`m365-copilot-cdp.spec.ts`](../apps/desktop/tests/m365-copilot-cdp.spec.ts) — describe **Grounding E2E** with test `06 — tetris_grounding` (requires `RELAY_GROUNDING_E2E=1`, Edge + CDP, M365 signed in). [`package.json`](../apps/desktop/package.json) `test:e2e:copilot-grounding`; root `pnpm run test:e2e:copilot-grounding`. [`playwright-cdp.config.ts`](../apps/desktop/playwright-cdp.config.ts) — Playwright defaults `CDP_ENDPOINT` to **9333** (Relay desktop default remains **9360**). [`AGENT_EVALUATION_CRITERIA.md`](AGENT_EVALUATION_CRITERIA.md) — automated CDP line.
+
+### 2026-04-10 Tests: tetris_grounding fixture + bundle regression
+
+**Change:** [`tests/fixtures/tetris_grounding.html`](../tests/fixtures/tetris_grounding.html) — minimal Tetris HTML without common hallucination typo tokens; [`scripts/verify-grounding-fixture.sh`](../scripts/verify-grounding-fixture.sh); root `package.json` `test:grounding-fixture`. [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) unit tests: fixture token check + `build_cdp_prompt` includes `CDP_BUNDLE_GROUNDING_BLOCK` and `read_file` tool body. [`AGENT_EVALUATION_CRITERIA.md`](AGENT_EVALUATION_CRITERIA.md) — manual Copilot check steps.
+
+**Verification:** `pnpm run test:grounding-fixture`; `cargo test -p relay-agent-desktop --lib tetris_grounding_fixture build_cdp_prompt_includes`.
 
 ### 2026-04-10 CDP: grounding prefix + Copilot wait abort + cancel wiring
 

@@ -1,0 +1,50 @@
+<!-- RELAY_GROUNDING_FIXTURE: alternate minimal Tetris-style single file for grounding / "improve this" E2E (forbidden typo tokens must stay absent — see AGENT_EVALUATION_CRITERIA). -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<title>テトリス（ミニ）</title>
+<style>
+  body { margin: 0; background: #1a1a2e; color: #eaeaea; font-family: system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 12px; }
+  canvas { display: block; border: 2px solid #4a4a6a; background: #0f0f1a; }
+  .hud { margin-top: 8px; font-size: 14px; }
+</style>
+</head>
+<body>
+  <canvas id="board" width="320" height="640"></canvas>
+  <div class="hud">操作: ← → 移動 · ↓ 加速 · R リセット</div>
+<script>
+(function () {
+  const W = 10, H = 20, SZ = 32;
+  const grid = [];
+  for (let r = 0; r < H; r++) grid[r] = new Uint8Array(W);
+
+  const cvs = document.getElementById("board");
+  const ctx = cvs.getContext("2d");
+  let px = 4, py = 0;
+
+  function paint() {
+    ctx.fillStyle = "#0f0f1a";
+    ctx.fillRect(0, 0, cvs.width, cvs.height);
+    ctx.fillStyle = "#6c5ce7";
+    ctx.fillRect(px * SZ, py * SZ, SZ - 2, SZ - 2);
+    for (let r = 0; r < H; r++) {
+      for (let c = 0; c < W; c++) {
+        if (grid[r][c]) {
+          ctx.fillStyle = "#00cec9";
+          ctx.fillRect(c * SZ, r * SZ, SZ - 2, SZ - 2);
+        }
+      }
+    }
+  }
+
+  function tick() {
+    py = Math.min(py + 1, H - 1);
+    paint();
+    requestAnimationFrame(tick);
+  }
+  tick();
+})();
+</script>
+</body>
+</html>

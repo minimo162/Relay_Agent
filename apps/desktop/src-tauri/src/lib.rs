@@ -1,14 +1,14 @@
 #[allow(dead_code)]
 mod agent_browser_daemon;
 mod agent_loop;
-mod copilot_port_reclaim;
-mod copilot_server;
-mod liteparse_env;
-mod lsp_probe;
 mod cdp_copilot;
 mod config;
 mod copilot_persistence;
+mod copilot_port_reclaim;
+mod copilot_server;
 mod error;
+mod liteparse_env;
+mod lsp_probe;
 mod models;
 mod registry;
 mod session_write_undo;

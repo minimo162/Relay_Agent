@@ -23,7 +23,8 @@ if (process.platform === "win32") {
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "../..");
+/** Monorepo root `Relay_Agent/` (`apps/desktop/scripts` → up 3 levels). */
+const repoRoot = path.resolve(__dirname, "../../..");
 const sh = path.join(repoRoot, "scripts/start-relay-edge-cdp.sh");
 
 if (!fs.existsSync(sh)) {

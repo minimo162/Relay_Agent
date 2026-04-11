@@ -55,8 +55,7 @@ async fn read_frame(stdout: &mut BufReader<ChildStdout>) -> std::io::Result<Vec<
         let lower = t.to_ascii_lowercase();
         if let Some(rest) = lower.strip_prefix("content-length:") {
             len = Some(
-                rest
-                    .trim()
+                rest.trim()
                     .parse::<usize>()
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?,
             );
@@ -81,7 +80,8 @@ async fn write_msg(stdin: &mut ChildStdin, msg: &Value) -> std::io::Result<()> {
 
 async fn next_json_response(stdout: &mut BufReader<ChildStdout>) -> std::io::Result<Value> {
     let buf = read_frame(stdout).await?;
-    serde_json::from_slice(&buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    serde_json::from_slice(&buf)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 fn spawn_rust_analyzer(
@@ -211,9 +211,7 @@ pub async fn pull_rust_diagnostics(
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("rs"))
     {
-        return Err(
-            "LSP diagnostics in this build support Rust (.rs) files only".to_string(),
-        );
+        return Err("LSP diagnostics in this build support Rust (.rs) files only".to_string());
     }
     let text = std::fs::read_to_string(file_path).map_err(|e| e.to_string())?;
     if text.len() > MAX_FILE_BYTES {
@@ -227,8 +225,7 @@ pub async fn pull_rust_diagnostics(
 
     let (mut child, mut stdin, mut reader) = spawn_rust_analyzer(workspace_root)?;
     lsp_initialize_session(&mut child, &mut stdin, &mut reader, &root_uri).await?;
-    let diag_resp =
-        lsp_request_pull_diagnostics(&mut stdin, &mut reader, &doc_uri, &text).await?;
+    let diag_resp = lsp_request_pull_diagnostics(&mut stdin, &mut reader, &doc_uri, &text).await?;
 
     let _ = child.kill().await;
 
@@ -242,7 +239,10 @@ pub async fn pull_rust_diagnostics(
 }
 
 /// Blocking wrapper for synchronous tool execution paths.
-pub fn pull_rust_diagnostics_blocking(workspace_root: &Path, file_path: &Path) -> Result<String, String> {
+pub fn pull_rust_diagnostics_blocking(
+    workspace_root: &Path,
+    file_path: &Path,
+) -> Result<String, String> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

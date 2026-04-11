@@ -19,6 +19,28 @@ const tabs: { id: TabId; label: string }[] = [
   { id: "servers", label: "MCP" },
 ];
 
+function sessionPresetLabel(preset: SessionPreset): string {
+  switch (preset) {
+    case "plan":
+      return "Read-only plan";
+    case "explore":
+      return "Read and search";
+    default:
+      return "Edit files";
+  }
+}
+
+function sessionPresetSummary(preset: SessionPreset): string {
+  switch (preset) {
+    case "plan":
+      return "Relay can inspect and plan, but it will not edit files.";
+    case "explore":
+      return "Relay can inspect files and searches without changing the workspace.";
+    default:
+      return "Relay can read and edit files. Sensitive actions may still require approval.";
+  }
+}
+
 function planStatusLabel(status: PlanTodoItem["status"]): string {
   switch (status) {
     case "completed":
@@ -79,6 +101,8 @@ export function ContextPanel(props: {
     const t = props.planTimeline();
     return t.length > 0 ? [...t].reverse() : false;
   });
+  const modeLabel = createMemo(() => sessionPresetLabel(props.sessionPreset()));
+  const modeSummary = createMemo(() => sessionPresetSummary(props.sessionPreset()));
   const [showAddServer, setShowAddServer] = createSignal(false);
   const [newServerName, setNewServerName] = createSignal("");
   const [newServerCommand, setNewServerCommand] = createSignal("");
@@ -123,15 +147,19 @@ export function ContextPanel(props: {
         <Switch>
           <Match when={activeTab() === "plan"}>
             <div class="flex flex-col gap-2" data-ra-execution-plan>
-              <span class={`ra-type-system-micro ${ui.mutedText}`}>Plan timeline</span>
-              <p class={`ra-type-system-caption leading-relaxed ${ui.mutedText}`}>
-                Task lists from the agent; newest first.
-              </p>
+              <div class="ra-context-note">
+                <span class={`ra-type-system-micro ${ui.mutedText}`}>Current mode</span>
+                <p class={`ra-type-button-label ${ui.textPrimary} mt-1`}>{modeLabel()}</p>
+                <p class={`ra-type-caption ${ui.mutedText} mt-1 leading-relaxed`}>{modeSummary()}</p>
+              </div>
               <Show
                 when={planNewestFirst()}
                 fallback={
-                  <div class={`ra-type-button-label ${ui.mutedText} text-center py-6 leading-relaxed`}>
-                    No tasks yet. They appear when the agent updates its task list.
+                  <div class="ra-context-empty-card">
+                    <div class={`ra-type-button-label ${ui.textPrimary}`}>No plan yet</div>
+                    <div class={`ra-type-caption ${ui.mutedText} mt-1 leading-relaxed`}>
+                      Relay will list task steps here after it starts working.
+                    </div>
                   </div>
                 }
               >
@@ -194,19 +222,21 @@ export function ContextPanel(props: {
                 )}
               </Show>
 
-              <details class={`${ui.radiusFeatured} border ${ui.border} p-2 mt-2`} data-ra-tool-policy>
-                <summary class={`cursor-pointer ra-type-system-micro ${ui.mutedText} list-none [&::-webkit-details-marker]:hidden`}>
-                  Tool rules for current mode
+              <details class={`ra-policy-card ${ui.radiusFeatured} border ${ui.border} mt-2`} data-ra-tool-policy>
+                <summary class={`cursor-pointer list-none [&::-webkit-details-marker]:hidden`}>
+                  <div class="ra-policy-card__summary">
+                    <span class={`ra-type-system-micro ${ui.mutedText}`}>Tool rules</span>
+                    <span class={`ra-type-caption ${ui.mutedText}`}>{modeLabel()}</span>
+                  </div>
                 </summary>
-                <div class="mt-2 pt-2 border-t border-[var(--ra-border)] space-y-2">
+                <div class="ra-policy-card__body">
                   <p class={`ra-type-caption leading-relaxed ${ui.mutedText}`}>
-                    <span class="ra-type-mono-small">{props.sessionPreset()}</span> mode. Approvals and{" "}
-                    <span class="ra-type-mono-small">.claw</span> still apply.
+                    {modeSummary()} Workspace-specific rules and approvals still apply.
                   </p>
                   <Show
                     when={permissionRows().length > 0}
                     fallback={
-                      <div class={`ra-type-button-label ${ui.mutedText} text-center py-4`}>Loading policy…</div>
+                      <div class={`ra-type-caption ${ui.mutedText} text-center py-3`}>Checking tool rules…</div>
                     }
                   >
                     <For each={permissionRows()}>
@@ -251,8 +281,8 @@ export function ContextPanel(props: {
           <Match when={activeTab() === "servers"}>
             <div class="flex flex-col gap-2">
               <p class={`ra-type-system-caption leading-relaxed ${ui.mutedText}`}>
-                Connect MCP servers for extra tools. Instruction files under your workspace appear below when a folder
-                is set in the header.
+                Connect external tool servers here. Workspace instruction files appear below when a
+                folder is set.
               </p>
               <Show
                 when={!props.workspacePath()?.trim()}
@@ -295,8 +325,7 @@ export function ContextPanel(props: {
                 }
               >
                 <p class={`ra-type-caption ${ui.mutedText}`}>
-                  Choose a workspace from the header to detect <span class="ra-type-mono-small">CLAW.md</span> and{" "}
-                  <span class="ra-type-mono-small">.claw</span>.
+                  Set a workspace from the header to surface this project&apos;s instruction files.
                 </p>
               </Show>
               <div class="flex items-center justify-between gap-2">
@@ -311,7 +340,7 @@ export function ContextPanel(props: {
                       class={`ra-type-button-label px-2.5 py-1 ${ui.radiusPill} border ${ui.border} ${ui.accent} hover:bg-[var(--ra-hover)] transition-colors`}
                       onClick={() => setShowAddServer(true)}
                     >
-                      + Add Server
+                      Add server
                     </button>
                   }
                 >
@@ -357,7 +386,7 @@ export function ContextPanel(props: {
                 when={props.mcpServers().length > 0}
                 fallback={
                   <div class={`ra-type-button-label ${ui.mutedText} text-center py-8 leading-relaxed px-1`}>
-                    No MCP servers yet. Add one to connect external tools.
+                    No external tool servers connected yet.
                   </div>
                 }
               >

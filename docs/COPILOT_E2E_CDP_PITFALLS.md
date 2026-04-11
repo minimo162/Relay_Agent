@@ -48,7 +48,7 @@ Microsoft 365 CopilotのE2Eテストを、実際にログインしたMicrosoft E
 
 **「Plain Text」ブロック内の混在:** Copilot がラベルや注意文と **同じコードブロック**にツール JSON を入れると、旧実装はフェンス本文を **1 つの JSON として**解釈できずツール 0 件になり得た。現在は `extract_fallback_markdown_fences` が **本文からツールオブジェクトを列挙**する。
 
-**誤拒否（「この Copilot では relay_tool 不可」）:** モデルが一般のブラウザ Copilot向けに「ツールは実行できない」と答えることがある。Relay では **CDP 経由の応答はデスクトップがパースしてツール実行する**ため、プロンプト先頭に **CDP session / Relay host execution** の説明と、添付ファイル用ショートメッセージ（`CDP_FILE_DELIVERY_USER_MESSAGE`）で「フェンスは Relay が実行する」「このチャットでは不可と断らない」旨を明示している（[`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs)）。
+**誤拒否（「この Copilot では relay_tool 不可」）:** モデルが一般のブラウザ Copilot向けに「ツールは実行できない」と答えることがある。Relay では **CDP 経由の応答はデスクトップがパースしてツール実行する**ため、プロンプト先頭に **CDP session / Relay host execution** の説明を入れ、「フェンスは Relay が実行する」「このチャットでは不可と断らない」旨を明示している（[`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs)）。
 
 **メタ応答で停滞（「規約に従う」→ 次の具体的指示を求める）:** ユーザーメッセージに **パスと作業内容が既にある** のに、モデルがチェックリストやコンプライアンス表明だけ返し **`read_file` 等のフェンスを同じターンで出さず**、指示の再入力を求めると **ツールが 0 件でループが止まる**。対策として、同じ [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) の CDP カタログ／添付メッセージ／既定 Constraints に **「具体的要求は同一ターンでツールを出す」「再入力を求めない」** 旨を追記している。
 
@@ -63,7 +63,7 @@ Microsoft 365 CopilotのE2Eテストを、実際にログインしたMicrosoft E
 | `apps/desktop/src-tauri/src/agent_loop.rs` | CDP 経由の応答から `relay_tool` / フォールバック JSON を解析してツール実行へ渡す |
 | `apps/desktop/playwright-cdp.config.ts` | CDP接続用 Playwright 設定（`connectOverCDP` / プロジェクト分離） |
 | `apps/desktop/tests/m365-copilot-capabilities-v2.spec.ts` | 能力検証 E2E（T1–T10、`cdp-connect` プロジェクト） |
-| `apps/desktop/tests/m365-copilot-cdp.spec.ts` | M365 チャット **スモーク**（新規チャット・送信・マルチターン、`m365-cdp-chat` プロジェクト） |
+| `apps/desktop/tests/m365-copilot-cdp.spec.ts` | M365 チャット **スモーク**（新規チャット・送信・マルチターン、`m365-cdp-chat` プロジェクト）。送信・待機は **`copilot_server.js`** の **`POST /v1/chat/completions`** 経由（アプリと同一ロジック）— 事前に Node ブリッジを起動し `--cdp-port` を Edge の CDP と揃える（下記）。 |
 | `playwright-capabilities.config.ts` | Web アプリ統合テスト用（別コンフィグ） |
 
 ## 実行手順
@@ -90,10 +90,46 @@ npx playwright test --config=playwright-cdp.config.ts --project=cdp-connect
 
 **M365 チャットスモーク（`m365-cdp-chat`、実 CDP での接続・送信・マルチターン確認向け）:**
 
+1. Edge を CDP 付きで起動し、Playwright の `CDP_ENDPOINT`（既定 `http://127.0.0.1:9333`）と **同じポート**にする。
+2. 別ターミナルで **`copilot_server.js`** を同じ CDP ポートで起動（既定 HTTP **`127.0.0.1:18080`** = `COPILOT_SERVER_URL`）:
+
 ```bash
 cd apps/desktop
-CDP_ENDPOINT=http://127.0.0.1:9360 npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat
+node src-tauri/binaries/copilot_server.js --cdp-port 9333
+# Edge が 9360 なら --cdp-port 9360 に合わせ、CDP_ENDPOINT も同じにする
 ```
+
+3. テスト実行（**9333 推奨** — `CDP_ENDPOINT` を固定したスクリプト）:
+
+```bash
+# リポジトリルートまたは apps/desktop
+pnpm run test:e2e:m365-cdp
+```
+
+同等の手動実行:
+
+```bash
+cd apps/desktop
+# Edge を 9333 で起動済みなら、次でも可（既定と同じ）:
+npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat
+# Relay 既定（9360）の Edge に繋ぐ場合:
+# CDP_ENDPOINT=http://127.0.0.1:9360 npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat
+```
+
+`GET /status` が失敗する場合は `copilot_server` が起動していないか、HTTP URL（`COPILOT_SERVER_URL`）がずれています。
+
+#### 9333 プロファイル（本番と同じロジックで一気通貫）
+
+送信・応答完了はデスクトップアプリと同じく **`copilot_server.js`** の **`POST /v1/chat/completions`**（`describe` → 貼り付け・送信・`waitForDomResponse`）。Playwright の `CDP_ENDPOINT` 既定も **9333** なので、Edge とブリッジを **9333** で揃えると運用が単純になる。
+
+1. **Edge（CDP 9333）** — リポジトリルートで例:  
+   `RELAY_EDGE_CDP_PORT=9333 bash scripts/start-relay-edge-cdp.sh`  
+   または手動: `microsoft-edge --remote-debugging-port=9333 …`（`RelayAgentEdgeProfile` を共有するなら `start-relay-edge-cdp.sh` と同じ `--user-data-dir` を推奨）。
+2. **`copilot_server.js`（同じ CDP ポート）** — 別ターミナル:  
+   `cd apps/desktop && node src-tauri/binaries/copilot_server.js --cdp-port 9333`  
+   （HTTP は既定 `http://127.0.0.1:18080` = `COPILOT_SERVER_URL`）
+3. **テスト** — リポジトリルートで `pnpm run test:e2e:m365-cdp`、または `cd apps/desktop` 同コマンド（`m365-cdp-chat` のみ、`CDP_ENDPOINT` は **9333** 固定）。  
+   一覧だけ確認: `pnpm run test:e2e:m365-cdp --list`（`pnpm run … -- --list` は余分な `--` が入り失敗しやすい）。
 
 Relay 既定の Edge CDP 基底ポートは **9360**（`scripts/start-relay-edge-cdp.sh`、`copilot_server.js` のスキャンは **9360–9379**）。**YakuLingo** 等が **9333** を使う場合は衝突回避のため Relay は 9360 起点。**既存のサインイン済み Edge が 9333** のときは `DevToolsActivePort` が生きていれば prestart は二重起動せず、手動では **`RELAY_EDGE_CDP_PORT=9333`** または **`CDP_ENDPOINT=http://127.0.0.1:9333`** で従来どおり繋げる。
 
@@ -101,7 +137,8 @@ Relay 既定の Edge CDP 基底ポートは **9360**（`scripts/start-relay-edge
 
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
-| `CDP_ENDPOINT` | `playwright-cdp.config.ts` 内は `http://localhost:9222`（`m365-cdp-chat` はテスト内で **9360** をデフォルト指定） | CDP の HTTP ベース URL（`/json/version` が取れること） |
+| `CDP_ENDPOINT` | `playwright-cdp.config.ts` / `m365-copilot-cdp.spec.ts` 等の既定は **`http://127.0.0.1:9333`**（テスト用）。Relay アプリ既定は **9360** — 上書き可 | CDP の HTTP ベース URL（`/json/version` が取れること） |
+| `COPILOT_SERVER_URL` | **`http://127.0.0.1:18080`** | `copilot_server.js` の HTTP（`GET /status`、`POST /v1/chat/completions`）。`m365-copilot-cdp.spec.ts` が送信・完了待ちに使う。**`--cdp-port` は Edge の CDP と同じにする。** |
 
 ---
 
@@ -109,21 +146,25 @@ Relay 既定の Edge CDP 基底ポートは **9360**（`scripts/start-relay-edge
 
 ### 目的
 
-- ローカルで **既に M365 Copilot にサインイン済みの Edge** に CDP で繋ぎ、UI 上で **コンポーザ入力・Enter 送信・2 通目以降（マルチターン）** が再現できることを確認する。
-- `copilot_server.js` と同系の送信経路（`Input.dispatchKeyEvent` など）がテスト側でも再現できるかを確認する。
+- ローカルで **既に M365 Copilot にサインイン済みの Edge** に CDP で繋ぎ、**`copilot_server.js`** が **同じブラウザ**に貼り付け・送信・応答完了まで行えることを確認する。
+- **送信・完了待ち:** `m365-copilot-cdp.spec.ts` は Playwright でコンポーザを直接操作せず、**`POST /v1/chat/completions`**（`copilot_server.js` の `describe` → `pastePromptRaw` → `submitPromptRaw` → 内部の `waitForDomResponse`）を呼ぶ。アプリ本体と **同一ファイル**の経路になる。
 
 ### 前提条件
 
-1. Edge をリモートデバッグ付きで起動（例: `--remote-debugging-port=9360`、レガシー環境は `9333`）。
-2. 同一プロファイルで `https://m365.cloud.microsoft/chat` を開き、**Copilot にログイン済み**であること（未ログインだとログイン画面だけが対象になり、意味のある検証にならない）。
-3. `apps/desktop` で Playwright 依存が入っていること（通常はリポジトリの `pnpm install` 済み）。
+1. Edge をリモートデバッグ付きで起動（Playwright 既定に合わせるなら **`--remote-debugging-port=9333`**。Relay アプリ・`pnpm relay:edge` と揃えるなら **9360**）。
+2. **`node apps/desktop/src-tauri/binaries/copilot_server.js --cdp-port <上記と同じ>`** を起動し、`curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:18080/status` が **200** になること（HTTP ポートは `COPILOT_SERVER_URL`、既定 **18080**）。
+3. 同一プロファイルで `https://m365.cloud.microsoft/chat` を開き、**Copilot にログイン済み**であること（未ログインだとログイン画面だけが対象になり、意味のある検証にならない）。
+4. `apps/desktop` で Playwright 依存が入っていること（通常はリポジトリの `pnpm install` 済み）。
 
 ### CDP 到達性の確認（任意）
 
 エンドポイントが生きていれば HTTP 200 で JSON が返る:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:9360/json/version
+# Playwright 既定（9333）に合わせた Edge なら:
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:9333/json/version
+# Relay 既定（9360）の Edge なら:
+# curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:9360/json/version
 # 期待: 200
 ```
 
@@ -131,7 +172,8 @@ curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:9360/json/version
 
 ```bash
 cd apps/desktop
-CDP_ENDPOINT=http://127.0.0.1:9360 npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat
+npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat
+# または Edge が 9360 のとき: CDP_ENDPOINT=http://127.0.0.1:9360 npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat
 ```
 
 - `workers: 1`・`test.describe.configure({ mode: "serial" })` のため、**同一ブラウザタブ上で順に** 00→05 が走る。
@@ -155,16 +197,16 @@ CDP_ENDPOINT=http://127.0.0.1:9360 npx playwright test --config=playwright-cdp.c
 
 | 項目 | 結果 |
 |------|------|
-| ホスト | Linux（開発環境）。CDP HTTP は当時 **9333**（`http://127.0.0.1:9333/json/version` → **200**）。現在のリポ既定は **9360**。 |
+| ホスト | Linux（開発環境）。CDP HTTP **9333**（`http://127.0.0.1:9333/json/version` → **200**）— Playwright 既定。**Relay アプリ・`pnpm relay:edge` の既定は 9360**。 |
 | UI 言語 | M365 チャット UI が **日本語**（ページタイトル `チャット \| M365 Copilot`、`button[aria-label="新しいチャット"]`、`生成を停止` など）。 |
-| コマンド | `cd apps/desktop && CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test …`（当時）。**現在の既定再現:** `CDP_ENDPOINT=http://127.0.0.1:9360 …` |
+| コマンド | `cd apps/desktop && npx playwright test …`（`CDP_ENDPOINT` 省略可、既定 **9333**）。9360 の Edge なら `CDP_ENDPOINT=http://127.0.0.1:9360` を付与。 |
 | 結果 | **6 passed**（合計 ~1.6 min）。04 は 1 通目は素の CDP Enter、2 通目は `CDP Enter after shell click` で送信。 |
 | 同時実施 | リポジトリ整合: `pnpm typecheck`（root）、`cargo test -p relay-agent-desktop --lib`、`cargo check -p relay-agent-desktop`（`apps/desktop/src-tauri`）— いずれも成功。 |
 
 ### 実装参照（送信まわり）
 
-- テスト: `apps/desktop/tests/m365-copilot-cdp.spec.ts`（`dispatchEnterViaCdp`、`tryEnterStrategies` / `tryCtrlEnterStrategies`、`focusM365ComposerDeep`、添付・送信待機ヘルパ）。
-- 本番 CDP サーバ: `apps/desktop/src-tauri/binaries/copilot_server.js`（`dispatchEnterKey`、`focusComposer`、`copilotAttachmentStillPending`、`submitPromptRaw`）。
+- テスト: `apps/desktop/tests/m365-copilot-cdp.spec.ts` — HTTP クライアント `tests/copilot-server-http.ts` 経由で **`copilot_server.js`** を呼ぶ（ペースト・送信・`waitForDomResponse` はサーバ内）。
+- 本番 CDP サーバ: `apps/desktop/src-tauri/binaries/copilot_server.js`（`dispatchEnterKey`、`focusComposer`、`copilotAttachmentStillPending`、`submitPromptRaw`、`copilot_wait_dom_response.mjs`）。
 
 ---
 
@@ -234,12 +276,12 @@ CDP_ENDPOINT=http://127.0.0.1:9360 npx playwright test --config=playwright-cdp.c
 ### 原則（ここを外すと「サインイン済みなのに繋がらない」になる）
 
 1. **常に同じ `--user-data-dir` を使う。** クッキーと M365 セッションはプロファイル単位。別ディレクトリで起動すると未ログイン扱いになる。
-2. **常に同じ `--remote-debugging-port` を使う（Relay 既定例: 9360）。** Playwright・`pnpm relay:edge`・`curl` の例を自分のポートに揃える（レガシー **9333** 運用なら環境変数で合わせる）。
+2. **常に同じ `--remote-debugging-port` を使う。** Playwright CDP スイートの既定は **9333**；`pnpm relay:edge` / Relay アプリの既定は **9360**。`CDP_ENDPOINT` / `RELAY_EDGE_CDP_PORT` でテストと手動 Edge を揃える。
 3. **`--remote-allow-origins=*` を付ける。** Chromium 111+ で CDP WebSocket が弾かれないようにする（`start-relay-edge-cdp.sh` と Rust 側の起動引数と同趣旨）。
 
-### ハイブリッド: 手動既定 9360 vs アプリ実行時の動的ポート
+### ハイブリッド: Playwright 既定 9333 vs Relay 手動既定 9360 vs アプリ実行時の動的ポート
 
-- **人間向けの既定（ドキュメント・Playwright・`curl`・`pnpm relay:edge`）** は **9360**（YakuLingo の **9333** と分離）。レガシー Edge は **`RELAY_EDGE_CDP_PORT=9333`** / **`CDP_ENDPOINT`** で合わせる。
+- **`pnpm relay:edge`・`start-relay-edge-cdp.sh`・Tauri 設定の `cdpPort` ヒント** のドキュメント既定は **9360**（`copilot_server.js` は **9360–9379** をスキャン）。**Playwright CDP 設定（`playwright-cdp.config.ts` 等）の HTTP 既定は 9333**（テスト用・YakuLingo と同系）。既存 Edge が片方のポートなら **`CDP_ENDPOINT`** / **`RELAY_EDGE_CDP_PORT`** で合わせる。
 - **パッケージドアプリ／Tauri IPC** は、`auto_launch` で Edge を立てる経路では **`--remote-debugging-port=0` + `DevToolsActivePort`**（または既存プロセス再利用）で **実ポートが可変**になり得る。`copilot_server.js` は基底 **9360** から 20 ポートをスキャンし、空きを選ぶと **`~/RelayAgentEdgeProfile/.relay-agent-cdp-port`** に記録する。
 - **`connect_cdp` / `cdp_start_new_chat` で `auto_launch: false` かつ `base_port` 未指定**、または **`cdp_send_prompt` / `cdp_screenshot`** のとき、Rust は **`.relay-agent-cdp-port`（`/json/version` が成功する場合）→ `DevToolsActivePort`（同様）→ なければ 9360** の順で接続先ポートを決める（`cdp_copilot::resolve_cdp_attachment_port`）。マーカーが古く CDP が死んでいれば自動で次候補へ落ちる。
 

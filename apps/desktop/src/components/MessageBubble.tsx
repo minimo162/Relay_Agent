@@ -40,7 +40,7 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
         class={`group relative max-w-[min(80%,42rem)] ${ui.radiusFeatured} ${
           isUser
             ? "ra-bubble-user"
-            : `${ui.surfaceCard} ${ui.border} border text-[var(--ra-text-primary)]`
+            : `${ui.surfaceCard} ${ui.border} border text-[var(--ra-text-primary)] shadow-[var(--ra-shadow-sm)]`
         }`}
         data-ra-bubble-role={props.role}
       >

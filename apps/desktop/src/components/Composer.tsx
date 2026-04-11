@@ -86,6 +86,8 @@ export function Composer(props: {
   onCancel: () => void;
   onSlashCommand?: (input: string) => Promise<string | null>;
   onAppendAssistant?: (text: string) => void;
+  hero?: boolean;
+  showModeControl?: boolean;
 }): JSX.Element {
   const [text, setText] = createSignal("");
   const [slashMode, setSlashMode] = createSignal<{
@@ -204,16 +206,21 @@ export function Composer(props: {
   };
 
   const canSend = () => text().trim().length > 0 && !props.running;
+  const showModeControl = () => props.showModeControl ?? true;
+  const placeholder = () =>
+    props.hero
+      ? "Describe the task you want Relay to handle."
+      : "What should the agent do? Type / for commands.";
 
   return (
-    <div class="ra-composer relative shrink-0">
+    <div class={`ra-composer relative shrink-0 ${props.hero ? "ra-composer--hero" : ""}`}>
       <div class="ra-composer-inner">
         <div class="ra-composer-shell relative">
           <div class="ra-composer-input-wrap">
             <Textarea
               ref={textareaRef}
               rows={1}
-              placeholder="What should the agent do? Type / for commands."
+              placeholder={placeholder()}
               value={text()}
               onInput={onInput}
               onKeyDown={onKey}
@@ -234,49 +241,51 @@ export function Composer(props: {
           <div class="ra-composer-toolbar">
             <div class="flex items-center gap-2 min-w-0 flex-wrap">
               <p class="ra-composer-hint shrink-0">⌘/Ctrl+Enter to send · Enter for new line</p>
-              <details
-                class={`relative shrink-0 list-none [&::-webkit-details-marker]:hidden`}
-                data-ra-session-mode
-              >
-                <summary
-                  class={`cursor-pointer ra-type-caption px-2 py-0.5 ${ui.radiusCompact} border border-[var(--ra-border)] text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]`}
+              <Show when={showModeControl()}>
+                <details
+                  class={`relative shrink-0 list-none [&::-webkit-details-marker]:hidden`}
+                  data-ra-session-mode
                 >
-                  Session mode
-                </summary>
-                <div
-                  class={`absolute left-0 bottom-full mb-1 z-50 min-w-[min(100vw-2rem,280px)] ${ui.radiusFeatured} border border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] shadow-[var(--ra-shadow-sm)] p-3 space-y-2`}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <label class={`flex flex-col gap-1 ra-type-system-caption text-[var(--ra-text-secondary)]`}>
-                    <span class="text-[var(--ra-text-muted)]">How the agent can change files</span>
-                    <select
-                      class={`${ui.radiusCompact} border border-[var(--ra-border)] bg-[var(--ra-surface)] text-[var(--ra-text-primary)] py-1 pl-1.5 pr-6 ra-type-caption w-full max-w-full`}
-                      aria-label="Session mode"
-                      value={props.sessionPreset}
-                      onChange={(e) =>
-                        props.onSessionPresetChange(e.currentTarget.value as SessionPreset)
-                      }
-                    >
-                      <option value="build" title="Full tools; writes may need approval">
-                        Build
-                      </option>
-                      <option value="plan" title="Read-only on disk">
-                        Plan
-                      </option>
-                      <option value="explore" title="Read/search only">
-                        Explore
-                      </option>
-                    </select>
-                  </label>
-                  <Show when={props.sessionPreset === "plan" || props.sessionPreset === "explore"}>
+                  <summary
+                    class={`cursor-pointer ra-type-caption px-2 py-0.5 ${ui.radiusCompact} border border-[var(--ra-border)] text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]`}
+                  >
+                    Work mode
+                  </summary>
+                  <div
+                    class={`absolute left-0 bottom-full mb-1 z-50 min-w-[min(100vw-2rem,320px)] ${ui.radiusFeatured} border border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] shadow-[var(--ra-shadow-sm)] p-3 space-y-2`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <label class={`flex flex-col gap-1 ra-type-system-caption text-[var(--ra-text-secondary)]`}>
+                      <span class="text-[var(--ra-text-muted)]">Choose how much Relay can change files</span>
+                      <select
+                        class={`${ui.radiusCompact} border border-[var(--ra-border)] bg-[var(--ra-surface)] text-[var(--ra-text-primary)] py-1 pl-1.5 pr-6 ra-type-caption w-full max-w-full`}
+                        aria-label="Work mode"
+                        value={props.sessionPreset}
+                        onChange={(e) =>
+                          props.onSessionPresetChange(e.currentTarget.value as SessionPreset)
+                        }
+                      >
+                        <option value="build" title="Read and edit files when approved">
+                          Edit files
+                        </option>
+                        <option value="plan" title="Read-only planning">
+                          Read-only plan
+                        </option>
+                        <option value="explore" title="Read and search only">
+                          Read and search
+                        </option>
+                      </select>
+                    </label>
                     <p class={`ra-type-caption text-[var(--ra-text-muted)] leading-snug`}>
                       {props.sessionPreset === "explore"
-                        ? "Explore: read/search only. Use Build to edit files."
-                        : "Plan: read-only — use Build to apply changes."}
+                        ? "Read and search the workspace without changing files."
+                        : props.sessionPreset === "plan"
+                          ? "Plan in read-only mode. Switch back when you want Relay to apply changes."
+                          : "Relay can read and edit files. Sensitive actions may still need approval."}
                     </p>
-                  </Show>
-                </div>
-              </details>
+                  </div>
+                </details>
+              </Show>
             </div>
             <div class="ra-composer-toolbar-actions">
               <Show when={props.running}>
@@ -284,18 +293,16 @@ export function Composer(props: {
                   Cancel
                 </button>
               </Show>
-              <Show when={canSend()}>
-                <button
-                  type="button"
-                  class="ra-composer-send"
-                  disabled={props.disabled}
-                  aria-label="Send"
-                  onClick={() => void send()}
-                >
-                  <SendArrowIcon />
-                  <span>Send</span>
-                </button>
-              </Show>
+              <button
+                type="button"
+                class="ra-composer-send"
+                disabled={!canSend()}
+                aria-label="Send"
+                onClick={() => void send()}
+              >
+                <SendArrowIcon />
+                <span>Send</span>
+              </button>
             </div>
           </div>
         </div>

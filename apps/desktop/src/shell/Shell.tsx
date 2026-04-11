@@ -42,6 +42,7 @@ import { ApprovalOverlay } from "../components/ApprovalOverlay";
 import { UserQuestionOverlay } from "../components/UserQuestionOverlay";
 import { Composer } from "../components/Composer";
 import { ContextPanel } from "../components/ContextPanel";
+import { FirstRunPanel } from "../components/FirstRunPanel";
 import { MessageFeed } from "../components/MessageFeed";
 import { SettingsModal } from "../components/SettingsModal";
 import { ShellHeader } from "../components/ShellHeader";
@@ -167,6 +168,9 @@ export default function Shell(): JSX.Element {
   });
 
   const [mcpServers, setMcpServers] = createSignal<McpServer[]>([]);
+  const isFirstRun = createMemo(
+    () => sessionIds().length === 0 && chunks().length === 0 && activeSessionId() === null,
+  );
 
   onCleanup(() => {
     if (copilotFlashTimer.id) clearTimeout(copilotFlashTimer.id);
@@ -492,7 +496,7 @@ export default function Shell(): JSX.Element {
   };
 
   return (
-    <div class="ra-shell">
+    <div classList={{ "ra-shell": true, "ra-shell--first-run": isFirstRun() }}>
       <ShellHeader
         sessionRunning={sessionRunning()}
         workspacePath={workspaceLabel}
@@ -541,36 +545,76 @@ export default function Shell(): JSX.Element {
             </p>
           </div>
         </Show>
-        <MessageFeed
-          chunks={chunks()}
-          sessionState={sessionState()}
-          workspacePath={workspaceLabel}
-          sessionPreset={sessionPreset()}
-        />
-        <Composer
-          sessionPreset={sessionPreset()}
-          onSessionPresetChange={(p) => {
-            setSessionPreset(p);
-            writeStoredSessionPreset(p);
-          }}
-          onSend={handleSend}
-          disabled={sessionRunning()}
-          running={sessionRunning()}
-          onCancel={handleCancel}
-          onSlashCommand={(input) => {
-            const ctx: SlashCommandContext = {
-              sessionId: activeSessionId(),
-              clearChunks: () => setChunks([]),
-              compactSession: (sid) => compactAgentSession({ sessionId: sid }),
-              sessionRunning: sessionRunning(),
-              chunksCount: chunks().length,
-            };
-            return executeSlashCommand(input, ctx);
-          }}
-          onAppendAssistant={(text: string) => {
-            setChunks((prev) => [...prev, { kind: "assistant", text }]);
-          }}
-        />
+        <Show
+          when={isFirstRun()}
+          fallback={
+            <>
+              <MessageFeed
+                chunks={chunks()}
+                sessionState={sessionState()}
+                workspacePath={workspaceLabel}
+                sessionPreset={sessionPreset()}
+              />
+              <Composer
+                sessionPreset={sessionPreset()}
+                onSessionPresetChange={(p) => {
+                  setSessionPreset(p);
+                  writeStoredSessionPreset(p);
+                }}
+                onSend={handleSend}
+                disabled={sessionRunning()}
+                running={sessionRunning()}
+                onCancel={handleCancel}
+                onSlashCommand={(input) => {
+                  const ctx: SlashCommandContext = {
+                    sessionId: activeSessionId(),
+                    clearChunks: () => setChunks([]),
+                    compactSession: (sid) => compactAgentSession({ sessionId: sid }),
+                    sessionRunning: sessionRunning(),
+                    chunksCount: chunks().length,
+                  };
+                  return executeSlashCommand(input, ctx);
+                }}
+                onAppendAssistant={(text: string) => {
+                  setChunks((prev) => [...prev, { kind: "assistant", text }]);
+                }}
+              />
+            </>
+          }
+        >
+          <FirstRunPanel
+            workspacePath={workspaceLabel}
+            onChooseWorkspace={() => setSettingsOpen(true)}
+            sessionPreset={sessionPreset()}
+          >
+            <Composer
+              sessionPreset={sessionPreset()}
+              onSessionPresetChange={(p) => {
+                setSessionPreset(p);
+                writeStoredSessionPreset(p);
+              }}
+              onSend={handleSend}
+              disabled={sessionRunning()}
+              running={sessionRunning()}
+              onCancel={handleCancel}
+              onSlashCommand={(input) => {
+                const ctx: SlashCommandContext = {
+                  sessionId: activeSessionId(),
+                  clearChunks: () => setChunks([]),
+                  compactSession: (sid) => compactAgentSession({ sessionId: sid }),
+                  sessionRunning: sessionRunning(),
+                  chunksCount: chunks().length,
+                };
+                return executeSlashCommand(input, ctx);
+              }}
+              onAppendAssistant={(text: string) => {
+                setChunks((prev) => [...prev, { kind: "assistant", text }]);
+              }}
+              hero
+              showModeControl={false}
+            />
+          </FirstRunPanel>
+        </Show>
         <ApprovalOverlay
           approvals={approvals()}
           onApproveOnce={handleApproveOnce}
@@ -592,13 +636,15 @@ export default function Shell(): JSX.Element {
         />
       </main>
 
-      <ContextPanel
-        mcpServers={mcpServers}
-        setMcpServers={setMcpServers}
-        workspacePath={workspaceLabel}
-        sessionPreset={sessionPreset}
-        planTimeline={planTimelineForActiveSession}
-      />
+      <Show when={!isFirstRun()}>
+        <ContextPanel
+          mcpServers={mcpServers}
+          setMcpServers={setMcpServers}
+          workspacePath={workspaceLabel}
+          sessionPreset={sessionPreset}
+          planTimeline={planTimelineForActiveSession}
+        />
+      </Show>
 
       <div class="col-span-full">
         <StatusBar

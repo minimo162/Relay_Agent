@@ -106,9 +106,7 @@ mod parity_style {
         struct DenyPrompter;
         impl PermissionPrompter for DenyPrompter {
             fn decide(&mut self, _request: &PermissionRequest) -> PermissionPromptDecision {
-                PermissionPromptDecision::Deny {
-                    reason: "n".into(),
-                }
+                PermissionPromptDecision::Deny { reason: "n".into() }
             }
         }
         let mut p = DenyPrompter;
@@ -133,7 +131,8 @@ mod parity_style {
 
     #[test]
     fn bash_read_only_project_rejects_rm_via_execute_tool() {
-        let root = std::env::temp_dir().join(format!("relay-parity-bash-ro-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("relay-parity-bash-ro-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join(".claw")).expect("claw dir");
         std::fs::write(
@@ -142,7 +141,8 @@ mod parity_style {
         )
         .expect("settings");
         let _guard = BashConfigCwdGuard::set(Some(root.clone()));
-        let err = execute_tool("bash", &json!({ "command": "rm -f x.txt" })).expect_err("rm blocked");
+        let err =
+            execute_tool("bash", &json!({ "command": "rm -f x.txt" })).expect_err("rm blocked");
         assert!(
             err.to_ascii_lowercase().contains("read-only")
                 || err.to_ascii_lowercase().contains("permission")
@@ -165,10 +165,7 @@ mod parity_style {
             }),
         )
         .expect("glob");
-        assert!(
-            glob.contains("a.rs") || glob.contains("numFiles"),
-            "{glob}"
-        );
+        assert!(glob.contains("a.rs") || glob.contains("numFiles"), "{glob}");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -250,11 +247,8 @@ mod parity_style {
         )
         .unwrap();
 
-        let read_out = execute_tool(
-            "read_file",
-            &json!({ "path": fixture.to_string_lossy() }),
-        )
-        .expect("read_file");
+        let read_out = execute_tool("read_file", &json!({ "path": fixture.to_string_lossy() }))
+            .expect("read_file");
         assert!(read_out.contains("alpha parity line"), "{read_out}");
 
         let grep_out = execute_tool(
@@ -286,8 +280,8 @@ mod parity_style {
         )
         .unwrap();
         let _guard = BashConfigCwdGuard::set(Some(root.clone()));
-        let out = execute_tool("bash", &json!({ "command": "printf 'parity-bash'" }))
-            .expect("bash echo");
+        let out =
+            execute_tool("bash", &json!({ "command": "printf 'parity-bash'" })).expect("bash echo");
         assert!(out.contains("parity-bash"), "{out}");
         let _ = fs::remove_dir_all(&root);
     }
@@ -321,7 +315,8 @@ mod parity_style {
         )
         .unwrap();
         let _guard = BashConfigCwdGuard::set(Some(root.clone()));
-        let err = execute_tool("bash", &json!({ "command": "sudo ls /" })).expect_err("sudo blocked");
+        let err =
+            execute_tool("bash", &json!({ "command": "sudo ls /" })).expect_err("sudo blocked");
         assert!(
             err.to_ascii_lowercase().contains("denylist"),
             "unexpected err: {err}"

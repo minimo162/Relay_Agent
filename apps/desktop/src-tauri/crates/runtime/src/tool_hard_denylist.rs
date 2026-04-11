@@ -11,17 +11,21 @@ static RE_SUDO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bsudo\b").expec
 static RE_RMDIR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\brmdir\b").expect("regex"));
 static RE_RM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\brm\b").expect("regex"));
 static RE_FIND: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bfind\b").expect("regex"));
-static RE_GIT_CONFIG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bgit\s+config\b").expect("regex"));
-static RE_GIT_PUSH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bgit\s+push\b").expect("regex"));
-static RE_GIT_COMMIT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bgit\s+commit\b").expect("regex"));
-static RE_GIT_RESET: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bgit\s+reset\b").expect("regex"));
-static RE_GIT_REBASE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bgit\s+rebase\b").expect("regex"));
+static RE_GIT_CONFIG: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgit\s+config\b").expect("regex"));
+static RE_GIT_PUSH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgit\s+push\b").expect("regex"));
+static RE_GIT_COMMIT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgit\s+commit\b").expect("regex"));
+static RE_GIT_RESET: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgit\s+reset\b").expect("regex"));
+static RE_GIT_REBASE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgit\s+rebase\b").expect("regex"));
 static RE_BREW_INSTALL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\bbrew\s+install\b").expect("regex"));
 static RE_CHMOD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bchmod\b").expect("regex"));
 static RE_777: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b777\b").expect("regex"));
-static RE_EXEC_RM: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"-exec\s+rm\b").expect("regex"));
+static RE_EXEC_RM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-exec\s+rm\b").expect("regex"));
 static RE_XARGS_RM: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\bxargs\b[\s\S]{0,120}?\brm\b").expect("regex"));
 

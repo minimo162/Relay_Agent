@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -12,55 +12,18 @@ use uuid::Uuid;
 /// M365 Copilot (CDP) cannot take API `tools`; model must emit this fenced JSON for invocations.
 const CDP_TOOL_FENCE: &str = "```relay_tool";
 
-/// Composer text when the full turn payload is sent as an attached file (see `CdpApiClient::stream`).
-/// Keep short; the attachment holds system + conversation + tool catalog.
-const CDP_FILE_DELIVERY_USER_MESSAGE: &str = "The attached text file is the full Relay Agent turn bundle (system context, conversation, and tool catalog). Read it and follow it. **Relay** parses your reply for `relay_tool` / `json` tool fences and **executes** those tools on the user's machine (not just display). Output real fenced tool JSON when the task needs files or other tools—do not claim this chat cannot run Relay tools. If the conversation **already** states concrete paths and what to do (e.g. improve/edit a named file), **emit tool calls in this reply**—do **not** ask the user to restate or give a “next step” you already have.\n\n**Grounding (mandatory):** If the bundle contains a `read_file` Tool Result or file `content`, every claim about syntax errors, missing HTML tags (`<!DOCTYPE>`, `<head>`, `<style>`, `<body>`), undefined identifiers, `drawBlock` coordinates, or similar must be **traceable to that text** (short quote or line numbers). Do **not** output a generic “fatal syntax + structure fix + minimal refactor” plan unless those problems **appear in the bundle**. If the file already has valid structure and no such issues, say what you actually see instead of a template checklist.\n\n（添付は Relay Agent 用の全文バンドルです。返信内の `relay_tool` や許容される `json` フェンスは Relay デスクトップが**解析して実行**します。表示用の説明だけにせず、必要なら規約どおりフェンス付きツール JSON を出してください。「この Copilot ではツール不可」と拒否しないでください。**パスと作業内容が既にユーザーメッセージにある場合は、この返信でツールを実行**し、同じ指示の再入力を求めないでください。**根拠:** バンドル内の read_file / Tool Result に現れない「致命的構文・HTML欠落・drawBlock 座標誤り」等のテンプレ列挙は禁止。実際の `content` に基づいて述べること。）";
+const CDP_INLINE_PROMPT_MAX_TOKENS: usize = 128_000;
 
-/// Undocumented: set to `1` or `true` to paste the full prompt into the composer instead of file attach (local debugging only).
-fn cdp_legacy_composer_full_paste() -> bool {
-    std::env::var("RELAY_CDP_LEGACY_COMPOSER")
-        .map(|v| {
-            matches!(
-                v.to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
-}
-
-/// Replace typographic Unicode so M365/Windows is less likely to mojibake the `.txt` bundle if UTF-8 is mis-detected.
-fn normalize_prompt_for_cdp_file_attachment(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '\u{2014}' | '\u{2013}' => out.push_str(" - "),
-            '\u{2192}' => out.push_str("->"),
-            '\u{2190}' => out.push_str("<-"),
-            '\u{2026}' => out.push_str("..."),
-            '\u{2018}' | '\u{2019}' => out.push('\''),
-            '\u{201C}' | '\u{201D}' => out.push('"'),
-            '\u{00A0}' => out.push(' '),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-/// Write UTF-8 text with a BOM so Japanese Windows / M365 often treat the attachment as UTF-8, not CP932.
-fn write_utf8_file_with_bom(path: &Path, content: &str) -> std::io::Result<()> {
-    let mut bytes = Vec::with_capacity(3 + content.len());
-    bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
-    bytes.extend_from_slice(content.as_bytes());
-    std::fs::write(path, bytes)
+fn estimate_cdp_prompt_tokens(prompt: &str) -> usize {
+    prompt.len() / 4 + 1
 }
 
 use runtime::{
-    self, assert_path_in_workspace, lexical_normalize, resolve_against_workspace, ApiClient,
-    BashConfigCwdGuard,
-    ApiRequest, AssistantEvent, ConfigLoader, ContentBlock, ConversationMessage, McpServerManager,
-    MessageRole, PermissionMode, PermissionPolicy, PermissionPromptDecision, PermissionPrompter,
-    PermissionRequest, RuntimeError, Session as RuntimeSession, TokenUsage, ToolExecutor,
-    pull_rust_diagnostics_blocking,
+    self, assert_path_in_workspace, lexical_normalize, pull_rust_diagnostics_blocking,
+    resolve_against_workspace, ApiClient, ApiRequest, AssistantEvent, BashConfigCwdGuard,
+    ConfigLoader, ContentBlock, ConversationMessage, McpServerManager, MessageRole, PermissionMode,
+    PermissionPolicy, PermissionPromptDecision, PermissionPrompter, PermissionRequest,
+    RuntimeError, Session as RuntimeSession, TokenUsage, ToolExecutor,
 };
 
 use crate::copilot_persistence::{self, PersistedSessionConfig};
@@ -172,21 +135,29 @@ fn human_approval_summary(tool_name: &str, input: &str) -> String {
     let url = v.get("url").and_then(|u| u.as_str());
 
     match tool_name {
-        "read_file" => path.map_or_else(|| "Allow reading a file?".into(), |p| {
-            format!("Allow reading this file?\n{p}")
-        }),
+        "read_file" => path.map_or_else(
+            || "Allow reading a file?".into(),
+            |p| format!("Allow reading this file?\n{p}"),
+        ),
         "glob_search" => {
             let pat = v.get("pattern").and_then(|x| x.as_str()).unwrap_or("*");
             format!("Search the workspace for files matching “{pat}”?")
         }
         "grep_search" => {
-            let pat = v.get("pattern").and_then(|x| x.as_str()).unwrap_or("pattern");
+            let pat = v
+                .get("pattern")
+                .and_then(|x| x.as_str())
+                .unwrap_or("pattern");
             format!("Search file contents for “{pat}”?")
         }
-        "write_file" => path.map_or_else(|| "Create or overwrite a file?".into(), |p| {
-            format!("Create or overwrite this file?\n{p}")
-        }),
-        "edit_file" => path.map_or_else(|| "Edit a file?".into(), |p| format!("Edit this file?\n{p}")),
+        "write_file" => path.map_or_else(
+            || "Create or overwrite a file?".into(),
+            |p| format!("Create or overwrite this file?\n{p}"),
+        ),
+        "edit_file" => path.map_or_else(
+            || "Edit a file?".into(),
+            |p| format!("Edit this file?\n{p}"),
+        ),
         "pdf_merge" => {
             let out = v
                 .get("output_path")
@@ -223,25 +194,32 @@ fn human_approval_summary(tool_name: &str, input: &str) -> String {
                 format!("Allow this PowerShell command (Office COM possible)?\n{preview}")
             },
         ),
-        "WebFetch" => url.map_or_else(|| "Fetch content from a URL?".into(), |u| {
-            format!("Fetch content from this URL?\n{u}")
-        }),
+        "WebFetch" => url.map_or_else(
+            || "Fetch content from a URL?".into(),
+            |u| format!("Fetch content from this URL?\n{u}"),
+        ),
         "WebSearch" => {
             let q = v.get("query").and_then(|x| x.as_str()).unwrap_or("…");
             format!("Search the web for “{q}”?")
         }
-        "git_status" => path.map_or_else(|| "Run git status in the workspace?".into(), |p| {
-            format!("Run git status in this folder?\n{p}")
-        }),
-        "git_diff" => path.map_or_else(|| "Run git diff in the workspace?".into(), |p| {
-            format!("Run git diff in this folder?\n{p}")
-        }),
+        "git_status" => path.map_or_else(
+            || "Run git status in the workspace?".into(),
+            |p| format!("Run git status in this folder?\n{p}"),
+        ),
+        "git_diff" => path.map_or_else(
+            || "Run git diff in the workspace?".into(),
+            |p| format!("Run git diff in this folder?\n{p}"),
+        ),
         "TodoWrite" => "Update the task list?".to_string(),
-        "NotebookEdit" => notebook_path.map_or_else(|| "Edit a notebook?".into(), |p| {
-            format!("Edit this notebook?\n{p}")
-        }),
+        "NotebookEdit" => notebook_path.map_or_else(
+            || "Edit a notebook?".into(),
+            |p| format!("Edit this notebook?\n{p}"),
+        ),
         "Config" => {
-            let s = v.get("setting").and_then(|x| x.as_str()).unwrap_or("settings");
+            let s = v
+                .get("setting")
+                .and_then(|x| x.as_str())
+                .unwrap_or("settings");
             format!("Change configuration: {s}?")
         }
         "Agent" => "Run a delegated sub-task?".to_string(),
@@ -470,7 +448,11 @@ pub fn run_agent_loop_impl(
             break;
         }
 
-        let turn_input = if turn == 0 { goal.as_str() } else { "Continue." };
+        let turn_input = if turn == 0 {
+            goal.as_str()
+        } else {
+            "Continue."
+        };
         let summary = match runtime_session.run_turn(turn_input, Some(&mut prompter)) {
             Ok(summary) => summary,
             Err(error) => {
@@ -571,43 +553,19 @@ impl CdpApiClient {
 
 impl ApiClient for CdpApiClient {
     fn stream(&mut self, request: &ApiRequest<'_>) -> Result<Vec<AssistantEvent>, RuntimeError> {
-        let prompt = normalize_prompt_for_cdp_file_attachment(&build_cdp_prompt(
-            request,
+        let (compacted_messages, estimated_tokens, removed_message_count) =
+            compact_request_messages_for_inline_cdp(request, self.session_preset)?;
+        let prompt = build_cdp_prompt_from_messages(
+            request.system_prompt,
+            &compacted_messages,
             self.session_preset,
-        ));
-
-        let legacy_composer = cdp_legacy_composer_full_paste();
-        if legacy_composer {
-            tracing::info!(
-                "[CdpApiClient] RELAY_CDP_LEGACY_COMPOSER: full composer paste ({} chars)",
-                prompt.len()
-            );
-        } else {
-            tracing::info!(
-                "[CdpApiClient] sending prompt via file attachment ({} chars)",
-                prompt.len()
-            );
-        }
-
-        let mut temp_prompt_file: Option<PathBuf> = None;
-        let (user_message, attachment_paths): (&str, Vec<String>) = if legacy_composer {
-            (prompt.as_str(), vec![])
-        } else {
-            let path = std::env::temp_dir().join(format!(
-                "relay-cdp-prompt-{}.txt",
-                Uuid::new_v4()
-            ));
-            write_utf8_file_with_bom(&path, prompt.as_str()).map_err(|e| {
-                RuntimeError::new(format!("failed to write temp Copilot prompt file: {e}"))
-            })?;
-            let path_for_attach = path
-                .canonicalize()
-                .unwrap_or_else(|_| path.clone())
-                .to_string_lossy()
-                .into_owned();
-            temp_prompt_file = Some(path);
-            (CDP_FILE_DELIVERY_USER_MESSAGE, vec![path_for_attach])
-        };
+        );
+        tracing::info!(
+            "[CdpApiClient] sending prompt inline (chars={}, est_tokens={}, compacted_removed_messages={})",
+            prompt.len(),
+            estimated_tokens,
+            removed_message_count
+        );
 
         let t0 = Instant::now();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -621,14 +579,7 @@ impl ApiClient for CdpApiClient {
                 .lock()
                 .map_err(|e| RuntimeError::new(format!("copilot server lock poisoned: {e}")))?;
             rt.block_on(async {
-                srv
-                    .send_prompt(
-                        "",
-                        user_message,
-                        self.response_timeout_secs,
-                        &attachment_paths,
-                        false,
-                    )
+                srv.send_prompt("", &prompt, self.response_timeout_secs, &[], false)
                     .await
             })
             .map_err(|e| {
@@ -640,12 +591,6 @@ impl ApiClient for CdpApiClient {
                 }
             })?
         };
-
-        if let Some(path) = temp_prompt_file {
-            if let Err(e) = std::fs::remove_file(&path) {
-                tracing::debug!(path = %path.display(), error = %e, "temp Copilot prompt file cleanup");
-            }
-        }
 
         tracing::info!(
             "[CdpApiClient] response {} chars in {:?}",
@@ -671,7 +616,9 @@ impl ApiClient for CdpApiClient {
             let mut start = 0;
             for (i, _) in visible_text.char_indices() {
                 if i > start && (i - start) >= RUNTIME_TEXT_CHUNK {
-                    events.push(AssistantEvent::TextDelta(visible_text[start..i].to_string()));
+                    events.push(AssistantEvent::TextDelta(
+                        visible_text[start..i].to_string(),
+                    ));
                     start = i;
                 }
             }
@@ -949,7 +896,10 @@ fn extract_mvp_tool_object_spans(
 
 /// Strip normal Markdown code fences and return JSON bodies that may contain tool calls.
 /// Skips `relay_tool` fences (payloads already taken by [`extract_relay_tool_fences`]); strips them from display.
-fn extract_fallback_markdown_fences(text: &str, whitelist: &HashSet<String>) -> (String, Vec<String>) {
+fn extract_fallback_markdown_fences(
+    text: &str,
+    whitelist: &HashSet<String>,
+) -> (String, Vec<String>) {
     const OPEN: &str = "```";
     let mut display = String::new();
     let mut payloads = Vec::new();
@@ -1028,7 +978,10 @@ fn extract_fallback_markdown_fences(text: &str, whitelist: &HashSet<String>) -> 
 }
 
 /// Pull `{"name":"…","input":{…}}` objects from prose (Copilot "Plain Text" without fences, or pretty-printed `{` + newline + `"name"`). Bounded scan.
-fn extract_unfenced_tool_json_candidates(text: &str, whitelist: &HashSet<String>) -> (String, Vec<String>) {
+fn extract_unfenced_tool_json_candidates(
+    text: &str,
+    whitelist: &HashSet<String>,
+) -> (String, Vec<String>) {
     let spans = extract_mvp_tool_object_spans(text, whitelist);
     let mut ranges = Vec::with_capacity(spans.len());
     let mut payloads = Vec::with_capacity(spans.len());
@@ -1269,6 +1222,54 @@ const CDP_BUNDLE_GROUNDING_BLOCK: &str = "## CDP bundle (read before you reply)\
 Do not list line-level bugs, missing tags, or identifiers (e.g. `x_size`, `bag.length0`) unless they appear verbatim in a `read_file` or Tool Result in this bundle. If you cite a problem, quote a short substring or line numbers from that text.\n\
 If the bundle contradicts a generic fix checklist, describe what the bundle actually contains instead of inventing errors.";
 
+fn build_cdp_prompt_from_messages(
+    system_prompt: &[String],
+    messages: &[ConversationMessage],
+    preset: SessionPreset,
+) -> String {
+    let request = ApiRequest {
+        system_prompt,
+        messages,
+    };
+    build_cdp_prompt(&request, preset)
+}
+
+fn compact_request_messages_for_inline_cdp(
+    request: &ApiRequest<'_>,
+    preset: SessionPreset,
+) -> Result<(Vec<ConversationMessage>, usize, usize), RuntimeError> {
+    let mut messages = request.messages.to_vec();
+    let mut compaction_rounds = 0;
+    let mut removed_message_count = 0;
+
+    loop {
+        let prompt = build_cdp_prompt_from_messages(request.system_prompt, &messages, preset);
+        let estimated_tokens = estimate_cdp_prompt_tokens(&prompt);
+        if estimated_tokens <= CDP_INLINE_PROMPT_MAX_TOKENS {
+            return Ok((messages, estimated_tokens, removed_message_count));
+        }
+
+        let mut session = RuntimeSession::new();
+        session.messages = messages;
+        let result = runtime::compact_session(&session, runtime::CompactionConfig::default());
+        if result.removed_message_count == 0 {
+            return Err(RuntimeError::new(format!(
+                "Copilot inline prompt remains above the {CDP_INLINE_PROMPT_MAX_TOKENS}-token limit after compaction (estimated {estimated_tokens} tokens)"
+            )));
+        }
+
+        messages = result.compacted_session.messages;
+        removed_message_count += result.removed_message_count;
+        compaction_rounds += 1;
+        tracing::info!(
+            "[CdpApiClient] compacted prompt context for inline delivery (round={}, removed_messages={}, est_tokens_before={})",
+            compaction_rounds,
+            result.removed_message_count,
+            estimated_tokens
+        );
+    }
+}
+
 /// Convert an `ApiRequest` into a human-readable text prompt for CDP.
 fn build_cdp_prompt(request: &ApiRequest<'_>, preset: SessionPreset) -> String {
     let mut parts = Vec::new();
@@ -1281,7 +1282,8 @@ fn build_cdp_prompt(request: &ApiRequest<'_>, preset: SessionPreset) -> String {
 
     for msg in request.messages {
         let role = match msg.role {
-            runtime::MessageRole::System | runtime::MessageRole::User => "User",
+            runtime::MessageRole::System => "System",
+            runtime::MessageRole::User => "User",
             runtime::MessageRole::Assistant => "Assistant",
             runtime::MessageRole::Tool => "Tool Result",
         };
@@ -1429,9 +1431,7 @@ impl PermissionPrompter for TauriApprovalPrompter {
                 })
                 .unwrap_or(false),
             Err(e) => {
-                tracing::error!(
-                    "[RelayAgent] registry lock poisoned during auto-allow check: {e}"
-                );
+                tracing::error!("[RelayAgent] registry lock poisoned during auto-allow check: {e}");
                 return PermissionPromptDecision::Deny {
                     reason: "registry lock poisoned".into(),
                 };
@@ -1658,7 +1658,8 @@ pub struct TauriToolExecutor {
 
 impl ToolExecutor for TauriToolExecutor {
     fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, runtime::ToolError> {
-        if let Some(r) = try_execute_mcp_meta_tool(&mut self.mcp_manager, &self.runtime, tool_name, input)
+        if let Some(r) =
+            try_execute_mcp_meta_tool(&mut self.mcp_manager, &self.runtime, tool_name, input)
         {
             return r;
         }
@@ -1670,7 +1671,12 @@ impl ToolExecutor for TauriToolExecutor {
         }
 
         if tool_name == "AskUserQuestion" {
-            return execute_ask_user_question_tool(&self.app, &self.registry, &self.session_id, input);
+            return execute_ask_user_question_tool(
+                &self.app,
+                &self.registry,
+                &self.session_id,
+                input,
+            );
         }
 
         if tool_name == "LSP" {
@@ -1752,8 +1758,7 @@ impl ToolExecutor for TauriToolExecutor {
             // Fix #4 — prepend cwd to bash commands instead of mutating process-global CWD
             if let Some(ref cwd) = self.cwd {
                 if let Some(cmd) = input_value.get("command").and_then(|v| v.as_str()) {
-                    let escaped = posix_shell_escape(cwd)
-                        .map_err(runtime::ToolError::new)?;
+                    let escaped = posix_shell_escape(cwd).map_err(runtime::ToolError::new)?;
                     let prefixed = format!("cd '{escaped}' && ( {cmd} )");
                     input_value["command"] = Value::String(prefixed);
                 }
@@ -1763,7 +1768,11 @@ impl ToolExecutor for TauriToolExecutor {
         if let Some(ref cwd) = self.cwd {
             let trimmed = cwd.trim();
             if !trimmed.is_empty() {
-                enforce_workspace_tool_paths(tool_name, &mut input_value, std::path::Path::new(trimmed))?;
+                enforce_workspace_tool_paths(
+                    tool_name,
+                    &mut input_value,
+                    std::path::Path::new(trimmed),
+                )?;
             }
         }
 
@@ -1852,9 +1861,7 @@ fn try_execute_mcp_meta_tool(
         }
         "ReadMcpResource" => {
             let Some(uri) = v.get("uri").and_then(|u| u.as_str()) else {
-                return Some(Err(runtime::ToolError::new(
-                    "ReadMcpResource requires uri",
-                )));
+                return Some(Err(runtime::ToolError::new("ReadMcpResource requires uri")));
             };
             let server = match resolve_mcp_server_for_read(mcp_manager, &v) {
                 Ok(s) => s,
@@ -2096,9 +2103,7 @@ fn execute_ask_user_question_tool(
             serde_json::to_string_pretty(&json!({ "answer": answer }))
                 .map_err(|e| runtime::ToolError::new(e.to_string()))
         }
-        Err(_) => Err(runtime::ToolError::new(
-            "user question channel closed",
-        )),
+        Err(_) => Err(runtime::ToolError::new("user question channel closed")),
     }
 }
 
@@ -2480,32 +2485,6 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn normalize_cdp_prompt_replaces_typographic_punctuation() {
-        let s = normalize_prompt_for_cdp_file_attachment(
-            "a — b – c → d ← e … f ‘g’ “h”\u{00A0}i",
-        );
-        assert!(s.contains(" - "));
-        assert!(!s.contains('—'));
-        assert!(!s.contains('–'));
-        assert!(s.contains("->"));
-        assert!(s.contains("<-"));
-        assert!(s.contains("..."));
-        assert!(s.contains("'g'"));
-        assert!(s.contains("\"h\""));
-        assert!(s.contains(" i"));
-    }
-
-    #[test]
-    fn write_utf8_file_with_bom_starts_with_ef_bb_bf() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("relay-cdp-prompt-test.txt");
-        write_utf8_file_with_bom(&path, "テスト").expect("write");
-        let raw = std::fs::read(&path).expect("read");
-        assert_eq!(&raw[..3], &[0xEF, 0xBB, 0xBF]);
-        assert_eq!(std::str::from_utf8(&raw[3..]).expect("utf8"), "テスト");
-    }
-
-    #[test]
     fn explore_catalog_lists_only_workspace_read_tools() {
         let s = cdp_tool_catalog_section(SessionPreset::Explore);
         assert!(s.contains("read_file"));
@@ -2514,6 +2493,127 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("Explore-only"));
         assert!(!s.contains("\"name\": \"write_file\""));
         assert!(!s.contains("\"name\": \"bash\""));
+    }
+
+    /// Fixture must not contain strings that models often hallucinate as "bugs" (see docs/AGENT_EVALUATION_CRITERIA.md).
+    #[test]
+    fn tetris_grounding_fixture_has_no_common_hallucination_tokens() {
+        let html = include_str!("../../../../tests/fixtures/tetris_grounding.html");
+        assert!(
+            html.contains("RELAY_GROUNDING_FIXTURE"),
+            "fixture marker missing"
+        );
+        for bad in ["x_size", "y_size", "bag.length0"] {
+            assert!(
+                !html.contains(bad),
+                "fixture must not contain hallucination example token {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tetris_html_fixture_has_no_common_hallucination_tokens() {
+        let html = include_str!("../../../../tests/fixtures/tetris.html");
+        assert!(
+            html.contains("RELAY_GROUNDING_FIXTURE"),
+            "fixture marker missing"
+        );
+        for bad in ["x_size", "y_size", "bag.length0"] {
+            assert!(
+                !html.contains(bad),
+                "fixture must not contain hallucination example token {bad:?}"
+            );
+        }
+    }
+
+    /// CDP bundle must include the grounding block and verbatim `read_file` tool output.
+    #[test]
+    fn build_cdp_prompt_includes_grounding_block_and_tool_result_body() {
+        let html = include_str!("../../../../tests/fixtures/tetris_grounding.html");
+        let messages = vec![ConversationMessage::tool_result(
+            "tu1",
+            "read_file",
+            html.to_string(),
+            false,
+        )];
+        let system: Vec<String> = vec![];
+        let request = ApiRequest {
+            system_prompt: &system,
+            messages: &messages,
+        };
+        let out = build_cdp_prompt(&request, SessionPreset::Build);
+        assert!(
+            out.contains("CDP bundle (read before you reply)"),
+            "grounding header missing from bundle"
+        );
+        assert!(
+            out.contains("Do not list line-level bugs"),
+            "grounding rules missing from bundle"
+        );
+        assert!(
+            out.contains("RELAY_GROUNDING_FIXTURE"),
+            "tool result body (fixture) missing from bundle"
+        );
+        assert!(
+            out.contains("Tool Result:") && out.contains("paintCell"),
+            "expected read_file narrative and fixture script in bundle"
+        );
+    }
+
+    #[test]
+    fn build_cdp_prompt_renders_compaction_summary_as_system() {
+        let messages = vec![ConversationMessage {
+            role: MessageRole::System,
+            blocks: vec![ContentBlock::Text {
+                text: "Compacted summary".to_string(),
+            }],
+            usage: None,
+        }];
+        let system: Vec<String> = vec![];
+        let request = ApiRequest {
+            system_prompt: &system,
+            messages: &messages,
+        };
+        let out = build_cdp_prompt(&request, SessionPreset::Build);
+        assert!(out.contains("System:\nCompacted summary"));
+    }
+
+    #[test]
+    fn inline_cdp_prompt_compacts_request_messages_when_prompt_is_too_large() {
+        let large = "x".repeat(90_000);
+        let messages = (0..8)
+            .map(|i| {
+                if i % 2 == 0 {
+                    ConversationMessage::user_text(large.clone())
+                } else {
+                    ConversationMessage::assistant(vec![ContentBlock::Text {
+                        text: large.clone(),
+                    }])
+                }
+            })
+            .collect::<Vec<_>>();
+        let system: Vec<String> = vec![];
+        let request = ApiRequest {
+            system_prompt: &system,
+            messages: &messages,
+        };
+        let (compacted_messages, estimated_tokens, removed_message_count) =
+            compact_request_messages_for_inline_cdp(&request, SessionPreset::Build)
+                .expect("compaction should succeed");
+        let prompt =
+            build_cdp_prompt_from_messages(&system, &compacted_messages, SessionPreset::Build);
+        assert!(
+            estimated_tokens <= CDP_INLINE_PROMPT_MAX_TOKENS,
+            "prompt still exceeds token limit after compaction: {estimated_tokens}"
+        );
+        assert!(
+            removed_message_count > 0,
+            "expected some messages to be compacted"
+        );
+        assert!(
+            prompt.contains("This session is being continued from a previous conversation"),
+            "expected compact continuation summary in prompt"
+        );
     }
 
     #[cfg(windows)]
@@ -2525,6 +2625,22 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("Range.Value2"));
         assert!(s.contains("Hybrid read"));
         assert!(s.contains("pdfPath"));
+    }
+
+    #[test]
+    fn inline_cdp_prompt_errors_when_recent_tail_still_exceeds_limit() {
+        let huge = "x".repeat(120_000);
+        let messages = (0..6)
+            .map(|_| ConversationMessage::user_text(huge.clone()))
+            .collect::<Vec<_>>();
+        let system: Vec<String> = vec![];
+        let request = ApiRequest {
+            system_prompt: &system,
+            messages: &messages,
+        };
+        let err = compact_request_messages_for_inline_cdp(&request, SessionPreset::Build)
+            .expect_err("should fail when preserved tail remains too large");
+        assert!(err.to_string().contains("remains above the"));
     }
 
     #[test]

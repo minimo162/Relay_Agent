@@ -9,11 +9,11 @@ use tokio::runtime::Builder;
 use tokio::time::timeout;
 
 use crate::bash_validation::validate_bash_against_config_permission;
-use crate::tool_hard_denylist::validate_bash_hard_deny;
 use crate::sandbox::{
     build_linux_sandbox_command, resolve_sandbox_status_for_request, FilesystemIsolationMode,
     SandboxConfig, SandboxStatus,
 };
+use crate::tool_hard_denylist::validate_bash_hard_deny;
 use crate::ConfigLoader;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

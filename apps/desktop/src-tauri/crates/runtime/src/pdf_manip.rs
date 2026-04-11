@@ -146,10 +146,7 @@ fn merge_load_input_documents(
         pages
             .into_values()
             .map(|object_id| {
-                let value = doc
-                    .get_object(object_id)
-                    .map_err(map_lopdf)?
-                    .clone();
+                let value = doc.get_object(object_id).map_err(map_lopdf)?.clone();
                 Ok::<_, io::Error>((object_id, value))
             })
             .try_for_each(|res| {
@@ -167,10 +164,7 @@ fn merge_load_input_documents(
 fn merge_partition_catalog_and_pages(
     document: &mut Document,
     documents_objects: BTreeMap<lopdf::ObjectId, Object>,
-) -> io::Result<(
-    (lopdf::ObjectId, Object),
-    (lopdf::ObjectId, Object),
-)> {
+) -> io::Result<((lopdf::ObjectId, Object), (lopdf::ObjectId, Object))> {
     let mut catalog_object: Option<(lopdf::ObjectId, Object)> = None;
     let mut pages_object: Option<(lopdf::ObjectId, Object)> = None;
 

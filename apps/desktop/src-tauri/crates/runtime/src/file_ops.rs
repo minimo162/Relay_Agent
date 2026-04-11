@@ -165,9 +165,7 @@ pub fn read_file(
             if raw.len() as u64 > MAX_TEXT_FILE_READ_BYTES {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    format!(
-                        "notebook file too large (limit {MAX_TEXT_FILE_READ_BYTES} bytes)"
-                    ),
+                    format!("notebook file too large (limit {MAX_TEXT_FILE_READ_BYTES} bytes)"),
                 ));
             }
             let raw = String::from_utf8(raw).map_err(|_| {
@@ -247,10 +245,7 @@ fn slice_text_payload(
 fn cell_source_as_string(source: &Value) -> String {
     match source {
         Value::String(s) => s.clone(),
-        Value::Array(parts) => parts
-            .iter()
-            .filter_map(|v| v.as_str())
-            .collect::<String>(),
+        Value::Array(parts) => parts.iter().filter_map(|v| v.as_str()).collect::<String>(),
         _ => String::new(),
     }
 }
@@ -280,12 +275,7 @@ fn summarize_notebook_outputs(outputs: &[Value]) -> String {
                 let mime_keys = output
                     .get("data")
                     .and_then(Value::as_object)
-                    .map(|m| {
-                        m.keys()
-                            .map(String::as_str)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
+                    .map(|m| m.keys().map(String::as_str).collect::<Vec<_>>().join(", "))
                     .unwrap_or_default();
                 lines.push(format!("    [data] {mime_keys}"));
             }
@@ -294,10 +284,7 @@ fn summarize_notebook_outputs(outputs: &[Value]) -> String {
                     .get("ename")
                     .and_then(Value::as_str)
                     .unwrap_or("Error");
-                let evalue = output
-                    .get("evalue")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
+                let evalue = output.get("evalue").and_then(Value::as_str).unwrap_or("");
                 lines.push(format!("    [error] {ename}: {evalue}"));
             }
             other => lines.push(format!("    [{other}]")),
@@ -322,10 +309,7 @@ fn format_ipynb_text(raw: &str) -> io::Result<String> {
     let mut out = Vec::new();
     let mut line_no = 1usize;
     for (i, cell) in cells.iter().enumerate() {
-        let cell_type = cell
-            .get("cell_type")
-            .and_then(Value::as_str)
-            .unwrap_or("?");
+        let cell_type = cell.get("cell_type").and_then(Value::as_str).unwrap_or("?");
         let source = cell_source_as_string(cell.get("source").unwrap_or(&Value::Null));
         out.push(format!("{line_no:6}\t### Cell[{i}] ({cell_type})"));
         line_no += 1;
@@ -357,7 +341,9 @@ fn read_image_summary(path: &Path) -> io::Result<String> {
     let format = reader
         .format()
         .map_or_else(|| "unknown".into(), |f| format!("{f:?}"));
-    let img = reader.decode().map_err(|e| io::Error::other(e.to_string()))?;
+    let img = reader
+        .decode()
+        .map_err(|e| io::Error::other(e.to_string()))?;
     let (w, h) = img.dimensions();
     Ok(format!(
         "[Image file — multimodal LLM attachment is not wired through tool results in this build.]\npath: {}\nformat: {format}\nwidth: {w}\nheight: {h}\n",

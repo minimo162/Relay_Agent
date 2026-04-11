@@ -8,11 +8,10 @@ mod electron_cdp;
 
 use reqwest::blocking::Client;
 use runtime::{
-    edit_file, execute_bash, glob_search, grep_search, merge_pdfs, read_file, reject_sensitive_file_path,
-    split_pdf, write_file,
-    pull_rust_diagnostics_blocking, task_create, task_get, task_list, task_output, task_stop,
-    task_update,
-    BashCommandInput, GrepSearchInput, PdfSplitSegment, PermissionMode,
+    edit_file, execute_bash, glob_search, grep_search, merge_pdfs, pull_rust_diagnostics_blocking,
+    read_file, reject_sensitive_file_path, split_pdf, task_create, task_get, task_list,
+    task_output, task_stop, task_update, write_file, BashCommandInput, GrepSearchInput,
+    PdfSplitSegment, PermissionMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -917,10 +916,12 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "Sleep" => from_value::<SleepInput>(input).and_then(run_sleep),
         "SendUserMessage" | "Brief" => from_value::<BriefInput>(input).and_then(run_brief),
         "Config" => from_value::<ConfigInput>(input).and_then(run_config),
-        "EnterPlanMode" => serde_json::to_string_pretty(&plan_mode_tool_json(true))
-            .map_err(|e| e.to_string()),
-        "ExitPlanMode" => serde_json::to_string_pretty(&plan_mode_tool_json(false))
-            .map_err(|e| e.to_string()),
+        "EnterPlanMode" => {
+            serde_json::to_string_pretty(&plan_mode_tool_json(true)).map_err(|e| e.to_string())
+        }
+        "ExitPlanMode" => {
+            serde_json::to_string_pretty(&plan_mode_tool_json(false)).map_err(|e| e.to_string())
+        }
         "StructuredOutput" => {
             from_value::<StructuredOutputInput>(input).and_then(run_structured_output)
         }
@@ -930,29 +931,17 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         // CLI Hub
         "CliList" => to_pretty_json(cli_hub::cli_list()),
         "CliDiscover" => to_pretty_json(cli_hub::cli_discover()),
-        "CliRegister" => {
-            from_value::<CliRegisterInput>(input).and_then(run_cli_register)
-        }
-        "CliUnregister" => {
-            from_value::<CliUnregisterInput>(input).and_then(run_cli_unregister)
-        }
+        "CliRegister" => from_value::<CliRegisterInput>(input).and_then(run_cli_register),
+        "CliUnregister" => from_value::<CliUnregisterInput>(input).and_then(run_cli_unregister),
         "CliRun" => from_value::<CliRunInput>(input).and_then(run_cli_run),
         // Electron CDP
-        "ElectronApps" => {
-            to_pretty_json(electron_cdp::electron_apps_status())
-        }
-        "ElectronLaunch" => {
-            from_value::<ElectronLaunchInput>(input).and_then(run_electron_launch)
-        }
-        "ElectronEval" => {
-            from_value::<ElectronEvalInput>(input).and_then(run_electron_eval)
-        }
+        "ElectronApps" => to_pretty_json(electron_cdp::electron_apps_status()),
+        "ElectronLaunch" => from_value::<ElectronLaunchInput>(input).and_then(run_electron_launch),
+        "ElectronEval" => from_value::<ElectronEvalInput>(input).and_then(run_electron_eval),
         "ElectronGetText" => {
             from_value::<ElectronGetTextInput>(input).and_then(run_electron_get_text)
         }
-        "ElectronClick" => {
-            from_value::<ElectronClickInput>(input).and_then(run_electron_click)
-        }
+        "ElectronClick" => from_value::<ElectronClickInput>(input).and_then(run_electron_click),
         "ElectronTypeText" => {
             from_value::<ElectronTypeTextInput>(input).and_then(run_electron_type_text)
         }
@@ -1008,13 +997,8 @@ fn run_read_file(input: ReadFileInput) -> Result<String, String> {
         .or(input.file_path)
         .ok_or_else(|| String::from("read_file requires path or file_path"))?;
     to_pretty_json(
-        read_file(
-            &path,
-            input.offset,
-            input.limit,
-            input.pages.as_deref(),
-        )
-        .map_err(io_to_string)?,
+        read_file(&path, input.offset, input.limit, input.pages.as_deref())
+            .map_err(io_to_string)?,
     )
 }
 
@@ -1123,8 +1107,7 @@ fn run_grep_search(input: GrepSearchInput) -> Result<String, String> {
 #[allow(clippy::needless_pass_by_value)]
 fn run_pdf_merge(input: PdfMergeInput) -> Result<String, String> {
     reject_sensitive_file_path(Path::new(&input.output_path)).map_err(io_to_string)?;
-    let output_path =
-        merge_pdfs(&input.output_path, &input.input_paths).map_err(io_to_string)?;
+    let output_path = merge_pdfs(&input.output_path, &input.input_paths).map_err(io_to_string)?;
     to_pretty_json(json!({
         "output_path": output_path.to_string_lossy(),
     }))
@@ -1184,9 +1167,7 @@ fn run_agent(input: &AgentInput) -> Result<String, String> {
             "Agent isolation \"worktree\" is not supported in Relay (sub-agents unavailable)",
         ));
     }
-    Err(String::from(
-        "sub-agent is not available (CDP-only mode)",
-    ))
+    Err(String::from("sub-agent is not available (CDP-only mode)"))
 }
 
 fn run_tool_search(input: ToolSearchInput) -> Result<String, String> {
@@ -2129,7 +2110,9 @@ fn validate_todos(todos: &[TodoItem]) -> Result<(), String> {
         if let Some(ref p) = todo.priority {
             let p = p.trim();
             if !matches!(p, "high" | "medium" | "low") {
-                return Err(format!("todo priority must be high, medium, or low (got {p:?})"));
+                return Err(format!(
+                    "todo priority must be high, medium, or low (got {p:?})"
+                ));
             }
         }
     }
@@ -2205,8 +2188,14 @@ fn deferred_tool_specs() -> Vec<ToolSpec> {
         .filter(|spec| {
             !matches!(
                 spec.name,
-                "bash" | "read_file" | "write_file" | "edit_file" | "glob_search" | "grep_search"
-                    | "pdf_merge" | "pdf_split"
+                "bash"
+                    | "read_file"
+                    | "write_file"
+                    | "edit_file"
+                    | "glob_search"
+                    | "grep_search"
+                    | "pdf_merge"
+                    | "pdf_split"
             )
         })
         .collect()
@@ -2356,7 +2345,12 @@ fn execute_notebook_edit(input: NotebookEditInput) -> Result<NotebookEditOutput,
     let mut claw_insert_at: Option<usize> = None;
     let mut effective_edit_mode = input.edit_mode;
 
-    if let Some(cmd) = input.command.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+    if let Some(cmd) = input
+        .command
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+    {
         let idx = input
             .index
             .ok_or_else(|| String::from("NotebookEdit: command requires index"))?;
@@ -2449,9 +2443,8 @@ fn execute_notebook_edit(input: NotebookEditInput) -> Result<NotebookEditOutput,
             let resolved_cell_type = resolved_cell_type.expect("insert cell type");
             let new_id = make_cell_id(cells.len());
             let new_cell = build_notebook_cell(&new_id, resolved_cell_type, &new_source);
-            let insert_at = claw_insert_at.unwrap_or_else(|| {
-                target_index.map_or(cells.len(), |index| index + 1)
-            });
+            let insert_at = claw_insert_at
+                .unwrap_or_else(|| target_index.map_or(cells.len(), |index| index + 1));
             cells.insert(insert_at, new_cell);
             cells
                 .get(insert_at)
@@ -3023,12 +3016,7 @@ fn iso8601_timestamp() -> String {
 #[cfg(windows)]
 fn prepend_powershell_utf8_console_setup(command: &str) -> String {
     let skip = std::env::var("RELAY_POWERSHELL_NO_UTF8_PREAMBLE")
-        .map(|v| {
-            matches!(
-                v.to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(false);
     if skip {
         return command.to_string();
@@ -3043,12 +3031,7 @@ fn execute_powershell(input: PowerShellInput) -> std::io::Result<runtime::BashCo
     let _ = &input.description;
     let shell = detect_powershell_shell()?;
     let command = prepend_powershell_utf8_console_setup(&input.command);
-    execute_shell_command(
-        shell,
-        &command,
-        input.timeout,
-        input.run_in_background,
-    )
+    execute_shell_command(shell, &command, input.timeout, input.run_in_background)
 }
 
 #[cfg(windows)]
@@ -3274,9 +3257,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use super::{
-        execute_tool, mvp_tool_specs,
-    };
+    use super::{execute_tool, mvp_tool_specs};
     use serde_json::json;
 
     fn env_lock() -> &'static Mutex<()> {

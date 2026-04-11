@@ -76,7 +76,12 @@ pub fn list_for_cwd(cwd: Option<&str>) -> Result<Vec<WorkspaceSlashCommandRow>, 
                 Ok(rows) => {
                     for row in rows {
                         let name = row.name.trim().to_string();
-                        if name.is_empty() || !name.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
+                        if name.is_empty()
+                            || !name
+                                .chars()
+                                .next()
+                                .map(|c| c.is_ascii_alphabetic())
+                                .unwrap_or(false)
                         {
                             continue;
                         }
@@ -168,7 +173,9 @@ pub fn list_for_cwd(cwd: Option<&str>) -> Result<Vec<WorkspaceSlashCommandRow>, 
     Ok(finish_sorted(by_name))
 }
 
-fn finish_sorted(by_name: HashMap<String, WorkspaceSlashCommandRow>) -> Vec<WorkspaceSlashCommandRow> {
+fn finish_sorted(
+    by_name: HashMap<String, WorkspaceSlashCommandRow>,
+) -> Vec<WorkspaceSlashCommandRow> {
     let mut v: Vec<_> = by_name.into_values().collect();
     v.sort_by(|a, b| a.name.cmp(&b.name));
     v

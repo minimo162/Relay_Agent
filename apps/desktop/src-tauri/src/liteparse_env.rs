@@ -18,10 +18,7 @@ pub fn apply(app: &tauri::App) {
         let root = dir.join("liteparse-runner");
         if root.join("parse.mjs").is_file() {
             std::env::set_var("RELAY_LITEPARSE_RUNNER_ROOT", &root);
-            tracing::info!(
-                "[liteparse] RELAY_LITEPARSE_RUNNER_ROOT={}",
-                root.display()
-            );
+            tracing::info!("[liteparse] RELAY_LITEPARSE_RUNNER_ROOT={}", root.display());
         }
     }
 

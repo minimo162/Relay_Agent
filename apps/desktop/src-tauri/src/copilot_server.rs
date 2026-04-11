@@ -10,9 +10,9 @@ use std::{
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
-use uuid::Uuid;
 use tokio::time::sleep;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 const READY_TIMEOUT_SECS: u64 = 30;
 const HEALTH_POLL_INTERVAL_MS: u64 = 500;
@@ -69,8 +69,13 @@ impl std::fmt::Display for CopilotError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CopilotError::Http(e) => write!(f, "HTTP error: {e}"),
-            CopilotError::StartupTimeout => write!(f, "copilot server did not become ready within {READY_TIMEOUT_SECS}s"),
-            CopilotError::ProcessExited(code) => write!(f, "copilot server exited with code {code:?}"),
+            CopilotError::StartupTimeout => write!(
+                f,
+                "copilot server did not become ready within {READY_TIMEOUT_SECS}s"
+            ),
+            CopilotError::ProcessExited(code) => {
+                write!(f, "copilot server exited with code {code:?}")
+            }
             CopilotError::Spawn(e) => write!(f, "failed to spawn copilot server: {e}"),
             CopilotError::PromptError(msg) => write!(f, "prompt error: {msg}"),
         }
@@ -402,11 +407,7 @@ impl CopilotServer {
             .send()
             .await
             .map_err(|e| {
-                warn!(
-                    "[copilot] POST failed after {:?}: {}",
-                    t0.elapsed(),
-                    e
-                );
+                warn!("[copilot] POST failed after {:?}: {}", t0.elapsed(), e);
                 CopilotError::Http(e)
             })?;
 
@@ -432,10 +433,7 @@ impl CopilotServer {
             )));
         }
 
-        let body: serde_json::Value = response
-            .json()
-            .await
-            .map_err(CopilotError::Http)?;
+        let body: serde_json::Value = response.json().await.map_err(CopilotError::Http)?;
 
         let content = body
             .get("choices")
@@ -489,7 +487,7 @@ impl CopilotServer {
                     attachment_paths,
                     new_chat,
                 )
-                    .await
+                .await
             }
             Err(e) => Err(e),
         }
@@ -551,9 +549,9 @@ fn resolve_script_path() -> Option<PathBuf> {
         option_env!("CARGO_MANIFEST_DIR")
             .map(|d| PathBuf::from(d).join("binaries/copilot_server.js")),
         // Next to the binary
-        env::current_exe().ok().and_then(|p| {
-            p.parent().map(|p| p.join("binaries/copilot_server.js"))
-        }),
+        env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.join("binaries/copilot_server.js"))),
         // Resource dir (Tauri bundles)
         option_env!("CARGO_MANIFEST_DIR")
             .map(|d| PathBuf::from(d).join("../../../src-tauri/binaries/copilot_server.js")),

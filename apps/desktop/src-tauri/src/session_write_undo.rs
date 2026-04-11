@@ -130,7 +130,10 @@ pub(crate) fn snapshots_before_mutation(tool_name: &str, input: &Value) -> Optio
         "write_file" | "edit_file" => {
             let path = path_from_value(input, "path")?;
             match read_snapshot(&path) {
-                Ok(prev) => out.push(PathUndoOp::Restore { path, previous: prev }),
+                Ok(prev) => out.push(PathUndoOp::Restore {
+                    path,
+                    previous: prev,
+                }),
                 Err(e) => {
                     tracing::warn!("[write_undo] skip snapshot for {}: {e}", path.display());
                     return None;
@@ -140,7 +143,10 @@ pub(crate) fn snapshots_before_mutation(tool_name: &str, input: &Value) -> Optio
         "NotebookEdit" => {
             let path = path_from_value(input, "notebook_path")?;
             match read_snapshot(&path) {
-                Ok(prev) => out.push(PathUndoOp::Restore { path, previous: prev }),
+                Ok(prev) => out.push(PathUndoOp::Restore {
+                    path,
+                    previous: prev,
+                }),
                 Err(e) => {
                     tracing::warn!("[write_undo] skip notebook snapshot: {e}");
                     return None;
@@ -150,7 +156,10 @@ pub(crate) fn snapshots_before_mutation(tool_name: &str, input: &Value) -> Optio
         "pdf_merge" => {
             let path = path_from_value(input, "output_path")?;
             match read_snapshot(&path) {
-                Ok(prev) => out.push(PathUndoOp::Restore { path, previous: prev }),
+                Ok(prev) => out.push(PathUndoOp::Restore {
+                    path,
+                    previous: prev,
+                }),
                 Err(e) => {
                     tracing::warn!("[write_undo] skip pdf_merge output snapshot: {e}");
                     return None;
@@ -173,9 +182,15 @@ pub(crate) fn snapshots_before_mutation(tool_name: &str, input: &Value) -> Optio
                     continue;
                 }
                 match read_snapshot(&path) {
-                    Ok(prev) => out.push(PathUndoOp::Restore { path, previous: prev }),
+                    Ok(prev) => out.push(PathUndoOp::Restore {
+                        path,
+                        previous: prev,
+                    }),
                     Err(e) => {
-                        tracing::warn!("[write_undo] skip pdf_split output {}: {e}", path.display());
+                        tracing::warn!(
+                            "[write_undo] skip pdf_split output {}: {e}",
+                            path.display()
+                        );
                         return None;
                     }
                 }

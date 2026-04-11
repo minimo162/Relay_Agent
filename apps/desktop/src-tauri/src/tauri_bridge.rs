@@ -126,9 +126,7 @@ pub fn ensure_copilot_server(
                 if st.started {
                     if block_port_change_on_concurrent_sessions {
                         if let Some(reg) = registry {
-                            let n = reg
-                                .running_session_count()
-                                .map_err(|e| e.to_string())?;
+                            let n = reg.running_session_count().map_err(|e| e.to_string())?;
                             if n > 1 {
                                 return Err("Cannot change Copilot CDP port while multiple agent sessions are running. Wait for sessions to finish or restart the app.".to_string());
                             }
@@ -145,7 +143,9 @@ pub fn ensure_copilot_server(
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
-                    .map_err(|e| format!("failed to create tokio runtime for copilot health: {e}"))?;
+                    .map_err(|e| {
+                        format!("failed to create tokio runtime for copilot health: {e}")
+                    })?;
                 let healthy = {
                     let srv = st
                         .server
@@ -407,10 +407,9 @@ pub async fn respond_approval(
 
     if request.approved && request.remember_for_workspace == Some(true) {
         if let Some(ref cwd) = entry.workspace_cwd {
-            if let Err(e) = crate::workspace_allowlist::remember_tool_for_workspace(
-                cwd,
-                &pending.tool_name,
-            ) {
+            if let Err(e) =
+                crate::workspace_allowlist::remember_tool_for_workspace(cwd, &pending.tool_name)
+            {
                 tracing::warn!("[RelayAgent] workspace allowlist persist failed: {e}");
             }
         }
@@ -707,7 +706,12 @@ fn cdp_is_connected() -> bool {
     cdp_session().lock().is_ok_and(|s| s.connected)
 }
 
-fn set_cdp_session_connected(port: u16, owns_browser: bool, page_url: String, page: cdp_copilot::CopilotPage) {
+fn set_cdp_session_connected(
+    port: u16,
+    owns_browser: bool,
+    page_url: String,
+    page: cdp_copilot::CopilotPage,
+) {
     if let Ok(mut state) = cdp_session().lock() {
         state.cdp_port = Some(port);
         state.owns_browser = owns_browser;
@@ -769,9 +773,11 @@ pub fn ensure_cdp_connected() -> Result<cdp_copilot::CopilotPage, String> {
         .map_err(|e| {
             let msg = e.to_string();
             if msg.contains("Microsoft Edge could not be found") {
-                "CDP: Microsoft Edge is not installed. Please install Edge and try again.".to_string()
+                "CDP: Microsoft Edge is not installed. Please install Edge and try again."
+                    .to_string()
             } else if msg.contains("Edge did not become ready") {
-                "CDP: Edge did not start within 30 seconds. It may be blocked by a security policy.".to_string()
+                "CDP: Edge did not start within 30 seconds. It may be blocked by a security policy."
+                    .to_string()
             } else {
                 format!("CDP: {msg}")
             }
@@ -841,12 +847,19 @@ pub async fn connect_cdp(
 ) -> Result<CdpConnectResult, String> {
     // If already connected, return current status
     {
-        let state = cdp_session().lock().map_err(|e| format!("cdp_session lock poisoned: {e}"))?;
+        let state = cdp_session()
+            .lock()
+            .map_err(|e| format!("cdp_session lock poisoned: {e}"))?;
         if state.connected {
             return Ok(CdpConnectResult {
                 ok: true,
                 debug_url: state.cdp_port.map_or_else(
-                    || format!("http://127.0.0.1:{}", request.base_port.unwrap_or(COPILOT_JS_CDP_PORT)),
+                    || {
+                        format!(
+                            "http://127.0.0.1:{}",
+                            request.base_port.unwrap_or(COPILOT_JS_CDP_PORT)
+                        )
+                    },
                     |p| format!("http://127.0.0.1:{p}"),
                 ),
                 page_url: state.page_url.clone().unwrap_or_default(),
@@ -1060,7 +1073,13 @@ pub async fn disconnect_cdp(_app: AppHandle) -> Result<(), String> {
                 .creation_flags(CREATE_NO_WINDOW)
                 .output();
             let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/IM", "msedge.exe", "/FI", &format!("CMDLINE eq *RelayAgentEdgeProfile*")])
+                .args([
+                    "/F",
+                    "/IM",
+                    "msedge.exe",
+                    "/FI",
+                    &format!("CMDLINE eq *RelayAgentEdgeProfile*"),
+                ])
                 .creation_flags(CREATE_NO_WINDOW)
                 .output();
         }
@@ -1175,11 +1194,9 @@ pub fn mcp_check_server_status(name: String) -> Result<McpServerInfo, String> {
     let data = registry
         .lock()
         .map_err(|e| format!("registry lock poisoned: {e}"))?;
-    data.get(&name)
-        .cloned()
-        .ok_or_else(|| {
-            format!("MCP server `{name}` not found — register it via Settings or `mcp_add_server`")
-        })
+    data.get(&name).cloned().ok_or_else(|| {
+        format!("MCP server `{name}` not found — register it via Settings or `mcp_add_server`")
+    })
 }
 
 fn relay_predictability_notes() -> Vec<String> {
@@ -1208,17 +1225,6 @@ fn relay_doctor_hints() -> Vec<String> {
     hints.push(format!(
         "Copilot Node bridge port {COPILOT_HTTP_PORT}; default Edge CDP target port {COPILOT_JS_CDP_PORT} (see scripts/start-relay-edge-cdp.sh and docs/COPILOT_E2E_CDP_PITFALLS.md)."
     ));
-    if let Ok(v) = std::env::var("RELAY_CDP_LEGACY_COMPOSER") {
-        if matches!(
-            v.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        ) {
-            hints.push(
-                "RELAY_CDP_LEGACY_COMPOSER is on: full prompt is pasted into the composer instead of file attach."
-                    .into(),
-            );
-        }
-    }
     if std::env::var("ANTHROPIC_API_KEY")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -1326,7 +1332,9 @@ pub fn get_workspace_allowlist() -> Result<WorkspaceAllowlistSnapshot, String> {
 }
 
 #[tauri::command]
-pub fn remove_workspace_allowlist_tool(request: WorkspaceAllowlistRemoveToolRequest) -> Result<(), String> {
+pub fn remove_workspace_allowlist_tool(
+    request: WorkspaceAllowlistRemoveToolRequest,
+) -> Result<(), String> {
     crate::workspace_allowlist::remove_tool_for_cwd(&request.cwd, &request.tool_name)
 }
 

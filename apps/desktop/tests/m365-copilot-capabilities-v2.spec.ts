@@ -1,7 +1,7 @@
 import { test, expect, chromium } from "@playwright/test";
 
 const CDP_ENDPOINT =
-  process.env.CDP_ENDPOINT || "http://127.0.0.1:9360";
+  process.env.CDP_ENDPOINT || "http://127.0.0.1:9333";
 const M365_COPILOT_URL = "https://m365.cloud.microsoft/chat";
 
 /* ── Helpers ─────────────────────────────────────────────────── */

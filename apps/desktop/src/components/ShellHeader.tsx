@@ -36,7 +36,7 @@ export function ShellHeader(props: {
       <span class={`ra-display-title ra-type-body-sans ${ui.textPrimary}`}>Relay Agent</span>
       <button
         type="button"
-        class={`ml-2 max-w-[min(40vw,14rem)] shrink min-w-0 ${ui.radiusPill} border px-2.5 py-0.5 text-left ra-type-caption transition-colors ${
+        class={`ra-workspace-chip ml-2 max-w-[min(40vw,14rem)] shrink min-w-0 ${ui.radiusPill} border px-2.5 py-0.5 text-left ra-type-caption transition-colors ${
           hasWorkspace()
             ? "border-[var(--ra-border-strong)] bg-[var(--ra-surface-elevated)] text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
             : "border-dashed border-[var(--ra-border)] text-[var(--ra-text-muted)] hover:border-[var(--ra-text-muted)] hover:text-[var(--ra-text-secondary)]"
@@ -50,7 +50,7 @@ export function ShellHeader(props: {
       </button>
       <div class="flex-1" />
       <div
-        class="flex items-center gap-2 shrink-0"
+        class="ra-shell-header__status flex items-center gap-2 shrink-0"
         title={props.sessionRunning ? "Agent is running." : "Agent is idle."}
       >
         <StatusDot
@@ -60,7 +60,7 @@ export function ShellHeader(props: {
         <span class={`ra-type-button-label ${ui.mutedText} hidden sm:inline`}>Agent</span>
       </div>
       <div
-        class="flex items-center gap-0.5 shrink-0 border-l border-[var(--ra-border)] pl-2 ml-1"
+        class="ra-shell-header__actions flex items-center gap-0.5 shrink-0 border-l border-[var(--ra-border)] pl-2 ml-1"
         title="Undo or redo the last workspace file change from this session"
       >
         <Button

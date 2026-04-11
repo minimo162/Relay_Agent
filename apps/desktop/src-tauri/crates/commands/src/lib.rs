@@ -353,7 +353,11 @@ pub fn handle_slash_command(
         SlashCommand::Init => Some(handle_init(session)),
         SlashCommand::Diff => Some(handle_diff(session)),
         SlashCommand::Export { path } => Some(handle_export(path, session)),
-        SlashCommand::Session { action, target } => Some(handle_session(action.as_deref(), target.as_deref(), session)),
+        SlashCommand::Session { action, target } => Some(handle_session(
+            action.as_deref(),
+            target.as_deref(),
+            session,
+        )),
         SlashCommand::Version => Some(handle_version(session)),
         SlashCommand::Clear { confirm } => Some(handle_clear(confirm, session)),
         SlashCommand::Resume { session_path } => Some(handle_resume(session_path, session)),
@@ -396,9 +400,8 @@ fn handle_help(session: &Session) -> SlashCommandResult {
 fn handle_status(session: &Session) -> SlashCommandResult {
     let msg_count = session.messages.len();
     let token_estimate = estimate_session_tokens(session);
-    let message = format!(
-        "Session status:\n  Messages: {msg_count}\n  Estimated tokens: ~{token_estimate}"
-    );
+    let message =
+        format!("Session status:\n  Messages: {msg_count}\n  Estimated tokens: ~{token_estimate}");
     SlashCommandResult {
         message,
         session: session.clone(),
@@ -460,8 +463,7 @@ fn handle_init(session: &Session) -> SlashCommandResult {
 }
 
 fn handle_diff(session: &Session) -> SlashCommandResult {
-    let message =
-        "Run `git diff` in the workspace terminal to see current changes.".to_string();
+    let message = "Run `git diff` in the workspace terminal to see current changes.".to_string();
     SlashCommandResult {
         message,
         session: session.clone(),
@@ -532,10 +534,7 @@ fn handle_clear(confirm: bool, session: &Session) -> SlashCommandResult {
     }
 }
 
-fn handle_resume(
-    session_path: Option<String>,
-    session: &Session,
-) -> SlashCommandResult {
+fn handle_resume(session_path: Option<String>, session: &Session) -> SlashCommandResult {
     let message = if let Some(path) = session_path {
         format!("To resume session `{path}`, restart the agent with --resume {path}")
     } else {
@@ -734,9 +733,8 @@ mod tests {
                 }]),
             ],
         };
-        let result =
-            handle_slash_command("/status", &session, CompactionConfig::default())
-                .expect("status should be handled");
+        let result = handle_slash_command("/status", &session, CompactionConfig::default())
+            .expect("status should be handled");
         assert!(result.message.contains("Messages: 2"));
         assert!(result.message.contains("Estimated tokens"));
         assert_eq!(result.session.messages.len(), 2);
@@ -745,75 +743,65 @@ mod tests {
     #[test]
     fn handles_cost_command() {
         let session = Session::new();
-        let result =
-            handle_slash_command("/cost", &session, CompactionConfig::default())
-                .expect("cost should be handled");
+        let result = handle_slash_command("/cost", &session, CompactionConfig::default())
+            .expect("cost should be handled");
         assert!(result.message.contains("Estimated session tokens"));
     }
 
     #[test]
     fn handles_memory_command() {
         let session = Session::new();
-        let result =
-            handle_slash_command("/memory", &session, CompactionConfig::default())
-                .expect("memory should be handled");
+        let result = handle_slash_command("/memory", &session, CompactionConfig::default())
+            .expect("memory should be handled");
         assert!(result.message.contains("Memory"));
     }
 
     #[test]
     fn handles_config_command() {
         let session = Session::new();
-        let result =
-            handle_slash_command("/config", &session, CompactionConfig::default())
-                .expect("config should be handled");
+        let result = handle_slash_command("/config", &session, CompactionConfig::default())
+            .expect("config should be handled");
         assert!(result.message.contains("/config"));
     }
 
     #[test]
     fn handles_init_command() {
         let session = Session::new();
-        let result =
-            handle_slash_command("/init", &session, CompactionConfig::default())
-                .expect("init should be handled");
+        let result = handle_slash_command("/init", &session, CompactionConfig::default())
+            .expect("init should be handled");
         assert!(result.message.contains("CLAW.md"));
     }
 
     #[test]
     fn handles_diff_command() {
         let session = Session::new();
-        let result =
-            handle_slash_command("/diff", &session, CompactionConfig::default())
-                .expect("diff should be handled");
+        let result = handle_slash_command("/diff", &session, CompactionConfig::default())
+            .expect("diff should be handled");
         assert!(result.message.contains("git diff"));
     }
 
     #[test]
     fn handles_export_command() {
         let session = Session::new();
-        let result = handle_slash_command(
-            "/export notes.json",
-            &session,
-            CompactionConfig::default(),
-        )
-        .expect("export should be handled");
+        let result =
+            handle_slash_command("/export notes.json", &session, CompactionConfig::default())
+                .expect("export should be handled");
         assert!(result.message.contains("export"));
     }
 
     #[test]
     fn handles_session_command() {
         let session = Session::new();
-        let result =
-            handle_slash_command("/session list", &session, CompactionConfig::default())
-                .expect("session should be handled");
+        let result = handle_slash_command("/session list", &session, CompactionConfig::default())
+            .expect("session should be handled");
         assert!(result.message.contains("session"));
     }
 
     #[test]
     fn handles_version_command() {
         let session = Session::new();
-        let result =
-            handle_slash_command("/version", &session, CompactionConfig::default())
-                .expect("version should be handled");
+        let result = handle_slash_command("/version", &session, CompactionConfig::default())
+            .expect("version should be handled");
         assert!(result.message.contains("Relay Agent"));
     }
 
@@ -823,9 +811,8 @@ mod tests {
             version: 1,
             messages: vec![ConversationMessage::user_text("hello")],
         };
-        let result =
-            handle_slash_command("/clear", &session, CompactionConfig::default())
-                .expect("clear should be handled");
+        let result = handle_slash_command("/clear", &session, CompactionConfig::default())
+            .expect("clear should be handled");
         assert!(result.message.contains("--confirm"));
         assert_eq!(result.session.messages.len(), 1);
     }
@@ -836,12 +823,9 @@ mod tests {
             version: 1,
             messages: vec![ConversationMessage::user_text("hello")],
         };
-        let result = handle_slash_command(
-            "/clear --confirm",
-            &session,
-            CompactionConfig::default(),
-        )
-        .expect("clear should be handled");
+        let result =
+            handle_slash_command("/clear --confirm", &session, CompactionConfig::default())
+                .expect("clear should be handled");
         assert!(result.message.contains("cleared"));
         assert_eq!(result.session.messages.len(), 0);
     }

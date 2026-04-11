@@ -15,7 +15,10 @@
     "test:e2e:auth-save": "pnpm --filter @relay-agent/desktop test:e2e:auth-save",
     "dev": "pnpm --filter @relay-agent/desktop dev",
     "relay:dev:linux": "bash scripts/relay-copilot-linux.sh",
-    "relay:edge": "bash scripts/start-relay-edge-cdp.sh"
+    "relay:edge": "bash scripts/start-relay-edge-cdp.sh",
+    "test:grounding-fixture": "bash scripts/verify-grounding-fixture.sh",
+    "test:e2e:copilot-grounding": "pnpm --filter @relay-agent/desktop test:e2e:copilot-grounding",
+    "test:e2e:m365-cdp": "pnpm --filter @relay-agent/desktop test:e2e:m365-cdp"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

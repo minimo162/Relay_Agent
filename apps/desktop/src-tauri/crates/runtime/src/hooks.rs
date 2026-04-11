@@ -382,12 +382,12 @@ mod tests {
     #[test]
     fn post_tool_use_failure_hook_runs_separately_from_post_tool_use() {
         let runner = HookRunner::new(
-            RuntimeHookConfig::new(Vec::new(), Vec::new()).with_post_tool_use_failure(vec![
-                shell_snippet("printf 'saw-failure'"),
-            ]),
+            RuntimeHookConfig::new(Vec::new(), Vec::new())
+                .with_post_tool_use_failure(vec![shell_snippet("printf 'saw-failure'")]),
         );
 
-        let result = runner.run_post_tool_use_failure("bash", r#"{"command":"false"}"#, "command failed");
+        let result =
+            runner.run_post_tool_use_failure("bash", r#"{"command":"false"}"#, "command failed");
 
         assert!(!result.is_denied());
         assert_eq!(result.messages(), &["saw-failure".to_string()]);

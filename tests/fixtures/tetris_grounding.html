@@ -1,0 +1,76 @@
+<!-- RELAY_GROUNDING_FIXTURE: minimal single-file Tetris for host bundle / grounding checks (see AGENT_EVALUATION_CRITERIA for forbidden typo examples). -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<title>Relay grounding — Tetris mini</title>
+<style>
+  body { margin: 0; background: #111; color: #eee; font-family: system-ui, sans-serif; display: flex; justify-content: center; padding: 16px; }
+  canvas { background: #000; border: 1px solid #444; }
+  .panel { margin-left: 16px; font-size: 14px; }
+</style>
+</head>
+<body>
+  <canvas id="game" width="300" height="600"></canvas>
+  <div class="panel">
+    <div>Score: <span id="score">0</span></div>
+    <p style="font-size:12px;color:#aaa">←/→ move · ↓ soft · Space hard</p>
+  </div>
+<script>
+(function () {
+  const COLS = 10, ROWS = 20, CELL = 30;
+  const GRID = [];
+  for (let y = 0; y < ROWS; y++) GRID[y] = Array(COLS).fill(0);
+
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  let score = 0;
+
+  function paintCell(x, y, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(x * CELL, y * CELL, CELL - 1, CELL - 1);
+  }
+
+  function clearBoard() {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
+  function drawGrid() {
+    clearBoard();
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        if (GRID[y][x]) paintCell(x, y, "#0af");
+      }
+    }
+  }
+
+  const pieceQueue = [];
+  function refillQueue() {
+    const kinds = [1, 2, 3];
+    while (pieceQueue.length < 3) pieceQueue.push(kinds[Math.floor(Math.random() * kinds.length)]);
+  }
+
+  function nextPiece() {
+    refillQueue();
+    if (pieceQueue.length === 0) refillQueue();
+    return pieceQueue.shift();
+  }
+
+  let cur = { x: 4, y: 0, kind: 1 };
+
+  function tick() {
+    drawGrid();
+    paintCell(cur.x, cur.y, "#f80");
+    document.getElementById("score").textContent = String(score);
+  }
+
+  function loop() {
+    tick();
+    requestAnimationFrame(loop);
+  }
+  loop();
+})();
+</script>
+</body>
+</html>

@@ -448,12 +448,12 @@ body a:focus-visible {
   color: var(--ra-text-primary);
 }
 
-/* User chat bubble — Surface 300 + accent rail */
+/* User chat bubble — warm surface with a slightly stronger outline */
 .ra-bubble-user {
   background: var(--ra-surface-300);
-  border: 1px solid var(--ra-border);
-  border-left: 3px solid var(--ra-accent);
+  border: 1px solid var(--ra-border-medium);
   color: var(--ra-text-primary);
+  box-shadow: var(--ra-shadow-sm);
 }
 
 .ra-body-editorial {
@@ -474,6 +474,10 @@ body a:focus-visible {
   background: var(--ra-surface);
 }
 
+.ra-shell--first-run {
+  grid-template-columns: 260px 1fr;
+}
+
 .ra-shell-header {
   grid-column: 1 / -1;
   display: flex;
@@ -491,6 +495,23 @@ body a:focus-visible {
 
 [data-theme="dark"] .ra-shell-header {
   background: color-mix(in oklab, var(--ra-surface-elevated) 82%, transparent);
+}
+
+.ra-workspace-chip {
+  opacity: 0.92;
+}
+
+.ra-shell-header__status {
+  opacity: 0.82;
+}
+
+.ra-shell-header__actions {
+  opacity: 0.72;
+}
+
+.ra-shell-header__actions:hover,
+.ra-shell-header__actions:focus-within {
+  opacity: 0.94;
 }
 
 .ra-shell-sidebar {
@@ -524,6 +545,10 @@ body a:focus-visible {
   background: var(--ra-color-surface);
   display: flex;
   flex-direction: column;
+}
+
+.ra-shell--first-run .ra-shell-main {
+  grid-column: 2 / 3;
 }
 
 .ra-shell-footer {
@@ -676,7 +701,7 @@ body a:focus-visible {
 }
 
 .ra-button-ghost:disabled {
-  opacity: 0.45;
+  opacity: 0.3;
 }
 
 .ra-button.ra-type-caption {
@@ -771,10 +796,20 @@ body a:focus-visible {
   background: var(--ra-surface-elevated);
 }
 
+.ra-composer--hero {
+  border-top: none;
+  padding: 0;
+  background: transparent;
+}
+
 .ra-composer-inner {
   width: 100%;
   max-width: 48rem;
   margin-inline: auto;
+}
+
+.ra-composer--hero .ra-composer-inner {
+  max-width: none;
 }
 
 .ra-composer-shell {
@@ -783,6 +818,13 @@ body a:focus-visible {
   background: var(--ra-surface);
   padding: 0.65rem 0.85rem 0.55rem;
   transition: border-color 150ms ease, box-shadow 200ms ease;
+}
+
+.ra-composer--hero .ra-composer-shell {
+  padding: 0.95rem 1rem 0.85rem;
+  border-radius: 1rem;
+  background: var(--ra-surface-card);
+  box-shadow: var(--ra-shadow-sm);
 }
 
 .ra-composer-shell:focus-within {
@@ -1004,6 +1046,54 @@ body a:focus-visible {
   overflow: hidden;
 }
 
+.ra-first-run {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem 1.75rem 1.75rem;
+  overflow-y: auto;
+}
+
+.ra-first-run__panel {
+  width: min(100%, 58rem);
+  display: grid;
+  gap: 1rem;
+}
+
+.ra-first-run__lead {
+  max-width: 38rem;
+}
+
+.ra-first-run__workspace,
+.ra-first-run__request {
+  display: grid;
+  gap: 0.9rem;
+  border: 1px solid var(--ra-border);
+  border-radius: 1rem;
+  background: var(--ra-surface-card);
+  padding: 1rem 1.1rem;
+  box-shadow: var(--ra-shadow-sm);
+}
+
+.ra-first-run__workspace {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.ra-first-run__mode-note {
+  margin: 0.65rem 0 0;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--ra-border);
+  border-radius: var(--ra-radius);
+  background: color-mix(in oklab, var(--ra-surface-card) 68%, transparent);
+  color: var(--ra-text-secondary);
+  font-family: var(--ra-font-display);
+  font-size: var(--ra-text-caption);
+  line-height: 1.45;
+}
+
 .ra-sidebar-shell__header {
   flex-shrink: 0;
   padding: 0.75rem;
@@ -1104,6 +1194,36 @@ body a:focus-visible {
   z-index: 1;
 }
 
+.ra-context-note,
+.ra-context-empty-card {
+  border: 1px solid var(--ra-border);
+  border-radius: 0.9rem;
+  background: color-mix(in oklab, var(--ra-surface-elevated) 44%, transparent);
+  padding: 0.8rem 0.9rem;
+}
+
+.ra-context-empty-card {
+  text-align: left;
+}
+
+.ra-policy-card {
+  overflow: hidden;
+  background: color-mix(in oklab, var(--ra-surface-elevated) 22%, transparent);
+}
+
+.ra-policy-card__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 0.9rem;
+}
+
+.ra-policy-card__body {
+  padding: 0 0.9rem 0.85rem;
+  border-top: 1px solid var(--ra-border);
+}
+
 /* Compact segmented control for shell header (matches context TabTrack) */
 .ra-tab-track--header {
   margin: 0;
@@ -1166,6 +1286,42 @@ body a:focus-visible {
   text-transform: uppercase;
   color: var(--ra-text-muted);
   margin-bottom: 0.35rem;
+}
+
+@media (max-width: 900px) {
+  .ra-shell,
+  .ra-shell--first-run {
+    grid-template-columns: 220px 1fr;
+  }
+
+  .ra-shell-context-panel {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .ra-shell,
+  .ra-shell--first-run {
+    grid-template-columns: 1fr;
+  }
+
+  .ra-shell-sidebar,
+  .ra-shell--first-run .ra-shell-sidebar {
+    display: none;
+  }
+
+  .ra-shell-main,
+  .ra-shell--first-run .ra-shell-main {
+    grid-column: 1 / -1;
+  }
+
+  .ra-first-run {
+    padding: 1rem;
+  }
+
+  .ra-first-run__workspace {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Tool status dot */
@@ -1310,8 +1466,10 @@ body a:focus-visible {
 
 .ra-md-assistant blockquote {
   margin: 0.35em 0;
-  padding-left: 0.75rem;
-  border-left: 3px solid var(--ra-border);
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--ra-border);
+  border-radius: var(--ra-radius);
+  background: color-mix(in oklab, var(--ra-surface-card) 72%, transparent);
   color: var(--ra-text-secondary);
 }
 

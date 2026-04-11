@@ -79,8 +79,7 @@ pub struct AgentBrowserDaemon {
 fn agent_browser_dir() -> PathBuf {
     if cfg!(windows) {
         let local = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| {
-            std::env::var("USERPROFILE")
-                .unwrap_or_else(|_| "C:\\Users\\default".to_string())
+            std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\default".to_string())
         });
         PathBuf::from(local).join("agent-browser")
     } else {
@@ -133,7 +132,9 @@ fn check_response(resp: &Value, action: &str) -> Result<Value, DaemonError> {
             .get("error")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown error");
-        Err(DaemonError::Command(format!("action '{action}' failed: {err}")))
+        Err(DaemonError::Command(format!(
+            "action '{action}' failed: {err}"
+        )))
     }
 }
 
@@ -209,12 +210,19 @@ impl AgentBrowserDaemon {
 
         // Get current URL to track state
         if let Ok(resp) = send_command(&mut stream, &cmd("2", "url", vec![])) {
-            if let Some(url_str) = resp.get("data").and_then(|d| d.get("url")).and_then(|v| v.as_str()) {
+            if let Some(url_str) = resp
+                .get("data")
+                .and_then(|d| d.get("url"))
+                .and_then(|v| v.as_str())
+            {
                 self.current_url = Some(url_str.to_string());
             }
         }
 
-        info!("[agent-browser] browser connected via CDP port {}", self.cdp_port);
+        info!(
+            "[agent-browser] browser connected via CDP port {}",
+            self.cdp_port
+        );
         Ok(())
     }
 
@@ -233,10 +241,7 @@ impl AgentBrowserDaemon {
     /// Navigate to a URL.
     pub fn navigate(&self, url: &str) -> Result<(), DaemonError> {
         self.with_connection(|stream| {
-            let resp = send_command(
-                stream,
-                &cmd("1", "navigate", vec![("url", json!(url))]),
-            )?;
+            let resp = send_command(stream, &cmd("1", "navigate", vec![("url", json!(url))]))?;
             check_response(&resp, "navigate")?;
             Ok(())
         })
@@ -300,10 +305,7 @@ impl AgentBrowserDaemon {
                 &cmd(
                     "1",
                     "fill",
-                    vec![
-                        ("selector", json!(selector)),
-                        ("value", json!(value)),
-                    ],
+                    vec![("selector", json!(selector)), ("value", json!(value))],
                 ),
             )?;
             check_response(&resp, "fill")?;
@@ -336,10 +338,7 @@ impl AgentBrowserDaemon {
         self.with_connection(|stream| {
             let resp = send_command(stream, &cmd("1", "url", vec![]))?;
             let data = check_response(&resp, "url")?;
-            Ok(data
-                .get("url")
-                .and_then(|v| v.as_str())
-                .map(String::from))
+            Ok(data.get("url").and_then(|v| v.as_str()).map(String::from))
         })
         .ok()
         .flatten()
@@ -395,7 +394,10 @@ impl AgentBrowserDaemon {
         std::thread::sleep(std::time::Duration::from_millis(500));
 
         // Type the prompt using real keystrokes
-        info!("[agent-browser] typing prompt ({} chars)...", user_prompt.len());
+        info!(
+            "[agent-browser] typing prompt ({} chars)...",
+            user_prompt.len()
+        );
         self.type_into(INPUT_SELECTOR, user_prompt)?;
         std::thread::sleep(std::time::Duration::from_millis(500));
 
@@ -491,7 +493,10 @@ fn start_daemon_process(session: &str) -> Result<(), DaemonError> {
     // Check if agent-browser is available
     let agent_browser = find_agent_browser_binary()?;
 
-    info!("[agent-browser] launching: {} daemon --session {}", agent_browser, session);
+    info!(
+        "[agent-browser] launching: {} daemon --session {}",
+        agent_browser, session
+    );
 
     let child = Command::new(&agent_browser)
         .args(["daemon", "--session", session])
@@ -501,7 +506,10 @@ fn start_daemon_process(session: &str) -> Result<(), DaemonError> {
         .spawn()
         .map_err(|e| DaemonError::Command(format!("failed to start agent-browser daemon: {e}")))?;
 
-    info!("[agent-browser] daemon process spawned (pid: {})", child.id());
+    info!(
+        "[agent-browser] daemon process spawned (pid: {})",
+        child.id()
+    );
 
     // Detach the process
     #[cfg(unix)]

@@ -68,7 +68,10 @@ fn read_devtools_active_port(profile_dir: &std::path::Path) -> Option<u16> {
 }
 
 /// Poll until `DevToolsActivePort` appears after `--remote-debugging-port=0` launch.
-async fn wait_for_devtools_active_port(profile_dir: &std::path::Path, max_wait_secs: u64) -> Result<u16> {
+async fn wait_for_devtools_active_port(
+    profile_dir: &std::path::Path,
+    max_wait_secs: u64,
+) -> Result<u16> {
     let deadline = std::time::Instant::now() + Duration::from_secs(max_wait_secs);
     let interval = Duration::from_millis(100);
     loop {
@@ -193,10 +196,7 @@ pub fn launch_dedicated_edge(debug_port: u16) -> Result<std::process::Child> {
         .arg(debug_port.to_string())
         // Chromium 111+ restricts DevTools/WebSocket origins without this; Edge needs it for CDP clients.
         .arg("--remote-allow-origins=*")
-        .arg(format!(
-            "--user-data-dir={}",
-            profile_dir.to_str().unwrap()
-        ))
+        .arg(format!("--user-data-dir={}", profile_dir.to_str().unwrap()))
         .args([
             "--no-first-run",
             "--no-default-browser-check",
@@ -368,14 +368,16 @@ pub async fn find_copilot_page(debug_url: &str) -> Result<Option<PageInfo>> {
 /* ── Persistent CDP connection ──────────────────────────────── */
 
 type PendingMap = Arc<AsyncMutex<HashMap<u64, oneshot::Sender<Value>>>>;
-type WsWriter = Arc<AsyncMutex<
-    futures_util::stream::SplitSink<
-        tokio_tungstenite::WebSocketStream<
-            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+type WsWriter = Arc<
+    AsyncMutex<
+        futures_util::stream::SplitSink<
+            tokio_tungstenite::WebSocketStream<
+                tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+            >,
+            Message,
         >,
-        Message,
     >,
->>;
+>;
 
 /// A persistent WebSocket connection to a CDP target.
 /// A background reader task dispatches responses by ID to waiting callers.
@@ -479,7 +481,10 @@ impl Ctx {
 
         let id = 1u64;
         let cmd = json!({ "id": id, "method": method, "params": params });
-        write.send(Message::Text(cmd.to_string())).await.context("send CDP one_shot")?;
+        write
+            .send(Message::Text(cmd.to_string()))
+            .await
+            .context("send CDP one_shot")?;
 
         while let Some(msg) = read.next().await {
             if let Ok(txt) = msg?.to_text() {
@@ -959,47 +964,39 @@ pub async fn connect_copilot_page(
     let profile_dir = relay_agent_edge_profile_dir();
     std::fs::create_dir_all(&profile_dir).ok();
 
-    let (debug_url_new, child, launched) =
-        if let Some(p) = read_devtools_active_port(&profile_dir) {
-            let url = format!("http://127.0.0.1:{p}");
-            let reuse_existing = if cdp_http_ready(&url).await {
-                true
-            } else {
-                info!(
+    let (debug_url_new, child, launched) = if let Some(p) = read_devtools_active_port(&profile_dir)
+    {
+        let url = format!("http://127.0.0.1:{p}");
+        let reuse_existing = if cdp_http_ready(&url).await {
+            true
+        } else {
+            info!(
                     "[CDP] DevToolsActivePort on {} but CDP not up yet — waiting before any new launch…",
                     p
                 );
-                wait_for_cdp_ready(&url, 30).await.is_ok()
-            };
+            wait_for_cdp_ready(&url, 30).await.is_ok()
+        };
 
-            if reuse_existing {
-                info!(
-                    "[CDP] Reusing live Edge CDP on port {} (RelayAgentEdgeProfile)",
-                    p
-                );
-                (url, None, false)
-            } else {
-                warn!(
+        if reuse_existing {
+            info!(
+                "[CDP] Reusing live Edge CDP on port {} (RelayAgentEdgeProfile)",
+                p
+            );
+            (url, None, false)
+        } else {
+            warn!(
                     "[CDP] DevToolsActivePort present but CDP unreachable after wait; launching new Edge…"
                 );
-                let spawned = launch_dedicated_edge(0)?;
-                let p2 = wait_for_devtools_active_port(&profile_dir, 30).await?;
-                (
-                    format!("http://127.0.0.1:{p2}"),
-                    Some(spawned),
-                    true,
-                )
-            }
-        } else {
-            info!("[CDP] Launching Edge with OS-assigned CDP port (remote-debugging-port=0)…");
             let spawned = launch_dedicated_edge(0)?;
-            let p = wait_for_devtools_active_port(&profile_dir, 30).await?;
-            (
-                format!("http://127.0.0.1:{p}"),
-                Some(spawned),
-                true,
-            )
-        };
+            let p2 = wait_for_devtools_active_port(&profile_dir, 30).await?;
+            (format!("http://127.0.0.1:{p2}"), Some(spawned), true)
+        }
+    } else {
+        info!("[CDP] Launching Edge with OS-assigned CDP port (remote-debugging-port=0)…");
+        let spawned = launch_dedicated_edge(0)?;
+        let p = wait_for_devtools_active_port(&profile_dir, 30).await?;
+        (format!("http://127.0.0.1:{p}"), Some(spawned), true)
+    };
 
     if launched {
         wait_for_cdp_ready(&debug_url_new, 30).await?;
@@ -1019,7 +1016,11 @@ pub async fn connect_copilot_page(
         pages = list_pages(&debug_url_new).await.unwrap_or_default();
         if !pages.is_empty() {
             if attempt > 0 {
-                info!("[CDP] pages found on attempt {} ({} tabs)", attempt + 1, pages.len());
+                info!(
+                    "[CDP] pages found on attempt {} ({} tabs)",
+                    attempt + 1,
+                    pages.len()
+                );
             }
             break;
         }
@@ -1036,7 +1037,10 @@ pub async fn connect_copilot_page(
         if page.kind != "page" {
             continue;
         }
-        if COPILOT_URL_PATTERNS.iter().any(|pat| page.url.contains(pat)) {
+        if COPILOT_URL_PATTERNS
+            .iter()
+            .any(|pat| page.url.contains(pat))
+        {
             // Already a Copilot tab — use it
             info!("[CDP] Found existing Copilot tab: {}", page.url);
             copilot_page = Some(page.clone());
@@ -1063,12 +1067,9 @@ pub async fn connect_copilot_page(
 
             // Re-check if navigation succeeded
             let pages2 = list_pages(&debug_url_new).await.unwrap_or_default();
-            copilot_page = pages2
-                .into_iter()
-                .find(|p| {
-                    p.kind == "page"
-                        && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat))
-                });
+            copilot_page = pages2.into_iter().find(|p| {
+                p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat))
+            });
         }
     }
 
@@ -1111,8 +1112,7 @@ pub async fn connect_copilot_page(
         }
     }
 
-    let copilot_page =
-        copilot_page.context("no Copilot tab found after all attempts")?;
+    let copilot_page = copilot_page.context("no Copilot tab found after all attempts")?;
 
     info!(
         "[CDP] Using Copilot tab: {} ({})",
@@ -1196,7 +1196,11 @@ fn parse_port(debug_url: &str) -> Option<u16> {
 /// Extract the target ID from a WebSocket debugger URL.
 /// Format: ws://host:port/devtools/page/<target-id>
 fn extract_target_id(ws_url: &str) -> Option<String> {
-    ws_url.rsplit('/').next().filter(|s| !s.is_empty()).map(String::from)
+    ws_url
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(String::from)
 }
 
 /// Resolve the WebSocket URL from a debug endpoint by fetching /json/version directly.

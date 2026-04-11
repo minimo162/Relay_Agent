@@ -116,10 +116,7 @@ fn command_appears_mutating(command: &str) -> bool {
     }
 
     // Rough output redirection to a path (not `2>&1` / `>&` only)
-    if (c.contains("> ") || c.contains(">>"))
-        && !c.contains("2>&1")
-        && !c.trim().ends_with(">&2")
-    {
+    if (c.contains("> ") || c.contains(">>")) && !c.contains("2>&1") && !c.trim().ends_with(">&2") {
         return true;
     }
 

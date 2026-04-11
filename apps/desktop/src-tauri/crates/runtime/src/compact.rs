@@ -112,7 +112,8 @@ pub fn compact_session(session: &Session, config: CompactionConfig) -> Compactio
         .saturating_sub(config.preserve_recent_messages);
     let removed = &session.messages[compacted_prefix_len..keep_from];
     let preserved = session.messages[keep_from..].to_vec();
-    let summary = merge_compact_summaries(existing_summary.as_deref(), &summarize_messages(removed));
+    let summary =
+        merge_compact_summaries(existing_summary.as_deref(), &summarize_messages(removed));
     let formatted_summary = format_compact_summary(&summary);
     let continuation = get_compact_continuation_message(&summary, true, !preserved.is_empty());
 
@@ -591,7 +592,9 @@ mod tests {
                 ConversationMessage::assistant(vec![ContentBlock::Text {
                     text: "I will inspect the compact flow.".to_string(),
                 }]),
-                ConversationMessage::user_text("Also update rust/crates/runtime/src/conversation.rs"),
+                ConversationMessage::user_text(
+                    "Also update rust/crates/runtime/src/conversation.rs",
+                ),
                 ConversationMessage::assistant(vec![ContentBlock::Text {
                     text: "Next: preserve prior summary context during auto compact.".to_string(),
                 }]),

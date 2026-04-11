@@ -87,7 +87,10 @@ fn liteparse_runner_root() -> Option<PathBuf> {
         }
     }
     let man = option_env!("CARGO_MANIFEST_DIR")?;
-    let candidate = Path::new(man).join("..").join("..").join("liteparse-runner");
+    let candidate = Path::new(man)
+        .join("..")
+        .join("..")
+        .join("liteparse-runner");
     let canon = std::fs::canonicalize(&candidate).ok()?;
     if canon.join("parse.mjs").is_file() {
         return Some(canon);
@@ -141,12 +144,14 @@ fn run_liteparse_child(
         .spawn()
         .map_err(|e| io::Error::other(format!("failed to spawn PDF parser: {e}")))?;
 
-    let mut stdout_pipe = child.stdout.take().ok_or_else(|| {
-        io::Error::other("PDF parser child has no stdout handle")
-    })?;
-    let mut stderr_pipe = child.stderr.take().ok_or_else(|| {
-        io::Error::other("PDF parser child has no stderr handle")
-    })?;
+    let mut stdout_pipe = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::other("PDF parser child has no stdout handle"))?;
+    let mut stderr_pipe = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::other("PDF parser child has no stderr handle"))?;
 
     let out_handle = thread::spawn(move || read_limited(&mut stdout_pipe, MAX_PDF_TEXT_BYTES));
     let err_handle = thread::spawn(move || read_limited(&mut stderr_pipe, MAX_PDF_STDERR_BYTES));
@@ -193,8 +198,7 @@ pub(crate) fn read_pdf_as_text(path: &Path, pages: Option<&str>) -> io::Result<S
 
     let lite_paths = resolve_liteparse_paths()?;
     let pages_arg = pages.unwrap_or("");
-    let (stdout_bytes, stderr_bytes, status) =
-        run_liteparse_child(&lite_paths, path, pages_arg)?;
+    let (stdout_bytes, stderr_bytes, status) = run_liteparse_child(&lite_paths, path, pages_arg)?;
 
     if !status.success() {
         let msg = String::from_utf8_lossy(&stderr_bytes);

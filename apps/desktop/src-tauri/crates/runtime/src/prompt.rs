@@ -776,9 +776,8 @@ mod tests {
             .instruction_files
             .iter()
             .any(|file| file.path.ends_with(".claw/instructions.md")));
-        assert!(
-            render_instruction_files(&context.instruction_files).contains("claw instruction markdown")
-        );
+        assert!(render_instruction_files(&context.instruction_files)
+            .contains("claw instruction markdown"));
 
         fs::remove_dir_all(root).expect("cleanup temp dir");
     }

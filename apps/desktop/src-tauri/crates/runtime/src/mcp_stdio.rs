@@ -538,24 +538,20 @@ impl McpServerManager {
         self.ensure_server_ready(server_name).await?;
         let request_id = self.take_request_id();
         let uri_owned = uri.to_string();
-        let response = {
-            let server = self.server_mut(server_name)?;
-            let process = server.process.as_mut().ok_or_else(|| {
-                McpServerManagerError::InvalidResponse {
-                    server_name: server_name.to_string(),
-                    method: "resources/read",
-                    details: "server process missing after initialization".to_string(),
-                }
-            })?;
-            process
-                .read_resource(
-                    request_id,
-                    McpReadResourceParams {
-                        uri: uri_owned,
-                    },
-                )
-                .await?
-        };
+        let response =
+            {
+                let server = self.server_mut(server_name)?;
+                let process = server.process.as_mut().ok_or_else(|| {
+                    McpServerManagerError::InvalidResponse {
+                        server_name: server_name.to_string(),
+                        method: "resources/read",
+                        details: "server process missing after initialization".to_string(),
+                    }
+                })?;
+                process
+                    .read_resource(request_id, McpReadResourceParams { uri: uri_owned })
+                    .await?
+            };
         Ok(response)
     }
 
@@ -572,10 +568,7 @@ impl McpServerManager {
                 qualified_name: qualified_tool_name.to_string(),
             })?;
 
-        match self
-            .call_tool_once(&route, arguments.clone())
-            .await
-        {
+        match self.call_tool_once(&route, arguments.clone()).await {
             Ok(response) => Ok(response),
             Err(err) if err.is_stdio_transport_io_failure() => {
                 self.force_restart_stdio_server(&route.server_name).await?;
@@ -592,26 +585,27 @@ impl McpServerManager {
     ) -> Result<JsonRpcResponse<McpToolCallResult>, McpServerManagerError> {
         self.ensure_server_ready(&route.server_name).await?;
         let request_id = self.take_request_id();
-        let response = {
-            let server = self.server_mut(&route.server_name)?;
-            let process = server.process.as_mut().ok_or_else(|| {
-                McpServerManagerError::InvalidResponse {
-                    server_name: route.server_name.clone(),
-                    method: "tools/call",
-                    details: "server process missing after initialization".to_string(),
-                }
-            })?;
-            process
-                .call_tool(
-                    request_id,
-                    McpToolCallParams {
-                        name: route.raw_name.clone(),
-                        arguments,
-                        meta: None,
-                    },
-                )
-                .await?
-        };
+        let response =
+            {
+                let server = self.server_mut(&route.server_name)?;
+                let process = server.process.as_mut().ok_or_else(|| {
+                    McpServerManagerError::InvalidResponse {
+                        server_name: route.server_name.clone(),
+                        method: "tools/call",
+                        details: "server process missing after initialization".to_string(),
+                    }
+                })?;
+                process
+                    .call_tool(
+                        request_id,
+                        McpToolCallParams {
+                            name: route.raw_name.clone(),
+                            arguments,
+                            meta: None,
+                        },
+                    )
+                    .await?
+            };
         Ok(response)
     }
 

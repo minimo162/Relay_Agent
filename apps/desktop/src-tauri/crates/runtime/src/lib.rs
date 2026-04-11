@@ -79,26 +79,22 @@ pub use permissions::{
     PermissionPrompter, PermissionRequest,
 };
 pub use prompt::{
-    claw_style_discipline_sections, load_system_prompt, prepend_bullets, ContextFile,
-    ProjectContext, PromptBuildError, render_instruction_files, render_project_context,
-    SystemPromptBuilder, FRONTIER_MODEL_NAME, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+    claw_style_discipline_sections, load_system_prompt, prepend_bullets, render_instruction_files,
+    render_project_context, ContextFile, ProjectContext, PromptBuildError, SystemPromptBuilder,
+    FRONTIER_MODEL_NAME, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
 };
 pub use remote::{
     inherited_upstream_proxy_env, no_proxy_list, read_token, upstream_proxy_ws_url,
     RemoteSessionContext, UpstreamProxyBootstrap, UpstreamProxyState, DEFAULT_REMOTE_BASE_URL,
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
 };
-pub use task_registry::{
-    task_create, task_get, task_list, task_output, task_stop, task_update,
-};
-pub use tool_hard_denylist::{reject_sensitive_file_path, validate_bash_hard_deny};
 pub use session::{ContentBlock, ConversationMessage, MessageRole, Session, SessionError};
+pub use task_registry::{task_create, task_get, task_list, task_output, task_stop, task_update};
+pub use tool_hard_denylist::{reject_sensitive_file_path, validate_bash_hard_deny};
 pub use usage::{
     format_usd, pricing_for_model, ModelPricing, TokenUsage, UsageCostEstimate, UsageTracker,
 };
-pub use workspace_path::{
-    assert_path_in_workspace, lexical_normalize, resolve_against_workspace,
-};
+pub use workspace_path::{assert_path_in_workspace, lexical_normalize, resolve_against_workspace};
 
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {

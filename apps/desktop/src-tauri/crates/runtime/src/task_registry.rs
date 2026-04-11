@@ -69,9 +69,7 @@ pub fn task_create(input: &Value) -> Result<String, String> {
 pub fn task_get(input: &Value) -> Result<String, String> {
     let id = task_id_str(input).ok_or_else(|| "TaskGet requires id or task_id".to_string())?;
     let g = registry().lock().map_err(|e| e.to_string())?;
-    let rec = g
-        .get(id)
-        .ok_or_else(|| format!("unknown task id `{id}`"))?;
+    let rec = g.get(id).ok_or_else(|| format!("unknown task id `{id}`"))?;
     serde_json::to_string_pretty(rec).map_err(|e| e.to_string())
 }
 
@@ -89,7 +87,8 @@ pub fn task_stop(input: &Value) -> Result<String, String> {
         return Err(format!("unknown task id `{id}`"));
     };
     rec.status = "stopped".into();
-    serde_json::to_string_pretty(&json!({ "id": id, "status": "stopped" })).map_err(|e| e.to_string())
+    serde_json::to_string_pretty(&json!({ "id": id, "status": "stopped" }))
+        .map_err(|e| e.to_string())
 }
 
 pub fn task_update(input: &Value) -> Result<String, String> {

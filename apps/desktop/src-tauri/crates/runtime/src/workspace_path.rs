@@ -116,7 +116,10 @@ mod tests {
     fn assert_rejects_absolute_outside_workspace() {
         let dir = std::env::temp_dir().join(format!("relay-ws-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let outside = dir.parent().expect("temp parent").join("relay_ws_outside_probe.txt");
+        let outside = dir
+            .parent()
+            .expect("temp parent")
+            .join("relay_ws_outside_probe.txt");
         let err =
             assert_path_in_workspace(&outside, &dir).expect_err("path outside workspace root");
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);

@@ -25,22 +25,40 @@ export function Sidebar(props: {
       return formatSessionSubtitle(id, meta).toLowerCase().includes(q);
     });
   });
+  const hasSessions = createMemo(() => props.sessions.length > 0);
+  const emptyTitle = createMemo(() => {
+    if (!hasSessions()) return "No sessions yet";
+    if (search().trim()) return "No matching sessions";
+    return "No sessions yet";
+  });
+  const emptySubtitle = createMemo(() =>
+    !hasSessions() ? "Your recent work appears here after the first request." : null,
+  );
 
   return (
     <aside class="ra-shell-sidebar" aria-label="Sessions">
       <div class="ra-sidebar-shell">
         <div class="ra-sidebar-shell__header">
           <h2 class={`ra-display-title ra-type-body-sans ${ui.textPrimary} mb-2`}>Sessions</h2>
-          <Input
-            type="search"
-            placeholder="Search sessions…"
-            aria-label="Search sessions"
-            onInput={(e) => setSearch(e.currentTarget.value)}
-          />
+          <Show when={hasSessions()}>
+            <Input
+              type="search"
+              placeholder="Search sessions…"
+              aria-label="Search sessions"
+              onInput={(e) => setSearch(e.currentTarget.value)}
+            />
+          </Show>
         </div>
         <div class="ra-sidebar-shell__list">
           <Show when={filtered().length === 0}>
-            <div class={`ra-type-button-label ${ui.mutedText} text-center py-8`}>No matching sessions</div>
+            <div class="py-8 px-4 text-center">
+              <div class={`ra-type-button-label ${ui.textPrimary}`}>{emptyTitle()}</div>
+              <Show when={emptySubtitle()}>
+                {(subtitle) => (
+                  <div class={`ra-type-caption ${ui.mutedText} mt-1 leading-relaxed`}>{subtitle()}</div>
+                )}
+              </Show>
+            </div>
           </Show>
           <For each={filtered()}>
             {(entry) => {

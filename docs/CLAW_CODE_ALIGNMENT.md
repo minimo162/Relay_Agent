@@ -19,7 +19,7 @@ Reference: [ultraworkers/claw-code](https://github.com/ultraworkers/claw-code) (
 
 | Area | Relay location | Notes |
 |------|----------------|-------|
-| M365 Copilot + CDP | `apps/desktop/src-tauri/src/agent_loop.rs`, `copilot_*.rs` | Not in claw CLI; `relay_tool` fenced protocol and file-attach delivery are Relay-only. |
+| M365 Copilot + CDP | `apps/desktop/src-tauri/src/agent_loop.rs`, `copilot_*.rs` | Not in claw CLI; `relay_tool` fenced protocol and the desktop CDP prompt-delivery path are Relay-only. |
 | Tauri IPC / UI events | `tauri_bridge.rs`, `lib.rs`, Solid app | Desktop shell; claw uses its own CLI/REPL. |
 | Tool execution + catalog | `crates/tools`, `crates/runtime` | Shapes aligned with [Claw tool-system](https://claw-code.codes/tool-system); implementation is in-repo. |
 | Permissions | `crates/runtime/src/permissions.rs`, `agent_loop` desktop policy | Same concepts as claw (modes, tool requirements, prompt escalation); not a shared crate today. |
