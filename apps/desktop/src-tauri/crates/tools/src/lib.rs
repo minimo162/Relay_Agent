@@ -53,6 +53,85 @@ pub struct ToolSpec {
     pub required_permission: PermissionMode,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalTargetExtractor {
+    None,
+    PathLike,
+    UrlLike,
+    CliRun,
+    ElectronApp,
+    McpQualifiedTool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RedactionRule {
+    pub field: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolApprovalDisplay {
+    pub approval_title: String,
+    pub approval_target_hint: Option<String>,
+    pub important_args: Vec<String>,
+}
+
+impl ToolSpec {
+    #[must_use]
+    pub fn approval_title(&self) -> Option<&'static str> {
+        match self.name {
+            "write_file" => Some("Create or overwrite a file?"),
+            "edit_file" => Some("Edit a file?"),
+            "bash" => Some("Run a shell command?"),
+            "CliRun" => Some("Run an external CLI command?"),
+            "ElectronLaunch" => Some("Launch and control an Electron app?"),
+            "ElectronEval" => Some("Execute JavaScript in an Electron app?"),
+            "ElectronClick" => Some("Click an element in an Electron app?"),
+            "ElectronTypeText" => Some("Type text in an Electron app?"),
+            "MCP" => Some("Call a connected integration tool?"),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn target_extractor(&self) -> ApprovalTargetExtractor {
+        match self.name {
+            "read_file" | "write_file" | "edit_file" | "pdf_merge" | "pdf_split" => {
+                ApprovalTargetExtractor::PathLike
+            }
+            "WebFetch" => ApprovalTargetExtractor::UrlLike,
+            "CliRun" => ApprovalTargetExtractor::CliRun,
+            "ElectronLaunch" | "ElectronEval" | "ElectronGetText" | "ElectronClick"
+            | "ElectronTypeText" => ApprovalTargetExtractor::ElectronApp,
+            "MCP" => ApprovalTargetExtractor::McpQualifiedTool,
+            _ => ApprovalTargetExtractor::None,
+        }
+    }
+
+    #[must_use]
+    pub fn risky_fields(&self) -> &'static [&'static str] {
+        match self.name {
+            "write_file" => &["path"],
+            "edit_file" => &["path", "replace_all"],
+            "bash" | "PowerShell" => &["command", "run_in_background"],
+            "CliRun" => &["cli", "args", "timeout_ms"],
+            "ElectronEval" => &["app", "cdp_port", "expression"],
+            "ElectronClick" => &["app", "selector"],
+            "ElectronTypeText" => &["app", "selector", "text"],
+            "MCP" => &["name", "arguments", "server", "serverName"],
+            _ => &[],
+        }
+    }
+
+    #[must_use]
+    pub fn redaction_rules(&self) -> &'static [RedactionRule] {
+        match self.name {
+            "ElectronTypeText" => &[RedactionRule { field: "text" }],
+            "MCP" => &[RedactionRule { field: "arguments" }],
+            _ => &[],
+        }
+    }
+}
+
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn mvp_tool_specs() -> Vec<ToolSpec> {
@@ -881,6 +960,140 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
         },
     ]);
     specs
+}
+
+#[must_use]
+pub fn approval_display_for_tool(tool_name: &str, input: &str) -> ToolApprovalDisplay {
+    let input_json: Value = serde_json::from_str(input).unwrap_or_else(|_| json!({}));
+    if let Some((_, _, tool)) = parse_mcp_qualified_name(tool_name) {
+        return ToolApprovalDisplay {
+            approval_title: format!("Call MCP integration tool “{tool}”?"),
+            approval_target_hint: Some(tool_name.to_string()),
+            important_args: summarize_important_args(
+                &input_json,
+                &["arguments", "server", "serverName"],
+                &[RedactionRule { field: "arguments" }],
+            ),
+        };
+    }
+
+    let spec = mvp_tool_specs().into_iter().find(|s| s.name == tool_name);
+    let title = spec
+        .as_ref()
+        .and_then(ToolSpec::approval_title)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("Allow “{tool_name}”?"));
+    let target = extract_approval_target(
+        tool_name,
+        &input_json,
+        spec.as_ref()
+            .map_or(ApprovalTargetExtractor::None, ToolSpec::target_extractor),
+    );
+    let important_args = summarize_important_args(
+        &input_json,
+        spec.as_ref().map_or(&[], ToolSpec::risky_fields),
+        spec.as_ref().map_or(&[], ToolSpec::redaction_rules),
+    );
+    ToolApprovalDisplay {
+        approval_title: title,
+        approval_target_hint: target,
+        important_args,
+    }
+}
+
+fn extract_approval_target(
+    tool_name: &str,
+    input: &Value,
+    extractor: ApprovalTargetExtractor,
+) -> Option<String> {
+    match extractor {
+        ApprovalTargetExtractor::None => None,
+        ApprovalTargetExtractor::PathLike => input
+            .get("path")
+            .or_else(|| input.get("file_path"))
+            .or_else(|| input.get("notebook_path"))
+            .or_else(|| input.get("input_path"))
+            .or_else(|| input.get("output_path"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        ApprovalTargetExtractor::UrlLike => input
+            .get("url")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        ApprovalTargetExtractor::CliRun => {
+            let cli = input.get("cli").and_then(Value::as_str).unwrap_or("(cli)");
+            let cwd = input
+                .get("cwd")
+                .and_then(Value::as_str)
+                .unwrap_or("(workspace)");
+            Some(format!("{cli} @ {cwd}"))
+        }
+        ApprovalTargetExtractor::ElectronApp => input
+            .get("app")
+            .and_then(Value::as_str)
+            .map(|app| format!("Electron app: {app}")),
+        ApprovalTargetExtractor::McpQualifiedTool => input
+            .get("name")
+            .and_then(Value::as_str)
+            .or_else(|| Some(tool_name).filter(|name| name.starts_with("mcp__")))
+            .map(ToString::to_string),
+    }
+}
+
+fn summarize_important_args(
+    input: &Value,
+    risky_fields: &[&str],
+    redactions: &[RedactionRule],
+) -> Vec<String> {
+    let mut summaries = Vec::new();
+    for field in risky_fields {
+        if let Some(value) = input.get(field) {
+            let redact = redactions.iter().any(|rule| rule.field == *field);
+            let rendered = if redact {
+                "<redacted>".to_string()
+            } else {
+                summarize_value(value)
+            };
+            summaries.push(format!("{field}={rendered}"));
+        }
+    }
+    summaries
+}
+
+fn summarize_value(value: &Value) -> String {
+    match value {
+        Value::String(s) => {
+            let mut preview: String = s.chars().take(96).collect();
+            if s.chars().count() > 96 {
+                preview.push('…');
+            }
+            preview
+        }
+        Value::Array(items) => {
+            if items.is_empty() {
+                "[]".to_string()
+            } else {
+                format!("[{} item(s)]", items.len())
+            }
+        }
+        Value::Object(map) => format!("{{{} key(s)}}", map.len()),
+        _ => value.to_string(),
+    }
+}
+
+fn parse_mcp_qualified_name(name: &str) -> Option<(&str, &str, &str)> {
+    if !name.starts_with("mcp__") {
+        return None;
+    }
+    let mut parts = name.splitn(3, "__");
+    let prefix = parts.next()?;
+    let integration = parts.next()?;
+    let tool = parts.next()?;
+    if prefix == "mcp" && !integration.is_empty() && !tool.is_empty() {
+        Some((prefix, integration, tool))
+    } else {
+        None
+    }
 }
 
 /// JSON for claw-style `EnterPlanMode` / `ExitPlanMode` when session posture cannot change mid-loop.

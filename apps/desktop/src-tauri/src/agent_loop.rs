@@ -187,141 +187,6 @@ This session uses **Explore** preset: only **read_file**, **glob_search**, and *
     }
 }
 
-/// One-line + optional path/command context for the approval UI (no raw tool jargon in the title).
-fn human_approval_summary(tool_name: &str, input: &str) -> String {
-    let v: Value = serde_json::from_str(input).unwrap_or_else(|_| json!({}));
-    let path = v.get("path").and_then(|p| p.as_str());
-    let notebook_path = v.get("notebook_path").and_then(|p| p.as_str());
-    let cmd = v.get("command").and_then(|c| c.as_str());
-    let url = v.get("url").and_then(|u| u.as_str());
-
-    match tool_name {
-        "read_file" => path.map_or_else(
-            || "Allow reading a file?".into(),
-            |p| format!("Allow reading this file?\n{p}"),
-        ),
-        "glob_search" => {
-            let pat = v.get("pattern").and_then(|x| x.as_str()).unwrap_or("*");
-            format!("Search the workspace for files matching “{pat}”?")
-        }
-        "grep_search" => {
-            let pat = v
-                .get("pattern")
-                .and_then(|x| x.as_str())
-                .unwrap_or("pattern");
-            format!("Search file contents for “{pat}”?")
-        }
-        "write_file" => path.map_or_else(
-            || "Create or overwrite a file?".into(),
-            |p| format!("Create or overwrite this file?\n{p}"),
-        ),
-        "edit_file" => path.map_or_else(
-            || "Edit a file?".into(),
-            |p| format!("Edit this file?\n{p}"),
-        ),
-        "pdf_merge" => {
-            let out = v
-                .get("output_path")
-                .and_then(|x| x.as_str())
-                .unwrap_or("(output)");
-            let n = v
-                .get("input_paths")
-                .and_then(|x| x.as_array())
-                .map_or(0, Vec::len);
-            format!("Merge {n} PDF files into this output?\n{out}")
-        }
-        "pdf_split" => {
-            let inp = v
-                .get("input_path")
-                .and_then(|x| x.as_str())
-                .unwrap_or("(input)");
-            let n = v
-                .get("segments")
-                .and_then(|x| x.as_array())
-                .map_or(0, Vec::len);
-            format!("Split PDF into {n} output file(s)?\n{inp}")
-        }
-        "bash" => cmd.map_or_else(
-            || "Run a bash command?".into(),
-            |c| {
-                let preview: String = c.chars().take(120).collect();
-                format!("Run this command?\n{preview}")
-            },
-        ),
-        "PowerShell" => cmd.map_or_else(
-            || "Run PowerShell (may batch Office COM: Word, Excel, PowerPoint, .msg)?".into(),
-            |c| {
-                let preview: String = c.chars().take(120).collect();
-                format!("Allow this PowerShell command (Office COM possible)?\n{preview}")
-            },
-        ),
-        "WebFetch" => url.map_or_else(
-            || "Fetch content from a URL?".into(),
-            |u| format!("Fetch content from this URL?\n{u}"),
-        ),
-        "WebSearch" => {
-            let q = v.get("query").and_then(|x| x.as_str()).unwrap_or("…");
-            format!("Search the web for “{q}”?")
-        }
-        "git_status" => path.map_or_else(
-            || "Run git status in the workspace?".into(),
-            |p| format!("Run git status in this folder?\n{p}"),
-        ),
-        "git_diff" => path.map_or_else(
-            || "Run git diff in the workspace?".into(),
-            |p| format!("Run git diff in this folder?\n{p}"),
-        ),
-        "TodoWrite" => "Update the task list?".to_string(),
-        "NotebookEdit" => notebook_path.map_or_else(
-            || "Edit a notebook?".into(),
-            |p| format!("Edit this notebook?\n{p}"),
-        ),
-        "Config" => {
-            let s = v
-                .get("setting")
-                .and_then(|x| x.as_str())
-                .unwrap_or("settings");
-            format!("Change configuration: {s}?")
-        }
-        "Agent" => "Run a delegated sub-task?".to_string(),
-        "REPL" => "Run code in a REPL?".to_string(),
-        "CliRun" => {
-            let cli = v.get("cli").and_then(|x| x.as_str()).unwrap_or("program");
-            format!("Run external program “{cli}”?")
-        }
-        "CliRegister" | "CliUnregister" => {
-            format!("Change registered CLI tools ({tool_name})?")
-        }
-        "ElectronLaunch" | "ElectronEval" | "ElectronClick" | "ElectronTypeText" => {
-            "Control a desktop app through automation?".to_string()
-        }
-        name if name.starts_with("mcp__") => format!("Allow connected integration “{name}”?"),
-        _ => {
-            if let Some(p) = path {
-                format!("Allow this action on {p}?")
-            } else if let Some(c) = cmd {
-                let preview: String = c.chars().take(80).collect();
-                format!("Allow this command?\n{preview}")
-            } else {
-                format!("Allow “{tool_name}”?")
-            }
-        }
-    }
-}
-
-fn approval_target_hint(input: &str) -> Option<String> {
-    let v: Value = serde_json::from_str(input).ok()?;
-    v.get("path")
-        .and_then(|p| p.as_str())
-        .map(String::from)
-        .or_else(|| {
-            v.get("notebook_path")
-                .and_then(|p| p.as_str())
-                .map(String::from)
-        })
-        .or_else(|| v.get("url").and_then(|p| p.as_str()).map(String::from))
-}
-
 /* ── Event name constants ─── */
 
 pub(crate) const E_TOOL_START: &str = "agent:tool_start";
@@ -2365,8 +2230,15 @@ impl PermissionPrompter for TauriApprovalPrompter {
 
         let approval_id = Uuid::new_v4().to_string();
 
-        let description = human_approval_summary(&request.tool_name, &request.input);
-        let target = approval_target_hint(&request.input);
+        let approval_display = tools::approval_display_for_tool(&request.tool_name, &request.input);
+        let mut description = approval_display.approval_title;
+        if !approval_display.important_args.is_empty() {
+            description = format!(
+                "{description}\n{}",
+                approval_display.important_args.join("\n")
+            );
+        }
+        let target = approval_display.approval_target_hint;
 
         // Parse input for the event
         let input_obj = serde_json::from_str(&request.input).unwrap_or(serde_json::json!({}));
