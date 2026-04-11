@@ -133,6 +133,19 @@ impl ToolSpec {
 }
 
 #[must_use]
+fn compat_tool_surface_enabled() -> bool {
+    matches!(
+        std::env::var("RELAY_COMPAT_MODE")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("1" | "true" | "on" | "yes" | "compat")
+    )
+}
+
+#[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn mvp_tool_specs() -> Vec<ToolSpec> {
     let mut specs = vec![
@@ -508,26 +521,6 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
                     { "required": ["setting"] },
                     { "required": ["key"] }
                 ],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::WorkspaceWrite,
-        },
-        ToolSpec {
-            name: "EnterPlanMode",
-            description: "Claw-style planning mode hook. On Relay, Build / Plan / Explore is chosen when **starting** a session — this tool does not switch live policy (see tool result notice).",
-            input_schema: json!({
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::WorkspaceWrite,
-        },
-        ToolSpec {
-            name: "ExitPlanMode",
-            description: "Claw-style exit from planning mode. On Relay, start a **Build** session to apply changes; session posture is fixed for the running loop.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {},
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::WorkspaceWrite,
@@ -978,6 +971,30 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             required_permission: PermissionMode::ReadOnly,
         },
     ]);
+    if compat_tool_surface_enabled() {
+        specs.extend(vec![
+            ToolSpec {
+                name: "EnterPlanMode",
+                description: "Compat hook only. Relay session posture cannot change mid-session; choose Build / Plan / Explore at session start.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                required_permission: PermissionMode::WorkspaceWrite,
+            },
+            ToolSpec {
+                name: "ExitPlanMode",
+                description: "Compat hook only. Relay session posture cannot change mid-session; start a new Build session to apply edits.",
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                required_permission: PermissionMode::WorkspaceWrite,
+            },
+        ]);
+    }
     specs
 }
 
@@ -1119,10 +1136,10 @@ fn parse_mcp_qualified_name(name: &str) -> Option<(&str, &str, &str)> {
 #[must_use]
 pub fn plan_mode_tool_json(entering: bool) -> Value {
     json!({
-        "ok": true,
+        "ok": false,
         "entering": entering,
-        "relayNotice": "Relay Agent: Build / Plan / Explore is selected when you **start** a session, not via this tool. For read-only analysis without applying edits, start a new session with **Plan** (or **Explore** for a narrow read-only tool catalog). To apply changes, use **Build**.",
-        "relayNoticeJa": "Relay Agent: Build / Plan / Explore はセッション**開始時**に選びます。このツールでは実行中に切り替わりません。編集せずに分析だけする場合は **Plan**（読み取り専用ツールだけなら **Explore**）で新規セッションを開始してください。変更を適用する場合は **Build** を使います。"
+        "error": "Relay: session mode is locked after session start. Start a new Build / Plan / Explore session instead.",
+        "errorJa": "Relay: セッションモードは開始後に変更できません。Build / Plan / Explore で新しいセッションを開始してください。"
     })
 }
 
@@ -3527,6 +3544,9 @@ mod tests {
 
     #[test]
     fn exposes_mvp_tools() {
+        let _guard = env_lock().lock().expect("env lock");
+        let original = std::env::var("RELAY_COMPAT_MODE").ok();
+        std::env::remove_var("RELAY_COMPAT_MODE");
         let names = mvp_tool_specs()
             .into_iter()
             .map(|spec| spec.name)
@@ -3543,8 +3563,8 @@ mod tests {
         assert!(names.contains(&"Sleep"));
         assert!(names.contains(&"SendUserMessage"));
         assert!(names.contains(&"Config"));
-        assert!(names.contains(&"EnterPlanMode"));
-        assert!(names.contains(&"ExitPlanMode"));
+        assert!(!names.contains(&"EnterPlanMode"));
+        assert!(!names.contains(&"ExitPlanMode"));
         assert!(names.contains(&"StructuredOutput"));
         assert!(names.contains(&"REPL"));
         assert!(names.contains(&"pdf_merge"));
@@ -3562,6 +3582,27 @@ mod tests {
         assert!(names.contains(&"PowerShell"));
         #[cfg(not(windows))]
         assert!(!names.contains(&"PowerShell"));
+        if let Some(value) = original {
+            std::env::set_var("RELAY_COMPAT_MODE", value);
+        }
+    }
+
+    #[test]
+    fn exposes_plan_mode_tools_in_compat_mode() {
+        let _guard = env_lock().lock().expect("env lock");
+        let original = std::env::var("RELAY_COMPAT_MODE").ok();
+        std::env::set_var("RELAY_COMPAT_MODE", "1");
+        let names = mvp_tool_specs()
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"EnterPlanMode"));
+        assert!(names.contains(&"ExitPlanMode"));
+        if let Some(value) = original {
+            std::env::set_var("RELAY_COMPAT_MODE", value);
+        } else {
+            std::env::remove_var("RELAY_COMPAT_MODE");
+        }
     }
 
     #[test]

@@ -4729,3 +4729,21 @@ Observed result:
 - `apps/desktop/src-tauri/crates/tools/src/lib.rs` exposes the new `BackgroundTaskOutput` tool, expands `TaskOutput` schema with `offset`/`tail`, and constrains `TaskUpdate.status` to canonical enum states.
 - `apps/desktop/src-tauri/crates/runtime/src/task_registry.rs` now uses an enum-backed task state machine and offset/tail output slicing.
 - All listed commands passed in this environment (the tools command selected 0 filtered tests because that exact test name does not exist in this crate).
+
+Plan mode tool surface compatibility gating (2026-04-11):
+
+```bash
+cargo test -p tools exposes_mvp_tools
+cargo test -p tools exposes_plan_mode_tools_in_compat_mode
+cargo test -p relay-agent-desktop plan_prompt_and_runtime_policy_have_zero_diff_snapshot
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/crates/tools/src/lib.rs` now hides `EnterPlanMode` / `ExitPlanMode` from the default tool surface, and only exposes them when `RELAY_COMPAT_MODE` is enabled (`1|true|on|yes|compat`).
+- The plan-mode tool response payload is now a short, consistent one-shot error explaining that Relay mode switching is session-start only.
+- `apps/desktop/src-tauri/src/agent_loop.rs` system prompt now explicitly states that Build / Plan / Explore can only be selected at session start (not mid-session via tools).
+- `apps/desktop/src-tauri/src/agent_loop.rs` Plan permission snapshot test fixture was updated to match the hidden-by-default tool surface.
+- `cargo test -p tools exposes_mvp_tools` passed.
+- `cargo test -p tools exposes_plan_mode_tools_in_compat_mode` passed.
+- `cargo test -p relay-agent-desktop plan_prompt_and_runtime_policy_have_zero_diff_snapshot` could not run in this container because the system `glib-2.0` development package is missing (`glib-sys` build-time pkg-config failure).

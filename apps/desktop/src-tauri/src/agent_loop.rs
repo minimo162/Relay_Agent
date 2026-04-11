@@ -1624,13 +1624,7 @@ fn parse_fallback_payloads(
                 continue;
             }
         };
-        parse_fallback_value(
-            &v,
-            whitelist,
-            sentinel_policy,
-            source_label,
-            &mut out,
-        );
+        parse_fallback_value(&v, whitelist, sentinel_policy, source_label, &mut out);
     }
     out
 }
@@ -3230,6 +3224,7 @@ pub fn build_desktop_system_prompt(
                 "For file access use read_file / write_file / edit_file; for PDF merge or split in the workspace use pdf_merge / pdf_split (not bash). Do not substitute shell or REPL for file I/O when those tools apply.\n\n",
                 "When the model is M365 Copilot in Edge (CDP), the appended message includes the tool catalog and `relay_tool` protocol. ",
                 "Do not refuse to output fenced tool JSON by claiming browser Copilot cannot run tools—Relay executes parsed tool calls from your reply.\n\n",
+                "IMPORTANT: Relay session mode switching is **session-start only**. Build / Plan / Explore cannot be changed mid-session via tools (including EnterPlanMode / ExitPlanMode).\n\n",
                 "IMPORTANT: Do not generate or guess URLs unless they clearly help with the user's programming task. ",
                 "You may use URLs the user provided or that appear in local files."
             ),
@@ -4138,8 +4133,6 @@ NotebookEdit|read-only|danger-full-access
 Sleep|read-only|read-only
 SendUserMessage|read-only|read-only
 Config|read-only|danger-full-access
-EnterPlanMode|read-only|danger-full-access
-ExitPlanMode|read-only|danger-full-access
 StructuredOutput|read-only|read-only
 REPL|read-only|danger-full-access
 PowerShell|read-only|danger-full-access
