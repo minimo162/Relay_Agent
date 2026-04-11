@@ -8,9 +8,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Listener, Manager};
 
 use crate::agent_loop::{
-    AgentApprovalNeededEvent, AgentErrorEvent, AgentTextDeltaEvent, AgentToolResultEvent,
-    AgentToolStartEvent, AgentTurnCompleteEvent, E_APPROVAL_NEEDED, E_ERROR, E_TEXT_DELTA,
-    E_TOOL_RESULT, E_TOOL_START, E_TURN_COMPLETE,
+    AgentApprovalNeededEvent, AgentErrorEvent, AgentSessionStatusEvent, AgentTextDeltaEvent,
+    AgentToolResultEvent, AgentToolStartEvent, AgentTurnCompleteEvent, E_APPROVAL_NEEDED, E_ERROR,
+    E_STATUS, E_TEXT_DELTA, E_TOOL_RESULT, E_TOOL_START, E_TURN_COMPLETE,
 };
 use crate::models::{RespondAgentApprovalRequest, SessionPreset, StartAgentRequest};
 use crate::registry::SessionRegistry;
@@ -45,6 +45,7 @@ pub struct AgentLoopSmokeSummary {
     retry_recovered: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     final_stop_reason: Option<String>,
+    status_sequence: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -58,11 +59,13 @@ pub struct AgentLoopSmokeSummary {
     approval_event_count: usize,
     completion_event_count: usize,
     error_event_count: usize,
+    status_event_count: usize,
     retry_count: usize,
 }
 
 #[derive(Clone, Debug, Default)]
 struct ObservedSmokeEvents {
+    statuses: Vec<AgentSessionStatusEvent>,
     approvals: Vec<AgentApprovalNeededEvent>,
     completions: Vec<AgentTurnCompleteEvent>,
     errors: Vec<AgentErrorEvent>,
@@ -277,8 +280,17 @@ async fn run_smoke(app: AppHandle, config: SmokeConfig) -> AgentLoopSmokeSummary
         summary.approval_event_count = observed_state.approvals.len();
         summary.completion_event_count = observed_state.completions.len();
         summary.error_event_count = observed_state.errors.len();
+        summary.status_event_count = observed_state.statuses.len();
         summary.retry_count = session_state.0;
         summary.retry_recovered = session_state.0 > 0;
+        summary.status_sequence = observed_state
+            .statuses
+            .iter()
+            .map(|evt| match evt.stop_reason.as_deref() {
+                Some(reason) => format!("{}:{reason}", evt.phase),
+                None => evt.phase.clone(),
+            })
+            .collect();
 
         let final_stop_reason = session_state.1.unwrap_or_default();
         if final_stop_reason != "completed" {
@@ -299,15 +311,27 @@ async fn run_smoke(app: AppHandle, config: SmokeConfig) -> AgentLoopSmokeSummary
         if summary.text_delta_count == 0 {
             return Err("smoke run did not observe text delta events".to_string());
         }
+        for required in ["running", "retrying", "waiting_approval", "idle:completed"] {
+            if !summary
+                .status_sequence
+                .iter()
+                .any(|phase| phase == required)
+            {
+                return Err(format!(
+                    "smoke run did not observe required status `{required}`"
+                ));
+            }
+        }
         summary.push_step(
             "verify-events",
             "ok",
             format!(
-                "toolStarts={}, toolResults={}, textDeltas={}, retries={}",
+                "toolStarts={}, toolResults={}, textDeltas={}, retries={}, statuses={}",
                 summary.tool_start_count,
                 summary.tool_result_count,
                 summary.text_delta_count,
-                summary.retry_count
+                summary.retry_count,
+                summary.status_sequence.join(" -> ")
             ),
         );
 
@@ -448,6 +472,16 @@ fn register_event_listeners(
 ) -> Vec<tauri::EventId> {
     let mut listeners = Vec::new();
 
+    {
+        let observed = Arc::clone(&observed);
+        listeners.push(app.listen_any(E_STATUS, move |event| {
+            if let Ok(payload) = serde_json::from_str::<AgentSessionStatusEvent>(event.payload()) {
+                if let Ok(mut state) = observed.lock() {
+                    state.statuses.push(payload);
+                }
+            }
+        }));
+    }
     {
         let observed = Arc::clone(&observed);
         listeners.push(app.listen_any(E_APPROVAL_NEEDED, move |event| {

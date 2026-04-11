@@ -2,9 +2,10 @@ import { createMemo, type JSX } from "solid-js";
 import { ui } from "../lib/ui-tokens";
 import { Button, StatusDot } from "./ui";
 import { workspaceBasename } from "../lib/workspace-display";
+import type { SessionStatusSnapshot } from "./shell-types";
 
 export function ShellHeader(props: {
-  sessionRunning: boolean;
+  sessionStatus: SessionStatusSnapshot;
   /** Configured workspace root (trimmed empty = unset). */
   workspacePath: () => string;
   /** Opens workspace folder dialog. */
@@ -30,6 +31,24 @@ export function ShellHeader(props: {
       ? `Workspace folder: ${pathTrimmed()}. Click to change.`
       : "Workspace folder not set. Click to configure.",
   );
+  const phaseLabel = createMemo(() => {
+    switch (props.sessionStatus.phase) {
+      case "running":
+        return "Agent running";
+      case "retrying":
+        return "Agent retrying";
+      case "compacting":
+        return "Agent compacting";
+      case "waiting_approval":
+        return "Agent waiting for approval";
+      case "cancelling":
+        return "Agent cancelling";
+      case "idle":
+      default:
+        return "Agent idle";
+    }
+  });
+  const busy = createMemo(() => props.sessionStatus.phase !== "idle");
 
   return (
     <header class="ra-shell-header">
@@ -51,11 +70,11 @@ export function ShellHeader(props: {
       <div class="flex-1" />
       <div
         class="ra-shell-header__status flex items-center gap-2 shrink-0"
-        title={props.sessionRunning ? "Agent is running." : "Agent is idle."}
+        title={`${phaseLabel()}.`}
       >
         <StatusDot
-          status={props.sessionRunning ? "connecting" : "connected"}
-          label={props.sessionRunning ? "Agent running" : "Agent idle"}
+          status={busy() ? "connecting" : "connected"}
+          label={phaseLabel()}
         />
         <span class={`ra-type-button-label ${ui.mutedText} hidden sm:inline`}>Agent</span>
       </div>
@@ -67,7 +86,7 @@ export function ShellHeader(props: {
           variant="ghost"
           type="button"
           class="ra-type-caption !px-2 !py-1 min-w-0"
-          disabled={props.sessionRunning || !props.canUndo}
+          disabled={busy() || !props.canUndo}
           onClick={() => props.onUndo()}
         >
           Undo
@@ -76,7 +95,7 @@ export function ShellHeader(props: {
           variant="ghost"
           type="button"
           class="ra-type-caption !px-2 !py-1 min-w-0"
-          disabled={props.sessionRunning || !props.canRedo}
+          disabled={busy() || !props.canRedo}
           onClick={() => props.onRedo()}
         >
           Redo

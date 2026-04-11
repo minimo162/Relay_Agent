@@ -4,6 +4,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  createRenderEffect,
   on,
   onCleanup,
   onMount,
@@ -14,14 +15,14 @@ import { ellipsisPath, workspaceBasename } from "../lib/workspace-display";
 import { EmptyState } from "./primitives";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCallRow } from "./ToolCallRow";
-import type { SessionState } from "./shell-types";
+import type { SessionStatusSnapshot } from "./shell-types";
 
 /** Pixels from bottom to treat as "following" the stream (sticky scroll). */
 const NEAR_BOTTOM_PX = 80;
 
 export function MessageFeed(props: {
   chunks: UiChunk[];
-  sessionState: SessionState;
+  sessionStatus: SessionStatusSnapshot;
   /** Saved workspace cwd (empty = unset). */
   workspacePath: () => string;
   /** Composer session mode (empty-state copy for Plan / Explore). */
@@ -38,15 +39,43 @@ export function MessageFeed(props: {
     }
     return null as string | null;
   });
+  const [nowMs, setNowMs] = createSignal(Date.now());
+  createRenderEffect(() => {
+    if (props.sessionStatus.phase !== "retrying") return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 250);
+    onCleanup(() => window.clearInterval(id));
+  });
   const statusLine = createMemo(() => {
-    if (props.sessionState !== "running") return null;
-    const name = runningToolName();
-    return name ? friendlyToolActivityLabel(name) : "Working…";
+    switch (props.sessionStatus.phase) {
+      case "running": {
+        const name = runningToolName();
+        return name ? friendlyToolActivityLabel(name) : "Working…";
+      }
+      case "retrying": {
+        const seconds = props.sessionStatus.nextRetryAtMs
+          ? Math.max(1, Math.ceil((props.sessionStatus.nextRetryAtMs - nowMs()) / 1000))
+          : null;
+        const attempt = props.sessionStatus.attempt;
+        const parts = ["Retrying soon…"];
+        if (attempt != null) parts.push(`attempt ${attempt}`);
+        if (seconds != null) parts.push(`in ${seconds}s`);
+        return parts.join(" ");
+      }
+      case "compacting":
+        return "Compacting context…";
+      case "waiting_approval":
+        return "Waiting for approval…";
+      case "cancelling":
+        return "Cancelling…";
+      case "idle":
+      default:
+        return null;
+    }
   });
 
   /** Fingerprint of visible feed content so streaming text deltas retrigger effects. */
   const feedScrollSignature = createMemo(() => {
-    const parts: string[] = [String(props.chunks.length), props.sessionState, statusLine() ?? ""];
+    const parts: string[] = [String(props.chunks.length), props.sessionStatus.phase, statusLine() ?? ""];
     for (const c of props.chunks) {
       if (c.kind === "user" || c.kind === "assistant") {
         parts.push(`${c.kind}:${c.text.length}`);

@@ -241,12 +241,14 @@ pub async fn warmup_copilot_bridge(
 }
 
 // Re-export registry and agent_loop types for external consumers
-pub use crate::agent_loop::{AgentErrorEvent, AgentSessionHistoryResponse};
+pub use crate::agent_loop::{
+    AgentErrorEvent, AgentSessionHistoryResponse, AgentSessionStatusEvent,
+};
 pub use crate::registry::SessionEntry;
 
 // What we need from agent_loop
-use crate::agent_loop::E_ERROR;
 use crate::agent_loop::{msg_to_relay, run_agent_loop_impl};
+use crate::agent_loop::{AgentSessionPhase, E_ERROR, E_STATUS};
 
 /* ── Tauri commands ─── */
 
@@ -288,6 +290,7 @@ pub(crate) async fn start_agent_inner(
         session: runtime::Session::new(),
         running: true,
         run_state: SessionRunState::Running,
+        loop_epoch: 1,
         cancelled: Arc::new(AtomicBool::new(false)),
         approvals: Mutex::new(HashMap::new()),
         user_questions: Mutex::new(HashMap::new()),
@@ -298,6 +301,7 @@ pub(crate) async fn start_agent_inner(
         last_stop_reason: None,
         retry_count: 0,
         last_error_summary: None,
+        terminal_status_emitted: false,
     };
     let cancelled = Arc::clone(&entry.cancelled);
     registry
@@ -531,14 +535,31 @@ pub async fn cancel_agent(
     registry: State<'_, SessionRegistry>,
     request: CancelAgentRequest,
 ) -> Result<(), String> {
-    // Mark cancelled and drain approvals via the registry API
+    let mut should_emit_status = false;
     if let Ok(mut data) = registry.data.lock() {
         if let Some(entry) = data.get_mut(&request.session_id) {
+            should_emit_status = !entry.terminal_status_emitted;
+            entry.loop_epoch = entry.loop_epoch.saturating_add(1);
             entry.cancelled.store(true, Ordering::Relaxed);
             entry.running = false;
             entry.run_state = SessionRunState::Cancelling;
+            entry.terminal_status_emitted = false;
             entry.last_stop_reason = Some("cancelled".to_string());
             entry.last_error_summary = Some("session cancelled by user".to_string());
+        }
+    }
+    if should_emit_status {
+        let cancelling = AgentSessionStatusEvent {
+            session_id: request.session_id.clone(),
+            phase: AgentSessionPhase::Cancelling.as_str().to_string(),
+            attempt: None,
+            message: Some("Cancellation requested".to_string()),
+            next_retry_at_ms: None,
+            tool_name: None,
+            stop_reason: None,
+        };
+        if let Err(e) = app.emit(E_STATUS, &cancelling) {
+            tracing::warn!("[RelayAgent] emit failed ({E_STATUS}): {e}");
         }
     }
     // Drain approvals and reject them all
@@ -564,6 +585,27 @@ pub async fn cancel_agent(
     }
 
     request_copilot_bridge_abort().await;
+
+    if should_emit_status {
+        if let Ok(mut data) = registry.data.lock() {
+            if let Some(entry) = data.get_mut(&request.session_id) {
+                entry.run_state = SessionRunState::Finished;
+                entry.terminal_status_emitted = true;
+            }
+        }
+        let idle = AgentSessionStatusEvent {
+            session_id: request.session_id.clone(),
+            phase: AgentSessionPhase::Idle.as_str().to_string(),
+            attempt: None,
+            message: Some("Session cancelled".to_string()),
+            next_retry_at_ms: None,
+            tool_name: None,
+            stop_reason: Some("cancelled".to_string()),
+        };
+        if let Err(e) = app.emit(E_STATUS, &idle) {
+            tracing::warn!("[RelayAgent] emit failed ({E_STATUS}): {e}");
+        }
+    }
 
     let evt = AgentErrorEvent {
         session_id: request.session_id.clone(),

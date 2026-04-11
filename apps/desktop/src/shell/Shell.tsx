@@ -24,6 +24,7 @@ import {
   type AgentApprovalNeededEvent,
   type AgentUserQuestionNeededEvent,
   type AgentErrorEvent,
+  type AgentSessionStatusEvent,
   type AgentTextDeltaEvent,
   type AgentToolResultEvent,
   type AgentToolStartEvent,
@@ -48,7 +49,7 @@ import { SettingsModal } from "../components/SettingsModal";
 import { ShellHeader } from "../components/ShellHeader";
 import { Sidebar } from "../components/Sidebar";
 import { StatusBar } from "../components/StatusBar";
-import type { Approval, UserQuestion } from "../components/shell-types";
+import type { Approval, SessionStatusSnapshot, UserQuestion } from "../components/shell-types";
 import { loadBrowserSettings, loadMaxTurns, loadWorkspacePath } from "../lib/settings-storage";
 import {
   buildPlanTimelineFromUiChunks,
@@ -76,7 +77,7 @@ export default function Shell(): JSX.Element {
   const sessionEntries = createMemo(() =>
     sessionIds().map((id) => ({ id, meta: sessionMeta()[id] })),
   );
-  const [sessionRunning, setSessionRunning] = createSignal(false);
+  const [statusBySession, setStatusBySession] = createSignal<Record<string, SessionStatusSnapshot>>({});
   const [sessionError, setSessionError] = createSignal<string | null>(null);
   const [copilotBridgeHint, setCopilotBridgeHint] = createSignal<string | null>(null);
   const [copilotSuccessFlash, setCopilotSuccessFlash] = createSignal<string | null>(null);
@@ -157,7 +158,7 @@ export default function Shell(): JSX.Element {
 
   createEffect(() => {
     activeSessionId();
-    if (sessionRunning()) return;
+    if ((statusBySession()[activeSessionId() ?? ""]?.phase ?? "idle") !== "idle") return;
     void refreshWriteUndoStatus();
   });
 
@@ -187,11 +188,12 @@ export default function Shell(): JSX.Element {
     runCopilotWarmup(true);
   });
 
-  const sessionState = createMemo(() => {
-    if (sessionRunning()) return "running" as const;
-    if (sessionError()) return "error" as const;
-    return "idle" as const;
+  const activeSessionStatus = createMemo<SessionStatusSnapshot>(() => {
+    const sid = activeSessionId();
+    if (!sid) return { phase: "idle" };
+    return statusBySession()[sid] ?? { phase: "idle" };
   });
+  const sessionBusy = createMemo(() => activeSessionStatus().phase !== "idle");
 
   const reloadHistory = async (
     sessionId: string,
@@ -210,16 +212,20 @@ export default function Shell(): JSX.Element {
         ...prev,
         [sessionId]: buildPlanTimelineFromUiChunks(next),
       }));
-      const idle = opts?.afterTurnComplete || !res.running;
-      setSessionRunning(!idle);
-      if (idle) setSessionError(null);
+      const nextStatus: SessionStatusSnapshot = opts?.afterTurnComplete || !res.running
+        ? { phase: "idle" }
+        : (statusBySession()[sessionId] ?? { phase: "running" });
+      setStatusBySession((prev) => ({ ...prev, [sessionId]: nextStatus }));
+      if (nextStatus.phase === "idle") setSessionError(null);
     } catch (err) {
       console.error("[IPC] load history failed", err);
       const fb = opts?.fallbackAssistantText?.trim();
       if (fb) {
         setChunks((prev) => [...prev, { kind: "assistant", text: fb }]);
       }
-      if (opts?.afterTurnComplete) setSessionRunning(false);
+      if (opts?.afterTurnComplete) {
+        setStatusBySession((prev) => ({ ...prev, [sessionId]: { phase: "idle" } }));
+      }
     }
   };
 
@@ -315,6 +321,25 @@ export default function Shell(): JSX.Element {
 
     const unlisten = await onAgentEvent((event) => {
       switch (event.type) {
+        case "status": {
+          const e = event.data as AgentSessionStatusEvent;
+          setStatusBySession((prev) => ({
+            ...prev,
+            [e.sessionId]: {
+              phase: e.phase,
+              attempt: e.attempt,
+              message: e.message,
+              nextRetryAtMs: e.nextRetryAtMs,
+              toolName: e.toolName,
+              stopReason: e.stopReason,
+            },
+          }));
+          if (e.phase === "idle" && e.stopReason !== "cancelled") {
+            setSessionError(null);
+          }
+          break;
+        }
+
         case "text_delta": {
           const e = event.data as AgentTextDeltaEvent;
           appendAssistantText(e.sessionId, e.text, e.isComplete);
@@ -324,7 +349,10 @@ export default function Shell(): JSX.Element {
         case "turn_complete": {
           const e = event.data as AgentTurnCompleteEvent;
           console.log("[IPC] turn_complete", e.sessionId, e.stopReason);
-          setSessionRunning(false);
+          setStatusBySession((prev) => ({
+            ...prev,
+            [e.sessionId]: { phase: "idle", stopReason: e.stopReason },
+          }));
           void reloadHistory(e.sessionId, {
             fallbackAssistantText: e.assistantMessage,
             afterTurnComplete: true,
@@ -335,7 +363,10 @@ export default function Shell(): JSX.Element {
         case "error": {
           const e = event.data as AgentErrorEvent;
           console.error("[IPC] error", e.sessionId, e.error);
-          setSessionRunning(false);
+          setStatusBySession((prev) => ({
+            ...prev,
+            [e.sessionId]: prev[e.sessionId] ?? { phase: "idle" },
+          }));
           if (!e.cancelled) setSessionError(e.error);
           break;
         }
@@ -413,11 +444,10 @@ export default function Shell(): JSX.Element {
           preview: truncatePromptPreview(text, 52),
         },
       }));
-      setSessionRunning(true);
+      setStatusBySession((prev) => ({ ...prev, [sessionId]: { phase: "running" } }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setSessionError(msg);
-      setSessionRunning(false);
     }
   };
 
@@ -483,7 +513,10 @@ export default function Shell(): JSX.Element {
     if (!sid) return;
     try {
       await cancelAgent({ sessionId: sid });
-      setSessionRunning(false);
+      setStatusBySession((prev) => ({
+        ...prev,
+        [sid]: { phase: "cancelling", message: "Cancellation requested" },
+      }));
     } catch (err) {
       console.error("[IPC] cancel failed", err);
     }
@@ -498,7 +531,7 @@ export default function Shell(): JSX.Element {
   return (
     <div classList={{ "ra-shell": true, "ra-shell--first-run": isFirstRun() }}>
       <ShellHeader
-        sessionRunning={sessionRunning()}
+        sessionStatus={activeSessionStatus()}
         workspacePath={workspaceLabel}
         onWorkspaceChipClick={() => setSettingsOpen(true)}
         canUndo={writeUndoStatus().canUndo}
@@ -551,7 +584,7 @@ export default function Shell(): JSX.Element {
             <>
               <MessageFeed
                 chunks={chunks()}
-                sessionState={sessionState()}
+                sessionStatus={activeSessionStatus()}
                 workspacePath={workspaceLabel}
                 sessionPreset={sessionPreset()}
               />
@@ -562,15 +595,15 @@ export default function Shell(): JSX.Element {
                   writeStoredSessionPreset(p);
                 }}
                 onSend={handleSend}
-                disabled={sessionRunning()}
-                running={sessionRunning()}
+                disabled={sessionBusy()}
+                running={sessionBusy()}
                 onCancel={handleCancel}
                 onSlashCommand={(input) => {
                   const ctx: SlashCommandContext = {
                     sessionId: activeSessionId(),
                     clearChunks: () => setChunks([]),
                     compactSession: (sid) => compactAgentSession({ sessionId: sid }),
-                    sessionRunning: sessionRunning(),
+                    sessionRunning: sessionBusy(),
                     chunksCount: chunks().length,
                   };
                   return executeSlashCommand(input, ctx);
@@ -594,15 +627,15 @@ export default function Shell(): JSX.Element {
                 writeStoredSessionPreset(p);
               }}
               onSend={handleSend}
-              disabled={sessionRunning()}
-              running={sessionRunning()}
+              disabled={sessionBusy()}
+              running={sessionBusy()}
               onCancel={handleCancel}
               onSlashCommand={(input) => {
                 const ctx: SlashCommandContext = {
                   sessionId: activeSessionId(),
                   clearChunks: () => setChunks([]),
                   compactSession: (sid) => compactAgentSession({ sessionId: sid }),
-                  sessionRunning: sessionRunning(),
+                  sessionRunning: sessionBusy(),
                   chunksCount: chunks().length,
                 };
                 return executeSlashCommand(input, ctx);
@@ -648,12 +681,12 @@ export default function Shell(): JSX.Element {
 
       <div class="col-span-full">
         <StatusBar
-          sessionState={sessionState()}
+          sessionStatus={activeSessionStatus()}
           sessionCount={sessionIds().length}
           copilotBridgeHint={copilotBridgeHint()}
           copilotSuccessFlash={copilotSuccessFlash()}
           onRetryCopilot={isTauri() ? () => runCopilotWarmup(false) : undefined}
-          copilotRetryDisabled={sessionRunning()}
+          copilotRetryDisabled={sessionBusy()}
           workspaceFullPath={workspaceLabel() || null}
         />
       </div>

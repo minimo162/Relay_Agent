@@ -1,10 +1,10 @@
 import { type JSX } from "solid-js";
 import { StatusDot } from "./ui";
-import type { SessionState } from "./shell-types";
+import type { SessionStatusSnapshot } from "./shell-types";
 import { ui } from "../lib/ui-tokens";
 
 export function StatusBar(props: {
-  sessionState: SessionState;
+  sessionStatus: SessionStatusSnapshot;
   sessionCount: number;
   copilotBridgeHint?: string | null;
   /** Short success line (e.g. after Copilot warmup); shown when no error/login hint. */
@@ -14,14 +14,16 @@ export function StatusBar(props: {
   /** Full workspace path for footer tooltip only (header shows the chip). */
   workspaceFullPath?: string | null;
 }): JSX.Element {
+  const phase = props.sessionStatus.phase;
   const dot =
-    props.sessionState === "running" ? "connecting"
-    : props.sessionState === "error" ? "disconnected"
-    : "connected";
+    phase === "idle" ? "connected" : "connecting";
 
   const label =
-    props.sessionState === "running" ? "Working"
-    : props.sessionState === "error" ? "Error"
+    phase === "running" ? "Working"
+    : phase === "retrying" ? "Retrying"
+    : phase === "compacting" ? "Compacting"
+    : phase === "waiting_approval" ? "Waiting"
+    : phase === "cancelling" ? "Cancelling"
     : "Ready";
 
   const hint = props.copilotBridgeHint?.trim();
@@ -33,7 +35,7 @@ export function StatusBar(props: {
     <footer
       class={`ra-shell-footer px-3 py-1 flex flex-col gap-0.5 ra-type-button-label ${ui.mutedText}`}
       style={{ "min-height": footerExtra ? "36px" : "28px" }}
-      data-ra-footer-session={props.sessionState}
+      data-ra-footer-session={phase}
       title={full || undefined}
       data-ra-workspace-label={full ? "set" : "unset"}
     >

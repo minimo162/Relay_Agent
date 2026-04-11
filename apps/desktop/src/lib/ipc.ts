@@ -10,7 +10,7 @@
  *
  * Events:
  *   agent:tool_start | agent:tool_result | agent:approval_needed | agent:user_question
- *   agent:turn_complete | agent:text_delta | agent:error
+ *   agent:status | agent:turn_complete | agent:text_delta | agent:error
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -161,11 +161,40 @@ export interface AgentUserQuestionNeededEvent {
   prompt: string;
 }
 
+export type AgentStopReason =
+  | "completed"
+  | "cancelled"
+  | "meta_stall"
+  | "retry_exhausted"
+  | "compaction_failed"
+  | "max_turns_reached"
+  | "permission_denied"
+  | "tool_error"
+  | "doom_loop";
+
 export interface AgentTurnCompleteEvent {
   sessionId: string;
-  stopReason: string;
+  stopReason: AgentStopReason;
   assistantMessage: string;
   messageCount: number;
+}
+
+export type AgentSessionPhase =
+  | "idle"
+  | "running"
+  | "retrying"
+  | "compacting"
+  | "waiting_approval"
+  | "cancelling";
+
+export interface AgentSessionStatusEvent {
+  sessionId: string;
+  phase: AgentSessionPhase;
+  attempt?: number;
+  message?: string;
+  nextRetryAtMs?: number;
+  toolName?: string;
+  stopReason?: AgentStopReason;
 }
 
 export interface AgentTextDeltaEvent {
@@ -186,6 +215,7 @@ export type AgentEvent =
   | { type: "tool_result"; data: AgentToolResultEvent }
   | { type: "approval_needed"; data: AgentApprovalNeededEvent }
   | { type: "user_question"; data: AgentUserQuestionNeededEvent }
+  | { type: "status"; data: AgentSessionStatusEvent }
   | { type: "text_delta"; data: AgentTextDeltaEvent }
   | { type: "turn_complete"; data: AgentTurnCompleteEvent }
   | { type: "error"; data: AgentErrorEvent };
@@ -481,6 +511,7 @@ const E_TOOL_RESULT = "agent:tool_result";
 const E_APPROVAL_NEEDED = "agent:approval_needed";
 const E_USER_QUESTION = "agent:user_question";
 const E_TEXT_DELTA = "agent:text_delta";
+const E_STATUS = "agent:status";
 const E_TURN_COMPLETE = "agent:turn_complete";
 const E_ERROR = "agent:error";
 
@@ -499,6 +530,9 @@ export function onAgentEvent(
     ),
     listen<AgentUserQuestionNeededEvent>(E_USER_QUESTION, (e) =>
       callback({ type: "user_question", data: e.payload }),
+    ),
+    listen<AgentSessionStatusEvent>(E_STATUS, (e) =>
+      callback({ type: "status", data: e.payload }),
     ),
     listen<AgentTextDeltaEvent>(E_TEXT_DELTA, (e) =>
       callback({ type: "text_delta", data: e.payload }),

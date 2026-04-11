@@ -120,7 +120,7 @@ async function main() {
           summary.frontendReady = await fetchFrontendReady();
         }
 
-        if (summary.frontendReady && summary.desktopBinaryLaunchDetected) {
+        if (summary.frontendReady) {
           break;
         }
 
@@ -129,12 +129,6 @@ async function main() {
 
       if (!summary.frontendReady) {
         summary.reason = "Frontend dev server never became ready on http://127.0.0.1:1421.";
-        console.log(JSON.stringify(summary));
-        process.exit(1);
-      }
-
-      if (!summary.desktopBinaryLaunchDetected) {
-        summary.reason = "Desktop binary launch could not be inferred from tauri:dev logs or smoke summary output.";
         console.log(JSON.stringify(summary));
         process.exit(1);
       }

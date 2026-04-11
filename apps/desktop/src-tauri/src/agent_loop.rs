@@ -272,6 +272,7 @@ pub(crate) const E_USER_QUESTION: &str = "agent:user_question";
 pub(crate) const E_TURN_COMPLETE: &str = "agent:turn_complete";
 pub(crate) const E_ERROR: &str = "agent:error";
 pub(crate) const E_TEXT_DELTA: &str = "agent:text_delta";
+pub(crate) const E_STATUS: &str = "agent:status";
 
 /// Remove M365 Copilot bracketed markers such as `【richwebanswer-…】` from visible prose.
 fn strip_richwebanswer_spans(s: &str) -> String {
@@ -391,6 +392,7 @@ enum LoopStopReason {
     MaxTurnsReached,
     PermissionDenied,
     ToolError,
+    DoomLoop,
 }
 
 impl LoopStopReason {
@@ -404,6 +406,7 @@ impl LoopStopReason {
             Self::MaxTurnsReached => "max_turns_reached",
             Self::PermissionDenied => "permission_denied",
             Self::ToolError => "tool_error",
+            Self::DoomLoop => "doom_loop",
         }
     }
 }
@@ -414,8 +417,109 @@ enum LoopDecision {
     Stop(LoopStopReason),
 }
 
-fn set_session_run_state(registry: &SessionRegistry, session_id: &str, run_state: SessionRunState) {
-    let _ignore = registry.mutate_session(session_id, |entry| {
+#[derive(Clone)]
+struct LoopEpochGuard {
+    session_id: String,
+    registry: SessionRegistry,
+    epoch: u64,
+}
+
+impl LoopEpochGuard {
+    fn new(registry: &SessionRegistry, session_id: &str) -> Self {
+        let epoch = registry
+            .get_session(session_id, |entry| entry.loop_epoch)
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+        Self {
+            session_id: session_id.to_string(),
+            registry: registry.clone(),
+            epoch,
+        }
+    }
+
+    fn is_current(&self) -> bool {
+        self.registry
+            .get_session(&self.session_id, |entry| entry.loop_epoch == self.epoch)
+            .ok()
+            .flatten()
+            .unwrap_or(false)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionPhase {
+    Idle,
+    Running,
+    Retrying,
+    Compacting,
+    WaitingApproval,
+    Cancelling,
+}
+
+impl AgentSessionPhase {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Running => "running",
+            Self::Retrying => "retrying",
+            Self::Compacting => "compacting",
+            Self::WaitingApproval => "waiting_approval",
+            Self::Cancelling => "cancelling",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct AgentStatusOptions {
+    attempt: Option<usize>,
+    message: Option<String>,
+    next_retry_at_ms: Option<u64>,
+    tool_name: Option<String>,
+    stop_reason: Option<LoopStopReason>,
+}
+
+impl AgentStatusOptions {
+    fn with_attempt(mut self, attempt: usize) -> Self {
+        self.attempt = Some(attempt);
+        self
+    }
+
+    fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.message = Some(message.into());
+        self
+    }
+
+    fn with_next_retry_at_ms(mut self, next_retry_at_ms: u64) -> Self {
+        self.next_retry_at_ms = Some(next_retry_at_ms);
+        self
+    }
+
+    fn with_tool_name(mut self, tool_name: impl Into<String>) -> Self {
+        self.tool_name = Some(tool_name.into());
+        self
+    }
+
+    fn with_stop_reason(mut self, stop_reason: LoopStopReason) -> Self {
+        self.stop_reason = Some(stop_reason);
+        self
+    }
+}
+
+fn mutate_session_if_current<F>(guard: &LoopEpochGuard, f: F)
+where
+    F: FnOnce(&mut crate::registry::SessionEntry),
+{
+    let _ignore = guard.registry.mutate_session(&guard.session_id, |entry| {
+        if entry.loop_epoch == guard.epoch {
+            f(entry);
+        }
+    });
+}
+
+fn set_session_run_state(guard: &LoopEpochGuard, run_state: SessionRunState) {
+    mutate_session_if_current(guard, |entry| {
         entry.run_state = run_state;
         entry.running = !matches!(
             run_state,
@@ -424,34 +528,86 @@ fn set_session_run_state(registry: &SessionRegistry, session_id: &str, run_state
     });
 }
 
-fn increment_session_retry_count(
-    registry: &SessionRegistry,
-    session_id: &str,
-    error_summary: &str,
-) {
+fn increment_session_retry_count(guard: &LoopEpochGuard, error_summary: &str) {
     let summary = error_summary.to_string();
-    let _ignore = registry.mutate_session(session_id, |entry| {
+    mutate_session_if_current(guard, |entry| {
         entry.retry_count += 1;
         entry.last_error_summary = Some(summary);
     });
 }
 
-fn set_session_error_summary(registry: &SessionRegistry, session_id: &str, error_summary: &str) {
+fn set_session_error_summary(guard: &LoopEpochGuard, error_summary: &str) {
     let summary = error_summary.to_string();
-    let _ignore = registry.mutate_session(session_id, |entry| {
+    mutate_session_if_current(guard, |entry| {
         entry.last_error_summary = Some(summary);
     });
 }
 
-fn set_session_stop_reason(
-    registry: &SessionRegistry,
-    session_id: &str,
-    stop_reason: LoopStopReason,
-) {
+fn set_session_stop_reason(guard: &LoopEpochGuard, stop_reason: LoopStopReason) {
     let reason = stop_reason.as_str().to_string();
-    let _ignore = registry.mutate_session(session_id, |entry| {
+    mutate_session_if_current(guard, |entry| {
         entry.last_stop_reason = Some(reason);
     });
+}
+
+fn mark_terminal_status_emitted(guard: &LoopEpochGuard) -> bool {
+    guard
+        .registry
+        .mutate_session(&guard.session_id, |entry| {
+            if entry.loop_epoch != guard.epoch || entry.terminal_status_emitted {
+                return false;
+            }
+            entry.terminal_status_emitted = true;
+            true
+        })
+        .ok()
+        .flatten()
+        .unwrap_or(false)
+}
+
+fn clear_terminal_status_emitted(guard: &LoopEpochGuard) {
+    mutate_session_if_current(guard, |entry| {
+        entry.terminal_status_emitted = false;
+    });
+}
+
+fn emit_status_event(
+    app: &AppHandle,
+    guard: &LoopEpochGuard,
+    phase: AgentSessionPhase,
+    options: AgentStatusOptions,
+) {
+    if !guard.is_current() {
+        return;
+    }
+    if phase == AgentSessionPhase::Idle && !mark_terminal_status_emitted(guard) {
+        return;
+    }
+    let evt = AgentSessionStatusEvent {
+        session_id: guard.session_id.clone(),
+        phase: phase.as_str().to_string(),
+        attempt: options.attempt,
+        message: options.message,
+        next_retry_at_ms: options.next_retry_at_ms,
+        tool_name: options.tool_name,
+        stop_reason: options
+            .stop_reason
+            .map(|reason| reason.as_str().to_string()),
+    };
+    if let Err(e) = app.emit(E_STATUS, &evt) {
+        tracing::warn!("[RelayAgent] emit failed ({E_STATUS}): {e}");
+    }
+}
+
+fn transition_session_state(
+    app: &AppHandle,
+    guard: &LoopEpochGuard,
+    run_state: SessionRunState,
+    phase: AgentSessionPhase,
+    options: AgentStatusOptions,
+) {
+    set_session_run_state(guard, run_state);
+    emit_status_event(app, guard, phase, options);
 }
 
 fn collect_assistant_text(messages: &[ConversationMessage]) -> String {
@@ -584,6 +740,105 @@ fn decide_loop_after_success(
     LoopDecision::Stop(LoopStopReason::Completed)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TurnActivitySignature {
+    tool_keys: Vec<String>,
+    assistant_prose: String,
+}
+
+fn collapse_inline_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn normalize_assistant_prose_for_loop_guard(text: &str) -> String {
+    collapse_inline_whitespace(&sanitize_copilot_visible_text(text))
+}
+
+fn tool_use_key(name: &str, input: &str) -> String {
+    match serde_json::from_str::<Value>(input) {
+        Ok(value) => {
+            let normalized = normalize_tool_input_for_dedup_key(name, &value);
+            format!(
+                "{}|{}",
+                name,
+                serde_json::to_string(&normalized).unwrap_or_default()
+            )
+        }
+        Err(_) => format!("{name}|{input}"),
+    }
+}
+
+fn summarize_turn_activity(summary: &runtime::TurnSummary) -> TurnActivitySignature {
+    let mut tool_keys = Vec::new();
+    for message in &summary.assistant_messages {
+        for block in &message.blocks {
+            if let ContentBlock::ToolUse { name, input, .. } = block {
+                tool_keys.push(tool_use_key(name, input));
+            }
+        }
+    }
+    TurnActivitySignature {
+        tool_keys,
+        assistant_prose: normalize_assistant_prose_for_loop_guard(&collect_summary_assistant_text(
+            summary,
+        )),
+    }
+}
+
+fn detect_doom_loop(history: &[TurnActivitySignature]) -> bool {
+    if history.len() < 3 {
+        return false;
+    }
+    let window = &history[history.len() - 3..];
+    let first = &window[0];
+    if first.tool_keys.is_empty() {
+        return false;
+    }
+    window.iter().all(|item| {
+        item.tool_keys == first.tool_keys && item.assistant_prose == first.assistant_prose
+    })
+}
+
+fn doom_loop_error_message(signature: &TurnActivitySignature) -> String {
+    let tool_list = signature
+        .tool_keys
+        .iter()
+        .map(|key| key.split('|').next().unwrap_or("tool"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if signature.assistant_prose.is_empty() {
+        format!(
+            "agent loop stopped after repeating the same tool call pattern 3 times: {tool_list}"
+        )
+    } else {
+        format!(
+            "agent loop stopped after repeating the same tool call pattern 3 times without new assistant progress: {tool_list}"
+        )
+    }
+}
+
+fn is_meta_stall_nudge(input: &str) -> bool {
+    input.trim() == "Continue."
+}
+
+fn build_compaction_replay_input(goal: &str, current_input: &str) -> String {
+    let latest_request = if is_meta_stall_nudge(current_input) {
+        goal.trim()
+    } else {
+        current_input.trim()
+    };
+    format!(
+        concat!(
+            "Resume the existing task from the compacted summary and preserved recent messages.\n",
+            "Do not ask the user to restate the task.\n\n",
+            "Original user goal:\n{goal}\n\n",
+            "Latest request to continue from:\n{latest_request}"
+        ),
+        goal = goal.trim(),
+        latest_request = latest_request,
+    )
+}
+
 fn runtime_error_needs_forced_compaction(error: &RuntimeError) -> bool {
     let lower = error.to_string().to_ascii_lowercase();
     lower.contains("copilot inline prompt remains above")
@@ -646,6 +901,7 @@ pub fn run_agent_loop_impl(
     browser_settings: Option<BrowserAutomationSettings>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(), AgentLoopError> {
+    let loop_guard = LoopEpochGuard::new(registry, session_id);
     let api_client = if smoke_provider_enabled() {
         CdpApiClient::new_smoke(
             session_preset,
@@ -697,9 +953,18 @@ pub fn run_agent_loop_impl(
     let mut current_input = goal.clone();
     let mut meta_stall_nudges_used = 0usize;
     let mut completed_turn = false;
+    let mut recent_turn_signatures: Vec<TurnActivitySignature> = Vec::new();
+
+    clear_terminal_status_emitted(&loop_guard);
+    emit_status_event(
+        app,
+        &loop_guard,
+        AgentSessionPhase::Running,
+        AgentStatusOptions::default(),
+    );
 
     for turn_index in 0..max_turns {
-        if cancelled.load(Ordering::SeqCst) {
+        if cancelled.load(Ordering::SeqCst) || !loop_guard.is_current() {
             final_stop_reason = LoopStopReason::Cancelled;
             break;
         }
@@ -708,12 +973,18 @@ pub fn run_agent_loop_impl(
         let mut compact_attempts = 0usize;
 
         loop {
-            if cancelled.load(Ordering::SeqCst) {
+            if cancelled.load(Ordering::SeqCst) || !loop_guard.is_current() {
                 final_stop_reason = LoopStopReason::Cancelled;
                 break;
             }
 
-            set_session_run_state(registry, session_id, SessionRunState::Running);
+            transition_session_state(
+                app,
+                &loop_guard,
+                SessionRunState::Running,
+                AgentSessionPhase::Running,
+                AgentStatusOptions::default(),
+            );
             let checkpoint = runtime_session.session().clone();
             let result = runtime_session.run_turn(current_input.clone(), Some(&mut prompter));
 
@@ -729,6 +1000,20 @@ pub fn run_agent_loop_impl(
                         max_turns,
                         session_preset,
                     )?;
+
+                    let turn_signature = summarize_turn_activity(&summary);
+                    recent_turn_signatures.push(turn_signature.clone());
+                    if recent_turn_signatures.len() > 3 {
+                        recent_turn_signatures.remove(0);
+                    }
+                    if detect_doom_loop(&recent_turn_signatures) {
+                        final_stop_reason = LoopStopReason::DoomLoop;
+                        let message = doom_loop_error_message(&turn_signature);
+                        set_session_error_summary(&loop_guard, &message);
+                        final_error_message = Some(message);
+                        completed_turn = true;
+                        break;
+                    }
 
                     match decide_loop_after_success(
                         session_preset,
@@ -756,7 +1041,7 @@ pub fn run_agent_loop_impl(
                                 if let Some((tool_name, output)) = first_error_tool_result(&summary)
                                 {
                                     let msg = format!("{tool_name}: {output}");
-                                    set_session_error_summary(registry, session_id, &msg);
+                                    set_session_error_summary(&loop_guard, &msg);
                                     final_error_message = Some(msg);
                                 }
                             }
@@ -768,9 +1053,10 @@ pub fn run_agent_loop_impl(
                 Err(error) => {
                     let error_text = error.to_string();
                     runtime_session.replace_session(checkpoint);
-                    set_session_error_summary(registry, session_id, &error_text);
+                    set_session_error_summary(&loop_guard, &error_text);
 
                     if cancelled.load(Ordering::SeqCst)
+                        || !loop_guard.is_current()
                         || error_text.contains("relay_copilot_aborted")
                     {
                         final_stop_reason = LoopStopReason::Cancelled;
@@ -781,7 +1067,14 @@ pub fn run_agent_loop_impl(
                         && compact_attempts < config.compact_retry_limit
                     {
                         compact_attempts += 1;
-                        set_session_run_state(registry, session_id, SessionRunState::Compacting);
+                        transition_session_state(
+                            app,
+                            &loop_guard,
+                            SessionRunState::Compacting,
+                            AgentSessionPhase::Compacting,
+                            AgentStatusOptions::default()
+                                .with_message("Compacting context to continue the task"),
+                        );
                         let compaction = runtime_session.force_compact(runtime::CompactionConfig {
                             max_estimated_tokens: 0,
                             ..runtime::CompactionConfig::default()
@@ -794,7 +1087,14 @@ pub fn run_agent_loop_impl(
                             completed_turn = true;
                             break;
                         }
-                        set_session_run_state(registry, session_id, SessionRunState::Running);
+                        current_input = build_compaction_replay_input(&goal, &current_input);
+                        transition_session_state(
+                            app,
+                            &loop_guard,
+                            SessionRunState::Running,
+                            AgentSessionPhase::Running,
+                            AgentStatusOptions::default().with_message("Resuming after compaction"),
+                        );
                         continue;
                     }
 
@@ -802,13 +1102,37 @@ pub fn run_agent_loop_impl(
                         && retry_attempts < config.max_turn_retries
                     {
                         retry_attempts += 1;
-                        increment_session_retry_count(registry, session_id, &error_text);
-                        set_session_run_state(registry, session_id, SessionRunState::Retrying);
+                        increment_session_retry_count(&loop_guard, &error_text);
+                        let backoff = retry_backoff(retry_attempts);
+                        let next_retry_at_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis()
+                            .saturating_add(backoff.as_millis())
+                            as u64;
+                        transition_session_state(
+                            app,
+                            &loop_guard,
+                            SessionRunState::Retrying,
+                            AgentSessionPhase::Retrying,
+                            AgentStatusOptions::default()
+                                .with_attempt(retry_attempts)
+                                .with_message(format!(
+                                    "Transient Copilot failure: retrying after {error_text}"
+                                ))
+                                .with_next_retry_at_ms(next_retry_at_ms),
+                        );
                         if !sleep_with_cancel(&cancelled, retry_backoff(retry_attempts)) {
                             final_stop_reason = LoopStopReason::Cancelled;
                             break;
                         }
-                        set_session_run_state(registry, session_id, SessionRunState::Running);
+                        transition_session_state(
+                            app,
+                            &loop_guard,
+                            SessionRunState::Running,
+                            AgentSessionPhase::Running,
+                            AgentStatusOptions::default().with_message("Retrying the task now"),
+                        );
                         continue;
                     }
 
@@ -826,7 +1150,7 @@ pub fn run_agent_loop_impl(
             }
         }
 
-        if completed_turn || current_input == "Continue." {
+        if completed_turn || is_meta_stall_nudge(&current_input) {
             if completed_turn {
                 break;
             }
@@ -834,28 +1158,41 @@ pub fn run_agent_loop_impl(
         }
     }
 
-    if !completed_turn && !cancelled.load(Ordering::SeqCst) && current_input == "Continue." {
+    if !completed_turn && !cancelled.load(Ordering::SeqCst) && is_meta_stall_nudge(&current_input) {
         final_stop_reason = LoopStopReason::MaxTurnsReached;
     }
 
-    set_session_stop_reason(registry, session_id, final_stop_reason);
+    set_session_stop_reason(&loop_guard, final_stop_reason);
     if let Some(error) = final_error_message.as_deref() {
-        emit_error(
-            app,
-            session_id,
-            error,
-            matches!(final_stop_reason, LoopStopReason::Cancelled),
-        );
+        if loop_guard.is_current() {
+            emit_error(
+                app,
+                session_id,
+                error,
+                matches!(final_stop_reason, LoopStopReason::Cancelled),
+            );
+        }
     }
 
     // Clear `running` before emitting so `get_session_history` matches the UI; otherwise the
     // frontend reload after `turn_complete` can see `running: true` until `mark_finished` runs
     // after persistence and re-enable the "thinking" indicator.
     let _ignore = registry.mutate_session(session_id, |entry| {
+        if entry.loop_epoch != loop_guard.epoch {
+            return;
+        }
         entry.running = false;
         entry.run_state = SessionRunState::Finished;
     });
-    emit_turn_complete(app, session_id, final_stop_reason, &runtime_session);
+    emit_status_event(
+        app,
+        &loop_guard,
+        AgentSessionPhase::Idle,
+        AgentStatusOptions::default().with_stop_reason(final_stop_reason),
+    );
+    if loop_guard.is_current() {
+        emit_turn_complete(app, session_id, final_stop_reason, &runtime_session);
+    }
 
     let session = runtime_session.into_session();
     copilot_persistence::save_session(
@@ -1872,12 +2209,13 @@ pub struct TauriApprovalPrompter {
 
 impl PermissionPrompter for TauriApprovalPrompter {
     fn decide(&mut self, request: &PermissionRequest) -> PermissionPromptDecision {
+        let loop_guard = LoopEpochGuard::new(&self.registry, &self.session_id);
         // Step 1 — check cancelled (short, independent lock)
         let cancelled = {
             match self.registry.data.lock() {
-                Ok(data) => data
-                    .get(&self.session_id)
-                    .is_some_and(|entry| entry.cancelled.load(Ordering::SeqCst)),
+                Ok(data) => data.get(&self.session_id).is_some_and(|entry| {
+                    entry.cancelled.load(Ordering::SeqCst) || entry.loop_epoch != loop_guard.epoch
+                }),
                 Err(e) => {
                     tracing::error!(
                         "[RelayAgent] registry lock poisoned during permission check: {e}"
@@ -1966,6 +2304,11 @@ impl PermissionPrompter for TauriApprovalPrompter {
                 }
             };
             if let Some(entry) = data.get_mut(&self.session_id) {
+                if entry.loop_epoch != loop_guard.epoch {
+                    return PermissionPromptDecision::Deny {
+                        reason: "session loop was replaced".into(),
+                    };
+                }
                 entry.run_state = SessionRunState::WaitingApproval;
                 let mut approvals = entry.approvals.lock().unwrap_or_else(|e| {
                     tracing::error!("[RelayAgent] approvals lock poisoned: {e}");
@@ -1981,6 +2324,14 @@ impl PermissionPrompter for TauriApprovalPrompter {
             }
             drop(data);
         }
+        emit_status_event(
+            &self.app,
+            &loop_guard,
+            AgentSessionPhase::WaitingApproval,
+            AgentStatusOptions::default()
+                .with_tool_name(request.tool_name.clone())
+                .with_message("Waiting for tool approval"),
+        );
 
         // Block until the user responds via respond_approval
         let decision = match rx.recv() {
@@ -1994,6 +2345,9 @@ impl PermissionPrompter for TauriApprovalPrompter {
         };
 
         let _ignore = self.registry.mutate_session(&self.session_id, |entry| {
+            if entry.loop_epoch != loop_guard.epoch {
+                return;
+            }
             if entry.run_state != SessionRunState::Cancelling {
                 entry.run_state = SessionRunState::Running;
                 entry.running = true;
@@ -2002,6 +2356,14 @@ impl PermissionPrompter for TauriApprovalPrompter {
                 entry.last_error_summary = Some(reason.clone());
             }
         });
+        if loop_guard.is_current() {
+            emit_status_event(
+                &self.app,
+                &loop_guard,
+                AgentSessionPhase::Running,
+                AgentStatusOptions::default().with_message("Approval resolved; continuing"),
+            );
+        }
 
         decision
     }
@@ -2885,6 +3247,23 @@ pub struct AgentTurnCompleteEvent {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentSessionStatusEvent {
+    pub session_id: String,
+    pub phase: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_retry_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentErrorEvent {
     pub session_id: String,
     pub error: String,
@@ -3615,5 +3994,95 @@ mod loop_controller_tests {
             signal.store(true, Ordering::SeqCst);
         });
         assert!(!sleep_with_cancel(&cancelled, Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn doom_loop_trips_after_three_identical_turns() {
+        let repeated = vec![
+            TurnActivitySignature {
+                tool_keys: vec![tool_use_key("read_file", r#"{"path":"a.txt"}"#)],
+                assistant_prose: normalize_assistant_prose_for_loop_guard("Reading the same file."),
+            },
+            TurnActivitySignature {
+                tool_keys: vec![tool_use_key("read_file", r#"{"path":"a.txt"}"#)],
+                assistant_prose: normalize_assistant_prose_for_loop_guard("Reading the same file."),
+            },
+            TurnActivitySignature {
+                tool_keys: vec![tool_use_key("read_file", r#"{"path":"a.txt"}"#)],
+                assistant_prose: normalize_assistant_prose_for_loop_guard("Reading the same file."),
+            },
+        ];
+        assert!(detect_doom_loop(&repeated));
+    }
+
+    #[test]
+    fn doom_loop_ignores_changed_tool_input() {
+        let changing = vec![
+            TurnActivitySignature {
+                tool_keys: vec![tool_use_key("read_file", r#"{"path":"a.txt"}"#)],
+                assistant_prose: normalize_assistant_prose_for_loop_guard("Reading the same file."),
+            },
+            TurnActivitySignature {
+                tool_keys: vec![tool_use_key("read_file", r#"{"path":"b.txt"}"#)],
+                assistant_prose: normalize_assistant_prose_for_loop_guard("Reading the same file."),
+            },
+            TurnActivitySignature {
+                tool_keys: vec![tool_use_key("read_file", r#"{"path":"a.txt"}"#)],
+                assistant_prose: normalize_assistant_prose_for_loop_guard("Reading the same file."),
+            },
+        ];
+        assert!(!detect_doom_loop(&changing));
+    }
+
+    #[test]
+    fn summarize_turn_activity_collects_normalized_tool_keys() {
+        let turn = runtime::TurnSummary {
+            assistant_messages: vec![ConversationMessage::assistant(vec![
+                ContentBlock::Text {
+                    text: "Reading README".to_string(),
+                },
+                ContentBlock::ToolUse {
+                    id: "tool-1".to_string(),
+                    name: "read_file".to_string(),
+                    input: r#"{"file_path":"README.md"}"#.to_string(),
+                },
+            ])],
+            tool_results: Vec::new(),
+            iterations: 1,
+            usage: TokenUsage::default(),
+            auto_compaction: None,
+        };
+        let signature = summarize_turn_activity(&turn);
+        assert_eq!(signature.tool_keys.len(), 1);
+        assert_eq!(
+            signature.tool_keys[0],
+            tool_use_key("read_file", r#"{"path":"README.md"}"#)
+        );
+    }
+
+    #[test]
+    fn compaction_replay_uses_original_goal_for_meta_stall_nudge() {
+        let replay = build_compaction_replay_input("Improve the agent loop", "Continue.");
+        assert!(replay.contains("Improve the agent loop"));
+        assert!(!replay.contains("Latest request to continue from:\nContinue."));
+    }
+
+    #[test]
+    fn compaction_replay_keeps_latest_user_request_when_not_nudge() {
+        let replay =
+            build_compaction_replay_input("Improve the agent loop", "Add a status event stream");
+        assert!(replay.contains("Improve the agent loop"));
+        assert!(replay.contains("Add a status event stream"));
+    }
+
+    #[test]
+    fn status_phase_strings_are_stable() {
+        assert_eq!(AgentSessionPhase::Running.as_str(), "running");
+        assert_eq!(AgentSessionPhase::Retrying.as_str(), "retrying");
+        assert_eq!(
+            AgentSessionPhase::WaitingApproval.as_str(),
+            "waiting_approval"
+        );
+        assert_eq!(AgentSessionPhase::Idle.as_str(), "idle");
     }
 }

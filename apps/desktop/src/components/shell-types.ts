@@ -1,4 +1,15 @@
-export type SessionState = "idle" | "running" | "error";
+import type { AgentSessionPhase, AgentStopReason } from "../lib/ipc";
+
+export type SessionPhase = AgentSessionPhase;
+
+export interface SessionStatusSnapshot {
+  phase: SessionPhase;
+  attempt?: number;
+  message?: string;
+  nextRetryAtMs?: number;
+  toolName?: string;
+  stopReason?: AgentStopReason;
+}
 
 export interface Approval {
   sessionId: string;

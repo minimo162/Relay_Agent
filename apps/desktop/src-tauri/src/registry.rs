@@ -36,6 +36,8 @@ pub struct SessionEntry {
     pub session: RuntimeSession,
     pub running: bool,
     pub run_state: SessionRunState,
+    /// Monotonic loop ownership token. Incrementing this invalidates stale wakeups/emits.
+    pub loop_epoch: u64,
     pub cancelled: Arc<AtomicBool>,
     /// Timestamp (UTC epoch seconds) when the session completed or was cancelled.
     /// Used for TTL-based eviction.
@@ -56,6 +58,8 @@ pub struct SessionEntry {
     pub retry_count: usize,
     /// Most recent backend error / rejection summary.
     pub last_error_summary: Option<String>,
+    /// True once a terminal `agent:status` idle event has been emitted for the current epoch.
+    pub terminal_status_emitted: bool,
 }
 
 impl SessionEntry {
