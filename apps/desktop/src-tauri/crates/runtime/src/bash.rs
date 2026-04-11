@@ -14,7 +14,7 @@ use crate::sandbox::{
     SandboxConfig, SandboxStatus,
 };
 use crate::tool_hard_denylist::validate_bash_hard_deny;
-use crate::ConfigLoader;
+use crate::{ConfigLoader, ResolvedPermissionMode};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BashCommandInput {
@@ -71,9 +71,22 @@ pub struct BashCommandOutput {
 
 pub fn execute_bash(input: BashCommandInput) -> io::Result<BashCommandOutput> {
     let cwd = env::current_dir()?;
-    validate_bash_hard_deny(&input.command)?;
-    validate_bash_against_config_permission(&input.command)?;
-    let sandbox_status = sandbox_status_for_input(&input, &cwd);
+    let (sandbox_status, read_only_mode) = sandbox_status_for_input(&input, &cwd);
+    ensure_sandbox_available_for_read_only(read_only_mode, &sandbox_status)?;
+    if let Err(error) = validate_bash_hard_deny(&input.command) {
+        eprintln!(
+            "[RelayAgent] bash heuristic-deny (hard denylist): {}",
+            input.command
+        );
+        return Err(error);
+    }
+    if let Err(error) = validate_bash_against_config_permission(&input.command) {
+        eprintln!(
+            "[RelayAgent] bash heuristic-deny (read-only heuristic): {}",
+            input.command
+        );
+        return Err(error);
+    }
 
     if input.run_in_background.unwrap_or(false) {
         let mut child = prepare_command(&input.command, &cwd, &sandbox_status, false);
@@ -171,19 +184,62 @@ async fn execute_bash_async(
     })
 }
 
-fn sandbox_status_for_input(input: &BashCommandInput, cwd: &std::path::Path) -> SandboxStatus {
-    let config = ConfigLoader::default_for(cwd).load().map_or_else(
-        |_| SandboxConfig::default(),
+fn sandbox_status_for_input(
+    input: &BashCommandInput,
+    cwd: &std::path::Path,
+) -> (SandboxStatus, bool) {
+    let runtime_config = ConfigLoader::default_for(cwd).load().ok();
+    let config = runtime_config.as_ref().map_or_else(
+        SandboxConfig::default,
         |runtime_config| runtime_config.sandbox().clone(),
     );
+    let read_only_mode = runtime_config
+        .as_ref()
+        .and_then(|cfg| cfg.permission_mode())
+        == Some(ResolvedPermissionMode::ReadOnly);
+    let force_read_only_profile = read_only_mode;
     let request = config.resolve_request(
-        input.dangerously_disable_sandbox.map(|disabled| !disabled),
-        input.namespace_restrictions,
-        input.isolate_network,
-        input.filesystem_mode,
+        force_read_only_profile
+            .then_some(true)
+            .or_else(|| input.dangerously_disable_sandbox.map(|disabled| !disabled)),
+        force_read_only_profile
+            .then_some(true)
+            .or(input.namespace_restrictions),
+        force_read_only_profile
+            .then_some(false)
+            .or(input.isolate_network),
+        force_read_only_profile
+            .then_some(FilesystemIsolationMode::WorkspaceOnly)
+            .or(input.filesystem_mode),
         input.allowed_mounts.clone(),
     );
-    resolve_sandbox_status_for_request(&request, cwd)
+    (resolve_sandbox_status_for_request(&request, cwd), read_only_mode)
+}
+
+fn ensure_sandbox_available_for_read_only(
+    read_only_mode: bool,
+    sandbox_status: &SandboxStatus,
+) -> io::Result<()> {
+    if !read_only_mode {
+        return Ok(());
+    }
+    if sandbox_status.active {
+        return Ok(());
+    }
+    eprintln!(
+        "[RelayAgent] bash sandbox-deny (read-only requires OS sandbox): {:?}",
+        sandbox_status.fallback_reason
+    );
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!(
+            "bash: read-only session requires OS sandbox, but sandbox startup is unavailable. {}",
+            sandbox_status
+                .fallback_reason
+                .clone()
+                .unwrap_or_else(|| "No fallback available (fail-closed).".to_string())
+        ),
+    ))
 }
 
 fn prepare_command(
@@ -249,7 +305,7 @@ fn prepare_sandbox_dirs(cwd: &std::path::Path) {
 mod tests {
     use std::io;
 
-    use super::{execute_bash, BashCommandInput};
+    use super::{ensure_sandbox_available_for_read_only, execute_bash, BashCommandInput};
     use crate::sandbox::FilesystemIsolationMode;
 
     #[test]
@@ -316,5 +372,16 @@ mod tests {
         .expect_err("read-only should reject rm");
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_only_fail_closed_when_sandbox_is_inactive() {
+        let mut status = crate::sandbox::SandboxStatus::default();
+        status.active = false;
+        status.fallback_reason = Some("sandbox unavailable".to_string());
+        let err = ensure_sandbox_available_for_read_only(true, &status)
+            .expect_err("inactive sandbox must fail-closed in read-only mode");
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(err.to_string().contains("requires OS sandbox"));
     }
 }

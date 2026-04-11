@@ -4688,3 +4688,20 @@ Observed result:
 - Added a Plan snapshot test that stringifies the full Plan-mode tool matrix (`tool|host|required`) and verifies the generated Plan addon includes matching allowed/blocked guidance.
 - `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml` passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml plan_prompt_and_runtime_policy_have_zero_diff_snapshot -- --exact` could not run in this container because `glib-2.0` dev package is missing for `glib-sys` during build.
+
+ReadOnly OS sandbox prioritization for CliRun/bash (2026-04-11):
+
+```bash
+cargo test -p runtime read_only_fail_closed_when_sandbox_is_inactive
+cargo test -p runtime bash_denies_obfuscated_destructive_sequences
+cargo test -p runtime bash_allows_common_safe_commands
+cargo test -p tools test_cli_list_returns_json
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/crates/runtime/src/bash.rs` now resolves permission mode before execution, maps ReadOnly sessions to a strict sandbox profile, fails closed when sandbox activation is unavailable, and emits distinct log lines for `sandbox-deny` vs `heuristic-deny`.
+- Existing hard denylist + read-only heuristic checks are preserved as second-stage validation after sandbox profile resolution.
+- `apps/desktop/src-tauri/crates/tools/src/cli_hub.rs` now applies the same ReadOnly fail-closed sandbox policy to `CliRun`, and records `sandbox-deny` / `heuristic-deny` separately in logs and JSON errors.
+- Regression coverage for obfuscated destructive command bypass and safe-command false positives was added in `apps/desktop/src-tauri/crates/runtime/src/tool_hard_denylist.rs` and `apps/desktop/src-tauri/crates/tools/src/cli_hub.rs` tests.
+- All listed commands passed in this environment.

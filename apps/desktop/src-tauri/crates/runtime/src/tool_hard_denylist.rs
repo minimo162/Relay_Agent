@@ -184,6 +184,29 @@ mod tests {
     }
 
     #[test]
+    fn bash_denies_obfuscated_destructive_sequences() {
+        assert!(validate_bash_hard_deny("printf ok;SuDo id").is_err());
+        assert!(validate_bash_hard_deny("echo x && /bin/RM -Rf ./tmp").is_err());
+        assert!(validate_bash_hard_deny("find . -name t -DeLeTe").is_err());
+    }
+
+    #[test]
+    fn bash_allows_common_safe_commands() {
+        for cmd in [
+            "ls -la",
+            "cat Cargo.toml",
+            "git status --short",
+            "find . -name '*.rs' | head -n 5",
+            "printf 'hello world'",
+        ] {
+            assert!(
+                validate_bash_hard_deny(cmd).is_ok(),
+                "expected safe command to pass: {cmd}"
+            );
+        }
+    }
+
+    #[test]
     fn path_denies_env_and_pem() {
         assert!(reject_sensitive_file_path(Path::new("/tmp/.env.local")).is_err());
         assert!(reject_sensitive_file_path(Path::new("id_rsa")).is_err());
