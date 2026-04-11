@@ -1414,7 +1414,7 @@ fn cdp_windows_office_catalog_addon() -> &'static str {
 const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Agent's model
 
 - User messages are sent from the **Relay Agent** Tauri desktop app through Microsoft Edge (M365 Copilot over CDP). Your reply returns to that same Relay session.
-- **Relay host execution:** Tool calls here are **not** Microsoft first-party Copilot action plugins. The Relay desktop parses tool-shaped JSON from your message (` ```relay_tool ` first, then accepted fenced JSON, and only in retry/repair mode bounded unfenced recovery) and runs the real tools (`read_file`, `write_file`, …) under session permissions and user approvals where configured.
+- **Relay host execution:** Tool calls here are **not** Microsoft first-party Copilot action plugins. The Relay desktop parses tool-shaped JSON from your message (` ```relay_tool ` first, then accepted fenced JSON, and only in retry/repair mode bounded unfenced recovery). For parser fallback paths (` ```json `, generic fences, or inline object recovery), include `"relay_tool_call": true` on each tool object so the host can treat it as an intentional tool invocation.
 - **Do not** tell the user that `relay_tool` "only works in the desktop" so you cannot use it in this chat, or that you "cannot execute tools in this Copilot environment"—**that is wrong for this session.** When the task needs a tool, output the prescribed fences.
 - **Do** emit fenced tool JSON when needed; **prose-only** refusals block the agent loop.
 - **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read_file` first** before edits. Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
@@ -1465,7 +1465,7 @@ When you need to call one or more tools, you may write a short user-facing expla
 - **Unfenced JSON is recovery-only:** Bare inline JSON objects are not the normal protocol. The host may attempt a bounded unfenced recovery parse only on a retry/repair pass after a tool-less response; do not rely on that path.
 - **Do not defer concrete requests:** If the user already named files and an action, **call tools now** in this turn; asking them to repeat the instruction wastes a turn and blocks the agent.
 
-- **Single tool:** one JSON object: `{{ "name": "<tool_name>", "input": {{ ... }} }}`
+- **Single tool:** one JSON object: `{{ "name": "<tool_name>", "relay_tool_call": true, "input": {{ ... }} }}`
 - **Optional:** `"id": "<string>"` — omit if unsure; the host will assign one.
 - **Multiple tools:** prefer **one** `relay_tool` fence with a JSON **array** of tool objects. Use multiple fences only when unavoidable. Repeating the same tool with identical `input` across fences wastes user approvals (the host dedupes, but you should not rely on it).
 - **File I/O:** use `read_file`, `write_file`, and `edit_file` for local files. Do **not** use `bash`, `PowerShell`, or `REPL` to read or write files when a file tool applies—prose Python/shell examples are not executed and encourage duplicate `relay_tool` calls. This matches the explicit, permission-gated tool model described at https://claw-code.codes/tool-system
@@ -1474,7 +1474,7 @@ When you need to call one or more tools, you may write a short user-facing expla
 Example:
 
 ```relay_tool
-{{"name":"read_file","input":{{"path":"README.md"}}}}
+{{"name":"read_file","relay_tool_call":true,"input":{{"path":"README.md"}}}}
 ```
 "#,
         lead = CDP_RELAY_RUNTIME_CATALOG_LEAD,
@@ -1501,28 +1501,54 @@ enum CdpToolParseMode {
     RetryRepair,
 }
 
+const FALLBACK_TOOL_SENTINEL_KEY: &str = "relay_tool_call";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FallbackSentinelPolicy {
+    ObserveOnly,
+    Enforce,
+}
+
+fn fallback_sentinel_policy() -> FallbackSentinelPolicy {
+    match std::env::var("RELAY_FALLBACK_SENTINEL_POLICY")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("enforce") | Some("required") | Some("reject") => FallbackSentinelPolicy::Enforce,
+        _ => FallbackSentinelPolicy::ObserveOnly,
+    }
+}
+
 fn parse_copilot_tool_response(
     raw: &str,
     parse_mode: CdpToolParseMode,
 ) -> (String, Vec<(String, String, String)>) {
     let whitelist = mvp_tool_names_whitelist();
+    let sentinel_policy = fallback_sentinel_policy();
     let (stripped, payloads) = extract_relay_tool_fences(raw);
     let mut calls = parse_tool_payloads(&payloads);
     let mut display = stripped;
     if calls.is_empty() {
         let (d, fb_payloads) = extract_fallback_markdown_fences(&display, &whitelist);
         display = d;
-        calls.extend(filter_whitelisted_tool_calls(
-            parse_tool_payloads(&fb_payloads),
+        calls.extend(parse_fallback_payloads(
+            &fb_payloads,
             &whitelist,
+            sentinel_policy,
+            "fenced JSON fallback",
         ));
     }
     if calls.is_empty() && parse_mode == CdpToolParseMode::RetryRepair {
         let (d, uf_payloads) = extract_unfenced_tool_json_candidates(&display, &whitelist);
         display = d;
-        calls.extend(filter_whitelisted_tool_calls(
-            parse_tool_payloads(&uf_payloads),
+        calls.extend(parse_fallback_payloads(
+            &uf_payloads,
             &whitelist,
+            sentinel_policy,
+            "inline tool-shaped object fallback",
         ));
     }
     (display.trim().to_string(), dedupe_relay_tool_calls(calls))
@@ -1581,6 +1607,80 @@ fn filter_whitelisted_tool_calls(
             }
         })
         .collect()
+}
+
+fn parse_fallback_payloads(
+    payloads: &[String],
+    whitelist: &HashSet<String>,
+    sentinel_policy: FallbackSentinelPolicy,
+    source_label: &str,
+) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    for payload in payloads {
+        let v: Value = match serde_json::from_str(payload) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("[CdpApiClient] skip invalid fallback JSON: {e}");
+                continue;
+            }
+        };
+        parse_fallback_value(
+            &v,
+            whitelist,
+            sentinel_policy,
+            source_label,
+            &mut out,
+        );
+    }
+    out
+}
+
+fn parse_fallback_value(
+    v: &Value,
+    whitelist: &HashSet<String>,
+    sentinel_policy: FallbackSentinelPolicy,
+    source_label: &str,
+    out: &mut Vec<(String, String, String)>,
+) {
+    match v {
+        Value::Array(arr) => {
+            for item in arr {
+                parse_fallback_value(item, whitelist, sentinel_policy, source_label, out);
+            }
+        }
+        Value::Object(obj) => {
+            let Some(name) = obj.get("name").and_then(Value::as_str) else {
+                return;
+            };
+            if !whitelist.contains(name) {
+                tracing::debug!(
+                    name = %name,
+                    "[CdpApiClient] skipped fallback tool call: not in MVP catalog"
+                );
+                return;
+            }
+            let has_sentinel = obj
+                .get(FALLBACK_TOOL_SENTINEL_KEY)
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !has_sentinel {
+                tracing::warn!(
+                    name = %name,
+                    policy = ?sentinel_policy,
+                    source = %source_label,
+                    "[CdpApiClient] fallback tool candidate missing `{}` sentinel key",
+                    FALLBACK_TOOL_SENTINEL_KEY
+                );
+                if sentinel_policy == FallbackSentinelPolicy::Enforce {
+                    return;
+                }
+            }
+            if let Some(call) = parse_one_tool_call(v) {
+                out.push(call);
+            }
+        }
+        _ => tracing::warn!("[CdpApiClient] fallback JSON must be object or array"),
+    }
 }
 
 /// After ` ``` `, find end of inner content (index in `body` before the closing fence).
@@ -3577,7 +3677,7 @@ mod cdp_copilot_tool_tests {
         let raw = r#"了解。read-only で確認します。
 
 ```json
-{"name":"read_file","input":{"path":"C:\\Users\\x\\Downloads\\テトリス.html"}}
+{"name":"read_file","relay_tool_call":true,"input":{"path":"C:\\Users\\x\\Downloads\\テトリス.html"}}
 ```
 "#;
         let (vis, tools) = parse_initial(raw);
@@ -3592,7 +3692,7 @@ mod cdp_copilot_tool_tests {
     fn fallback_plain_triple_backtick_fence() {
         let raw = r#"x
 ```
-{"name":"glob_search","input":{"pattern":"*.toml"}}
+{"name":"glob_search","relay_tool_call":true,"input":{"pattern":"*.toml"}}
 ```
 y"#;
         let (vis, tools) = parse_initial(raw);
@@ -3609,7 +3709,7 @@ y"#;
 not json
 ```
 ```json
-{"name":"read_file","input":{"path":"C:\\a.html"}}
+{"name":"read_file","relay_tool_call":true,"input":{"path":"C:\\a.html"}}
 ```
 Tail"#;
         let (vis, tools) = parse_initial(raw);
@@ -3622,7 +3722,7 @@ Tail"#;
     #[test]
     fn fallback_drops_unknown_tool_name() {
         let raw = r#"```json
-{"name":"relay_absurd_tool_name_zz","input":{}}
+{"name":"relay_absurd_tool_name_zz","relay_tool_call":true,"input":{}}
 ```"#;
         let (_vis, tools) = parse_initial(raw);
         assert!(tools.is_empty());
@@ -3631,10 +3731,10 @@ Tail"#;
     #[test]
     fn fallback_duplicate_json_fences_deduped() {
         let raw = r#"```json
-{"name":"read_file","input":{"path":"same.txt"}}
+{"name":"read_file","relay_tool_call":true,"input":{"path":"same.txt"}}
 ```
 ```json
-{"name":"read_file","input":{"path":"same.txt"}}
+{"name":"read_file","relay_tool_call":true,"input":{"path":"same.txt"}}
 ```"#;
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
@@ -3642,7 +3742,8 @@ Tail"#;
 
     #[test]
     fn unfenced_tool_json_in_prose() {
-        let raw = "了解。\n\n{\"name\":\"read_file\",\"input\":{\"path\":\"C:\\\\x\\\\y.txt\"}}\n";
+        let raw =
+            "了解。\n\n{\"name\":\"read_file\",\"relay_tool_call\":true,\"input\":{\"path\":\"C:\\\\x\\\\y.txt\"}}\n";
         let (vis, tools) = parse_initial(raw);
         assert!(tools.is_empty());
         assert!(vis.contains("read_file"));
@@ -3659,6 +3760,7 @@ Tail"#;
 
 {
   "name": "read_file",
+  "relay_tool_call": true,
   "input": {
     "path": "C:\\Users\\x\\Downloads\\テトリス.html"
   }
@@ -3683,6 +3785,7 @@ Tail"#;
 relay_tool は完全にはサポートされていません。
 {
   "name": "read_file",
+  "relay_tool_call": true,
   "input": {
     "path": "C:\\Users\\m242054\\Downloads\\テトリス.html"
   }
@@ -3706,6 +3809,7 @@ relay_tool は完全にはサポートされていません。
 Note line.
 {
   "name": "glob_search",
+  "relay_tool_call": true,
   "input": { "pattern": "*.rs" }
 }
 ```
@@ -3715,6 +3819,28 @@ post"#;
         assert_eq!(tools[0].1, "glob_search");
         assert!(vis.contains("pre"));
         assert!(vis.contains("post"));
+    }
+
+    #[test]
+    fn fallback_observe_mode_accepts_missing_sentinel() {
+        std::env::remove_var("RELAY_FALLBACK_SENTINEL_POLICY");
+        let raw = r#"```json
+{"name":"read_file","input":{"path":"README.md"}}
+```"#;
+        let (_vis, tools) = parse_initial(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "read_file");
+    }
+
+    #[test]
+    fn fallback_enforce_mode_rejects_missing_sentinel() {
+        std::env::set_var("RELAY_FALLBACK_SENTINEL_POLICY", "enforce");
+        let raw = r#"```json
+{"name":"read_file","input":{"path":"README.md"}}
+```"#;
+        let (_vis, tools) = parse_initial(raw);
+        assert!(tools.is_empty());
+        std::env::remove_var("RELAY_FALLBACK_SENTINEL_POLICY");
     }
 
     #[test]
