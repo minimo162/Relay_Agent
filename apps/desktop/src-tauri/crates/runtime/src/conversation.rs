@@ -122,18 +122,6 @@ pub enum TurnInput {
     Synthetic(String),
 }
 
-impl TurnInput {
-    fn text(&self) -> &str {
-        match self {
-            Self::User(text) | Self::Synthetic(text) => text,
-        }
-    }
-
-    fn persists_in_session(&self) -> bool {
-        matches!(self, Self::User(_))
-    }
-}
-
 pub struct ConversationRuntime<C, T> {
     session: Session,
     api_client: C,
@@ -217,10 +205,14 @@ where
         turn_input: TurnInput,
         mut prompter: Option<&mut dyn PermissionPrompter>,
     ) -> Result<TurnSummary, RuntimeError> {
+        let (input_text, persists_in_session) = match turn_input {
+            TurnInput::User(text) => (text, true),
+            TurnInput::Synthetic(text) => (text, false),
+        };
         let inserted_input_index = self.session.messages.len();
         self.session
             .messages
-            .push(ConversationMessage::user_text(turn_input.text().to_string()));
+            .push(ConversationMessage::user_text(input_text));
 
         let mut assistant_messages = Vec::new();
         let mut tool_results = Vec::new();
@@ -230,7 +222,7 @@ where
         loop {
             iterations += 1;
             if iterations > self.max_iterations {
-                self.cleanup_turn_input(inserted_input_index, turn_input.persists_in_session());
+                self.cleanup_turn_input(inserted_input_index, persists_in_session);
                 return Err(RuntimeError::new(
                     "conversation loop exceeded the maximum number of iterations",
                 ));
@@ -254,90 +246,8 @@ where
                 break;
             }
 
-            let mut batch_outcome = None;
-            for (tool_use_id, tool_name, input) in pending_tool_uses {
-                let permission_outcome = if let Some(prompt) = prompter.as_mut() {
-                    self.permission_policy
-                        .authorize(&tool_name, &input, Some(*prompt))
-                } else {
-                    self.permission_policy.authorize(&tool_name, &input, None)
-                };
-
-                let (result_message, result_outcome) = match permission_outcome {
-                    PermissionOutcome::Allow => {
-                        let pre_hook_result = self.hook_runner.run_pre_tool_use(&tool_name, &input);
-                        if pre_hook_result.is_denied() {
-                            let deny_message = format!("PreToolUse hook denied tool `{tool_name}`");
-                            let output = format_hook_message(&pre_hook_result, &deny_message);
-                            (
-                                ConversationMessage::tool_result(
-                                    tool_use_id,
-                                    tool_name,
-                                    output.clone(),
-                                    true,
-                                ),
-                                Some(TurnOutcome::ToolError { message: output }),
-                            )
-                        } else {
-                            let (mut output, mut is_error) =
-                                match self.tool_executor.execute(&tool_name, &input) {
-                                    Ok(output) => (output, false),
-                                    Err(error) => (error.to_string(), true),
-                                };
-                            output = merge_hook_feedback(pre_hook_result.messages(), output, false);
-
-                            let post_hook_result = if is_error {
-                                self.hook_runner
-                                    .run_post_tool_use_failure(&tool_name, &input, &output)
-                            } else {
-                                self.hook_runner
-                                    .run_post_tool_use(&tool_name, &input, &output, false)
-                            };
-                            if post_hook_result.is_denied() {
-                                is_error = true;
-                            }
-                            output = merge_hook_feedback(
-                                post_hook_result.messages(),
-                                output,
-                                post_hook_result.is_denied(),
-                            );
-
-                            let outcome = if is_error {
-                                Some(TurnOutcome::ToolError {
-                                    message: output.clone(),
-                                })
-                            } else {
-                                None
-                            };
-                            (
-                                ConversationMessage::tool_result(
-                                    tool_use_id,
-                                    tool_name,
-                                    output,
-                                    is_error,
-                                ),
-                                outcome,
-                            )
-                        }
-                    }
-                    PermissionOutcome::Deny { reason } => (
-                        ConversationMessage::tool_result(
-                            tool_use_id,
-                            tool_name,
-                            reason.clone(),
-                            true,
-                        ),
-                        Some(TurnOutcome::PermissionDenied { message: reason }),
-                    ),
-                };
-                self.session.messages.push(result_message.clone());
-                tool_results.push(result_message);
-                if result_outcome.is_some() {
-                    batch_outcome = result_outcome;
-                    break;
-                }
-            }
-            last_batch_outcome = batch_outcome;
+            last_batch_outcome =
+                self.execute_pending_tool_uses(pending_tool_uses, &mut prompter, &mut tool_results);
         }
 
         let terminal_assistant_text = assistant_messages
@@ -345,7 +255,7 @@ where
             .map(assistant_message_text)
             .unwrap_or_default();
         let outcome = determine_turn_outcome(last_batch_outcome, &terminal_assistant_text);
-        self.cleanup_turn_input(inserted_input_index, turn_input.persists_in_session());
+        self.cleanup_turn_input(inserted_input_index, persists_in_session);
         let auto_compaction = self.maybe_auto_compact();
 
         Ok(TurnSummary {
@@ -403,6 +313,99 @@ where
         }
         if inserted_input_index < self.session.messages.len() {
             self.session.messages.remove(inserted_input_index);
+        }
+    }
+
+    fn execute_pending_tool_uses(
+        &mut self,
+        pending_tool_uses: Vec<(String, String, String)>,
+        prompter: &mut Option<&mut dyn PermissionPrompter>,
+        tool_results: &mut Vec<ConversationMessage>,
+    ) -> Option<TurnOutcome> {
+        let mut batch_outcome = None;
+        for (tool_use_id, tool_name, input) in pending_tool_uses {
+            let (result_message, result_outcome) =
+                self.build_tool_result_message(tool_use_id, tool_name, &input, prompter);
+            self.session.messages.push(result_message.clone());
+            tool_results.push(result_message);
+            if result_outcome.is_some() {
+                batch_outcome = result_outcome;
+                break;
+            }
+        }
+        batch_outcome
+    }
+
+    fn build_tool_result_message(
+        &mut self,
+        tool_use_id: String,
+        tool_name: String,
+        input: &str,
+        prompter: &mut Option<&mut dyn PermissionPrompter>,
+    ) -> (ConversationMessage, Option<TurnOutcome>) {
+        let permission_outcome = if let Some(prompt) = prompter.as_mut() {
+            self.permission_policy
+                .authorize(&tool_name, input, Some(*prompt))
+        } else {
+            self.permission_policy.authorize(&tool_name, input, None)
+        };
+
+        match permission_outcome {
+            PermissionOutcome::Allow => {
+                let pre_hook_result = self.hook_runner.run_pre_tool_use(&tool_name, input);
+                if pre_hook_result.is_denied() {
+                    let deny_message = format!("PreToolUse hook denied tool `{tool_name}`");
+                    let output = format_hook_message(&pre_hook_result, &deny_message);
+                    return (
+                        ConversationMessage::tool_result(
+                            tool_use_id,
+                            tool_name,
+                            output.clone(),
+                            true,
+                        ),
+                        Some(TurnOutcome::ToolError { message: output }),
+                    );
+                }
+
+                let (mut output, mut is_error) = match self.tool_executor.execute(&tool_name, input)
+                {
+                    Ok(output) => (output, false),
+                    Err(error) => (error.to_string(), true),
+                };
+                output = merge_hook_feedback(pre_hook_result.messages(), output, false);
+
+                let post_hook_result = if is_error {
+                    self.hook_runner
+                        .run_post_tool_use_failure(&tool_name, input, &output)
+                } else {
+                    self.hook_runner
+                        .run_post_tool_use(&tool_name, input, &output, false)
+                };
+                if post_hook_result.is_denied() {
+                    is_error = true;
+                }
+                output = merge_hook_feedback(
+                    post_hook_result.messages(),
+                    output,
+                    post_hook_result.is_denied(),
+                );
+
+                let outcome = if is_error {
+                    Some(TurnOutcome::ToolError {
+                        message: output.clone(),
+                    })
+                } else {
+                    None
+                };
+                (
+                    ConversationMessage::tool_result(tool_use_id, tool_name, output, is_error),
+                    outcome,
+                )
+            }
+            PermissionOutcome::Deny { reason } => (
+                ConversationMessage::tool_result(tool_use_id, tool_name, reason.clone(), true),
+                Some(TurnOutcome::PermissionDenied { message: reason }),
+            ),
         }
     }
 
@@ -633,9 +636,9 @@ mod tests {
     use crate::prompt::{ProjectContext, SystemPromptBuilder};
     use crate::session::{ContentBlock, MessageRole, Session};
     use crate::usage::TokenUsage;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::path::PathBuf;
 
     struct ScriptedApiClient {
         call_count: usize,
@@ -1160,7 +1163,10 @@ mod tests {
 
         assert_eq!(summary.outcome, TurnOutcome::Completed);
         assert_eq!(runtime.session().messages.len(), 1);
-        assert!(matches!(runtime.session().messages[0].role, MessageRole::Assistant));
+        assert!(matches!(
+            runtime.session().messages[0].role,
+            MessageRole::Assistant
+        ));
     }
 
     #[test]

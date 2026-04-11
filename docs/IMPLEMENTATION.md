@@ -4747,3 +4747,22 @@ Observed result:
 - `cargo test -p tools exposes_mvp_tools` passed.
 - `cargo test -p tools exposes_plan_mode_tools_in_compat_mode` passed.
 - `cargo test -p relay-agent-desktop plan_prompt_and_runtime_policy_have_zero_diff_snapshot` could not run in this container because the system `glib-2.0` development package is missing (`glib-sys` build-time pkg-config failure).
+
+Runtime crate clippy lint fixes (2026-04-12):
+
+```bash
+cargo test -p runtime
+cargo clippy -p runtime -- -D warnings
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace -- -D warnings
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/crates/runtime/src/bash.rs` now uses the direct `RuntimeConfig::permission_mode` method reference in `sandbox_status_for_input()`.
+- `apps/desktop/src-tauri/crates/runtime/src/conversation.rs` now consumes `TurnInput` immediately inside `run_turn_with_input()`, keeps the public signature unchanged, and moves tool-batch execution into private helpers to satisfy clippy's line-count and pass-by-value lints without changing session/tool behavior.
+- `apps/desktop/src-tauri/crates/runtime/src/prompt.rs` now uses `write!` for the truncated snapshot suffix instead of allocating through `format!`.
+- `apps/desktop/src-tauri/crates/runtime/src/task_registry.rs` now uses `Value::as_u64` directly and converts `tail` / `offset` through a saturating `u64 -> usize` helper so 32-bit targets do not truncate.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all` passed after the edits.
+- `cargo test -p runtime` passed (`117 passed; 0 failed`).
+- `cargo clippy -p runtime -- -D warnings` passed.
+- `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace -- -D warnings` is still blocked in this container because Linux desktop build dependencies are missing (`glib-2.0` / `gobject-2.0` development packages via `pkg-config`), so full-workspace clippy could not complete here.

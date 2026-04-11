@@ -136,9 +136,14 @@ pub fn task_output(input: &Value) -> Result<String, String> {
     let bytes = rec.output.as_bytes();
     let start = input
         .get("tail")
-        .and_then(|v| v.as_u64())
-        .map(|tail| bytes.len().saturating_sub(tail as usize))
-        .or_else(|| input.get("offset").and_then(|v| v.as_u64()).map(|v| v as usize))
+        .and_then(Value::as_u64)
+        .map(|tail| bytes.len().saturating_sub(saturating_usize(tail)))
+        .or_else(|| {
+            input
+                .get("offset")
+                .and_then(Value::as_u64)
+                .map(saturating_usize)
+        })
         .unwrap_or(0)
         .min(bytes.len());
     let sliced = String::from_utf8_lossy(&bytes[start..]).to_string();
@@ -149,6 +154,10 @@ pub fn task_output(input: &Value) -> Result<String, String> {
         "output": sliced
     }))
     .map_err(|e| e.to_string())
+}
+
+fn saturating_usize(value: u64) -> usize {
+    usize::try_from(value).unwrap_or(usize::MAX)
 }
 
 fn parse_task_status(value: &str) -> Result<TaskStatus, String> {

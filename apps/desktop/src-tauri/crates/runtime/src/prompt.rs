@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -250,8 +251,20 @@ fn read_git_status(cwd: &Path) -> Option<String> {
 fn read_git_diff(cwd: &Path) -> Option<String> {
     let mut sections = Vec::new();
 
-    push_git_diff_section(cwd, "Staged", &["diff", "--cached", "--stat"], &["diff", "--cached"], &mut sections);
-    push_git_diff_section(cwd, "Unstaged", &["diff", "--stat"], &["diff"], &mut sections);
+    push_git_diff_section(
+        cwd,
+        "Staged",
+        &["diff", "--cached", "--stat"],
+        &["diff", "--cached"],
+        &mut sections,
+    );
+    push_git_diff_section(
+        cwd,
+        "Unstaged",
+        &["diff", "--stat"],
+        &["diff"],
+        &mut sections,
+    );
 
     if sections.is_empty() {
         None
@@ -344,7 +357,7 @@ fn truncate_prompt_snapshot(content: &str, limit: usize, reason: &str) -> String
     }
 
     let mut output = trimmed.chars().take(limit).collect::<String>();
-    output.push_str(&format!("\n\n[{reason}]"));
+    write!(&mut output, "\n\n[{reason}]").expect("writing to String cannot fail");
     output
 }
 
@@ -557,7 +570,8 @@ mod tests {
         collapse_blank_lines, display_context_path, normalize_instruction_content,
         render_instruction_content, render_instruction_files, render_project_context,
         truncate_instruction_content, truncate_prompt_snapshot, ContextFile, ProjectContext,
-        SystemPromptBuilder, SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
+        SystemPromptBuilder, MAX_GIT_DIFF_TOTAL_CHARS, MAX_GIT_STATUS_CHARS,
+        SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
     };
     use crate::config::ConfigLoader;
     use std::fs;
@@ -848,11 +862,19 @@ mod tests {
         let rendered = render_project_context(&ProjectContext {
             cwd: PathBuf::from("/tmp/project"),
             current_date: "2026-04-11".to_string(),
-            git_status: Some("s".repeat(3_000)),
-            git_diff: Some("d".repeat(10_000)),
+            git_status: Some(truncate_prompt_snapshot(
+                &"s".repeat(3_000),
+                MAX_GIT_STATUS_CHARS,
+                "git status snapshot truncated to fit prompt budget",
+            )),
+            git_diff: Some(truncate_prompt_snapshot(
+                &"d".repeat(10_000),
+                MAX_GIT_DIFF_TOTAL_CHARS,
+                "git diff snapshot truncated to fit prompt budget",
+            )),
             instruction_files: Vec::new(),
         });
-        assert!(rendered.contains("git diff snapshot (budgeted)"));
+        assert!(rendered.contains("Git diff snapshot (budgeted)"));
         assert!(rendered.contains("git diff snapshot truncated to fit prompt budget"));
         assert!(rendered.contains("s"));
     }

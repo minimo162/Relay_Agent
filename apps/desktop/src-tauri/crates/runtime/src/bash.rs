@@ -287,7 +287,9 @@ pub struct BackgroundTaskOutputSlice {
     pub data: String,
 }
 
-pub fn read_background_task_output(input: BackgroundTaskOutputInput) -> io::Result<BackgroundTaskOutputSlice> {
+pub fn read_background_task_output(
+    input: BackgroundTaskOutputInput,
+) -> io::Result<BackgroundTaskOutputSlice> {
     let stream = input.stream.unwrap_or_else(|| "stdout".to_string());
     let log_path = background_task_stream_path(&input.background_task_id, &stream);
     let mut file = File::open(log_path)?;
@@ -348,13 +350,14 @@ fn sandbox_status_for_input(
     cwd: &std::path::Path,
 ) -> (SandboxStatus, bool) {
     let runtime_config = ConfigLoader::default_for(cwd).load().ok();
-    let config = runtime_config.as_ref().map_or_else(
-        SandboxConfig::default,
-        |runtime_config| runtime_config.sandbox().clone(),
-    );
+    let config = runtime_config
+        .as_ref()
+        .map_or_else(SandboxConfig::default, |runtime_config| {
+            runtime_config.sandbox().clone()
+        });
     let read_only_mode = runtime_config
         .as_ref()
-        .and_then(|cfg| cfg.permission_mode())
+        .and_then(super::config::RuntimeConfig::permission_mode)
         == Some(ResolvedPermissionMode::ReadOnly);
     let force_read_only_profile = read_only_mode;
     let request = config.resolve_request(
@@ -372,7 +375,10 @@ fn sandbox_status_for_input(
             .or(input.filesystem_mode),
         input.allowed_mounts.clone(),
     );
-    (resolve_sandbox_status_for_request(&request, cwd), read_only_mode)
+    (
+        resolve_sandbox_status_for_request(&request, cwd),
+        read_only_mode,
+    )
 }
 
 fn ensure_sandbox_available_for_read_only(
