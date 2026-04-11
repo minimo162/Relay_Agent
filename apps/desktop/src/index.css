@@ -872,7 +872,8 @@ body a:focus-visible {
 
 .ra-composer-toolbar-main {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 0.5rem;
   min-width: 0;
   flex: 1;
@@ -883,17 +884,24 @@ body a:focus-visible {
   font-size: var(--ra-text-micro);
   color: var(--ra-text-muted);
   line-height: 1.4;
-  flex: 1;
   min-width: 9rem;
+}
+
+.ra-composer-mode-summary {
+  margin: 0;
+  font-size: var(--ra-text-micro);
+  color: var(--ra-text-muted);
+  line-height: 1.35;
 }
 
 .ra-composer-toolbar-actions {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  flex-shrink: 0;
   flex-wrap: wrap;
   justify-content: flex-end;
+  flex: 1 1 26rem;
+  min-width: min(100%, 26rem);
 }
 
 .ra-composer-mode-control {
@@ -902,18 +910,24 @@ body a:focus-visible {
   border: 1px solid var(--ra-border);
   background: var(--ra-surface-muted);
   overflow: hidden;
+  flex: 1 1 22rem;
+  min-width: min(100%, 22rem);
+  max-width: 100%;
 }
 
 .ra-composer-mode-option {
+  flex: 1 1 0;
   border: none;
   border-right: 1px solid var(--ra-border);
   background: transparent;
   color: var(--ra-text-secondary);
-  padding: 0.38rem 0.6rem;
+  padding: 0.38rem 0.55rem;
   min-height: 2rem;
   font-family: var(--ra-font-sans);
   font-size: var(--ra-text-micro);
   line-height: 1;
+  text-align: center;
+  white-space: nowrap;
   cursor: pointer;
   transition:
     color 150ms ease,
@@ -1410,6 +1424,19 @@ body a:focus-visible {
 
   .ra-first-run__workspace {
     grid-template-columns: 1fr;
+  }
+
+  .ra-composer-toolbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
+  .ra-composer-mode-control {
+    order: -1;
+    width: 100%;
+    min-width: 0;
+    flex-basis: 100%;
   }
 }
 
