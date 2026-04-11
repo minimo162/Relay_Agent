@@ -441,6 +441,8 @@ The remaining UI follow-up emphasis is on the Windows Tauri walkthrough verifica
 
 **Status:** Implemented (2026-04-09).
 
+**2026-04-11 follow-up scope:** backend-first hardening plus launched-app verification recovery only. Current follow-up work under this milestone is limited to Rust-side loop control, retry/compaction handling, internal session run-state tracking, and restoring the env-gated `agent-loop:test` smoke path; it does **not** widen UI workflow scope or change the Copilot/CDP prompt contract.
+
 ### Goal
 
 Offer an [OpenCode](https://github.com/anomalyco/opencode)-style **Build** vs **Plan** posture at session start without replacing the Copilot/CDP stack: **Build** keeps the existing desktop permission ladder (read tools auto-allow; workspace writes and shell escalate to approval). **Plan** sets the host `PermissionPolicy` active mode to **read-only** so mutating tools are **rejected without prompts**; the model is instructed to analyze and propose changes in prose/markdown only.

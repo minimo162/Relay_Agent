@@ -2,9 +2,11 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::thread;
+use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use base64::Engine as _;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
@@ -29,7 +31,7 @@ use runtime::{
 use crate::copilot_persistence::{self, PersistedSessionConfig};
 use crate::error::AgentLoopError;
 use crate::models::{BrowserAutomationSettings, DesktopPermissionSummaryRow, SessionPreset};
-use crate::registry::SessionRegistry;
+use crate::registry::{SessionRegistry, SessionRunState};
 use crate::session_write_undo;
 use crate::tauri_bridge;
 
@@ -353,24 +355,7 @@ fn emit_copilot_text_deltas_for_ui(app: &AppHandle, session_id: &str, visible_te
 }
 
 fn collect_all_assistant_text_for_ui(session: &RuntimeSession) -> String {
-    session
-        .messages
-        .iter()
-        .filter(|m| m.role == MessageRole::Assistant)
-        .flat_map(|m| m.blocks.iter())
-        .filter_map(|b| match b {
-            ContentBlock::Text { text } => {
-                let t = text.trim();
-                if t.is_empty() {
-                    None
-                } else {
-                    Some(text.clone())
-                }
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    collect_assistant_text(&session.messages)
 }
 
 /* ── POSIX shell escaping ─── */
@@ -396,6 +381,260 @@ fn timeout_secs_from_browser_settings(bs: Option<&BrowserAutomationSettings>) ->
     secs.clamp(10, 900)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoopStopReason {
+    Completed,
+    Cancelled,
+    MetaStall,
+    RetryExhausted,
+    CompactionFailed,
+    MaxTurnsReached,
+    PermissionDenied,
+    ToolError,
+}
+
+impl LoopStopReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::MetaStall => "meta_stall",
+            Self::RetryExhausted => "retry_exhausted",
+            Self::CompactionFailed => "compaction_failed",
+            Self::MaxTurnsReached => "max_turns_reached",
+            Self::PermissionDenied => "permission_denied",
+            Self::ToolError => "tool_error",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LoopDecision {
+    Continue { next_input: String },
+    Stop(LoopStopReason),
+}
+
+fn set_session_run_state(registry: &SessionRegistry, session_id: &str, run_state: SessionRunState) {
+    let _ignore = registry.mutate_session(session_id, |entry| {
+        entry.run_state = run_state;
+        entry.running = !matches!(
+            run_state,
+            SessionRunState::Cancelling | SessionRunState::Finished
+        );
+    });
+}
+
+fn increment_session_retry_count(
+    registry: &SessionRegistry,
+    session_id: &str,
+    error_summary: &str,
+) {
+    let summary = error_summary.to_string();
+    let _ignore = registry.mutate_session(session_id, |entry| {
+        entry.retry_count += 1;
+        entry.last_error_summary = Some(summary);
+    });
+}
+
+fn set_session_error_summary(registry: &SessionRegistry, session_id: &str, error_summary: &str) {
+    let summary = error_summary.to_string();
+    let _ignore = registry.mutate_session(session_id, |entry| {
+        entry.last_error_summary = Some(summary);
+    });
+}
+
+fn set_session_stop_reason(
+    registry: &SessionRegistry,
+    session_id: &str,
+    stop_reason: LoopStopReason,
+) {
+    let reason = stop_reason.as_str().to_string();
+    let _ignore = registry.mutate_session(session_id, |entry| {
+        entry.last_stop_reason = Some(reason);
+    });
+}
+
+fn collect_assistant_text(messages: &[ConversationMessage]) -> String {
+    messages
+        .iter()
+        .filter(|m| m.role == MessageRole::Assistant)
+        .flat_map(|m| m.blocks.iter())
+        .filter_map(|b| match b {
+            ContentBlock::Text { text } => {
+                let t = text.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(text.clone())
+                }
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn collect_summary_assistant_text(summary: &runtime::TurnSummary) -> String {
+    collect_assistant_text(&summary.assistant_messages)
+}
+
+fn first_error_tool_result(summary: &runtime::TurnSummary) -> Option<(&str, &str)> {
+    for msg in &summary.tool_results {
+        for block in &msg.blocks {
+            if let ContentBlock::ToolResult {
+                tool_name,
+                output,
+                is_error,
+                ..
+            } = block
+            {
+                if *is_error {
+                    return Some((tool_name.as_str(), output.as_str()));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn is_permission_denied_output(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    lower.contains("requires approval")
+        || lower.contains("requires read-only permission")
+        || lower.contains("requires workspace-write permission")
+        || lower.contains("requires danger-full-access permission")
+        || lower.contains("user rejected the tool execution")
+        || lower.contains("approval channel was closed")
+}
+
+fn has_error_tool_result(summary: &runtime::TurnSummary) -> bool {
+    first_error_tool_result(summary).is_some()
+}
+
+fn has_permission_denied_tool_result(summary: &runtime::TurnSummary) -> bool {
+    first_error_tool_result(summary)
+        .map(|(_, output)| is_permission_denied_output(output))
+        .unwrap_or(false)
+}
+
+fn is_meta_stall_text(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let short = trimmed.chars().count() <= 500;
+    short
+        && [
+            "provide the concrete next step",
+            "provide the next step",
+            "please provide",
+            "share the file",
+            "share the relevant",
+            "let me know the file",
+            "which file",
+            "what file",
+            "what would you like me to",
+            "to proceed",
+            "i can help",
+            "i'm ready",
+            "i would start by",
+            "i'll start by",
+            "i need the file",
+            "need a bit more context",
+            "restate",
+        ]
+        .iter()
+        .any(|needle| lower.contains(needle))
+}
+
+fn decide_loop_after_success(
+    session_preset: SessionPreset,
+    turn_index: usize,
+    meta_stall_nudges_used: usize,
+    meta_stall_nudge_limit: usize,
+    summary: &runtime::TurnSummary,
+) -> LoopDecision {
+    if has_permission_denied_tool_result(summary) {
+        return LoopDecision::Stop(LoopStopReason::PermissionDenied);
+    }
+    if has_error_tool_result(summary) {
+        return LoopDecision::Stop(LoopStopReason::ToolError);
+    }
+
+    let assistant_text = collect_summary_assistant_text(summary);
+    let is_meta_stall = summary.tool_results.is_empty()
+        && summary.iterations == 1
+        && is_meta_stall_text(&assistant_text);
+
+    if session_preset == SessionPreset::Build
+        && turn_index == 0
+        && is_meta_stall
+        && meta_stall_nudges_used < meta_stall_nudge_limit
+    {
+        return LoopDecision::Continue {
+            next_input: "Continue.".to_string(),
+        };
+    }
+
+    if is_meta_stall {
+        return LoopDecision::Stop(LoopStopReason::MetaStall);
+    }
+
+    LoopDecision::Stop(LoopStopReason::Completed)
+}
+
+fn runtime_error_needs_forced_compaction(error: &RuntimeError) -> bool {
+    let lower = error.to_string().to_ascii_lowercase();
+    lower.contains("copilot inline prompt remains above")
+        || lower.contains("token limit")
+        || lower.contains("context window")
+}
+
+fn runtime_error_is_retryable(error: &RuntimeError) -> bool {
+    let lower = error.to_string().to_ascii_lowercase();
+    if lower.contains("relay_copilot_aborted") || lower.contains("conversation loop exceeded") {
+        return false;
+    }
+    [
+        "timeout",
+        "timed out",
+        "connection reset",
+        "connection refused",
+        "broken pipe",
+        "temporarily unavailable",
+        "transport",
+        "http 5",
+        "copilot request failed",
+        "unexpected eof",
+        "connection closed",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn retry_backoff(attempt: usize) -> Duration {
+    let secs = match attempt {
+        0 | 1 => 1,
+        _ => 2_u64.saturating_pow((attempt - 1) as u32),
+    };
+    Duration::from_secs(secs.min(8))
+}
+
+fn sleep_with_cancel(cancelled: &AtomicBool, duration: Duration) -> bool {
+    let chunk = Duration::from_millis(100);
+    let mut remaining = duration;
+    while remaining > Duration::ZERO {
+        if cancelled.load(Ordering::SeqCst) {
+            return false;
+        }
+        let step = remaining.min(chunk);
+        thread::sleep(step);
+        remaining = remaining.saturating_sub(step);
+    }
+    !cancelled.load(Ordering::SeqCst)
+}
+
 pub fn run_agent_loop_impl(
     app: &AppHandle,
     registry: &SessionRegistry,
@@ -407,18 +646,26 @@ pub fn run_agent_loop_impl(
     browser_settings: Option<BrowserAutomationSettings>,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(), AgentLoopError> {
-    let server = tauri_bridge::ensure_copilot_server(
-        tauri_bridge::effective_cdp_port(browser_settings.as_ref()),
-        true,
-        Some(registry),
-    )
-    .map_err(AgentLoopError::InitializationError)?;
-    let api_client = CdpApiClient::new(
-        server,
-        session_preset,
-        Some((app.clone(), session_id.to_string())),
-        timeout_secs_from_browser_settings(browser_settings.as_ref()),
-    );
+    let api_client = if smoke_provider_enabled() {
+        CdpApiClient::new_smoke(
+            session_preset,
+            Some((app.clone(), session_id.to_string())),
+            timeout_secs_from_browser_settings(browser_settings.as_ref()),
+        )
+    } else {
+        let server = tauri_bridge::ensure_copilot_server(
+            tauri_bridge::effective_cdp_port(browser_settings.as_ref()),
+            true,
+            Some(registry),
+        )
+        .map_err(AgentLoopError::InitializationError)?;
+        CdpApiClient::new_live(
+            server,
+            session_preset,
+            Some((app.clone(), session_id.to_string())),
+            timeout_secs_from_browser_settings(browser_settings.as_ref()),
+        )
+    };
 
     let tool_executor = build_tool_executor(app, session_id, cwd.clone(), registry.clone());
     let permission_policy = desktop_permission_policy(session_preset);
@@ -441,69 +688,174 @@ pub fn run_agent_loop_impl(
         registry: registry.clone(),
     };
 
-    let mut final_summary = None;
+    let mut final_stop_reason = if cancelled.load(Ordering::SeqCst) {
+        LoopStopReason::Cancelled
+    } else {
+        LoopStopReason::Completed
+    };
+    let mut final_error_message: Option<String> = None;
+    let mut current_input = goal.clone();
+    let mut meta_stall_nudges_used = 0usize;
+    let mut completed_turn = false;
 
-    for turn in 0..max_turns {
+    for turn_index in 0..max_turns {
         if cancelled.load(Ordering::SeqCst) {
+            final_stop_reason = LoopStopReason::Cancelled;
             break;
         }
 
-        let turn_input = if turn == 0 {
-            goal.as_str()
-        } else {
-            "Continue."
-        };
-        let summary = match runtime_session.run_turn(turn_input, Some(&mut prompter)) {
-            Ok(summary) => summary,
-            Err(error) => {
-                let err_str = error.to_string();
-                let cancelled = err_str.contains("relay_copilot_aborted");
-                emit_error(
-                    app,
-                    session_id,
-                    &format!("agent loop failed: {error}"),
-                    cancelled,
-                );
+        let mut retry_attempts = 0usize;
+        let mut compact_attempts = 0usize;
+
+        loop {
+            if cancelled.load(Ordering::SeqCst) {
+                final_stop_reason = LoopStopReason::Cancelled;
                 break;
             }
-        };
 
-        persist_turn(
-            app,
-            registry,
-            &runtime_session,
-            session_id,
-            &goal,
-            cwd.as_ref(),
-            max_turns,
-            session_preset,
-        )?;
+            set_session_run_state(registry, session_id, SessionRunState::Running);
+            let checkpoint = runtime_session.session().clone();
+            let result = runtime_session.run_turn(current_input.clone(), Some(&mut prompter));
 
-        // Outer Copilot rounds: `run_turn` already loops until the model stops requesting tools.
-        // The old check (last assistant message still contains ToolUse) was never true at turn end,
-        // so multi-turn "Continue." never ran. Align with claw-code intent: optionally nudge Copilot
-        // once on Build when the first model round produced no tool calls at all (meta-only stall).
-        let needs_extra_copilot_round = session_preset == SessionPreset::Build
-            && turn == 0
-            && summary.tool_results.is_empty()
-            && summary.iterations == 1;
+            match result {
+                Ok(summary) => {
+                    persist_turn(
+                        app,
+                        registry,
+                        &runtime_session,
+                        session_id,
+                        &goal,
+                        cwd.as_ref(),
+                        max_turns,
+                        session_preset,
+                    )?;
 
-        final_summary = Some(summary);
+                    match decide_loop_after_success(
+                        session_preset,
+                        turn_index,
+                        meta_stall_nudges_used,
+                        config.meta_stall_nudge_limit,
+                        &summary,
+                    ) {
+                        LoopDecision::Continue { next_input } => {
+                            if turn_index + 1 >= max_turns {
+                                final_stop_reason = LoopStopReason::MaxTurnsReached;
+                                completed_turn = true;
+                                break;
+                            }
+                            meta_stall_nudges_used += 1;
+                            current_input = next_input;
+                            break;
+                        }
+                        LoopDecision::Stop(reason) => {
+                            final_stop_reason = reason;
+                            if matches!(
+                                reason,
+                                LoopStopReason::PermissionDenied | LoopStopReason::ToolError
+                            ) {
+                                if let Some((tool_name, output)) = first_error_tool_result(&summary)
+                                {
+                                    let msg = format!("{tool_name}: {output}");
+                                    set_session_error_summary(registry, session_id, &msg);
+                                    final_error_message = Some(msg);
+                                }
+                            }
+                            completed_turn = true;
+                            break;
+                        }
+                    }
+                }
+                Err(error) => {
+                    let error_text = error.to_string();
+                    runtime_session.replace_session(checkpoint);
+                    set_session_error_summary(registry, session_id, &error_text);
 
-        if !needs_extra_copilot_round {
-            break;
+                    if cancelled.load(Ordering::SeqCst)
+                        || error_text.contains("relay_copilot_aborted")
+                    {
+                        final_stop_reason = LoopStopReason::Cancelled;
+                        break;
+                    }
+
+                    if runtime_error_needs_forced_compaction(&error)
+                        && compact_attempts < config.compact_retry_limit
+                    {
+                        compact_attempts += 1;
+                        set_session_run_state(registry, session_id, SessionRunState::Compacting);
+                        let compaction = runtime_session.force_compact(runtime::CompactionConfig {
+                            max_estimated_tokens: 0,
+                            ..runtime::CompactionConfig::default()
+                        });
+                        if compaction.removed_message_count == 0 {
+                            final_stop_reason = LoopStopReason::CompactionFailed;
+                            final_error_message = Some(format!(
+                                "agent loop could not compact context enough to continue: {error_text}"
+                            ));
+                            completed_turn = true;
+                            break;
+                        }
+                        set_session_run_state(registry, session_id, SessionRunState::Running);
+                        continue;
+                    }
+
+                    if runtime_error_is_retryable(&error)
+                        && retry_attempts < config.max_turn_retries
+                    {
+                        retry_attempts += 1;
+                        increment_session_retry_count(registry, session_id, &error_text);
+                        set_session_run_state(registry, session_id, SessionRunState::Retrying);
+                        if !sleep_with_cancel(&cancelled, retry_backoff(retry_attempts)) {
+                            final_stop_reason = LoopStopReason::Cancelled;
+                            break;
+                        }
+                        set_session_run_state(registry, session_id, SessionRunState::Running);
+                        continue;
+                    }
+
+                    final_stop_reason = if runtime_error_needs_forced_compaction(&error) {
+                        LoopStopReason::CompactionFailed
+                    } else if runtime_error_is_retryable(&error) {
+                        LoopStopReason::RetryExhausted
+                    } else {
+                        LoopStopReason::ToolError
+                    };
+                    final_error_message = Some(format!("agent loop failed: {error_text}"));
+                    completed_turn = true;
+                    break;
+                }
+            }
+        }
+
+        if completed_turn || current_input == "Continue." {
+            if completed_turn {
+                break;
+            }
+            continue;
         }
     }
 
-    if let Some(summary) = &final_summary {
-        // Clear `running` before emitting so `get_session_history` matches the UI; otherwise the
-        // frontend reload after `turn_complete` can see `running: true` until `mark_finished` runs
-        // after persistence and re-enable the "thinking" indicator.
-        let _ignore = registry.mutate_session(session_id, |entry| {
-            entry.running = false;
-        });
-        emit_turn_complete(app, session_id, summary, &runtime_session, &cancelled);
+    if !completed_turn && !cancelled.load(Ordering::SeqCst) && current_input == "Continue." {
+        final_stop_reason = LoopStopReason::MaxTurnsReached;
     }
+
+    set_session_stop_reason(registry, session_id, final_stop_reason);
+    if let Some(error) = final_error_message.as_deref() {
+        emit_error(
+            app,
+            session_id,
+            error,
+            matches!(final_stop_reason, LoopStopReason::Cancelled),
+        );
+    }
+
+    // Clear `running` before emitting so `get_session_history` matches the UI; otherwise the
+    // frontend reload after `turn_complete` can see `running: true` until `mark_finished` runs
+    // after persistence and re-enable the "thinking" indicator.
+    let _ignore = registry.mutate_session(session_id, |entry| {
+        entry.running = false;
+        entry.run_state = SessionRunState::Finished;
+    });
+    emit_turn_complete(app, session_id, final_stop_reason, &runtime_session);
 
     let session = runtime_session.into_session();
     copilot_persistence::save_session(
@@ -528,26 +880,152 @@ pub fn run_agent_loop_impl(
 
 /// Sends prompts to M365 Copilot via the bundled `copilot_server.js` (Node + CDP).
 pub struct CdpApiClient {
-    server: std::sync::Arc<std::sync::Mutex<crate::copilot_server::CopilotServer>>,
+    source: CdpApiClientSource,
     response_timeout_secs: u64,
     session_preset: SessionPreset,
     /// When set, each Copilot reply emits `agent:text_delta` so the UI updates during tool loops.
     progress_emit: Option<(AppHandle, String)>,
 }
 
+enum CdpApiClientSource {
+    Live(std::sync::Arc<std::sync::Mutex<crate::copilot_server::CopilotServer>>),
+    Smoke(FakeSmokeApiClient),
+}
+
+struct FakeSmokeApiClient {
+    stream_call_count: usize,
+}
+
+#[derive(Debug, Clone)]
+struct FakeSmokeScenario {
+    source_path: String,
+    output_path: String,
+    expected_output: String,
+}
+
 impl CdpApiClient {
-    fn new(
+    fn new_live(
         server: std::sync::Arc<std::sync::Mutex<crate::copilot_server::CopilotServer>>,
         session_preset: SessionPreset,
         progress_emit: Option<(AppHandle, String)>,
         response_timeout_secs: u64,
     ) -> Self {
         Self {
-            server,
+            source: CdpApiClientSource::Live(server),
             response_timeout_secs,
             session_preset,
             progress_emit,
         }
+    }
+
+    fn new_smoke(
+        session_preset: SessionPreset,
+        progress_emit: Option<(AppHandle, String)>,
+        response_timeout_secs: u64,
+    ) -> Self {
+        Self {
+            source: CdpApiClientSource::Smoke(FakeSmokeApiClient {
+                stream_call_count: 0,
+            }),
+            response_timeout_secs,
+            session_preset,
+            progress_emit,
+        }
+    }
+}
+
+fn smoke_provider_enabled() -> bool {
+    std::env::var("RELAY_AGENT_AUTORUN_AGENT_LOOP_SMOKE")
+        .ok()
+        .is_some_and(|value| value.trim() == "1")
+}
+
+fn fake_smoke_marker_value(messages: &[ConversationMessage], key: &str) -> Option<String> {
+    messages
+        .iter()
+        .filter(|message| message.role == MessageRole::User)
+        .flat_map(|message| message.blocks.iter())
+        .find_map(|block| match block {
+            ContentBlock::Text { text } => text
+                .lines()
+                .find_map(|line| line.strip_prefix(key).map(|value| value.trim().to_string())),
+            _ => None,
+        })
+}
+
+fn fake_smoke_scenario_from_request(
+    request: &ApiRequest<'_>,
+) -> Result<FakeSmokeScenario, RuntimeError> {
+    let source_path = fake_smoke_marker_value(request.messages, "SOURCE_PATH=")
+        .ok_or_else(|| RuntimeError::new("smoke provider request missing SOURCE_PATH marker"))?;
+    let output_path = fake_smoke_marker_value(request.messages, "OUTPUT_PATH=")
+        .ok_or_else(|| RuntimeError::new("smoke provider request missing OUTPUT_PATH marker"))?;
+    let expected_output = fake_smoke_marker_value(request.messages, "EXPECTED_OUTPUT_BASE64=")
+        .ok_or_else(|| {
+            RuntimeError::new("smoke provider request missing EXPECTED_OUTPUT_BASE64 marker")
+        })?;
+    let expected_output = base64::engine::general_purpose::STANDARD
+        .decode(expected_output)
+        .map_err(|error| {
+            RuntimeError::new(format!(
+                "smoke provider expected output decode failed: {error}"
+            ))
+        })?;
+    let expected_output = String::from_utf8(expected_output).map_err(|error| {
+        RuntimeError::new(format!(
+            "smoke provider expected output was not valid UTF-8: {error}"
+        ))
+    })?;
+    Ok(FakeSmokeScenario {
+        source_path,
+        output_path,
+        expected_output,
+    })
+}
+
+fn fake_smoke_tool_reply(scenario: &FakeSmokeScenario) -> Result<String, RuntimeError> {
+    let payload = json!([
+        {
+            "name": "read_file",
+            "input": {
+                "path": scenario.source_path,
+            }
+        },
+        {
+            "name": "write_file",
+            "input": {
+                "path": scenario.output_path,
+                "content": scenario.expected_output,
+            }
+        }
+    ]);
+    let tool_json = serde_json::to_string_pretty(&payload).map_err(|error| {
+        RuntimeError::new(format!("smoke tool payload serialization failed: {error}"))
+    })?;
+    Ok(format!(
+        "Reading the source and saving the filtered copy.\n\n```relay_tool\n{tool_json}\n```"
+    ))
+}
+
+impl FakeSmokeApiClient {
+    fn stream(&mut self, request: &ApiRequest<'_>) -> Result<String, RuntimeError> {
+        let scenario = fake_smoke_scenario_from_request(request)?;
+        let response = match self.stream_call_count {
+            0 => {
+                self.stream_call_count += 1;
+                return Err(RuntimeError::new(
+                    "Copilot request failed: connection reset by peer during smoke setup",
+                ));
+            }
+            1 => "I'll start by preparing the filtered copy.".to_string(),
+            2 => fake_smoke_tool_reply(&scenario)?,
+            _ => format!(
+                "Filtered copy saved to {} after retry recovery.",
+                scenario.output_path
+            ),
+        };
+        self.stream_call_count += 1;
+        Ok(response)
     }
 }
 
@@ -573,23 +1051,25 @@ impl ApiClient for CdpApiClient {
             .build()
             .map_err(|e| RuntimeError::new(format!("tokio runtime: {e}")))?;
 
-        let response_text = {
-            let mut srv = self
-                .server
-                .lock()
-                .map_err(|e| RuntimeError::new(format!("copilot server lock poisoned: {e}")))?;
-            rt.block_on(async {
-                srv.send_prompt("", &prompt, self.response_timeout_secs, &[], false)
-                    .await
-            })
-            .map_err(|e| {
-                let es = e.to_string();
-                if es.contains("relay_copilot_aborted") {
-                    RuntimeError::new("relay_copilot_aborted")
-                } else {
-                    RuntimeError::new(format!("Copilot request failed: {e}"))
-                }
-            })?
+        let response_text = match &mut self.source {
+            CdpApiClientSource::Live(server) => {
+                let mut srv = server
+                    .lock()
+                    .map_err(|e| RuntimeError::new(format!("copilot server lock poisoned: {e}")))?;
+                rt.block_on(async {
+                    srv.send_prompt("", &prompt, self.response_timeout_secs, &[], false)
+                        .await
+                })
+                .map_err(|e| {
+                    let es = e.to_string();
+                    if es.contains("relay_copilot_aborted") {
+                        RuntimeError::new("relay_copilot_aborted")
+                    } else {
+                        RuntimeError::new(format!("Copilot request failed: {e}"))
+                    }
+                })?
+            }
+            CdpApiClientSource::Smoke(smoke) => smoke.stream(request)?,
         };
 
         tracing::info!(
@@ -1351,24 +1831,21 @@ fn persist_turn(
 fn emit_turn_complete(
     app: &AppHandle,
     session_id: &str,
-    _summary: &runtime::TurnSummary,
+    stop_reason: LoopStopReason,
     runtime_session: &runtime::ConversationRuntime<CdpApiClient, TauriToolExecutor>,
-    cancelled: &AtomicBool,
 ) {
     let last_text = collect_all_assistant_text_for_ui(runtime_session.session());
 
-    if !cancelled.load(Ordering::SeqCst) {
-        if let Err(e) = app.emit(
-            E_TURN_COMPLETE,
-            AgentTurnCompleteEvent {
-                session_id: session_id.to_string(),
-                stop_reason: "end_turn".into(),
-                assistant_message: last_text,
-                message_count: runtime_session.session().messages.len(),
-            },
-        ) {
-            tracing::warn!("[RelayAgent] emit failed ({E_TURN_COMPLETE}): {e}");
-        }
+    if let Err(e) = app.emit(
+        E_TURN_COMPLETE,
+        AgentTurnCompleteEvent {
+            session_id: session_id.to_string(),
+            stop_reason: stop_reason.as_str().into(),
+            assistant_message: last_text,
+            message_count: runtime_session.session().messages.len(),
+        },
+    ) {
+        tracing::warn!("[RelayAgent] emit failed ({E_TURN_COMPLETE}): {e}");
     }
 }
 
@@ -1489,6 +1966,7 @@ impl PermissionPrompter for TauriApprovalPrompter {
                 }
             };
             if let Some(entry) = data.get_mut(&self.session_id) {
+                entry.run_state = SessionRunState::WaitingApproval;
                 let mut approvals = entry.approvals.lock().unwrap_or_else(|e| {
                     tracing::error!("[RelayAgent] approvals lock poisoned: {e}");
                     e.into_inner()
@@ -1505,7 +1983,7 @@ impl PermissionPrompter for TauriApprovalPrompter {
         }
 
         // Block until the user responds via respond_approval
-        match rx.recv() {
+        let decision = match rx.recv() {
             Ok(true) => PermissionPromptDecision::Allow,
             Ok(false) => PermissionPromptDecision::Deny {
                 reason: "user rejected the tool execution".into(),
@@ -1513,7 +1991,19 @@ impl PermissionPrompter for TauriApprovalPrompter {
             Err(_) => PermissionPromptDecision::Deny {
                 reason: "approval channel was closed (session ended or was cancelled)".into(),
             },
-        }
+        };
+
+        let _ignore = self.registry.mutate_session(&self.session_id, |entry| {
+            if entry.run_state != SessionRunState::Cancelling {
+                entry.run_state = SessionRunState::Running;
+                entry.running = true;
+            }
+            if let PermissionPromptDecision::Deny { reason } = &decision {
+                entry.last_error_summary = Some(reason.clone());
+            }
+        });
+
+        decision
     }
 }
 
@@ -2343,7 +2833,7 @@ pub fn build_desktop_system_prompt(
 
 /* ── Event types ─── */
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentToolStartEvent {
     pub session_id: String,
@@ -2351,7 +2841,7 @@ pub struct AgentToolStartEvent {
     pub tool_name: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentToolResultEvent {
     pub session_id: String,
@@ -2370,7 +2860,7 @@ pub struct AgentUserQuestionNeededEvent {
     pub prompt: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentApprovalNeededEvent {
     pub session_id: String,
@@ -2384,7 +2874,7 @@ pub struct AgentApprovalNeededEvent {
     pub workspace_cwd_configured: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentTurnCompleteEvent {
     pub session_id: String,
@@ -2393,7 +2883,7 @@ pub struct AgentTurnCompleteEvent {
     pub message_count: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentErrorEvent {
     pub session_id: String,
@@ -2401,7 +2891,7 @@ pub struct AgentErrorEvent {
     pub cancelled: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentTextDeltaEvent {
     pub session_id: String,
@@ -2994,5 +3484,136 @@ mod desktop_permission_tests {
             Some(&mut pr),
         );
         assert!(matches!(out, PermissionOutcome::Deny { .. }));
+    }
+}
+
+#[cfg(test)]
+mod loop_controller_tests {
+    use super::*;
+    use runtime::{ConversationMessage, TokenUsage};
+
+    fn summary(
+        assistant_text: &str,
+        tool_results: Vec<ConversationMessage>,
+    ) -> runtime::TurnSummary {
+        runtime::TurnSummary {
+            assistant_messages: vec![ConversationMessage::assistant(vec![ContentBlock::Text {
+                text: assistant_text.to_string(),
+            }])],
+            tool_results,
+            iterations: 1,
+            usage: TokenUsage::default(),
+            auto_compaction: None,
+        }
+    }
+
+    fn tool_error_result(tool_name: &str, output: &str) -> ConversationMessage {
+        ConversationMessage::tool_result("tool-1", tool_name, output, true)
+    }
+
+    fn tool_success_result(tool_name: &str, output: &str) -> ConversationMessage {
+        ConversationMessage::tool_result("tool-1", tool_name, output, false)
+    }
+
+    #[test]
+    fn actionable_terminal_answer_stops_completed() {
+        let s = summary("I inspected the file and here is the fix.", Vec::new());
+        assert_eq!(
+            decide_loop_after_success(SessionPreset::Build, 0, 0, 1, &s),
+            LoopDecision::Stop(LoopStopReason::Completed)
+        );
+    }
+
+    #[test]
+    fn first_build_turn_meta_stall_gets_one_nudge() {
+        let s = summary(
+            "Please provide the concrete next step and the relevant file.",
+            Vec::new(),
+        );
+        assert_eq!(
+            decide_loop_after_success(SessionPreset::Build, 0, 0, 1, &s),
+            LoopDecision::Continue {
+                next_input: "Continue.".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn exhausted_meta_stall_limit_stops() {
+        let s = summary(
+            "Please provide the concrete next step and the relevant file.",
+            Vec::new(),
+        );
+        assert_eq!(
+            decide_loop_after_success(SessionPreset::Build, 0, 1, 1, &s),
+            LoopDecision::Stop(LoopStopReason::MetaStall)
+        );
+    }
+
+    #[test]
+    fn tool_using_turn_never_blindly_continues() {
+        let s = summary(
+            "I read the file and found the issue.",
+            vec![tool_success_result("read_file", "contents")],
+        );
+        assert_eq!(
+            decide_loop_after_success(SessionPreset::Build, 0, 0, 1, &s),
+            LoopDecision::Stop(LoopStopReason::Completed)
+        );
+    }
+
+    #[test]
+    fn approval_denial_becomes_permission_denied() {
+        let s = summary(
+            "The write was blocked.",
+            vec![tool_error_result(
+                "write_file",
+                "user rejected the tool execution",
+            )],
+        );
+        assert_eq!(
+            decide_loop_after_success(SessionPreset::Build, 0, 0, 1, &s),
+            LoopDecision::Stop(LoopStopReason::PermissionDenied)
+        );
+    }
+
+    #[test]
+    fn generic_tool_failure_becomes_tool_error() {
+        let s = summary(
+            "The command failed.",
+            vec![tool_error_result("bash", "exit status 1")],
+        );
+        assert_eq!(
+            decide_loop_after_success(SessionPreset::Build, 0, 0, 1, &s),
+            LoopDecision::Stop(LoopStopReason::ToolError)
+        );
+    }
+
+    #[test]
+    fn retryable_runtime_errors_are_classified() {
+        assert!(runtime_error_is_retryable(&RuntimeError::new(
+            "Copilot request failed: timeout waiting for response",
+        )));
+        assert!(!runtime_error_is_retryable(&RuntimeError::new(
+            "relay_copilot_aborted",
+        )));
+    }
+
+    #[test]
+    fn prompt_overflow_requests_forced_compaction() {
+        assert!(runtime_error_needs_forced_compaction(&RuntimeError::new(
+            "Copilot inline prompt remains above the 128000-token limit after compaction",
+        )));
+    }
+
+    #[test]
+    fn retry_sleep_stops_when_cancelled() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let signal = Arc::clone(&cancelled);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            signal.store(true, Ordering::SeqCst);
+        });
+        assert!(!sleep_with_cancel(&cancelled, Duration::from_secs(1)));
     }
 }

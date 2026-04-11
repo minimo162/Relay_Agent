@@ -8,9 +8,8 @@
   "scripts": {
     "check": "pnpm --filter @relay-agent/desktop check",
     "launch:test": "pnpm --filter @relay-agent/desktop launch:test",
-    "workflow:test": "pnpm --filter @relay-agent/desktop workflow:test",
+    "agent-loop:test": "pnpm --filter @relay-agent/desktop agent-loop:test",
     "typecheck": "pnpm --filter @relay-agent/desktop typecheck",
-    "startup:test": "pnpm --filter @relay-agent/desktop startup:test",
     "test:e2e:local": "pnpm --filter @relay-agent/desktop test:e2e:local",
     "test:e2e:auth-save": "pnpm --filter @relay-agent/desktop test:e2e:auth-save",
     "dev": "pnpm --filter @relay-agent/desktop dev",

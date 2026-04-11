@@ -46,7 +46,6 @@ Expected result:
 test -f .taskmaster/docs/prd_app_launch_execution_test.txt
 test -f docs/APP_LAUNCH_TEST_VERIFICATION.md
 pnpm launch:test
-pnpm startup:test
 pnpm typecheck
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 jq '.master.tasks[] | select((.id | tonumber) >= 32 and (.id | tonumber) <= 36) | {id, status}' .taskmaster/tasks/tasks.json

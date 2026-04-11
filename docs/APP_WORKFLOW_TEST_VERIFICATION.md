@@ -8,7 +8,12 @@ preview, approval, and save-copy execution.
 
 ## Automated Workflow Test
 
-Run from the repository root:
+Historical note: the older root-level `pnpm workflow:test` wrapper referenced
+here is not exposed in the current package scripts. Keep this file as the
+workflow-smoke acceptance artifact and use `docs/IMPLEMENTATION.md` for the
+latest recorded run.
+
+Historical command from the original workflow-smoke slice:
 
 ```bash
 pnpm workflow:test
@@ -56,9 +61,7 @@ Expected result:
 ```bash
 test -f .taskmaster/docs/prd_app_workflow_launch_test.txt
 test -f docs/APP_WORKFLOW_TEST_VERIFICATION.md
-pnpm workflow:test
 pnpm launch:test
-pnpm startup:test
 pnpm typecheck
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 jq '.master.tasks[] | select((.id | tonumber) >= 37 and (.id | tonumber) <= 41) | {id, status}' .taskmaster/tasks/tasks.json

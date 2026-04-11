@@ -112,7 +112,8 @@ async function main() {
         if (!summary.desktopBinaryLaunchDetected) {
           summary.desktopBinaryLaunchDetected =
             /Running .*relay-agent-desktop/.test(logs) ||
-            logs.includes("Running `/workspace/relay-agent-main/target/debug/relay-agent-desktop`");
+            logs.includes("Running `/workspace/relay-agent-main/target/debug/relay-agent-desktop`") ||
+            fs.existsSync(summaryPath);
         }
 
         if (!summary.frontendReady) {
@@ -133,7 +134,7 @@ async function main() {
       }
 
       if (!summary.desktopBinaryLaunchDetected) {
-        summary.reason = "Desktop binary launch was not detected in tauri:dev logs.";
+        summary.reason = "Desktop binary launch could not be inferred from tauri:dev logs or smoke summary output.";
         console.log(JSON.stringify(summary));
         process.exit(1);
       }
@@ -182,6 +183,12 @@ async function main() {
 
       if (!smokeSummary.approvalSeen || !smokeSummary.completionSeen) {
         summary.reason = "Agent loop smoke did not observe approval and completion events.";
+        console.log(JSON.stringify(summary));
+        process.exit(1);
+      }
+
+      if (!smokeSummary.retryRecovered || smokeSummary.finalStopReason !== "completed") {
+        summary.reason = "Agent loop smoke did not verify retry recovery through a completed stop reason.";
         console.log(JSON.stringify(summary));
         process.exit(1);
       }

@@ -297,6 +297,19 @@ where
         &self.session
     }
 
+    pub fn replace_session(&mut self, session: Session) {
+        self.usage_tracker = UsageTracker::from_session(&session);
+        self.session = session;
+    }
+
+    pub fn force_compact(&mut self, config: CompactionConfig) -> CompactionResult {
+        let result = compact_session(&self.session, config);
+        if result.removed_message_count > 0 {
+            self.replace_session(result.compacted_session.clone());
+        }
+        result
+    }
+
     #[must_use]
     pub fn into_session(self) -> Session {
         self.session

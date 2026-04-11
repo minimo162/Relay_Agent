@@ -9,6 +9,16 @@ use runtime::Session as RuntimeSession;
 use crate::error::AgentLoopError;
 use crate::session_write_undo::WriteUndoStacks;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRunState {
+    Running,
+    Retrying,
+    WaitingApproval,
+    Compacting,
+    Cancelling,
+    Finished,
+}
+
 /// Pending UI approval: unblock channel plus tool name for session-scoped allow rules.
 pub struct PendingApproval {
     pub tx: std::sync::mpsc::Sender<bool>,
@@ -25,6 +35,7 @@ pub struct PendingUserQuestion {
 pub struct SessionEntry {
     pub session: RuntimeSession,
     pub running: bool,
+    pub run_state: SessionRunState,
     pub cancelled: Arc<AtomicBool>,
     /// Timestamp (UTC epoch seconds) when the session completed or was cancelled.
     /// Used for TTL-based eviction.
@@ -39,12 +50,19 @@ pub struct SessionEntry {
     pub workspace_cwd: Option<String>,
     /// Stack of successful workspace writes for OpenCode-style undo/redo.
     pub write_undo: Mutex<WriteUndoStacks>,
+    /// Last terminal stop reason emitted by the backend loop.
+    pub last_stop_reason: Option<String>,
+    /// Total transient retries consumed by this session.
+    pub retry_count: usize,
+    /// Most recent backend error / rejection summary.
+    pub last_error_summary: Option<String>,
 }
 
 impl SessionEntry {
     /// Mark this session as finished and record the timestamp for TTL cleanup.
     pub fn mark_finished(&mut self) {
         self.running = false;
+        self.run_state = SessionRunState::Finished;
         self.cancelled.store(true, Ordering::SeqCst);
         if self.finished_at.is_none() {
             self.finished_at = Some(Utc::now().timestamp());

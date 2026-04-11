@@ -1,6 +1,7 @@
 #[allow(dead_code)]
 mod agent_browser_daemon;
 mod agent_loop;
+mod agent_loop_smoke;
 mod cdp_copilot;
 mod config;
 mod copilot_persistence;
@@ -40,6 +41,7 @@ fn relay_apply_webview2_cdp_from_env() {}
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     relay_apply_webview2_cdp_from_env();
+    agent_loop_smoke::apply_test_app_local_data_dir_override();
 
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
@@ -58,6 +60,7 @@ pub fn run() {
         .setup(|app| {
             liteparse_env::apply(app);
             app.manage(SessionRegistry::new());
+            agent_loop_smoke::spawn_if_configured(&app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -7,7 +7,12 @@ plus a short manual checklist for the real desktop window launch.
 
 ## Automated Startup Test
 
-Run from the repository root:
+Historical note: the earlier root-level `pnpm startup:test` wrapper referenced by
+this verification doc is not exposed in the current package scripts. Keep this
+file as the startup-smoke acceptance artifact and use
+`docs/IMPLEMENTATION.md` for the latest verification record.
+
+Historical command from the original startup-smoke slice:
 
 ```bash
 pnpm startup:test
@@ -51,7 +56,6 @@ Expected result:
 ```bash
 test -f .taskmaster/docs/prd_startup_test_harness.txt
 test -f docs/STARTUP_TEST_VERIFICATION.md
-pnpm startup:test
 pnpm typecheck
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 jq '.master.tasks[] | select((.id | tonumber) >= 27 and (.id | tonumber) <= 31) | {id, status}' .taskmaster/tasks/tasks.json

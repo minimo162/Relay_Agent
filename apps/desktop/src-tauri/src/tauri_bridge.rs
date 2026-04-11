@@ -19,7 +19,7 @@ use crate::models::{
     WorkspaceAllowlistCwdRequest, WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
     WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
 };
-use crate::registry::SessionRegistry;
+use crate::registry::{SessionRegistry, SessionRunState};
 use runtime::MAX_TEXT_FILE_READ_BYTES;
 
 /* ── Copilot Node bridge (copilot_server.js) ───────────────── *
@@ -260,6 +260,14 @@ pub async fn start_agent(
     registry: State<'_, SessionRegistry>,
     request: StartAgentRequest,
 ) -> Result<String, String> {
+    start_agent_inner(app, registry.inner().clone(), request).await
+}
+
+pub(crate) async fn start_agent_inner(
+    app: AppHandle,
+    registry: SessionRegistry,
+    request: StartAgentRequest,
+) -> Result<String, String> {
     let goal = request.goal.trim().to_string();
     if goal.is_empty() {
         return Err("goal must not be empty".into());
@@ -279,6 +287,7 @@ pub async fn start_agent(
     let entry = SessionEntry {
         session: runtime::Session::new(),
         running: true,
+        run_state: SessionRunState::Running,
         cancelled: Arc::new(AtomicBool::new(false)),
         approvals: Mutex::new(HashMap::new()),
         user_questions: Mutex::new(HashMap::new()),
@@ -286,6 +295,9 @@ pub async fn start_agent(
         finished_at: None,
         write_undo: Mutex::new(crate::session_write_undo::WriteUndoStacks::default()),
         workspace_cwd,
+        last_stop_reason: None,
+        retry_count: 0,
+        last_error_summary: None,
     };
     let cancelled = Arc::clone(&entry.cancelled);
     registry
@@ -294,7 +306,7 @@ pub async fn start_agent(
 
     let app_for_task = app.clone();
     let sid_for_task = session_id.clone();
-    let reg_for_task = registry.inner().clone();
+    let reg_for_task = registry.clone();
 
     // Periodically evict stale sessions to prevent memory leaks
     let ttl_seconds = crate::config::AgentConfig::global()
@@ -377,6 +389,13 @@ pub async fn start_agent(
 pub async fn respond_approval(
     _app: AppHandle,
     registry: State<'_, SessionRegistry>,
+    request: RespondAgentApprovalRequest,
+) -> Result<(), String> {
+    respond_approval_inner(registry.inner().clone(), request)
+}
+
+pub(crate) fn respond_approval_inner(
+    registry: SessionRegistry,
     request: RespondAgentApprovalRequest,
 ) -> Result<(), String> {
     let mut data = registry
@@ -517,6 +536,9 @@ pub async fn cancel_agent(
         if let Some(entry) = data.get_mut(&request.session_id) {
             entry.cancelled.store(true, Ordering::Relaxed);
             entry.running = false;
+            entry.run_state = SessionRunState::Cancelling;
+            entry.last_stop_reason = Some("cancelled".to_string());
+            entry.last_error_summary = Some("session cancelled by user".to_string());
         }
     }
     // Drain approvals and reject them all

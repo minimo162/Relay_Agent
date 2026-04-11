@@ -18,6 +18,12 @@ pub struct AgentConfig {
     /// Session cleanup TTL in minutes. Sessions completed/cancelled longer ago
     /// than this are evicted from the in-memory registry.
     pub session_cleanup_ttl_minutes: u64,
+    /// Transient Copilot/CDP failures retried per outer turn before the loop stops.
+    pub max_turn_retries: usize,
+    /// Number of extra "Continue." nudges allowed for a meta-only first reply.
+    pub meta_stall_nudge_limit: usize,
+    /// Forced compaction attempts allowed when inline prompt size still blocks a turn.
+    pub compact_retry_limit: usize,
 }
 
 impl Default for AgentConfig {
@@ -29,6 +35,9 @@ impl Default for AgentConfig {
             compact_max_tokens: 4000,
             max_concurrent_sessions: 4,
             session_cleanup_ttl_minutes: 30,
+            max_turn_retries: 2,
+            meta_stall_nudge_limit: 1,
+            compact_retry_limit: 1,
         }
     }
 }
