@@ -1,17 +1,40 @@
 import { For, Show, createMemo, createSignal, type JSX } from "solid-js";
 import type { SessionMeta } from "../session/session-display";
 import { formatSessionSubtitle, sessionPrimaryLine } from "../session/session-display";
-import { Input } from "./ui";
+import type { SessionStatusSnapshot } from "./shell-types";
+import { Button, Input } from "./ui";
 import { ui } from "../lib/ui-tokens";
 
-export type SessionListEntry = { id: string; meta?: SessionMeta };
+export type SessionListEntry = { id: string; meta?: SessionMeta; status?: SessionStatusSnapshot };
+
+function workspaceBaseName(workspacePath: string): string | null {
+  const raw = workspacePath.trim();
+  if (!raw) return null;
+  const normalized = raw.replace(/[\\/]+$/, "");
+  if (!normalized) return null;
+  const parts = normalized.split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) ?? normalized;
+}
+
+function statusBadgeLabel(status?: SessionStatusSnapshot): string | null {
+  if (!status) return null;
+  if (status.phase === "waiting_approval") return "Needs approval";
+  if (status.phase === "running" || status.phase === "retrying" || status.phase === "compacting") {
+    return "Running";
+  }
+  return null;
+}
 
 export function Sidebar(props: {
   sessions: SessionListEntry[];
   activeSessionId: string | null;
   onSelect: (id: string) => void;
+  onNewSession: () => void;
+  workspacePath: string;
+  onWorkspaceChipClick: () => void;
 }): JSX.Element {
   const [search, setSearch] = createSignal("");
+  const workspaceName = createMemo(() => workspaceBaseName(props.workspacePath));
 
   const filtered = createMemo(() => {
     const q = search().toLowerCase().trim();
@@ -39,7 +62,26 @@ export function Sidebar(props: {
     <aside class="ra-shell-sidebar" aria-label="Sessions">
       <div class="ra-sidebar-shell">
         <div class="ra-sidebar-shell__header">
-          <h2 class={`ra-display-title ra-type-body-sans ${ui.textPrimary} mb-2`}>Sessions</h2>
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <h2 class={`ra-display-title ra-type-body-sans ${ui.textPrimary}`}>Sessions</h2>
+            <Button variant="secondary" class="ra-type-caption ra-button--pill-tight" onClick={props.onNewSession}>
+              New session
+            </Button>
+          </div>
+          <button
+            type="button"
+            class="ra-sidebar-workspace-chip"
+            onClick={props.onWorkspaceChipClick}
+            title={workspaceName() ? props.workspacePath : "Choose workspace"}
+          >
+            <span class={`ra-type-caption ${ui.mutedText}`}>Current workspace</span>
+            <span class={`ra-type-button-label ${workspaceName() ? ui.textPrimary : "text-[var(--ra-red)]"}`}>
+              {workspaceName() ?? "Unset"}
+            </span>
+            <span class={`ra-type-caption ${ui.mutedText}`}>
+              {workspaceName() ? "Tap to change workspace." : "Set workspace to enable project context."}
+            </span>
+          </button>
           <Show when={hasSessions()}>
             <Input
               type="search"
@@ -65,6 +107,7 @@ export function Sidebar(props: {
               const id = entry.id;
               const primaryLabel = sessionPrimaryLine(entry.meta);
               const subLabel = formatSessionSubtitle(id, entry.meta);
+              const statusLabel = statusBadgeLabel(entry.status);
               return (
                 <button
                   type="button"
@@ -77,7 +120,12 @@ export function Sidebar(props: {
                   title={id}
                   onClick={() => props.onSelect(id)}
                 >
-                  <span class="block font-medium truncate">{primaryLabel}</span>
+                  <span class="flex items-center gap-2">
+                    <span class="block font-medium truncate flex-1">{primaryLabel}</span>
+                    <Show when={statusLabel}>
+                      {(label) => <span class="ra-session-status-badge">{label()}</span>}
+                    </Show>
+                  </span>
                   <span class={`block ra-type-caption mt-0.5 truncate ${ui.mutedText}`}>{subLabel}</span>
                 </button>
               );

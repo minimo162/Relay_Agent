@@ -1153,6 +1153,29 @@ body a:focus-visible {
   border-bottom: 1px solid var(--ra-border);
 }
 
+.ra-sidebar-workspace-chip {
+  width: 100%;
+  display: grid;
+  gap: 0.15rem;
+  text-align: left;
+  border: 1px solid var(--ra-border);
+  border-radius: 0.75rem;
+  background: var(--ra-surface-card);
+  padding: 0.5rem 0.625rem;
+  margin-bottom: 0.55rem;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.ra-sidebar-workspace-chip:hover {
+  background: var(--ra-hover);
+  border-color: var(--ra-border-medium);
+}
+
+.ra-sidebar-workspace-chip:focus-visible {
+  outline: var(--ra-focus-ring);
+  outline-offset: var(--ra-focus-ring-offset);
+}
+
 .ra-sidebar-shell__list {
   flex: 1;
   overflow-y: auto;
@@ -1189,6 +1212,19 @@ body a:focus-visible {
 .ra-session-row:focus-visible {
   outline: var(--ra-focus-ring);
   outline-offset: var(--ra-focus-ring-offset);
+}
+
+.ra-session-status-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--ra-radius-pill);
+  border: 1px solid var(--ra-border);
+  padding: 0.15rem 0.4rem;
+  font-size: 0.67rem;
+  line-height: 1.1;
+  color: var(--ra-text-secondary);
+  background: color-mix(in oklab, var(--ra-surface-card) 88%, transparent);
+  white-space: nowrap;
 }
 
 /* Segmented tab track (context panel) */
