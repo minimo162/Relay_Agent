@@ -24,7 +24,7 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 | UI | SolidJS, Vite, TypeScript, Tailwind — **Cursor Inspiration** in [`apps/desktop/src/index.css`](apps/desktop/src/index.css) + [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md): Surface scale, oklab borders (including **strong** borders at 55% opacity), cream primary buttons, **`.ra-type-*`** typography utilities, editorial **`cswh`** on serif markdown, mono scale for tools/code. Dark theme uses a paired warm-charcoal scale. **Default theme is light** (`data-theme` + `localStorage` `relay-agent/theme`). Proprietary Cursor fonts are not bundled (system fallbacks). Details: `docs/IMPLEMENTATION.md` (Milestone Log, **2026-04-10** OpenWork second pass + earlier Desktop UI milestones) |
 | Shell | Tauri v2, `tauri-plugin-shell`, `tauri-plugin-dialog` |
 | Agent / tools | Rust (`apps/desktop/src-tauri/`, internal crates) |
-| AI surface | M365 Copilot in Edge via **Node** `copilot_server.js` + CDP; the desktop sends the Relay turn bundle **inline in the prompt body** for the paid-license path, compacting context before the effective **128000-token** ceiling when needed. The host parses tool calls from **` ```relay_tool `** JSON and, if none, from accepted fenced JSON; bounded unfenced tool-shaped object recovery is **retry/repair only**, not the normal protocol. Fallback parser candidates are being migrated to require **`"relay_tool_call": true`** per tool object (observe/warn phase first; enforce via `RELAY_FALLBACK_SENTINEL_POLICY=enforce`) ([`agent_loop.rs`](apps/desktop/src-tauri/src/agent_loop.rs)) |
+| AI surface | M365 Copilot in Edge via **Node** `copilot_server.js` + CDP; the desktop sends the Relay turn bundle **inline in the prompt body** for the paid-license path, compacting context before the effective **128000-token** ceiling when needed. The host parses tool calls from **` ```relay_tool `** JSON and, if none, from accepted fenced JSON; bounded unfenced tool-shaped object recovery is **retry/repair only**, not the normal protocol. Fallback parser candidates are being migrated to require **`"relay_tool_call": true`** per tool object (observe/warn phase first; enforce via `RELAY_FALLBACK_SENTINEL_POLICY=enforce`) ([`agent_loop/orchestrator.rs`](apps/desktop/src-tauri/src/agent_loop/orchestrator.rs)) |
 
 ## What the app does
 
@@ -47,7 +47,7 @@ SolidJS (apps/desktop/src)  ←→  Tauri IPC  ←→  Rust (agent_loop, tools, 
                                     Edge + M365 Copilot (CDP)
 ```
 
-Rust entry: `apps/desktop/src-tauri/src/lib.rs`. IPC types: Rust `models.rs` ↔ `apps/desktop/src/lib/ipc.ts`.
+Rust entry: `apps/desktop/src-tauri/src/lib.rs`. IPC source types live in Rust (`models.rs`, `agent_loop/events`) and generate `apps/desktop/src/lib/ipc.generated.ts`; `apps/desktop/src/lib/ipc.ts` stays as the thin invoke/listen wrapper plus UI helpers.
 
 ## Repository layout
 
@@ -80,7 +80,7 @@ Relay_Agent/
 | `connect_cdp`, `cdp_*`, `disconnect_cdp` | Direct CDP helpers |
 | `mcp_*` | MCP server registry |
 
-**Events:** `agent:text_delta`, `agent:tool_start`, `agent:tool_result`, `agent:approval_needed`, `agent:turn_complete`, `agent:error`. Shapes live in `apps/desktop/src/lib/ipc.ts`.
+**Events:** `agent:text_delta`, `agent:tool_start`, `agent:tool_result`, `agent:approval_needed`, `agent:turn_complete`, `agent:error`. Shapes are generated into `apps/desktop/src/lib/ipc.generated.ts` and consumed via `apps/desktop/src/lib/ipc.ts`.
 
 ## Configuration
 
@@ -98,8 +98,12 @@ Relay_Agent/
 pnpm typecheck
 pnpm --filter @relay-agent/desktop build
 
-cd apps/desktop/src-tauri && cargo check && cargo test -p relay-agent-desktop --lib
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings
 ```
+
+`cargo check` / `cargo test` may still print non-fatal `ts-rs` warnings for ignored serde hints such as `skip_serializing_if = "Option::is_none"` while generating TypeScript bindings; `clippy` is clean for the desktop crate.
 
 **Grounding / CDP checks:** `pnpm run test:grounding-fixture`; `pnpm run test:e2e:m365-cdp`; opt-in real Copilot grounding checks: `pnpm run test:e2e:copilot-grounding`.
 
@@ -109,7 +113,7 @@ cd apps/desktop/src-tauri && cargo check && cargo test -p relay-agent-desktop --
 
 **Inspect Copilot DOM (real CDP):** `pnpm --filter @relay-agent/desktop inspect:copilot-dom` (signed-in Edge on 9360).
 
-**CI:** see `.github/workflows/` — typically `cargo check`, `clippy`, `pnpm typecheck`, bundled Node fetch for Tauri.
+**CI:** see `.github/workflows/` — typically bundled Node fetch for Tauri, `cargo check`, `cargo clippy -- -D warnings`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `pnpm typecheck`.
 
 ## License
 

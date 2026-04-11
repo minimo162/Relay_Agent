@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_lines)]
+
 //! Discover `.relay/commands/*.md` and optional `.relay/commands.json` under the workspace cwd.
 //! Paths are constrained under canonicalized `cwd` (no `..` escape).
 
@@ -21,10 +23,7 @@ struct CommandsJsonEntry {
 }
 
 fn is_safe_relay_rel(path: &Path) -> bool {
-    path.components().all(|c| match c {
-        Component::Normal(_) => true,
-        _ => false,
-    })
+    path.components().all(|c| matches!(c, Component::Normal(_)))
 }
 
 /// `candidate` must be same as or under `root` (both should be canonical).
@@ -33,10 +32,8 @@ fn path_under_root(root: &Path, candidate: &Path) -> bool {
     let mut c = candidate.components();
     loop {
         match (r.next(), c.next()) {
-            (None, None) => return true,
-            (None, Some(_)) => return true,
-            (Some(_), None) => return false,
-            (Some(a), Some(b)) if a == b => continue,
+            (None, None | Some(_)) => return true,
+            (Some(a), Some(b)) if a == b => {}
             _ => return false,
         }
     }
@@ -77,11 +74,7 @@ pub fn list_for_cwd(cwd: Option<&str>) -> Result<Vec<WorkspaceSlashCommandRow>, 
                     for row in rows {
                         let name = row.name.trim().to_string();
                         if name.is_empty()
-                            || !name
-                                .chars()
-                                .next()
-                                .map(|c| c.is_ascii_alphabetic())
-                                .unwrap_or(false)
+                            || !name.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
                         {
                             continue;
                         }
@@ -140,13 +133,7 @@ pub fn list_for_cwd(cwd: Option<&str>) -> Result<Vec<WorkspaceSlashCommandRow>, 
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .trim();
-            if stem.is_empty()
-                || !stem
-                    .chars()
-                    .next()
-                    .map(|c| c.is_ascii_alphabetic())
-                    .unwrap_or(false)
-            {
+            if stem.is_empty() || !stem.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
                 continue;
             }
             let body = match read_capped(&path) {

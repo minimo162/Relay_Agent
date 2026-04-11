@@ -56,5 +56,8 @@ jobs:
       - name: cargo clippy
         run: cargo clippy -- -D warnings
 
+      - name: cargo test
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+
       - name: pnpm typecheck
         run: pnpm typecheck

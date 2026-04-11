@@ -2,8 +2,9 @@
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InstructionSurface {
     pub label: String,
@@ -13,7 +14,7 @@ pub struct InstructionSurface {
     pub is_directory: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceInstructionSurfaces {
     pub workspace_root: Option<String>,

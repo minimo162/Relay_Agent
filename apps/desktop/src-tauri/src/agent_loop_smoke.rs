@@ -1,3 +1,9 @@
+#![allow(
+    clippy::needless_pass_by_value,
+    clippy::struct_excessive_bools,
+    clippy::too_many_lines
+)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -12,8 +18,8 @@ use crate::agent_loop::{
     AgentToolResultEvent, AgentToolStartEvent, AgentTurnCompleteEvent, E_APPROVAL_NEEDED, E_ERROR,
     E_STATUS, E_TEXT_DELTA, E_TOOL_RESULT, E_TOOL_START, E_TURN_COMPLETE,
 };
+use crate::app_services::AppServices;
 use crate::models::{RespondAgentApprovalRequest, SessionPreset, StartAgentRequest};
-use crate::registry::SessionRegistry;
 use crate::tauri_bridge::{respond_approval_inner, start_agent_inner};
 
 const SMOKE_EVENT_TIMEOUT: Duration = Duration::from_secs(45);
@@ -175,7 +181,10 @@ async fn run_smoke(app: AppHandle, config: SmokeConfig) -> AgentLoopSmokeSummary
         ..AgentLoopSmokeSummary::default()
     };
 
-    let registry = app.state::<SessionRegistry>().inner().clone();
+    let services = app.state::<AppServices>();
+    let registry = services.registry();
+    let agent_semaphore = services.agent_semaphore();
+    let agent_config = services.config().clone();
     let observed = Arc::new(Mutex::new(ObservedSmokeEvents::default()));
     let listeners = register_event_listeners(&app, Arc::clone(&observed));
 
@@ -202,7 +211,14 @@ async fn run_smoke(app: AppHandle, config: SmokeConfig) -> AgentLoopSmokeSummary
             session_preset: SessionPreset::Build,
         };
 
-        let session_id = start_agent_inner(app.clone(), registry.clone(), request).await?;
+        let session_id = start_agent_inner(
+            app.clone(),
+            registry.clone(),
+            agent_semaphore,
+            agent_config,
+            request,
+        )
+        .await?;
         summary.session_id = Some(session_id.clone());
         summary.push_step("start-agent", "ok", format!("session={session_id}"));
 

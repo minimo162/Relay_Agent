@@ -96,7 +96,7 @@ export function ContextPanel(props: {
       const server = await mcpAddServer({
         name,
         command,
-        args: args ? args.split(" ").filter(Boolean) : undefined,
+        args: args ? args.split(" ").filter(Boolean) : [],
       });
       props.setMcpServers((prev) => [...prev, server]);
       setNewServerName("");

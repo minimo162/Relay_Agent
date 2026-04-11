@@ -15,19 +15,50 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn, Event } from "@tauri-apps/api/event";
+import type {
+  AgentApprovalNeededEvent as GeneratedAgentApprovalNeededEvent,
+  AgentErrorEvent as GeneratedAgentErrorEvent,
+  AgentSessionHistoryResponse as GeneratedAgentSessionHistoryResponse,
+  AgentSessionStatusEvent as GeneratedAgentSessionStatusEvent,
+  AgentTextDeltaEvent as GeneratedAgentTextDeltaEvent,
+  AgentToolResultEvent as GeneratedAgentToolResultEvent,
+  AgentToolStartEvent as GeneratedAgentToolStartEvent,
+  AgentTurnCompleteEvent as GeneratedAgentTurnCompleteEvent,
+  AgentUserQuestionNeededEvent as GeneratedAgentUserQuestionNeededEvent,
+  BrowserAutomationSettings as GeneratedBrowserAutomationSettings,
+  CancelAgentRequest as GeneratedCancelAgentRequest,
+  CdpConnectResult as GeneratedCdpConnectResult,
+  CdpPromptResult as GeneratedCdpPromptResult,
+  CdpSendPromptRequest as GeneratedCdpSendPromptRequest,
+  CompactAgentSessionRequest as GeneratedCompactAgentSessionRequest,
+  CompactAgentSessionResponse as GeneratedCompactAgentSessionResponse,
+  ConnectCdpRequest as GeneratedConnectCdpRequest,
+  DesktopPermissionSummaryRow as GeneratedDesktopPermissionSummaryRow,
+  GetAgentSessionHistoryRequest as GeneratedGetAgentSessionHistoryRequest,
+  InstructionSurface as GeneratedInstructionSurface,
+  McpAddServerRequest as GeneratedMcpAddServerRequest,
+  McpServerInfo as GeneratedMcpServerInfo,
+  MessageContent as GeneratedMessageContent,
+  RelayDiagnostics as GeneratedRelayDiagnostics,
+  RustAnalyzerProbeRequest as GeneratedRustAnalyzerProbeRequest,
+  RustAnalyzerProbeResponse as GeneratedRustAnalyzerProbeResponse,
+  SessionPreset as GeneratedSessionPreset,
+  SessionWriteUndoRequest as GeneratedSessionWriteUndoRequest,
+  SessionWriteUndoStatusResponse as GeneratedSessionWriteUndoStatusResponse,
+  StartAgentRequest as GeneratedStartAgentRequest,
+  WorkspaceAllowlistSnapshot as GeneratedWorkspaceAllowlistSnapshot,
+  WorkspaceInstructionSurfaces as GeneratedWorkspaceInstructionSurfaces,
+  WorkspaceSlashCommandRow as GeneratedWorkspaceSlashCommandRow,
+} from "./ipc.generated";
 
 /* ============================================================
    Request / Response types (Rust models.rs → camelCase)
    ============================================================ */
 
-export interface BrowserAutomationSettings {
-  cdpPort: number;
-  autoLaunchEdge: boolean;
-  timeoutMs: number;
-}
+export type BrowserAutomationSettings = GeneratedBrowserAutomationSettings;
 
 /** OpenCode-style session posture (see `SessionPreset` in `models.rs`). */
-export type SessionPreset = "build" | "plan" | "explore";
+export type SessionPreset = GeneratedSessionPreset;
 
 const LS_SESSION_PRESET = "relay.sessionPreset.v1";
 
@@ -52,15 +83,7 @@ export function writeStoredSessionPreset(p: SessionPreset): void {
   }
 }
 
-export interface StartAgentRequest {
-  goal: string;
-  files?: string[];
-  cwd?: string | null;
-  browserSettings?: BrowserAutomationSettings | null;
-  maxTurns?: number | null;
-  /** Default on the host is `build` when omitted. */
-  sessionPreset?: SessionPreset;
-}
+export type StartAgentRequest = GeneratedStartAgentRequest;
 
 /**
  * Tool approvals (OpenWork-style): `approved` unblocks one execution; `rememberForSession`
@@ -72,9 +95,7 @@ export interface RespondAgentApprovalRequest {
   sessionId: string;
   approvalId: string;
   approved: boolean;
-  /** When true with approved, auto-allow this tool for the rest of the session (Rust `SessionEntry.auto_allowed_tools`). */
   rememberForSession?: boolean;
-  /** When true with approved, persist per normalized workspace cwd and merge into session allow-list. */
   rememberForWorkspace?: boolean;
 }
 
@@ -86,80 +107,25 @@ export interface RespondUserQuestionRequest {
 }
 
 /** `get_relay_diagnostics` payload (camelCase from Rust). */
-export interface RelayDiagnostics {
-  appVersion: string;
-  targetOs: string;
-  copilotNodeBridgePort: number;
-  defaultEdgeCdpPort: number;
-  relayAgentDevMode: boolean;
-  architectureNotes: string;
-  processCwd: string;
-  clawConfigHomeDisplay: string;
-  maxTextFileReadBytes: number;
-  doctorHints: string[];
-  /** Short bullets: defaults vs Settings (OpenWork-style predictability). */
-  predictabilityNotes: string[];
-}
+export type RelayDiagnostics = GeneratedRelayDiagnostics;
 
-export interface CancelAgentRequest {
-  sessionId: string;
-}
+export type CancelAgentRequest = GeneratedCancelAgentRequest;
 
-export interface GetAgentSessionHistoryRequest {
-  sessionId: string;
-}
+export type GetAgentSessionHistoryRequest = GeneratedGetAgentSessionHistoryRequest;
 
 /* Content block inside a Rust Message */
-type MessageBlock =
-  | { type: "text"; text: string }
-  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
-  | { type: "tool_result"; tool_use_id: string; content: string; is_error: boolean };
-
-export interface AgentMessage {
-  role: string;
-  content: MessageBlock[];
-}
-
-export interface AgentSessionHistoryResponse {
-  sessionId: string;
-  running: boolean;
-  messages: AgentMessage[];
-}
+type MessageBlock = GeneratedMessageContent;
+type AgentMessage = GeneratedAgentSessionHistoryResponse["messages"][number];
+export type AgentSessionHistoryResponse = GeneratedAgentSessionHistoryResponse;
 
 /* ============================================================
    Tauri event payloads
    ============================================================ */
 
-export interface AgentToolStartEvent {
-  sessionId: string;
-  toolUseId: string;
-  toolName: string;
-}
-
-export interface AgentToolResultEvent {
-  sessionId: string;
-  toolUseId: string;
-  toolName: string;
-  content: string;
-  isError: boolean;
-}
-
-export interface AgentApprovalNeededEvent {
-  sessionId: string;
-  approvalId: string;
-  toolName: string;
-  description: string;
-  target?: string;
-  input: Record<string, unknown>;
-  /** When true, UI may offer "Allow for this workspace" (session started with cwd). */
-  workspaceCwdConfigured?: boolean;
-}
-
-export interface AgentUserQuestionNeededEvent {
-  sessionId: string;
-  questionId: string;
-  prompt: string;
-}
+export type AgentToolStartEvent = GeneratedAgentToolStartEvent;
+export type AgentToolResultEvent = GeneratedAgentToolResultEvent;
+export type AgentApprovalNeededEvent = GeneratedAgentApprovalNeededEvent;
+export type AgentUserQuestionNeededEvent = GeneratedAgentUserQuestionNeededEvent;
 
 export type AgentStopReason =
   | "completed"
@@ -172,12 +138,8 @@ export type AgentStopReason =
   | "tool_error"
   | "doom_loop";
 
-export interface AgentTurnCompleteEvent {
-  sessionId: string;
-  stopReason: AgentStopReason;
-  assistantMessage: string;
-  messageCount: number;
-}
+export type AgentTurnCompleteEvent =
+  Omit<GeneratedAgentTurnCompleteEvent, "stopReason"> & { stopReason: AgentStopReason };
 
 export type AgentSessionPhase =
   | "idle"
@@ -187,27 +149,13 @@ export type AgentSessionPhase =
   | "waiting_approval"
   | "cancelling";
 
-export interface AgentSessionStatusEvent {
-  sessionId: string;
-  phase: AgentSessionPhase;
-  attempt?: number;
-  message?: string;
-  nextRetryAtMs?: number;
-  toolName?: string;
-  stopReason?: AgentStopReason;
-}
-
-export interface AgentTextDeltaEvent {
-  sessionId: string;
-  text: string;
-  isComplete: boolean;
-}
-
-export interface AgentErrorEvent {
-  sessionId: string;
-  error: string;
-  cancelled: boolean;
-}
+export type AgentSessionStatusEvent =
+  Omit<GeneratedAgentSessionStatusEvent, "phase" | "stopReason"> & {
+    phase: AgentSessionPhase;
+    stopReason?: AgentStopReason;
+  };
+export type AgentTextDeltaEvent = GeneratedAgentTextDeltaEvent;
+export type AgentErrorEvent = GeneratedAgentErrorEvent;
 
 /* Union of all agent events */
 export type AgentEvent =
@@ -245,15 +193,7 @@ export async function writeTextExport(path: string, contents: string): Promise<v
   return invoke<void>("write_text_export", { path, contents });
 }
 
-export interface WorkspaceAllowlistEntryRow {
-  workspaceKey: string;
-  tools: string[];
-}
-
-export interface WorkspaceAllowlistSnapshot {
-  storePath: string;
-  entries: WorkspaceAllowlistEntryRow[];
-}
+export type WorkspaceAllowlistSnapshot = GeneratedWorkspaceAllowlistSnapshot;
 
 export async function getWorkspaceAllowlist(): Promise<WorkspaceAllowlistSnapshot> {
   return invoke<WorkspaceAllowlistSnapshot>("get_workspace_allowlist");
@@ -269,12 +209,7 @@ export async function clearWorkspaceAllowlist(cwd: string): Promise<void> {
   return invoke<void>("clear_workspace_allowlist", { request: { cwd } });
 }
 
-export interface WorkspaceSlashCommandRow {
-  name: string;
-  description?: string;
-  body: string;
-  source: string;
-}
+export type WorkspaceSlashCommandRow = GeneratedWorkspaceSlashCommandRow;
 
 export async function listWorkspaceSlashCommands(cwd: string | null): Promise<WorkspaceSlashCommandRow[]> {
   return invoke<WorkspaceSlashCommandRow[]>("list_workspace_slash_commands", {
@@ -282,17 +217,8 @@ export async function listWorkspaceSlashCommands(cwd: string | null): Promise<Wo
   });
 }
 
-export interface InstructionSurface {
-  label: string;
-  path: string;
-  exists: boolean;
-  isDirectory: boolean;
-}
-
-export interface WorkspaceInstructionSurfaces {
-  workspaceRoot: string | null;
-  surfaces: InstructionSurface[];
-}
+export type InstructionSurface = GeneratedInstructionSurface;
+export type WorkspaceInstructionSurfaces = GeneratedWorkspaceInstructionSurfaces;
 
 /** Read-only Claw-style instruction paths under workspace `cwd`. */
 export async function fetchWorkspaceInstructionSurfaces(
@@ -303,13 +229,7 @@ export async function fetchWorkspaceInstructionSurfaces(
   });
 }
 
-export interface DesktopPermissionSummaryRow {
-  name: string;
-  hostMode: string;
-  requiredMode: string;
-  requirement: "auto_allow" | "require_approval" | "auto_deny";
-  description: string;
-}
+export type DesktopPermissionSummaryRow = GeneratedDesktopPermissionSummaryRow;
 
 /** Effective tool gating for the composer session preset (Context → Policy). */
 export async function getDesktopPermissionSummary(
@@ -343,11 +263,11 @@ export function formatSessionAuditSummary(res: AgentSessionHistoryResponse): str
       if (block.type === "text") {
         const t = block.text.trim();
         if (t) lines.push(trimAuditText(t, AUDIT_SUMMARY_LINE_MAX));
-      } else if (block.type === "tool_use") {
+      } else if (block.type === "toolUse") {
         lines.push(`tool: ${block.name}  [${block.id}]`);
-      } else if (block.type === "tool_result") {
-        const flag = block.is_error ? " (error)" : "";
-        lines.push(`tool_result: ${block.tool_use_id}${flag}`);
+      } else if (block.type === "toolResult") {
+        const flag = block.isError ? " (error)" : "";
+        lines.push(`tool_result: ${block.toolUseId}${flag}`);
         const c = block.content.trim();
         if (c) lines.push(`  ${trimAuditText(c, AUDIT_SUMMARY_LINE_MAX)}`);
       }
@@ -367,14 +287,8 @@ export async function getSessionHistory(
   return invoke<AgentSessionHistoryResponse>("get_session_history", { request });
 }
 
-export interface SessionWriteUndoRequest {
-  sessionId: string;
-}
-
-export interface SessionWriteUndoStatusResponse {
-  canUndo: boolean;
-  canRedo: boolean;
-}
+export type SessionWriteUndoRequest = GeneratedSessionWriteUndoRequest;
+export type SessionWriteUndoStatusResponse = GeneratedSessionWriteUndoStatusResponse;
 
 export async function undoSessionWrite(request: SessionWriteUndoRequest): Promise<void> {
   return invoke<void>("undo_session_write", { request });
@@ -390,15 +304,8 @@ export async function getSessionWriteUndoStatus(
   return invoke<SessionWriteUndoStatusResponse>("get_session_write_undo_status", { request });
 }
 
-export interface RustAnalyzerProbeRequest {
-  workspacePath?: string | null;
-}
-
-export interface RustAnalyzerProbeResponse {
-  ok: boolean;
-  versionLine?: string | null;
-  error?: string | null;
-}
+export type RustAnalyzerProbeRequest = GeneratedRustAnalyzerProbeRequest;
+export type RustAnalyzerProbeResponse = GeneratedRustAnalyzerProbeResponse;
 
 /** Minimal LSP milestone: runs `rust-analyzer --version` in the given folder (`docs/LSP_MILESTONE.md`). */
 export async function probeRustAnalyzer(
@@ -407,14 +314,8 @@ export async function probeRustAnalyzer(
   return invoke<RustAnalyzerProbeResponse>("probe_rust_analyzer", { request });
 }
 
-export interface CompactAgentSessionRequest {
-  sessionId: string;
-}
-
-export interface CompactAgentSessionResponse {
-  message: string;
-  removedMessageCount: number;
-}
+export type CompactAgentSessionRequest = GeneratedCompactAgentSessionRequest;
+export type CompactAgentSessionResponse = GeneratedCompactAgentSessionResponse;
 
 export async function compactAgentSession(
   request: CompactAgentSessionRequest,
@@ -442,34 +343,10 @@ export async function warmupCopilotBridge(
    CDP (Chrome DevTools Protocol) — M365 Copilot integration
    ============================================================ */
 
-export interface ConnectCdpRequest {
-  autoLaunch?: boolean;
-  /** When `autoLaunch` is true, CDP port is OS-assigned (`DevToolsActivePort`); this is a hint only. */
-  /** When `autoLaunch` is false: explicit CDP port, or omit to resolve marker / DevToolsActivePort then **9360**. */
-  basePort?: number;
-}
-
-export interface CdpConnectResult {
-  ok: boolean;
-  debugUrl: string;
-  pageUrl: string;
-  pageTitle: string;
-  port?: number;
-  launched: boolean;
-  error: string | null;
-}
-
-export interface CdpSendPromptRequest {
-  prompt: string;
-  waitResponseSecs?: number;
-}
-
-export interface CdpPromptResult {
-  ok: boolean;
-  responseText: string;
-  bodyLength: number;
-  error: string | null;
-}
+export type ConnectCdpRequest = GeneratedConnectCdpRequest;
+export type CdpConnectResult = GeneratedCdpConnectResult;
+export type CdpSendPromptRequest = GeneratedCdpSendPromptRequest;
+export type CdpPromptResult = GeneratedCdpPromptResult;
 
 /** Connect to M365 Copilot via Edge CDP */
 export async function connectCdp(
@@ -557,21 +434,21 @@ export function formatMessageBlock(block: MessageBlock): UiMessageChunk {
     case "text":
       return { kind: "text", text: block.text };
 
-    case "tool_use":
+    case "toolUse":
       return {
         kind: "tool_use",
         toolUseId: block.id,
         toolName: block.name,
-        input: block.input,
+        input: (block.input ?? {}) as Record<string, unknown>,
         status: "running",
       };
 
-    case "tool_result":
+    case "toolResult":
       return {
         kind: "tool_result",
-        toolUseId: block.tool_use_id,
+        toolUseId: block.toolUseId,
         content: block.content,
-        isError: block.is_error,
+        isError: block.isError,
       };
   }
 }
@@ -609,7 +486,7 @@ export function chunksFromHistory(messages: AgentMessage[]): UiChunk[] {
         if (block.type === "text" && block.text) {
           chunks.push({ kind: "assistant" as const, text: block.text });
         }
-        if (block.type === "tool_use") {
+        if (block.type === "toolUse") {
           const chunk = {
             kind: "tool_call" as const,
             toolUseId: block.id,
@@ -620,11 +497,11 @@ export function chunksFromHistory(messages: AgentMessage[]): UiChunk[] {
           chunks.push(chunk);
           toolCallIndex.set(block.id, chunk);
         }
-        if (block.type === "tool_result") {
-          const lastTool = toolCallIndex.get(block.tool_use_id);
+        if (block.type === "toolResult") {
+          const lastTool = toolCallIndex.get(block.toolUseId);
           if (lastTool) {
             lastTool.result = block.content;
-            lastTool.status = block.is_error ? "error" : "done";
+            lastTool.status = block.isError ? "error" : "done";
           }
         }
       }
@@ -688,20 +565,8 @@ export function friendlyToolActivityLabel(toolName: string): string {
    MCP Server Management
    ============================================================ */
 
-export interface McpServerInfo {
-  name: string;
-  command: string;
-  args: string[];
-  status: string;
-  connected: boolean;
-  tools: string[];
-}
-
-export interface McpAddServerRequest {
-  name: string;
-  command: string;
-  args?: string[];
-}
+export type McpServerInfo = GeneratedMcpServerInfo;
+export type McpAddServerRequest = GeneratedMcpAddServerRequest;
 
 /* ============================================================
    Context Panel types

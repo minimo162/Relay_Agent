@@ -1,8 +1,7 @@
 /// <reference types="vite/client" />
 import { isTauri } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js";
-import { truncatePromptPreview, type SessionMeta } from "../session/session-display";
+import { Show, createEffect, createMemo, createSignal, onMount, type JSX } from "solid-js";
+import { truncatePromptPreview } from "../session/session-display";
 import {
   cancelAgent,
   chunksFromHistory,
@@ -11,26 +10,15 @@ import {
   getSessionWriteUndoStatus,
   listWorkspaceSlashCommands,
   mcpListServers,
-  onAgentEvent,
   redoSessionWrite,
   respondApproval,
   respondUserQuestion,
   startAgent,
   undoSessionWrite,
-  warmupCopilotBridge,
   readStoredSessionPreset,
   writeStoredSessionPreset,
   type SessionPreset,
-  type AgentApprovalNeededEvent,
-  type AgentUserQuestionNeededEvent,
-  type AgentErrorEvent,
-  type AgentSessionStatusEvent,
-  type AgentTextDeltaEvent,
-  type AgentToolResultEvent,
-  type AgentToolStartEvent,
-  type AgentTurnCompleteEvent,
   type McpServer,
-  type UiChunk,
   type WorkspaceSlashCommandRow,
 } from "../lib/ipc";
 import {
@@ -49,13 +37,13 @@ import { SettingsModal } from "../components/SettingsModal";
 import { ShellHeader } from "../components/ShellHeader";
 import { Sidebar } from "../components/Sidebar";
 import { StatusBar } from "../components/StatusBar";
-import type { Approval, SessionStatusSnapshot, UserQuestion } from "../components/shell-types";
+import type { SessionStatusSnapshot } from "../components/shell-types";
 import { loadBrowserSettings, loadMaxTurns, loadWorkspacePath } from "../lib/settings-storage";
-import {
-  buildPlanTimelineFromUiChunks,
-  parseTodoWriteToolResult,
-  type PlanTimelineEntry,
-} from "../context/todo-write-parse";
+import { buildPlanTimelineFromUiChunks } from "../context/todo-write-parse";
+import { createSessionStore } from "./sessionStore";
+import { createApprovalStore } from "./approvalStore";
+import { useCopilotWarmup } from "./useCopilotWarmup";
+import { useAgentEvents } from "./useAgentEvents";
 
 function workspaceSlashRowsToCommands(rows: WorkspaceSlashCommandRow[]): SlashCommand[] {
   return rows.map((row) => ({
@@ -70,63 +58,11 @@ function workspaceSlashRowsToCommands(rows: WorkspaceSlashCommandRow[]): SlashCo
 }
 
 export default function Shell(): JSX.Element {
-  const [activeSessionId, setActiveSessionId] = createSignal<string | null>(null);
-  const [sessionIds, setSessionIds] = createSignal<string[]>([]);
-  const [sessionMeta, setSessionMeta] = createSignal<Record<string, SessionMeta>>({});
-  const [statusBySession, setStatusBySession] = createSignal<Record<string, SessionStatusSnapshot>>({});
-
-  const sessionEntries = createMemo(() =>
-    sessionIds().map((id) => ({ id, meta: sessionMeta()[id], status: statusBySession()[id] })),
-  );
+  const sessions = createSessionStore();
+  const approvals = createApprovalStore();
   const [sessionError, setSessionError] = createSignal<string | null>(null);
-  const [copilotBridgeHint, setCopilotBridgeHint] = createSignal<string | null>(null);
-  const [copilotSuccessFlash, setCopilotSuccessFlash] = createSignal<string | null>(null);
-  const copilotFlashTimer: { id?: ReturnType<typeof setTimeout> } = {};
-
-  const runCopilotWarmup = (focusMainWindow: boolean) => {
-    if (copilotFlashTimer.id) {
-      clearTimeout(copilotFlashTimer.id);
-      copilotFlashTimer.id = undefined;
-    }
-    void warmupCopilotBridge(loadBrowserSettings())
-      .then((r) => {
-        if (r.loginRequired) {
-          setCopilotBridgeHint("Sign in to Copilot in Edge, then return here.");
-          setCopilotSuccessFlash(null);
-        } else if (r.error) {
-          setCopilotBridgeHint(`Copilot: ${r.error}`);
-          setCopilotSuccessFlash(null);
-        } else if (r.connected) {
-          setCopilotBridgeHint(null);
-          setCopilotSuccessFlash("Copilot ready.");
-          copilotFlashTimer.id = setTimeout(() => {
-            setCopilotSuccessFlash(null);
-            copilotFlashTimer.id = undefined;
-          }, 3500);
-        }
-      })
-      .catch((err) => {
-        console.error("[Copilot] warmup failed:", err);
-        const msg = err instanceof Error ? err.message : String(err);
-        setCopilotBridgeHint(`Copilot: ${msg}`);
-        setCopilotSuccessFlash(null);
-      })
-      .finally(() => {
-        if (!focusMainWindow || !isTauri()) return;
-        const win = getCurrentWindow();
-        void win
-          .show()
-          .then(() => win.setFocus())
-          .catch((e) => console.error("[Shell] window show/focus failed:", e));
-      });
-  };
-
-  const [chunks, setChunks] = createSignal<UiChunk[]>([]);
-
-  const [approvals, setApprovals] = createSignal<Approval[]>([]);
-  const [userQuestions, setUserQuestions] = createSignal<UserQuestion[]>([]);
+  const { copilotBridgeHint, copilotSuccessFlash, runCopilotWarmup } = useCopilotWarmup(loadBrowserSettings);
   const [settingsOpen, setSettingsOpen] = createSignal(false);
-  const [planBySession, setPlanBySession] = createSignal<Record<string, PlanTimelineEntry[]>>({});
   const [workspaceLabel, setWorkspaceLabel] = createSignal(loadWorkspacePath().trim());
   const [sessionPreset, setSessionPreset] = createSignal<SessionPreset>(readStoredSessionPreset());
   const [writeUndoStatus, setWriteUndoStatus] = createSignal({ canUndo: false, canRedo: false });
@@ -143,7 +79,7 @@ export default function Shell(): JSX.Element {
   });
 
   const refreshWriteUndoStatus = async () => {
-    const sid = activeSessionId();
+    const sid = sessions.activeSessionId();
     if (!sid) {
       setWriteUndoStatus({ canUndo: false, canRedo: false });
       return;
@@ -157,25 +93,12 @@ export default function Shell(): JSX.Element {
   };
 
   createEffect(() => {
-    activeSessionId();
-    if ((statusBySession()[activeSessionId() ?? ""]?.phase ?? "idle") !== "idle") return;
+    sessions.activeSessionId();
+    if ((sessions.statusBySession()[sessions.activeSessionId() ?? ""]?.phase ?? "idle") !== "idle") return;
     void refreshWriteUndoStatus();
   });
 
-  const planTimelineForActiveSession = createMemo(() => {
-    const id = activeSessionId();
-    if (!id) return [];
-    return planBySession()[id] ?? [];
-  });
-
   const [mcpServers, setMcpServers] = createSignal<McpServer[]>([]);
-  const isFirstRun = createMemo(
-    () => sessionIds().length === 0 && chunks().length === 0 && activeSessionId() === null,
-  );
-
-  onCleanup(() => {
-    if (copilotFlashTimer.id) clearTimeout(copilotFlashTimer.id);
-  });
 
   onMount(async () => {
     try {
@@ -188,12 +111,7 @@ export default function Shell(): JSX.Element {
     runCopilotWarmup(true);
   });
 
-  const activeSessionStatus = createMemo<SessionStatusSnapshot>(() => {
-    const sid = activeSessionId();
-    if (!sid) return { phase: "idle" };
-    return statusBySession()[sid] ?? { phase: "idle" };
-  });
-  const sessionBusy = createMemo(() => activeSessionStatus().phase !== "idle");
+  const sessionBusy = createMemo(() => sessions.activeSessionStatus().phase !== "idle");
 
   const reloadHistory = async (
     sessionId: string,
@@ -207,223 +125,44 @@ export default function Shell(): JSX.Element {
       if (!hasAssistantText && fb) {
         next = [...next, { kind: "assistant" as const, text: fb }];
       }
-      setChunks(next);
-      setPlanBySession((prev) => ({
+      sessions.setChunks(next);
+      sessions.setPlanBySession((prev) => ({
         ...prev,
         [sessionId]: buildPlanTimelineFromUiChunks(next),
       }));
       const nextStatus: SessionStatusSnapshot = opts?.afterTurnComplete || !res.running
         ? { phase: "idle" }
-        : (statusBySession()[sessionId] ?? { phase: "running" });
-      setStatusBySession((prev) => ({ ...prev, [sessionId]: nextStatus }));
+        : (sessions.statusBySession()[sessionId] ?? { phase: "running" });
+      sessions.setStatusBySession((prev) => ({ ...prev, [sessionId]: nextStatus }));
       if (nextStatus.phase === "idle") setSessionError(null);
     } catch (err) {
       console.error("[IPC] load history failed", err);
       const fb = opts?.fallbackAssistantText?.trim();
       if (fb) {
-        setChunks((prev) => [...prev, { kind: "assistant", text: fb }]);
+        sessions.setChunks((prev) => [...prev, { kind: "assistant", text: fb }]);
       }
       if (opts?.afterTurnComplete) {
-        setStatusBySession((prev) => ({ ...prev, [sessionId]: { phase: "idle" } }));
+        sessions.setStatusBySession((prev) => ({ ...prev, [sessionId]: { phase: "idle" } }));
       }
     }
   };
 
-  onMount(async () => {
-    const appendAssistantText = (sessionId: string, text: string, isComplete: boolean) => {
-      if (!text && !isComplete) return;
-      if (activeSessionId() !== sessionId) return;
-
-      if (!text && isComplete) {
-        return;
-      }
-
-      setChunks((prev) => {
-        const next = [...prev];
-        const last = next.at(-1);
-        if (last?.kind === "assistant") {
-          last.text += text;
-          return next;
-        }
-        next.push({ kind: "assistant", text });
-        return next;
-      });
-    };
-
-    const trackToolStart = (sessionId: string, event: AgentToolStartEvent) => {
-      if (activeSessionId() !== sessionId) return;
-      setChunks((prev) => {
-        const next = [...prev];
-        const existing = next.find(
-          (chunk): chunk is Extract<UiChunk, { kind: "tool_call" }> =>
-            chunk.kind === "tool_call" && chunk.toolUseId === event.toolUseId,
-        );
-        if (!existing) {
-          next.push({
-            kind: "tool_call",
-            toolUseId: event.toolUseId,
-            toolName: event.toolName,
-            result: null,
-            status: "running",
-          });
-        }
-        return next;
-      });
-    };
-
-    const trackToolResult = (sessionId: string, event: AgentToolResultEvent) => {
-      if (event.toolName === "TodoWrite" && !event.isError) {
-        const todos = parseTodoWriteToolResult(event.content);
-        if (todos?.length) {
-          setPlanBySession((prev) => {
-            const cur = prev[sessionId] ?? [];
-            if (cur.some((e) => e.toolUseId === event.toolUseId)) return prev;
-            const entry: PlanTimelineEntry = {
-              toolUseId: event.toolUseId,
-              atMs: Date.now(),
-              todos,
-            };
-            return { ...prev, [sessionId]: [...cur, entry] };
-          });
-        }
-      }
-
-      if (activeSessionId() !== sessionId) return;
-      setChunks((prev) => {
-        const idx = prev.findIndex(
-          (chunk): chunk is Extract<UiChunk, { kind: "tool_call" }> =>
-            chunk.kind === "tool_call" && chunk.toolUseId === event.toolUseId,
-        );
-        if (idx === -1) {
-          return [
-            ...prev,
-            {
-              kind: "tool_call",
-              toolUseId: event.toolUseId,
-              toolName: event.toolName,
-              result: event.content,
-              status: event.isError ? "error" : "done",
-            },
-          ];
-        }
-        const cur = prev[idx] as Extract<UiChunk, { kind: "tool_call" }>;
-        const next = [...prev];
-        next[idx] = {
-          kind: "tool_call",
-          toolUseId: cur.toolUseId,
-          toolName: cur.toolName,
-          result: event.content,
-          status: event.isError ? "error" : "done",
-        };
-        return next;
-      });
-    };
-
-    const unlisten = await onAgentEvent((event) => {
-      switch (event.type) {
-        case "status": {
-          const e = event.data as AgentSessionStatusEvent;
-          setStatusBySession((prev) => ({
-            ...prev,
-            [e.sessionId]: {
-              phase: e.phase,
-              attempt: e.attempt,
-              message: e.message,
-              nextRetryAtMs: e.nextRetryAtMs,
-              toolName: e.toolName,
-              stopReason: e.stopReason,
-            },
-          }));
-          if (e.phase === "idle" && e.stopReason !== "cancelled") {
-            setSessionError(null);
-          }
-          break;
-        }
-
-        case "text_delta": {
-          const e = event.data as AgentTextDeltaEvent;
-          appendAssistantText(e.sessionId, e.text, e.isComplete);
-          break;
-        }
-
-        case "turn_complete": {
-          const e = event.data as AgentTurnCompleteEvent;
-          console.log("[IPC] turn_complete", e.sessionId, e.stopReason);
-          setStatusBySession((prev) => ({
-            ...prev,
-            [e.sessionId]: { phase: "idle", stopReason: e.stopReason },
-          }));
-          void reloadHistory(e.sessionId, {
-            fallbackAssistantText: e.assistantMessage,
-            afterTurnComplete: true,
-          });
-          break;
-        }
-
-        case "error": {
-          const e = event.data as AgentErrorEvent;
-          console.error("[IPC] error", e.sessionId, e.error);
-          setStatusBySession((prev) => ({
-            ...prev,
-            [e.sessionId]: prev[e.sessionId] ?? { phase: "idle" },
-          }));
-          if (!e.cancelled) setSessionError(e.error);
-          break;
-        }
-
-        case "approval_needed": {
-          const e = event.data as AgentApprovalNeededEvent;
-          console.log("[IPC] approval_needed", e.approvalId, e.toolName);
-          setApprovals((prev) => [
-            ...prev,
-            {
-              sessionId: e.sessionId,
-              approvalId: e.approvalId,
-              toolName: e.toolName,
-              description: e.description,
-              target: e.target,
-              workspaceCwdConfigured: Boolean(e.workspaceCwdConfigured),
-            },
-          ]);
-          break;
-        }
-
-        case "user_question": {
-          const e = event.data as AgentUserQuestionNeededEvent;
-          setUserQuestions((prev) => [
-            ...prev,
-            {
-              sessionId: e.sessionId,
-              questionId: e.questionId,
-              prompt: e.prompt,
-            },
-          ]);
-          break;
-        }
-
-        case "tool_start": {
-          const e = event.data as AgentToolStartEvent;
-          trackToolStart(e.sessionId, e);
-          break;
-        }
-
-        case "tool_result": {
-          const e = event.data as AgentToolResultEvent;
-          trackToolResult(e.sessionId, e);
-          break;
-        }
-      }
-    });
-
-    onCleanup(() => unlisten());
+  useAgentEvents({
+    activeSessionId: sessions.activeSessionId,
+    setChunks: sessions.setChunks,
+    setPlanBySession: sessions.setPlanBySession,
+    setStatusBySession: sessions.setStatusBySession,
+    setApprovals: approvals.setApprovals,
+    setUserQuestions: approvals.setUserQuestions,
+    setSessionError,
+    reloadHistory,
   });
 
   const handleSend = async (text: string) => {
     setSessionError(null);
-    setApprovals([]);
-    setUserQuestions([]);
+    approvals.clearPending();
 
-    setChunks((prev) => [...prev, { kind: "user" as const, text }]);
+    sessions.setChunks((prev) => [...prev, { kind: "user" as const, text }]);
 
     try {
       const cwd = loadWorkspacePath().trim();
@@ -435,16 +174,16 @@ export default function Shell(): JSX.Element {
         browserSettings: loadBrowserSettings(),
         sessionPreset: sessionPreset(),
       });
-      setActiveSessionId(sessionId);
-      setSessionIds((prev) => [...prev, sessionId]);
-      setSessionMeta((m) => ({
+      sessions.setActiveSessionId(sessionId);
+      sessions.setSessionIds((prev) => [...prev, sessionId]);
+      sessions.setSessionMeta((m) => ({
         ...m,
         [sessionId]: {
           createdAt: Date.now(),
           preview: truncatePromptPreview(text, 52),
         },
       }));
-      setStatusBySession((prev) => ({ ...prev, [sessionId]: { phase: "running" } }));
+      sessions.setStatusBySession((prev) => ({ ...prev, [sessionId]: { phase: "running" } }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setSessionError(msg);
@@ -452,21 +191,21 @@ export default function Shell(): JSX.Element {
   };
 
   const handleApproveOnce = async (approvalId: string) => {
-    const sid = activeSessionId();
+    const sid = sessions.activeSessionId();
     if (!sid) return;
     await respondApproval({ sessionId: sid, approvalId, approved: true, rememberForSession: false });
-    setApprovals((prev) => prev.filter((a) => a.approvalId !== approvalId));
+    approvals.removeApproval(approvalId);
   };
 
   const handleApproveForSession = async (approvalId: string) => {
-    const sid = activeSessionId();
+    const sid = sessions.activeSessionId();
     if (!sid) return;
     await respondApproval({ sessionId: sid, approvalId, approved: true, rememberForSession: true });
-    setApprovals((prev) => prev.filter((a) => a.approvalId !== approvalId));
+    approvals.removeApproval(approvalId);
   };
 
   const handleApproveForWorkspace = async (approvalId: string) => {
-    const sid = activeSessionId();
+    const sid = sessions.activeSessionId();
     if (!sid) return;
     await respondApproval({
       sessionId: sid,
@@ -475,45 +214,45 @@ export default function Shell(): JSX.Element {
       rememberForSession: false,
       rememberForWorkspace: true,
     });
-    setApprovals((prev) => prev.filter((a) => a.approvalId !== approvalId));
+    approvals.removeApproval(approvalId);
   };
 
   const handleReject = async (approvalId: string) => {
-    const sid = activeSessionId();
+    const sid = sessions.activeSessionId();
     if (!sid) return;
     await respondApproval({ sessionId: sid, approvalId, approved: false });
-    setApprovals((prev) => prev.filter((a) => a.approvalId !== approvalId));
+    approvals.removeApproval(approvalId);
   };
 
   const handleUserQuestionSubmit = async (questionId: string, answer: string) => {
-    const sid = activeSessionId();
+    const sid = sessions.activeSessionId();
     if (!sid) return;
     if (!answer) return;
     try {
       await respondUserQuestion({ sessionId: sid, questionId, answer });
-      setUserQuestions((prev) => prev.filter((q) => q.questionId !== questionId));
+      approvals.removeQuestion(questionId);
     } catch (err) {
       console.error("[IPC] respond_user_question failed", err);
     }
   };
 
   const handleUserQuestionCancel = async (questionId: string) => {
-    const sid = activeSessionId();
+    const sid = sessions.activeSessionId();
     if (!sid) return;
     try {
       await respondUserQuestion({ sessionId: sid, questionId, answer: "" });
-      setUserQuestions((prev) => prev.filter((q) => q.questionId !== questionId));
+      approvals.removeQuestion(questionId);
     } catch (err) {
       console.error("[IPC] respond_user_question cancel failed", err);
     }
   };
 
   const handleCancel = async () => {
-    const sid = activeSessionId();
+    const sid = sessions.activeSessionId();
     if (!sid) return;
     try {
       await cancelAgent({ sessionId: sid });
-      setStatusBySession((prev) => ({
+      sessions.setStatusBySession((prev) => ({
         ...prev,
         [sid]: { phase: "cancelling", message: "Cancellation requested" },
       }));
@@ -523,30 +262,29 @@ export default function Shell(): JSX.Element {
   };
 
   const selectSession = (id: string) => {
-    setActiveSessionId(id);
+    sessions.setActiveSessionId(id);
     setSessionError(null);
     void reloadHistory(id);
   };
 
   const handleNewSession = () => {
-    setActiveSessionId(null);
-    setChunks([]);
+    sessions.setActiveSessionId(null);
+    sessions.setChunks([]);
     setSessionError(null);
-    setApprovals([]);
-    setUserQuestions([]);
+    approvals.clearPending();
     setWriteUndoStatus({ canUndo: false, canRedo: false });
   };
 
   return (
-    <div classList={{ "ra-shell": true, "ra-shell--first-run": isFirstRun() }}>
+    <div classList={{ "ra-shell": true, "ra-shell--first-run": sessions.isFirstRun() }}>
       <ShellHeader
-        sessionStatus={activeSessionStatus()}
+        sessionStatus={sessions.activeSessionStatus()}
         workspacePath={workspaceLabel}
         onWorkspaceChipClick={() => setSettingsOpen(true)}
         canUndo={writeUndoStatus().canUndo}
         canRedo={writeUndoStatus().canRedo}
         onUndo={async () => {
-          const sid = activeSessionId();
+          const sid = sessions.activeSessionId();
           if (!sid) return;
           try {
             await undoSessionWrite({ sessionId: sid });
@@ -557,7 +295,7 @@ export default function Shell(): JSX.Element {
           }
         }}
         onRedo={async () => {
-          const sid = activeSessionId();
+          const sid = sessions.activeSessionId();
           if (!sid) return;
           try {
             await redoSessionWrite({ sessionId: sid });
@@ -570,8 +308,8 @@ export default function Shell(): JSX.Element {
       />
 
       <Sidebar
-        sessions={sessionEntries()}
-        activeSessionId={activeSessionId()}
+        sessions={sessions.sessionEntries()}
+        activeSessionId={sessions.activeSessionId()}
         onSelect={selectSession}
         onNewSession={handleNewSession}
         workspacePath={workspaceLabel()}
@@ -595,12 +333,12 @@ export default function Shell(): JSX.Element {
           </div>
         </Show>
         <Show
-          when={isFirstRun()}
+          when={sessions.isFirstRun()}
           fallback={
             <>
               <MessageFeed
-                chunks={chunks()}
-                sessionStatus={activeSessionStatus()}
+                chunks={sessions.chunks()}
+                sessionStatus={sessions.activeSessionStatus()}
                 workspacePath={workspaceLabel}
                 sessionPreset={sessionPreset()}
               />
@@ -616,16 +354,16 @@ export default function Shell(): JSX.Element {
                 onCancel={handleCancel}
                 onSlashCommand={(input) => {
                   const ctx: SlashCommandContext = {
-                    sessionId: activeSessionId(),
-                    clearChunks: () => setChunks([]),
+                    sessionId: sessions.activeSessionId(),
+                    clearChunks: () => sessions.setChunks([]),
                     compactSession: (sid) => compactAgentSession({ sessionId: sid }),
                     sessionRunning: sessionBusy(),
-                    chunksCount: chunks().length,
+                    chunksCount: sessions.chunks().length,
                   };
                   return executeSlashCommand(input, ctx);
                 }}
                 onAppendAssistant={(text: string) => {
-                  setChunks((prev) => [...prev, { kind: "assistant", text }]);
+                  sessions.setChunks((prev) => [...prev, { kind: "assistant", text }]);
                 }}
               />
             </>
@@ -648,30 +386,30 @@ export default function Shell(): JSX.Element {
               onCancel={handleCancel}
               onSlashCommand={(input) => {
                 const ctx: SlashCommandContext = {
-                  sessionId: activeSessionId(),
-                  clearChunks: () => setChunks([]),
+                  sessionId: sessions.activeSessionId(),
+                  clearChunks: () => sessions.setChunks([]),
                   compactSession: (sid) => compactAgentSession({ sessionId: sid }),
                   sessionRunning: sessionBusy(),
-                  chunksCount: chunks().length,
+                  chunksCount: sessions.chunks().length,
                 };
                 return executeSlashCommand(input, ctx);
               }}
               onAppendAssistant={(text: string) => {
-                setChunks((prev) => [...prev, { kind: "assistant", text }]);
+                sessions.setChunks((prev) => [...prev, { kind: "assistant", text }]);
               }}
               hero
             />
           </FirstRunPanel>
         </Show>
         <ApprovalOverlay
-          approvals={approvals()}
+          approvals={approvals.approvals()}
           onApproveOnce={handleApproveOnce}
           onApproveForSession={handleApproveForSession}
           onApproveForWorkspace={handleApproveForWorkspace}
           onReject={handleReject}
         />
         <UserQuestionOverlay
-          questions={userQuestions()}
+          questions={approvals.userQuestions()}
           onSubmit={handleUserQuestionSubmit}
           onCancel={handleUserQuestionCancel}
         />
@@ -681,17 +419,17 @@ export default function Shell(): JSX.Element {
           onSaved={() => {
             setWorkspaceLabel(loadWorkspacePath().trim());
           }}
-          sessionCount={sessionIds().length}
+          sessionCount={sessions.sessionIds().length}
         />
       </main>
 
-      <Show when={!isFirstRun()}>
+      <Show when={!sessions.isFirstRun()}>
         <ContextPanel
           mcpServers={mcpServers}
           setMcpServers={setMcpServers}
           workspacePath={workspaceLabel}
           sessionPreset={sessionPreset}
-          planTimeline={planTimelineForActiveSession}
+          planTimeline={sessions.planTimelineForActiveSession}
         />
       </Show>
 

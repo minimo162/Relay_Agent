@@ -1,3 +1,10 @@
+#![allow(
+    clippy::needless_pass_by_value,
+    clippy::uninlined_format_args,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
+
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,7 +15,8 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
+use ts_rs::TS;
 use uuid::Uuid;
 
 /// M365 Copilot (CDP) cannot take API `tools`; model must emit this fenced JSON for invocations.
@@ -28,10 +36,13 @@ use runtime::{
     RuntimeError, Session as RuntimeSession, TokenUsage, ToolExecutor,
 };
 
+use crate::app_services::AppServices;
 use crate::copilot_persistence::{self, PersistedSessionConfig};
 use crate::error::AgentLoopError;
 use crate::models::{BrowserAutomationSettings, DesktopPermissionSummaryRow, SessionPreset};
-use crate::registry::{SessionRegistry, SessionRunState};
+use crate::registry::{
+    PendingApproval, PendingUserQuestion, SessionRegistry, SessionRunState, SessionState,
+};
 use crate::session_write_undo;
 use crate::tauri_bridge;
 
@@ -43,7 +54,7 @@ const EXPLORE_TOOL_NAMES: &[&str] = &["read_file", "glob_search", "grep_search"]
 /// are denied without prompts (OpenCode-style plan agent); `.claw` permission heuristics for bash
 /// still apply in addition. **Explore:** same read-only host as Plan, but every tool outside
 /// `EXPLORE_TOOL_NAMES` requires danger tier so only file discovery reads run.
-fn desktop_permission_policy(preset: SessionPreset) -> PermissionPolicy {
+pub(crate) fn desktop_permission_policy(preset: SessionPreset) -> PermissionPolicy {
     let base = match preset {
         SessionPreset::Build => PermissionMode::WorkspaceWrite,
         SessionPreset::Plan | SessionPreset::Explore => PermissionMode::ReadOnly,
@@ -119,9 +130,9 @@ fn preset_tool_permissions(preset: SessionPreset) -> Vec<SessionToolPermissionRo
     tools::mvp_tool_specs()
         .into_iter()
         .map(|spec| {
-            let required = policy.required_mode_for(&spec.name);
+            let required = policy.required_mode_for(spec.name);
             let requirement = classify_permission_ui_requirement(host, required);
-            let reason = describe_permission_reason(&spec.name, host, required, requirement);
+            let reason = describe_permission_reason(spec.name, host, required, requirement);
             SessionToolPermissionRow {
                 name: spec.name.to_string(),
                 host_mode: host,
@@ -179,9 +190,9 @@ fn session_preset_system_addon(preset: SessionPreset) -> Option<String> {
             SessionPreset::Plan,
         ))),
         SessionPreset::Explore => Some(
-            r#"## Session mode: Explore (narrow read-only)
+            r"## Session mode: Explore (narrow read-only)
 
-This session uses **Explore** preset: only **read_file**, **glob_search**, and **grep_search** are available—no web, no shell, no MCP, no task list updates, no writes. Map the codebase quickly; for broader read-only analysis (including **TodoWrite**), use **Plan**; to **apply edits**, start a **new session** with **Build**."#
+This session uses **Explore** preset: only **read_file**, **glob_search**, and **grep_search** are available—no web, no shell, no MCP, no task list updates, no writes. Map the codebase quickly; for broader read-only analysis (including **TodoWrite**), use **Plan**; to **apply edits**, start a **new session** with **Build**."
                 .to_string(),
         ),
     }
@@ -210,7 +221,7 @@ fn strip_richwebanswer_spans(s: &str) -> String {
         let mut inner = String::new();
         inner.push(c);
         let mut closed = false;
-        while let Some(c2) = chars.next() {
+        for c2 in chars.by_ref() {
             inner.push(c2);
             if c2 == '】' {
                 closed = true;
@@ -297,7 +308,7 @@ pub(crate) fn posix_shell_escape(s: &str) -> Result<String, String> {
 
 #[allow(clippy::needless_pass_by_value)]
 fn timeout_secs_from_browser_settings(bs: Option<&BrowserAutomationSettings>) -> u64 {
-    let ms = bs.map(|b| b.timeout_ms).unwrap_or(120_000);
+    let ms = bs.map_or(120_000, |b| b.timeout_ms);
     let secs = (u64::from(ms).div_ceil(1000)).max(1);
     secs.clamp(10, 900)
 }
@@ -338,7 +349,7 @@ enum LoopDecision {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum LoopInput {
+pub(crate) enum LoopInput {
     User(String),
     Synthetic(String),
 }
@@ -450,7 +461,7 @@ impl AgentStatusOptions {
 
 fn mutate_session_if_current<F>(guard: &LoopEpochGuard, f: F)
 where
-    F: FnOnce(&mut crate::registry::SessionEntry),
+    F: FnOnce(&mut SessionState),
 {
     let _ignore = guard.registry.mutate_session(&guard.session_id, |entry| {
         if entry.loop_epoch == guard.epoch {
@@ -622,7 +633,7 @@ fn decide_loop_after_success(
     let assistant_text = summary.terminal_assistant_text.as_str();
     let is_meta_stall = summary.tool_results.is_empty()
         && summary.iterations == 1
-        && is_meta_stall_text(&assistant_text);
+        && is_meta_stall_text(assistant_text);
 
     if session_preset == SessionPreset::Build
         && turn_index == 0
@@ -722,7 +733,7 @@ fn is_meta_stall_nudge(input: &LoopInput) -> bool {
     matches!(input, LoopInput::Synthetic(text) if text.trim() == "Continue.")
 }
 
-fn build_compaction_replay_input(goal: &str, current_input: &LoopInput) -> String {
+pub(crate) fn build_compaction_replay_input(goal: &str, current_input: &LoopInput) -> String {
     let latest_request = if is_meta_stall_nudge(current_input) {
         goal.trim()
     } else {
@@ -740,7 +751,7 @@ fn build_compaction_replay_input(goal: &str, current_input: &LoopInput) -> Strin
     )
 }
 
-fn runtime_error_needs_forced_compaction(error: &RuntimeError) -> bool {
+pub(crate) fn runtime_error_needs_forced_compaction(error: &RuntimeError) -> bool {
     let lower = error.to_string().to_ascii_lowercase();
     lower.contains("copilot inline prompt remains above")
         || lower.contains("token limit")
@@ -769,15 +780,15 @@ fn runtime_error_is_retryable(error: &RuntimeError) -> bool {
     .any(|needle| lower.contains(needle))
 }
 
-fn retry_backoff(attempt: usize) -> Duration {
+pub(crate) fn retry_backoff(attempt: usize) -> Duration {
     let secs = match attempt {
         0 | 1 => 1,
-        _ => 2_u64.saturating_pow((attempt - 1) as u32),
+        _ => 2_u64.saturating_pow(u32::try_from(attempt - 1).unwrap_or(u32::MAX)),
     };
     Duration::from_secs(secs.min(8))
 }
 
-fn sleep_with_cancel(cancelled: &AtomicBool, duration: Duration) -> bool {
+pub(crate) fn sleep_with_cancel(cancelled: &AtomicBool, duration: Duration) -> bool {
     let chunk = Duration::from_millis(100);
     let mut remaining = duration;
     while remaining > Duration::ZERO {
@@ -813,6 +824,7 @@ pub fn run_agent_loop_impl(
         let server = tauri_bridge::ensure_copilot_server(
             tauri_bridge::effective_cdp_port(browser_settings.as_ref()),
             true,
+            app.state::<AppServices>().copilot_bridge(),
             Some(registry),
         )
         .map_err(AgentLoopError::InitializationError)?;
@@ -893,7 +905,7 @@ pub fn run_agent_loop_impl(
 
             match result {
                 Ok(summary) => {
-                    final_assistant_message = summary.terminal_assistant_text.clone();
+                    final_assistant_message.clone_from(&summary.terminal_assistant_text);
                     persist_turn(
                         app,
                         registry,
@@ -1010,12 +1022,14 @@ pub fn run_agent_loop_impl(
                         retry_attempts += 1;
                         increment_session_retry_count(&loop_guard, &error_text);
                         let backoff = retry_backoff(retry_attempts);
-                        let next_retry_at_ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis()
-                            .saturating_add(backoff.as_millis())
-                            as u64;
+                        let next_retry_at_ms = u64::try_from(
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis()
+                                .saturating_add(backoff.as_millis()),
+                        )
+                        .unwrap_or(u64::MAX);
                         transition_session_state(
                             app,
                             &loop_guard,
@@ -1056,11 +1070,8 @@ pub fn run_agent_loop_impl(
             }
         }
 
-        if completed_turn || is_meta_stall_nudge(&current_input) {
-            if completed_turn {
-                break;
-            }
-            continue;
+        if completed_turn {
+            break;
         }
     }
 
@@ -1447,7 +1458,7 @@ fn cdp_tool_catalog_section(preset: SessionPreset) -> String {
         ""
     };
     format!(
-        r#"{lead}## Relay Agent tools
+        r#"{CDP_RELAY_RUNTIME_CATALOG_LEAD}## Relay Agent tools
 
 The JSON array below lists every tool you may invoke. Each entry has `name`, `description`, and `input_schema` (JSON Schema for the tool's `input` object).
 {mode_note}
@@ -1477,7 +1488,6 @@ Example:
 {{"name":"read_file","relay_tool_call":true,"input":{{"path":"README.md"}}}}
 ```
 "#,
-        lead = CDP_RELAY_RUNTIME_CATALOG_LEAD,
         mode_note = mode_note,
         json_pretty = json_pretty,
         win_addon = win_addon,
@@ -1496,7 +1506,7 @@ fn mvp_tool_names_whitelist() -> HashSet<String> {
 /// M365 Copilot often emits tool JSON in ` ```json ` or bare ` ``` ` fences instead of ` ```relay_tool `;
 /// when the primary parse yields no calls, we run conservative fallbacks (whitelist MVP tool names only).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CdpToolParseMode {
+pub(crate) enum CdpToolParseMode {
     Initial,
     RetryRepair,
 }
@@ -1517,12 +1527,12 @@ fn fallback_sentinel_policy() -> FallbackSentinelPolicy {
         .map(str::to_ascii_lowercase)
         .as_deref()
     {
-        Some("enforce") | Some("required") | Some("reject") => FallbackSentinelPolicy::Enforce,
+        Some("enforce" | "required" | "reject") => FallbackSentinelPolicy::Enforce,
         _ => FallbackSentinelPolicy::ObserveOnly,
     }
 }
 
-fn parse_copilot_tool_response(
+pub(crate) fn parse_copilot_tool_response(
     raw: &str,
     parse_mode: CdpToolParseMode,
 ) -> (String, Vec<(String, String, String)>) {
@@ -1749,7 +1759,7 @@ fn extract_mvp_tool_object_spans(
             search_start = abs + 1;
             continue;
         }
-        if !obj.get("input").map_or(true, Value::is_object) {
+        if !obj.get("input").is_none_or(Value::is_object) {
             search_start = abs + 1;
             continue;
         }
@@ -2087,7 +2097,7 @@ fn parse_one_tool_call(v: &Value) -> Option<(String, String, String)> {
     Some((id, name, input_str))
 }
 
-/// Short CDP-only rules (prefix of the bundle) so the model lists concrete bugs only when they appear in Tool Result / read_file text above.
+/// Short CDP-only rules (prefix of the bundle) so the model lists concrete bugs only when they appear in Tool Result / `read_file` text above.
 const CDP_BUNDLE_GROUNDING_BLOCK: &str = "## CDP bundle (read before you reply)\n\
 Do not list line-level bugs, missing tags, or identifiers (e.g. `x_size`, `bag.length0`) unless they appear verbatim in a `read_file` or Tool Result in this bundle. If you cite a problem, quote a short substring or line numbers from that text.\n\
 If the bundle contradicts a generic fix checklist, describe what the bundle actually contains instead of inventing errors.";
@@ -2278,10 +2288,11 @@ impl PermissionPrompter for TauriApprovalPrompter {
         let loop_guard = LoopEpochGuard::new(&self.registry, &self.session_id);
         // Step 1 — check cancelled (short, independent lock)
         let cancelled = {
-            match self.registry.data.lock() {
-                Ok(data) => data.get(&self.session_id).is_some_and(|entry| {
-                    entry.cancelled.load(Ordering::SeqCst) || entry.loop_epoch != loop_guard.epoch
-                }),
+            match self.registry.get_session(&self.session_id, |entry| {
+                entry.cancelled.load(Ordering::SeqCst) || entry.loop_epoch != loop_guard.epoch
+            }) {
+                Ok(Some(cancelled)) => cancelled,
+                Ok(None) => true,
                 Err(e) => {
                     tracing::error!(
                         "[RelayAgent] registry lock poisoned during permission check: {e}"
@@ -2300,17 +2311,11 @@ impl PermissionPrompter for TauriApprovalPrompter {
         }
 
         // User chose "allow for this session" for this tool earlier in the same session.
-        let session_allows_tool = match self.registry.data.lock() {
-            Ok(data) => data
-                .get(&self.session_id)
-                .and_then(|entry| {
-                    entry
-                        .auto_allowed_tools
-                        .lock()
-                        .ok()
-                        .map(|set| set.contains(&request.tool_name))
-                })
+        let session_allows_tool = match self.registry.get_handle(&self.session_id) {
+            Ok(Some(handle)) => handle
+                .is_tool_auto_allowed(&request.tool_name)
                 .unwrap_or(false),
+            Ok(None) => false,
             Err(e) => {
                 tracing::error!("[RelayAgent] registry lock poisoned during auto-allow check: {e}");
                 return PermissionPromptDecision::Deny {
@@ -2337,14 +2342,16 @@ impl PermissionPrompter for TauriApprovalPrompter {
         // Parse input for the event
         let input_obj = serde_json::from_str(&request.input).unwrap_or(serde_json::json!({}));
 
-        let workspace_cwd_configured = match self.registry.data.lock() {
-            Ok(data) => data
-                .get(&self.session_id)
-                .and_then(|e| e.workspace_cwd.as_deref())
+        let workspace_cwd_configured = match self.registry.get_session(&self.session_id, |entry| {
+            entry
+                .workspace_cwd
+                .as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-                .is_some(),
-            Err(_) => false,
+                .is_some()
+        }) {
+            Ok(Some(configured)) => configured,
+            Ok(None) | Err(_) => false,
         };
 
         if let Err(e) = self.app.emit(
@@ -2365,8 +2372,18 @@ impl PermissionPrompter for TauriApprovalPrompter {
         // Create oneshot channel
         let (tx, rx) = std::sync::mpsc::channel::<bool>();
         {
-            let mut data = match self.registry.data.lock() {
-                Ok(d) => d,
+            let Some(handle) = self.registry.get_handle(&self.session_id).ok().flatten() else {
+                return PermissionPromptDecision::Deny {
+                    reason: "session was removed".into(),
+                };
+            };
+            match handle.read_state(|entry| entry.loop_epoch) {
+                Ok(epoch) if epoch == loop_guard.epoch => {}
+                Ok(_) => {
+                    return PermissionPromptDecision::Deny {
+                        reason: "session loop was replaced".into(),
+                    };
+                }
                 Err(e) => {
                     tracing::error!(
                         "[RelayAgent] registry lock poisoned during approval registration: {e}"
@@ -2375,27 +2392,27 @@ impl PermissionPrompter for TauriApprovalPrompter {
                         reason: "registry lock poisoned".into(),
                     };
                 }
-            };
-            if let Some(entry) = data.get_mut(&self.session_id) {
-                if entry.loop_epoch != loop_guard.epoch {
-                    return PermissionPromptDecision::Deny {
-                        reason: "session loop was replaced".into(),
-                    };
-                }
-                entry.run_state = SessionRunState::WaitingApproval;
-                let mut approvals = entry.approvals.lock().unwrap_or_else(|e| {
-                    tracing::error!("[RelayAgent] approvals lock poisoned: {e}");
-                    e.into_inner()
-                });
-                approvals.insert(
-                    approval_id.clone(),
-                    crate::registry::PendingApproval {
-                        tx,
-                        tool_name: request.tool_name.clone(),
-                    },
-                );
             }
-            drop(data);
+            if let Err(e) = handle.write_state(|entry| {
+                entry.run_state = SessionRunState::WaitingApproval;
+            }) {
+                tracing::error!("[RelayAgent] session state lock poisoned: {e}");
+                return PermissionPromptDecision::Deny {
+                    reason: "registry lock poisoned".into(),
+                };
+            }
+            if let Err(e) = handle.insert_pending_approval(
+                approval_id.clone(),
+                PendingApproval {
+                    tx,
+                    tool_name: request.tool_name.clone(),
+                },
+            ) {
+                tracing::error!("[RelayAgent] approvals lock poisoned: {e}");
+                return PermissionPromptDecision::Deny {
+                    reason: "registry lock poisoned".into(),
+                };
+            }
         }
         emit_status_event(
             &self.app,
@@ -2477,15 +2494,14 @@ fn enforce_workspace_tool_paths(
                 normalize_key(obj, key)?;
             }
         }
-        "write_file" | "edit_file" => {
+        "write_file" | "edit_file" | "LSP" => {
             normalize_key(obj, "path")?;
         }
         "glob_search" | "grep_search" | "git_status" | "git_diff" => {
             let has_path = obj
                 .get("path")
                 .and_then(|v| v.as_str())
-                .map(|s| !s.is_empty())
-                .unwrap_or(false);
+                .is_some_and(|s| !s.is_empty());
             if !has_path {
                 let root = workspace
                     .canonicalize()
@@ -2524,9 +2540,6 @@ fn enforce_workspace_tool_paths(
         "NotebookEdit" => {
             normalize_key(obj, "notebook_path")?;
         }
-        "LSP" => {
-            normalize_key(obj, "path")?;
-        }
         _ => {}
     }
     Ok(())
@@ -2547,8 +2560,10 @@ pub fn build_tool_executor(
         .as_ref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        .map_or_else(
+            || std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            PathBuf::from,
+        );
 
     let mut mcp_manager = match ConfigLoader::default_for(&cwd_path).load() {
         Ok(cfg) => McpServerManager::from_runtime_config(&cfg),
@@ -2712,11 +2727,11 @@ impl ToolExecutor for TauriToolExecutor {
             tools::execute_tool(tool_name, &input_value).map_err(runtime::ToolError::new)?;
 
         if let Some(ops) = undo_snap {
-            let _ignore = self.registry.mutate_session(&self.session_id, |entry| {
-                if let Ok(mut g) = entry.write_undo.lock() {
+            if let Ok(Some(handle)) = self.registry.get_handle(&self.session_id) {
+                let _ignore = handle.with_write_undo(|g| {
                     g.push_mutation(ops);
-                }
-            });
+                });
+            }
         }
 
         if let Err(e) = self.app.emit(
@@ -2990,23 +3005,17 @@ fn execute_ask_user_question_tool(
     let (tx, rx) = std::sync::mpsc::channel::<String>();
 
     {
-        let mut data = registry
-            .data
-            .lock()
-            .map_err(|e| runtime::ToolError::new(format!("registry lock poisoned: {e}")))?;
-        let Some(entry) = data.get_mut(session_id) else {
+        let Some(handle) = registry
+            .get_handle(session_id)
+            .map_err(|e| runtime::ToolError::new(e.to_string()))?
+        else {
             return Err(runtime::ToolError::new(format!(
                 "session `{session_id}` not found for AskUserQuestion"
             )));
         };
-        let mut qs = entry
-            .user_questions
-            .lock()
-            .map_err(|e| runtime::ToolError::new(format!("user_questions lock poisoned: {e}")))?;
-        qs.insert(
-            question_id.clone(),
-            crate::registry::PendingUserQuestion { tx },
-        );
+        handle
+            .insert_pending_user_question(question_id.clone(), PendingUserQuestion { tx })
+            .map_err(|e| runtime::ToolError::new(e.to_string()))?;
     }
 
     let evt = AgentUserQuestionNeededEvent {
@@ -3262,7 +3271,7 @@ pub fn build_desktop_system_prompt(
     builder.build()
 }
 
-fn load_local_system_prompt_addition(goal: &str) -> Option<String> {
+pub(crate) fn load_local_system_prompt_addition(goal: &str) -> Option<String> {
     let path = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from)?
@@ -3296,7 +3305,7 @@ fn load_local_system_prompt_addition(goal: &str) -> Option<String> {
 
 /* ── Event types ─── */
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentToolStartEvent {
     pub session_id: String,
@@ -3304,7 +3313,7 @@ pub struct AgentToolStartEvent {
     pub tool_name: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentToolResultEvent {
     pub session_id: String,
@@ -3314,7 +3323,7 @@ pub struct AgentToolResultEvent {
     pub is_error: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentUserQuestionNeededEvent {
     pub session_id: String,
@@ -3323,7 +3332,7 @@ pub struct AgentUserQuestionNeededEvent {
     pub prompt: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentApprovalNeededEvent {
     pub session_id: String,
@@ -3332,12 +3341,13 @@ pub struct AgentApprovalNeededEvent {
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    #[ts(type = "unknown")]
     pub input: serde_json::Value,
     /// True when the session was started with a non-empty workspace `cwd` (enables "allow for workspace").
     pub workspace_cwd_configured: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentTurnCompleteEvent {
     pub session_id: String,
@@ -3346,7 +3356,7 @@ pub struct AgentTurnCompleteEvent {
     pub message_count: usize,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionStatusEvent {
     pub session_id: String,
@@ -3363,7 +3373,7 @@ pub struct AgentSessionStatusEvent {
     pub stop_reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentErrorEvent {
     pub session_id: String,
@@ -3371,7 +3381,7 @@ pub struct AgentErrorEvent {
     pub cancelled: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentTextDeltaEvent {
     pub session_id: String,
@@ -3379,14 +3389,14 @@ pub struct AgentTextDeltaEvent {
     pub is_complete: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayMessage {
     pub role: String,
     pub content: Vec<MessageContent>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum MessageContent {
     Text {
@@ -3395,6 +3405,7 @@ pub enum MessageContent {
     ToolUse {
         id: String,
         name: String,
+        #[ts(type = "unknown")]
         input: serde_json::Value,
     },
     ToolResult {
@@ -3406,7 +3417,7 @@ pub enum MessageContent {
     },
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionHistoryResponse {
     pub session_id: String,
@@ -3494,7 +3505,7 @@ mod cdp_copilot_tool_tests {
     /// Fixture must not contain strings that models often hallucinate as "bugs" (see docs/AGENT_EVALUATION_CRITERIA.md).
     #[test]
     fn tetris_grounding_fixture_has_no_common_hallucination_tokens() {
-        let html = include_str!("../../../../tests/fixtures/tetris_grounding.html");
+        let html = include_str!("../../../../../tests/fixtures/tetris_grounding.html");
         assert!(
             html.contains("RELAY_GROUNDING_FIXTURE"),
             "fixture marker missing"
@@ -3509,7 +3520,7 @@ mod cdp_copilot_tool_tests {
 
     #[test]
     fn tetris_html_fixture_has_no_common_hallucination_tokens() {
-        let html = include_str!("../../../../tests/fixtures/tetris.html");
+        let html = include_str!("../../../../../tests/fixtures/tetris.html");
         assert!(
             html.contains("RELAY_GROUNDING_FIXTURE"),
             "fixture marker missing"
@@ -3525,7 +3536,7 @@ mod cdp_copilot_tool_tests {
     /// CDP bundle must include the grounding block and verbatim `read_file` tool output.
     #[test]
     fn build_cdp_prompt_includes_grounding_block_and_tool_result_body() {
-        let html = include_str!("../../../../tests/fixtures/tetris_grounding.html");
+        let html = include_str!("../../../../../tests/fixtures/tetris_grounding.html");
         let messages = vec![ConversationMessage::tool_result(
             "tu1",
             "read_file",
@@ -3818,6 +3829,7 @@ post"#;
 
     #[test]
     fn fallback_observe_mode_accepts_missing_sentinel() {
+        let _guard = env_lock();
         std::env::remove_var("RELAY_FALLBACK_SENTINEL_POLICY");
         let raw = r#"```json
 {"name":"read_file","input":{"path":"README.md"}}
@@ -3829,6 +3841,7 @@ post"#;
 
     #[test]
     fn fallback_enforce_mode_rejects_missing_sentinel() {
+        let _guard = env_lock();
         std::env::set_var("RELAY_FALLBACK_SENTINEL_POLICY", "enforce");
         let raw = r#"```json
 {"name":"read_file","input":{"path":"README.md"}}
@@ -4135,7 +4148,6 @@ SendUserMessage|read-only|read-only
 Config|read-only|danger-full-access
 StructuredOutput|read-only|read-only
 REPL|read-only|danger-full-access
-PowerShell|read-only|danger-full-access
 CliList|read-only|read-only
 CliDiscover|read-only|read-only
 CliRegister|read-only|danger-full-access
@@ -4158,7 +4170,8 @@ TaskGet|read-only|read-only
 TaskList|read-only|read-only
 TaskStop|read-only|read-only
 TaskUpdate|read-only|read-only
-TaskOutput|read-only|read-only"#;
+TaskOutput|read-only|read-only
+BackgroundTaskOutput|read-only|read-only"#;
 
         assert_eq!(runtime_snapshot, expected_runtime);
 

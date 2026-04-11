@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Debug / support bundle fields (OpenWork-style Settings → Debug export).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayDiagnostics {
     pub app_version: String,
@@ -28,7 +29,7 @@ pub struct RelayDiagnostics {
 /// so mutating tools are rejected without prompts—start a Build session to apply changes.
 /// **Explore** is read-only like Plan but only exposes `read_file` / `glob_search` / `grep_search`
 /// in the Copilot tool catalog (OpenCode-style fast codebase exploration).
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionPreset {
     #[default]
@@ -38,7 +39,7 @@ pub enum SessionPreset {
 }
 
 /// Settings for M365 Copilot browser automation via Chrome `DevTools` Protocol.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserAutomationSettings {
     pub cdp_port: u16,
@@ -48,7 +49,7 @@ pub struct BrowserAutomationSettings {
 }
 
 /// Request to start a new agent session.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct StartAgentRequest {
     pub goal: String,
@@ -65,7 +66,7 @@ pub struct StartAgentRequest {
 }
 
 /// Request to approve or reject a pending tool execution.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RespondAgentApprovalRequest {
     pub session_id: String,
@@ -80,7 +81,7 @@ pub struct RespondAgentApprovalRequest {
 }
 
 /// Answer for a pending `AskUserQuestion` tool call.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RespondUserQuestionRequest {
     pub session_id: String,
@@ -89,27 +90,27 @@ pub struct RespondUserQuestionRequest {
 }
 
 /// Request to cancel a running agent session.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelAgentRequest {
     pub session_id: String,
 }
 
 /// Request to retrieve session message history.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct GetAgentSessionHistoryRequest {
     pub session_id: String,
 }
 
 /// Undo/redo for session write stack (same `session_id` shape as history).
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionWriteUndoRequest {
     pub session_id: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionWriteUndoStatusResponse {
     pub can_undo: bool,
@@ -117,14 +118,14 @@ pub struct SessionWriteUndoStatusResponse {
 }
 
 /// Optional workspace folder for `rust-analyzer --version` probe (`docs/LSP_MILESTONE.md`).
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RustAnalyzerProbeRequest {
     #[serde(default)]
     pub workspace_path: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RustAnalyzerProbeResponse {
     pub ok: bool,
@@ -133,7 +134,7 @@ pub struct RustAnalyzerProbeResponse {
 }
 
 /// One tool row for the desktop permission summary (Context → Policy).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopPermissionSummaryRow {
     pub name: String,
@@ -144,13 +145,13 @@ pub struct DesktopPermissionSummaryRow {
     pub description: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct GetPermissionSummaryRequest {
     pub session_preset: SessionPreset,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceInstructionSurfacesRequest {
     #[serde(default)]
@@ -158,7 +159,7 @@ pub struct WorkspaceInstructionSurfacesRequest {
 }
 
 /// Information about a registered MCP server.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerInfo {
     pub name: String,
@@ -171,7 +172,7 @@ pub struct McpServerInfo {
 }
 
 /// Request to add an MCP server to the registry.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct McpAddServerRequest {
     pub name: String,
@@ -181,35 +182,35 @@ pub struct McpAddServerRequest {
 }
 
 /// One persisted workspace → allowed tools row (`~/.relay-agent/workspace_allowed_tools.json`).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceAllowlistEntryRow {
     pub workspace_key: String,
     pub tools: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceAllowlistSnapshot {
     pub store_path: String,
     pub entries: Vec<WorkspaceAllowlistEntryRow>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceAllowlistRemoveToolRequest {
     pub cwd: String,
     pub tool_name: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceAllowlistCwdRequest {
     pub cwd: String,
 }
 
 /// Workspace-defined slash command (`.relay/commands/*.md` or `commands.json`).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceSlashCommandRow {
     pub name: String,
@@ -219,7 +220,7 @@ pub struct WorkspaceSlashCommandRow {
     pub source: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ListWorkspaceSlashCommandsRequest {
     #[serde(default)]

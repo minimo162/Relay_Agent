@@ -1,14 +1,17 @@
+#![allow(clippy::needless_pass_by_value, clippy::unused_async)]
+
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
-use tokio::sync::Semaphore;
+use ts_rs::TS;
 use uuid::Uuid;
 
 use std::time::Duration;
 
+use crate::app_services::{AppServices, CopilotBridgeManager, CopilotServerState};
 use crate::cdp_copilot;
 use crate::models::{
     BrowserAutomationSettings, CancelAgentRequest, DesktopPermissionSummaryRow,
@@ -19,7 +22,7 @@ use crate::models::{
     WorkspaceAllowlistCwdRequest, WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
     WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
 };
-use crate::registry::{SessionRegistry, SessionRunState};
+use crate::registry::{SessionHandle, SessionRegistry, SessionRunState, SessionState};
 use runtime::MAX_TEXT_FILE_READ_BYTES;
 
 /* ── Copilot Node bridge (copilot_server.js) ───────────────── *
@@ -29,29 +32,17 @@ use runtime::MAX_TEXT_FILE_READ_BYTES;
  * `agent-browser` install. See `agent_browser_daemon.rs` for   *
  * an optional alternate approach.                               */
 
-pub struct CopilotServerState {
-    server: Arc<Mutex<crate::copilot_server::CopilotServer>>,
-    started: bool,
-}
-
-static COPILOT_SERVER_SLOT: OnceLock<Mutex<Option<CopilotServerState>>> = OnceLock::new();
-
-fn copilot_server_slot() -> &'static Mutex<Option<CopilotServerState>> {
-    COPILOT_SERVER_SLOT.get_or_init(|| Mutex::new(None))
-}
-
 /// Notify the Node `copilot_server.js` bridge to abort an in-flight `describe` wait loop (best-effort).
-async fn request_copilot_bridge_abort() {
-    let url = match copilot_server_slot().lock().ok().and_then(|g| {
+async fn request_copilot_bridge_abort(bridge: Arc<CopilotBridgeManager>) {
+    let Some(url) = bridge.lock().ok().and_then(|g| {
         g.as_ref().and_then(|st| {
             st.server
                 .lock()
                 .ok()
                 .map(|srv| format!("{}/v1/chat/abort", srv.server_url()))
         })
-    }) {
-        Some(u) => u,
-        None => return,
+    }) else {
+        return;
     };
     match reqwest::Client::new()
         .post(url)
@@ -96,12 +87,11 @@ pub fn effective_cdp_port(browser_settings: Option<&BrowserAutomationSettings>) 
 pub fn ensure_copilot_server(
     desired_cdp_port: u16,
     block_port_change_on_concurrent_sessions: bool,
+    bridge: Arc<CopilotBridgeManager>,
     registry: Option<&SessionRegistry>,
 ) -> Result<Arc<Mutex<crate::copilot_server::CopilotServer>>, String> {
     let server_arc = {
-        let mut slot = copilot_server_slot()
-            .lock()
-            .map_err(|e| format!("copilot server state lock poisoned: {e}"))?;
+        let mut slot = bridge.lock()?;
         if slot.is_none() {
             let edge_profile = crate::copilot_server::default_edge_profile_dir();
             let _ = std::fs::create_dir_all(&edge_profile);
@@ -173,9 +163,7 @@ pub fn ensure_copilot_server(
     };
 
     {
-        let mut slot = copilot_server_slot()
-            .lock()
-            .map_err(|e| format!("copilot server state lock poisoned: {e}"))?;
+        let mut slot = bridge.lock()?;
         let st = slot
             .as_mut()
             .expect("copilot server slot must exist after init");
@@ -206,17 +194,17 @@ pub fn ensure_copilot_server(
 }
 
 /// Ensure Node `copilot_server.js` is up and run `GET /status` (Edge launch + Copilot tab + login probe).
-#[tauri::command]
 pub async fn warmup_copilot_bridge(
-    registry: State<'_, SessionRegistry>,
+    services: State<'_, AppServices>,
     browser_settings: Option<BrowserAutomationSettings>,
 ) -> Result<crate::copilot_server::CopilotStatusResponse, String> {
-    let reg = registry.inner().clone();
+    let reg = services.registry();
+    let bridge = services.copilot_bridge();
     let cdp = effective_cdp_port(browser_settings.as_ref());
     // `ensure_copilot_server` builds a temporary runtime and uses `block_on`; it must not run on a
     // Tokio worker thread (nested runtime panic: "Cannot start a runtime from within a runtime").
     tokio::task::spawn_blocking(move || {
-        let server_arc = ensure_copilot_server(cdp, true, Some(&reg))?;
+        let server_arc = ensure_copilot_server(cdp, true, bridge, Some(&reg))?;
         let srv_clone = Arc::clone(&server_arc);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -241,33 +229,34 @@ pub async fn warmup_copilot_bridge(
 }
 
 // Re-export registry and agent_loop types for external consumers
-pub use crate::agent_loop::{
+pub(crate) use crate::agent_loop::{
     AgentErrorEvent, AgentSessionHistoryResponse, AgentSessionStatusEvent,
 };
-pub use crate::registry::SessionEntry;
 
 // What we need from agent_loop
 use crate::agent_loop::{msg_to_relay, run_agent_loop_impl};
 use crate::agent_loop::{AgentSessionPhase, E_ERROR, E_STATUS};
 
-/* ── Tauri commands ─── */
-
-/// Limits concurrent agent sessions to prevent resource exhaustion.
-/// Default: 4 simultaneous agents.
-static AGENT_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
-
-#[tauri::command]
 pub async fn start_agent(
     app: AppHandle,
-    registry: State<'_, SessionRegistry>,
+    services: State<'_, AppServices>,
     request: StartAgentRequest,
 ) -> Result<String, String> {
-    start_agent_inner(app, registry.inner().clone(), request).await
+    start_agent_inner(
+        app,
+        services.registry(),
+        services.agent_semaphore(),
+        services.config().clone(),
+        request,
+    )
+    .await
 }
 
 pub(crate) async fn start_agent_inner(
     app: AppHandle,
     registry: SessionRegistry,
+    agent_semaphore: Arc<tokio::sync::Semaphore>,
+    config: crate::config::AgentConfig,
     request: StartAgentRequest,
 ) -> Result<String, String> {
     let goal = request.goal.trim().to_string();
@@ -286,26 +275,15 @@ pub(crate) async fn start_agent_inner(
     let auto_initial: HashSet<String> =
         crate::workspace_allowlist::load_for_cwd(workspace_cwd.as_deref());
 
-    let entry = SessionEntry {
-        session: runtime::Session::new(),
-        running: true,
-        run_state: SessionRunState::Running,
-        loop_epoch: 1,
-        cancelled: Arc::new(AtomicBool::new(false)),
-        approvals: Mutex::new(HashMap::new()),
-        user_questions: Mutex::new(HashMap::new()),
-        auto_allowed_tools: Mutex::new(auto_initial),
-        finished_at: None,
-        write_undo: Mutex::new(crate::session_write_undo::WriteUndoStacks::default()),
-        workspace_cwd,
-        last_stop_reason: None,
-        retry_count: 0,
-        last_error_summary: None,
-        terminal_status_emitted: false,
-    };
-    let cancelled = Arc::clone(&entry.cancelled);
+    let handle = SessionHandle::new(
+        SessionState::new(runtime::Session::new(), workspace_cwd),
+        auto_initial,
+    );
+    let cancelled = handle
+        .read_state(|state| Arc::clone(&state.cancelled))
+        .map_err(|e| e.to_string())?;
     registry
-        .insert(session_id.clone(), entry)
+        .insert(session_id.clone(), handle)
         .map_err(|e| e.to_string())?;
 
     let app_for_task = app.clone();
@@ -313,17 +291,12 @@ pub(crate) async fn start_agent_inner(
     let reg_for_task = registry.clone();
 
     // Periodically evict stale sessions to prevent memory leaks
-    let ttl_seconds = crate::config::AgentConfig::global()
-        .session_cleanup_ttl_minutes
-        .cast_signed()
-        * 60;
-    if let Err(e) = registry.cleanup_stale_sessions(ttl_seconds) {
+    let ttl_seconds = i64::try_from(config.session_cleanup_ttl_minutes).unwrap_or(i64::MAX) * 60;
+    if let Err(e) = registry.remove_stale_sessions(ttl_seconds) {
         tracing::warn!("[RelayAgent] stale session cleanup failed: {e}");
     }
 
-    let permit = AGENT_SEMAPHORE
-        .get_or_init(|| Arc::new(Semaphore::new(4)))
-        .clone()
+    let permit = agent_semaphore
         .acquire_owned()
         .await
         .map_err(|_| "agent concurrency limit reached — try again later".to_string())?;
@@ -379,8 +352,9 @@ pub(crate) async fn start_agent_inner(
         }
 
         // Always clean up session state, even on panic
-        let _ignore = reg_for_task
-            .mutate_session(&sid_for_task, super::registry::SessionEntry::mark_finished);
+        if let Ok(Some(handle)) = reg_for_task.get_handle(&sid_for_task) {
+            let _ignore = handle.write_state(SessionState::mark_finished);
+        }
 
         // Release concurrency slot
         drop(permit);
@@ -389,56 +363,48 @@ pub(crate) async fn start_agent_inner(
     Ok(session_id)
 }
 
-#[tauri::command]
 pub async fn respond_approval(
     _app: AppHandle,
-    registry: State<'_, SessionRegistry>,
+    services: State<'_, AppServices>,
     request: RespondAgentApprovalRequest,
 ) -> Result<(), String> {
-    respond_approval_inner(registry.inner().clone(), request)
+    respond_approval_inner(services.registry(), request)
 }
 
 pub(crate) fn respond_approval_inner(
     registry: SessionRegistry,
     request: RespondAgentApprovalRequest,
 ) -> Result<(), String> {
-    let mut data = registry
-        .data
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
-    let entry = data
-        .get_mut(&request.session_id)
+    let handle = registry
+        .get_handle(&request.session_id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("session `{}` not found", request.session_id))?;
-
-    let pending = entry
-        .approvals
-        .lock()
-        .map_err(|e| format!("approvals lock poisoned: {e}"))?
-        .remove(&request.approval_id)
+    let pending = handle
+        .take_pending_approval(&request.approval_id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("approval `{}` not pending", request.approval_id))?;
 
     if request.approved
         && (request.remember_for_session == Some(true)
             || request.remember_for_workspace == Some(true))
     {
-        let mut auto = entry
-            .auto_allowed_tools
-            .lock()
-            .map_err(|e| format!("auto_allowed_tools lock poisoned: {e}"))?;
-        auto.insert(pending.tool_name.clone());
+        handle
+            .add_auto_allowed_tool(&pending.tool_name)
+            .map_err(|e| e.to_string())?;
     }
 
     if request.approved && request.remember_for_workspace == Some(true) {
-        if let Some(ref cwd) = entry.workspace_cwd {
+        if let Some(cwd) = handle
+            .read_state(|state| state.workspace_cwd.clone())
+            .map_err(|e| e.to_string())?
+        {
             if let Err(e) =
-                crate::workspace_allowlist::remember_tool_for_workspace(cwd, &pending.tool_name)
+                crate::workspace_allowlist::remember_tool_for_workspace(&cwd, &pending.tool_name)
             {
                 tracing::warn!("[RelayAgent] workspace allowlist persist failed: {e}");
             }
         }
     }
-
-    drop(data);
 
     pending
         .tx
@@ -446,27 +412,19 @@ pub(crate) fn respond_approval_inner(
         .map_err(|_| "approval channel closed — session may have ended".into())
 }
 
-#[tauri::command]
 pub async fn respond_user_question(
-    registry: State<'_, SessionRegistry>,
+    services: State<'_, AppServices>,
     request: RespondUserQuestionRequest,
 ) -> Result<(), String> {
-    let mut data = registry
-        .data
-        .lock()
-        .map_err(|e| format!("registry lock poisoned: {e}"))?;
-    let entry = data
-        .get_mut(&request.session_id)
+    let handle = services
+        .registry()
+        .get_handle(&request.session_id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("session `{}` not found", request.session_id))?;
-
-    let pending = entry
-        .user_questions
-        .lock()
-        .map_err(|e| format!("user_questions lock poisoned: {e}"))?
-        .remove(&request.question_id)
+    let pending = handle
+        .take_pending_user_question(&request.question_id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("question `{}` not pending", request.question_id))?;
-
-    drop(data);
 
     pending
         .tx
@@ -474,79 +432,79 @@ pub async fn respond_user_question(
         .map_err(|_| "question channel closed — session may have ended".into())
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CompactAgentSessionRequest {
     pub session_id: String,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CompactAgentSessionResponse {
     pub message: String,
     pub removed_message_count: usize,
 }
 
-#[tauri::command]
 pub async fn compact_agent_session(
-    registry: State<'_, SessionRegistry>,
+    services: State<'_, AppServices>,
     request: CompactAgentSessionRequest,
 ) -> Result<CompactAgentSessionResponse, String> {
-    use commands::handle_slash_command;
+    use relay_commands::handle_slash_command;
     use runtime::CompactionConfig;
 
-    let result = {
-        let mut data = registry
-            .data
-            .lock()
-            .map_err(|e| format!("registry lock poisoned: {e}"))?;
-        let entry = data
-            .get_mut(&request.session_id)
-            .ok_or_else(|| format!("session `{}` not found", request.session_id))?;
+    let handle = services
+        .registry()
+        .get_handle(&request.session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("session `{}` not found", request.session_id))?;
+    let result = handle
+        .write_state(|state| {
+            let config = CompactionConfig {
+                preserve_recent_messages: 2,
+                max_estimated_tokens: 4000,
+            };
 
-        let config = CompactionConfig {
-            preserve_recent_messages: 2,
-            max_estimated_tokens: 4000,
-        };
+            let cmd_result =
+                handle_slash_command("/compact", &state.session, config).ok_or_else(|| {
+                    "compact command is only available for existing sessions".to_string()
+                })?;
 
-        let cmd_result = handle_slash_command("/compact", &entry.session, config)
-            .ok_or_else(|| "compact command is only available for existing sessions".to_string())?;
+            let removed_count = state
+                .session
+                .messages
+                .len()
+                .saturating_sub(cmd_result.session.messages.len());
 
-        let _removed = cmd_result.message.len();
-        let removed_count = entry
-            .session
-            .messages
-            .len()
-            .saturating_sub(cmd_result.session.messages.len());
-
-        entry.session = cmd_result.session;
-        CompactAgentSessionResponse {
-            message: cmd_result.message,
-            removed_message_count: removed_count,
-        }
-    };
+            state.session = cmd_result.session;
+            Ok::<CompactAgentSessionResponse, String>(CompactAgentSessionResponse {
+                message: cmd_result.message,
+                removed_message_count: removed_count,
+            })
+        })
+        .map_err(|e| e.to_string())??;
 
     Ok(result)
 }
 
-#[tauri::command]
 pub async fn cancel_agent(
     app: AppHandle,
-    registry: State<'_, SessionRegistry>,
+    services: State<'_, AppServices>,
     request: CancelAgentRequest,
 ) -> Result<(), String> {
+    let registry = services.registry();
+    let bridge = services.copilot_bridge();
     let mut should_emit_status = false;
-    if let Ok(mut data) = registry.data.lock() {
-        if let Some(entry) = data.get_mut(&request.session_id) {
-            should_emit_status = !entry.terminal_status_emitted;
-            entry.loop_epoch = entry.loop_epoch.saturating_add(1);
-            entry.cancelled.store(true, Ordering::Relaxed);
-            entry.running = false;
-            entry.run_state = SessionRunState::Cancelling;
-            entry.terminal_status_emitted = false;
-            entry.last_stop_reason = Some("cancelled".to_string());
-            entry.last_error_summary = Some("session cancelled by user".to_string());
-        }
+    if let Ok(Some(handle)) = registry.get_handle(&request.session_id) {
+        let _ignore = handle.write_state(|state| {
+            should_emit_status = !state.terminal_status_emitted;
+            state.loop_epoch = state.loop_epoch.saturating_add(1);
+            state.cancelled.store(true, Ordering::Relaxed);
+            state.running = false;
+            state.run_state = SessionRunState::Cancelling;
+            state.terminal_status_emitted = false;
+            state.last_stop_reason = Some("cancelled".to_string());
+            state.last_error_summary = Some("session cancelled by user".to_string());
+        });
     }
     if should_emit_status {
         let cancelling = AgentSessionStatusEvent {
@@ -563,35 +521,47 @@ pub async fn cancel_agent(
         }
     }
     // Drain approvals and reject them all
-    match registry.drain_approvals(&request.session_id) {
-        Ok(senders) => {
-            for tx in senders {
-                let _ = tx.send(false);
+    match registry.get_handle(&request.session_id) {
+        Ok(Some(handle)) => match handle.drain_approvals() {
+            Ok(senders) => {
+                for tx in senders {
+                    let _ = tx.send(false);
+                }
             }
-        }
+            Err(e) => {
+                tracing::error!("[RelayAgent] drain approvals failed during cancel: {e}");
+            }
+        },
+        Ok(None) => {}
         Err(e) => {
-            tracing::error!("[RelayAgent] drain approvals failed during cancel: {e}");
+            tracing::error!("[RelayAgent] registry failed during cancel approvals: {e}");
         }
     }
-    match registry.drain_user_questions(&request.session_id) {
-        Ok(senders) => {
-            for tx in senders {
-                let _ = tx.send(String::new());
+    match registry.get_handle(&request.session_id) {
+        Ok(Some(handle)) => match handle.drain_user_questions() {
+            Ok(senders) => {
+                for tx in senders {
+                    let _ = tx.send(String::new());
+                }
             }
-        }
+            Err(e) => {
+                tracing::error!("[RelayAgent] drain user questions failed during cancel: {e}");
+            }
+        },
+        Ok(None) => {}
         Err(e) => {
-            tracing::error!("[RelayAgent] drain user questions failed during cancel: {e}");
+            tracing::error!("[RelayAgent] registry failed during cancel questions: {e}");
         }
     }
 
-    request_copilot_bridge_abort().await;
+    request_copilot_bridge_abort(bridge).await;
 
     if should_emit_status {
-        if let Ok(mut data) = registry.data.lock() {
-            if let Some(entry) = data.get_mut(&request.session_id) {
-                entry.run_state = SessionRunState::Finished;
-                entry.terminal_status_emitted = true;
-            }
+        if let Ok(Some(handle)) = registry.get_handle(&request.session_id) {
+            let _ignore = handle.write_state(|state| {
+                state.run_state = SessionRunState::Finished;
+                state.terminal_status_emitted = true;
+            });
         }
         let idle = AgentSessionStatusEvent {
             session_id: request.session_id.clone(),
@@ -618,25 +588,30 @@ pub async fn cancel_agent(
     Ok(())
 }
 
-#[tauri::command]
 pub async fn get_session_history(
-    registry: State<'_, SessionRegistry>,
+    services: State<'_, AppServices>,
     request: GetAgentSessionHistoryRequest,
 ) -> Result<AgentSessionHistoryResponse, String> {
-    let maybe_loaded = {
-        let data = registry
-            .data
-            .lock()
-            .map_err(|e| format!("registry lock poisoned: {e}"))?;
-        data.get(&request.session_id).map(|entry| {
-            let running = entry.running && !entry.cancelled.load(Ordering::SeqCst);
-            let messages = entry.session.messages.iter().map(msg_to_relay).collect();
-            AgentSessionHistoryResponse {
-                session_id: request.session_id.clone(),
-                running,
-                messages,
-            }
-        })
+    let maybe_loaded = if let Some(handle) = services
+        .registry()
+        .get_handle(&request.session_id)
+        .map_err(|e| e.to_string())?
+    {
+        Some(
+            handle
+                .read_state(|state| {
+                    let running = state.running && !state.cancelled.load(Ordering::SeqCst);
+                    let messages = state.session.messages.iter().map(msg_to_relay).collect();
+                    AgentSessionHistoryResponse {
+                        session_id: request.session_id.clone(),
+                        running,
+                        messages,
+                    }
+                })
+                .map_err(|e| e.to_string())?,
+        )
+    } else {
+        None
     };
 
     if let Some(history) = maybe_loaded {
@@ -655,67 +630,51 @@ pub async fn get_session_history(
     })
 }
 
-#[tauri::command]
 pub fn undo_session_write(
-    registry: State<'_, SessionRegistry>,
+    services: State<'_, AppServices>,
     request: SessionWriteUndoRequest,
 ) -> Result<(), String> {
-    registry
-        .with_data(|m| {
-            let entry = m
-                .get_mut(&request.session_id)
-                .ok_or_else(|| "Unknown session.".to_string())?;
-            let mut stack = entry
-                .write_undo
-                .lock()
-                .map_err(|_| "Undo state lock poisoned.".to_string())?;
-            stack.undo()
-        })
+    let handle = services
+        .registry()
+        .get_handle(&request.session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Unknown session.".to_string())?;
+    handle
+        .with_write_undo(super::session_write_undo::WriteUndoStacks::undo)
         .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
 pub fn redo_session_write(
-    registry: State<'_, SessionRegistry>,
+    services: State<'_, AppServices>,
     request: SessionWriteUndoRequest,
 ) -> Result<(), String> {
-    registry
-        .with_data(|m| {
-            let entry = m
-                .get_mut(&request.session_id)
-                .ok_or_else(|| "Unknown session.".to_string())?;
-            let mut stack = entry
-                .write_undo
-                .lock()
-                .map_err(|_| "Undo state lock poisoned.".to_string())?;
-            stack.redo()
-        })
+    let handle = services
+        .registry()
+        .get_handle(&request.session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Unknown session.".to_string())?;
+    handle
+        .with_write_undo(super::session_write_undo::WriteUndoStacks::redo)
         .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
 pub fn get_session_write_undo_status(
-    registry: State<'_, SessionRegistry>,
+    services: State<'_, AppServices>,
     request: SessionWriteUndoRequest,
 ) -> Result<SessionWriteUndoStatusResponse, String> {
-    registry
-        .with_data(|m| {
-            let entry = m
-                .get(&request.session_id)
-                .ok_or_else(|| "Unknown session.".to_string())?;
-            let stack = entry
-                .write_undo
-                .lock()
-                .map_err(|_| "Undo state lock poisoned.".to_string())?;
-            Ok(SessionWriteUndoStatusResponse {
-                can_undo: stack.can_undo(),
-                can_redo: stack.can_redo(),
-            })
-        })
+    let handle = services
+        .registry()
+        .get_handle(&request.session_id)
         .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Unknown session.".to_string())?;
+    handle
+        .with_write_undo(|stack| SessionWriteUndoStatusResponse {
+            can_undo: stack.can_undo(),
+            can_redo: stack.can_redo(),
+        })
+        .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
 pub fn probe_rust_analyzer(request: RustAnalyzerProbeRequest) -> RustAnalyzerProbeResponse {
     crate::lsp_probe::probe_rust_analyzer(request.workspace_path.as_deref())
 }
@@ -860,7 +819,7 @@ pub fn ensure_cdp_connected() -> Result<cdp_copilot::CopilotPage, String> {
     Ok(page)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectCdpRequest {
     /// If true and no existing browser is found, auto-launch a dedicated Edge.
@@ -873,7 +832,7 @@ pub struct ConnectCdpRequest {
     pub base_port: Option<u16>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CdpSendPromptRequest {
     pub prompt: String,
@@ -881,7 +840,7 @@ pub struct CdpSendPromptRequest {
     pub wait_response_secs: Option<u64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CdpConnectResult {
     pub ok: bool,
@@ -895,7 +854,7 @@ pub struct CdpConnectResult {
     pub error: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CdpPromptResult {
     pub ok: bool,
@@ -904,7 +863,6 @@ pub struct CdpPromptResult {
     pub error: Option<String>,
 }
 
-#[tauri::command]
 pub async fn connect_cdp(
     _app: AppHandle,
     request: ConnectCdpRequest,
@@ -982,7 +940,6 @@ pub async fn connect_cdp(
     }
 }
 
-#[tauri::command]
 pub async fn cdp_send_prompt(
     _app: AppHandle,
     request: CdpSendPromptRequest,
@@ -1038,7 +995,6 @@ pub async fn cdp_send_prompt(
     })
 }
 
-#[tauri::command]
 pub async fn cdp_start_new_chat(
     _app: AppHandle,
     request: ConnectCdpRequest,
@@ -1101,7 +1057,6 @@ pub async fn cdp_start_new_chat(
 }
 
 /// Disconnect from the Copilot page and clean up the browser if it was auto-launched.
-#[tauri::command]
 pub async fn disconnect_cdp(_app: AppHandle) -> Result<(), String> {
     // Use the tracked port to avoid reconnecting to the CDP endpoint.
     // The ConnectionResult from a prior connect_copilot_page() call owns the Edge child
@@ -1162,7 +1117,6 @@ pub async fn disconnect_cdp(_app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
 pub async fn cdp_screenshot(_app: AppHandle) -> Result<serde_json::Value, String> {
     let port = cdp_copilot::resolve_cdp_attachment_port(COPILOT_JS_CDP_PORT).await;
     let debug_url = get_cdp_debug_url(port);
@@ -1204,7 +1158,6 @@ fn new_server_info(name: &str, command: &str, args: Vec<String>) -> McpServerInf
 }
 
 /// List all registered MCP servers.
-#[tauri::command]
 pub fn mcp_list_servers() -> Result<Vec<McpServerInfo>, String> {
     let registry = mcp_registry();
     let data = registry
@@ -1217,7 +1170,6 @@ pub fn mcp_list_servers() -> Result<Vec<McpServerInfo>, String> {
 
 /// Add an MCP server to the registry, or replace an existing one.
 /// If the server was already connected, it is reset to disconnected.
-#[tauri::command]
 pub fn mcp_add_server(request: McpAddServerRequest) -> Result<McpServerInfo, String> {
     let name = request.name.trim().to_string();
     if name.is_empty() {
@@ -1241,7 +1193,6 @@ pub fn mcp_add_server(request: McpAddServerRequest) -> Result<McpServerInfo, Str
 
 /// Remove an MCP server from the registry.
 #[allow(clippy::needless_pass_by_value)]
-#[tauri::command]
 pub fn mcp_remove_server(name: String) -> Result<bool, String> {
     let registry = mcp_registry();
     let mut data = registry
@@ -1252,7 +1203,6 @@ pub fn mcp_remove_server(name: String) -> Result<bool, String> {
 
 /// Check the status of a single MCP server.
 #[allow(clippy::needless_pass_by_value)]
-#[tauri::command]
 pub fn mcp_check_server_status(name: String) -> Result<McpServerInfo, String> {
     let registry = mcp_registry();
     let data = registry
@@ -1264,24 +1214,16 @@ pub fn mcp_check_server_status(name: String) -> Result<McpServerInfo, String> {
 }
 
 fn relay_predictability_notes() -> Vec<String> {
-    let mut n = Vec::new();
-    n.push(
+    vec![
         "Edge CDP defaults to port 9360 for the Copilot bridge unless you change “CDP port hint” in Settings (Browser automation)."
             .into(),
-    );
-    n.push(
         "The workspace path (cwd) in Settings is sent per agent run and may differ from the app process working directory (see diagnostics processCwd)."
             .into(),
-    );
-    n.push(
         "“Allow for this workspace” persists tool names under ~/.relay-agent/workspace_allowed_tools.json (normalized folder keys)."
             .into(),
-    );
-    n.push(
         "Optional project slash commands: add .relay/commands/<name>.md or .relay/commands/commands.json (see PLANS.md)."
             .into(),
-    );
-    n
+    ]
 }
 
 fn relay_doctor_hints() -> Vec<String> {
@@ -1323,7 +1265,6 @@ fn relay_doctor_hints() -> Vec<String> {
 }
 
 /// JSON-friendly runtime facts for bug reports (mirrors `OpenWork` debug export, reduced scope).
-#[tauri::command]
 pub fn get_relay_diagnostics() -> RelayDiagnostics {
     let dev = std::env::var("RELAY_AGENT_DEV_MODE")
         .map(|v| {
@@ -1333,19 +1274,21 @@ pub fn get_relay_diagnostics() -> RelayDiagnostics {
             )
         })
         .unwrap_or(false);
-    let process_cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|e| format!("(unavailable: {e})"));
-    let claw_config_home_display = std::env::var("CLAW_CONFIG_HOME")
-        .map(|s| {
+    let process_cwd = std::env::current_dir().map_or_else(
+        |e| format!("(unavailable: {e})"),
+        |p| p.display().to_string(),
+    );
+    let claw_config_home_display = std::env::var("CLAW_CONFIG_HOME").map_or_else(
+        |_| "~/.claw (default; set CLAW_CONFIG_HOME to override)".to_string(),
+        |s| {
             let t = s.trim();
             if t.is_empty() {
                 "~/.claw (default)".to_string()
             } else {
                 t.to_string()
             }
-        })
-        .unwrap_or_else(|_| "~/.claw (default; set CLAW_CONFIG_HOME to override)".to_string());
+        },
+    );
     RelayDiagnostics {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         target_os: std::env::consts::OS.to_string(),
@@ -1362,7 +1305,6 @@ pub fn get_relay_diagnostics() -> RelayDiagnostics {
 }
 
 /// Writes UTF-8 text to a path chosen by the user (e.g. diagnostics JSON export).
-#[tauri::command]
 pub fn write_text_export(path: String, contents: String) -> Result<(), String> {
     if path.trim().is_empty() {
         return Err("path is empty".to_string());
@@ -1376,38 +1318,32 @@ pub fn write_text_export(path: String, contents: String) -> Result<(), String> {
     std::fs::write(p, contents).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
 pub fn workspace_instruction_surfaces(
     request: WorkspaceInstructionSurfacesRequest,
 ) -> crate::workspace_surfaces::WorkspaceInstructionSurfaces {
     crate::workspace_surfaces::scan_workspace_instructions(request.cwd)
 }
 
-#[tauri::command]
 pub fn get_desktop_permission_summary(
     request: GetPermissionSummaryRequest,
 ) -> Vec<DesktopPermissionSummaryRow> {
     crate::agent_loop::desktop_permission_summary_rows(request.session_preset)
 }
 
-#[tauri::command]
 pub fn get_workspace_allowlist() -> Result<WorkspaceAllowlistSnapshot, String> {
     crate::workspace_allowlist::snapshot()
 }
 
-#[tauri::command]
 pub fn remove_workspace_allowlist_tool(
     request: WorkspaceAllowlistRemoveToolRequest,
 ) -> Result<(), String> {
     crate::workspace_allowlist::remove_tool_for_cwd(&request.cwd, &request.tool_name)
 }
 
-#[tauri::command]
 pub fn clear_workspace_allowlist(request: WorkspaceAllowlistCwdRequest) -> Result<(), String> {
     crate::workspace_allowlist::clear_cwd(&request.cwd)
 }
 
-#[tauri::command]
 pub fn list_workspace_slash_commands(
     request: ListWorkspaceSlashCommandsRequest,
 ) -> Result<Vec<WorkspaceSlashCommandRow>, String> {

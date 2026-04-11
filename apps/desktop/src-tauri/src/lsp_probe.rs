@@ -8,8 +8,7 @@ pub fn probe_rust_analyzer(workspace: Option<&str>) -> crate::models::RustAnalyz
     let cwd = workspace
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(Path::new)
-        .unwrap_or_else(|| Path::new("."));
+        .map_or_else(|| Path::new("."), Path::new);
 
     match Command::new("rust-analyzer").current_dir(cwd).arg("--version").output() {
         Ok(out) => {

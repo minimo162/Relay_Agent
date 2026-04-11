@@ -20,7 +20,7 @@ struct HealthBody {
 /// match `expected_boot_token`, terminates the process listening on that port (platform-specific).
 ///
 /// Set `RELAY_COPILOT_RECLAIM_STALE_HTTP=0` to skip (e.g. shared-port debugging).
-/// On Windows, **`RELAY_COPILOT_RECLAIM_NETSTAT=1`** enables a slow `netstat`/`taskkill` fallback after PowerShell (default off for faster startup).
+/// On Windows, **`RELAY_COPILOT_RECLAIM_NETSTAT=1`** enables a slow `netstat`/`taskkill` fallback after `PowerShell` (default off for faster startup).
 pub(crate) async fn maybe_reclaim_stale_copilot_http_port(
     client: &Client,
     port: u16,
@@ -34,14 +34,13 @@ pub(crate) async fn maybe_reclaim_stale_copilot_http_port(
     }
 
     let url = format!("http://127.0.0.1:{port}/health");
-    let response = match client
+    let Ok(response) = client
         .get(&url)
         .timeout(Duration::from_secs(2))
         .send()
         .await
-    {
-        Ok(r) => r,
-        Err(_) => return,
+    else {
+        return;
     };
 
     if !response.status().is_success() {

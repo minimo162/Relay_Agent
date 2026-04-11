@@ -43,17 +43,15 @@ pub fn normalize_workspace_key(cwd: &str) -> String {
     }
     let p = Path::new(t);
     p.canonicalize()
-        .map(|x| x.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| t.to_string())
+        .map_or_else(|_| t.to_string(), |x| x.to_string_lossy().into_owned())
 }
 
 fn read_store() -> StoreFile {
     let Ok(path) = store_path() else {
         return StoreFile::default();
     };
-    let data = match fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(_) => return StoreFile::default(),
+    let Ok(data) = fs::read_to_string(&path) else {
+        return StoreFile::default();
     };
     serde_json::from_str(&data).unwrap_or_default()
 }

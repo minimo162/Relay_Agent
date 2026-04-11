@@ -9,7 +9,7 @@ The repository now contains a **working Tauri v2 + SolidJS desktop application**
 Practical implication:
 
 - **Greenfield planning below is historical:** Milestones 0–1 (and much of the relay/session vertical slice) are implemented in source; treat earlier “directories do not exist” wording in `.taskmaster/docs/repo_audit.md` as superseded unless the audit file is explicitly refreshed.
-- The legacy **`packages/contracts` workspace package has been removed**; IPC and shared shapes are defined in Rust and kept in sync with `apps/desktop/src/lib/ipc.ts` (see `AGENTS.md` — Rust IPC is the source of truth).
+- The legacy **`packages/contracts` workspace package has been removed**; IPC source shapes live in Rust and generate `apps/desktop/src/lib/ipc.generated.ts`, while `apps/desktop/src/lib/ipc.ts` stays a thin wrapper layer (see `AGENTS.md` — Rust IPC is the source of truth).
 - `.taskmaster/` remains the planning and task-graph layer alongside `PLANS.md` and `docs/IMPLEMENTATION.md`.
 - “Preserve existing structure” means: avoid unnecessary reshaping of the **current** app layout; prefer incremental milestones over churny renames.
 
@@ -152,7 +152,7 @@ Create a working workspace foundation that can host the desktop app and Rust/Tau
 
 - The workspace installs successfully.
 - The desktop app structure exists as **SolidJS + Vite SPA + Tauri v2** (not SvelteKit).
-- TypeScript IPC types in `apps/desktop/src/lib/ipc.ts` align with Rust command/event signatures in `tauri_bridge.rs` and related modules.
+- TypeScript IPC types are generated from Rust source models into `apps/desktop/src/lib/ipc.generated.ts`, with `apps/desktop/src/lib/ipc.ts` limited to invoke/listen wrappers and UI helpers.
 - Basic JS/TS and Rust checks run without structural failures.
 
 ### Verification Commands
@@ -227,9 +227,52 @@ Manual verification:
 ### Risks and Mitigations
 
 - Risk: contract drift between frontend and backend payloads.
-  Mitigation: treat Rust IPC as source of truth; update `ipc.ts` in the same change as command/event shape changes.
+  Mitigation: treat Rust IPC as source of truth; update generated bindings and the thin `ipc.ts` wrapper in the same change as command/event shape changes.
 - Risk: session persistence is added late and breaks flow state.
   Mitigation: build local storage during this milestone, not after UI wiring is finished.
+
+## Milestone 2A: Core / Client / IPC Boundary Refactor
+
+**Status:** Complete in source (2026-04-12).
+
+### Goal
+
+Reduce desktop change cost by moving orchestration and contracts behind clearer backend boundaries while preserving the existing Tauri commands, `agent:*` events, session presets, and UX.
+
+### Change Targets
+
+- `apps/desktop/src-tauri/src/app_services.rs`, `registry.rs`, `lib.rs`, `tauri_bridge.rs`
+- `apps/desktop/src-tauri/src/agent_loop/**`
+- `apps/desktop/src-tauri/src/commands/**`
+- `apps/desktop/src-tauri/src/ipc_codegen.rs`, `models.rs`, `workspace_surfaces.rs`
+- `apps/desktop/src/lib/ipc.generated.ts`, `apps/desktop/src/lib/ipc.ts`
+- `apps/desktop/src/shell/Shell.tsx`, `apps/desktop/src/shell/{sessionStore,approvalStore,useAgentEvents,useCopilotWarmup}.ts`
+- `.github/workflows/ci.yml`, `README.md`, `docs/IMPLEMENTATION.md`
+
+### Acceptance Criteria
+
+- Tauri app state is centralized under `AppServices`, including config-derived session semaphore and Copilot bridge state.
+- The session registry uses per-session handles instead of one central mutex for approvals, questions, undo stacks, and run state.
+- `agent_loop` is a module boundary with orchestration, prompt, permission, retry, compaction, executor, and transport slices instead of a single top-level file.
+- Rust IPC source models generate `apps/desktop/src/lib/ipc.generated.ts`; `ipc.ts` remains a thin wrapper/helper layer.
+- `Shell.tsx` is reduced to composition, with event handling, warmup, session state, and approval state split into stores/hooks.
+- CI runs `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` in addition to the existing checks.
+- README and implementation notes describe the generated IPC boundary and the new backend/client split.
+
+### Verification Commands
+
+```bash
+node apps/desktop/scripts/fetch-bundled-node.mjs
+corepack pnpm --filter @relay-agent/desktop typecheck
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings
+```
+
+### Notes
+
+- PR CI now enforces `cargo test`; mock Playwright remains a follow-up instead of a required PR gate in this milestone.
+- `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings` now passes for the desktop crate; remaining Rust verification noise is limited to non-fatal `ts-rs` serde-attribute warnings tracked in `docs/IMPLEMENTATION.md`.
 
 ## Milestone 3: CSV Inspect and Preview Slice
 

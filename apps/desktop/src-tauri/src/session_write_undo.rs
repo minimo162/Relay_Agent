@@ -82,7 +82,7 @@ fn read_snapshot(path: &Path) -> Result<Option<Vec<u8>>, String> {
     Ok(Some(buf))
 }
 
-fn apply_restore(path: &Path, previous: &Option<Vec<u8>>) -> Result<(), String> {
+fn apply_restore(path: &Path, previous: Option<&Vec<u8>>) -> Result<(), String> {
     match previous {
         None => {
             let _ = fs::remove_file(path);
@@ -107,7 +107,7 @@ fn apply_undo_frame(ops: &[PathUndoOp]) -> Result<Vec<PathUndoOp>, String> {
                     path: path.clone(),
                     previous: current,
                 });
-                apply_restore(path, previous)?;
+                apply_restore(path, previous.as_ref())?;
             }
         }
     }

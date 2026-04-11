@@ -527,10 +527,7 @@ pub struct CopilotPage {
 
 /// When `RELAY_COPILOT_NO_WINDOW_FOCUS=1`, skip CDP `Page.bringToFront` (aligns with `copilot_server.js`).
 fn copilot_window_focus_allowed() -> bool {
-    match std::env::var("RELAY_COPILOT_NO_WINDOW_FOCUS") {
-        Ok(v) if v == "1" => false,
-        _ => true,
-    }
+    !matches!(std::env::var("RELAY_COPILOT_NO_WINDOW_FOCUS"), Ok(v) if v == "1")
 }
 
 impl CopilotPage {

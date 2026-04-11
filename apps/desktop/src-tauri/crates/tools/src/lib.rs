@@ -1019,8 +1019,7 @@ pub fn approval_display_for_tool(tool_name: &str, input: &str) -> ToolApprovalDi
     let title = spec
         .as_ref()
         .and_then(ToolSpec::approval_title)
-        .map(ToString::to_string)
-        .unwrap_or_else(|| format!("Allow “{tool_name}”?"));
+        .map_or_else(|| format!("Allow “{tool_name}”?"), ToString::to_string);
     let target = extract_approval_target(
         tool_name,
         &input_json,
