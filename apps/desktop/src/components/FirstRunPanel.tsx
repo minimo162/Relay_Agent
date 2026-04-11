@@ -2,18 +2,8 @@ import { createMemo, type JSX } from "solid-js";
 import { ellipsisPath, workspaceBasename } from "../lib/workspace-display";
 import { ui } from "../lib/ui-tokens";
 import type { SessionPreset } from "../lib/ipc";
+import { sessionModeDefaultNote } from "../lib/session-mode-label";
 import { Button } from "./ui";
-
-function modeSummary(preset: SessionPreset): string {
-  switch (preset) {
-    case "plan":
-      return "Default mode: Read-only plan. Relay can inspect the workspace without editing files.";
-    case "explore":
-      return "Default mode: Read and search. Relay can inspect files and searches without changing them.";
-    default:
-      return "Default mode: Edit files. Relay can apply changes, and sensitive actions may still ask for approval.";
-  }
-}
 
 export function FirstRunPanel(props: {
   workspacePath: () => string;
@@ -67,9 +57,7 @@ export function FirstRunPanel(props: {
             <p class={`ra-type-caption ${ui.mutedText} mt-1`}>
               Ask Relay to review code, plan a change, or update files in the selected workspace.
             </p>
-            <p class="ra-first-run__mode-note">
-              {modeSummary(props.sessionPreset)}
-            </p>
+            <p class="ra-first-run__mode-note">{sessionModeDefaultNote(props.sessionPreset)}</p>
           </div>
           {props.children}
         </div>

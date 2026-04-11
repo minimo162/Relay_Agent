@@ -12,6 +12,7 @@ import {
 } from "solid-js";
 import { friendlyToolActivityLabel, type SessionPreset, type UiChunk } from "../lib/ipc";
 import { ellipsisPath, workspaceBasename } from "../lib/workspace-display";
+import { sessionModeLabel } from "../lib/session-mode-label";
 import { EmptyState } from "./primitives";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCallRow } from "./ToolCallRow";
@@ -128,10 +129,10 @@ export function MessageFeed(props: {
         ? `${ellipsisPath(p, 72)} — describe your task in the box below.`
         : "Click the workspace name in the header to set a project folder so file tools use the right root. Then describe your task below.";
     if (props.sessionPreset === "plan") {
-      return `${base} Plan mode stays read-only; use Build when you want the agent to apply file changes.`;
+      return `${base} Plan mode stays read-only; use ${sessionModeLabel("build")} when you want the agent to apply file changes.`;
     }
     if (props.sessionPreset === "explore") {
-      return `${base} Explore mode only runs read_file, glob_search, and grep_search—switch to Plan or Build for more tools.`;
+      return `${base} Explore mode only runs read_file, glob_search, and grep_search—switch to ${sessionModeLabel("plan")} or ${sessionModeLabel("build")} for more tools.`;
     }
     return base;
   });

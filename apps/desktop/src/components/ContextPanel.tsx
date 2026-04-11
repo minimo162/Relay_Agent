@@ -1,5 +1,6 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, type JSX } from "solid-js";
 import type { McpServer, Policy, SessionPreset } from "../lib/ipc";
+import { sessionModeLabel, sessionModeSummary } from "../lib/session-mode-label";
 import type { PlanTimelineEntry, PlanTodoItem } from "../context/todo-write-parse";
 import {
   fetchWorkspaceInstructionSurfaces,
@@ -18,28 +19,6 @@ const tabs: { id: TabId; label: string }[] = [
   { id: "plan", label: "Plan" },
   { id: "servers", label: "MCP" },
 ];
-
-function sessionPresetLabel(preset: SessionPreset): string {
-  switch (preset) {
-    case "plan":
-      return "Read-only plan";
-    case "explore":
-      return "Read and search";
-    default:
-      return "Edit files";
-  }
-}
-
-function sessionPresetSummary(preset: SessionPreset): string {
-  switch (preset) {
-    case "plan":
-      return "Relay can inspect and plan, but it will not edit files.";
-    case "explore":
-      return "Relay can inspect files and searches without changing the workspace.";
-    default:
-      return "Relay can read and edit files. Sensitive actions may still require approval.";
-  }
-}
 
 function planStatusLabel(status: PlanTodoItem["status"]): string {
   switch (status) {
@@ -101,8 +80,8 @@ export function ContextPanel(props: {
     const t = props.planTimeline();
     return t.length > 0 ? [...t].reverse() : false;
   });
-  const modeLabel = createMemo(() => sessionPresetLabel(props.sessionPreset()));
-  const modeSummary = createMemo(() => sessionPresetSummary(props.sessionPreset()));
+  const modeLabel = createMemo(() => sessionModeLabel(props.sessionPreset()));
+  const modeSummary = createMemo(() => sessionModeSummary(props.sessionPreset()));
   const [showAddServer, setShowAddServer] = createSignal(false);
   const [newServerName, setNewServerName] = createSignal("");
   const [newServerCommand, setNewServerCommand] = createSignal("");

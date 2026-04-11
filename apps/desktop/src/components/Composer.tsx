@@ -1,12 +1,9 @@
 import { Show, createEffect, createSignal, onMount, type JSX } from "solid-js";
 import { Textarea } from "./ui";
-import {
-  detectSlashMode,
-  findSlashCommands,
-  type SlashCommand,
-} from "../lib/slash-commands";
+import { detectSlashMode, findSlashCommands, type SlashCommand } from "../lib/slash-commands";
 import type { SessionPreset } from "../lib/ipc";
 import { ui } from "../lib/ui-tokens";
+import { sessionModeLabel, sessionModeSummary } from "../lib/session-mode-label";
 
 /** Matches `.ra-composer-shell textarea` max-height in index.css */
 const COMPOSER_TEXTAREA_MAX_PX = 200;
@@ -176,8 +173,7 @@ export function Composer(props: {
         e.preventDefault();
         setSlashMode({
           ...current,
-          selectedIndex:
-            (current.selectedIndex - 1 + current.commands.length) % current.commands.length,
+          selectedIndex: (current.selectedIndex - 1 + current.commands.length) % current.commands.length,
         });
         return;
       }
@@ -238,7 +234,8 @@ export function Composer(props: {
           </div>
           <div class="ra-composer-toolbar">
             <div class="ra-composer-toolbar-main">
-              <p class="ra-composer-hint shrink-0">⌘/Ctrl+Enter to send · Enter for new line</p>
+              <p class="ra-composer-hint">⌘/Ctrl+Enter to send · Enter for new line</p>
+              <p class="ra-composer-mode-summary">{sessionModeSummary(props.sessionPreset)}</p>
             </div>
             <div class="ra-composer-toolbar-actions">
               <div
@@ -253,7 +250,7 @@ export function Composer(props: {
                   aria-pressed={props.sessionPreset === "build"}
                   onClick={() => props.onSessionPresetChange("build")}
                 >
-                  Edit
+                  {sessionModeLabel("build")}
                 </button>
                 <button
                   type="button"
@@ -261,7 +258,7 @@ export function Composer(props: {
                   aria-pressed={props.sessionPreset === "plan"}
                   onClick={() => props.onSessionPresetChange("plan")}
                 >
-                  Plan
+                  {sessionModeLabel("plan")}
                 </button>
                 <button
                   type="button"
@@ -269,7 +266,7 @@ export function Composer(props: {
                   aria-pressed={props.sessionPreset === "explore"}
                   onClick={() => props.onSessionPresetChange("explore")}
                 >
-                  Explore
+                  {sessionModeLabel("explore")}
                 </button>
               </div>
               <Show when={props.running}>
