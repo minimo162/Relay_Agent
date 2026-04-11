@@ -3044,7 +3044,7 @@ fn try_execute_mcp_tool(
     input: &str,
 ) -> Option<Result<String, runtime::ToolError>> {
     // Check if this tool name maps to an MCP tool
-    let route = mcp_manager.tool_index().get(tool_name).cloned()?;
+    let route = mcp_manager.resolve_tool_route(tool_name)?;
 
     let input_value: serde_json::Value =
         serde_json::from_str(input).unwrap_or_else(|_| serde_json::json!({}));

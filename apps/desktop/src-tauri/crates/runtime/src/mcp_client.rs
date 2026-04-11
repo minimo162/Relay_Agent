@@ -143,7 +143,7 @@ mod tests {
 
         let bootstrap = McpClientBootstrap::from_scoped_config("stdio-server", &config);
         assert_eq!(bootstrap.normalized_name, "stdio-server");
-        assert_eq!(bootstrap.tool_prefix, "mcp__stdio-server__");
+        assert_eq!(bootstrap.tool_prefix, "mcp__stdio-server_eeff1555__");
         assert_eq!(
             bootstrap.signature.as_deref(),
             Some("stdio:[uvx|mcp-server]")
