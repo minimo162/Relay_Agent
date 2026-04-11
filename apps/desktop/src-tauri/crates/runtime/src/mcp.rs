@@ -24,7 +24,7 @@ pub fn normalize_name_for_mcp(name: &str) -> String {
 
 #[must_use]
 pub fn mcp_tool_prefix(server_name: &str) -> String {
-    format!("mcp__{}__", normalize_name_for_mcp(server_name))
+    format!("mcp__{}__", normalize_name_with_hash_for_mcp(server_name))
 }
 
 #[must_use]
@@ -32,6 +32,15 @@ pub fn mcp_tool_name(server_name: &str, tool_name: &str) -> String {
     format!(
         "{}{}",
         mcp_tool_prefix(server_name),
+        normalize_name_with_hash_for_mcp(tool_name)
+    )
+}
+
+#[must_use]
+pub fn mcp_legacy_tool_name(server_name: &str, tool_name: &str) -> String {
+    format!(
+        "mcp__{}__{}",
+        normalize_name_for_mcp(server_name),
         normalize_name_for_mcp(tool_name)
     )
 }
@@ -155,6 +164,21 @@ fn stable_hex_hash(value: &str) -> String {
     format!("{hash:016x}")
 }
 
+fn short_stable_hex_hash(value: &str, len: usize) -> String {
+    stable_hex_hash(value)
+        .chars()
+        .take(len)
+        .collect::<String>()
+}
+
+fn normalize_name_with_hash_for_mcp(name: &str) -> String {
+    format!(
+        "{}_{}",
+        normalize_name_for_mcp(name),
+        short_stable_hex_hash(name, 8)
+    )
+}
+
 fn collapse_underscores(value: &str) -> String {
     let mut collapsed = String::with_capacity(value.len());
     let mut last_was_underscore = false;
@@ -211,8 +235,8 @@ mod tests {
     };
 
     use super::{
-        mcp_server_signature, mcp_tool_name, normalize_name_for_mcp, scoped_mcp_config_hash,
-        unwrap_ccr_proxy_url,
+        mcp_legacy_tool_name, mcp_server_signature, mcp_tool_name, normalize_name_for_mcp,
+        scoped_mcp_config_hash, unwrap_ccr_proxy_url,
     };
 
     #[test]
@@ -225,6 +249,10 @@ mod tests {
         );
         assert_eq!(
             mcp_tool_name("claude.ai Example Server", "weather tool"),
+            "mcp__claude_ai_Example_Server_100c0694__weather_tool_cb50e90c"
+        );
+        assert_eq!(
+            mcp_legacy_tool_name("claude.ai Example Server", "weather tool"),
             "mcp__claude_ai_Example_Server__weather_tool"
         );
     }

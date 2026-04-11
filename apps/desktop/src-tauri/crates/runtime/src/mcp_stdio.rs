@@ -9,7 +9,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 use crate::config::{McpTransport, RuntimeConfig, ScopedMcpServerConfig};
-use crate::mcp::mcp_tool_name;
+use crate::mcp::{mcp_legacy_tool_name, mcp_tool_name};
 use crate::mcp_client::{McpClientBootstrap, McpClientTransport, McpStdioTransport};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -328,6 +328,7 @@ pub struct McpServerManager {
     servers: BTreeMap<String, ManagedMcpServer>,
     unsupported_servers: Vec<UnsupportedMcpServer>,
     tool_index: BTreeMap<String, ToolRoute>,
+    legacy_tool_aliases: BTreeMap<String, String>,
     next_request_id: u64,
 }
 
@@ -362,6 +363,7 @@ impl McpServerManager {
             servers: managed_servers,
             unsupported_servers,
             tool_index: BTreeMap::new(),
+            legacy_tool_aliases: BTreeMap::new(),
             next_request_id: 1,
         }
     }
@@ -420,6 +422,7 @@ impl McpServerManager {
 
                 for tool in result.tools {
                     let qualified_name = mcp_tool_name(&server_name, &tool.name);
+                    let legacy_qualified_name = mcp_legacy_tool_name(&server_name, &tool.name);
                     self.tool_index.insert(
                         qualified_name.clone(),
                         ToolRoute {
@@ -427,6 +430,10 @@ impl McpServerManager {
                             raw_name: tool.name.clone(),
                         },
                     );
+                    if legacy_qualified_name != qualified_name {
+                        self.legacy_tool_aliases
+                            .insert(legacy_qualified_name, qualified_name.clone());
+                    }
                     discovered_tools.push(ManagedMcpTool {
                         server_name: server_name.clone(),
                         qualified_name,
@@ -560,9 +567,10 @@ impl McpServerManager {
         qualified_tool_name: &str,
         arguments: Option<JsonValue>,
     ) -> Result<JsonRpcResponse<McpToolCallResult>, McpServerManagerError> {
+        let canonical_name = self.resolve_qualified_tool_name(qualified_tool_name);
         let route = self
             .tool_index
-            .get(qualified_tool_name)
+            .get(&canonical_name)
             .cloned()
             .ok_or_else(|| McpServerManagerError::UnknownTool {
                 qualified_name: qualified_tool_name.to_string(),
@@ -640,6 +648,12 @@ impl McpServerManager {
         &self.tool_index
     }
 
+    #[must_use]
+    pub fn resolve_tool_route(&self, qualified_tool_name: &str) -> Option<ToolRoute> {
+        let canonical_name = self.resolve_qualified_tool_name(qualified_tool_name);
+        self.tool_index.get(&canonical_name).cloned()
+    }
+
     /// Configured stdio MCP server names (from merged settings).
     #[must_use]
     pub fn stdio_server_names(&self) -> Vec<String> {
@@ -649,6 +663,15 @@ impl McpServerManager {
     fn clear_routes_for_server(&mut self, server_name: &str) {
         self.tool_index
             .retain(|_, route| route.server_name != server_name);
+        self.legacy_tool_aliases
+            .retain(|_, canonical| self.tool_index.contains_key(canonical));
+    }
+
+    fn resolve_qualified_tool_name(&self, qualified_tool_name: &str) -> String {
+        self.legacy_tool_aliases
+            .get(qualified_tool_name)
+            .cloned()
+            .unwrap_or_else(|| qualified_tool_name.to_string())
     }
 
     fn server_mut(
@@ -982,7 +1005,7 @@ mod tests {
         ConfigSource, McpRemoteServerConfig, McpSdkServerConfig, McpServerConfig,
         McpStdioServerConfig, McpWebSocketServerConfig, ScopedMcpServerConfig,
     };
-    use crate::mcp::mcp_tool_name;
+    use crate::mcp::{mcp_legacy_tool_name, mcp_tool_name};
     use crate::mcp_client::McpClientBootstrap;
 
     use super::{
@@ -1701,6 +1724,43 @@ mod tests {
                     .and_then(|result| result.structured_content.as_ref())
                     .and_then(|value| value.get("server")),
                 Some(&json!("beta"))
+            );
+
+            manager.shutdown().await.expect("shutdown");
+            cleanup_script(&script_path);
+        });
+    }
+
+    #[test]
+    fn manager_accepts_legacy_qualified_tool_aliases() {
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let script_path = write_manager_mcp_server_script();
+            let root = script_path.parent().expect("script parent");
+            let log_path = root.join("alpha.log");
+            let servers = BTreeMap::from([(
+                "alpha".to_string(),
+                manager_server_config(&script_path, "alpha", &log_path),
+            )]);
+            let mut manager = McpServerManager::from_servers(&servers);
+            manager.discover_tools().await.expect("discover tools");
+
+            let legacy_name = mcp_legacy_tool_name("alpha", "echo");
+            let response = manager
+                .call_tool(&legacy_name, Some(json!({"text": "legacy"})))
+                .await
+                .expect("call with legacy alias");
+
+            assert_eq!(
+                response
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.structured_content.as_ref())
+                    .and_then(|value| value.get("server")),
+                Some(&json!("alpha"))
             );
 
             manager.shutdown().await.expect("shutdown");

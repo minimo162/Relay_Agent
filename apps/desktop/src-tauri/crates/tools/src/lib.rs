@@ -984,10 +984,12 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
 #[must_use]
 pub fn approval_display_for_tool(tool_name: &str, input: &str) -> ToolApprovalDisplay {
     let input_json: Value = serde_json::from_str(input).unwrap_or_else(|_| json!({}));
-    if let Some((_, _, tool)) = parse_mcp_qualified_name(tool_name) {
+    if let Some((_, integration, tool)) = parse_mcp_qualified_name(tool_name) {
+        let display_tool = humanize_mcp_segment(tool);
+        let display_integration = humanize_mcp_segment(integration);
         return ToolApprovalDisplay {
-            approval_title: format!("Call MCP integration tool “{tool}”?"),
-            approval_target_hint: Some(tool_name.to_string()),
+            approval_title: format!("Call MCP integration tool “{display_tool}”?"),
+            approval_target_hint: Some(format!("mcp__{display_integration}__{display_tool}")),
             important_args: summarize_important_args(
                 &input_json,
                 &["arguments", "server", "serverName"],
@@ -1112,6 +1114,18 @@ fn parse_mcp_qualified_name(name: &str) -> Option<(&str, &str, &str)> {
         Some((prefix, integration, tool))
     } else {
         None
+    }
+}
+
+fn humanize_mcp_segment(segment: &str) -> String {
+    let Some((base, hash)) = segment.rsplit_once('_') else {
+        return segment.to_string();
+    };
+    let hash_len = hash.len();
+    if (6..=8).contains(&hash_len) && hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        base.to_string()
+    } else {
+        segment.to_string()
     }
 }
 
