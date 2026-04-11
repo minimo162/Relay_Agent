@@ -16,6 +16,14 @@
 
 ## Milestone Log
 
+### 2026-04-11 CDP fallback parser: sentinel-gated tool candidates (staged rollout)
+
+**Problem:** Fallback parsing paths (generic fenced JSON / inline tool-shaped object recovery) could treat accidental tool-shaped JSON as executable intent because they only checked shape + whitelist. We needed an explicit sentinel to mark “this is intentionally a tool call,” with a compatibility period before strict rejection.
+
+**Change:** [`agent_loop.rs`](../apps/desktop/src-tauri/src/agent_loop.rs) now introduces fallback-sentinel policy for fallback parser paths only: each fallback tool object is inspected for **`"relay_tool_call": true`**. Missing sentinel now emits a warning log (default **observe** phase), and strict rejection is available via **`RELAY_FALLBACK_SENTINEL_POLICY=enforce`** (`required` / `reject` aliases accepted). Primary `relay_tool` fenced parsing remains unchanged. The CDP prompt/tool-protocol examples now include sentinel-bearing tool objects, and [`README.md`](../README.md) now documents the staged rollout plus the enforcement env var.
+
+**Verification:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot_tool_tests::fallback_observe_mode_accepts_missing_sentinel cdp_copilot_tool_tests::fallback_enforce_mode_rejects_missing_sentinel`; `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot_tool_tests::fallback_json_fence_read_file cdp_copilot_tool_tests::unfenced_tool_json_in_prose`; `git diff --check` — pass (2026-04-11).
+
 ### 2026-04-11 Agent loop: backend-first hardening (run-state, retry, stop reasons)
 
 **Problem:** The Rust-side Copilot/CDP loop still relied on a thin outer `for` loop with a one-off `"Continue."` heuristic. That made failure handling coarse: transient Copilot transport failures stopped immediately, approval denials were indistinguishable from generic tool failures in the terminal state, and the in-memory session registry had no explicit run-state beyond a boolean `running`.
