@@ -73,11 +73,11 @@ export default function Shell(): JSX.Element {
   const [activeSessionId, setActiveSessionId] = createSignal<string | null>(null);
   const [sessionIds, setSessionIds] = createSignal<string[]>([]);
   const [sessionMeta, setSessionMeta] = createSignal<Record<string, SessionMeta>>({});
+  const [statusBySession, setStatusBySession] = createSignal<Record<string, SessionStatusSnapshot>>({});
 
   const sessionEntries = createMemo(() =>
-    sessionIds().map((id) => ({ id, meta: sessionMeta()[id] })),
+    sessionIds().map((id) => ({ id, meta: sessionMeta()[id], status: statusBySession()[id] })),
   );
-  const [statusBySession, setStatusBySession] = createSignal<Record<string, SessionStatusSnapshot>>({});
   const [sessionError, setSessionError] = createSignal<string | null>(null);
   const [copilotBridgeHint, setCopilotBridgeHint] = createSignal<string | null>(null);
   const [copilotSuccessFlash, setCopilotSuccessFlash] = createSignal<string | null>(null);
@@ -528,6 +528,15 @@ export default function Shell(): JSX.Element {
     void reloadHistory(id);
   };
 
+  const handleNewSession = () => {
+    setActiveSessionId(null);
+    setChunks([]);
+    setSessionError(null);
+    setApprovals([]);
+    setUserQuestions([]);
+    setWriteUndoStatus({ canUndo: false, canRedo: false });
+  };
+
   return (
     <div classList={{ "ra-shell": true, "ra-shell--first-run": isFirstRun() }}>
       <ShellHeader
@@ -560,7 +569,14 @@ export default function Shell(): JSX.Element {
         }}
       />
 
-      <Sidebar sessions={sessionEntries()} activeSessionId={activeSessionId()} onSelect={selectSession} />
+      <Sidebar
+        sessions={sessionEntries()}
+        activeSessionId={activeSessionId()}
+        onSelect={selectSession}
+        onNewSession={handleNewSession}
+        workspacePath={workspaceLabel()}
+        onWorkspaceChipClick={() => setSettingsOpen(true)}
+      />
 
       <main class="ra-shell-main">
         <Show when={sessionError()}>
