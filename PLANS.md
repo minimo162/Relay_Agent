@@ -441,7 +441,7 @@ The remaining UI follow-up emphasis is on the Windows Tauri walkthrough verifica
 
 **Status:** Implemented (2026-04-09).
 
-**2026-04-11 follow-up scope:** backend-first hardening, launched-app verification recovery, and the next loop-control slice only. Current follow-up work under this milestone is limited to Rust-side loop control, retry/compaction handling, internal session run-state tracking, env-gated `agent-loop:test` smoke coverage, a thin pushed status stream (`agent:status`) with minimal shell consumption, doom-loop stopping, and compaction replay; it does **not** widen UI workflow scope beyond that minimal status wiring or change the Copilot/CDP prompt contract.
+**2026-04-11 follow-up scope:** backend-first hardening, launched-app verification recovery, the next loop-control slice, and the runtime/host contract cleanup only. Current follow-up work under this milestone is limited to Rust-side loop control, retry/compaction handling, internal session run-state tracking, env-gated `agent-loop:test` smoke coverage, a thin pushed status stream (`agent:status`) with minimal shell consumption, doom-loop stopping, compaction replay, explicit runtime terminal outcomes, separated outer/inner iteration limits, safe batched-tool short-circuiting, and synthetic control-input handling that stays out of user transcript; it does **not** widen UI workflow scope beyond that minimal status wiring or change the Copilot/CDP prompt contract.
 
 ### Goal
 

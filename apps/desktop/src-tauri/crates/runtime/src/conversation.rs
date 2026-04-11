@@ -90,11 +90,48 @@ pub struct TurnSummary {
     pub iterations: usize,
     pub usage: TokenUsage,
     pub auto_compaction: Option<AutoCompactionEvent>,
+    pub outcome: TurnOutcome,
+    pub terminal_assistant_text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AutoCompactionEvent {
     pub removed_message_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnOutcome {
+    Completed,
+    PermissionDenied { message: String },
+    ToolError { message: String },
+}
+
+impl TurnOutcome {
+    #[must_use]
+    pub fn error_message(&self) -> Option<&str> {
+        match self {
+            Self::Completed => None,
+            Self::PermissionDenied { message } | Self::ToolError { message } => Some(message),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnInput {
+    User(String),
+    Synthetic(String),
+}
+
+impl TurnInput {
+    fn text(&self) -> &str {
+        match self {
+            Self::User(text) | Self::Synthetic(text) => text,
+        }
+    }
+
+    fn persists_in_session(&self) -> bool {
+        matches!(self, Self::User(_))
+    }
 }
 
 pub struct ConversationRuntime<C, T> {
@@ -170,19 +207,30 @@ where
     pub fn run_turn(
         &mut self,
         user_input: impl Into<String>,
+        prompter: Option<&mut dyn PermissionPrompter>,
+    ) -> Result<TurnSummary, RuntimeError> {
+        self.run_turn_with_input(TurnInput::User(user_input.into()), prompter)
+    }
+
+    pub fn run_turn_with_input(
+        &mut self,
+        turn_input: TurnInput,
         mut prompter: Option<&mut dyn PermissionPrompter>,
     ) -> Result<TurnSummary, RuntimeError> {
+        let inserted_input_index = self.session.messages.len();
         self.session
             .messages
-            .push(ConversationMessage::user_text(user_input.into()));
+            .push(ConversationMessage::user_text(turn_input.text().to_string()));
 
         let mut assistant_messages = Vec::new();
         let mut tool_results = Vec::new();
         let mut iterations = 0;
+        let mut last_batch_outcome: Option<TurnOutcome> = None;
 
         loop {
             iterations += 1;
             if iterations > self.max_iterations {
+                self.cleanup_turn_input(inserted_input_index, turn_input.persists_in_session());
                 return Err(RuntimeError::new(
                     "conversation loop exceeded the maximum number of iterations",
                 ));
@@ -206,6 +254,7 @@ where
                 break;
             }
 
+            let mut batch_outcome = None;
             for (tool_use_id, tool_name, input) in pending_tool_uses {
                 let permission_outcome = if let Some(prompt) = prompter.as_mut() {
                     self.permission_policy
@@ -214,16 +263,20 @@ where
                     self.permission_policy.authorize(&tool_name, &input, None)
                 };
 
-                let result_message = match permission_outcome {
+                let (result_message, result_outcome) = match permission_outcome {
                     PermissionOutcome::Allow => {
                         let pre_hook_result = self.hook_runner.run_pre_tool_use(&tool_name, &input);
                         if pre_hook_result.is_denied() {
                             let deny_message = format!("PreToolUse hook denied tool `{tool_name}`");
-                            ConversationMessage::tool_result(
-                                tool_use_id,
-                                tool_name,
-                                format_hook_message(&pre_hook_result, &deny_message),
-                                true,
+                            let output = format_hook_message(&pre_hook_result, &deny_message);
+                            (
+                                ConversationMessage::tool_result(
+                                    tool_use_id,
+                                    tool_name,
+                                    output.clone(),
+                                    true,
+                                ),
+                                Some(TurnOutcome::ToolError { message: output }),
                             )
                         } else {
                             let (mut output, mut is_error) =
@@ -249,23 +302,50 @@ where
                                 post_hook_result.is_denied(),
                             );
 
-                            ConversationMessage::tool_result(
-                                tool_use_id,
-                                tool_name,
-                                output,
-                                is_error,
+                            let outcome = if is_error {
+                                Some(TurnOutcome::ToolError {
+                                    message: output.clone(),
+                                })
+                            } else {
+                                None
+                            };
+                            (
+                                ConversationMessage::tool_result(
+                                    tool_use_id,
+                                    tool_name,
+                                    output,
+                                    is_error,
+                                ),
+                                outcome,
                             )
                         }
                     }
-                    PermissionOutcome::Deny { reason } => {
-                        ConversationMessage::tool_result(tool_use_id, tool_name, reason, true)
-                    }
+                    PermissionOutcome::Deny { reason } => (
+                        ConversationMessage::tool_result(
+                            tool_use_id,
+                            tool_name,
+                            reason.clone(),
+                            true,
+                        ),
+                        Some(TurnOutcome::PermissionDenied { message: reason }),
+                    ),
                 };
                 self.session.messages.push(result_message.clone());
                 tool_results.push(result_message);
+                if result_outcome.is_some() {
+                    batch_outcome = result_outcome;
+                    break;
+                }
             }
+            last_batch_outcome = batch_outcome;
         }
 
+        let terminal_assistant_text = assistant_messages
+            .last()
+            .map(assistant_message_text)
+            .unwrap_or_default();
+        let outcome = determine_turn_outcome(last_batch_outcome, &terminal_assistant_text);
+        self.cleanup_turn_input(inserted_input_index, turn_input.persists_in_session());
         let auto_compaction = self.maybe_auto_compact();
 
         Ok(TurnSummary {
@@ -274,6 +354,8 @@ where
             iterations,
             usage: self.usage_tracker.cumulative_usage(),
             auto_compaction,
+            outcome,
+            terminal_assistant_text,
         })
     }
 
@@ -315,6 +397,15 @@ where
         self.session
     }
 
+    fn cleanup_turn_input(&mut self, inserted_input_index: usize, persists_in_session: bool) {
+        if persists_in_session {
+            return;
+        }
+        if inserted_input_index < self.session.messages.len() {
+            self.session.messages.remove(inserted_input_index);
+        }
+    }
+
     fn maybe_auto_compact(&mut self) -> Option<AutoCompactionEvent> {
         if self.usage_tracker.cumulative_usage().input_tokens
             < self.auto_compaction_input_tokens_threshold
@@ -338,6 +429,57 @@ where
         Some(AutoCompactionEvent {
             removed_message_count: result.removed_message_count,
         })
+    }
+}
+
+fn assistant_message_text(message: &ConversationMessage) -> String {
+    message
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text } => {
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn unrecovered_error_text(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    [
+        "could not",
+        "couldn't",
+        "cannot",
+        "can't",
+        "unable",
+        "blocked",
+        "denied",
+        "permission",
+        "failed",
+        "error",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn determine_turn_outcome(
+    last_batch_outcome: Option<TurnOutcome>,
+    terminal_assistant_text: &str,
+) -> TurnOutcome {
+    match last_batch_outcome {
+        Some(outcome) if unrecovered_error_text(terminal_assistant_text) => outcome,
+        _ => TurnOutcome::Completed,
     }
 }
 
@@ -480,7 +622,7 @@ mod tests {
     use super::{
         parse_auto_compaction_threshold, ApiClient, ApiRequest, AssistantEvent,
         AutoCompactionEvent, ConversationRuntime, RuntimeError, StaticToolExecutor, ToolError,
-        DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD,
+        TurnInput, TurnOutcome, DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD,
     };
     use crate::compact::CompactionConfig;
     use crate::config::{RuntimeFeatureConfig, RuntimeHookConfig};
@@ -491,6 +633,8 @@ mod tests {
     use crate::prompt::{ProjectContext, SystemPromptBuilder};
     use crate::session::{ContentBlock, MessageRole, Session};
     use crate::usage::TokenUsage;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::path::PathBuf;
 
     struct ScriptedApiClient {
@@ -606,6 +750,37 @@ mod tests {
                 ..
             }
         ));
+        assert_eq!(summary.outcome, TurnOutcome::Completed);
+        assert_eq!(summary.terminal_assistant_text, "The answer is 4.");
+    }
+
+    #[test]
+    fn one_tool_turn_succeeds_when_inner_iterations_exceed_outer_turn_limit() {
+        let outer_max_turns = 1;
+        let inner_max_iterations = 8;
+        assert!(inner_max_iterations > outer_max_turns);
+
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            ScriptedApiClient { call_count: 0 },
+            StaticToolExecutor::new().register("add", |input| {
+                let total = input
+                    .split(',')
+                    .map(|part| part.parse::<i32>().expect("input must be valid integer"))
+                    .sum::<i32>();
+                Ok(total.to_string())
+            }),
+            PermissionPolicy::new(PermissionMode::WorkspaceWrite),
+            vec!["system".to_string()],
+        )
+        .with_max_iterations(inner_max_iterations);
+
+        let summary = runtime
+            .run_turn("what is 2 + 2?", Some(&mut PromptAllowOnce))
+            .expect("one-tool turn should succeed");
+
+        assert_eq!(summary.iterations, 2);
+        assert_eq!(summary.outcome, TurnOutcome::Completed);
     }
 
     #[test]
@@ -659,6 +834,13 @@ mod tests {
             .expect("conversation should continue after denied tool");
 
         assert_eq!(summary.tool_results.len(), 1);
+        assert_eq!(
+            summary.outcome,
+            TurnOutcome::PermissionDenied {
+                message: "not now".to_string(),
+            }
+        );
+        assert_eq!(summary.terminal_assistant_text, "I could not use the tool.");
         assert!(matches!(
             &summary.tool_results[0].blocks[0],
             ContentBlock::ToolResult { is_error: true, output, .. } if output == "not now"
@@ -855,6 +1037,8 @@ mod tests {
             .expect("turn completes");
 
         assert_eq!(summary.tool_results.len(), 1);
+        assert_eq!(summary.outcome, TurnOutcome::Completed);
+        assert_eq!(summary.terminal_assistant_text, "handled");
         let ContentBlock::ToolResult {
             is_error, output, ..
         } = &summary.tool_results[0].blocks[0]
@@ -874,6 +1058,109 @@ mod tests {
             !output.contains("post-success"),
             "PostToolUse should not run on executor error: {output:?}"
         );
+    }
+
+    #[test]
+    fn stops_batched_tools_after_first_failure() {
+        struct BatchedApiClient {
+            calls: usize,
+        }
+
+        impl ApiClient for BatchedApiClient {
+            fn stream(
+                &mut self,
+                _request: &ApiRequest<'_>,
+            ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+                self.calls += 1;
+                match self.calls {
+                    1 => Ok(vec![
+                        AssistantEvent::ToolUse {
+                            id: "tool-1".to_string(),
+                            name: "fail".to_string(),
+                            input: "{}".to_string(),
+                        },
+                        AssistantEvent::ToolUse {
+                            id: "tool-2".to_string(),
+                            name: "never".to_string(),
+                            input: "{}".to_string(),
+                        },
+                        AssistantEvent::MessageStop,
+                    ]),
+                    2 => Ok(vec![
+                        AssistantEvent::TextDelta("handled".to_string()),
+                        AssistantEvent::MessageStop,
+                    ]),
+                    _ => Err(RuntimeError::new("unexpected extra API call")),
+                }
+            }
+        }
+
+        let never_calls = Arc::new(AtomicUsize::new(0));
+        let never_calls_check = Arc::clone(&never_calls);
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            BatchedApiClient { calls: 0 },
+            StaticToolExecutor::new()
+                .register("fail", |_input| Err(ToolError::new("first tool failed")))
+                .register("never", move |_input| {
+                    never_calls_check.fetch_add(1, Ordering::SeqCst);
+                    Ok("should not execute".to_string())
+                }),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec!["system".to_string()],
+        );
+
+        let summary = runtime.run_turn("batch", None).expect("turn completes");
+
+        assert_eq!(summary.tool_results.len(), 1);
+        assert_eq!(summary.outcome, TurnOutcome::Completed);
+        assert_eq!(never_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn synthetic_turn_input_is_not_persisted_in_session() {
+        struct SyntheticApiClient {
+            calls: usize,
+        }
+
+        impl ApiClient for SyntheticApiClient {
+            fn stream(
+                &mut self,
+                request: &ApiRequest<'_>,
+            ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+                self.calls += 1;
+                assert!(
+                    request.messages.iter().any(|message| {
+                        message.role == MessageRole::User
+                            && matches!(
+                                message.blocks.first(),
+                                Some(ContentBlock::Text { text }) if text == "Continue."
+                            )
+                    }),
+                    "synthetic input should be present in the request",
+                );
+                Ok(vec![
+                    AssistantEvent::TextDelta("done".to_string()),
+                    AssistantEvent::MessageStop,
+                ])
+            }
+        }
+
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            SyntheticApiClient { calls: 0 },
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec!["system".to_string()],
+        );
+
+        let summary = runtime
+            .run_turn_with_input(TurnInput::Synthetic("Continue.".to_string()), None)
+            .expect("synthetic turn completes");
+
+        assert_eq!(summary.outcome, TurnOutcome::Completed);
+        assert_eq!(runtime.session().messages.len(), 1);
+        assert!(matches!(runtime.session().messages[0].role, MessageRole::Assistant));
     }
 
     #[test]

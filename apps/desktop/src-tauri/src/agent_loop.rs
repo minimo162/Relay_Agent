@@ -355,10 +355,6 @@ fn emit_copilot_text_deltas_for_ui(app: &AppHandle, session_id: &str, visible_te
     }
 }
 
-fn collect_all_assistant_text_for_ui(session: &RuntimeSession) -> String {
-    collect_assistant_text(&session.messages)
-}
-
 /* ── POSIX shell escaping ─── */
 
 /// POSIX-compliant shell escaping for use in `sh -c` contexts.
@@ -415,6 +411,27 @@ impl LoopStopReason {
 enum LoopDecision {
     Continue { next_input: String },
     Stop(LoopStopReason),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LoopInput {
+    User(String),
+    Synthetic(String),
+}
+
+impl LoopInput {
+    fn text(&self) -> &str {
+        match self {
+            Self::User(text) | Self::Synthetic(text) => text,
+        }
+    }
+
+    fn to_runtime_input(&self) -> runtime::TurnInput {
+        match self {
+            Self::User(text) => runtime::TurnInput::User(text.clone()),
+            Self::Synthetic(text) => runtime::TurnInput::Synthetic(text.clone()),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -634,45 +651,6 @@ fn collect_summary_assistant_text(summary: &runtime::TurnSummary) -> String {
     collect_assistant_text(&summary.assistant_messages)
 }
 
-fn first_error_tool_result(summary: &runtime::TurnSummary) -> Option<(&str, &str)> {
-    for msg in &summary.tool_results {
-        for block in &msg.blocks {
-            if let ContentBlock::ToolResult {
-                tool_name,
-                output,
-                is_error,
-                ..
-            } = block
-            {
-                if *is_error {
-                    return Some((tool_name.as_str(), output.as_str()));
-                }
-            }
-        }
-    }
-    None
-}
-
-fn is_permission_denied_output(output: &str) -> bool {
-    let lower = output.to_ascii_lowercase();
-    lower.contains("requires approval")
-        || lower.contains("requires read-only permission")
-        || lower.contains("requires workspace-write permission")
-        || lower.contains("requires danger-full-access permission")
-        || lower.contains("user rejected the tool execution")
-        || lower.contains("approval channel was closed")
-}
-
-fn has_error_tool_result(summary: &runtime::TurnSummary) -> bool {
-    first_error_tool_result(summary).is_some()
-}
-
-fn has_permission_denied_tool_result(summary: &runtime::TurnSummary) -> bool {
-    first_error_tool_result(summary)
-        .map(|(_, output)| is_permission_denied_output(output))
-        .unwrap_or(false)
-}
-
 fn is_meta_stall_text(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -690,15 +668,11 @@ fn is_meta_stall_text(text: &str) -> bool {
             "let me know the file",
             "which file",
             "what file",
-            "what would you like me to",
-            "to proceed",
-            "i can help",
-            "i'm ready",
-            "i would start by",
-            "i'll start by",
             "i need the file",
             "need a bit more context",
             "restate",
+            "provide the file path",
+            "which path",
         ]
         .iter()
         .any(|needle| lower.contains(needle))
@@ -711,14 +685,17 @@ fn decide_loop_after_success(
     meta_stall_nudge_limit: usize,
     summary: &runtime::TurnSummary,
 ) -> LoopDecision {
-    if has_permission_denied_tool_result(summary) {
-        return LoopDecision::Stop(LoopStopReason::PermissionDenied);
-    }
-    if has_error_tool_result(summary) {
-        return LoopDecision::Stop(LoopStopReason::ToolError);
+    match &summary.outcome {
+        runtime::TurnOutcome::PermissionDenied { .. } => {
+            return LoopDecision::Stop(LoopStopReason::PermissionDenied);
+        }
+        runtime::TurnOutcome::ToolError { .. } => {
+            return LoopDecision::Stop(LoopStopReason::ToolError);
+        }
+        runtime::TurnOutcome::Completed => {}
     }
 
-    let assistant_text = collect_summary_assistant_text(summary);
+    let assistant_text = summary.terminal_assistant_text.as_str();
     let is_meta_stall = summary.tool_results.is_empty()
         && summary.iterations == 1
         && is_meta_stall_text(&assistant_text);
@@ -817,15 +794,15 @@ fn doom_loop_error_message(signature: &TurnActivitySignature) -> String {
     }
 }
 
-fn is_meta_stall_nudge(input: &str) -> bool {
-    input.trim() == "Continue."
+fn is_meta_stall_nudge(input: &LoopInput) -> bool {
+    matches!(input, LoopInput::Synthetic(text) if text.trim() == "Continue.")
 }
 
-fn build_compaction_replay_input(goal: &str, current_input: &str) -> String {
+fn build_compaction_replay_input(goal: &str, current_input: &LoopInput) -> String {
     let latest_request = if is_meta_stall_nudge(current_input) {
         goal.trim()
     } else {
-        current_input.trim()
+        current_input.text().trim()
     };
     format!(
         concat!(
@@ -936,7 +913,7 @@ pub fn run_agent_loop_impl(
         permission_policy,
         system_prompt,
     );
-    runtime_session = runtime_session.with_max_iterations(max_turns);
+    runtime_session = runtime_session.with_max_iterations(config.max_inner_iterations);
 
     let mut prompter = TauriApprovalPrompter {
         app: app.clone(),
@@ -950,7 +927,8 @@ pub fn run_agent_loop_impl(
         LoopStopReason::Completed
     };
     let mut final_error_message: Option<String> = None;
-    let mut current_input = goal.clone();
+    let mut final_assistant_message = String::new();
+    let mut current_input = LoopInput::User(goal.clone());
     let mut meta_stall_nudges_used = 0usize;
     let mut completed_turn = false;
     let mut recent_turn_signatures: Vec<TurnActivitySignature> = Vec::new();
@@ -986,10 +964,12 @@ pub fn run_agent_loop_impl(
                 AgentStatusOptions::default(),
             );
             let checkpoint = runtime_session.session().clone();
-            let result = runtime_session.run_turn(current_input.clone(), Some(&mut prompter));
+            let result = runtime_session
+                .run_turn_with_input(current_input.to_runtime_input(), Some(&mut prompter));
 
             match result {
                 Ok(summary) => {
+                    final_assistant_message = summary.terminal_assistant_text.clone();
                     persist_turn(
                         app,
                         registry,
@@ -1029,7 +1009,7 @@ pub fn run_agent_loop_impl(
                                 break;
                             }
                             meta_stall_nudges_used += 1;
-                            current_input = next_input;
+                            current_input = LoopInput::Synthetic(next_input);
                             break;
                         }
                         LoopDecision::Stop(reason) => {
@@ -1038,9 +1018,8 @@ pub fn run_agent_loop_impl(
                                 reason,
                                 LoopStopReason::PermissionDenied | LoopStopReason::ToolError
                             ) {
-                                if let Some((tool_name, output)) = first_error_tool_result(&summary)
-                                {
-                                    let msg = format!("{tool_name}: {output}");
+                                if let Some(message) = summary.outcome.error_message() {
+                                    let msg = message.to_string();
                                     set_session_error_summary(&loop_guard, &msg);
                                     final_error_message = Some(msg);
                                 }
@@ -1087,7 +1066,10 @@ pub fn run_agent_loop_impl(
                             completed_turn = true;
                             break;
                         }
-                        current_input = build_compaction_replay_input(&goal, &current_input);
+                        current_input = LoopInput::Synthetic(build_compaction_replay_input(
+                            &goal,
+                            &current_input,
+                        ));
                         transition_session_state(
                             app,
                             &loop_guard,
@@ -1191,7 +1173,13 @@ pub fn run_agent_loop_impl(
         AgentStatusOptions::default().with_stop_reason(final_stop_reason),
     );
     if loop_guard.is_current() {
-        emit_turn_complete(app, session_id, final_stop_reason, &runtime_session);
+        emit_turn_complete(
+            app,
+            session_id,
+            final_stop_reason,
+            runtime_session.session().messages.len(),
+            &final_assistant_message,
+        );
     }
 
     let session = runtime_session.into_session();
@@ -1354,7 +1342,7 @@ impl FakeSmokeApiClient {
                     "Copilot request failed: connection reset by peer during smoke setup",
                 ));
             }
-            1 => "I'll start by preparing the filtered copy.".to_string(),
+            1 => "Please provide the concrete next step and the relevant file.".to_string(),
             2 => fake_smoke_tool_reply(&scenario)?,
             _ => format!(
                 "Filtered copy saved to {} after retry recovery.",
@@ -2169,17 +2157,16 @@ fn emit_turn_complete(
     app: &AppHandle,
     session_id: &str,
     stop_reason: LoopStopReason,
-    runtime_session: &runtime::ConversationRuntime<CdpApiClient, TauriToolExecutor>,
+    message_count: usize,
+    assistant_message: &str,
 ) {
-    let last_text = collect_all_assistant_text_for_ui(runtime_session.session());
-
     if let Err(e) = app.emit(
         E_TURN_COMPLETE,
         AgentTurnCompleteEvent {
             session_id: session_id.to_string(),
             stop_reason: stop_reason.as_str().into(),
-            assistant_message: last_text,
-            message_count: runtime_session.session().messages.len(),
+            assistant_message: assistant_message.to_string(),
+            message_count,
         },
     ) {
         tracing::warn!("[RelayAgent] emit failed ({E_TURN_COMPLETE}): {e}");
@@ -3874,6 +3861,7 @@ mod loop_controller_tests {
     fn summary(
         assistant_text: &str,
         tool_results: Vec<ConversationMessage>,
+        outcome: runtime::TurnOutcome,
     ) -> runtime::TurnSummary {
         runtime::TurnSummary {
             assistant_messages: vec![ConversationMessage::assistant(vec![ContentBlock::Text {
@@ -3883,6 +3871,8 @@ mod loop_controller_tests {
             iterations: 1,
             usage: TokenUsage::default(),
             auto_compaction: None,
+            outcome,
+            terminal_assistant_text: assistant_text.to_string(),
         }
     }
 
@@ -3896,7 +3886,11 @@ mod loop_controller_tests {
 
     #[test]
     fn actionable_terminal_answer_stops_completed() {
-        let s = summary("I inspected the file and here is the fix.", Vec::new());
+        let s = summary(
+            "I inspected the file and here is the fix.",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
         assert_eq!(
             decide_loop_after_success(SessionPreset::Build, 0, 0, 1, &s),
             LoopDecision::Stop(LoopStopReason::Completed)
@@ -3908,6 +3902,7 @@ mod loop_controller_tests {
         let s = summary(
             "Please provide the concrete next step and the relevant file.",
             Vec::new(),
+            runtime::TurnOutcome::Completed,
         );
         assert_eq!(
             decide_loop_after_success(SessionPreset::Build, 0, 0, 1, &s),
@@ -3922,6 +3917,7 @@ mod loop_controller_tests {
         let s = summary(
             "Please provide the concrete next step and the relevant file.",
             Vec::new(),
+            runtime::TurnOutcome::Completed,
         );
         assert_eq!(
             decide_loop_after_success(SessionPreset::Build, 0, 1, 1, &s),
@@ -3934,6 +3930,7 @@ mod loop_controller_tests {
         let s = summary(
             "I read the file and found the issue.",
             vec![tool_success_result("read_file", "contents")],
+            runtime::TurnOutcome::Completed,
         );
         assert_eq!(
             decide_loop_after_success(SessionPreset::Build, 0, 0, 1, &s),
@@ -3949,6 +3946,9 @@ mod loop_controller_tests {
                 "write_file",
                 "user rejected the tool execution",
             )],
+            runtime::TurnOutcome::PermissionDenied {
+                message: "user rejected the tool execution".to_string(),
+            },
         );
         assert_eq!(
             decide_loop_after_success(SessionPreset::Build, 0, 0, 1, &s),
@@ -3961,6 +3961,9 @@ mod loop_controller_tests {
         let s = summary(
             "The command failed.",
             vec![tool_error_result("bash", "exit status 1")],
+            runtime::TurnOutcome::ToolError {
+                message: "exit status 1".to_string(),
+            },
         );
         assert_eq!(
             decide_loop_after_success(SessionPreset::Build, 0, 0, 1, &s),
@@ -4051,6 +4054,8 @@ mod loop_controller_tests {
             iterations: 1,
             usage: TokenUsage::default(),
             auto_compaction: None,
+            outcome: runtime::TurnOutcome::Completed,
+            terminal_assistant_text: "Reading README".to_string(),
         };
         let signature = summarize_turn_activity(&turn);
         assert_eq!(signature.tool_keys.len(), 1);
@@ -4062,17 +4067,28 @@ mod loop_controller_tests {
 
     #[test]
     fn compaction_replay_uses_original_goal_for_meta_stall_nudge() {
-        let replay = build_compaction_replay_input("Improve the agent loop", "Continue.");
+        let replay = build_compaction_replay_input(
+            "Improve the agent loop",
+            &LoopInput::Synthetic("Continue.".to_string()),
+        );
         assert!(replay.contains("Improve the agent loop"));
         assert!(!replay.contains("Latest request to continue from:\nContinue."));
     }
 
     #[test]
     fn compaction_replay_keeps_latest_user_request_when_not_nudge() {
-        let replay =
-            build_compaction_replay_input("Improve the agent loop", "Add a status event stream");
+        let replay = build_compaction_replay_input(
+            "Improve the agent loop",
+            &LoopInput::User("Add a status event stream".to_string()),
+        );
         assert!(replay.contains("Improve the agent loop"));
         assert!(replay.contains("Add a status event stream"));
+    }
+
+    #[test]
+    fn narrowed_meta_stall_heuristic_does_not_trip_on_generic_short_reply() {
+        assert!(!is_meta_stall_text("I can help with that."));
+        assert!(!is_meta_stall_text("To proceed, I fixed the issue."));
     }
 
     #[test]

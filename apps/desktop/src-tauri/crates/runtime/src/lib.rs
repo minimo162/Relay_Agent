@@ -41,7 +41,8 @@ pub use config::{
 };
 pub use conversation::{
     auto_compaction_threshold_from_env, ApiClient, ApiRequest, AssistantEvent, AutoCompactionEvent,
-    ConversationRuntime, RuntimeError, StaticToolExecutor, ToolError, ToolExecutor, TurnSummary,
+    ConversationRuntime, RuntimeError, StaticToolExecutor, ToolError, ToolExecutor, TurnInput,
+    TurnOutcome, TurnSummary,
 };
 pub use file_ops::{
     edit_file, glob_search, grep_search, read_file, write_file, EditFileOutput, GlobSearchOutput,
