@@ -644,7 +644,6 @@ export default function Shell(): JSX.Element {
                 setChunks((prev) => [...prev, { kind: "assistant", text }]);
               }}
               hero
-              showModeControl={false}
             />
           </FirstRunPanel>
         </Show>

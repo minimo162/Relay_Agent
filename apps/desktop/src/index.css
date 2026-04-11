@@ -870,6 +870,14 @@ body a:focus-visible {
   border-top: 1px solid var(--ra-border);
 }
 
+.ra-composer-toolbar-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  flex: 1;
+}
+
 .ra-composer-hint {
   margin: 0;
   font-size: var(--ra-text-micro);
@@ -884,6 +892,51 @@ body a:focus-visible {
   align-items: center;
   gap: 0.5rem;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.ra-composer-mode-control {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--ra-border);
+  background: var(--ra-surface-muted);
+  overflow: hidden;
+}
+
+.ra-composer-mode-option {
+  border: none;
+  border-right: 1px solid var(--ra-border);
+  background: transparent;
+  color: var(--ra-text-secondary);
+  padding: 0.38rem 0.6rem;
+  min-height: 2rem;
+  font-family: var(--ra-font-sans);
+  font-size: var(--ra-text-micro);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color 150ms ease,
+    background-color 150ms ease;
+}
+
+.ra-composer-mode-option:last-child {
+  border-right: none;
+}
+
+.ra-composer-mode-option:hover {
+  background: var(--ra-hover);
+}
+
+.ra-composer-mode-option:focus-visible {
+  position: relative;
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--ra-border-focus);
+}
+
+.ra-composer-mode-option.is-selected {
+  background: var(--ra-surface-elevated);
+  color: var(--ra-text-primary);
 }
 
 .ra-composer-send {
