@@ -100,11 +100,7 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
             explore_visible: true,
             ..DEFAULT_TOOL_METADATA
         },
-        "glob_search" => ToolMetadata {
-            explore_visible: true,
-            ..DEFAULT_TOOL_METADATA
-        },
-        "grep_search" => ToolMetadata {
+        "glob_search" | "grep_search" => ToolMetadata {
             explore_visible: true,
             ..DEFAULT_TOOL_METADATA
         },

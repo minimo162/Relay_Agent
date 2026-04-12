@@ -16,6 +16,14 @@
 
 ## Milestone Log
 
+### 2026-04-12 Tools crate clippy follow-up: merge identical metadata arms
+
+**Problem:** `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings` regressed in CI after the tool-surface metadata refactor because [`tool_metadata`](../apps/desktop/src-tauri/crates/tools/src/lib.rs) had separate `match` arms for `"glob_search"` and `"grep_search"` that returned the same `ToolMetadata`, triggering `clippy::match_same_arms`.
+
+**Change:** Merged the identical `"glob_search"` and `"grep_search"` branches in [`crates/tools/src/lib.rs`](../apps/desktop/src-tauri/crates/tools/src/lib.rs) into a single pattern arm. This keeps Explore visibility and all other metadata unchanged while satisfying clippy without widening scope.
+
+**Verification:** `cargo clippy -- -D warnings`; `cargo test -p tools` — pass (2026-04-12). An initial `cargo test -p tools` run hit a transient failure in `bash_tool_reports_success_exit_failure_timeout_and_background`, but the focused rerun and final full-suite rerun both passed with no source changes between them.
+
 ### 2026-04-12 ts-rs warning cleanup for optional IPC fields
 
 **Problem:** `cargo check` / `cargo test` on the desktop crate still printed non-fatal `ts-rs` warnings for `#[serde(skip_serializing_if = "Option::is_none")]` on several `TS`-derived IPC/event structs. The warnings were noisy even though the generated TypeScript shapes were otherwise correct.
