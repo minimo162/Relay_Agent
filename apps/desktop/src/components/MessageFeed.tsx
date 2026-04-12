@@ -153,6 +153,7 @@ export function MessageFeed(props: {
               <ToolCallRow
                 toolUseId={chunk.toolUseId}
                 toolName={chunk.toolName}
+                input={chunk.input}
                 status={chunk.status}
                 result={chunk.result}
               />

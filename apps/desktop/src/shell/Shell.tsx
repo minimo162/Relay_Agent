@@ -1,11 +1,13 @@
 /// <reference types="vite/client" />
 import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Show, createEffect, createMemo, createSignal, onMount, type JSX } from "solid-js";
 import { truncatePromptPreview } from "../session/session-display";
 import {
   cancelAgent,
   chunksFromHistory,
   compactAgentSession,
+  continueAgentSession,
   getSessionHistory,
   getSessionWriteUndoStatus,
   listWorkspaceSlashCommands,
@@ -15,10 +17,8 @@ import {
   respondUserQuestion,
   startAgent,
   undoSessionWrite,
-  readStoredSessionPreset,
-  writeStoredSessionPreset,
-  type SessionPreset,
   type McpServer,
+  type SessionPreset,
   type WorkspaceSlashCommandRow,
 } from "../lib/ipc";
 import {
@@ -33,13 +33,21 @@ import { Composer } from "../components/Composer";
 import { ContextPanel } from "../components/ContextPanel";
 import { FirstRunPanel } from "../components/FirstRunPanel";
 import { MessageFeed } from "../components/MessageFeed";
-import { SettingsModal } from "../components/SettingsModal";
+import { SettingsModal, type ShellSettingsDraft } from "../components/SettingsModal";
 import { ShellHeader } from "../components/ShellHeader";
 import { Sidebar } from "../components/Sidebar";
 import { StatusBar } from "../components/StatusBar";
 import type { SessionStatusSnapshot } from "../components/shell-types";
-import { loadBrowserSettings, loadMaxTurns, loadWorkspacePath } from "../lib/settings-storage";
+import {
+  loadAlwaysOnTop,
+  loadBrowserSettings,
+  loadDefaultSessionPreset,
+  loadMaxTurns,
+  loadWorkspacePath,
+  saveDefaultSessionPreset,
+} from "../lib/settings-storage";
 import { buildPlanTimelineFromUiChunks } from "../context/todo-write-parse";
+import { sessionModeDefaultNote } from "../lib/session-mode-label";
 import { createSessionStore } from "./sessionStore";
 import { createApprovalStore } from "./approvalStore";
 import { useCopilotWarmup } from "./useCopilotWarmup";
@@ -57,15 +65,27 @@ function workspaceSlashRowsToCommands(rows: WorkspaceSlashCommandRow[]): SlashCo
   }));
 }
 
+async function applyAlwaysOnTopSetting(enabled: boolean) {
+  if (!isTauri()) return;
+  try {
+    await getCurrentWindow().setAlwaysOnTop(enabled);
+  } catch (error) {
+    console.error("[Shell] setAlwaysOnTop failed", error);
+  }
+}
+
 export default function Shell(): JSX.Element {
   const sessions = createSessionStore();
   const approvals = createApprovalStore();
   const [sessionError, setSessionError] = createSignal<string | null>(null);
-  const { copilotBridgeHint, copilotSuccessFlash, runCopilotWarmup } = useCopilotWarmup(loadBrowserSettings);
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [workspaceLabel, setWorkspaceLabel] = createSignal(loadWorkspacePath().trim());
-  const [sessionPreset, setSessionPreset] = createSignal<SessionPreset>(readStoredSessionPreset());
+  const [defaultSessionPreset, setDefaultSessionPreset] = createSignal<SessionPreset>(loadDefaultSessionPreset());
+  const [browserSettings, setBrowserSettings] = createSignal(loadBrowserSettings());
+  const [maxTurns, setMaxTurns] = createSignal(loadMaxTurns());
+  const [alwaysOnTop, setAlwaysOnTop] = createSignal(loadAlwaysOnTop());
   const [writeUndoStatus, setWriteUndoStatus] = createSignal({ canUndo: false, canRedo: false });
+  const { copilotState, runCopilotWarmup } = useCopilotWarmup(browserSettings);
 
   createEffect(() => {
     const cwd = workspaceLabel();
@@ -76,6 +96,10 @@ export default function Shell(): JSX.Element {
     void listWorkspaceSlashCommands(cwd.trim() || null)
       .then((rows) => setWorkspaceSlashCommands(workspaceSlashRowsToCommands(rows)))
       .catch(() => setWorkspaceSlashCommands([]));
+  });
+
+  createEffect(() => {
+    void applyAlwaysOnTopSetting(alwaysOnTop());
   });
 
   const refreshWriteUndoStatus = async () => {
@@ -93,8 +117,12 @@ export default function Shell(): JSX.Element {
   };
 
   createEffect(() => {
-    sessions.activeSessionId();
-    if ((sessions.statusBySession()[sessions.activeSessionId() ?? ""]?.phase ?? "idle") !== "idle") return;
+    const sid = sessions.activeSessionId();
+    if (!sid) {
+      setWriteUndoStatus({ canUndo: false, canRedo: false });
+      return;
+    }
+    if ((sessions.statusBySession()[sid]?.phase ?? "idle") !== "idle") return;
     void refreshWriteUndoStatus();
   });
 
@@ -112,6 +140,16 @@ export default function Shell(): JSX.Element {
   });
 
   const sessionBusy = createMemo(() => sessions.activeSessionStatus().phase !== "idle");
+  const activeSessionPreset = createMemo<SessionPreset>(() => {
+    const sid = sessions.activeSessionId();
+    if (!sid) return defaultSessionPreset();
+    return sessions.sessionMeta()[sid]?.preset ?? defaultSessionPreset();
+  });
+  const modeLockedNote = createMemo(() => {
+    const sid = sessions.activeSessionId();
+    if (!sid) return null;
+    return `Mode for this conversation: ${sessionModeDefaultNote(activeSessionPreset())} Start a new conversation to change it.`;
+  });
 
   const reloadHistory = async (
     sessionId: string,
@@ -159,32 +197,49 @@ export default function Shell(): JSX.Element {
   });
 
   const handleSend = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
     setSessionError(null);
     approvals.clearPending();
 
-    sessions.setChunks((prev) => [...prev, { kind: "user" as const, text }]);
+    const prevChunks = sessions.chunks();
+    const activeId = sessions.activeSessionId();
+    const canContinue = Boolean(activeId && sessions.activeSessionStatus().phase === "idle");
+
+    sessions.setChunks((prev) => [...prev, { kind: "user" as const, text: trimmed }]);
 
     try {
-      const cwd = loadWorkspacePath().trim();
+      if (canContinue && activeId) {
+        await continueAgentSession({ sessionId: activeId, message: trimmed });
+        sessions.setStatusBySession((prev) => ({ ...prev, [activeId]: { phase: "running" } }));
+        sessions.setHasStartedConversation(true);
+        return;
+      }
+
+      const preset = defaultSessionPreset();
       const sessionId = await startAgent({
-        goal: text,
+        goal: trimmed,
         files: [],
-        cwd: cwd || null,
-        maxTurns: loadMaxTurns(),
-        browserSettings: loadBrowserSettings(),
-        sessionPreset: sessionPreset(),
+        cwd: workspaceLabel().trim() || null,
+        maxTurns: maxTurns(),
+        browserSettings: browserSettings(),
+        sessionPreset: preset,
       });
       sessions.setActiveSessionId(sessionId);
-      sessions.setSessionIds((prev) => [...prev, sessionId]);
-      sessions.setSessionMeta((m) => ({
-        ...m,
+      sessions.setSessionIds((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
+      sessions.setSessionMeta((meta) => ({
+        ...meta,
         [sessionId]: {
           createdAt: Date.now(),
-          preview: truncatePromptPreview(text, 52),
+          preview: truncatePromptPreview(trimmed, 52),
+          preset,
         },
       }));
       sessions.setStatusBySession((prev) => ({ ...prev, [sessionId]: { phase: "running" } }));
+      sessions.setHasStartedConversation(true);
     } catch (err) {
+      sessions.setChunks(prevChunks);
       const msg = err instanceof Error ? err.message : String(err);
       setSessionError(msg);
     }
@@ -226,8 +281,7 @@ export default function Shell(): JSX.Element {
 
   const handleUserQuestionSubmit = async (questionId: string, answer: string) => {
     const sid = sessions.activeSessionId();
-    if (!sid) return;
-    if (!answer) return;
+    if (!sid || !answer) return;
     try {
       await respondUserQuestion({ sessionId: sid, questionId, answer });
       approvals.removeQuestion(questionId);
@@ -263,6 +317,7 @@ export default function Shell(): JSX.Element {
 
   const selectSession = (id: string) => {
     sessions.setActiveSessionId(id);
+    sessions.setHasStartedConversation(true);
     setSessionError(null);
     void reloadHistory(id);
   };
@@ -275,12 +330,25 @@ export default function Shell(): JSX.Element {
     setWriteUndoStatus({ canUndo: false, canRedo: false });
   };
 
+  const applySettings = (settings: ShellSettingsDraft) => {
+    setWorkspaceLabel(settings.workspacePath);
+    setDefaultSessionPreset(settings.sessionPreset);
+    setBrowserSettings(settings.browserSettings);
+    setMaxTurns(settings.maxTurns);
+    setAlwaysOnTop(settings.alwaysOnTop);
+  };
+
+  const handleDefaultPresetChange = (preset: SessionPreset) => {
+    setDefaultSessionPreset(preset);
+    saveDefaultSessionPreset(preset);
+  };
+
   return (
     <div classList={{ "ra-shell": true, "ra-shell--first-run": sessions.isFirstRun() }}>
       <ShellHeader
         sessionStatus={sessions.activeSessionStatus()}
         workspacePath={workspaceLabel}
-        onWorkspaceChipClick={() => setSettingsOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
         canUndo={writeUndoStatus().canUndo}
         canRedo={writeUndoStatus().canRedo}
         onUndo={async () => {
@@ -305,16 +373,19 @@ export default function Shell(): JSX.Element {
             setSessionError(msg);
           }
         }}
+        firstRun={sessions.isFirstRun()}
       />
 
-      <Sidebar
-        sessions={sessions.sessionEntries()}
-        activeSessionId={sessions.activeSessionId()}
-        onSelect={selectSession}
-        onNewSession={handleNewSession}
-        workspacePath={workspaceLabel()}
-        onWorkspaceChipClick={() => setSettingsOpen(true)}
-      />
+      <Show when={!sessions.isFirstRun()}>
+        <Sidebar
+          sessions={sessions.sessionEntries()}
+          activeSessionId={sessions.activeSessionId()}
+          onSelect={selectSession}
+          onNewSession={handleNewSession}
+          workspacePath={workspaceLabel()}
+          onWorkspaceChipClick={() => setSettingsOpen(true)}
+        />
+      </Show>
 
       <main class="ra-shell-main">
         <Show when={sessionError()}>
@@ -327,11 +398,9 @@ export default function Shell(): JSX.Element {
             <p class={`mt-0.5 ra-type-body-sans text-[var(--ra-red)] whitespace-pre-wrap break-words`}>
               {sessionError()}
             </p>
-            <p class={`mt-1.5 ra-type-button-label text-[var(--ra-text-secondary)]`}>
-              Try editing your prompt or switching sessions.
-            </p>
           </div>
         </Show>
+
         <Show
           when={sessions.isFirstRun()}
           fallback={
@@ -340,14 +409,11 @@ export default function Shell(): JSX.Element {
                 chunks={sessions.chunks()}
                 sessionStatus={sessions.activeSessionStatus()}
                 workspacePath={workspaceLabel}
-                sessionPreset={sessionPreset()}
+                sessionPreset={activeSessionPreset()}
               />
               <Composer
-                sessionPreset={sessionPreset()}
-                onSessionPresetChange={(p) => {
-                  setSessionPreset(p);
-                  writeStoredSessionPreset(p);
-                }}
+                sessionPreset={activeSessionPreset()}
+                onSessionPresetChange={handleDefaultPresetChange}
                 onSend={handleSend}
                 disabled={sessionBusy()}
                 running={sessionBusy()}
@@ -365,21 +431,22 @@ export default function Shell(): JSX.Element {
                 onAppendAssistant={(text: string) => {
                   sessions.setChunks((prev) => [...prev, { kind: "assistant", text }]);
                 }}
+                allowModeSelection={sessions.activeSessionId() === null}
+                modeLockedNote={modeLockedNote()}
               />
             </>
           }
         >
           <FirstRunPanel
             workspacePath={workspaceLabel}
-            onChooseWorkspace={() => setSettingsOpen(true)}
-            sessionPreset={sessionPreset()}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onReconnectCopilot={() => runCopilotWarmup(false)}
+            sessionPreset={defaultSessionPreset()}
+            copilotState={copilotState()}
           >
             <Composer
-              sessionPreset={sessionPreset()}
-              onSessionPresetChange={(p) => {
-                setSessionPreset(p);
-                writeStoredSessionPreset(p);
-              }}
+              sessionPreset={defaultSessionPreset()}
+              onSessionPresetChange={handleDefaultPresetChange}
               onSend={handleSend}
               disabled={sessionBusy()}
               running={sessionBusy()}
@@ -398,9 +465,11 @@ export default function Shell(): JSX.Element {
                 sessions.setChunks((prev) => [...prev, { kind: "assistant", text }]);
               }}
               hero
+              allowModeSelection={false}
             />
           </FirstRunPanel>
         </Show>
+
         <ApprovalOverlay
           approvals={approvals.approvals()}
           onApproveOnce={handleApproveOnce}
@@ -416,10 +485,9 @@ export default function Shell(): JSX.Element {
         <SettingsModal
           open={settingsOpen()}
           onClose={() => setSettingsOpen(false)}
-          onSaved={() => {
-            setWorkspaceLabel(loadWorkspacePath().trim());
-          }}
-          sessionCount={sessions.sessionIds().length}
+          onApply={applySettings}
+          copilotState={copilotState()}
+          onReconnectCopilot={() => runCopilotWarmup(false)}
         />
       </main>
 
@@ -428,19 +496,16 @@ export default function Shell(): JSX.Element {
           mcpServers={mcpServers}
           setMcpServers={setMcpServers}
           workspacePath={workspaceLabel}
-          sessionPreset={sessionPreset}
+          sessionPreset={activeSessionPreset}
           planTimeline={sessions.planTimelineForActiveSession}
         />
       </Show>
 
-      <div class="col-span-full">
-        <StatusBar
-          copilotBridgeHint={copilotBridgeHint()}
-          copilotSuccessFlash={copilotSuccessFlash()}
-          onRetryCopilot={isTauri() ? () => runCopilotWarmup(false) : undefined}
-          copilotRetryDisabled={sessionBusy()}
-        />
-      </div>
+      <Show when={!sessions.isFirstRun()}>
+        <div class="col-span-full">
+          <StatusBar sessionStatus={sessions.activeSessionStatus()} />
+        </div>
+      </Show>
     </div>
   );
 }

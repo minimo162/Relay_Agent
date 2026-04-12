@@ -2,8 +2,9 @@ use tauri::{AppHandle, State};
 
 use crate::app_services::AppServices;
 use crate::models::{
-    CancelAgentRequest, GetAgentSessionHistoryRequest, RespondAgentApprovalRequest,
-    RespondUserQuestionRequest, SessionWriteUndoRequest, StartAgentRequest,
+    CancelAgentRequest, ContinueAgentSessionRequest, GetAgentSessionHistoryRequest,
+    RespondAgentApprovalRequest, RespondUserQuestionRequest, SessionWriteUndoRequest,
+    StartAgentRequest,
 };
 use crate::tauri_bridge::{
     self, AgentSessionHistoryResponse, CompactAgentSessionRequest, CompactAgentSessionResponse,
@@ -16,6 +17,22 @@ pub async fn start_agent(
     request: StartAgentRequest,
 ) -> Result<String, String> {
     tauri_bridge::start_agent_inner(
+        app,
+        services.registry(),
+        services.agent_semaphore(),
+        services.config().clone(),
+        request,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn continue_agent_session(
+    app: AppHandle,
+    services: State<'_, AppServices>,
+    request: ContinueAgentSessionRequest,
+) -> Result<String, String> {
+    tauri_bridge::continue_agent_session_inner(
         app,
         services.registry(),
         services.agent_semaphore(),

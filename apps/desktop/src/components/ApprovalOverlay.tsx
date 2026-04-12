@@ -27,7 +27,7 @@ export function ApprovalOverlay(props: {
                 </p>
                 <details class="mt-3">
                   <summary class={`ra-type-caption text-[var(--ra-text-muted)] cursor-pointer select-none`}>
-                    Technical details
+                    Advanced details
                   </summary>
                   <p class="ra-type-mono-small text-[var(--ra-text-muted)] mt-1 break-all">
                     {approval.toolName}
@@ -56,7 +56,7 @@ export function ApprovalOverlay(props: {
                     </Button>
                   </div>
                   <div class="flex flex-col items-end gap-1">
-                    <p class="ra-type-caption text-[var(--ra-text-muted)]">次回以降も許可</p>
+                    <p class="ra-type-caption text-[var(--ra-text-muted)]">Remember this choice</p>
                     <div class="flex flex-wrap gap-2 justify-end">
                       <Button
                         variant="secondary"
@@ -64,7 +64,7 @@ export function ApprovalOverlay(props: {
                         class="ra-type-button-label px-3 py-1.5"
                         title="Current session only"
                       >
-                        Allow for session
+                        Always allow in this conversation
                       </Button>
                       <Show when={approval.workspaceCwdConfigured && props.onApproveForWorkspace}>
                         <Button
@@ -73,7 +73,7 @@ export function ApprovalOverlay(props: {
                           class="ra-type-button-label px-3 py-1.5"
                           title="Saved per workspace in ~/.relay-agent/workspace_allowed_tools.json"
                         >
-                          Allow for workspace
+                          Always allow in this folder
                         </Button>
                       </Show>
                     </div>

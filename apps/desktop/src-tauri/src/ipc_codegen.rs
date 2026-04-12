@@ -8,11 +8,12 @@ use crate::agent_loop::{
     AgentTurnCompleteEvent, AgentUserQuestionNeededEvent, MessageContent, RelayMessage,
 };
 use crate::models::{
-    BrowserAutomationSettings, CancelAgentRequest, DesktopPermissionSummaryRow,
-    GetAgentSessionHistoryRequest, GetPermissionSummaryRequest, ListWorkspaceSlashCommandsRequest,
-    McpAddServerRequest, McpServerInfo, RelayDiagnostics, RespondAgentApprovalRequest,
-    RespondUserQuestionRequest, RustAnalyzerProbeRequest, RustAnalyzerProbeResponse, SessionPreset,
-    SessionWriteUndoRequest, SessionWriteUndoStatusResponse, StartAgentRequest,
+    BrowserAutomationSettings, CancelAgentRequest, ContinueAgentSessionRequest,
+    DesktopPermissionSummaryRow, GetAgentSessionHistoryRequest, GetPermissionSummaryRequest,
+    ListWorkspaceSlashCommandsRequest, McpAddServerRequest, McpServerInfo, RelayDiagnostics,
+    RespondAgentApprovalRequest, RespondUserQuestionRequest, RustAnalyzerProbeRequest,
+    RustAnalyzerProbeResponse, SessionPreset, SessionWriteUndoRequest,
+    SessionWriteUndoStatusResponse, StartAgentRequest,
     WorkspaceAllowlistCwdRequest, WorkspaceAllowlistEntryRow, WorkspaceAllowlistRemoveToolRequest,
     WorkspaceAllowlistSnapshot, WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
 };
@@ -31,6 +32,7 @@ pub fn render_ipc_generated_ts() -> String {
         decl::<BrowserAutomationSettings>(),
         decl::<SessionPreset>(),
         decl::<StartAgentRequest>(),
+        decl::<ContinueAgentSessionRequest>(),
         decl::<RespondAgentApprovalRequest>(),
         decl::<RespondUserQuestionRequest>(),
         decl::<RelayDiagnostics>(),

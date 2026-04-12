@@ -62,6 +62,7 @@ export function useAgentEvents(options: UseAgentEventsOptions) {
             kind: "tool_call",
             toolUseId: event.toolUseId,
             toolName: event.toolName,
+            input: (event.input ?? {}) as Record<string, unknown>,
             result: null,
             status: "running",
           });
@@ -100,6 +101,7 @@ export function useAgentEvents(options: UseAgentEventsOptions) {
               kind: "tool_call",
               toolUseId: event.toolUseId,
               toolName: event.toolName,
+              input: {},
               result: event.content,
               status: event.isError ? "error" : "done",
             },
@@ -111,6 +113,7 @@ export function useAgentEvents(options: UseAgentEventsOptions) {
           kind: "tool_call",
           toolUseId: cur.toolUseId,
           toolName: cur.toolName,
+          input: cur.input,
           result: event.content,
           status: event.isError ? "error" : "done",
         };

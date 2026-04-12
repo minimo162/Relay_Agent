@@ -1,56 +1,35 @@
 import { type JSX } from "solid-js";
 import { ui } from "../lib/ui-tokens";
+import type { SessionStatusSnapshot } from "./shell-types";
+
+function footerLabel(status: SessionStatusSnapshot): string {
+  switch (status.phase) {
+    case "running":
+      return "Conversation in progress";
+    case "retrying":
+      return "Retrying";
+    case "compacting":
+      return "Compacting context";
+    case "waiting_approval":
+      return "Waiting for approval";
+    case "cancelling":
+      return "Cancelling";
+    case "idle":
+    default:
+      return "Ready";
+  }
+}
 
 export function StatusBar(props: {
-  copilotBridgeHint?: string | null;
-  /** Short success line (e.g. after Copilot warmup); shown when no error/login hint. */
-  copilotSuccessFlash?: string | null;
-  onRetryCopilot?: () => void;
-  copilotRetryDisabled?: boolean;
+  sessionStatus: SessionStatusSnapshot;
 }): JSX.Element {
-  const hint = props.copilotBridgeHint?.trim();
-  const successFlash = props.copilotSuccessFlash?.trim();
-  const footerExtra = hint || successFlash;
-
   return (
     <footer
-      class={`ra-shell-footer px-3 py-1 flex flex-col gap-0.5 ra-type-button-label ${ui.mutedText}`}
-      style={{ "min-height": footerExtra ? "36px" : "28px" }}
+      class={`ra-shell-footer px-3 py-1 flex items-center gap-2 ra-type-button-label ${ui.mutedText}`}
+      data-ra-footer-session={props.sessionStatus.phase}
     >
-      <div class="flex items-center gap-2 w-full flex-wrap">
-        <span class="text-[var(--ra-text-muted)]">Agent hints</span>
-        <span class="mx-auto" />
-        {props.onRetryCopilot ? (
-          <button
-            type="button"
-            class="ra-type-caption text-[var(--ra-text-muted)] hover:text-[var(--ra-text-primary)] underline-offset-2 hover:underline disabled:opacity-40 disabled:pointer-events-none"
-            disabled={props.copilotRetryDisabled}
-            onClick={() => props.onRetryCopilot?.()}
-            data-ra-copilot-reconnect
-          >
-            Reconnect Copilot
-          </button>
-        ) : null}
-      </div>
-      {hint ? (
-        <div
-          role="status"
-          data-ra-copilot-warmup-hint
-          class="w-full truncate text-[var(--ra-accent)] opacity-95"
-          title={hint}
-        >
-          {hint}
-        </div>
-      ) : successFlash ? (
-        <div
-          role="status"
-          data-ra-copilot-warmup-success
-          class="w-full truncate text-[var(--ra-text-secondary)] opacity-90"
-          title={successFlash}
-        >
-          {successFlash}
-        </div>
-      ) : null}
+      <span class="text-[var(--ra-text-muted)]">Conversation</span>
+      <span class={`ra-type-caption ${ui.textSecondary}`}>{footerLabel(props.sessionStatus)}</span>
     </footer>
   );
 }

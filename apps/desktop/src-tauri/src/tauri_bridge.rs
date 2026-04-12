@@ -1,6 +1,7 @@
 #![allow(clippy::needless_pass_by_value, clippy::unused_async)]
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -14,12 +15,14 @@ use std::time::Duration;
 
 use crate::app_services::{AppServices, CopilotBridgeManager, CopilotServerState};
 use crate::cdp_copilot;
+use crate::copilot_persistence::{self, PersistedSessionConfig};
 use crate::models::{
-    BrowserAutomationSettings, CancelAgentRequest, DesktopPermissionSummaryRow,
-    GetAgentSessionHistoryRequest, GetPermissionSummaryRequest, ListWorkspaceSlashCommandsRequest,
-    McpAddServerRequest, McpServerInfo, RelayDiagnostics, RespondAgentApprovalRequest,
-    RespondUserQuestionRequest, RustAnalyzerProbeRequest, RustAnalyzerProbeResponse,
-    SessionWriteUndoRequest, SessionWriteUndoStatusResponse, StartAgentRequest,
+    BrowserAutomationSettings, CancelAgentRequest, ContinueAgentSessionRequest,
+    DesktopPermissionSummaryRow, GetAgentSessionHistoryRequest, GetPermissionSummaryRequest,
+    ListWorkspaceSlashCommandsRequest, McpAddServerRequest, McpServerInfo, RelayDiagnostics,
+    RespondAgentApprovalRequest, RespondUserQuestionRequest, RustAnalyzerProbeRequest,
+    RustAnalyzerProbeResponse, SessionWriteUndoRequest, SessionWriteUndoStatusResponse,
+    StartAgentRequest,
     WorkspaceAllowlistCwdRequest, WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
     WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
 };
@@ -238,60 +241,132 @@ pub(crate) use crate::agent_loop::{
 use crate::agent_loop::{msg_to_relay, run_agent_loop_impl};
 use crate::agent_loop::{AgentSessionPhase, E_ERROR, E_STATUS};
 
-pub async fn start_agent(
-    app: AppHandle,
-    services: State<'_, AppServices>,
-    request: StartAgentRequest,
-) -> Result<String, String> {
-    start_agent_inner(
-        app,
-        services.registry(),
-        services.agent_semaphore(),
-        services.config().clone(),
-        request,
-    )
-    .await
+fn normalize_optional_string(value: Option<&str>) -> Option<String> {
+    value.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
 }
 
-pub(crate) async fn start_agent_inner(
+fn start_request_session_config(
+    request: &StartAgentRequest,
+    goal: &str,
+) -> PersistedSessionConfig {
+    PersistedSessionConfig {
+        goal: Some(goal.to_string()),
+        cwd: normalize_optional_string(request.cwd.as_deref()),
+        max_turns: request.max_turns,
+        session_preset: Some(request.session_preset),
+        browser_settings: request.browser_settings.clone(),
+    }
+}
+
+fn first_user_text(session: &runtime::Session) -> Option<String> {
+    session.messages.iter().find_map(|message| {
+        if message.role != runtime::MessageRole::User {
+            return None;
+        }
+        let text = message
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                runtime::ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim()
+            .to_string();
+        (!text.is_empty()).then_some(text)
+    })
+}
+
+fn ensure_loaded_session_handle(
+    registry: &SessionRegistry,
+    session_id: &str,
+) -> Result<Arc<SessionHandle>, String> {
+    if let Some(handle) = registry.get_handle(session_id).map_err(|e| e.to_string())? {
+        return Ok(handle);
+    }
+
+    let loaded = copilot_persistence::load_session(session_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("session `{session_id}` not found"))?;
+    let auto_initial: HashSet<String> =
+        crate::workspace_allowlist::load_for_cwd(loaded.config.cwd.as_deref());
+    registry
+        .insert(
+            session_id.to_string(),
+            SessionHandle::new(
+                SessionState::new_idle(loaded.session, loaded.config),
+                auto_initial,
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+    registry
+        .get_handle(session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("session `{session_id}` not found after load"))
+}
+
+fn prepare_session_continuation(
+    handle: &SessionHandle,
+    fallback_message: &str,
+) -> Result<
+    (
+        runtime::Session,
+        PersistedSessionConfig,
+        Arc<AtomicBool>,
+    ),
+    String,
+> {
+    handle
+        .write_state(|state| -> Result<_, String> {
+            if state.running && !state.cancelled.load(Ordering::SeqCst) {
+                return Err("session is already running".to_string());
+            }
+
+            let goal = state
+                .session_config
+                .goal
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| first_user_text(&state.session))
+                .unwrap_or_else(|| fallback_message.to_string());
+            state.session_config.goal = Some(goal);
+            state.running = true;
+            state.run_state = SessionRunState::Running;
+            state.loop_epoch = state.loop_epoch.saturating_add(1);
+            state.cancelled = Arc::new(AtomicBool::new(false));
+            state.finished_at = None;
+            state.retry_count = 0;
+            state.last_stop_reason = None;
+            state.last_error_summary = None;
+            state.terminal_status_emitted = false;
+
+            Ok((
+                state.session.clone(),
+                state.session_config.clone(),
+                Arc::clone(&state.cancelled),
+            ))
+        })
+        .map_err(|e| e.to_string())?
+}
+
+async fn spawn_session_loop(
     app: AppHandle,
     registry: SessionRegistry,
     agent_semaphore: Arc<tokio::sync::Semaphore>,
     config: crate::config::AgentConfig,
-    request: StartAgentRequest,
+    session_id: String,
+    conversation_goal: String,
+    turn_input: String,
+    session_config: PersistedSessionConfig,
+    initial_session: runtime::Session,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<String, String> {
-    let goal = request.goal.trim().to_string();
-    if goal.is_empty() {
-        return Err("goal must not be empty".into());
-    }
+    let cwd = normalize_optional_string(session_config.cwd.as_deref());
+    let max_turns = session_config.max_turns;
+    let session_preset = session_config.session_preset.unwrap_or_default();
+    let browser_settings = session_config.browser_settings.clone();
 
-    let session_id = format!("session-{}", Uuid::new_v4());
-
-    let workspace_cwd = request
-        .cwd
-        .as_ref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-
-    let auto_initial: HashSet<String> =
-        crate::workspace_allowlist::load_for_cwd(workspace_cwd.as_deref());
-
-    let handle = SessionHandle::new(
-        SessionState::new(runtime::Session::new(), workspace_cwd),
-        auto_initial,
-    );
-    let cancelled = handle
-        .read_state(|state| Arc::clone(&state.cancelled))
-        .map_err(|e| e.to_string())?;
-    registry
-        .insert(session_id.clone(), handle)
-        .map_err(|e| e.to_string())?;
-
-    let app_for_task = app.clone();
-    let sid_for_task = session_id.clone();
-    let reg_for_task = registry.clone();
-
-    // Periodically evict stale sessions to prevent memory leaks
     let ttl_seconds = i64::try_from(config.session_cleanup_ttl_minutes).unwrap_or(i64::MAX) * 60;
     if let Err(e) = registry.remove_stale_sessions(ttl_seconds) {
         tracing::warn!("[RelayAgent] stale session cleanup failed: {e}");
@@ -302,26 +377,29 @@ pub(crate) async fn start_agent_inner(
         .await
         .map_err(|_| "agent concurrency limit reached — try again later".to_string())?;
 
+    let app_for_task = app.clone();
+    let sid_for_task = session_id.clone();
+    let reg_for_task = registry.clone();
+
     tokio::task::spawn_blocking(move || {
-        // Catch panics to prevent silent thread death and stuck sessions
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_agent_loop_impl(
                 &app_for_task,
                 &reg_for_task,
                 &sid_for_task,
-                goal,
-                request.cwd,
-                request.max_turns,
-                request.session_preset,
-                request.browser_settings,
+                conversation_goal,
+                turn_input,
+                cwd,
+                max_turns,
+                session_preset,
+                browser_settings,
                 cancelled,
+                initial_session,
             )
         }));
 
         match result {
-            Ok(Ok(())) => {
-                // Normal completion — no event needed (turn_complete already emitted)
-            }
+            Ok(Ok(())) => {}
             Ok(Err(err)) => {
                 let evt = AgentErrorEvent {
                     session_id: sid_for_task.clone(),
@@ -352,16 +430,110 @@ pub(crate) async fn start_agent_inner(
             }
         }
 
-        // Always clean up session state, even on panic
         if let Ok(Some(handle)) = reg_for_task.get_handle(&sid_for_task) {
             let _ignore = handle.write_state(SessionState::mark_finished);
         }
 
-        // Release concurrency slot
         drop(permit);
     });
 
     Ok(session_id)
+}
+
+pub async fn start_agent(
+    app: AppHandle,
+    services: State<'_, AppServices>,
+    request: StartAgentRequest,
+) -> Result<String, String> {
+    start_agent_inner(
+        app,
+        services.registry(),
+        services.agent_semaphore(),
+        services.config().clone(),
+        request,
+    )
+    .await
+}
+
+pub(crate) async fn start_agent_inner(
+    app: AppHandle,
+    registry: SessionRegistry,
+    agent_semaphore: Arc<tokio::sync::Semaphore>,
+    config: crate::config::AgentConfig,
+    request: StartAgentRequest,
+) -> Result<String, String> {
+    let goal = request.goal.trim().to_string();
+    if goal.is_empty() {
+        return Err("goal must not be empty".into());
+    }
+
+    let session_id = format!("session-{}", Uuid::new_v4());
+    let session_config = start_request_session_config(&request, &goal);
+    let auto_initial: HashSet<String> =
+        crate::workspace_allowlist::load_for_cwd(session_config.cwd.as_deref());
+
+    let handle = SessionHandle::new(
+        SessionState::new(runtime::Session::new(), session_config.clone()),
+        auto_initial,
+    );
+    let cancelled = handle
+        .read_state(|state| Arc::clone(&state.cancelled))
+        .map_err(|e| e.to_string())?;
+    registry
+        .insert(session_id.clone(), handle)
+        .map_err(|e| e.to_string())?;
+    spawn_session_loop(
+        app,
+        registry,
+        agent_semaphore,
+        config,
+        session_id,
+        goal.clone(),
+        goal,
+        session_config,
+        runtime::Session::new(),
+        cancelled,
+    )
+    .await
+}
+
+pub(crate) async fn continue_agent_session_inner(
+    app: AppHandle,
+    registry: SessionRegistry,
+    agent_semaphore: Arc<tokio::sync::Semaphore>,
+    config: crate::config::AgentConfig,
+    request: ContinueAgentSessionRequest,
+) -> Result<String, String> {
+    let message = request.message.trim().to_string();
+    if message.is_empty() {
+        return Err("message must not be empty".into());
+    }
+
+    let handle = ensure_loaded_session_handle(&registry, &request.session_id)?;
+    let _ = handle.drain_approvals();
+    let _ = handle.drain_user_questions();
+    let (initial_session, session_config, cancelled) =
+        prepare_session_continuation(&handle, &message)?;
+
+    let conversation_goal = session_config
+        .goal
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| message.clone());
+
+    spawn_session_loop(
+        app,
+        registry,
+        agent_semaphore,
+        config,
+        request.session_id,
+        conversation_goal,
+        message,
+        session_config,
+        initial_session,
+        cancelled,
+    )
+    .await
 }
 
 pub async fn respond_approval(
@@ -396,7 +568,7 @@ pub(crate) fn respond_approval_inner(
 
     if request.approved && request.remember_for_workspace == Some(true) {
         if let Some(cwd) = handle
-            .read_state(|state| state.workspace_cwd.clone())
+            .read_state(|state| state.session_config.cwd.clone())
             .map_err(|e| e.to_string())?
         {
             if let Err(e) =
@@ -619,7 +791,7 @@ pub async fn get_session_history(
         return Ok(history);
     }
 
-    let loaded = crate::copilot_persistence::load_session(&request.session_id)
+    let loaded = copilot_persistence::load_session(&request.session_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("session `{}` not found", request.session_id))?;
     let messages = loaded.session.messages.iter().map(msg_to_relay).collect();
@@ -1349,4 +1521,87 @@ pub fn list_workspace_slash_commands(
     request: ListWorkspaceSlashCommandsRequest,
 ) -> Result<Vec<WorkspaceSlashCommandRow>, String> {
     crate::workspace_slash_commands::list_for_cwd(request.cwd.as_deref())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use runtime::ConversationMessage;
+    use tempfile::TempDir;
+
+    fn saved_session_config() -> PersistedSessionConfig {
+        PersistedSessionConfig {
+            goal: Some("Original task".to_string()),
+            cwd: Some("/tmp/project".to_string()),
+            max_turns: Some(8),
+            session_preset: Some(crate::models::SessionPreset::Plan),
+            browser_settings: Some(BrowserAutomationSettings {
+                cdp_port: 9444,
+                auto_launch_edge: false,
+                timeout_ms: 90_000,
+            }),
+        }
+    }
+
+    #[test]
+    fn prepare_session_continuation_reuses_history_and_goal() {
+        let mut session = runtime::Session::new();
+        session.messages.push(ConversationMessage::user_text("Original task"));
+        session.messages.push(ConversationMessage::assistant(vec![]));
+        let handle = SessionHandle::new(
+            SessionState::new_idle(session.clone(), saved_session_config()),
+            HashSet::new(),
+        );
+
+        let (loaded, config, cancelled) =
+            prepare_session_continuation(&handle, "Follow-up request").expect("continue session");
+
+        assert_eq!(loaded.messages.len(), session.messages.len());
+        assert_eq!(config.goal.as_deref(), Some("Original task"));
+        assert_eq!(config.session_preset, Some(crate::models::SessionPreset::Plan));
+        assert!(!cancelled.load(Ordering::SeqCst));
+        let running = handle.read_state(|state| state.running).expect("read state");
+        assert!(running);
+    }
+
+    #[test]
+    fn prepare_session_continuation_rejects_running_session() {
+        let handle = SessionHandle::new(
+            SessionState::new(runtime::Session::new(), saved_session_config()),
+            HashSet::new(),
+        );
+
+        let err =
+            prepare_session_continuation(&handle, "Follow-up request").expect_err("should reject");
+        assert!(err.contains("already running"));
+    }
+
+    #[test]
+    fn ensure_loaded_session_handle_hydrates_persisted_session() {
+        let temp = TempDir::new().expect("tempdir");
+        let previous_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", temp.path());
+
+        let mut session = runtime::Session::new();
+        session.messages.push(ConversationMessage::user_text("Persisted task"));
+        copilot_persistence::save_session("session-hydrated", &session, saved_session_config())
+            .expect("save session");
+
+        let registry = SessionRegistry::new();
+        let handle =
+            ensure_loaded_session_handle(&registry, "session-hydrated").expect("load handle");
+        let (message_count, config) = handle
+            .read_state(|state| (state.session.messages.len(), state.session_config.clone()))
+            .expect("read hydrated state");
+
+        assert_eq!(message_count, 1);
+        assert_eq!(config.goal.as_deref(), Some("Original task"));
+        assert_eq!(config.browser_settings.as_ref().map(|v| v.cdp_port), Some(9444));
+
+        if let Some(home) = previous_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+    }
 }

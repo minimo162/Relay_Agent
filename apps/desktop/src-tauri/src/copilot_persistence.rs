@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use runtime::{ContentBlock, ConversationMessage, RuntimeError, Session, TokenUsage};
 use serde::{Deserialize, Serialize};
 
-use crate::models::SessionPreset;
+use crate::models::{BrowserAutomationSettings, SessionPreset};
 
 /* ── Session persistence types ─── */
 
@@ -20,6 +20,8 @@ pub struct PersistedSessionConfig {
     pub max_turns: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_preset: Option<SessionPreset>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_settings: Option<BrowserAutomationSettings>,
 }
 
 /// A session loaded from disk with its configuration.

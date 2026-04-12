@@ -68,6 +68,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::agent::start_agent,
+            commands::agent::continue_agent_session,
             commands::agent::respond_approval,
             commands::agent::respond_user_question,
             commands::agent::cancel_agent,

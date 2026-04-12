@@ -1,10 +1,5 @@
 import { test, expect } from "@playwright/test";
 
-/* ── Helpers ─────────────────────────────────────────────── */
-
-const COMPOSER_PLACEHOLDER = "What should the agent do? Type / for commands.";
-
-/** Send a Tauri event from the browser context */
 async function emitEvent(page: any, event: string, payload: any) {
   await page.evaluate(
     ({ event, payload }) => {
@@ -15,144 +10,83 @@ async function emitEvent(page: any, event: string, payload: any) {
   );
 }
 
-/** Composer input selector (reusable) */
-function composerInput(page: any) {
-  return page.locator(`textarea[placeholder='${COMPOSER_PLACEHOLDER}']`);
-}
-
-/** Open the page and wait for the Solid app to hydrate */
 async function openApp(page: any) {
   await page.goto("/");
-  await expect(page.locator("text=Relay Agent v0.1.0")).toBeVisible();
+  await expect(page.getByRole("banner").getByText("Relay Agent", { exact: true })).toBeVisible();
 }
 
-/* ── Existing Tests (fixed selectors) ────────────────────── */
+function composer(page: any) {
+  return page.locator("textarea");
+}
 
-test("app shell renders 3-pane layout", async ({ page }) => {
+test("first run shows onboarding preflight and hides app chrome", async ({ page }) => {
   await openApp(page);
-  await expect(page.getByText("Relay Agent", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Sessions" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Plan" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "MCP" })).toBeVisible();
-  await expect(page.locator("text=Relay Agent v0.1.0")).toBeVisible();
+  await expect(page.getByText("Check the basics before you start")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Conversations" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Integrations" })).toHaveCount(0);
+  await expect(page.locator("[data-ra-footer-session]")).toHaveCount(0);
 });
 
-test("composer input is present and editable", async ({ page }) => {
+test("settings modal exposes setup and advanced controls", async ({ page }) => {
   await openApp(page);
-  await expect(composerInput(page)).toBeVisible();
-  await expect(composerInput(page)).toBeEditable();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Workspace folder", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Default work mode", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Copilot connection", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Always on top", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Export diagnostics" })).toBeVisible();
 });
 
-test("typing in composer shows Send button", async ({ page }) => {
+test("sending the first prompt exits onboarding and creates one conversation", async ({ page }) => {
   await openApp(page);
-  await expect(page.getByRole("button", { name: "Send" })).not.toBeVisible();
-  await composerInput(page).fill("hello");
-  await expect(page.getByRole("button", { name: "Send" })).toBeVisible({ timeout: 3000 });
+  await composer(page).fill("review the workspace");
+  await composer(page).press("Control+Enter");
+  await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible({ timeout: 5000 });
+  await expect(page.locator(".ra-session-row")).toHaveCount(1);
+  await expect(page.locator("[data-ra-footer-session]")).toBeVisible();
 });
 
-test("ctrl+enter sends message and adds user bubble", async ({ page }) => {
+test("tool rows use human labels instead of raw tool names", async ({ page }) => {
   await openApp(page);
-  await composerInput(page).fill("analyze this data");
-  await composerInput(page).press("Control+Enter");
-  await expect(
-    page.locator("main").locator('[data-ra-bubble-role="user"]').filter({ hasText: "analyze this data" }),
-  ).toBeVisible({ timeout: 5000 });
-});
-
-test("clicking Send button sends message", async ({ page }) => {
-  await openApp(page);
-  await composerInput(page).fill("summarize results");
-  await page.getByRole("button", { name: "Send" }).click();
-  await expect(
-    page.locator("main").locator('[data-ra-bubble-role="user"]').filter({ hasText: "summarize results" }),
-  ).toBeVisible({ timeout: 5000 });
-});
-
-test("session appears in sidebar after sending prompt", async ({ page }) => {
-  await openApp(page);
-  await composerInput(page).fill("test session");
-  await composerInput(page).press("Control+Enter");
-  await expect(page.getByRole("button", { name: /session-/ })).toBeVisible({ timeout: 5000 });
-});
-
-test("context panel tabs are switchable", async ({ page }) => {
-  await openApp(page);
-  await page.getByRole("tab", { name: "MCP" }).click();
-  await expect(page.getByText(/No MCP servers yet/)).toBeVisible();
-  await page.getByRole("tab", { name: "Plan" }).click();
-  await expect(page.getByText("Plan timeline")).toBeVisible();
-  await page.locator("[data-ra-tool-policy] summary").click();
-  await expect(page.getByText(/Tool rules for current mode/)).toBeVisible();
-});
-
-test("workspace chip is in header", async ({ page }) => {
-  await openApp(page);
-  await expect(
-    page.getByRole("button", { name: /Workspace folder not set\. Click to configure\.|Workspace folder:/ }),
-  ).toBeVisible();
-});
-
-test("turn_complete event handled without crash", async ({ page }) => {
-  await openApp(page);
-  await composerInput(page).fill("process workbook");
-  await composerInput(page).press("Control+Enter");
-  await emitEvent(page, "agent:turn_complete", {
-    sessionId: "session-e2e-1",
-    stopReason: "end_turn",
-    assistantMessage: "Analysis complete.",
-    messageCount: 2,
-  });
-  await expect(composerInput(page)).toBeVisible();
-});
-
-test("error event handled gracefully", async ({ page }) => {
-  await openApp(page);
-  await emitEvent(page, "agent:error", {
-    sessionId: "session-e2e-1",
-    error: "Something went wrong",
-    cancelled: false,
-  });
-  await expect(composerInput(page)).toBeVisible();
-});
-
-test("tool_start event handled", async ({ page }) => {
-  await openApp(page);
+  await composer(page).fill("inspect file");
+  await composer(page).press("Control+Enter");
   await emitEvent(page, "agent:tool_start", {
     sessionId: "session-e2e-1",
     toolUseId: "tool-1",
     toolName: "read_file",
+    input: { path: "/tmp/demo.txt" },
   });
-  await expect(composerInput(page)).toBeVisible();
-});
-
-test("tool_result event handled", async ({ page }) => {
-  await openApp(page);
   await emitEvent(page, "agent:tool_result", {
     sessionId: "session-e2e-1",
     toolUseId: "tool-1",
     toolName: "read_file",
-    content: "file contents here",
+    content: JSON.stringify({
+      type: "text",
+      file: { filePath: "/tmp/demo.txt", numLines: 12, startLine: 1, totalLines: 12, content: "hello" },
+    }),
     isError: false,
   });
-  await expect(composerInput(page)).toBeVisible();
+  await expect(page.getByText("Read file", { exact: true })).toBeVisible();
+  await expect(page.getByText("/tmp/demo.txt", { exact: true })).toBeVisible();
+  await expect(page.getByText("12 lines loaded of 12")).toBeVisible();
+  await expect(page.getByText("read_file")).toHaveCount(0);
 });
 
-test("approval_needed event handled", async ({ page }) => {
+test("approval overlay uses updated copy and advanced details label", async ({ page }) => {
   await openApp(page);
   await emitEvent(page, "agent:approval_needed", {
     sessionId: "session-e2e-1",
     approvalId: "approval-1",
     toolName: "write_file",
-    description: "write_file on /tmp/output.csv",
-    target: "/tmp/output.csv",
-    input: { path: "/tmp/output.csv", content: "data" },
+    description: "Create or overwrite a file?",
+    target: "/tmp/output.txt",
+    input: { path: "/tmp/output.txt", content: "hello" },
+    workspaceCwdConfigured: true,
   });
-  await expect(page.getByRole("button", { name: "Allow once" }).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "Don't allow", exact: true }).first()).toBeVisible();
-});
-
-test("light mode is default", async ({ page }) => {
-  await openApp(page);
-  const theme = await page.locator("html").getAttribute("data-theme");
-  expect(theme).toBe("light");
+  await expect(page.getByRole("button", { name: "Always allow in this conversation" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Always allow in this folder" })).toBeVisible();
+  await expect(page.getByText("Advanced details")).toBeVisible();
 });

@@ -66,6 +66,14 @@ pub struct StartAgentRequest {
     pub session_preset: SessionPreset,
 }
 
+/// Request to continue an existing agent session with a new user message.
+#[derive(Clone, Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinueAgentSessionRequest {
+    pub session_id: String,
+    pub message: String,
+}
+
 /// Request to approve or reject a pending tool execution.
 #[derive(Clone, Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

@@ -1,7 +1,10 @@
+import type { SessionPreset } from "../lib/ipc";
+
 export type SessionMeta = {
   createdAt: number;
   /** First user message preview (one line). */
   preview?: string;
+  preset?: SessionPreset;
 };
 
 export function sessionPrimaryLine(meta: SessionMeta | undefined): string {

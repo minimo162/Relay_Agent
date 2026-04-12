@@ -63,9 +63,9 @@ export function Sidebar(props: {
       <div class="ra-sidebar-shell">
         <div class="ra-sidebar-shell__header">
           <div class="flex items-center justify-between gap-2 mb-2">
-            <h2 class={`ra-display-title ra-type-body-sans ${ui.textPrimary}`}>Sessions</h2>
+            <h2 class={`ra-display-title ra-type-body-sans ${ui.textPrimary}`}>Conversations</h2>
             <Button variant="secondary" class="ra-type-caption ra-button--pill-tight" onClick={props.onNewSession}>
-              New session
+              New conversation
             </Button>
           </div>
           <button

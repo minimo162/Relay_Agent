@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use chrono::Utc;
 use runtime::Session as RuntimeSession;
 
+use crate::copilot_persistence::PersistedSessionConfig;
 use crate::error::AgentLoopError;
 use crate::session_write_undo::WriteUndoStacks;
 
@@ -39,8 +40,8 @@ pub struct SessionState {
     pub cancelled: Arc<AtomicBool>,
     /// Timestamp (UTC epoch seconds) when the session completed or was cancelled.
     pub finished_at: Option<i64>,
-    /// Workspace `cwd` from `start_agent` (trimmed), for workspace-scoped allowlist persistence.
-    pub workspace_cwd: Option<String>,
+    /// Persisted launch config for this conversation. Used for continuation after idle/restart.
+    pub session_config: PersistedSessionConfig,
     /// Last terminal stop reason emitted by the backend loop.
     pub last_stop_reason: Option<String>,
     /// Total transient retries consumed by this session.
@@ -53,7 +54,7 @@ pub struct SessionState {
 
 impl SessionState {
     #[must_use]
-    pub fn new(session: RuntimeSession, workspace_cwd: Option<String>) -> Self {
+    pub fn new(session: RuntimeSession, session_config: PersistedSessionConfig) -> Self {
         Self {
             session,
             running: true,
@@ -61,12 +62,22 @@ impl SessionState {
             loop_epoch: 1,
             cancelled: Arc::new(AtomicBool::new(false)),
             finished_at: None,
-            workspace_cwd,
+            session_config,
             last_stop_reason: None,
             retry_count: 0,
             last_error_summary: None,
             terminal_status_emitted: false,
         }
+    }
+
+    #[must_use]
+    pub fn new_idle(session: RuntimeSession, session_config: PersistedSessionConfig) -> Self {
+        let mut state = Self::new(session, session_config);
+        state.running = false;
+        state.run_state = SessionRunState::Finished;
+        state.cancelled.store(true, Ordering::SeqCst);
+        state.finished_at = Some(Utc::now().timestamp());
+        state
     }
 
     /// Mark this session as finished and record the timestamp for TTL cleanup.
@@ -351,7 +362,7 @@ mod tests {
             .insert(
                 "s1".to_string(),
                 SessionHandle::new(
-                    SessionState::new(RuntimeSession::new(), None),
+                    SessionState::new(RuntimeSession::new(), PersistedSessionConfig::default()),
                     HashSet::new(),
                 ),
             )
@@ -360,7 +371,7 @@ mod tests {
             .insert(
                 "s2".to_string(),
                 SessionHandle::new(
-                    SessionState::new(RuntimeSession::new(), None),
+                    SessionState::new(RuntimeSession::new(), PersistedSessionConfig::default()),
                     HashSet::new(),
                 ),
             )
@@ -405,11 +416,17 @@ mod tests {
     fn remove_stale_sessions_only_evicts_expired_finished_sessions() {
         let registry = SessionRegistry::new();
 
-        let mut stale = SessionState::new(RuntimeSession::new(), None);
+        let mut stale = SessionState::new(
+            RuntimeSession::new(),
+            PersistedSessionConfig::default(),
+        );
         stale.mark_finished();
         stale.finished_at = Some(Utc::now().timestamp() - 120);
 
-        let mut fresh = SessionState::new(RuntimeSession::new(), None);
+        let mut fresh = SessionState::new(
+            RuntimeSession::new(),
+            PersistedSessionConfig::default(),
+        );
         fresh.mark_finished();
         fresh.finished_at = Some(Utc::now().timestamp());
 

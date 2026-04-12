@@ -84,6 +84,8 @@ export function Composer(props: {
   onSlashCommand?: (input: string) => Promise<string | null>;
   onAppendAssistant?: (text: string) => void;
   hero?: boolean;
+  allowModeSelection?: boolean;
+  modeLockedNote?: string | null;
 }): JSX.Element {
   const [text, setText] = createSignal("");
   const [slashMode, setSlashMode] = createSignal<{
@@ -205,6 +207,7 @@ export function Composer(props: {
     props.hero
       ? "Describe the task you want Relay to handle."
       : "What should the agent do? Type / for commands.";
+  const allowModeSelection = () => props.allowModeSelection ?? true;
 
   return (
     <div class={`ra-composer relative shrink-0 ${props.hero ? "ra-composer--hero" : ""}`}>
@@ -235,40 +238,44 @@ export function Composer(props: {
           <div class="ra-composer-toolbar">
             <div class="ra-composer-toolbar-main">
               <p class="ra-composer-hint">⌘/Ctrl+Enter to send · Enter for new line</p>
-              <p class="ra-composer-mode-summary">{sessionModeSummary(props.sessionPreset)}</p>
+              <p class="ra-composer-mode-summary">
+                {props.modeLockedNote ?? sessionModeSummary(props.sessionPreset)}
+              </p>
             </div>
             <div class="ra-composer-toolbar-actions">
-              <div
-                class={`ra-composer-mode-control ${ui.radiusCompact}`}
-                data-ra-session-mode
-                role="group"
-                aria-label="Work mode"
-              >
-                <button
-                  type="button"
-                  class={`ra-composer-mode-option ${props.sessionPreset === "build" ? "is-selected" : ""}`}
-                  aria-pressed={props.sessionPreset === "build"}
-                  onClick={() => props.onSessionPresetChange("build")}
+              <Show when={allowModeSelection()}>
+                <div
+                  class={`ra-composer-mode-control ${ui.radiusCompact}`}
+                  data-ra-session-mode
+                  role="group"
+                  aria-label="Work mode"
                 >
-                  {sessionModeLabel("build")}
-                </button>
-                <button
-                  type="button"
-                  class={`ra-composer-mode-option ${props.sessionPreset === "plan" ? "is-selected" : ""}`}
-                  aria-pressed={props.sessionPreset === "plan"}
-                  onClick={() => props.onSessionPresetChange("plan")}
-                >
-                  {sessionModeLabel("plan")}
-                </button>
-                <button
-                  type="button"
-                  class={`ra-composer-mode-option ${props.sessionPreset === "explore" ? "is-selected" : ""}`}
-                  aria-pressed={props.sessionPreset === "explore"}
-                  onClick={() => props.onSessionPresetChange("explore")}
-                >
-                  {sessionModeLabel("explore")}
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    class={`ra-composer-mode-option ${props.sessionPreset === "build" ? "is-selected" : ""}`}
+                    aria-pressed={props.sessionPreset === "build"}
+                    onClick={() => props.onSessionPresetChange("build")}
+                  >
+                    {sessionModeLabel("build")}
+                  </button>
+                  <button
+                    type="button"
+                    class={`ra-composer-mode-option ${props.sessionPreset === "plan" ? "is-selected" : ""}`}
+                    aria-pressed={props.sessionPreset === "plan"}
+                    onClick={() => props.onSessionPresetChange("plan")}
+                  >
+                    {sessionModeLabel("plan")}
+                  </button>
+                  <button
+                    type="button"
+                    class={`ra-composer-mode-option ${props.sessionPreset === "explore" ? "is-selected" : ""}`}
+                    aria-pressed={props.sessionPreset === "explore"}
+                    onClick={() => props.onSessionPresetChange("explore")}
+                  >
+                    {sessionModeLabel("explore")}
+                  </button>
+                </div>
+              </Show>
               <Show when={props.running}>
                 <button type="button" class="ra-composer-cancel" onClick={props.onCancel}>
                   Cancel

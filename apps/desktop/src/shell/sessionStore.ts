@@ -11,6 +11,7 @@ export function createSessionStore() {
   const [statusBySession, setStatusBySession] = createSignal<Record<string, SessionStatusSnapshot>>({});
   const [chunks, setChunks] = createSignal<UiChunk[]>([]);
   const [planBySession, setPlanBySession] = createSignal<Record<string, PlanTimelineEntry[]>>({});
+  const [hasStartedConversation, setHasStartedConversation] = createSignal(false);
 
   const sessionEntries = createMemo(() =>
     sessionIds().map((id) => ({ id, meta: sessionMeta()[id], status: statusBySession()[id] })),
@@ -28,9 +29,7 @@ export function createSessionStore() {
     return planBySession()[id] ?? [];
   });
 
-  const isFirstRun = createMemo(
-    () => sessionIds().length === 0 && chunks().length === 0 && activeSessionId() === null,
-  );
+  const isFirstRun = createMemo(() => !hasStartedConversation());
 
   return {
     activeSessionId,
@@ -45,6 +44,8 @@ export function createSessionStore() {
     setChunks,
     planBySession,
     setPlanBySession,
+    hasStartedConversation,
+    setHasStartedConversation,
     sessionEntries,
     activeSessionStatus,
     planTimelineForActiveSession,

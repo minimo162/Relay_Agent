@@ -1,6 +1,6 @@
 # Relay Agent
 
-Desktop agent app: **Tauri v2**, **SolidJS**, **Rust**. You send a goal; the agent runs with **M365 Copilot** driven over **CDP** (Edge). Tool runs can require approval. The main window is **always on top**.
+Desktop agent app: **Tauri v2**, **SolidJS**, **Rust**. You send a goal; the agent runs with **M365 Copilot** driven over **CDP** (Edge). Tool runs can require approval. The main window is **not** always on top by default and can be toggled in Settings.
 
 ## Quick start
 
@@ -21,20 +21,21 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 
 | Layer | Technology |
 |-------|------------|
-| UI | SolidJS, Vite, TypeScript, Tailwind — **Cursor Inspiration** in [`apps/desktop/src/index.css`](apps/desktop/src/index.css) + [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md): Surface scale, oklab borders (including **strong** borders at 55% opacity), cream primary buttons, **`.ra-type-*`** typography utilities, editorial **`cswh`** on serif markdown, mono scale for tools/code. Dark theme uses a paired warm-charcoal scale. **Default theme is light** (`data-theme` + `localStorage` `relay-agent/theme`). Proprietary Cursor fonts are not bundled (system fallbacks). Details: `docs/IMPLEMENTATION.md` (Milestone Log, **2026-04-10** OpenWork second pass + earlier Desktop UI milestones) |
+| UI | SolidJS, Vite, TypeScript, Tailwind — quiet operational shell in [`apps/desktop/src/index.css`](apps/desktop/src/index.css), still grounded in [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md) but now toned toward **near-white / low-effect / software-first** surfaces. Light theme uses cool neutral `--ra-*` tokens, border-led cards, and sans-first chrome; dark theme remains the paired warm-charcoal scale. **Default theme is light** (`data-theme` + `localStorage` `relay-agent/theme`). Details: `docs/IMPLEMENTATION.md` (Milestone Log, **2026-04-12** conversation + settings refresh, plus earlier desktop UI milestones) |
 | Shell | Tauri v2, `tauri-plugin-shell`, `tauri-plugin-dialog` |
 | Agent / tools | Rust (`apps/desktop/src-tauri/`, internal crates) |
 | AI surface | M365 Copilot in Edge via **Node** `copilot_server.js` + CDP; the desktop sends the Relay turn bundle **inline in the prompt body** for the paid-license path, compacting context before the effective **128000-token** ceiling when needed. The host parses tool calls from **` ```relay_tool `** JSON and, if none, from accepted fenced JSON; bounded unfenced tool-shaped object recovery is **retry/repair only**, not the normal protocol. Fallback parser candidates are being migrated to require **`"relay_tool_call": true`** per tool object (observe/warn phase first; enforce via `RELAY_FALLBACK_SENTINEL_POLICY=enforce`) ([`agent_loop/orchestrator.rs`](apps/desktop/src-tauri/src/agent_loop/orchestrator.rs)) |
 
 ## What the app does
 
-- **Sessions** — Sidebar, history, streaming assistant text; tool steps always show **inline in chat**.
-- **First run** — The initial screen centers a **workspace chooser** and the **first request** composer in the main pane; the right-side **Plan / MCP** panel stays hidden until the first session starts.
-- **Approvals** — **Allow once**, **Allow for session**, or **Don’t allow** for gated tools.
-- **Workspace** — Header chip (basename / “not set”) opens a small **Workspace** modal: path + **Browse…** + **Done** on desktop. `maxTurns` / browser CDP hints are **not** edited in-app (existing `localStorage` `relay.settings.browser` / `relay.settings.maxTurns` still apply when set). The footer offers **Reconnect Copilot** (uses the same stored browser hints as `start_agent` / `warmup_copilot_bridge`).
-- **Context panel** — **Plan** (default): `TodoWrite` timeline + **Tool rules** disclosure; **MCP** servers and workspace instruction surfaces when `cwd` is set. The panel is suppressed on the zero-session first-run screen so the initial task flow stays focused.
-- **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or **Send** submits. The inline **Work mode** control uses **Edit files** / **Read-only plan** / **Read and search** labels and shows the active preset summary beside the shortcut hint; slash commands (`/help`, `/compact`, …). Explore = `read_file` / `glob_search` / `grep_search` only in the Copilot tool list.
+- **Conversations** — The sidebar tracks conversations, not one-shot runs. Sending while the active conversation is idle continues that conversation; **New conversation** starts a separate one. Tool steps always show **inline in chat**.
+- **First run** — The zero-state is a dedicated onboarding shell with a **Preflight** block for workspace, Copilot sign-in, CDP reachability, and default work mode plus the first request composer. Sidebar, context panel, and footer stay hidden until the first conversation starts.
+- **Approvals** — **Allow once**, **Always allow in this conversation**, or **Always allow in this folder** for gated tools. Technical payloads are tucked under **Advanced details**.
+- **Settings** — The Settings modal now includes **Workspace folder**, **Default work mode**, **Copilot connection**, **Reconnect Copilot**, **CDP port**, **response timeout**, **auto-launch Edge**, **always on top**, and **Export diagnostics**.
+- **Context panel** — **Plan** (default): `TodoWrite` timeline + **Tool rules** disclosure; **Integrations** shows MCP servers and workspace instruction surfaces when `cwd` is set. The panel stays hidden on first run.
+- **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or **Send** submits. Work mode is chosen for a new conversation and then stays fixed for that conversation; switching mode means starting **New conversation**. Explore = `read_file` / `glob_search` / `grep_search` only in the Copilot tool list.
 - **Undo / Redo** — Header actions reverse the last successful workspace writes from the active session (`write_file`, `edit_file`, `NotebookEdit`, PDF tools), when the agent is idle.
+- **Audit readability** — Tool rows prefer human labels and per-tool summaries (`Read file`, `Search file contents`, PDF actions, file writes) instead of raw internal tool ids.
 - **Extras** — PDF via LiteParse + bundled Node; Windows Office hybrid read (COM + PDF); MCP over stdio.
 
 Details, limits, and milestone notes: **[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)**. Roadmap and guardrails: **[PLANS.md](PLANS.md)**. Repo rules: **[AGENTS.md](AGENTS.md)**. Manual criteria for model grounding and tool protocol: **[docs/AGENT_EVALUATION_CRITERIA.md](docs/AGENT_EVALUATION_CRITERIA.md)**. Claw-code selective alignment (upstream pin, parity checklist, `compat-harness` fixture vs full CLI harness, **~47** cataloged tool names on Unix / **48** with Windows `PowerShell`, claw-shaped JSON aliases and plan-mode tool notices): **[docs/CLAW_CODE_ALIGNMENT.md](docs/CLAW_CODE_ALIGNMENT.md)**.
@@ -71,7 +72,8 @@ Relay_Agent/
 
 | Command | Purpose |
 |---------|---------|
-| `start_agent` | New session (`goal`, optional `cwd`, `files`, `maxTurns`, `browserSettings`, `sessionPreset`: `build` \| `plan` \| `explore`) |
+| `start_agent` | Start a new conversation (`goal`, optional `cwd`, `files`, `maxTurns`, `browserSettings`, `sessionPreset`: `build` \| `plan` \| `explore`) |
+| `continue_agent_session` | Continue an existing idle conversation (`sessionId`, `message`) |
 | `respond_approval` | Approve/deny; optional `rememberForSession` |
 | `cancel_agent`, `get_session_history`, `compact_agent_session` | Session control |
 | `undo_session_write`, `redo_session_write`, `get_session_write_undo_status` | Per-session file-write undo stack |
@@ -88,7 +90,7 @@ Relay_Agent/
 
 **Claw-style paths** (instructions + settings): `.claw`, `CLAW.md`, optional additive `~/.relay-agent/SYSTEM_PROMPT.md` — see [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) and runtime crate docs. The local prompt file appends custom guidance but does **not** replace Relay’s core system sections. When `.claw` sets permission mode to **read-only**, the **bash** tool rejects commands that look mutating (e.g. `rm`, `git commit`, shell redirects); use file tools where applicable.
 
-**Diagnostics:** `get_relay_diagnostics` (and related IPC) remain in the backend for tooling; there is **no in-app diagnostics export** in the simplified UI (2026-04-10). Use devtools / future automation if you need a JSON bundle.
+**Diagnostics:** `get_relay_diagnostics` still exists in IPC, and the Settings modal now exposes **Export diagnostics** for a text bundle.
 
 **Environment (Copilot):** Default CDP base **9360**. Effective CDP port for the Node bridge and agent: **`browserSettings.cdpPort`** from each `start_agent` / `warmup_copilot_bridge` request (typically from `localStorage` `relay.settings.browser`) **overrides** `RELAY_EDGE_CDP_PORT`, which overrides the default. Changing the port while **more than one** agent session is running returns an error (finish other sessions or restart the app). Integration tests and external tools may still use `CDP_ENDPOINT` (see Playwright configs). Linux: Edge + `DISPLAY`; profile `~/RelayAgentEdgeProfile`. Dedicated Edge is started **without** a trailing Copilot URL; the Node bridge navigates over CDP (`Page.navigate` / tab reuse) so a cold **`Target.createTarget`** race does not open **two** `m365.cloud.microsoft/chat` tabs. Optional: `RELAY_CDP_PROBE_TIMEOUT_MS` (slow Windows CDP), `RELAY_COPILOT_NO_WINDOW_FOCUS=1` (do not raise Edge via CDP), `RELAY_COPILOT_NUDGE_EDGE=1` (Win32 nudge, off by default), **`RELAY_FALLBACK_SENTINEL_POLICY=enforce`** (reject fallback parser candidates that omit `"relay_tool_call": true`; default is observe/warn for compatibility). **Startup tuning:** Windows skips **`--remote-debugging-port=0`** unless **`RELAY_COPILOT_TRY_PORT_ZERO=1`**; **`RELAY_EXISTING_CDP_WAIT_MS`** (default 10s Win / 30s else) waits for CDP after a probe miss; **`RELAY_EDGE_PORT0_CDP_WAIT_MS`** (2–120s, default 12s) limits CDP wait when port=0 is used; **`RELAY_COPILOT_RECLAIM_NETSTAT=1`** enables slow Windows `netstat` fallback during HTTP port reclaim (default off). Stale **`copilot_server`** on **18080+** is reclaimed via `/health` + `bootToken`; **`RELAY_COPILOT_RECLAIM_STALE_HTTP=0`** disables. **CDP prompts** tell Copilot that Relay parses and executes `relay_tool` / accepted fenced JSON from each reply, with bounded unfenced recovery reserved for retry/repair situations. Details: [docs/COPILOT_E2E_CDP_PITFALLS.md](docs/COPILOT_E2E_CDP_PITFALLS.md).
 

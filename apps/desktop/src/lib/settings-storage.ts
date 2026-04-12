@@ -1,8 +1,10 @@
-import type { BrowserAutomationSettings } from "./ipc";
+import type { BrowserAutomationSettings, SessionPreset } from "./ipc";
 
 const LS_WORKSPACE = "relay.settings.workspacePath";
 const LS_BROWSER = "relay.settings.browser";
 const LS_MAX_TURNS = "relay.settings.maxTurns";
+const LS_SESSION_PRESET = "relay.sessionPreset.v1";
+const LS_ALWAYS_ON_TOP = "relay.settings.window.alwaysOnTop";
 
 const DEFAULT_BROWSER: BrowserAutomationSettings = {
   cdpPort: 9360,
@@ -11,6 +13,7 @@ const DEFAULT_BROWSER: BrowserAutomationSettings = {
 };
 
 export const DEFAULT_MAX_TURNS = 16;
+export const DEFAULT_SESSION_PRESET: SessionPreset = "build";
 
 export function loadWorkspacePath(): string {
   try {
@@ -73,6 +76,46 @@ export function saveMaxTurns(n: number): void {
   try {
     if (typeof localStorage !== "undefined") {
       localStorage.setItem(LS_MAX_TURNS, String(n));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadDefaultSessionPreset(): SessionPreset {
+  try {
+    const value = typeof localStorage !== "undefined" ? localStorage.getItem(LS_SESSION_PRESET) : null;
+    if (value === "build" || value === "plan" || value === "explore") return value;
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_SESSION_PRESET;
+}
+
+export function saveDefaultSessionPreset(preset: SessionPreset): void {
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(LS_SESSION_PRESET, preset);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadAlwaysOnTop(): boolean {
+  try {
+    const value = typeof localStorage !== "undefined" ? localStorage.getItem(LS_ALWAYS_ON_TOP) : null;
+    return value === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveAlwaysOnTop(enabled: boolean): void {
+  try {
+    if (typeof localStorage !== "undefined") {
+      if (enabled) localStorage.setItem(LS_ALWAYS_ON_TOP, "1");
+      else localStorage.removeItem(LS_ALWAYS_ON_TOP);
     }
   } catch {
     /* ignore */

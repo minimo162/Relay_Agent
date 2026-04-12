@@ -40,7 +40,7 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
         class={`group relative max-w-[min(80%,42rem)] ${ui.radiusFeatured} ${
           isUser
             ? "ra-bubble-user"
-            : `${ui.surfaceCard} ${ui.border} border text-[var(--ra-text-primary)] shadow-[var(--ra-shadow-sm)]`
+            : `${ui.surfaceCard} ${ui.border} border text-[var(--ra-text-primary)]`
         }`}
         data-ra-bubble-role={props.role}
       >
@@ -70,7 +70,7 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
           }
         >
           <div
-            class={`ra-type-body-serif-sm px-4 py-2.5 whitespace-pre-wrap break-words ${
+            class={`ra-type-body-sans px-4 py-2.5 whitespace-pre-wrap break-words ${
               collapsed() ? "max-h-48 overflow-hidden" : ""
             }`}
           >

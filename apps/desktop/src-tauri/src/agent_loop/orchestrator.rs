@@ -807,11 +807,13 @@ pub fn run_agent_loop_impl(
     registry: &SessionRegistry,
     session_id: &str,
     goal: String,
+    turn_input: String,
     cwd: Option<String>,
     max_turns: Option<usize>,
     session_preset: SessionPreset,
     browser_settings: Option<BrowserAutomationSettings>,
     cancelled: Arc<AtomicBool>,
+    initial_session: RuntimeSession,
 ) -> Result<(), AgentLoopError> {
     let loop_guard = LoopEpochGuard::new(registry, session_id);
     let api_client = if smoke_provider_enabled() {
@@ -843,7 +845,7 @@ pub fn run_agent_loop_impl(
     let max_turns = max_turns.unwrap_or(config.max_turns);
 
     let mut runtime_session = runtime::ConversationRuntime::new(
-        RuntimeSession::new(),
+        initial_session,
         api_client,
         tool_executor,
         permission_policy,
@@ -864,7 +866,7 @@ pub fn run_agent_loop_impl(
     };
     let mut final_error_message: Option<String> = None;
     let mut final_assistant_message = String::new();
-    let mut current_input = LoopInput::User(goal.clone());
+    let mut current_input = LoopInput::User(turn_input.clone());
     let mut meta_stall_nudges_used = 0usize;
     let mut completed_turn = false;
     let mut recent_turn_signatures: Vec<TurnActivitySignature> = Vec::new();
@@ -915,6 +917,7 @@ pub fn run_agent_loop_impl(
                         cwd.as_ref(),
                         max_turns,
                         session_preset,
+                        browser_settings.clone(),
                     )?;
 
                     let turn_signature = summarize_turn_activity(&summary);
@@ -1126,6 +1129,7 @@ pub fn run_agent_loop_impl(
             cwd,
             max_turns: Some(max_turns),
             session_preset: Some(session_preset),
+            browser_settings,
         },
     )
     .map_err(|error| AgentLoopError::PersistenceError(error.to_string()))?;
@@ -2220,6 +2224,7 @@ fn persist_turn(
     cwd: Option<&String>,
     max_turns: usize,
     session_preset: SessionPreset,
+    browser_settings: Option<BrowserAutomationSettings>,
 ) -> Result<(), AgentLoopError> {
     let _ignore = registry.mutate_session(session_id, |entry| {
         entry.session = runtime_session.session().clone();
@@ -2232,6 +2237,7 @@ fn persist_turn(
             cwd: cwd.cloned(),
             max_turns: Some(max_turns),
             session_preset: Some(session_preset),
+            browser_settings,
         },
     )
     .map_err(|error| {
@@ -2343,7 +2349,8 @@ impl PermissionPrompter for TauriApprovalPrompter {
 
         let workspace_cwd_configured = match self.registry.get_session(&self.session_id, |entry| {
             entry
-                .workspace_cwd
+                .session_config
+                .cwd
                 .as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
@@ -2663,12 +2670,14 @@ impl ToolExecutor for TauriToolExecutor {
         }
 
         let tool_use_id = Uuid::new_v4().to_string();
+        let input_obj = serde_json::from_str(&input).unwrap_or_else(|_| serde_json::json!({}));
         if let Err(e) = self.app.emit(
             E_TOOL_START,
             AgentToolStartEvent {
                 session_id: self.session_id.clone(),
                 tool_use_id: tool_use_id.clone(),
                 tool_name: tool_name.to_string(),
+                input: input_obj,
             },
         ) {
             tracing::warn!("[RelayAgent] emit failed ({E_TOOL_START}): {e}");
@@ -3310,6 +3319,8 @@ pub struct AgentToolStartEvent {
     pub session_id: String,
     pub tool_use_id: String,
     pub tool_name: String,
+    #[ts(type = "unknown")]
+    pub input: serde_json::Value,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]

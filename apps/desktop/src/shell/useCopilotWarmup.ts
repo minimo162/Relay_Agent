@@ -3,9 +3,18 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createSignal, onCleanup } from "solid-js";
 import { warmupCopilotBridge, type BrowserAutomationSettings } from "../lib/ipc";
 
+export type CopilotWarmupState =
+  | { status: "idle"; message: string | null }
+  | { status: "checking"; message: string | null }
+  | { status: "ready"; message: string }
+  | { status: "needs_sign_in"; message: string }
+  | { status: "error"; message: string };
+
 export function useCopilotWarmup(loadSettings: () => BrowserAutomationSettings | null | undefined) {
-  const [copilotBridgeHint, setCopilotBridgeHint] = createSignal<string | null>(null);
-  const [copilotSuccessFlash, setCopilotSuccessFlash] = createSignal<string | null>(null);
+  const [copilotState, setCopilotState] = createSignal<CopilotWarmupState>({
+    status: "idle",
+    message: null,
+  });
   const copilotFlashTimer: { id?: ReturnType<typeof setTimeout> } = {};
 
   const runCopilotWarmup = (focusMainWindow: boolean) => {
@@ -13,28 +22,32 @@ export function useCopilotWarmup(loadSettings: () => BrowserAutomationSettings |
       clearTimeout(copilotFlashTimer.id);
       copilotFlashTimer.id = undefined;
     }
+    setCopilotState({ status: "checking", message: "Checking Copilot connection…" });
     void warmupCopilotBridge(loadSettings() ?? null)
       .then((r) => {
         if (r.loginRequired) {
-          setCopilotBridgeHint("Sign in to Copilot in Edge, then return here.");
-          setCopilotSuccessFlash(null);
+          setCopilotState({
+            status: "needs_sign_in",
+            message: "Sign in to Copilot in Edge, then return here.",
+          });
         } else if (r.error) {
-          setCopilotBridgeHint(`Copilot: ${r.error}`);
-          setCopilotSuccessFlash(null);
+          setCopilotState({ status: "error", message: `Copilot: ${r.error}` });
         } else if (r.connected) {
-          setCopilotBridgeHint(null);
-          setCopilotSuccessFlash("Copilot ready.");
+          setCopilotState({ status: "ready", message: "Copilot ready." });
           copilotFlashTimer.id = setTimeout(() => {
-            setCopilotSuccessFlash(null);
+            setCopilotState((prev) =>
+              prev.status === "ready" ? { status: "idle", message: null } : prev,
+            );
             copilotFlashTimer.id = undefined;
           }, 3500);
+        } else {
+          setCopilotState({ status: "error", message: "Copilot is unavailable right now." });
         }
       })
       .catch((err) => {
         console.error("[Copilot] warmup failed:", err);
         const msg = err instanceof Error ? err.message : String(err);
-        setCopilotBridgeHint(`Copilot: ${msg}`);
-        setCopilotSuccessFlash(null);
+        setCopilotState({ status: "error", message: `Copilot: ${msg}` });
       })
       .finally(() => {
         if (!focusMainWindow || !isTauri()) return;
@@ -51,8 +64,7 @@ export function useCopilotWarmup(loadSettings: () => BrowserAutomationSettings |
   });
 
   return {
-    copilotBridgeHint,
-    copilotSuccessFlash,
+    copilotState,
     runCopilotWarmup,
   };
 }

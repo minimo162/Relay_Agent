@@ -23,7 +23,7 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
     case "start_agent": {
       state.sessionCounter += 1;
       const id = `session-e2e-${state.sessionCounter}`;
-      state.sessions.set(id, { running: true });
+      state.sessions.set(id, { running: true, messages: [req.goal] });
       const win = window as unknown as { __RELAY_E2E_AUTOCOMPLETE?: boolean };
       if (win.__RELAY_E2E_AUTOCOMPLETE !== false) {
         setTimeout(() => {
@@ -39,6 +39,26 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
       }
       return id;
     }
+    case "continue_agent_session": {
+      const s = state.sessions.get(req.sessionId);
+      if (!s) throw new Error(`[E2E mock] Unknown session: ${req.sessionId}`);
+      s.running = true;
+      s.messages = [...(s.messages ?? []), req.message];
+      const win = window as unknown as { __RELAY_E2E_AUTOCOMPLETE?: boolean };
+      if (win.__RELAY_E2E_AUTOCOMPLETE !== false) {
+        setTimeout(() => {
+          const current = state.sessions.get(req.sessionId);
+          if (current) current.running = false;
+          state.emit("agent:turn_complete", {
+            sessionId: req.sessionId,
+            stopReason: "end_turn",
+            assistantMessage: "Task completed.",
+            messageCount: (s.messages?.length ?? 0) + 1,
+          });
+        }, 200);
+      }
+      return req.sessionId;
+    }
     case "respond_approval":
       return undefined;
     case "respond_user_question":
@@ -53,7 +73,10 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
       return {
         sessionId: req.sessionId,
         running: s ? s.running : false,
-        messages: [],
+        messages: (s?.messages ?? []).map((text: string) => ({
+          role: "user",
+          content: [{ type: "text", text }],
+        })),
       };
     }
     case "compact_agent_session":

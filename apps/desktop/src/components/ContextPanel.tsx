@@ -12,12 +12,13 @@ import {
 import { Button, IconButton, Input } from "./ui";
 import { TabTrack } from "./primitives";
 import { ui } from "../lib/ui-tokens";
+import { humanToolLabel } from "../lib/tool-timeline";
 
 type TabId = "plan" | "servers";
 
 const tabs: { id: TabId; label: string }[] = [
   { id: "plan", label: "Plan" },
-  { id: "servers", label: "MCP" },
+  { id: "servers", label: "Integrations" },
 ];
 
 function planStatusLabel(status: PlanTodoItem["status"]): string {
@@ -237,9 +238,15 @@ export function ContextPanel(props: {
                         return (
                           <div class="ra-quiet-row ra-quiet-row--align-center gap-2">
                             <div class="flex-1 min-w-0">
-                              <div class={`ra-type-button-label font-medium ${ui.textPrimary}`}>{policy.name}</div>
+                              <div class={`ra-type-button-label font-medium ${ui.textPrimary}`}>{humanToolLabel(policy.name)}</div>
                               <Show when={policy.description}>
-                                <div class={`ra-type-caption ${ui.mutedText} truncate`}>{policy.description}</div>
+                                <div class={`ra-type-caption ${ui.mutedText}`}>{policy.description}</div>
+                              </Show>
+                              <Show when={humanToolLabel(policy.name) !== policy.name}>
+                                <details class="mt-1">
+                                  <summary class={`ra-type-caption ${ui.mutedText} cursor-pointer`}>Advanced details</summary>
+                                  <div class={`ra-type-mono-small ${ui.mutedText} mt-1`}>{policy.name}</div>
+                                </details>
                               </Show>
                             </div>
                             <span

@@ -18,6 +18,11 @@ export interface StartAgentRequest {
   sessionPreset: SessionPreset;
 }
 
+export interface ContinueAgentSessionRequest {
+  sessionId: string;
+  message: string;
+}
+
 export interface RespondAgentApprovalRequest {
   sessionId: string;
   approvalId: string;
@@ -186,6 +191,7 @@ export interface AgentToolStartEvent {
   sessionId: string;
   toolUseId: string;
   toolName: string;
+  input: unknown;
 }
 
 export interface AgentToolResultEvent {

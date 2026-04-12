@@ -32,6 +32,7 @@ import type {
   CdpSendPromptRequest as GeneratedCdpSendPromptRequest,
   CompactAgentSessionRequest as GeneratedCompactAgentSessionRequest,
   CompactAgentSessionResponse as GeneratedCompactAgentSessionResponse,
+  ContinueAgentSessionRequest as GeneratedContinueAgentSessionRequest,
   ConnectCdpRequest as GeneratedConnectCdpRequest,
   DesktopPermissionSummaryRow as GeneratedDesktopPermissionSummaryRow,
   GetAgentSessionHistoryRequest as GeneratedGetAgentSessionHistoryRequest,
@@ -84,6 +85,7 @@ export function writeStoredSessionPreset(p: SessionPreset): void {
 }
 
 export type StartAgentRequest = GeneratedStartAgentRequest;
+export type ContinueAgentSessionRequest = GeneratedContinueAgentSessionRequest;
 
 /**
  * Tool approvals (OpenWork-style): `approved` unblocks one execution; `rememberForSession`
@@ -174,6 +176,10 @@ export type AgentEvent =
 
 export async function startAgent(request: StartAgentRequest): Promise<string> {
   return invoke<string>("start_agent", { request });
+}
+
+export async function continueAgentSession(request: ContinueAgentSessionRequest): Promise<string> {
+  return invoke<string>("continue_agent_session", { request });
 }
 
 export async function respondApproval(request: RespondAgentApprovalRequest): Promise<void> {
@@ -491,6 +497,7 @@ export function chunksFromHistory(messages: AgentMessage[]): UiChunk[] {
             kind: "tool_call" as const,
             toolUseId: block.id,
             toolName: block.name,
+            input: (block.input ?? {}) as Record<string, unknown>,
             result: null as string | null,
             status: "running" as const,
           };
@@ -517,6 +524,7 @@ export type UiChunk =
       kind: "tool_call";
       toolUseId: string;
       toolName: string;
+      input?: Record<string, unknown>;
       status: "running" | "done" | "error";
       result: string | null;
     };
