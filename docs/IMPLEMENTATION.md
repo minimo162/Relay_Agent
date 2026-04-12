@@ -16,6 +16,14 @@
 
 ## Milestone Log
 
+### 2026-04-12 Tools crate: cached tool catalog + ToolSearch visibility metadata
+
+**Problem:** [`apps/desktop/src-tauri/crates/tools/src/lib.rs`](../apps/desktop/src-tauri/crates/tools/src/lib.rs) still rebuilt the full MVP tool list on every `mvp_tool_specs()` call, `approval_display_for_tool()` scanned that rebuilt list linearly to find a single spec, and `deferred_tool_specs()` maintained its ToolSearch exclusion set as a hard-coded blacklist separate from `ToolMetadata`. That left catalog/manifest lookup more expensive than needed and kept ToolSearch visibility policy split across two mechanisms.
+
+**Change:** Added an internal `ToolCatalog` cache in [`crates/tools/src/lib.rs`](../apps/desktop/src-tauri/crates/tools/src/lib.rs), backed by `OnceLock` with separate base and `RELAY_COMPAT_MODE` instances. The cache now owns the built `Vec<ToolSpec>`, an O(1)-style name index, and a precomputed `ToolRegistry`, exposed through new public helpers `tool_registry()`, `tool_spec()`, and `is_tool_visible_in_tool_search()`. `mvp_tool_specs()` now returns cloned specs from the cached catalog, while the old constructor body moved to `build_mvp_tool_specs(compat_mode)`. `ToolMetadata` gained `tool_search_visible`, defaulting to `true`, and the built-in local read/write/search/shell tools (`bash`, `read_file`, `write_file`, `edit_file`, `glob_search`, `grep_search`, `pdf_merge`, `pdf_split`) now explicitly opt out of ToolSearch. `deferred_tool_specs()` now derives its candidate set from that metadata instead of a separate blacklist, and `approval_display_for_tool()` now resolves specs via `tool_spec()` instead of rebuilding/scanning the full catalog. Added regression tests for metadata-driven ToolSearch visibility and for `ToolRegistry` source tagging of compat-only `EnterPlanMode` / `ExitPlanMode` entries.
+
+**Verification:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools`; `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass (2026-04-12).
+
 ### 2026-04-12 Tools crate clippy follow-up: merge identical metadata arms
 
 **Problem:** `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings` regressed in CI after the tool-surface metadata refactor because [`tool_metadata`](../apps/desktop/src-tauri/crates/tools/src/lib.rs) had separate `match` arms for `"glob_search"` and `"grep_search"` that returned the same `ToolMetadata`, triggering `clippy::match_same_arms`.

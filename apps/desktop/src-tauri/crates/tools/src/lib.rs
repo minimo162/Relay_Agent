@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 mod cli_hub;
@@ -82,6 +83,7 @@ pub struct ToolMetadata {
     pub risky_fields: &'static [&'static str],
     pub redaction_rules: &'static [RedactionRule],
     pub explore_visible: bool,
+    pub tool_search_visible: bool,
 }
 
 const DEFAULT_TOOL_METADATA: ToolMetadata = ToolMetadata {
@@ -90,6 +92,7 @@ const DEFAULT_TOOL_METADATA: ToolMetadata = ToolMetadata {
     risky_fields: &[],
     redaction_rules: &[],
     explore_visible: false,
+    tool_search_visible: true,
 };
 
 #[must_use]
@@ -98,26 +101,31 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
         "read_file" => ToolMetadata {
             target_extractor: ApprovalTargetExtractor::PathLike,
             explore_visible: true,
+            tool_search_visible: false,
             ..DEFAULT_TOOL_METADATA
         },
         "glob_search" | "grep_search" => ToolMetadata {
             explore_visible: true,
+            tool_search_visible: false,
             ..DEFAULT_TOOL_METADATA
         },
         "write_file" => ToolMetadata {
             approval_title: Some("Create or overwrite a file?"),
             target_extractor: ApprovalTargetExtractor::PathLike,
             risky_fields: &["path"],
+            tool_search_visible: false,
             ..DEFAULT_TOOL_METADATA
         },
         "edit_file" => ToolMetadata {
             approval_title: Some("Edit a file?"),
             target_extractor: ApprovalTargetExtractor::PathLike,
             risky_fields: &["path", "replace_all"],
+            tool_search_visible: false,
             ..DEFAULT_TOOL_METADATA
         },
         "pdf_merge" | "pdf_split" => ToolMetadata {
             target_extractor: ApprovalTargetExtractor::PathLike,
+            tool_search_visible: false,
             ..DEFAULT_TOOL_METADATA
         },
         "WebFetch" => ToolMetadata {
@@ -127,6 +135,7 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
         "bash" => ToolMetadata {
             approval_title: Some("Run a shell command?"),
             risky_fields: &["command", "run_in_background"],
+            tool_search_visible: false,
             ..DEFAULT_TOOL_METADATA
         },
         "PowerShell" => ToolMetadata {
@@ -178,6 +187,89 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
     }
 }
 
+#[derive(Debug)]
+struct ToolCatalog {
+    specs: Vec<ToolSpec>,
+    by_name: BTreeMap<&'static str, usize>,
+    registry: ToolRegistry,
+}
+
+impl ToolCatalog {
+    fn new(specs: Vec<ToolSpec>) -> Self {
+        let by_name = specs
+            .iter()
+            .enumerate()
+            .map(|(index, spec)| (spec.name, index))
+            .collect::<BTreeMap<_, _>>();
+        let registry = ToolRegistry::new(
+            specs.iter()
+                .map(|spec| ToolManifestEntry {
+                    name: spec.name.to_string(),
+                    source: if matches!(spec.name, "EnterPlanMode" | "ExitPlanMode") {
+                        ToolSource::Conditional
+                    } else {
+                        ToolSource::Base
+                    },
+                })
+                .collect(),
+        );
+        Self {
+            specs,
+            by_name,
+            registry,
+        }
+    }
+
+    fn specs(&self) -> &[ToolSpec] {
+        &self.specs
+    }
+
+    fn spec(&self, name: &str) -> Option<&ToolSpec> {
+        self.by_name
+            .get(name)
+            .and_then(|index| self.specs.get(*index))
+    }
+
+    fn deferred_specs(&self) -> Vec<ToolSpec> {
+        self.specs
+            .iter()
+            .filter(|spec| tool_metadata(spec.name).tool_search_visible)
+            .cloned()
+            .collect()
+    }
+
+    fn registry(&self) -> &ToolRegistry {
+        &self.registry
+    }
+}
+
+static BASE_TOOL_CATALOG: OnceLock<ToolCatalog> = OnceLock::new();
+static COMPAT_TOOL_CATALOG: OnceLock<ToolCatalog> = OnceLock::new();
+
+#[must_use]
+fn tool_catalog() -> &'static ToolCatalog {
+    if compat_tool_surface_enabled() {
+        COMPAT_TOOL_CATALOG.get_or_init(|| ToolCatalog::new(build_mvp_tool_specs(true)))
+    } else {
+        BASE_TOOL_CATALOG.get_or_init(|| ToolCatalog::new(build_mvp_tool_specs(false)))
+    }
+}
+
+#[must_use]
+pub fn tool_registry() -> ToolRegistry {
+    tool_catalog().registry().clone()
+}
+
+#[must_use]
+pub fn tool_spec(name: &str) -> Option<&'static ToolSpec> {
+    tool_catalog().spec(name)
+}
+
+#[must_use]
+pub fn is_tool_visible_in_tool_search(name: &str) -> bool {
+    tool_spec(name).is_some_and(|spec| tool_metadata(spec.name).tool_search_visible)
+}
+
 #[must_use]
 pub fn is_tool_visible_in_surface(name: &str, surface: ToolSurface) -> bool {
     match surface {
@@ -188,9 +280,11 @@ pub fn is_tool_visible_in_surface(name: &str, surface: ToolSurface) -> bool {
 
 #[must_use]
 pub fn tool_specs_for_surface(surface: ToolSurface) -> Vec<ToolSpec> {
-    mvp_tool_specs()
-        .into_iter()
+    tool_catalog()
+        .specs()
+        .iter()
         .filter(|spec| is_tool_visible_in_surface(spec.name, surface))
+        .cloned()
         .collect()
 }
 
@@ -253,7 +347,7 @@ fn compat_tool_surface_enabled() -> bool {
 
 #[must_use]
 #[allow(clippy::too_many_lines)]
-pub fn mvp_tool_specs() -> Vec<ToolSpec> {
+fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
     let mut specs = vec![
         ToolSpec {
             name: "bash",
@@ -1077,7 +1171,7 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
             required_permission: PermissionMode::ReadOnly,
         },
     ]);
-    if compat_tool_surface_enabled() {
+    if compat_mode {
         specs.extend(vec![
             ToolSpec {
                 name: "EnterPlanMode",
@@ -1105,6 +1199,11 @@ pub fn mvp_tool_specs() -> Vec<ToolSpec> {
 }
 
 #[must_use]
+pub fn mvp_tool_specs() -> Vec<ToolSpec> {
+    tool_catalog().specs().to_vec()
+}
+
+#[must_use]
 pub fn approval_display_for_tool(tool_name: &str, input: &str) -> ToolApprovalDisplay {
     let input_json: Value = serde_json::from_str(input).unwrap_or_else(|_| json!({}));
     if let Some((_, integration, tool)) = parse_mcp_qualified_name(tool_name) {
@@ -1121,21 +1220,19 @@ pub fn approval_display_for_tool(tool_name: &str, input: &str) -> ToolApprovalDi
         };
     }
 
-    let spec = mvp_tool_specs().into_iter().find(|s| s.name == tool_name);
+    let spec = tool_spec(tool_name);
     let title = spec
-        .as_ref()
         .and_then(ToolSpec::approval_title)
         .map_or_else(|| format!("Allow “{tool_name}”?"), ToString::to_string);
     let target = extract_approval_target(
         tool_name,
         &input_json,
-        spec.as_ref()
-            .map_or(ApprovalTargetExtractor::None, ToolSpec::target_extractor),
+        spec.map_or(ApprovalTargetExtractor::None, ToolSpec::target_extractor),
     );
     let important_args = summarize_important_args(
         &input_json,
-        spec.as_ref().map_or(&[], ToolSpec::risky_fields),
-        spec.as_ref().map_or(&[], ToolSpec::redaction_rules),
+        spec.map_or(&[], ToolSpec::risky_fields),
+        spec.map_or(&[], ToolSpec::redaction_rules),
     );
     ToolApprovalDisplay {
         approval_title: title,
@@ -2555,22 +2652,7 @@ fn execute_tool_search(input: ToolSearchInput) -> ToolSearchOutput {
 }
 
 fn deferred_tool_specs() -> Vec<ToolSpec> {
-    mvp_tool_specs()
-        .into_iter()
-        .filter(|spec| {
-            !matches!(
-                spec.name,
-                "bash"
-                    | "read_file"
-                    | "write_file"
-                    | "edit_file"
-                    | "glob_search"
-                    | "grep_search"
-                    | "pdf_merge"
-                    | "pdf_split"
-            )
-        })
-        .collect()
+    tool_catalog().deferred_specs()
 }
 
 fn search_tool_specs(query: &str, max_results: usize, specs: &[ToolSpec]) -> Vec<String> {
@@ -3646,8 +3728,9 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        execute_tool, mvp_tool_specs, required_permission_for_surface, tool_metadata,
-        tool_specs_for_surface, ApprovalTargetExtractor, ToolSurface,
+        execute_tool, is_tool_visible_in_tool_search, mvp_tool_specs,
+        required_permission_for_surface, tool_metadata, tool_registry, tool_specs_for_surface,
+        ApprovalTargetExtractor, ToolSource, ToolSurface,
     };
     use runtime::PermissionMode;
     use serde_json::json;
@@ -3715,20 +3798,24 @@ mod tests {
         let read = tool_metadata("read_file");
         assert_eq!(read.target_extractor, ApprovalTargetExtractor::PathLike);
         assert!(read.explore_visible);
+        assert!(!read.tool_search_visible);
         assert_eq!(read.approval_title, None);
 
         let write = tool_metadata("write_file");
         assert_eq!(write.approval_title, Some("Create or overwrite a file?"));
         assert_eq!(write.risky_fields, &["path"]);
+        assert!(!write.tool_search_visible);
 
         let bash = tool_metadata("bash");
         assert_eq!(bash.approval_title, Some("Run a shell command?"));
         assert_eq!(bash.risky_fields, &["command", "run_in_background"]);
+        assert!(!bash.tool_search_visible);
 
         let mcp = tool_metadata("MCP");
         assert_eq!(mcp.approval_title, Some("Call a connected integration tool?"));
         assert_eq!(mcp.target_extractor, ApprovalTargetExtractor::McpQualifiedTool);
         assert_eq!(mcp.redaction_rules, &[super::RedactionRule { field: "arguments" }]);
+        assert!(mcp.tool_search_visible);
 
         let unknown = tool_metadata("nope");
         assert_eq!(unknown.approval_title, None);
@@ -3736,6 +3823,7 @@ mod tests {
         assert!(unknown.risky_fields.is_empty());
         assert!(unknown.redaction_rules.is_empty());
         assert!(!unknown.explore_visible);
+        assert!(unknown.tool_search_visible);
     }
 
     #[test]
@@ -3798,6 +3886,50 @@ mod tests {
         } else {
             std::env::remove_var("RELAY_COMPAT_MODE");
         }
+    }
+
+    #[test]
+    fn cached_tool_registry_marks_conditional_entries() {
+        let _guard = env_lock().lock().expect("env lock");
+        let original = std::env::var("RELAY_COMPAT_MODE").ok();
+        std::env::set_var("RELAY_COMPAT_MODE", "1");
+
+        let registry = tool_registry();
+        let entries = registry.entries();
+
+        let enter_plan = entries
+            .iter()
+            .find(|entry| entry.name == "EnterPlanMode")
+            .expect("EnterPlanMode entry");
+        assert_eq!(enter_plan.source, ToolSource::Conditional);
+
+        let exit_plan = entries
+            .iter()
+            .find(|entry| entry.name == "ExitPlanMode")
+            .expect("ExitPlanMode entry");
+        assert_eq!(exit_plan.source, ToolSource::Conditional);
+
+        let bash = entries
+            .iter()
+            .find(|entry| entry.name == "bash")
+            .expect("bash entry");
+        assert_eq!(bash.source, ToolSource::Base);
+
+        if let Some(value) = original {
+            std::env::set_var("RELAY_COMPAT_MODE", value);
+        } else {
+            std::env::remove_var("RELAY_COMPAT_MODE");
+        }
+    }
+
+    #[test]
+    fn tool_search_visibility_is_driven_by_metadata() {
+        assert!(!is_tool_visible_in_tool_search("read_file"));
+        assert!(!is_tool_visible_in_tool_search("write_file"));
+        assert!(!is_tool_visible_in_tool_search("pdf_merge"));
+        assert!(is_tool_visible_in_tool_search("WebFetch"));
+        assert!(is_tool_visible_in_tool_search("MCP"));
+        assert!(!is_tool_visible_in_tool_search("nope"));
     }
 
     #[test]
