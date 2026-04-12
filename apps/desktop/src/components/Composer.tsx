@@ -86,6 +86,7 @@ export function Composer(props: {
   hero?: boolean;
   allowModeSelection?: boolean;
   modeLockedNote?: string | null;
+  autoFocus?: boolean;
 }): JSX.Element {
   const [text, setText] = createSignal("");
   const [slashMode, setSlashMode] = createSignal<{
@@ -106,6 +107,13 @@ export function Composer(props: {
   onMount(() => {
     queueMicrotask(() => {
       if (textareaRef) adjustComposerTextareaHeight(textareaRef);
+    });
+  });
+
+  createEffect(() => {
+    if (!props.autoFocus || props.disabled) return;
+    queueMicrotask(() => {
+      textareaRef?.focus();
     });
   });
 
@@ -223,6 +231,7 @@ export function Composer(props: {
               onKeyDown={onKey}
               disabled={props.disabled}
               class="ra-composer-input resize-none w-full"
+              data-ra-composer-textarea=""
             />
             <Show when={slashMode()}>
               {(m) => (

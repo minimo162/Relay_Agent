@@ -192,10 +192,19 @@ class CdpSession {
   #id = 0;
   #pending = new Map();
   #listeners = new Map();
+  #terminalError = null;
 
   constructor(wsUrl) {
     this.#ws = new WS(wsUrl);
     this.#ws.onmessage = (e) => this._handle(typeof e.data === "string" ? e.data : String(e.data));
+    this.#ws.onerror = (e) => {
+      const message = e?.error?.message || e?.message || "CDP WebSocket error";
+      this._failPending(new Error(message));
+    };
+    this.#ws.onclose = (e) => {
+      const suffix = e?.code ? ` (code ${e.code})` : "";
+      this._failPending(new Error(`CDP WebSocket closed${suffix}`));
+    };
   }
 
   get ready() {
@@ -207,7 +216,10 @@ class CdpSession {
     });
   }
 
-  close() { this.#ws.close(); }
+  close() {
+    this._failPending(new Error("CDP WebSocket closed by caller"));
+    this.#ws.close();
+  }
 
   on(event, fn) {
     if (!this.#listeners.has(event)) this.#listeners.set(event, new Set());
@@ -217,6 +229,14 @@ class CdpSession {
 
   send(method, params = {}, timeoutMs = CDP_COMMAND_TIMEOUT_MS) {
     return new Promise((resolve, reject) => {
+      if (this.#terminalError) {
+        reject(this.#terminalError);
+        return;
+      }
+      if (this.#ws.readyState !== WS.OPEN) {
+        reject(new Error(`CDP WebSocket is not open (state=${this.#ws.readyState})`));
+        return;
+      }
       const id = ++this.#id;
       const t = setTimeout(() => { this.#pending.delete(id); reject(new Error(`CDP ${method} timed out`)); }, timeoutMs);
       this.#pending.set(id, { resolve, reject, timer: t });
@@ -242,6 +262,16 @@ class CdpSession {
 
   _onMessage = (raw) => this._handle(raw);
   _onError = () => { /* errors logged at call site */ }
+
+  _failPending(error) {
+    if (this.#terminalError) return;
+    this.#terminalError = error instanceof Error ? error : new Error(String(error));
+    for (const [id, pending] of this.#pending.entries()) {
+      clearTimeout(pending.timer);
+      pending.reject(this.#terminalError);
+      this.#pending.delete(id);
+    }
+  }
 
   /** Run JS in the target page and return the result */
   async evaluate(expression, evaluateTimeoutMs = CDP_RUNTIME_EVALUATE_TIMEOUT_MS) {
@@ -435,6 +465,19 @@ class CopilotSession {
     }
     relaySession.cdpTargetId = null;
     relaySession.initialized = false;
+  }
+
+  async _closeRelayTargetIfKnown(relaySession, reason) {
+    const targetId = relaySession?.cdpTargetId;
+    if (!targetId || !this.cdpSession) return false;
+    try {
+      console.error("[copilot] closing relay session target:", relaySession.relaySessionId, reason || "(no reason)");
+      await this.cdpSession.send("Target.closeTarget", { targetId }, 3e3);
+      return true;
+    } catch (error) {
+      console.error("[copilot] Target.closeTarget failed:", error?.message || error);
+      return false;
+    }
   }
 
   async findStatusPage() {
@@ -709,117 +752,170 @@ class CopilotSession {
   }
 
   async describeImpl(params, requestState) {
-    let pageSession = null;
-    let attachmentTempFiles = [];
     const relaySessionId = requestState.relaySessionId;
     const relaySession = this._getRelaySessionState(relaySessionId);
-    try {
-      console.error("[copilot:describe] connecting...");
-      await this.connect(globalOptions.cdpPort);
-      console.error("[copilot:describe] finding copilot page for relay session", relaySessionId);
-      const page = await this.findOrCreateRelayPage(relaySessionId, relaySession);
-      console.error("[copilot:describe] page:", JSON.stringify(page));
-
-      if (isLoginUrl(page.url)) {
-        throw new CopilotLoginRequiredError(
-          "Copilot にログインしてください。Edge の画面を確認してください。"
-        );
-      }
-
-      if (copilotWindowFocusAllowed()) {
-        await this.cdpSession.send("Target.activateTarget", { targetId: page.targetId }).catch((e) => {
-          console.error("[copilot:describe] Target.activateTarget:", e?.message || e);
-        });
-      }
-
-      pageSession = await this.navigateToPage(page);
-      await pageSession.send("Page.enable", {}).catch(() => {});
-      if (copilotWindowFocusAllowed()) {
-        await pageSession.send("Page.bringToFront", {}).catch((e) => {
-          console.error("[copilot:describe] Page.bringToFront:", e?.message || e);
-        });
-      }
-
-      const { currentUrl } = await this.ensureTargetUrl(
-        pageSession,
-        page,
-        page.targetId,
-        false,
-        "[copilot:describe]",
-      );
-      if (!isCopilotUrl(currentUrl)) {
-        this._invalidateRelaySession(relaySession, "target stopped resolving to Copilot");
-        throw new Error("Copilot tab could not be resolved for the Relay session");
-      }
-
-      const netCapture = createCopilotNetworkCapture(pageSession);
-      await netCapture.enable();
-
-      let hadAttachments = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let pageSession = null;
+      let attachmentTempFiles = [];
+      const describeStartedAt = Date.now();
       try {
-        const wantNewChat = !relaySession.initialized || envNewChatEachTurn() || params.relayNewChat === true;
-        const envEach = envNewChatEachTurn();
-        console.error(
-          "[copilot:describe] wantNewChat=",
-          wantNewChat,
-          "initialized=",
-          relaySession.initialized,
-          "RELAY_COPILOT_NEW_CHAT_EACH_TURN=",
-          envEach ? "on" : "off",
-          "relayNewChat=",
-          params.relayNewChat === true,
-          "relaySessionId=",
-          relaySessionId,
-        );
-        if (wantNewChat) {
-          console.error("[copilot:describe] starting new chat...");
-          const newChatOk = await clickNewChatDeep(pageSession);
-          if (!newChatOk) {
-            console.error("[copilot:describe] new chat not found (css+shadow+a11y); last-chance CDP click");
-            await pageSession.click(NEW_CHAT_BUTTON_SELECTORS[0]).catch(() => {});
-          }
-          await sleep(1600);
-          relaySession.initialized = true;
-        } else {
-          console.error("[copilot:describe] continuing in current Copilot thread (no new chat click)");
-          await sleep(500);
+        console.error("[copilot:describe] connecting...", attempt > 0 ? `(retry ${attempt})` : "");
+        await this.connect(globalOptions.cdpPort);
+        console.error("[copilot:describe] finding copilot page for relay session", relaySessionId);
+        const page = await this.findOrCreateRelayPage(relaySessionId, relaySession);
+        console.error("[copilot:describe] page:", JSON.stringify(page));
+
+        if (isLoginUrl(page.url)) {
+          throw new CopilotLoginRequiredError(
+            "Copilot にログインしてください。Edge の画面を確認してください。"
+          );
         }
 
-        const upload = await uploadCopilotAttachments(pageSession, params.attachmentPaths || [], params.imageB64);
-        attachmentTempFiles = upload.tempFiles;
-        hadAttachments = upload.hadAttachments;
+        if (copilotWindowFocusAllowed()) {
+          await this.cdpSession.send("Target.activateTarget", { targetId: page.targetId }).catch((e) => {
+            console.error("[copilot:describe] Target.activateTarget:", e?.message || e);
+          });
+        }
 
-        console.error("[copilot:describe] pasting prompt...");
-        const fullPrompt = params.systemPrompt ? `${params.systemPrompt}\n\n${params.userPrompt}` : params.userPrompt;
-        await pastePromptRaw(pageSession, fullPrompt);
+        pageSession = await this.navigateToPage(page);
+        await pageSession.send("Page.enable", {}).catch(() => {});
+        if (copilotWindowFocusAllowed()) {
+          await pageSession.send("Page.bringToFront", {}).catch((e) => {
+            console.error("[copilot:describe] Page.bringToFront:", e?.message || e);
+          });
+        }
 
-        console.error("[copilot:describe] submitting prompt...");
-        return await submitPromptRaw(pageSession, fullPrompt.length, netCapture, {
-          hadAttachments,
-          abortCheck: () => requestState.aborted === true,
-        });
-      } finally {
-        await netCapture.disable().catch(() => {});
-      }
-    } catch (error) {
-      if (requestState.aborted || error?.message === "relay_copilot_aborted") {
-        throw new Error("relay_copilot_aborted");
-      }
-      if (error instanceof CopilotLoginRequiredError) {
+        const { currentUrl } = await this.ensureTargetUrl(
+          pageSession,
+          page,
+          page.targetId,
+          false,
+          "[copilot:describe]",
+        );
+        if (!isCopilotUrl(currentUrl)) {
+          this._invalidateRelaySession(relaySession, "target stopped resolving to Copilot");
+          throw new Error("Copilot tab could not be resolved for the Relay session");
+        }
+        await assertCopilotPageResponsive(pageSession, "[copilot:describe]");
+        console.error(
+          "[copilot:describe] page ready in",
+          Date.now() - describeStartedAt,
+          "ms for relay session",
+          relaySessionId,
+        );
+
+        const netCapture = createCopilotNetworkCapture(pageSession);
+        await netCapture.enable();
+
+        let hadAttachments = false;
+        try {
+          const wantNewChat = !relaySession.initialized || envNewChatEachTurn() || params.relayNewChat === true;
+          const envEach = envNewChatEachTurn();
+          console.error(
+            "[copilot:describe] wantNewChat=",
+            wantNewChat,
+            "initialized=",
+            relaySession.initialized,
+            "RELAY_COPILOT_NEW_CHAT_EACH_TURN=",
+            envEach ? "on" : "off",
+            "relayNewChat=",
+            params.relayNewChat === true,
+            "relaySessionId=",
+            relaySessionId,
+          );
+          if (wantNewChat) {
+            console.error("[copilot:describe] starting new chat...");
+            const newChatOk = await clickNewChatDeep(pageSession);
+            if (!newChatOk) {
+              console.error("[copilot:describe] new chat not found (css+shadow+a11y); last-chance CDP click");
+              await pageSession.click(NEW_CHAT_BUTTON_SELECTORS[0]).catch(() => {});
+            }
+            await sleep(1600);
+            relaySession.initialized = true;
+            console.error(
+              "[copilot:describe] new chat ready after",
+              Date.now() - describeStartedAt,
+              "ms",
+            );
+          } else {
+            console.error("[copilot:describe] continuing in current Copilot thread (no new chat click)");
+            await sleep(500);
+          }
+
+          const uploadStartedAt = Date.now();
+          const upload = await uploadCopilotAttachments(pageSession, params.attachmentPaths || [], params.imageB64);
+          attachmentTempFiles = upload.tempFiles;
+          hadAttachments = upload.hadAttachments;
+          console.error(
+            "[copilot:describe] attachments prepared in",
+            Date.now() - uploadStartedAt,
+            "ms",
+            "hadAttachments=",
+            hadAttachments,
+          );
+
+          console.error("[copilot:describe] pasting prompt...");
+          const fullPrompt = params.systemPrompt ? `${params.systemPrompt}\n\n${params.userPrompt}` : params.userPrompt;
+          const pasteStartedAt = Date.now();
+          await pastePromptRaw(pageSession, fullPrompt);
+          console.error(
+            "[copilot:describe] paste finished in",
+            Date.now() - pasteStartedAt,
+            "ms (prompt chars",
+            fullPrompt.length,
+            ")",
+          );
+
+          console.error("[copilot:describe] submitting prompt...");
+          const submitStartedAt = Date.now();
+          const responseText = await submitPromptRaw(pageSession, fullPrompt.length, netCapture, {
+            hadAttachments,
+            abortCheck: () => requestState.aborted === true,
+          });
+          console.error(
+            "[copilot:describe] submit+response finished in",
+            Date.now() - submitStartedAt,
+            "ms (response chars",
+            responseText.length,
+            "total elapsed",
+            Date.now() - describeStartedAt,
+            "ms)",
+          );
+          return responseText;
+        } finally {
+          await netCapture.disable().catch(() => {});
+        }
+      } catch (error) {
+        if (requestState.aborted || error?.message === "relay_copilot_aborted") {
+          throw new Error("relay_copilot_aborted");
+        }
+        if (error instanceof CopilotLoginRequiredError) {
+          throw error;
+        }
+        const message = error?.message || String(error);
+        const recoverable = attempt === 0 && isRecoverableCopilotTabFailure(error);
+        if (isRecoverableCopilotTabFailure(error)) {
+          await this._closeRelayTargetIfKnown(relaySession, message).catch(() => {});
+        }
+        this._invalidateRelaySession(relaySession, message);
+        if (recoverable) {
+          console.error("[copilot:describe] recoverable CDP/tab failure; retrying once:", message);
+          await sleep(750);
+          continue;
+        }
         throw error;
-      }
-      this._invalidateRelaySession(relaySession, error?.message || String(error));
-      throw error;
-    } finally {
-      for (const tf of attachmentTempFiles) {
-        setTimeout(() => {
-          fs.promises.unlink(tf).catch(() => {});
-        }, 5000);
-      }
-      if (pageSession) {
-        pageSession.close();
+      } finally {
+        for (const tf of attachmentTempFiles) {
+          setTimeout(() => {
+            fs.promises.unlink(tf).catch(() => {});
+          }, 5000);
+        }
+        if (pageSession) {
+          pageSession.close();
+        }
       }
     }
+    throw new Error("Copilot describe retry exhausted");
   }
 }
 
@@ -1466,6 +1562,7 @@ var COMPOSER_PASTE_SETTLE_KIROKU_POLL_MAX_MS = 380;
 var COMPOSER_PASTE_SETTLE_KIROKU_FALLBACK_MS = 240;
 var COMPOSER_PASTE_SETTLE_EXEC_POLL_MAX_MS = 440;
 var COMPOSER_PASTE_SETTLE_EXEC_FALLBACK_MS = 360;
+var LONG_PROMPT_SKIP_SYNC_IN_PAGE_CHARS = 12_000;
 
 async function waitForComposerPasteSettle(session, fullLen, options = {}) {
   const intervalMs = options.intervalMs ?? COMPOSER_PASTE_SETTLE_POLL_MS;
@@ -1737,6 +1834,7 @@ async function pastePromptRaw(session, text) {
   let len = 0;
   let pasted = false;
   const needMin = pasteNeedMinChars(text.length);
+  const skipSyncInPage = text.length > LONG_PROMPT_SKIP_SYNC_IN_PAGE_CHARS;
 
   let skipBulkFallbacks = false;
   if (text.length <= 16_000) {
@@ -1752,7 +1850,7 @@ async function pastePromptRaw(session, text) {
       }
     }
   }
-  if (!skipBulkFallbacks) {
+  if (!skipBulkFallbacks && !skipSyncInPage) {
     try {
       console.error("[copilot:paste] trying sync in-page execCommand (single evaluate, ~1200 code units/step)…");
       const syncRes = await pasteViaSyncBrowserExecCommand(session, text);
@@ -1769,10 +1867,16 @@ async function pastePromptRaw(session, text) {
       skipBulkFallbacks = true;
       console.error("[copilot:paste] pasteLooksComplete after sync in-page");
     }
+  } else if (skipSyncInPage) {
+    console.error(
+      "[copilot:paste] long prompt — skipping sync in-page execCommand and using CDP-first path",
+      text.length,
+      "chars",
+    );
   }
 
   /** Very long prompts: synthetic multi-part paste often drops text; stream via CDP first. */
-  if (!skipBulkFallbacks && text.length > 12_000) {
+  if (!skipBulkFallbacks && text.length > LONG_PROMPT_SKIP_SYNC_IN_PAGE_CHARS) {
     console.error("[copilot:paste] long prompt — CDP Input.insertText first (", text.length, "chars )");
     try {
       await insertTextViaCdp(session, text);
@@ -2128,12 +2232,21 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
 
   // Prefer keyboard submit first (fewer brittle send-button selectors / layout deps).
   console.error("[copilot:submit] trying keyboard (Enter)");
-  await trySubmitViaEnter(session);
-  let sendClicked = await composerSubmitLooksSent(session, lenBefore);
+  let sendClicked = false;
+  try {
+    await trySubmitViaEnter(session);
+    sendClicked = await composerSubmitLooksSent(session, lenBefore);
+  } catch (error) {
+    console.error("[copilot:submit] Enter failed:", error?.message || error);
+  }
   if (!sendClicked) {
     console.error("[copilot:submit] Enter not confirmed; trying Ctrl+Enter");
-    await trySubmitViaCtrlEnter(session);
-    sendClicked = await composerSubmitLooksSent(session, lenBefore);
+    try {
+      await trySubmitViaCtrlEnter(session);
+      sendClicked = await composerSubmitLooksSent(session, lenBefore);
+    } catch (error) {
+      console.error("[copilot:submit] Ctrl+Enter failed:", error?.message || error);
+    }
   }
 
   // Wait for send button to become visible and enabled
@@ -2212,6 +2325,56 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
     "s)…",
   );
   return await waitForDomResponse(session, netCapture, expectedPromptLen, abortCheck);
+}
+
+function isRecoverableCopilotTabFailure(error) {
+  const message = String(error?.message || error || "");
+  return (
+    /CDP (?:Input\.dispatchKeyEvent|Runtime\.evaluate|Network\.enable|Page\.navigate|Target\.activateTarget|Page\.bringToFront) timed out/i.test(
+      message,
+    ) ||
+    /CDP WebSocket (?:closed|error|timeout|is not open)/i.test(message) ||
+    /Copilot send failed \(no clickable send within 45s/i.test(message) ||
+    /Session closed|Target closed|Target detached|No session with given id|Cannot find context with specified id|Execution context was destroyed/i.test(
+      message,
+    ) ||
+    /tab crash page visible|SIGTRAP|Aw,\s*Snap|This page is having a problem/i.test(message)
+  );
+}
+
+async function inspectCopilotPageHealth(session) {
+  const result = await session.evaluate(
+    `(() => ({
+      title: document.title || "",
+      href: location.href || "",
+      bodyText: ((document.body && (document.body.innerText || document.body.textContent)) || "").slice(0, 600)
+    }))()`,
+    6e3,
+  );
+  const value = result?.value || {};
+  const title = String(value.title || "");
+  const href = String(value.href || "");
+  const bodyText = String(value.bodyText || "");
+  return { title, href, bodyText };
+}
+
+function copilotPageLooksCrashed(health) {
+  const combined = `${health?.title || ""}\n${health?.bodyText || ""}`;
+  return /this page is having a problem|aw,\s*snap|sigtrap|status_(?:access_violation|breakpoint)|problem loading page|ページ.*問題|問題が発生|クラッシュ/i.test(
+    combined,
+  );
+}
+
+async function assertCopilotPageResponsive(session, logPrefix) {
+  const health = await inspectCopilotPageHealth(session);
+  if (copilotPageLooksCrashed(health)) {
+    const snippet = `${health.title} ${health.bodyText}`.replace(/\s+/g, " ").trim().slice(0, 220);
+    throw new Error(`Copilot tab crash page visible: ${snippet}`);
+  }
+  console.error(logPrefix, "page healthy:", JSON.stringify({
+    title: health.title.slice(0, 80),
+    href: health.href.slice(0, 120),
+  }));
 }
 
 

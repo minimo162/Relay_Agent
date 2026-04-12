@@ -34,6 +34,11 @@ export function SettingsModal(props: {
   copilotState: CopilotWarmupState;
   onReconnectCopilot: () => void;
 }): JSX.Element {
+  let closeButtonRef!: HTMLButtonElement;
+  let workspaceInputRef!: HTMLInputElement;
+  let panelRef!: HTMLDivElement;
+  let lastFocusedElement: HTMLElement | null = null;
+  let wasOpen = false;
   const [workspace, setWorkspace] = createSignal("");
   const [sessionPreset, setSessionPreset] = createSignal<SessionPreset>("build");
   const [maxTurns, setMaxTurns] = createSignal("16");
@@ -45,17 +50,57 @@ export function SettingsModal(props: {
   const [exporting, setExporting] = createSignal(false);
 
   createEffect(() => {
-    if (!props.open) return;
-    const browser = loadBrowserSettings();
-    setWorkspace(loadWorkspacePath());
-    setSessionPreset(loadDefaultSessionPreset());
-    setMaxTurns(String(loadMaxTurns()));
-    setCdpPort(String(browser.cdpPort));
-    setTimeoutMs(String(browser.timeoutMs));
-    setAutoLaunchEdge(browser.autoLaunchEdge);
-    setAlwaysOnTop(loadAlwaysOnTop());
-    setHint(null);
+    if (props.open && !wasOpen) {
+      lastFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const browser = loadBrowserSettings();
+      setWorkspace(loadWorkspacePath());
+      setSessionPreset(loadDefaultSessionPreset());
+      setMaxTurns(String(loadMaxTurns()));
+      setCdpPort(String(browser.cdpPort));
+      setTimeoutMs(String(browser.timeoutMs));
+      setAutoLaunchEdge(browser.autoLaunchEdge);
+      setAlwaysOnTop(loadAlwaysOnTop());
+      setHint(null);
+      queueMicrotask(() => {
+        (workspaceInputRef ?? closeButtonRef)?.focus();
+      });
+    } else if (!props.open && wasOpen) {
+      queueMicrotask(() => {
+        if (lastFocusedElement && document.contains(lastFocusedElement)) {
+          lastFocusedElement.focus();
+        }
+      });
+    }
+    wasOpen = props.open;
   });
+
+  const handleDialogKeyDown: JSX.EventHandlerUnion<HTMLDivElement, KeyboardEvent> = (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      props.onClose();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusables = panelRef?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    );
+    if (!focusables || focusables.length === 0) return;
+    const ordered = Array.from(focusables).filter((el) => !el.hasAttribute("disabled"));
+    const first = ordered[0];
+    const last = ordered[ordered.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey) {
+      if (active === first || !panelRef.contains(active)) {
+        event.preventDefault();
+        last.focus();
+      }
+      return;
+    }
+    if (active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   const persist = () => {
     const nextMaxTurns = Math.min(256, Math.max(1, parseInt(maxTurns(), 10) || 16));
@@ -117,7 +162,13 @@ export function SettingsModal(props: {
 
   return (
     <Show when={props.open}>
-      <div class="absolute inset-0 z-20" role="dialog" aria-modal="true" aria-label="Settings">
+      <div
+        class="absolute inset-0 z-20"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Settings"
+        onKeyDown={handleDialogKeyDown}
+      >
         <button
           type="button"
           class="ra-modal-backdrop absolute inset-0 cursor-default border-0 p-0"
@@ -125,7 +176,7 @@ export function SettingsModal(props: {
           onClick={() => props.onClose()}
         />
         <div class="absolute inset-x-0 top-6 mx-auto w-full max-w-3xl max-h-[min(92vh,52rem)] overflow-y-auto pointer-events-none flex justify-center px-4">
-          <div class="ra-modal-panel w-full pointer-events-auto">
+          <div ref={panelRef} class="ra-modal-panel w-full pointer-events-auto">
             <div class="flex items-start justify-between gap-3">
               <div>
                 <p class="ra-modal-panel__title">Settings</p>
@@ -134,6 +185,7 @@ export function SettingsModal(props: {
                 </p>
               </div>
               <button
+                ref={closeButtonRef}
                 type="button"
                 class="ra-type-caption text-[var(--ra-text-muted)] hover:text-[var(--ra-text-primary)]"
                 onClick={() => props.onClose()}
@@ -150,10 +202,12 @@ export function SettingsModal(props: {
                     <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Workspace folder</span>
                     <div class="flex gap-2 mt-1 items-stretch">
                       <Input
+                        ref={workspaceInputRef}
                         class="ra-type-mono-small flex-1 min-w-0"
                         placeholder="/path/to/project"
                         value={workspace()}
                         onInput={(e) => setWorkspace(e.currentTarget.value)}
+                        data-ra-settings-workspace=""
                       />
                       <Show when={isTauri()}>
                         <Button

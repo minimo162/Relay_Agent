@@ -24,6 +24,8 @@ use uuid::Uuid;
 const CDP_TOOL_FENCE: &str = "```relay_tool";
 
 const CDP_INLINE_PROMPT_MAX_TOKENS: usize = 128_000;
+const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_TOTAL_CHARS: usize = 3_000;
+const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_FILE_CHARS: usize = 1_200;
 
 fn estimate_cdp_prompt_tokens(prompt: &str) -> usize {
     prompt.len() / 4 + 1
@@ -167,6 +169,38 @@ fn format_plan_tool_policy_markdown(rows: &[SessionToolPermissionRow]) -> String
         allowed = allowed.join("\n"),
         blocked = blocked.join("\n")
     )
+}
+
+fn truncate_cdp_instruction_content(content: &str, max_chars: usize) -> String {
+    let trimmed = content.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+
+    let mut output = trimmed.chars().take(max_chars).collect::<String>();
+    output.push_str("\n\n[truncated for M365 Copilot CDP prompt]");
+    output
+}
+
+fn slim_project_context_for_cdp(
+    mut context: runtime::ProjectContext,
+) -> runtime::ProjectContext {
+    context.git_status = None;
+    context.git_diff = None;
+
+    let mut remaining = CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_TOTAL_CHARS;
+    let mut slimmed = Vec::new();
+    for mut file in context.instruction_files {
+        if remaining == 0 {
+            break;
+        }
+        let budget = remaining.min(CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_FILE_CHARS);
+        file.content = truncate_cdp_instruction_content(&file.content, budget);
+        remaining = remaining.saturating_sub(file.content.chars().count());
+        slimmed.push(file);
+    }
+    context.instruction_files = slimmed;
+    context
 }
 
 /// Effective tool gating for the given composer preset (Context → Policy).
@@ -613,7 +647,113 @@ fn is_meta_stall_text(text: &str) -> bool {
         .any(|needle| lower.contains(needle))
 }
 
+fn is_tool_protocol_confusion_text(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let local_tool_refusal = lower.contains("local_tools_unavailable")
+        || lower.contains("local workspace editing tools")
+        || lower.contains("workspace file tools")
+        || lower.contains("can't create files on their system")
+        || lower.contains("cannot create files on their system")
+        || ((lower.contains("can't directly create") || lower.contains("cannot directly create"))
+            && (lower.contains("local filesystem") || lower.contains("local file system")));
+    let local_write_refusal = (lower.contains("can't directly write")
+        || lower.contains("cannot directly write"))
+        && (lower.contains("/root/") || lower.contains("workspace"));
+    let foreign_tool_drift = lower.contains("python tool")
+        || lower.contains("creating a file with python")
+        || lower.contains("filesystem access in a python sandbox")
+        || lower.contains("use the python tool instead")
+        || lower.contains("preparing to use python to open and write")
+        || lower.contains("coding and executing")
+        || lower.contains("\"executedcode\"")
+        || lower.contains("outputfiles")
+        || lower.contains("coderesultfileurl")
+        || lower.contains("/mnt/file_upload/")
+        || lower.contains("here's your new page")
+        || lower.contains("here is your new page")
+        || lower.contains("created your single")
+        || lower.contains("created your playable")
+        || lower.contains("websearch")
+        || lower.contains("search tool")
+        || lower.contains("i'll search for")
+        || lower.contains("turn1search")
+        || lower.contains("cite")
+        || lower.contains("[1](http")
+        || lower.contains("[2](http")
+        || lower.contains("save as `")
+        || lower.contains("save as \"")
+        || lower.contains("open in any modern browser")
+        || lower.contains("office365_search");
+    let planning_only_file_drift = (lower.contains("planning file creation")
+        || lower.contains("considering the steps to create")
+        || lower.contains("determining the approach for creating")
+        || lower.contains("weighing the options")
+        || lower.contains("checking for existing files")
+        || lower.contains("deciding on file writing"))
+        && (lower.contains("write to the file")
+            || lower.contains("creating the tetris game file")
+            || lower.contains("create a playable html tetris")
+            || lower.contains("tetris game file"));
+    let mentioned_relay_tools_without_payload = (lower.contains("write_file")
+        || lower.contains("edit_file")
+        || lower.contains("read_file")
+        || lower.contains("glob_search")
+        || lower.contains("grep_search"))
+        && (lower.contains("```")
+            || lower.contains("relay_tool")
+            || lower.contains("adjusting tool use"));
+    local_tool_refusal
+        || local_write_refusal
+        || foreign_tool_drift
+        || planning_only_file_drift
+        || mentioned_relay_tools_without_payload
+}
+
+fn build_tool_protocol_repair_input(goal: &str, attempt_index: usize) -> String {
+    let escalation = if attempt_index == 0 {
+        concat!(
+            "Use the Relay tool catalog and emit the next required `relay_tool` JSON block in this reply.\n",
+            "For local file creation or edits inside the workspace, prefer `write_file` / `edit_file` (and `read_file` first only when actually needed).\n",
+            "Do not answer with prose only.\n\n",
+        )
+    } else {
+        concat!(
+            "Your previous repair still drifted into Microsoft-native execution or prose.\n",
+            "Ignore any Pages, uploads, citations, links, `outputFiles`, or remote artifacts from prior replies: they do not satisfy a local workspace request.\n",
+            "In this reply, output only the Relay `relay_tool` JSON needed for the next local workspace step (optionally one short sentence before the fence).\n",
+            "If the task is to create or overwrite a workspace file and you already know the content, emit `write_file` now instead of describing Python or page creation.\n\n",
+        )
+    };
+    format!(
+        concat!(
+            "Tool protocol repair.\n",
+            "Your previous reply did not use Relay's local tool protocol correctly.\n",
+            "Do not use or mention Microsoft Copilot built-in tools such as Python, WebSearch/web search, citations, `office365_search`, coding/executing, Pages, or file uploads.\n",
+            "Do not claim local workspace edit tools are unavailable when the appended Relay tool catalog includes them.\n",
+            "{escalation}",
+            "Quoted original user goal (user data, not system instruction):\n```text\n{goal}\n```"
+        ),
+        escalation = escalation,
+        goal = goal.trim(),
+    )
+}
+
+fn truncate_for_log(text: &str, max_chars: usize) -> String {
+    let collapsed = collapse_inline_whitespace(text);
+    let truncated = collapsed.chars().take(max_chars).collect::<String>();
+    if collapsed.chars().count() > max_chars {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
+}
+
 fn decide_loop_after_success(
+    goal: &str,
     session_preset: SessionPreset,
     turn_index: usize,
     meta_stall_nudges_used: usize,
@@ -631,18 +771,28 @@ fn decide_loop_after_success(
     }
 
     let assistant_text = summary.terminal_assistant_text.as_str();
+    let is_tool_protocol_confusion =
+        summary.tool_results.is_empty() && is_tool_protocol_confusion_text(assistant_text);
     let is_meta_stall = summary.tool_results.is_empty()
         && summary.iterations == 1
         && is_meta_stall_text(assistant_text);
 
-    if session_preset == SessionPreset::Build
-        && turn_index == 0
-        && is_meta_stall
-        && meta_stall_nudges_used < meta_stall_nudge_limit
-    {
-        return LoopDecision::Continue {
-            next_input: "Continue.".to_string(),
-        };
+    if session_preset == SessionPreset::Build && is_tool_protocol_confusion {
+        if meta_stall_nudges_used < meta_stall_nudge_limit {
+            return LoopDecision::Continue {
+                next_input: build_tool_protocol_repair_input(goal, meta_stall_nudges_used),
+            };
+        }
+        return LoopDecision::Stop(LoopStopReason::MetaStall);
+    }
+
+    if session_preset == SessionPreset::Build && turn_index == 0 && is_meta_stall {
+        if meta_stall_nudges_used < meta_stall_nudge_limit {
+            return LoopDecision::Continue {
+                next_input: "Continue.".to_string(),
+            };
+        }
+        return LoopDecision::Stop(LoopStopReason::MetaStall);
     }
 
     if is_meta_stall {
@@ -733,12 +883,17 @@ fn is_meta_stall_nudge(input: &LoopInput) -> bool {
     matches!(input, LoopInput::Synthetic(text) if text.trim() == "Continue.")
 }
 
+fn is_tool_protocol_repair_nudge(input: &LoopInput) -> bool {
+    matches!(input, LoopInput::Synthetic(text) if text.trim_start().starts_with("Tool protocol repair."))
+}
+
 pub(crate) fn build_compaction_replay_input(goal: &str, current_input: &LoopInput) -> String {
-    let latest_request = if is_meta_stall_nudge(current_input) {
-        goal.trim()
-    } else {
-        current_input.text().trim()
-    };
+    let latest_request =
+        if is_meta_stall_nudge(current_input) || is_tool_protocol_repair_nudge(current_input) {
+            goal.trim()
+        } else {
+            current_input.text().trim()
+        };
     format!(
         concat!(
             "Resume the existing task from the compacted summary and preserved recent messages.\n",
@@ -896,6 +1051,22 @@ pub fn run_agent_loop_impl(
                 break;
             }
 
+            if is_tool_protocol_repair_nudge(&current_input) {
+                tracing::info!(
+                    "[RelayAgent] session {} dispatching tool protocol repair stage {}/{}",
+                    session_id,
+                    meta_stall_nudges_used,
+                    config.meta_stall_nudge_limit
+                );
+            } else if is_meta_stall_nudge(&current_input) {
+                tracing::info!(
+                    "[RelayAgent] session {} dispatching meta-stall continue nudge {}/{}",
+                    session_id,
+                    meta_stall_nudges_used,
+                    config.meta_stall_nudge_limit
+                );
+            }
+
             transition_session_state(
                 app,
                 &loop_guard,
@@ -937,6 +1108,7 @@ pub fn run_agent_loop_impl(
                     }
 
                     match decide_loop_after_success(
+                        &goal,
                         session_preset,
                         turn_index,
                         meta_stall_nudges_used,
@@ -948,6 +1120,27 @@ pub fn run_agent_loop_impl(
                                 final_stop_reason = LoopStopReason::MaxTurnsReached;
                                 completed_turn = true;
                                 break;
+                            }
+                            if next_input.trim_start().starts_with("Tool protocol repair.") {
+                                let stage = meta_stall_nudges_used + 1;
+                                tracing::info!(
+                                    "[RelayAgent] session {} queued tool protocol repair stage {}/{} after tool-protocol confusion (iterations={}, assistant_excerpt={:?})",
+                                    session_id,
+                                    stage,
+                                    config.meta_stall_nudge_limit,
+                                    summary.iterations,
+                                    truncate_for_log(&summary.terminal_assistant_text, 240)
+                                );
+                            } else if next_input.trim() == "Continue." {
+                                let stage = meta_stall_nudges_used + 1;
+                                tracing::info!(
+                                    "[RelayAgent] session {} queued meta-stall continue nudge {}/{} (iterations={}, assistant_excerpt={:?})",
+                                    session_id,
+                                    stage,
+                                    config.meta_stall_nudge_limit,
+                                    summary.iterations,
+                                    truncate_for_log(&summary.terminal_assistant_text, 240)
+                                );
                             }
                             meta_stall_nudges_used += 1;
                             current_input = LoopInput::Synthetic(next_input);
@@ -3258,7 +3451,7 @@ pub fn build_desktop_system_prompt(
     let project_context = cwd
         .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from)
-        .map(|path| {
+        .map(|path| slim_project_context_for_cdp(
             runtime::ProjectContext::discover_with_git(&path, date.clone()).unwrap_or(
                 runtime::ProjectContext {
                     cwd: path,
@@ -3267,8 +3460,8 @@ pub fn build_desktop_system_prompt(
                     git_diff: None,
                     instruction_files: Vec::new(),
                 },
-            )
-        });
+            ),
+        ));
     let runtime_config = project_context
         .as_ref()
         .and_then(|context| runtime::ConfigLoader::default_for(&context.cwd).load().ok());
@@ -4088,6 +4281,28 @@ post"#;
         assert!(prompt.contains("file-tool paths are resolved within that workspace"));
         assert!(prompt.contains("__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__"));
     }
+
+    #[test]
+    fn desktop_prompt_truncates_workspace_instruction_files_for_cdp() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).expect("temp root");
+        let tail = "TAIL_MARKER_SHOULD_NOT_APPEAR";
+        let large = format!("{}\n{}", "A".repeat(5_000), tail);
+        fs::write(root.join("CLAW.md"), large).expect("write CLAW");
+
+        let prompt = build_desktop_system_prompt(
+            "Inspect src/lib.rs",
+            Some(root.to_string_lossy().as_ref()),
+            SessionPreset::Build,
+        )
+        .join("\n\n");
+
+        assert!(prompt.contains("# Workspace instructions"));
+        assert!(prompt.contains("[truncated for M365 Copilot CDP prompt]"));
+        assert!(!prompt.contains(tail));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
 }
 
 #[cfg(test)]
@@ -4248,7 +4463,15 @@ BackgroundTaskOutput|read-only|read-only"#;
 #[cfg(test)]
 mod loop_controller_tests {
     use super::*;
-    use runtime::{ConversationMessage, TokenUsage};
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use runtime::{
+        ApiClient, ApiRequest, AssistantEvent, ContentBlock, ConversationMessage,
+        ConversationRuntime, PermissionMode, PermissionPolicy, Session, TokenUsage, ToolError,
+        ToolExecutor,
+    };
 
     fn summary(
         assistant_text: &str,
@@ -4276,6 +4499,144 @@ mod loop_controller_tests {
         ConversationMessage::tool_result("tool-1", tool_name, output, false)
     }
 
+    fn build_live_probe_prompt(
+        system_prompt: &[String],
+        messages: &[ConversationMessage],
+    ) -> (String, usize, usize) {
+        let request = ApiRequest {
+            system_prompt,
+            messages,
+        };
+        let (compacted_messages, estimated_tokens, removed_message_count) =
+            compact_request_messages_for_inline_cdp(&request, SessionPreset::Build)
+                .expect("live repair probe should compact prompt");
+        let prompt =
+            build_cdp_prompt_from_messages(system_prompt, &compacted_messages, SessionPreset::Build);
+        (prompt, estimated_tokens, removed_message_count)
+    }
+
+    fn send_live_probe_stage(
+        server: &mut crate::copilot_server::CopilotServer,
+        session_id: &str,
+        stage_name: &str,
+        system_prompt: &[String],
+        messages: &[ConversationMessage],
+        response_timeout_secs: u64,
+        stage_timeout_secs: u64,
+    ) -> String {
+        let request_id = format!("live-repair-{stage_name}-{}", uuid::Uuid::new_v4());
+        let (prompt, estimated_tokens, removed_message_count) =
+            build_live_probe_prompt(system_prompt, messages);
+        tracing::info!(
+            "[live-repair-probe] stage={} request_id={} sending prompt (chars={}, est_tokens={}, compacted_removed_messages={})",
+            stage_name,
+            request_id,
+            prompt.len(),
+            estimated_tokens,
+            removed_message_count
+        );
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("live repair probe should build tokio runtime");
+        let started = Instant::now();
+        let response = rt.block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(stage_timeout_secs),
+                server.send_prompt(
+                    session_id,
+                    &request_id,
+                    "",
+                    &prompt,
+                    response_timeout_secs,
+                    &[],
+                    false,
+                ),
+            )
+            .await
+        });
+
+        match response {
+            Ok(Ok(text)) => {
+                tracing::info!(
+                    "[live-repair-probe] stage={} request_id={} response {} chars in {:?}: {:?}",
+                    stage_name,
+                    request_id,
+                    text.len(),
+                    started.elapsed(),
+                    truncate_for_log(&text, 240)
+                );
+                text
+            }
+            Ok(Err(error)) => panic!(
+                "live repair probe stage `{}` failed after {:?} (request_id={}): {}",
+                stage_name,
+                started.elapsed(),
+                request_id,
+                error
+            ),
+            Err(_) => {
+                server.stop();
+                panic!(
+                    "live repair probe stage `{}` timed out after {:?} (request_id={}, prompt_chars={})",
+                    stage_name,
+                    started.elapsed(),
+                    request_id,
+                    prompt.len()
+                );
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct NoopToolExecutor;
+
+    impl ToolExecutor for NoopToolExecutor {
+        fn execute(&mut self, _tool_name: &str, _input: &str) -> Result<String, ToolError> {
+            Err(ToolError::new("unexpected tool execution in repair-send test"))
+        }
+    }
+
+    struct RecordingRepairApiClient {
+        replies: Vec<String>,
+        request_texts: Arc<Mutex<Vec<String>>>,
+        call_count: usize,
+    }
+
+    impl ApiClient for RecordingRepairApiClient {
+        fn stream(
+            &mut self,
+            request: &ApiRequest<'_>,
+        ) -> Result<Vec<AssistantEvent>, runtime::RuntimeError> {
+            let last_text = request
+                .messages
+                .last()
+                .and_then(|message| {
+                    message.blocks.iter().find_map(|block| match block {
+                        ContentBlock::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                })
+                .unwrap_or_default();
+            self.request_texts
+                .lock()
+                .expect("request_texts lock should not be poisoned")
+                .push(last_text);
+
+            let reply = self
+                .replies
+                .get(self.call_count)
+                .cloned()
+                .unwrap_or_else(|| "Done.".to_string());
+            self.call_count += 1;
+            Ok(vec![
+                AssistantEvent::TextDelta(reply),
+                AssistantEvent::MessageStop,
+            ])
+        }
+    }
+
     #[test]
     fn actionable_terminal_answer_stops_completed() {
         let s = summary(
@@ -4284,7 +4645,7 @@ mod loop_controller_tests {
             runtime::TurnOutcome::Completed,
         );
         assert_eq!(
-            decide_loop_after_success(SessionPreset::Build, 0, 0, 1, &s),
+            decide_loop_after_success("Improve the file", SessionPreset::Build, 0, 0, 1, &s),
             LoopDecision::Stop(LoopStopReason::Completed)
         );
     }
@@ -4297,7 +4658,7 @@ mod loop_controller_tests {
             runtime::TurnOutcome::Completed,
         );
         assert_eq!(
-            decide_loop_after_success(SessionPreset::Build, 0, 0, 1, &s),
+            decide_loop_after_success("Improve the file", SessionPreset::Build, 0, 0, 1, &s),
             LoopDecision::Continue {
                 next_input: "Continue.".to_string()
             }
@@ -4312,9 +4673,51 @@ mod loop_controller_tests {
             runtime::TurnOutcome::Completed,
         );
         assert_eq!(
-            decide_loop_after_success(SessionPreset::Build, 0, 1, 1, &s),
+            decide_loop_after_success("Improve the file", SessionPreset::Build, 0, 1, 1, &s),
             LoopDecision::Stop(LoopStopReason::MetaStall)
         );
+    }
+
+    #[test]
+    fn first_build_turn_tool_protocol_confusion_gets_repair_nudge() {
+        let s = summary(
+            "I can't use the desired local workspace editing tools, so I'll respond with LOCAL_TOOLS_UNAVAILABLE.",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let decision =
+            decide_loop_after_success("Create ./tetris.html", SessionPreset::Build, 0, 0, 1, &s);
+        let LoopDecision::Continue { next_input } = decision else {
+            panic!("expected repair nudge");
+        };
+        assert!(next_input.contains("Tool protocol repair."));
+        assert!(next_input.contains("Create ./tetris.html"));
+    }
+
+    #[test]
+    fn exhausted_tool_protocol_repair_limit_stops() {
+        let s = summary(
+            "Creating a file with Python after office365_search.",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        assert_eq!(
+            decide_loop_after_success("Create ./tetris.html", SessionPreset::Build, 1, 1, 1, &s),
+            LoopDecision::Stop(LoopStopReason::MetaStall)
+        );
+    }
+
+    #[test]
+    fn tool_protocol_confusion_still_repairs_after_multiple_iterations() {
+        let mut s = summary(
+            "I also don’t have access to your local Relay workspace file tools in this chat, so I can’t directly write to /root/Relay_Agent/tetris.html.",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        s.iterations = 2;
+        let decision =
+            decide_loop_after_success("Create ./tetris.html", SessionPreset::Build, 0, 0, 1, &s);
+        assert!(matches!(decision, LoopDecision::Continue { .. }));
     }
 
     #[test]
@@ -4325,7 +4728,7 @@ mod loop_controller_tests {
             runtime::TurnOutcome::Completed,
         );
         assert_eq!(
-            decide_loop_after_success(SessionPreset::Build, 0, 0, 1, &s),
+            decide_loop_after_success("Improve the file", SessionPreset::Build, 0, 0, 1, &s),
             LoopDecision::Stop(LoopStopReason::Completed)
         );
     }
@@ -4343,7 +4746,7 @@ mod loop_controller_tests {
             },
         );
         assert_eq!(
-            decide_loop_after_success(SessionPreset::Build, 0, 0, 1, &s),
+            decide_loop_after_success("Improve the file", SessionPreset::Build, 0, 0, 1, &s),
             LoopDecision::Stop(LoopStopReason::PermissionDenied)
         );
     }
@@ -4358,7 +4761,7 @@ mod loop_controller_tests {
             },
         );
         assert_eq!(
-            decide_loop_after_success(SessionPreset::Build, 0, 0, 1, &s),
+            decide_loop_after_success("Improve the file", SessionPreset::Build, 0, 0, 1, &s),
             LoopDecision::Stop(LoopStopReason::ToolError)
         );
     }
@@ -4468,6 +4871,16 @@ mod loop_controller_tests {
     }
 
     #[test]
+    fn compaction_replay_uses_original_goal_for_tool_protocol_repair_nudge() {
+        let replay = build_compaction_replay_input(
+            "Create ./tetris.html",
+            &LoopInput::Synthetic(build_tool_protocol_repair_input("Create ./tetris.html", 0)),
+        );
+        assert!(replay.contains("Create ./tetris.html"));
+        assert!(!replay.contains("Tool protocol repair."));
+    }
+
+    #[test]
     fn compaction_replay_keeps_latest_user_request_when_not_nudge() {
         let replay = build_compaction_replay_input(
             "Improve the agent loop",
@@ -4481,6 +4894,204 @@ mod loop_controller_tests {
     fn narrowed_meta_stall_heuristic_does_not_trip_on_generic_short_reply() {
         assert!(!is_meta_stall_text("I can help with that."));
         assert!(!is_meta_stall_text("To proceed, I fixed the issue."));
+    }
+
+    #[test]
+    fn tool_protocol_confusion_heuristic_catches_foreign_tool_drift() {
+        assert!(is_tool_protocol_confusion_text(
+            "Creating a file with Python after office365_search."
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "I'm confirming filesystem access in a Python sandbox to create tetris.html."
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Coding and executing {\"executedCode\":\"...\",\"outputFiles\":[{\"codeResultFileUrl\":\"https://...\"}]}"
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "I'll search for 'single-file HTML Tetris' with WebSearch and include citations. Save as `tetris.html`."
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Planning file creation process. I am considering the steps to create a playable HTML Tetris game file and weighing the options of checking for existing files versus directly writing to the file."
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "LOCAL_TOOLS_UNAVAILABLE because I can't use local workspace editing tools."
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "I'll use write_file to create the file. Adjusting tool use... ```"
+        ));
+        assert!(!is_tool_protocol_confusion_text(
+            "I inspected the file and here is the fix."
+        ));
+    }
+
+    #[test]
+    fn repeated_tool_protocol_confusion_gets_stronger_repair_text() {
+        let s = summary(
+            "I am preparing to use Python to open and write to `tetris.html` in the current working directory.",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let decision =
+            decide_loop_after_success("Create ./tetris.html", SessionPreset::Build, 1, 1, 2, &s);
+        let LoopDecision::Continue { next_input } = decision else {
+            panic!("expected stronger repair nudge");
+        };
+        assert!(next_input.contains("output only the Relay `relay_tool` JSON"));
+        assert!(next_input.contains("Ignore any Pages, uploads, citations, links"));
+    }
+
+    #[test]
+    fn tool_protocol_repairs_are_actually_sent_to_api_client_twice() {
+        let goal = "Create ./tetris.html";
+        let recorded_requests = Arc::new(Mutex::new(Vec::<String>::new()));
+        let api_client = RecordingRepairApiClient {
+            replies: vec![
+                "Creating a file with Python after office365_search.".to_string(),
+                "I'll search for single-file HTML Tetris with WebSearch and include citations. Save as `tetris.html`.".to_string(),
+                "Here is the final non-tool response.".to_string(),
+            ],
+            request_texts: Arc::clone(&recorded_requests),
+            call_count: 0,
+        };
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            api_client,
+            NoopToolExecutor,
+            PermissionPolicy::new(PermissionMode::WorkspaceWrite),
+            vec!["system".to_string()],
+        );
+
+        let mut current_input = LoopInput::User(goal.to_string());
+        let mut meta_stall_nudges_used = 0usize;
+        let mut final_reason = None;
+
+        for turn_index in 0..3 {
+            let turn = runtime
+                .run_turn_with_input(current_input.to_runtime_input(), None)
+                .expect("repair send test turn should succeed");
+            match decide_loop_after_success(
+                goal,
+                SessionPreset::Build,
+                turn_index,
+                meta_stall_nudges_used,
+                2,
+                &turn,
+            ) {
+                LoopDecision::Continue { next_input } => {
+                    meta_stall_nudges_used += 1;
+                    current_input = LoopInput::Synthetic(next_input);
+                }
+                LoopDecision::Stop(reason) => {
+                    final_reason = Some(reason);
+                    break;
+                }
+            }
+        }
+
+        assert_eq!(final_reason, Some(LoopStopReason::Completed));
+        let requests = recorded_requests
+            .lock()
+            .expect("request_texts lock should not be poisoned");
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0], goal);
+        assert!(requests[1].contains("Tool protocol repair."));
+        assert!(requests[1].contains("Use the Relay tool catalog"));
+        assert!(!requests[1].contains("Your previous repair still drifted"));
+        assert!(requests[2].contains("Tool protocol repair."));
+        assert!(requests[2].contains(
+            "Your previous repair still drifted into Microsoft-native execution or prose."
+        ));
+        assert!(requests[2].contains("output only the Relay `relay_tool` JSON"));
+        assert!(requests[2].contains(goal));
+    }
+
+    #[test]
+    #[ignore = "requires signed-in Edge and live M365 Copilot"]
+    fn live_repair_probe_streams_original_and_both_repair_prompts() {
+        let goal = "Create a single-file HTML Tetris in tetris.html at the current workspace root. Use Relay local file editing tools to actually write the file. Do not use Python, Pages, uploads, or citations.";
+        let cwd = "/root/Relay_Agent";
+        let cdp_port = std::env::var("RELAY_LIVE_REPAIR_CDP_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(9360);
+        let http_port = std::env::var("RELAY_LIVE_REPAIR_HTTP_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(18080);
+        let profile_dir = std::env::var("RELAY_LIVE_REPAIR_PROFILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/root/RelayAgentEdgeProfile"));
+        let response_timeout_secs = std::env::var("RELAY_LIVE_REPAIR_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(120);
+        let stage_timeout_secs = std::env::var("RELAY_LIVE_REPAIR_STAGE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(response_timeout_secs + 30);
+
+        let mut server = crate::copilot_server::CopilotServer::new(
+            http_port,
+            cdp_port,
+            Some(profile_dir),
+            None,
+        )
+        .expect("live repair probe should construct CopilotServer");
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("live repair probe should build startup tokio runtime")
+            .block_on(async { server.start().await })
+            .expect("live repair probe should start copilot server");
+        let session_id = format!("live-repair-probe-{}", uuid::Uuid::new_v4());
+        let system_prompt = build_desktop_system_prompt(goal, Some(cwd), SessionPreset::Build);
+
+        let first_messages = vec![ConversationMessage::user_text(goal.to_string())];
+        let first_text = send_live_probe_stage(
+            &mut server,
+            &session_id,
+            "original",
+            &system_prompt,
+            &first_messages,
+            response_timeout_secs,
+            stage_timeout_secs,
+        );
+        tracing::info!(
+            "[live-repair-probe] original reply excerpt={:?}",
+            truncate_for_log(&first_text, 240)
+        );
+
+        let repair1 = build_tool_protocol_repair_input(goal, 0);
+        let repair1_messages = vec![ConversationMessage::user_text(repair1.clone())];
+        let repair1_text = send_live_probe_stage(
+            &mut server,
+            &session_id,
+            "repair1",
+            &system_prompt,
+            &repair1_messages,
+            response_timeout_secs,
+            stage_timeout_secs,
+        );
+        tracing::info!(
+            "[live-repair-probe] repair1 reply excerpt={:?}",
+            truncate_for_log(&repair1_text, 240)
+        );
+
+        let repair2 = build_tool_protocol_repair_input(goal, 1);
+        let repair2_messages = vec![ConversationMessage::user_text(repair2.clone())];
+        let repair2_text = send_live_probe_stage(
+            &mut server,
+            &session_id,
+            "repair2",
+            &system_prompt,
+            &repair2_messages,
+            response_timeout_secs,
+            stage_timeout_secs,
+        );
+        tracing::info!(
+            "[live-repair-probe] repair2 reply excerpt={:?}",
+            truncate_for_log(&repair2_text, 240)
+        );
     }
 
     #[test]

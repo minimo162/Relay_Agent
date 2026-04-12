@@ -22,7 +22,8 @@ pub struct AgentConfig {
     pub max_turn_retries: usize,
     /// Maximum assistant/tool follow-up iterations inside a single outer turn.
     pub max_inner_iterations: usize,
-    /// Number of extra "Continue." nudges allowed for a meta-only first reply.
+    /// Number of extra synthetic repair / "Continue." nudges allowed after a meta-only or
+    /// tool-protocol-confused reply.
     pub meta_stall_nudge_limit: usize,
     /// Forced compaction attempts allowed when inline prompt size still blocks a turn.
     pub compact_retry_limit: usize,
@@ -39,7 +40,7 @@ impl Default for AgentConfig {
             session_cleanup_ttl_minutes: 30,
             max_turn_retries: 2,
             max_inner_iterations: 8,
-            meta_stall_nudge_limit: 1,
+            meta_stall_nudge_limit: 2,
             compact_retry_limit: 1,
         }
     }

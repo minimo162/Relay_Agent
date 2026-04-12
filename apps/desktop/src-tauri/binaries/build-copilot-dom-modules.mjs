@@ -82,6 +82,114 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function decodeJwtSegmentBase64Url(seg) {
+  if (!seg || typeof seg !== "string") return "";
+  try {
+    const pad = (x) => x + "=".repeat((4 - (x.length % 4)) % 4);
+    const b64 = pad(seg.replace(/-/g, "+").replace(/_/g, "/"));
+    return Buffer.from(b64, "base64").toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+function stringLooksLikeJwt(text) {
+  const t = String(text || "").trim();
+  const parts = t.split(".");
+  if (parts.length !== 3) return false;
+  const [h, p, sig] = parts;
+  if (h.length < 10 || p.length < 40 || sig.length < 10) return false;
+  if (!parts.every((x) => /^[A-Za-z0-9_-]+$/.test(x))) return false;
+  if (t.length < 100) return false;
+  const header = decodeJwtSegmentBase64Url(h);
+  const payload = decodeJwtSegmentBase64Url(p);
+  if (header && /"alg"\\s*:/.test(header) && /"(typ|kid)"\\s*:/.test(header)) {
+    if (/"typ"\\s*:\\s*"JWT"/i.test(header) || /"typ"\\s*:\\s*"at\\+jwt"/i.test(header)) return true;
+  }
+  if (payload && payload.startsWith("{")) {
+    if (
+      /"(aud|iss|exp|iat|nbf|sub|oid|tid)"\\s*:/.test(payload) &&
+      (/"iss"\\s*:\\s*"https:\\/\\/(sts\\.windows\\.net|login\\.microsoftonline\\.com)/i.test(payload) ||
+        /substrate\\.office\\.com/i.test(payload) ||
+        /graph\\.microsoft\\.com/i.test(payload))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function stringLooksLikeM365ClientTelemetry(text) {
+  const t = String(text || "").trim();
+  if (t.length < 50) return false;
+  let score = 0;
+  if (/SubstrateTraceId/i.test(t)) score += 2;
+  if (/SubstrateLogicalId/i.test(t)) score += 2;
+  if (/browserName/i.test(t) && /browserVersion/i.test(t)) score += 2;
+  if (/cardCount/i.test(t)) score += 1;
+  if (/cardReferenceIds/i.test(t) || /cardIds/i.test(t)) score += 1;
+  if (/substrateLatency/i.test(t)) score += 1;
+  if (/renderLatency/i.test(t)) score += 1;
+  if (/isFallbackCards/i.test(t)) score += 1;
+  if (/hasGptSelected/i.test(t)) score += 1;
+  if (/displayType/i.test(t) && /"value"\\s*:\\s*"(grid|list)"/i.test(t)) score += 1;
+  return score >= 4;
+}
+
+function stringLooksLikeBareUuidOrHexId(text) {
+  const t = String(text || "").trim();
+  if (!t) return true;
+  const uuidShape = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (uuidShape.test(t)) return true;
+  if (/^[0-9a-f]{32}$/i.test(t)) return true;
+  const lines = t.split(/\\r?\\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length && lines.every((l) => uuidShape.test(l) || /^[0-9a-f]{32}$/i.test(l))) return true;
+  const parts = t.split(/,\\s*/).map((l) => l.trim()).filter(Boolean);
+  if (
+    parts.length >= 1 &&
+    parts.length <= 6 &&
+    parts.every((l) => uuidShape.test(l) || /^[0-9a-f]{32}$/i.test(l))
+  )
+    return true;
+  if (t.startsWith("{") && t.length < 280) {
+    if (
+      /"(trace|correlation|event|request|session|logical)?id"\\s*:\\s*"[0-9a-f-]{32,36}"/i.test(t) &&
+      !/"(text|content|message|markdown|answer)"\\s*:/i.test(t)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function networkExtractLooksLikeGarbage(text) {
+  const t = (text || "").trim();
+  if (t.length < 1) return true;
+  if (stringLooksLikeJwt(t)) return true;
+  if (stringLooksLikeM365ClientTelemetry(t)) return true;
+  if (stringLooksLikeBareUuidOrHexId(t)) return true;
+  if (/data:image\\/[^;]+;base64,/i.test(t)) return true;
+  if (t.length > 6_000) {
+    const sample = t.slice(0, 12_000);
+    let b64ish = 0;
+    for (let i = 0; i < sample.length; i++) {
+      const c = sample.charCodeAt(i);
+      if (
+        (c >= 65 && c <= 90) ||
+        (c >= 97 && c <= 122) ||
+        (c >= 48 && c <= 57) ||
+        c === 43 ||
+        c === 47 ||
+        c === 61
+      ) {
+        b64ish++;
+      }
+    }
+    if (b64ish / sample.length > 0.9) return true;
+  }
+  return false;
+}
+
 ${slice(2357, 2365)}
 
 async function extractAssistantReplyText(session) {

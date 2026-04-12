@@ -433,6 +433,7 @@ export default function Shell(): JSX.Element {
                 }}
                 allowModeSelection={sessions.activeSessionId() === null}
                 modeLockedNote={modeLockedNote()}
+                autoFocus={!settingsOpen()}
               />
             </>
           }
@@ -466,6 +467,7 @@ export default function Shell(): JSX.Element {
               }}
               hero
               allowModeSelection={false}
+              autoFocus={!settingsOpen()}
             />
           </FirstRunPanel>
         </Show>
