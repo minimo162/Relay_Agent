@@ -5,6 +5,13 @@
 
 export const COPILOT_SERVER_URL =
   process.env.COPILOT_SERVER_URL ?? "http://127.0.0.1:18080";
+const COPILOT_SERVER_BOOT_TOKEN = process.env.COPILOT_SERVER_BOOT_TOKEN?.trim() || "";
+
+function copilotServerAuthHeaders(): HeadersInit {
+  return COPILOT_SERVER_BOOT_TOKEN
+    ? { "X-Relay-Boot-Token": COPILOT_SERVER_BOOT_TOKEN }
+    : {};
+}
 
 export async function copilotServerHealth(): Promise<{
   ok: boolean;
@@ -13,7 +20,10 @@ export async function copilotServerHealth(): Promise<{
 }> {
   const base = COPILOT_SERVER_URL.replace(/\/$/, "");
   try {
-    const r = await fetch(`${base}/status`, { method: "GET" });
+    const r = await fetch(`${base}/status`, {
+      method: "GET",
+      headers: copilotServerAuthHeaders(),
+    });
     const text = await r.text();
     return {
       ok: r.ok,
@@ -33,6 +43,8 @@ export type CopilotCompletionOptions = {
   systemPrompt?: string;
   /** Same as `relay_new_chat` in `copilot_server.js` / `parseOpenAiRequest`. */
   relayNewChat?: boolean;
+  relaySessionId?: string;
+  relayRequestId?: string;
   /** Optional local files to send through `relay_attachments` (same path as the desktop app). */
   relayAttachments?: string[];
   /** Default 240s (Copilot can exceed 180s on slow paths). */
@@ -54,6 +66,11 @@ export async function postCopilotChatCompletion(opts: CopilotCompletionOptions):
   const body: Record<string, unknown> = {
     model: "relay-copilot-e2e",
     messages,
+    relay_session_id: opts.relaySessionId ?? "playwright-session",
+    relay_request_id:
+      opts.relayRequestId ??
+      globalThis.crypto?.randomUUID?.() ??
+      `req-${Date.now()}-${Math.random().toString(16).slice(2)}`,
   };
   if (opts.relayNewChat === true) {
     body.relay_new_chat = true;
@@ -68,7 +85,10 @@ export async function postCopilotChatCompletion(opts: CopilotCompletionOptions):
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...copilotServerAuthHeaders(),
+      },
       body: JSON.stringify(body),
       signal: controller.signal,
     });

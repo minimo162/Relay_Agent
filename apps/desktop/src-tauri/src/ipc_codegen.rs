@@ -13,9 +13,9 @@ use crate::models::{
     ListWorkspaceSlashCommandsRequest, McpAddServerRequest, McpServerInfo, RelayDiagnostics,
     RespondAgentApprovalRequest, RespondUserQuestionRequest, RustAnalyzerProbeRequest,
     RustAnalyzerProbeResponse, SessionPreset, SessionWriteUndoRequest,
-    SessionWriteUndoStatusResponse, StartAgentRequest,
-    WorkspaceAllowlistCwdRequest, WorkspaceAllowlistEntryRow, WorkspaceAllowlistRemoveToolRequest,
-    WorkspaceAllowlistSnapshot, WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
+    SessionWriteUndoStatusResponse, StartAgentRequest, WorkspaceAllowlistCwdRequest,
+    WorkspaceAllowlistEntryRow, WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
+    WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
 };
 use crate::tauri_bridge::{
     CdpConnectResult, CdpPromptResult, CdpSendPromptRequest, CompactAgentSessionRequest,

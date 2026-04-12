@@ -345,13 +345,13 @@ function withTimeout(promise, ms, label) {
 /* ─── Copilot session ─── */
 
 class CopilotSession {
-  cdpTargetId = null;
   cdpSession = null;
   cdpPort = null;
-  /** Set by POST /v1/chat/abort; `waitForDomResponse` / `submitPromptRaw` poll to exit early. */
-  abortDescribe = false;
   /** Serialize /v1/chat/completions — overlapping POSTs (e.g. Rust retry while Copilot still runs) must wait, not 500 "busy". */
   _describeChain = Promise.resolve();
+  relaySessions = new Map();
+  inflightRequests = new Map();
+  completedRequests = new Map();
 
   async _getBrowserWsUrl(port) {
     // /json/version → webSocketDebuggerUrl (browser-level)
@@ -387,17 +387,59 @@ class CopilotSession {
     }
   }
 
-  async findOrCreatePage() {
-    const session = this.cdpSession;
+  _getRelaySessionState(relaySessionId) {
+    let state = this.relaySessions.get(relaySessionId);
+    if (!state) {
+      state = { relaySessionId, cdpTargetId: null, initialized: false };
+      this.relaySessions.set(relaySessionId, state);
+    }
+    return state;
+  }
 
-    // List existing pages and find the Copilot one. Prefer the *last* match so CDP attaches to the
-    // newest chat tab (a duplicate m365 tab from an extra Edge launch would otherwise stay stale).
+  _claimedTargetIds(exceptRelaySessionId = null) {
+    const claimed = new Set();
+    for (const [relaySessionId, state] of this.relaySessions.entries()) {
+      if (relaySessionId === exceptRelaySessionId) continue;
+      if (state?.cdpTargetId) claimed.add(state.cdpTargetId);
+    }
+    return claimed;
+  }
+
+  _pruneCompletedRequests() {
+    while (this.completedRequests.size > 128) {
+      const firstKey = this.completedRequests.keys().next().value;
+      if (firstKey == null) break;
+      this.completedRequests.delete(firstKey);
+    }
+  }
+
+  async _waitForPages() {
+    const session = this.cdpSession;
     let pages = await session.listPages();
     const emptyPollDeadline = Date.now() + 3e3;
     while (pages.length === 0 && Date.now() < emptyPollDeadline) {
       await sleep(200);
       pages = await session.listPages();
     }
+    return pages;
+  }
+
+  _lookupPageByTargetId(pages, targetId) {
+    if (!targetId) return null;
+    return pages.find((page) => page.targetId === targetId) || null;
+  }
+
+  _invalidateRelaySession(relaySession, reason) {
+    if (reason) {
+      console.error("[copilot] invalidating relay session target:", relaySession.relaySessionId, reason);
+    }
+    relaySession.cdpTargetId = null;
+    relaySession.initialized = false;
+  }
+
+  async findStatusPage() {
+    const session = this.cdpSession;
+    const pages = await this._waitForPages();
     const copilots = pages.filter((p) => p.url.includes("m365.cloud.microsoft/chat"));
     let copilotPage = copilots.length ? copilots[copilots.length - 1] : undefined;
     if (copilots.length > 1) {
@@ -437,8 +479,60 @@ class CopilotSession {
       return { targetId: result.targetId, url: COPILOT_URL };
     }
 
-    this.cdpTargetId = copilotPage.targetId;
     return copilotPage;
+  }
+
+  async findOrCreateRelayPage(relaySessionId, relaySession) {
+    const session = this.cdpSession;
+    const pages = await this._waitForPages();
+    const claimedTargets = this._claimedTargetIds(relaySessionId);
+
+    const existing = this._lookupPageByTargetId(pages, relaySession.cdpTargetId);
+    if (relaySession.cdpTargetId && !existing) {
+      this._invalidateRelaySession(relaySession, "tracked tab disappeared");
+    } else if (existing) {
+      return existing;
+    }
+
+    const unclaimedCopilot = pages.filter(
+      (page) => !claimedTargets.has(page.targetId) && isCopilotUrl(page.url),
+    );
+    if (unclaimedCopilot.length > 0) {
+      const page = unclaimedCopilot[unclaimedCopilot.length - 1];
+      relaySession.cdpTargetId = page.targetId;
+      return page;
+    }
+
+    const unclaimedLogin = pages.filter(
+      (page) => !claimedTargets.has(page.targetId) && isLoginUrl(page.url),
+    );
+    if (unclaimedLogin.length > 0) {
+      const page = unclaimedLogin[unclaimedLogin.length - 1];
+      relaySession.cdpTargetId = page.targetId;
+      return page;
+    }
+
+    const unclaimedDisposable = pages.filter(
+      (page) => !claimedTargets.has(page.targetId) && isDisposableStartUrl(page.url),
+    );
+    if (unclaimedDisposable.length > 0) {
+      const page = unclaimedDisposable[unclaimedDisposable.length - 1];
+      console.error(
+        "[copilot] no Copilot URL yet — reusing unclaimed tab for relay session",
+        relaySessionId,
+        page.url?.slice(0, 120) || "(empty)",
+      );
+      relaySession.cdpTargetId = page.targetId;
+      return page;
+    }
+
+    console.error("[copilot] no unclaimed page targets — creating dedicated Copilot tab for", relaySessionId);
+    const result = await session.send("Target.createTarget", {
+      url: COPILOT_URL
+    });
+    relaySession.cdpTargetId = result.targetId;
+    relaySession.initialized = false;
+    return { targetId: result.targetId, url: COPILOT_URL };
   }
 
   async navigateToPage(page) {
@@ -460,6 +554,42 @@ class CopilotSession {
     return pageSession;
   }
 
+  async ensureTargetUrl(pageSession, page, targetId, allowLogin, logPrefix) {
+    let currentUrl = page.url || "";
+    if (!isCopilotUrl(currentUrl) && !(allowLogin && isLoginUrl(currentUrl))) {
+      console.error(logPrefix, "navigating to Copilot URL from:", currentUrl?.slice(0, 140) || "(empty)");
+      await pageSession.send("Page.navigate", { url: COPILOT_URL });
+      try {
+        currentUrl = await waitForTargetUrl(
+          this.cdpSession,
+          targetId,
+          (url) => isCopilotUrl(url) || (allowLogin && isLoginUrl(url)),
+          45e3,
+        );
+        console.error(logPrefix, "target URL reached:", currentUrl?.slice(0, 120));
+      } catch (e) {
+        console.error(logPrefix, "navigate wait failed, retrying once:", e?.message || e);
+        await pageSession.send("Page.navigate", { url: COPILOT_URL });
+        currentUrl = await waitForTargetUrl(
+          this.cdpSession,
+          targetId,
+          (url) => isCopilotUrl(url) || (allowLogin && isLoginUrl(url)),
+          30e3,
+        );
+        console.error(logPrefix, "target URL after retry:", currentUrl?.slice(0, 120));
+      }
+      await sleep(700);
+    }
+
+    const pages = await this.cdpSession.listPages();
+    const refreshed = pages.find((entry) => entry.targetId === targetId);
+    const finalUrl = refreshed?.url || currentUrl;
+    if (!isCopilotUrl(finalUrl) && !(allowLogin && isLoginUrl(finalUrl))) {
+      throw new Error("Copilot tab could not be resolved on the Relay Edge session");
+    }
+    return { currentUrl: finalUrl, page: refreshed || page };
+  }
+
   async inspectStatus() {
     const pending = this._describeChain.then(() => this.inspectStatusImpl());
     this._describeChain = pending.catch(() => {});
@@ -470,7 +600,7 @@ class CopilotSession {
     let pageSession = null;
     try {
       await this.connect(globalOptions.cdpPort);
-      const page = await this.findOrCreatePage();
+      const page = await this.findStatusPage();
       if (!page) {
         return { connected: false, loginRequired: false, error: "Copilot page not available" };
       }
@@ -483,23 +613,13 @@ class CopilotSession {
         await pageSession.send("Page.bringToFront", {}).catch(() => {});
       }
 
-      let url = page.url || "";
-      if (!isCopilotUrl(url) && !isLoginUrl(url)) {
-        await pageSession.send("Page.navigate", { url: COPILOT_URL });
-        try {
-          await waitForTargetUrl(
-            this.cdpSession,
-            page.targetId,
-            (u) => isCopilotUrl(u) || isLoginUrl(u),
-            25e3,
-          );
-        } catch {
-          /* listPages below */
-        }
-      }
-      const pages = await this.cdpSession.listPages();
-      const p2 = pages.find((x) => x.targetId === page.targetId);
-      const finalUrl = p2?.url || url;
+      const { currentUrl: finalUrl } = await this.ensureTargetUrl(
+        pageSession,
+        page,
+        page.targetId,
+        true,
+        "[copilot:status]",
+      );
       const login = isLoginUrl(finalUrl);
       return {
         connected: !login,
@@ -517,23 +637,87 @@ class CopilotSession {
     }
   }
 
-  async describe(systemPrompt, userPrompt, imageB64, attachmentPaths, options = {}) {
-    const pending = this._describeChain.then(() =>
-      this.describeImpl(systemPrompt, userPrompt, imageB64, attachmentPaths || [], options),
-    );
-    this._describeChain = pending.catch(() => {});
-    return pending;
+  async startOrJoinDescribe(params) {
+    const relaySessionId = String(params.relaySessionId || "").trim();
+    const relayRequestId = String(params.relayRequestId || "").trim();
+    if (!relaySessionId) throw new Error("relay_session_id is required");
+    if (!relayRequestId) throw new Error("relay_request_id is required");
+
+    const completed = this.completedRequests.get(relayRequestId);
+    if (completed) {
+      if (completed.relaySessionId !== relaySessionId) {
+        return {
+          status: 409,
+          body: { error: "relay_request_id already belongs to another Relay session" },
+        };
+      }
+      return completed.record;
+    }
+
+    const inflight = this.inflightRequests.get(relayRequestId);
+    if (inflight) {
+      if (inflight.relaySessionId !== relaySessionId) {
+        return {
+          status: 409,
+          body: { error: "relay_request_id already belongs to another Relay session" },
+        };
+      }
+      return await inflight.promise;
+    }
+
+    const requestState = {
+      relaySessionId,
+      relayRequestId,
+      aborted: false,
+    };
+
+    const execute = async () => {
+      try {
+        const description = await this.describeImpl(params, requestState);
+        return {
+          status: 200,
+          body: { choices: [{ message: { role: "assistant", content: description } }] },
+        };
+      } catch (error) {
+        return responseRecordFromError(error);
+      }
+    };
+
+    const promise = this._describeChain
+      .then(execute)
+      .then((record) => {
+        this.completedRequests.set(relayRequestId, { relaySessionId, record });
+        this._pruneCompletedRequests();
+        this.inflightRequests.delete(relayRequestId);
+        return record;
+      });
+    this._describeChain = promise.catch(() => {});
+    this.inflightRequests.set(relayRequestId, {
+      relaySessionId,
+      requestState,
+      promise,
+    });
+
+    return await promise;
   }
 
-  async describeImpl(systemPrompt, userPrompt, imageB64, attachmentPaths = [], options = {}) {
+  abortRequest(relaySessionId, relayRequestId) {
+    const inflight = this.inflightRequests.get(relayRequestId);
+    if (!inflight || inflight.relaySessionId !== relaySessionId) return false;
+    inflight.requestState.aborted = true;
+    return true;
+  }
+
+  async describeImpl(params, requestState) {
     let pageSession = null;
     let attachmentTempFiles = [];
+    const relaySessionId = requestState.relaySessionId;
+    const relaySession = this._getRelaySessionState(relaySessionId);
     try {
-      this.abortDescribe = false;
       console.error("[copilot:describe] connecting...");
       await this.connect(globalOptions.cdpPort);
-      console.error("[copilot:describe] finding copilot page...");
-      const page = await this.findOrCreatePage();
+      console.error("[copilot:describe] finding copilot page for relay session", relaySessionId);
+      const page = await this.findOrCreateRelayPage(relaySessionId, relaySession);
       console.error("[copilot:describe] page:", JSON.stringify(page));
 
       if (isLoginUrl(page.url)) {
@@ -556,20 +740,16 @@ class CopilotSession {
         });
       }
 
-      let currentUrl = page.url || "";
+      const { currentUrl } = await this.ensureTargetUrl(
+        pageSession,
+        page,
+        page.targetId,
+        false,
+        "[copilot:describe]",
+      );
       if (!isCopilotUrl(currentUrl)) {
-        console.error("[copilot:describe] navigating to Copilot URL from:", currentUrl?.slice(0, 140) || "(empty)");
-        await pageSession.send("Page.navigate", { url: COPILOT_URL });
-        try {
-          currentUrl = await waitForTargetUrl(this.cdpSession, page.targetId, isCopilotUrl, 45e3);
-          console.error("[copilot:describe] Copilot URL reached:", currentUrl?.slice(0, 120));
-        } catch (e) {
-          console.error("[copilot:describe] navigate wait failed, retrying once:", e?.message || e);
-          await pageSession.send("Page.navigate", { url: COPILOT_URL });
-          currentUrl = await waitForTargetUrl(this.cdpSession, page.targetId, isCopilotUrl, 30e3);
-          console.error("[copilot:describe] Copilot URL after retry:", currentUrl?.slice(0, 120));
-        }
-        await sleep(700);
+        this._invalidateRelaySession(relaySession, "target stopped resolving to Copilot");
+        throw new Error("Copilot tab could not be resolved for the Relay session");
       }
 
       const netCapture = createCopilotNetworkCapture(pageSession);
@@ -577,9 +757,20 @@ class CopilotSession {
 
       let hadAttachments = false;
       try {
-        const wantNewChat = envNewChatEachTurn() || options.relayNewChat === true;
+        const wantNewChat = !relaySession.initialized || envNewChatEachTurn() || params.relayNewChat === true;
         const envEach = envNewChatEachTurn();
-        console.error("[copilot:describe] wantNewChat=", wantNewChat, "RELAY_COPILOT_NEW_CHAT_EACH_TURN=", envEach ? "on" : "off", "relayNewChat=", options.relayNewChat === true);
+        console.error(
+          "[copilot:describe] wantNewChat=",
+          wantNewChat,
+          "initialized=",
+          relaySession.initialized,
+          "RELAY_COPILOT_NEW_CHAT_EACH_TURN=",
+          envEach ? "on" : "off",
+          "relayNewChat=",
+          params.relayNewChat === true,
+          "relaySessionId=",
+          relaySessionId,
+        );
         if (wantNewChat) {
           console.error("[copilot:describe] starting new chat...");
           const newChatOk = await clickNewChatDeep(pageSession);
@@ -588,29 +779,38 @@ class CopilotSession {
             await pageSession.click(NEW_CHAT_BUTTON_SELECTORS[0]).catch(() => {});
           }
           await sleep(1600);
+          relaySession.initialized = true;
         } else {
           console.error("[copilot:describe] continuing in current Copilot thread (no new chat click)");
           await sleep(500);
         }
 
-        const upload = await uploadCopilotAttachments(pageSession, attachmentPaths, imageB64);
+        const upload = await uploadCopilotAttachments(pageSession, params.attachmentPaths || [], params.imageB64);
         attachmentTempFiles = upload.tempFiles;
         hadAttachments = upload.hadAttachments;
 
         console.error("[copilot:describe] pasting prompt...");
-        const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${userPrompt}` : userPrompt;
+        const fullPrompt = params.systemPrompt ? `${params.systemPrompt}\n\n${params.userPrompt}` : params.userPrompt;
         await pastePromptRaw(pageSession, fullPrompt);
 
         console.error("[copilot:describe] submitting prompt...");
         return await submitPromptRaw(pageSession, fullPrompt.length, netCapture, {
           hadAttachments,
-          abortCheck: () => this.abortDescribe,
+          abortCheck: () => requestState.aborted === true,
         });
       } finally {
         await netCapture.disable().catch(() => {});
       }
+    } catch (error) {
+      if (requestState.aborted || error?.message === "relay_copilot_aborted") {
+        throw new Error("relay_copilot_aborted");
+      }
+      if (error instanceof CopilotLoginRequiredError) {
+        throw error;
+      }
+      this._invalidateRelaySession(relaySession, error?.message || String(error));
+      throw error;
     } finally {
-      this.abortDescribe = false;
       for (const tf of attachmentTempFiles) {
         setTimeout(() => {
           fs.promises.unlink(tf).catch(() => {});
@@ -3414,6 +3614,30 @@ function findEdgePath() {
 
 /* ─── HTTP server ─── */
 
+function requireBridgeAuth(req, res) {
+  if (!globalOptions.bootToken) return true;
+  const header = req.headers["x-relay-boot-token"];
+  const token = Array.isArray(header) ? header[0] : header;
+  if (token === globalOptions.bootToken) return true;
+  writeJson(res, 401, { error: "unauthorized" });
+  return false;
+}
+
+function responseRecordFromError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error("[copilot] request failed:", error);
+  if (error instanceof CopilotLoginRequiredError) {
+    return { status: 401, body: { error: "login_required", message } };
+  }
+  if (message === "relay_copilot_aborted") {
+    return { status: 499, body: { error: "relay_copilot_aborted" } };
+  }
+  if (/\bis required\b/i.test(message) || /User prompt is empty/i.test(message)) {
+    return { status: 400, body: { error: message } };
+  }
+  return { status: 500, body: { error: message } };
+}
+
 function createServer(session) {
   return http.createServer(async (req, res) => {
     try {
@@ -3424,15 +3648,24 @@ function createServer(session) {
       }
       const reqUrl = new URL(req.url ?? "/", "http://127.0.0.1");
       if (req.method === "GET" && reqUrl.pathname === "/status") {
+        if (!requireBridgeAuth(req, res)) return;
         const status = await session.inspectStatus();
         return writeJson(res, 200, status);
       }
       if (req.method === "POST" && reqUrl.pathname === "/v1/chat/abort") {
-        session.abortDescribe = true;
-        console.error("[copilot:http] POST /v1/chat/abort — abortDescribe set");
-        return writeJson(res, 200, { ok: true, aborted: true });
+        if (!requireBridgeAuth(req, res)) return;
+        const payload = await readJsonBody(req);
+        const relaySessionId = String(payload.relay_session_id || "").trim();
+        const relayRequestId = String(payload.relay_request_id || "").trim();
+        if (!relaySessionId || !relayRequestId) {
+          return writeJson(res, 400, { error: "relay_session_id and relay_request_id are required" });
+        }
+        const aborted = session.abortRequest(relaySessionId, relayRequestId);
+        console.error("[copilot:http] POST /v1/chat/abort relaySessionId=", relaySessionId, "relayRequestId=", relayRequestId, "aborted=", aborted);
+        return writeJson(res, 200, { ok: true, aborted });
       }
       if (req.method === "POST" && reqUrl.pathname === "/v1/chat/completions") {
+        if (!requireBridgeAuth(req, res)) return;
         const payload = await readJsonBody(req);
         const prompt = parseOpenAiRequest(payload);
         console.error(
@@ -3440,29 +3673,18 @@ function createServer(session) {
           (prompt.userPrompt || "").length,
           "system_chars=",
           (prompt.systemPrompt || "").length,
+          "relay_session_id=",
+          prompt.relaySessionId,
+          "relay_request_id=",
+          prompt.relayRequestId,
         );
-        const description = await session.describe(
-          prompt.systemPrompt,
-          prompt.userPrompt,
-          prompt.imageB64,
-          prompt.attachmentPaths,
-          { relayNewChat: prompt.relayNewChat },
-        );
-        return writeJson(res, 200, {
-          choices: [{ message: { role: "assistant", content: description } }]
-        });
+        const record = await session.startOrJoinDescribe(prompt);
+        return writeJson(res, record.status, record.body);
       }
       return writeJson(res, 404, { error: "Not found" });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("[copilot] request failed:", error);
-      if (error instanceof CopilotLoginRequiredError) {
-        return writeJson(res, 401, { error: "login_required", message });
-      }
-      if (message === "relay_copilot_aborted") {
-        return writeJson(res, 499, { error: "relay_copilot_aborted" });
-      }
-      return writeJson(res, 500, { error: message });
+      const record = responseRecordFromError(error);
+      return writeJson(res, record.status, record.body);
     }
   });
 }
@@ -3499,8 +3721,12 @@ function parseOpenAiRequest(payload) {
   const ra = payload.relay_attachments;
   const attachmentPaths = Array.isArray(ra) ? ra.map((x) => String(x || "").trim()).filter(Boolean) : [];
   if (!userPrompt.trim()) throw new Error("User prompt is empty");
+  const relaySessionId = String(payload.relay_session_id || "").trim();
+  const relayRequestId = String(payload.relay_request_id || "").trim();
+  if (!relaySessionId) throw new Error("relay_session_id is required");
+  if (!relayRequestId) throw new Error("relay_request_id is required");
   const relayNewChat = payload.relay_new_chat === true;
-  return { systemPrompt, userPrompt, imageB64, attachmentPaths, relayNewChat };
+  return { systemPrompt, userPrompt, imageB64, attachmentPaths, relayNewChat, relaySessionId, relayRequestId };
 }
 
 function extractBase64(url) { const m = url.match(/^data:[^;]+;base64,(.+)$/); return m ? m[1] : url; }

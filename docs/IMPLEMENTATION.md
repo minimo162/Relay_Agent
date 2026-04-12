@@ -4830,3 +4830,26 @@ Observed result:
 - `cargo test -p runtime` passed (`117 passed; 0 failed`).
 - `cargo clippy -p runtime -- -D warnings` passed.
 - `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace -- -D warnings` is still blocked in this container because Linux desktop build dependencies are missing (`glib-2.0` / `gobject-2.0` development packages via `pkg-config`), so full-workspace clippy could not complete here.
+
+M365 Copilot bridge hardening: session/request isolation + direct CDP strictness (2026-04-12):
+
+```bash
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+node --check apps/desktop/src-tauri/binaries/copilot_server.js
+pnpm --filter @relay-agent/desktop typecheck
+timeout 120 pnpm --filter @relay-agent/desktop test:e2e:m365-cdp
+```
+
+Observed result:
+
+- [`apps/desktop/src-tauri/binaries/copilot_server.js`](../apps/desktop/src-tauri/binaries/copilot_server.js) no longer uses one global Copilot conversation state. The bridge now keeps a Relay-session map (`relay_session_id -> dedicated tab/thread`), queues requests globally but tracks them per `relay_request_id`, joins duplicate retries idempotently, and aborts only the targeted request. First use or lost-tab recovery forces a new Copilot chat once for that Relay session.
+- Mutable bridge endpoints now require the same boot token used by `/health`: `GET /status`, `POST /v1/chat/completions`, and `POST /v1/chat/abort` reject requests without `X-Relay-Boot-Token`. Chat payloads now require `relay_session_id` and `relay_request_id`.
+- [`apps/desktop/src-tauri/src/copilot_server.rs`](../apps/desktop/src-tauri/src/copilot_server.rs), [`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs), [`apps/desktop/src-tauri/src/tauri_bridge.rs`](../apps/desktop/src-tauri/src/tauri_bridge.rs), and [`apps/desktop/src-tauri/src/registry.rs`](../apps/desktop/src-tauri/src/registry.rs) now propagate session/request ids through the Rust agent loop, store the current in-flight Copilot request per Relay session, reuse the same request id on retry, and send request-scoped aborts during `cancel_agent`.
+- [`apps/desktop/src-tauri/src/cdp_copilot.rs`](../apps/desktop/src-tauri/src/cdp_copilot.rs) now rejects non-Relay / non-Edge CDP endpoints for direct helper attach, removes the permissive “fall back to any tab and call it connected” behavior, and exposes the spawned browser PID so [`disconnect_cdp`](../apps/desktop/src-tauri/src/tauri_bridge.rs) kills only that process instead of any process matching `RelayAgentEdgeProfile`.
+- [`apps/desktop/tests/copilot-server-http.ts`](../apps/desktop/tests/copilot-server-http.ts) now sends `relay_session_id`, generated `relay_request_id`, and optional `COPILOT_SERVER_BOOT_TOKEN` so direct bridge tests match the hardened HTTP contract.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` passed (`96 passed; 0 failed`), including new unit coverage for strict Edge-vs-Chrome CDP detection.
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.js` passed.
+- `pnpm --filter @relay-agent/desktop typecheck` passed.
+- `timeout 120 pnpm --filter @relay-agent/desktop test:e2e:m365-cdp` failed in this container before exercising the hardened path because no live `copilot_server.js` + signed-in Edge/CDP environment was running on `http://127.0.0.1:18080` / `CDP_ENDPOINT=http://127.0.0.1:9333` (`GET /status` precondition failed with `fetch failed`).

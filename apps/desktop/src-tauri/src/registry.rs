@@ -50,6 +50,8 @@ pub struct SessionState {
     pub last_error_summary: Option<String>,
     /// True once a terminal `agent:status` idle event has been emitted for the current epoch.
     pub terminal_status_emitted: bool,
+    /// In-flight Copilot bridge request bound to this Relay session, if any.
+    pub current_copilot_request_id: Option<String>,
 }
 
 impl SessionState {
@@ -67,6 +69,7 @@ impl SessionState {
             retry_count: 0,
             last_error_summary: None,
             terminal_status_emitted: false,
+            current_copilot_request_id: None,
         }
     }
 
@@ -85,6 +88,7 @@ impl SessionState {
         self.running = false;
         self.run_state = SessionRunState::Finished;
         self.cancelled.store(true, Ordering::SeqCst);
+        self.current_copilot_request_id = None;
         if self.finished_at.is_none() {
             self.finished_at = Some(Utc::now().timestamp());
         }
@@ -416,17 +420,11 @@ mod tests {
     fn remove_stale_sessions_only_evicts_expired_finished_sessions() {
         let registry = SessionRegistry::new();
 
-        let mut stale = SessionState::new(
-            RuntimeSession::new(),
-            PersistedSessionConfig::default(),
-        );
+        let mut stale = SessionState::new(RuntimeSession::new(), PersistedSessionConfig::default());
         stale.mark_finished();
         stale.finished_at = Some(Utc::now().timestamp() - 120);
 
-        let mut fresh = SessionState::new(
-            RuntimeSession::new(),
-            PersistedSessionConfig::default(),
-        );
+        let mut fresh = SessionState::new(RuntimeSession::new(), PersistedSessionConfig::default());
         fresh.mark_finished();
         fresh.finished_at = Some(Utc::now().timestamp());
 

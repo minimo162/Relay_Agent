@@ -92,6 +92,67 @@ async fn cdp_http_ready(debug_url: &str) -> bool {
     )
 }
 
+async fn fetch_cdp_version(debug_url: &str) -> Option<Value> {
+    let response = reqwest::get(format!("{debug_url}/json/version"))
+        .await
+        .ok()?;
+    response.json::<Value>().await.ok()
+}
+
+fn cdp_version_looks_like_edge(info: &Value) -> bool {
+    let browser = info
+        .get("Browser")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_lowercase();
+    let user_agent = info
+        .get("User-Agent")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_lowercase();
+    let combined = format!("{browser} {user_agent}");
+    if combined.contains("edg") || combined.contains("microsoft edge") {
+        return true;
+    }
+    if combined.contains("google chrome") {
+        return false;
+    }
+    !combined.contains("chrome/") || combined.contains("edg")
+}
+
+fn cdp_definitely_google_chrome_only(info: &Value) -> bool {
+    let browser = info
+        .get("Browser")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_lowercase();
+    let user_agent = info
+        .get("User-Agent")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_lowercase();
+    let combined = format!("{browser} {user_agent}");
+    if combined.contains("edg") || combined.contains("microsoft edge") {
+        return false;
+    }
+    combined.contains("google chrome") || combined.contains("chrome/")
+}
+
+fn cdp_dedicated_relay_profile_ok(info: &Value) -> bool {
+    if cdp_version_looks_like_edge(info) {
+        return true;
+    }
+    info.get("webSocketDebuggerUrl")
+        .and_then(Value::as_str)
+        .is_some_and(|_| !cdp_definitely_google_chrome_only(info))
+}
+
+async fn cdp_http_ready_relay_dedicated(debug_url: &str) -> bool {
+    fetch_cdp_version(debug_url)
+        .await
+        .is_some_and(|info| cdp_dedicated_relay_profile_ok(&info))
+}
+
 /// Same relative path as `copilot_server.js` `RELAY_CDP_PORT_MARKER` under the Edge profile dir.
 const RELAY_CDP_PORT_MARKER: &str = ".relay-agent-cdp-port";
 
@@ -113,14 +174,14 @@ pub async fn resolve_cdp_attachment_port(preferred: u16) -> u16 {
     let profile_dir = relay_agent_edge_profile_dir();
     if let Some(p) = read_relay_cdp_port_marker(&profile_dir) {
         let url = format!("http://127.0.0.1:{p}");
-        if cdp_http_ready(&url).await {
+        if cdp_http_ready_relay_dedicated(&url).await {
             info!("[CDP] resolve_cdp_attachment_port: using marker port {p}");
             return p;
         }
     }
     if let Some(p) = read_devtools_active_port(&profile_dir) {
         let url = format!("http://127.0.0.1:{p}");
-        if cdp_http_ready(&url).await {
+        if cdp_http_ready_relay_dedicated(&url).await {
             info!("[CDP] resolve_cdp_attachment_port: using DevToolsActivePort {p}");
             return p;
         }
@@ -166,6 +227,29 @@ mod attachment_port_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("DevToolsActivePort"), "9444\nsecond\n").unwrap();
         assert_eq!(read_devtools_active_port(dir.path()), Some(9444));
+    }
+
+    #[test]
+    fn cdp_version_edge_detection_prefers_edge_markers() {
+        let info = json!({
+            "Browser": "Chrome/136.0.0.0",
+            "User-Agent": "Mozilla/5.0 Edg/136.0.0.0",
+            "webSocketDebuggerUrl": "ws://127.0.0.1/devtools/browser/1"
+        });
+        assert!(cdp_version_looks_like_edge(&info));
+        assert!(cdp_dedicated_relay_profile_ok(&info));
+    }
+
+    #[test]
+    fn cdp_version_rejects_stock_google_chrome() {
+        let info = json!({
+            "Browser": "Google Chrome/136.0.0.0",
+            "User-Agent": "Mozilla/5.0 Chrome/136.0.0.0",
+            "webSocketDebuggerUrl": "ws://127.0.0.1/devtools/browser/1"
+        });
+        assert!(!cdp_version_looks_like_edge(&info));
+        assert!(cdp_definitely_google_chrome_only(&info));
+        assert!(!cdp_dedicated_relay_profile_ok(&info));
     }
 }
 
@@ -906,6 +990,10 @@ pub struct ConnectionResult {
 }
 
 impl ConnectionResult {
+    pub fn edge_process_id(&self) -> Option<u32> {
+        self.edge_process.as_ref().map(Child::id)
+    }
+
     /// Quit the Edge process if it was launched by this connection.
     /// Safe to call multiple times; subsequent calls are no-ops.
     pub fn quit_edge(&mut self) {
@@ -942,6 +1030,33 @@ pub fn disconnect_copilot_page(result: ConnectionResult) {
     info!("[CDP] Disconnected from {:?}", debug_url);
 }
 
+async fn debug_url_matches_relay_profile(debug_url: &str) -> bool {
+    let Some(port) = parse_port(debug_url) else {
+        return false;
+    };
+    let profile_dir = relay_agent_edge_profile_dir();
+    let marker_ok = read_relay_cdp_port_marker(&profile_dir).is_some_and(|p| p == port);
+    let devtools_ok = read_devtools_active_port(&profile_dir).is_some_and(|p| p == port);
+    (marker_ok || devtools_ok) && cdp_http_ready_relay_dedicated(debug_url).await
+}
+
+async fn navigate_page_to_copilot(debug_url: &str, page: &PageInfo) -> Result<PageInfo> {
+    let page_ctx = Ctx::connect(&page.ws_url).await?;
+    let result = page_ctx
+        .send(
+            "Page.navigate",
+            json!({ "url": "https://m365.cloud.microsoft/chat" }),
+        )
+        .await;
+    info!("[CDP] Page.navigate result: {:?}", result);
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    let pages = list_pages(debug_url).await.unwrap_or_default();
+    pages
+        .into_iter()
+        .find(|p| p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat)))
+        .context("Copilot URL did not resolve after navigation")
+}
+
 /// Connect to a Copilot page, auto-launching Edge if needed.
 pub async fn connect_copilot_page(
     debug_url: &str,
@@ -949,6 +1064,12 @@ pub async fn connect_copilot_page(
     _base_port: u16,
 ) -> Result<ConnectionResult> {
     if !auto_launch {
+        if !debug_url_matches_relay_profile(debug_url).await {
+            bail!(
+                "CDP endpoint {debug_url} is not the Relay dedicated Edge profile. \
+                 Use Relay's marker/DevToolsActivePort-backed endpoint or enable auto_launch."
+            );
+        }
         if let Some(p) = try_existing(debug_url).await {
             return p;
         }
@@ -964,14 +1085,14 @@ pub async fn connect_copilot_page(
     let (debug_url_new, child, launched) = if let Some(p) = read_devtools_active_port(&profile_dir)
     {
         let url = format!("http://127.0.0.1:{p}");
-        let reuse_existing = if cdp_http_ready(&url).await {
+        let reuse_existing = if cdp_http_ready_relay_dedicated(&url).await {
             true
         } else {
             info!(
                     "[CDP] DevToolsActivePort on {} but CDP not up yet — waiting before any new launch…",
                     p
                 );
-            wait_for_cdp_ready(&url, 30).await.is_ok()
+            wait_for_cdp_ready(&url, 30).await.is_ok() && cdp_http_ready_relay_dedicated(&url).await
         };
 
         if reuse_existing {
@@ -1052,21 +1173,9 @@ pub async fn connect_copilot_page(
                 "[CDP] Navigating existing tab to Copilot (was: {})",
                 first_page.url
             );
-            let page_ctx = Ctx::connect(&first_page.ws_url).await?;
-            let result = page_ctx
-                .send(
-                    "Page.navigate",
-                    json!({ "url": "https://m365.cloud.microsoft/chat" }),
-                )
-                .await;
-            info!("[CDP] Page.navigate result: {:?}", result);
-            tokio::time::sleep(Duration::from_secs(10)).await;
-
-            // Re-check if navigation succeeded
-            let pages2 = list_pages(&debug_url_new).await.unwrap_or_default();
-            copilot_page = pages2.into_iter().find(|p| {
-                p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat))
-            });
+            copilot_page = navigate_page_to_copilot(&debug_url_new, first_page)
+                .await
+                .ok();
         }
     }
 
@@ -1089,24 +1198,6 @@ pub async fn connect_copilot_page(
         copilot_page = pages3.into_iter().find(|p| {
             p.kind == "page" && COPILOT_URL_PATTERNS.iter().any(|pat| p.url.contains(pat))
         });
-    }
-
-    // Last resort: use any available page even if not Copilot URL
-    if copilot_page.is_none() {
-        warn!("[CDP] No Copilot tab found, falling back to first available page");
-        let pages4 = list_pages(&debug_url_new).await.unwrap_or_default();
-        if let Some(first) = pages4.into_iter().find(|p| p.kind == "page") {
-            // Navigate it to Copilot URL
-            let page_ctx = Ctx::connect(&first.ws_url).await?;
-            let _ = page_ctx
-                .send(
-                    "Page.navigate",
-                    json!({ "url": "https://m365.cloud.microsoft/chat" }),
-                )
-                .await;
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            copilot_page = Some(first);
-        }
     }
 
     let copilot_page = copilot_page.context("no Copilot tab found after all attempts")?;
@@ -1152,31 +1243,34 @@ async fn try_existing(debug_url: &str) -> Option<Result<ConnectionResult>> {
         }));
     }
 
-    // Check if the browser is reachable at all
-    if reqwest::get(&format!("{debug_url}/json/version"))
-        .await
-        .is_ok()
-    {
-        // Browser is up but no Copilot page — use any page
-        if let Ok(pages) = list_pages(debug_url).await {
-            if let Some(first) = pages.iter().find(|p| p.kind == "page") {
-                warn!(
-                    "[CDP] No Copilot page found, falling back to tab: {}",
-                    first.url
-                );
-                return Some(Ok(ConnectionResult {
-                    page: CopilotPage {
-                        debug_url: debug_url.into(),
-                        ws_url: first.ws_url.clone(),
-                        resolved_ws: Arc::new(AsyncMutex::new(None)),
-                        url: first.url.clone(),
-                        title: first.title.clone(),
-                    },
-                    port: parse_port(debug_url).unwrap_or(9360),
-                    launched: false,
-                    edge_process: None,
-                }));
-            }
+    if !cdp_http_ready_relay_dedicated(debug_url).await {
+        return Some(Err(anyhow::anyhow!(
+            "CDP endpoint {debug_url} is reachable but is not Relay's dedicated Edge profile"
+        )));
+    }
+
+    if let Ok(pages) = list_pages(debug_url).await {
+        if let Some(first) = pages.iter().find(|p| p.kind == "page") {
+            warn!(
+                "[CDP] No Copilot page found, attempting navigation in existing Relay tab: {}",
+                first.url
+            );
+            return Some(
+                navigate_page_to_copilot(debug_url, first)
+                    .await
+                    .map(|page| ConnectionResult {
+                        page: CopilotPage {
+                            debug_url: debug_url.into(),
+                            ws_url: page.ws_url.clone(),
+                            resolved_ws: Arc::new(AsyncMutex::new(None)),
+                            url: page.url.clone(),
+                            title: page.title.clone(),
+                        },
+                        port: parse_port(debug_url).unwrap_or(9360),
+                        launched: false,
+                        edge_process: None,
+                    }),
+            );
         }
     }
 

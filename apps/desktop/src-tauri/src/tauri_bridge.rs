@@ -22,9 +22,8 @@ use crate::models::{
     ListWorkspaceSlashCommandsRequest, McpAddServerRequest, McpServerInfo, RelayDiagnostics,
     RespondAgentApprovalRequest, RespondUserQuestionRequest, RustAnalyzerProbeRequest,
     RustAnalyzerProbeResponse, SessionWriteUndoRequest, SessionWriteUndoStatusResponse,
-    StartAgentRequest,
-    WorkspaceAllowlistCwdRequest, WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
-    WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
+    StartAgentRequest, WorkspaceAllowlistCwdRequest, WorkspaceAllowlistRemoveToolRequest,
+    WorkspaceAllowlistSnapshot, WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
 };
 use crate::registry::{SessionHandle, SessionRegistry, SessionRunState, SessionState};
 use runtime::MAX_TEXT_FILE_READ_BYTES;
@@ -36,24 +35,36 @@ use runtime::MAX_TEXT_FILE_READ_BYTES;
  * `agent-browser` install. See `agent_browser_daemon.rs` for   *
  * an optional alternate approach.                               */
 
-/// Notify the Node `copilot_server.js` bridge to abort an in-flight `describe` wait loop (best-effort).
-async fn request_copilot_bridge_abort(bridge: Arc<CopilotBridgeManager>) {
-    let Some(url) = bridge.lock().ok().and_then(|g| {
+/// Notify the Node `copilot_server.js` bridge to abort an in-flight request (best-effort).
+async fn request_copilot_bridge_abort(
+    bridge: Arc<CopilotBridgeManager>,
+    relay_session_id: &str,
+    relay_request_id: &str,
+) {
+    let Some((url, boot_token)) = bridge.lock().ok().and_then(|g| {
         g.as_ref().and_then(|st| {
-            st.server
-                .lock()
-                .ok()
-                .map(|srv| format!("{}/v1/chat/abort", srv.server_url()))
+            st.server.lock().ok().map(|srv| {
+                (
+                    format!("{}/v1/chat/abort", srv.server_url()),
+                    srv.boot_token().map(str::to_string),
+                )
+            })
         })
     }) else {
         return;
     };
-    match reqwest::Client::new()
+    let client = reqwest::Client::new();
+    let mut request = client
         .post(url)
         .timeout(Duration::from_secs(5))
-        .send()
-        .await
-    {
+        .json(&serde_json::json!({
+            "relay_session_id": relay_session_id,
+            "relay_request_id": relay_request_id,
+        }));
+    if let Some(token) = boot_token {
+        request = request.header("X-Relay-Boot-Token", token);
+    }
+    match request.send().await {
         Ok(resp) => tracing::info!(
             "[RelayAgent] copilot bridge abort POST status={}",
             resp.status()
@@ -242,13 +253,13 @@ use crate::agent_loop::{msg_to_relay, run_agent_loop_impl};
 use crate::agent_loop::{AgentSessionPhase, E_ERROR, E_STATUS};
 
 fn normalize_optional_string(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
+    value
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
 }
 
-fn start_request_session_config(
-    request: &StartAgentRequest,
-    goal: &str,
-) -> PersistedSessionConfig {
+fn start_request_session_config(request: &StartAgentRequest, goal: &str) -> PersistedSessionConfig {
     PersistedSessionConfig {
         goal: Some(goal.to_string()),
         cwd: normalize_optional_string(request.cwd.as_deref()),
@@ -309,14 +320,7 @@ fn ensure_loaded_session_handle(
 fn prepare_session_continuation(
     handle: &SessionHandle,
     fallback_message: &str,
-) -> Result<
-    (
-        runtime::Session,
-        PersistedSessionConfig,
-        Arc<AtomicBool>,
-    ),
-    String,
-> {
+) -> Result<(runtime::Session, PersistedSessionConfig, Arc<AtomicBool>), String> {
     handle
         .write_state(|state| -> Result<_, String> {
             if state.running && !state.cancelled.load(Ordering::SeqCst) {
@@ -340,6 +344,7 @@ fn prepare_session_continuation(
             state.last_stop_reason = None;
             state.last_error_summary = None;
             state.terminal_status_emitted = false;
+            state.current_copilot_request_id = None;
 
             Ok((
                 state.session.clone(),
@@ -727,13 +732,22 @@ pub async fn cancel_agent(
         }
     }
 
-    request_copilot_bridge_abort(bridge).await;
+    let current_request_id = registry
+        .get_session(&request.session_id, |state| {
+            state.current_copilot_request_id.clone()
+        })
+        .map_err(|e| e.to_string())?
+        .flatten();
+    if let Some(request_id) = current_request_id.as_deref() {
+        request_copilot_bridge_abort(bridge, &request.session_id, request_id).await;
+    }
 
     if should_emit_status {
         if let Ok(Some(handle)) = registry.get_handle(&request.session_id) {
             let _ignore = handle.write_state(|state| {
                 state.run_state = SessionRunState::Finished;
                 state.terminal_status_emitted = true;
+                state.current_copilot_request_id = None;
             });
         }
         let idle = AgentSessionStatusEvent {
@@ -860,6 +874,8 @@ struct CdpSessionState {
     cdp_port: Option<u16>,
     /// True if this app spawned Edge for this profile (disconnect may kill it).
     owns_browser: bool,
+    /// PID of the browser process launched by this app, if tracked.
+    browser_pid: Option<u32>,
     /// Whether the frontend currently has an active CDP connection.
     connected: bool,
     /// URL of the Copilot page (if connected).
@@ -875,6 +891,7 @@ fn cdp_session() -> &'static Mutex<CdpSessionState> {
         Mutex::new(CdpSessionState {
             cdp_port: None,
             owns_browser: false,
+            browser_pid: None,
             connected: false,
             page_url: None,
             page: None,
@@ -905,12 +922,14 @@ fn cdp_is_connected() -> bool {
 fn set_cdp_session_connected(
     port: u16,
     owns_browser: bool,
+    browser_pid: Option<u32>,
     page_url: String,
     page: cdp_copilot::CopilotPage,
 ) {
     if let Ok(mut state) = cdp_session().lock() {
         state.cdp_port = Some(port);
         state.owns_browser = owns_browser;
+        state.browser_pid = browser_pid;
         state.connected = true;
         state.page_url = Some(page_url);
         state.page = Some(page);
@@ -923,6 +942,7 @@ fn mark_cdp_disconnected() {
     if let Ok(mut state) = cdp_session().lock() {
         state.cdp_port = None;
         state.owns_browser = false;
+        state.browser_pid = None;
         state.connected = false;
         state.page_url = None;
         state.page = None;
@@ -983,7 +1003,13 @@ pub fn ensure_cdp_connected() -> Result<cdp_copilot::CopilotPage, String> {
     let port = result.port;
     let page_url = result.page.url.clone();
 
-    set_cdp_session_connected(port, result.launched, page_url, page.clone());
+    set_cdp_session_connected(
+        port,
+        result.launched,
+        result.edge_process_id(),
+        page_url,
+        page.clone(),
+    );
 
     tracing::info!("[CDP] auto-connected to {}", page.url);
     // ConnectionResult dropped here; its Edge process ownership is no longer needed
@@ -1088,6 +1114,7 @@ pub async fn connect_cdp(
             set_cdp_session_connected(
                 res.port,
                 res.launched,
+                res.edge_process_id(),
                 res.page.url.clone(),
                 res.page.clone(),
             );
@@ -1202,6 +1229,7 @@ pub async fn cdp_start_new_chat(
     set_cdp_session_connected(
         res.port,
         res.launched,
+        res.edge_process_id(),
         res.page.url.clone(),
         res.page.clone(),
     );
@@ -1235,7 +1263,7 @@ pub async fn disconnect_cdp(_app: AppHandle) -> Result<(), String> {
     // The ConnectionResult from a prior connect_copilot_page() call owns the Edge child
     // process, but since CDP commands are one-shot (open WS → send → close), we can
     // kill the process directly by port ownership.
-    let owns_browser = {
+    let (owns_browser, browser_pid) = {
         let state = cdp_session()
             .lock()
             .map_err(|e| format!("cdp_session lock poisoned: {e}"))?;
@@ -1246,7 +1274,7 @@ pub async fn disconnect_cdp(_app: AppHandle) -> Result<(), String> {
                 state.cdp_port
             );
         }
-        kill
+        (kill, state.browser_pid)
     };
 
     if owns_browser {
@@ -1254,34 +1282,20 @@ pub async fn disconnect_cdp(_app: AppHandle) -> Result<(), String> {
         {
             use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
-            let port_hint = cdp_session()
-                .lock()
-                .ok()
-                .and_then(|s| s.cdp_port)
-                .unwrap_or(0);
-            // Kill Edge processes that use our isolated profile directory
-            let _ = std::process::Command::new("taskkill")
-                .args(["/F", "/FI", &format!("WINDOWTITLE eq *{}*", port_hint)])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output();
-            let _ = std::process::Command::new("taskkill")
-                .args([
-                    "/F",
-                    "/IM",
-                    "msedge.exe",
-                    "/FI",
-                    &format!("CMDLINE eq *RelayAgentEdgeProfile*"),
-                ])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output();
+            if let Some(pid) = browser_pid {
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output();
+            }
         }
         #[cfg(not(target_os = "windows"))]
         {
-            // Match the actual profile directory name used in cdp_copilot.rs
-            let _ = std::process::Command::new("pkill")
-                .arg("-f")
-                .arg("RelayAgentEdgeProfile")
-                .output();
+            if let Some(pid) = browser_pid {
+                let _ = std::process::Command::new("kill")
+                    .args(["-TERM", &pid.to_string()])
+                    .output();
+            }
         }
     }
 
@@ -1546,8 +1560,12 @@ mod tests {
     #[test]
     fn prepare_session_continuation_reuses_history_and_goal() {
         let mut session = runtime::Session::new();
-        session.messages.push(ConversationMessage::user_text("Original task"));
-        session.messages.push(ConversationMessage::assistant(vec![]));
+        session
+            .messages
+            .push(ConversationMessage::user_text("Original task"));
+        session
+            .messages
+            .push(ConversationMessage::assistant(vec![]));
         let handle = SessionHandle::new(
             SessionState::new_idle(session.clone(), saved_session_config()),
             HashSet::new(),
@@ -1558,9 +1576,14 @@ mod tests {
 
         assert_eq!(loaded.messages.len(), session.messages.len());
         assert_eq!(config.goal.as_deref(), Some("Original task"));
-        assert_eq!(config.session_preset, Some(crate::models::SessionPreset::Plan));
+        assert_eq!(
+            config.session_preset,
+            Some(crate::models::SessionPreset::Plan)
+        );
         assert!(!cancelled.load(Ordering::SeqCst));
-        let running = handle.read_state(|state| state.running).expect("read state");
+        let running = handle
+            .read_state(|state| state.running)
+            .expect("read state");
         assert!(running);
     }
 
@@ -1583,7 +1606,9 @@ mod tests {
         std::env::set_var("HOME", temp.path());
 
         let mut session = runtime::Session::new();
-        session.messages.push(ConversationMessage::user_text("Persisted task"));
+        session
+            .messages
+            .push(ConversationMessage::user_text("Persisted task"));
         copilot_persistence::save_session("session-hydrated", &session, saved_session_config())
             .expect("save session");
 
@@ -1596,7 +1621,10 @@ mod tests {
 
         assert_eq!(message_count, 1);
         assert_eq!(config.goal.as_deref(), Some("Original task"));
-        assert_eq!(config.browser_settings.as_ref().map(|v| v.cdp_port), Some(9444));
+        assert_eq!(
+            config.browser_settings.as_ref().map(|v| v.cdp_port),
+            Some(9444)
+        );
 
         if let Some(home) = previous_home {
             std::env::set_var("HOME", home);

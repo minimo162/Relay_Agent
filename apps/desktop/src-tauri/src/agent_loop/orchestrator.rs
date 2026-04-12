@@ -834,6 +834,8 @@ pub fn run_agent_loop_impl(
             server,
             session_preset,
             Some((app.clone(), session_id.to_string())),
+            registry.clone(),
+            session_id.to_string(),
             timeout_secs_from_browser_settings(browser_settings.as_ref()),
         )
     };
@@ -1149,6 +1151,8 @@ pub struct CdpApiClient {
     session_preset: SessionPreset,
     /// When set, each Copilot reply emits `agent:text_delta` so the UI updates during tool loops.
     progress_emit: Option<(AppHandle, String)>,
+    registry: Option<SessionRegistry>,
+    session_id: Option<String>,
 }
 
 enum CdpApiClientSource {
@@ -1172,6 +1176,8 @@ impl CdpApiClient {
         server: std::sync::Arc<std::sync::Mutex<crate::copilot_server::CopilotServer>>,
         session_preset: SessionPreset,
         progress_emit: Option<(AppHandle, String)>,
+        registry: SessionRegistry,
+        session_id: String,
         response_timeout_secs: u64,
     ) -> Self {
         Self {
@@ -1179,6 +1185,8 @@ impl CdpApiClient {
             response_timeout_secs,
             session_preset,
             progress_emit,
+            registry: Some(registry),
+            session_id: Some(session_id),
         }
     }
 
@@ -1194,6 +1202,8 @@ impl CdpApiClient {
             response_timeout_secs,
             session_preset,
             progress_emit,
+            registry: None,
+            session_id: None,
         }
     }
 }
@@ -1317,14 +1327,47 @@ impl ApiClient for CdpApiClient {
 
         let response_text = match &mut self.source {
             CdpApiClientSource::Live(server) => {
-                let mut srv = server
-                    .lock()
-                    .map_err(|e| RuntimeError::new(format!("copilot server lock poisoned: {e}")))?;
-                rt.block_on(async {
-                    srv.send_prompt("", &prompt, self.response_timeout_secs, &[], false)
-                        .await
-                })
-                .map_err(|e| {
+                let request_id = Uuid::new_v4().to_string();
+                let clear_request_id = |registry: &Option<SessionRegistry>,
+                                        session_id: &Option<String>,
+                                        request_id: &str| {
+                    if let (Some(registry), Some(session_id)) = (registry, session_id.as_deref()) {
+                        let _ignore = registry.mutate_session(session_id, |entry| {
+                            if entry.current_copilot_request_id.as_deref() == Some(request_id) {
+                                entry.current_copilot_request_id = None;
+                            }
+                        });
+                    }
+                };
+                if let (Some(registry), Some(session_id)) =
+                    (&self.registry, self.session_id.as_deref())
+                {
+                    let _ignore = registry.mutate_session(session_id, |entry| {
+                        entry.current_copilot_request_id = Some(request_id.clone());
+                    });
+                }
+                let mut srv = server.lock().map_err(|e| {
+                    clear_request_id(&self.registry, &self.session_id, &request_id);
+                    RuntimeError::new(format!("copilot server lock poisoned: {e}"))
+                })?;
+                let session_id = self.session_id.as_deref().ok_or_else(|| {
+                    clear_request_id(&self.registry, &self.session_id, &request_id);
+                    RuntimeError::new("missing Relay session_id for Copilot request")
+                })?;
+                let result = rt.block_on(async {
+                    srv.send_prompt(
+                        session_id,
+                        &request_id,
+                        "",
+                        &prompt,
+                        self.response_timeout_secs,
+                        &[],
+                        false,
+                    )
+                    .await
+                });
+                clear_request_id(&self.registry, &self.session_id, &request_id);
+                result.map_err(|e| {
                     let es = e.to_string();
                     if es.contains("relay_copilot_aborted") {
                         RuntimeError::new("relay_copilot_aborted")

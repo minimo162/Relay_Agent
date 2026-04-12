@@ -116,6 +116,10 @@ impl CopilotServer {
         self.cdp_port
     }
 
+    pub fn boot_token(&self) -> Option<&str> {
+        self.boot_token.as_deref()
+    }
+
     /// Update CDP port before a restart (`stop` + `start`); does not affect the HTTP listen port.
     pub fn set_cdp_port(&mut self, port: u16) {
         self.cdp_port = port;
@@ -335,13 +339,14 @@ impl CopilotServer {
         &self,
         timeout_secs: u64,
     ) -> Result<CopilotStatusResponse, CopilotError> {
-        let response = self
+        let mut request = self
             .client
             .get(format!("{}/status", self.server_url()))
-            .timeout(Duration::from_secs(timeout_secs))
-            .send()
-            .await
-            .map_err(CopilotError::Http)?;
+            .timeout(Duration::from_secs(timeout_secs));
+        if let Some(token) = &self.boot_token {
+            request = request.header("X-Relay-Boot-Token", token);
+        }
+        let response = request.send().await.map_err(CopilotError::Http)?;
 
         if response.status().is_success() {
             response
@@ -370,6 +375,8 @@ impl CopilotServer {
 
     async fn send_prompt_once(
         &self,
+        relay_session_id: &str,
+        relay_request_id: &str,
         system_prompt: &str,
         user_prompt: &str,
         timeout_secs: u64,
@@ -391,7 +398,9 @@ impl CopilotServer {
             "messages": [
                 { "role": "system", "content": system_prompt },
                 { "role": "user", "content": user_prompt }
-            ]
+            ],
+            "relay_session_id": relay_session_id,
+            "relay_request_id": relay_request_id,
         });
         if !attachment_paths.is_empty() {
             body["relay_attachments"] = json!(attachment_paths);
@@ -399,17 +408,18 @@ impl CopilotServer {
         if new_chat {
             body["relay_new_chat"] = json!(true);
         }
-        let response = self
+        let mut request = self
             .client
             .post(url)
             .json(&body)
-            .timeout(Duration::from_secs(timeout_secs))
-            .send()
-            .await
-            .map_err(|e| {
-                warn!("[copilot] POST failed after {:?}: {}", t0.elapsed(), e);
-                CopilotError::Http(e)
-            })?;
+            .timeout(Duration::from_secs(timeout_secs));
+        if let Some(token) = &self.boot_token {
+            request = request.header("X-Relay-Boot-Token", token);
+        }
+        let response = request.send().await.map_err(|e| {
+            warn!("[copilot] POST failed after {:?}: {}", t0.elapsed(), e);
+            CopilotError::Http(e)
+        })?;
 
         let status = response.status();
         info!(
@@ -458,6 +468,8 @@ impl CopilotServer {
     /// `new_chat`: when `true`, Node may click Copilot "new chat" before pasting (see `relay_new_chat` in `copilot_server.js`). Default agent path uses `false` so turns append to the current Copilot thread.
     pub async fn send_prompt(
         &mut self,
+        relay_session_id: &str,
+        relay_request_id: &str,
         system_prompt: &str,
         user_prompt: &str,
         timeout_secs: u64,
@@ -466,6 +478,8 @@ impl CopilotServer {
     ) -> Result<String, CopilotError> {
         match self
             .send_prompt_once(
+                relay_session_id,
+                relay_request_id,
                 system_prompt,
                 user_prompt,
                 timeout_secs,
@@ -481,6 +495,8 @@ impl CopilotServer {
                 );
                 self.start().await?;
                 self.send_prompt_once(
+                    relay_session_id,
+                    relay_request_id,
                     system_prompt,
                     user_prompt,
                     timeout_secs,
