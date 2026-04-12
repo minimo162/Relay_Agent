@@ -232,6 +232,7 @@ export function Composer(props: {
               disabled={props.disabled}
               class="ra-composer-input resize-none w-full"
               data-ra-composer-textarea=""
+              data-testid="composer-textarea"
             />
             <Show when={slashMode()}>
               {(m) => (
@@ -295,6 +296,8 @@ export function Composer(props: {
                 class="ra-composer-send"
                 disabled={!canSend()}
                 aria-label="Send"
+                data-ra-composer-send=""
+                data-testid="composer-send"
                 onClick={() => void send()}
               >
                 <SendArrowIcon />

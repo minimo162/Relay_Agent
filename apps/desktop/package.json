@@ -12,6 +12,8 @@
     "prep:liteparse-runner": "npm ci --omit=dev --prefix ./src-tauri/liteparse-runner",
     "prep:tauri-bundle": "npm run prep:bundled-node && npm run prep:liteparse-runner",
     "tauri:dev": "node ./scripts/prestart-relay-edge.mjs && tauri dev",
+    "tauri:dev:approve": "node ./scripts/dev-approve-latest.mjs",
+    "tauri:dev:send": "node ./scripts/dev-first-run-send.mjs",
     "tauri:dev:cdp": "node ./scripts/tauri-dev-cdp.mjs",
     "tauri:build": "tauri build",
     "launch:test": "node ./scripts/launch_tauri_smoke.mjs",

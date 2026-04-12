@@ -1,7 +1,8 @@
 /// <reference types="vite/client" />
 import { isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Show, createEffect, createMemo, createSignal, onMount, type JSX } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { truncatePromptPreview } from "../session/session-display";
 import {
   cancelAgent,
@@ -52,6 +53,17 @@ import { createSessionStore } from "./sessionStore";
 import { createApprovalStore } from "./approvalStore";
 import { useCopilotWarmup } from "./useCopilotWarmup";
 import { useAgentEvents } from "./useAgentEvents";
+
+const DEV_FIRST_RUN_SEND_EVENT = "relay:dev-first-run-send";
+const DEV_APPROVE_LATEST_EVENT = "relay:dev-approve-latest";
+
+type DevFirstRunSendPayload = {
+  text?: string;
+};
+
+type DevApprovalPayload = {
+  mode?: "once";
+};
 
 function workspaceSlashRowsToCommands(rows: WorkspaceSlashCommandRow[]): SlashCommand[] {
   return rows.map((row) => ({
@@ -137,6 +149,40 @@ export default function Shell(): JSX.Element {
     }
 
     runCopilotWarmup(true);
+  });
+
+  onMount(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let sendUnlisten: (() => void) | null = null;
+    let approveUnlisten: (() => void) | null = null;
+    void listen<DevFirstRunSendPayload>(DEV_FIRST_RUN_SEND_EVENT, (event) => {
+      const text = event.payload?.text?.trim();
+      if (!text) return;
+      void handleSend(text);
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      sendUnlisten = fn;
+    });
+    void listen<DevApprovalPayload>(DEV_APPROVE_LATEST_EVENT, () => {
+      const approval = approvals.approvals()[0];
+      if (!approval) return;
+      void handleApproveOnce(approval.approvalId);
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      approveUnlisten = fn;
+    });
+    onCleanup(() => {
+      disposed = true;
+      sendUnlisten?.();
+      approveUnlisten?.();
+    });
   });
 
   const sessionBusy = createMemo(() => sessions.activeSessionStatus().phase !== "idle");

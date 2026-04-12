@@ -9,6 +9,7 @@ mod config;
 mod copilot_persistence;
 mod copilot_port_reclaim;
 mod copilot_server;
+mod dev_control;
 mod error;
 mod ipc_codegen;
 mod liteparse_env;
@@ -63,6 +64,7 @@ pub fn run() {
         .setup(|app| {
             liteparse_env::apply(app);
             app.manage(AppServices::new());
+            dev_control::spawn(app.handle());
             agent_loop_smoke::spawn_if_configured(app.handle());
             Ok(())
         })

@@ -4971,3 +4971,37 @@ Observed result:
 - The ignored live probe still fails in `original`, but the prompt was materially reduced: the latest failure was `catalog_flavor=StandardMinimal`, `prompt_chars=12533`, `grounding_chars=404`, `system_chars=4893`, `message_chars=196`, `catalog_chars=7034` (`live-repair-original-c57e3e9e-5a17-4b2f-a957-0f7cd7b1208b`). This narrows the remaining live blocker beyond the prior 35k-catalog run.
 - Real `tauri:dev` validation improved: the app warmup now reaches `Ready` end-to-end in the XRDP session, and the first-run UI shows `Copilot signed in: Signed in` plus `CDP reachable: Reachable`. Tauri logs captured a full successful warmup trace (`request_id=4eb058c8-d9c5-42c3-96d9-3cab65b085df` and later `51236fb5-...`) through `ensure_server -> health_check -> status_request -> Ready`.
 - The remaining real-app blocker is now narrower than before: XRDP/X11 automation can focus and type into the real Tauri composer, but the final send action (`Ctrl+Enter`, Tab/Return, and direct send-button clicks via `xdotool`) did not dispatch a request from the real app window in this environment. No approval overlay appeared, no session log advanced, and `/root/Relay_Agent/tetris.html` was still absent at the end of the run.
+
+Dev send trigger + slimmer Standard original prompt + real app file creation (2026-04-13):
+
+```bash
+node --check apps/desktop/scripts/dev-first-run-send.mjs
+node --check apps/desktop/scripts/dev-approve-latest.mjs
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot_tool_tests::standard_minimal_system_prompt_is_short_and_goal_focused -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot_tool_tests::cdp_attempt_request_id_appends_attempt_index -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot_tool_tests::standard_catalog_retry_policy_widens_once_for_protocol_confusion -- --nocapture
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm --filter @relay-agent/desktop typecheck
+git diff --check
+DISPLAY=:10.0 XAUTHORITY=/root/.Xauthority pnpm --filter @relay-agent/desktop run tauri:dev
+pnpm --filter @relay-agent/desktop run tauri:dev:send -- "Create /root/Relay_Agent/tetris.html as a single-file HTML Tetris game. Use Relay local file tools to write the file in the workspace. Do not use Python, uploads, Pages, citations, or remote artifacts."
+pnpm --filter @relay-agent/desktop run tauri:dev:approve
+RELAY_LIVE_REPAIR_TIMEOUT_SECS=90 RELAY_LIVE_REPAIR_STAGE_TIMEOUT_SECS=90 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml loop_controller_tests::live_repair_probe_streams_original_and_both_repair_prompts -- --ignored --nocapture
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/dev_control.rs` now starts a debug-only localhost control server on `127.0.0.1:18411` and emits Tauri app events for `relay:dev-first-run-send` and `relay:dev-approve-latest`. This made XRDP validation deterministic without relying on pixel-perfect `xdotool` send clicks.
+- `apps/desktop/src/shell/Shell.tsx` now listens for those dev-only events and routes them through the real `handleSend` / `handleApproveOnce` paths, so first-run submission and approval still exercise the same app logic as a real UI click.
+- `apps/desktop/src/components/Composer.tsx` now exposes stable hooks on the real textarea and send button (`data-ra-composer-textarea`, `data-ra-composer-send`, plus `data-testid` values) for future app automation.
+- `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs` now gives the Standard original CDP send its own compact system/context flavor. The first Standard attempt keeps the same reduced local file catalog but now uses a much shorter system block that preserves only Relay/CDP tool protocol essentials, a compact task summary, and a capped workspace/system excerpt. Widen retries still fall back to the full Standard prompt/catalog once.
+- Standard CDP logging is now request-chain based. Each logical Standard request gets one parent chain id and per-attempt child ids (`... .1`, `... .2`) so logs show exactly whether a reply stayed on `StandardMinimal` or widened to `StandardFull`. The ignored live probe now uses the same request-chain / attempt structure in its timeout output.
+- Real `tauri:dev` validation succeeded end to end for the local file path:
+  - warmup reached `Ready`,
+  - `pnpm ... tauri:dev:send` created a real Relay session and sent the prompt through the app,
+  - Copilot returned duplicate `write_file` tool fences that the host deduped,
+  - `pnpm ... tauri:dev:approve` approved the pending `write_file`,
+  - the app executed the local file write and `/root/Relay_Agent/tetris.html` now exists.
+- The real-app run also narrowed the post-approval behavior. After approval, the loop continued into another Copilot turn with a much larger prompt (`request_chain=cdp-inline-e1f23985-...`, `chars=104671`, `message_chars=95461`) because the written file content/tool result was echoed back into the follow-up context. File creation succeeded, but the next optimization target is keeping that post-write continuation smaller.
+- The ignored live probe still times out in `original`, but with the new slimmer original prompt and request-chain logging the latest failure is now explicit: `request_chain=live-repair-original-f2646869-c0d5-421e-bd29-5010128ecba3`, `attempt=1`, `catalog_flavor=StandardMinimal`, `prompt_chars=9392`, `grounding_chars=404`, `system_chars=1752`, `message_chars=196`, `catalog_chars=7034`.

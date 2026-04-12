@@ -26,6 +26,8 @@ const CDP_TOOL_FENCE: &str = "```relay_tool";
 const CDP_INLINE_PROMPT_MAX_TOKENS: usize = 128_000;
 const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_TOTAL_CHARS: usize = 3_000;
 const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_FILE_CHARS: usize = 1_200;
+const CDP_STANDARD_MINIMAL_CONTEXT_MAX_CHARS: usize = 900;
+const CDP_STANDARD_MINIMAL_GOAL_MAX_CHARS: usize = 500;
 const CDP_REPAIR_TOOL_NAMES: &[&str] = &[
     "read_file",
     "write_file",
@@ -1559,8 +1561,12 @@ impl ApiClient for CdpApiClient {
             CdpPromptFlavor::Repair => CdpCatalogFlavor::Repair,
         };
         let mut widened_once = false;
+        let request_chain_id = cdp_request_chain_id("cdp-inline");
+        let mut attempt_index = 0_usize;
 
         loop {
+            attempt_index += 1;
+            let request_id = cdp_attempt_request_id(&request_chain_id, attempt_index);
             let (compacted_messages, estimated_tokens, removed_message_count) =
                 compact_request_messages_for_inline_cdp_with_flavor(
                     request,
@@ -1577,7 +1583,10 @@ impl ApiClient for CdpApiClient {
             );
             let prompt = prompt_bundle.prompt.clone();
             tracing::info!(
-                "[CdpApiClient] sending prompt inline (flavor={:?}, catalog_flavor={:?}, chars={}, est_tokens={}, compacted_removed_messages={}, grounding_chars={}, system_chars={}, message_chars={}, catalog_chars={})",
+                "[CdpApiClient] request_chain={} attempt={} request_id={} sending prompt inline (flavor={:?}, catalog_flavor={:?}, chars={}, est_tokens={}, compacted_removed_messages={}, grounding_chars={}, system_chars={}, message_chars={}, catalog_chars={})",
+                request_chain_id,
+                attempt_index,
+                request_id,
                 prompt_flavor,
                 prompt_bundle.catalog_flavor,
                 prompt_bundle.total_chars(),
@@ -1592,7 +1601,6 @@ impl ApiClient for CdpApiClient {
             let t0 = Instant::now();
             let response_text = match &mut self.source {
                 CdpApiClientSource::Live(server) => {
-                    let request_id = Uuid::new_v4().to_string();
                     let clear_request_id =
                         |registry: &Option<SessionRegistry>,
                          session_id: &Option<String>,
@@ -1650,10 +1658,14 @@ impl ApiClient for CdpApiClient {
             };
 
             tracing::info!(
-                "[CdpApiClient] response {} chars in {:?} (catalog_flavor={:?})",
+                "[CdpApiClient] request_chain={} attempt={} request_id={} response {} chars in {:?} (catalog_flavor={:?}, visible_excerpt={:?})",
+                request_chain_id,
+                attempt_index,
+                request_id,
                 response_text.len(),
                 t0.elapsed(),
-                catalog_flavor
+                catalog_flavor,
+                truncate_for_log(&response_text, 240)
             );
 
             let (mut visible_text, tool_calls) =
@@ -1674,7 +1686,9 @@ impl ApiClient for CdpApiClient {
                 widened_once = true;
                 catalog_flavor = CdpCatalogFlavor::StandardFull;
                 tracing::info!(
-                    "[CdpApiClient] widening Standard CDP catalog after tool-less/protocol-confused reply (session_preset={:?}, visible_excerpt={:?})",
+                    "[CdpApiClient] request_chain={} attempt={} widening Standard CDP catalog after tool-less/protocol-confused reply (session_preset={:?}, visible_excerpt={:?})",
+                    request_chain_id,
+                    attempt_index,
                     self.session_preset,
                     truncate_for_log(&visible_text, 240)
                 );
@@ -2057,6 +2071,59 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
         ),
         goal = goal.trim()
     )
+}
+
+fn truncate_for_prompt_chars(text: &str, max_chars: usize) -> String {
+    truncate_cdp_instruction_content(text, max_chars)
+}
+
+fn build_standard_minimal_cdp_system_prompt(
+    system_prompt: &[String],
+    messages: &[ConversationMessage],
+) -> String {
+    let goal = latest_user_text(messages)
+        .map(|text| truncate_for_prompt_chars(&text, CDP_STANDARD_MINIMAL_GOAL_MAX_CHARS))
+        .unwrap_or_default();
+    let context_summary = system_prompt
+        .iter()
+        .skip(2)
+        .map(|section| section.trim())
+        .filter(|section| !section.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let trimmed_context =
+        truncate_for_prompt_chars(&context_summary, CDP_STANDARD_MINIMAL_CONTEXT_MAX_CHARS);
+    let mut parts = vec![concat!(
+        "## Relay desktop CDP mode\n",
+        "You are Relay Agent in the desktop app using M365 Copilot over CDP.\n",
+        "Use Relay local workspace tools when the task needs file or search actions.\n",
+        "When a tool is needed, emit fenced `relay_tool` JSON in this reply.\n",
+        "Do not claim this Copilot chat cannot use tools; Relay executes parsed local tool calls.\n",
+        "Prefer `read_file` before edits unless the new file content is already fully known.\n",
+        "Stay inside the current workspace and avoid remote artifacts, Python, WebSearch, citations, or uploads for local file tasks."
+    )
+    .to_string()];
+    if !goal.is_empty() {
+        parts.push(format!(
+            "Current task summary:\n```text\n{}\n```",
+            goal.trim()
+        ));
+    }
+    if !trimmed_context.trim().is_empty() {
+        parts.push(format!(
+            "Compact workspace/system context:\n```text\n{}\n```",
+            trimmed_context.trim()
+        ));
+    }
+    parts.join("\n\n")
+}
+
+fn cdp_request_chain_id(prefix: &str) -> String {
+    format!("{prefix}-{}", Uuid::new_v4())
+}
+
+fn cdp_attempt_request_id(chain_id: &str, attempt_index: usize) -> String {
+    format!("{chain_id}.{attempt_index}")
 }
 
 fn cdp_tool_parse_mode(messages: &[ConversationMessage]) -> CdpToolParseMode {
@@ -2663,9 +2730,12 @@ fn build_cdp_prompt_bundle_from_messages(
 ) -> CdpPromptBundle {
     let grounding_text = CDP_BUNDLE_GROUNDING_BLOCK.to_string();
     let effective_messages = cdp_messages_for_flavor(messages, flavor);
-    let system_text = match flavor {
-        CdpPromptFlavor::Standard => system_prompt.join("\n\n"),
-        CdpPromptFlavor::Repair => build_repair_cdp_system_prompt(messages),
+    let system_text = match (flavor, catalog_flavor) {
+        (CdpPromptFlavor::Standard, CdpCatalogFlavor::StandardMinimal) => {
+            build_standard_minimal_cdp_system_prompt(system_prompt, messages)
+        }
+        (CdpPromptFlavor::Standard, _) => system_prompt.join("\n\n"),
+        (CdpPromptFlavor::Repair, _) => build_repair_cdp_system_prompt(messages),
     };
     let message_text = render_cdp_messages(&effective_messages);
     let catalog_text = cdp_tool_catalog_section_for_flavor(preset, flavor, catalog_flavor);
@@ -4077,6 +4147,39 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
+    fn standard_minimal_system_prompt_is_short_and_goal_focused() {
+        let system = vec![
+            "## Relay desktop runtime\nUse registered tools.".to_string(),
+            "## Relay desktop constraints\nPrefer read-only tools.".to_string(),
+            "# Workspace instructions\n".to_string() + &"A".repeat(1800),
+        ];
+        let messages = vec![ConversationMessage::user_text(
+            "Create /root/Relay_Agent/tetris.html as a single-file HTML Tetris game.".to_string(),
+        )];
+        let full = build_cdp_prompt_bundle_from_messages(
+            &system,
+            &messages,
+            SessionPreset::Build,
+            CdpPromptFlavor::Standard,
+            CdpCatalogFlavor::StandardFull,
+        );
+        let minimal = build_cdp_prompt_bundle_from_messages(
+            &system,
+            &messages,
+            SessionPreset::Build,
+            CdpPromptFlavor::Standard,
+            CdpCatalogFlavor::StandardMinimal,
+        );
+
+        assert!(minimal.system_text.contains("## Relay desktop CDP mode"));
+        assert!(minimal.system_text.contains("tetris.html"));
+        assert!(minimal
+            .system_text
+            .contains("Compact workspace/system context"));
+        assert!(minimal.system_chars() < full.system_chars());
+    }
+
+    #[test]
     fn repair_prompt_uses_latest_repair_message_and_minimal_catalog() {
         let system = vec![
             "# Project context\nWorking directory: /tmp/workspace".to_string(),
@@ -4106,6 +4209,12 @@ mod cdp_copilot_tool_tests {
         assert!(!bundle.system_text.contains("# Project context"));
         assert!(bundle.catalog_text.contains("\"name\": \"write_file\""));
         assert!(!bundle.catalog_text.contains("\"name\": \"bash\""));
+    }
+
+    #[test]
+    fn cdp_attempt_request_id_appends_attempt_index() {
+        assert_eq!(cdp_attempt_request_id("chain-123", 1), "chain-123.1");
+        assert_eq!(cdp_attempt_request_id("chain-123", 2), "chain-123.2");
     }
 
     #[test]
@@ -4933,12 +5042,9 @@ mod loop_controller_tests {
     fn build_live_probe_prompt(
         system_prompt: &[String],
         messages: &[ConversationMessage],
+        catalog_flavor: CdpCatalogFlavor,
     ) -> (CdpPromptFlavor, CdpPromptBundle, usize, usize) {
         let flavor = cdp_prompt_flavor(messages);
-        let catalog_flavor = match flavor {
-            CdpPromptFlavor::Standard => CdpCatalogFlavor::StandardMinimal,
-            CdpPromptFlavor::Repair => CdpCatalogFlavor::Repair,
-        };
         let request = ApiRequest {
             system_prompt,
             messages,
@@ -4975,79 +5081,125 @@ mod loop_controller_tests {
         response_timeout_secs: u64,
         stage_timeout_secs: u64,
     ) -> String {
-        let request_id = format!("live-repair-{stage_name}-{}", uuid::Uuid::new_v4());
-        let (flavor, prompt_bundle, estimated_tokens, removed_message_count) =
-            build_live_probe_prompt(system_prompt, messages);
-        tracing::info!(
-            "[live-repair-probe] stage={} request_id={} sending prompt (flavor={:?}, catalog_flavor={:?}, chars={}, est_tokens={}, compacted_removed_messages={}, grounding_chars={}, system_chars={}, message_chars={}, catalog_chars={})",
-            stage_name,
-            request_id,
-            flavor,
-            prompt_bundle.catalog_flavor,
-            prompt_bundle.total_chars(),
-            estimated_tokens,
-            removed_message_count,
-            prompt_bundle.grounding_chars(),
-            prompt_bundle.system_chars(),
-            prompt_bundle.message_chars(),
-            prompt_bundle.catalog_chars(),
-        );
-
+        let flavor = cdp_prompt_flavor(messages);
+        let parse_mode = cdp_tool_parse_mode(messages);
+        let request_chain_id = cdp_request_chain_id(&format!("live-repair-{stage_name}"));
+        let mut catalog_flavor = match flavor {
+            CdpPromptFlavor::Standard => CdpCatalogFlavor::StandardMinimal,
+            CdpPromptFlavor::Repair => CdpCatalogFlavor::Repair,
+        };
+        let mut widened_once = false;
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("live repair probe should build tokio runtime");
-        let started = Instant::now();
-        let response = rt.block_on(async {
-            tokio::time::timeout(
-                Duration::from_secs(stage_timeout_secs),
-                server.send_prompt(
-                    session_id,
-                    &request_id,
-                    "",
-                    &prompt_bundle.prompt,
-                    response_timeout_secs,
-                    &[],
-                    false,
-                ),
-            )
-            .await
-        });
+        let mut attempt_index = 0_usize;
 
-        match response {
-            Ok(Ok(text)) => {
-                tracing::info!(
-                    "[live-repair-probe] stage={} request_id={} response {} chars in {:?}: {:?}",
-                    stage_name,
-                    request_id,
-                    text.len(),
-                    started.elapsed(),
-                    truncate_for_log(&text, 240)
-                );
-                text
-            }
-            Ok(Err(error)) => panic!(
-                "live repair probe stage `{}` failed after {:?} (request_id={}): {}",
+        loop {
+            attempt_index += 1;
+            let request_id = cdp_attempt_request_id(&request_chain_id, attempt_index);
+            let (flavor, prompt_bundle, estimated_tokens, removed_message_count) =
+                build_live_probe_prompt(system_prompt, messages, catalog_flavor);
+            tracing::info!(
+                "[live-repair-probe] stage={} request_chain={} attempt={} request_id={} sending prompt (flavor={:?}, catalog_flavor={:?}, chars={}, est_tokens={}, compacted_removed_messages={}, grounding_chars={}, system_chars={}, message_chars={}, catalog_chars={})",
                 stage_name,
-                started.elapsed(),
+                request_chain_id,
+                attempt_index,
                 request_id,
-                error
-            ),
-            Err(_) => {
-                server.stop();
-                panic!(
-                    "live repair probe stage `{}` timed out after {:?} (request_id={}, flavor={:?}, catalog_flavor={:?}, prompt_chars={}, grounding_chars={}, system_chars={}, message_chars={}, catalog_chars={})",
+                flavor,
+                prompt_bundle.catalog_flavor,
+                prompt_bundle.total_chars(),
+                estimated_tokens,
+                removed_message_count,
+                prompt_bundle.grounding_chars(),
+                prompt_bundle.system_chars(),
+                prompt_bundle.message_chars(),
+                prompt_bundle.catalog_chars(),
+            );
+
+            let started = Instant::now();
+            let response = rt.block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(stage_timeout_secs),
+                    server.send_prompt(
+                        session_id,
+                        &request_id,
+                        "",
+                        &prompt_bundle.prompt,
+                        response_timeout_secs,
+                        &[],
+                        false,
+                    ),
+                )
+                .await
+            });
+
+            match response {
+                Ok(Ok(text)) => {
+                    tracing::info!(
+                        "[live-repair-probe] stage={} request_chain={} attempt={} request_id={} response {} chars in {:?}: {:?}",
+                        stage_name,
+                        request_chain_id,
+                        attempt_index,
+                        request_id,
+                        text.len(),
+                        started.elapsed(),
+                        truncate_for_log(&text, 240)
+                    );
+                    let (mut visible_text, tool_calls) = parse_copilot_tool_response(&text, parse_mode);
+                    if visible_text.trim().is_empty() && !text.trim().is_empty() {
+                        visible_text = text.trim().to_string();
+                    }
+                    let visible_text = sanitize_copilot_visible_text(&visible_text);
+                    if should_retry_standard_with_full_catalog(
+                        flavor,
+                        catalog_flavor,
+                        parse_mode,
+                        &visible_text,
+                        &tool_calls,
+                    ) && !widened_once
+                    {
+                        widened_once = true;
+                        catalog_flavor = CdpCatalogFlavor::StandardFull;
+                        tracing::info!(
+                            "[live-repair-probe] stage={} request_chain={} attempt={} widening to {:?} after visible_excerpt={:?}",
+                            stage_name,
+                            request_chain_id,
+                            attempt_index,
+                            catalog_flavor,
+                            truncate_for_log(&visible_text, 240)
+                        );
+                        continue;
+                    }
+                    return text;
+                }
+                Ok(Err(error)) => panic!(
+                    "live repair probe stage `{}` failed after {:?} (request_chain={}, attempt={}, request_id={}): {}",
                     stage_name,
                     started.elapsed(),
+                    request_chain_id,
+                    attempt_index,
                     request_id,
-                    flavor,
-                    prompt_bundle.catalog_flavor,
-                    prompt_bundle.total_chars(),
-                    prompt_bundle.grounding_chars(),
-                    prompt_bundle.system_chars(),
-                    prompt_bundle.message_chars(),
-                    prompt_bundle.catalog_chars()
-                );
+                    error
+                ),
+                Err(_) => {
+                    server.stop();
+                    panic!(
+                        "live repair probe stage `{}` timed out after {:?} (request_chain={}, attempt={}, request_id={}, flavor={:?}, catalog_flavor={:?}, prompt_chars={}, grounding_chars={}, system_chars={}, message_chars={}, catalog_chars={})",
+                        stage_name,
+                        started.elapsed(),
+                        request_chain_id,
+                        attempt_index,
+                        request_id,
+                        flavor,
+                        prompt_bundle.catalog_flavor,
+                        prompt_bundle.total_chars(),
+                        prompt_bundle.grounding_chars(),
+                        prompt_bundle.system_chars(),
+                        prompt_bundle.message_chars(),
+                        prompt_bundle.catalog_chars()
+                    );
+                }
             }
         }
     }
@@ -5480,7 +5632,7 @@ mod loop_controller_tests {
         )];
 
         let (flavor, bundle, estimated_tokens, removed_message_count) =
-            build_live_probe_prompt(&system_prompt, &messages);
+            build_live_probe_prompt(&system_prompt, &messages, CdpCatalogFlavor::Repair);
 
         assert_eq!(flavor, CdpPromptFlavor::Repair);
         assert!(estimated_tokens > 0);
