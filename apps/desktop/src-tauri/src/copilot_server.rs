@@ -20,6 +20,7 @@ const HEALTH_POLL_INTERVAL_MS: u64 = 500;
 const WARMUP_STATUS_TIMEOUT_SECS: u64 = 120;
 /// If `127.0.0.1:18080` is held by a stray `node copilot_server.js` (e.g. after `--keep-app`), try the next ports.
 const COPILOT_HTTP_PORT_FALLBACKS: u16 = 32;
+pub(crate) const RELAY_COPILOT_SERVICE_NAME: &str = "relay_copilot_server";
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,15 +37,44 @@ pub struct CopilotStatusResponse {
 #[serde(rename_all = "camelCase")]
 struct HealthBody {
     status: String,
-    boot_token: Option<String>,
+    #[serde(default)]
+    service: Option<String>,
+    #[serde(default)]
+    instance_id: Option<String>,
+}
+
+fn validate_health_body(
+    expected_instance_id: Option<&str>,
+    body: &HealthBody,
+) -> Result<(), String> {
+    if body.status != "ok" {
+        return Err(format!(
+            "health check failed: body status {:?}",
+            body.status
+        ));
+    }
+    if body.service.as_deref() != Some(RELAY_COPILOT_SERVICE_NAME) {
+        return Err(format!(
+            "health check failed: unexpected service {:?}",
+            body.service
+        ));
+    }
+    if let Some(expected) = expected_instance_id {
+        if body.instance_id.as_deref() != Some(expected) {
+            return Err("unexpected copilot_server instance".to_string());
+        }
+    }
+    Ok(())
 }
 
 pub struct CopilotServer {
     process: Option<Arc<Mutex<Child>>>,
     port: u16,
     cdp_port: u16,
-    /// Matches `copilot_server.js` `/health` `bootToken` so we never treat a stale listener on `port` as ready.
+    /// Shared out-of-band with `copilot_server.js` for authenticated mutable endpoints only.
     boot_token: Option<String>,
+    /// Public `/health` fingerprint so we can identify our spawned bridge instance without exposing the boot token.
+    instance_id: Option<String>,
     client: Client,
     script_path: Option<PathBuf>,
     user_data_dir: Option<PathBuf>,
@@ -98,6 +128,7 @@ impl CopilotServer {
             port,
             cdp_port,
             boot_token: None,
+            instance_id: None,
             client: Client::builder()
                 // Per-request timeouts still apply; avoid a tight default that races slow Windows loopback.
                 .timeout(Duration::from_secs(30))
@@ -186,12 +217,14 @@ impl CopilotServer {
             }
 
             let boot_token = Uuid::new_v4().to_string();
+            let instance_id = Uuid::new_v4().to_string();
             self.boot_token = Some(boot_token.clone());
+            self.instance_id = Some(instance_id.clone());
 
             crate::copilot_port_reclaim::maybe_reclaim_stale_copilot_http_port(
                 &self.client,
                 self.port,
-                &boot_token,
+                &instance_id,
             )
             .await;
 
@@ -204,6 +237,8 @@ impl CopilotServer {
                 self.cdp_port.to_string(),
                 "--boot-token".to_string(),
                 boot_token,
+                "--instance-id".to_string(),
+                instance_id,
             ];
 
             if let Some(ref data_dir) = self.user_data_dir {
@@ -307,24 +342,17 @@ impl CopilotServer {
         }
 
         let body: HealthBody = response.json().await.map_err(CopilotError::Http)?;
-        if body.status != "ok" {
-            return Err(CopilotError::PromptError(format!(
-                "health check failed: body status {:?}",
-                body.status
-            )));
-        }
-
-        if let Some(expected) = &self.boot_token {
-            if body.boot_token.as_deref() != Some(expected.as_str()) {
+        if let Err(message) = validate_health_body(self.instance_id.as_deref(), &body) {
+            if self.instance_id.is_some()
+                && body.service.as_deref() == Some(RELAY_COPILOT_SERVICE_NAME)
+                && body.instance_id.as_deref() != self.instance_id.as_deref()
+            {
                 warn!(
-                    "[copilot] /health bootToken mismatch (stale process on port {}?); expected this session's token",
+                    "[copilot] /health instanceId mismatch (unexpected bridge on port {}?); expected this session's fingerprint",
                     self.port
                 );
-                return Err(CopilotError::PromptError(format!(
-                    "stale copilot_server on port {} (bootToken mismatch); stop the orphan node.exe or free the port",
-                    self.port
-                )));
             }
+            return Err(CopilotError::PromptError(message));
         }
 
         Ok(())
@@ -596,4 +624,33 @@ fn find_node() -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_health_body, HealthBody, RELAY_COPILOT_SERVICE_NAME};
+
+    #[test]
+    fn health_body_requires_service_and_matching_instance_id() {
+        let ok = HealthBody {
+            status: "ok".into(),
+            service: Some(RELAY_COPILOT_SERVICE_NAME.into()),
+            instance_id: Some("instance-123".into()),
+        };
+        assert!(validate_health_body(Some("instance-123"), &ok).is_ok());
+
+        let wrong_service = HealthBody {
+            status: "ok".into(),
+            service: Some("other_service".into()),
+            instance_id: Some("instance-123".into()),
+        };
+        assert!(validate_health_body(Some("instance-123"), &wrong_service).is_err());
+
+        let wrong_instance = HealthBody {
+            status: "ok".into(),
+            service: Some(RELAY_COPILOT_SERVICE_NAME.into()),
+            instance_id: Some("other-instance".into()),
+        };
+        assert!(validate_health_body(Some("instance-123"), &wrong_instance).is_err());
+    }
 }

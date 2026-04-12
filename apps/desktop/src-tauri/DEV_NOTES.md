@@ -3,9 +3,10 @@
 ## M365 Copilot CDP Integration
 
 ### Architecture
-- `src/cdp_copilot.rs` — Lightweight CDP client using tokio-tungstenite
+- `src/cdp_copilot.rs` — Lightweight CDP client using tokio-tungstenite for direct helper commands
 - Connects to running Edge/Chrome via `http://127.0.0.1:9360` (Relay default; override with `RELAY_EDGE_CDP_PORT` / see `start-relay-edge-cdp.sh`)
 - No Playwright dependency — raw CDP WebSocket protocol
+- Production browser automation path is **Node `copilot_server.js` + CDP**; direct `cdp_*` commands are diagnostics/manual helpers, and `agent_browser_daemon.rs` remains experimental/inactive.
 
 ### Tauri Commands
 - `warmup_copilot_bridge` — Ensures `copilot_server.js` is up, then `GET /status` (Edge via `ensureEdgeConnected`, Copilot tab, login URL detection). Used by the Solid shell on mount; serializes with `describe` in JS via `_describeChain`. **Rust:** the command runs **`ensure_copilot_server`** and the **`warmup_status`** `block_on` inside **`tokio::task::spawn_blocking`** so `ensure_copilot_server`’s temporary runtime is not nested on a Tokio worker (avoids *“Cannot start a runtime from within a runtime”*).

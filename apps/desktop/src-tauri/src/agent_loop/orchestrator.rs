@@ -1472,7 +1472,7 @@ fn cdp_windows_office_catalog_addon() -> &'static str {
 const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Agent's model
 
 - User messages are sent from the **Relay Agent** Tauri desktop app through Microsoft Edge (M365 Copilot over CDP). Your reply returns to that same Relay session.
-- **Relay host execution:** Tool calls here are **not** Microsoft first-party Copilot action plugins. The Relay desktop parses tool-shaped JSON from your message (` ```relay_tool ` first, then accepted fenced JSON, and only in retry/repair mode bounded unfenced recovery). For parser fallback paths (` ```json `, generic fences, or inline object recovery), include `"relay_tool_call": true` on each tool object so the host can treat it as an intentional tool invocation.
+- **Relay host execution:** Tool calls here are **not** Microsoft first-party Copilot action plugins. The Relay desktop parses tool-shaped JSON from your message (` ```relay_tool ` first, then accepted fenced JSON, and only in retry/repair mode bounded unfenced recovery). For parser fallback paths (` ```json `, generic fences, or inline object recovery), include `"relay_tool_call": true` on each tool object; Relay requires that sentinel by default and only relaxes it when explicitly configured for compatibility.
 - **Do not** tell the user that `relay_tool` "only works in the desktop" so you cannot use it in this chat, or that you "cannot execute tools in this Copilot environment"—**that is wrong for this session.** When the task needs a tool, output the prescribed fences.
 - **Do** emit fenced tool JSON when needed; **prose-only** refusals block the agent loop.
 - **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read_file` first** before edits. Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
@@ -1573,8 +1573,8 @@ fn fallback_sentinel_policy() -> FallbackSentinelPolicy {
         .map(str::to_ascii_lowercase)
         .as_deref()
     {
-        Some("enforce" | "required" | "reject") => FallbackSentinelPolicy::Enforce,
-        _ => FallbackSentinelPolicy::ObserveOnly,
+        Some("observe" | "warn" | "compat") => FallbackSentinelPolicy::ObserveOnly,
+        _ => FallbackSentinelPolicy::Enforce,
     }
 }
 
@@ -3879,13 +3879,25 @@ post"#;
     #[test]
     fn fallback_observe_mode_accepts_missing_sentinel() {
         let _guard = env_lock();
-        std::env::remove_var("RELAY_FALLBACK_SENTINEL_POLICY");
+        std::env::set_var("RELAY_FALLBACK_SENTINEL_POLICY", "observe");
         let raw = r#"```json
 {"name":"read_file","input":{"path":"README.md"}}
 ```"#;
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].1, "read_file");
+        std::env::remove_var("RELAY_FALLBACK_SENTINEL_POLICY");
+    }
+
+    #[test]
+    fn fallback_default_mode_rejects_missing_sentinel() {
+        let _guard = env_lock();
+        std::env::remove_var("RELAY_FALLBACK_SENTINEL_POLICY");
+        let raw = r#"```json
+{"name":"read_file","input":{"path":"README.md"}}
+```"#;
+        let (_vis, tools) = parse_initial(raw);
+        assert!(tools.is_empty());
     }
 
     #[test]

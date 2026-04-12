@@ -71,7 +71,6 @@ nohup "$EDGE" \
   --disable-gpu \
   --disable-gpu-compositing \
   --disable-restore-session-state \
-  "https://m365.cloud.microsoft/chat/" \
   >>"$LOG" 2>&1 &
 
 for _ in $(seq 1 45); do

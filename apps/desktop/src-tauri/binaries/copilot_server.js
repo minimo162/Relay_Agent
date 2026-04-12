@@ -3613,6 +3613,7 @@ function findEdgePath() {
 }
 
 /* ─── HTTP server ─── */
+const RELAY_COPILOT_SERVICE_NAME = "relay_copilot_server";
 
 function requireBridgeAuth(req, res) {
   if (!globalOptions.bootToken) return true;
@@ -3642,9 +3643,11 @@ function createServer(session) {
   return http.createServer(async (req, res) => {
     try {
       if (req.method === "GET" && req.url === "/health") {
-        const body = { status: "ok" };
-        if (globalOptions.bootToken) body.bootToken = globalOptions.bootToken;
-        return writeJson(res, 200, body);
+        return writeJson(res, 200, {
+          status: "ok",
+          service: RELAY_COPILOT_SERVICE_NAME,
+          instanceId: globalOptions.instanceId || null,
+        });
       }
       const reqUrl = new URL(req.url ?? "/", "http://127.0.0.1");
       if (req.method === "GET" && reqUrl.pathname === "/status") {
@@ -3740,15 +3743,16 @@ function writeJson(res, code, body) {
 /* ─── Entry ─── */
 
 function parseArgs(argv) {
-  let port = DEFAULT_PORT, cdpPort = DEFAULT_CDP_PORT, userDataDir = null, bootToken = null, help = false;
+  let port = DEFAULT_PORT, cdpPort = DEFAULT_CDP_PORT, userDataDir = null, bootToken = null, instanceId = null, help = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--help" || argv[i] === "-h") { help = true; continue; }
     if (argv[i] === "--port") { port = Number(argv[++i]); continue; }
     if (argv[i] === "--cdp-port") { cdpPort = Number(argv[++i]); continue; }
     if (argv[i] === "--user-data-dir") { userDataDir = argv[++i] ?? null; continue; }
     if (argv[i] === "--boot-token") { bootToken = argv[++i] ?? null; continue; }
+    if (argv[i] === "--instance-id") { instanceId = argv[++i] ?? null; continue; }
   }
-  return { port, cdpPort, userDataDir, bootToken, help };
+  return { port, cdpPort, userDataDir, bootToken, instanceId, help };
 }
 
 var globalOptions = parseArgs(process.argv.slice(2));
@@ -3759,7 +3763,7 @@ if (!globalOptions.userDataDir) {
 
 async function main() {
   if (globalOptions.help) {
-    console.error("Usage: node copilot_server.js [--port 18080] [--cdp-port 9360] [--user-data-dir <path>] [--boot-token <uuid>]");
+    console.error("Usage: node copilot_server.js [--port 18080] [--cdp-port 9360] [--user-data-dir <path>] [--boot-token <uuid>] [--instance-id <uuid>]");
     return;
   }
   const session = new CopilotSession();
@@ -3774,7 +3778,7 @@ async function main() {
     throw err;
   });
   server.listen(globalOptions.port, "127.0.0.1", () => {
-    console.error(`[copilot] listening on http://127.0.0.1:${globalOptions.port} (cdp:${globalOptions.cdpPort})`);
+    console.error(`[copilot] listening on http://127.0.0.1:${globalOptions.port} (cdp:${globalOptions.cdpPort}, instance:${globalOptions.instanceId || "none"})`);
   });
   const shutdown = async () => { server.close(); process.exit(0); };
   process.on("SIGINT", () => void shutdown());
