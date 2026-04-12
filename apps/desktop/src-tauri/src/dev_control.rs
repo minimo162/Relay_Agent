@@ -7,6 +7,9 @@ use tauri::{AppHandle, Emitter};
 
 pub const DEV_FIRST_RUN_SEND_EVENT: &str = "relay:dev-first-run-send";
 pub const DEV_APPROVE_LATEST_EVENT: &str = "relay:dev-approve-latest";
+pub const DEV_APPROVE_LATEST_SESSION_EVENT: &str = "relay:dev-approve-latest-session";
+pub const DEV_APPROVE_LATEST_WORKSPACE_EVENT: &str = "relay:dev-approve-latest-workspace";
+pub const DEV_REJECT_LATEST_EVENT: &str = "relay:dev-reject-latest";
 const DEFAULT_DEV_CONTROL_PORT: u16 = 18_411;
 
 #[derive(Debug, Deserialize)]
@@ -153,6 +156,45 @@ fn handle_connection(
                 &mut stream,
                 202,
                 &json!({ "ok": true, "event": DEV_APPROVE_LATEST_EVENT }),
+            )
+        }
+        ("POST", "/approve-latest-session") => {
+            tracing::info!(
+                "[dev-control] emitting {}",
+                DEV_APPROVE_LATEST_SESSION_EVENT
+            );
+            app.emit(
+                DEV_APPROVE_LATEST_SESSION_EVENT,
+                json!({ "mode": "session" }),
+            )?;
+            write_json_response(
+                &mut stream,
+                202,
+                &json!({ "ok": true, "event": DEV_APPROVE_LATEST_SESSION_EVENT }),
+            )
+        }
+        ("POST", "/approve-latest-workspace") => {
+            tracing::info!(
+                "[dev-control] emitting {}",
+                DEV_APPROVE_LATEST_WORKSPACE_EVENT
+            );
+            app.emit(
+                DEV_APPROVE_LATEST_WORKSPACE_EVENT,
+                json!({ "mode": "workspace" }),
+            )?;
+            write_json_response(
+                &mut stream,
+                202,
+                &json!({ "ok": true, "event": DEV_APPROVE_LATEST_WORKSPACE_EVENT }),
+            )
+        }
+        ("POST", "/reject-latest") => {
+            tracing::info!("[dev-control] emitting {}", DEV_REJECT_LATEST_EVENT);
+            app.emit(DEV_REJECT_LATEST_EVENT, json!({ "mode": "reject" }))?;
+            write_json_response(
+                &mut stream,
+                202,
+                &json!({ "ok": true, "event": DEV_REJECT_LATEST_EVENT }),
             )
         }
         _ => write_json_response(

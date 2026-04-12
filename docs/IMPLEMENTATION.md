@@ -5005,3 +5005,57 @@ Observed result:
   - the app executed the local file write and `/root/Relay_Agent/tetris.html` now exists.
 - The real-app run also narrowed the post-approval behavior. After approval, the loop continued into another Copilot turn with a much larger prompt (`request_chain=cdp-inline-e1f23985-...`, `chars=104671`, `message_chars=95461`) because the written file content/tool result was echoed back into the follow-up context. File creation succeeded, but the next optimization target is keeping that post-write continuation smaller.
 - The ignored live probe still times out in `original`, but with the new slimmer original prompt and request-chain logging the latest failure is now explicit: `request_chain=live-repair-original-f2646869-c0d5-421e-bd29-5010128ecba3`, `attempt=1`, `catalog_flavor=StandardMinimal`, `prompt_chars=9392`, `grounding_chars=404`, `system_chars=1752`, `message_chars=196`, `catalog_chars=7034`.
+
+Post-approval prompt compression + long continuation hardening + approval dev controls (2026-04-13):
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot_tool_tests::write_file_success_is_summarized_for_cdp_followup -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot_tool_tests::edit_file_error_keeps_full_tool_output -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot_tool_tests::read_file_success_keeps_full_tool_output -- --nocapture
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+node --check apps/desktop/src-tauri/binaries/copilot_server.js
+node --check apps/desktop/scripts/dev-first-run-send.mjs
+node --check apps/desktop/scripts/dev-approve-latest.mjs
+node --check apps/desktop/scripts/dev-approve-latest-session.mjs
+node --check apps/desktop/scripts/dev-approve-latest-workspace.mjs
+node --check apps/desktop/scripts/dev-reject-latest.mjs
+pnpm --filter @relay-agent/desktop typecheck
+git diff --check
+DISPLAY=:10.0 XAUTHORITY=/root/.Xauthority pnpm --filter @relay-agent/desktop run tauri:dev
+pnpm --filter @relay-agent/desktop run tauri:dev:send -- "Create /root/Relay_Agent/tetris_reject.txt with exactly REJECT_ME using Relay local file tools."
+pnpm --filter @relay-agent/desktop run tauri:dev:reject
+pnpm --filter @relay-agent/desktop run tauri:dev:send -- "Create /root/Relay_Agent/tetris_session_a.txt with exactly SESSION_A using Relay local file tools."
+pnpm --filter @relay-agent/desktop run tauri:dev:approve:session
+pnpm --filter @relay-agent/desktop run tauri:dev:send -- "Create /root/Relay_Agent/tetris_session_b.txt with exactly SESSION_B using Relay local file tools."
+pnpm --filter @relay-agent/desktop run tauri:dev:approve:workspace
+pnpm --filter @relay-agent/desktop run tauri:dev:send -- "Create /root/Relay_Agent/tetris_workspace_c.txt with exactly WORKSPACE_C using Relay local file tools."
+RELAY_LIVE_REPAIR_TIMEOUT_SECS=90 RELAY_LIVE_REPAIR_STAGE_TIMEOUT_SECS=90 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml loop_controller_tests::live_repair_probe_streams_original_and_both_repair_prompts -- --ignored --nocapture
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs` now compresses CDP-only `Tool Result` blocks for successful `write_file` and `edit_file` calls. Instead of echoing the full JSON payload and file content back to Copilot, the follow-up prompt now keeps only a short metadata summary (`tool`, `status`, `file_path`, `kind`, `replace_all`, `content_chars`, `original_file_chars`, `structured_patch_chars`, `git_diff_present`). Error results and non-mutation tool results still keep their full text.
+- The prompt breakdown now exposes `user_text_chars`, `assistant_text_chars`, `tool_result_chars`, and `tool_result_count`, so live runs can distinguish whether prompt size is coming from conversational text or tool-result echo.
+- `apps/desktop/src-tauri/binaries/copilot_server.js` now logs `phase=paste`, `phase=submit`, and `phase=wait_response` explicitly for each request and adds a one-time long-continuation retry path for prompts `>= 32000` chars. That retry rechecks page health, clears the composer, and retries the same thread before falling back to the existing recoverable-target logic.
+- `apps/desktop/src-tauri/src/copilot_server.rs` now treats 401-like boot-token failures as recoverable bridge startup issues and retries once after restarting the local bridge.
+- `apps/desktop/src-tauri/src/dev_control.rs` and `apps/desktop/src/shell/Shell.tsx` now support debug-only localhost approval controls beyond `approve once`: `reject latest`, `approve for session`, and `approve for workspace`. The real UI handlers remain the execution path; the localhost helper only emits Tauri events under `debug_assertions` on `127.0.0.1`.
+- New helper scripts were added for those flows: `dev-reject-latest.mjs`, `dev-approve-latest-session.mjs`, and `dev-approve-latest-workspace.mjs`.
+- The reject path was verified end to end from the real app. After `tauri:dev:send` followed by `tauri:dev:reject`, `/root/Relay_Agent/tetris_reject.txt` remained absent.
+- The session approval path was verified end to end from the real app. After `tauri:dev:send` followed by `tauri:dev:approve:session`, `/root/Relay_Agent/tetris_session_a.txt` was created.
+- The workspace approval control also executed through the real app path; `/root/Relay_Agent/tetris_session_b.txt` was created after `tauri:dev:approve:workspace`. A subsequent `tetris_workspace_c.txt` run did not reach an auto-approved local write because Copilot first emitted another tool-protocol-confused reply and the host moved into repair instead of reaching a clean approval decision. That means the workspace remember toggle itself is wired, but automatic no-prompt workspace reuse remains inconclusive in this run.
+- The CDP-only mutation summary materially reduced post-approval continuation size. The earlier real-app continuation had reached `message_chars=95461`; the comparable compressed follow-up runs now logged `message_chars=839` / `tool_result_chars=469` and `message_chars=797` / `tool_result_chars=469`, proving the file-content echo is no longer dominating the next Copilot turn.
+- The ignored live repair probe no longer fails in `original`. The latest run passed `original` and timed out in `repair1`, which narrows the remaining instability to the repair resend / Copilot wait path rather than the first prompt payload. The exact failure was:
+  - `request_chain=live-repair-repair1-cfb839b3-1bd9-4c9f-b122-d42041e14dde`
+  - `attempt=1`
+  - `catalog_flavor=Repair`
+  - `prompt_chars=6296`
+  - `grounding_chars=404`
+  - `system_chars=724`
+  - `message_chars=903`
+  - `user_text_chars=897`
+  - `assistant_text_chars=0`
+  - `tool_result_chars=0`
+  - `tool_result_count=0`
+  - `catalog_chars=4259`
+- Current narrowest blocker: after the post-approval compression work, the remaining live failure is no longer prompt bulk in `original`; it is the `repair1` live resend path timing out even with a 6.3k prompt, which points to Copilot-side response behavior / repair resend stability rather than raw prompt size.

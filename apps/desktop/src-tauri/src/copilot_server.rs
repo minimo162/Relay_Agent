@@ -473,6 +473,17 @@ impl CopilotServer {
         }
     }
 
+    fn boot_token_error_recoverable(err: &CopilotError) -> bool {
+        match err {
+            CopilotError::PromptError(message) => {
+                let lowered = message.to_ascii_lowercase();
+                lowered.contains("401")
+                    && (lowered.contains("unauthorized") || lowered.contains("copilot returned"))
+            }
+            _ => false,
+        }
+    }
+
     async fn send_prompt_once(
         &self,
         relay_session_id: &str,
@@ -592,6 +603,22 @@ impl CopilotServer {
             Err(e) if Self::http_error_recoverable(&e) => {
                 warn!(
                     "[copilot] chat/completions failed ({e}); restarting Node bridge and retrying once"
+                );
+                self.start().await?;
+                self.send_prompt_once(
+                    relay_session_id,
+                    relay_request_id,
+                    system_prompt,
+                    user_prompt,
+                    timeout_secs,
+                    attachment_paths,
+                    new_chat,
+                )
+                .await
+            }
+            Err(e) if Self::boot_token_error_recoverable(&e) => {
+                warn!(
+                    "[copilot] chat/completions failed with probable stale boot token ({e}); restarting Node bridge and retrying once"
                 );
                 self.start().await?;
                 self.send_prompt_once(

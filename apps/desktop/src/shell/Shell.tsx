@@ -56,13 +56,16 @@ import { useAgentEvents } from "./useAgentEvents";
 
 const DEV_FIRST_RUN_SEND_EVENT = "relay:dev-first-run-send";
 const DEV_APPROVE_LATEST_EVENT = "relay:dev-approve-latest";
+const DEV_APPROVE_LATEST_SESSION_EVENT = "relay:dev-approve-latest-session";
+const DEV_APPROVE_LATEST_WORKSPACE_EVENT = "relay:dev-approve-latest-workspace";
+const DEV_REJECT_LATEST_EVENT = "relay:dev-reject-latest";
 
 type DevFirstRunSendPayload = {
   text?: string;
 };
 
 type DevApprovalPayload = {
-  mode?: "once";
+  mode?: "once" | "session" | "workspace" | "reject";
 };
 
 function workspaceSlashRowsToCommands(rows: WorkspaceSlashCommandRow[]): SlashCommand[] {
@@ -156,6 +159,9 @@ export default function Shell(): JSX.Element {
     let disposed = false;
     let sendUnlisten: (() => void) | null = null;
     let approveUnlisten: (() => void) | null = null;
+    let approveSessionUnlisten: (() => void) | null = null;
+    let approveWorkspaceUnlisten: (() => void) | null = null;
+    let rejectUnlisten: (() => void) | null = null;
     void listen<DevFirstRunSendPayload>(DEV_FIRST_RUN_SEND_EVENT, (event) => {
       const text = event.payload?.text?.trim();
       if (!text) return;
@@ -178,10 +184,46 @@ export default function Shell(): JSX.Element {
       }
       approveUnlisten = fn;
     });
+    void listen<DevApprovalPayload>(DEV_APPROVE_LATEST_SESSION_EVENT, () => {
+      const approval = approvals.approvals()[0];
+      if (!approval) return;
+      void handleApproveForSession(approval.approvalId);
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      approveSessionUnlisten = fn;
+    });
+    void listen<DevApprovalPayload>(DEV_APPROVE_LATEST_WORKSPACE_EVENT, () => {
+      const approval = approvals.approvals()[0];
+      if (!approval || !approval.workspaceCwdConfigured) return;
+      void handleApproveForWorkspace(approval.approvalId);
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      approveWorkspaceUnlisten = fn;
+    });
+    void listen<DevApprovalPayload>(DEV_REJECT_LATEST_EVENT, () => {
+      const approval = approvals.approvals()[0];
+      if (!approval) return;
+      void handleReject(approval.approvalId);
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      rejectUnlisten = fn;
+    });
     onCleanup(() => {
       disposed = true;
       sendUnlisten?.();
       approveUnlisten?.();
+      approveSessionUnlisten?.();
+      approveWorkspaceUnlisten?.();
+      rejectUnlisten?.();
     });
   });
 

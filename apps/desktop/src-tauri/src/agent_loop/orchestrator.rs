@@ -61,6 +61,10 @@ struct CdpPromptBundle {
     message_text: String,
     catalog_text: String,
     catalog_flavor: CdpCatalogFlavor,
+    user_text_chars: usize,
+    assistant_text_chars: usize,
+    tool_result_chars: usize,
+    tool_result_count: usize,
 }
 
 impl CdpPromptBundle {
@@ -82,6 +86,22 @@ impl CdpPromptBundle {
 
     fn catalog_chars(&self) -> usize {
         self.catalog_text.len()
+    }
+
+    fn user_text_chars(&self) -> usize {
+        self.user_text_chars
+    }
+
+    fn assistant_text_chars(&self) -> usize {
+        self.assistant_text_chars
+    }
+
+    fn tool_result_chars(&self) -> usize {
+        self.tool_result_chars
+    }
+
+    fn tool_result_count(&self) -> usize {
+        self.tool_result_count
     }
 }
 
@@ -1583,7 +1603,7 @@ impl ApiClient for CdpApiClient {
             );
             let prompt = prompt_bundle.prompt.clone();
             tracing::info!(
-                "[CdpApiClient] request_chain={} attempt={} request_id={} sending prompt inline (flavor={:?}, catalog_flavor={:?}, chars={}, est_tokens={}, compacted_removed_messages={}, grounding_chars={}, system_chars={}, message_chars={}, catalog_chars={})",
+                "[CdpApiClient] request_chain={} attempt={} request_id={} sending prompt inline (flavor={:?}, catalog_flavor={:?}, chars={}, est_tokens={}, compacted_removed_messages={}, grounding_chars={}, system_chars={}, message_chars={}, user_text_chars={}, assistant_text_chars={}, tool_result_chars={}, tool_result_count={}, catalog_chars={})",
                 request_chain_id,
                 attempt_index,
                 request_id,
@@ -1595,6 +1615,10 @@ impl ApiClient for CdpApiClient {
                 prompt_bundle.grounding_chars(),
                 prompt_bundle.system_chars(),
                 prompt_bundle.message_chars(),
+                prompt_bundle.user_text_chars(),
+                prompt_bundle.assistant_text_chars(),
+                prompt_bundle.tool_result_chars(),
+                prompt_bundle.tool_result_count(),
                 prompt_bundle.catalog_chars(),
             );
 
@@ -2690,7 +2714,17 @@ fn cdp_messages_for_flavor(
 }
 
 fn render_cdp_messages(messages: &[ConversationMessage]) -> String {
+    render_cdp_messages_with_breakdown(messages).0
+}
+
+fn render_cdp_messages_with_breakdown(
+    messages: &[ConversationMessage],
+) -> (String, (usize, usize, usize, usize)) {
     let mut parts = Vec::new();
+    let mut user_text_chars = 0;
+    let mut assistant_text_chars = 0;
+    let mut tool_result_chars = 0;
+    let mut tool_result_count = 0;
     for msg in messages {
         let role = match msg.role {
             runtime::MessageRole::System => "System",
@@ -2703,7 +2737,14 @@ fn render_cdp_messages(messages: &[ConversationMessage]) -> String {
             .blocks
             .iter()
             .map(|b| match b {
-                ContentBlock::Text { text } => text.clone(),
+                ContentBlock::Text { text } => {
+                    match msg.role {
+                        runtime::MessageRole::User => user_text_chars += text.len(),
+                        runtime::MessageRole::Assistant => assistant_text_chars += text.len(),
+                        _ => {}
+                    }
+                    text.clone()
+                }
                 ContentBlock::ToolUse { name, input, .. } => {
                     format!("[Tool Call: {name}] {input}")
                 }
@@ -2712,13 +2753,26 @@ fn render_cdp_messages(messages: &[ConversationMessage]) -> String {
                     output,
                     is_error,
                     ..
-                } => format_cdp_tool_result(tool_name, output, *is_error),
+                } => {
+                    let rendered = format_cdp_tool_result(tool_name, output, *is_error);
+                    tool_result_chars += rendered.len();
+                    tool_result_count += 1;
+                    rendered
+                }
             })
             .collect();
 
         parts.push(format!("{role}:\n{}", text.join("\n")));
     }
-    parts.join("\n\n")
+    (
+        parts.join("\n\n"),
+        (
+            user_text_chars,
+            assistant_text_chars,
+            tool_result_chars,
+            tool_result_count,
+        ),
+    )
 }
 
 fn build_cdp_prompt_bundle_from_messages(
@@ -2737,7 +2791,7 @@ fn build_cdp_prompt_bundle_from_messages(
         (CdpPromptFlavor::Standard, _) => system_prompt.join("\n\n"),
         (CdpPromptFlavor::Repair, _) => build_repair_cdp_system_prompt(messages),
     };
-    let message_text = render_cdp_messages(&effective_messages);
+    let (message_text, message_breakdown) = render_cdp_messages_with_breakdown(&effective_messages);
     let catalog_text = cdp_tool_catalog_section_for_flavor(preset, flavor, catalog_flavor);
     let mut parts = vec![grounding_text.clone()];
     if !system_text.is_empty() {
@@ -2754,6 +2808,10 @@ fn build_cdp_prompt_bundle_from_messages(
         message_text,
         catalog_text,
         catalog_flavor,
+        user_text_chars: message_breakdown.0,
+        assistant_text_chars: message_breakdown.1,
+        tool_result_chars: message_breakdown.2,
+        tool_result_count: message_breakdown.3,
     }
 }
 
@@ -2826,8 +2884,58 @@ fn build_cdp_prompt(request: &ApiRequest<'_>, preset: SessionPreset) -> String {
     .prompt
 }
 
+fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) -> String {
+    if is_error {
+        return output.to_string();
+    }
+    if !matches!(tool_name, "write_file" | "edit_file") {
+        return output.to_string();
+    }
+    let Ok(value) = serde_json::from_str::<Value>(output) else {
+        return output.to_string();
+    };
+    let Some(object) = value.as_object() else {
+        return output.to_string();
+    };
+
+    let mut lines =
+        vec!["CDP follow-up summary: local file mutation already executed.".to_string()];
+    lines.push(format!("tool: {tool_name}"));
+    lines.push("status: ok".to_string());
+    if let Some(path) = object.get("file_path").and_then(Value::as_str) {
+        lines.push(format!("file_path: {path}"));
+    }
+    if let Some(kind) = object.get("kind").and_then(Value::as_str) {
+        lines.push(format!("kind: {kind}"));
+    }
+    if let Some(replace_all) = object.get("replace_all").and_then(Value::as_bool) {
+        lines.push(format!("replace_all: {replace_all}"));
+    }
+    if let Some(content) = object.get("content").and_then(Value::as_str) {
+        lines.push(format!("content_chars: {}", content.len()));
+    }
+    if let Some(original) = object.get("original_file").and_then(Value::as_str) {
+        lines.push(format!("original_file_chars: {}", original.len()));
+    }
+    if let Some(structured_patch) = object.get("structured_patch") {
+        let patch_chars = serde_json::to_string(structured_patch)
+            .map(|text| text.len())
+            .unwrap_or_default();
+        lines.push(format!("structured_patch_chars: {patch_chars}"));
+    }
+    lines.push(format!(
+        "git_diff_present: {}",
+        object
+            .get("git_diff")
+            .map(|value| !value.is_null())
+            .unwrap_or(false)
+    ));
+    lines.join("\n")
+}
+
 fn format_cdp_tool_result(tool_name: &str, output: &str, is_error: bool) -> String {
     let status = if is_error { "error" } else { "ok" };
+    let summarized_output = summarized_tool_result_body(tool_name, output, is_error);
     format!(
         concat!(
             "<UNTRUSTED_TOOL_OUTPUT tool=\"{tool_name}\" status=\"{status}\">\n",
@@ -2839,7 +2947,7 @@ fn format_cdp_tool_result(tool_name: &str, output: &str, is_error: bool) -> Stri
         ),
         tool_name = tool_name,
         status = status,
-        output = output,
+        output = summarized_output,
     )
 }
 
@@ -4180,6 +4288,42 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
+    fn write_file_success_is_summarized_for_cdp_followup() {
+        let output = serde_json::json!({
+            "kind": "create",
+            "file_path": "/root/Relay_Agent/tetris.html",
+            "content": "<html>".repeat(50),
+            "structured_patch": [{ "op": "add", "path": "/0", "value": "x".repeat(64) }],
+            "original_file": null,
+            "git_diff": null
+        })
+        .to_string();
+
+        let rendered = format_cdp_tool_result("write_file", &output, false);
+        assert!(rendered.contains("CDP follow-up summary"));
+        assert!(rendered.contains("file_path: /root/Relay_Agent/tetris.html"));
+        assert!(rendered.contains("content_chars: 300"));
+        assert!(rendered.contains("structured_patch_chars:"));
+        assert!(!rendered.contains("<html><html>"));
+    }
+
+    #[test]
+    fn edit_file_error_keeps_full_tool_output() {
+        let output = r#"{"error":"old_string not found in file"}"#;
+        let rendered = format_cdp_tool_result("edit_file", output, true);
+        assert!(rendered.contains("old_string not found in file"));
+        assert!(!rendered.contains("CDP follow-up summary"));
+    }
+
+    #[test]
+    fn read_file_success_keeps_full_tool_output() {
+        let output = r#"{"file":{"content":"line 1\nline 2"}}"#;
+        let rendered = format_cdp_tool_result("read_file", output, false);
+        assert!(rendered.contains("line 1"));
+        assert!(!rendered.contains("CDP follow-up summary"));
+    }
+
+    #[test]
     fn repair_prompt_uses_latest_repair_message_and_minimal_catalog() {
         let system = vec![
             "# Project context\nWorking directory: /tmp/workspace".to_string(),
@@ -5101,7 +5245,7 @@ mod loop_controller_tests {
             let (flavor, prompt_bundle, estimated_tokens, removed_message_count) =
                 build_live_probe_prompt(system_prompt, messages, catalog_flavor);
             tracing::info!(
-                "[live-repair-probe] stage={} request_chain={} attempt={} request_id={} sending prompt (flavor={:?}, catalog_flavor={:?}, chars={}, est_tokens={}, compacted_removed_messages={}, grounding_chars={}, system_chars={}, message_chars={}, catalog_chars={})",
+                "[live-repair-probe] stage={} request_chain={} attempt={} request_id={} sending prompt (flavor={:?}, catalog_flavor={:?}, chars={}, est_tokens={}, compacted_removed_messages={}, grounding_chars={}, system_chars={}, message_chars={}, user_text_chars={}, assistant_text_chars={}, tool_result_chars={}, tool_result_count={}, catalog_chars={})",
                 stage_name,
                 request_chain_id,
                 attempt_index,
@@ -5114,6 +5258,10 @@ mod loop_controller_tests {
                 prompt_bundle.grounding_chars(),
                 prompt_bundle.system_chars(),
                 prompt_bundle.message_chars(),
+                prompt_bundle.user_text_chars(),
+                prompt_bundle.assistant_text_chars(),
+                prompt_bundle.tool_result_chars(),
+                prompt_bundle.tool_result_count(),
                 prompt_bundle.catalog_chars(),
             );
 
@@ -5185,7 +5333,7 @@ mod loop_controller_tests {
                 Err(_) => {
                     server.stop();
                     panic!(
-                        "live repair probe stage `{}` timed out after {:?} (request_chain={}, attempt={}, request_id={}, flavor={:?}, catalog_flavor={:?}, prompt_chars={}, grounding_chars={}, system_chars={}, message_chars={}, catalog_chars={})",
+                        "live repair probe stage `{}` timed out after {:?} (request_chain={}, attempt={}, request_id={}, flavor={:?}, catalog_flavor={:?}, prompt_chars={}, grounding_chars={}, system_chars={}, message_chars={}, user_text_chars={}, assistant_text_chars={}, tool_result_chars={}, tool_result_count={}, catalog_chars={})",
                         stage_name,
                         started.elapsed(),
                         request_chain_id,
@@ -5197,6 +5345,10 @@ mod loop_controller_tests {
                         prompt_bundle.grounding_chars(),
                         prompt_bundle.system_chars(),
                         prompt_bundle.message_chars(),
+                        prompt_bundle.user_text_chars(),
+                        prompt_bundle.assistant_text_chars(),
+                        prompt_bundle.tool_result_chars(),
+                        prompt_bundle.tool_result_count(),
                         prompt_bundle.catalog_chars()
                     );
                 }
@@ -5627,9 +5779,26 @@ mod loop_controller_tests {
         let goal = "Create ./tetris.html";
         let system_prompt =
             build_desktop_system_prompt(goal, Some("/root/Relay_Agent"), SessionPreset::Build);
-        let messages = vec![ConversationMessage::user_text(
-            build_tool_protocol_repair_input(goal, 0),
-        )];
+        let messages = vec![
+            ConversationMessage::user_text(build_tool_protocol_repair_input(goal, 0)),
+            ConversationMessage::assistant(vec![ContentBlock::Text {
+                text: "I will write the file next.".to_string(),
+            }]),
+            ConversationMessage::tool_result(
+                "tool-1",
+                "write_file",
+                serde_json::json!({
+                    "kind": "create",
+                    "file_path": "/root/Relay_Agent/tetris.html",
+                    "content": "<html>demo</html>",
+                    "structured_patch": [{ "op": "add", "path": "/0", "value": "demo" }],
+                    "original_file": null,
+                    "git_diff": null
+                })
+                .to_string(),
+                false,
+            ),
+        ];
 
         let (flavor, bundle, estimated_tokens, removed_message_count) =
             build_live_probe_prompt(&system_prompt, &messages, CdpCatalogFlavor::Repair);
@@ -5640,6 +5809,10 @@ mod loop_controller_tests {
         assert!(bundle.grounding_chars() > 0);
         assert!(bundle.system_chars() > 0);
         assert!(bundle.message_chars() > 0);
+        assert!(bundle.user_text_chars() > 0);
+        assert!(bundle.assistant_text_chars() > 0);
+        assert!(bundle.tool_result_chars() > 0);
+        assert_eq!(bundle.tool_result_count(), 1);
         assert!(bundle.catalog_chars() > 0);
         assert!(bundle.catalog_text.contains("\"name\": \"write_file\""));
         assert!(!bundle.catalog_text.contains("\"name\": \"bash\""));

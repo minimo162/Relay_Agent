@@ -176,6 +176,7 @@ var CDP_RUNTIME_EVALUATE_TIMEOUT_MS = 90e3;
 var EDGE_LAUNCH_TIMEOUT_MS = 45e3;
 var EDGE_LAUNCH_POLL_INTERVAL_MS = 500;
 var CDP_PORT_SCAN_RANGE = 20;
+var LONG_CONTINUATION_RETRY_CHARS = 32_000;
 /** Written under the dedicated Edge profile dir so we reconnect to Relay's instance, not an arbitrary manual CDP port. */
 var RELAY_CDP_PORT_MARKER = ".relay-agent-cdp-port";
 /**
@@ -854,34 +855,77 @@ class CopilotSession {
             hadAttachments,
           );
 
-          console.error("[copilot:describe] pasting prompt...");
           const fullPrompt = params.systemPrompt ? `${params.systemPrompt}\n\n${params.userPrompt}` : params.userPrompt;
-          const pasteStartedAt = Date.now();
-          await pastePromptRaw(pageSession, fullPrompt);
-          console.error(
-            "[copilot:describe] paste finished in",
-            Date.now() - pasteStartedAt,
-            "ms (prompt chars",
-            fullPrompt.length,
-            ")",
-          );
+          let continuationRetryUsed = false;
+          while (true) {
+            let phase = "paste";
+            let phaseStartedAt = Date.now();
+            try {
+              console.error(
+                "[copilot:describe] phase=paste begin prompt_chars=",
+                fullPrompt.length,
+                continuationRetryUsed ? "(continuation retry)" : ""
+              );
+              await pastePromptRaw(pageSession, fullPrompt);
+              console.error(
+                "[copilot:describe] phase=paste done elapsed_ms=",
+                Date.now() - phaseStartedAt,
+                "prompt_chars=",
+                fullPrompt.length,
+              );
 
-          console.error("[copilot:describe] submitting prompt...");
-          const submitStartedAt = Date.now();
-          const responseText = await submitPromptRaw(pageSession, fullPrompt.length, netCapture, {
-            hadAttachments,
-            abortCheck: () => requestState.aborted === true,
-          });
-          console.error(
-            "[copilot:describe] submit+response finished in",
-            Date.now() - submitStartedAt,
-            "ms (response chars",
-            responseText.length,
-            "total elapsed",
-            Date.now() - describeStartedAt,
-            "ms)",
-          );
-          return responseText;
+              phase = "submit";
+              phaseStartedAt = Date.now();
+              console.error("[copilot:describe] phase=submit begin");
+              const responseText = await submitPromptRaw(pageSession, fullPrompt.length, netCapture, {
+                hadAttachments,
+                abortCheck: () => requestState.aborted === true,
+              });
+              console.error(
+                "[copilot:describe] phase=wait_response done elapsed_ms=",
+                Date.now() - phaseStartedAt,
+                "response_chars=",
+                responseText.length,
+                "total_elapsed_ms=",
+                Date.now() - describeStartedAt,
+              );
+              return responseText;
+            } catch (error) {
+              if (
+                !continuationRetryUsed &&
+                isRecoverableLongContinuationFailure(error, fullPrompt.length, phase)
+              ) {
+                continuationRetryUsed = true;
+                const health = await inspectCopilotPageHealth(pageSession).catch(() => null);
+                if (health) {
+                  console.error(
+                    "[copilot:describe] long continuation retry health:",
+                    JSON.stringify({
+                      title: (health.title || "").slice(0, 80),
+                      href: (health.href || "").slice(0, 120),
+                    }),
+                  );
+                }
+                if (health && copilotPageLooksCrashed(health)) {
+                  throw error;
+                }
+                console.error(
+                  "[copilot:describe] long continuation retry after phase=",
+                  phase,
+                  "elapsed_ms=",
+                  Date.now() - phaseStartedAt,
+                  "error=",
+                  error?.message || error,
+                );
+                await assertCopilotPageResponsive(pageSession, "[copilot:describe]");
+                await focusComposer(pageSession).catch(() => {});
+                await clearComposerViaKeyboard(pageSession).catch(() => {});
+                await sleep(250);
+                continue;
+              }
+              throw error;
+            }
+          }
         } finally {
           await netCapture.disable().catch(() => {});
         }
@@ -2320,6 +2364,10 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
   }
 
   console.error(
+    "[copilot:describe] phase=wait_response begin send_ok=true timeout_s",
+    RESPONSE_TIMEOUT_MS / 1000,
+  );
+  console.error(
     "[copilot:describe] send OK; waiting for Copilot reply (DOM/network, timeout",
     RESPONSE_TIMEOUT_MS / 1000,
     "s)…",
@@ -2339,6 +2387,19 @@ function isRecoverableCopilotTabFailure(error) {
       message,
     ) ||
     /tab crash page visible|SIGTRAP|Aw,\s*Snap|This page is having a problem/i.test(message)
+  );
+}
+
+function isRecoverableLongContinuationFailure(error, promptLen, phase) {
+  if (promptLen < LONG_CONTINUATION_RETRY_CHARS) return false;
+  const message = String(error?.message || error || "");
+  if (!["paste", "submit", "wait_response"].includes(phase)) return false;
+  return (
+    /timed out|timeout/i.test(message) ||
+    /error sending request/i.test(message) ||
+    /response wait/i.test(message) ||
+    /CDP WebSocket (?:closed|error|timeout|is not open)/i.test(message) ||
+    /Copilot send failed/i.test(message)
   );
 }
 
