@@ -68,6 +68,151 @@ pub struct RedactionRule {
     pub field: &'static str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolSurface {
+    Build,
+    Plan,
+    Explore,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolMetadata {
+    pub approval_title: Option<&'static str>,
+    pub target_extractor: ApprovalTargetExtractor,
+    pub risky_fields: &'static [&'static str],
+    pub redaction_rules: &'static [RedactionRule],
+    pub explore_visible: bool,
+}
+
+const DEFAULT_TOOL_METADATA: ToolMetadata = ToolMetadata {
+    approval_title: None,
+    target_extractor: ApprovalTargetExtractor::None,
+    risky_fields: &[],
+    redaction_rules: &[],
+    explore_visible: false,
+};
+
+#[must_use]
+pub fn tool_metadata(name: &str) -> ToolMetadata {
+    match name {
+        "read_file" => ToolMetadata {
+            target_extractor: ApprovalTargetExtractor::PathLike,
+            explore_visible: true,
+            ..DEFAULT_TOOL_METADATA
+        },
+        "glob_search" => ToolMetadata {
+            explore_visible: true,
+            ..DEFAULT_TOOL_METADATA
+        },
+        "grep_search" => ToolMetadata {
+            explore_visible: true,
+            ..DEFAULT_TOOL_METADATA
+        },
+        "write_file" => ToolMetadata {
+            approval_title: Some("Create or overwrite a file?"),
+            target_extractor: ApprovalTargetExtractor::PathLike,
+            risky_fields: &["path"],
+            ..DEFAULT_TOOL_METADATA
+        },
+        "edit_file" => ToolMetadata {
+            approval_title: Some("Edit a file?"),
+            target_extractor: ApprovalTargetExtractor::PathLike,
+            risky_fields: &["path", "replace_all"],
+            ..DEFAULT_TOOL_METADATA
+        },
+        "pdf_merge" | "pdf_split" => ToolMetadata {
+            target_extractor: ApprovalTargetExtractor::PathLike,
+            ..DEFAULT_TOOL_METADATA
+        },
+        "WebFetch" => ToolMetadata {
+            target_extractor: ApprovalTargetExtractor::UrlLike,
+            ..DEFAULT_TOOL_METADATA
+        },
+        "bash" => ToolMetadata {
+            approval_title: Some("Run a shell command?"),
+            risky_fields: &["command", "run_in_background"],
+            ..DEFAULT_TOOL_METADATA
+        },
+        "PowerShell" => ToolMetadata {
+            risky_fields: &["command", "run_in_background"],
+            ..DEFAULT_TOOL_METADATA
+        },
+        "CliRun" => ToolMetadata {
+            approval_title: Some("Run an external CLI command?"),
+            target_extractor: ApprovalTargetExtractor::CliRun,
+            risky_fields: &["cli", "args", "timeout_ms"],
+            ..DEFAULT_TOOL_METADATA
+        },
+        "ElectronLaunch" => ToolMetadata {
+            approval_title: Some("Launch and control an Electron app?"),
+            target_extractor: ApprovalTargetExtractor::ElectronApp,
+            ..DEFAULT_TOOL_METADATA
+        },
+        "ElectronEval" => ToolMetadata {
+            approval_title: Some("Execute JavaScript in an Electron app?"),
+            target_extractor: ApprovalTargetExtractor::ElectronApp,
+            risky_fields: &["app", "cdp_port", "expression"],
+            ..DEFAULT_TOOL_METADATA
+        },
+        "ElectronGetText" => ToolMetadata {
+            target_extractor: ApprovalTargetExtractor::ElectronApp,
+            ..DEFAULT_TOOL_METADATA
+        },
+        "ElectronClick" => ToolMetadata {
+            approval_title: Some("Click an element in an Electron app?"),
+            target_extractor: ApprovalTargetExtractor::ElectronApp,
+            risky_fields: &["app", "selector"],
+            ..DEFAULT_TOOL_METADATA
+        },
+        "ElectronTypeText" => ToolMetadata {
+            approval_title: Some("Type text in an Electron app?"),
+            target_extractor: ApprovalTargetExtractor::ElectronApp,
+            risky_fields: &["app", "selector", "text"],
+            redaction_rules: &[RedactionRule { field: "text" }],
+            ..DEFAULT_TOOL_METADATA
+        },
+        "MCP" => ToolMetadata {
+            approval_title: Some("Call a connected integration tool?"),
+            target_extractor: ApprovalTargetExtractor::McpQualifiedTool,
+            risky_fields: &["name", "arguments", "server", "serverName"],
+            redaction_rules: &[RedactionRule { field: "arguments" }],
+            ..DEFAULT_TOOL_METADATA
+        },
+        _ => DEFAULT_TOOL_METADATA,
+    }
+}
+
+#[must_use]
+pub fn is_tool_visible_in_surface(name: &str, surface: ToolSurface) -> bool {
+    match surface {
+        ToolSurface::Build | ToolSurface::Plan => true,
+        ToolSurface::Explore => tool_metadata(name).explore_visible,
+    }
+}
+
+#[must_use]
+pub fn tool_specs_for_surface(surface: ToolSurface) -> Vec<ToolSpec> {
+    mvp_tool_specs()
+        .into_iter()
+        .filter(|spec| is_tool_visible_in_surface(spec.name, surface))
+        .collect()
+}
+
+#[must_use]
+pub fn required_permission_for_surface(spec: &ToolSpec, surface: ToolSurface) -> PermissionMode {
+    let mut required = if spec.required_permission == PermissionMode::WorkspaceWrite {
+        PermissionMode::DangerFullAccess
+    } else {
+        spec.required_permission
+    };
+
+    if matches!(surface, ToolSurface::Explore) && !is_tool_visible_in_surface(spec.name, surface) {
+        required = PermissionMode::DangerFullAccess;
+    }
+
+    required
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolApprovalDisplay {
     pub approval_title: String,
@@ -78,57 +223,22 @@ pub struct ToolApprovalDisplay {
 impl ToolSpec {
     #[must_use]
     pub fn approval_title(&self) -> Option<&'static str> {
-        match self.name {
-            "write_file" => Some("Create or overwrite a file?"),
-            "edit_file" => Some("Edit a file?"),
-            "bash" => Some("Run a shell command?"),
-            "CliRun" => Some("Run an external CLI command?"),
-            "ElectronLaunch" => Some("Launch and control an Electron app?"),
-            "ElectronEval" => Some("Execute JavaScript in an Electron app?"),
-            "ElectronClick" => Some("Click an element in an Electron app?"),
-            "ElectronTypeText" => Some("Type text in an Electron app?"),
-            "MCP" => Some("Call a connected integration tool?"),
-            _ => None,
-        }
+        tool_metadata(self.name).approval_title
     }
 
     #[must_use]
     pub fn target_extractor(&self) -> ApprovalTargetExtractor {
-        match self.name {
-            "read_file" | "write_file" | "edit_file" | "pdf_merge" | "pdf_split" => {
-                ApprovalTargetExtractor::PathLike
-            }
-            "WebFetch" => ApprovalTargetExtractor::UrlLike,
-            "CliRun" => ApprovalTargetExtractor::CliRun,
-            "ElectronLaunch" | "ElectronEval" | "ElectronGetText" | "ElectronClick"
-            | "ElectronTypeText" => ApprovalTargetExtractor::ElectronApp,
-            "MCP" => ApprovalTargetExtractor::McpQualifiedTool,
-            _ => ApprovalTargetExtractor::None,
-        }
+        tool_metadata(self.name).target_extractor
     }
 
     #[must_use]
     pub fn risky_fields(&self) -> &'static [&'static str] {
-        match self.name {
-            "write_file" => &["path"],
-            "edit_file" => &["path", "replace_all"],
-            "bash" | "PowerShell" => &["command", "run_in_background"],
-            "CliRun" => &["cli", "args", "timeout_ms"],
-            "ElectronEval" => &["app", "cdp_port", "expression"],
-            "ElectronClick" => &["app", "selector"],
-            "ElectronTypeText" => &["app", "selector", "text"],
-            "MCP" => &["name", "arguments", "server", "serverName"],
-            _ => &[],
-        }
+        tool_metadata(self.name).risky_fields
     }
 
     #[must_use]
     pub fn redaction_rules(&self) -> &'static [RedactionRule] {
-        match self.name {
-            "ElectronTypeText" => &[RedactionRule { field: "text" }],
-            "MCP" => &[RedactionRule { field: "arguments" }],
-            _ => &[],
-        }
+        tool_metadata(self.name).redaction_rules
     }
 }
 
@@ -3539,7 +3649,11 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    use super::{execute_tool, mvp_tool_specs};
+    use super::{
+        execute_tool, mvp_tool_specs, required_permission_for_surface, tool_metadata,
+        tool_specs_for_surface, ApprovalTargetExtractor, ToolSurface,
+    };
+    use runtime::PermissionMode;
     use serde_json::json;
 
     fn env_lock() -> &'static Mutex<()> {
@@ -3598,6 +3712,78 @@ mod tests {
         if let Some(value) = original {
             std::env::set_var("RELAY_COMPAT_MODE", value);
         }
+    }
+
+    #[test]
+    fn tool_metadata_matches_existing_behavior() {
+        let read = tool_metadata("read_file");
+        assert_eq!(read.target_extractor, ApprovalTargetExtractor::PathLike);
+        assert!(read.explore_visible);
+        assert_eq!(read.approval_title, None);
+
+        let write = tool_metadata("write_file");
+        assert_eq!(write.approval_title, Some("Create or overwrite a file?"));
+        assert_eq!(write.risky_fields, &["path"]);
+
+        let bash = tool_metadata("bash");
+        assert_eq!(bash.approval_title, Some("Run a shell command?"));
+        assert_eq!(bash.risky_fields, &["command", "run_in_background"]);
+
+        let mcp = tool_metadata("MCP");
+        assert_eq!(mcp.approval_title, Some("Call a connected integration tool?"));
+        assert_eq!(mcp.target_extractor, ApprovalTargetExtractor::McpQualifiedTool);
+        assert_eq!(mcp.redaction_rules, &[super::RedactionRule { field: "arguments" }]);
+
+        let unknown = tool_metadata("nope");
+        assert_eq!(unknown.approval_title, None);
+        assert_eq!(unknown.target_extractor, ApprovalTargetExtractor::None);
+        assert!(unknown.risky_fields.is_empty());
+        assert!(unknown.redaction_rules.is_empty());
+        assert!(!unknown.explore_visible);
+    }
+
+    #[test]
+    fn explore_surface_only_exposes_workspace_read_tools() {
+        let names = tool_specs_for_surface(ToolSurface::Explore)
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["read_file", "glob_search", "grep_search"]);
+    }
+
+    #[test]
+    fn required_permission_for_surface_preserves_current_policy() {
+        let specs = mvp_tool_specs();
+        let write = specs
+            .iter()
+            .find(|spec| spec.name == "write_file")
+            .expect("write_file spec");
+        assert_eq!(
+            required_permission_for_surface(write, ToolSurface::Build),
+            PermissionMode::DangerFullAccess
+        );
+        assert_eq!(
+            required_permission_for_surface(write, ToolSurface::Plan),
+            PermissionMode::DangerFullAccess
+        );
+
+        let read = specs
+            .iter()
+            .find(|spec| spec.name == "read_file")
+            .expect("read_file spec");
+        assert_eq!(
+            required_permission_for_surface(read, ToolSurface::Explore),
+            PermissionMode::ReadOnly
+        );
+
+        let web = specs
+            .iter()
+            .find(|spec| spec.name == "WebFetch")
+            .expect("WebFetch spec");
+        assert_eq!(
+            required_permission_for_surface(web, ToolSurface::Explore),
+            PermissionMode::DangerFullAccess
+        );
     }
 
     #[test]

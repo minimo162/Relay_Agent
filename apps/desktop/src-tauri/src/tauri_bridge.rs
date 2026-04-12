@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
+use serde_with::skip_serializing_none;
 use tauri::{AppHandle, Emitter, State};
 use ts_rs::TS;
 use uuid::Uuid;
@@ -842,12 +843,12 @@ pub struct CdpSendPromptRequest {
 
 #[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[skip_serializing_none]
 pub struct CdpConnectResult {
     pub ok: bool,
     pub debug_url: String,
     pub page_url: String,
     pub page_title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
     #[serde(default)]
     pub launched: bool,

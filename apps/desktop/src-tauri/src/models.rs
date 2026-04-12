@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_with::skip_serializing_none;
 use ts_rs::TS;
 
 /// Debug / support bundle fields (OpenWork-style Settings → Debug export).
@@ -212,9 +213,9 @@ pub struct WorkspaceAllowlistCwdRequest {
 /// Workspace-defined slash command (`.relay/commands/*.md` or `commands.json`).
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[skip_serializing_none]
 pub struct WorkspaceSlashCommandRow {
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub body: String,
     pub source: String,
