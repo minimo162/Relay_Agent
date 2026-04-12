@@ -4909,3 +4909,34 @@ Observed result:
 - `node --check apps/desktop/src-tauri/binaries/copilot_server.js` passed.
 - `pnpm --filter @relay-agent/desktop typecheck` passed.
 - `timeout 120 pnpm --filter @relay-agent/desktop test:e2e:m365-cdp` failed in this container before exercising the hardened path because no live `copilot_server.js` + signed-in Edge/CDP environment was running on `http://127.0.0.1:18080` / `CDP_ENDPOINT=http://127.0.0.1:9333` (`GET /status` precondition failed with `fetch failed`).
+
+Repair-stage CDP prompt slimming + live revalidation (2026-04-13):
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot_tool_tests::repair_catalog_is_reduced_to_local_file_tools -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot_tool_tests::repair_prompt_uses_latest_repair_message_and_minimal_catalog -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot_tool_tests::tool_protocol_repair_messages_use_retry_parse_mode -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml loop_controller_tests::live_probe_prompt_breakdown_reports_system_message_and_catalog -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml loop_controller_tests::tool_protocol_repairs_are_actually_sent_to_api_client_twice -- --nocapture
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+node --check apps/desktop/src-tauri/binaries/copilot_server.js
+pnpm --filter @relay-agent/desktop typecheck
+git diff --check
+RELAY_LIVE_REPAIR_TIMEOUT_SECS=90 RELAY_LIVE_REPAIR_STAGE_TIMEOUT_SECS=120 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml loop_controller_tests::live_repair_probe_streams_original_and_both_repair_prompts -- --ignored --nocapture
+DISPLAY=:10.0 XAUTHORITY=/root/.Xauthority RELAY_SKIP_PRESTART_EDGE=1 pnpm --filter @relay-agent/desktop run tauri:dev
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs` now has explicit CDP prompt flavors: normal turns keep the standard prompt path, while tool-protocol repair turns use a dedicated repair prompt that only keeps the current goal, the minimal Relay/CDP framing, and the latest synthetic repair message instead of resending the whole Build-session prompt.
+- Repair-stage catalog serialization is now reduced to local file tools only: `read_file`, `write_file`, `edit_file`, `glob_search`, and `grep_search`. The normal Build catalog remains unchanged for non-repair turns.
+- CDP live probe logging now emits prompt composition breakdown by stage: flavor, total chars, estimated tokens, removed message count, and `grounding/system/message/catalog` char counts. Timeout panics now include the same breakdown so the stuck stage is explicit in test output.
+- `apps/desktop/src-tauri/binaries/copilot_server.js` dedicated Edge launch args now include `--password-store=basic` and `--disable-session-crashed-bubble` to reduce keyring / restore-page interruptions during XRDP-backed live runs.
+- Focused Rust tests covering reduced repair catalog selection, repair-message prompt construction, retry parse mode, prompt-breakdown diagnostics, and staged repair transport all passed in this environment.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` passed.
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.js` passed.
+- `pnpm --filter @relay-agent/desktop typecheck` passed.
+- `git diff --check` passed.
+- Live ignored probe still does not complete end-to-end in this XRDP/Linux environment. The latest rerun failed in `original` after 120 seconds with the new breakdown attached: `flavor=Standard`, `prompt_chars=41013`, `grounding_chars=404`, `system_chars=4893`, `message_chars=196`, `catalog_chars=35514` (`live-repair-original-7dae2bbc-e11b-42c9-9816-30fa898c61e7`).
+- Real `tauri:dev` app validation launched successfully on the XRDP desktop and the signed-in dedicated Edge window was visible, but the app remained in first-run preflight with `Copilot signed in: Needs attention` / `CDP reachable: Not ready`. A local-file-creation request could not be completed from the live app UI, and `/root/Relay_Agent/tetris.html` was still absent at the end of the run.
+- Current blocker is still live Copilot bridge/app readiness rather than the repair-prompt builder itself. The prompt slimming and diagnostics changes are in place; the remaining work is to make the live `original`/warmup path deterministic enough for the app to reach the local Relay tool flow.

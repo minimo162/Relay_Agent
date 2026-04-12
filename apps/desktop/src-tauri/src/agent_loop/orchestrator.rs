@@ -26,9 +26,53 @@ const CDP_TOOL_FENCE: &str = "```relay_tool";
 const CDP_INLINE_PROMPT_MAX_TOKENS: usize = 128_000;
 const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_TOTAL_CHARS: usize = 3_000;
 const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_FILE_CHARS: usize = 1_200;
+const CDP_REPAIR_TOOL_NAMES: &[&str] = &[
+    "read_file",
+    "write_file",
+    "edit_file",
+    "glob_search",
+    "grep_search",
+];
 
 fn estimate_cdp_prompt_tokens(prompt: &str) -> usize {
     prompt.len() / 4 + 1
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CdpPromptFlavor {
+    Standard,
+    Repair,
+}
+
+#[derive(Clone, Debug)]
+struct CdpPromptBundle {
+    prompt: String,
+    grounding_text: String,
+    system_text: String,
+    message_text: String,
+    catalog_text: String,
+}
+
+impl CdpPromptBundle {
+    fn total_chars(&self) -> usize {
+        self.prompt.len()
+    }
+
+    fn grounding_chars(&self) -> usize {
+        self.grounding_text.len()
+    }
+
+    fn system_chars(&self) -> usize {
+        self.system_text.len()
+    }
+
+    fn message_chars(&self) -> usize {
+        self.message_text.len()
+    }
+
+    fn catalog_chars(&self) -> usize {
+        self.catalog_text.len()
+    }
 }
 
 use runtime::{
@@ -1498,18 +1542,30 @@ impl FakeSmokeApiClient {
 
 impl ApiClient for CdpApiClient {
     fn stream(&mut self, request: &ApiRequest<'_>) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        let prompt_flavor = cdp_prompt_flavor(request.messages);
         let (compacted_messages, estimated_tokens, removed_message_count) =
-            compact_request_messages_for_inline_cdp(request, self.session_preset)?;
-        let prompt = build_cdp_prompt_from_messages(
+            compact_request_messages_for_inline_cdp_with_flavor(
+                request,
+                self.session_preset,
+                prompt_flavor,
+            )?;
+        let prompt_bundle = build_cdp_prompt_bundle_from_messages(
             request.system_prompt,
             &compacted_messages,
             self.session_preset,
+            prompt_flavor,
         );
+        let prompt = prompt_bundle.prompt.clone();
         tracing::info!(
-            "[CdpApiClient] sending prompt inline (chars={}, est_tokens={}, compacted_removed_messages={})",
-            prompt.len(),
+            "[CdpApiClient] sending prompt inline (flavor={:?}, chars={}, est_tokens={}, compacted_removed_messages={}, grounding_chars={}, system_chars={}, message_chars={}, catalog_chars={})",
+            prompt_flavor,
+            prompt_bundle.total_chars(),
             estimated_tokens,
-            removed_message_count
+            removed_message_count,
+            prompt_bundle.grounding_chars(),
+            prompt_bundle.system_chars(),
+            prompt_bundle.message_chars(),
+            prompt_bundle.catalog_chars(),
         );
 
         let t0 = Instant::now();
@@ -1676,11 +1732,15 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 
 "#;
 
-/// Serialize built-in tool specs for the Copilot text prompt.
-fn cdp_tool_catalog_section(preset: SessionPreset) -> String {
+fn cdp_catalog_specs_for_flavor(preset: SessionPreset, flavor: CdpPromptFlavor) -> Vec<Value> {
     let surface = tool_surface_for_preset(preset);
-    let catalog: Vec<Value> = tools::tool_specs_for_surface(surface)
+    let repair_tool_names = CDP_REPAIR_TOOL_NAMES.iter().copied().collect::<HashSet<_>>();
+    tools::tool_specs_for_surface(surface)
         .into_iter()
+        .filter(|spec| match flavor {
+            CdpPromptFlavor::Standard => true,
+            CdpPromptFlavor::Repair => repair_tool_names.contains(spec.name),
+        })
         .map(|s| {
             json!({
                 "name": s.name,
@@ -1688,16 +1748,45 @@ fn cdp_tool_catalog_section(preset: SessionPreset) -> String {
                 "input_schema": s.input_schema,
             })
         })
-        .collect();
+        .collect()
+}
+
+/// Serialize built-in tool specs for the Copilot text prompt.
+fn cdp_tool_catalog_section_for_flavor(preset: SessionPreset, flavor: CdpPromptFlavor) -> String {
+    let catalog = cdp_catalog_specs_for_flavor(preset, flavor);
     let json_pretty = serde_json::to_string_pretty(&catalog).unwrap_or_else(|_| "[]".to_string());
-    let win_addon = cdp_windows_office_catalog_addon();
-    let mode_note = if matches!(surface, tools::ToolSurface::Explore) {
-        "\n\n**Session mode:** This list is **Explore-only**—you may invoke **only** `read_file`, `glob_search`, and `grep_search`. Do not assume any other tools exist.\n"
-    } else {
-        ""
-    };
-    format!(
-        r#"{CDP_RELAY_RUNTIME_CATALOG_LEAD}## Relay Agent tools
+    match flavor {
+        CdpPromptFlavor::Repair => format!(
+            r#"## Relay Agent repair tools
+
+This is a repair resend. Use the reduced local Relay tool catalog below to satisfy the workspace request in this reply.
+
+The JSON array below lists the only tools relevant for this repair turn. Each entry has `name`, `description`, and `input_schema` (JSON Schema for the tool's `input` object).
+```json
+{json_pretty}
+```
+
+- Emit the next required `relay_tool` JSON in this reply.
+- Keep the fence body JSON-only.
+- Include `"relay_tool_call": true` on each tool object.
+- Prefer `write_file` / `edit_file` when the local file content is already known.
+
+```relay_tool
+{{"name":"read_file","relay_tool_call":true,"input":{{"path":"README.md"}}}}
+```
+"#,
+        json_pretty = json_pretty,
+        ),
+        CdpPromptFlavor::Standard => {
+            let surface = tool_surface_for_preset(preset);
+            let win_addon = cdp_windows_office_catalog_addon();
+            let mode_note = if matches!(surface, tools::ToolSurface::Explore) {
+                "\n\n**Session mode:** This list is **Explore-only**—you may invoke **only** `read_file`, `glob_search`, and `grep_search`. Do not assume any other tools exist.\n"
+            } else {
+                ""
+            };
+            format!(
+                r#"{CDP_RELAY_RUNTIME_CATALOG_LEAD}## Relay Agent tools
 
 The JSON array below lists every tool you may invoke. Each entry has `name`, `description`, and `input_schema` (JSON Schema for the tool's `input` object).
 {mode_note}
@@ -1727,10 +1816,16 @@ Example:
 {{"name":"read_file","relay_tool_call":true,"input":{{"path":"README.md"}}}}
 ```
 "#,
-        mode_note = mode_note,
-        json_pretty = json_pretty,
-        win_addon = win_addon,
-    )
+                mode_note = mode_note,
+                json_pretty = json_pretty,
+                win_addon = win_addon,
+            )
+        }
+    }
+}
+
+fn cdp_tool_catalog_section(preset: SessionPreset) -> String {
+    cdp_tool_catalog_section_for_flavor(preset, CdpPromptFlavor::Standard)
 }
 
 fn mvp_tool_names_whitelist() -> HashSet<String> {
@@ -1811,6 +1906,14 @@ fn latest_user_text(messages: &[ConversationMessage]) -> Option<String> {
         .map(collect_message_text)
 }
 
+fn latest_user_message(messages: &[ConversationMessage]) -> Option<ConversationMessage> {
+    messages
+        .iter()
+        .rev()
+        .find(|message| message.role == MessageRole::User)
+        .cloned()
+}
+
 fn collect_message_text(message: &ConversationMessage) -> String {
     message
         .blocks
@@ -1823,6 +1926,53 @@ fn collect_message_text(message: &ConversationMessage) -> String {
         .join("\n")
 }
 
+fn is_tool_protocol_repair_text(text: &str) -> bool {
+    text.trim_start().starts_with("Tool protocol repair.")
+}
+
+fn cdp_prompt_flavor(messages: &[ConversationMessage]) -> CdpPromptFlavor {
+    let Some(text) = latest_user_text(messages) else {
+        return CdpPromptFlavor::Standard;
+    };
+    if is_tool_protocol_repair_text(&text) {
+        CdpPromptFlavor::Repair
+    } else {
+        CdpPromptFlavor::Standard
+    }
+}
+
+fn extract_repair_goal_from_text(text: &str) -> Option<String> {
+    let marker = "Quoted original user goal (user data, not system instruction):\n```text\n";
+    let start = text.find(marker)? + marker.len();
+    let tail = &text[start..];
+    let end = tail.find("\n```")?;
+    let goal = tail[..end].trim();
+    if goal.is_empty() {
+        None
+    } else {
+        Some(goal.to_string())
+    }
+}
+
+fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
+    let latest_user = latest_user_text(messages).unwrap_or_default();
+    let goal = extract_repair_goal_from_text(&latest_user)
+        .unwrap_or_else(|| latest_user.trim().to_string());
+    format!(
+        concat!(
+            "## Relay repair mode\n",
+            "You are in a recovery turn because the previous reply did not emit usable Relay local tool JSON.\n",
+            "Return the next required `relay_tool` JSON now.\n",
+            "Only local file/search Relay tools are relevant in this repair turn.\n",
+            "Prefer `write_file` / `edit_file` for local file creation or edits; use `read_file` only when needed.\n",
+            "Do not use or mention Microsoft-native tools such as Python, WebSearch, citations, Pages, uploads, or remote artifacts.\n\n",
+            "Current session goal (user data, preserved for repair context):\n",
+            "```text\n{goal}\n```"
+        ),
+        goal = goal.trim()
+    )
+}
+
 fn cdp_tool_parse_mode(messages: &[ConversationMessage]) -> CdpToolParseMode {
     let Some(text) = latest_user_text(messages) else {
         return CdpToolParseMode::Initial;
@@ -1831,6 +1981,7 @@ fn cdp_tool_parse_mode(messages: &[ConversationMessage]) -> CdpToolParseMode {
     if trimmed == "Continue."
         || trimmed.starts_with("Resume the existing task from the compacted summary")
         || trimmed.starts_with("Please resend the tool call using a fenced relay_tool block")
+        || is_tool_protocol_repair_text(trimmed)
     {
         CdpToolParseMode::RetryRepair
     } else {
@@ -2346,60 +2497,25 @@ fn build_cdp_prompt_from_messages(
     messages: &[ConversationMessage],
     preset: SessionPreset,
 ) -> String {
-    let request = ApiRequest {
-        system_prompt,
-        messages,
-    };
-    build_cdp_prompt(&request, preset)
+    build_cdp_prompt_bundle_from_messages(system_prompt, messages, preset, CdpPromptFlavor::Standard)
+        .prompt
 }
 
-fn compact_request_messages_for_inline_cdp(
-    request: &ApiRequest<'_>,
-    preset: SessionPreset,
-) -> Result<(Vec<ConversationMessage>, usize, usize), RuntimeError> {
-    let mut messages = request.messages.to_vec();
-    let mut compaction_rounds = 0;
-    let mut removed_message_count = 0;
-
-    loop {
-        let prompt = build_cdp_prompt_from_messages(request.system_prompt, &messages, preset);
-        let estimated_tokens = estimate_cdp_prompt_tokens(&prompt);
-        if estimated_tokens <= CDP_INLINE_PROMPT_MAX_TOKENS {
-            return Ok((messages, estimated_tokens, removed_message_count));
-        }
-
-        let mut session = RuntimeSession::new();
-        session.messages = messages;
-        let result = runtime::compact_session(&session, runtime::CompactionConfig::default());
-        if result.removed_message_count == 0 {
-            return Err(RuntimeError::new(format!(
-                "Copilot inline prompt remains above the {CDP_INLINE_PROMPT_MAX_TOKENS}-token limit after compaction (estimated {estimated_tokens} tokens)"
-            )));
-        }
-
-        messages = result.compacted_session.messages;
-        removed_message_count += result.removed_message_count;
-        compaction_rounds += 1;
-        tracing::info!(
-            "[CdpApiClient] compacted prompt context for inline delivery (round={}, removed_messages={}, est_tokens_before={})",
-            compaction_rounds,
-            result.removed_message_count,
-            estimated_tokens
-        );
+fn cdp_messages_for_flavor(
+    messages: &[ConversationMessage],
+    flavor: CdpPromptFlavor,
+) -> Vec<ConversationMessage> {
+    match flavor {
+        CdpPromptFlavor::Standard => messages.to_vec(),
+        CdpPromptFlavor::Repair => latest_user_message(messages)
+            .map(|message| vec![message])
+            .unwrap_or_else(|| messages.to_vec()),
     }
 }
 
-/// Convert an `ApiRequest` into a human-readable text prompt for CDP.
-fn build_cdp_prompt(request: &ApiRequest<'_>, preset: SessionPreset) -> String {
+fn render_cdp_messages(messages: &[ConversationMessage]) -> String {
     let mut parts = Vec::new();
-
-    parts.push(CDP_BUNDLE_GROUNDING_BLOCK.to_string());
-
-    if !request.system_prompt.is_empty() {
-        parts.push(request.system_prompt.join("\n\n"));
-    }
-
-    for msg in request.messages {
+    for msg in messages {
         let role = match msg.role {
             runtime::MessageRole::System => "System",
             runtime::MessageRole::User => "User",
@@ -2426,11 +2542,95 @@ fn build_cdp_prompt(request: &ApiRequest<'_>, preset: SessionPreset) -> String {
 
         parts.push(format!("{role}:\n{}", text.join("\n")));
     }
+    parts.join("\n\n")
+}
 
-    let mut out = parts.join("\n\n");
-    out.push_str("\n\n");
-    out.push_str(&cdp_tool_catalog_section(preset));
-    out
+fn build_cdp_prompt_bundle_from_messages(
+    system_prompt: &[String],
+    messages: &[ConversationMessage],
+    preset: SessionPreset,
+    flavor: CdpPromptFlavor,
+) -> CdpPromptBundle {
+    let grounding_text = CDP_BUNDLE_GROUNDING_BLOCK.to_string();
+    let effective_messages = cdp_messages_for_flavor(messages, flavor);
+    let system_text = match flavor {
+        CdpPromptFlavor::Standard => system_prompt.join("\n\n"),
+        CdpPromptFlavor::Repair => build_repair_cdp_system_prompt(messages),
+    };
+    let message_text = render_cdp_messages(&effective_messages);
+    let catalog_text = cdp_tool_catalog_section_for_flavor(preset, flavor);
+    let mut parts = vec![grounding_text.clone()];
+    if !system_text.is_empty() {
+        parts.push(system_text.clone());
+    }
+    if !message_text.is_empty() {
+        parts.push(message_text.clone());
+    }
+    parts.push(catalog_text.clone());
+    CdpPromptBundle {
+        prompt: parts.join("\n\n"),
+        grounding_text,
+        system_text,
+        message_text,
+        catalog_text,
+    }
+}
+
+fn compact_request_messages_for_inline_cdp_with_flavor(
+    request: &ApiRequest<'_>,
+    preset: SessionPreset,
+    flavor: CdpPromptFlavor,
+) -> Result<(Vec<ConversationMessage>, usize, usize), RuntimeError> {
+    let mut messages = cdp_messages_for_flavor(request.messages, flavor);
+    let mut compaction_rounds = 0;
+    let mut removed_message_count = 0;
+
+    loop {
+        let prompt_bundle =
+            build_cdp_prompt_bundle_from_messages(request.system_prompt, &messages, preset, flavor);
+        let estimated_tokens = estimate_cdp_prompt_tokens(&prompt_bundle.prompt);
+        if estimated_tokens <= CDP_INLINE_PROMPT_MAX_TOKENS {
+            return Ok((messages, estimated_tokens, removed_message_count));
+        }
+
+        let mut session = RuntimeSession::new();
+        session.messages = messages;
+        let result = runtime::compact_session(&session, runtime::CompactionConfig::default());
+        if result.removed_message_count == 0 {
+            return Err(RuntimeError::new(format!(
+                "Copilot inline prompt remains above the {CDP_INLINE_PROMPT_MAX_TOKENS}-token limit after compaction (estimated {estimated_tokens} tokens)"
+            )));
+        }
+
+        messages = result.compacted_session.messages;
+        removed_message_count += result.removed_message_count;
+        compaction_rounds += 1;
+        tracing::info!(
+            "[CdpApiClient] compacted prompt context for inline delivery (round={}, removed_messages={}, est_tokens_before={}, flavor={:?})",
+            compaction_rounds,
+            result.removed_message_count,
+            estimated_tokens,
+            flavor
+        );
+    }
+}
+
+fn compact_request_messages_for_inline_cdp(
+    request: &ApiRequest<'_>,
+    preset: SessionPreset,
+) -> Result<(Vec<ConversationMessage>, usize, usize), RuntimeError> {
+    compact_request_messages_for_inline_cdp_with_flavor(request, preset, CdpPromptFlavor::Standard)
+}
+
+/// Convert an `ApiRequest` into a human-readable text prompt for CDP.
+fn build_cdp_prompt(request: &ApiRequest<'_>, preset: SessionPreset) -> String {
+    build_cdp_prompt_bundle_from_messages(
+        request.system_prompt,
+        request.messages,
+        preset,
+        CdpPromptFlavor::Standard,
+    )
+    .prompt
 }
 
 fn format_cdp_tool_result(tool_name: &str, output: &str, is_error: bool) -> String {
@@ -3718,6 +3918,61 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
+    fn repair_catalog_is_reduced_to_local_file_tools() {
+        let s = cdp_tool_catalog_section_for_flavor(SessionPreset::Build, CdpPromptFlavor::Repair);
+        assert!(s.contains("read_file"));
+        assert!(s.contains("write_file"));
+        assert!(s.contains("edit_file"));
+        assert!(s.contains("glob_search"));
+        assert!(s.contains("grep_search"));
+        assert!(!s.contains("\"name\": \"bash\""));
+        assert!(!s.contains("\"name\": \"WebFetch\""));
+        assert!(!s.contains("\"name\": \"WebSearch\""));
+        assert!(s.contains("repair resend"));
+    }
+
+    #[test]
+    fn repair_prompt_uses_latest_repair_message_and_minimal_catalog() {
+        let system = vec![
+            "# Project context\nWorking directory: /tmp/workspace".to_string(),
+            "# Workspace instructions\nVery long instructions".to_string(),
+        ];
+        let repair = build_tool_protocol_repair_input("Create ./tetris.html", 0);
+        let messages = vec![
+            ConversationMessage::user_text("Original request".to_string()),
+            ConversationMessage::assistant(vec![ContentBlock::Text {
+                text: "I will use Python to create the page.".to_string(),
+            }]),
+            ConversationMessage::user_text(repair.clone()),
+        ];
+
+        let bundle = build_cdp_prompt_bundle_from_messages(
+            &system,
+            &messages,
+            SessionPreset::Build,
+            CdpPromptFlavor::Repair,
+        );
+
+        assert!(bundle.system_text.contains("## Relay repair mode"));
+        assert!(bundle.system_text.contains("Create ./tetris.html"));
+        assert!(bundle.message_text.contains("Tool protocol repair."));
+        assert!(!bundle.message_text.contains("I will use Python"));
+        assert!(!bundle.system_text.contains("# Project context"));
+        assert!(bundle.catalog_text.contains("\"name\": \"write_file\""));
+        assert!(!bundle.catalog_text.contains("\"name\": \"bash\""));
+    }
+
+    #[test]
+    fn tool_protocol_repair_messages_use_retry_parse_mode() {
+        let messages = vec![ConversationMessage::user_text(build_tool_protocol_repair_input(
+            "Create ./tetris.html",
+            0,
+        ))];
+        assert_eq!(cdp_tool_parse_mode(&messages), CdpToolParseMode::RetryRepair);
+        assert_eq!(cdp_prompt_flavor(&messages), CdpPromptFlavor::Repair);
+    }
+
+    #[test]
     fn sanitize_strips_richwebanswer_markers() {
         let raw = "Hello 【richwebanswer-ac461e】 world";
         let s = sanitize_copilot_visible_text(raw);
@@ -4502,17 +4757,26 @@ mod loop_controller_tests {
     fn build_live_probe_prompt(
         system_prompt: &[String],
         messages: &[ConversationMessage],
-    ) -> (String, usize, usize) {
+    ) -> (CdpPromptFlavor, CdpPromptBundle, usize, usize) {
+        let flavor = cdp_prompt_flavor(messages);
         let request = ApiRequest {
             system_prompt,
             messages,
         };
         let (compacted_messages, estimated_tokens, removed_message_count) =
-            compact_request_messages_for_inline_cdp(&request, SessionPreset::Build)
+            compact_request_messages_for_inline_cdp_with_flavor(
+                &request,
+                SessionPreset::Build,
+                flavor,
+            )
                 .expect("live repair probe should compact prompt");
-        let prompt =
-            build_cdp_prompt_from_messages(system_prompt, &compacted_messages, SessionPreset::Build);
-        (prompt, estimated_tokens, removed_message_count)
+        let prompt_bundle = build_cdp_prompt_bundle_from_messages(
+            system_prompt,
+            &compacted_messages,
+            SessionPreset::Build,
+            flavor,
+        );
+        (flavor, prompt_bundle, estimated_tokens, removed_message_count)
     }
 
     fn send_live_probe_stage(
@@ -4525,15 +4789,20 @@ mod loop_controller_tests {
         stage_timeout_secs: u64,
     ) -> String {
         let request_id = format!("live-repair-{stage_name}-{}", uuid::Uuid::new_v4());
-        let (prompt, estimated_tokens, removed_message_count) =
+        let (flavor, prompt_bundle, estimated_tokens, removed_message_count) =
             build_live_probe_prompt(system_prompt, messages);
         tracing::info!(
-            "[live-repair-probe] stage={} request_id={} sending prompt (chars={}, est_tokens={}, compacted_removed_messages={})",
+            "[live-repair-probe] stage={} request_id={} sending prompt (flavor={:?}, chars={}, est_tokens={}, compacted_removed_messages={}, grounding_chars={}, system_chars={}, message_chars={}, catalog_chars={})",
             stage_name,
             request_id,
-            prompt.len(),
+            flavor,
+            prompt_bundle.total_chars(),
             estimated_tokens,
-            removed_message_count
+            removed_message_count,
+            prompt_bundle.grounding_chars(),
+            prompt_bundle.system_chars(),
+            prompt_bundle.message_chars(),
+            prompt_bundle.catalog_chars(),
         );
 
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -4548,7 +4817,7 @@ mod loop_controller_tests {
                     session_id,
                     &request_id,
                     "",
-                    &prompt,
+                    &prompt_bundle.prompt,
                     response_timeout_secs,
                     &[],
                     false,
@@ -4579,11 +4848,16 @@ mod loop_controller_tests {
             Err(_) => {
                 server.stop();
                 panic!(
-                    "live repair probe stage `{}` timed out after {:?} (request_id={}, prompt_chars={})",
+                    "live repair probe stage `{}` timed out after {:?} (request_id={}, flavor={:?}, prompt_chars={}, grounding_chars={}, system_chars={}, message_chars={}, catalog_chars={})",
                     stage_name,
                     started.elapsed(),
                     request_id,
-                    prompt.len()
+                    flavor,
+                    prompt_bundle.total_chars(),
+                    prompt_bundle.grounding_chars(),
+                    prompt_bundle.system_chars(),
+                    prompt_bundle.message_chars(),
+                    prompt_bundle.catalog_chars()
                 );
             }
         }
@@ -5003,6 +5277,29 @@ mod loop_controller_tests {
         ));
         assert!(requests[2].contains("output only the Relay `relay_tool` JSON"));
         assert!(requests[2].contains(goal));
+    }
+
+    #[test]
+    fn live_probe_prompt_breakdown_reports_system_message_and_catalog() {
+        let goal = "Create ./tetris.html";
+        let system_prompt = build_desktop_system_prompt(goal, Some("/root/Relay_Agent"), SessionPreset::Build);
+        let messages = vec![ConversationMessage::user_text(build_tool_protocol_repair_input(
+            goal,
+            0,
+        ))];
+
+        let (flavor, bundle, estimated_tokens, removed_message_count) =
+            build_live_probe_prompt(&system_prompt, &messages);
+
+        assert_eq!(flavor, CdpPromptFlavor::Repair);
+        assert!(estimated_tokens > 0);
+        assert_eq!(removed_message_count, 0);
+        assert!(bundle.grounding_chars() > 0);
+        assert!(bundle.system_chars() > 0);
+        assert!(bundle.message_chars() > 0);
+        assert!(bundle.catalog_chars() > 0);
+        assert!(bundle.catalog_text.contains("\"name\": \"write_file\""));
+        assert!(!bundle.catalog_text.contains("\"name\": \"bash\""));
     }
 
     #[test]
