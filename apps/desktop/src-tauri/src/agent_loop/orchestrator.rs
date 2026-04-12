@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use serde_with::skip_serializing_none;
 use tauri::{AppHandle, Emitter, Manager};
 use ts_rs::TS;
 use uuid::Uuid;
@@ -46,29 +47,28 @@ use crate::registry::{
 use crate::session_write_undo;
 use crate::tauri_bridge;
 
-/// Tools allowed in **Explore** preset (narrow read-only catalog + policy).
-const EXPLORE_TOOL_NAMES: &[&str] = &["read_file", "glob_search", "grep_search"];
+fn tool_surface_for_preset(preset: SessionPreset) -> tools::ToolSurface {
+    match preset {
+        SessionPreset::Build => tools::ToolSurface::Build,
+        SessionPreset::Plan => tools::ToolSurface::Plan,
+        SessionPreset::Explore => tools::ToolSurface::Explore,
+    }
+}
 
 /// **Build:** read/search tools run freely; workspace writes map to danger tier so the user is
 /// prompted (writes, shell, MCP, etc.). **Plan:** host active mode is read-only so mutating tools
 /// are denied without prompts (OpenCode-style plan agent); `.claw` permission heuristics for bash
-/// still apply in addition. **Explore:** same read-only host as Plan, but every tool outside
-/// `EXPLORE_TOOL_NAMES` requires danger tier so only file discovery reads run.
+/// still apply in addition. **Explore:** same read-only host as Plan, but only the tools exposed
+/// on the Explore surface remain callable without a danger-tier escalation.
 pub(crate) fn desktop_permission_policy(preset: SessionPreset) -> PermissionPolicy {
     let base = match preset {
         SessionPreset::Build => PermissionMode::WorkspaceWrite,
         SessionPreset::Plan | SessionPreset::Explore => PermissionMode::ReadOnly,
     };
+    let surface = tool_surface_for_preset(preset);
     let mut policy = PermissionPolicy::new(base);
     for spec in tools::mvp_tool_specs() {
-        let mut required = if spec.required_permission == PermissionMode::WorkspaceWrite {
-            PermissionMode::DangerFullAccess
-        } else {
-            spec.required_permission
-        };
-        if preset == SessionPreset::Explore && !EXPLORE_TOOL_NAMES.contains(&spec.name) {
-            required = PermissionMode::DangerFullAccess;
-        }
+        let required = tools::required_permission_for_surface(&spec, surface);
         policy = policy.with_tool_requirement(spec.name, required);
     }
     policy
@@ -1438,21 +1438,20 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 
 /// Serialize built-in tool specs for the Copilot text prompt.
 fn cdp_tool_catalog_section(preset: SessionPreset) -> String {
-    let explore_only = preset == SessionPreset::Explore;
-    let catalog: Vec<Value> = tools::mvp_tool_specs()
-        .iter()
-        .filter(|s| !explore_only || EXPLORE_TOOL_NAMES.contains(&s.name))
+    let surface = tool_surface_for_preset(preset);
+    let catalog: Vec<Value> = tools::tool_specs_for_surface(surface)
+        .into_iter()
         .map(|s| {
             json!({
                 "name": s.name,
                 "description": s.description,
-                "input_schema": s.input_schema.clone(),
+                "input_schema": s.input_schema,
             })
         })
         .collect();
     let json_pretty = serde_json::to_string_pretty(&catalog).unwrap_or_else(|_| "[]".to_string());
     let win_addon = cdp_windows_office_catalog_addon();
-    let mode_note = if explore_only {
+    let mode_note = if matches!(surface, tools::ToolSurface::Explore) {
         "\n\n**Session mode:** This list is **Explore-only**—you may invoke **only** `read_file`, `glob_search`, and `grep_search`. Do not assume any other tools exist.\n"
     } else {
         ""
@@ -3334,12 +3333,12 @@ pub struct AgentUserQuestionNeededEvent {
 
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[skip_serializing_none]
 pub struct AgentApprovalNeededEvent {
     pub session_id: String,
     pub approval_id: String,
     pub tool_name: String,
     pub description: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
     #[ts(type = "unknown")]
     pub input: serde_json::Value,
@@ -3358,18 +3357,14 @@ pub struct AgentTurnCompleteEvent {
 
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[skip_serializing_none]
 pub struct AgentSessionStatusEvent {
     pub session_id: String,
     pub phase: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub attempt: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_retry_at_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
 }
 

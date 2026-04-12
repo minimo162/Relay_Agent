@@ -16,6 +16,22 @@
 
 ## Milestone Log
 
+### 2026-04-12 ts-rs warning cleanup for optional IPC fields
+
+**Problem:** `cargo check` / `cargo test` on the desktop crate still printed non-fatal `ts-rs` warnings for `#[serde(skip_serializing_if = "Option::is_none")]` on several `TS`-derived IPC/event structs. The warnings were noisy even though the generated TypeScript shapes were otherwise correct.
+
+**Change:** Added `serde_with` to the desktop crate and moved the affected `TS`-derived structs to `#[skip_serializing_none]` container attributes instead of field-level `skip_serializing_if` attributes. This was applied to [`WorkspaceSlashCommandRow`](../apps/desktop/src-tauri/src/models.rs), [`AgentApprovalNeededEvent`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs), [`AgentSessionStatusEvent`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs), and [`CdpConnectResult`](../apps/desktop/src-tauri/src/tauri_bridge.rs). Serialization still omits `None` fields, while `ts-rs` no longer warns during desktop verification.
+
+**Verification:** `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`; `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop agent_loop`; `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop ipc_codegen::tests::rendered_ipc_bindings_include_core_contracts -- --exact` — pass (2026-04-12). The previous `ts-rs` `skip_serializing_if` warnings no longer appear in these runs.
+
+### 2026-04-12 Tool surface / metadata refactor (Phase 1)
+
+**Problem:** Tool approval metadata and preset-specific tool visibility were split across two places. [`crates/tools/src/lib.rs`](../apps/desktop/src-tauri/crates/tools/src/lib.rs) owned the tool specs, but approval titles / target extraction / risky fields / redaction rules still lived in separate `match self.name` branches, while [`agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs) duplicated Explore-only tool filtering with its own hard-coded list for both permission policy and the CDP prompt catalog.
+
+**Change:** Added `ToolSurface` (`Build` / `Plan` / `Explore`) and `ToolMetadata` to [`crates/tools/src/lib.rs`](../apps/desktop/src-tauri/crates/tools/src/lib.rs), plus shared helpers `tool_metadata`, `is_tool_visible_in_surface`, `tool_specs_for_surface`, and `required_permission_for_surface`. `ToolSpec::approval_title`, `target_extractor`, `risky_fields`, and `redaction_rules` now resolve through the shared metadata table instead of duplicating per-tool matches. On the desktop side, [`agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs) now maps `SessionPreset` to `ToolSurface`, derives Explore catalog contents from `tools::tool_specs_for_surface(...)`, and derives per-tool permission requirements from `tools::required_permission_for_surface(...)` so runtime gating and prompt-visible catalog come from the same source. Added regression coverage in the `tools` crate for metadata lookup, Explore surface membership, and per-surface permission requirements; existing desktop tests continue to pin Explore visibility and Plan/runtime policy parity.
+
+**Verification:** `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`; `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools`; `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`; `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop agent_loop` — pass (2026-04-12). `cargo check` and desktop tests still emit the existing non-fatal `ts-rs` "`failed to parse serde attribute skip_serializing_if = \"Option::is_none\"`" warnings; no new warnings or behavior regressions were introduced by this refactor.
+
 ### 2026-04-12 Core/client/IPC boundary refactor
 
 **Problem:** The desktop app had clear product behavior, but the implementation cost was climbing because `tauri_bridge.rs`, `agent_loop.rs`, and `Shell.tsx` were each carrying too much cross-layer state. IPC types were also maintained twice by hand across Rust and TypeScript, and CI still skipped `cargo test` even though the repo already had useful regression coverage.
