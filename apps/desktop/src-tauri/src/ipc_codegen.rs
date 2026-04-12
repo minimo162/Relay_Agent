@@ -19,7 +19,8 @@ use crate::models::{
 };
 use crate::tauri_bridge::{
     CdpConnectResult, CdpPromptResult, CdpSendPromptRequest, CompactAgentSessionRequest,
-    CompactAgentSessionResponse, ConnectCdpRequest,
+    CompactAgentSessionResponse, ConnectCdpRequest, CopilotWarmupFailureCode, CopilotWarmupResult,
+    CopilotWarmupStage,
 };
 use crate::workspace_surfaces::{InstructionSurface, WorkspaceInstructionSurfaces};
 
@@ -57,6 +58,9 @@ pub fn render_ipc_generated_ts() -> String {
         decl::<WorkspaceInstructionSurfacesRequest>(),
         decl::<InstructionSurface>(),
         decl::<WorkspaceInstructionSurfaces>(),
+        decl::<CopilotWarmupStage>(),
+        decl::<CopilotWarmupFailureCode>(),
+        decl::<CopilotWarmupResult>(),
         decl::<ConnectCdpRequest>(),
         decl::<CdpSendPromptRequest>(),
         decl::<CdpConnectResult>(),

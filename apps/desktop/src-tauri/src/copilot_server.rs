@@ -33,6 +33,31 @@ pub struct CopilotStatusResponse {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CopilotStatusHttpError {
+    pub status: u16,
+    pub error_code: Option<String>,
+    pub message: Option<String>,
+    pub url: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum CopilotStatusCheckError {
+    Transport(CopilotError),
+    Http(CopilotStatusHttpError),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StatusErrorBody {
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct HealthBody {
@@ -108,6 +133,24 @@ impl std::fmt::Display for CopilotError {
             }
             CopilotError::Spawn(e) => write!(f, "failed to spawn copilot server: {e}"),
             CopilotError::PromptError(msg) => write!(f, "prompt error: {msg}"),
+        }
+    }
+}
+
+impl std::fmt::Display for CopilotStatusCheckError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CopilotStatusCheckError::Transport(error) => write!(f, "{error}"),
+            CopilotStatusCheckError::Http(error) => write!(
+                f,
+                "status check failed: status {} ({})",
+                error.status,
+                error
+                    .error_code
+                    .as_deref()
+                    .or(error.message.as_deref())
+                    .unwrap_or("unknown")
+            ),
         }
     }
 }
@@ -367,6 +410,26 @@ impl CopilotServer {
         &self,
         timeout_secs: u64,
     ) -> Result<CopilotStatusResponse, CopilotError> {
+        self.status_with_timeout_detailed(timeout_secs)
+            .await
+            .map_err(|error| match error {
+                CopilotStatusCheckError::Transport(error) => error,
+                CopilotStatusCheckError::Http(error) => CopilotError::PromptError(format!(
+                    "status check failed: status {}{}",
+                    error.status,
+                    error
+                        .error_code
+                        .as_deref()
+                        .map(|code| format!(" ({code})"))
+                        .unwrap_or_default()
+                )),
+            })
+    }
+
+    pub async fn status_with_timeout_detailed(
+        &self,
+        timeout_secs: u64,
+    ) -> Result<CopilotStatusResponse, CopilotStatusCheckError> {
         let mut request = self
             .client
             .get(format!("{}/status", self.server_url()))
@@ -374,18 +437,27 @@ impl CopilotServer {
         if let Some(token) = &self.boot_token {
             request = request.header("X-Relay-Boot-Token", token);
         }
-        let response = request.send().await.map_err(CopilotError::Http)?;
+        let response = request
+            .send()
+            .await
+            .map_err(CopilotError::Http)
+            .map_err(CopilotStatusCheckError::Transport)?;
 
         if response.status().is_success() {
             response
                 .json::<CopilotStatusResponse>()
                 .await
                 .map_err(CopilotError::Http)
+                .map_err(CopilotStatusCheckError::Transport)
         } else {
-            Err(CopilotError::PromptError(format!(
-                "status check failed: status {}",
-                response.status()
-            )))
+            let status = response.status().as_u16();
+            let body = response.json::<StatusErrorBody>().await.ok();
+            Err(CopilotStatusCheckError::Http(CopilotStatusHttpError {
+                status,
+                error_code: body.as_ref().and_then(|value| value.error.clone()),
+                message: body.as_ref().and_then(|value| value.message.clone()),
+                url: body.and_then(|value| value.url),
+            }))
         }
     }
 

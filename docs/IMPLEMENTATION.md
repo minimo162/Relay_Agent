@@ -4940,3 +4940,34 @@ Observed result:
 - Live ignored probe still does not complete end-to-end in this XRDP/Linux environment. The latest rerun failed in `original` after 120 seconds with the new breakdown attached: `flavor=Standard`, `prompt_chars=41013`, `grounding_chars=404`, `system_chars=4893`, `message_chars=196`, `catalog_chars=35514` (`live-repair-original-7dae2bbc-e11b-42c9-9816-30fa898c61e7`).
 - Real `tauri:dev` app validation launched successfully on the XRDP desktop and the signed-in dedicated Edge window was visible, but the app remained in first-run preflight with `Copilot signed in: Needs attention` / `CDP reachable: Not ready`. A local-file-creation request could not be completed from the live app UI, and `/root/Relay_Agent/tetris.html` was still absent at the end of the run.
 - Current blocker is still live Copilot bridge/app readiness rather than the repair-prompt builder itself. The prompt slimming and diagnostics changes are in place; the remaining work is to make the live `original`/warmup path deterministic enough for the app to reach the local Relay tool flow.
+
+Warmup diagnostics + Standard catalog slimming + real app revalidation (2026-04-13):
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml classify_warmup_ready_response -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml classify_warmup_login_required_response -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml classify_warmup_copilot_tab_unavailable_response -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml standard_minimal_catalog_is_reduced_to_local_file_tools -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml standard_catalog_retry_policy_widens_once_for_protocol_confusion -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml live_probe_prompt_breakdown_reports_system_message_and_catalog -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_repairs_are_actually_sent_to_api_client_twice -- --nocapture
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+node --check apps/desktop/src-tauri/binaries/copilot_server.js
+pnpm --filter @relay-agent/desktop typecheck
+git diff --check
+RELAY_LIVE_REPAIR_TIMEOUT_SECS=90 RELAY_LIVE_REPAIR_STAGE_TIMEOUT_SECS=120 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml loop_controller_tests::live_repair_probe_streams_original_and_both_repair_prompts -- --ignored --nocapture
+DISPLAY=:10.0 XAUTHORITY=/root/.Xauthority RELAY_SKIP_PRESTART_EDGE=1 pnpm --filter @relay-agent/desktop run tauri:dev
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/tauri_bridge.rs` now returns a structured `CopilotWarmupResult` from `warmup_copilot_bridge` with `requestId`, `stage`, `failureCode`, `cdpPort`, `bootTokenPresent`, `statusCode`, `message`, and the existing connection booleans/URL. Rust warmup logs now emit per-stage records with request id and CDP port (`ensure_server`, `health_check`, `status_request`, final outcome).
+- `apps/desktop/src-tauri/src/copilot_server.rs` now preserves non-200 `/status` response details instead of flattening them into a generic string, so Rust can distinguish `unauthorized`, `login_required`, and generic HTTP/transport failures.
+- `apps/desktop/src/shell/useCopilotWarmup.ts`, `FirstRunPanel.tsx`, and `SettingsModal.tsx` now treat the structured warmup result as the source of truth for UI state. The first-run screen now correctly surfaces a stable `Signed in` / `Reachable` state once warmup returns `ready`, and settings/preflight can show stage/request diagnostics instead of only a generic error string.
+- `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs` now separates prompt flavor from catalog flavor. Standard CDP sends start with a reduced local-file catalog (`read_file`, `write_file`, `edit_file`, `glob_search`, `grep_search`) and widen to the full Build catalog only once when the first Standard reply is tool-less and matches the existing meta-stall / tool-protocol-confusion heuristics. Repair sends remain on the reduced repair catalog.
+- CDP send logs and the ignored live probe logs now include `catalog_flavor` in addition to the existing prompt composition breakdown, so it is explicit whether a turn used `StandardMinimal`, `StandardFull`, or `Repair`.
+- All listed static checks passed in this environment.
+- The ignored live probe still fails in `original`, but the prompt was materially reduced: the latest failure was `catalog_flavor=StandardMinimal`, `prompt_chars=12533`, `grounding_chars=404`, `system_chars=4893`, `message_chars=196`, `catalog_chars=7034` (`live-repair-original-c57e3e9e-5a17-4b2f-a957-0f7cd7b1208b`). This narrows the remaining live blocker beyond the prior 35k-catalog run.
+- Real `tauri:dev` validation improved: the app warmup now reaches `Ready` end-to-end in the XRDP session, and the first-run UI shows `Copilot signed in: Signed in` plus `CDP reachable: Reachable`. Tauri logs captured a full successful warmup trace (`request_id=4eb058c8-d9c5-42c3-96d9-3cab65b085df` and later `51236fb5-...`) through `ensure_server -> health_check -> status_request -> Ready`.
+- The remaining real-app blocker is now narrower than before: XRDP/X11 automation can focus and type into the real Tauri composer, but the final send action (`Ctrl+Enter`, Tab/Return, and direct send-button clicks via `xdotool`) did not dispatch a request from the real app window in this environment. No approval overlay appeared, no session log advanced, and `/root/Relay_Agent/tetris.html` was still absent at the end of the run.

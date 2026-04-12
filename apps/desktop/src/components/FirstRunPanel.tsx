@@ -3,7 +3,7 @@ import { ellipsisPath, workspaceBasename } from "../lib/workspace-display";
 import { ui } from "../lib/ui-tokens";
 import type { SessionPreset } from "../lib/ipc";
 import { sessionModeDefaultNote, sessionModeLabel } from "../lib/session-mode-label";
-import type { CopilotWarmupState } from "../shell/useCopilotWarmup";
+import { copilotWarmupStageDetail, type CopilotWarmupState } from "../shell/useCopilotWarmup";
 import { Button } from "./ui";
 
 function PreflightItem(props: {
@@ -45,10 +45,16 @@ export function FirstRunPanel(props: {
       ? ellipsisPath(workspace(), 72)
       : "Choose a folder so Relay can inspect and edit the right files.",
   );
-  const copilotSignedIn = createMemo(() => props.copilotState.status === "ready");
-  const cdpReachable = createMemo(
-    () => props.copilotState.status === "ready" || props.copilotState.status === "needs_sign_in",
+  const copilotSignedIn = createMemo(
+    () => props.copilotState.result?.connected ?? props.copilotState.status === "ready",
   );
+  const cdpReachable = createMemo(
+    () => props.copilotState.result?.connected
+      || props.copilotState.result?.loginRequired
+      || props.copilotState.status === "ready"
+      || props.copilotState.status === "needs_sign_in",
+  );
+  const copilotStageDetail = createMemo(() => copilotWarmupStageDetail(props.copilotState));
 
   return (
     <section class="ra-first-run" aria-label="Get started">
@@ -88,11 +94,13 @@ export function FirstRunPanel(props: {
               label="Copilot signed in"
               value={copilotSignedIn() ? "Signed in" : "Needs attention"}
               detail={
-                props.copilotState.status === "needs_sign_in"
-                  ? props.copilotState.message
+                props.copilotState.status === "checking"
+                  ? "Checking the Copilot sign-in state…"
+                  : props.copilotState.status === "needs_sign_in"
+                  ? props.copilotState.message ?? "Sign in to Copilot in Edge, then return here."
                   : copilotSignedIn()
                     ? "Copilot is ready for this app."
-                    : props.copilotState.message ?? "Run a connection check from settings."
+                    : copilotStageDetail() ?? props.copilotState.message ?? "Run a connection check from settings."
               }
               state={copilotSignedIn() ? "good" : "warn"}
             />
@@ -101,10 +109,10 @@ export function FirstRunPanel(props: {
               value={cdpReachable() ? "Reachable" : "Not ready"}
               detail={
                 props.copilotState.status === "checking"
-                  ? "Checking the Edge connection…"
+                  ? copilotStageDetail() ?? "Checking the Edge connection…"
                   : cdpReachable()
                     ? "Relay can reach the Edge debugging endpoint."
-                    : props.copilotState.message ?? "Open settings to review the browser connection."
+                    : copilotStageDetail() ?? props.copilotState.message ?? "Open settings to review the browser connection."
               }
               state={cdpReachable() ? "good" : "warn"}
             />

@@ -16,7 +16,11 @@ import {
   saveWorkspacePath,
 } from "../lib/settings-storage";
 import { sessionModeLabel, sessionModeSummary } from "../lib/session-mode-label";
-import type { CopilotWarmupState } from "../shell/useCopilotWarmup";
+import {
+  copilotWarmupHeadline,
+  copilotWarmupStageDetail,
+  type CopilotWarmupState,
+} from "../shell/useCopilotWarmup";
 import { Button, Input } from "./ui";
 
 export interface ShellSettingsDraft {
@@ -245,15 +249,12 @@ export function SettingsModal(props: {
                     <div>
                       <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Copilot connection</span>
                       <p class="ra-type-button-label text-[var(--ra-text-primary)] mt-1">
-                        {props.copilotState.status === "ready"
-                          ? "Ready"
-                          : props.copilotState.status === "needs_sign_in"
-                            ? "Needs sign-in"
-                            : props.copilotState.status === "checking"
-                              ? "Checking…"
-                              : props.copilotState.status === "error"
-                                ? "Needs attention"
-                                : "Not checked yet"}
+                        {copilotWarmupHeadline(props.copilotState)}
+                      </p>
+                      <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
+                        {copilotWarmupStageDetail(props.copilotState)
+                          ?? props.copilotState.message
+                          ?? "Run a check to verify the Edge/CDP connection."}
                       </p>
                       <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
                         {props.copilotState.message ?? "Run a check to verify the Edge/CDP connection."}

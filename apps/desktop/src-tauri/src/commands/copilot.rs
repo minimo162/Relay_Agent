@@ -7,7 +7,7 @@ use crate::models::BrowserAutomationSettings;
 pub async fn warmup_copilot_bridge(
     services: State<'_, AppServices>,
     browser_settings: Option<BrowserAutomationSettings>,
-) -> Result<crate::copilot_server::CopilotStatusResponse, String> {
+) -> Result<crate::tauri_bridge::CopilotWarmupResult, String> {
     crate::tauri_bridge::warmup_copilot_bridge(services, browser_settings).await
 }
 

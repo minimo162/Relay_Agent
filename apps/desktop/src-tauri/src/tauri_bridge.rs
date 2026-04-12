@@ -212,14 +212,45 @@ pub fn ensure_copilot_server(
 pub async fn warmup_copilot_bridge(
     services: State<'_, AppServices>,
     browser_settings: Option<BrowserAutomationSettings>,
-) -> Result<crate::copilot_server::CopilotStatusResponse, String> {
+) -> Result<CopilotWarmupResult, String> {
     let reg = services.registry();
     let bridge = services.copilot_bridge();
     let cdp = effective_cdp_port(browser_settings.as_ref());
+    let request_id = Uuid::new_v4().to_string();
     // `ensure_copilot_server` builds a temporary runtime and uses `block_on`; it must not run on a
     // Tokio worker thread (nested runtime panic: "Cannot start a runtime from within a runtime").
     tokio::task::spawn_blocking(move || {
-        let server_arc = ensure_copilot_server(cdp, true, bridge, Some(&reg))?;
+        tracing::info!(
+            "[CopilotWarmup] request_id={} cdp_port={} stage={} boot_token_present=false",
+            request_id,
+            cdp,
+            "ensure_server",
+        );
+        let server_arc = match ensure_copilot_server(cdp, true, bridge, Some(&reg)) {
+            Ok(server_arc) => server_arc,
+            Err(error) => {
+                tracing::warn!(
+                    "[CopilotWarmup] request_id={} cdp_port={} stage={} outcome=failed failure_code={} message={}",
+                    request_id,
+                    cdp,
+                    "ensure_server",
+                    "ensure_server_failed",
+                    error
+                );
+                return Ok(warmup_result(
+                    &request_id,
+                    cdp,
+                    false,
+                    CopilotWarmupStage::EnsureServer,
+                    error,
+                    Some(CopilotWarmupFailureCode::EnsureServerFailed),
+                    None,
+                    None,
+                    false,
+                    false,
+                ));
+            }
+        };
         let srv_clone = Arc::clone(&server_arc);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -228,16 +259,128 @@ pub async fn warmup_copilot_bridge(
         let guard = srv_clone
             .lock()
             .map_err(|e| format!("copilot server mutex poisoned: {e}"))?;
-        let out = rt.block_on(guard.warmup_status());
-        Ok(match out {
-            Ok(resp) => resp,
-            Err(e) => crate::copilot_server::CopilotStatusResponse {
-                connected: false,
-                login_required: false,
-                url: None,
-                error: Some(e.to_string()),
-            },
-        })
+        let boot_token_present = guard.boot_token().is_some();
+
+        tracing::info!(
+            "[CopilotWarmup] request_id={} cdp_port={} stage={} boot_token_present={}",
+            request_id,
+            cdp,
+            "health_check",
+            boot_token_present,
+        );
+        if let Err(error) = rt.block_on(guard.health_check()) {
+            tracing::warn!(
+                "[CopilotWarmup] request_id={} cdp_port={} stage={} outcome=failed failure_code={} boot_token_present={} message={}",
+                request_id,
+                cdp,
+                "health_check",
+                "health_check_failed",
+                boot_token_present,
+                error
+            );
+            return Ok(warmup_result(
+                &request_id,
+                cdp,
+                boot_token_present,
+                CopilotWarmupStage::HealthCheck,
+                error.to_string(),
+                Some(CopilotWarmupFailureCode::HealthCheckFailed),
+                None,
+                None,
+                false,
+                false,
+            ));
+        }
+
+        tracing::info!(
+            "[CopilotWarmup] request_id={} cdp_port={} stage={} boot_token_present={}",
+            request_id,
+            cdp,
+            "status_request",
+            boot_token_present,
+        );
+        let result = match rt.block_on(guard.status_with_timeout_detailed(120)) {
+            Ok(response) => classify_warmup_status_response(
+                &request_id,
+                cdp,
+                boot_token_present,
+                response,
+            ),
+            Err(crate::copilot_server::CopilotStatusCheckError::Http(error)) => {
+                let (stage, failure_code) = match error.error_code.as_deref() {
+                    Some("unauthorized") => (
+                        CopilotWarmupStage::BootTokenAuth,
+                        CopilotWarmupFailureCode::BootTokenUnauthorized,
+                    ),
+                    Some("login_required") => (
+                        CopilotWarmupStage::LoginCheck,
+                        CopilotWarmupFailureCode::LoginRequired,
+                    ),
+                    _ => (
+                        CopilotWarmupStage::StatusRequest,
+                        CopilotWarmupFailureCode::StatusHttpError,
+                    ),
+                };
+                warmup_result(
+                    &request_id,
+                    cdp,
+                    boot_token_present,
+                    stage,
+                    error
+                        .message
+                        .clone()
+                        .or(error.error_code.clone())
+                        .unwrap_or_else(|| format!("status check failed: status {}", error.status)),
+                    Some(failure_code),
+                    Some(error.status),
+                    error.url.clone(),
+                    false,
+                    failure_code == CopilotWarmupFailureCode::LoginRequired,
+                )
+            }
+            Err(crate::copilot_server::CopilotStatusCheckError::Transport(error)) => {
+                let error_text = error.to_string();
+                let lower = error_text.to_ascii_lowercase();
+                let (stage, failure_code) = if lower.contains("cdp")
+                    || lower.contains("debugging endpoint")
+                    || lower.contains("websocket")
+                {
+                    (
+                        CopilotWarmupStage::CdpAttach,
+                        CopilotWarmupFailureCode::CdpAttachFailed,
+                    )
+                } else {
+                    (
+                        CopilotWarmupStage::StatusRequest,
+                        CopilotWarmupFailureCode::StatusTransportError,
+                    )
+                };
+                warmup_result(
+                    &request_id,
+                    cdp,
+                    boot_token_present,
+                    stage,
+                    error_text,
+                    Some(failure_code),
+                    None,
+                    None,
+                    false,
+                    false,
+                )
+            }
+        };
+        tracing::info!(
+            "[CopilotWarmup] request_id={} cdp_port={} stage={:?} outcome={} failure_code={:?} boot_token_present={} status_code={:?} message={}",
+            result.request_id,
+            result.cdp_port,
+            result.stage,
+            if result.failure_code.is_some() { "failed" } else { "ok" },
+            result.failure_code,
+            result.boot_token_present,
+            result.status_code,
+            result.message
+        );
+        Ok(result)
     })
     .await
     .map_err(|e| format!("copilot warmup task: {e}"))?
@@ -621,6 +764,149 @@ pub struct CompactAgentSessionRequest {
 pub struct CompactAgentSessionResponse {
     pub message: String,
     pub removed_message_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, TS, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CopilotWarmupStage {
+    EnsureServer,
+    HealthCheck,
+    BootTokenAuth,
+    StatusRequest,
+    CdpAttach,
+    CopilotTab,
+    LoginCheck,
+    Ready,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, TS, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CopilotWarmupFailureCode {
+    EnsureServerFailed,
+    HealthCheckFailed,
+    BootTokenUnauthorized,
+    StatusHttpError,
+    StatusTransportError,
+    CdpAttachFailed,
+    CopilotTabUnavailable,
+    LoginRequired,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[skip_serializing_none]
+pub struct CopilotWarmupResult {
+    pub request_id: String,
+    pub connected: bool,
+    pub login_required: bool,
+    pub boot_token_present: bool,
+    pub cdp_port: u16,
+    pub stage: CopilotWarmupStage,
+    pub message: String,
+    pub failure_code: Option<CopilotWarmupFailureCode>,
+    pub status_code: Option<u16>,
+    pub url: Option<String>,
+}
+
+fn warmup_result(
+    request_id: &str,
+    cdp_port: u16,
+    boot_token_present: bool,
+    stage: CopilotWarmupStage,
+    message: impl Into<String>,
+    failure_code: Option<CopilotWarmupFailureCode>,
+    status_code: Option<u16>,
+    url: Option<String>,
+    connected: bool,
+    login_required: bool,
+) -> CopilotWarmupResult {
+    CopilotWarmupResult {
+        request_id: request_id.to_string(),
+        connected,
+        login_required,
+        boot_token_present,
+        cdp_port,
+        stage,
+        message: message.into(),
+        failure_code,
+        status_code,
+        url,
+    }
+}
+
+fn classify_warmup_status_response(
+    request_id: &str,
+    cdp_port: u16,
+    boot_token_present: bool,
+    response: crate::copilot_server::CopilotStatusResponse,
+) -> CopilotWarmupResult {
+    if response.connected {
+        return warmup_result(
+            request_id,
+            cdp_port,
+            boot_token_present,
+            CopilotWarmupStage::Ready,
+            "Copilot ready.",
+            None,
+            None,
+            response.url,
+            true,
+            false,
+        );
+    }
+    if response.login_required {
+        return warmup_result(
+            request_id,
+            cdp_port,
+            boot_token_present,
+            CopilotWarmupStage::LoginCheck,
+            response
+                .error
+                .unwrap_or_else(|| "Sign in to Copilot in Edge, then return here.".to_string()),
+            Some(CopilotWarmupFailureCode::LoginRequired),
+            None,
+            response.url,
+            false,
+            true,
+        );
+    }
+
+    let error = response
+        .error
+        .unwrap_or_else(|| "Copilot is unavailable right now.".to_string());
+    let lower = error.to_ascii_lowercase();
+    let (stage, code) = if lower.contains("copilot page not available") {
+        (
+            CopilotWarmupStage::CopilotTab,
+            CopilotWarmupFailureCode::CopilotTabUnavailable,
+        )
+    } else if lower.contains("cdp")
+        || lower.contains("debugging endpoint")
+        || lower.contains("websocket")
+    {
+        (
+            CopilotWarmupStage::CdpAttach,
+            CopilotWarmupFailureCode::CdpAttachFailed,
+        )
+    } else {
+        (
+            CopilotWarmupStage::StatusRequest,
+            CopilotWarmupFailureCode::Unknown,
+        )
+    };
+    warmup_result(
+        request_id,
+        cdp_port,
+        boot_token_present,
+        stage,
+        error,
+        Some(code),
+        None,
+        response.url,
+        false,
+        false,
+    )
 }
 
 pub async fn compact_agent_session(
@@ -1631,5 +1917,66 @@ mod tests {
         } else {
             std::env::remove_var("HOME");
         }
+    }
+
+    #[test]
+    fn classify_warmup_ready_response() {
+        let result = classify_warmup_status_response(
+            "req-1",
+            9360,
+            true,
+            crate::copilot_server::CopilotStatusResponse {
+                connected: true,
+                login_required: false,
+                url: Some("https://m365.cloud.microsoft/chat/".to_string()),
+                error: None,
+            },
+        );
+        assert_eq!(result.stage, CopilotWarmupStage::Ready);
+        assert_eq!(result.failure_code, None);
+        assert!(result.connected);
+        assert!(result.boot_token_present);
+    }
+
+    #[test]
+    fn classify_warmup_login_required_response() {
+        let result = classify_warmup_status_response(
+            "req-2",
+            9360,
+            true,
+            crate::copilot_server::CopilotStatusResponse {
+                connected: false,
+                login_required: true,
+                url: Some("https://login.microsoftonline.com/".to_string()),
+                error: Some("Sign in to Copilot in Edge, then return here.".to_string()),
+            },
+        );
+        assert_eq!(result.stage, CopilotWarmupStage::LoginCheck);
+        assert_eq!(
+            result.failure_code,
+            Some(CopilotWarmupFailureCode::LoginRequired)
+        );
+        assert!(result.login_required);
+    }
+
+    #[test]
+    fn classify_warmup_copilot_tab_unavailable_response() {
+        let result = classify_warmup_status_response(
+            "req-3",
+            9360,
+            false,
+            crate::copilot_server::CopilotStatusResponse {
+                connected: false,
+                login_required: false,
+                url: None,
+                error: Some("Copilot page not available".to_string()),
+            },
+        );
+        assert_eq!(result.stage, CopilotWarmupStage::CopilotTab);
+        assert_eq!(
+            result.failure_code,
+            Some(CopilotWarmupFailureCode::CopilotTabUnavailable)
+        );
+        assert!(!result.connected);
     }
 }

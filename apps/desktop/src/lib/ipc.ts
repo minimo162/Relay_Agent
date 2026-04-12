@@ -330,11 +330,38 @@ export async function compactAgentSession(
 }
 
 /** Node bridge `GET /status` after ensuring Edge/Copilot tab (startup prewarm). */
+export type CopilotWarmupStage =
+  | "ensure_server"
+  | "health_check"
+  | "boot_token_auth"
+  | "status_request"
+  | "cdp_attach"
+  | "copilot_tab"
+  | "login_check"
+  | "ready";
+
+export type CopilotWarmupFailureCode =
+  | "ensure_server_failed"
+  | "health_check_failed"
+  | "boot_token_unauthorized"
+  | "status_http_error"
+  | "status_transport_error"
+  | "cdp_attach_failed"
+  | "copilot_tab_unavailable"
+  | "login_required"
+  | "unknown";
+
 export interface CopilotWarmupResult {
+  requestId: string;
   connected: boolean;
   loginRequired: boolean;
+  bootTokenPresent: boolean;
+  cdpPort: number;
+  stage: CopilotWarmupStage;
+  message: string;
+  failureCode?: CopilotWarmupFailureCode | null;
+  statusCode?: number | null;
   url?: string | null;
-  error?: string | null;
 }
 
 export async function warmupCopilotBridge(
