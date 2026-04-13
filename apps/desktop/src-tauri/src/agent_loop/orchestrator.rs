@@ -778,11 +778,19 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         && (lower.contains("```")
             || lower.contains("relay_tool")
             || lower.contains("adjusting tool use"));
+    let repair_refusal = lower.contains("sorry, it looks like i can’t respond")
+        || lower.contains("sorry, it looks like i can't respond")
+        || lower.contains("cannot respond to this")
+        || lower.contains("can't respond to this")
+        || lower.contains("let’s try a different topic")
+        || lower.contains("let's try a different topic")
+        || (lower.contains("different topic") && lower.contains("new chat"));
     local_tool_refusal
         || local_write_refusal
         || foreign_tool_drift
         || planning_only_file_drift
         || mentioned_relay_tools_without_payload
+        || repair_refusal
 }
 
 fn build_tool_protocol_repair_input(goal: &str, attempt_index: usize) -> String {
@@ -790,13 +798,17 @@ fn build_tool_protocol_repair_input(goal: &str, attempt_index: usize) -> String 
         concat!(
             "Use the Relay tool catalog and emit the next required `relay_tool` JSON block in this reply.\n",
             "For local file creation or edits inside the workspace, prefer `write_file` / `edit_file` (and `read_file` first only when actually needed).\n",
-            "Do not answer with prose only.\n\n",
+            "Output exactly one fenced `relay_tool` block and nothing before or after it.\n",
+            "Do not answer with prose only.\n",
+            "Do not mention `relay_tool` in plain text.\n\n",
         )
     } else {
         concat!(
             "Your previous repair still drifted into Microsoft-native execution or prose.\n",
             "Ignore any Pages, uploads, citations, links, `outputFiles`, or remote artifacts from prior replies: they do not satisfy a local workspace request.\n",
-            "In this reply, output only the Relay `relay_tool` JSON needed for the next local workspace step (optionally one short sentence before the fence).\n",
+            "In this reply, output exactly one Relay `relay_tool` fence and nothing else.\n",
+            "Do not include any explanatory sentence before or after the fence.\n",
+            "Do not emit plain-text `relay_tool` mentions.\n",
             "If the task is to create or overwrite a workspace file and you already know the content, emit `write_file` now instead of describing Python or page creation.\n\n",
         )
     };
@@ -1582,6 +1594,7 @@ impl ApiClient for CdpApiClient {
         };
         let mut widened_once = false;
         let request_chain_id = cdp_request_chain_id("cdp-inline");
+        let stage_label = cdp_stage_label(request.messages);
         let mut attempt_index = 0_usize;
 
         loop {
@@ -1660,6 +1673,9 @@ impl ApiClient for CdpApiClient {
                         srv.send_prompt(
                             session_id,
                             &request_id,
+                            &request_chain_id,
+                            attempt_index,
+                            stage_label,
                             "",
                             &prompt,
                             self.response_timeout_secs,
@@ -2148,6 +2164,21 @@ fn cdp_request_chain_id(prefix: &str) -> String {
 
 fn cdp_attempt_request_id(chain_id: &str, attempt_index: usize) -> String {
     format!("{chain_id}.{attempt_index}")
+}
+
+fn cdp_stage_label(messages: &[ConversationMessage]) -> &'static str {
+    let Some(text) = latest_user_text(messages) else {
+        return "original";
+    };
+    let trimmed = text.trim();
+    if !is_tool_protocol_repair_text(trimmed) {
+        return "original";
+    }
+    if trimmed.contains("Your previous repair still drifted") {
+        "repair2"
+    } else {
+        "repair1"
+    }
 }
 
 fn cdp_tool_parse_mode(messages: &[ConversationMessage]) -> CdpToolParseMode {
@@ -5272,6 +5303,9 @@ mod loop_controller_tests {
                     server.send_prompt(
                         session_id,
                         &request_id,
+                        &request_chain_id,
+                        attempt_index,
+                        stage_name,
                         "",
                         &prompt_bundle.prompt,
                         response_timeout_secs,
@@ -5688,9 +5722,27 @@ mod loop_controller_tests {
         assert!(is_tool_protocol_confusion_text(
             "I'll use write_file to create the file. Adjusting tool use... ```"
         ));
+        assert!(is_tool_protocol_confusion_text(
+            "Sorry, it looks like I can’t respond to this. Let’s try a different topic New chat"
+        ));
         assert!(!is_tool_protocol_confusion_text(
             "I inspected the file and here is the fix."
         ));
+    }
+
+    #[test]
+    fn repair_prompt_forbids_prose_and_plain_text_mentions() {
+        let repair1 = build_tool_protocol_repair_input("Create ./tetris.html", 0);
+        assert!(repair1.contains(
+            "Output exactly one fenced `relay_tool` block and nothing before or after it."
+        ));
+        assert!(repair1.contains("Do not mention `relay_tool` in plain text."));
+
+        let repair2 = build_tool_protocol_repair_input("Create ./tetris.html", 1);
+        assert!(repair2.contains("output exactly one Relay `relay_tool` fence and nothing else"));
+        assert!(
+            repair2.contains("Do not include any explanatory sentence before or after the fence.")
+        );
     }
 
     #[test]
@@ -5705,7 +5757,7 @@ mod loop_controller_tests {
         let LoopDecision::Continue { next_input } = decision else {
             panic!("expected stronger repair nudge");
         };
-        assert!(next_input.contains("output only the Relay `relay_tool` JSON"));
+        assert!(next_input.contains("output exactly one Relay `relay_tool` fence and nothing else"));
         assert!(next_input.contains("Ignore any Pages, uploads, citations, links"));
     }
 
@@ -5770,7 +5822,9 @@ mod loop_controller_tests {
         assert!(requests[2].contains(
             "Your previous repair still drifted into Microsoft-native execution or prose."
         ));
-        assert!(requests[2].contains("output only the Relay `relay_tool` JSON"));
+        assert!(
+            requests[2].contains("output exactly one Relay `relay_tool` fence and nothing else")
+        );
         assert!(requests[2].contains(goal));
     }
 

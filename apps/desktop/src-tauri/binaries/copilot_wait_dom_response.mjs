@@ -446,7 +446,13 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
   return null;
 }
 
-async function waitForDomResponse(session, netCapture = null, submittedPromptLen = 0, abortCheck = null) {
+async function waitForDomResponse(
+  session,
+  netCapture = null,
+  submittedPromptLen = 0,
+  abortCheck = null,
+  options = {},
+) {
   const wire = async (s) => {
     let t = stripStreamingPlaceholderTail(String(s ?? "").trim());
     if (netCapture) t = stripStreamingPlaceholderTail(String(await netCapture.pickBestOver(t, submittedPromptLen) ?? "").trim());
@@ -464,7 +470,11 @@ async function waitForDomResponse(session, netCapture = null, submittedPromptLen
     baselineLen = 0;
   }
   const waitStarted = Date.now();
-  const deadline = waitStarted + RESPONSE_TIMEOUT_MS;
+  const timeoutMs =
+    Number.isFinite(options?.timeoutMs) && options.timeoutMs > 0
+      ? options.timeoutMs
+      : RESPONSE_TIMEOUT_MS;
+  const deadline = waitStarted + timeoutMs;
   let prev = baselineLen;
   let stable = 0;
   let streamed = false;

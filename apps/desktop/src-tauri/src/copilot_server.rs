@@ -488,6 +488,9 @@ impl CopilotServer {
         &self,
         relay_session_id: &str,
         relay_request_id: &str,
+        relay_request_chain: &str,
+        relay_request_attempt: usize,
+        relay_stage_label: &str,
         system_prompt: &str,
         user_prompt: &str,
         timeout_secs: u64,
@@ -496,13 +499,16 @@ impl CopilotServer {
     ) -> Result<String, CopilotError> {
         let url = format!("{}/v1/chat/completions", self.server_url());
         info!(
-            "[copilot] POST {} (timeout {}s, user_prompt_chars={}, system_chars={}, attachments={}, relay_new_chat={})",
+            "[copilot] POST {} (timeout {}s, user_prompt_chars={}, system_chars={}, attachments={}, relay_new_chat={}, stage_label={}, request_chain={}, request_attempt={})",
             url,
             timeout_secs,
             user_prompt.len(),
             system_prompt.len(),
             attachment_paths.len(),
-            new_chat
+            new_chat,
+            relay_stage_label,
+            relay_request_chain,
+            relay_request_attempt
         );
         let t0 = Instant::now();
         let mut body = json!({
@@ -512,6 +518,9 @@ impl CopilotServer {
             ],
             "relay_session_id": relay_session_id,
             "relay_request_id": relay_request_id,
+            "relay_request_chain": relay_request_chain,
+            "relay_request_attempt": relay_request_attempt,
+            "relay_stage_label": relay_stage_label,
         });
         if !attachment_paths.is_empty() {
             body["relay_attachments"] = json!(attachment_paths);
@@ -581,6 +590,9 @@ impl CopilotServer {
         &mut self,
         relay_session_id: &str,
         relay_request_id: &str,
+        relay_request_chain: &str,
+        relay_request_attempt: usize,
+        relay_stage_label: &str,
         system_prompt: &str,
         user_prompt: &str,
         timeout_secs: u64,
@@ -591,6 +603,9 @@ impl CopilotServer {
             .send_prompt_once(
                 relay_session_id,
                 relay_request_id,
+                relay_request_chain,
+                relay_request_attempt,
+                relay_stage_label,
                 system_prompt,
                 user_prompt,
                 timeout_secs,
@@ -608,6 +623,9 @@ impl CopilotServer {
                 self.send_prompt_once(
                     relay_session_id,
                     relay_request_id,
+                    relay_request_chain,
+                    relay_request_attempt,
+                    relay_stage_label,
                     system_prompt,
                     user_prompt,
                     timeout_secs,
@@ -624,6 +642,9 @@ impl CopilotServer {
                 self.send_prompt_once(
                     relay_session_id,
                     relay_request_id,
+                    relay_request_chain,
+                    relay_request_attempt,
+                    relay_stage_label,
                     system_prompt,
                     user_prompt,
                     timeout_secs,

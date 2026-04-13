@@ -755,14 +755,48 @@ class CopilotSession {
   async describeImpl(params, requestState) {
     const relaySessionId = requestState.relaySessionId;
     const relaySession = this._getRelaySessionState(relaySessionId);
-    for (let attempt = 0; attempt < 2; attempt++) {
+    const requestChain = String(params.relayRequestChain || requestState.relayRequestId || "").trim() || requestState.relayRequestId;
+    const requestAttempt =
+      Number.isFinite(params.relayRequestAttempt) && params.relayRequestAttempt >= 1
+        ? params.relayRequestAttempt
+        : 1;
+    const stageLabel = String(params.relayStageLabel || "original").trim() || "original";
+    const repairStage = isRepairStageLabel(stageLabel);
+    let recoverableAttempt = 0;
+    let repairReplayUsed = false;
+
+    while (true) {
       let pageSession = null;
       let attachmentTempFiles = [];
       const describeStartedAt = Date.now();
+      const trace = {
+        requestChain,
+        stageLabel,
+        requestAttempt,
+        transportAttempt: recoverableAttempt + 1,
+        repairReplayAttempt: repairReplayUsed ? 2 : 1,
+        wantNewChat: false,
+        newChatReady: false,
+        pasteDone: false,
+        submitObserved: false,
+        networkSeedSeen: false,
+        domWaitStarted: false,
+        domWaitFinished: false,
+        failureClass: null,
+      };
       try {
-        console.error("[copilot:describe] connecting...", attempt > 0 ? `(retry ${attempt})` : "");
+        logDescribeTrace("[copilot:describe] connecting", trace, {
+          recoverable_retry: recoverableAttempt > 0,
+        });
         await this.connect(globalOptions.cdpPort);
-        console.error("[copilot:describe] finding copilot page for relay session", relaySessionId);
+        console.error(
+          "[copilot:describe] finding copilot page for relay session",
+          relaySessionId,
+          "request_chain=",
+          requestChain,
+          "stage_label=",
+          stageLabel,
+        );
         const page = await this.findOrCreateRelayPage(relaySessionId, relaySession);
         console.error("[copilot:describe] page:", JSON.stringify(page));
 
@@ -810,8 +844,11 @@ class CopilotSession {
 
         let hadAttachments = false;
         try {
-          const wantNewChat = !relaySession.initialized || envNewChatEachTurn() || params.relayNewChat === true;
+          const forceRepairNewChat = repairStage && repairReplayUsed;
+          const wantNewChat =
+            forceRepairNewChat || !relaySession.initialized || envNewChatEachTurn() || params.relayNewChat === true;
           const envEach = envNewChatEachTurn();
+          trace.wantNewChat = wantNewChat;
           console.error(
             "[copilot:describe] wantNewChat=",
             wantNewChat,
@@ -823,16 +860,30 @@ class CopilotSession {
             params.relayNewChat === true,
             "relaySessionId=",
             relaySessionId,
+            "request_chain=",
+            requestChain,
+            "stage_label=",
+            stageLabel,
+            "request_attempt=",
+            requestAttempt,
+            "repair_replay_attempt=",
+            trace.repairReplayAttempt,
           );
           if (wantNewChat) {
             console.error("[copilot:describe] starting new chat...");
-            const newChatOk = await clickNewChatDeep(pageSession);
+            let newChatOk = await clickNewChatDeep(pageSession);
             if (!newChatOk) {
               console.error("[copilot:describe] new chat not found (css+shadow+a11y); last-chance CDP click");
-              await pageSession.click(NEW_CHAT_BUTTON_SELECTORS[0]).catch(() => {});
+              await pageSession.click(NEW_CHAT_BUTTON_SELECTORS[0]).then(() => {
+                newChatOk = true;
+              }).catch(() => {});
+            }
+            if (!newChatOk) {
+              throw new Error("Copilot new chat could not be started");
             }
             await sleep(1600);
             relaySession.initialized = true;
+            trace.newChatReady = true;
             console.error(
               "[copilot:describe] new chat ready after",
               Date.now() - describeStartedAt,
@@ -864,9 +915,14 @@ class CopilotSession {
               console.error(
                 "[copilot:describe] phase=paste begin prompt_chars=",
                 fullPrompt.length,
-                continuationRetryUsed ? "(continuation retry)" : ""
+                continuationRetryUsed ? "(continuation retry)" : "",
+                "request_chain=",
+                requestChain,
+                "stage_label=",
+                stageLabel,
               );
               await pastePromptRaw(pageSession, fullPrompt);
+              trace.pasteDone = true;
               console.error(
                 "[copilot:describe] phase=paste done elapsed_ms=",
                 Date.now() - phaseStartedAt,
@@ -880,7 +936,10 @@ class CopilotSession {
               const responseText = await submitPromptRaw(pageSession, fullPrompt.length, netCapture, {
                 hadAttachments,
                 abortCheck: () => requestState.aborted === true,
+                trace,
+                responseTimeoutMs: repairResponseTimeoutMs(stageLabel),
               });
+              trace.networkSeedSeen = !!netCapture?.sawAnySeed?.();
               console.error(
                 "[copilot:describe] phase=wait_response done elapsed_ms=",
                 Date.now() - phaseStartedAt,
@@ -889,6 +948,15 @@ class CopilotSession {
                 "total_elapsed_ms=",
                 Date.now() - describeStartedAt,
               );
+              if (repairStage && !repairReplayUsed && responseLooksLikeRepairRefusal(responseText)) {
+                trace.failureClass = "copilot_refusal_after_send";
+                logDescribeTrace("[copilot:describe] repair fresh-chat replay requested", trace, {
+                  response_excerpt: String(responseText).trim().slice(0, 240),
+                });
+                const replayError = new Error("relay_repair_replay");
+                replayError.repairReplayReason = trace.failureClass;
+                throw replayError;
+              }
               return responseText;
             } catch (error) {
               if (
@@ -923,6 +991,7 @@ class CopilotSession {
                 await sleep(250);
                 continue;
               }
+              trace.networkSeedSeen = !!netCapture?.sawAnySeed?.();
               throw error;
             }
           }
@@ -936,13 +1005,39 @@ class CopilotSession {
         if (error instanceof CopilotLoginRequiredError) {
           throw error;
         }
+        if (error?.repairReplayReason && repairStage && !repairReplayUsed) {
+          repairReplayUsed = true;
+          logDescribeTrace("[copilot:describe] repair replay continuing with forced new chat", trace, {
+            classified_reason: error.repairReplayReason,
+          });
+          await sleep(750);
+          continue;
+        }
+        trace.failureClass = classifyDescribeFailure(trace);
         const message = error?.message || String(error);
-        const recoverable = attempt === 0 && isRecoverableCopilotTabFailure(error);
+        logDescribeTrace("[copilot:describe] classified failure", trace, {
+          error: message,
+        });
+        if (
+          repairStage &&
+          !repairReplayUsed &&
+          ["network_seed_missing", "dom_response_timeout"].includes(trace.failureClass)
+        ) {
+          repairReplayUsed = true;
+          console.error(
+            "[copilot:describe] repair stage forcing fresh-chat replay after classified failure=",
+            trace.failureClass,
+          );
+          await sleep(750);
+          continue;
+        }
+        const recoverable = recoverableAttempt === 0 && isRecoverableCopilotTabFailure(error);
         if (isRecoverableCopilotTabFailure(error)) {
           await this._closeRelayTargetIfKnown(relaySession, message).catch(() => {});
         }
         this._invalidateRelaySession(relaySession, message);
         if (recoverable) {
+          recoverableAttempt += 1;
           console.error("[copilot:describe] recoverable CDP/tab failure; retrying once:", message);
           await sleep(750);
           continue;
@@ -959,7 +1054,6 @@ class CopilotSession {
         }
       }
     }
-    throw new Error("Copilot describe retry exhausted");
   }
 }
 
@@ -2253,6 +2347,11 @@ async function clickSendViaCdpMouse(session) {
 async function submitPromptRaw(session, expectedPromptLen, netCapture = null, opts = {}) {
   const hadAttachments = opts.hadAttachments === true;
   const abortCheck = typeof opts.abortCheck === "function" ? opts.abortCheck : null;
+  const trace = opts.trace || null;
+  const responseTimeoutMs =
+    Number.isFinite(opts.responseTimeoutMs) && opts.responseTimeoutMs > 0
+      ? opts.responseTimeoutMs
+      : RESPONSE_TIMEOUT_MS;
   const stableMs = hadAttachments ? SEND_BUTTON_STABLE_MS_AFTER_ATTACH : SEND_BUTTON_STABLE_MS_DEFAULT;
 
   const minComposer = minComposerThresholdForSubmit(expectedPromptLen);
@@ -2363,16 +2462,35 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
     );
   }
 
+  if (trace) {
+    trace.submitObserved = true;
+    trace.networkSeedSeen = !!netCapture?.sawAnySeed?.();
+    trace.domWaitStarted = true;
+  }
   console.error(
     "[copilot:describe] phase=wait_response begin send_ok=true timeout_s",
-    RESPONSE_TIMEOUT_MS / 1000,
+    responseTimeoutMs / 1000,
   );
   console.error(
     "[copilot:describe] send OK; waiting for Copilot reply (DOM/network, timeout",
-    RESPONSE_TIMEOUT_MS / 1000,
+    responseTimeoutMs / 1000,
     "s)…",
   );
-  return await waitForDomResponse(session, netCapture, expectedPromptLen, abortCheck);
+  try {
+    const response = await waitForDomResponse(session, netCapture, expectedPromptLen, abortCheck, {
+      timeoutMs: responseTimeoutMs,
+    });
+    if (trace) {
+      trace.domWaitFinished = true;
+      trace.networkSeedSeen = !!netCapture?.sawAnySeed?.();
+    }
+    return response;
+  } catch (error) {
+    if (trace) {
+      trace.networkSeedSeen = !!netCapture?.sawAnySeed?.();
+    }
+    throw error;
+  }
 }
 
 function isRecoverableCopilotTabFailure(error) {
@@ -2400,6 +2518,59 @@ function isRecoverableLongContinuationFailure(error, promptLen, phase) {
     /response wait/i.test(message) ||
     /CDP WebSocket (?:closed|error|timeout|is not open)/i.test(message) ||
     /Copilot send failed/i.test(message)
+  );
+}
+
+function isRepairStageLabel(stageLabel) {
+  return stageLabel === "repair1" || stageLabel === "repair2";
+}
+
+function repairResponseTimeoutMs(stageLabel) {
+  return isRepairStageLabel(stageLabel) ? 30_000 : RESPONSE_TIMEOUT_MS;
+}
+
+function responseLooksLikeRepairRefusal(text) {
+  const lower = String(text || "").trim().toLowerCase();
+  if (!lower) return false;
+  return (
+    lower.includes("sorry, it looks like i can’t respond") ||
+    lower.includes("sorry, it looks like i can't respond") ||
+    lower.includes("cannot respond to this") ||
+    lower.includes("can't respond to this") ||
+    lower.includes("let’s try a different topic") ||
+    lower.includes("let's try a different topic") ||
+    (lower.includes("different topic") && lower.includes("new chat"))
+  );
+}
+
+function classifyDescribeFailure(trace) {
+  if (trace.failureClass) return trace.failureClass;
+  if (trace.wantNewChat && !trace.newChatReady) return "new_chat_not_ready";
+  if (!trace.submitObserved) return "submit_not_observed";
+  if (trace.submitObserved && !trace.networkSeedSeen) return "network_seed_missing";
+  if (trace.domWaitStarted && !trace.domWaitFinished) return "dom_response_timeout";
+  return "dom_response_timeout";
+}
+
+function logDescribeTrace(prefix, trace, extras = {}) {
+  console.error(
+    prefix,
+    JSON.stringify({
+      request_chain: trace.requestChain,
+      stage_label: trace.stageLabel,
+      request_attempt: trace.requestAttempt,
+      transport_attempt: trace.transportAttempt,
+      repair_replay_attempt: trace.repairReplayAttempt,
+      want_new_chat: trace.wantNewChat,
+      new_chat_ready: trace.newChatReady,
+      paste_done: trace.pasteDone,
+      submit_observed: trace.submitObserved,
+      network_seed_seen: trace.networkSeedSeen,
+      dom_wait_started: trace.domWaitStarted,
+      dom_wait_finished: trace.domWaitFinished,
+      failure_class: trace.failureClass || null,
+      ...extras,
+    }),
   );
 }
 
@@ -2943,6 +3114,12 @@ function createCopilotNetworkCapture(session) {
           console.error("[copilot:network] Network.enable failed:", e?.message || e);
         });
       await session.send("Network.setCacheDisabled", { cacheDisabled: true }).catch(() => {});
+    },
+    sawAnySeed() {
+      return metas.length > 0 || chathubRequestIds.size > 0 || chathubFramePayloads.length > 0;
+    },
+    sawChathubSeed() {
+      return chathubRequestIds.size > 0 || chathubFramePayloads.length > 0;
     },
     /**
      * After Copilot has responded, try to beat DOM extraction using API / SSE payloads.
@@ -3910,6 +4087,12 @@ function createServer(session) {
           prompt.relaySessionId,
           "relay_request_id=",
           prompt.relayRequestId,
+          "relay_request_chain=",
+          prompt.relayRequestChain,
+          "relay_request_attempt=",
+          prompt.relayRequestAttempt,
+          "relay_stage_label=",
+          prompt.relayStageLabel,
         );
         const record = await session.startOrJoinDescribe(prompt);
         return writeJson(res, record.status, record.body);
@@ -3958,8 +4141,24 @@ function parseOpenAiRequest(payload) {
   const relayRequestId = String(payload.relay_request_id || "").trim();
   if (!relaySessionId) throw new Error("relay_session_id is required");
   if (!relayRequestId) throw new Error("relay_request_id is required");
+  const relayRequestChain = String(payload.relay_request_chain || relayRequestId).trim() || relayRequestId;
+  const relayRequestAttemptRaw = Number.parseInt(String(payload.relay_request_attempt || "1"), 10);
+  const relayRequestAttempt =
+    Number.isFinite(relayRequestAttemptRaw) && relayRequestAttemptRaw >= 1 ? relayRequestAttemptRaw : 1;
+  const relayStageLabel = String(payload.relay_stage_label || "original").trim() || "original";
   const relayNewChat = payload.relay_new_chat === true;
-  return { systemPrompt, userPrompt, imageB64, attachmentPaths, relayNewChat, relaySessionId, relayRequestId };
+  return {
+    systemPrompt,
+    userPrompt,
+    imageB64,
+    attachmentPaths,
+    relayNewChat,
+    relaySessionId,
+    relayRequestId,
+    relayRequestChain,
+    relayRequestAttempt,
+    relayStageLabel,
+  };
 }
 
 function extractBase64(url) { const m = url.match(/^data:[^;]+;base64,(.+)$/); return m ? m[1] : url; }

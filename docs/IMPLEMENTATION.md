@@ -5059,3 +5059,46 @@ Observed result:
   - `tool_result_count=0`
   - `catalog_chars=4259`
 - Current narrowest blocker: after the post-approval compression work, the remaining live failure is no longer prompt bulk in `original`; it is the `repair1` live resend path timing out even with a 6.3k prompt, which points to Copilot-side response behavior / repair resend stability rather than raw prompt size.
+
+Repair-stage transport labeling + fresh-chat replay + clean workspace-remember validation (2026-04-13):
+
+```bash
+node --check apps/desktop/src-tauri/binaries/copilot_server.js
+node --check apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml repair_prompt_forbids_prose_and_plain_text_mentions -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_confusion_heuristic_catches_foreign_tool_drift -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_repairs_are_actually_sent_to_api_client_twice -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml repeated_tool_protocol_confusion_gets_stronger_repair_text -- --nocapture
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm --filter @relay-agent/desktop typecheck
+RELAY_LIVE_REPAIR_TIMEOUT_SECS=90 RELAY_LIVE_REPAIR_STAGE_TIMEOUT_SECS=90 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml loop_controller_tests::live_repair_probe_streams_original_and_both_repair_prompts -- --ignored --nocapture
+DISPLAY=:10.0 XAUTHORITY=/root/.Xauthority pnpm --filter @relay-agent/desktop run tauri:dev
+pnpm --filter @relay-agent/desktop run tauri:dev:send -- "Create /root/Relay_Agent/workspace_auto_a.txt with exactly WORKSPACE_AUTO_A using Relay local file tools."
+pnpm --filter @relay-agent/desktop run tauri:dev:approve:workspace
+DISPLAY=:10.0 XAUTHORITY=/root/.Xauthority pnpm --filter @relay-agent/desktop run tauri:dev
+pnpm --filter @relay-agent/desktop run tauri:dev:send -- "Create /root/Relay_Agent/workspace_auto_b.txt with exactly WORKSPACE_AUTO_B using Relay local file tools."
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/copilot_server.rs` now forwards `relay_request_chain`, `relay_request_attempt`, and `relay_stage_label` to the local Node bridge. Standard agent turns label as `original`; repair nudges label as `repair1` / `repair2`.
+- `apps/desktop/src-tauri/binaries/copilot_server.js` now logs request-scoped repair metadata (`request_chain`, `stage_label`, `request_attempt`, `transport_attempt`, `repair_replay_attempt`) and classifies failures as `new_chat_not_ready`, `submit_not_observed`, `network_seed_missing`, `dom_response_timeout`, or `copilot_refusal_after_send`.
+- Repair-stage transport now has a dedicated replay path: `repair1` / `repair2` first try the current Copilot thread, then one forced fresh-chat replay if the send stalls after submission or returns a refusal-like answer. This path is separate from the existing long-continuation retry and detached-tab retry.
+- `apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs` now accepts a caller-provided timeout. Repair-stage waits use a shorter bridge-side timeout so the bridge can classify and replay before Rust's outer stage timeout fires.
+- `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs` now treats apology-style repair refusals as tool-protocol confusion and tightens the repair nudge text: the repair message now explicitly requires exactly one fenced `relay_tool` block, forbids surrounding prose, and forbids plain-text `relay_tool` mentions.
+- Focused Rust tests and static checks passed.
+- Clean workspace-remember validation succeeded:
+  - app run A started from an empty `workspace_allowed_tools.json` entry for `/root/Relay_Agent`
+  - `tauri:dev:send` followed by `tauri:dev:approve:workspace` created `/root/Relay_Agent/workspace_auto_a.txt`
+  - after fully restarting `tauri:dev`, a fresh session created `/root/Relay_Agent/workspace_auto_b.txt` without any second approval action
+  - the original `workspace_allowed_tools.json` content was restored after validation
+- Live ignored probe remains unstable in this environment. One rerun advanced past `original` and later stalled at `repair2`; a subsequent captured rerun regressed to `original` timing out at:
+  - `request_chain=live-repair-original-df44dc2a-3c62-435b-9df2-a3adb165954b`
+  - `catalog_flavor=StandardMinimal`
+  - `prompt_chars=9392`
+  - `system_chars=1752`
+  - `message_chars=196`
+  - `catalog_chars=7034`
+- Current blocker after this milestone: the real app path now proves workspace remember across restarts, but the ignored live probe still does not fail deterministically enough to guarantee that the new repair-stage classification always surfaces before Rust's outer stage timeout.
