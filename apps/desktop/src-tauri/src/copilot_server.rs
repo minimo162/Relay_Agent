@@ -9,7 +9,7 @@ use std::{
 
 use reqwest::Client;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::time::sleep;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -60,6 +60,39 @@ struct StatusErrorBody {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct PromptErrorBody {
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    failure_class: Option<String>,
+    #[serde(default)]
+    stage_label: Option<String>,
+    #[serde(default)]
+    request_chain: Option<String>,
+    #[serde(default)]
+    request_attempt: Option<usize>,
+    #[serde(default)]
+    transport_attempt: Option<usize>,
+    #[serde(default)]
+    repair_replay_attempt: Option<usize>,
+    #[serde(default)]
+    want_new_chat: Option<bool>,
+    #[serde(default)]
+    new_chat_ready: Option<bool>,
+    #[serde(default)]
+    submit_observed: Option<bool>,
+    #[serde(default)]
+    network_seed_seen: Option<bool>,
+    #[serde(default)]
+    dom_wait_started: Option<bool>,
+    #[serde(default)]
+    dom_wait_finished: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct HealthBody {
     status: String,
     #[serde(default)]
@@ -90,6 +123,66 @@ fn validate_health_body(
         }
     }
     Ok(())
+}
+
+fn summarize_prompt_error_body(status: reqwest::StatusCode, raw_body: &str) -> String {
+    let parsed = serde_json::from_str::<PromptErrorBody>(raw_body).ok();
+    if let Some(body) = parsed {
+        let mut parts = vec![format!(
+            "copilot returned {status}: {}",
+            body.error
+                .clone()
+                .or(body.message.clone())
+                .unwrap_or_else(|| "unknown error".to_string())
+        )];
+        if let Some(value) = body.failure_class {
+            parts.push(format!("failureClass={value}"));
+        }
+        if let Some(value) = body.stage_label {
+            parts.push(format!("stageLabel={value}"));
+        }
+        if let Some(value) = body.request_chain {
+            parts.push(format!("requestChain={value}"));
+        }
+        if let Some(value) = body.request_attempt {
+            parts.push(format!("requestAttempt={value}"));
+        }
+        if let Some(value) = body.transport_attempt {
+            parts.push(format!("transportAttempt={value}"));
+        }
+        if let Some(value) = body.repair_replay_attempt {
+            parts.push(format!("repairReplayAttempt={value}"));
+        }
+        if let Some(value) = body.want_new_chat {
+            parts.push(format!("wantNewChat={value}"));
+        }
+        if let Some(value) = body.new_chat_ready {
+            parts.push(format!("newChatReady={value}"));
+        }
+        if let Some(value) = body.submit_observed {
+            parts.push(format!("submitObserved={value}"));
+        }
+        if let Some(value) = body.network_seed_seen {
+            parts.push(format!("networkSeedSeen={value}"));
+        }
+        if let Some(value) = body.dom_wait_started {
+            parts.push(format!("domWaitStarted={value}"));
+        }
+        if let Some(value) = body.dom_wait_finished {
+            parts.push(format!("domWaitFinished={value}"));
+        }
+        if let Some(value) = body.message {
+            if !parts.iter().any(|part| part.ends_with(&value)) {
+                parts.push(format!("message={value}"));
+            }
+        }
+        return parts.join(" ");
+    }
+
+    match serde_json::from_str::<Value>(raw_body) {
+        Ok(value) => format!("copilot returned {status}: {value}"),
+        Err(_) => format!("copilot returned {status}: {raw_body}"),
+    }
 }
 
 pub struct CopilotServer {
@@ -491,6 +584,7 @@ impl CopilotServer {
         relay_request_chain: &str,
         relay_request_attempt: usize,
         relay_stage_label: &str,
+        relay_probe_mode: bool,
         system_prompt: &str,
         user_prompt: &str,
         timeout_secs: u64,
@@ -499,7 +593,7 @@ impl CopilotServer {
     ) -> Result<String, CopilotError> {
         let url = format!("{}/v1/chat/completions", self.server_url());
         info!(
-            "[copilot] POST {} (timeout {}s, user_prompt_chars={}, system_chars={}, attachments={}, relay_new_chat={}, stage_label={}, request_chain={}, request_attempt={})",
+            "[copilot] POST {} (timeout {}s, user_prompt_chars={}, system_chars={}, attachments={}, relay_new_chat={}, stage_label={}, request_chain={}, request_attempt={}, probe_mode={})",
             url,
             timeout_secs,
             user_prompt.len(),
@@ -508,7 +602,8 @@ impl CopilotServer {
             new_chat,
             relay_stage_label,
             relay_request_chain,
-            relay_request_attempt
+            relay_request_attempt,
+            relay_probe_mode
         );
         let t0 = Instant::now();
         let mut body = json!({
@@ -521,6 +616,7 @@ impl CopilotServer {
             "relay_request_chain": relay_request_chain,
             "relay_request_attempt": relay_request_attempt,
             "relay_stage_label": relay_stage_label,
+            "relay_probe_mode": relay_probe_mode,
         });
         if !attachment_paths.is_empty() {
             body["relay_attachments"] = json!(attachment_paths);
@@ -558,8 +654,8 @@ impl CopilotServer {
             if body.contains("relay_copilot_aborted") {
                 return Err(CopilotError::PromptError("relay_copilot_aborted".into()));
             }
-            return Err(CopilotError::PromptError(format!(
-                "copilot returned {status}: {body}"
+            return Err(CopilotError::PromptError(summarize_prompt_error_body(
+                status, &body,
             )));
         }
 
@@ -593,6 +689,7 @@ impl CopilotServer {
         relay_request_chain: &str,
         relay_request_attempt: usize,
         relay_stage_label: &str,
+        relay_probe_mode: bool,
         system_prompt: &str,
         user_prompt: &str,
         timeout_secs: u64,
@@ -606,6 +703,7 @@ impl CopilotServer {
                 relay_request_chain,
                 relay_request_attempt,
                 relay_stage_label,
+                relay_probe_mode,
                 system_prompt,
                 user_prompt,
                 timeout_secs,
@@ -626,6 +724,7 @@ impl CopilotServer {
                     relay_request_chain,
                     relay_request_attempt,
                     relay_stage_label,
+                    relay_probe_mode,
                     system_prompt,
                     user_prompt,
                     timeout_secs,
@@ -645,6 +744,7 @@ impl CopilotServer {
                     relay_request_chain,
                     relay_request_attempt,
                     relay_stage_label,
+                    relay_probe_mode,
                     system_prompt,
                     user_prompt,
                     timeout_secs,
@@ -748,7 +848,10 @@ fn find_node() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_health_body, HealthBody, RELAY_COPILOT_SERVICE_NAME};
+    use super::{
+        summarize_prompt_error_body, validate_health_body, HealthBody, RELAY_COPILOT_SERVICE_NAME,
+    };
+    use reqwest::StatusCode;
 
     #[test]
     fn health_body_requires_service_and_matching_instance_id() {
@@ -772,5 +875,33 @@ mod tests {
             instance_id: Some("other-instance".into()),
         };
         assert!(validate_health_body(Some("instance-123"), &wrong_instance).is_err());
+    }
+
+    #[test]
+    fn summarize_prompt_error_body_includes_bridge_failure_metadata() {
+        let body = serde_json::json!({
+            "error": "dom response timed out",
+            "failureClass": "dom_response_timeout",
+            "stageLabel": "repair1",
+            "requestChain": "live-repair-repair1-123",
+            "requestAttempt": 2,
+            "transportAttempt": 1,
+            "repairReplayAttempt": 1,
+            "wantNewChat": true,
+            "newChatReady": true,
+            "submitObserved": true,
+            "networkSeedSeen": false,
+            "domWaitStarted": true,
+            "domWaitFinished": false
+        })
+        .to_string();
+        let summary = summarize_prompt_error_body(StatusCode::INTERNAL_SERVER_ERROR, &body);
+        assert!(summary.contains("copilot returned 500"));
+        assert!(summary.contains("failureClass=dom_response_timeout"));
+        assert!(summary.contains("stageLabel=repair1"));
+        assert!(summary.contains("requestChain=live-repair-repair1-123"));
+        assert!(summary.contains("repairReplayAttempt=1"));
+        assert!(summary.contains("domWaitFinished=false"));
+        assert!(summary.contains("dom response timed out"));
     }
 }

@@ -5102,3 +5102,30 @@ Observed result:
   - `message_chars=196`
   - `catalog_chars=7034`
 - Current blocker after this milestone: the real app path now proves workspace remember across restarts, but the ignored live probe still does not fail deterministically enough to guarantee that the new repair-stage classification always surfaces before Rust's outer stage timeout.
+
+Deterministic live probe isolation + bridge failure attribution (2026-04-13):
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+node --check apps/desktop/src-tauri/binaries/copilot_server.js
+node --check apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml repair_ -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml summarize_prompt_error_body_includes_bridge_failure_metadata -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_repairs_are_actually_sent_to_api_client_twice -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml exhausted_tool_protocol_repair_limit_stops -- --nocapture
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm --filter @relay-agent/desktop typecheck
+RELAY_LIVE_REPAIR_TIMEOUT_SECS=90 RELAY_LIVE_REPAIR_STAGE_TIMEOUT_SECS=90 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml loop_controller_tests::live_repair_probe_streams_original_and_both_repair_prompts -- --ignored --nocapture
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/copilot_server.rs` now sends an explicit `relay_probe_mode` flag to the local bridge and preserves structured bridge failures in `PromptError` text. Non-200 bridge responses can now surface `failureClass`, `stageLabel`, `requestChain`, `requestAttempt`, `transportAttempt`, `repairReplayAttempt`, and the boolean wait-state markers back into Rust instead of collapsing to a flat HTTP error.
+- `summarize_prompt_error_body()` now formats those classified bridge failures for Rust-side logs and panics, and `summarize_prompt_error_body_includes_bridge_failure_metadata` fixes the expected metadata shape in a focused unit test.
+- `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs` now derives `original` / `repair1` / `repair2` stage labels from the CDP message stream. Live probe sends run with `relay_probe_mode=true`, while normal runtime sends keep `false`.
+- Probe sends now run through a stricter isolated transport path in `apps/desktop/src-tauri/binaries/copilot_server.js`: probe sessions mark their relay session state as `probeMode`, page selection stops reusing stray Copilot conversations, and each probe stage forces `new chat` before sending.
+- Repair-refusal text such as Copilot apology / “different topic / new chat” replies is now classified on the Rust side as repair failure rather than a normal completed assistant turn. In `RetryRepair` mode that means escalation to the next repair stage instead of silently drifting into `Completed`.
+- The new repair-refusal behavior is covered by `repair_refusal_text_escalates_like_tool_confusion`, while the existing repair-budget stop path is still fixed by `exhausted_tool_protocol_repair_limit_stops`.
+- The ignored live probe rerun completed successfully in this environment. `loop_controller_tests::live_repair_probe_streams_original_and_both_repair_prompts` passed end to end with the isolated probe path enabled, so the earlier nondeterministic `original` / `repair2` timeout swing did not reproduce in this captured run.
+- Current state after this milestone: the real app workspace-remember path remains intact, and the ignored live probe is now both isolated and attributable. The next meaningful work is no longer probe determinism; it is deciding whether to keep hardening post-probe repair resend behavior or move on to broader app/runtime polish.

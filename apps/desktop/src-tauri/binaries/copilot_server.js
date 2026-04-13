@@ -421,7 +421,7 @@ class CopilotSession {
   _getRelaySessionState(relaySessionId) {
     let state = this.relaySessions.get(relaySessionId);
     if (!state) {
-      state = { relaySessionId, cdpTargetId: null, initialized: false };
+      state = { relaySessionId, cdpTargetId: null, initialized: false, probeMode: false };
       this.relaySessions.set(relaySessionId, state);
     }
     return state;
@@ -530,12 +530,23 @@ class CopilotSession {
     const session = this.cdpSession;
     const pages = await this._waitForPages();
     const claimedTargets = this._claimedTargetIds(relaySessionId);
+    const dedicatedOnly = relaySession?.probeMode === true;
 
     const existing = this._lookupPageByTargetId(pages, relaySession.cdpTargetId);
     if (relaySession.cdpTargetId && !existing) {
       this._invalidateRelaySession(relaySession, "tracked tab disappeared");
     } else if (existing) {
       return existing;
+    }
+
+    if (dedicatedOnly) {
+      console.error("[copilot] probe mode: creating dedicated Copilot tab for", relaySessionId);
+      const result = await session.send("Target.createTarget", {
+        url: COPILOT_URL
+      });
+      relaySession.cdpTargetId = result.targetId;
+      relaySession.initialized = false;
+      return { targetId: result.targetId, url: COPILOT_URL };
     }
 
     const unclaimedCopilot = pages.filter(
@@ -713,6 +724,7 @@ class CopilotSession {
       relaySessionId,
       relayRequestId,
       aborted: false,
+      probeMode: params.relayProbeMode === true,
     };
 
     const execute = async () => {
@@ -755,6 +767,7 @@ class CopilotSession {
   async describeImpl(params, requestState) {
     const relaySessionId = requestState.relaySessionId;
     const relaySession = this._getRelaySessionState(relaySessionId);
+    relaySession.probeMode = requestState.probeMode === true;
     const requestChain = String(params.relayRequestChain || requestState.relayRequestId || "").trim() || requestState.relayRequestId;
     const requestAttempt =
       Number.isFinite(params.relayRequestAttempt) && params.relayRequestAttempt >= 1
@@ -846,7 +859,11 @@ class CopilotSession {
         try {
           const forceRepairNewChat = repairStage && repairReplayUsed;
           const wantNewChat =
-            forceRepairNewChat || !relaySession.initialized || envNewChatEachTurn() || params.relayNewChat === true;
+            requestState.probeMode ||
+            forceRepairNewChat ||
+            !relaySession.initialized ||
+            envNewChatEachTurn() ||
+            params.relayNewChat === true;
           const envEach = envNewChatEachTurn();
           trace.wantNewChat = wantNewChat;
           console.error(
@@ -937,7 +954,7 @@ class CopilotSession {
                 hadAttachments,
                 abortCheck: () => requestState.aborted === true,
                 trace,
-                responseTimeoutMs: repairResponseTimeoutMs(stageLabel),
+                responseTimeoutMs: bridgeResponseTimeoutMs(stageLabel, requestState.probeMode),
               });
               trace.networkSeedSeen = !!netCapture?.sawAnySeed?.();
               console.error(
@@ -1042,7 +1059,7 @@ class CopilotSession {
           await sleep(750);
           continue;
         }
-        throw error;
+        throw attachFailureMeta(error, trace, { message });
       } finally {
         for (const tf of attachmentTempFiles) {
           setTimeout(() => {
@@ -2525,7 +2542,8 @@ function isRepairStageLabel(stageLabel) {
   return stageLabel === "repair1" || stageLabel === "repair2";
 }
 
-function repairResponseTimeoutMs(stageLabel) {
+function bridgeResponseTimeoutMs(stageLabel, probeMode) {
+  if (probeMode) return 30_000;
   return isRepairStageLabel(stageLabel) ? 30_000 : RESPONSE_TIMEOUT_MS;
 }
 
@@ -2572,6 +2590,26 @@ function logDescribeTrace(prefix, trace, extras = {}) {
       ...extras,
     }),
   );
+}
+
+function attachFailureMeta(error, trace, extras = {}) {
+  const target = error instanceof Error ? error : new Error(String(error || "unknown error"));
+  target.relayFailureMeta = {
+    failureClass: trace.failureClass || null,
+    stageLabel: trace.stageLabel,
+    requestChain: trace.requestChain,
+    requestAttempt: trace.requestAttempt,
+    transportAttempt: trace.transportAttempt,
+    repairReplayAttempt: trace.repairReplayAttempt,
+    wantNewChat: trace.wantNewChat,
+    newChatReady: trace.newChatReady,
+    submitObserved: trace.submitObserved,
+    networkSeedSeen: trace.networkSeedSeen,
+    domWaitStarted: trace.domWaitStarted,
+    domWaitFinished: trace.domWaitFinished,
+    ...extras,
+  };
+  return target;
 }
 
 async function inspectCopilotPageHealth(session) {
@@ -4033,6 +4071,10 @@ function requireBridgeAuth(req, res) {
 
 function responseRecordFromError(error) {
   const message = error instanceof Error ? error.message : String(error);
+  const meta =
+    error && typeof error === "object" && error.relayFailureMeta && typeof error.relayFailureMeta === "object"
+      ? error.relayFailureMeta
+      : null;
   console.error("[copilot] request failed:", error);
   if (error instanceof CopilotLoginRequiredError) {
     return { status: 401, body: { error: "login_required", message } };
@@ -4043,7 +4085,7 @@ function responseRecordFromError(error) {
   if (/\bis required\b/i.test(message) || /User prompt is empty/i.test(message)) {
     return { status: 400, body: { error: message } };
   }
-  return { status: 500, body: { error: message } };
+  return { status: 500, body: { error: message, ...(meta || {}) } };
 }
 
 function createServer(session) {
@@ -4146,6 +4188,7 @@ function parseOpenAiRequest(payload) {
   const relayRequestAttempt =
     Number.isFinite(relayRequestAttemptRaw) && relayRequestAttemptRaw >= 1 ? relayRequestAttemptRaw : 1;
   const relayStageLabel = String(payload.relay_stage_label || "original").trim() || "original";
+  const relayProbeMode = payload.relay_probe_mode === true;
   const relayNewChat = payload.relay_new_chat === true;
   return {
     systemPrompt,
@@ -4158,6 +4201,7 @@ function parseOpenAiRequest(payload) {
     relayRequestChain,
     relayRequestAttempt,
     relayStageLabel,
+    relayProbeMode,
   };
 }
 

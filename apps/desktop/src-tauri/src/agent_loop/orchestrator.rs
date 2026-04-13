@@ -719,6 +719,21 @@ fn is_meta_stall_text(text: &str) -> bool {
         .any(|needle| lower.contains(needle))
 }
 
+fn is_repair_refusal_text(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    lower.contains("sorry, it looks like i can’t respond")
+        || lower.contains("sorry, it looks like i can't respond")
+        || lower.contains("cannot respond to this")
+        || lower.contains("can't respond to this")
+        || lower.contains("let’s try a different topic")
+        || lower.contains("let's try a different topic")
+        || (lower.contains("different topic") && lower.contains("new chat"))
+}
+
 fn is_tool_protocol_confusion_text(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -778,19 +793,12 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         && (lower.contains("```")
             || lower.contains("relay_tool")
             || lower.contains("adjusting tool use"));
-    let repair_refusal = lower.contains("sorry, it looks like i can’t respond")
-        || lower.contains("sorry, it looks like i can't respond")
-        || lower.contains("cannot respond to this")
-        || lower.contains("can't respond to this")
-        || lower.contains("let’s try a different topic")
-        || lower.contains("let's try a different topic")
-        || (lower.contains("different topic") && lower.contains("new chat"));
     local_tool_refusal
         || local_write_refusal
         || foreign_tool_drift
         || planning_only_file_drift
         || mentioned_relay_tools_without_payload
-        || repair_refusal
+        || is_repair_refusal_text(trimmed)
 }
 
 fn build_tool_protocol_repair_input(goal: &str, attempt_index: usize) -> String {
@@ -857,11 +865,13 @@ fn decide_loop_after_success(
     let assistant_text = summary.terminal_assistant_text.as_str();
     let is_tool_protocol_confusion =
         summary.tool_results.is_empty() && is_tool_protocol_confusion_text(assistant_text);
+    let is_repair_refusal =
+        summary.tool_results.is_empty() && is_repair_refusal_text(assistant_text);
     let is_meta_stall = summary.tool_results.is_empty()
         && summary.iterations == 1
         && is_meta_stall_text(assistant_text);
 
-    if session_preset == SessionPreset::Build && is_tool_protocol_confusion {
+    if session_preset == SessionPreset::Build && (is_tool_protocol_confusion || is_repair_refusal) {
         if meta_stall_nudges_used < meta_stall_nudge_limit {
             return LoopDecision::Continue {
                 next_input: build_tool_protocol_repair_input(goal, meta_stall_nudges_used),
@@ -1676,6 +1686,7 @@ impl ApiClient for CdpApiClient {
                             &request_chain_id,
                             attempt_index,
                             stage_label,
+                            false,
                             "",
                             &prompt,
                             self.response_timeout_secs,
@@ -5306,6 +5317,7 @@ mod loop_controller_tests {
                         &request_chain_id,
                         attempt_index,
                         stage_name,
+                        true,
                         "",
                         &prompt_bundle.prompt,
                         response_timeout_secs,
@@ -5743,6 +5755,22 @@ mod loop_controller_tests {
         assert!(
             repair2.contains("Do not include any explanatory sentence before or after the fence.")
         );
+    }
+
+    #[test]
+    fn repair_refusal_text_escalates_like_tool_confusion() {
+        let s = summary(
+            "Sorry, it looks like I can’t respond to this. Let’s try a different topic New chat",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let decision =
+            decide_loop_after_success("Create ./tetris.html", SessionPreset::Build, 1, 1, 2, &s);
+        let LoopDecision::Continue { next_input } = decision else {
+            panic!("expected repair refusal to escalate");
+        };
+        assert!(next_input.contains("Tool protocol repair."));
+        assert!(next_input.contains("output exactly one Relay `relay_tool` fence and nothing else"));
     }
 
     #[test]
