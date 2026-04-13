@@ -34,6 +34,7 @@ export function EmptyState(props: {
   eyebrow?: string;
   title: string;
   subtitle?: string;
+  example?: string;
 }): JSX.Element {
   return (
     <div class="flex h-full min-h-[12rem] items-center justify-center px-4 text-center">
@@ -45,6 +46,12 @@ export function EmptyState(props: {
         <p class={`ra-type-title-sm ${ui.textPrimary}`}>{props.title}</p>
         <Show when={props.subtitle}>
           <p class={`ra-type-body-sans ${ui.mutedText} mt-1 max-w-[18rem] mx-auto`}>{props.subtitle}</p>
+        </Show>
+        <Show when={props.example}>
+          <div class="ra-empty-state__example">
+            <p class={`ra-type-system-micro ${ui.mutedText}`}>Example request</p>
+            <p class={`ra-type-body-sans ${ui.textPrimary} mt-1`}>{props.example}</p>
+          </div>
         </Show>
       </div>
     </div>

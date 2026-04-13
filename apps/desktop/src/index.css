@@ -1127,6 +1127,17 @@ body a:focus-visible {
   max-width: 38rem;
 }
 
+.ra-first-run__steps {
+  margin: 0.9rem 0 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.35rem;
+  color: var(--ra-text-secondary);
+  font-family: var(--ra-font-ui);
+  font-size: var(--ra-text-caption);
+  line-height: 1.5;
+}
+
 .ra-first-run__preflight,
 .ra-first-run__request {
   display: grid;
@@ -1135,6 +1146,12 @@ body a:focus-visible {
   border-radius: 1rem;
   background: var(--ra-surface-100);
   padding: 1rem 1.1rem;
+}
+
+.ra-first-run__request--primary {
+  border-color: var(--ra-border-medium);
+  background: var(--ra-surface-100);
+  box-shadow: var(--ra-shadow-sm);
 }
 
 .ra-preflight-grid {
@@ -1148,6 +1165,14 @@ body a:focus-visible {
   border-radius: 0.85rem;
   background: var(--ra-surface-200);
   padding: 0.85rem 0.9rem;
+}
+
+.ra-first-run__example {
+  margin-top: 0.9rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--ra-border);
+  border-radius: 0.85rem;
+  background: var(--ra-surface-200);
 }
 
 .ra-first-run__mode-note {
@@ -1308,6 +1333,13 @@ body a:focus-visible {
   text-align: left;
 }
 
+.ra-context-empty-list {
+  margin: 0.55rem 0 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
 .ra-policy-card {
   overflow: hidden;
   background: var(--ra-surface-100);
@@ -1388,6 +1420,15 @@ body a:focus-visible {
   text-transform: uppercase;
   color: var(--ra-text-muted);
   margin-bottom: 0.35rem;
+}
+
+.ra-empty-state__example {
+  margin: 0.9rem auto 0;
+  max-width: 22rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--ra-border);
+  border-radius: 0.85rem;
+  background: var(--ra-surface-100);
 }
 
 @media (max-width: 900px) {
@@ -1525,6 +1566,27 @@ body a:focus-visible {
   border-radius: 0.9rem;
   background: var(--ra-surface-200);
   padding: 1rem;
+}
+
+.ra-settings-details {
+  padding: 0.9rem 1rem 1rem;
+}
+
+.ra-settings-details__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.ra-settings-details__summary::-webkit-details-marker {
+  display: none;
+}
+
+.ra-settings-details[open] .ra-settings-details__summary {
+  margin-bottom: 0.5rem;
 }
 
 .ra-settings-field-grid {

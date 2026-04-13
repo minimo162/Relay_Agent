@@ -128,7 +128,7 @@ export function ContextPanel(props: {
           <Match when={activeTab() === "plan"}>
             <div class="flex flex-col gap-2" data-ra-execution-plan>
               <div class="ra-context-note">
-                <span class={`ra-type-system-micro ${ui.mutedText}`}>Current mode</span>
+                <span class={`ra-type-system-micro ${ui.mutedText}`}>Conversation mode</span>
                 <p class={`ra-type-button-label ${ui.textPrimary} mt-1`}>{modeLabel()}</p>
                 <p class={`ra-type-caption ${ui.mutedText} mt-1 leading-relaxed`}>{modeSummary()}</p>
               </div>
@@ -136,10 +136,12 @@ export function ContextPanel(props: {
                 when={planNewestFirst()}
                 fallback={
                   <div class="ra-context-empty-card">
-                    <div class={`ra-type-button-label ${ui.textPrimary}`}>No plan yet</div>
-                    <div class={`ra-type-caption ${ui.mutedText} mt-1 leading-relaxed`}>
-                      Relay will list task steps here after it starts working.
-                    </div>
+                    <div class={`ra-type-button-label ${ui.textPrimary}`}>What happens next</div>
+                    <ul class={`ra-context-empty-list ra-type-caption ${ui.mutedText}`}>
+                      <li>Relay will propose steps here after it starts.</li>
+                      <li>Approvals appear before risky changes.</li>
+                      <li>Integrations live in the next tab.</li>
+                    </ul>
                   </div>
                 }
               >
@@ -267,9 +269,10 @@ export function ContextPanel(props: {
           <Match when={activeTab() === "servers"}>
             <div class="flex flex-col gap-2">
               <p class={`ra-type-system-caption leading-relaxed ${ui.mutedText}`}>
-                Connect external tool servers here. Workspace instruction files appear below when a
-                folder is set.
+                Manage connected servers and project instructions here.
               </p>
+              <div class={`${ui.radiusFeatured} border ${ui.border} p-2 space-y-1.5`}>
+                <span class={`ra-type-system-micro ${ui.mutedText}`}>Workspace instructions</span>
               <Show
                 when={!props.workspacePath()?.trim()}
                 fallback={
@@ -278,11 +281,7 @@ export function ContextPanel(props: {
                     fallback={<p class={`ra-type-caption ${ui.mutedText}`}>Scanning workspace instructions…</p>}
                   >
                     {(surf) => (
-                      <div
-                        class={`${ui.radiusFeatured} border ${ui.border} p-2 space-y-1.5`}
-                        data-ra-workspace-instructions
-                      >
-                        <span class={`ra-type-system-micro ${ui.mutedText}`}>Workspace instructions</span>
+                      <div class="space-y-1.5" data-ra-workspace-instructions>
                         <Show when={surf().workspaceRoot}>
                           <p class={`ra-type-mono-small ${ui.mutedText} break-all`}>{surf().workspaceRoot}</p>
                         </Show>
@@ -311,13 +310,18 @@ export function ContextPanel(props: {
                 }
               >
                 <p class={`ra-type-caption ${ui.mutedText}`}>
-                  Set a workspace from the header to surface this project&apos;s instruction files.
+                  Choose a project folder from the header to show instruction files here.
                 </p>
               </Show>
+              </div>
+              <div class={`${ui.radiusFeatured} border ${ui.border} p-2 space-y-2`}>
+                <div class="flex items-center justify-between gap-2">
+                  <span class={`ra-type-system-micro ${ui.mutedText}`}>Servers</span>
+                  <span class={`ra-type-system-micro ${ui.mutedText}`}>
+                    {props.mcpServers().length} connected
+                  </span>
+                </div>
               <div class="flex items-center justify-between gap-2">
-                <span class={`ra-type-system-micro ${ui.mutedText}`}>
-                  {props.mcpServers().length} server{props.mcpServers().length !== 1 ? "s" : ""}
-                </span>
                 <Show
                   when={showAddServer()}
                   fallback={
@@ -406,6 +410,7 @@ export function ContextPanel(props: {
                   )}
                 </For>
               </Show>
+              </div>
             </div>
           </Match>
         </Switch>

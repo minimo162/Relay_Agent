@@ -184,7 +184,9 @@ test.describe("Settings and first-run UX", () => {
     await openApp(page);
     await expect(page.getByRole("heading", { name: "Conversations" })).toHaveCount(0);
     await expect(page.getByRole("tab", { name: "Integrations" })).toHaveCount(0);
-    await expect(page.getByText("Check the basics before you start")).toBeVisible();
+    await expect(page.getByText("Confirm the basics, then send your first request")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open Settings" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Reconnect Copilot" })).toHaveCount(0);
   });
 
   test("settings modal shows connection and advanced controls", async ({ page }) => {
@@ -194,7 +196,11 @@ test.describe("Settings and first-run UX", () => {
     const dialog = page.getByRole("dialog", { name: "Settings" });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Reconnect Copilot" })).toBeVisible();
-    await expect(dialog.getByText("CDP port")).toBeVisible();
+    const advanced = dialog.locator("details.ra-settings-details");
+    await expect(advanced).not.toHaveAttribute("open", "");
+    await expect(dialog.getByText("Browser debug port")).not.toBeVisible();
+    await advanced.locator("summary").click();
+    await expect(dialog.getByText("Browser debug port")).toBeVisible();
     await expect(dialog.getByText("Response timeout (ms)")).toBeVisible();
     await expect(dialog.getByText("Always on top")).toBeVisible();
   });

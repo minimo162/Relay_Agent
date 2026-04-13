@@ -72,14 +72,14 @@ export function Sidebar(props: {
             type="button"
             class="ra-sidebar-workspace-chip"
             onClick={props.onWorkspaceChipClick}
-            title={workspaceName() ? props.workspacePath : "Choose workspace"}
+            title={workspaceName() ? props.workspacePath : "Choose project folder"}
           >
-            <span class={`ra-type-caption ${ui.mutedText}`}>Current workspace</span>
+            <span class={`ra-type-caption ${ui.mutedText}`}>Project folder</span>
             <span class={`ra-type-button-label ${workspaceName() ? ui.textPrimary : "text-[var(--ra-red)]"}`}>
               {workspaceName() ?? "Unset"}
             </span>
             <span class={`ra-type-caption ${ui.mutedText}`}>
-              {workspaceName() ? "Tap to change workspace." : "Set workspace to enable project context."}
+              {workspaceName() ? "Change the project folder." : "Set a project folder to give Relay context."}
             </span>
           </button>
           <Show when={hasSessions()}>

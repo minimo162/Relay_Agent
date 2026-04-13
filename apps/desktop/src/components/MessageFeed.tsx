@@ -127,12 +127,12 @@ export function MessageFeed(props: {
     const base =
       p.length > 0
         ? `${ellipsisPath(p, 72)} — describe your task in the box below.`
-        : "Click the workspace name in the header to set a project folder so file tools use the right root. Then describe your task below.";
+        : "Click the project folder in the header to choose the folder Relay should use, then describe your task below.";
     if (props.sessionPreset === "plan") {
-      return `${base} Plan mode stays read-only; use ${sessionModeLabel("build")} when you want the agent to apply file changes.`;
+      return `${base} This conversation stays read-only; start a new conversation in ${sessionModeLabel("build")} if you want Relay to change files.`;
     }
     if (props.sessionPreset === "explore") {
-      return `${base} Explore mode only runs read_file, glob_search, and grep_search—switch to ${sessionModeLabel("plan")} or ${sessionModeLabel("build")} for more tools.`;
+      return `${base} This conversation can read and search only; start a new conversation in ${sessionModeLabel("plan")} or ${sessionModeLabel("build")} for broader tools.`;
     }
     return base;
   });
@@ -144,6 +144,7 @@ export function MessageFeed(props: {
           eyebrow={emptyEyebrow()}
           title="Ready when you are"
           subtitle={emptySubtitle()}
+          example="Example: Review the auth flow and suggest the smallest safe fix."
         />
       </Show>
       <For each={feedChunks()}>

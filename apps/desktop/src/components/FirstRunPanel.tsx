@@ -2,15 +2,16 @@ import { createMemo, type JSX } from "solid-js";
 import { ellipsisPath, workspaceBasename } from "../lib/workspace-display";
 import { ui } from "../lib/ui-tokens";
 import type { SessionPreset } from "../lib/ipc";
-import { sessionModeDefaultNote, sessionModeLabel } from "../lib/session-mode-label";
+import { sessionModeLabel, sessionModeSummary } from "../lib/session-mode-label";
 import { copilotWarmupStageDetail, type CopilotWarmupState } from "../shell/useCopilotWarmup";
 import { Button } from "./ui";
 
-function PreflightItem(props: {
+function StartItem(props: {
   label: string;
   value: string;
   detail: string;
   state: "good" | "warn" | "neutral";
+  technicalDetail?: string | null;
 }) {
   return (
     <div class="ra-preflight-item">
@@ -23,6 +24,12 @@ function PreflightItem(props: {
             ? "text-[var(--ra-red)]"
             : ui.textMuted
       }`}>{props.detail}</p>
+      {props.technicalDetail ? (
+        <details class="mt-2">
+          <summary class={`ra-type-caption ${ui.mutedText} cursor-pointer`}>Details</summary>
+          <p class={`ra-type-mono-small mt-1 ${ui.mutedText}`}>{props.technicalDetail}</p>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -43,18 +50,40 @@ export function FirstRunPanel(props: {
   const workspaceHint = createMemo(() =>
     hasWorkspace()
       ? ellipsisPath(workspace(), 72)
-      : "Choose a folder so Relay can inspect and edit the right files.",
+      : "Open settings and choose the folder Relay should inspect and edit.",
   );
-  const copilotSignedIn = createMemo(
-    () => props.copilotState.result?.connected ?? props.copilotState.status === "ready",
-  );
-  const cdpReachable = createMemo(
-    () => props.copilotState.result?.connected
-      || props.copilotState.result?.loginRequired
-      || props.copilotState.status === "ready"
-      || props.copilotState.status === "needs_sign_in",
+  const connectionReady = createMemo(
+    () => props.copilotState.result?.connected || props.copilotState.status === "ready",
   );
   const copilotStageDetail = createMemo(() => copilotWarmupStageDetail(props.copilotState));
+  const connectionStatus = createMemo(() => {
+    if (props.copilotState.status === "checking") return "Checking";
+    if (connectionReady()) return "Ready";
+    return "Needs setup";
+  });
+  const connectionDetail = createMemo(() => {
+    if (props.copilotState.status === "checking") {
+      return "Relay is checking the browser connection now.";
+    }
+    if (connectionReady()) {
+      return "Copilot is ready in this app.";
+    }
+    if (props.copilotState.status === "needs_sign_in") {
+      return "Open Settings, sign in to Copilot in Edge, then reconnect.";
+    }
+    return "Open Settings to review the connection, then try reconnecting.";
+  });
+  const connectionTechnicalDetail = createMemo(() => {
+    const stage = copilotStageDetail();
+    const message = props.copilotState.message?.trim() || null;
+    if (stage && message && stage !== message) {
+      return `${message} | ${stage}`;
+    }
+    return stage ?? message;
+  });
+  const showReconnect = createMemo(
+    () => props.copilotState.status !== "checking" && !connectionReady(),
+  );
 
   return (
     <section class="ra-first-run" aria-label="Get started">
@@ -63,78 +92,68 @@ export function FirstRunPanel(props: {
           <p class="ra-empty-state__eyebrow">Relay Agent</p>
           <h1 class={`ra-type-section-heading ${ui.textPrimary}`}>Tell Relay what you need</h1>
           <p class={`ra-type-body-sans ${ui.textSecondary}`}>
-            Set up the workspace and Copilot connection, then describe the task in one clear request.
+            Start in three steps so Relay knows your project, your connection is ready, and your first request is clear.
           </p>
+          <ol class="ra-first-run__steps">
+            <li>Choose a project folder.</li>
+            <li>Confirm the Copilot connection.</li>
+            <li>Describe the outcome you want.</li>
+          </ol>
+        </div>
+
+        <div class="ra-first-run__request ra-first-run__request--primary">
+          <div class="min-w-0">
+            <p class={`ra-type-system-micro ${ui.mutedText}`}>First request</p>
+            <p class={`ra-type-title-sm ${ui.textPrimary} mt-1`}>Start with the outcome you want</p>
+            <p class={`ra-type-caption ${ui.mutedText} mt-1`}>
+              Be direct about the result, then let Relay inspect the code and choose the next steps.
+            </p>
+            <div class="ra-first-run__example">
+              <span class={`ra-type-system-micro ${ui.mutedText}`}>Example</span>
+              <p class={`ra-type-body-sans ${ui.textPrimary} mt-1`}>
+                Summarize this repo and propose the smallest fix for the failing flow.
+              </p>
+            </div>
+            <p class="ra-first-run__mode-note">
+              New conversations start in {sessionModeLabel(props.sessionPreset)}. {sessionModeSummary(props.sessionPreset)}
+            </p>
+          </div>
+          {props.children}
         </div>
 
         <div class="ra-first-run__preflight">
           <div class="flex items-center justify-between gap-3 flex-wrap">
             <div>
-              <p class={`ra-type-system-micro ${ui.mutedText}`}>Preflight</p>
-              <p class={`ra-type-title-sm ${ui.textPrimary} mt-1`}>Check the basics before you start</p>
+              <p class={`ra-type-system-micro ${ui.mutedText}`}>Start here</p>
+              <p class={`ra-type-title-sm ${ui.textPrimary} mt-1`}>Confirm the basics, then send your first request</p>
             </div>
             <div class="flex flex-wrap gap-2">
-              <Button variant="secondary" type="button" class="ra-type-button-label" onClick={props.onReconnectCopilot}>
-                Reconnect Copilot
-              </Button>
               <Button variant="primary" type="button" class="ra-type-button-label" onClick={props.onOpenSettings}>
-                Open settings
+                Open Settings
               </Button>
+              {showReconnect() ? (
+                <Button variant="secondary" type="button" class="ra-type-button-label" onClick={props.onReconnectCopilot}>
+                  Reconnect Copilot
+                </Button>
+              ) : null}
             </div>
           </div>
 
           <div class="ra-preflight-grid">
-            <PreflightItem
-              label="Workspace selected"
-              value={workspaceName()}
+            <StartItem
+              label="Project folder"
+              value={hasWorkspace() ? workspaceName() : "Not selected"}
               detail={workspaceHint()}
               state={hasWorkspace() ? "good" : "warn"}
             />
-            <PreflightItem
-              label="Copilot signed in"
-              value={copilotSignedIn() ? "Signed in" : "Needs attention"}
-              detail={
-                props.copilotState.status === "checking"
-                  ? "Checking the Copilot sign-in state…"
-                  : props.copilotState.status === "needs_sign_in"
-                  ? props.copilotState.message ?? "Sign in to Copilot in Edge, then return here."
-                  : copilotSignedIn()
-                    ? "Copilot is ready for this app."
-                    : copilotStageDetail() ?? props.copilotState.message ?? "Run a connection check from settings."
-              }
-              state={copilotSignedIn() ? "good" : "warn"}
-            />
-            <PreflightItem
-              label="CDP reachable"
-              value={cdpReachable() ? "Reachable" : "Not ready"}
-              detail={
-                props.copilotState.status === "checking"
-                  ? copilotStageDetail() ?? "Checking the Edge connection…"
-                  : cdpReachable()
-                    ? "Relay can reach the Edge debugging endpoint."
-                    : copilotStageDetail() ?? props.copilotState.message ?? "Open settings to review the browser connection."
-              }
-              state={cdpReachable() ? "good" : "warn"}
-            />
-            <PreflightItem
-              label="Default work mode"
-              value={sessionModeLabel(props.sessionPreset)}
-              detail={sessionModeDefaultNote(props.sessionPreset)}
-              state="neutral"
+            <StartItem
+              label="Copilot connection"
+              value={connectionStatus()}
+              detail={connectionDetail()}
+              technicalDetail={connectionTechnicalDetail()}
+              state={connectionReady() ? "good" : props.copilotState.status === "checking" ? "neutral" : "warn"}
             />
           </div>
-        </div>
-
-        <div class="ra-first-run__request">
-          <div class="min-w-0">
-            <p class={`ra-type-system-micro ${ui.mutedText}`}>First request</p>
-            <p class={`ra-type-title-sm ${ui.textPrimary} mt-1`}>Start with the outcome you want</p>
-            <p class={`ra-type-caption ${ui.mutedText} mt-1`}>
-              Ask Relay to review code, plan an implementation, or update files in the selected workspace.
-            </p>
-            <p class="ra-first-run__mode-note">{sessionModeDefaultNote(props.sessionPreset)}</p>
-          </div>
-          {props.children}
         </div>
       </div>
     </section>

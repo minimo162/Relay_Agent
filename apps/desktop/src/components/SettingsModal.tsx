@@ -185,7 +185,7 @@ export function SettingsModal(props: {
               <div>
                 <p class="ra-modal-panel__title">Settings</p>
                 <p class="ra-type-button-label text-[var(--ra-text-secondary)] mt-1">
-                  Configure Relay&apos;s workspace, Copilot connection, and desktop behavior.
+                  Configure Relay&apos;s project folder, Copilot connection, and desktop behavior.
                 </p>
               </div>
               <button
@@ -198,12 +198,12 @@ export function SettingsModal(props: {
               </button>
             </div>
 
-            <div class="ra-settings-grid mt-5">
+            <div class="mt-5 space-y-4">
               <section class="ra-settings-card">
-                <p class="ra-type-system-micro text-[var(--ra-text-muted)]">Setup</p>
+                <p class="ra-type-system-micro text-[var(--ra-text-muted)]">Basic</p>
                 <div class="mt-3 space-y-4">
                   <div>
-                    <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Workspace folder</span>
+                    <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Project folder</span>
                     <div class="flex gap-2 mt-1 items-stretch">
                       <Input
                         ref={workspaceInputRef}
@@ -227,8 +227,8 @@ export function SettingsModal(props: {
                   </div>
 
                   <div>
-                    <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Default work mode</span>
-                    <div class="ra-settings-segmented mt-1" role="group" aria-label="Default work mode">
+                    <span class="ra-type-system-micro text-[var(--ra-text-muted)]">New conversation mode</span>
+                    <div class="ra-settings-segmented mt-1" role="group" aria-label="New conversation mode">
                       {(["build", "plan", "explore"] as SessionPreset[]).map((preset) => (
                         <button
                           type="button"
@@ -256,9 +256,6 @@ export function SettingsModal(props: {
                           ?? props.copilotState.message
                           ?? "Run a check to verify the Edge/CDP connection."}
                       </p>
-                      <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                        {props.copilotState.message ?? "Run a check to verify the Edge/CDP connection."}
-                      </p>
                     </div>
                     <Button variant="secondary" type="button" class="ra-type-button-label" onClick={props.onReconnectCopilot}>
                       Reconnect Copilot
@@ -267,8 +264,14 @@ export function SettingsModal(props: {
                 </div>
               </section>
 
-              <section class="ra-settings-card">
-                <p class="ra-type-system-micro text-[var(--ra-text-muted)]">Advanced</p>
+              <details class="ra-settings-card ra-settings-details">
+                <summary class="ra-settings-details__summary">
+                  <div>
+                    <p class="ra-type-system-micro text-[var(--ra-text-muted)]">Advanced</p>
+                    <p class="ra-type-button-label text-[var(--ra-text-primary)] mt-1">Browser and troubleshooting options</p>
+                  </div>
+                  <span class="ra-type-caption text-[var(--ra-text-muted)]">Show</span>
+                </summary>
                 <div class="mt-3 space-y-4">
                   <div class="ra-settings-field-grid">
                     <label class="block">
@@ -276,7 +279,7 @@ export function SettingsModal(props: {
                       <Input value={maxTurns()} onInput={(e) => setMaxTurns(e.currentTarget.value)} />
                     </label>
                     <label class="block">
-                      <span class="ra-type-system-micro text-[var(--ra-text-muted)]">CDP port</span>
+                      <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Browser debug port</span>
                       <Input value={cdpPort()} onInput={(e) => setCdpPort(e.currentTarget.value)} />
                     </label>
                   </div>
@@ -329,7 +332,7 @@ export function SettingsModal(props: {
                     </Button>
                   </div>
                 </div>
-              </section>
+              </details>
             </div>
 
             <Show when={hint()}>
