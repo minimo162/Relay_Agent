@@ -23,6 +23,12 @@ struct DevFirstRunSendEvent {
     text: String,
 }
 
+struct ParsedHttpRequest {
+    method: String,
+    path: String,
+    body: Vec<u8>,
+}
+
 pub fn spawn(app: &AppHandle) {
     if !cfg!(debug_assertions) {
         return;
@@ -65,6 +71,20 @@ fn handle_connection(
     app: &AppHandle,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let request = read_http_request(&mut stream)?;
+    dispatch_http_request(&mut stream, app, port, &request)
+}
+
+fn read_http_request(
+    stream: &mut TcpStream,
+) -> Result<ParsedHttpRequest, Box<dyn std::error::Error + Send + Sync>> {
+    let buffer = read_http_request_buffer(stream)?;
+    parse_http_request(stream, buffer)
+}
+
+fn read_http_request_buffer(
+    stream: &mut TcpStream,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let mut buffer = Vec::with_capacity(4096);
     let mut chunk = [0_u8; 1024];
     loop {
@@ -77,14 +97,21 @@ fn handle_connection(
             break;
         }
         if buffer.len() > 1024 * 1024 {
-            return write_json_response(
-                &mut stream,
+            write_json_response(
+                stream,
                 413,
                 &json!({ "ok": false, "error": "request_too_large" }),
-            );
+            )?;
+            return Err("request_too_large".into());
         }
     }
+    Ok(buffer)
+}
 
+fn parse_http_request(
+    stream: &mut TcpStream,
+    mut buffer: Vec<u8>,
+) -> Result<ParsedHttpRequest, Box<dyn std::error::Error + Send + Sync>> {
     let request = String::from_utf8_lossy(&buffer).to_string();
     let header_end = request
         .find("\r\n\r\n")
@@ -95,8 +122,8 @@ fn handle_connection(
         .next()
         .ok_or_else(|| "missing request line".to_string())?;
     let mut request_parts = request_line.split_whitespace();
-    let method = request_parts.next().unwrap_or_default();
-    let path = request_parts.next().unwrap_or_default();
+    let method = request_parts.next().unwrap_or_default().to_string();
+    let path = request_parts.next().unwrap_or_default().to_string();
 
     let content_length = lines
         .find_map(|line| {
@@ -108,7 +135,8 @@ fn handle_connection(
         })
         .unwrap_or(0);
 
-    let mut body = buffer[(header_end + 4)..].to_vec();
+    let mut body = buffer.split_off(header_end + 4);
+    let mut chunk = [0_u8; 1024];
     while body.len() < content_length {
         let read = stream.read(&mut chunk)?;
         if read == 0 {
@@ -120,89 +148,82 @@ fn handle_connection(
         body.truncate(content_length);
     }
 
-    match (method, path) {
-        ("GET", "/health") => write_json_response(
-            &mut stream,
-            200,
-            &json!({ "ok": true, "port": port, "event": DEV_FIRST_RUN_SEND_EVENT }),
-        ),
-        ("POST", "/first-run-send") => {
-            let payload: DevFirstRunSendRequest = serde_json::from_slice(&body)?;
-            let text = payload.text.trim().to_string();
-            if text.is_empty() {
-                return write_json_response(
-                    &mut stream,
-                    400,
-                    &json!({ "ok": false, "error": "missing_text" }),
-                );
-            }
-            let event = DevFirstRunSendEvent { text };
-            tracing::info!(
-                "[dev-control] emitting {} via {} chars",
-                DEV_FIRST_RUN_SEND_EVENT,
-                event.text.chars().count()
-            );
-            app.emit(DEV_FIRST_RUN_SEND_EVENT, event)?;
-            write_json_response(
-                &mut stream,
-                202,
-                &json!({ "ok": true, "event": DEV_FIRST_RUN_SEND_EVENT }),
-            )
-        }
+    Ok(ParsedHttpRequest { method, path, body })
+}
+
+fn dispatch_http_request(
+    stream: &mut TcpStream,
+    app: &AppHandle,
+    port: u16,
+    request: &ParsedHttpRequest,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    match (request.method.as_str(), request.path.as_str()) {
+        ("GET", "/health") => write_health_response(stream, port),
+        ("POST", "/first-run-send") => handle_first_run_send(stream, app, &request.body),
         ("POST", "/approve-latest") => {
-            tracing::info!("[dev-control] emitting {}", DEV_APPROVE_LATEST_EVENT);
-            app.emit(DEV_APPROVE_LATEST_EVENT, json!({ "mode": "once" }))?;
-            write_json_response(
-                &mut stream,
-                202,
-                &json!({ "ok": true, "event": DEV_APPROVE_LATEST_EVENT }),
-            )
+            emit_mode_event(stream, app, DEV_APPROVE_LATEST_EVENT, "once")
         }
         ("POST", "/approve-latest-session") => {
-            tracing::info!(
-                "[dev-control] emitting {}",
-                DEV_APPROVE_LATEST_SESSION_EVENT
-            );
-            app.emit(
-                DEV_APPROVE_LATEST_SESSION_EVENT,
-                json!({ "mode": "session" }),
-            )?;
-            write_json_response(
-                &mut stream,
-                202,
-                &json!({ "ok": true, "event": DEV_APPROVE_LATEST_SESSION_EVENT }),
-            )
+            emit_mode_event(stream, app, DEV_APPROVE_LATEST_SESSION_EVENT, "session")
         }
         ("POST", "/approve-latest-workspace") => {
-            tracing::info!(
-                "[dev-control] emitting {}",
-                DEV_APPROVE_LATEST_WORKSPACE_EVENT
-            );
-            app.emit(
-                DEV_APPROVE_LATEST_WORKSPACE_EVENT,
-                json!({ "mode": "workspace" }),
-            )?;
-            write_json_response(
-                &mut stream,
-                202,
-                &json!({ "ok": true, "event": DEV_APPROVE_LATEST_WORKSPACE_EVENT }),
-            )
+            emit_mode_event(stream, app, DEV_APPROVE_LATEST_WORKSPACE_EVENT, "workspace")
         }
         ("POST", "/reject-latest") => {
-            tracing::info!("[dev-control] emitting {}", DEV_REJECT_LATEST_EVENT);
-            app.emit(DEV_REJECT_LATEST_EVENT, json!({ "mode": "reject" }))?;
-            write_json_response(
-                &mut stream,
-                202,
-                &json!({ "ok": true, "event": DEV_REJECT_LATEST_EVENT }),
-            )
+            emit_mode_event(stream, app, DEV_REJECT_LATEST_EVENT, "reject")
         }
-        _ => write_json_response(
-            &mut stream,
-            404,
-            &json!({ "ok": false, "error": "not_found" }),
-        ),
+        _ => write_json_response(stream, 404, &json!({ "ok": false, "error": "not_found" })),
     }
+}
+
+fn write_health_response(
+    stream: &mut TcpStream,
+    port: u16,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    write_json_response(
+        stream,
+        200,
+        &json!({ "ok": true, "port": port, "event": DEV_FIRST_RUN_SEND_EVENT }),
+    )
+}
+
+fn handle_first_run_send(
+    stream: &mut TcpStream,
+    app: &AppHandle,
+    body: &[u8],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let payload: DevFirstRunSendRequest = serde_json::from_slice(body)?;
+    let text = payload.text.trim().to_string();
+    if text.is_empty() {
+        return write_json_response(
+            stream,
+            400,
+            &json!({ "ok": false, "error": "missing_text" }),
+        );
+    }
+    let event = DevFirstRunSendEvent { text };
+    tracing::info!(
+        "[dev-control] emitting {} via {} chars",
+        DEV_FIRST_RUN_SEND_EVENT,
+        event.text.chars().count()
+    );
+    app.emit(DEV_FIRST_RUN_SEND_EVENT, event)?;
+    write_json_response(
+        stream,
+        202,
+        &json!({ "ok": true, "event": DEV_FIRST_RUN_SEND_EVENT }),
+    )
+}
+
+fn emit_mode_event(
+    stream: &mut TcpStream,
+    app: &AppHandle,
+    event_name: &str,
+    mode: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    tracing::info!("[dev-control] emitting {}", event_name);
+    app.emit(event_name, json!({ "mode": mode }))?;
+    write_json_response(stream, 202, &json!({ "ok": true, "event": event_name }))
 }
 
 fn write_json_response(

@@ -217,173 +217,204 @@ pub async fn warmup_copilot_bridge(
     let bridge = services.copilot_bridge();
     let cdp = effective_cdp_port(browser_settings.as_ref());
     let request_id = Uuid::new_v4().to_string();
+    tokio::task::spawn_blocking(move || run_copilot_warmup_blocking(reg, bridge, cdp, request_id))
+        .await
+        .map_err(|e| format!("copilot warmup task: {e}"))?
+}
+
+fn run_copilot_warmup_blocking(
+    reg: SessionRegistry,
+    bridge: Arc<CopilotBridgeManager>,
+    cdp: u16,
+    request_id: String,
+) -> Result<CopilotWarmupResult, String> {
     // `ensure_copilot_server` builds a temporary runtime and uses `block_on`; it must not run on a
     // Tokio worker thread (nested runtime panic: "Cannot start a runtime from within a runtime").
-    tokio::task::spawn_blocking(move || {
-        tracing::info!(
-            "[CopilotWarmup] request_id={} cdp_port={} stage={} boot_token_present=false",
-            request_id,
-            cdp,
-            "ensure_server",
-        );
-        let server_arc = match ensure_copilot_server(cdp, true, bridge, Some(&reg)) {
-            Ok(server_arc) => server_arc,
-            Err(error) => {
-                tracing::warn!(
-                    "[CopilotWarmup] request_id={} cdp_port={} stage={} outcome=failed failure_code={} message={}",
-                    request_id,
-                    cdp,
-                    "ensure_server",
-                    "ensure_server_failed",
-                    error
-                );
-                return Ok(warmup_result(
-                    &request_id,
-                    cdp,
-                    false,
-                    CopilotWarmupStage::EnsureServer,
-                    error,
-                    Some(CopilotWarmupFailureCode::EnsureServerFailed),
-                    None,
-                    None,
-                    false,
-                    false,
-                ));
-            }
-        };
-        let srv_clone = Arc::clone(&server_arc);
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("copilot warmup runtime: {e}"))?;
-        let mut guard = srv_clone
-            .lock()
-            .map_err(|e| format!("copilot server mutex poisoned: {e}"))?;
-        let boot_token_present = guard.boot_token().is_some();
-
-        tracing::info!(
-            "[CopilotWarmup] request_id={} cdp_port={} stage={} boot_token_present={}",
-            request_id,
-            cdp,
-            "health_check",
-            boot_token_present,
-        );
-        if let Err(error) = rt.block_on(guard.health_check()) {
+    tracing::info!(
+        "[CopilotWarmup] request_id={} cdp_port={} stage={} boot_token_present=false",
+        request_id,
+        cdp,
+        "ensure_server",
+    );
+    let server_arc = match ensure_copilot_server(cdp, true, bridge, Some(&reg)) {
+        Ok(server_arc) => server_arc,
+        Err(error) => {
             tracing::warn!(
-                "[CopilotWarmup] request_id={} cdp_port={} stage={} outcome=failed failure_code={} boot_token_present={} message={}",
+                "[CopilotWarmup] request_id={} cdp_port={} stage={} outcome=failed failure_code={} message={}",
                 request_id,
                 cdp,
-                "health_check",
-                "health_check_failed",
-                boot_token_present,
+                "ensure_server",
+                "ensure_server_failed",
                 error
             );
             return Ok(warmup_result(
                 &request_id,
                 cdp,
-                boot_token_present,
-                CopilotWarmupStage::HealthCheck,
-                error.to_string(),
-                Some(CopilotWarmupFailureCode::HealthCheckFailed),
-                None,
-                None,
                 false,
-                false,
+                CopilotWarmupStage::EnsureServer,
+                error,
+                CopilotWarmupResultSpec::failed(Some(CopilotWarmupFailureCode::EnsureServerFailed)),
             ));
         }
+    };
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("copilot warmup runtime: {e}"))?;
+    let mut guard = server_arc
+        .lock()
+        .map_err(|e| format!("copilot server mutex poisoned: {e}"))?;
+    let boot_token_present = guard.boot_token().is_some();
 
-        tracing::info!(
-            "[CopilotWarmup] request_id={} cdp_port={} stage={} boot_token_present={}",
+    if let Some(result) =
+        run_warmup_health_check(&request_id, cdp, boot_token_present, &rt, &mut guard)
+    {
+        return Ok(result);
+    }
+
+    tracing::info!(
+        "[CopilotWarmup] request_id={} cdp_port={} stage={} boot_token_present={}",
+        request_id,
+        cdp,
+        "status_request",
+        boot_token_present,
+    );
+    let result = match rt.block_on(guard.status_with_timeout_detailed(120)) {
+        Ok(response) => {
+            classify_warmup_status_response(&request_id, cdp, boot_token_present, response)
+        }
+        Err(crate::copilot_server::CopilotStatusCheckError::Http(error)) => {
+            classify_warmup_status_http_error(&request_id, cdp, boot_token_present, error)
+        }
+        Err(crate::copilot_server::CopilotStatusCheckError::Transport(error)) => {
+            classify_warmup_status_transport_error(&request_id, cdp, boot_token_present, error)
+        }
+    };
+    log_warmup_result(&result);
+    Ok(result)
+}
+
+fn run_warmup_health_check(
+    request_id: &str,
+    cdp: u16,
+    boot_token_present: bool,
+    rt: &tokio::runtime::Runtime,
+    guard: &mut crate::copilot_server::CopilotServer,
+) -> Option<CopilotWarmupResult> {
+    tracing::info!(
+        "[CopilotWarmup] request_id={} cdp_port={} stage={} boot_token_present={}",
+        request_id,
+        cdp,
+        "health_check",
+        boot_token_present,
+    );
+    if let Err(error) = rt.block_on(guard.health_check()) {
+        tracing::warn!(
+            "[CopilotWarmup] request_id={} cdp_port={} stage={} outcome=failed failure_code={} boot_token_present={} message={}",
             request_id,
             cdp,
-            "status_request",
+            "health_check",
+            "health_check_failed",
             boot_token_present,
+            error
         );
-        let result = match rt.block_on(guard.status_with_timeout_detailed(120)) {
-            Ok(response) => classify_warmup_status_response(
-                &request_id,
-                cdp,
-                boot_token_present,
-                response,
-            ),
-            Err(crate::copilot_server::CopilotStatusCheckError::Http(error)) => {
-                let (stage, failure_code) = match error.error_code.as_deref() {
-                    Some("unauthorized") => (
-                        CopilotWarmupStage::BootTokenAuth,
-                        CopilotWarmupFailureCode::BootTokenUnauthorized,
-                    ),
-                    Some("login_required") => (
-                        CopilotWarmupStage::LoginCheck,
-                        CopilotWarmupFailureCode::LoginRequired,
-                    ),
-                    _ => (
-                        CopilotWarmupStage::StatusRequest,
-                        CopilotWarmupFailureCode::StatusHttpError,
-                    ),
-                };
-                warmup_result(
-                    &request_id,
-                    cdp,
-                    boot_token_present,
-                    stage,
-                    error
-                        .message
-                        .clone()
-                        .or(error.error_code.clone())
-                        .unwrap_or_else(|| format!("status check failed: status {}", error.status)),
-                    Some(failure_code),
-                    Some(error.status),
-                    error.url.clone(),
-                    false,
-                    failure_code == CopilotWarmupFailureCode::LoginRequired,
-                )
-            }
-            Err(crate::copilot_server::CopilotStatusCheckError::Transport(error)) => {
-                let error_text = error.to_string();
-                let lower = error_text.to_ascii_lowercase();
-                let (stage, failure_code) = if lower.contains("cdp")
-                    || lower.contains("debugging endpoint")
-                    || lower.contains("websocket")
-                {
-                    (
-                        CopilotWarmupStage::CdpAttach,
-                        CopilotWarmupFailureCode::CdpAttachFailed,
-                    )
-                } else {
-                    (
-                        CopilotWarmupStage::StatusRequest,
-                        CopilotWarmupFailureCode::StatusTransportError,
-                    )
-                };
-                warmup_result(
-                    &request_id,
-                    cdp,
-                    boot_token_present,
-                    stage,
-                    error_text,
-                    Some(failure_code),
-                    None,
-                    None,
-                    false,
-                    false,
-                )
-            }
-        };
-        tracing::info!(
-            "[CopilotWarmup] request_id={} cdp_port={} stage={:?} outcome={} failure_code={:?} boot_token_present={} status_code={:?} message={}",
-            result.request_id,
-            result.cdp_port,
-            result.stage,
-            if result.failure_code.is_some() { "failed" } else { "ok" },
-            result.failure_code,
-            result.boot_token_present,
-            result.status_code,
-            result.message
-        );
-        Ok(result)
-    })
-    .await
-    .map_err(|e| format!("copilot warmup task: {e}"))?
+        return Some(warmup_result(
+            request_id,
+            cdp,
+            boot_token_present,
+            CopilotWarmupStage::HealthCheck,
+            error.to_string(),
+            CopilotWarmupResultSpec::failed(Some(CopilotWarmupFailureCode::HealthCheckFailed)),
+        ));
+    }
+    None
+}
+
+fn classify_warmup_status_http_error(
+    request_id: &str,
+    cdp_port: u16,
+    boot_token_present: bool,
+    error: crate::copilot_server::CopilotStatusHttpError,
+) -> CopilotWarmupResult {
+    let (stage, failure_code) = match error.error_code.as_deref() {
+        Some("unauthorized") => (
+            CopilotWarmupStage::BootTokenAuth,
+            CopilotWarmupFailureCode::BootTokenUnauthorized,
+        ),
+        Some("login_required") => (
+            CopilotWarmupStage::LoginCheck,
+            CopilotWarmupFailureCode::LoginRequired,
+        ),
+        _ => (
+            CopilotWarmupStage::StatusRequest,
+            CopilotWarmupFailureCode::StatusHttpError,
+        ),
+    };
+    let login_required = failure_code == CopilotWarmupFailureCode::LoginRequired;
+    warmup_result(
+        request_id,
+        cdp_port,
+        boot_token_present,
+        stage,
+        error
+            .message
+            .clone()
+            .or(error.error_code.clone())
+            .unwrap_or_else(|| format!("status check failed: status {}", error.status)),
+        CopilotWarmupResultSpec {
+            connected: false,
+            login_required,
+            failure_code: Some(failure_code),
+            status_code: Some(error.status),
+            url: error.url.clone(),
+        },
+    )
+}
+
+fn classify_warmup_status_transport_error(
+    request_id: &str,
+    cdp_port: u16,
+    boot_token_present: bool,
+    error: crate::copilot_server::CopilotError,
+) -> CopilotWarmupResult {
+    let error_text = error.to_string();
+    let lower = error_text.to_ascii_lowercase();
+    let (stage, failure_code) = if lower.contains("cdp")
+        || lower.contains("debugging endpoint")
+        || lower.contains("websocket")
+    {
+        (
+            CopilotWarmupStage::CdpAttach,
+            CopilotWarmupFailureCode::CdpAttachFailed,
+        )
+    } else {
+        (
+            CopilotWarmupStage::StatusRequest,
+            CopilotWarmupFailureCode::StatusTransportError,
+        )
+    };
+    warmup_result(
+        request_id,
+        cdp_port,
+        boot_token_present,
+        stage,
+        error_text,
+        CopilotWarmupResultSpec::failed(Some(failure_code)),
+    )
+}
+
+fn log_warmup_result(result: &CopilotWarmupResult) {
+    tracing::info!(
+        "[CopilotWarmup] request_id={} cdp_port={} stage={:?} outcome={} failure_code={:?} boot_token_present={} status_code={:?} message={}",
+        result.request_id,
+        result.cdp_port,
+        result.stage,
+        if result.failure_code.is_some() { "failed" } else { "ok" },
+        result.failure_code,
+        result.boot_token_present,
+        result.status_code,
+        result.message
+    );
 }
 
 // Re-export registry and agent_loop types for external consumers
@@ -498,18 +529,30 @@ fn prepare_session_continuation(
         .map_err(|e| e.to_string())?
 }
 
-async fn spawn_session_loop(
-    app: AppHandle,
-    registry: SessionRegistry,
-    agent_semaphore: Arc<tokio::sync::Semaphore>,
-    config: crate::config::AgentConfig,
+struct SessionLoopLaunch {
     session_id: String,
     conversation_goal: String,
     turn_input: String,
     session_config: PersistedSessionConfig,
     initial_session: runtime::Session,
     cancelled: Arc<AtomicBool>,
+}
+
+async fn spawn_session_loop(
+    app: AppHandle,
+    registry: SessionRegistry,
+    agent_semaphore: Arc<tokio::sync::Semaphore>,
+    config: crate::config::AgentConfig,
+    launch: SessionLoopLaunch,
 ) -> Result<String, String> {
+    let SessionLoopLaunch {
+        session_id,
+        conversation_goal,
+        turn_input,
+        session_config,
+        initial_session,
+        cancelled,
+    } = launch;
     let cwd = normalize_optional_string(session_config.cwd.as_deref());
     let max_turns = session_config.max_turns;
     let session_preset = session_config.session_preset.unwrap_or_default();
@@ -635,12 +678,14 @@ pub(crate) async fn start_agent_inner(
         registry,
         agent_semaphore,
         config,
-        session_id,
-        goal.clone(),
-        goal,
-        session_config,
-        runtime::Session::new(),
-        cancelled,
+        SessionLoopLaunch {
+            session_id,
+            conversation_goal: goal.clone(),
+            turn_input: goal,
+            session_config,
+            initial_session: runtime::Session::new(),
+            cancelled,
+        },
     )
     .await
 }
@@ -674,12 +719,14 @@ pub(crate) async fn continue_agent_session_inner(
         registry,
         agent_semaphore,
         config,
-        request.session_id,
-        conversation_goal,
-        message,
-        session_config,
-        initial_session,
-        cancelled,
+        SessionLoopLaunch {
+            session_id: request.session_id,
+            conversation_goal,
+            turn_input: message,
+            session_config,
+            initial_session,
+            cancelled,
+        },
     )
     .await
 }
@@ -809,29 +856,45 @@ pub struct CopilotWarmupResult {
     pub url: Option<String>,
 }
 
+struct CopilotWarmupResultSpec {
+    connected: bool,
+    login_required: bool,
+    failure_code: Option<CopilotWarmupFailureCode>,
+    status_code: Option<u16>,
+    url: Option<String>,
+}
+
+impl CopilotWarmupResultSpec {
+    fn failed(failure_code: Option<CopilotWarmupFailureCode>) -> Self {
+        Self {
+            connected: false,
+            login_required: false,
+            failure_code,
+            status_code: None,
+            url: None,
+        }
+    }
+}
+
 fn warmup_result(
     request_id: &str,
     cdp_port: u16,
     boot_token_present: bool,
     stage: CopilotWarmupStage,
     message: impl Into<String>,
-    failure_code: Option<CopilotWarmupFailureCode>,
-    status_code: Option<u16>,
-    url: Option<String>,
-    connected: bool,
-    login_required: bool,
+    spec: CopilotWarmupResultSpec,
 ) -> CopilotWarmupResult {
     CopilotWarmupResult {
         request_id: request_id.to_string(),
-        connected,
-        login_required,
+        connected: spec.connected,
+        login_required: spec.login_required,
         boot_token_present,
         cdp_port,
         stage,
         message: message.into(),
-        failure_code,
-        status_code,
-        url,
+        failure_code: spec.failure_code,
+        status_code: spec.status_code,
+        url: spec.url,
     }
 }
 
@@ -848,11 +911,13 @@ fn classify_warmup_status_response(
             boot_token_present,
             CopilotWarmupStage::Ready,
             "Copilot ready.",
-            None,
-            None,
-            response.url,
-            true,
-            false,
+            CopilotWarmupResultSpec {
+                connected: true,
+                login_required: false,
+                failure_code: None,
+                status_code: None,
+                url: response.url,
+            },
         );
     }
     if response.login_required {
@@ -864,11 +929,13 @@ fn classify_warmup_status_response(
             response
                 .error
                 .unwrap_or_else(|| "Sign in to Copilot in Edge, then return here.".to_string()),
-            Some(CopilotWarmupFailureCode::LoginRequired),
-            None,
-            response.url,
-            false,
-            true,
+            CopilotWarmupResultSpec {
+                connected: false,
+                login_required: true,
+                failure_code: Some(CopilotWarmupFailureCode::LoginRequired),
+                status_code: None,
+                url: response.url,
+            },
         );
     }
 
@@ -901,11 +968,13 @@ fn classify_warmup_status_response(
         boot_token_present,
         stage,
         error,
-        Some(code),
-        None,
-        response.url,
-        false,
-        false,
+        CopilotWarmupResultSpec {
+            connected: false,
+            login_required: false,
+            failure_code: Some(code),
+            status_code: None,
+            url: response.url,
+        },
     )
 }
 
@@ -957,8 +1026,26 @@ pub async fn cancel_agent(
 ) -> Result<(), String> {
     let registry = services.registry();
     let bridge = services.copilot_bridge();
+    let should_emit_status = mark_session_cancelling(&registry, &request.session_id);
+    if should_emit_status {
+        emit_cancelling_status(&app, &request.session_id);
+    }
+    drain_session_approvals(&registry, &request.session_id);
+    drain_session_user_questions(&registry, &request.session_id);
+    abort_active_copilot_request(&registry, bridge, &request.session_id).await?;
+
+    if should_emit_status {
+        finalize_cancelled_session(&registry, &request.session_id);
+        emit_cancelled_status(&app, &request.session_id);
+    }
+
+    emit_cancelled_error(&app, &request.session_id);
+    Ok(())
+}
+
+fn mark_session_cancelling(registry: &SessionRegistry, session_id: &str) -> bool {
     let mut should_emit_status = false;
-    if let Ok(Some(handle)) = registry.get_handle(&request.session_id) {
+    if let Ok(Some(handle)) = registry.get_handle(session_id) {
         let _ignore = handle.write_state(|state| {
             should_emit_status = !state.terminal_status_emitted;
             state.loop_epoch = state.loop_epoch.saturating_add(1);
@@ -970,38 +1057,41 @@ pub async fn cancel_agent(
             state.last_error_summary = Some("session cancelled by user".to_string());
         });
     }
-    if should_emit_status {
-        let cancelling = AgentSessionStatusEvent {
-            session_id: request.session_id.clone(),
-            phase: AgentSessionPhase::Cancelling.as_str().to_string(),
-            attempt: None,
-            message: Some("Cancellation requested".to_string()),
-            next_retry_at_ms: None,
-            tool_name: None,
-            stop_reason: None,
-        };
-        if let Err(e) = app.emit(E_STATUS, &cancelling) {
-            tracing::warn!("[RelayAgent] emit failed ({E_STATUS}): {e}");
-        }
+    should_emit_status
+}
+
+fn emit_cancelling_status(app: &AppHandle, session_id: &str) {
+    let cancelling = AgentSessionStatusEvent {
+        session_id: session_id.to_string(),
+        phase: AgentSessionPhase::Cancelling.as_str().to_string(),
+        attempt: None,
+        message: Some("Cancellation requested".to_string()),
+        next_retry_at_ms: None,
+        tool_name: None,
+        stop_reason: None,
+    };
+    if let Err(e) = app.emit(E_STATUS, &cancelling) {
+        tracing::warn!("[RelayAgent] emit failed ({E_STATUS}): {e}");
     }
-    // Drain approvals and reject them all
-    match registry.get_handle(&request.session_id) {
+}
+
+fn drain_session_approvals(registry: &SessionRegistry, session_id: &str) {
+    match registry.get_handle(session_id) {
         Ok(Some(handle)) => match handle.drain_approvals() {
             Ok(senders) => {
                 for tx in senders {
                     let _ = tx.send(false);
                 }
             }
-            Err(e) => {
-                tracing::error!("[RelayAgent] drain approvals failed during cancel: {e}");
-            }
+            Err(e) => tracing::error!("[RelayAgent] drain approvals failed during cancel: {e}"),
         },
         Ok(None) => {}
-        Err(e) => {
-            tracing::error!("[RelayAgent] registry failed during cancel approvals: {e}");
-        }
+        Err(e) => tracing::error!("[RelayAgent] registry failed during cancel approvals: {e}"),
     }
-    match registry.get_handle(&request.session_id) {
+}
+
+fn drain_session_user_questions(registry: &SessionRegistry, session_id: &str) {
+    match registry.get_handle(session_id) {
         Ok(Some(handle)) => match handle.drain_user_questions() {
             Ok(senders) => {
                 for tx in senders {
@@ -1013,52 +1103,59 @@ pub async fn cancel_agent(
             }
         },
         Ok(None) => {}
-        Err(e) => {
-            tracing::error!("[RelayAgent] registry failed during cancel questions: {e}");
-        }
+        Err(e) => tracing::error!("[RelayAgent] registry failed during cancel questions: {e}"),
     }
+}
 
+async fn abort_active_copilot_request(
+    registry: &SessionRegistry,
+    bridge: Arc<CopilotBridgeManager>,
+    session_id: &str,
+) -> Result<(), String> {
     let current_request_id = registry
-        .get_session(&request.session_id, |state| {
-            state.current_copilot_request_id.clone()
-        })
+        .get_session(session_id, |state| state.current_copilot_request_id.clone())
         .map_err(|e| e.to_string())?
         .flatten();
     if let Some(request_id) = current_request_id.as_deref() {
-        request_copilot_bridge_abort(bridge, &request.session_id, request_id).await;
+        request_copilot_bridge_abort(bridge, session_id, request_id).await;
     }
+    Ok(())
+}
 
-    if should_emit_status {
-        if let Ok(Some(handle)) = registry.get_handle(&request.session_id) {
-            let _ignore = handle.write_state(|state| {
-                state.run_state = SessionRunState::Finished;
-                state.terminal_status_emitted = true;
-                state.current_copilot_request_id = None;
-            });
-        }
-        let idle = AgentSessionStatusEvent {
-            session_id: request.session_id.clone(),
-            phase: AgentSessionPhase::Idle.as_str().to_string(),
-            attempt: None,
-            message: Some("Session cancelled".to_string()),
-            next_retry_at_ms: None,
-            tool_name: None,
-            stop_reason: Some("cancelled".to_string()),
-        };
-        if let Err(e) = app.emit(E_STATUS, &idle) {
-            tracing::warn!("[RelayAgent] emit failed ({E_STATUS}): {e}");
-        }
+fn finalize_cancelled_session(registry: &SessionRegistry, session_id: &str) {
+    if let Ok(Some(handle)) = registry.get_handle(session_id) {
+        let _ignore = handle.write_state(|state| {
+            state.run_state = SessionRunState::Finished;
+            state.terminal_status_emitted = true;
+            state.current_copilot_request_id = None;
+        });
     }
+}
 
+fn emit_cancelled_status(app: &AppHandle, session_id: &str) {
+    let idle = AgentSessionStatusEvent {
+        session_id: session_id.to_string(),
+        phase: AgentSessionPhase::Idle.as_str().to_string(),
+        attempt: None,
+        message: Some("Session cancelled".to_string()),
+        next_retry_at_ms: None,
+        tool_name: None,
+        stop_reason: Some("cancelled".to_string()),
+    };
+    if let Err(e) = app.emit(E_STATUS, &idle) {
+        tracing::warn!("[RelayAgent] emit failed ({E_STATUS}): {e}");
+    }
+}
+
+fn emit_cancelled_error(app: &AppHandle, session_id: &str) {
     let evt = AgentErrorEvent {
-        session_id: request.session_id.clone(),
+        session_id: session_id.to_string(),
         error: "session cancelled by user".into(),
         cancelled: true,
     };
     if let Err(e) = app.emit(E_ERROR, &evt) {
         tracing::warn!("[RelayAgent] emit failed ({E_ERROR}): {e}");
     }
-    Ok(())
 }
 
 pub async fn get_session_history(
@@ -1820,7 +1917,9 @@ pub async fn get_relay_diagnostics(services: State<'_, AppServices>) -> RelayDia
                 Ok(status) => {
                     diagnostics.copilot_bridge_connected = Some(status.connected);
                     diagnostics.copilot_bridge_login_required = Some(status.login_required);
-                    diagnostics.copilot_bridge_status_url = status.url.clone();
+                    diagnostics
+                        .copilot_bridge_status_url
+                        .clone_from(&status.url);
                     diagnostics.last_copilot_bridge_failure = status
                         .last_bridge_failure
                         .clone()

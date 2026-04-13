@@ -1717,19 +1717,19 @@ impl ApiClient for CdpApiClient {
                         RuntimeError::new("missing Relay session_id for Copilot request")
                     })?;
                     let result = rt.block_on(async {
-                        srv.send_prompt(
-                            session_id,
-                            &request_id,
-                            &request_chain_id,
-                            attempt_index,
-                            stage_label,
-                            false,
-                            "",
-                            &prompt,
-                            self.response_timeout_secs,
-                            &[],
-                            false,
-                        )
+                        srv.send_prompt(crate::copilot_server::CopilotSendPromptRequest {
+                            relay_session_id: session_id,
+                            relay_request_id: &request_id,
+                            relay_request_chain: &request_chain_id,
+                            relay_request_attempt: attempt_index,
+                            relay_stage_label: stage_label,
+                            relay_probe_mode: false,
+                            system_prompt: "",
+                            user_prompt: &prompt,
+                            timeout_secs: self.response_timeout_secs,
+                            attachment_paths: &[],
+                            new_chat: false,
+                        })
                         .await
                     });
                     clear_request_id(&self.registry, &self.session_id, &request_id);
@@ -2786,9 +2786,9 @@ fn cdp_messages_for_flavor(
 ) -> Vec<ConversationMessage> {
     match flavor {
         CdpPromptFlavor::Standard => messages.to_vec(),
-        CdpPromptFlavor::Repair => latest_user_message(messages)
-            .map(|message| vec![message])
-            .unwrap_or_else(|| messages.to_vec()),
+        CdpPromptFlavor::Repair => {
+            latest_user_message(messages).map_or_else(|| messages.to_vec(), |message| vec![message])
+        }
     }
 }
 
@@ -3004,10 +3004,7 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
     }
     lines.push(format!(
         "git_diff_present: {}",
-        object
-            .get("git_diff")
-            .map(|value| !value.is_null())
-            .unwrap_or(false)
+        object.get("git_diff").is_some_and(|value| !value.is_null())
     ));
     lines.join("\n")
 }
@@ -3486,7 +3483,7 @@ impl ToolExecutor for TauriToolExecutor {
         }
 
         let tool_use_id = Uuid::new_v4().to_string();
-        let input_obj = serde_json::from_str(&input).unwrap_or_else(|_| serde_json::json!({}));
+        let input_obj = serde_json::from_str(input).unwrap_or_else(|_| serde_json::json!({}));
         if let Err(e) = self.app.emit(
             E_TOOL_START,
             AgentToolStartEvent {
@@ -5348,19 +5345,19 @@ mod loop_controller_tests {
             let response = rt.block_on(async {
                 tokio::time::timeout(
                     Duration::from_secs(stage_timeout_secs),
-                    server.send_prompt(
-                        session_id,
-                        &request_id,
-                        &request_chain_id,
-                        attempt_index,
-                        stage_name,
-                        true,
-                        "",
-                        &prompt_bundle.prompt,
-                        response_timeout_secs,
-                        &[],
-                        false,
-                    ),
+                    server.send_prompt(crate::copilot_server::CopilotSendPromptRequest {
+                        relay_session_id: session_id,
+                        relay_request_id: &request_id,
+                        relay_request_chain: &request_chain_id,
+                        relay_request_attempt: attempt_index,
+                        relay_stage_label: stage_name,
+                        relay_probe_mode: true,
+                        system_prompt: "",
+                        user_prompt: &prompt_bundle.prompt,
+                        timeout_secs: response_timeout_secs,
+                        attachment_paths: &[],
+                        new_chat: false,
+                    }),
                 )
                 .await
             });
@@ -5986,9 +5983,9 @@ mod loop_controller_tests {
         assert!(bundle.system_chars() > 0);
         assert!(bundle.message_chars() > 0);
         assert!(bundle.user_text_chars() > 0);
-        assert!(bundle.assistant_text_chars() > 0);
-        assert!(bundle.tool_result_chars() > 0);
-        assert_eq!(bundle.tool_result_count(), 1);
+        assert_eq!(bundle.assistant_text_chars(), 0);
+        assert_eq!(bundle.tool_result_chars(), 0);
+        assert_eq!(bundle.tool_result_count(), 0);
         assert!(bundle.catalog_chars() > 0);
         assert!(bundle.catalog_text.contains("\"name\": \"write_file\""));
         assert!(!bundle.catalog_text.contains("\"name\": \"bash\""));

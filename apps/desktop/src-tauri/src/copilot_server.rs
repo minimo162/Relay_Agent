@@ -251,31 +251,46 @@ pub enum CopilotPromptFailure {
     Bridge(CopilotBridgeFailureInfo),
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct CopilotSendPromptRequest<'a> {
+    pub relay_session_id: &'a str,
+    pub relay_request_id: &'a str,
+    pub relay_request_chain: &'a str,
+    pub relay_request_attempt: usize,
+    pub relay_stage_label: &'a str,
+    pub relay_probe_mode: bool,
+    pub system_prompt: &'a str,
+    pub user_prompt: &'a str,
+    pub timeout_secs: u64,
+    pub attachment_paths: &'a [String],
+    pub new_chat: bool,
+}
+
 fn parse_prompt_error_body(status: reqwest::StatusCode, raw_body: &str) -> CopilotError {
     let parsed = serde_json::from_str::<PromptErrorBody>(raw_body).ok();
     if let Some(body) = parsed {
         if let Some(failure) = prompt_error_to_bridge_failure(&body) {
             if failure.failure_class.is_some() {
-                return CopilotError::PromptError(CopilotPromptFailure::Bridge(failure));
+                return CopilotError::PromptError(Box::new(CopilotPromptFailure::Bridge(failure)));
             }
-            return CopilotError::BridgeBug(failure);
+            return CopilotError::BridgeBug(Box::new(failure));
         }
         let message = body
             .error
             .or(body.message)
             .unwrap_or_else(|| "unknown error".to_string());
-        return CopilotError::PromptError(CopilotPromptFailure::Message(format!(
+        return CopilotError::PromptError(Box::new(CopilotPromptFailure::Message(format!(
             "copilot returned {status}: {message}"
-        )));
+        ))));
     }
 
     match serde_json::from_str::<Value>(raw_body) {
-        Ok(value) => CopilotError::PromptError(CopilotPromptFailure::Message(format!(
+        Ok(value) => CopilotError::PromptError(Box::new(CopilotPromptFailure::Message(format!(
             "copilot returned {status}: {value}"
-        ))),
-        Err(_) => CopilotError::PromptError(CopilotPromptFailure::Message(format!(
+        )))),
+        Err(_) => CopilotError::PromptError(Box::new(CopilotPromptFailure::Message(format!(
             "copilot returned {status}: {raw_body}"
-        ))),
+        )))),
     }
 }
 
@@ -306,9 +321,9 @@ pub enum CopilotError {
     ProcessExited(Option<i32>),
     Spawn(std::io::Error),
     #[allow(dead_code)]
-    PromptError(CopilotPromptFailure),
+    PromptError(Box<CopilotPromptFailure>),
     #[allow(dead_code)]
-    BridgeBug(CopilotBridgeFailureInfo),
+    BridgeBug(Box<CopilotBridgeFailureInfo>),
 }
 
 impl std::fmt::Display for CopilotError {
@@ -323,12 +338,14 @@ impl std::fmt::Display for CopilotError {
                 write!(f, "copilot server exited with code {code:?}")
             }
             CopilotError::Spawn(e) => write!(f, "failed to spawn copilot server: {e}"),
-            CopilotError::PromptError(CopilotPromptFailure::Message(msg)) => {
-                write!(f, "prompt error: {msg}")
-            }
-            CopilotError::PromptError(CopilotPromptFailure::Bridge(failure)) => {
-                write!(f, "prompt error: {}", format_bridge_failure(failure))
-            }
+            CopilotError::PromptError(prompt_error) => match prompt_error.as_ref() {
+                CopilotPromptFailure::Message(msg) => {
+                    write!(f, "prompt error: {msg}")
+                }
+                CopilotPromptFailure::Bridge(failure) => {
+                    write!(f, "prompt error: {}", format_bridge_failure(failure))
+                }
+            },
             CopilotError::BridgeBug(failure) => {
                 write!(f, "bridge bug: {}", format_bridge_failure(failure))
             }
@@ -409,9 +426,11 @@ impl CopilotServer {
 
     fn record_status_snapshot(&mut self, status: &CopilotStatusResponse) {
         if status.last_bridge_failure.is_some() {
-            self.last_bridge_failure = status.last_bridge_failure.clone();
+            self.last_bridge_failure
+                .clone_from(&status.last_bridge_failure);
         }
-        self.last_repair_stage_stats = status.repair_stage_stats.clone();
+        self.last_repair_stage_stats
+            .clone_from(&status.repair_stage_stats);
     }
 
     /// Update CDP port before a restart (`stop` + `start`); does not affect the HTTP listen port.
@@ -582,11 +601,13 @@ impl CopilotServer {
             }
         }
 
-        Err(CopilotError::PromptError(CopilotPromptFailure::Message(format!(
-            "copilot_server could not bind on ports {}–{}; stop orphan node.exe processes or free a port",
-            preferred_port,
-            preferred_port.saturating_add(COPILOT_HTTP_PORT_FALLBACKS - 1)
-        ))))
+        Err(CopilotError::PromptError(Box::new(
+            CopilotPromptFailure::Message(format!(
+                "copilot_server could not bind on ports {}–{}; stop orphan node.exe processes or free a port",
+                preferred_port,
+                preferred_port.saturating_add(COPILOT_HTTP_PORT_FALLBACKS - 1)
+            )),
+        )))
     }
 
     pub async fn health_check(&self) -> Result<(), CopilotError> {
@@ -598,8 +619,11 @@ impl CopilotServer {
             .map_err(CopilotError::Http)?;
 
         if !response.status().is_success() {
-            return Err(CopilotError::PromptError(CopilotPromptFailure::Message(
-                format!("health check failed: status {}", response.status()),
+            return Err(CopilotError::PromptError(Box::new(
+                CopilotPromptFailure::Message(format!(
+                    "health check failed: status {}",
+                    response.status()
+                )),
             )));
         }
 
@@ -614,8 +638,8 @@ impl CopilotServer {
                     self.port
                 );
             }
-            return Err(CopilotError::PromptError(CopilotPromptFailure::Message(
-                message,
+            return Err(CopilotError::PromptError(Box::new(
+                CopilotPromptFailure::Message(message),
             )));
         }
 
@@ -636,7 +660,7 @@ impl CopilotServer {
             .map_err(|error| match error {
                 CopilotStatusCheckError::Transport(error) => error,
                 CopilotStatusCheckError::Http(error) => {
-                    CopilotError::PromptError(CopilotPromptFailure::Message(format!(
+                    CopilotError::PromptError(Box::new(CopilotPromptFailure::Message(format!(
                         "status check failed: status {}{}",
                         error.status,
                         error
@@ -644,7 +668,7 @@ impl CopilotServer {
                             .as_deref()
                             .map(|code| format!(" ({code})"))
                             .unwrap_or_default()
-                    )))
+                    ))))
                 }
             })
     }
@@ -700,16 +724,28 @@ impl CopilotServer {
 
     fn boot_token_error_recoverable(err: &CopilotError) -> bool {
         match err {
-            CopilotError::PromptError(CopilotPromptFailure::Message(message)) => {
-                let lowered = message.to_ascii_lowercase();
-                lowered.contains("401")
-                    && (lowered.contains("unauthorized") || lowered.contains("copilot returned"))
-            }
-            CopilotError::PromptError(CopilotPromptFailure::Bridge(failure))
-            | CopilotError::BridgeBug(failure) => failure
+            CopilotError::PromptError(prompt_error) => match prompt_error.as_ref() {
+                CopilotPromptFailure::Message(message) => {
+                    let lowered = message.to_ascii_lowercase();
+                    lowered.contains("401")
+                        && (lowered.contains("unauthorized")
+                            || lowered.contains("copilot returned"))
+                }
+                CopilotPromptFailure::Bridge(failure) => failure
+                    .message
+                    .as_deref()
+                    .map(str::to_ascii_lowercase)
+                    .is_some_and(|lowered| {
+                        lowered.contains("401")
+                            && (lowered.contains("unauthorized")
+                                || lowered.contains("copilot returned")
+                                || lowered.contains("status check failed"))
+                    }),
+            },
+            CopilotError::BridgeBug(failure) => failure
                 .message
                 .as_deref()
-                .map(|message| message.to_ascii_lowercase())
+                .map(str::to_ascii_lowercase)
                 .is_some_and(|lowered| {
                     lowered.contains("401")
                         && (lowered.contains("unauthorized")
@@ -720,62 +756,105 @@ impl CopilotServer {
         }
     }
 
+    fn build_send_prompt_body(request: CopilotSendPromptRequest<'_>) -> Value {
+        let mut body = json!({
+            "messages": [
+                { "role": "system", "content": request.system_prompt },
+                { "role": "user", "content": request.user_prompt }
+            ],
+            "relay_session_id": request.relay_session_id,
+            "relay_request_id": request.relay_request_id,
+            "relay_request_chain": request.relay_request_chain,
+            "relay_request_attempt": request.relay_request_attempt,
+            "relay_stage_label": request.relay_stage_label,
+            "relay_probe_mode": request.relay_probe_mode,
+        });
+        if !request.attachment_paths.is_empty() {
+            body["relay_attachments"] = json!(request.attachment_paths);
+        }
+        if request.new_chat {
+            body["relay_new_chat"] = json!(true);
+        }
+        body
+    }
+
+    fn record_send_prompt_error(&mut self, error: &CopilotError) {
+        match error {
+            CopilotError::PromptError(prompt_error) => {
+                if let CopilotPromptFailure::Bridge(failure) = prompt_error.as_ref() {
+                    self.set_last_bridge_failure(Some(failure.clone()));
+                    warn!(
+                        "[copilot] structured bridge failure: {}",
+                        format_bridge_failure(failure)
+                    );
+                }
+            }
+            CopilotError::BridgeBug(failure) => {
+                self.set_last_bridge_failure(Some((**failure).clone()));
+                warn!(
+                    "[copilot] structured bridge failure: {}",
+                    format_bridge_failure(failure)
+                );
+            }
+            CopilotError::Http(_)
+            | CopilotError::StartupTimeout
+            | CopilotError::ProcessExited(_)
+            | CopilotError::Spawn(_) => {}
+        }
+    }
+
+    async fn parse_send_prompt_error(
+        &mut self,
+        status: reqwest::StatusCode,
+        response: reqwest::Response,
+        started_at: Instant,
+    ) -> Result<String, CopilotError> {
+        let body = response.text().await.unwrap_or_default();
+        warn!(
+            "[copilot] error body ({} bytes) after {:?}",
+            body.len(),
+            started_at.elapsed()
+        );
+        if body.contains("relay_copilot_aborted") {
+            self.set_last_bridge_failure(None);
+            return Err(CopilotError::PromptError(Box::new(
+                CopilotPromptFailure::Message("relay_copilot_aborted".into()),
+            )));
+        }
+        let error = parse_prompt_error_body(status, &body);
+        self.record_send_prompt_error(&error);
+        Err(error)
+    }
+
     async fn send_prompt_once(
         &mut self,
-        relay_session_id: &str,
-        relay_request_id: &str,
-        relay_request_chain: &str,
-        relay_request_attempt: usize,
-        relay_stage_label: &str,
-        relay_probe_mode: bool,
-        system_prompt: &str,
-        user_prompt: &str,
-        timeout_secs: u64,
-        attachment_paths: &[String],
-        new_chat: bool,
+        request: CopilotSendPromptRequest<'_>,
     ) -> Result<String, CopilotError> {
         let url = format!("{}/v1/chat/completions", self.server_url());
         info!(
             "[copilot] POST {} (timeout {}s, user_prompt_chars={}, system_chars={}, attachments={}, relay_new_chat={}, stage_label={}, request_chain={}, request_attempt={}, probe_mode={})",
             url,
-            timeout_secs,
-            user_prompt.len(),
-            system_prompt.len(),
-            attachment_paths.len(),
-            new_chat,
-            relay_stage_label,
-            relay_request_chain,
-            relay_request_attempt,
-            relay_probe_mode
+            request.timeout_secs,
+            request.user_prompt.len(),
+            request.system_prompt.len(),
+            request.attachment_paths.len(),
+            request.new_chat,
+            request.relay_stage_label,
+            request.relay_request_chain,
+            request.relay_request_attempt,
+            request.relay_probe_mode
         );
         let t0 = Instant::now();
-        let mut body = json!({
-            "messages": [
-                { "role": "system", "content": system_prompt },
-                { "role": "user", "content": user_prompt }
-            ],
-            "relay_session_id": relay_session_id,
-            "relay_request_id": relay_request_id,
-            "relay_request_chain": relay_request_chain,
-            "relay_request_attempt": relay_request_attempt,
-            "relay_stage_label": relay_stage_label,
-            "relay_probe_mode": relay_probe_mode,
-        });
-        if !attachment_paths.is_empty() {
-            body["relay_attachments"] = json!(attachment_paths);
-        }
-        if new_chat {
-            body["relay_new_chat"] = json!(true);
-        }
-        let mut request = self
+        let body = Self::build_send_prompt_body(request);
+        let mut http_request = self
             .client
             .post(url)
             .json(&body)
-            .timeout(Duration::from_secs(timeout_secs));
+            .timeout(Duration::from_secs(request.timeout_secs));
         if let Some(token) = &self.boot_token {
-            request = request.header("X-Relay-Boot-Token", token);
+            http_request = http_request.header("X-Relay-Boot-Token", token);
         }
-        let response = request.send().await.map_err(|e| {
+        let response = http_request.send().await.map_err(|e| {
             warn!("[copilot] POST failed after {:?}: {}", t0.elapsed(), e);
             CopilotError::Http(e)
         })?;
@@ -788,35 +867,7 @@ impl CopilotServer {
         );
 
         if !response.status().is_success() {
-            let body = response.text().await.unwrap_or_default();
-            warn!(
-                "[copilot] error body ({} bytes) after {:?}",
-                body.len(),
-                t0.elapsed()
-            );
-            if body.contains("relay_copilot_aborted") {
-                self.set_last_bridge_failure(None);
-                return Err(CopilotError::PromptError(CopilotPromptFailure::Message(
-                    "relay_copilot_aborted".into(),
-                )));
-            }
-            let error = parse_prompt_error_body(status, &body);
-            match &error {
-                CopilotError::PromptError(CopilotPromptFailure::Bridge(failure))
-                | CopilotError::BridgeBug(failure) => {
-                    self.set_last_bridge_failure(Some(failure.clone()));
-                    warn!(
-                        "[copilot] structured bridge failure: {}",
-                        format_bridge_failure(failure)
-                    );
-                }
-                CopilotError::PromptError(CopilotPromptFailure::Message(_))
-                | CopilotError::Http(_)
-                | CopilotError::StartupTimeout
-                | CopilotError::ProcessExited(_)
-                | CopilotError::Spawn(_) => {}
-            }
-            return Err(error);
+            return self.parse_send_prompt_error(status, response, t0).await;
         }
 
         let body: serde_json::Value = response.json().await.map_err(CopilotError::Http)?;
@@ -845,74 +896,23 @@ impl CopilotServer {
     /// `new_chat`: when `true`, Node may click Copilot "new chat" before pasting (see `relay_new_chat` in `copilot_server.js`). Default agent path uses `false` so turns append to the current Copilot thread.
     pub async fn send_prompt(
         &mut self,
-        relay_session_id: &str,
-        relay_request_id: &str,
-        relay_request_chain: &str,
-        relay_request_attempt: usize,
-        relay_stage_label: &str,
-        relay_probe_mode: bool,
-        system_prompt: &str,
-        user_prompt: &str,
-        timeout_secs: u64,
-        attachment_paths: &[String],
-        new_chat: bool,
+        request: CopilotSendPromptRequest<'_>,
     ) -> Result<String, CopilotError> {
-        match self
-            .send_prompt_once(
-                relay_session_id,
-                relay_request_id,
-                relay_request_chain,
-                relay_request_attempt,
-                relay_stage_label,
-                relay_probe_mode,
-                system_prompt,
-                user_prompt,
-                timeout_secs,
-                attachment_paths,
-                new_chat,
-            )
-            .await
-        {
+        match self.send_prompt_once(request).await {
             Ok(t) => Ok(t),
             Err(e) if Self::http_error_recoverable(&e) => {
                 warn!(
                     "[copilot] chat/completions failed ({e}); restarting Node bridge and retrying once"
                 );
                 self.start().await?;
-                self.send_prompt_once(
-                    relay_session_id,
-                    relay_request_id,
-                    relay_request_chain,
-                    relay_request_attempt,
-                    relay_stage_label,
-                    relay_probe_mode,
-                    system_prompt,
-                    user_prompt,
-                    timeout_secs,
-                    attachment_paths,
-                    new_chat,
-                )
-                .await
+                self.send_prompt_once(request).await
             }
             Err(e) if Self::boot_token_error_recoverable(&e) => {
                 warn!(
                     "[copilot] chat/completions failed with probable stale boot token ({e}); restarting Node bridge and retrying once"
                 );
                 self.start().await?;
-                self.send_prompt_once(
-                    relay_session_id,
-                    relay_request_id,
-                    relay_request_chain,
-                    relay_request_attempt,
-                    relay_stage_label,
-                    relay_probe_mode,
-                    system_prompt,
-                    user_prompt,
-                    timeout_secs,
-                    attachment_paths,
-                    new_chat,
-                )
-                .await
+                self.send_prompt_once(request).await
             }
             Err(e) => Err(e),
         }
@@ -1060,7 +1060,10 @@ mod tests {
         })
         .to_string();
         let error = parse_prompt_error_body(StatusCode::INTERNAL_SERVER_ERROR, &body);
-        let CopilotError::PromptError(CopilotPromptFailure::Bridge(failure)) = error else {
+        let CopilotError::PromptError(prompt_error) = error else {
+            panic!("expected structured bridge failure");
+        };
+        let CopilotPromptFailure::Bridge(failure) = prompt_error.as_ref() else {
             panic!("expected structured bridge failure");
         };
         assert_eq!(

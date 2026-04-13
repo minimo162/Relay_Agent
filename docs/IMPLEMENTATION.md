@@ -16,6 +16,14 @@
 
 ## Milestone Log
 
+### 2026-04-14 Rust backend: clear Clippy `-D warnings` failures in desktop Tauri sources
+
+**Problem:** CI was failing `cargo clippy -- -D warnings` in the desktop Rust backend. The blocking set included small `Option`/borrow issues in the CDP orchestrator plus structural Clippy failures in the Copilot bridge, debug-control HTTP shim, and Tauri bridge layer (`result_large_err`, `too_many_arguments`, `too_many_lines`, `assigning_clones`, and related style lints).
+
+**Change:** Updated [`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs) to use `map_or_else`, `is_some_and`, and a direct `serde_json::from_str(input)` call without changing CDP prompt selection or tool-result summarization. Refactored [`apps/desktop/src-tauri/src/copilot_server.rs`](../apps/desktop/src-tauri/src/copilot_server.rs) so large `CopilotError` variants are boxed, repeated clone assignments use `clone_from`, the boot-token recovery lowercase checks use method references, and prompt-send calls flow through a dedicated internal `CopilotSendPromptRequest` struct with helper methods for body construction and structured error recording. Split [`apps/desktop/src-tauri/src/dev_control.rs`](../apps/desktop/src-tauri/src/dev_control.rs) into request-read, parse, dispatch, and per-route helpers while preserving the debug-only local HTTP contract. Refactored [`apps/desktop/src-tauri/src/tauri_bridge.rs`](../apps/desktop/src-tauri/src/tauri_bridge.rs) by introducing internal warmup/session-launch helper structs, moving Copilot warmup classification and cancel-path work into focused helpers, and switching diagnostics URL assignment to `clone_from`; Tauri command signatures and `CopilotWarmupResult` JSON fields remain unchanged.
+
+**Verification:** `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`; `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`; `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib`; `git diff --check` — pass (2026-04-14). The pre-existing `ts-rs failed to parse serde attribute` warnings still appear during Rust builds but were intentionally left out of scope because they are non-fatal and were not part of the approved Clippy-only fix.
+
 ### 2026-04-14 Desktop UI: clarify first-run flow, empty states, and settings hierarchy
 
 **Problem:** The desktop shell had already been simplified, but first-run still exposed Relay-internal concepts too early. The onboarding surface split Copilot readiness into multiple technical cards, the request composer was not clearly the primary action, the right panel empty state did not explain what would happen next, and Settings still put basic setup and advanced browser/troubleshooting controls at the same level.
