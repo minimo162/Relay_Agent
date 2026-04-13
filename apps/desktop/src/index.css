@@ -50,11 +50,11 @@
 [data-theme="light"] {
   color-scheme: light;
 
-  --ra-surface-100: #fcfdff;
-  --ra-surface-200: #f7f9fc;
-  --ra-surface-300: #f1f5f9;
-  --ra-surface-400: #e9eef5;
-  --ra-surface-500: #dde5ef;
+  --ra-surface-100: #f7f5ef;
+  --ra-surface-200: #f2f1ed;
+  --ra-surface-300: #ebeae5;
+  --ra-surface-400: #e6e5e0;
+  --ra-surface-500: #e1e0db;
 
   --ra-surface: var(--ra-surface-200);
   --ra-surface-elevated: var(--ra-surface-300);
@@ -62,41 +62,42 @@
   --ra-surface-card: var(--ra-surface-400);
   --ra-surface-muted: var(--ra-surface-300);
 
-  --ra-border: rgba(24, 39, 75, 0.12);
-  --ra-border-medium: rgba(24, 39, 75, 0.22);
-  --ra-border-focus: #2563eb;
-  --ra-border-strong: rgba(24, 39, 75, 0.36);
-  --ra-border-solid: #172033;
+  --ra-border: color-mix(in oklab, #26251e 10%, transparent);
+  --ra-border-medium: color-mix(in oklab, #26251e 18%, transparent);
+  --ra-border-focus: #f54e00;
+  --ra-border-strong: rgba(38, 37, 30, 0.32);
+  --ra-border-solid: #26251e;
 
-  --ra-accent: #2563eb;
-  --ra-accent-hover: #1d4ed8;
-  --ra-accent-rgb: 37 99 235;
-  --ra-accent-secondary: #4b5563;
-  --ra-accent-gradient: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  --ra-accent: #f54e00;
+  --ra-accent-hover: #de4800;
+  --ra-accent-rgb: 245 78 0;
+  --ra-accent-secondary: #c08532;
+  --ra-accent-gradient: linear-gradient(135deg, #f54e00 0%, #ff6a1f 58%, #c08532 100%);
 
-  --ra-text-primary: #172033;
-  --ra-text-secondary: rgba(23, 32, 51, 0.68);
-  --ra-text-muted: rgba(23, 32, 51, 0.48);
-  --ra-secondary-pill-fg: rgba(23, 32, 51, 0.68);
+  --ra-text-primary: #26251e;
+  --ra-text-secondary: rgba(38, 37, 30, 0.72);
+  --ra-text-muted: rgba(38, 37, 30, 0.5);
+  --ra-secondary-pill-fg: rgba(38, 37, 30, 0.68);
 
-  --ra-hover: rgba(37, 99, 235, 0.06);
-  --ra-active: rgba(37, 99, 235, 0.12);
-  --ra-hover-text: #1d4ed8;
-  --ra-ghost-bg: rgba(23, 32, 51, 0.05);
+  --ra-hover: color-mix(in oklab, #f54e00 7%, var(--ra-surface-100));
+  --ra-active: color-mix(in oklab, #f54e00 12%, var(--ra-surface-100));
+  --ra-hover-text: #cf2d56;
+  --ra-ghost-bg: rgba(38, 37, 30, 0.05);
 
-  --ra-green: #0f8a5f;
-  --ra-green-rgb: 15 138 95;
-  --ra-yellow: #b7791f;
-  --ra-red: #c2410c;
+  --ra-green: #1f8a65;
+  --ra-green-rgb: 31 138 101;
+  --ra-yellow: #c08532;
+  --ra-red: #cf2d56;
 
-  --ra-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
-  --ra-shadow-md: 0 8px 24px rgba(15, 23, 42, 0.08);
-  --ra-shadow-lg: 0 16px 48px rgba(15, 23, 42, 0.1);
+  --ra-shadow-sm: 0 10px 30px rgba(38, 37, 30, 0.05), 0 0 0 1px color-mix(in oklab, #26251e 6%, transparent);
+  --ra-shadow-md: 0 18px 46px rgba(38, 37, 30, 0.08), 0 0 0 1px color-mix(in oklab, #26251e 8%, transparent);
+  --ra-shadow-lg: 0 28px 70px rgba(38, 37, 30, 0.1), 0 14px 32px rgba(38, 37, 30, 0.08),
+    0 0 0 1px color-mix(in oklab, #26251e 10%, transparent);
 
   --ra-surface-selected: var(--ra-surface-500);
   --ra-btn-primary-bg: var(--ra-surface-300);
   --ra-btn-primary-fg: var(--ra-text-primary);
-  --ra-focus-elevated: 0 0 0 3px rgba(37, 99, 235, 0.14);
+  --ra-focus-elevated: 0 0 0 3px color-mix(in oklab, #f54e00 16%, transparent);
 
   --ra-color-page: var(--ra-surface);
   --ra-color-surface: var(--ra-surface-card);
@@ -115,12 +116,12 @@
   --ra-color-warning: var(--ra-yellow);
   --ra-color-danger: var(--ra-red);
 
-  --ra-focus-ring: 2px solid var(--ra-border-medium);
+  --ra-focus-ring: 2px solid color-mix(in oklab, #f54e00 28%, transparent);
   --ra-focus-ring-offset: 2px;
 
   --ra-link-color: var(--ra-accent);
   --ra-link-hover: var(--ra-accent-hover);
-  --ra-link-underline: rgba(23, 32, 51, 0.3);
+  --ra-link-underline: rgba(38, 37, 30, 0.3);
 }
 
 [data-theme="dark"] {
@@ -468,7 +469,9 @@ body a:focus-visible {
   grid-template-columns: 260px 1fr 300px;
   height: 100vh;
   overflow: hidden;
-  background: var(--ra-surface);
+  background:
+    radial-gradient(circle at top left, color-mix(in oklab, var(--ra-accent) 6%, transparent), transparent 28%),
+    linear-gradient(180deg, var(--ra-surface-100) 0%, var(--ra-surface-200) 16%, var(--ra-surface) 100%);
 }
 
 .ra-shell--first-run {
@@ -485,7 +488,8 @@ body a:focus-visible {
   position: sticky;
   top: 0;
   z-index: 20;
-  background: var(--ra-surface-100);
+  background: color-mix(in oklab, var(--ra-surface-100) 90%, transparent);
+  backdrop-filter: blur(18px);
   min-height: 52px;
 }
 
@@ -498,11 +502,11 @@ body a:focus-visible {
 }
 
 .ra-shell-header__status {
-  opacity: 0.82;
+  opacity: 0.78;
 }
 
 .ra-shell-header__actions {
-  opacity: 0.72;
+  opacity: 0.66;
 }
 
 .ra-shell-header__actions:hover,
@@ -516,7 +520,7 @@ body a:focus-visible {
   min-height: 0;
   overflow: hidden;
   border-right: 1px solid var(--ra-border);
-  background: var(--ra-color-page);
+  background: color-mix(in oklab, var(--ra-surface-100) 86%, var(--ra-surface));
   display: flex;
   flex-direction: column;
 }
@@ -529,7 +533,7 @@ body a:focus-visible {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  background: var(--ra-color-page);
+  background: transparent;
 }
 
 .ra-shell-context-panel {
@@ -538,7 +542,7 @@ body a:focus-visible {
   min-height: 0;
   overflow: hidden;
   border-left: 1px solid var(--ra-border);
-  background: var(--ra-color-surface);
+  background: color-mix(in oklab, var(--ra-surface-card) 82%, var(--ra-surface-100));
   display: flex;
   flex-direction: column;
 }
@@ -554,7 +558,7 @@ body a:focus-visible {
   gap: 0.5rem;
   padding: 0.4rem 1.1rem;
   border-top: 1px solid var(--ra-border);
-  background: var(--ra-surface-100);
+  background: color-mix(in oklab, var(--ra-surface-100) 92%, transparent);
   min-height: 30px;
   font-size: var(--ra-text-caption);
   color: var(--ra-text-secondary);
@@ -568,7 +572,7 @@ body a:focus-visible {
   border: 1px solid var(--ra-border);
   background: var(--ra-surface-card);
   border-radius: var(--ra-radius);
-  box-shadow: none;
+  box-shadow: var(--ra-shadow-sm);
 }
 
 .ra-card--interactive {
@@ -637,6 +641,7 @@ body a:focus-visible {
 
 .ra-button-primary:hover:not(:disabled) {
   background: var(--ra-surface-400);
+  color: var(--ra-hover-text);
 }
 
 .ra-button-primary:focus-visible {
@@ -657,6 +662,7 @@ body a:focus-visible {
 }
 
 .ra-button-secondary:hover:not(:disabled) {
+  background: var(--ra-surface-400);
   color: var(--ra-text-primary);
 }
 
@@ -675,6 +681,7 @@ body a:focus-visible {
 }
 
 .ra-button-tertiary:hover:not(:disabled) {
+  background: var(--ra-surface-400);
   color: var(--ra-text-primary);
 }
 
@@ -767,11 +774,11 @@ body a:focus-visible {
 }
 
 .ra-status-dot--connected {
-  background: var(--ra-green);
+  background: color-mix(in oklab, var(--ra-green) 88%, white 12%);
 }
 
 .ra-status-dot--connecting {
-  background: var(--ra-yellow);
+  background: color-mix(in oklab, var(--ra-yellow) 82%, white 18%);
   animation: soft-pulse 1.5s ease-in-out infinite;
 }
 
@@ -787,8 +794,8 @@ body a:focus-visible {
 /* Composer (task input area) — flat surface */
 .ra-composer {
   border-top: 1px solid var(--ra-border);
-  padding: 0.85rem 1.1rem 0.95rem;
-  background: var(--ra-surface-elevated);
+  padding: 0.75rem 1.1rem 0.85rem;
+  background: color-mix(in oklab, var(--ra-surface-300) 92%, transparent);
 }
 
 .ra-composer--hero {
@@ -810,15 +817,17 @@ body a:focus-visible {
 .ra-composer-shell {
   border: 1px solid var(--ra-border);
   border-radius: var(--ra-radius);
-  background: var(--ra-surface);
-  padding: 0.65rem 0.85rem 0.55rem;
+  background: color-mix(in oklab, var(--ra-surface-100) 92%, white);
+  padding: 0.55rem 0.75rem 0.45rem;
+  box-shadow: var(--ra-shadow-sm);
   transition: border-color 150ms ease, box-shadow 200ms ease;
 }
 
 .ra-composer--hero .ra-composer-shell {
-  padding: 0.95rem 1rem 0.85rem;
+  padding: 1rem 1rem 0.9rem;
   border-radius: 1rem;
   background: var(--ra-surface-100);
+  box-shadow: var(--ra-shadow-md);
 }
 
 .ra-composer-shell:focus-within {
@@ -836,12 +845,12 @@ body a:focus-visible {
   border-radius: 0;
   background: transparent;
   color: var(--ra-text-primary);
-  padding: 0.25rem 0.1rem 0.5rem;
+  padding: 0.2rem 0.1rem 0.35rem;
   font-size: 1rem;
   line-height: 1.55;
   resize: none;
   font-family: inherit;
-  min-height: 4.5rem;
+  min-height: 4.2rem;
   max-height: 200px;
   box-shadow: none;
   transition: none;
@@ -858,9 +867,9 @@ body a:focus-visible {
   flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 0.5rem 0.75rem;
-  padding-top: 0.4rem;
-  margin-top: 0.1rem;
+  gap: 0.45rem 0.75rem;
+  padding-top: 0.45rem;
+  margin-top: 0.05rem;
   border-top: 1px solid var(--ra-border);
 }
 
@@ -868,7 +877,7 @@ body a:focus-visible {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.5rem;
+  gap: 0.3rem;
   min-width: 0;
   flex: 1;
 }
@@ -883,7 +892,7 @@ body a:focus-visible {
 
 .ra-composer-mode-summary {
   margin: 0;
-  font-size: var(--ra-text-micro);
+  font-size: 0.6875rem;
   color: var(--ra-text-muted);
   line-height: 1.35;
 }
@@ -953,7 +962,7 @@ body a:focus-visible {
   justify-content: center;
   gap: 0.35rem;
   min-height: 2.375rem;
-  padding: 0.625rem 0.875rem;
+  padding: 0.625rem 0.95rem;
   border: none;
   border-radius: var(--ra-radius);
   font-family: var(--ra-font-display);
@@ -961,9 +970,9 @@ body a:focus-visible {
   font-weight: 400;
   line-height: 1;
   cursor: pointer;
-  background: var(--ra-btn-primary-bg);
-  color: var(--ra-btn-primary-fg);
-  box-shadow: none;
+  background: var(--ra-accent-gradient);
+  color: #ffffff;
+  box-shadow: var(--ra-shadow-sm);
   transition:
     color 150ms ease,
     background-color 150ms ease,
@@ -972,7 +981,8 @@ body a:focus-visible {
 }
 
 .ra-composer-send:hover:not(:disabled) {
-  color: var(--ra-hover-text);
+  color: #ffffff;
+  filter: brightness(1.04);
 }
 
 .ra-composer-send:focus-visible {
@@ -1006,7 +1016,7 @@ body a:focus-visible {
   font-weight: 400;
   line-height: 1;
   cursor: pointer;
-  background: var(--ra-surface-400);
+  background: var(--ra-surface-300);
   color: var(--ra-secondary-pill-fg);
   transition:
     background-color 150ms ease,
@@ -1100,11 +1110,12 @@ body a:focus-visible {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  margin: 0.5rem 0.45rem;
-  border-radius: 0.85rem;
+  margin: 0.7rem 0.55rem;
+  border-radius: 1rem;
   border: 1px solid var(--ra-border);
   background: var(--ra-sidebar);
   overflow: hidden;
+  box-shadow: var(--ra-shadow-sm);
 }
 
 .ra-first-run {
@@ -1120,7 +1131,7 @@ body a:focus-visible {
 .ra-first-run__panel {
   width: min(100%, 64rem);
   display: grid;
-  gap: 1rem;
+  gap: 1.2rem;
 }
 
 .ra-first-run__lead {
@@ -1166,6 +1177,14 @@ body a:focus-visible {
   border-radius: 1rem;
   background: var(--ra-surface-100);
   padding: 1rem 1.1rem;
+  box-shadow: var(--ra-shadow-sm);
+}
+
+.ra-first-run__step--primary {
+  border-color: color-mix(in oklab, var(--ra-accent) 24%, var(--ra-border));
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--ra-accent) 5%, var(--ra-surface-100)) 0%, var(--ra-surface-100) 100%);
+  box-shadow: var(--ra-shadow-md);
 }
 
 .ra-first-run__step-header {
@@ -1187,7 +1206,7 @@ body a:focus-visible {
 
 .ra-first-run__step-body {
   display: grid;
-  gap: 0.45rem;
+  gap: 0.4rem;
 }
 
 .ra-first-run__step-action {
@@ -1221,7 +1240,7 @@ body a:focus-visible {
 }
 
 .ra-first-run__request-composer {
-  margin-top: 0.35rem;
+  margin-top: 0.55rem;
 }
 
 .ra-preflight-grid {
@@ -1269,16 +1288,17 @@ body a:focus-visible {
   gap: 0.15rem;
   text-align: left;
   border: 1px solid var(--ra-border);
-  border-radius: 0.75rem;
+  border-radius: 0.85rem;
   background: var(--ra-surface-card);
   padding: 0.5rem 0.625rem;
   margin-bottom: 0.55rem;
-  transition: background-color 150ms ease, border-color 150ms ease;
+  transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
 }
 
 .ra-sidebar-workspace-chip:hover {
   background: var(--ra-hover);
   border-color: var(--ra-border-medium);
+  box-shadow: var(--ra-shadow-sm);
 }
 
 .ra-sidebar-workspace-chip:focus-visible {
@@ -1297,9 +1317,9 @@ body a:focus-visible {
   width: 100%;
   text-align: left;
   border: none;
-  border-radius: 0.75rem;
+  border-radius: 0.85rem;
   padding: 0.6rem 0.8rem;
-  margin-bottom: 0.125rem;
+  margin-bottom: 0.2rem;
   font-size: var(--ra-text-caption);
   line-height: 1.35;
   cursor: pointer;
@@ -1314,9 +1334,11 @@ body a:focus-visible {
 }
 
 .ra-session-row--selected {
-  background: var(--ra-surface-selected);
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--ra-accent) 7%, var(--ra-surface-selected)) 0%, var(--ra-surface-selected) 100%);
   color: var(--ra-text-primary);
   font-weight: 500;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ra-accent) 14%, transparent);
 }
 
 .ra-session-row:focus-visible {
@@ -1345,7 +1367,7 @@ body a:focus-visible {
   margin: 0.65rem 0.65rem 0;
   border-radius: 9999px;
   border: 1px solid var(--ra-border);
-  background: var(--ra-surface);
+  background: color-mix(in oklab, var(--ra-surface-100) 94%, transparent);
   flex-shrink: 0;
 }
 
@@ -1371,11 +1393,11 @@ body a:focus-visible {
 
 .ra-tab-track__btn--active {
   color: var(--ra-text-primary);
-  box-shadow: inset 0 0 0 1px var(--ra-border-medium);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ra-accent) 16%, transparent);
 }
 
 [data-theme="light"] .ra-tab-track__btn--active {
-  background: var(--ra-surface-500);
+  background: color-mix(in oklab, var(--ra-accent) 8%, var(--ra-surface-500));
 }
 
 [data-theme="dark"] .ra-tab-track__btn--active {
@@ -1394,9 +1416,10 @@ body a:focus-visible {
 .ra-context-note,
 .ra-context-empty-card {
   border: 1px solid var(--ra-border);
-  border-radius: 0.9rem;
+  border-radius: 1rem;
   background: var(--ra-surface-100);
   padding: 0.8rem 0.9rem;
+  box-shadow: var(--ra-shadow-sm);
 }
 
 .ra-context-empty-card {
@@ -1450,12 +1473,13 @@ body a:focus-visible {
   padding: 0.5rem 0.75rem;
   border-radius: 0.75rem;
   border: 1px solid var(--ra-border);
-  background: transparent;
-  transition: background-color 150ms ease;
+  background: color-mix(in oklab, var(--ra-surface-100) 72%, transparent);
+  transition: background-color 150ms ease, border-color 150ms ease;
 }
 
 .ra-quiet-row:hover {
   background: var(--ra-hover);
+  border-color: var(--ra-border-medium);
 }
 
 .ra-quiet-row--align-center {
@@ -1479,8 +1503,10 @@ body a:focus-visible {
   height: 2.5rem;
   margin: 0 auto 0.75rem;
   border-radius: 0.75rem;
-  background: var(--ra-hover);
+  background:
+    radial-gradient(circle at 35% 35%, color-mix(in oklab, var(--ra-accent) 18%, var(--ra-surface-100)), var(--ra-surface-300));
   border: 1px solid var(--ra-border);
+  box-shadow: var(--ra-shadow-sm);
 }
 
 .ra-empty-state__eyebrow {
@@ -1495,20 +1521,22 @@ body a:focus-visible {
 .ra-empty-state__example {
   margin: 0.9rem auto 0;
   max-width: 22rem;
-  padding: 0.75rem 0.85rem;
+  padding: 0.85rem 0.95rem;
   border: 1px solid var(--ra-border);
-  border-radius: 0.85rem;
+  border-radius: 1rem;
   background: var(--ra-surface-100);
+  box-shadow: var(--ra-shadow-sm);
 }
 
 .ra-empty-state__steps {
   margin: 0.9rem auto 0;
   max-width: 22rem;
-  padding: 0.75rem 0.85rem;
+  padding: 0.85rem 0.95rem;
   border: 1px solid var(--ra-border);
-  border-radius: 0.85rem;
+  border-radius: 1rem;
   background: var(--ra-surface-100);
   text-align: left;
+  box-shadow: var(--ra-shadow-sm);
 }
 
 .ra-empty-state__steps ul {
@@ -1529,8 +1557,8 @@ body a:focus-visible {
 .ra-composer-examples {
   display: grid;
   gap: 0.55rem;
-  margin-top: 0.85rem;
-  padding-top: 0.85rem;
+  margin-top: 0.95rem;
+  padding-top: 0.95rem;
   border-top: 1px solid var(--ra-border);
 }
 
@@ -1544,7 +1572,7 @@ body a:focus-visible {
   text-align: left;
   cursor: pointer;
   border: 1px solid var(--ra-border);
-  border-radius: 0.85rem;
+  border-radius: 0.95rem;
   background: var(--ra-surface-100);
   color: var(--ra-text-primary);
   padding: 0.7rem 0.8rem;
@@ -1560,6 +1588,7 @@ body a:focus-visible {
 .ra-composer-example-btn:hover {
   background: var(--ra-hover);
   border-color: var(--ra-border-medium);
+  box-shadow: var(--ra-shadow-sm);
 }
 
 .ra-composer-example-btn:focus-visible {
@@ -1669,7 +1698,8 @@ body a:focus-visible {
 .ra-modal-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(15, 23, 42, 0.32);
+  background: rgba(38, 37, 30, 0.24);
+  backdrop-filter: blur(8px);
   z-index: 9;
 }
 
@@ -1677,9 +1707,10 @@ body a:focus-visible {
   position: relative;
   z-index: 10;
   border: 1px solid var(--ra-border);
-  border-radius: var(--ra-radius);
+  border-radius: 1rem;
   background: var(--ra-surface-100);
   padding: 1.1rem 1.25rem;
+  box-shadow: var(--ra-shadow-lg);
 }
 
 .ra-modal-panel__title {
@@ -1699,9 +1730,10 @@ body a:focus-visible {
 
 .ra-settings-card {
   border: 1px solid var(--ra-border);
-  border-radius: 0.9rem;
+  border-radius: 1rem;
   background: var(--ra-surface-200);
   padding: 1rem;
+  box-shadow: var(--ra-shadow-sm);
 }
 
 .ra-settings-details {
@@ -1731,6 +1763,20 @@ body a:focus-visible {
   gap: 0.75rem;
 }
 
+.ra-settings-step {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.95rem 1rem;
+  border: 1px solid var(--ra-border);
+  border-radius: 0.95rem;
+  background: var(--ra-surface-100);
+}
+
+.ra-settings-step--highlight {
+  border-color: color-mix(in oklab, var(--ra-accent) 18%, var(--ra-border));
+  box-shadow: var(--ra-shadow-sm);
+}
+
 .ra-settings-status {
   display: flex;
   align-items: flex-start;
@@ -1738,8 +1784,13 @@ body a:focus-visible {
   gap: 0.75rem;
   padding: 0.85rem 0.9rem;
   border: 1px solid var(--ra-border);
-  border-radius: 0.85rem;
+  border-radius: 0.95rem;
   background: var(--ra-surface-100);
+  box-shadow: var(--ra-shadow-sm);
+}
+
+.ra-settings-status--highlight {
+  border-color: color-mix(in oklab, var(--ra-accent) 18%, var(--ra-border));
 }
 
 .ra-settings-segmented {

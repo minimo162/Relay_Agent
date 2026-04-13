@@ -28,7 +28,7 @@ export function StatusBar(props: {
       class={`ra-shell-footer px-3 py-1 flex items-center gap-2 ra-type-button-label ${ui.mutedText}`}
       data-ra-footer-session={props.sessionStatus.phase}
     >
-      <span class="text-[var(--ra-text-muted)]">Conversation</span>
+      <span class="text-[var(--ra-text-muted)]">Status</span>
       <span class={`ra-type-caption ${ui.textSecondary}`}>{footerLabel(props.sessionStatus)}</span>
     </footer>
   );

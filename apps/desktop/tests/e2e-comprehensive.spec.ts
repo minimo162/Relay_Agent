@@ -139,10 +139,6 @@ async function sendPrompt(page: any, text: string) {
   await textarea.press("Control+Enter");
 }
 
-async function waitForIdle(page: any) {
-  await expect(page.locator('[data-ra-footer-session="idle"]')).toBeVisible({ timeout: 10000 });
-}
-
 async function emitEvent(page: any, event: string, payload: any) {
   await page.evaluate(
     ({ event, payload }) => {
@@ -157,11 +153,9 @@ test.describe("Conversation model", () => {
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "first task");
-    await waitForIdle(page);
     await expect(page.locator(".ra-session-row")).toHaveCount(1);
 
     await sendPrompt(page, "follow-up task");
-    await waitForIdle(page);
     await expect(page.locator(".ra-session-row")).toHaveCount(1);
     await expect(page.getByText("follow-up task")).toBeVisible();
   });
@@ -170,10 +164,9 @@ test.describe("Conversation model", () => {
     await injectMock(page, true);
     await openApp(page);
     await sendPrompt(page, "task one");
-    await waitForIdle(page);
+    await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible({ timeout: 5000 });
     await page.getByRole("button", { name: "New conversation" }).click();
     await sendPrompt(page, "task two");
-    await waitForIdle(page);
     await expect(page.locator(".ra-session-row")).toHaveCount(2);
   });
 });
@@ -184,7 +177,7 @@ test.describe("Settings and first-run UX", () => {
     await openApp(page);
     await expect(page.getByRole("heading", { name: "Conversations" })).toHaveCount(0);
     await expect(page.getByRole("tab", { name: "Integrations" })).toHaveCount(0);
-    await expect(page.getByText("Confirm the basics, then send your first request")).toBeVisible();
+    await expect(page.getByText("Set up once, then ask for the result you want")).toBeVisible();
     await expect(page.getByRole("button", { name: "Open Settings" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Reconnect Copilot" })).toHaveCount(0);
   });

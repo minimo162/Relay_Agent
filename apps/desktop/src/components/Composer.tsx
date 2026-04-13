@@ -232,14 +232,14 @@ export function Composer(props: {
     if (props.hero) {
       switch (props.sessionPreset) {
         case "plan":
-          return "Describe the outcome you want to understand. Relay will inspect first and reply with a plan only.";
+          return "Describe the outcome you want to understand. Relay will inspect first and reply with a plan.";
         case "explore":
           return "Describe what you want to inspect. Relay will read and search without changing files.";
         default:
-          return "Describe the outcome you want. Relay will inspect the repo before proposing or making changes.";
+          return "Describe the result you want. Relay will inspect the repo before it proposes or makes changes.";
       }
     }
-    return "Describe the outcome you want, not the implementation steps.";
+    return "Ask for the result you want, not the implementation steps.";
   });
   const heroExamples = createMemo(() => {
     switch (props.sessionPreset) {

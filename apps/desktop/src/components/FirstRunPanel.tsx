@@ -32,12 +32,13 @@ function StepCard(props: {
   statusState: "good" | "warn" | "neutral";
   summary: string;
   detail: string;
+  featured?: boolean;
   action?: JSX.Element;
   technicalDetail?: string | null;
   children?: JSX.Element;
 }) {
   return (
-    <section class="ra-first-run__step">
+    <section class={`ra-first-run__step ${props.featured ? "ra-first-run__step--primary" : ""}`}>
       <div class="ra-first-run__step-header">
         <div>
           <p class="ra-first-run__step-kicker">{props.step}</p>
@@ -115,9 +116,9 @@ export function FirstRunPanel(props: {
   const requestStatusLabel = createMemo(() => `Default: ${modeLabel()}`);
   const requestSummary = createMemo(() => {
     if (hasWorkspace() && connectionReady()) {
-      return "Describe the outcome you want. Relay can inspect this project as soon as you send.";
+      return "Describe the result you want. Relay can inspect the project as soon as you send.";
     }
-    return "You can still write the request now. Relay will call out missing setup before it can act fully.";
+    return "Start with the result you want. Relay will flag missing setup before it tries to do full agent work.";
   });
   const requestDetail = createMemo(() =>
     `New conversations start in ${modeLabel()}. ${sessionModeSummary(props.sessionPreset)}`,
@@ -149,9 +150,9 @@ export function FirstRunPanel(props: {
       <div class="ra-first-run__panel">
         <div class="ra-first-run__lead">
           <p class="ra-empty-state__eyebrow">Relay Agent</p>
-          <h1 class={`ra-type-section-heading ${ui.textPrimary}`}>Get Relay ready in three steps</h1>
+          <h1 class={`ra-type-section-heading ${ui.textPrimary}`}>Set up once, then ask for the result you want</h1>
           <p class={`ra-type-body-sans ${ui.textSecondary}`}>
-            Relay works best when it knows which project to use, the Copilot connection is available, and your first request is outcome-based.
+            Relay works best when the project folder is set, Copilot is reachable, and the first request describes the outcome instead of the implementation.
           </p>
           <ol class="ra-first-run__steps">
             <li>Pick the project folder Relay should inspect.</li>
@@ -159,7 +160,7 @@ export function FirstRunPanel(props: {
             <li>Describe the result you want, not the implementation steps.</li>
           </ol>
           <p class={`ra-type-caption ${ui.mutedText} mt-3`}>
-            Nothing here blocks you. Relay can still accept a request now, but the cards below make missing setup obvious before you lose time.
+            Nothing here blocks you. These steps just surface missing setup before you spend a turn on the wrong context or a broken connection.
           </p>
         </div>
 
@@ -206,6 +207,7 @@ export function FirstRunPanel(props: {
             statusState="neutral"
             summary={requestSummary()}
             detail={requestDetail()}
+            featured
           >
             <div class="ra-first-run__request-composer">{props.children}</div>
           </StepCard>

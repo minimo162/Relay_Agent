@@ -205,7 +205,7 @@ export function SettingsModal(props: {
                   Set the project folder, confirm Copilot is ready, and choose how new conversations should start.
                 </p>
                 <div class="mt-3 space-y-4">
-                  <div>
+                  <div class="ra-settings-step ra-settings-step--highlight">
                     <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Step 1 · Project folder</span>
                     <div class="flex gap-2 mt-1 items-stretch">
                       <Input
@@ -232,7 +232,7 @@ export function SettingsModal(props: {
                     </p>
                   </div>
 
-                  <div class="ra-settings-status">
+                  <div class="ra-settings-status ra-settings-status--highlight">
                     <div>
                       <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Step 2 · Copilot connection</span>
                       <p class="ra-type-button-label text-[var(--ra-text-primary)] mt-1">
@@ -252,7 +252,7 @@ export function SettingsModal(props: {
                     </Button>
                   </div>
 
-                  <div>
+                  <div class="ra-settings-step">
                     <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Step 3 · New conversation mode</span>
                     <div class="ra-settings-segmented mt-1" role="group" aria-label="New conversation mode">
                       {(["build", "plan", "explore"] as SessionPreset[]).map((preset) => (

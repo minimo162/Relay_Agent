@@ -123,9 +123,9 @@ export function MessageFeed(props: {
   });
 
   const emptyTitle = createMemo(() => {
-    if (props.sessionPreset === "plan") return "Start with the part you want Relay to inspect";
-    if (props.sessionPreset === "explore") return "Start with the question you want Relay to answer";
-    return "Start with the outcome you want";
+    if (props.sessionPreset === "plan") return "Start with the part of the project you want understood";
+    if (props.sessionPreset === "explore") return "Start with the question you want answered from the codebase";
+    return "Start with the result you want";
   });
 
   const emptySubtitle = createMemo(() => {
@@ -140,7 +140,7 @@ export function MessageFeed(props: {
     if (props.sessionPreset === "explore") {
       return `${location} This conversation can read and search only, so it is safe for quick codebase exploration.`;
     }
-    return `${location} Relay can inspect the repo, propose next steps, and edit files when needed.`;
+    return `${location} Relay can inspect the repo, decide whether a plan is needed, and edit files when the request calls for it.`;
   });
 
   const emptyNextSteps = createMemo(() => {
@@ -158,13 +158,13 @@ export function MessageFeed(props: {
     }
     return [
       "Relay will inspect the repo before deciding whether a plan or approval is needed.",
-      "Approvals appear before risky changes, and progress shows inline in the conversation.",
+      "Approvals appear before risky changes, and progress continues inline in the conversation.",
     ];
   });
 
   const emptyExample = createMemo(() => {
     if (props.sessionPreset === "plan") {
-      return "Review the onboarding flow and propose the smallest safe change that would make it clearer for new developers.";
+      return "Review the onboarding flow and propose the smallest safe change that would make setup clearer for new developers.";
     }
     if (props.sessionPreset === "explore") {
       return "Find where the first-run setup is rendered and explain how the UI decides what to show.";
