@@ -5129,3 +5129,38 @@ Observed result:
 - The new repair-refusal behavior is covered by `repair_refusal_text_escalates_like_tool_confusion`, while the existing repair-budget stop path is still fixed by `exhausted_tool_protocol_repair_limit_stops`.
 - The ignored live probe rerun completed successfully in this environment. `loop_controller_tests::live_repair_probe_streams_original_and_both_repair_prompts` passed end to end with the isolated probe path enabled, so the earlier nondeterministic `original` / `repair2` timeout swing did not reproduce in this captured run.
 - Current state after this milestone: the real app workspace-remember path remains intact, and the ignored live probe is now both isolated and attributable. The next meaningful work is no longer probe determinism; it is deciding whether to keep hardening post-probe repair resend behavior or move on to broader app/runtime polish.
+
+Repair continuation hardening + typed bridge diagnostics + signed-in probe docs (2026-04-13):
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+node --check apps/desktop/src-tauri/binaries/copilot_server.js
+pnpm --filter @relay-agent/desktop typecheck
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml parse_prompt_error_body_ -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml repair_refusal_text_escalates_like_tool_confusion -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml exhausted_tool_protocol_repair_limit_stops -- --nocapture
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+RELAY_LIVE_REPAIR_TIMEOUT_SECS=90 RELAY_LIVE_REPAIR_STAGE_TIMEOUT_SECS=90 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml loop_controller_tests::live_repair_probe_streams_original_and_both_repair_prompts -- --ignored --nocapture
+DISPLAY=:10.0 XAUTHORITY=/root/.Xauthority RELAY_SKIP_PRESTART_EDGE=1 pnpm --filter @relay-agent/desktop run tauri:dev
+pnpm --filter @relay-agent/desktop run tauri:dev:send -- "Create /root/Relay_Agent/repair_small_case.txt with exactly REPAIR_SMALL_OK using Relay local file tools. First, in plain text, say exactly which relay_tool you intend to call. Do not use a code fence for that first response."
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/models.rs`, `apps/desktop/src-tauri/src/copilot_server.rs`, and `apps/desktop/src-tauri/src/tauri_bridge.rs` now carry structured bridge diagnostics instead of collapsing prompt failures into a single string. `RelayDiagnostics` can now expose bridge running/connected state, cached `last_copilot_bridge_failure`, and per-stage repair stats gathered from the local Node bridge.
+- `apps/desktop/src-tauri/src/commands/diagnostics.rs` now serves `get_relay_diagnostics` asynchronously through `AppServices`, so support/diagnostic export can snapshot the current bridge status and the last typed bridge failure without inventing UI-only strings.
+- `apps/desktop/src-tauri/binaries/copilot_server.js` now records repair-stage transport stats keyed by `stageLabel` and `failureClass`, including `new_chat_ready`, `paste`, `submit`, `network_seed`, `dom_wait_start`, `dom_wait_finish`, and elapsed timings. Successful `/status` responses now return `lastBridgeFailure` and `repairStageStats`, and classified non-200 prompt failures preserve that metadata for Rust.
+- `README.md` now includes the short signed-in live-probe repro command, while `docs/COPILOT_E2E_CDP_PITFALLS.md` documents prerequisites, expected `original -> repair1 -> repair2` log progression, and the meaning of each classified `failureClass`.
+- Focused typed-error tests passed:
+  - `parse_prompt_error_body_preserves_bridge_failure_metadata`
+  - `parse_prompt_error_body_treats_unclassified_bridge_failure_as_bug`
+  - `repair_refusal_text_escalates_like_tool_confusion`
+  - `exhausted_tool_protocol_repair_limit_stops`
+- The ignored live probe passed in the captured run with the new typed bridge failure plumbing enabled, so the canonical signed-in command is now recorded in repo docs rather than only in ad hoc terminal history.
+- Real-app repair validation is still the narrow blocker. A clean `tauri:dev` run with the intentionally adversarial prompt above produced:
+  - `attempt=1` `catalog_flavor=StandardMinimal`
+  - a tool-less / protocol-confused plain-text reply: `I will call the write_file relay tool...`
+  - one automatic widen retry to `catalog_flavor=StandardFull`
+  - a second plain-text completion claiming the file had been written
+- That real-app run did **not** enter `repair1` / `repair2`, and `/root/Relay_Agent/repair_small_case.txt` was not created. Current blocker is therefore narrower than before: the host now exposes typed bridge failures and probe diagnostics cleanly, but the non-probe app runtime can still drift from Standard widen into a false plain-text completion instead of escalating into the repair path.

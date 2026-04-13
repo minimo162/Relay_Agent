@@ -2,7 +2,58 @@ use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 use ts_rs::TS;
 
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CopilotBridgeFailureInfo {
+    pub failure_class: Option<String>,
+    pub stage_label: Option<String>,
+    pub request_chain: Option<String>,
+    pub request_attempt: Option<usize>,
+    pub transport_attempt: Option<usize>,
+    pub repair_replay_attempt: Option<usize>,
+    pub want_new_chat: Option<bool>,
+    pub new_chat_ready: Option<bool>,
+    pub paste_done: Option<bool>,
+    pub submit_observed: Option<bool>,
+    pub network_seed_seen: Option<bool>,
+    pub dom_wait_started: Option<bool>,
+    pub dom_wait_finished: Option<bool>,
+    pub new_chat_ready_elapsed_ms: Option<u64>,
+    pub paste_elapsed_ms: Option<u64>,
+    pub wait_response_elapsed_ms: Option<u64>,
+    pub total_elapsed_ms: Option<u64>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CopilotRepairStageFailureCount {
+    pub failure_class: String,
+    pub count: u64,
+}
+
+#[skip_serializing_none]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CopilotRepairStageStats {
+    pub stage_label: String,
+    pub attempts: u64,
+    pub success_count: u64,
+    pub new_chat_ready_count: u64,
+    pub paste_count: u64,
+    pub submit_count: u64,
+    pub network_seed_count: u64,
+    pub dom_wait_started_count: u64,
+    pub dom_wait_finished_count: u64,
+    pub failure_counts: Vec<CopilotRepairStageFailureCount>,
+    pub last_request_chain: Option<String>,
+    pub last_failure_class: Option<String>,
+    pub last_total_elapsed_ms: Option<u64>,
+}
+
 /// Debug / support bundle fields (OpenWork-style Settings → Debug export).
+#[skip_serializing_none]
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayDiagnostics {
@@ -23,6 +74,22 @@ pub struct RelayDiagnostics {
     /// Short bullets explaining defaults vs Settings (OpenWork-style predictability).
     #[serde(default)]
     pub predictability_notes: Vec<String>,
+    #[serde(default)]
+    pub copilot_bridge_running: Option<bool>,
+    #[serde(default)]
+    pub copilot_bridge_connected: Option<bool>,
+    #[serde(default)]
+    pub copilot_bridge_login_required: Option<bool>,
+    #[serde(default)]
+    pub copilot_bridge_status_url: Option<String>,
+    #[serde(default)]
+    pub copilot_bridge_cdp_port: Option<u16>,
+    #[serde(default)]
+    pub copilot_boot_token_present: Option<bool>,
+    #[serde(default)]
+    pub last_copilot_bridge_failure: Option<CopilotBridgeFailureInfo>,
+    #[serde(default)]
+    pub copilot_repair_stage_stats: Vec<CopilotRepairStageStats>,
 }
 
 /// OpenCode-style session posture: **Build** matches the default desktop permission ladder

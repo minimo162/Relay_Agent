@@ -4,6 +4,8 @@ use crate::models::{
     WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
     WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
 };
+use crate::app_services::AppServices;
+use tauri::State;
 
 #[tauri::command]
 pub fn probe_rust_analyzer(request: RustAnalyzerProbeRequest) -> RustAnalyzerProbeResponse {
@@ -11,8 +13,10 @@ pub fn probe_rust_analyzer(request: RustAnalyzerProbeRequest) -> RustAnalyzerPro
 }
 
 #[tauri::command]
-pub fn get_relay_diagnostics() -> RelayDiagnostics {
-    crate::tauri_bridge::get_relay_diagnostics()
+pub async fn get_relay_diagnostics(
+    services: State<'_, AppServices>,
+) -> Result<RelayDiagnostics, String> {
+    Ok(crate::tauri_bridge::get_relay_diagnostics(services).await)
 }
 
 #[tauri::command]

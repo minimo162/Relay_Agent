@@ -9,6 +9,7 @@ use crate::agent_loop::{
 };
 use crate::models::{
     BrowserAutomationSettings, CancelAgentRequest, ContinueAgentSessionRequest,
+    CopilotBridgeFailureInfo, CopilotRepairStageFailureCount, CopilotRepairStageStats,
     DesktopPermissionSummaryRow, GetAgentSessionHistoryRequest, GetPermissionSummaryRequest,
     ListWorkspaceSlashCommandsRequest, McpAddServerRequest, McpServerInfo, RelayDiagnostics,
     RespondAgentApprovalRequest, RespondUserQuestionRequest, RustAnalyzerProbeRequest,
@@ -36,6 +37,9 @@ pub fn render_ipc_generated_ts() -> String {
         decl::<ContinueAgentSessionRequest>(),
         decl::<RespondAgentApprovalRequest>(),
         decl::<RespondUserQuestionRequest>(),
+        decl::<CopilotBridgeFailureInfo>(),
+        decl::<CopilotRepairStageFailureCount>(),
+        decl::<CopilotRepairStageStats>(),
         decl::<RelayDiagnostics>(),
         decl::<CancelAgentRequest>(),
         decl::<GetAgentSessionHistoryRequest>(),

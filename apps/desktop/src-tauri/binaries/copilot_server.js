@@ -383,6 +383,8 @@ class CopilotSession {
   relaySessions = new Map();
   inflightRequests = new Map();
   completedRequests = new Map();
+  repairStageStats = new Map();
+  lastBridgeFailure = null;
 
   async _getBrowserWsUrl(port) {
     // /json/version → webSocketDebuggerUrl (browser-level)
@@ -442,6 +444,68 @@ class CopilotSession {
       if (firstKey == null) break;
       this.completedRequests.delete(firstKey);
     }
+  }
+
+  _recordRepairStageTrace(trace, success) {
+    if (!isRepairStageLabel(trace?.stageLabel)) return;
+    let entry = this.repairStageStats.get(trace.stageLabel);
+    if (!entry) {
+      entry = {
+        stageLabel: trace.stageLabel,
+        attempts: 0,
+        successCount: 0,
+        newChatReadyCount: 0,
+        pasteCount: 0,
+        submitCount: 0,
+        networkSeedCount: 0,
+        domWaitStartedCount: 0,
+        domWaitFinishedCount: 0,
+        failureCounts: new Map(),
+        lastRequestChain: null,
+        lastFailureClass: null,
+        lastTotalElapsedMs: null,
+      };
+      this.repairStageStats.set(trace.stageLabel, entry);
+    }
+    entry.attempts += 1;
+    if (success) entry.successCount += 1;
+    if (trace.newChatReady) entry.newChatReadyCount += 1;
+    if (trace.pasteDone) entry.pasteCount += 1;
+    if (trace.submitObserved) entry.submitCount += 1;
+    if (trace.networkSeedSeen) entry.networkSeedCount += 1;
+    if (trace.domWaitStarted) entry.domWaitStartedCount += 1;
+    if (trace.domWaitFinished) entry.domWaitFinishedCount += 1;
+    if (!success) {
+      const failureClass = trace.failureClass || "__unclassified__";
+      entry.failureCounts.set(failureClass, (entry.failureCounts.get(failureClass) || 0) + 1);
+      entry.lastFailureClass = failureClass;
+    } else {
+      entry.lastFailureClass = null;
+    }
+    entry.lastRequestChain = trace.requestChain || null;
+    entry.lastTotalElapsedMs = Number.isFinite(trace.totalElapsedMs) ? trace.totalElapsedMs : null;
+  }
+
+  _serializeRepairStageStats() {
+    return Array.from(this.repairStageStats.values())
+      .sort((a, b) => String(a.stageLabel).localeCompare(String(b.stageLabel)))
+      .map((entry) => ({
+        stageLabel: entry.stageLabel,
+        attempts: entry.attempts,
+        successCount: entry.successCount,
+        newChatReadyCount: entry.newChatReadyCount,
+        pasteCount: entry.pasteCount,
+        submitCount: entry.submitCount,
+        networkSeedCount: entry.networkSeedCount,
+        domWaitStartedCount: entry.domWaitStartedCount,
+        domWaitFinishedCount: entry.domWaitFinishedCount,
+        failureCounts: Array.from(entry.failureCounts.entries())
+          .sort(([a], [b]) => String(a).localeCompare(String(b)))
+          .map(([failureClass, count]) => ({ failureClass, count })),
+        lastRequestChain: entry.lastRequestChain,
+        lastFailureClass: entry.lastFailureClass,
+        lastTotalElapsedMs: entry.lastTotalElapsedMs,
+      }));
   }
 
   async _waitForPages() {
@@ -657,7 +721,13 @@ class CopilotSession {
       await this.connect(globalOptions.cdpPort);
       const page = await this.findStatusPage();
       if (!page) {
-        return { connected: false, loginRequired: false, error: "Copilot page not available" };
+        return {
+          connected: false,
+          loginRequired: false,
+          error: "Copilot page not available",
+          lastBridgeFailure: this.lastBridgeFailure,
+          repairStageStats: this._serializeRepairStageStats(),
+        };
       }
       if (copilotWindowFocusAllowed()) {
         await this.cdpSession.send("Target.activateTarget", { targetId: page.targetId }).catch(() => {});
@@ -680,12 +750,16 @@ class CopilotSession {
         connected: !login,
         loginRequired: login,
         url: finalUrl,
+        lastBridgeFailure: this.lastBridgeFailure,
+        repairStageStats: this._serializeRepairStageStats(),
       };
     } catch (error) {
       return {
         connected: false,
         loginRequired: false,
         error: error instanceof Error ? error.message : String(error),
+        lastBridgeFailure: this.lastBridgeFailure,
+        repairStageStats: this._serializeRepairStageStats(),
       };
     } finally {
       if (pageSession) pageSession.close();
@@ -796,6 +870,10 @@ class CopilotSession {
         domWaitStarted: false,
         domWaitFinished: false,
         failureClass: null,
+        newChatReadyElapsedMs: null,
+        pasteElapsedMs: null,
+        waitResponseElapsedMs: null,
+        totalElapsedMs: null,
       };
       try {
         logDescribeTrace("[copilot:describe] connecting", trace, {
@@ -901,9 +979,10 @@ class CopilotSession {
             await sleep(1600);
             relaySession.initialized = true;
             trace.newChatReady = true;
+            trace.newChatReadyElapsedMs = Date.now() - describeStartedAt;
             console.error(
               "[copilot:describe] new chat ready after",
-              Date.now() - describeStartedAt,
+              trace.newChatReadyElapsedMs,
               "ms",
             );
           } else {
@@ -940,9 +1019,10 @@ class CopilotSession {
               );
               await pastePromptRaw(pageSession, fullPrompt);
               trace.pasteDone = true;
+              trace.pasteElapsedMs = Date.now() - phaseStartedAt;
               console.error(
                 "[copilot:describe] phase=paste done elapsed_ms=",
-                Date.now() - phaseStartedAt,
+                trace.pasteElapsedMs,
                 "prompt_chars=",
                 fullPrompt.length,
               );
@@ -957,23 +1037,29 @@ class CopilotSession {
                 responseTimeoutMs: bridgeResponseTimeoutMs(stageLabel, requestState.probeMode),
               });
               trace.networkSeedSeen = !!netCapture?.sawAnySeed?.();
+              trace.waitResponseElapsedMs = Date.now() - phaseStartedAt;
+              trace.totalElapsedMs = Date.now() - describeStartedAt;
               console.error(
                 "[copilot:describe] phase=wait_response done elapsed_ms=",
-                Date.now() - phaseStartedAt,
+                trace.waitResponseElapsedMs,
                 "response_chars=",
                 responseText.length,
                 "total_elapsed_ms=",
-                Date.now() - describeStartedAt,
+                trace.totalElapsedMs,
               );
               if (repairStage && !repairReplayUsed && responseLooksLikeRepairRefusal(responseText)) {
                 trace.failureClass = "copilot_refusal_after_send";
                 logDescribeTrace("[copilot:describe] repair fresh-chat replay requested", trace, {
                   response_excerpt: String(responseText).trim().slice(0, 240),
                 });
+                this.lastBridgeFailure = attachFailureMeta(new Error("relay_repair_replay"), trace).relayFailureMeta;
+                this._recordRepairStageTrace(trace, false);
                 const replayError = new Error("relay_repair_replay");
                 replayError.repairReplayReason = trace.failureClass;
                 throw replayError;
               }
+              this.lastBridgeFailure = null;
+              this._recordRepairStageTrace(trace, true);
               return responseText;
             } catch (error) {
               if (
@@ -1009,6 +1095,7 @@ class CopilotSession {
                 continue;
               }
               trace.networkSeedSeen = !!netCapture?.sawAnySeed?.();
+              trace.totalElapsedMs = Date.now() - describeStartedAt;
               throw error;
             }
           }
@@ -1022,7 +1109,11 @@ class CopilotSession {
         if (error instanceof CopilotLoginRequiredError) {
           throw error;
         }
+        const message = error?.message || String(error);
         if (error?.repairReplayReason && repairStage && !repairReplayUsed) {
+          trace.totalElapsedMs = Date.now() - describeStartedAt;
+          this.lastBridgeFailure = attachFailureMeta(error, trace, { message }).relayFailureMeta;
+          this._recordRepairStageTrace(trace, false);
           repairReplayUsed = true;
           logDescribeTrace("[copilot:describe] repair replay continuing with forced new chat", trace, {
             classified_reason: error.repairReplayReason,
@@ -1031,10 +1122,12 @@ class CopilotSession {
           continue;
         }
         trace.failureClass = classifyDescribeFailure(trace);
-        const message = error?.message || String(error);
+        trace.totalElapsedMs = Date.now() - describeStartedAt;
         logDescribeTrace("[copilot:describe] classified failure", trace, {
           error: message,
         });
+        this.lastBridgeFailure = attachFailureMeta(error, trace, { message }).relayFailureMeta;
+        this._recordRepairStageTrace(trace, false);
         if (
           repairStage &&
           !repairReplayUsed &&
@@ -2586,6 +2679,10 @@ function logDescribeTrace(prefix, trace, extras = {}) {
       network_seed_seen: trace.networkSeedSeen,
       dom_wait_started: trace.domWaitStarted,
       dom_wait_finished: trace.domWaitFinished,
+      new_chat_ready_elapsed_ms: trace.newChatReadyElapsedMs ?? null,
+      paste_elapsed_ms: trace.pasteElapsedMs ?? null,
+      wait_response_elapsed_ms: trace.waitResponseElapsedMs ?? null,
+      total_elapsed_ms: trace.totalElapsedMs ?? null,
       failure_class: trace.failureClass || null,
       ...extras,
     }),
@@ -2603,10 +2700,15 @@ function attachFailureMeta(error, trace, extras = {}) {
     repairReplayAttempt: trace.repairReplayAttempt,
     wantNewChat: trace.wantNewChat,
     newChatReady: trace.newChatReady,
+    pasteDone: trace.pasteDone,
     submitObserved: trace.submitObserved,
     networkSeedSeen: trace.networkSeedSeen,
     domWaitStarted: trace.domWaitStarted,
     domWaitFinished: trace.domWaitFinished,
+    newChatReadyElapsedMs: trace.newChatReadyElapsedMs ?? null,
+    pasteElapsedMs: trace.pasteElapsedMs ?? null,
+    waitResponseElapsedMs: trace.waitResponseElapsedMs ?? null,
+    totalElapsedMs: trace.totalElapsedMs ?? null,
     ...extras,
   };
   return target;

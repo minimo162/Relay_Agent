@@ -256,7 +256,7 @@ pub async fn warmup_copilot_bridge(
             .enable_all()
             .build()
             .map_err(|e| format!("copilot warmup runtime: {e}"))?;
-        let guard = srv_clone
+        let mut guard = srv_clone
             .lock()
             .map_err(|e| format!("copilot server mutex poisoned: {e}"))?;
         let boot_token_present = guard.boot_token().is_some();
@@ -1737,8 +1737,7 @@ fn relay_doctor_hints() -> Vec<String> {
     hints
 }
 
-/// JSON-friendly runtime facts for bug reports (mirrors `OpenWork` debug export, reduced scope).
-pub fn get_relay_diagnostics() -> RelayDiagnostics {
+fn relay_diagnostics_base() -> RelayDiagnostics {
     let dev = std::env::var("RELAY_AGENT_DEV_MODE")
         .map(|v| {
             matches!(
@@ -1774,6 +1773,95 @@ pub fn get_relay_diagnostics() -> RelayDiagnostics {
         max_text_file_read_bytes: MAX_TEXT_FILE_READ_BYTES,
         doctor_hints: relay_doctor_hints(),
         predictability_notes: relay_predictability_notes(),
+        copilot_bridge_running: None,
+        copilot_bridge_connected: None,
+        copilot_bridge_login_required: None,
+        copilot_bridge_status_url: None,
+        copilot_bridge_cdp_port: None,
+        copilot_boot_token_present: None,
+        last_copilot_bridge_failure: None,
+        copilot_repair_stage_stats: Vec::new(),
+    }
+}
+
+/// JSON-friendly runtime facts for bug reports (mirrors `OpenWork` debug export, reduced scope).
+pub async fn get_relay_diagnostics(services: State<'_, AppServices>) -> RelayDiagnostics {
+    let mut diagnostics = relay_diagnostics_base();
+    let bridge = services.copilot_bridge();
+    let server_arc = match bridge.lock() {
+        Ok(slot) => slot.as_ref().map(|state| Arc::clone(&state.server)),
+        Err(error) => {
+            diagnostics
+                .doctor_hints
+                .push(format!("Copilot bridge state unavailable: {error}"));
+            return diagnostics;
+        }
+    };
+    let Some(server_arc) = server_arc else {
+        return diagnostics;
+    };
+
+    let snapshot = tokio::task::spawn_blocking(move || -> Result<RelayDiagnostics, String> {
+        let mut diagnostics = relay_diagnostics_base();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("copilot diagnostics runtime: {e}"))?;
+        let mut server = server_arc
+            .lock()
+            .map_err(|e| format!("copilot server mutex poisoned: {e}"))?;
+
+        diagnostics.copilot_bridge_running = Some(server.is_running());
+        diagnostics.copilot_bridge_cdp_port = Some(server.cdp_port());
+        diagnostics.copilot_boot_token_present = Some(server.boot_token().is_some());
+
+        if server.is_running() {
+            match rt.block_on(server.status()) {
+                Ok(status) => {
+                    diagnostics.copilot_bridge_connected = Some(status.connected);
+                    diagnostics.copilot_bridge_login_required = Some(status.login_required);
+                    diagnostics.copilot_bridge_status_url = status.url.clone();
+                    diagnostics.last_copilot_bridge_failure = status
+                        .last_bridge_failure
+                        .clone()
+                        .or_else(|| server.last_bridge_failure().cloned());
+                    diagnostics.copilot_repair_stage_stats = if status.repair_stage_stats.is_empty()
+                    {
+                        server.last_repair_stage_stats().to_vec()
+                    } else {
+                        status.repair_stage_stats.clone()
+                    };
+                }
+                Err(error) => {
+                    diagnostics
+                        .doctor_hints
+                        .push(format!("Copilot bridge status unavailable: {error}"));
+                    diagnostics.last_copilot_bridge_failure = server.last_bridge_failure().cloned();
+                    diagnostics.copilot_repair_stage_stats = server.last_repair_stage_stats().to_vec();
+                }
+            }
+        } else {
+            diagnostics.last_copilot_bridge_failure = server.last_bridge_failure().cloned();
+            diagnostics.copilot_repair_stage_stats = server.last_repair_stage_stats().to_vec();
+        }
+        Ok(diagnostics)
+    })
+    .await;
+
+    match snapshot {
+        Ok(Ok(diagnostics)) => diagnostics,
+        Ok(Err(error)) => {
+            diagnostics
+                .doctor_hints
+                .push(format!("Copilot bridge diagnostics failed: {error}"));
+            diagnostics
+        }
+        Err(error) => {
+            diagnostics
+                .doctor_hints
+                .push(format!("Copilot bridge diagnostics task failed: {error}"));
+            diagnostics
+        }
     }
 }
 
@@ -1930,6 +2018,8 @@ mod tests {
                 login_required: false,
                 url: Some("https://m365.cloud.microsoft/chat/".to_string()),
                 error: None,
+                last_bridge_failure: None,
+                repair_stage_stats: Vec::new(),
             },
         );
         assert_eq!(result.stage, CopilotWarmupStage::Ready);
@@ -1949,6 +2039,8 @@ mod tests {
                 login_required: true,
                 url: Some("https://login.microsoftonline.com/".to_string()),
                 error: Some("Sign in to Copilot in Edge, then return here.".to_string()),
+                last_bridge_failure: None,
+                repair_stage_stats: Vec::new(),
             },
         );
         assert_eq!(result.stage, CopilotWarmupStage::LoginCheck);
@@ -1970,6 +2062,8 @@ mod tests {
                 login_required: false,
                 url: None,
                 error: Some("Copilot page not available".to_string()),
+                last_bridge_failure: None,
+                repair_stage_stats: Vec::new(),
             },
         );
         assert_eq!(result.stage, CopilotWarmupStage::CopilotTab);

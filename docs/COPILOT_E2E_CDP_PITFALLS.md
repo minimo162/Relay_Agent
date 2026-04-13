@@ -208,6 +208,58 @@ npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat
 - テスト: `apps/desktop/tests/m365-copilot-cdp.spec.ts` — HTTP クライアント `tests/copilot-server-http.ts` 経由で **`copilot_server.js`** を呼ぶ（ペースト・送信・`waitForDomResponse` はサーバ内）。
 - 本番 CDP サーバ: `apps/desktop/src-tauri/binaries/copilot_server.js`（`dispatchEnterKey`、`focusComposer`、`copilotAttachmentStillPending`、`submitPromptRaw`、`copilot_wait_dom_response.mjs`）。
 
+## Relay ignored live repair probe
+
+### 目的
+
+- Rust 側の live probe から、**同じ signed-in Edge / same profile / same Node bridge path** を使って `original -> repair1 -> repair2` を順に流し、repair resend の安定性を確認する。
+- 失敗時は、単なる timeout ではなく **typed bridge failure** を見る。現在の panic / ログには `failureClass`, `stageLabel`, `requestChain`, `transportAttempt`, `repairReplayAttempt` が出る。
+
+### 前提
+
+1. `RelayAgentEdgeProfile` で M365 Copilot にサインイン済み。
+2. Edge の CDP ポートは **9360** を基準に揃える（必要なら `RELAY_EDGE_CDP_PORT` で変更可）。
+3. Linux では GUI セッション上の同じプロファイルを使う。Windows でも同じ専用プロファイルを使う。
+
+### Canonical repro
+
+```bash
+RELAY_EDGE_CDP_PORT=9360 bash scripts/start-relay-edge-cdp.sh
+RELAY_LIVE_REPAIR_TIMEOUT_SECS=90 RELAY_LIVE_REPAIR_STAGE_TIMEOUT_SECS=90 \
+  cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml \
+  loop_controller_tests::live_repair_probe_streams_original_and_both_repair_prompts \
+  -- --ignored --nocapture
+```
+
+### 期待ログ
+
+- 成功時:
+  - `stage=original ... sending prompt`
+  - `original reply excerpt=...`
+  - `stage=repair1 ... sending prompt`
+  - `repair1 reply excerpt=...`
+  - `stage=repair2 ... sending prompt`
+  - `repair2 reply excerpt=...`
+- 失敗時:
+  - Rust panic か bridge error に `failureClass=... stageLabel=... requestChain=...`
+  - bridge 側には `request_chain`, `stage_label`, `request_attempt`, `transport_attempt`, `repair_replay_attempt` が JSON で出る
+
+### `failureClass` の見方
+
+| 値 | 意味 |
+|----|------|
+| `new_chat_not_ready` | repair/original 開始時の `New chat` 準備が終わらなかった |
+| `submit_not_observed` | ペーストは通ったが送信成立まで到達しなかった |
+| `network_seed_missing` | 送信観測後に Copilot 応答系 network seed が見えなかった |
+| `dom_response_timeout` | DOM 応答待ちまで入ったが完了しなかった |
+| `copilot_refusal_after_send` | 送信後に Copilot が refusal / apology 系の返答を返した |
+
+### repair replay の規約
+
+- `repair1` / `repair2` はまず現在の thread で送る。
+- `network_seed_missing` / `dom_response_timeout` / `copilot_refusal_after_send` のときだけ、**1 回だけ** fresh chat replay する。
+- それ以上は暗黙 retry しない。次の stop point をログで確定させる。
+
 ---
 
 ## テストスイート（T1-T10）

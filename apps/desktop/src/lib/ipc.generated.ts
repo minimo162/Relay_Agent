@@ -37,6 +37,48 @@ export interface RespondUserQuestionRequest {
   answer: string;
 }
 
+export interface CopilotBridgeFailureInfo {
+  failureClass?: string | null;
+  stageLabel?: string | null;
+  requestChain?: string | null;
+  requestAttempt?: number | null;
+  transportAttempt?: number | null;
+  repairReplayAttempt?: number | null;
+  wantNewChat?: boolean | null;
+  newChatReady?: boolean | null;
+  pasteDone?: boolean | null;
+  submitObserved?: boolean | null;
+  networkSeedSeen?: boolean | null;
+  domWaitStarted?: boolean | null;
+  domWaitFinished?: boolean | null;
+  newChatReadyElapsedMs?: number | null;
+  pasteElapsedMs?: number | null;
+  waitResponseElapsedMs?: number | null;
+  totalElapsedMs?: number | null;
+  message?: string | null;
+}
+
+export interface CopilotRepairStageFailureCount {
+  failureClass: string;
+  count: number;
+}
+
+export interface CopilotRepairStageStats {
+  stageLabel: string;
+  attempts: number;
+  successCount: number;
+  newChatReadyCount: number;
+  pasteCount: number;
+  submitCount: number;
+  networkSeedCount: number;
+  domWaitStartedCount: number;
+  domWaitFinishedCount: number;
+  failureCounts: CopilotRepairStageFailureCount[];
+  lastRequestChain?: string | null;
+  lastFailureClass?: string | null;
+  lastTotalElapsedMs?: number | null;
+}
+
 export interface RelayDiagnostics {
   appVersion: string;
   targetOs: string;
@@ -49,6 +91,14 @@ export interface RelayDiagnostics {
   maxTextFileReadBytes: number;
   doctorHints: string[];
   predictabilityNotes: string[];
+  copilotBridgeRunning?: boolean | null;
+  copilotBridgeConnected?: boolean | null;
+  copilotBridgeLoginRequired?: boolean | null;
+  copilotBridgeStatusUrl?: string | null;
+  copilotBridgeCdpPort?: number | null;
+  copilotBootTokenPresent?: boolean | null;
+  lastCopilotBridgeFailure?: CopilotBridgeFailureInfo | null;
+  copilotRepairStageStats: CopilotRepairStageStats[];
 }
 
 export interface CancelAgentRequest {

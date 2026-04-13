@@ -109,6 +109,18 @@ cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings
 
 **Grounding / CDP checks:** `pnpm run test:grounding-fixture`; `pnpm run test:e2e:m365-cdp`; opt-in real Copilot grounding checks: `pnpm run test:e2e:copilot-grounding`.
 
+**Live repair probe (signed-in Edge):**
+
+```bash
+RELAY_EDGE_CDP_PORT=9360 bash scripts/start-relay-edge-cdp.sh
+RELAY_LIVE_REPAIR_TIMEOUT_SECS=90 RELAY_LIVE_REPAIR_STAGE_TIMEOUT_SECS=90 \
+  cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml \
+  loop_controller_tests::live_repair_probe_streams_original_and_both_repair_prompts \
+  -- --ignored --nocapture
+```
+
+Use the signed-in `RelayAgentEdgeProfile` on the same CDP port. A good run logs `original`, `repair1`, and `repair2` stage sends/replies. If it fails, the panic/log output now includes typed bridge metadata such as `failureClass`, `stageLabel`, and `requestChain`. Detailed prerequisites and failure meanings: [docs/COPILOT_E2E_CDP_PITFALLS.md](docs/COPILOT_E2E_CDP_PITFALLS.md).
+
 **Headless launched-app smokes:** `pnpm launch:test` verifies `tauri:dev` launch stability in Linux/Xvfb, and `pnpm agent-loop:test` runs the env-gated Rust autorun smoke that exercises retry recovery, approval handling, emitted `agent:*` events, the pushed `agent:status` phase sequence (`running` → `retrying` → `waiting_approval` → `idle:completed` minimum), and final `stopReason: "completed"` through the real desktop bridge.
 
 **E2E (mock Tauri, browser only):** from `apps/desktop`, `E2E_SKIP_AUTH_SETUP=1 pnpm exec playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts`. Use `CI=1` if `vite preview` might reuse a stale build after changing `tests/tauri-mock-core.ts`.

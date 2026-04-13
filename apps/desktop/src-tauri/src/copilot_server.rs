@@ -14,6 +14,8 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::models::{CopilotBridgeFailureInfo, CopilotRepairStageStats};
+
 const READY_TIMEOUT_SECS: u64 = 30;
 const HEALTH_POLL_INTERVAL_MS: u64 = 500;
 /// `GET /status` drives Edge launch + navigation; allow longer than default HTTP client timeout.
@@ -31,6 +33,10 @@ pub struct CopilotStatusResponse {
     pub url: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub last_bridge_failure: Option<CopilotBridgeFailureInfo>,
+    #[serde(default)]
+    pub repair_stage_stats: Vec<CopilotRepairStageStats>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +95,16 @@ struct PromptErrorBody {
     dom_wait_started: Option<bool>,
     #[serde(default)]
     dom_wait_finished: Option<bool>,
+    #[serde(default)]
+    paste_done: Option<bool>,
+    #[serde(default)]
+    new_chat_ready_elapsed_ms: Option<u64>,
+    #[serde(default)]
+    paste_elapsed_ms: Option<u64>,
+    #[serde(default)]
+    wait_response_elapsed_ms: Option<u64>,
+    #[serde(default)]
+    total_elapsed_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,63 +141,141 @@ fn validate_health_body(
     Ok(())
 }
 
-fn summarize_prompt_error_body(status: reqwest::StatusCode, raw_body: &str) -> String {
+fn prompt_error_to_bridge_failure(body: &PromptErrorBody) -> Option<CopilotBridgeFailureInfo> {
+    let failure = CopilotBridgeFailureInfo {
+        failure_class: body.failure_class.clone(),
+        stage_label: body.stage_label.clone(),
+        request_chain: body.request_chain.clone(),
+        request_attempt: body.request_attempt,
+        transport_attempt: body.transport_attempt,
+        repair_replay_attempt: body.repair_replay_attempt,
+        want_new_chat: body.want_new_chat,
+        new_chat_ready: body.new_chat_ready,
+        paste_done: body.paste_done,
+        submit_observed: body.submit_observed,
+        network_seed_seen: body.network_seed_seen,
+        dom_wait_started: body.dom_wait_started,
+        dom_wait_finished: body.dom_wait_finished,
+        new_chat_ready_elapsed_ms: body.new_chat_ready_elapsed_ms,
+        paste_elapsed_ms: body.paste_elapsed_ms,
+        wait_response_elapsed_ms: body.wait_response_elapsed_ms,
+        total_elapsed_ms: body.total_elapsed_ms,
+        message: body
+            .message
+            .clone()
+            .or(body.error.clone())
+            .filter(|value| !value.trim().is_empty()),
+    };
+    let has_metadata = failure.failure_class.is_some()
+        || failure.stage_label.is_some()
+        || failure.request_chain.is_some()
+        || failure.request_attempt.is_some()
+        || failure.transport_attempt.is_some()
+        || failure.repair_replay_attempt.is_some()
+        || failure.want_new_chat.is_some()
+        || failure.new_chat_ready.is_some()
+        || failure.paste_done.is_some()
+        || failure.submit_observed.is_some()
+        || failure.network_seed_seen.is_some()
+        || failure.dom_wait_started.is_some()
+        || failure.dom_wait_finished.is_some()
+        || failure.new_chat_ready_elapsed_ms.is_some()
+        || failure.paste_elapsed_ms.is_some()
+        || failure.wait_response_elapsed_ms.is_some()
+        || failure.total_elapsed_ms.is_some();
+    has_metadata.then_some(failure)
+}
+
+fn format_bridge_failure(failure: &CopilotBridgeFailureInfo) -> String {
+    let mut parts = Vec::new();
+    if let Some(value) = &failure.failure_class {
+        parts.push(format!("failureClass={value}"));
+    }
+    if let Some(value) = &failure.stage_label {
+        parts.push(format!("stageLabel={value}"));
+    }
+    if let Some(value) = &failure.request_chain {
+        parts.push(format!("requestChain={value}"));
+    }
+    if let Some(value) = failure.request_attempt {
+        parts.push(format!("requestAttempt={value}"));
+    }
+    if let Some(value) = failure.transport_attempt {
+        parts.push(format!("transportAttempt={value}"));
+    }
+    if let Some(value) = failure.repair_replay_attempt {
+        parts.push(format!("repairReplayAttempt={value}"));
+    }
+    if let Some(value) = failure.want_new_chat {
+        parts.push(format!("wantNewChat={value}"));
+    }
+    if let Some(value) = failure.new_chat_ready {
+        parts.push(format!("newChatReady={value}"));
+    }
+    if let Some(value) = failure.paste_done {
+        parts.push(format!("pasteDone={value}"));
+    }
+    if let Some(value) = failure.submit_observed {
+        parts.push(format!("submitObserved={value}"));
+    }
+    if let Some(value) = failure.network_seed_seen {
+        parts.push(format!("networkSeedSeen={value}"));
+    }
+    if let Some(value) = failure.dom_wait_started {
+        parts.push(format!("domWaitStarted={value}"));
+    }
+    if let Some(value) = failure.dom_wait_finished {
+        parts.push(format!("domWaitFinished={value}"));
+    }
+    if let Some(value) = failure.new_chat_ready_elapsed_ms {
+        parts.push(format!("newChatReadyElapsedMs={value}"));
+    }
+    if let Some(value) = failure.paste_elapsed_ms {
+        parts.push(format!("pasteElapsedMs={value}"));
+    }
+    if let Some(value) = failure.wait_response_elapsed_ms {
+        parts.push(format!("waitResponseElapsedMs={value}"));
+    }
+    if let Some(value) = failure.total_elapsed_ms {
+        parts.push(format!("totalElapsedMs={value}"));
+    }
+    if let Some(value) = &failure.message {
+        parts.push(format!("message={value}"));
+    }
+    parts.join(" ")
+}
+
+#[derive(Debug, Clone)]
+pub enum CopilotPromptFailure {
+    Message(String),
+    Bridge(CopilotBridgeFailureInfo),
+}
+
+fn parse_prompt_error_body(status: reqwest::StatusCode, raw_body: &str) -> CopilotError {
     let parsed = serde_json::from_str::<PromptErrorBody>(raw_body).ok();
     if let Some(body) = parsed {
-        let mut parts = vec![format!(
-            "copilot returned {status}: {}",
-            body.error
-                .clone()
-                .or(body.message.clone())
-                .unwrap_or_else(|| "unknown error".to_string())
-        )];
-        if let Some(value) = body.failure_class {
-            parts.push(format!("failureClass={value}"));
-        }
-        if let Some(value) = body.stage_label {
-            parts.push(format!("stageLabel={value}"));
-        }
-        if let Some(value) = body.request_chain {
-            parts.push(format!("requestChain={value}"));
-        }
-        if let Some(value) = body.request_attempt {
-            parts.push(format!("requestAttempt={value}"));
-        }
-        if let Some(value) = body.transport_attempt {
-            parts.push(format!("transportAttempt={value}"));
-        }
-        if let Some(value) = body.repair_replay_attempt {
-            parts.push(format!("repairReplayAttempt={value}"));
-        }
-        if let Some(value) = body.want_new_chat {
-            parts.push(format!("wantNewChat={value}"));
-        }
-        if let Some(value) = body.new_chat_ready {
-            parts.push(format!("newChatReady={value}"));
-        }
-        if let Some(value) = body.submit_observed {
-            parts.push(format!("submitObserved={value}"));
-        }
-        if let Some(value) = body.network_seed_seen {
-            parts.push(format!("networkSeedSeen={value}"));
-        }
-        if let Some(value) = body.dom_wait_started {
-            parts.push(format!("domWaitStarted={value}"));
-        }
-        if let Some(value) = body.dom_wait_finished {
-            parts.push(format!("domWaitFinished={value}"));
-        }
-        if let Some(value) = body.message {
-            if !parts.iter().any(|part| part.ends_with(&value)) {
-                parts.push(format!("message={value}"));
+        if let Some(failure) = prompt_error_to_bridge_failure(&body) {
+            if failure.failure_class.is_some() {
+                return CopilotError::PromptError(CopilotPromptFailure::Bridge(failure));
             }
+            return CopilotError::BridgeBug(failure);
         }
-        return parts.join(" ");
+        let message = body
+            .error
+            .or(body.message)
+            .unwrap_or_else(|| "unknown error".to_string());
+        return CopilotError::PromptError(CopilotPromptFailure::Message(format!(
+            "copilot returned {status}: {message}"
+        )));
     }
 
     match serde_json::from_str::<Value>(raw_body) {
-        Ok(value) => format!("copilot returned {status}: {value}"),
-        Err(_) => format!("copilot returned {status}: {raw_body}"),
+        Ok(value) => CopilotError::PromptError(CopilotPromptFailure::Message(format!(
+            "copilot returned {status}: {value}"
+        ))),
+        Err(_) => CopilotError::PromptError(CopilotPromptFailure::Message(format!(
+            "copilot returned {status}: {raw_body}"
+        ))),
     }
 }
 
@@ -197,6 +291,8 @@ pub struct CopilotServer {
     script_path: Option<PathBuf>,
     user_data_dir: Option<PathBuf>,
     edge_path: Option<String>,
+    last_bridge_failure: Option<CopilotBridgeFailureInfo>,
+    last_repair_stage_stats: Vec<CopilotRepairStageStats>,
     #[allow(dead_code)]
     log_threads: Vec<thread::JoinHandle<()>>,
 }
@@ -210,7 +306,9 @@ pub enum CopilotError {
     ProcessExited(Option<i32>),
     Spawn(std::io::Error),
     #[allow(dead_code)]
-    PromptError(String),
+    PromptError(CopilotPromptFailure),
+    #[allow(dead_code)]
+    BridgeBug(CopilotBridgeFailureInfo),
 }
 
 impl std::fmt::Display for CopilotError {
@@ -225,7 +323,15 @@ impl std::fmt::Display for CopilotError {
                 write!(f, "copilot server exited with code {code:?}")
             }
             CopilotError::Spawn(e) => write!(f, "failed to spawn copilot server: {e}"),
-            CopilotError::PromptError(msg) => write!(f, "prompt error: {msg}"),
+            CopilotError::PromptError(CopilotPromptFailure::Message(msg)) => {
+                write!(f, "prompt error: {msg}")
+            }
+            CopilotError::PromptError(CopilotPromptFailure::Bridge(failure)) => {
+                write!(f, "prompt error: {}", format_bridge_failure(failure))
+            }
+            CopilotError::BridgeBug(failure) => {
+                write!(f, "bridge bug: {}", format_bridge_failure(failure))
+            }
         }
     }
 }
@@ -275,6 +381,8 @@ impl CopilotServer {
             script_path,
             user_data_dir,
             edge_path,
+            last_bridge_failure: None,
+            last_repair_stage_stats: Vec::new(),
             log_threads: Vec::new(),
         })
     }
@@ -285,6 +393,25 @@ impl CopilotServer {
 
     pub fn boot_token(&self) -> Option<&str> {
         self.boot_token.as_deref()
+    }
+
+    pub fn last_bridge_failure(&self) -> Option<&CopilotBridgeFailureInfo> {
+        self.last_bridge_failure.as_ref()
+    }
+
+    pub fn last_repair_stage_stats(&self) -> &[CopilotRepairStageStats] {
+        &self.last_repair_stage_stats
+    }
+
+    fn set_last_bridge_failure(&mut self, failure: Option<CopilotBridgeFailureInfo>) {
+        self.last_bridge_failure = failure;
+    }
+
+    fn record_status_snapshot(&mut self, status: &CopilotStatusResponse) {
+        if status.last_bridge_failure.is_some() {
+            self.last_bridge_failure = status.last_bridge_failure.clone();
+        }
+        self.last_repair_stage_stats = status.repair_stage_stats.clone();
     }
 
     /// Update CDP port before a restart (`stop` + `start`); does not affect the HTTP listen port.
@@ -455,11 +582,11 @@ impl CopilotServer {
             }
         }
 
-        Err(CopilotError::PromptError(format!(
+        Err(CopilotError::PromptError(CopilotPromptFailure::Message(format!(
             "copilot_server could not bind on ports {}–{}; stop orphan node.exe processes or free a port",
             preferred_port,
             preferred_port.saturating_add(COPILOT_HTTP_PORT_FALLBACKS - 1)
-        )))
+        ))))
     }
 
     pub async fn health_check(&self) -> Result<(), CopilotError> {
@@ -471,10 +598,10 @@ impl CopilotServer {
             .map_err(CopilotError::Http)?;
 
         if !response.status().is_success() {
-            return Err(CopilotError::PromptError(format!(
+            return Err(CopilotError::PromptError(CopilotPromptFailure::Message(format!(
                 "health check failed: status {}",
                 response.status()
-            )));
+            ))));
         }
 
         let body: HealthBody = response.json().await.map_err(CopilotError::Http)?;
@@ -488,39 +615,43 @@ impl CopilotServer {
                     self.port
                 );
             }
-            return Err(CopilotError::PromptError(message));
+            return Err(CopilotError::PromptError(CopilotPromptFailure::Message(
+                message,
+            )));
         }
 
         Ok(())
     }
 
-    pub async fn status(&self) -> Result<CopilotStatusResponse, CopilotError> {
+    pub async fn status(&mut self) -> Result<CopilotStatusResponse, CopilotError> {
         self.status_with_timeout(30).await
     }
 
     /// Same as [`Self::status`] but with an explicit per-request timeout (warmup / Edge cold start).
     pub async fn status_with_timeout(
-        &self,
+        &mut self,
         timeout_secs: u64,
     ) -> Result<CopilotStatusResponse, CopilotError> {
         self.status_with_timeout_detailed(timeout_secs)
             .await
             .map_err(|error| match error {
                 CopilotStatusCheckError::Transport(error) => error,
-                CopilotStatusCheckError::Http(error) => CopilotError::PromptError(format!(
-                    "status check failed: status {}{}",
-                    error.status,
-                    error
-                        .error_code
-                        .as_deref()
-                        .map(|code| format!(" ({code})"))
-                        .unwrap_or_default()
-                )),
+                CopilotStatusCheckError::Http(error) => CopilotError::PromptError(
+                    CopilotPromptFailure::Message(format!(
+                        "status check failed: status {}{}",
+                        error.status,
+                        error
+                            .error_code
+                            .as_deref()
+                            .map(|code| format!(" ({code})"))
+                            .unwrap_or_default()
+                    )),
+                ),
             })
     }
 
     pub async fn status_with_timeout_detailed(
-        &self,
+        &mut self,
         timeout_secs: u64,
     ) -> Result<CopilotStatusResponse, CopilotStatusCheckError> {
         let mut request = self
@@ -537,11 +668,13 @@ impl CopilotServer {
             .map_err(CopilotStatusCheckError::Transport)?;
 
         if response.status().is_success() {
-            response
+            let status = response
                 .json::<CopilotStatusResponse>()
                 .await
                 .map_err(CopilotError::Http)
-                .map_err(CopilotStatusCheckError::Transport)
+                .map_err(CopilotStatusCheckError::Transport)?;
+            self.record_status_snapshot(&status);
+            Ok(status)
         } else {
             let status = response.status().as_u16();
             let body = response.json::<StatusErrorBody>().await.ok();
@@ -555,7 +688,7 @@ impl CopilotServer {
     }
 
     /// Startup warmup: long-timeout `/status` (Edge + Copilot tab + login probe).
-    pub async fn warmup_status(&self) -> Result<CopilotStatusResponse, CopilotError> {
+    pub async fn warmup_status(&mut self) -> Result<CopilotStatusResponse, CopilotError> {
         self.status_with_timeout(WARMUP_STATUS_TIMEOUT_SECS).await
     }
 
@@ -568,17 +701,28 @@ impl CopilotServer {
 
     fn boot_token_error_recoverable(err: &CopilotError) -> bool {
         match err {
-            CopilotError::PromptError(message) => {
+            CopilotError::PromptError(CopilotPromptFailure::Message(message)) => {
                 let lowered = message.to_ascii_lowercase();
                 lowered.contains("401")
                     && (lowered.contains("unauthorized") || lowered.contains("copilot returned"))
             }
+            CopilotError::PromptError(CopilotPromptFailure::Bridge(failure))
+            | CopilotError::BridgeBug(failure) => failure
+                .message
+                .as_deref()
+                .map(|message| message.to_ascii_lowercase())
+                .is_some_and(|lowered| {
+                    lowered.contains("401")
+                        && (lowered.contains("unauthorized")
+                            || lowered.contains("copilot returned")
+                            || lowered.contains("status check failed"))
+                }),
             _ => false,
         }
     }
 
     async fn send_prompt_once(
-        &self,
+        &mut self,
         relay_session_id: &str,
         relay_request_id: &str,
         relay_request_chain: &str,
@@ -652,14 +796,29 @@ impl CopilotServer {
                 t0.elapsed()
             );
             if body.contains("relay_copilot_aborted") {
-                return Err(CopilotError::PromptError("relay_copilot_aborted".into()));
+                self.set_last_bridge_failure(None);
+                return Err(CopilotError::PromptError(CopilotPromptFailure::Message(
+                    "relay_copilot_aborted".into(),
+                )));
             }
-            return Err(CopilotError::PromptError(summarize_prompt_error_body(
-                status, &body,
-            )));
+            let error = parse_prompt_error_body(status, &body);
+            match &error {
+                CopilotError::PromptError(CopilotPromptFailure::Bridge(failure))
+                | CopilotError::BridgeBug(failure) => {
+                    self.set_last_bridge_failure(Some(failure.clone()));
+                    warn!("[copilot] structured bridge failure: {}", format_bridge_failure(failure));
+                }
+                CopilotError::PromptError(CopilotPromptFailure::Message(_))
+                | CopilotError::Http(_)
+                | CopilotError::StartupTimeout
+                | CopilotError::ProcessExited(_)
+                | CopilotError::Spawn(_) => {}
+            }
+            return Err(error);
         }
 
         let body: serde_json::Value = response.json().await.map_err(CopilotError::Http)?;
+        self.set_last_bridge_failure(None);
 
         let content = body
             .get("choices")
@@ -849,7 +1008,8 @@ fn find_node() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        summarize_prompt_error_body, validate_health_body, HealthBody, RELAY_COPILOT_SERVICE_NAME,
+        parse_prompt_error_body, validate_health_body, CopilotError, CopilotPromptFailure,
+        HealthBody, RELAY_COPILOT_SERVICE_NAME,
     };
     use reqwest::StatusCode;
 
@@ -878,7 +1038,7 @@ mod tests {
     }
 
     #[test]
-    fn summarize_prompt_error_body_includes_bridge_failure_metadata() {
+    fn parse_prompt_error_body_preserves_bridge_failure_metadata() {
         let body = serde_json::json!({
             "error": "dom response timed out",
             "failureClass": "dom_response_timeout",
@@ -889,19 +1049,49 @@ mod tests {
             "repairReplayAttempt": 1,
             "wantNewChat": true,
             "newChatReady": true,
+            "pasteDone": true,
             "submitObserved": true,
             "networkSeedSeen": false,
             "domWaitStarted": true,
-            "domWaitFinished": false
+            "domWaitFinished": false,
+            "totalElapsedMs": 8123
         })
         .to_string();
-        let summary = summarize_prompt_error_body(StatusCode::INTERNAL_SERVER_ERROR, &body);
-        assert!(summary.contains("copilot returned 500"));
-        assert!(summary.contains("failureClass=dom_response_timeout"));
-        assert!(summary.contains("stageLabel=repair1"));
-        assert!(summary.contains("requestChain=live-repair-repair1-123"));
-        assert!(summary.contains("repairReplayAttempt=1"));
-        assert!(summary.contains("domWaitFinished=false"));
-        assert!(summary.contains("dom response timed out"));
+        let error = parse_prompt_error_body(StatusCode::INTERNAL_SERVER_ERROR, &body);
+        let CopilotError::PromptError(CopilotPromptFailure::Bridge(failure)) = error else {
+            panic!("expected structured bridge failure");
+        };
+        assert_eq!(
+            failure.failure_class.as_deref(),
+            Some("dom_response_timeout")
+        );
+        assert_eq!(failure.stage_label.as_deref(), Some("repair1"));
+        assert_eq!(
+            failure.request_chain.as_deref(),
+            Some("live-repair-repair1-123")
+        );
+        assert_eq!(failure.repair_replay_attempt, Some(1));
+        assert_eq!(failure.paste_done, Some(true));
+        assert_eq!(failure.dom_wait_finished, Some(false));
+        assert_eq!(failure.total_elapsed_ms, Some(8123));
+        assert_eq!(failure.message.as_deref(), Some("dom response timed out"));
+    }
+
+    #[test]
+    fn parse_prompt_error_body_treats_unclassified_bridge_failure_as_bug() {
+        let body = serde_json::json!({
+            "error": "bridge timeout",
+            "stageLabel": "repair2",
+            "requestChain": "live-repair-repair2-123",
+            "submitObserved": true
+        })
+        .to_string();
+        let error = parse_prompt_error_body(StatusCode::INTERNAL_SERVER_ERROR, &body);
+        let CopilotError::BridgeBug(failure) = error else {
+            panic!("expected unclassified bridge failure to be surfaced as bridge bug");
+        };
+        assert_eq!(failure.stage_label.as_deref(), Some("repair2"));
+        assert_eq!(failure.submit_observed, Some(true));
+        assert_eq!(failure.failure_class, None);
     }
 }
