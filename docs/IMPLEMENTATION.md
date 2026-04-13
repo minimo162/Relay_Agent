@@ -5164,3 +5164,45 @@ Observed result:
   - one automatic widen retry to `catalog_flavor=StandardFull`
   - a second plain-text completion claiming the file had been written
 - That real-app run did **not** enter `repair1` / `repair2`, and `/root/Relay_Agent/repair_small_case.txt` was not created. Current blocker is therefore narrower than before: the host now exposes typed bridge failures and probe diagnostics cleanly, but the non-probe app runtime can still drift from Standard widen into a false plain-text completion instead of escalating into the repair path.
+
+Build completion gating + Standard-to-repair escalation (2026-04-13):
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml build_false_completion_claim_escalates_to_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml exhausted_false_completion_claim_stops_with_meta_stall -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml non_build_false_completion_claim_stays_completed -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml repair_refusal_text_escalates_like_tool_confusion -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml standard_catalog_retry_policy_widens_once_for_protocol_confusion -- --nocapture
+pnpm --filter @relay-agent/desktop typecheck
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+DISPLAY=:10.0 XAUTHORITY=/root/.Xauthority RELAY_SKIP_PRESTART_EDGE=1 pnpm --filter @relay-agent/desktop run tauri:dev
+pnpm --filter @relay-agent/desktop run tauri:dev:send -- "Create /root/Relay_Agent/repair_small_case.txt with exactly REPAIR_SMALL_OK using Relay local file tools. First, in plain text, say exactly which relay_tool you intend to call. Do not use a code fence for that first response."
+pnpm --filter @relay-agent/desktop run tauri:dev:approve
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs` now classifies Build-only false completions separately from generic tool-protocol confusion. If a Build turn has no `tool_results` but the assistant claims the file was created/saved/written anyway, the host no longer stops as `Completed`.
+- The new false-completion heuristic covers the mixed English/Japanese success summaries seen in live runs, including claims mentioning `write_file`, `/root/...` paths, workspace files, and phrases such as `完了`, `作成済み`, `保存`, or `status: ok`.
+- `decide_loop_after_success()` now treats three no-tool Build outcomes the same way:
+  - tool-protocol confusion
+  - repair refusal
+  - false completion success-claim
+- Focused loop-controller tests passed:
+  - `build_false_completion_claim_escalates_to_repair`
+  - `exhausted_false_completion_claim_stops_with_meta_stall`
+  - `non_build_false_completion_claim_stays_completed`
+  - `repair_refusal_text_escalates_like_tool_confusion`
+  - `standard_catalog_retry_policy_widens_once_for_protocol_confusion`
+- Real-app validation improved exactly as intended on the non-probe path:
+  - `StandardMinimal` returned the same tool-less plain-text `write_file` explanation
+  - the runtime widened once to `StandardFull`
+  - the widened reply then falsely claimed `/root/Relay_Agent/repair_small_case.txt` had already been created with `write_file`
+  - the host **did not** stop as completed; instead it logged `queued tool protocol repair stage 1/2` and `dispatching tool protocol repair stage 1/2`
+- The same captured run ultimately reached local execution as well:
+  - `repair1` replies were observed in both fenced and `Plain Text ... {"name":"write_file"...}` forms
+  - after the repair loop progressed, `/root/Relay_Agent/repair_small_case.txt` was created locally with exact contents `REPAIR_SMALL_OK`
+  - this confirms the real app can now recover from the widened false completion and still reach local `write_file`
+- Current narrowest remaining issue after this milestone: the real app no longer dies at false completion, but the repair path is still noisier than ideal because Copilot may require multiple repair1 resend cycles before the local tool call is executed.

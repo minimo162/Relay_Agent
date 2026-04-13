@@ -1,10 +1,10 @@
+use crate::app_services::AppServices;
 use crate::models::{
     GetPermissionSummaryRequest, ListWorkspaceSlashCommandsRequest, RelayDiagnostics,
     RustAnalyzerProbeRequest, RustAnalyzerProbeResponse, WorkspaceAllowlistCwdRequest,
     WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
     WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
 };
-use crate::app_services::AppServices;
 use tauri::State;
 
 #[tauri::command]

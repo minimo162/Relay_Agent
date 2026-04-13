@@ -734,6 +734,39 @@ fn is_repair_refusal_text(text: &str) -> bool {
         || (lower.contains("different topic") && lower.contains("new chat"))
 }
 
+fn is_false_completion_success_claim_text(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let mentions_local_file = lower.contains("write_file")
+        || lower.contains("edit_file")
+        || lower.contains("/root/")
+        || lower.contains("workspace")
+        || lower.contains(".html")
+        || lower.contains(".txt")
+        || trimmed.contains("ファイル")
+        || trimmed.contains("内容");
+    let success_claim = lower.contains("created")
+        || lower.contains("written")
+        || lower.contains("wrote")
+        || lower.contains("saved")
+        || lower.contains("completed")
+        || lower.contains("done")
+        || lower.contains("has been created")
+        || lower.contains("was used")
+        || lower.contains("status: ok")
+        || trimmed.contains("作成")
+        || trimmed.contains("作成済")
+        || trimmed.contains("保存")
+        || trimmed.contains("完了")
+        || trimmed.contains("書き込")
+        || trimmed.contains("書かれ")
+        || trimmed.contains("生成");
+    mentions_local_file && success_claim
+}
+
 fn is_tool_protocol_confusion_text(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -867,11 +900,15 @@ fn decide_loop_after_success(
         summary.tool_results.is_empty() && is_tool_protocol_confusion_text(assistant_text);
     let is_repair_refusal =
         summary.tool_results.is_empty() && is_repair_refusal_text(assistant_text);
+    let is_false_completion =
+        summary.tool_results.is_empty() && is_false_completion_success_claim_text(assistant_text);
     let is_meta_stall = summary.tool_results.is_empty()
         && summary.iterations == 1
         && is_meta_stall_text(assistant_text);
 
-    if session_preset == SessionPreset::Build && (is_tool_protocol_confusion || is_repair_refusal) {
+    if session_preset == SessionPreset::Build
+        && (is_tool_protocol_confusion || is_repair_refusal || is_false_completion)
+    {
         if meta_stall_nudges_used < meta_stall_nudge_limit {
             return LoopDecision::Continue {
                 next_input: build_tool_protocol_repair_input(goal, meta_stall_nudges_used),
@@ -5771,6 +5808,63 @@ mod loop_controller_tests {
         };
         assert!(next_input.contains("Tool protocol repair."));
         assert!(next_input.contains("output exactly one Relay `relay_tool` fence and nothing else"));
+    }
+
+    #[test]
+    fn build_false_completion_claim_escalates_to_repair() {
+        let s = summary(
+            "完了しました。`/root/Relay_Agent/repair_small_case.txt` は write_file を使用して作成済みです。",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let decision = decide_loop_after_success(
+            "Create ./repair_small_case.txt",
+            SessionPreset::Build,
+            1,
+            0,
+            2,
+            &s,
+        );
+        let LoopDecision::Continue { next_input } = decision else {
+            panic!("expected false completion to escalate to repair");
+        };
+        assert!(next_input.contains("Tool protocol repair."));
+    }
+
+    #[test]
+    fn exhausted_false_completion_claim_stops_with_meta_stall() {
+        let s = summary(
+            "Completed. `/root/Relay_Agent/repair_small_case.txt` has been created with write_file and status: ok.",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let decision = decide_loop_after_success(
+            "Create ./repair_small_case.txt",
+            SessionPreset::Build,
+            1,
+            2,
+            2,
+            &s,
+        );
+        assert_eq!(decision, LoopDecision::Stop(LoopStopReason::MetaStall));
+    }
+
+    #[test]
+    fn non_build_false_completion_claim_stays_completed() {
+        let s = summary(
+            "Completed. `/root/Relay_Agent/repair_small_case.txt` has been created with write_file and status: ok.",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let decision = decide_loop_after_success(
+            "Create ./repair_small_case.txt",
+            SessionPreset::Explore,
+            1,
+            0,
+            2,
+            &s,
+        );
+        assert_eq!(decision, LoopDecision::Stop(LoopStopReason::Completed));
     }
 
     #[test]

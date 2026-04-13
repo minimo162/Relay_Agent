@@ -598,10 +598,9 @@ impl CopilotServer {
             .map_err(CopilotError::Http)?;
 
         if !response.status().is_success() {
-            return Err(CopilotError::PromptError(CopilotPromptFailure::Message(format!(
-                "health check failed: status {}",
-                response.status()
-            ))));
+            return Err(CopilotError::PromptError(CopilotPromptFailure::Message(
+                format!("health check failed: status {}", response.status()),
+            )));
         }
 
         let body: HealthBody = response.json().await.map_err(CopilotError::Http)?;
@@ -636,8 +635,8 @@ impl CopilotServer {
             .await
             .map_err(|error| match error {
                 CopilotStatusCheckError::Transport(error) => error,
-                CopilotStatusCheckError::Http(error) => CopilotError::PromptError(
-                    CopilotPromptFailure::Message(format!(
+                CopilotStatusCheckError::Http(error) => {
+                    CopilotError::PromptError(CopilotPromptFailure::Message(format!(
                         "status check failed: status {}{}",
                         error.status,
                         error
@@ -645,8 +644,8 @@ impl CopilotServer {
                             .as_deref()
                             .map(|code| format!(" ({code})"))
                             .unwrap_or_default()
-                    )),
-                ),
+                    )))
+                }
             })
     }
 
@@ -806,7 +805,10 @@ impl CopilotServer {
                 CopilotError::PromptError(CopilotPromptFailure::Bridge(failure))
                 | CopilotError::BridgeBug(failure) => {
                     self.set_last_bridge_failure(Some(failure.clone()));
-                    warn!("[copilot] structured bridge failure: {}", format_bridge_failure(failure));
+                    warn!(
+                        "[copilot] structured bridge failure: {}",
+                        format_bridge_failure(failure)
+                    );
                 }
                 CopilotError::PromptError(CopilotPromptFailure::Message(_))
                 | CopilotError::Http(_)

@@ -1837,7 +1837,8 @@ pub async fn get_relay_diagnostics(services: State<'_, AppServices>) -> RelayDia
                         .doctor_hints
                         .push(format!("Copilot bridge status unavailable: {error}"));
                     diagnostics.last_copilot_bridge_failure = server.last_bridge_failure().cloned();
-                    diagnostics.copilot_repair_stage_stats = server.last_repair_stage_stats().to_vec();
+                    diagnostics.copilot_repair_stage_stats =
+                        server.last_repair_stage_stats().to_vec();
                 }
             }
         } else {
