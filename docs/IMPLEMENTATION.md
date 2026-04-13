@@ -5266,3 +5266,26 @@ Observed result:
 - [`apps/desktop/src/components/SettingsModal.tsx`](../apps/desktop/src/components/SettingsModal.tsx) now mirrors the first-run sequence in the Basic section: project folder, Copilot connection, then new conversation mode, each with one-line help text describing why it matters.
 - [`apps/desktop/src/components/ContextPanel.tsx`](../apps/desktop/src/components/ContextPanel.tsx) now explains the empty Plan tab in plain language: checklist, approvals, and next steps appear there after work begins.
 - [`apps/desktop/src/index.css`](../apps/desktop/src/index.css) adds only the styling needed for the new hierarchy: step cards, status badges, hero example buttons, and richer empty-state guidance, while preserving the existing token system and responsive behavior.
+
+Desktop E2E shared mock harness + restored shell coverage (2026-04-14):
+
+```bash
+pnpm --filter @relay-agent/desktop typecheck
+pnpm --filter @relay-agent/desktop build
+pnpm --filter @relay-agent/desktop exec playwright test tests/app.e2e.spec.ts --reporter=line
+pnpm --filter @relay-agent/desktop exec playwright test tests/e2e-comprehensive.spec.ts --reporter=line
+git diff --check
+```
+
+Observed result:
+
+- Added a shared Playwright-side browser harness at [`apps/desktop/tests/relay-e2e-harness.ts`](../apps/desktop/tests/relay-e2e-harness.ts) so both desktop shell specs now initialize the same deterministic mock session state, auto-complete toggle, explicit event emitters, and listener readiness checks.
+- The harness now supports both E2E paths used by this repo: the lightweight `window.__RELAY_MOCK__` state consumed by the local mock modules and the `window.__TAURI_INTERNALS__` / `plugin:event|listen` path expected when the built preview bundle resolves the real Tauri web API package. That removes the earlier brittle dependency on per-spec inline setup.
+- [`apps/desktop/tests/app.e2e.spec.ts`](../apps/desktop/tests/app.e2e.spec.ts) no longer skips the tool-row and approval-overlay cases. Those tests now create a mock session, wait for listener registration, emit deterministic `agent:tool_start`, `agent:tool_result`, and `agent:approval_needed` events, and assert the human-readable audit/approval UI.
+- [`apps/desktop/tests/e2e-comprehensive.spec.ts`](../apps/desktop/tests/e2e-comprehensive.spec.ts) now reuses the same helper instead of keeping a second inline mock implementation. Event-driven assertions were tightened to wait for session creation and listener readiness before emitting tool or approval events.
+- No production desktop/runtime contracts changed. This pass is test infrastructure only.
+- Verification passed in the captured run:
+  - `typecheck`
+  - `build`
+  - `tests/app.e2e.spec.ts`: 5 passed
+  - `tests/e2e-comprehensive.spec.ts`: 6 passed
