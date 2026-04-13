@@ -201,9 +201,12 @@ export function SettingsModal(props: {
             <div class="mt-5 space-y-4">
               <section class="ra-settings-card">
                 <p class="ra-type-system-micro text-[var(--ra-text-muted)]">Basic</p>
+                <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
+                  Set the project folder, confirm Copilot is ready, and choose how new conversations should start.
+                </p>
                 <div class="mt-3 space-y-4">
                   <div>
-                    <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Project folder</span>
+                    <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Step 1 · Project folder</span>
                     <div class="flex gap-2 mt-1 items-stretch">
                       <Input
                         ref={workspaceInputRef}
@@ -224,10 +227,33 @@ export function SettingsModal(props: {
                         </Button>
                       </Show>
                     </div>
+                    <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
+                      Relay reads and edits within this folder, so point it at the repo you want this window to work on.
+                    </p>
+                  </div>
+
+                  <div class="ra-settings-status">
+                    <div>
+                      <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Step 2 · Copilot connection</span>
+                      <p class="ra-type-button-label text-[var(--ra-text-primary)] mt-1">
+                        {copilotWarmupHeadline(props.copilotState)}
+                      </p>
+                      <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
+                        {copilotWarmupStageDetail(props.copilotState)
+                          ?? props.copilotState.message
+                          ?? "Run a check to verify the Edge/CDP connection."}
+                      </p>
+                      <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
+                        Relay uses the Edge + CDP path to reach Copilot. If this is not ready, reconnect after signing in.
+                      </p>
+                    </div>
+                    <Button variant="secondary" type="button" class="ra-type-button-label" onClick={props.onReconnectCopilot}>
+                      Reconnect Copilot
+                    </Button>
                   </div>
 
                   <div>
-                    <span class="ra-type-system-micro text-[var(--ra-text-muted)]">New conversation mode</span>
+                    <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Step 3 · New conversation mode</span>
                     <div class="ra-settings-segmented mt-1" role="group" aria-label="New conversation mode">
                       {(["build", "plan", "explore"] as SessionPreset[]).map((preset) => (
                         <button
@@ -243,23 +269,9 @@ export function SettingsModal(props: {
                     <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
                       {sessionModeSummary(sessionPreset())}
                     </p>
-                  </div>
-
-                  <div class="ra-settings-status">
-                    <div>
-                      <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Copilot connection</span>
-                      <p class="ra-type-button-label text-[var(--ra-text-primary)] mt-1">
-                        {copilotWarmupHeadline(props.copilotState)}
-                      </p>
-                      <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                        {copilotWarmupStageDetail(props.copilotState)
-                          ?? props.copilotState.message
-                          ?? "Run a check to verify the Edge/CDP connection."}
-                      </p>
-                    </div>
-                    <Button variant="secondary" type="button" class="ra-type-button-label" onClick={props.onReconnectCopilot}>
-                      Reconnect Copilot
-                    </Button>
+                    <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
+                      This is the default starting mode for each new conversation. You can still choose a different mode when you start one.
+                    </p>
                   </div>
                 </div>
               </section>

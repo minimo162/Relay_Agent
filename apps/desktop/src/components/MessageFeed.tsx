@@ -122,19 +122,54 @@ export function MessageFeed(props: {
     return p ? workspaceBasename(p) : "Workspace";
   });
 
+  const emptyTitle = createMemo(() => {
+    if (props.sessionPreset === "plan") return "Start with the part you want Relay to inspect";
+    if (props.sessionPreset === "explore") return "Start with the question you want Relay to answer";
+    return "Start with the outcome you want";
+  });
+
   const emptySubtitle = createMemo(() => {
     const p = props.workspacePath().trim();
-    const base =
+    const location =
       p.length > 0
-        ? `${ellipsisPath(p, 72)} — describe your task in the box below.`
-        : "Click the project folder in the header to choose the folder Relay should use, then describe your task below.";
+        ? `Relay will work in ${ellipsisPath(p, 72)}.`
+        : "Choose the project folder from the header first so Relay knows which codebase to use.";
     if (props.sessionPreset === "plan") {
-      return `${base} This conversation stays read-only; start a new conversation in ${sessionModeLabel("build")} if you want Relay to change files.`;
+      return `${location} This conversation stays read-only and returns a plan, explanation, or review.`;
     }
     if (props.sessionPreset === "explore") {
-      return `${base} This conversation can read and search only; start a new conversation in ${sessionModeLabel("plan")} or ${sessionModeLabel("build")} for broader tools.`;
+      return `${location} This conversation can read and search only, so it is safe for quick codebase exploration.`;
     }
-    return base;
+    return `${location} Relay can inspect the repo, propose next steps, and edit files when needed.`;
+  });
+
+  const emptyNextSteps = createMemo(() => {
+    if (props.sessionPreset === "plan") {
+      return [
+        "Relay will inspect the repo first and write its checklist in the Plan panel.",
+        `If you want file changes later, start a new conversation in ${sessionModeLabel("build")}.`,
+      ];
+    }
+    if (props.sessionPreset === "explore") {
+      return [
+        "Relay will read files and run searches only.",
+        `For a plan or code changes, start a new conversation in ${sessionModeLabel("plan")} or ${sessionModeLabel("build")}.`,
+      ];
+    }
+    return [
+      "Relay will inspect the repo before deciding whether a plan or approval is needed.",
+      "Approvals appear before risky changes, and progress shows inline in the conversation.",
+    ];
+  });
+
+  const emptyExample = createMemo(() => {
+    if (props.sessionPreset === "plan") {
+      return "Review the onboarding flow and propose the smallest safe change that would make it clearer for new developers.";
+    }
+    if (props.sessionPreset === "explore") {
+      return "Find where the first-run setup is rendered and explain how the UI decides what to show.";
+    }
+    return "Fix the first-run setup flow so a new developer can understand what to do without opening the docs.";
   });
 
   return (
@@ -142,9 +177,10 @@ export function MessageFeed(props: {
       <Show when={empty() && props.chunks.length === 0}>
         <EmptyState
           eyebrow={emptyEyebrow()}
-          title="Ready when you are"
+          title={emptyTitle()}
           subtitle={emptySubtitle()}
-          example="Example: Review the auth flow and suggest the smallest safe fix."
+          nextSteps={emptyNextSteps()}
+          example={emptyExample()}
         />
       </Show>
       <For each={feedChunks()}>

@@ -1154,6 +1154,76 @@ body a:focus-visible {
   box-shadow: var(--ra-shadow-sm);
 }
 
+.ra-first-run__flow {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.ra-first-run__step {
+  display: grid;
+  gap: 0.85rem;
+  border: 1px solid var(--ra-border);
+  border-radius: 1rem;
+  background: var(--ra-surface-100);
+  padding: 1rem 1.1rem;
+}
+
+.ra-first-run__step-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ra-first-run__step-kicker {
+  margin: 0;
+  color: var(--ra-text-muted);
+  font-family: var(--ra-font-ui);
+  font-size: var(--ra-text-micro);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.ra-first-run__step-body {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.ra-first-run__step-action {
+  margin-top: 0.25rem;
+}
+
+.ra-first-run__status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  border-radius: var(--ra-radius-pill);
+  border: 1px solid var(--ra-border);
+  padding: 0.35rem 0.6rem;
+  line-height: 1;
+}
+
+.ra-first-run__status-badge--good {
+  background: color-mix(in oklab, var(--ra-green) 14%, var(--ra-surface-100));
+  color: var(--ra-green);
+}
+
+.ra-first-run__status-badge--warn {
+  background: color-mix(in oklab, var(--ra-red) 12%, var(--ra-surface-100));
+  color: var(--ra-red);
+}
+
+.ra-first-run__status-badge--neutral {
+  background: color-mix(in oklab, var(--ra-accent) 10%, var(--ra-surface-100));
+  color: var(--ra-accent);
+}
+
+.ra-first-run__request-composer {
+  margin-top: 0.35rem;
+}
+
 .ra-preflight-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1429,6 +1499,72 @@ body a:focus-visible {
   border: 1px solid var(--ra-border);
   border-radius: 0.85rem;
   background: var(--ra-surface-100);
+}
+
+.ra-empty-state__steps {
+  margin: 0.9rem auto 0;
+  max-width: 22rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--ra-border);
+  border-radius: 0.85rem;
+  background: var(--ra-surface-100);
+  text-align: left;
+}
+
+.ra-empty-state__steps ul {
+  margin: 0.55rem 0 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.ra-composer-shortcut-hint {
+  margin: 0.15rem 0 0;
+  color: var(--ra-text-muted);
+  font-family: var(--ra-font-ui);
+  font-size: var(--ra-text-caption);
+  line-height: 1.4;
+}
+
+.ra-composer-examples {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--ra-border);
+}
+
+.ra-composer-examples__list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.ra-composer-example-btn {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid var(--ra-border);
+  border-radius: 0.85rem;
+  background: var(--ra-surface-100);
+  color: var(--ra-text-primary);
+  padding: 0.7rem 0.8rem;
+  font-family: var(--ra-font-ui);
+  font-size: var(--ra-text-body);
+  line-height: 1.45;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.ra-composer-example-btn:hover {
+  background: var(--ra-hover);
+  border-color: var(--ra-border-medium);
+}
+
+.ra-composer-example-btn:focus-visible {
+  outline: var(--ra-focus-ring);
+  outline-offset: var(--ra-focus-ring-offset);
 }
 
 @media (max-width: 900px) {

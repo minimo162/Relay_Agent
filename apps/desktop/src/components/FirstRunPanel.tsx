@@ -6,31 +6,58 @@ import { sessionModeLabel, sessionModeSummary } from "../lib/session-mode-label"
 import { copilotWarmupStageDetail, type CopilotWarmupState } from "../shell/useCopilotWarmup";
 import { Button } from "./ui";
 
-function StartItem(props: {
+function StepStatusBadge(props: {
   label: string;
-  value: string;
-  detail: string;
   state: "good" | "warn" | "neutral";
-  technicalDetail?: string | null;
 }) {
   return (
-    <div class="ra-preflight-item">
-      <p class={`ra-type-system-micro ${ui.mutedText}`}>{props.label}</p>
-      <p class={`ra-type-button-label mt-1 ${ui.textPrimary}`}>{props.value}</p>
-      <p class={`ra-type-caption mt-1 ${
+    <span
+      class={`ra-first-run__status-badge ra-type-system-micro ${
         props.state === "good"
-          ? "text-[var(--ra-green)]"
+          ? "ra-first-run__status-badge--good"
           : props.state === "warn"
-            ? "text-[var(--ra-red)]"
-            : ui.textMuted
-      }`}>{props.detail}</p>
-      {props.technicalDetail ? (
-        <details class="mt-2">
-          <summary class={`ra-type-caption ${ui.mutedText} cursor-pointer`}>Details</summary>
-          <p class={`ra-type-mono-small mt-1 ${ui.mutedText}`}>{props.technicalDetail}</p>
-        </details>
-      ) : null}
-    </div>
+            ? "ra-first-run__status-badge--warn"
+            : "ra-first-run__status-badge--neutral"
+      }`}
+    >
+      {props.label}
+    </span>
+  );
+}
+
+function StepCard(props: {
+  step: string;
+  title: string;
+  statusLabel: string;
+  statusState: "good" | "warn" | "neutral";
+  summary: string;
+  detail: string;
+  action?: JSX.Element;
+  technicalDetail?: string | null;
+  children?: JSX.Element;
+}) {
+  return (
+    <section class="ra-first-run__step">
+      <div class="ra-first-run__step-header">
+        <div>
+          <p class="ra-first-run__step-kicker">{props.step}</p>
+          <h2 class="ra-type-title-sm text-[var(--ra-text-primary)] mt-1">{props.title}</h2>
+        </div>
+        <StepStatusBadge label={props.statusLabel} state={props.statusState} />
+      </div>
+      <div class="ra-first-run__step-body">
+        <p class={`ra-type-body-sans ${ui.textPrimary}`}>{props.summary}</p>
+        <p class={`ra-type-caption ${ui.mutedText}`}>{props.detail}</p>
+        {props.action ? <div class="ra-first-run__step-action">{props.action}</div> : null}
+        {props.technicalDetail ? (
+          <details class="mt-1.5">
+            <summary class={`ra-type-caption ${ui.mutedText} cursor-pointer`}>Details</summary>
+            <p class={`ra-type-mono-small mt-1 ${ui.mutedText}`}>{props.technicalDetail}</p>
+          </details>
+        ) : null}
+        {props.children}
+      </div>
+    </section>
   );
 }
 
@@ -56,6 +83,7 @@ export function FirstRunPanel(props: {
     () => props.copilotState.result?.connected || props.copilotState.status === "ready",
   );
   const copilotStageDetail = createMemo(() => copilotWarmupStageDetail(props.copilotState));
+  const modeLabel = createMemo(() => sessionModeLabel(props.sessionPreset));
   const connectionStatus = createMemo(() => {
     if (props.copilotState.status === "checking") return "Checking";
     if (connectionReady()) return "Ready";
@@ -84,76 +112,103 @@ export function FirstRunPanel(props: {
   const showReconnect = createMemo(
     () => props.copilotState.status !== "checking" && !connectionReady(),
   );
+  const requestStatusLabel = createMemo(() => `Default: ${modeLabel()}`);
+  const requestSummary = createMemo(() => {
+    if (hasWorkspace() && connectionReady()) {
+      return "Describe the outcome you want. Relay can inspect this project as soon as you send.";
+    }
+    return "You can still write the request now. Relay will call out missing setup before it can act fully.";
+  });
+  const requestDetail = createMemo(() =>
+    `New conversations start in ${modeLabel()}. ${sessionModeSummary(props.sessionPreset)}`,
+  );
+  const connectionAction = createMemo<JSX.Element>(() => {
+    if (props.copilotState.status === "needs_sign_in" || props.copilotState.status === "checking") {
+      return (
+        <Button variant="secondary" type="button" class="ra-type-button-label" onClick={props.onOpenSettings}>
+          Open Settings
+        </Button>
+      );
+    }
+    if (showReconnect()) {
+      return (
+        <Button variant="secondary" type="button" class="ra-type-button-label" onClick={props.onReconnectCopilot}>
+          Reconnect Copilot
+        </Button>
+      );
+    }
+    return (
+      <Button variant="secondary" type="button" class="ra-type-button-label" onClick={props.onOpenSettings}>
+        Review Settings
+      </Button>
+    );
+  });
 
   return (
     <section class="ra-first-run" aria-label="Get started">
       <div class="ra-first-run__panel">
         <div class="ra-first-run__lead">
           <p class="ra-empty-state__eyebrow">Relay Agent</p>
-          <h1 class={`ra-type-section-heading ${ui.textPrimary}`}>Tell Relay what you need</h1>
+          <h1 class={`ra-type-section-heading ${ui.textPrimary}`}>Get Relay ready in three steps</h1>
           <p class={`ra-type-body-sans ${ui.textSecondary}`}>
-            Start in three steps so Relay knows your project, your connection is ready, and your first request is clear.
+            Relay works best when it knows which project to use, the Copilot connection is available, and your first request is outcome-based.
           </p>
           <ol class="ra-first-run__steps">
-            <li>Choose a project folder.</li>
-            <li>Confirm the Copilot connection.</li>
-            <li>Describe the outcome you want.</li>
+            <li>Pick the project folder Relay should inspect.</li>
+            <li>Check that Copilot is reachable from this app.</li>
+            <li>Describe the result you want, not the implementation steps.</li>
           </ol>
+          <p class={`ra-type-caption ${ui.mutedText} mt-3`}>
+            Nothing here blocks you. Relay can still accept a request now, but the cards below make missing setup obvious before you lose time.
+          </p>
         </div>
 
-        <div class="ra-first-run__request ra-first-run__request--primary">
-          <div class="min-w-0">
-            <p class={`ra-type-system-micro ${ui.mutedText}`}>First request</p>
-            <p class={`ra-type-title-sm ${ui.textPrimary} mt-1`}>Start with the outcome you want</p>
-            <p class={`ra-type-caption ${ui.mutedText} mt-1`}>
-              Be direct about the result, then let Relay inspect the code and choose the next steps.
-            </p>
-            <div class="ra-first-run__example">
-              <span class={`ra-type-system-micro ${ui.mutedText}`}>Example</span>
-              <p class={`ra-type-body-sans ${ui.textPrimary} mt-1`}>
-                Summarize this repo and propose the smallest fix for the failing flow.
-              </p>
-            </div>
-            <p class="ra-first-run__mode-note">
-              New conversations start in {sessionModeLabel(props.sessionPreset)}. {sessionModeSummary(props.sessionPreset)}
-            </p>
-          </div>
-          {props.children}
-        </div>
-
-        <div class="ra-first-run__preflight">
-          <div class="flex items-center justify-between gap-3 flex-wrap">
-            <div>
-              <p class={`ra-type-system-micro ${ui.mutedText}`}>Start here</p>
-              <p class={`ra-type-title-sm ${ui.textPrimary} mt-1`}>Confirm the basics, then send your first request</p>
-            </div>
-            <div class="flex flex-wrap gap-2">
+        <div class="ra-first-run__flow">
+          <StepCard
+            step="Step 1"
+            title="Choose a project folder"
+            statusLabel={hasWorkspace() ? "Ready" : "Needs setup"}
+            statusState={hasWorkspace() ? "good" : "warn"}
+            summary={
+              hasWorkspace()
+                ? `Relay is pointed at ${workspaceName()}.`
+                : "Pick the repository or project folder Relay should read and edit."
+            }
+            detail={workspaceHint()}
+            action={
               <Button variant="primary" type="button" class="ra-type-button-label" onClick={props.onOpenSettings}>
-                Open Settings
+                {hasWorkspace() ? "Change folder" : "Choose folder"}
               </Button>
-              {showReconnect() ? (
-                <Button variant="secondary" type="button" class="ra-type-button-label" onClick={props.onReconnectCopilot}>
-                  Reconnect Copilot
-                </Button>
-              ) : null}
-            </div>
-          </div>
+            }
+          />
 
-          <div class="ra-preflight-grid">
-            <StartItem
-              label="Project folder"
-              value={hasWorkspace() ? workspaceName() : "Not selected"}
-              detail={workspaceHint()}
-              state={hasWorkspace() ? "good" : "warn"}
-            />
-            <StartItem
-              label="Copilot connection"
-              value={connectionStatus()}
-              detail={connectionDetail()}
-              technicalDetail={connectionTechnicalDetail()}
-              state={connectionReady() ? "good" : props.copilotState.status === "checking" ? "neutral" : "warn"}
-            />
-          </div>
+          <StepCard
+            step="Step 2"
+            title="Confirm the Copilot connection"
+            statusLabel={connectionStatus()}
+            statusState={connectionReady() ? "good" : props.copilotState.status === "checking" ? "neutral" : "warn"}
+            summary={
+              connectionReady()
+                ? "Copilot is ready in this app."
+                : props.copilotState.status === "checking"
+                  ? "Relay is checking the browser connection now."
+                  : "Relay needs Edge and Copilot ready before it can complete full agent work."
+            }
+            detail={connectionDetail()}
+            technicalDetail={connectionTechnicalDetail()}
+            action={connectionAction()}
+          />
+
+          <StepCard
+            step="Step 3"
+            title="Send the first request"
+            statusLabel={requestStatusLabel()}
+            statusState="neutral"
+            summary={requestSummary()}
+            detail={requestDetail()}
+          >
+            <div class="ra-first-run__request-composer">{props.children}</div>
+          </StepCard>
         </div>
       </div>
     </section>

@@ -35,6 +35,7 @@ export function EmptyState(props: {
   title: string;
   subtitle?: string;
   example?: string;
+  nextSteps?: string[];
 }): JSX.Element {
   return (
     <div class="flex h-full min-h-[12rem] items-center justify-center px-4 text-center">
@@ -46,6 +47,14 @@ export function EmptyState(props: {
         <p class={`ra-type-title-sm ${ui.textPrimary}`}>{props.title}</p>
         <Show when={props.subtitle}>
           <p class={`ra-type-body-sans ${ui.mutedText} mt-1 max-w-[18rem] mx-auto`}>{props.subtitle}</p>
+        </Show>
+        <Show when={props.nextSteps && props.nextSteps.length > 0}>
+          <div class="ra-empty-state__steps">
+            <p class={`ra-type-system-micro ${ui.mutedText}`}>What happens next</p>
+            <ul class={`ra-type-caption ${ui.textPrimary}`}>
+              <For each={props.nextSteps!}>{(step) => <li>{step}</li>}</For>
+            </ul>
+          </div>
         </Show>
         <Show when={props.example}>
           <div class="ra-empty-state__example">

@@ -5233,3 +5233,20 @@ Observed result:
   - `$ui-ux-pro-max` invocation on that current-user path
   - precedence of `CODEX_HOME/skills` over `HOME/.codex/skills`
 - `cargo test -p tools` passed with all 40 tests green, and `git diff --check` passed with no whitespace or conflict-marker issues.
+
+Desktop UI first-use clarity pass with `ui-ux-pro-max` guidance (2026-04-14):
+
+```bash
+pnpm --filter @relay-agent/desktop typecheck
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- [`apps/desktop/src/components/FirstRunPanel.tsx`](../apps/desktop/src/components/FirstRunPanel.tsx) now presents first-run as an explicit 3-step flow: project folder, Copilot connection, then first request. Each step has a visible status badge, one plain-language explanation, and a single obvious action. The composer remains on the same screen as the final step instead of reading like a parallel card.
+- [`apps/desktop/src/components/Composer.tsx`](../apps/desktop/src/components/Composer.tsx) now gives mode-aware outcome-based guidance, separates the keyboard shortcut hint from the main instruction, and adds concrete developer request examples on the hero composer so first-time users can start from realistic prompts.
+- [`apps/desktop/src/components/MessageFeed.tsx`](../apps/desktop/src/components/primitives.tsx) now explains what happens next in each mode instead of showing a generic empty state. The copy now pairs explanation with action and uses developer-specific examples.
+- [`apps/desktop/src/components/SettingsModal.tsx`](../apps/desktop/src/components/SettingsModal.tsx) now mirrors the first-run sequence in the Basic section: project folder, Copilot connection, then new conversation mode, each with one-line help text describing why it matters.
+- [`apps/desktop/src/components/ContextPanel.tsx`](../apps/desktop/src/components/ContextPanel.tsx) now explains the empty Plan tab in plain language: checklist, approvals, and next steps appear there after work begins.
+- [`apps/desktop/src/index.css`](../apps/desktop/src/index.css) adds only the styling needed for the new hierarchy: step cards, status badges, hero example buttons, and richer empty-state guidance, while preserving the existing token system and responsive behavior.

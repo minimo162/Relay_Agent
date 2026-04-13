@@ -1,4 +1,4 @@
-import { Show, createEffect, createSignal, onMount, type JSX } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onMount, type JSX } from "solid-js";
 import { Textarea } from "./ui";
 import { detectSlashMode, findSlashCommands, type SlashCommand } from "../lib/slash-commands";
 import type { SessionPreset } from "../lib/ipc";
@@ -211,10 +211,58 @@ export function Composer(props: {
   };
 
   const canSend = () => text().trim().length > 0 && !props.running;
-  const placeholder = () =>
-    props.hero
-      ? "Describe the task you want Relay to handle."
-      : "What should the agent do? Type / for commands.";
+  const placeholder = () => {
+    if (!props.hero) {
+      return props.sessionPreset === "build"
+        ? "Describe the result you want. Type / for commands."
+        : props.sessionPreset === "plan"
+          ? "Describe what Relay should inspect and plan. Type / for commands."
+          : "Describe what Relay should read or search. Type / for commands.";
+    }
+    switch (props.sessionPreset) {
+      case "plan":
+        return "Example: Review the onboarding flow and propose the smallest safe UI fix.";
+      case "explore":
+        return "Example: Find where first-run instructions are rendered and explain the flow.";
+      default:
+        return "Example: Fix the first-run setup flow so new developers know what to do.";
+    }
+  };
+  const helperHint = createMemo(() => {
+    if (props.hero) {
+      switch (props.sessionPreset) {
+        case "plan":
+          return "Describe the outcome you want to understand. Relay will inspect first and reply with a plan only.";
+        case "explore":
+          return "Describe what you want to inspect. Relay will read and search without changing files.";
+        default:
+          return "Describe the outcome you want. Relay will inspect the repo before proposing or making changes.";
+      }
+    }
+    return "Describe the outcome you want, not the implementation steps.";
+  });
+  const heroExamples = createMemo(() => {
+    switch (props.sessionPreset) {
+      case "plan":
+        return [
+          "Review this repo and propose the smallest safe fix for the onboarding flow.",
+          "Explain how Copilot warmup works and list the files involved.",
+          "Plan a refactor that makes first-run setup easier to understand.",
+        ];
+      case "explore":
+        return [
+          "Find where the first-run instructions are rendered and summarize the flow.",
+          "Search for how conversation mode is stored and used.",
+          "Inspect the settings UI and explain the basic setup path.",
+        ];
+      default:
+        return [
+          "Fix the failing first-run guidance so new developers know what to do.",
+          "Trace why settings do not persist and update the code safely.",
+          "Add a clearer loading state to the Copilot connection check.",
+        ];
+    }
+  });
   const allowModeSelection = () => props.allowModeSelection ?? true;
 
   return (
@@ -247,10 +295,11 @@ export function Composer(props: {
           </div>
           <div class="ra-composer-toolbar">
             <div class="ra-composer-toolbar-main">
-              <p class="ra-composer-hint">⌘/Ctrl+Enter to send · Enter for new line</p>
+              <p class="ra-composer-hint">{helperHint()}</p>
               <p class="ra-composer-mode-summary">
-                {props.modeLockedNote ?? sessionModeSummary(props.sessionPreset)}
+                {props.modeLockedNote ?? `${sessionModeLabel(props.sessionPreset)} · ${sessionModeSummary(props.sessionPreset)}`}
               </p>
+              <p class="ra-composer-shortcut-hint">⌘/Ctrl+Enter to send · Enter for new line</p>
             </div>
             <div class="ra-composer-toolbar-actions">
               <Show when={allowModeSelection()}>
@@ -305,6 +354,32 @@ export function Composer(props: {
               </button>
             </div>
           </div>
+          <Show when={props.hero}>
+            <div class="ra-composer-examples" aria-label="Example requests">
+              <span class={`ra-type-system-micro text-[var(--ra-text-muted)]`}>Try a developer request</span>
+              <div class="ra-composer-examples__list">
+                <For each={heroExamples()}>
+                  {(example) => (
+                    <button
+                      type="button"
+                      class="ra-composer-example-btn"
+                      onClick={() => {
+                        setText(example);
+                        queueMicrotask(() => {
+                          if (textareaRef) {
+                            adjustComposerTextareaHeight(textareaRef);
+                            textareaRef.focus();
+                          }
+                        });
+                      }}
+                    >
+                      {example}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </div>
+          </Show>
         </div>
       </div>
     </div>

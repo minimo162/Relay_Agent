@@ -136,11 +136,11 @@ export function ContextPanel(props: {
                 when={planNewestFirst()}
                 fallback={
                   <div class="ra-context-empty-card">
-                    <div class={`ra-type-button-label ${ui.textPrimary}`}>What happens next</div>
+                    <div class={`ra-type-button-label ${ui.textPrimary}`}>What shows up here</div>
                     <ul class={`ra-context-empty-list ra-type-caption ${ui.mutedText}`}>
-                      <li>Relay will propose steps here after it starts.</li>
-                      <li>Approvals appear before risky changes.</li>
-                      <li>Integrations live in the next tab.</li>
+                      <li>Relay writes its checklist here after work starts.</li>
+                      <li>Approvals show up before risky changes go through.</li>
+                      <li>Open Integrations for workspace instructions and connected servers.</li>
                     </ul>
                   </div>
                 }
