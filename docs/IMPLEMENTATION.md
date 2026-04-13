@@ -5214,3 +5214,22 @@ Observed result:
   - after the repair loop progressed, `/root/Relay_Agent/repair_small_case.txt` was created locally with exact contents `REPAIR_SMALL_OK`
   - this confirms the real app can now recover from the widened false completion and still reach local `write_file`
 - Current narrowest remaining issue after this milestone: the real app no longer dies at false completion, but the repair path is still noisier than ideal because Copilot may require multiple repair1 resend cycles before the local tool call is executed.
+
+Skill tool current-user `.codex` lookup for `ui-ux-pro-max` (2026-04-14):
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools
+git diff --check
+```
+
+Observed result:
+
+- `apps/desktop/src-tauri/crates/tools/src/lib.rs` `resolve_skill_path()` now searches skill roots in this order: `CODEX_HOME/skills`, current user `~/.codex/skills` via `dirs::home_dir()`, then legacy `/home/bellman/.codex/skills`.
+- This fixes the current environment mismatch where Relay previously skipped `/root/.codex/skills/ui-ux-pro-max` because `CODEX_HOME` was unset and the fallback path was hardcoded to another user.
+- Skill name handling is unchanged: both bare names and `$skill` invocations still strip prefixes the same way, and directory matching still supports direct and case-insensitive lookup.
+- Added `tools` crate tests covering:
+  - resolution from `HOME/.codex/skills` when `CODEX_HOME` is unset
+  - `$ui-ux-pro-max` invocation on that current-user path
+  - precedence of `CODEX_HOME/skills` over `HOME/.codex/skills`
+- `cargo test -p tools` passed with all 40 tests green, and `git diff --check` passed with no whitespace or conflict-marker issues.

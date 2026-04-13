@@ -2606,7 +2606,16 @@ fn resolve_skill_path(skill: &str) -> Result<std::path::PathBuf, String> {
     if let Ok(codex_home) = std::env::var("CODEX_HOME") {
         candidates.push(std::path::PathBuf::from(codex_home).join("skills"));
     }
-    candidates.push(std::path::PathBuf::from("/home/bellman/.codex/skills"));
+    if let Some(home) = dirs::home_dir() {
+        let current_user_root = home.join(".codex").join("skills");
+        if !candidates.contains(&current_user_root) {
+            candidates.push(current_user_root);
+        }
+    }
+    let legacy_root = std::path::PathBuf::from("/home/bellman/.codex/skills");
+    if !candidates.contains(&legacy_root) {
+        candidates.push(legacy_root);
+    }
 
     for root in candidates {
         let direct = root.join(requested).join("SKILL.md");
@@ -4343,6 +4352,9 @@ mod tests {
         let _guard = env_lock()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous_codex_home = std::env::var("CODEX_HOME").ok();
+        let previous_home = std::env::var("HOME").ok();
+        let previous_userprofile = std::env::var("USERPROFILE").ok();
         let codex_home = temp_path("codex-home");
         let skill_dir = codex_home.join("skills").join("help");
         fs::create_dir_all(&skill_dir).expect("skill dir");
@@ -4388,8 +4400,142 @@ mod tests {
             .expect("path")
             .ends_with("/help/SKILL.md"));
 
-        std::env::remove_var("CODEX_HOME");
+        if let Some(codex_home) = previous_codex_home {
+            std::env::set_var("CODEX_HOME", codex_home);
+        } else {
+            std::env::remove_var("CODEX_HOME");
+        }
+        if let Some(home) = previous_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(userprofile) = previous_userprofile {
+            std::env::set_var("USERPROFILE", userprofile);
+        } else {
+            std::env::remove_var("USERPROFILE");
+        }
         let _ = fs::remove_dir_all(&codex_home);
+    }
+
+    #[test]
+    fn skill_uses_current_home_codex_when_codex_home_unset() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous_codex_home = std::env::var("CODEX_HOME").ok();
+        let previous_home = std::env::var("HOME").ok();
+        let previous_userprofile = std::env::var("USERPROFILE").ok();
+        let home = temp_path("skill-home");
+        let skill_dir = home.join(".codex").join("skills").join("ui-ux-pro-max");
+        fs::create_dir_all(&skill_dir).expect("skill dir");
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "description: root-backed skill\n\nUse the local home directory skill fixture.\n",
+        )
+        .expect("write SKILL.md");
+        std::env::remove_var("CODEX_HOME");
+        std::env::set_var("HOME", &home);
+        std::env::remove_var("USERPROFILE");
+
+        let result = execute_tool(
+            "Skill",
+            &json!({
+                "skill": "$ui-ux-pro-max"
+            }),
+        )
+        .expect("Skill should resolve via HOME/.codex/skills");
+        let output: serde_json::Value = serde_json::from_str(&result).expect("valid json");
+        assert_eq!(output["skill"], "$ui-ux-pro-max");
+        assert!(output["path"]
+            .as_str()
+            .expect("path")
+            .ends_with("/ui-ux-pro-max/SKILL.md"));
+        assert!(output["prompt"]
+            .as_str()
+            .expect("prompt")
+            .contains("root-backed skill"));
+
+        if let Some(codex_home) = previous_codex_home {
+            std::env::set_var("CODEX_HOME", codex_home);
+        } else {
+            std::env::remove_var("CODEX_HOME");
+        }
+        if let Some(home) = previous_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(userprofile) = previous_userprofile {
+            std::env::set_var("USERPROFILE", userprofile);
+        } else {
+            std::env::remove_var("USERPROFILE");
+        }
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn skill_prefers_codex_home_over_current_home_codex() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous_codex_home = std::env::var("CODEX_HOME").ok();
+        let previous_home = std::env::var("HOME").ok();
+        let previous_userprofile = std::env::var("USERPROFILE").ok();
+        let codex_home = temp_path("skill-precedence-codex-home");
+        let home = temp_path("skill-precedence-home");
+        let codex_skill_dir = codex_home.join("skills").join("help");
+        let home_skill_dir = home.join(".codex").join("skills").join("help");
+        fs::create_dir_all(&codex_skill_dir).expect("codex skill dir");
+        fs::create_dir_all(&home_skill_dir).expect("home skill dir");
+        fs::write(
+            codex_skill_dir.join("SKILL.md"),
+            "description: codex home wins\n\nPrefer CODEX_HOME fixture.\n",
+        )
+        .expect("write codex home skill");
+        fs::write(
+            home_skill_dir.join("SKILL.md"),
+            "description: home fallback\n\nDo not pick this fixture first.\n",
+        )
+        .expect("write home skill");
+        std::env::set_var("CODEX_HOME", &codex_home);
+        std::env::set_var("HOME", &home);
+        std::env::remove_var("USERPROFILE");
+
+        let result = execute_tool(
+            "Skill",
+            &json!({
+                "skill": "help"
+            }),
+        )
+        .expect("Skill should prefer CODEX_HOME");
+        let output: serde_json::Value = serde_json::from_str(&result).expect("valid json");
+        assert!(output["prompt"]
+            .as_str()
+            .expect("prompt")
+            .contains("Prefer CODEX_HOME fixture."));
+        assert!(output["path"]
+            .as_str()
+            .expect("path")
+            .starts_with(codex_home.to_string_lossy().as_ref()));
+
+        if let Some(codex_home) = previous_codex_home {
+            std::env::set_var("CODEX_HOME", codex_home);
+        } else {
+            std::env::remove_var("CODEX_HOME");
+        }
+        if let Some(home) = previous_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+        if let Some(userprofile) = previous_userprofile {
+            std::env::set_var("USERPROFILE", userprofile);
+        } else {
+            std::env::remove_var("USERPROFILE");
+        }
+        let _ = fs::remove_dir_all(&codex_home);
+        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
