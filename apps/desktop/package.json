@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "check": "pnpm typecheck && pnpm build",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
@@ -21,6 +22,7 @@
     "tauri:build": "tauri build",
     "launch:test": "node ./scripts/launch_tauri_smoke.mjs",
     "agent-loop:test": "node ./scripts/launch_agent_loop_smoke.mjs",
+    "smoke:windows": "node ./scripts/e2e_windows_smoke.mjs",
     "test:e2e": "playwright test",
     "test:e2e:m365-cdp": "CDP_ENDPOINT=http://127.0.0.1:9333 playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat",
     "test:e2e:copilot-grounding": "RELAY_GROUNDING_E2E=1 playwright test --config=playwright-cdp.config.ts -g tetris",

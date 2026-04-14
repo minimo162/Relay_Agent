@@ -1,991 +1,155 @@
 {
-  "projectName": "Relay Agent — claw-code ベース アーキテクチャ再設計",
-  "version": "4.0",
-  "createdAt": "2026-04-02",
-  "summary": "自作ツールを捨て claw-code (Rust) を薄くラップ。Claude API 不可のため Copilot Chat で代替。",
+  "projectName": "Relay_Agent Current Desktop Baseline",
+  "version": "5.0",
+  "createdAt": "2026-04-14",
+  "summary": "Current task graph for the conversation-first Tauri desktop agent, aligned with the live repo state and the claw-code hardening track.",
   "phases": [
     {
-      "id": "P1",
-      "name": "Phase 1: 依存追加 & CopilotChatProvider",
-      "description": "claw-code crates を Cargo 依存に追加し、Copilot Chat を ModelProvider trait で接続する。",
+      "id": "baseline",
+      "name": "Current Architecture Baseline",
+      "description": "Tracks the product boundaries that already exist in source and must stay aligned with docs and verification artifacts.",
       "tasks": [
         {
-          "id": "T01",
-          "title": "claw-code リポジトリの fork 作成 & 固定",
-          "description": "claw-cli/claw-code-rust を fork し、特定コミットで固定。ultraworkers/claw-code が disabled のため、安定したソースを確保する。",
-          "files": [],
-          "effort": "S",
-          "priority": "critical",
-          "blockedBy": [],
-          "status": "pending"
-        },
-        {
-          "id": "T02",
-          "title": "Cargo.toml に claw crates を依存追加",
-          "description": "claw-core, claw-tools, claw-provider, claw-permissions, claw-compact を pinned git 依存で追加し、cargo check が通ることを確認する。",
+          "id": "B01",
+          "title": "Conversation-first desktop shell is the live product",
+          "description": "The active product is the Tauri + Solid desktop app under apps/desktop with session-based conversations, inline tool events, Settings-based preflight, and warm-token light theme.",
           "files": [
-            "apps/desktop/src-tauri/Cargo.toml"
+            "README.md",
+            "PLANS.md",
+            "AGENTS.md",
+            "apps/desktop/src/index.css",
+            "apps/desktop/src/components/FirstRunPanel.tsx",
+            "apps/desktop/src/components/SettingsModal.tsx"
           ],
-          "effort": "S",
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-14 Desktop UI milestones)",
+          "effort": "M",
           "priority": "critical",
           "blockedBy": [],
           "status": "completed"
         },
         {
-          "id": "T03",
-          "title": "CopilotChatProvider の実装",
-          "description": "claw-provider の ModelProvider trait を実装する CopilotChatProvider を作成。Copilot browser スクリプトを使って M365 Copilot Chat にプロンプトを送信し、messages + tools を Copilot 向けプロンプト文字列に変換してレスポンスを ModelResponse にパースする。stream() は complete() を1チャンク列へ変換する擬似実装とする。",
-          "files": [
-            "apps/desktop/src-tauri/src/copilot_provider.rs"
-          ],
-          "subtasks": [
-            "ModelProvider trait の complete() 実装",
-            "messages → Copilot プロンプト文字列変換 (format_for_copilot)",
-            "tools → JSON Schema 埋め込み",
-            "Copilot レスポンス → ModelResponse パース (parse_copilot_response)",
-            "tool_use JSON ブロック抽出ロジック",
-            "stream() の擬似ストリーム実装",
-            "エラーハンドリング (パース失敗時のリトライ)"
-          ],
-          "effort": "L",
-          "priority": "critical",
-          "blockedBy": [
-            "T02"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T04",
-          "title": "CopilotChatProvider の結合テスト",
-          "description": "claw-core の query() 関数に CopilotChatProvider を渡し、単一ターンの会話が成功することを確認。Copilot Chat にプロンプトを送り、テキスト応答が正常にパースされることをテスト。",
-          "files": [
-            "apps/desktop/src-tauri/src/copilot_provider.rs"
-          ],
-          "effort": "M",
-          "priority": "critical",
-          "blockedBy": [
-            "T03"
-          ],
-          "status": "completed"
-        }
-      ]
-    },
-    {
-      "id": "P2",
-      "name": "Phase 2: ツール移行",
-      "description": "自作ツールを claw-tools に置換し、Relay 固有ツールを Tool trait で登録する。",
-      "tasks": [
-        {
-          "id": "T05",
-          "title": "claw-tools ビルトインツールの有効化",
-          "description": "claw-tools の ToolRegistry を初期化し、6 ビルトインツール (bash, file_read, file_write, file_edit, glob, grep) を登録。Tauri コマンドから呼び出せることを確認。",
-          "files": [
-            "apps/desktop/src-tauri/src/lib.rs",
-            "apps/desktop/src-tauri/src/state.rs",
-            "apps/desktop/src-tauri/src/execution.rs",
-            "apps/desktop/src-tauri/src/models.rs"
-          ],
-          "subtasks": [
-            "ToolRegistry の初期化コード追加",
-            "6 ビルトインツールの登録確認",
-            "Tauri state に ToolRegistry を格納",
-            "簡単な呼び出しテスト (file_read でファイル読取)"
-          ],
-          "effort": "M",
-          "priority": "critical",
-          "blockedBy": [
-            "T02"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T06",
-          "title": "Relay 固有ツールの Tool trait 実装",
-          "description": "workbook.inspect, sheet.preview, sheet.profile_columns, session.diff_from_base, table.rename_columns, table.cast_columns, table.filter_rows, table.derive_column, table.group_aggregate, workbook.save_copy, document.read_text を claw-tools の Tool trait で実装。既存の workbook/ モジュールの関数を内部で呼び出す薄いラッパー。",
-          "files": [
-            "apps/desktop/src-tauri/src/relay_tools.rs",
-            "apps/desktop/src-tauri/src/state.rs",
-            "apps/desktop/src-tauri/src/storage.rs",
-            "apps/desktop/src-tauri/src/lib.rs"
-          ],
-          "subtasks": [
-            "relay_tools.rs 新規作成",
-            "WorkbookInspectTool (workbook.inspect) 実装",
-            "SheetPreviewTool (sheet.preview) 実装",
-            "SheetProfileColumnsTool (sheet.profile_columns) 実装",
-            "SessionDiffTool (session.diff_from_base) 実装",
-            "TableRenameColumnsTool 実装",
-            "TableCastColumnsTool 実装",
-            "TableFilterRowsTool 実装",
-            "TableDeriveColumnTool 実装",
-            "TableGroupAggregateTool 実装",
-            "WorkbookSaveCopyTool 実装",
-            "DocumentReadTextTool 実装",
-            "全ツールを ToolRegistry に登録"
-          ],
-          "effort": "XL",
-          "priority": "critical",
-          "blockedBy": [
-            "T05"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T07",
-          "title": "旧ツール関連コードの削除",
-          "description": "tool_registry.rs と file_ops.rs を削除。関連する IPC コマンド (list_tools, set_tool_enabled 等) を新しい ToolRegistry 経由に書き換え。",
-          "files": [
-            "apps/desktop/src-tauri/src/tool_catalog.rs",
-            "apps/desktop/src-tauri/src/file_support.rs",
-            "apps/desktop/src-tauri/src/read_action_executor.rs",
-            "apps/desktop/src-tauri/src/lib.rs"
-          ],
-          "effort": "M",
-          "priority": "high",
-          "blockedBy": [
-            "T06"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T08",
-          "title": "ツール移行の E2E テスト",
-          "description": "claw-tools 経由で全ツール (ビルトイン 6 + Relay 固有 11) が正常に動作することを確認。CSV ファイルの inspect → filter → save_copy の一連フローをテスト。",
-          "files": [
-            "apps/desktop/src-tauri/src/state.rs"
-          ],
-          "effort": "M",
-          "priority": "high",
-          "blockedBy": [
-            "T07"
-          ],
-          "status": "completed"
-        }
-      ]
-    },
-    {
-      "id": "P3",
-      "name": "Phase 3: エージェントループ移行",
-      "description": "TypeScript のエージェントループを Rust (claw-core) に移行し、フロントエンドは Tauri イベントの受信のみに。",
-      "tasks": [
-        {
-          "id": "T09",
-          "title": "tauri_bridge.rs の実装",
-          "description": "claw-core のエージェントループと Tauri フロントエンド間の橋渡しモジュール。start_agent, respond_approval, cancel_agent, get_session_history の 4 コマンドを実装。ツール実行時に Tauri イベント (agent:tool_start, agent:tool_result, agent:approval_needed, agent:turn_complete, agent:error) を emit。",
-          "files": [
-            "apps/desktop/src-tauri/src/tauri_bridge.rs"
-          ],
-          "subtasks": [
-            "start_agent コマンド: claw-core query() をバックグラウンドで起動",
-            "イベント emit: tool_start, tool_result",
-            "承認ゲート: write ツール実行前に approval_needed イベントを emit し、応答を待つ",
-            "respond_approval コマンド: 承認/拒否を受け取りループを再開",
-            "cancel_agent コマンド: ループのキャンセル",
-            "get_session_history コマンド: claw-core のメッセージ履歴を返す",
-            "エラーハンドリング: agent:error イベント emit"
-          ],
-          "effort": "XL",
-          "priority": "critical",
-          "blockedBy": [
-            "T04",
-            "T06"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T10",
-          "title": "フロントエンド agent-ui.ts の実装",
-          "description": "Tauri イベントを listen し、Svelte ストアを更新するモジュール。旧 agent-loop.ts, agent-loop-core.ts, tool-runtime.ts を置換。start_agent IPC を呼び出し、以降はイベント駆動で UI を更新。",
-          "files": [
-            "apps/desktop/src/lib/agent-ui.ts"
-          ],
-          "subtasks": [
-            "Tauri イベント listener の登録 (agent:*)",
-            "feedStore: FeedEntry[] の管理 (tool_start/result で更新)",
-            "approvalStore: 承認待ち状態の管理",
-            "sessionStore: セッション履歴",
-            "start_agent() → IPC 呼び出し",
-            "respondApproval() → IPC 呼び出し",
-            "cancelAgent() → IPC 呼び出し"
-          ],
-          "effort": "L",
-          "priority": "critical",
-          "blockedBy": [
-            "T09"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T11",
-          "title": "旧エージェントループの削除",
-          "description": "agent-loop.ts, agent-loop-core.ts, agent-loop-prompts.ts, tool-runtime.ts, copilot-browser.ts を削除。ipc.ts から不要なコマンドを削除。",
-          "files": [
-            "apps/desktop/src/lib/agent-loop.ts",
-            "apps/desktop/src/lib/agent-loop-core.ts",
-            "apps/desktop/src/lib/agent-loop-prompts.ts",
-            "apps/desktop/src/lib/tool-runtime.ts",
-            "apps/desktop/src/lib/copilot-browser.ts",
-            "apps/desktop/src/lib/ipc.ts"
-          ],
-          "effort": "M",
-          "priority": "high",
-          "blockedBy": [
-            "T10"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T12",
-          "title": "Svelte コンポーネントの接続更新",
-          "description": "UnifiedFeed, ApprovalCard, CompletionCard, TaskInput 等を新しい agent-ui.ts のストアに接続。旧ストア (delegation.ts) からの移行。",
-          "files": [
-            "apps/desktop/src/lib/components/UnifiedFeed.svelte",
-            "apps/desktop/src/lib/components/ApprovalCard.svelte",
-            "apps/desktop/src/lib/components/CompletionCard.svelte",
-            "apps/desktop/src/lib/components/TaskInput.svelte",
-            "apps/desktop/src/routes/+page.svelte"
-          ],
-          "effort": "L",
-          "priority": "high",
-          "blockedBy": [
-            "T10"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T13",
-          "title": "エージェントループ移行の E2E テスト",
-          "description": "フロントエンドからタスクを入力し、Rust 側ループ → Copilot Chat → ツール実行 → 承認 → 完了の一連フローが動作することを確認。",
-          "files": [],
-          "effort": "L",
-          "priority": "critical",
-          "blockedBy": [
-            "T11",
-            "T12"
-          ],
-          "status": "completed"
-        }
-      ]
-    },
-    {
-      "id": "P4",
-      "name": "Phase 4: ストレージ簡素化",
-      "description": "storage.rs の大部分を claw-core のセッション管理に移行し、Relay 固有の状態のみ残す。",
-      "tasks": [
-        {
-          "id": "T14",
-          "title": "claw-core セッション管理への移行",
-          "description": "storage.rs のセッション/ターン/メッセージ管理を claw-core に委譲。storage.rs にはワークブック状態 (WorkbookState, DiffSummary)、承認記録 (ApprovalDecision)、アーティファクト管理のみ残す。",
-          "files": [
-            "apps/desktop/src-tauri/src/storage.rs"
-          ],
-          "subtasks": [
-            "claw-core のセッション管理 API を把握",
-            "セッション CRUD を claw-core に委譲",
-            "ターン管理を claw-core に委譲",
-            "RelayPacket 生成ロジックを削除",
-            "ワークブック状態管理を workbook_state.rs に分離",
-            "承認記録を approval_store.rs に分離",
-            "旧 storage.rs の残りを削除"
-          ],
-          "effort": "XL",
-          "priority": "high",
-          "blockedBy": [
-            "T13"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T15",
-          "title": "パーミッション管理の claw-permissions 移行",
-          "description": "risk_evaluator.rs の承認ポリシーを claw-permissions の PermissionPolicy trait でラップ。write ツールは Interactive、read ツールは AutoApprove のルールを設定。",
-          "files": [
-            "apps/desktop/src-tauri/src/risk_evaluator.rs",
-            "apps/desktop/src-tauri/src/tauri_bridge.rs"
-          ],
-          "effort": "M",
-          "priority": "high",
-          "blockedBy": [
-            "T09"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T16",
-          "title": "relay.rs の削除",
-          "description": "RelayPacket 生成は claw-core のメッセージモデルに置換済み。relay.rs を完全削除し、参照箇所を修正。",
-          "files": [
-            "apps/desktop/src-tauri/src/relay.rs",
-            "apps/desktop/src-tauri/src/lib.rs"
-          ],
-          "effort": "S",
-          "priority": "medium",
-          "blockedBy": [
-            "T14"
-          ],
-          "status": "completed"
-        }
-      ]
-    },
-    {
-      "id": "P5",
-      "name": "Phase 5: マニュアルモード廃止",
-      "description": "全ユーザーが Edge CDP 環境を持つことが確認されたため、手動コピペ方式のガイドワークフローを完全廃止し、委任モード (Edge CDP + 自律実行) のみに一本化する。",
-      "tasks": [
-        {
-          "id": "T31",
-          "title": "マニュアルモード UI セクション削除 (+page.svelte)",
-          "description": "+page.svelte の {:else} ブロック (マニュアルモード UI, ~857 行) を削除。guidedStage 型・変数宣言、stepBanner 定数、handleSetupStage / handleCopilotStage / handleReviewSaveStage 関数 (マニュアル専用のもの)、buildSetupSignature / stepState / currentStepNumber ヘルパー、$: リアクティブ宣言 (currentSetupSignature / setupStepComplete / copilotStepAvailable / reviewStepAvailable)、step1Expanded / preparedSetupSignature 等の変数を削除。",
-          "files": [
-            "apps/desktop/src/routes/+page.svelte"
-          ],
-          "subtasks": [
-            "{:else} ブロック全体 (lines ~4879-5735) 削除",
-            "type GuidedStage と let guidedStage 変数削除",
-            "const stepBanner 定数削除",
-            "handleSetupStage / handleCopilotStage / handleReviewSaveStage 関数削除",
-            "buildSetupSignature / stepState / currentStepNumber 関数削除",
-            "$: currentSetupSignature / setupStepComplete / copilotStepAvailable / reviewStepAvailable 削除",
-            "let step1Expanded / preparedSetupSignature / workflowStartedAt / completedAt 削除",
-            "applyRecoverableDraft() 内の guidedStage / step1Expanded 設定行削除",
-            "resetAll() / handleDelegationSubmit() 内の guidedStage 参照削除"
-          ],
-          "effort": "L",
-          "priority": "critical",
-          "blockedBy": [],
-          "status": "completed"
-        },
-        {
-          "id": "T32",
-          "title": "uiMode 変数・セグメントコントロール UI 削除",
-          "description": "uiMode 変数と setUiMode 関数を削除し、モード切替セグメントコントロール UI を削除する。if (uiMode === 'delegation') ガードを全て unwrap (無条件化)、if (uiMode !== 'delegation') early return を削除。UiMode / loadUiMode / saveUiMode を import から除去。pnpm typecheck で型エラーがないことを確認。",
-          "files": [
-            "apps/desktop/src/routes/+page.svelte"
-          ],
-          "subtasks": [
-            "let uiMode: UiMode = 'delegation' 変数削除",
-            "setUiMode 関数削除",
-            "セグメントコントロール UI (モード切替ボタン行) 削除",
-            "if (uiMode === 'delegation') ガードを全てアンラップ (29箇所)",
-            "if (uiMode !== 'delegation') early return 削除 (2箇所)",
-            "UiMode / loadUiMode / saveUiMode を from '$lib' import から削除",
-            "goToSetup / goToCopilot 関数削除",
-            "$: persistDelegationDraft() の条件分岐削除 (無条件化)",
-            "onMount 内の if (uiMode === 'delegation') 条件削除"
-          ],
-          "effort": "M",
-          "priority": "critical",
-          "blockedBy": [
-            "T31"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T33",
-          "title": "continuity.ts UiMode 関連削除",
-          "description": "continuity.ts から UiMode 型の 'manual' 値、ContinuityState.uiMode フィールド、normalizeUiMode / loadUiMode / saveUiMode 関数を削除。LocalStorage の 'ra-ui-mode' キーは次回起動時に無視されるため追加対応不要。",
-          "files": [
-            "apps/desktop/src/lib/continuity.ts"
-          ],
-          "subtasks": [
-            "UiMode 型を 'delegation' のみに変更、または型ごと削除",
-            "ContinuityState.uiMode フィールド削除",
-            "createDefaultState() から uiMode: 'delegation' 削除",
-            "readState() から normalizeUiMode 呼び出し削除",
-            "normalizeUiMode 関数削除",
-            "loadUiMode export 関数削除",
-            "saveUiMode export 関数削除"
-          ],
-          "effort": "S",
-          "priority": "high",
-          "blockedBy": [
-            "T32"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T34",
-          "title": "マニュアルモード廃止の確認テスト & README 更新",
-          "description": "pnpm typecheck / pnpm check が全て通ることを確認。委任モードでのタスク実行 E2E テスト (TaskInput 入力 → UnifiedFeed 表示 → ApprovalCard 3択 → 完了)。セグメントコントロール消去の目視確認。README.md のマニュアルモード記述を削除・更新。",
-          "files": [
-            "README.md"
-          ],
-          "subtasks": [
-            "pnpm typecheck 通過確認",
-            "pnpm check 通過確認",
-            "委任モード E2E: タスク入力 → エージェント実行 → ApprovalCard → 完了",
-            "セグメントコントロールが UI 上に存在しないことを目視確認",
-            "README.md のマニュアルモード実行例・説明を削除または委任モードに統合"
-          ],
-          "effort": "M",
-          "priority": "critical",
-          "blockedBy": [
-            "T33"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T35",
-          "title": "孤立コンポーネントの削除",
-          "description": "マニュアルモード廃止後に参照されなくなったコンポーネントファイルの削除と、+page.svelte の未使用 import 行の除去。",
-          "files": [
-            "apps/desktop/src/lib/components/GoalInput.svelte",
-            "apps/desktop/src/lib/components/AgentActivityFeed.svelte",
-            "apps/desktop/src/lib/components/CompletionTimeline.svelte",
-            "apps/desktop/src/lib/components/Sidebar.svelte",
-            "apps/desktop/src/routes/+page.svelte"
-          ],
-          "subtasks": [
-            "GoalInput.svelte 削除",
-            "AgentActivityFeed.svelte 削除",
-            "CompletionTimeline.svelte 削除",
-            "Sidebar.svelte 削除",
-            "+page.svelte から未使用 import 6 件削除 (GoalInput, AgentActivityFeed, ArtifactPreview, ApprovalGate, CompletionTimeline, Sidebar)",
-            "pnpm typecheck 0 エラーで完了確認"
-          ],
-          "effort": "S",
-          "priority": "medium",
-          "blockedBy": [
-            "T34"
-          ],
-          "status": "completed"
-        }
-      ]
-    },
-    {
-      "id": "P6",
-      "name": "Phase 6: クリーンアップ",
-      "description": "未使用コード・依存の削除、IPC 型定義の簡素化、ドキュメント更新。",
-      "tasks": [
-        {
-          "id": "T17",
-          "title": "不要な Rust コードの削除",
-          "description": "models.rs の未使用型定義、execution.rs の旧実行ロジック、session.rs の旧コマンド等を削除。cargo check でコンパイルが通ることを確認。",
+          "id": "B02",
+          "title": "Rust IPC contracts are canonical",
+          "description": "Rust source models and command signatures under apps/desktop/src-tauri define the contract; generated frontend bindings live in ipc.generated.ts and ipc.ts remains thin.",
           "files": [
             "apps/desktop/src-tauri/src/models.rs",
-            "apps/desktop/src-tauri/src/execution.rs",
-            "apps/desktop/src-tauri/src/session.rs",
-            "apps/desktop/src-tauri/src/lib.rs"
+            "apps/desktop/src-tauri/src/lib.rs",
+            "apps/desktop/src/lib/ipc.generated.ts",
+            "apps/desktop/src/lib/ipc.ts"
           ],
-          "effort": "M",
-          "priority": "medium",
-          "blockedBy": [
-            "T14",
-            "T16"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T18",
-          "title": "IPC 型定義 (contracts/) の簡素化",
-          "description": "packages/contracts/ の TypeScript 型定義を新しい IPC に合わせて簡素化。不要な型 (RelayPacket, CopilotTurnResponse 等) を削除。新しいイベント型 (AgentEvent) を追加。",
-          "files": [
-            "packages/contracts/src/index.ts",
-            "packages/contracts/src/ipc.ts",
-            "packages/contracts/src/core.ts",
-            "packages/contracts/src/relay.ts"
-          ],
-          "effort": "M",
-          "priority": "medium",
-          "blockedBy": [
-            "T11"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T19",
-          "title": "旧 Cargo 依存の削除",
-          "description": "claw-code で代替された依存 (csv パース用の一部、regex の直接利用等) を Cargo.toml から削除。claw-tools が内部で持っているものは不要。",
-          "files": [
-            "apps/desktop/src-tauri/Cargo.toml"
-          ],
-          "effort": "S",
-          "priority": "low",
-          "blockedBy": [
-            "T17"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T20",
-          "title": "最終 E2E テスト & コード量確認",
-          "description": "全機能の E2E テスト実行。TS agent-loop/orchestration が 0 であること、in-repo workbook runtime / relay-specific tool runtime が削除されていること、残る custom Rust が M365 Copilot interop + thin desktop glue に限定されていることを確認する。Rust/TS の byte 数は telemetry として記録する。",
-          "files": [],
-          "effort": "L",
-          "priority": "critical",
-          "blockedBy": [
-            "T17",
-            "T18",
-            "T19"
-          ],
-          "status": "pending"
-        }
-      ]
-    },
-    {
-      "id": "P7",
-      "name": "Phase 7: UI/UX — openwork インスパイア",
-      "description": "different-ai/openwork のデザイン言語を全面採用。pill radius / cool neutral / ping ドット / Segmented Control / 3ペイン / Step Cluster / インライン承認 / Inbox パネル。P3完了後に並行着手可能。",
-      "tasks": [
-        {
-          "id": "T21",
-          "title": "デザイントークン刷新 (cool neutral + pill radius + IBM Plex Sans)",
-          "description": "旧 Shizuka warm stone パレットを cool neutral (#f6f9fc ベース) に全面置換。角丸を pill ファーストに大幅拡大 (8/16/24/32/pill)。フォントスタックを IBM Plex Sans + Noto Sans JP に変更。shadow を3段階に薄化。uppercase セクションラベル用 .label-section クラス追加。旧 --kz-* トークン完全削除。",
-          "files": [
-            "apps/desktop/src/routes/+layout.svelte"
-          ],
-          "subtasks": [
-            "Light Mode カラートークン (#f6f9fc / #f9fafb / #f3f4f6 ボーダー)",
-            "Dark Mode カラートークン (slate-900/800/700 ベース)",
-            "角丸: --r-sm(8) --r-md(16) --r-lg(24) --r-xl(32) --r-full(pill)",
-            "IBM Plex Sans フォント (Google Fonts wght@400;500;600)",
-            ".label-section: 11px uppercase letter-spacing:0.08em",
-            "shadow 3段階: --shadow-xs / --shadow-sm / --shadow-md",
-            "ボタン全種 border-radius: var(--r-full) に変更",
-            "旧 --kz-* / warm stone トークン完全削除"
-          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-12 Core / Client / IPC boundary refactor)",
           "effort": "M",
           "priority": "critical",
           "blockedBy": [],
           "status": "completed"
         },
         {
-          "id": "T22",
-          "title": "3ペインレイアウト構築 + ContextPanel.svelte 新規作成",
-          "description": "AppSidebar(左 180px) + MainContent(中央 flex-grow) + ContextPanel(右 260px) の CSS Grid 3列レイアウト。ContextPanel は FILES/MCP SERVERS/APPROVAL POLICY/PROJECT の4セクション。⌘\\ 左トグル、⌘/ 右トグル。幅<1200px 時は右パネル自動非表示。",
+          "id": "B03",
+          "title": "Agent loop, tools, and permissions run in Rust",
+          "description": "The real desktop loop, tool executor, permission escalation, MCP routing, and session registry are implemented in the Rust backend rather than a frontend runtime.",
           "files": [
-            "apps/desktop/src/routes/+page.svelte",
-            "apps/desktop/src/lib/components/ContextPanel.svelte"
+            "apps/desktop/src-tauri/src/agent_loop/",
+            "apps/desktop/src-tauri/src/tauri_bridge.rs",
+            "apps/desktop/src-tauri/src/registry.rs",
+            "apps/desktop/src-tauri/crates/runtime/",
+            "apps/desktop/src-tauri/crates/tools/"
           ],
-          "subtasks": [
-            "CSS Grid 3列レイアウト (+page.svelte)",
-            "ContextPanel.svelte 新規作成",
-            "Segmented Control で FILES/MCP/POLICY/PROJECT タブ切替",
-            "⌘\\ 左ペイン toggle / ⌘/ 右ペイン toggle (キーバインド)",
-            "幅<1200px レスポンシブ (右パネル自動非表示)",
-            "Titlebar 38px + StatusStrip 28px の上下固定維持"
-          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-12 backend/client split, 2026-04-14 hardening entry)",
           "effort": "L",
           "priority": "critical",
-          "blockedBy": [
-            "T21"
-          ],
+          "blockedBy": [],
           "status": "completed"
-        },
+        }
+      ]
+    },
+    {
+      "id": "hardening",
+      "name": "Repo Hardening Toward Claw-Code Operational Rigor",
+      "description": "Repository truth cleanup, headless doctor, deterministic parity/session harness, and CI alignment.",
+      "tasks": [
         {
-          "id": "T23",
-          "title": "Segmented Control コンポーネント (white pill スタイル)",
-          "description": "汎用 SegmentedControl.svelte を新規作成。トラック: gray-100 BG + border + --r-full。アクティブピル: white + --shadow-xs + --r-full。CommandPalette / ArtifactPreview / ContextPanel / BatchDashboard に適用。",
+          "id": "H01",
+          "title": "Clean up repository source of truth",
+          "description": "Align workspace license metadata, remove dead workspace entries, make runtime::CompactionConfig::default() the canonical compaction source, set pnpm check as the canonical frontend gate, and update live docs to the current desktop product.",
           "files": [
-            "apps/desktop/src/lib/components/CommandPalette.svelte",
-            "apps/desktop/src/lib/components/ArtifactPreview.svelte",
-            "apps/desktop/src/lib/components/ContextPanel.svelte",
-            "apps/desktop/src/lib/components/BatchDashboard.svelte"
-          ],
-          "subtasks": [
-            "SegmentedControl.svelte 新規作成 (props: items[], value)",
-            "トラック CSS: border + --c-border BG + --r-full + padding 3px",
-            "アクティブピル CSS: white + --shadow-xs + --r-full",
-            "CommandPalette のカテゴリタブに適用 (ナビ/自動化/設定)",
-            "ArtifactPreview のタブに適用 (プレビュー/差分/JSON)",
-            "ContextPanel のセクション切替に適用"
-          ],
-          "effort": "M",
-          "priority": "high",
-          "blockedBy": [
-            "T21"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T24",
-          "title": "AppSidebar セッション行スタイル刷新 + ping ドット",
-          "description": "セッション行を openwork スタイルに。hover: gray-100 / active: gray-200 + font-weight 500。border/outline なし。日付グループラベルを uppercase 11px に。三点メニューをホバーで出現。StatusStrip と MCP ドットに ping アニメーション (CSS @keyframes) を追加。prefers-reduced-motion 対応。",
-          "files": [
-            "apps/desktop/src/lib/components/AppSidebar.svelte",
-            "apps/desktop/src/lib/components/StatusStrip.svelte"
-          ],
-          "subtasks": [
-            "セッション行: --r-md(16px) / hover:gray-100 / active:gray-200+500w",
-            "日付グループラベル: uppercase 11px letter-spacing:0.08em",
-            "三点メニュー: ホバーで出現 (削除アクション)",
-            "「+ 新規タスク」ボタンを pill 形状に",
-            ".dot-ping CSS @keyframes (2重リング / 2s / opacity ping)",
-            "接続状態: connected=緑ping / connecting=黄ping(1s) / disconnected=灰",
-            "StatusStrip と ContextPanel の MCP ドットに適用",
-            "prefers-reduced-motion でアニメーション停止"
-          ],
-          "effort": "M",
-          "priority": "high",
-          "blockedBy": [
-            "T21"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T25",
-          "title": "UnifiedFeed → Step Cluster フィード全面刷新",
-          "description": "1行1エントリから Step Cluster 方式に変更。エージェントループの1ラウンドを1クラスターにグループ化。クラスターヘッダー(ラベル/ステップ数/経過時間/展開アイコン)、ステップ行(✓⟳○✗ + ツール名 + 時間)、詳細アコーディオン。実行中は accent 左ボーダー 2px。コンパクション区切りライン表示。",
-          "files": [
-            "apps/desktop/src/lib/components/UnifiedFeed.svelte"
-          ],
-          "subtasks": [
-            "StepCluster / StepEntry 型定義",
-            "クラスターヘッダー: label + ステップ数バッジ + 経過時間 + ▶/▼",
-            "ステップ行: ステータスアイコン (✓⟳○✗) + ツール名 mono + 経過時間",
-            "実行中クラスター: --c-accent 左ボーダー 2px + accent-subtle BG",
-            "詳細アコーディオン: JSON detail をクリックで展開",
-            "EXECUTION LOG .label-section ヘッダー",
-            "コンパクション区切りライン: ─── コンテキストを圧縮しました ───",
-            "agent-ui.ts イベント → StepCluster 変換アダプタ"
-          ],
-          "effort": "L",
-          "priority": "critical",
-          "blockedBy": [
-            "T10",
-            "T21"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T26",
-          "title": "TaskInput ボトム固定 Composer 実装",
-          "description": "常時ボトム固定の Composer に統一。ツールバー (@ファイル / /コマンド / Copilot▾)、auto-grow textarea (56-200px)、ファイルチップ、送信/停止切替。border-radius --r-xl(32px)。空状態の中央エリアにサジェストチップと最近ファイルを表示。",
-          "files": [
-            "apps/desktop/src/lib/components/TaskInput.svelte"
-          ],
-          "subtasks": [
-            "position: sticky bottom / --r-xl(32px) シェル",
-            "ツールバー: @ファイルボタン / /コマンドボタン / Copilot▾ボタン",
-            "auto-grow textarea (min:56px max:200px)",
-            "ファイルチップ: コンポーザー上部 (× で削除)",
-            "送信 ↵ → 停止 ■ 切替 (実行中フラグで制御)",
-            "Enter 送信 / Shift+Enter 改行",
-            "空状態: 中央にサジェストチップ4種 + 最近ファイル最大3件"
-          ],
-          "effort": "M",
-          "priority": "high",
-          "blockedBy": [
-            "T21"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T27",
-          "title": "ApprovalCard インライン化 + 3択ボタン",
-          "description": "承認UIをフィード内インラインカードに変更。「拒否 / 今回のみ許可 / 常に許可」3択。「常に許可」→ ContextPanel の承認ポリシー自動更新。accent 左ボーダー 3px。スコープ警告はカード内インラインアラート。",
-          "files": [
-            "apps/desktop/src/lib/components/ApprovalCard.svelte"
-          ],
-          "subtasks": [
-            "フィード内インライン表示 (モーダル・オーバーレイ廃止)",
-            "書込承認カード: 3択ボタン (拒否/今回/常に)",
-            "プラン確認カード: EXECUTION PLAN .label-section + ステップリスト",
-            "「常に許可」→ respond_approval(always:true) IPC → ContextPanel ポリシー更新",
-            "accent 左ボーダー 3px / --r-md カード",
-            "スコープ警告: .alert-warning インラインアラート",
-            "ArtifactPreview 差分表示を書込カード内に埋め込み"
-          ],
-          "effort": "M",
-          "priority": "critical",
-          "blockedBy": [
-            "T22",
-            "T25"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T28",
-          "title": "InboxPanel 実装 (右パネル内ファイル共有エリア)",
-          "description": "ContextPanel 内の FILES セクションを Inbox として実装。ドラッグ&ドロップ + ファイルピッカーでファイル追加。追加ファイルは session_store に記録し、エージェントのシステムプロンプトに自動追記。ドロップゾーンはドラッグオーバーで accent スタイルに変化。",
-          "files": [
-            "apps/desktop/src/lib/components/ContextPanel.svelte",
-            "apps/desktop/src-tauri/src/session_store.rs"
-          ],
-          "subtasks": [
-            "InboxPanel サブコンポーネント作成",
-            "ドロップゾーン: 点線ボーダー --r-lg / ドラッグオーバー accent",
-            "ファイル行: アイコン + 名前 + サイズ/時刻 + × ボタン (ホバーで出現)",
-            "Tauri IPC: add_inbox_file / remove_inbox_file",
-            "session_store.rs に inbox_files: Vec<InboxFile> を追加",
-            "start_agent 時にシステムプロンプトへ自動追記",
-            "セッションをまたいで Inbox を保持 (プロジェクト単位)"
-          ],
-          "effort": "L",
-          "priority": "high",
-          "blockedBy": [
-            "T22"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T29",
-          "title": "残コンポーネントのデザイントークン適用",
-          "description": "CompletionCard, SheetDiffCard, FileOpPreview, PipelineBuilder, BatchDashboard (Segmented Control 適用), TemplateBrowser, Toast に新デザイントークンを適用。機能変更なし、スタイルのみ。ボタンは全て pill 形状に統一。",
-          "files": [
-            "apps/desktop/src/lib/components/CompletionCard.svelte",
-            "apps/desktop/src/lib/components/SheetDiffCard.svelte",
-            "apps/desktop/src/lib/components/FileOpPreview.svelte",
-            "apps/desktop/src/lib/components/PipelineBuilder.svelte",
-            "apps/desktop/src/lib/components/BatchDashboard.svelte",
-            "apps/desktop/src/lib/components/TemplateBrowser.svelte",
-            "apps/desktop/src/lib/components/Toast.svelte"
-          ],
-          "effort": "M",
-          "priority": "medium",
-          "blockedBy": [
-            "T21"
-          ],
-          "status": "completed"
-        },
-        {
-          "id": "T30",
-          "title": "UI 統合テスト & ビジュアルレビュー",
-          "description": "全コンポーネントの目視確認。Light/Dark モード、3ペイン各トグル (⌘\\ / ⌘/)、ping アニメーション、Segmented Control、Inbox ドロップ、ApprovalCard 3択、Step Cluster 展開/折りたたみ。prefers-reduced-motion でアニメーション停止を確認。注 (2026-04): 現行アプリは Solid `apps/desktop/`。OpenWork インスパイアのシェル刷新・Playwright 回帰 (`tests/app.e2e.spec.ts`, `tests/e2e-comprehensive.spec.ts`) と実装ログ記載で本タスクの受け入れを満たす。レガシー Svelte パスは参照のみ。",
-          "files": [
-            "apps/desktop/tests/app.e2e.spec.ts",
-            "apps/desktop/tests/e2e-comprehensive.spec.ts",
+            "Cargo.toml",
+            "pnpm-workspace.yaml",
+            "package.json",
+            "README.md",
+            "PLANS.md",
+            "AGENTS.md",
+            "docs/CLAW_CODE_ALIGNMENT.md",
             "docs/IMPLEMENTATION.md"
           ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-14 Repo hardening toward claw-code operational rigor)",
           "effort": "M",
           "priority": "critical",
+          "blockedBy": [],
+          "status": "completed"
+        },
+        {
+          "id": "H02",
+          "title": "Add headless relay-agent-doctor",
+          "description": "Ship a dedicated doctor binary, shared diagnostics service, root pnpm doctor script, stable JSON report types, and integration coverage for ready/login-required/auth-failure/missing-workspace/missing-runtime-asset cases.",
+          "files": [
+            "apps/desktop/src-tauri/src/doctor.rs",
+            "apps/desktop/src-tauri/src/bin/relay-agent-doctor.rs",
+            "apps/desktop/src-tauri/src/models.rs",
+            "apps/desktop/src-tauri/src/commands/copilot.rs",
+            "apps/desktop/src-tauri/src/commands/diagnostics.rs",
+            "apps/desktop/src-tauri/tests/doctor_cli.rs",
+            "package.json"
+          ],
+          "artifact": "apps/desktop/src-tauri/tests/doctor_cli.rs",
+          "effort": "L",
+          "priority": "critical",
           "blockedBy": [
-            "T21",
-            "T22",
-            "T23",
-            "T24",
-            "T25",
-            "T26",
-            "T27",
-            "T28",
-            "T29"
+            "H01"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "H03",
+          "title": "Expand deterministic parity with a desktop full-session harness",
+          "description": "Extract shared desktop smoke support, reuse it from compat-harness, and cover claw-style streaming text, plugin tool roundtrip, auto compaction, and token cost reporting deterministically.",
+          "files": [
+            "apps/desktop/src-tauri/src/test_support.rs",
+            "apps/desktop/src-tauri/src/agent_loop_smoke.rs",
+            "apps/desktop/src-tauri/src/tauri_bridge.rs",
+            "apps/desktop/src-tauri/src/agent_loop/orchestrator.rs",
+            "apps/desktop/src-tauri/crates/compat-harness/Cargo.toml",
+            "apps/desktop/src-tauri/crates/compat-harness/src/lib.rs",
+            "docs/CLAW_CODE_ALIGNMENT.md"
+          ],
+          "artifact": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness",
+          "effort": "L",
+          "priority": "critical",
+          "blockedBy": [
+            "H01"
+          ],
+          "status": "completed"
+        },
+        {
+          "id": "H04",
+          "title": "Align CI with documented acceptance criteria",
+          "description": "Replace Linux-only CI with Ubuntu and Windows coverage, run pnpm check plus launched-app smokes, add docs truth guards, and keep release packaging separate from the main acceptance workflow.",
+          "files": [
+            ".github/workflows/ci.yml",
+            "package.json",
+            "apps/desktop/package.json",
+            "docs/IMPLEMENTATION.md"
+          ],
+          "artifact": "docs/IMPLEMENTATION.md (2026-04-14 Repo hardening toward claw-code operational rigor)",
+          "effort": "M",
+          "priority": "high",
+          "blockedBy": [
+            "H01",
+            "H02",
+            "H03"
           ],
           "status": "completed"
         }
       ]
     }
-  ],
-  "taskDependencyGraph": {
-    "T01": [],
-    "T02": [
-      "T01"
-    ],
-    "T03": [
-      "T02"
-    ],
-    "T04": [
-      "T03"
-    ],
-    "T05": [
-      "T02"
-    ],
-    "T06": [
-      "T05"
-    ],
-    "T07": [
-      "T06"
-    ],
-    "T08": [
-      "T07"
-    ],
-    "T09": [
-      "T04",
-      "T06"
-    ],
-    "T10": [
-      "T09"
-    ],
-    "T11": [
-      "T10"
-    ],
-    "T12": [
-      "T10"
-    ],
-    "T13": [
-      "T11",
-      "T12"
-    ],
-    "T14": [
-      "T13"
-    ],
-    "T15": [
-      "T09"
-    ],
-    "T16": [
-      "T14"
-    ],
-    "T17": [
-      "T14",
-      "T16"
-    ],
-    "T18": [
-      "T11"
-    ],
-    "T19": [
-      "T17"
-    ],
-    "T20": [
-      "T17",
-      "T18",
-      "T19"
-    ],
-    "T21": [],
-    "T22": [
-      "T21"
-    ],
-    "T23": [
-      "T21"
-    ],
-    "T24": [
-      "T21"
-    ],
-    "T25": [
-      "T10",
-      "T21"
-    ],
-    "T26": [
-      "T21"
-    ],
-    "T27": [
-      "T22",
-      "T25"
-    ],
-    "T28": [
-      "T22"
-    ],
-    "T29": [
-      "T21"
-    ],
-    "T30": [
-      "T21",
-      "T22",
-      "T23",
-      "T24",
-      "T25",
-      "T26",
-      "T27",
-      "T28",
-      "T29"
-    ],
-    "T31": [],
-    "T32": [
-      "T31"
-    ],
-    "T33": [
-      "T32"
-    ],
-    "T34": [
-      "T33"
-    ],
-    "T35": [
-      "T34"
-    ]
-  },
-  "parallelizableGroups": [
-    {
-      "group": "P1-parallel",
-      "tasks": [
-        "T03",
-        "T05"
-      ],
-      "note": "T02 完了後に並行可能"
-    },
-    {
-      "group": "P3-parallel",
-      "tasks": [
-        "T11",
-        "T12"
-      ],
-      "note": "T10 完了後に並行可能"
-    },
-    {
-      "group": "P4-parallel",
-      "tasks": [
-        "T14",
-        "T15"
-      ],
-      "note": "ストレージ移行とパーミッション移行は並行可能"
-    },
-    {
-      "group": "P5-manual",
-      "tasks": [
-        "T31",
-        "T32",
-        "T33",
-        "T34"
-      ],
-      "note": "T13 完了済のため即着手可能。T31→T32→T33→T34 の順次実行"
-    },
-    {
-      "group": "P6-parallel",
-      "tasks": [
-        "T17",
-        "T18"
-      ],
-      "note": "Rust クリーンアップと TS 型定義簡素化は並行可能"
-    },
-    {
-      "group": "P7-wave1",
-      "tasks": [
-        "T21"
-      ],
-      "note": "UI の起点。これが全 UI タスクの前提"
-    },
-    {
-      "group": "P7-wave2",
-      "tasks": [
-        "T22",
-        "T23",
-        "T24",
-        "T26",
-        "T29"
-      ],
-      "note": "T21 完了後に全て並行可能"
-    },
-    {
-      "group": "P7-wave3",
-      "tasks": [
-        "T25",
-        "T27",
-        "T28"
-      ],
-      "note": "T22 + T10 完了後に並行可能 (T25 は T10 待ち)"
-    },
-    {
-      "group": "P7-wave4",
-      "tasks": [
-        "T30"
-      ],
-      "note": "全 UI タスク完了後"
-    }
-  ],
-  "criticalPath": [
-    "T01",
-    "T02",
-    "T03",
-    "T04",
-    "T09",
-    "T10",
-    "T11",
-    "T13",
-    "T14",
-    "T16",
-    "T17",
-    "T20"
-  ],
-  "manualModeRemovalPath": [
-    "T31",
-    "T32",
-    "T33",
-    "T34",
-    "T35"
-  ],
-  "uiCriticalPath": [
-    "T21",
-    "T22",
-    "T25",
-    "T27",
-    "T30"
-  ],
-  "estimatedTotalEffort": "7 phases, 35 tasks (P1-P4: バックエンド移行 16タスク / P5: マニュアルモード廃止 5タスク [完了] / P6: クリーンアップ 4タスク / P7: UI刷新 10タスク [T21-T27完了])"
+  ]
 }

@@ -16,7 +16,7 @@ pub fn probe_rust_analyzer(request: RustAnalyzerProbeRequest) -> RustAnalyzerPro
 pub async fn get_relay_diagnostics(
     services: State<'_, AppServices>,
 ) -> Result<RelayDiagnostics, String> {
-    Ok(crate::tauri_bridge::get_relay_diagnostics(services).await)
+    Ok(crate::doctor::get_relay_diagnostics_from_state(services).await)
 }
 
 #[tauri::command]

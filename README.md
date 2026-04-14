@@ -21,7 +21,7 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 
 | Layer | Technology |
 |-------|------------|
-| UI | SolidJS, Vite, TypeScript, Tailwind — quiet operational shell in [`apps/desktop/src/index.css`](apps/desktop/src/index.css), still grounded in [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md) but now toned toward **near-white / low-effect / software-first** surfaces. Light theme uses cool neutral `--ra-*` tokens, border-led cards, and sans-first chrome; dark theme remains the paired warm-charcoal scale. **Default theme is light** (`data-theme` + `localStorage` `relay-agent/theme`). Details: `docs/IMPLEMENTATION.md` (Milestone Log, **2026-04-12** conversation + settings refresh, plus earlier desktop UI milestones) |
+| UI | SolidJS, Vite, TypeScript, Tailwind — conversation-first desktop shell in [`apps/desktop/src/index.css`](apps/desktop/src/index.css), aligned with [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md). Light theme uses warm `--ra-*` tokens, cream surfaces, and border-led cards; dark theme is the paired warm-charcoal scale. **Default theme is light** (`data-theme` + `localStorage` `relay-agent/theme`). Details: `docs/IMPLEMENTATION.md` (Milestone Log, **2026-04-14** warm-token realignment) |
 | Shell | Tauri v2, `tauri-plugin-shell`, `tauri-plugin-dialog` |
 | Agent / tools | Rust (`apps/desktop/src-tauri/`, internal crates) |
 | AI surface | M365 Copilot in Edge via **Node** `copilot_server.js` + CDP; this is the production path. Direct Rust `cdp_*` commands remain diagnostics/manual helpers, and `agent_browser_daemon.rs` stays experimental/inactive. The desktop sends the Relay turn bundle **inline in the prompt body** for the paid-license path, compacting context before the effective **128000-token** ceiling when needed. The host parses tool calls from **` ```relay_tool `** JSON and, if none, from accepted fenced JSON; bounded unfenced tool-shaped object recovery is **retry/repair only**, not the normal protocol. Fallback parser candidates require **`"relay_tool_call": true`** per tool object by default; opt out only with `RELAY_FALLBACK_SENTINEL_POLICY=observe` for compatibility ([`agent_loop/orchestrator.rs`](apps/desktop/src-tauri/src/agent_loop/orchestrator.rs)) |
@@ -38,7 +38,7 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 - **Audit readability** — Tool rows prefer human labels and per-tool summaries (`Read file`, `Search file contents`, PDF actions, file writes) instead of raw internal tool ids.
 - **Extras** — PDF via LiteParse + bundled Node; Windows Office hybrid read (COM + PDF); MCP over stdio.
 
-Details, limits, and milestone notes: **[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)**. Roadmap and guardrails: **[PLANS.md](PLANS.md)**. Repo rules: **[AGENTS.md](AGENTS.md)**. Manual criteria for model grounding and tool protocol: **[docs/AGENT_EVALUATION_CRITERIA.md](docs/AGENT_EVALUATION_CRITERIA.md)**. Claw-code selective alignment (upstream pin, parity checklist, `compat-harness` fixture vs full CLI harness, **~47** cataloged tool names on Unix / **48** with Windows `PowerShell`, claw-shaped JSON aliases and plan-mode tool notices): **[docs/CLAW_CODE_ALIGNMENT.md](docs/CLAW_CODE_ALIGNMENT.md)**.
+Details, limits, and milestone notes: **[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)**. Roadmap and guardrails: **[PLANS.md](PLANS.md)**. Repo rules: **[AGENTS.md](AGENTS.md)**. Manual criteria for model grounding and tool protocol: **[docs/AGENT_EVALUATION_CRITERIA.md](docs/AGENT_EVALUATION_CRITERIA.md)**. Claw-code selective alignment (upstream pin, tool-shape notes, `compat-harness` parity-style tests, and deterministic full-session harness coverage): **[docs/CLAW_CODE_ALIGNMENT.md](docs/CLAW_CODE_ALIGNMENT.md)**.
 
 ## Architecture (high level)
 
@@ -86,28 +86,31 @@ Relay_Agent/
 
 ## Configuration
 
-**Rust defaults** (`apps/desktop/src-tauri/src/config.rs`): e.g. `max_turns` (16), concurrency (4), session TTL (30 min). Full table in source.
+**Rust defaults** (`apps/desktop/src-tauri/src/config.rs`): e.g. `max_turns` (16), concurrency (4), session TTL (30 min). Compaction defaults are canonical in `runtime::CompactionConfig::default()` (`preserve_recent_messages = 5`, `max_estimated_tokens = 10000`).
 
 **Claw-style paths** (instructions + settings): `.claw`, `CLAW.md`, optional additive `~/.relay-agent/SYSTEM_PROMPT.md` — see [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md) and runtime crate docs. The local prompt file appends custom guidance but does **not** replace Relay’s core system sections. When `.claw` sets permission mode to **read-only**, the **bash** tool rejects commands that look mutating (e.g. `rm`, `git commit`, shell redirects); use file tools where applicable.
 
-**Diagnostics:** `get_relay_diagnostics` still exists in IPC, and the Settings modal now exposes **Export diagnostics** for a text bundle.
+**Diagnostics:** `get_relay_diagnostics` still exists in IPC, the Settings modal exposes **Export diagnostics** for a text bundle, and the repo now ships a headless doctor entrypoint: `pnpm doctor -- --json`.
 
 **Environment (Copilot):** Default CDP base **9360**. Effective CDP port for the Node bridge and agent: **`browserSettings.cdpPort`** from each `start_agent` / `warmup_copilot_bridge` request (typically from `localStorage` `relay.settings.browser`) **overrides** `RELAY_EDGE_CDP_PORT`, which overrides the default. Changing the port while **more than one** agent session is running returns an error (finish other sessions or restart the app). Integration tests and external tools may still use `CDP_ENDPOINT` (see Playwright configs). Linux: Edge + `DISPLAY`; profile `~/RelayAgentEdgeProfile`. Dedicated Edge is started **without** a trailing Copilot URL; the Node bridge navigates over CDP (`Page.navigate` / tab reuse) so a cold **`Target.createTarget`** race does not open **two** `m365.cloud.microsoft/chat` tabs. The Node bridge now binds Copilot tabs **per Relay session** and requires **`relay_session_id` + `relay_request_id`** on `POST /v1/chat/completions`; retries reuse the same `request_id`, and `POST /v1/chat/abort` cancels by that request id only. Anonymous `GET /health` returns only a non-secret Relay fingerprint (`status`, `service`, `instanceId`) so Rust can confirm the spawned bridge without exposing the boot token over HTTP. Mutable bridge endpoints (`GET /status`, `POST /v1/chat/completions`, `POST /v1/chat/abort`) require **`X-Relay-Boot-Token`**; the token is shared out-of-band at spawn time and is **not** returned by `/health`. Direct `connect_cdp` / `cdp_*` attach only to the Relay-dedicated Edge profile and `disconnect_cdp` kills only the tracked browser PID. Optional: `RELAY_CDP_PROBE_TIMEOUT_MS` (slow Windows CDP), `RELAY_COPILOT_NO_WINDOW_FOCUS=1` (do not raise Edge via CDP), `RELAY_COPILOT_NUDGE_EDGE=1` (Win32 nudge, off by default), **`RELAY_FALLBACK_SENTINEL_POLICY=observe`** (compatibility opt-out; the default now rejects fallback parser candidates that omit `"relay_tool_call": true`). **Startup tuning:** Windows skips **`--remote-debugging-port=0`** unless **`RELAY_COPILOT_TRY_PORT_ZERO=1`**; **`RELAY_EXISTING_CDP_WAIT_MS`** (default 10s Win / 30s else) waits for CDP after a probe miss; **`RELAY_EDGE_PORT0_CDP_WAIT_MS`** (2–120s, default 12s) limits CDP wait when port=0 is used; **`RELAY_COPILOT_RECLAIM_NETSTAT=1`** enables slow Windows `netstat` fallback during HTTP port reclaim (default off). Stale **Relay-owned** `copilot_server` listeners on **18080+** are reclaimed only when `/health` returns the Relay service fingerprint with a different `instanceId`; listeners without that fingerprint are treated as foreign and left alone. **`RELAY_COPILOT_RECLAIM_STALE_HTTP=0`** disables reclaim. **CDP prompts** tell Copilot that Relay parses and executes `relay_tool` / accepted fenced JSON from each reply, with bounded unfenced recovery reserved for retry/repair situations. Details: [docs/COPILOT_E2E_CDP_PITFALLS.md](docs/COPILOT_E2E_CDP_PITFALLS.md).
 
 ## Development
 
 ```bash
-pnpm typecheck
-pnpm --filter @relay-agent/desktop build
+pnpm check
 
 cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings
 ```
 
+Fast local frontend-only check: `pnpm typecheck`.
+
 `cargo check` / `cargo test` may still print non-fatal `ts-rs` warnings for ignored serde hints such as `skip_serializing_if = "Option::is_none"` while generating TypeScript bindings; `clippy` is clean for the desktop crate.
 
 **Grounding / CDP checks:** `pnpm run test:grounding-fixture`; `pnpm run test:e2e:m365-cdp`; opt-in real Copilot grounding checks: `pnpm run test:e2e:copilot-grounding`.
+
+**Headless doctor:** `pnpm doctor -- --json` probes workspace `.claw`, bundled runtime assets (`relay-node`, LiteParse runner), CDP reachability, bridge `/health`, authenticated `/status`, and M365 sign-in state. Exit codes: `0` = `ok`, `1` = `warn`, `2` = `fail`.
 
 **Live repair probe (signed-in Edge):**
 
@@ -123,11 +126,13 @@ Use the signed-in `RelayAgentEdgeProfile` on the same CDP port. A good run logs 
 
 **Headless launched-app smokes:** `pnpm launch:test` verifies `tauri:dev` launch stability in Linux/Xvfb, and `pnpm agent-loop:test` runs the env-gated Rust autorun smoke that exercises retry recovery, approval handling, emitted `agent:*` events, the pushed `agent:status` phase sequence (`running` → `retrying` → `waiting_approval` → `idle:completed` minimum), and final `stopReason: "completed"` through the real desktop bridge.
 
+**Deterministic parity harness:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness` covers claw-style parity scenarios, including the desktop full-session harness for `streaming_text`, `plugin_tool_roundtrip`, `auto_compact_triggered`, and `token_cost_reporting`.
+
 **E2E (mock Tauri, browser only):** from `apps/desktop`, `E2E_SKIP_AUTH_SETUP=1 pnpm exec playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts`. Use `CI=1` if `vite preview` might reuse a stale build after changing `tests/tauri-mock-core.ts`.
 
 **Inspect Copilot DOM (real CDP):** `pnpm --filter @relay-agent/desktop inspect:copilot-dom` (signed-in Edge on 9360).
 
-**CI:** see `.github/workflows/` — typically bundled Node fetch for Tauri, `cargo check`, `cargo clippy -- -D warnings`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, and `pnpm typecheck`.
+**CI:** see `.github/workflows/` — main CI now runs a matrix: `ubuntu-latest` executes bundled-node prep, Linux Tauri deps, `cargo check`, `cargo clippy -- -D warnings`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, docs truth guards, `pnpm check`, `pnpm launch:test`, and `pnpm agent-loop:test`; `windows-latest` runs bundled-node prep, `cargo check`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, `pnpm check`, and `pnpm smoke:windows`.
 
 ## License
 

@@ -409,8 +409,10 @@ dependencies = [
 name = "compat-harness"
 version = "0.1.0"
 dependencies = [
+ "relay-agent-desktop",
  "runtime",
  "serde_json",
+ "tokio",
  "tools",
 ]
 

@@ -77,6 +77,7 @@ pub use oauth::{
     OAuthCallbackParams, OAuthRefreshRequest, OAuthTokenExchangeRequest, OAuthTokenSet,
     PkceChallengeMethod, PkceCodePair,
 };
+pub use pdf_liteparse::{resolve_liteparse_paths, LiteparsePaths};
 pub use pdf_manip::{merge_pdfs, split_pdf, PdfSplitSegment};
 pub use permissions::{
     PermissionMode, PermissionOutcome, PermissionPolicy, PermissionPromptDecision,

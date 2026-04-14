@@ -3,10 +3,10 @@
 ## Repository State
 
 - This repository contains a working Tauri v2 + SolidJS desktop agent application under `apps/desktop/`.
-- Desktop **visual design** is driven by CSS variables in `apps/desktop/src/index.css` (`--ra-*`), aligned with **`apps/desktop/DESIGN.md`** (Cursor Inspiration spec). Light theme follows that spec; dark is a paired warm-charcoal scale. Default theme is **light**. Prefer tokens and `.ra-*` utilities over ad hoc colors; see `docs/IMPLEMENTATION.md` (2026-04-09 Desktop UI milestone).
+- Desktop **visual design** is driven by CSS variables in `apps/desktop/src/index.css` (`--ra-*`), aligned with **`apps/desktop/DESIGN.md`** (Cursor Inspiration spec). Light theme uses the warm-token palette now documented in `docs/IMPLEMENTATION.md` (2026-04-14 milestone); dark is the paired warm-charcoal scale. Default theme is **light**. Prefer tokens and `.ra-*` utilities over ad hoc colors.
 - Rust backend lives in `apps/desktop/src-tauri/` with internal crates under `crates/{api,runtime,tools,commands,compat-harness}`.
 - Desktop **`read_file`** on `.pdf` uses **LiteParse** (`liteparse-runner/`, OCR off) via **Node**; release bundles include a **Tauri `externalBin`** sidecar (`relay-node`). See `README.md`, `PLANS.md` (PDF reading), and `docs/IMPLEMENTATION.md` (2026-04-08 milestone).
-- The legacy `packages/contracts` directory has been removed; contracts are now defined inline within the Rust crates.
+- The legacy shared TypeScript contracts package has been removed; contracts are now defined inline within the Rust crates.
 - Use `PLANS.md` for the milestone roadmap and `docs/IMPLEMENTATION.md` for implementation notes.
 
 ## Source of Truth
@@ -18,6 +18,7 @@
   4. `docs/CLAW_CODE_ALIGNMENT.md` (claw-code reference pin, parity checklist, tool-catalog notes — optional for features unrelated to that alignment)
 - The Rust crate types and IPC command signatures in `src-tauri/` are the source of truth for contracts.
 - The frontend types in `src/lib/ipc.ts` must stay in sync with the Rust IPC layer.
+- `runtime::CompactionConfig::default()` is the canonical source for compaction defaults.
 
 ## Execution Rules
 
@@ -30,6 +31,7 @@
 ## Verification Discipline
 
 - Run the milestone verification commands at the end of each milestone.
+- Use root `pnpm check` as the canonical frontend acceptance gate; `pnpm typecheck` is the fast local-only check.
 - If verification fails, fix the issue before moving to the next milestone.
 - Record verification commands and outcomes in `docs/IMPLEMENTATION.md`.
 - Do not mark a task complete if its acceptance artifact does not exist.

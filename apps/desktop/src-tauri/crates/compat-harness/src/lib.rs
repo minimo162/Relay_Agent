@@ -340,3 +340,288 @@ mod parity_style {
         let _ = fs::remove_dir_all(&dir);
     }
 }
+
+#[cfg(test)]
+mod full_session_harness {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use relay_agent_desktop_lib::test_support::{create_test_app, run_agent_loop_smoke};
+
+    fn temp_dir(label: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("{label}-{nanos}"));
+        fs::create_dir_all(&root).expect("create temp dir");
+        root
+    }
+
+    #[test]
+    fn streaming_text_full_session_harness_matches_desktop_event_flow() {
+        let app = create_test_app();
+        let root = temp_dir("relay-compat-streaming");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        let summary = runtime.block_on(run_agent_loop_smoke(
+            app.handle().clone(),
+            Some(root.clone()),
+        ));
+
+        assert_eq!(summary.status, "ok", "{summary:?}");
+        assert!(summary.text_delta_count > 0, "{summary:?}");
+        assert!(summary.tool_start_count > 0, "{summary:?}");
+        assert!(summary.approval_seen, "{summary:?}");
+        assert_eq!(summary.final_stop_reason.as_deref(), Some("completed"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod missing_scenarios {
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use runtime::{
+        mcp_tool_name, ApiClient, ApiRequest, AssistantEvent, AutoCompactionEvent,
+        ConfigSource, ContentBlock, ConversationRuntime, McpServerConfig, McpServerManager,
+        McpStdioServerConfig, MessageRole, PermissionMode, PermissionPolicy, ScopedMcpServerConfig,
+        Session, StaticToolExecutor, TokenUsage, UsageTracker,
+    };
+    use serde_json::json;
+
+    fn temp_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("compat-harness-{nanos}"));
+        fs::create_dir_all(&root).expect("temp dir");
+        root
+    }
+
+    fn write_manager_mcp_server_script() -> PathBuf {
+        let root = temp_dir();
+        let script_path = root.join("manager-mcp-server.py");
+        let script = [
+            "#!/usr/bin/env python3",
+            "import json, os, sys",
+            "LABEL = os.environ.get('MCP_SERVER_LABEL', 'server')",
+            "def read_message():",
+            "    header = b''",
+            r"    while not header.endswith(b'\r\n\r\n'):",
+            "        chunk = sys.stdin.buffer.read(1)",
+            "        if not chunk:",
+            "            return None",
+            "        header += chunk",
+            "    length = 0",
+            r"    for line in header.decode().split('\r\n'):",
+            r"        if line.lower().startswith('content-length:'):",
+            r"            length = int(line.split(':', 1)[1].strip())",
+            "    payload = sys.stdin.buffer.read(length)",
+            "    return json.loads(payload.decode())",
+            "def send_message(message):",
+            "    payload = json.dumps(message).encode()",
+            r"    sys.stdout.buffer.write(f'Content-Length: {len(payload)}\r\n\r\n'.encode() + payload)",
+            "    sys.stdout.buffer.flush()",
+            "while True:",
+            "    request = read_message()",
+            "    if request is None:",
+            "        break",
+            "    method = request['method']",
+            "    if method == 'initialize':",
+            "        send_message({",
+            "            'jsonrpc': '2.0',",
+            "            'id': request['id'],",
+            "            'result': {",
+            "                'protocolVersion': request['params']['protocolVersion'],",
+            "                'capabilities': {'tools': {}},",
+            "                'serverInfo': {'name': LABEL, 'version': '1.0.0'}",
+            "            }",
+            "        })",
+            "    elif method == 'tools/list':",
+            "        send_message({",
+            "            'jsonrpc': '2.0',",
+            "            'id': request['id'],",
+            "            'result': {",
+            "                'tools': [{",
+            "                    'name': 'echo',",
+            "                    'description': f'Echo tool for {LABEL}',",
+            "                    'inputSchema': {'type': 'object', 'properties': {'text': {'type': 'string'}}, 'required': ['text']}",
+            "                }]",
+            "            }",
+            "        })",
+            "    elif method == 'tools/call':",
+            "        args = request['params'].get('arguments') or {}",
+            "        text = args.get('text', '')",
+            "        send_message({",
+            "            'jsonrpc': '2.0',",
+            "            'id': request['id'],",
+            "            'result': {",
+            "                'content': [{'type': 'text', 'text': f'{LABEL}:{text}'}],",
+            "                'structuredContent': {'server': LABEL, 'echoed': text},",
+            "                'isError': False",
+            "            }",
+            "        })",
+            "    else:",
+            "        send_message({",
+            "            'jsonrpc': '2.0',",
+            "            'id': request['id'],",
+            "            'error': {'code': -32601, 'message': f'unknown method: {method}'},",
+            "        })",
+        ]
+        .join("\n");
+        fs::write(&script_path, script).expect("write script");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&script_path, permissions).expect("chmod");
+        }
+        script_path
+    }
+
+    fn cleanup_script(script_path: &Path) {
+        fs::remove_file(script_path).expect("cleanup script");
+        fs::remove_dir_all(script_path.parent().expect("script parent")).expect("cleanup dir");
+    }
+
+    fn manager_server_config(script_path: &Path, label: &str) -> ScopedMcpServerConfig {
+        ScopedMcpServerConfig {
+            scope: ConfigSource::Local,
+            config: McpServerConfig::Stdio(McpStdioServerConfig {
+                command: "python3".to_string(),
+                args: vec![script_path.to_string_lossy().into_owned()],
+                env: BTreeMap::from([(
+                    "MCP_SERVER_LABEL".to_string(),
+                    label.to_string(),
+                )]),
+            }),
+        }
+    }
+
+    #[test]
+    fn plugin_tool_roundtrip_via_fake_stdio_server() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let script_path = write_manager_mcp_server_script();
+            let servers = BTreeMap::from([(
+                "alpha".to_string(),
+                manager_server_config(&script_path, "alpha"),
+            )]);
+            let mut manager = McpServerManager::from_servers(&servers);
+
+            manager.discover_tools().await.expect("discover tools");
+            let response = manager
+                .call_tool(
+                    &mcp_tool_name("alpha", "echo"),
+                    Some(json!({ "text": "roundtrip" })),
+                )
+                .await
+                .expect("call tool");
+
+            assert_eq!(
+                response
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.structured_content.as_ref())
+                    .and_then(|value| value.get("echoed")),
+                Some(&json!("roundtrip"))
+            );
+
+            manager.shutdown().await.expect("shutdown");
+            cleanup_script(&script_path);
+        });
+    }
+
+    #[test]
+    fn auto_compact_triggered_matches_runtime_defaults() {
+        struct SimpleApi;
+        impl ApiClient for SimpleApi {
+            fn stream(
+                &mut self,
+                _request: &ApiRequest<'_>,
+            ) -> Result<Vec<AssistantEvent>, runtime::RuntimeError> {
+                Ok(vec![
+                    AssistantEvent::TextDelta("done".to_string()),
+                    AssistantEvent::Usage(TokenUsage {
+                        input_tokens: 120_000,
+                        output_tokens: 4,
+                        cache_creation_input_tokens: 0,
+                        cache_read_input_tokens: 0,
+                    }),
+                    AssistantEvent::MessageStop,
+                ])
+            }
+        }
+
+        let session = Session {
+            version: 1,
+            messages: vec![
+                runtime::ConversationMessage::user_text("one"),
+                runtime::ConversationMessage::assistant(vec![ContentBlock::Text {
+                    text: "two".to_string(),
+                }]),
+                runtime::ConversationMessage::user_text("three"),
+                runtime::ConversationMessage::assistant(vec![ContentBlock::Text {
+                    text: "four".to_string(),
+                }]),
+            ],
+        };
+
+        let mut runtime = ConversationRuntime::new(
+            session,
+            SimpleApi,
+            StaticToolExecutor::new(),
+            PermissionPolicy::new(PermissionMode::DangerFullAccess),
+            vec!["system".to_string()],
+        )
+        .with_auto_compaction_input_tokens_threshold(100_000);
+
+        let summary = runtime.run_turn("trigger", None).expect("turn should succeed");
+
+        assert_eq!(
+            summary.auto_compaction,
+            Some(AutoCompactionEvent {
+                removed_message_count: 1,
+            })
+        );
+        assert_eq!(runtime.session().messages[0].role, MessageRole::System);
+    }
+
+    #[test]
+    fn token_cost_reporting_tracks_cumulative_usage() {
+        let mut tracker = UsageTracker::default();
+        tracker.record(TokenUsage {
+            input_tokens: 10,
+            output_tokens: 4,
+            cache_creation_input_tokens: 2,
+            cache_read_input_tokens: 1,
+        });
+        tracker.record(TokenUsage {
+            input_tokens: 20,
+            output_tokens: 6,
+            cache_creation_input_tokens: 3,
+            cache_read_input_tokens: 2,
+        });
+
+        let usage = tracker.cumulative_usage();
+        let lines = usage.summary_lines_for_model("usage", Some("claude-sonnet-4-20250514"));
+
+        assert_eq!(usage.total_tokens(), 48);
+        assert!(lines[0].contains("estimated_cost="), "{lines:?}");
+        assert!(lines[0].contains("model=claude-sonnet-4-20250514"), "{lines:?}");
+    }
+}

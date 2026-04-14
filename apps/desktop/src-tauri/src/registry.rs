@@ -221,7 +221,7 @@ impl SessionHandle {
         Ok(questions.drain().map(|(_, p)| p.tx).collect())
     }
 
-    pub fn with_write_undo<F, R>(&self, f: F) -> Result<R, AgentLoopError>
+    pub(crate) fn with_write_undo<F, R>(&self, f: F) -> Result<R, AgentLoopError>
     where
         F: FnOnce(&mut WriteUndoStacks) -> R,
     {

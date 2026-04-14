@@ -6,9 +6,23 @@ on:
   pull_request:
 
 jobs:
-  lint:
-    name: CI Checks
-    runs-on: ubuntu-latest
+  checks:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu Acceptance
+            os: ubuntu-latest
+            run_clippy: true
+            run_launch_smokes: true
+            run_windows_smoke: false
+          - name: Windows Acceptance
+            os: windows-latest
+            run_clippy: false
+            run_launch_smokes: false
+            run_windows_smoke: true
 
     steps:
       - name: Check out repository
@@ -23,6 +37,7 @@ jobs:
           node-version: 22
 
       - name: Install pnpm
+        shell: bash
         run: |
           corepack enable
           corepack prepare pnpm@10.33.0 --activate
@@ -30,7 +45,6 @@ jobs:
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
-      # tauri-build validates externalBin paths; binaries/ is gitignored.
       - name: Fetch Tauri externalBin (relay-node)
         working-directory: apps/desktop
         run: node ./scripts/fetch-bundled-node.mjs
@@ -40,24 +54,47 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
             build-essential \
             curl \
-            wget \
             file \
-            libxdo-dev \
-            libssl-dev \
             libayatana-appindicator3-dev \
-            librsvg2-dev
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            wget \
+            xvfb
+
+      - name: Guard live docs against stale references
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          ! rg -n "packages/contracts|spreadsheet-centric demo|minimal CSV end-to-end demo" README.md PLANS.md AGENTS.md docs/CLAW_CODE_ALIGNMENT.md
 
       - name: cargo check
         run: cargo check
 
       - name: cargo clippy
+        if: matrix.run_clippy
         run: cargo clippy -- -D warnings
 
       - name: cargo test
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 
-      - name: pnpm typecheck
-        run: pnpm typecheck
+      - name: cargo test -p compat-harness
+        run: cargo test -p compat-harness
+
+      - name: pnpm check
+        run: pnpm check
+
+      - name: pnpm launch:test
+        if: matrix.run_launch_smokes
+        run: pnpm launch:test
+
+      - name: pnpm agent-loop:test
+        if: matrix.run_launch_smokes
+        run: pnpm agent-loop:test
+
+      - name: pnpm smoke:windows
+        if: matrix.run_windows_smoke
+        run: pnpm smoke:windows

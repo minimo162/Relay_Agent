@@ -1,90 +1,127 @@
-# Claw-code alignment (Relay_Agent)
+# Claw-code Alignment
 
 Reference: [ultraworkers/claw-code](https://github.com/ultraworkers/claw-code) (`rust/` workspace, `USAGE.md`, `PARITY.md`).
 
-## Current upstream pin
+## Current Upstream Pin
 
 | Field | Value |
 |-------|--------|
 | Remote | `https://github.com/ultraworkers/claw-code.git` |
 | Branch | `main` |
 | Commit (last port batch) | `e4c38718824bda32c054664d1a01e591b489f635` |
-| Last `ls-remote` verification | 2026-04-09 (unchanged from pin above) |
+| Last verification | 2026-04-09 |
 
-**Procedure:** On each selective port, update this table and add a line under `docs/IMPLEMENTATION.md` Milestone Log (same SHA). Re-resolve with:
+Refresh with:
 
-`git ls-remote https://github.com/ultraworkers/claw-code.git refs/heads/main`
+```bash
+git ls-remote https://github.com/ultraworkers/claw-code.git refs/heads/main
+```
 
-## Module boundaries
+Record any refreshed SHA in `docs/IMPLEMENTATION.md`.
 
-| Area | Relay location | Notes |
-|------|----------------|-------|
-| M365 Copilot + CDP | `apps/desktop/src-tauri/src/agent_loop.rs`, `copilot_*.rs` | Not in claw CLI; `relay_tool` fenced protocol and the desktop CDP prompt-delivery path are Relay-only. |
-| Tauri IPC / UI events | `tauri_bridge.rs`, `lib.rs`, Solid app | Desktop shell; claw uses its own CLI/REPL. |
-| Tool execution + catalog | `crates/tools`, `crates/runtime` | Shapes aligned with [Claw tool-system](https://claw-code.codes/tool-system); implementation is in-repo. |
-| Permissions | `crates/runtime/src/permissions.rs`, `agent_loop` desktop policy | Same concepts as claw (modes, tool requirements, prompt escalation); not a shared crate today. |
-| File I/O | `crates/runtime/src/file_ops.rs` | Workspace containment when a session `cwd` is set is enforced at the tool executor (`agent_loop`); see `workspace_path` in runtime. |
-| Config / instructions | `.claw/`, `CLAW.md`, `CLAW_CONFIG_HOME` | Matches Relay naming documented in `docs/IMPLEMENTATION.md`. |
+## Alignment Principle
 
-## Tool catalog: Relay `mvp_tool_specs` vs claw
+Relay does **not** try to copy claw’s CLI surface. The alignment target is:
 
-claw-code `rust/` exposes on the order of **~40** tools in `mvp_tool_specs()` (per `PARITY.md`). Relay’s [`mvp_tool_specs()`](apps/desktop/src-tauri/crates/tools/src/lib.rs) lists **47** names on Unix targets (includes read-only **`git_status`** / **`git_diff`**, **`EnterPlanMode` / `ExitPlanMode`** catalog stubs, and Relay-only tools below), **48** with Windows-only `PowerShell` (see source for the authoritative list).
+- canonical Rust boundaries
+- claw-shaped tool schemas and permission posture
+- deterministic parity coverage
+- machine-readable diagnostics / recovery behavior
+- event-first operation rather than prose-only desktop glue
 
-**Diff policy:** When adding or renaming tools, cross-check claw `rust/crates/tools` schemas and descriptions so Copilot-facing JSON stays compatible with the [tool-system](https://claw-code.codes/tool-system) model. Relay-only tools (Electron CDP, `pdf_*`, Copilot hints) stay documented in tool descriptions.
+Relay-specific areas remain:
 
-**Claw-shaped JSON (compat layer):** `bash` catalog schema includes claw sandbox fields (`namespaceRestrictions`, `isolateNetwork`, `filesystemMode`, `allowedMounts`) — runtime already accepts them via [`BashCommandInput`](apps/desktop/src-tauri/crates/runtime/src/bash.rs). **`Task*`** accept `task_id` as an alias for `id`; `TaskCreate` accepts `prompt`; `TaskUpdate` appends claw `message` into task output. **`AskUserQuestion`** accepts claw single `question` + `options: string[]` (normalized to Relay `questions[]` in [`agent_loop.rs`](apps/desktop/src-tauri/src/agent_loop.rs)). **`LSP`** catalog lists claw actions; only **`diagnostics`** runs (rust-analyzer); other actions error clearly. **`EnterPlanMode` / `ExitPlanMode`** return a success JSON notice that session posture is chosen at session start (`tools::plan_mode_tool_json`, also handled in `TauriToolExecutor`).
+- Tauri IPC and Solid desktop UI
+- M365 Copilot + Edge CDP transport
+- Node bridge lifecycle
+- desktop diagnostics export and launched-app smoke flows
 
-### Tools present in claw `mvp_tool_specs` but not in Relay (desktop product policy)
+## Canonical Boundaries
 
-Relay still omits **`Team*`**, **`Cron*`**, **`RemoteTrigger`**, **`Worker*`**, **`RunTaskPacket`**, and similar CLI-oriented specs.
+| Area | Relay location | Alignment note |
+|------|----------------|----------------|
+| Agent loop orchestration | `apps/desktop/src-tauri/src/agent_loop/` | Relay keeps desktop/CDP transport, but retry, permission, prompt, and compaction behavior are kept claw-shaped where practical. |
+| Tool execution + schemas | `apps/desktop/src-tauri/crates/{tools,runtime}` | Tool names, JSON shapes, and permission expectations follow claw conventions. |
+| Permissions | `apps/desktop/src-tauri/crates/runtime/src/permissions.rs` | Modes and escalation posture mirror claw concepts; desktop approval UI is Relay-specific. |
+| Config / instructions | `.claw/`, `CLAW.md`, `CLAW_CONFIG_HOME` | Same config surface, desktop-hosted. |
+| Diagnostics / doctor | `apps/desktop/src-tauri/src/doctor.rs`, `relay-agent-doctor` | Relay-specific entrypoint, claw-style operational rigor target. |
+| Desktop session harness | `apps/desktop/src-tauri/src/test_support.rs`, `crates/compat-harness` | Deterministic parity layer for Relay’s desktop boundary. |
 
-**Recently ported for Copilot/claw name compatibility:** MCP meta-tools (`ListMcpResources`, `ReadMcpResource`, `McpAuth`, unified `MCP` with `list_resources` / `read_resource` / `list_tools` / `call_tool`) — desktop executor only, delegating to session [`McpServerManager`](apps/desktop/src-tauri/crates/runtime/src/mcp_stdio.rs); **`AskUserQuestion`** — UI overlay + `respond_user_question` IPC; **`LSP`** — `pull_diagnostics` via `rust-analyzer` stdio ([`lsp_diagnostics.rs`](apps/desktop/src-tauri/crates/runtime/src/lsp_diagnostics.rs)); in-memory **`TaskCreate` / `TaskGet` / `TaskList` / `TaskStop` / `TaskUpdate` / `TaskOutput`** ([`task_registry.rs`](apps/desktop/src-tauri/crates/runtime/src/task_registry.rs)).
+## Tool Catalog Notes
 
-Dynamic **`mcp__<server>__<tool>`** names remain the primary MCP surface alongside the meta tools above. If the model emits a claw-only name Relay still does not register, `execute_tool` / the agent executor returns an error until ported — document new names here when adding stubs.
+Relay keeps claw-compatible JSON where possible and documents Relay-only additions explicitly.
 
-## Mock parity scenario map (claw harness ↔ Relay)
+- `bash` accepts claw sandbox fields (`namespaceRestrictions`, `isolateNetwork`, `filesystemMode`, `allowedMounts`).
+- `Task*` accepts claw-style aliases such as `task_id` and `prompt`.
+- `AskUserQuestion` accepts claw’s single `question` + `options` shape and normalizes to Relay’s UI contract.
+- `LSP` advertises claw-style actions, but only `diagnostics` is implemented today.
+- `EnterPlanMode` / `ExitPlanMode` remain catalog stubs that return success JSON; session posture is chosen at session start.
+- Dynamic `mcp__<server>__<tool>` names remain the primary MCP surface, with meta tools layered on top.
 
-claw uses scripted scenarios in `rust/mock_parity_scenarios.json` and `rust/crates/rusty-claude-cli/tests/mock_parity_harness.rs` with the **`claw` binary** and **`mock-anthropic-service`** (see claw `PARITY.md`). Relay vendors a copy of the scenario manifest at [`apps/desktop/src-tauri/crates/compat-harness/fixtures/mock_parity_scenarios.json`](apps/desktop/src-tauri/crates/compat-harness/fixtures/mock_parity_scenarios.json); sync instructions are in `fixtures/SYNC.txt`. The test `mock_parity_scenario_manifest_matches_claw_canonical_order` keeps the **scenario name list and order** aligned with upstream.
+## Deterministic Parity Coverage
 
-The `compat-harness` crate no longer parses a legacy Claude Code **TypeScript** upstream (`src/commands.ts` / `src/tools.ts`); that surface does not exist on ultraworkers/claw-code.
+Relay vendors claw’s `rust/mock_parity_scenarios.json` manifest at:
 
-Relay [`compat-harness` `parity_style`](apps/desktop/src-tauri/crates/compat-harness/src/lib.rs) exercises **direct `tools::execute_tool` and `PermissionPolicy`** where possible. It does **not** replace the full CLI mock-API harness. Scenarios below marked *not in desktop harness* need a follow-up (subprocess `claw` + mock service, or desktop JSON output parity).
+- `apps/desktop/src-tauri/crates/compat-harness/fixtures/mock_parity_scenarios.json`
 
-| claw-style scenario | Relay coverage (`compat-harness`) |
-|---------------------|-----------------------------------|
-| `streaming_text` | *Not in desktop harness* (needs mock Anthropic + agent turn) |
-| `read_file_roundtrip` | `read_file_roundtrip_under_temp_workspace` |
-| `grep_chunk_assembly` | `grep_search_finds_match_in_workspace_file` (content); `grep_search_count_mode_finds_expected_matches` (count, claw-style fixture text) |
-| `write_file_allowed` | `write_file_allowed_under_temp_workspace` |
-| `write_file_denied` | `write_file_denied_under_read_only_policy` (policy only; `execute_tool` does not enforce desktop `PermissionEnforcer`) |
-| `multi_tool_turn_roundtrip` | `multi_tool_read_file_then_grep_in_same_workspace` (behavioral; not a single model turn) |
-| `bash_stdout_roundtrip` | `bash_stdout_roundtrip_echo` (workspace-write); `bash_stdout_roundtrip_echo_danger_full_access` (claw permission string) |
-| `bash_permission_prompt_approved` | `bash_escalation_prompts_under_workspace_write_policy` |
-| `bash_permission_prompt_denied` | `bash_permission_prompt_denied_under_workspace_write_policy` |
-| `plugin_tool_roundtrip` | *Not in desktop harness* |
-| `auto_compact_triggered` | *Not in desktop harness* |
-| `token_cost_reporting` | *Not in desktop harness* |
-| (extra) Workspace path safety | `workspace_boundary_rejects_outside_path` |
-| (extra) Glob + read flow | `glob_and_read_multi_step_style` |
-| (extra) Read-only bash | `bash_read_only_project_rejects_rm_via_execute_tool` |
-| (extra) Hard denylist | `bash_hard_denylist_blocks_sudo_even_when_workspace_write`, `read_file_hard_denylist_blocks_dot_env` |
+The test `mock_parity_scenario_manifest_matches_claw_canonical_order` keeps scenario name order aligned with upstream.
 
-## Parity-style checklist (from claw `PARITY.md`)
+Relay uses **two** deterministic layers:
 
-- [x] Workspace boundary for file tools when session `cwd` is set (`runtime::workspace_path`, enforced in `TauriToolExecutor`).
-- [x] Large plain-text read capped (`MAX_TEXT_FILE_READ_BYTES` in `file_ops::read_file`).
-- [x] Large `write_file` body capped (`MAX_WRITE_FILE_BYTES` in `file_ops::write_file`, aligned with claw `MAX_WRITE_SIZE`).
-- [x] NUL-byte rejection for plain-text reads (binary heuristic aligned with claw file-tool notes).
-- [x] Bash read-only heuristic guard when `.claw` permission mode is read-only (`bash_validation` + `BashConfigCwdGuard`); not the full claw bash-validation submodule matrix.
-- [x] MCP operator-facing errors: clearer `Display` for unknown server/tool and Tauri `mcp_check_server_status` hint; **`McpServerManager::call_tool` retries once** after recoverable stdio `Io` failures (process reset + re-init). Full multi-transport lifecycle remains shared “remaining work” with claw.
-- [x] Claw-style MCP meta tool names (`ListMcpResources`, `ReadMcpResource`, `McpAuth`, `MCP` JSON `action`) routed through `TauriToolExecutor` to the session `McpServerManager` (stdio servers from merged `.claw`).
-- [x] **`AskUserQuestion`**: `agent:user_question` event + `respond_user_question` + Solid `UserQuestionOverlay`.
-- [x] **`LSP`**: first slice = pull diagnostics for a workspace file via `rust-analyzer` stdio (`runtime::pull_rust_diagnostics_blocking`).
-- [x] **`Task*`** (in-memory registry; no external worker): `TaskCreate`, `TaskGet`, `TaskList`, `TaskStop`, `TaskUpdate`, `TaskOutput`.
-- [x] Session compaction / token counting parity with claw (`should_compact` / re-compact / merged summaries aligned with claw-code `rust/crates/runtime/src/compact.rs` at pin SHA; Relay keeps `CompactionConfig::default().preserve_recent_messages == 5` vs upstream 4 — documented in `IMPLEMENTATION.md` 2026-04-09 batch).
-- [x] **`PostToolUseFailure` hooks:** merged from `.claw` `hooks.PostToolUseFailure` (claw-shaped stdin JSON with `tool_error`); `HookRunner` runs these only after a tool executor error, not `PostToolUse`. Env: `HOOK_TOOL_ERROR` plus `HOOK_TOOL_OUTPUT` set to the error text.
-- [x] **Desktop CDP outer turn:** after `run_turn`, a follow-up Copilot round with user text `Continue.` runs at most once on **Build** when the first model round produced **no tool calls** (`iterations == 1`, empty `tool_results`)—recovery for meta-only stalls without the broken “last message still has ToolUse” check.
+- `parity_style`: direct tool / permission / workspace checks
+- `full_session_harness`: drives the real desktop session loop through `start_agent_inner`, approvals, `agent:*` events, and final state
 
-## Upstream revision pin (optional ports)
+### Scenario Map
 
-When porting behavior, record the claw-code `main` commit SHA you diffed against in `docs/IMPLEMENTATION.md` (milestone log) and refresh the **Current upstream pin** table above. No automatic submodule is required.
+| claw scenario | Relay harness | Exact test |
+|---------------|---------------|------------|
+| `streaming_text` | `full_session_harness` | `streaming_text_full_session_harness_matches_desktop_event_flow` |
+| `read_file_roundtrip` | `parity_style` | `read_file_roundtrip_under_temp_workspace` |
+| `grep_chunk_assembly` | `parity_style` | `grep_search_finds_match_in_workspace_file`; `grep_search_count_mode_finds_expected_matches` |
+| `write_file_allowed` | `parity_style` | `write_file_allowed_under_temp_workspace` |
+| `write_file_denied` | `parity_style` | `write_file_denied_under_read_only_policy` |
+| `multi_tool_turn_roundtrip` | `parity_style` | `multi_tool_read_file_then_grep_in_same_workspace` |
+| `bash_stdout_roundtrip` | `parity_style` | `bash_stdout_roundtrip_echo`; `bash_stdout_roundtrip_echo_danger_full_access` |
+| `bash_permission_prompt_approved` | `parity_style` | `bash_escalation_prompts_under_workspace_write_policy` |
+| `bash_permission_prompt_denied` | `parity_style` | `bash_permission_prompt_denied_under_workspace_write_policy` |
+| `plugin_tool_roundtrip` | `parity_style` | `plugin_tool_roundtrip_via_fake_stdio_server` |
+| `auto_compact_triggered` | `parity_style` | `auto_compact_triggered_matches_runtime_defaults` |
+| `token_cost_reporting` | `parity_style` | `token_cost_reporting_tracks_cumulative_usage` |
+
+Additional Relay-only guards:
+
+- `workspace_boundary_rejects_outside_path`
+- `glob_and_read_multi_step_style`
+- `bash_read_only_project_rejects_rm_via_execute_tool`
+- `bash_hard_denylist_blocks_sudo_even_when_workspace_write`
+- `read_file_hard_denylist_blocks_dot_env`
+
+## Parity Checklist
+
+- [x] Workspace containment when session `cwd` is set.
+- [x] Large text-read cap and large write cap.
+- [x] Binary / NUL-byte rejection for plain-text reads.
+- [x] Read-only bash heuristic guard under `.claw` permission mode.
+- [x] MCP operator-facing errors and recoverable stdio retry.
+- [x] Claw-style MCP meta tool names (`ListMcpResources`, `ReadMcpResource`, `McpAuth`, `MCP`).
+- [x] `AskUserQuestion` desktop flow.
+- [x] `LSP` diagnostics slice.
+- [x] `Task*` in-memory registry surface.
+- [x] Session compaction and token accounting parity, with Relay’s canonical defaults defined in `runtime::CompactionConfig::default()` (`preserve_recent_messages = 5`, `max_estimated_tokens = 10000`).
+- [x] `PostToolUseFailure` hooks.
+- [x] Deterministic desktop full-session harness for streamed text, approval flow, and completed stop reasons.
+
+## Doctor And Operations
+
+claw’s rigor target also applies to operational entrypoints.
+
+- Relay now ships `relay-agent-doctor` and root `pnpm doctor -- --json`.
+- Doctor output is machine-readable via `RelayDoctorReport` / `RelayDoctorCheck`.
+- Required checks cover workspace `.claw`, runtime assets, Edge/CDP reachability, bridge `/health`, authenticated `/status`, and M365 sign-in state.
+
+## When Porting From Claw
+
+- Refresh the upstream SHA in this file.
+- Record the port batch in `docs/IMPLEMENTATION.md`.
+- Update the deterministic scenario map if tool behavior or parity coverage changes.
+- Keep Relay-only desktop behavior documented instead of silently diverging.

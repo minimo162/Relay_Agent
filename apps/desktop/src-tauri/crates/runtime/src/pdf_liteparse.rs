@@ -53,9 +53,7 @@ fn sidecar_base_dir() -> Option<PathBuf> {
 fn resolve_node_binary() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("RELAY_BUNDLED_NODE") {
         let pb = PathBuf::from(p);
-        if pb.is_file() {
-            return Some(pb);
-        }
+        return pb.is_file().then_some(pb);
     }
     if let Some(base) = sidecar_base_dir() {
         #[cfg(windows)]
@@ -82,9 +80,7 @@ fn resolve_node_binary() -> Option<PathBuf> {
 fn liteparse_runner_root() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("RELAY_LITEPARSE_RUNNER_ROOT") {
         let pb = PathBuf::from(p);
-        if pb.join("parse.mjs").is_file() {
-            return Some(pb);
-        }
+        return pb.join("parse.mjs").is_file().then_some(pb);
     }
     let man = option_env!("CARGO_MANIFEST_DIR")?;
     let candidate = Path::new(man)
@@ -98,13 +94,13 @@ fn liteparse_runner_root() -> Option<PathBuf> {
     None
 }
 
-struct LiteparsePaths {
-    runner: PathBuf,
-    parse_mjs: PathBuf,
-    node: PathBuf,
+pub struct LiteparsePaths {
+    pub runner: PathBuf,
+    pub parse_mjs: PathBuf,
+    pub node: PathBuf,
 }
 
-fn resolve_liteparse_paths() -> io::Result<LiteparsePaths> {
+pub fn resolve_liteparse_paths() -> io::Result<LiteparsePaths> {
     let runner = liteparse_runner_root().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,

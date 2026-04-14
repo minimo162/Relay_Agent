@@ -16,7 +16,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use serde_with::skip_serializing_none;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -367,7 +367,11 @@ fn sanitize_copilot_visible_text(s: &str) -> String {
 
 const COPILOT_UI_TEXT_CHUNK: usize = 320;
 
-fn emit_copilot_text_deltas_for_ui(app: &AppHandle, session_id: &str, visible_text: &str) {
+fn emit_copilot_text_deltas_for_ui<R: Runtime>(
+    app: &AppHandle<R>,
+    session_id: &str,
+    visible_text: &str,
+) {
     let v = visible_text.trim();
     if v.is_empty() {
         return;
@@ -629,8 +633,8 @@ fn clear_terminal_status_emitted(guard: &LoopEpochGuard) {
     });
 }
 
-fn emit_status_event(
-    app: &AppHandle,
+fn emit_status_event<R: Runtime>(
+    app: &AppHandle<R>,
     guard: &LoopEpochGuard,
     phase: AgentSessionPhase,
     options: AgentStatusOptions,
@@ -657,8 +661,8 @@ fn emit_status_event(
     }
 }
 
-fn transition_session_state(
-    app: &AppHandle,
+fn transition_session_state<R: Runtime>(
+    app: &AppHandle<R>,
     guard: &LoopEpochGuard,
     run_state: SessionRunState,
     phase: AgentSessionPhase,
@@ -1088,8 +1092,8 @@ pub(crate) fn sleep_with_cancel(cancelled: &AtomicBool, duration: Duration) -> b
     !cancelled.load(Ordering::SeqCst)
 }
 
-pub fn run_agent_loop_impl(
-    app: &AppHandle,
+pub fn run_agent_loop_impl<R: Runtime>(
+    app: &AppHandle<R>,
     registry: &SessionRegistry,
     session_id: &str,
     goal: String,
@@ -1469,12 +1473,12 @@ pub fn run_agent_loop_impl(
 /* ── CDP-based API client ─── */
 
 /// Sends prompts to M365 Copilot via the bundled `copilot_server.js` (Node + CDP).
-pub struct CdpApiClient {
+pub struct CdpApiClient<R: Runtime> {
     source: CdpApiClientSource,
     response_timeout_secs: u64,
     session_preset: SessionPreset,
     /// When set, each Copilot reply emits `agent:text_delta` so the UI updates during tool loops.
-    progress_emit: Option<(AppHandle, String)>,
+    progress_emit: Option<(AppHandle<R>, String)>,
     registry: Option<SessionRegistry>,
     session_id: Option<String>,
 }
@@ -1495,11 +1499,11 @@ struct FakeSmokeScenario {
     expected_output: String,
 }
 
-impl CdpApiClient {
+impl<R: Runtime> CdpApiClient<R> {
     fn new_live(
         server: std::sync::Arc<std::sync::Mutex<crate::copilot_server::CopilotServer>>,
         session_preset: SessionPreset,
-        progress_emit: Option<(AppHandle, String)>,
+        progress_emit: Option<(AppHandle<R>, String)>,
         registry: SessionRegistry,
         session_id: String,
         response_timeout_secs: u64,
@@ -1516,7 +1520,7 @@ impl CdpApiClient {
 
     fn new_smoke(
         session_preset: SessionPreset,
-        progress_emit: Option<(AppHandle, String)>,
+        progress_emit: Option<(AppHandle<R>, String)>,
         response_timeout_secs: u64,
     ) -> Self {
         Self {
@@ -1627,7 +1631,7 @@ impl FakeSmokeApiClient {
     }
 }
 
-impl ApiClient for CdpApiClient {
+impl<R: Runtime> ApiClient for CdpApiClient<R> {
     fn stream(&mut self, request: &ApiRequest<'_>) -> Result<Vec<AssistantEvent>, RuntimeError> {
         let prompt_flavor = cdp_prompt_flavor(request.messages);
         let parse_mode = cdp_tool_parse_mode(request.messages);
@@ -3028,10 +3032,10 @@ fn format_cdp_tool_result(tool_name: &str, output: &str, is_error: bool) -> Stri
 }
 
 /// Persist the session state after a turn: update registry + save to disk.
-fn persist_turn(
-    _app: &AppHandle,
+fn persist_turn<R: Runtime>(
+    _app: &AppHandle<R>,
     registry: &SessionRegistry,
-    runtime_session: &runtime::ConversationRuntime<CdpApiClient, TauriToolExecutor>,
+    runtime_session: &runtime::ConversationRuntime<CdpApiClient<R>, TauriToolExecutor<R>>,
     session_id: &str,
     goal: &str,
     cwd: Option<&String>,
@@ -3060,8 +3064,8 @@ fn persist_turn(
 }
 
 /// Emit the `turn_complete` event with the final assistant text and message count.
-fn emit_turn_complete(
-    app: &AppHandle,
+fn emit_turn_complete<R: Runtime>(
+    app: &AppHandle<R>,
     session_id: &str,
     stop_reason: LoopStopReason,
     message_count: usize,
@@ -3081,7 +3085,7 @@ fn emit_turn_complete(
 }
 
 /// Emit an error event to the frontend.
-fn emit_error(app: &AppHandle, session_id: &str, error: &str, cancelled: bool) {
+fn emit_error<R: Runtime>(app: &AppHandle<R>, session_id: &str, error: &str, cancelled: bool) {
     let evt = AgentErrorEvent {
         session_id: session_id.to_string(),
         error: error.to_string(),
@@ -3095,13 +3099,13 @@ fn emit_error(app: &AppHandle, session_id: &str, error: &str, cancelled: bool) {
 /* ── Approval prompter with real channel wiring ─── */
 /* Fix #3: restructured to avoid nested registry + approvals lock */
 
-pub struct TauriApprovalPrompter {
-    pub app: AppHandle,
+pub struct TauriApprovalPrompter<R: Runtime> {
+    pub app: AppHandle<R>,
     pub session_id: String,
     pub registry: SessionRegistry,
 }
 
-impl PermissionPrompter for TauriApprovalPrompter {
+impl<R: Runtime> PermissionPrompter for TauriApprovalPrompter<R> {
     fn decide(&mut self, request: &PermissionRequest) -> PermissionPromptDecision {
         let loop_guard = LoopEpochGuard::new(&self.registry, &self.session_id);
         // Step 1 — check cancelled (short, independent lock)
@@ -3364,12 +3368,12 @@ fn enforce_workspace_tool_paths(
     Ok(())
 }
 
-pub fn build_tool_executor(
-    app: &AppHandle,
+pub fn build_tool_executor<R: Runtime>(
+    app: &AppHandle<R>,
     session_id: &str,
     cwd: Option<String>,
     registry: SessionRegistry,
-) -> TauriToolExecutor {
+) -> TauriToolExecutor<R> {
     let tokio_runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -3406,8 +3410,8 @@ pub fn build_tool_executor(
     }
 }
 
-pub struct TauriToolExecutor {
-    app: AppHandle,
+pub struct TauriToolExecutor<R: Runtime> {
+    app: AppHandle<R>,
     session_id: String,
     cwd: Option<String>,
     registry: SessionRegistry,
@@ -3415,7 +3419,7 @@ pub struct TauriToolExecutor {
     runtime: tokio::runtime::Runtime,
 }
 
-impl ToolExecutor for TauriToolExecutor {
+impl<R: Runtime> ToolExecutor for TauriToolExecutor<R> {
     fn execute(&mut self, tool_name: &str, input: &str) -> Result<String, runtime::ToolError> {
         if let Some(r) =
             try_execute_mcp_meta_tool(&mut self.mcp_manager, &self.runtime, tool_name, input)
@@ -3782,8 +3786,8 @@ fn normalize_claw_ask_user_question_payload(v: &mut Value) {
     *v = json!({ "questions": [qobj] });
 }
 
-fn execute_ask_user_question_tool(
-    app: &AppHandle,
+fn execute_ask_user_question_tool<R: Runtime>(
+    app: &AppHandle<R>,
     registry: &SessionRegistry,
     session_id: &str,
     input: &str,

@@ -11,6 +11,8 @@ runtime = { path = "../runtime" }
 
 [dev-dependencies]
 serde_json = "1"
+relay_agent_desktop_lib = { package = "relay-agent-desktop", path = "../.." }
+tokio = { version = "1", features = ["rt", "time"] }
 
 [lints]
 workspace = true

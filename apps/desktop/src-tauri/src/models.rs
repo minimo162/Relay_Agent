@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use serde_with::skip_serializing_none;
 use ts_rs::TS;
 
@@ -90,6 +91,77 @@ pub struct RelayDiagnostics {
     pub last_copilot_bridge_failure: Option<CopilotBridgeFailureInfo>,
     #[serde(default)]
     pub copilot_repair_stage_stats: Vec<CopilotRepairStageStats>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CopilotWarmupStage {
+    EnsureServer,
+    HealthCheck,
+    BootTokenAuth,
+    StatusRequest,
+    CdpAttach,
+    CopilotTab,
+    LoginCheck,
+    Ready,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CopilotWarmupFailureCode {
+    EnsureServerFailed,
+    HealthCheckFailed,
+    BootTokenUnauthorized,
+    StatusHttpError,
+    StatusTransportError,
+    CdpAttachFailed,
+    CopilotTabUnavailable,
+    LoginRequired,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[skip_serializing_none]
+pub struct CopilotWarmupResult {
+    pub request_id: String,
+    pub connected: bool,
+    pub login_required: bool,
+    pub boot_token_present: bool,
+    pub cdp_port: u16,
+    pub stage: CopilotWarmupStage,
+    pub message: String,
+    pub failure_code: Option<CopilotWarmupFailureCode>,
+    pub status_code: Option<u16>,
+    pub url: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RelayDoctorStatus {
+    Ok,
+    Warn,
+    Fail,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayDoctorCheck {
+    pub id: String,
+    pub status: RelayDoctorStatus,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<JsonValue>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayDoctorReport {
+    pub status: RelayDoctorStatus,
+    pub timestamp: String,
+    pub browser_settings: BrowserAutomationSettings,
+    pub checks: Vec<RelayDoctorCheck>,
+    pub doctor_hints: Vec<String>,
 }
 
 /// OpenCode-style session posture: **Build** matches the default desktop permission ladder

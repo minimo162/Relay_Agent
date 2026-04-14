@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -73,9 +73,9 @@ async fn request_copilot_bridge_abort(
     }
 }
 
-const COPILOT_HTTP_PORT: u16 = 18080;
+pub(crate) const COPILOT_HTTP_PORT: u16 = 18080;
 /// M365 Copilot Edge CDP base port: must match `scripts/start-relay-edge-cdp.sh`, `copilot_server.js`, and Playwright defaults (`YakuLingo` uses 9333; Relay avoids collision).
-const COPILOT_JS_CDP_PORT: u16 = 9360;
+pub(crate) const COPILOT_JS_CDP_PORT: u16 = 9360;
 
 fn env_cdp_port_override() -> Option<u16> {
     std::env::var("RELAY_EDGE_CDP_PORT")
@@ -538,8 +538,8 @@ struct SessionLoopLaunch {
     cancelled: Arc<AtomicBool>,
 }
 
-async fn spawn_session_loop(
-    app: AppHandle,
+async fn spawn_session_loop<R: Runtime>(
+    app: AppHandle<R>,
     registry: SessionRegistry,
     agent_semaphore: Arc<tokio::sync::Semaphore>,
     config: crate::config::AgentConfig,
@@ -646,8 +646,8 @@ pub async fn start_agent(
     .await
 }
 
-pub(crate) async fn start_agent_inner(
-    app: AppHandle,
+pub(crate) async fn start_agent_inner<R: Runtime>(
+    app: AppHandle<R>,
     registry: SessionRegistry,
     agent_semaphore: Arc<tokio::sync::Semaphore>,
     config: crate::config::AgentConfig,
@@ -690,8 +690,8 @@ pub(crate) async fn start_agent_inner(
     .await
 }
 
-pub(crate) async fn continue_agent_session_inner(
-    app: AppHandle,
+pub(crate) async fn continue_agent_session_inner<R: Runtime>(
+    app: AppHandle<R>,
     registry: SessionRegistry,
     agent_semaphore: Arc<tokio::sync::Semaphore>,
     config: crate::config::AgentConfig,
@@ -1060,7 +1060,7 @@ fn mark_session_cancelling(registry: &SessionRegistry, session_id: &str) -> bool
     should_emit_status
 }
 
-fn emit_cancelling_status(app: &AppHandle, session_id: &str) {
+fn emit_cancelling_status<R: Runtime>(app: &AppHandle<R>, session_id: &str) {
     let cancelling = AgentSessionStatusEvent {
         session_id: session_id.to_string(),
         phase: AgentSessionPhase::Cancelling.as_str().to_string(),
@@ -1132,7 +1132,7 @@ fn finalize_cancelled_session(registry: &SessionRegistry, session_id: &str) {
     }
 }
 
-fn emit_cancelled_status(app: &AppHandle, session_id: &str) {
+fn emit_cancelled_status<R: Runtime>(app: &AppHandle<R>, session_id: &str) {
     let idle = AgentSessionStatusEvent {
         session_id: session_id.to_string(),
         phase: AgentSessionPhase::Idle.as_str().to_string(),
@@ -1147,7 +1147,7 @@ fn emit_cancelled_status(app: &AppHandle, session_id: &str) {
     }
 }
 
-fn emit_cancelled_error(app: &AppHandle, session_id: &str) {
+fn emit_cancelled_error<R: Runtime>(app: &AppHandle<R>, session_id: &str) {
     let evt = AgentErrorEvent {
         session_id: session_id.to_string(),
         error: "session cancelled by user".into(),

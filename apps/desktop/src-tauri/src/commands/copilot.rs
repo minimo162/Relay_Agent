@@ -1,14 +1,14 @@
 use tauri::{AppHandle, State};
 
 use crate::app_services::AppServices;
-use crate::models::BrowserAutomationSettings;
+use crate::models::{BrowserAutomationSettings, CopilotWarmupResult};
 
 #[tauri::command]
 pub async fn warmup_copilot_bridge(
     services: State<'_, AppServices>,
     browser_settings: Option<BrowserAutomationSettings>,
-) -> Result<crate::tauri_bridge::CopilotWarmupResult, String> {
-    crate::tauri_bridge::warmup_copilot_bridge(services, browser_settings).await
+) -> Result<CopilotWarmupResult, String> {
+    crate::doctor::warmup_copilot_bridge_from_state(services, browser_settings).await
 }
 
 #[tauri::command]
