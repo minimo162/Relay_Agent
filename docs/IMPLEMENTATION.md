@@ -5315,3 +5315,28 @@ Observed result:
   - full `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`
   - `git diff --check`
 - Windows verification could not be executed from this Linux workspace, so the remaining acceptance artifact is the next CI run. Expected outcome is that the Windows `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` step reaches real test execution instead of aborting at process startup.
+
+Windows test manifest fix moved to app crate build script (2026-04-15):
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml wrapper_creates_and_runs_mock_app_harness -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test -p compat-harness
+git diff --check
+```
+
+Observed result:
+
+- Replaced the earlier repo-level `.cargo/config.toml` workaround. That approach did propagate `__TAURI_WORKSPACE__=true` into the upstream `tauri` dependency build script, but it still did not fix Windows CI because the emitted link args applied to the dependency build, not to the final `relay_agent_desktop_lib` test executable that was crashing with `STATUS_ENTRYPOINT_NOT_FOUND`.
+- [`apps/desktop/src-tauri/build.rs`](../apps/desktop/src-tauri/build.rs) now keeps `tauri_build::build()` and adds a second Windows/MSVC-only path for Rust test targets. The script copies [`windows-test-app-manifest.xml`](../apps/desktop/src-tauri/windows-test-app-manifest.xml) into `OUT_DIR` and emits:
+  - `cargo:rustc-link-arg-tests=/MANIFEST:EMBED`
+  - `cargo:rustc-link-arg-tests=/MANIFESTINPUT:<path>`
+  - `cargo:rustc-link-arg-tests=/WX`
+- The checked-in test manifest uses the same Common Controls v6 dependency Tauri documents for Windows manifests. This keeps the packaged-app manifest under `tauri_build` ownership while giving the desktop crate's Rust test binary its own Windows loader metadata.
+- The `MockRuntime` smoke harness and desktop test layout were left unchanged.
+- Local non-Windows regression checks passed after the build-script change:
+  - focused smoke wrapper test `wrapper_creates_and_runs_mock_app_harness`
+  - full `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`
+  - `cargo test -p compat-harness`
+  - `git diff --check`
+- Windows verification still depends on CI because this workspace cannot execute MSVC test binaries. The intended acceptance artifact is that the next Windows `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` run reaches actual test execution instead of exiting at process startup.
