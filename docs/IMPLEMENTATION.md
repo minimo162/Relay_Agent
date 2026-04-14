@@ -15,6 +15,14 @@
 
 ## Milestone Log
 
+### 2026-04-15 Windows CI fix: split headless desktop logic out of the Tauri lib test target
+
+**Problem:** Windows CI was still depending on the top-level `relay_agent_desktop_lib` unit-test executable. That binary was aborting during process startup with `STATUS_ENTRYPOINT_NOT_FOUND` before any Rust tests could run, even though the internal workspace crates and integration targets were already healthy.
+
+**Change:** Added a new internal crate at [`apps/desktop/src-tauri/crates/desktop-core`](../apps/desktop/src-tauri/crates/desktop-core) and moved the headless desktop logic that does not require a Tauri runtime into it. The shell crate now re-exports the moved modules instead of owning those unit tests directly, which keeps frontend IPC contracts stable while shifting coverage into a Windows-safe target. The extracted crate now covers headless agent-loop helpers (prompt construction, tool-response parsing, repair logic, permission-policy snapshots, compaction replay helpers), persistence/session validation, registry/session cleanup, workspace slash-command merging, workspace surface models, and shared desktop error/session-write types. Main CI and the live docs were updated so Windows no longer runs the crashing shell lib test binary; the acceptance path is now `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, and `pnpm smoke:windows`.
+
+**Verification:** `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`; `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core`; `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`; `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`; `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness` — pass (2026-04-15). `pnpm check` was run after the doc/workflow update and passed. `pnpm smoke:windows` remains a Windows-lane-only acceptance command and could not be executed from this Linux workspace.
+
 ### 2026-04-14 Repo hardening toward claw-code operational rigor
 
 **Problem:** The repo direction was already close to claw-code in architecture, but the operational surface still had avoidable drift. Workspace metadata, live docs, compaction defaults, and CI acceptance were not fully aligned, there was no headless doctor entrypoint, and the parity harness still left several claw scenarios outside the deterministic desktop path.

@@ -100,7 +100,9 @@ Relay_Agent/
 pnpm check
 
 cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness
 cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings
 ```
 
@@ -126,13 +128,17 @@ Use the signed-in `RelayAgentEdgeProfile` on the same CDP port. A good run logs 
 
 **Headless launched-app smokes:** `pnpm launch:test` verifies `tauri:dev` launch stability in Linux/Xvfb, and `pnpm agent-loop:test` runs the env-gated Rust autorun smoke that exercises retry recovery, approval handling, emitted `agent:*` events, the pushed `agent:status` phase sequence (`running` → `retrying` → `waiting_approval` → `idle:completed` minimum), and final `stopReason: "completed"` through the real desktop bridge.
 
+**Headless desktop coverage:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop` runs the workspace tests without invoking the Windows-hostile Tauri lib test binary. Headless desktop logic and its unit tests now live in `apps/desktop/src-tauri/crates/desktop-core`.
+
+**Doctor CLI integration:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli` covers doctor report shape and CLI-facing status handling.
+
 **Deterministic parity harness:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness` covers claw-style parity scenarios, including the desktop full-session harness for `streaming_text`, `plugin_tool_roundtrip`, `auto_compact_triggered`, and `token_cost_reporting`.
 
 **E2E (mock Tauri, browser only):** from `apps/desktop`, `E2E_SKIP_AUTH_SETUP=1 pnpm exec playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts`. Use `CI=1` if `vite preview` might reuse a stale build after changing `tests/tauri-mock-core.ts`.
 
 **Inspect Copilot DOM (real CDP):** `pnpm --filter @relay-agent/desktop inspect:copilot-dom` (signed-in Edge on 9360).
 
-**CI:** see `.github/workflows/` — main CI now runs a matrix: `ubuntu-latest` executes bundled-node prep, Linux Tauri deps, `cargo check`, `cargo clippy -- -D warnings`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, docs truth guards, `pnpm check`, `pnpm launch:test`, and `pnpm agent-loop:test`; `windows-latest` runs bundled-node prep, `cargo check`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, `pnpm check`, and `pnpm smoke:windows`.
+**CI:** see `.github/workflows/` — main CI now runs a matrix: `ubuntu-latest` executes bundled-node prep, Linux Tauri deps, docs truth guards, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, `pnpm launch:test`, and `pnpm agent-loop:test`; `windows-latest` runs bundled-node prep, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, and `pnpm smoke:windows`.
 
 ## License
 

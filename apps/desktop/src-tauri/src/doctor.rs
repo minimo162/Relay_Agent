@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
+use desktop_core::doctor::{
+    failed_check, ok_check, report_from_checks as core_report_from_checks, warn_check,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use tauri::State;
@@ -17,7 +19,7 @@ use crate::copilot_server::{
 };
 use crate::models::{
     BrowserAutomationSettings, CopilotWarmupFailureCode, CopilotWarmupResult, CopilotWarmupStage,
-    RelayDiagnostics, RelayDoctorCheck, RelayDoctorReport, RelayDoctorStatus,
+    RelayDiagnostics, RelayDoctorCheck, RelayDoctorReport,
 };
 use crate::registry::SessionRegistry;
 use runtime::{ConfigLoader, MAX_TEXT_FILE_READ_BYTES};
@@ -545,13 +547,7 @@ fn report_from_checks(
     browser_settings: BrowserAutomationSettings,
     checks: Vec<RelayDoctorCheck>,
 ) -> RelayDoctorReport {
-    RelayDoctorReport {
-        status: aggregate_status(&checks),
-        timestamp: Utc::now().to_rfc3339(),
-        browser_settings,
-        checks,
-        doctor_hints: relay_doctor_hints(),
-    }
+    core_report_from_checks(browser_settings, checks, relay_doctor_hints())
 }
 
 fn relay_predictability_notes() -> Vec<String> {
@@ -1047,57 +1043,6 @@ fn push_status_outcome_checks(checks: &mut Vec<RelayDoctorCheck>, outcome: Bridg
     }
 }
 
-fn ok_check(id: &str, message: impl Into<String>, details: Option<JsonValue>) -> RelayDoctorCheck {
-    RelayDoctorCheck {
-        id: id.to_string(),
-        status: RelayDoctorStatus::Ok,
-        message: message.into(),
-        details,
-    }
-}
-
-fn warn_check(
-    id: &str,
-    message: impl Into<String>,
-    details: Option<JsonValue>,
-) -> RelayDoctorCheck {
-    RelayDoctorCheck {
-        id: id.to_string(),
-        status: RelayDoctorStatus::Warn,
-        message: message.into(),
-        details,
-    }
-}
-
-fn failed_check(
-    id: &str,
-    message: impl Into<String>,
-    details: Option<JsonValue>,
-) -> RelayDoctorCheck {
-    RelayDoctorCheck {
-        id: id.to_string(),
-        status: RelayDoctorStatus::Fail,
-        message: message.into(),
-        details,
-    }
-}
-
-fn aggregate_status(checks: &[RelayDoctorCheck]) -> RelayDoctorStatus {
-    if checks
-        .iter()
-        .any(|check| check.status == RelayDoctorStatus::Fail)
-    {
-        RelayDoctorStatus::Fail
-    } else if checks
-        .iter()
-        .any(|check| check.status == RelayDoctorStatus::Warn)
-    {
-        RelayDoctorStatus::Warn
-    } else {
-        RelayDoctorStatus::Ok
-    }
-}
-
 fn classify_warmup_status_response(
     request_id: &str,
     cdp_port: u16,
@@ -1259,54 +1204,4 @@ pub async fn get_relay_diagnostics_from_state(
     services: State<'_, AppServices>,
 ) -> RelayDiagnostics {
     get_relay_diagnostics(services.copilot_bridge()).await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn aggregate_status_prefers_fail_then_warn() {
-        assert_eq!(
-            aggregate_status(&[ok_check("one", "ok", None), warn_check("two", "warn", None),]),
-            RelayDoctorStatus::Warn
-        );
-        assert_eq!(
-            aggregate_status(&[
-                ok_check("one", "ok", None),
-                failed_check("two", "fail", None),
-                warn_check("three", "warn", None),
-            ]),
-            RelayDoctorStatus::Fail
-        );
-    }
-
-    #[test]
-    fn doctor_report_serializes_expected_shape() {
-        let report = report_from_checks(
-            default_browser_settings(),
-            vec![
-                ok_check("workspace_config", "ok", None),
-                warn_check(
-                    "m365_sign_in",
-                    "warn",
-                    Some(json!({"url": "https://example.com"})),
-                ),
-            ],
-        );
-        let json = serde_json::to_value(report).expect("serialize report");
-        assert_eq!(json.get("status").and_then(JsonValue::as_str), Some("warn"));
-        assert!(json.get("timestamp").and_then(JsonValue::as_str).is_some());
-        assert!(json
-            .get("browserSettings")
-            .and_then(|value| value.get("cdpPort"))
-            .is_some());
-        assert_eq!(
-            json.get("checks")
-                .and_then(JsonValue::as_array)
-                .expect("checks array")
-                .len(),
-            2
-        );
-    }
 }

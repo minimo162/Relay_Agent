@@ -7,7 +7,7 @@ Date: 2026-04-14
 Relay_Agent is a **conversation-first Tauri desktop agent** under `apps/desktop/`.
 
 - Frontend: SolidJS + Vite desktop shell.
-- Backend: Rust in `apps/desktop/src-tauri/`, with internal crates under `crates/{api,runtime,tools,commands,compat-harness}`.
+- Backend: Rust in `apps/desktop/src-tauri/`, with internal crates under `crates/{api,desktop-core,runtime,tools,commands,compat-harness}`.
 - Primary execution path: M365 Copilot via Edge CDP and the Relay Node bridge.
 - Contract source of truth: Rust IPC types and command signatures; generated frontend bindings live in `apps/desktop/src/lib/ipc.generated.ts`, with `apps/desktop/src/lib/ipc.ts` kept thin.
 - UI direction: warm-token light theme and paired warm-charcoal dark theme from `apps/desktop/DESIGN.md`.
@@ -51,7 +51,9 @@ Canonical repo verification commands:
 ```bash
 pnpm check
 cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness
 ```
 
 Acceptance and smoke commands:
@@ -61,7 +63,6 @@ pnpm launch:test
 pnpm agent-loop:test
 pnpm smoke:windows
 pnpm doctor -- --json
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness
 ```
 
 Rules:
@@ -151,8 +152,8 @@ Change targets:
 Acceptance criteria:
 
 - Main CI runs on `ubuntu-latest` and `windows-latest`.
-- Ubuntu executes bundled-node prep, Tauri system dependencies, `cargo check`, `cargo clippy -- -D warnings`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, `pnpm check`, `pnpm launch:test`, and `pnpm agent-loop:test`.
-- Windows executes bundled-node prep, `cargo check`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`, `pnpm check`, and `pnpm smoke:windows`.
+- Ubuntu executes bundled-node prep, Tauri system dependencies, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, `pnpm launch:test`, and `pnpm agent-loop:test`.
+- Windows executes bundled-node prep, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, and `pnpm smoke:windows`.
 - CI also guards the live docs map against stale removed-package or spreadsheet-era references.
 
 ## Out Of Scope

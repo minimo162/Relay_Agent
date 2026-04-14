@@ -669,6 +669,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "desktop-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "runtime",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tools",
+ "tracing",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3173,6 +3190,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "commands",
+ "desktop-core",
  "futures",
  "futures-util",
  "reqwest 0.12.28",

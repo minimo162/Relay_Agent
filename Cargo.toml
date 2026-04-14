@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "apps/desktop/src-tauri",
+    "apps/desktop/src-tauri/crates/desktop-core",
     "apps/desktop/src-tauri/crates/runtime",
     "apps/desktop/src-tauri/crates/tools",
     "apps/desktop/src-tauri/crates/commands",

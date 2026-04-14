@@ -78,11 +78,14 @@ jobs:
         if: matrix.run_clippy
         run: cargo clippy -- -D warnings
 
-      - name: cargo test
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - name: cargo test --workspace --exclude relay-agent-desktop
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop
+
+      - name: cargo test --test doctor_cli
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli
 
       - name: cargo test -p compat-harness
-        run: cargo test -p compat-harness
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness
 
       - name: pnpm check
         run: pnpm check

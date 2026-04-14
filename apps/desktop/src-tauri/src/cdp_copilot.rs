@@ -26,10 +26,12 @@
 
 use anyhow::{bail, Context, Result};
 use base64::Engine;
+use desktop_core::cdp::{
+    cdp_dedicated_relay_profile_ok, read_devtools_active_port, read_relay_cdp_port_marker,
+};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::process::Child;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -38,34 +40,9 @@ use tokio::time::{timeout, Duration};
 use tracing::{debug, info, warn};
 use tungstenite::Message;
 
+pub use desktop_core::cdp::relay_agent_edge_profile_dir;
+
 /* ── Profile + DevToolsActivePort (port 0) ───────────────────── */
-
-/// Isolated Edge profile directory (same path the Tauri `disconnect_cdp` cleanup expects).
-pub fn relay_agent_edge_profile_dir() -> PathBuf {
-    let home = std::env::var("HOME")
-        .ok()
-        .or_else(|| std::env::var("USERPROFILE").ok())
-        .map_or_else(
-            || {
-                if cfg!(target_os = "windows") {
-                    PathBuf::from(r"C:\Users\Default\AppData\Local")
-                } else {
-                    PathBuf::from("/tmp")
-                }
-            },
-            PathBuf::from,
-        );
-    home.join("RelayAgentEdgeProfile")
-}
-
-/// Read the Chromium-written `DevToolsActivePort` file (first line = port).
-fn read_devtools_active_port(profile_dir: &std::path::Path) -> Option<u16> {
-    let path = profile_dir.join("DevToolsActivePort");
-    let data = std::fs::read_to_string(&path).ok()?;
-    let line = data.lines().next()?.trim();
-    let port: u16 = line.parse().ok()?;
-    (port > 0).then_some(port)
-}
 
 /// Poll until `DevToolsActivePort` appears after `--remote-debugging-port=0` launch.
 async fn wait_for_devtools_active_port(
@@ -99,71 +76,10 @@ async fn fetch_cdp_version(debug_url: &str) -> Option<Value> {
     response.json::<Value>().await.ok()
 }
 
-fn cdp_version_looks_like_edge(info: &Value) -> bool {
-    let browser = info
-        .get("Browser")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_lowercase();
-    let user_agent = info
-        .get("User-Agent")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_lowercase();
-    let combined = format!("{browser} {user_agent}");
-    if combined.contains("edg") || combined.contains("microsoft edge") {
-        return true;
-    }
-    if combined.contains("google chrome") {
-        return false;
-    }
-    !combined.contains("chrome/") || combined.contains("edg")
-}
-
-fn cdp_definitely_google_chrome_only(info: &Value) -> bool {
-    let browser = info
-        .get("Browser")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_lowercase();
-    let user_agent = info
-        .get("User-Agent")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_lowercase();
-    let combined = format!("{browser} {user_agent}");
-    if combined.contains("edg") || combined.contains("microsoft edge") {
-        return false;
-    }
-    combined.contains("google chrome") || combined.contains("chrome/")
-}
-
-fn cdp_dedicated_relay_profile_ok(info: &Value) -> bool {
-    if cdp_version_looks_like_edge(info) {
-        return true;
-    }
-    info.get("webSocketDebuggerUrl")
-        .and_then(Value::as_str)
-        .is_some_and(|_| !cdp_definitely_google_chrome_only(info))
-}
-
 async fn cdp_http_ready_relay_dedicated(debug_url: &str) -> bool {
     fetch_cdp_version(debug_url)
         .await
         .is_some_and(|info| cdp_dedicated_relay_profile_ok(&info))
-}
-
-/// Same relative path as `copilot_server.js` `RELAY_CDP_PORT_MARKER` under the Edge profile dir.
-const RELAY_CDP_PORT_MARKER: &str = ".relay-agent-cdp-port";
-
-fn read_relay_cdp_port_marker(profile_dir: &std::path::Path) -> Option<u16> {
-    let path = profile_dir.join(RELAY_CDP_PORT_MARKER);
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let n: u32 = raw.trim().parse().ok()?;
-    (1..=65535)
-        .contains(&n)
-        .then(|| u16::try_from(n).ok())
-        .flatten()
 }
 
 /// CDP HTTP port when attaching with `auto_launch: false` and no explicit `base_port`.
@@ -188,69 +104,6 @@ pub async fn resolve_cdp_attachment_port(preferred: u16) -> u16 {
     }
     debug!("[CDP] resolve_cdp_attachment_port: fallback to preferred port {preferred}");
     preferred
-}
-
-#[cfg(test)]
-mod attachment_port_tests {
-    use super::*;
-    use std::io::Write;
-
-    #[test]
-    fn read_relay_cdp_port_marker_valid() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let mut f = std::fs::File::create(dir.path().join(RELAY_CDP_PORT_MARKER)).unwrap();
-        writeln!(f, "9340").unwrap();
-        assert_eq!(read_relay_cdp_port_marker(dir.path()), Some(9340));
-    }
-
-    #[test]
-    fn read_relay_cdp_port_marker_whitespace_trimmed() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join(RELAY_CDP_PORT_MARKER), " 9335 \n").unwrap();
-        assert_eq!(read_relay_cdp_port_marker(dir.path()), Some(9335));
-    }
-
-    #[test]
-    fn read_relay_cdp_port_marker_invalid_or_missing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        assert_eq!(read_relay_cdp_port_marker(dir.path()), None);
-        std::fs::write(dir.path().join(RELAY_CDP_PORT_MARKER), "0").unwrap();
-        assert_eq!(read_relay_cdp_port_marker(dir.path()), None);
-        std::fs::write(dir.path().join(RELAY_CDP_PORT_MARKER), "70000").unwrap();
-        assert_eq!(read_relay_cdp_port_marker(dir.path()), None);
-        std::fs::write(dir.path().join(RELAY_CDP_PORT_MARKER), "not-a-port").unwrap();
-        assert_eq!(read_relay_cdp_port_marker(dir.path()), None);
-    }
-
-    #[test]
-    fn read_devtools_active_port_first_line() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("DevToolsActivePort"), "9444\nsecond\n").unwrap();
-        assert_eq!(read_devtools_active_port(dir.path()), Some(9444));
-    }
-
-    #[test]
-    fn cdp_version_edge_detection_prefers_edge_markers() {
-        let info = json!({
-            "Browser": "Chrome/136.0.0.0",
-            "User-Agent": "Mozilla/5.0 Edg/136.0.0.0",
-            "webSocketDebuggerUrl": "ws://127.0.0.1/devtools/browser/1"
-        });
-        assert!(cdp_version_looks_like_edge(&info));
-        assert!(cdp_dedicated_relay_profile_ok(&info));
-    }
-
-    #[test]
-    fn cdp_version_rejects_stock_google_chrome() {
-        let info = json!({
-            "Browser": "Google Chrome/136.0.0.0",
-            "User-Agent": "Mozilla/5.0 Chrome/136.0.0.0",
-            "webSocketDebuggerUrl": "ws://127.0.0.1/devtools/browser/1"
-        });
-        assert!(!cdp_version_looks_like_edge(&info));
-        assert!(cdp_definitely_google_chrome_only(&info));
-        assert!(!cdp_dedicated_relay_profile_ok(&info));
-    }
 }
 
 /* ── Edge auto-launch ────────────────────────────────────────── */

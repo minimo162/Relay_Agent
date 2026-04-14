@@ -5,27 +5,11 @@ use std::process::Command;
 use std::time::Duration;
 
 use reqwest::Client;
-use serde::Deserialize;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
 use crate::copilot_server::RELAY_COPILOT_SERVICE_NAME;
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct HealthBody {
-    status: String,
-    #[serde(default)]
-    service: Option<String>,
-    #[serde(default)]
-    instance_id: Option<String>,
-}
-
-fn should_reclaim_listener(body: &HealthBody, expected_instance_id: &str) -> bool {
-    body.status == "ok"
-        && body.service.as_deref() == Some(RELAY_COPILOT_SERVICE_NAME)
-        && body.instance_id.as_deref() != Some(expected_instance_id)
-}
+use desktop_core::copilot_port_reclaim::{should_reclaim_listener, HealthBody};
 
 /// Probes `/health` on `port`. If a Relay-owned bridge is present but its `instanceId` does not
 /// match `expected_instance_id`, terminates the process listening on that port (platform-specific).
@@ -63,7 +47,7 @@ pub(crate) async fn maybe_reclaim_stale_copilot_http_port(
         Err(_) => return,
     };
 
-    if !should_reclaim_listener(&body, expected_instance_id) {
+    if !should_reclaim_listener(&body, expected_instance_id, RELAY_COPILOT_SERVICE_NAME) {
         return;
     }
 
@@ -186,53 +170,4 @@ fn kill_listen_port_unix(port: u16) -> std::io::Result<()> {
         let _ = Command::new("kill").args(["-9", pid]).status();
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{should_reclaim_listener, HealthBody};
-    use crate::copilot_server::RELAY_COPILOT_SERVICE_NAME;
-
-    #[test]
-    fn reclaim_requires_relay_service_and_mismatched_instance_id() {
-        let relay_other_instance = HealthBody {
-            status: "ok".into(),
-            service: Some(RELAY_COPILOT_SERVICE_NAME.into()),
-            instance_id: Some("other-instance".into()),
-        };
-        assert!(should_reclaim_listener(
-            &relay_other_instance,
-            "expected-instance"
-        ));
-
-        let same_instance = HealthBody {
-            status: "ok".into(),
-            service: Some(RELAY_COPILOT_SERVICE_NAME.into()),
-            instance_id: Some("expected-instance".into()),
-        };
-        assert!(!should_reclaim_listener(
-            &same_instance,
-            "expected-instance"
-        ));
-
-        let foreign_service = HealthBody {
-            status: "ok".into(),
-            service: Some("other_service".into()),
-            instance_id: Some("other-instance".into()),
-        };
-        assert!(!should_reclaim_listener(
-            &foreign_service,
-            "expected-instance"
-        ));
-
-        let missing_fingerprint = HealthBody {
-            status: "ok".into(),
-            service: None,
-            instance_id: None,
-        };
-        assert!(!should_reclaim_listener(
-            &missing_fingerprint,
-            "expected-instance"
-        ));
-    }
 }
