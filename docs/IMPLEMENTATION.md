@@ -5296,3 +5296,22 @@ Observed result:
   - `build`
   - `tests/app.e2e.spec.ts`: 5 passed
   - `tests/e2e-comprehensive.spec.ts`: 6 passed
+
+Windows `cargo test` startup fix for desktop lib harness (2026-04-15):
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml wrapper_creates_and_runs_mock_app_harness -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+git diff --check
+```
+
+Observed result:
+
+- Added repo-level Cargo env configuration at [`.cargo/config.toml`](../.cargo/config.toml) setting `__TAURI_WORKSPACE__ = "true"`.
+- This deliberately enables Tauri `v2.10.3`'s own Windows/MSVC test workaround in the upstream `tauri` crate build script, which documents the exact failure class we saw in CI: `STATUS_ENTRYPOINT_NOT_FOUND` before the desktop lib tests can execute.
+- No desktop crate build logic changed. [`apps/desktop/src-tauri/build.rs`](../apps/desktop/src-tauri/build.rs) still delegates to `tauri_build::build()`, and the `MockRuntime`-based smoke harness remains intact.
+- Local Linux verification still passed after the repo-level env change:
+  - focused smoke wrapper test `wrapper_creates_and_runs_mock_app_harness`
+  - full `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`
+  - `git diff --check`
+- Windows verification could not be executed from this Linux workspace, so the remaining acceptance artifact is the next CI run. Expected outcome is that the Windows `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` step reaches real test execution instead of aborting at process startup.
