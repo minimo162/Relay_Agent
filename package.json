@@ -11,6 +11,7 @@
     "launch:test": "pnpm --filter @relay-agent/desktop launch:test",
     "agent-loop:test": "pnpm --filter @relay-agent/desktop agent-loop:test",
     "smoke:windows": "pnpm --filter @relay-agent/desktop smoke:windows",
+    "live:m365:desktop-smoke": "pnpm --filter @relay-agent/desktop live:m365:desktop-smoke",
     "typecheck": "pnpm --filter @relay-agent/desktop typecheck",
     "test:e2e:local": "pnpm --filter @relay-agent/desktop test:e2e:local",
     "test:e2e:auth-save": "pnpm --filter @relay-agent/desktop test:e2e:auth-save",

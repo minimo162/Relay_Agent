@@ -1,11 +1,22 @@
+use crate::agent_loop::{msg_to_relay, MessageContent};
+use crate::app_services::AppServices;
+use crate::doctor::relay_diagnostics_blocking;
+use crate::models::{
+    BrowserAutomationSettings, RespondAgentApprovalRequest, SessionPreset, StartAgentRequest,
+};
+use crate::registry::SessionRunState;
+use crate::tauri_bridge::{respond_approval_inner, start_agent_inner};
+use runtime::ConversationMessage;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub const DEV_FIRST_RUN_SEND_EVENT: &str = "relay:dev-first-run-send";
+pub const DEV_CONFIGURE_EVENT: &str = "relay:dev-configure";
 pub const DEV_APPROVE_LATEST_EVENT: &str = "relay:dev-approve-latest";
 pub const DEV_APPROVE_LATEST_SESSION_EVENT: &str = "relay:dev-approve-latest-session";
 pub const DEV_APPROVE_LATEST_WORKSPACE_EVENT: &str = "relay:dev-approve-latest-workspace";
@@ -17,10 +28,79 @@ struct DevFirstRunSendRequest {
     text: String,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DevStartAgentRequest {
+    goal: String,
+    cwd: Option<String>,
+    cdp_port: Option<u16>,
+    auto_launch_edge: Option<bool>,
+    timeout_ms: Option<u32>,
+    max_turns: Option<usize>,
+    session_preset: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DevConfigureRequest {
+    workspace_path: Option<String>,
+    session_preset: Option<String>,
+    cdp_port: Option<u16>,
+    auto_launch_edge: Option<bool>,
+    timeout_ms: Option<u32>,
+    max_turns: Option<u32>,
+    always_on_top: Option<bool>,
+    persist_settings: Option<bool>,
+    rerun_warmup: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DevDirectApprovalRequest {
+    session_id: String,
+    approval_id: String,
+    approved: Option<bool>,
+    remember_for_session: Option<bool>,
+    remember_for_workspace: Option<bool>,
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DevFirstRunSendEvent {
     text: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DevPendingApprovalState {
+    approval_id: String,
+    tool_name: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DevSessionState {
+    session_id: String,
+    running: bool,
+    run_state: String,
+    last_stop_reason: Option<String>,
+    retry_count: usize,
+    message_count: usize,
+    pending_approvals: Vec<DevPendingApprovalState>,
+    tool_use_counts: BTreeMap<String, usize>,
+    tool_result_counts: BTreeMap<String, usize>,
+    tool_error_counts: BTreeMap<String, usize>,
+    last_assistant_text: Option<String>,
+    current_copilot_request_id: Option<String>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DevStateResponse {
+    ok: bool,
+    relay_diagnostics: crate::models::RelayDiagnostics,
+    latest_session_id: Option<String>,
+    sessions: Vec<DevSessionState>,
 }
 
 struct ParsedHttpRequest {
@@ -159,7 +239,11 @@ fn dispatch_http_request(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/health") => write_health_response(stream, port),
+        ("GET", "/state") => write_state_response(stream, app),
         ("POST", "/first-run-send") => handle_first_run_send(stream, app, &request.body),
+        ("POST", "/start-agent") => handle_start_agent(stream, app, &request.body),
+        ("POST", "/configure") => handle_configure(stream, app, &request.body),
+        ("POST", "/approve") => handle_direct_approval(stream, app, &request.body),
         ("POST", "/approve-latest") => {
             emit_mode_event(stream, app, DEV_APPROVE_LATEST_EVENT, "once")
         }
@@ -176,6 +260,14 @@ fn dispatch_http_request(
     }
 }
 
+fn write_state_response(
+    stream: &mut TcpStream,
+    app: &AppHandle,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let state = build_state_response(app)?;
+    write_json_response(stream, 200, &serde_json::to_value(state)?)
+}
+
 fn write_health_response(
     stream: &mut TcpStream,
     port: u16,
@@ -185,6 +277,84 @@ fn write_health_response(
         200,
         &json!({ "ok": true, "port": port, "event": DEV_FIRST_RUN_SEND_EVENT }),
     )
+}
+
+fn handle_configure(
+    stream: &mut TcpStream,
+    app: &AppHandle,
+    body: &[u8],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let payload: DevConfigureRequest = serde_json::from_slice(body)?;
+    tracing::info!("[dev-control] emitting {}", DEV_CONFIGURE_EVENT);
+    app.emit(DEV_CONFIGURE_EVENT, &payload)?;
+    write_json_response(
+        stream,
+        202,
+        &json!({ "ok": true, "event": DEV_CONFIGURE_EVENT }),
+    )
+}
+
+fn handle_start_agent(
+    stream: &mut TcpStream,
+    app: &AppHandle,
+    body: &[u8],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let payload: DevStartAgentRequest = serde_json::from_slice(body)?;
+    let goal = payload.goal.trim();
+    if goal.is_empty() {
+        return write_json_response(
+            stream,
+            400,
+            &json!({ "ok": false, "error": "missing_goal" }),
+        );
+    }
+
+    let request = StartAgentRequest {
+        goal: goal.to_string(),
+        files: Vec::new(),
+        cwd: payload.cwd.map(|value| value.trim().to_string()),
+        browser_settings: Some(BrowserAutomationSettings {
+            cdp_port: payload.cdp_port.unwrap_or(9360),
+            auto_launch_edge: payload.auto_launch_edge.unwrap_or(false),
+            timeout_ms: payload.timeout_ms.unwrap_or(60_000),
+        }),
+        max_turns: payload.max_turns,
+        session_preset: parse_session_preset(payload.session_preset.as_deref()),
+    };
+
+    let services = app.state::<AppServices>();
+    let session_id = tauri::async_runtime::block_on(start_agent_inner(
+        app.clone(),
+        services.registry(),
+        services.agent_semaphore(),
+        services.config().clone(),
+        request,
+    ))
+    .map_err(|error| format!("start_agent failed: {error}"))?;
+
+    write_json_response(stream, 202, &json!({ "ok": true, "sessionId": session_id }))
+}
+
+fn handle_direct_approval(
+    stream: &mut TcpStream,
+    app: &AppHandle,
+    body: &[u8],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let payload: DevDirectApprovalRequest = serde_json::from_slice(body)?;
+    let services = app.state::<AppServices>();
+    respond_approval_inner(
+        services.registry(),
+        RespondAgentApprovalRequest {
+            session_id: payload.session_id,
+            approval_id: payload.approval_id,
+            approved: payload.approved.unwrap_or(true),
+            remember_for_session: payload.remember_for_session,
+            remember_for_workspace: payload.remember_for_workspace,
+        },
+    )
+    .map_err(|error| format!("respond_approval failed: {error}"))?;
+
+    write_json_response(stream, 202, &json!({ "ok": true }))
 }
 
 fn handle_first_run_send(
@@ -224,6 +394,157 @@ fn emit_mode_event(
     tracing::info!("[dev-control] emitting {}", event_name);
     app.emit(event_name, json!({ "mode": mode }))?;
     write_json_response(stream, 202, &json!({ "ok": true, "event": event_name }))
+}
+
+fn build_state_response(
+    app: &AppHandle,
+) -> Result<DevStateResponse, Box<dyn std::error::Error + Send + Sync>> {
+    let services = app.state::<AppServices>();
+    let registry = services.registry();
+    let relay_diagnostics = relay_diagnostics_blocking(services.copilot_bridge());
+    let mut sessions = Vec::new();
+
+    for session_id in registry.list_session_ids()? {
+        let Some(handle) = registry.get_handle(&session_id)? else {
+            continue;
+        };
+        let pending_approvals = handle
+            .list_pending_approvals()?
+            .into_iter()
+            .map(|(approval_id, tool_name)| DevPendingApprovalState {
+                approval_id,
+                tool_name,
+            })
+            .collect::<Vec<_>>();
+        let snapshot = handle.read_state(|state| {
+            build_session_state(&session_id, state, pending_approvals.clone())
+        })?;
+        sessions.push(snapshot);
+    }
+
+    sessions.sort_by(|left, right| {
+        right
+            .running
+            .cmp(&left.running)
+            .then_with(|| {
+                right
+                    .pending_approvals
+                    .len()
+                    .cmp(&left.pending_approvals.len())
+            })
+            .then_with(|| right.message_count.cmp(&left.message_count))
+            .then_with(|| left.session_id.cmp(&right.session_id))
+    });
+    let latest_session_id = sessions.first().map(|session| session.session_id.clone());
+
+    Ok(DevStateResponse {
+        ok: true,
+        relay_diagnostics,
+        latest_session_id,
+        sessions,
+    })
+}
+
+fn build_session_state(
+    session_id: &str,
+    state: &crate::registry::SessionState,
+    pending_approvals: Vec<DevPendingApprovalState>,
+) -> DevSessionState {
+    let (
+        message_count,
+        tool_use_counts,
+        tool_result_counts,
+        tool_error_counts,
+        last_assistant_text,
+    ) = summarize_session_messages(&state.session.messages);
+
+    DevSessionState {
+        session_id: session_id.to_string(),
+        running: state.running,
+        run_state: run_state_label(state.run_state).to_string(),
+        last_stop_reason: state.last_stop_reason.clone(),
+        retry_count: state.retry_count,
+        message_count,
+        pending_approvals,
+        tool_use_counts,
+        tool_result_counts,
+        tool_error_counts,
+        last_assistant_text,
+        current_copilot_request_id: state.current_copilot_request_id.clone(),
+    }
+}
+
+fn summarize_session_messages(
+    messages: &[ConversationMessage],
+) -> (
+    usize,
+    BTreeMap<String, usize>,
+    BTreeMap<String, usize>,
+    BTreeMap<String, usize>,
+    Option<String>,
+) {
+    let mut tool_use_names = BTreeMap::<String, String>::new();
+    let mut tool_use_counts = BTreeMap::<String, usize>::new();
+    let mut tool_result_counts = BTreeMap::<String, usize>::new();
+    let mut tool_error_counts = BTreeMap::<String, usize>::new();
+    let mut last_assistant_text = None;
+
+    for message in messages.iter().map(msg_to_relay) {
+        for content in message.content {
+            match content {
+                MessageContent::Text { text } if message.role == "assistant" => {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        last_assistant_text = Some(trimmed.to_string());
+                    }
+                }
+                MessageContent::ToolUse { id, name, .. } => {
+                    tool_use_names.insert(id, name.clone());
+                    *tool_use_counts.entry(name).or_insert(0) += 1;
+                }
+                MessageContent::ToolResult {
+                    tool_use_id,
+                    is_error,
+                    ..
+                } => {
+                    if let Some(name) = tool_use_names.get(&tool_use_id).cloned() {
+                        *tool_result_counts.entry(name.clone()).or_insert(0) += 1;
+                        if is_error {
+                            *tool_error_counts.entry(name).or_insert(0) += 1;
+                        }
+                    }
+                }
+                MessageContent::Text { .. } => {}
+            }
+        }
+    }
+
+    (
+        messages.len(),
+        tool_use_counts,
+        tool_result_counts,
+        tool_error_counts,
+        last_assistant_text,
+    )
+}
+
+fn run_state_label(state: SessionRunState) -> &'static str {
+    match state {
+        SessionRunState::Running => "running",
+        SessionRunState::Retrying => "retrying",
+        SessionRunState::WaitingApproval => "waiting_approval",
+        SessionRunState::Compacting => "compacting",
+        SessionRunState::Cancelling => "cancelling",
+        SessionRunState::Finished => "finished",
+    }
+}
+
+fn parse_session_preset(raw: Option<&str>) -> SessionPreset {
+    match raw.map(str::trim) {
+        Some("plan") => SessionPreset::Plan,
+        Some("explore") => SessionPreset::Explore,
+        _ => SessionPreset::Build,
+    }
 }
 
 fn write_json_response(

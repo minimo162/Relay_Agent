@@ -5356,3 +5356,43 @@ Observed result:
   - `cargo test -p compat-harness`
   - `git diff --check`
 - Windows verification still depends on CI because this workspace cannot execute MSVC test binaries. The intended acceptance artifact is that the next Windows `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` run reaches actual test execution instead of exiting at process startup.
+
+Linux live M365 Copilot desktop smoke with real Edge/CDP (2026-04-15):
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+node --check apps/desktop/scripts/live_m365_desktop_smoke.mjs
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop
+pnpm check
+pnpm --filter @relay-agent/desktop live:m365:desktop-smoke
+```
+
+Observed result:
+
+- Added a debug-only desktop control surface and a dedicated live smoke harness so the Linux desktop app can be driven end-to-end against a real signed-in M365 Copilot session without mutating persisted local settings:
+  - [`apps/desktop/src-tauri/src/dev_control.rs`](../apps/desktop/src-tauri/src/dev_control.rs) now exposes `/state`, `/configure`, `/start-agent`, and `/approve` for controlled live-run orchestration.
+  - [`apps/desktop/src/shell/Shell.tsx`](../apps/desktop/src/shell/Shell.tsx) now accepts `relay:dev-configure` to apply temporary runtime settings and rerun warmup without persisting them.
+  - [`apps/desktop/scripts/live_m365_desktop_smoke.mjs`](../apps/desktop/scripts/live_m365_desktop_smoke.mjs) now launches Xvfb when needed, starts Edge on CDP `9360`, runs `doctor`, starts the desktop app, waits for preflight readiness, starts the live agent session, captures approval state, approves the single `write_file`, and validates the final file contents.
+  - The harness now isolates app-local data with `RELAY_AGENT_TEST_APP_LOCAL_DATA_DIR`, so prior remembered approvals no longer leak into the live run.
+- Tightened the Copilot tool-response parser to recover the real M365 plain-text wrapper observed on Linux:
+  - [`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs)
+  - [`apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs`](../apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs)
+  - When Copilot returns sentinel-marked tool JSON wrapped in `Plain Text` / `relay_tool` confusion text instead of a clean fenced block, the host now allows bounded inline recovery in that specific confused initial-turn case instead of forcing a needless repair loop.
+  - Added regression tests in both parser copies for the observed `Plain Text ... {"name":"read_file","relay_tool_call":true,...}` shape.
+- Real Linux desktop validation passed on the successful harness run:
+  - artifacts: `/tmp/relay-live-m365-smoke-Bo8E2i`
+  - `doctor` status was `warn` only because `workspace_config` had no `.claw` files; live gates `edge_cdp`, `bridge_health`, `bridge_status`, and `m365_sign_in` were all `ok`
+  - preflight reached `copilotBridgeConnected=true` and `copilotBridgeLoginRequired=false`
+  - live prompt used:
+    - `README.md を読み、冒頭説明の最初の文を使って /root/Relay_Agent/relay_live_m365_smoke.txt を作成してください。内容は 2 行だけにし、1 行目は "source: README.md"、2 行目は "summary: <最初の文>"。他のファイルは変更しないでください。`
+  - approval was observed exactly once for `write_file`
+  - completed session state recorded `toolUseCounts.read_file = 1`, `toolUseCounts.write_file = 1`, and matching tool results
+  - output artifact [`relay_live_m365_smoke.txt`](../relay_live_m365_smoke.txt) was created with:
+    - `source: README.md`
+    - `summary: Desktop agent app: **Tauri v2**, **SolidJS**, **Rust**.`
+- Verification summary:
+  - `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed
+  - `node --check apps/desktop/scripts/live_m365_desktop_smoke.mjs`: passed
+  - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`: passed
+  - `pnpm check`: passed
+  - `pnpm --filter @relay-agent/desktop live:m365:desktop-smoke`: passed on artifact run `/tmp/relay-live-m365-smoke-Bo8E2i`

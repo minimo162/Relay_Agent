@@ -42,10 +42,13 @@ impl SmokeConfig {
 }
 
 pub fn apply_test_app_local_data_dir_override() {
-    let Some(config) = SmokeConfig::from_env() else {
-        return;
-    };
-    let Some(dir) = config.local_data_dir else {
+    let local_data_dir = std::env::var("RELAY_AGENT_TEST_APP_LOCAL_DATA_DIR")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| SmokeConfig::from_env().and_then(|config| config.local_data_dir));
+    let Some(dir) = local_data_dir else {
         return;
     };
     crate::test_support::apply_test_app_local_data_dir_override(&dir);

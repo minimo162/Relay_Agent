@@ -373,7 +373,7 @@ pub fn parse_copilot_tool_response(
             sentinel_policy,
         ));
     }
-    if calls.is_empty() && parse_mode == CdpToolParseMode::RetryRepair {
+    if calls.is_empty() && should_try_inline_tool_json_fallback(raw, &display, parse_mode) {
         let (d, uf_payloads) = extract_unfenced_tool_json_candidates(&display, &whitelist);
         display = d;
         calls.extend(parse_fallback_payloads(
@@ -383,6 +383,27 @@ pub fn parse_copilot_tool_response(
         ));
     }
     (display.trim().to_string(), dedupe_relay_tool_calls(calls))
+}
+
+fn should_try_inline_tool_json_fallback(
+    raw: &str,
+    display: &str,
+    parse_mode: CdpToolParseMode,
+) -> bool {
+    if parse_mode == CdpToolParseMode::RetryRepair {
+        return true;
+    }
+    let raw_lower = raw.to_ascii_lowercase();
+    let display_lower = display.to_ascii_lowercase();
+    let has_tool_sentinel =
+        raw_lower.contains("\"relay_tool_call\"") || display_lower.contains("\"relay_tool_call\"");
+    if !has_tool_sentinel {
+        return false;
+    }
+    raw_lower.contains("relay_tool")
+        || display_lower.contains("relay_tool")
+        || is_tool_protocol_confusion_text(raw)
+        || is_tool_protocol_confusion_text(display)
 }
 
 fn latest_user_text(messages: &[ConversationMessage]) -> Option<String> {
@@ -1634,6 +1655,21 @@ BackgroundTaskOutput|read-only|read-only"#;
             "```relay_tool\n[{\"name\":\"read_file\",\"input\":{\"path\":\"README.md\"}},{\"name\":\"read_file\",\"input\":{\"file_path\":\"README.md\"}}]\n```",
         );
         assert_eq!(calls.len(), 1);
+    }
+
+    #[test]
+    fn parse_initial_recovers_inline_plain_text_tool_confusion_with_sentinel() {
+        let raw = r#"README.md を読み取り、冒頭説明の最初の文を取得します。取得後に指定どおりの 2 行ファイルを作成します。
+
+Plain Text
+relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
+{"name":"read_file","relay_tool_call":true,"input":{"path":"README.md"}}"#;
+        let (display, calls) = parse_initial(raw);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, "read_file");
+        assert_eq!(calls[0].2, r#"{"path":"README.md"}"#);
+        assert!(display.contains("README.md を読み取り"));
+        assert!(!display.contains(r#""relay_tool_call""#));
     }
 
     #[test]

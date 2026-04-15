@@ -45,7 +45,11 @@ import {
   loadDefaultSessionPreset,
   loadMaxTurns,
   loadWorkspacePath,
+  saveAlwaysOnTop,
+  saveBrowserSettings,
   saveDefaultSessionPreset,
+  saveMaxTurns,
+  saveWorkspacePath,
 } from "../lib/settings-storage";
 import { buildPlanTimelineFromUiChunks } from "../context/todo-write-parse";
 import { sessionModeDefaultNote } from "../lib/session-mode-label";
@@ -55,6 +59,7 @@ import { useCopilotWarmup } from "./useCopilotWarmup";
 import { useAgentEvents } from "./useAgentEvents";
 
 const DEV_FIRST_RUN_SEND_EVENT = "relay:dev-first-run-send";
+const DEV_CONFIGURE_EVENT = "relay:dev-configure";
 const DEV_APPROVE_LATEST_EVENT = "relay:dev-approve-latest";
 const DEV_APPROVE_LATEST_SESSION_EVENT = "relay:dev-approve-latest-session";
 const DEV_APPROVE_LATEST_WORKSPACE_EVENT = "relay:dev-approve-latest-workspace";
@@ -62,6 +67,18 @@ const DEV_REJECT_LATEST_EVENT = "relay:dev-reject-latest";
 
 type DevFirstRunSendPayload = {
   text?: string;
+};
+
+type DevConfigurePayload = {
+  workspacePath?: string | null;
+  sessionPreset?: SessionPreset | null;
+  cdpPort?: number | null;
+  autoLaunchEdge?: boolean | null;
+  timeoutMs?: number | null;
+  maxTurns?: number | null;
+  alwaysOnTop?: boolean | null;
+  persistSettings?: boolean | null;
+  rerunWarmup?: boolean | null;
 };
 
 type DevApprovalPayload = {
@@ -158,6 +175,7 @@ export default function Shell(): JSX.Element {
     if (!isTauri()) return;
     let disposed = false;
     let sendUnlisten: (() => void) | null = null;
+    let configureUnlisten: (() => void) | null = null;
     let approveUnlisten: (() => void) | null = null;
     let approveSessionUnlisten: (() => void) | null = null;
     let approveWorkspaceUnlisten: (() => void) | null = null;
@@ -172,6 +190,53 @@ export default function Shell(): JSX.Element {
         return;
       }
       sendUnlisten = fn;
+    });
+    void listen<DevConfigurePayload>(DEV_CONFIGURE_EVENT, (event) => {
+      const payload = event.payload ?? {};
+      const persistSettings = payload.persistSettings === true;
+      if (typeof payload.workspacePath === "string") {
+        const next = payload.workspacePath.trim();
+        setWorkspaceLabel(next);
+        if (persistSettings) saveWorkspacePath(next);
+      }
+      if (payload.sessionPreset === "build" || payload.sessionPreset === "plan" || payload.sessionPreset === "explore") {
+        setDefaultSessionPreset(payload.sessionPreset);
+        if (persistSettings) saveDefaultSessionPreset(payload.sessionPreset);
+      }
+      if (
+        typeof payload.cdpPort === "number" ||
+        typeof payload.autoLaunchEdge === "boolean" ||
+        typeof payload.timeoutMs === "number"
+      ) {
+        const current = browserSettings();
+        const next = {
+          cdpPort:
+            typeof payload.cdpPort === "number" && payload.cdpPort > 0 ? payload.cdpPort : current.cdpPort,
+          autoLaunchEdge:
+            typeof payload.autoLaunchEdge === "boolean" ? payload.autoLaunchEdge : current.autoLaunchEdge,
+          timeoutMs:
+            typeof payload.timeoutMs === "number" && payload.timeoutMs > 0 ? payload.timeoutMs : current.timeoutMs,
+        };
+        setBrowserSettings(next);
+        if (persistSettings) saveBrowserSettings(next);
+      }
+      if (typeof payload.maxTurns === "number" && payload.maxTurns > 0) {
+        setMaxTurns(payload.maxTurns);
+        if (persistSettings) saveMaxTurns(payload.maxTurns);
+      }
+      if (typeof payload.alwaysOnTop === "boolean") {
+        setAlwaysOnTop(payload.alwaysOnTop);
+        if (persistSettings) saveAlwaysOnTop(payload.alwaysOnTop);
+      }
+      if (payload.rerunWarmup !== false) {
+        runCopilotWarmup(true);
+      }
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      configureUnlisten = fn;
     });
     void listen<DevApprovalPayload>(DEV_APPROVE_LATEST_EVENT, () => {
       const approval = approvals.approvals()[0];
@@ -220,6 +285,7 @@ export default function Shell(): JSX.Element {
     onCleanup(() => {
       disposed = true;
       sendUnlisten?.();
+      configureUnlisten?.();
       approveUnlisten?.();
       approveSessionUnlisten?.();
       approveWorkspaceUnlisten?.();

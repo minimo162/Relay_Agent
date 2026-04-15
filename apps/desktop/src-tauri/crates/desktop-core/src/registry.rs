@@ -174,6 +174,17 @@ impl SessionHandle {
         Ok(approvals.drain().map(|(_, p)| p.tx).collect())
     }
 
+    pub fn list_pending_approvals(&self) -> Result<Vec<(String, String)>, AgentLoopError> {
+        let approvals = self
+            .approvals
+            .lock()
+            .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
+        Ok(approvals
+            .iter()
+            .map(|(approval_id, pending)| (approval_id.clone(), pending.tool_name.clone()))
+            .collect())
+    }
+
     pub fn insert_pending_user_question(
         &self,
         question_id: String,
@@ -301,6 +312,14 @@ impl SessionRegistry {
             }
         }
         Ok(count)
+    }
+
+    pub fn list_session_ids(&self) -> Result<Vec<String>, AgentLoopError> {
+        let data = self
+            .data
+            .read()
+            .map_err(|e| AgentLoopError::RegistryLockPoisoned(e.to_string()))?;
+        Ok(data.keys().cloned().collect())
     }
 
     pub fn remove_stale_sessions(&self, ttl_seconds: i64) -> Result<usize, AgentLoopError> {
