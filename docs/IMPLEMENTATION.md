@@ -15,6 +15,14 @@
 
 ## Milestone Log
 
+### 2026-04-15 Desktop UI: conversation-first minimal shell
+
+**Problem:** The desktop shell still spent its default layout budget on always-visible secondary panels. Even after the earlier onboarding cleanup, the normal chat view kept `Chats` and `Context` open at all times, and the first-run screen still distributed attention across too many equal-weight surfaces instead of clearly centering the first request.
+
+**Change:** Refined the Solid desktop shell into a conversation-first layout without changing Rust IPC or backend behavior. [`apps/desktop/src/shell/Shell.tsx`](../apps/desktop/src/shell/Shell.tsx) now keeps the conversation as the only persistent main surface, moves `Chats` and `Context` into header-driven drawers, removes the old persistent footer, and closes drawers on session selection and settings entry. [`apps/desktop/src/components/ShellHeader.tsx`](../apps/desktop/src/components/ShellHeader.tsx) now exposes the simpler control bar with project, live status, `Chats`, `Context`, and `Settings`. [`apps/desktop/src/components/FirstRunPanel.tsx`](../apps/desktop/src/components/FirstRunPanel.tsx), [`apps/desktop/src/components/Composer.tsx`](../apps/desktop/src/components/Composer.tsx), [`apps/desktop/src/components/MessageFeed.tsx`](../apps/desktop/src/components/MessageFeed.tsx), and [`apps/desktop/src/index.css`](../apps/desktop/src/index.css) now compress first-run into one primary card, reduce composer chrome to the active mode summary plus send controls, shorten the empty state copy, and restyle the shell for overlay drawers instead of a fixed three-pane grid. Updated [`apps/desktop/tests/app.e2e.spec.ts`](../apps/desktop/tests/app.e2e.spec.ts) and [`apps/desktop/tests/e2e-comprehensive.spec.ts`](../apps/desktop/tests/e2e-comprehensive.spec.ts) to cover the hidden default side panels, drawer-triggered access to chats/context, preserved onboarding gating, and unchanged inline approval / tool-row behavior.
+
+**Verification:** `pnpm --filter @relay-agent/desktop typecheck` — pass. `pnpm --filter @relay-agent/desktop exec playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts` — pass (13 tests). `pnpm check` — pass.
+
 ### 2026-04-15 Desktop UI: minimal first-run refinement
 
 **Problem:** The first-run shell had already been simplified, but it still read like three equal setup cards with repeated copy. New users still had to scan too many parallel surfaces before they could understand the one thing that mattered: set the project, confirm Copilot, then send the first request.

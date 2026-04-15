@@ -36,13 +36,14 @@ test("first run shows onboarding preflight and hides app chrome", async ({ page 
       name: "Choose the project, check Copilot, then send the first request",
     }),
   ).toBeVisible();
-  await expect(page.getByRole("heading", { level: 2, name: "Check the two setup items once" })).toBeVisible();
+  await expect(page.locator(".ra-first-run__card")).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "First request" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Choose project" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Chats" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Chats" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Context" })).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "Integrations" })).toHaveCount(0);
-  await expect(page.locator("[data-ra-footer-session]")).toHaveCount(0);
   await expect(page.locator("[data-ra-session-mode]")).toHaveCount(0);
   await expect(composer(page)).toBeDisabled();
   await expect(page.getByTestId("composer-send")).toBeDisabled();
@@ -77,12 +78,16 @@ test("sending the first prompt exits onboarding and creates one conversation", a
   await seedWorkspace(page);
   await openApp(page);
   await sendPrompt(page, "review the workspace");
-  await expect(page.getByRole("heading", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await expect(page.locator("[data-ra-shell-drawer='sessions']")).toHaveCount(0);
+  await page.getByRole("button", { name: "Chats" }).click();
+  await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible();
   await expect(page.locator(".ra-session-row")).toHaveCount(1);
+  await page.getByRole("button", { name: "Context" }).click();
+  await expect(page.locator("[data-ra-shell-drawer='context']")).toBeVisible();
   await expect(page.getByText("What you will see here")).toBeVisible();
   await expect(page.getByRole("button", { name: "Undo" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Redo" })).toHaveCount(0);
-  await expect(page.getByRole("contentinfo")).toBeVisible();
 });
 
 test("tool rows use human labels instead of raw tool names", async ({ page }) => {
@@ -90,7 +95,7 @@ test("tool rows use human labels instead of raw tool names", async ({ page }) =>
   await seedWorkspace(page);
   await openApp(page);
   await sendPrompt(page, "inspect file");
-  await expect(page.getByRole("heading", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
   await waitForMockSession(page, "session-e2e-1");
   await waitForAgentListener(page, "agent:tool_start");
   await waitForAgentListener(page, "agent:tool_result");
@@ -124,7 +129,7 @@ test("approval requests render inline instead of blocking the feed", async ({ pa
   await seedWorkspace(page);
   await openApp(page);
   await sendPrompt(page, "prepare approval");
-  await expect(page.getByRole("heading", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
   await waitForMockSession(page, "session-e2e-1");
   await waitForAgentListener(page, "agent:approval_needed");
 
@@ -151,7 +156,7 @@ test("streaming assistant text shows Drafting and suppresses generic working sta
   await seedWorkspace(page);
   await openApp(page);
   await sendPrompt(page, "stream a reply");
-  await expect(page.getByRole("heading", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
   await waitForMockSession(page, "session-e2e-1");
   await waitForAgentListener(page, "agent:text_delta");
 

@@ -24,6 +24,10 @@ export function ShellHeader(props: {
   sessionStatus: SessionStatusSnapshot;
   workspacePath: () => string;
   onOpenSettings: () => void;
+  onToggleChats?: () => void;
+  onToggleContext?: () => void;
+  chatsOpen?: boolean;
+  contextOpen?: boolean;
   canUndo: boolean;
   canRedo: boolean;
   onUndo: () => void;
@@ -71,9 +75,34 @@ export function ShellHeader(props: {
             </span>
           </div>
 
+          <div class="ra-shell-header__nav">
+            <Button
+              variant="secondary"
+              type="button"
+              class={`ra-type-button-label ra-shell-header__toggle ${props.chatsOpen ? "is-open" : ""}`}
+              aria-expanded={props.chatsOpen}
+              aria-controls="ra-drawer-sessions"
+              onClick={() => props.onToggleChats?.()}
+              data-ra-chats-trigger=""
+            >
+              Chats
+            </Button>
+            <Button
+              variant="secondary"
+              type="button"
+              class={`ra-type-button-label ra-shell-header__toggle ${props.contextOpen ? "is-open" : ""}`}
+              aria-expanded={props.contextOpen}
+              aria-controls="ra-drawer-context"
+              onClick={() => props.onToggleContext?.()}
+              data-ra-context-trigger=""
+            >
+              Context
+            </Button>
+          </div>
+
           {showWriteActions() ? (
             <div
-              class="ra-shell-header__actions flex items-center gap-0.5 shrink-0 border-l border-[var(--ra-border)] pl-2 ml-1"
+              class="ra-shell-header__actions flex items-center gap-0.5 shrink-0"
               title="Undo or redo the last file change from this conversation"
             >
               <Button

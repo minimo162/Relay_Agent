@@ -38,7 +38,6 @@ import { MessageFeed } from "../components/MessageFeed";
 import { SettingsModal, type ShellSettingsDraft } from "../components/SettingsModal";
 import { ShellHeader } from "../components/ShellHeader";
 import { Sidebar } from "../components/Sidebar";
-import { StatusBar } from "../components/StatusBar";
 import type { SessionStatusSnapshot } from "../components/shell-types";
 import {
   loadAlwaysOnTop,
@@ -86,6 +85,8 @@ type DevApprovalPayload = {
   mode?: "once" | "session" | "workspace" | "reject";
 };
 
+type ShellDrawer = "none" | "sessions" | "context";
+
 function workspaceSlashRowsToCommands(rows: WorkspaceSlashCommandRow[]): SlashCommand[] {
   return rows.map((row) => ({
     command: `/${row.name}`,
@@ -121,6 +122,7 @@ export default function Shell(): JSX.Element {
   const [maxTurns, setMaxTurns] = createSignal(loadMaxTurns());
   const [alwaysOnTop, setAlwaysOnTop] = createSignal(loadAlwaysOnTop());
   const [writeUndoStatus, setWriteUndoStatus] = createSignal({ canUndo: false, canRedo: false });
+  const [activeDrawer, setActiveDrawer] = createSignal<ShellDrawer>("none");
   const { copilotState, runCopilotWarmup } = useCopilotWarmup(browserSettings);
 
   const mergeChunksWithInline = (sessionId: string, baseChunks: UiChunk[]): UiChunk[] => {
@@ -255,6 +257,10 @@ export default function Shell(): JSX.Element {
     void refreshWriteUndoStatus();
   });
 
+  createEffect(() => {
+    if (sessions.isFirstRun()) setActiveDrawer("none");
+  });
+
   const [mcpServers, setMcpServers] = createSignal<McpServer[]>([]);
 
   onMount(async () => {
@@ -269,6 +275,13 @@ export default function Shell(): JSX.Element {
   });
 
   onMount(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && activeDrawer() !== "none") {
+        setActiveDrawer("none");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    onCleanup(() => window.removeEventListener("keydown", onKeyDown));
     if (!isTauri()) return;
     let disposed = false;
     let sendUnlisten: (() => void) | null = null;
@@ -590,6 +603,7 @@ export default function Shell(): JSX.Element {
   };
 
   const selectSession = (id: string) => {
+    setActiveDrawer("none");
     sessions.setActiveSessionId(id);
     sessions.setHasStartedConversation(true);
     setSessionError(null);
@@ -597,6 +611,7 @@ export default function Shell(): JSX.Element {
   };
 
   const handleNewSession = () => {
+    setActiveDrawer("none");
     sessions.setActiveSessionId(null);
     sessions.setChunks([]);
     setSessionError(null);
@@ -617,12 +632,34 @@ export default function Shell(): JSX.Element {
     saveDefaultSessionPreset(preset);
   };
 
+  const openSettings = () => {
+    setActiveDrawer("none");
+    setSettingsOpen(true);
+  };
+
+  const toggleDrawer = (drawer: Exclude<ShellDrawer, "none">) => {
+    setActiveDrawer((current) => (current === drawer ? "none" : drawer));
+  };
+
   return (
     <div classList={{ "ra-shell": true, "ra-shell--first-run": sessions.isFirstRun() }}>
+      <Show when={!sessions.isFirstRun() && activeDrawer() !== "none"}>
+        <button
+          type="button"
+          class="ra-shell-drawer-backdrop"
+          aria-label="Close panel"
+          onClick={() => setActiveDrawer("none")}
+        />
+      </Show>
+
       <ShellHeader
         sessionStatus={sessions.activeSessionStatus()}
         workspacePath={workspaceLabel}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={openSettings}
+        onToggleChats={() => toggleDrawer("sessions")}
+        onToggleContext={() => toggleDrawer("context")}
+        chatsOpen={activeDrawer() === "sessions"}
+        contextOpen={activeDrawer() === "context"}
         canUndo={writeUndoStatus().canUndo}
         canRedo={writeUndoStatus().canRedo}
         onUndo={async () => {
@@ -649,17 +686,6 @@ export default function Shell(): JSX.Element {
         }}
         firstRun={sessions.isFirstRun()}
       />
-
-      <Show when={!sessions.isFirstRun()}>
-        <Sidebar
-          sessions={sessions.sessionEntries()}
-          activeSessionId={sessions.activeSessionId()}
-          onSelect={selectSession}
-          onNewSession={handleNewSession}
-          workspacePath={workspaceLabel()}
-          onWorkspaceChipClick={() => setSettingsOpen(true)}
-        />
-      </Show>
 
       <main class="ra-shell-main">
         <Show when={sessionError()}>
@@ -720,7 +746,7 @@ export default function Shell(): JSX.Element {
         >
           <FirstRunPanel
             workspacePath={workspaceLabel}
-            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenSettings={openSettings}
             onReconnectCopilot={() => runCopilotWarmup(false)}
             sessionPreset="build"
             copilotState={copilotState()}
@@ -779,19 +805,39 @@ export default function Shell(): JSX.Element {
       </main>
 
       <Show when={!sessions.isFirstRun()}>
-        <ContextPanel
-          mcpServers={mcpServers}
-          setMcpServers={setMcpServers}
-          workspacePath={workspaceLabel}
-          sessionPreset={activeSessionPreset}
-          planTimeline={sessions.planTimelineForActiveSession}
-        />
-      </Show>
-
-      <Show when={!sessions.isFirstRun()}>
-        <div class="col-span-full">
-          <StatusBar sessionStatus={sessions.activeSessionStatus()} />
-        </div>
+        <Show when={activeDrawer() === "sessions"}>
+          <aside
+            id="ra-drawer-sessions"
+            class="ra-shell-drawer ra-shell-drawer--left"
+            aria-label="Chats"
+            data-ra-shell-drawer="sessions"
+          >
+            <Sidebar
+              sessions={sessions.sessionEntries()}
+              activeSessionId={sessions.activeSessionId()}
+              onSelect={selectSession}
+              onNewSession={handleNewSession}
+              workspacePath={workspaceLabel()}
+              onWorkspaceChipClick={openSettings}
+            />
+          </aside>
+        </Show>
+        <Show when={activeDrawer() === "context"}>
+          <aside
+            id="ra-drawer-context"
+            class="ra-shell-drawer ra-shell-drawer--right"
+            aria-label="Context"
+            data-ra-shell-drawer="context"
+          >
+            <ContextPanel
+              mcpServers={mcpServers}
+              setMcpServers={setMcpServers}
+              workspacePath={workspaceLabel}
+              sessionPreset={activeSessionPreset}
+              planTimeline={sessions.planTimelineForActiveSession}
+            />
+          </aside>
+        </Show>
       </Show>
     </div>
   );

@@ -12,7 +12,6 @@ import {
 } from "solid-js";
 import { friendlyToolActivityLabel, type SessionPreset, type UiChunk } from "../lib/ipc";
 import { ellipsisPath, workspaceBasename } from "../lib/workspace-display";
-import { sessionModeLabel } from "../lib/session-mode-label";
 import { EmptyState } from "./primitives";
 import { InlineApprovalCard } from "./InlineApprovalCard";
 import { InlineQuestionCard } from "./InlineQuestionCard";
@@ -168,33 +167,14 @@ export function MessageFeed(props: {
     const location =
       p.length > 0
         ? `Relay will work in ${ellipsisPath(p, 72)}.`
-        : "Choose the project from the header first so Relay knows where to work.";
+        : "Choose the project from the header so Relay knows where to work.";
     if (props.sessionPreset === "plan") {
       return `${location} This chat stays read-only and returns a plan, explanation, or review.`;
     }
     if (props.sessionPreset === "explore") {
-      return `${location} This chat can only read and search, so it is safe for quick checks.`;
+      return `${location} This chat can only read and search.`;
     }
-    return `${location} Relay can inspect the project, decide whether a plan is needed, and edit files when the request calls for it.`;
-  });
-
-  const emptyNextSteps = createMemo(() => {
-    if (props.sessionPreset === "plan") {
-      return [
-        "Relay will inspect the repo first and write its checklist in the Plan panel.",
-        `If you want file changes later, start a new chat in ${sessionModeLabel("build")}.`,
-      ];
-    }
-    if (props.sessionPreset === "explore") {
-      return [
-        "Relay will read files and run searches only.",
-        `For a plan or changes, start a new chat in ${sessionModeLabel("plan")} or ${sessionModeLabel("build")}.`,
-      ];
-    }
-    return [
-      "Relay will inspect the project before deciding whether a plan or approval is needed.",
-      "Approvals appear before risky changes, and progress stays inline in the chat.",
-    ];
+    return `${location} Relay can inspect the project and edit files when the request calls for it.`;
   });
 
   const emptyExample = createMemo(() => {
@@ -214,7 +194,6 @@ export function MessageFeed(props: {
           eyebrow={emptyEyebrow()}
           title={emptyTitle()}
           subtitle={emptySubtitle()}
-          nextSteps={emptyNextSteps()}
           example={emptyExample()}
         />
       </Show>

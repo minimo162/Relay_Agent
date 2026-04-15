@@ -30,9 +30,12 @@ test.describe("Conversation model", () => {
     await seedWorkspace(page);
     await openApp(page);
     await sendPrompt(page, "first task");
+    await page.getByRole("button", { name: "Chats" }).click();
     await expect(page.locator(".ra-session-row")).toHaveCount(1);
+    await page.getByRole("button", { name: "Chats" }).click();
 
     await sendPrompt(page, "follow-up task");
+    await page.getByRole("button", { name: "Chats" }).click();
     await expect(page.locator(".ra-session-row")).toHaveCount(1);
     await expect(page.getByText("follow-up task")).toBeVisible();
   });
@@ -42,12 +45,14 @@ test.describe("Conversation model", () => {
     await seedWorkspace(page);
     await openApp(page);
     await sendPrompt(page, "task one");
-    await expect(page.getByRole("heading", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+    await page.getByRole("button", { name: "Chats" }).click();
     await page.getByRole("button", { name: "New chat" }).click();
     await sendPrompt(page, "task two");
+    await page.getByRole("button", { name: "Chats" }).click();
     await expect(page.locator(".ra-session-row")).toHaveCount(2);
     await page.getByRole("button", { name: "New chat" }).click();
-    await expect(page.getByLabel("How Relay is working")).toBeVisible();
+    await expect(page.getByLabel("Chat mode")).toBeVisible();
   });
 });
 
@@ -56,6 +61,8 @@ test.describe("Settings and first-run UX", () => {
     await injectRelayMock(page, { autoComplete: true });
     await openApp(page);
     await expect(page.getByRole("heading", { name: "Chats" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Chats" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Context" })).toHaveCount(0);
     await expect(page.getByRole("tab", { name: "Integrations" })).toHaveCount(0);
     await expect(
       page.getByRole("heading", {
@@ -86,6 +93,21 @@ test.describe("Settings and first-run UX", () => {
     await expect(dialog.getByText("Browser debug port")).toBeVisible();
     await expect(dialog.getByText("Response timeout (ms)")).toBeVisible();
     await expect(dialog.getByText("Always on top")).toBeVisible();
+  });
+
+  test("normal chat opens chats and context from drawer triggers", async ({ page }) => {
+    await injectRelayMock(page, { autoComplete: true });
+    await seedWorkspace(page);
+    await openApp(page);
+    await sendPrompt(page, "open the shell");
+    await page.getByRole("button", { name: "Chats" }).click();
+    await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Chats" })).toBeVisible();
+    await page.getByRole("button", { name: "Chats" }).click();
+    await expect(page.locator("[data-ra-shell-drawer='sessions']")).toHaveCount(0);
+    await page.getByRole("button", { name: "Context" }).click();
+    await expect(page.locator("[data-ra-shell-drawer='context']")).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Integrations" })).toBeVisible();
   });
 });
 
