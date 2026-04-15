@@ -33,10 +33,11 @@ test("first run shows onboarding preflight and hides app chrome", async ({ page 
   await expect(
     page.getByRole("heading", {
       level: 1,
-      name: "Choose the project, check Copilot, then send the first request",
+      name: "Set the project and Copilot, then send the first request",
     }),
   ).toBeVisible();
   await expect(page.locator(".ra-first-run__card")).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Check the two requirements" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 2, name: "First request" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Choose project" })).toBeVisible();
@@ -86,6 +87,7 @@ test("sending the first prompt exits onboarding and creates one conversation", a
   await page.getByRole("button", { name: "Context" }).click();
   await expect(page.locator("[data-ra-shell-drawer='context']")).toBeVisible();
   await expect(page.getByText("What you will see here")).toBeVisible();
+  await expect(page.locator("[data-ra-permissions-details]")).not.toHaveAttribute("open", "");
   await expect(page.getByRole("button", { name: "Undo" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Redo" })).toHaveCount(0);
 });

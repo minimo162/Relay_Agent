@@ -10,7 +10,7 @@ function questionStateLabel(status: UiUserQuestionChunk["status"]): string {
       return "Cancelled";
     case "pending":
     default:
-      return "Input required";
+      return "Answer needed";
   }
 }
 
@@ -47,9 +47,10 @@ export function InlineQuestionCard(props: {
           </p>
         }
       >
+        <p class="ra-inline-card__note">Relay is waiting for your answer before it can continue.</p>
         <Textarea
           class="ra-inline-question__textarea"
-          placeholder="Your answer…"
+          placeholder="Type your answer…"
           value={draft()}
           onInput={(event) => setDraft(event.currentTarget.value)}
         />

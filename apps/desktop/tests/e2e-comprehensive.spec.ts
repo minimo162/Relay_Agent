@@ -67,9 +67,10 @@ test.describe("Settings and first-run UX", () => {
     await expect(
       page.getByRole("heading", {
         level: 1,
-        name: "Choose the project, check Copilot, then send the first request",
+        name: "Set the project and Copilot, then send the first request",
       }),
     ).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: "Check the two requirements" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Reconnect Copilot" })).toHaveCount(0);
     await expect(page.locator("[data-ra-session-mode]")).toHaveCount(0);
@@ -108,6 +109,7 @@ test.describe("Settings and first-run UX", () => {
     await page.getByRole("button", { name: "Context" }).click();
     await expect(page.locator("[data-ra-shell-drawer='context']")).toBeVisible();
     await expect(page.getByRole("tab", { name: "Integrations" })).toBeVisible();
+    await expect(page.locator("[data-ra-permissions-details]")).not.toHaveAttribute("open", "");
   });
 });
 

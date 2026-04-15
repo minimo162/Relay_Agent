@@ -496,14 +496,14 @@ body a:focus-visible {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.55rem 1.1rem;
+  padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--ra-border);
   position: sticky;
   top: 0;
   z-index: 20;
-  background: color-mix(in oklab, var(--ra-surface-100) 90%, transparent);
-  backdrop-filter: blur(18px);
-  min-height: 52px;
+  background: color-mix(in oklab, var(--ra-surface-100) 94%, transparent);
+  backdrop-filter: blur(14px);
+  min-height: 50px;
 }
 
 .ra-shell-header--minimal {
@@ -515,7 +515,7 @@ body a:focus-visible {
 }
 
 .ra-shell-header__status {
-  opacity: 0.78;
+  opacity: 0.72;
 }
 
 .ra-shell-header__nav {
@@ -531,7 +531,7 @@ body a:focus-visible {
 }
 
 .ra-shell-header__actions {
-  opacity: 0.66;
+  opacity: 0.62;
   border-left: 1px solid var(--ra-border);
   padding-left: 0.5rem;
   margin-left: 0.1rem;
@@ -559,9 +559,9 @@ body a:focus-visible {
   z-index: 19;
   width: min(24rem, calc(100vw - 2rem));
   border: 1px solid var(--ra-border);
-  border-radius: 1.25rem;
-  background: color-mix(in oklab, var(--ra-surface-100) 95%, white);
-  box-shadow: var(--ra-shadow-lg);
+  border-radius: 1.1rem;
+  background: color-mix(in oklab, var(--ra-surface-100) 97%, white);
+  box-shadow: var(--ra-shadow-md);
   overflow: hidden;
 }
 
@@ -832,8 +832,8 @@ body a:focus-visible {
 /* Composer (task input area) — flat surface */
 .ra-composer {
   border-top: 1px solid var(--ra-border);
-  padding: 0.75rem 1.1rem 0.85rem;
-  background: color-mix(in oklab, var(--ra-surface-300) 92%, transparent);
+  padding: 0.7rem 1rem 0.8rem;
+  background: color-mix(in oklab, var(--ra-surface-200) 94%, transparent);
 }
 
 .ra-composer--hero {
@@ -855,17 +855,17 @@ body a:focus-visible {
 .ra-composer-shell {
   border: 1px solid var(--ra-border);
   border-radius: var(--ra-radius);
-  background: color-mix(in oklab, var(--ra-surface-100) 92%, white);
-  padding: 0.55rem 0.75rem 0.45rem;
-  box-shadow: var(--ra-shadow-sm);
+  background: color-mix(in oklab, var(--ra-surface-100) 96%, white);
+  padding: 0.5rem 0.7rem 0.4rem;
+  box-shadow: 0 8px 24px rgba(38, 37, 30, 0.04), 0 0 0 1px color-mix(in oklab, #26251e 5%, transparent);
   transition: border-color 150ms ease, box-shadow 200ms ease;
 }
 
 .ra-composer--hero .ra-composer-shell {
-  padding: 1rem 1rem 0.9rem;
+  padding: 0.95rem 0.95rem 0.85rem;
   border-radius: 1rem;
-  background: var(--ra-surface-100);
-  box-shadow: var(--ra-shadow-md);
+  background: color-mix(in oklab, var(--ra-surface-100) 98%, white);
+  box-shadow: 0 14px 34px rgba(38, 37, 30, 0.06), 0 0 0 1px color-mix(in oklab, #26251e 7%, transparent);
 }
 
 .ra-composer-shell:focus-within {
@@ -905,7 +905,7 @@ body a:focus-visible {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.45rem 0.75rem;
+  gap: 0.4rem 0.7rem;
   padding-top: 0.45rem;
   margin-top: 0.05rem;
   border-top: 1px solid var(--ra-border);
@@ -932,14 +932,14 @@ body a:focus-visible {
   margin: 0;
   font-size: 0.6875rem;
   color: var(--ra-text-muted);
-  line-height: 1.35;
+  line-height: 1.3;
 }
 
 .ra-composer-disabled-note {
   margin: 0;
   font-size: var(--ra-text-caption);
   color: var(--ra-accent);
-  line-height: 1.45;
+  line-height: 1.35;
 }
 
 .ra-composer-toolbar-actions {
@@ -963,7 +963,7 @@ body a:focus-visible {
   justify-content: space-between;
   gap: 0.6rem;
   min-height: 2.2rem;
-  padding: 0.45rem 0.7rem;
+  padding: 0.4rem 0.65rem;
   border: 1px solid var(--ra-border);
   border-radius: var(--ra-radius-pill);
   background: color-mix(in oklab, var(--ra-surface-100) 90%, transparent);
@@ -1060,7 +1060,7 @@ body a:focus-visible {
   cursor: pointer;
   background: var(--ra-accent-gradient);
   color: #ffffff;
-  box-shadow: var(--ra-shadow-sm);
+  box-shadow: 0 8px 22px rgba(245, 78, 0, 0.16);
   transition:
     color 150ms ease,
     background-color 150ms ease,
@@ -1212,31 +1212,31 @@ body a:focus-visible {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 1.75rem 1.75rem 2rem;
+  padding: 1.5rem 1.5rem 1.75rem;
   overflow-y: auto;
 }
 
 .ra-first-run__panel {
-  width: min(100%, 56rem);
+  width: min(100%, 52rem);
   display: grid;
-  gap: 1rem;
+  gap: 0.9rem;
 }
 
 .ra-first-run__card {
   display: grid;
-  gap: 1rem;
+  gap: 0.9rem;
   border: 1px solid var(--ra-border);
-  border-radius: 1.4rem;
+  border-radius: 1.2rem;
   background:
-    linear-gradient(180deg, color-mix(in oklab, var(--ra-accent) 3%, var(--ra-surface-100)) 0%, var(--ra-surface-100) 100%);
-  padding: 1.4rem;
-  box-shadow: var(--ra-shadow-md);
+    linear-gradient(180deg, color-mix(in oklab, var(--ra-accent) 2%, var(--ra-surface-100)) 0%, var(--ra-surface-100) 100%);
+  padding: 1.2rem;
+  box-shadow: 0 16px 38px rgba(38, 37, 30, 0.06), 0 0 0 1px color-mix(in oklab, #26251e 5%, transparent);
 }
 
 .ra-first-run__intro {
-  max-width: 44rem;
+  max-width: 40rem;
   display: grid;
-  gap: 0.6rem;
+  gap: 0.45rem;
 }
 
 .ra-first-run__progress {
@@ -1252,7 +1252,7 @@ body a:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  padding: 0.35rem 0.6rem;
+  padding: 0.3rem 0.55rem;
   border: 1px solid var(--ra-border);
   border-radius: var(--ra-radius-pill);
   background: color-mix(in oklab, var(--ra-surface-100) 88%, transparent);
@@ -1278,15 +1278,15 @@ body a:focus-visible {
 .ra-first-run__readiness,
 .ra-first-run__request-card {
   display: grid;
-  gap: 0.85rem;
+  gap: 0.75rem;
   border: 1px solid var(--ra-border);
-  border-radius: 1rem;
-  background: color-mix(in oklab, var(--ra-surface-100) 95%, transparent);
-  padding: 1rem 1.05rem;
+  border-radius: 0.95rem;
+  background: color-mix(in oklab, var(--ra-surface-100) 97%, transparent);
+  padding: 0.9rem 0.95rem;
 }
 
 .ra-first-run__readiness {
-  gap: 0.7rem;
+  gap: 0.6rem;
 }
 
 .ra-first-run__readiness-header {
@@ -1300,11 +1300,11 @@ body a:focus-visible {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 0.9rem;
-  padding: 0.85rem 0.9rem;
-  border: 1px solid color-mix(in oklab, var(--ra-border) 92%, transparent);
-  border-radius: 0.9rem;
-  background: color-mix(in oklab, var(--ra-surface-200) 94%, transparent);
+  gap: 0.8rem;
+  padding: 0.75rem 0.8rem;
+  border: 1px solid color-mix(in oklab, var(--ra-border) 88%, transparent);
+  border-radius: 0.8rem;
+  background: color-mix(in oklab, var(--ra-surface-100) 88%, transparent);
 }
 
 .ra-first-run__setup-row-main {
@@ -1339,8 +1339,8 @@ body a:focus-visible {
 .ra-first-run__request-card {
   border-color: color-mix(in oklab, var(--ra-accent) 18%, var(--ra-border));
   background:
-    linear-gradient(180deg, color-mix(in oklab, var(--ra-accent) 4%, var(--ra-surface-100)) 0%, var(--ra-surface-100) 100%);
-  box-shadow: var(--ra-shadow-sm);
+    linear-gradient(180deg, color-mix(in oklab, var(--ra-accent) 3%, var(--ra-surface-100)) 0%, var(--ra-surface-100) 100%);
+  box-shadow: 0 10px 24px rgba(38, 37, 30, 0.04);
 }
 
 .ra-first-run__request-header {
@@ -1367,7 +1367,7 @@ body a:focus-visible {
   white-space: nowrap;
   border-radius: var(--ra-radius-pill);
   border: 1px solid var(--ra-border);
-  padding: 0.35rem 0.6rem;
+  padding: 0.3rem 0.55rem;
   line-height: 1;
 }
 
@@ -1425,19 +1425,19 @@ body a:focus-visible {
 
 .ra-sidebar-shell__header {
   flex-shrink: 0;
-  padding: 0.75rem;
+  padding: 0.7rem;
   border-bottom: 1px solid var(--ra-border);
 }
 
 .ra-sidebar-workspace-chip {
   width: 100%;
   display: grid;
-  gap: 0.15rem;
+  gap: 0.1rem;
   text-align: left;
   border: 1px solid var(--ra-border);
-  border-radius: 0.85rem;
-  background: var(--ra-surface-card);
-  padding: 0.5rem 0.625rem;
+  border-radius: 0.8rem;
+  background: color-mix(in oklab, var(--ra-surface-100) 88%, transparent);
+  padding: 0.45rem 0.6rem;
   margin-bottom: 0.55rem;
   transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
 }
@@ -1464,8 +1464,8 @@ body a:focus-visible {
   width: 100%;
   text-align: left;
   border: none;
-  border-radius: 0.85rem;
-  padding: 0.6rem 0.8rem;
+  border-radius: 0.8rem;
+  padding: 0.55rem 0.7rem;
   margin-bottom: 0.2rem;
   font-size: var(--ra-text-caption);
   line-height: 1.35;
@@ -1482,10 +1482,10 @@ body a:focus-visible {
 
 .ra-session-row--selected {
   background:
-    linear-gradient(180deg, color-mix(in oklab, var(--ra-accent) 7%, var(--ra-surface-selected)) 0%, var(--ra-surface-selected) 100%);
+    linear-gradient(180deg, color-mix(in oklab, var(--ra-accent) 5%, var(--ra-surface-selected)) 0%, var(--ra-surface-selected) 100%);
   color: var(--ra-text-primary);
   font-weight: 500;
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ra-accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ra-accent) 10%, transparent);
 }
 
 .ra-session-row:focus-visible {
@@ -1563,10 +1563,10 @@ body a:focus-visible {
 .ra-context-note,
 .ra-context-empty-card {
   border: 1px solid var(--ra-border);
-  border-radius: 1rem;
-  background: var(--ra-surface-100);
-  padding: 0.8rem 0.9rem;
-  box-shadow: var(--ra-shadow-sm);
+  border-radius: 0.95rem;
+  background: color-mix(in oklab, var(--ra-surface-100) 98%, transparent);
+  padding: 0.75rem 0.85rem;
+  box-shadow: 0 8px 20px rgba(38, 37, 30, 0.035);
 }
 
 .ra-context-empty-card {
@@ -1582,7 +1582,7 @@ body a:focus-visible {
 
 .ra-policy-card {
   overflow: hidden;
-  background: var(--ra-surface-100);
+  background: color-mix(in oklab, var(--ra-surface-100) 98%, transparent);
 }
 
 .ra-policy-card__summary {
@@ -1590,11 +1590,11 @@ body a:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 0.75rem 0.9rem;
+  padding: 0.7rem 0.85rem;
 }
 
 .ra-policy-card__body {
-  padding: 0 0.9rem 0.85rem;
+  padding: 0 0.85rem 0.8rem;
   border-top: 1px solid var(--ra-border);
 }
 
@@ -1653,7 +1653,7 @@ body a:focus-visible {
   background:
     radial-gradient(circle at 35% 35%, color-mix(in oklab, var(--ra-accent) 18%, var(--ra-surface-100)), var(--ra-surface-300));
   border: 1px solid var(--ra-border);
-  box-shadow: var(--ra-shadow-sm);
+  box-shadow: 0 10px 24px rgba(38, 37, 30, 0.04);
 }
 
 .ra-empty-state__eyebrow {
@@ -1668,11 +1668,10 @@ body a:focus-visible {
 .ra-empty-state__example {
   margin: 0.9rem auto 0;
   max-width: 22rem;
-  padding: 0.85rem 0.95rem;
+  padding: 0.75rem 0.85rem;
   border: 1px solid var(--ra-border);
-  border-radius: 1rem;
-  background: var(--ra-surface-100);
-  box-shadow: var(--ra-shadow-sm);
+  border-radius: 0.9rem;
+  background: color-mix(in oklab, var(--ra-surface-100) 98%, transparent);
 }
 
 .ra-empty-state__steps {
@@ -1888,13 +1887,13 @@ body a:focus-visible {
 
 .ra-inline-card {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.65rem;
   max-width: min(80%, 42rem);
   margin: 0 0 0.85rem;
-  padding: 0.95rem 1rem;
+  padding: 0.9rem 0.95rem;
   border: 1px solid var(--ra-border);
-  border-radius: 0.95rem;
-  box-shadow: var(--ra-shadow-sm);
+  border-radius: 0.9rem;
+  box-shadow: 0 10px 24px rgba(38, 37, 30, 0.045);
 }
 
 .ra-inline-card--approval {
@@ -1926,6 +1925,7 @@ body a:focus-visible {
   font-family: var(--ra-font-ui);
   font-size: var(--ra-text-micro);
   color: var(--ra-text-secondary);
+  white-space: nowrap;
 }
 
 .ra-inline-card__meta {
@@ -1949,7 +1949,7 @@ body a:focus-visible {
   margin: 0;
   font-size: var(--ra-text-caption);
   color: var(--ra-text-secondary);
-  line-height: 1.5;
+  line-height: 1.45;
 }
 
 .ra-inline-question__textarea {
@@ -2096,6 +2096,7 @@ body a:focus-visible {
   font-family: var(--ra-font-ui);
   font-size: var(--ra-text-micro);
   line-height: 1;
+  border: 1px solid color-mix(in oklab, var(--ra-accent) 12%, transparent);
 }
 
 .ra-md-assistant :first-child {

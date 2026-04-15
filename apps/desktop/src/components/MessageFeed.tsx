@@ -68,18 +68,14 @@ export function MessageFeed(props: {
         const seconds = props.sessionStatus.nextRetryAtMs
           ? Math.max(1, Math.ceil((props.sessionStatus.nextRetryAtMs - nowMs()) / 1000))
           : null;
-        const attempt = props.sessionStatus.attempt;
-        const parts = ["Retrying soon…"];
-        if (attempt != null) parts.push(`attempt ${attempt}`);
-        if (seconds != null) parts.push(`in ${seconds}s`);
-        return parts.join(" ");
+        return seconds != null ? `Retrying in ${seconds}s…` : "Retrying…";
       }
       case "compacting":
-        return "Compacting context…";
+        return "Condensing context…";
       case "waiting_approval":
-        return visiblePendingApproval() ? null : "Needs your approval…";
+        return visiblePendingApproval() ? null : "Waiting for approval…";
       case "cancelling":
-        return "Cancelling…";
+        return "Stopping…";
       case "idle":
       default:
         return null;
@@ -157,9 +153,9 @@ export function MessageFeed(props: {
   });
 
   const emptyTitle = createMemo(() => {
-    if (props.sessionPreset === "plan") return "Start with what you want reviewed";
-    if (props.sessionPreset === "explore") return "Start with what you want checked";
-    return "Start with the result you want";
+    if (props.sessionPreset === "plan") return "Ask for a review or plan";
+    if (props.sessionPreset === "explore") return "Ask Relay to inspect the project";
+    return "Ask for the result you need";
   });
 
   const emptySubtitle = createMemo(() => {
@@ -179,12 +175,12 @@ export function MessageFeed(props: {
 
   const emptyExample = createMemo(() => {
     if (props.sessionPreset === "plan") {
-      return "Review this setup flow and propose the smallest safe change that would make it easier to understand.";
+      return "Review this setup flow and propose the smallest safe change.";
     }
     if (props.sessionPreset === "explore") {
-      return "Find where the first screen is rendered and explain how the app decides what to show.";
+      return "Find where the first screen is rendered.";
     }
-    return "Make the first screen easier to understand for someone using the app for the first time.";
+    return "Make the first screen easier to understand for first-time users.";
   });
 
   return (
@@ -242,10 +238,10 @@ export function MessageFeed(props: {
 
       <Show when={statusLine()}>
         <div
-          class={`flex items-center gap-2 ra-type-button-label mt-2 text-[var(--ra-timeline-thinking)]`}
+          class={`flex items-center gap-2 ra-type-caption mt-2 text-[var(--ra-text-secondary)]`}
           data-ra-agent-thinking
         >
-          <span class="inline-block w-2 h-2 rounded-full bg-[var(--ra-timeline-thinking)] animate-pulse" />
+          <span class="inline-block w-2 h-2 rounded-full bg-[var(--ra-accent)] animate-pulse" />
           {statusLine()}
         </div>
       </Show>

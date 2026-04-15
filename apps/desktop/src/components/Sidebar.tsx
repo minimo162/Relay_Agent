@@ -50,12 +50,12 @@ export function Sidebar(props: {
   });
   const hasSessions = createMemo(() => props.sessions.length > 0);
   const emptyTitle = createMemo(() => {
-    if (!hasSessions()) return "No sessions yet";
-    if (search().trim()) return "No matching sessions";
-    return "No sessions yet";
+    if (!hasSessions()) return "No chats yet";
+    if (search().trim()) return "No matching chats";
+    return "No chats yet";
   });
   const emptySubtitle = createMemo(() =>
-    !hasSessions() ? "Your recent work appears here after the first request." : null,
+    !hasSessions() ? "Your recent chats appear here after the first request." : null,
   );
 
   return (
@@ -76,17 +76,17 @@ export function Sidebar(props: {
           >
             <span class={`ra-type-caption ${ui.mutedText}`}>Project</span>
             <span class={`ra-type-button-label ${workspaceName() ? ui.textPrimary : "text-[var(--ra-red)]"}`}>
-              {workspaceName() ?? "Unset"}
+              {workspaceName() ?? "Not set"}
             </span>
             <span class={`ra-type-caption ${ui.mutedText}`}>
-              {workspaceName() ? "Change the project." : "Set a project so Relay has the right context."}
+              {workspaceName() ? "Change project" : "Choose project"}
             </span>
           </button>
           <Show when={hasSessions()}>
             <Input
               type="search"
-              placeholder="Search sessions…"
-              aria-label="Search sessions"
+              placeholder="Search chats…"
+              aria-label="Search chats"
               onInput={(e) => setSearch(e.currentTarget.value)}
             />
           </Show>

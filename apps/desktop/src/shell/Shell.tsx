@@ -52,7 +52,7 @@ import {
   saveWorkspacePath,
 } from "../lib/settings-storage";
 import { buildPlanTimelineFromUiChunks } from "../context/todo-write-parse";
-import { sessionModeDefaultNote } from "../lib/session-mode-label";
+import { sessionModeLabel } from "../lib/session-mode-label";
 import { createSessionStore } from "./sessionStore";
 import { createApprovalStore } from "./approvalStore";
 import { useCopilotWarmup } from "./useCopilotWarmup";
@@ -427,7 +427,7 @@ export default function Shell(): JSX.Element {
   const modeLockedNote = createMemo(() => {
     const sid = sessions.activeSessionId();
     if (!sid) return null;
-    return `Mode for this conversation: ${sessionModeDefaultNote(activeSessionPreset())} Start a new conversation to change it.`;
+    return `This chat uses ${sessionModeLabel(activeSessionPreset())}. Start a new chat to change it.`;
   });
 
   const reloadHistory = async (

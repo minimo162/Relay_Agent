@@ -7,13 +7,13 @@ import type { SessionStatusSnapshot } from "./shell-types";
 function statusLabel(status: SessionStatusSnapshot): string {
   switch (status.phase) {
     case "waiting_approval":
-      return "Needs your approval";
+      return "Needs approval";
     case "running":
     case "retrying":
     case "compacting":
-      return "Relay is working";
+      return "Working";
     case "cancelling":
-      return "Cancelling request";
+      return "Cancelling";
     case "idle":
     default:
       return "Ready";

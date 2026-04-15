@@ -128,7 +128,7 @@ export function ContextPanel(props: {
           <Match when={activeTab() === "plan"}>
             <div class="flex flex-col gap-2" data-ra-execution-plan>
               <div class="ra-context-note">
-                <span class={`ra-type-system-micro ${ui.mutedText}`}>How Relay is working</span>
+                <span class={`ra-type-system-micro ${ui.mutedText}`}>How this chat runs</span>
                 <p class={`ra-type-button-label ${ui.textPrimary} mt-1`}>{modeLabel()}</p>
                 <p class={`ra-type-caption ${ui.mutedText} mt-1 leading-relaxed`}>{modeSummary()}</p>
               </div>
@@ -140,7 +140,7 @@ export function ContextPanel(props: {
                     <ul class={`ra-context-empty-list ra-type-caption ${ui.mutedText}`}>
                       <li>Relay writes its live checklist here after it inspects the project.</li>
                       <li>Approvals still stop risky changes before they go through.</li>
-                      <li>Use Integrations to review project instructions and connected services.</li>
+                      <li>Integrations shows project instructions and connected services.</li>
                     </ul>
                   </div>
                 }
@@ -204,7 +204,11 @@ export function ContextPanel(props: {
                 )}
               </Show>
 
-              <details class={`ra-policy-card ${ui.radiusFeatured} border ${ui.border} mt-2`} data-ra-tool-policy>
+              <details
+                class={`ra-policy-card ${ui.radiusFeatured} border ${ui.border} mt-2`}
+                data-ra-tool-policy
+                data-ra-permissions-details
+              >
                 <summary class={`cursor-pointer list-none [&::-webkit-details-marker]:hidden`}>
                   <div class="ra-policy-card__summary">
                     <span class={`ra-type-system-micro ${ui.mutedText}`}>Permissions</span>
@@ -271,49 +275,61 @@ export function ContextPanel(props: {
               <p class={`ra-type-system-caption leading-relaxed ${ui.mutedText}`}>
                 Review connected services and project instructions here.
               </p>
-              <div class={`${ui.radiusFeatured} border ${ui.border} p-2 space-y-1.5`}>
-                <span class={`ra-type-system-micro ${ui.mutedText}`}>Workspace instructions</span>
-              <Show
-                when={!props.workspacePath()?.trim()}
-                fallback={
-                  <Show
-                    when={instructionSurfaces()}
-                    fallback={<p class={`ra-type-caption ${ui.mutedText}`}>Scanning workspace instructions…</p>}
-                  >
-                    {(surf) => (
-                      <div class="space-y-1.5" data-ra-workspace-instructions>
-                        <Show when={surf().workspaceRoot}>
-                          <p class={`ra-type-mono-small ${ui.mutedText} break-all`}>{surf().workspaceRoot}</p>
-                        </Show>
-                        <For each={surf().surfaces}>
-                          {(s) => (
-                            <div class={`flex items-start gap-2 ra-type-caption`}>
-                              <span
-                                class={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${
-                                  s.exists ? "bg-[var(--ra-green)]" : "bg-[var(--ra-text-muted)]"
-                                }`}
-                                aria-hidden
-                              />
-                              <div class="min-w-0 flex-1">
-                                <div class={`ra-type-button-label font-medium ${ui.textPrimary}`}>{s.label}</div>
-                                <div class={`ra-type-mono-small ${ui.mutedText} break-all`}>{s.path}</div>
-                                <div class={`ra-type-caption ${ui.mutedText}`}>
-                                  {s.exists ? (s.isDirectory ? "Present (directory)" : "Present") : "Not found"}
-                                </div>
-                              </div>
-                            </div>
-                          )}
-                        </For>
-                      </div>
-                    )}
-                  </Show>
-                }
+              <details
+                class={`${ui.radiusFeatured} border ${ui.border} ra-policy-card`}
+                data-ra-workspace-instructions-details
               >
-                <p class={`ra-type-caption ${ui.mutedText}`}>
-                  Choose a project folder from the header to show instruction files here.
-                </p>
-              </Show>
-              </div>
+                <summary class={`cursor-pointer list-none [&::-webkit-details-marker]:hidden`}>
+                  <div class="ra-policy-card__summary">
+                    <span class={`ra-type-system-micro ${ui.mutedText}`}>Workspace instructions</span>
+                    <span class={`ra-type-caption ${ui.mutedText}`}>
+                      {props.workspacePath()?.trim() ? "Review files" : "Project not set"}
+                    </span>
+                  </div>
+                </summary>
+                <div class="ra-policy-card__body">
+                  <Show
+                    when={!props.workspacePath()?.trim()}
+                    fallback={
+                      <Show
+                        when={instructionSurfaces()}
+                        fallback={<p class={`ra-type-caption ${ui.mutedText}`}>Scanning workspace instructions…</p>}
+                      >
+                        {(surf) => (
+                          <div class="space-y-1.5" data-ra-workspace-instructions>
+                            <Show when={surf().workspaceRoot}>
+                              <p class={`ra-type-mono-small ${ui.mutedText} break-all`}>{surf().workspaceRoot}</p>
+                            </Show>
+                            <For each={surf().surfaces}>
+                              {(s) => (
+                                <div class={`flex items-start gap-2 ra-type-caption`}>
+                                  <span
+                                    class={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${
+                                      s.exists ? "bg-[var(--ra-green)]" : "bg-[var(--ra-text-muted)]"
+                                    }`}
+                                    aria-hidden
+                                  />
+                                  <div class="min-w-0 flex-1">
+                                    <div class={`ra-type-button-label font-medium ${ui.textPrimary}`}>{s.label}</div>
+                                    <div class={`ra-type-mono-small ${ui.mutedText} break-all`}>{s.path}</div>
+                                    <div class={`ra-type-caption ${ui.mutedText}`}>
+                                      {s.exists ? (s.isDirectory ? "Present (directory)" : "Present") : "Not found"}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </For>
+                          </div>
+                        )}
+                      </Show>
+                    }
+                  >
+                    <p class={`ra-type-caption ${ui.mutedText}`}>
+                      Choose a project folder from the header to show instruction files here.
+                    </p>
+                  </Show>
+                </div>
+              </details>
               <div class={`${ui.radiusFeatured} border ${ui.border} p-2 space-y-2`}>
                 <div class="flex items-center justify-between gap-2">
                   <span class={`ra-type-system-micro ${ui.mutedText}`}>Servers</span>

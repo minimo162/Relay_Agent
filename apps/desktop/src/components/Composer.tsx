@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, onMount, type JSX } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, onMount, type JSX } from "solid-js";
 import { Textarea } from "./ui";
 import { detectSlashMode, findSlashCommands, type SlashCommand } from "../lib/slash-commands";
 import type { SessionPreset } from "../lib/ipc";
@@ -218,44 +218,29 @@ export function Composer(props: {
   const placeholder = () => {
     if (!props.hero) {
       return props.sessionPreset === "build"
-        ? "Describe what you want Relay to do. Type / for commands."
+        ? "Describe the result you need. Type / for commands."
         : props.sessionPreset === "plan"
           ? "Describe what you want reviewed. Type / for commands."
-          : "Describe what you want Relay to read or search. Type / for commands.";
+          : "Describe what you want Relay to inspect. Type / for commands.";
     }
     switch (props.sessionPreset) {
       case "plan":
-        return "Example: Review this setup flow and tell me the safest next change.";
+        return "Example: Review this setup flow and propose the safest next change.";
       case "explore":
-        return "Example: Find where this setup flow is defined and explain it.";
+        return "Example: Find where this setup flow is defined.";
       default:
-        return "Example: Make this setup flow easier to understand for first-time users.";
+        return "Example: Make this setup flow easier to understand.";
     }
   };
-  const modeSummary = createMemo(() =>
-    props.modeLockedNote ?? `${sessionModeLabel(props.sessionPreset)} · ${sessionModeSummary(props.sessionPreset)}`,
-  );
-  const heroExamples = createMemo(() => {
-    switch (props.sessionPreset) {
-      case "plan":
-        return [
-          "Review this setup flow and propose the smallest safe improvement.",
-          "Explain why this app asks for project and Copilot setup first.",
-          "Plan a cleanup that makes the first screen easier to understand.",
-        ];
-      case "explore":
-        return [
-          "Find where the first screen is rendered and summarize the flow.",
-          "Search for how the current chat mode is stored and used.",
-          "Inspect the settings UI and explain the basic setup path.",
-        ];
-      default:
-        return [
-          "Make the first screen simpler for someone opening the app for the first time.",
-          "Trace why settings do not persist and fix it safely.",
-          "Add a clearer loading state to the Copilot check.",
-        ];
-    }
+  const modeSummary = createMemo(() => {
+    if (props.modeLockedNote) return props.modeLockedNote;
+    const summary =
+      props.sessionPreset === "build"
+        ? "Can read and edit."
+        : props.sessionPreset === "plan"
+          ? "Read-only planning."
+          : "Read-only search.";
+    return `${sessionModeLabel(props.sessionPreset)} · ${summary}`;
   });
   const allowModeSelection = () => props.allowModeSelection ?? true;
   const currentModeLabel = createMemo(() => sessionModeLabel(props.sessionPreset));
@@ -351,32 +336,6 @@ export function Composer(props: {
               </button>
             </div>
           </div>
-          <Show when={props.hero}>
-            <div class="ra-composer-examples" aria-label="Example requests">
-              <span class={`ra-type-system-micro text-[var(--ra-text-muted)]`}>Try one of these</span>
-              <div class="ra-composer-examples__list">
-                <For each={heroExamples()}>
-                  {(example) => (
-                    <button
-                      type="button"
-                      class="ra-composer-example-btn"
-                      onClick={() => {
-                        setText(example);
-                        queueMicrotask(() => {
-                          if (textareaRef) {
-                            adjustComposerTextareaHeight(textareaRef);
-                            textareaRef.focus();
-                          }
-                        });
-                      }}
-                    >
-                      {example}
-                    </button>
-                  )}
-                </For>
-              </div>
-            </div>
-          </Show>
         </div>
       </div>
     </div>

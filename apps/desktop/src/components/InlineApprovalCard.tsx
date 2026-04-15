@@ -7,10 +7,10 @@ function approvalStateLabel(status: UiApprovalRequestChunk["status"]): string {
     case "approved":
       return "Allowed";
     case "rejected":
-      return "Denied";
+      return "Not allowed";
     case "pending":
     default:
-      return "Approval required";
+      return "Needs your approval";
   }
 }
 
@@ -54,6 +54,7 @@ export function InlineApprovalCard(props: {
           </p>
         }
       >
+        <p class="ra-inline-card__note">Relay is paused until you choose what to allow.</p>
         <div class="ra-inline-card__actions">
           <Button
             variant="secondary"
@@ -73,7 +74,7 @@ export function InlineApprovalCard(props: {
           </Button>
         </div>
         <div class="ra-inline-card__remember">
-          <span class="ra-type-caption text-[var(--ra-text-muted)]">Remember this choice</span>
+          <span class="ra-type-caption text-[var(--ra-text-muted)]">Allow without asking again</span>
           <div class="ra-inline-card__actions">
             <Button
               variant="secondary"

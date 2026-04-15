@@ -100,13 +100,13 @@ export function FirstRunPanel(props: {
   );
   const requestSummary = createMemo(() => {
     if (props.canStart) {
-      return "Describe the result you want. Relay will start as soon as you send.";
+      return "Describe the result you need, then send the first request.";
     }
-    return "Finish the setup above before sending your first request.";
+    return "Finish the setup above before sending the first request.";
   });
   const requestDetail = createMemo(() =>
     props.startDisabledReason
-      ?? `Your first chat starts in ${modeLabel()} so Relay can inspect the project and make changes when needed.`,
+      ?? `The first chat starts in ${modeLabel()} so Relay can work in the project right away.`,
   );
   const connectionAction = createMemo<JSX.Element>(() => {
     if (props.copilotState.status === "needs_sign_in" || props.copilotState.status === "checking") {
@@ -136,7 +136,7 @@ export function FirstRunPanel(props: {
         <div class="ra-first-run__card">
           <div class="ra-first-run__intro">
             <p class="ra-empty-state__eyebrow">Relay Agent</p>
-            <h1 class={`ra-type-section-heading ${ui.textPrimary}`}>Choose the project, check Copilot, then send the first request</h1>
+            <h1 class={`ra-type-section-heading ${ui.textPrimary}`}>Set the project and Copilot, then send the first request</h1>
             <p class={`ra-type-body-sans ${ui.textSecondary}`}>
               Start with one clear path so Relay has the right project and a ready Copilot connection.
             </p>
@@ -160,6 +160,7 @@ export function FirstRunPanel(props: {
             <div class="ra-first-run__readiness-header">
               <div>
                 <p class="ra-first-run__step-kicker">Ready before you send</p>
+                <h2 class={`ra-type-title-sm ${ui.textPrimary}`}>Check the two requirements</h2>
               </div>
             </div>
 
