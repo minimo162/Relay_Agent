@@ -15,6 +15,44 @@
 
 ## Milestone Log
 
+### 2026-04-15 Live M365 Copilot same-session grounding / approval-reuse harness
+
+**Problem:** The repo already had a one-shot live desktop smoke, but it did not verify the next hardening slice: same-session multi-turn continuity, grounding honesty across turns, and `Always allow in this conversation` reuse on the second file mutation in the same Relay session. We needed a concrete harness and artifact bundle for the real Linux + Edge + M365 Copilot path without changing IPC or public contracts.
+
+**Change:** Added [`apps/desktop/scripts/live_m365_multiturn_grounding_approval.mjs`](../apps/desktop/scripts/live_m365_multiturn_grounding_approval.mjs) plus script aliases in [`apps/desktop/package.json`](../apps/desktop/package.json), [`package.json`](../package.json), and a short command note in [`README.md`](../README.md). The harness reuses the existing debug-only desktop control surface (`/configure`, `/state`, `/first-run-send`, `/approve`), prepares `/root/Relay_Agent/tetris_grounding_live_copy.html` from [`tests/fixtures/tetris_grounding.html`](../tests/fixtures/tetris_grounding.html), records SHA-256 hashes, captures `doctor` / preflight / per-turn JSON snapshots, writes `prompt-response-excerpts.json`, and emits a structured `report.json`. It also records an exact pre-desktop `pnpm doctor -- --json --cdp-port 9360 --no-auto-launch-edge` snapshot under `doctor-before-tauri.*`; because that flag intentionally skips authenticated bridge status, the harness reruns doctor after desktop warmup for the actual live gate artifact `doctor.json`.
+
+Exact live prompts encoded in the harness and used on the artifact run:
+
+```text
+Turn 1:
+tests/fixtures/tetris_grounding.html を読み、このファイルに対して行える最小の可読性改善を 3 つだけ挙げてください。まだファイルは編集しないでください。各指摘は、このファイル内に実在する識別子・文字列・構造だけを根拠にしてください。存在しない識別子やバグ名を推測で挙げないでください。
+
+Turn 2:
+いま挙げた 3 つのうち 1 つだけを /root/Relay_Agent/tetris_grounding_live_copy.html に適用してください。元の tests/fixtures/tetris_grounding.html は変更しないでください。
+
+Turn 3:
+同じファイルに、残りの改善を 1 つだけ追加で適用してください。今回も元の fixture は変更しないでください。
+```
+
+**Verification:** `node --check apps/desktop/scripts/live_m365_multiturn_grounding_approval.mjs` — pass. `pnpm check` — pass. `pnpm --filter @relay-agent/desktop live:m365:grounding-approval-multiturn` — **failed intentionally with captured artifacts** at `/tmp/relay-live-m365-grounding-approval-78C9NH`.
+
+Observed live result from that run:
+
+- `doctor.json` passed the intended live gate after desktop warmup: `edge_cdp = ok`, `bridge_health = ok`, `bridge_status = ok`, `m365_sign_in = ok`.
+- Session continuity at the bridge level looked healthy before the grounding failure:
+  - `sessionId = session-0fe739b4-42a0-408b-b28f-0af99966a9cb`
+  - `tauri-dev.log` recorded one initial new chat and later `continuing in current Copilot thread (no new chat click)` twice.
+- Failure stage was `turn1_complete`, classified as `grounding_regression`.
+- Turn 1 did call `read_file`, but the tool result was an error and the assistant claimed the file did not exist:
+  - `read_file`: `No such file or directory (os error 2)`
+  - `glob_search`: `**/*tetris*grounding*.html` returned 0 matches
+  - the assistant therefore refused to list three readability improvements and said the requested file was absent
+- The fixture path was in fact present in the repo, so this run does **not** meet the grounding acceptance criteria. The harness now fails immediately on that condition instead of drifting into Turn 2/3.
+- Approval reuse was **not reached** on this run because Turn 1 failed before any mutation turn.
+- Final file check from the failed run:
+  - source fixture hash stayed unchanged: `424a423435ee392220285c9575f802221ddaa66fa315769ec43d595e96dd8579`
+  - `/root/Relay_Agent/tetris_grounding_live_copy.html` stayed unchanged for the same reason
+
 ### 2026-04-15 Desktop core: clear `desktop-core` Clippy `-D warnings` regressions
 
 **Problem:** `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings` was failing again after the `desktop-core` extraction. The remaining blockers were all inside the new crate: one needless raw-string hash, one unnested or-pattern, several pure helper functions missing `#[must_use]`, and `SessionRegistry::new()` lacking a matching `Default` impl.
