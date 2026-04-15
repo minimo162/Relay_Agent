@@ -30,10 +30,14 @@ async function sendPrompt(page: any, text: string) {
 
 test("first run shows onboarding preflight and hides app chrome", async ({ page }) => {
   await openApp(page);
-  await expect(page.getByText("Set up once, then tell Relay what you want done")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Check Copilot" })).toBeVisible();
-  await expect(page.getByText("Copilot signed in", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("CDP reachable", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", {
+      level: 1,
+      name: "Choose the project, check Copilot, then send the first request",
+    }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Check the two setup items once" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "First request" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Choose project" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Chats" })).toHaveCount(0);
@@ -42,7 +46,13 @@ test("first run shows onboarding preflight and hides app chrome", async ({ page 
   await expect(page.locator("[data-ra-session-mode]")).toHaveCount(0);
   await expect(composer(page)).toBeDisabled();
   await expect(page.getByTestId("composer-send")).toBeDisabled();
-  await expect(page.getByRole("status")).toBeVisible();
+  await expect(page.locator("[data-ra-composer-disabled-note]")).toHaveText(
+    "Choose a project before sending your first request.",
+  );
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("button", { name: "Choose project" })).toBeFocused();
 });
 
 test("settings modal exposes setup and advanced controls", async ({ page }) => {

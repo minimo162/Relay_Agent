@@ -15,6 +15,14 @@
 
 ## Milestone Log
 
+### 2026-04-15 Desktop UI: minimal first-run refinement
+
+**Problem:** The first-run shell had already been simplified, but it still read like three equal setup cards with repeated copy. New users still had to scan too many parallel surfaces before they could understand the one thing that mattered: set the project, confirm Copilot, then send the first request.
+
+**Change:** Refined the onboarding surface into a quieter single-column path without changing IPC or backend behavior. [`apps/desktop/src/components/FirstRunPanel.tsx`](../apps/desktop/src/components/FirstRunPanel.tsx) now uses a short intro, one compact readiness block for `Project` and `Copilot`, and one visually primary `First request` block. [`apps/desktop/src/index.css`](../apps/desktop/src/index.css) now reduces the first-run card count, flattens the secondary setup surfaces, and increases whitespace while keeping the existing warm token system. [`apps/desktop/src/components/Composer.tsx`](../apps/desktop/src/components/Composer.tsx) now exposes the disabled first-run reason through an inline live status element so the gating is readable without relying on color alone. [`apps/desktop/src/components/SettingsModal.tsx`](../apps/desktop/src/components/SettingsModal.tsx) now mirrors the simpler onboarding language for Project and Copilot while keeping advanced controls collapsed. Updated [`apps/desktop/tests/app.e2e.spec.ts`](../apps/desktop/tests/app.e2e.spec.ts) and [`apps/desktop/tests/e2e-comprehensive.spec.ts`](../apps/desktop/tests/e2e-comprehensive.spec.ts) to cover the new heading structure, hidden first-run chrome, visible disabled-state reason, keyboard reachability of the first actions, and the unchanged transition into the normal chat shell after the first send.
+
+**Verification:** `pnpm --filter @relay-agent/desktop typecheck` — pass. `pnpm --filter @relay-agent/desktop exec playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts` — pass (12 tests). `pnpm check` — pass.
+
 ### 2026-04-15 Desktop UI: first-use simplification for general users
 
 **Problem:** The desktop shell already had a cleaner conversation-first structure, but first-run still asked new users to parse several Relay-internal concepts at once. Project selection, Copilot readiness, and conversation modes were understandable for a developer who already knew the system, but the initial screen still exposed too many parallel decisions and too much repeated wording across the header, sidebar, settings, and composer.

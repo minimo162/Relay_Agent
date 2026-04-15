@@ -202,7 +202,7 @@ export function SettingsModal(props: {
               <section class="ra-settings-card">
                 <p class="ra-type-system-micro text-[var(--ra-text-muted)]">Basic</p>
                 <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                  Choose the project and confirm that Copilot is ready.
+                  Choose the project and make sure Copilot is ready before the first request.
                 </p>
                 <div class="mt-3 space-y-4">
                   <div class="ra-settings-step ra-settings-step--highlight">
@@ -228,7 +228,7 @@ export function SettingsModal(props: {
                       </Show>
                     </div>
                     <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                      Relay reads and edits within this folder, so point it at the project you want this window to use.
+                      Relay reads and edits in this folder for the current window.
                     </p>
                   </div>
 
@@ -244,7 +244,7 @@ export function SettingsModal(props: {
                           ?? "Run a check to verify the Edge/CDP connection."}
                       </p>
                       <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                        Relay uses Edge to reach Copilot. If this is not ready, reconnect after signing in.
+                        Relay uses Edge to reach Copilot. If this is not ready, sign in there and reconnect.
                       </p>
                     </div>
                     <Button variant="secondary" type="button" class="ra-type-button-label" onClick={props.onReconnectCopilot}>
@@ -265,7 +265,7 @@ export function SettingsModal(props: {
                 <div class="mt-3 space-y-4">
                   <div class="ra-settings-step">
                     <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Conversation defaults</span>
-                    <p class="ra-type-button-label text-[var(--ra-text-primary)] mt-1">Default chat mode</p>
+                    <p class="ra-type-button-label text-[var(--ra-text-primary)] mt-1">Default chat mode after onboarding</p>
                     <div class="ra-settings-segmented mt-2" role="group" aria-label="Default chat mode">
                       {(["build", "plan", "explore"] as SessionPreset[]).map((preset) => (
                         <button

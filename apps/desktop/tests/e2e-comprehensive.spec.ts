@@ -57,10 +57,18 @@ test.describe("Settings and first-run UX", () => {
     await openApp(page);
     await expect(page.getByRole("heading", { name: "Chats" })).toHaveCount(0);
     await expect(page.getByRole("tab", { name: "Integrations" })).toHaveCount(0);
-    await expect(page.getByText("Set up once, then tell Relay what you want done")).toBeVisible();
+    await expect(
+      page.getByRole("heading", {
+        level: 1,
+        name: "Choose the project, check Copilot, then send the first request",
+      }),
+    ).toBeVisible();
     await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Reconnect Copilot" })).toHaveCount(0);
     await expect(page.locator("[data-ra-session-mode]")).toHaveCount(0);
+    await expect(page.locator("[data-ra-composer-disabled-note]")).toHaveText(
+      "Choose a project before sending your first request.",
+    );
   });
 
   test("settings modal shows connection and advanced controls", async ({ page }) => {

@@ -307,7 +307,7 @@ export function Composer(props: {
               <p class="ra-composer-mode-summary">{modeSummary()}</p>
               <Show when={props.disabledReason}>
                 {(reason) => (
-                  <p class="ra-composer-disabled-note" role="status">
+                  <p class="ra-composer-disabled-note" role="status" aria-live="polite" data-ra-composer-disabled-note="">
                     {reason()}
                   </p>
                 )}
