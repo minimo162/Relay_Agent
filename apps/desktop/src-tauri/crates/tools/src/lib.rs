@@ -4852,7 +4852,9 @@ mod tests {
 
         let read_error = execute_tool("read_file", &json!({ "path": "missing.txt" }))
             .expect_err("missing file should fail");
-        assert!(!read_error.is_empty());
+        assert!(read_error.contains("No such file or directory"));
+        assert!(read_error.contains("resolved path:"));
+        assert!(read_error.contains(&*root.join("missing.txt").to_string_lossy()));
 
         let edit_once = execute_tool(
             "edit_file",

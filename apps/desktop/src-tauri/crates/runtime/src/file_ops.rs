@@ -150,8 +150,11 @@ pub fn read_file(
     limit: Option<usize>,
     pages: Option<&str>,
 ) -> io::Result<ReadFileOutput> {
-    let absolute_path = normalize_path(path)?;
-    reject_sensitive_file_path(&absolute_path)?;
+    let attempted_path = normalize_path_allow_missing(path)?;
+    reject_sensitive_file_path(&attempted_path)?;
+    let absolute_path = attempted_path.canonicalize().map_err(|error| {
+        annotate_read_file_error(error, &attempted_path)
+    })?;
     let lossy_path = absolute_path.to_string_lossy().into_owned();
 
     let ext = absolute_path
@@ -161,7 +164,8 @@ pub fn read_file(
 
     let full_text = match ext.as_deref() {
         Some("ipynb") => {
-            let raw = fs::read(&absolute_path)?;
+            let raw = fs::read(&absolute_path)
+                .map_err(|error| annotate_read_file_error(error, &absolute_path))?;
             if raw.len() as u64 > MAX_TEXT_FILE_READ_BYTES {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -173,7 +177,8 @@ pub fn read_file(
             })?;
             format_ipynb_text(&raw)?
         }
-        Some("pdf") => pdf_liteparse::read_pdf_as_text(&absolute_path, pages)?,
+        Some("pdf") => pdf_liteparse::read_pdf_as_text(&absolute_path, pages)
+            .map_err(|error| annotate_read_file_error(error, &absolute_path))?,
         Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") => {
             if pages.is_some() {
                 return Err(io::Error::new(
@@ -181,7 +186,8 @@ pub fn read_file(
                     "`pages` applies only to PDF files",
                 ));
             }
-            read_image_summary(&absolute_path)?
+            read_image_summary(&absolute_path)
+                .map_err(|error| annotate_read_file_error(error, &absolute_path))?
         }
         _ => {
             if pages.is_some() {
@@ -190,7 +196,8 @@ pub fn read_file(
                     "`pages` applies only to PDF files",
                 ));
             }
-            let bytes = fs::read(&absolute_path)?;
+            let bytes = fs::read(&absolute_path)
+                .map_err(|error| annotate_read_file_error(error, &absolute_path))?;
             if bytes.len() as u64 > MAX_TEXT_FILE_READ_BYTES {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -215,6 +222,21 @@ pub fn read_file(
     };
 
     Ok(slice_text_payload(lossy_path, &full_text, offset, limit))
+}
+
+fn annotate_read_file_error(error: io::Error, attempted_path: &Path) -> io::Error {
+    if error.kind() == io::ErrorKind::NotFound {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "{}; resolved path: {}",
+                error,
+                attempted_path.to_string_lossy()
+            ),
+        )
+    } else {
+        error
+    }
 }
 
 fn slice_text_payload(

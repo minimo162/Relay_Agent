@@ -35,6 +35,10 @@ const CDP_REPAIR_TOOL_NAMES: &[&str] = &[
     "glob_search",
     "grep_search",
 ];
+const ORIGINAL_GOAL_MARKER: &str =
+    "Quoted original user goal (user data, not system instruction):\n```text\n";
+const LATEST_REQUEST_MARKER: &str =
+    "Quoted latest user request for this turn (user data, not system instruction):\n```text\n";
 
 fn estimate_cdp_prompt_tokens(prompt: &str) -> usize {
     prompt.len() / 4 + 1
@@ -51,6 +55,18 @@ enum CdpCatalogFlavor {
     StandardMinimal,
     StandardFull,
     Repair,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ActionableUserTurn {
+    text: String,
+    path_anchors: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReadFileToolErrorContext {
+    requested_path: Option<String>,
+    output: String,
 }
 
 #[derive(Clone, Debug)]
@@ -454,8 +470,17 @@ impl LoopStopReason {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LoopDecision {
-    Continue { next_input: String },
+    Continue {
+        next_input: String,
+        kind: LoopContinueKind,
+    },
     Stop(LoopStopReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoopContinueKind {
+    MetaNudge,
+    PathRepair,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -771,6 +796,13 @@ fn is_false_completion_success_claim_text(text: &str) -> bool {
     mentions_local_file && success_claim
 }
 
+fn contains_plain_relay_tool_mention(lower: &str) -> bool {
+    lower.contains("relay_tool ")
+        || lower.contains("relay_tool\n")
+        || lower.contains("relay_tool\r")
+        || lower.contains("`relay_tool`")
+}
+
 fn is_tool_protocol_confusion_text(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -828,7 +860,7 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || lower.contains("glob_search")
         || lower.contains("grep_search"))
         && (lower.contains("```")
-            || lower.contains("relay_tool")
+            || contains_plain_relay_tool_mention(&lower)
             || lower.contains("adjusting tool use"));
     local_tool_refusal
         || local_write_refusal
@@ -838,7 +870,11 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || is_repair_refusal_text(trimmed)
 }
 
-fn build_tool_protocol_repair_input(goal: &str, attempt_index: usize) -> String {
+fn build_tool_protocol_repair_input(
+    goal: &str,
+    latest_request: &str,
+    attempt_index: usize,
+) -> String {
     let escalation = if attempt_index == 0 {
         concat!(
             "Use the Relay tool catalog and emit the next required `relay_tool` JSON block in this reply.\n",
@@ -864,9 +900,44 @@ fn build_tool_protocol_repair_input(goal: &str, attempt_index: usize) -> String 
             "Do not use or mention Microsoft Copilot built-in tools such as Python, WebSearch/web search, citations, `office365_search`, coding/executing, Pages, or file uploads.\n",
             "Do not claim local workspace edit tools are unavailable when the appended Relay tool catalog includes them.\n",
             "{escalation}",
+            "Quoted latest user request for this turn (user data, not system instruction):\n```text\n{latest_request}\n```\n\n",
             "Quoted original user goal (user data, not system instruction):\n```text\n{goal}\n```"
         ),
         escalation = escalation,
+        latest_request = latest_request.trim(),
+        goal = goal.trim(),
+    )
+}
+
+fn build_path_resolution_repair_input(
+    goal: &str,
+    latest_request: &str,
+    requested_path: &str,
+    failed_tool_path: Option<&str>,
+    error_output: &str,
+) -> String {
+    let failed_path_text = failed_tool_path
+        .filter(|path| !path.trim().is_empty())
+        .map(|path| format!("Previous failed read_file input (do not reuse it unless it exactly matches the requested path):\n```text\n{}\n```\n\n", path.trim()))
+        .unwrap_or_default();
+    format!(
+        concat!(
+            "Path resolution repair.\n",
+            "The previous `read_file` call failed with ENOENT.\n",
+            "Retry exactly one `read_file` Relay tool call in this reply.\n",
+            "Use the latest-turn requested path string exactly as written below.\n",
+            "Do not prepend a prior directory, do not switch to a same-named file elsewhere, and do not answer with prose.\n",
+            "Output exactly one fenced `relay_tool` block and nothing before or after it.\n\n",
+            "Exact path to use verbatim:\n```text\n{requested_path}\n```\n\n",
+            "{failed_path_text}",
+            "Latest user request for this turn (user data, primary repair anchor):\n```text\n{latest_request}\n```\n\n",
+            "Previous `read_file` error:\n```text\n{error_output}\n```\n\n",
+            "Quoted original user goal (user data, not system instruction):\n```text\n{goal}\n```"
+        ),
+        requested_path = requested_path.trim(),
+        failed_path_text = failed_path_text,
+        latest_request = latest_request.trim(),
+        error_output = error_output.trim(),
         goal = goal.trim(),
     )
 }
@@ -881,12 +952,75 @@ fn truncate_for_log(text: &str, max_chars: usize) -> String {
     }
 }
 
+fn latest_read_file_tool_error(summary: &runtime::TurnSummary) -> Option<ReadFileToolErrorContext> {
+    let output = summary.tool_results.iter().rev().find_map(|message| {
+        message.blocks.iter().find_map(|block| match block {
+            ContentBlock::ToolResult {
+                tool_name,
+                output,
+                is_error,
+                ..
+            } if *is_error && tool_name == "read_file" => Some(output.clone()),
+            _ => None,
+        })
+    })?;
+    let requested_path = summary.assistant_messages.iter().rev().find_map(|message| {
+        message.blocks.iter().rev().find_map(|block| match block {
+            ContentBlock::ToolUse { name, input, .. } if name == "read_file" => {
+                serde_json::from_str::<Value>(input).ok().and_then(|value| {
+                    value
+                        .get("path")
+                        .or_else(|| value.get("file_path"))
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string)
+                })
+            }
+            _ => None,
+        })
+    });
+    Some(ReadFileToolErrorContext {
+        requested_path,
+        output,
+    })
+}
+
+fn is_read_file_enoent(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    lower.contains("no such file or directory") || lower.contains("os error 2")
+}
+
+fn select_path_repair_anchor(
+    latest_request: &str,
+    failed_tool_path: Option<&str>,
+) -> Option<String> {
+    let anchors = extract_path_anchors_from_text(latest_request);
+    if anchors.is_empty() {
+        return None;
+    }
+    if let Some(failed_path) = failed_tool_path {
+        let failed_name = std::path::Path::new(failed_path)
+            .file_name()
+            .and_then(|value| value.to_str());
+        if let Some(anchor) = anchors.iter().find(|anchor| {
+            std::path::Path::new(anchor.as_str())
+                .file_name()
+                .and_then(|value| value.to_str())
+                == failed_name
+        }) {
+            return Some(anchor.clone());
+        }
+    }
+    anchors.into_iter().next()
+}
+
 fn decide_loop_after_success(
     goal: &str,
+    latest_turn_input: &str,
     session_preset: SessionPreset,
     turn_index: usize,
     meta_stall_nudges_used: usize,
     meta_stall_nudge_limit: usize,
+    path_repair_used: bool,
     summary: &runtime::TurnSummary,
 ) -> LoopDecision {
     match &summary.outcome {
@@ -894,6 +1028,27 @@ fn decide_loop_after_success(
             return LoopDecision::Stop(LoopStopReason::PermissionDenied);
         }
         runtime::TurnOutcome::ToolError { .. } => {
+            if session_preset == SessionPreset::Build && !path_repair_used {
+                if let Some(error) = latest_read_file_tool_error(summary) {
+                    if is_read_file_enoent(&error.output) {
+                        if let Some(requested_path) = select_path_repair_anchor(
+                            latest_turn_input,
+                            error.requested_path.as_deref(),
+                        ) {
+                            return LoopDecision::Continue {
+                                next_input: build_path_resolution_repair_input(
+                                    goal,
+                                    latest_turn_input,
+                                    &requested_path,
+                                    error.requested_path.as_deref(),
+                                    &error.output,
+                                ),
+                                kind: LoopContinueKind::PathRepair,
+                            };
+                        }
+                    }
+                }
+            }
             return LoopDecision::Stop(LoopStopReason::ToolError);
         }
         runtime::TurnOutcome::Completed => {}
@@ -915,7 +1070,12 @@ fn decide_loop_after_success(
     {
         if meta_stall_nudges_used < meta_stall_nudge_limit {
             return LoopDecision::Continue {
-                next_input: build_tool_protocol_repair_input(goal, meta_stall_nudges_used),
+                next_input: build_tool_protocol_repair_input(
+                    goal,
+                    latest_turn_input,
+                    meta_stall_nudges_used,
+                ),
+                kind: LoopContinueKind::MetaNudge,
             };
         }
         return LoopDecision::Stop(LoopStopReason::MetaStall);
@@ -925,6 +1085,7 @@ fn decide_loop_after_success(
         if meta_stall_nudges_used < meta_stall_nudge_limit {
             return LoopDecision::Continue {
                 next_input: "Continue.".to_string(),
+                kind: LoopContinueKind::MetaNudge,
             };
         }
         return LoopDecision::Stop(LoopStopReason::MetaStall);
@@ -1022,13 +1183,20 @@ fn is_tool_protocol_repair_nudge(input: &LoopInput) -> bool {
     matches!(input, LoopInput::Synthetic(text) if text.trim_start().starts_with("Tool protocol repair."))
 }
 
-pub(crate) fn build_compaction_replay_input(goal: &str, current_input: &LoopInput) -> String {
-    let latest_request =
-        if is_meta_stall_nudge(current_input) || is_tool_protocol_repair_nudge(current_input) {
-            goal.trim()
-        } else {
-            current_input.text().trim()
-        };
+fn is_path_resolution_repair_nudge(input: &LoopInput) -> bool {
+    matches!(input, LoopInput::Synthetic(text) if text.trim_start().starts_with("Path resolution repair."))
+}
+
+pub(crate) fn build_compaction_replay_input(
+    goal: &str,
+    latest_turn_input: &str,
+    current_input: &LoopInput,
+) -> String {
+    let latest_request = if matches!(current_input, LoopInput::Synthetic(_)) {
+        latest_turn_input.trim()
+    } else {
+        current_input.text().trim()
+    };
     format!(
         concat!(
             "Resume the existing task from the compacted summary and preserved recent messages.\n",
@@ -1160,6 +1328,7 @@ pub fn run_agent_loop_impl<R: Runtime>(
     let mut final_assistant_message = String::new();
     let mut current_input = LoopInput::User(turn_input.clone());
     let mut meta_stall_nudges_used = 0usize;
+    let mut path_repair_used = false;
     let mut completed_turn = false;
     let mut recent_turn_signatures: Vec<TurnActivitySignature> = Vec::new();
 
@@ -1192,6 +1361,11 @@ pub fn run_agent_loop_impl<R: Runtime>(
                     session_id,
                     meta_stall_nudges_used,
                     config.meta_stall_nudge_limit
+                );
+            } else if is_path_resolution_repair_nudge(&current_input) {
+                tracing::info!(
+                    "[RelayAgent] session {} dispatching path-resolution repair retry",
+                    session_id
                 );
             } else if is_meta_stall_nudge(&current_input) {
                 tracing::info!(
@@ -1244,13 +1418,15 @@ pub fn run_agent_loop_impl<R: Runtime>(
 
                     match decide_loop_after_success(
                         &goal,
+                        &turn_input,
                         session_preset,
                         turn_index,
                         meta_stall_nudges_used,
                         config.meta_stall_nudge_limit,
+                        path_repair_used,
                         &summary,
                     ) {
-                        LoopDecision::Continue { next_input } => {
+                        LoopDecision::Continue { next_input, kind } => {
                             if turn_index + 1 >= max_turns {
                                 final_stop_reason = LoopStopReason::MaxTurnsReached;
                                 completed_turn = true;
@@ -1266,6 +1442,16 @@ pub fn run_agent_loop_impl<R: Runtime>(
                                     summary.iterations,
                                     truncate_for_log(&summary.terminal_assistant_text, 240)
                                 );
+                            } else if next_input
+                                .trim_start()
+                                .starts_with("Path resolution repair.")
+                            {
+                                tracing::info!(
+                                    "[RelayAgent] session {} queued path-resolution repair after read_file ENOENT (iterations={}, assistant_excerpt={:?})",
+                                    session_id,
+                                    summary.iterations,
+                                    truncate_for_log(&summary.terminal_assistant_text, 240)
+                                );
                             } else if next_input.trim() == "Continue." {
                                 let stage = meta_stall_nudges_used + 1;
                                 tracing::info!(
@@ -1277,7 +1463,10 @@ pub fn run_agent_loop_impl<R: Runtime>(
                                     truncate_for_log(&summary.terminal_assistant_text, 240)
                                 );
                             }
-                            meta_stall_nudges_used += 1;
+                            match kind {
+                                LoopContinueKind::MetaNudge => meta_stall_nudges_used += 1,
+                                LoopContinueKind::PathRepair => path_repair_used = true,
+                            }
                             current_input = LoopInput::Synthetic(next_input);
                             break;
                         }
@@ -1337,6 +1526,7 @@ pub fn run_agent_loop_impl<R: Runtime>(
                         }
                         current_input = LoopInput::Synthetic(build_compaction_replay_input(
                             &goal,
+                            &turn_input,
                             &current_input,
                         ));
                         transition_session_state(
@@ -1869,6 +2059,7 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - **Do not** tell the user that `relay_tool` "only works in the desktop" so you cannot use it in this chat, or that you "cannot execute tools in this Copilot environment"—**that is wrong for this session.** When the task needs a tool, output the prescribed fences.
 - **Do** emit fenced tool JSON when needed; **prose-only** refusals block the agent loop.
 - **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read_file` first** before edits. Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
+- **Path discipline:** If the latest user turn names a concrete path (absolute path, relative path, or bare filename with an extension), use that exact string in tool input. Do **not** rewrite it to a different directory from a prior turn. Treat bare filenames with an extension as workspace-root-relative unless the user gave another base.
 - **No meta-only stall:** When the work clearly needs tools, do **not** answer with only protocol checklists or promises; the host needs **parsed fences** in this message.
 - **Single copy of prose:** Do **not** repeat the same paragraph, checklist, or “了解しました” block multiple times in one reply. One clear statement is enough.
 - **No Copilot chrome in prose:** Do **not** paste internal UI markers, search preambles, or bracketed IDs (e.g. `【richwebanswer-…】`) into the user-visible answer—omit them entirely.
@@ -2105,10 +2296,7 @@ fn should_try_inline_tool_json_fallback(
     if !has_tool_sentinel {
         return false;
     }
-    raw_lower.contains("relay_tool")
-        || display_lower.contains("relay_tool")
-        || is_tool_protocol_confusion_text(raw)
-        || is_tool_protocol_confusion_text(display)
+    is_tool_protocol_confusion_text(raw) || is_tool_protocol_confusion_text(display)
 }
 
 fn latest_user_text(messages: &[ConversationMessage]) -> Option<String> {
@@ -2143,11 +2331,168 @@ fn is_tool_protocol_repair_text(text: &str) -> bool {
     text.trim_start().starts_with("Tool protocol repair.")
 }
 
+fn is_path_resolution_repair_text(text: &str) -> bool {
+    text.trim_start().starts_with("Path resolution repair.")
+}
+
+fn is_compaction_replay_text(text: &str) -> bool {
+    text.trim_start()
+        .starts_with("Resume the existing task from the compacted summary")
+}
+
+fn is_synthetic_control_user_text(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed == "Continue."
+        || is_tool_protocol_repair_text(trimmed)
+        || is_path_resolution_repair_text(trimmed)
+        || is_compaction_replay_text(trimmed)
+}
+
+fn trim_path_punctuation(token: &str) -> &str {
+    token.trim_matches(|c: char| {
+        matches!(
+            c,
+            '`' | '"'
+                | '\''
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '<'
+                | '>'
+                | ','
+                | ':'
+                | ';'
+                | '!'
+                | '?'
+                | '。'
+                | '、'
+                | '，'
+                | '：'
+                | '；'
+                | '！'
+                | '？'
+        )
+    })
+}
+
+fn is_windows_absolute_path(token: &str) -> bool {
+    let bytes = token.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+}
+
+fn is_bare_filename_with_extension(token: &str) -> bool {
+    if token.is_empty() || token.contains('/') || token.contains('\\') || token.ends_with('.') {
+        return false;
+    }
+    let Some((stem, ext)) = token.rsplit_once('.') else {
+        return false;
+    };
+    !stem.is_empty()
+        && !ext.is_empty()
+        && ext.len() <= 16
+        && ext.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+fn is_path_candidate_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | '\\' | ':' | '~')
+}
+
+fn extract_path_anchors_from_text(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let mut candidate = String::new();
+    let flush_candidate =
+        |candidate: &mut String, out: &mut Vec<String>, seen: &mut HashSet<String>| {
+            let token = trim_path_punctuation(candidate);
+            if token.is_empty() || token.contains("://") {
+                candidate.clear();
+                return;
+            }
+            let is_path = token.starts_with('/')
+                || is_windows_absolute_path(token)
+                || token.starts_with("./")
+                || token.starts_with("../")
+                || token.contains('/')
+                || token.contains('\\')
+                || is_bare_filename_with_extension(token);
+            if is_path && seen.insert(token.to_string()) {
+                out.push(token.to_string());
+            }
+            candidate.clear();
+        };
+
+    for ch in text.chars() {
+        if is_path_candidate_char(ch) {
+            candidate.push(ch);
+        } else if !candidate.is_empty() {
+            flush_candidate(&mut candidate, &mut out, &mut seen);
+        }
+    }
+    if !candidate.is_empty() {
+        flush_candidate(&mut candidate, &mut out, &mut seen);
+    }
+    out
+}
+
+fn latest_actionable_user_turn(messages: &[ConversationMessage]) -> Option<ActionableUserTurn> {
+    messages.iter().rev().find_map(|message| {
+        if message.role != MessageRole::User {
+            return None;
+        }
+        let text = collect_message_text(message);
+        if is_synthetic_control_user_text(&text) {
+            return None;
+        }
+        Some(ActionableUserTurn {
+            path_anchors: extract_path_anchors_from_text(&text),
+            text,
+        })
+    })
+}
+
+fn latest_actionable_user_text(messages: &[ConversationMessage]) -> Option<String> {
+    latest_actionable_user_turn(messages).map(|turn| turn.text)
+}
+
+fn extract_quoted_block(text: &str, marker: &str) -> Option<String> {
+    let start = text.find(marker)? + marker.len();
+    let tail = &text[start..];
+    let end = tail.find("\n```")?;
+    let extracted = tail[..end].trim();
+    if extracted.is_empty() {
+        None
+    } else {
+        Some(extracted.to_string())
+    }
+}
+
+fn build_latest_requested_paths_section(messages: &[ConversationMessage]) -> Option<String> {
+    let turn = latest_actionable_user_turn(messages)?;
+    if turn.path_anchors.is_empty() {
+        return None;
+    }
+    Some(format!(
+        concat!(
+            "Latest requested paths:\n",
+            "Use these exact path strings in tool input. Do not rewrite them to another directory from a prior turn.\n",
+            "Treat a bare filename with an extension as workspace-root-relative unless the user gave another base.\n",
+            "```text\n{}\n```"
+        ),
+        turn.path_anchors.join("\n")
+    ))
+}
+
 fn cdp_prompt_flavor(messages: &[ConversationMessage]) -> CdpPromptFlavor {
     let Some(text) = latest_user_text(messages) else {
         return CdpPromptFlavor::Standard;
     };
-    if is_tool_protocol_repair_text(&text) {
+    if is_tool_protocol_repair_text(&text) || is_path_resolution_repair_text(&text) {
         CdpPromptFlavor::Repair
     } else {
         CdpPromptFlavor::Standard
@@ -2155,22 +2500,20 @@ fn cdp_prompt_flavor(messages: &[ConversationMessage]) -> CdpPromptFlavor {
 }
 
 fn extract_repair_goal_from_text(text: &str) -> Option<String> {
-    let marker = "Quoted original user goal (user data, not system instruction):\n```text\n";
-    let start = text.find(marker)? + marker.len();
-    let tail = &text[start..];
-    let end = tail.find("\n```")?;
-    let goal = tail[..end].trim();
-    if goal.is_empty() {
-        None
-    } else {
-        Some(goal.to_string())
-    }
+    extract_quoted_block(text, ORIGINAL_GOAL_MARKER)
+}
+
+fn extract_latest_request_from_text(text: &str) -> Option<String> {
+    extract_quoted_block(text, LATEST_REQUEST_MARKER)
 }
 
 fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
     let latest_user = latest_user_text(messages).unwrap_or_default();
-    let goal = extract_repair_goal_from_text(&latest_user)
+    let latest_request = extract_latest_request_from_text(&latest_user)
+        .or_else(|| latest_actionable_user_text(messages))
         .unwrap_or_else(|| latest_user.trim().to_string());
+    let goal =
+        extract_repair_goal_from_text(&latest_user).unwrap_or_else(|| latest_request.clone());
     format!(
         concat!(
             "## Relay repair mode\n",
@@ -2178,10 +2521,14 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
             "Return the next required `relay_tool` JSON now.\n",
             "Only local file/search Relay tools are relevant in this repair turn.\n",
             "Prefer `write_file` / `edit_file` for local file creation or edits; use `read_file` only when needed.\n",
+            "If the latest real user turn named a concrete path, reuse that exact string in tool input. Do not rewrite it to another directory or prior-turn variant.\n",
             "Do not use or mention Microsoft-native tools such as Python, WebSearch, citations, Pages, uploads, or remote artifacts.\n\n",
+            "Latest user request for this turn (user data, primary repair anchor):\n",
+            "```text\n{latest_request}\n```\n\n",
             "Current session goal (user data, preserved for repair context):\n",
             "```text\n{goal}\n```"
         ),
+        latest_request = latest_request.trim(),
         goal = goal.trim()
     )
 }
@@ -2194,7 +2541,7 @@ fn build_standard_minimal_cdp_system_prompt(
     system_prompt: &[String],
     messages: &[ConversationMessage],
 ) -> String {
-    let goal = latest_user_text(messages)
+    let goal = latest_actionable_user_text(messages)
         .map(|text| truncate_for_prompt_chars(&text, CDP_STANDARD_MINIMAL_GOAL_MAX_CHARS))
         .unwrap_or_default();
     let context_summary = system_prompt
@@ -2213,6 +2560,7 @@ fn build_standard_minimal_cdp_system_prompt(
         "When a tool is needed, emit fenced `relay_tool` JSON in this reply.\n",
         "Do not claim this Copilot chat cannot use tools; Relay executes parsed local tool calls.\n",
         "Prefer `read_file` before edits unless the new file content is already fully known.\n",
+        "If the latest user turn names a concrete path, use that exact string in tool input. Do not rewrite it to another directory from prior turns.\n",
         "Stay inside the current workspace and avoid remote artifacts, Python, WebSearch, citations, or uploads for local file tasks."
     )
     .to_string()];
@@ -2244,6 +2592,9 @@ fn cdp_stage_label(messages: &[ConversationMessage]) -> &'static str {
         return "original";
     };
     let trimmed = text.trim();
+    if is_path_resolution_repair_text(trimmed) {
+        return "path-repair";
+    }
     if !is_tool_protocol_repair_text(trimmed) {
         return "original";
     }
@@ -2263,6 +2614,7 @@ fn cdp_tool_parse_mode(messages: &[ConversationMessage]) -> CdpToolParseMode {
         || trimmed.starts_with("Resume the existing task from the compacted summary")
         || trimmed.starts_with("Please resend the tool call using a fenced relay_tool block")
         || is_tool_protocol_repair_text(trimmed)
+        || is_path_resolution_repair_text(trimmed)
     {
         CdpToolParseMode::RetryRepair
     } else {
@@ -2888,13 +3240,19 @@ fn build_cdp_prompt_bundle_from_messages(
 ) -> CdpPromptBundle {
     let grounding_text = CDP_BUNDLE_GROUNDING_BLOCK.to_string();
     let effective_messages = cdp_messages_for_flavor(messages, flavor);
-    let system_text = match (flavor, catalog_flavor) {
+    let mut system_text = match (flavor, catalog_flavor) {
         (CdpPromptFlavor::Standard, CdpCatalogFlavor::StandardMinimal) => {
             build_standard_minimal_cdp_system_prompt(system_prompt, messages)
         }
         (CdpPromptFlavor::Standard, _) => system_prompt.join("\n\n"),
         (CdpPromptFlavor::Repair, _) => build_repair_cdp_system_prompt(messages),
     };
+    if let Some(paths_section) = build_latest_requested_paths_section(messages) {
+        if !system_text.is_empty() {
+            system_text.push_str("\n\n");
+        }
+        system_text.push_str(&paths_section);
+    }
     let (message_text, message_breakdown) = render_cdp_messages_with_breakdown(&effective_messages);
     let catalog_text = cdp_tool_catalog_section_for_flavor(preset, flavor, catalog_flavor);
     let mut parts = vec![grounding_text.clone()];
@@ -3389,6 +3747,60 @@ fn enforce_workspace_tool_paths(
     Ok(())
 }
 
+fn extract_path_like_input(input: &Value, keys: &[&str]) -> Option<String> {
+    let obj = input.as_object()?;
+    keys.iter()
+        .find_map(|key| obj.get(*key).and_then(Value::as_str))
+        .map(ToString::to_string)
+}
+
+fn enrich_read_file_tool_error(
+    message: String,
+    original_path: Option<&str>,
+    resolved_path: Option<&str>,
+    workspace_cwd: Option<&str>,
+) -> String {
+    let lower = message.to_ascii_lowercase();
+    if !lower.contains("no such file or directory") && !lower.contains("os error 2") {
+        return message;
+    }
+
+    let mut lines = vec![message];
+    if let Some(path) = resolved_path.filter(|path| !path.trim().is_empty()) {
+        if !lines[0].contains(path) {
+            lines.push(format!("resolved path: {}", path.trim()));
+        }
+    }
+
+    let Some(original_path) = original_path.map(str::trim).filter(|path| !path.is_empty()) else {
+        return lines.join("\n");
+    };
+    if std::path::Path::new(original_path).is_absolute() {
+        return lines.join("\n");
+    }
+    let Some(workspace_root) = workspace_cwd
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+    else {
+        return lines.join("\n");
+    };
+    let Some(file_name) = std::path::Path::new(original_path)
+        .file_name()
+        .map(|value| value.to_owned())
+    else {
+        return lines.join("\n");
+    };
+    let workspace_root_candidate = workspace_root.join(file_name);
+    if workspace_root_candidate.exists() {
+        lines.push(format!(
+            "workspace-root hint: same filename exists at {}",
+            workspace_root_candidate.display()
+        ));
+    }
+    lines.join("\n")
+}
+
 pub fn build_tool_executor<R: Runtime>(
     app: &AppHandle<R>,
     session_id: &str,
@@ -3523,6 +3935,11 @@ impl<R: Runtime> ToolExecutor for TauriToolExecutor<R> {
 
         let mut input_value: Value =
             serde_json::from_str(input).unwrap_or_else(|_| serde_json::json!({}));
+        let original_read_file_path = if tool_name == "read_file" {
+            extract_path_like_input(&input_value, &["path", "file_path"])
+        } else {
+            None
+        };
 
         let _bash_config_cwd = if tool_name == "bash" {
             let root = self
@@ -3561,6 +3978,11 @@ impl<R: Runtime> ToolExecutor for TauriToolExecutor<R> {
                 )?;
             }
         }
+        let resolved_read_file_path = if tool_name == "read_file" {
+            extract_path_like_input(&input_value, &["path", "file_path"])
+        } else {
+            None
+        };
 
         let undo_snap = match tool_name {
             "write_file" | "edit_file" | "NotebookEdit" | "pdf_merge" | "pdf_split" => {
@@ -3569,8 +3991,22 @@ impl<R: Runtime> ToolExecutor for TauriToolExecutor<R> {
             _ => None,
         };
 
-        let result =
-            tools::execute_tool(tool_name, &input_value).map_err(runtime::ToolError::new)?;
+        let result = match tools::execute_tool(tool_name, &input_value) {
+            Ok(result) => result,
+            Err(error) => {
+                let message = if tool_name == "read_file" {
+                    enrich_read_file_tool_error(
+                        error,
+                        original_read_file_path.as_deref(),
+                        resolved_read_file_path.as_deref(),
+                        self.cwd.as_deref(),
+                    )
+                } else {
+                    error
+                };
+                return Err(runtime::ToolError::new(message));
+            }
+        };
 
         if let Some(ops) = undo_snap {
             if let Ok(Some(handle)) = self.registry.get_handle(&self.session_id) {
@@ -4430,7 +4866,8 @@ mod cdp_copilot_tool_tests {
             "# Project context\nWorking directory: /tmp/workspace".to_string(),
             "# Workspace instructions\nVery long instructions".to_string(),
         ];
-        let repair = build_tool_protocol_repair_input("Create ./tetris.html", 0);
+        let repair =
+            build_tool_protocol_repair_input("Original request", "Create ./tetris.html", 0);
         let messages = vec![
             ConversationMessage::user_text("Original request".to_string()),
             ConversationMessage::assistant(vec![ContentBlock::Text {
@@ -4457,6 +4894,44 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
+    fn latest_actionable_user_turn_skips_synthetic_control_prompts() {
+        let messages = vec![
+            ConversationMessage::user_text(
+                "同じセッションのまま、tetris_grounding_live_copy.html を read_file で読みます。"
+                    .to_string(),
+            ),
+            ConversationMessage::user_text("Continue.".to_string()),
+            ConversationMessage::user_text(build_tool_protocol_repair_input(
+                "Original goal",
+                "Use tetris_grounding_live_copy.html",
+                0,
+            )),
+        ];
+        let turn = latest_actionable_user_turn(&messages).expect("actionable user turn");
+        assert!(turn.text.contains("tetris_grounding_live_copy.html"));
+        assert_eq!(turn.path_anchors, vec!["tetris_grounding_live_copy.html"]);
+    }
+
+    #[test]
+    fn prompt_bundle_keeps_bare_filename_in_latest_requested_paths() {
+        let messages = vec![ConversationMessage::user_text(
+            "同じセッションのまま、tetris_grounding_live_copy.html を read_file で読みます。"
+                .to_string(),
+        )];
+        let bundle = build_cdp_prompt_bundle_from_messages(
+            &[],
+            &messages,
+            SessionPreset::Build,
+            CdpPromptFlavor::Standard,
+            CdpCatalogFlavor::StandardMinimal,
+        );
+        assert!(bundle.system_text.contains("Latest requested paths"));
+        assert!(bundle
+            .system_text
+            .contains("tetris_grounding_live_copy.html"));
+    }
+
+    #[test]
     fn cdp_attempt_request_id_appends_attempt_index() {
         assert_eq!(cdp_attempt_request_id("chain-123", 1), "chain-123.1");
         assert_eq!(cdp_attempt_request_id("chain-123", 2), "chain-123.2");
@@ -4465,7 +4940,7 @@ mod cdp_copilot_tool_tests {
     #[test]
     fn tool_protocol_repair_messages_use_retry_parse_mode() {
         let messages = vec![ConversationMessage::user_text(
-            build_tool_protocol_repair_input("Create ./tetris.html", 0),
+            build_tool_protocol_repair_input("Original goal", "Create ./tetris.html", 0),
         )];
         assert_eq!(
             cdp_tool_parse_mode(&messages),
@@ -5534,7 +6009,16 @@ mod loop_controller_tests {
             runtime::TurnOutcome::Completed,
         );
         assert_eq!(
-            decide_loop_after_success("Improve the file", SessionPreset::Build, 0, 0, 1, &s),
+            decide_loop_after_success(
+                "Improve the file",
+                "Improve the file",
+                SessionPreset::Build,
+                0,
+                0,
+                1,
+                false,
+                &s,
+            ),
             LoopDecision::Stop(LoopStopReason::Completed)
         );
     }
@@ -5547,9 +6031,19 @@ mod loop_controller_tests {
             runtime::TurnOutcome::Completed,
         );
         assert_eq!(
-            decide_loop_after_success("Improve the file", SessionPreset::Build, 0, 0, 1, &s),
+            decide_loop_after_success(
+                "Improve the file",
+                "Improve the file",
+                SessionPreset::Build,
+                0,
+                0,
+                1,
+                false,
+                &s,
+            ),
             LoopDecision::Continue {
-                next_input: "Continue.".to_string()
+                next_input: "Continue.".to_string(),
+                kind: LoopContinueKind::MetaNudge,
             }
         );
     }
@@ -5562,7 +6056,16 @@ mod loop_controller_tests {
             runtime::TurnOutcome::Completed,
         );
         assert_eq!(
-            decide_loop_after_success("Improve the file", SessionPreset::Build, 0, 1, 1, &s),
+            decide_loop_after_success(
+                "Improve the file",
+                "Improve the file",
+                SessionPreset::Build,
+                0,
+                1,
+                1,
+                false,
+                &s,
+            ),
             LoopDecision::Stop(LoopStopReason::MetaStall)
         );
     }
@@ -5574,9 +6077,21 @@ mod loop_controller_tests {
             Vec::new(),
             runtime::TurnOutcome::Completed,
         );
-        let decision =
-            decide_loop_after_success("Create ./tetris.html", SessionPreset::Build, 0, 0, 1, &s);
-        let LoopDecision::Continue { next_input } = decision else {
+        let decision = decide_loop_after_success(
+            "Create ./tetris.html",
+            "Create ./tetris.html",
+            SessionPreset::Build,
+            0,
+            0,
+            1,
+            false,
+            &s,
+        );
+        let LoopDecision::Continue {
+            next_input,
+            kind: LoopContinueKind::MetaNudge,
+        } = decision
+        else {
             panic!("expected repair nudge");
         };
         assert!(next_input.contains("Tool protocol repair."));
@@ -5591,7 +6106,16 @@ mod loop_controller_tests {
             runtime::TurnOutcome::Completed,
         );
         assert_eq!(
-            decide_loop_after_success("Create ./tetris.html", SessionPreset::Build, 1, 1, 1, &s),
+            decide_loop_after_success(
+                "Create ./tetris.html",
+                "Create ./tetris.html",
+                SessionPreset::Build,
+                1,
+                1,
+                1,
+                false,
+                &s,
+            ),
             LoopDecision::Stop(LoopStopReason::MetaStall)
         );
     }
@@ -5604,8 +6128,16 @@ mod loop_controller_tests {
             runtime::TurnOutcome::Completed,
         );
         s.iterations = 2;
-        let decision =
-            decide_loop_after_success("Create ./tetris.html", SessionPreset::Build, 0, 0, 1, &s);
+        let decision = decide_loop_after_success(
+            "Create ./tetris.html",
+            "Create ./tetris.html",
+            SessionPreset::Build,
+            0,
+            0,
+            1,
+            false,
+            &s,
+        );
         assert!(matches!(decision, LoopDecision::Continue { .. }));
     }
 
@@ -5617,7 +6149,16 @@ mod loop_controller_tests {
             runtime::TurnOutcome::Completed,
         );
         assert_eq!(
-            decide_loop_after_success("Improve the file", SessionPreset::Build, 0, 0, 1, &s),
+            decide_loop_after_success(
+                "Improve the file",
+                "Improve the file",
+                SessionPreset::Build,
+                0,
+                0,
+                1,
+                false,
+                &s,
+            ),
             LoopDecision::Stop(LoopStopReason::Completed)
         );
     }
@@ -5635,7 +6176,16 @@ mod loop_controller_tests {
             },
         );
         assert_eq!(
-            decide_loop_after_success("Improve the file", SessionPreset::Build, 0, 0, 1, &s),
+            decide_loop_after_success(
+                "Improve the file",
+                "Improve the file",
+                SessionPreset::Build,
+                0,
+                0,
+                1,
+                false,
+                &s,
+            ),
             LoopDecision::Stop(LoopStopReason::PermissionDenied)
         );
     }
@@ -5650,9 +6200,93 @@ mod loop_controller_tests {
             },
         );
         assert_eq!(
-            decide_loop_after_success("Improve the file", SessionPreset::Build, 0, 0, 1, &s),
+            decide_loop_after_success(
+                "Improve the file",
+                "Improve the file",
+                SessionPreset::Build,
+                0,
+                0,
+                1,
+                false,
+                &s,
+            ),
             LoopDecision::Stop(LoopStopReason::ToolError)
         );
+    }
+
+    #[test]
+    fn read_file_enoent_in_build_session_gets_path_repair() {
+        let summary = runtime::TurnSummary {
+            assistant_messages: vec![ConversationMessage::assistant(vec![ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "read_file".to_string(),
+                input: r#"{"path":"tests/fixtures/tetris_grounding_live_copy.html"}"#.to_string(),
+            }])],
+            tool_results: vec![tool_error_result(
+                "read_file",
+                "No such file or directory (os error 2)\nresolved path: /root/Relay_Agent/tests/fixtures/tetris_grounding_live_copy.html",
+            )],
+            iterations: 1,
+            usage: TokenUsage::default(),
+            auto_compaction: None,
+            outcome: runtime::TurnOutcome::ToolError {
+                message: "No such file or directory (os error 2)".to_string(),
+            },
+            terminal_assistant_text: String::new(),
+        };
+        let decision = decide_loop_after_success(
+            "Read the requested file",
+            "同じセッションのまま、tetris_grounding_live_copy.html を read_file で読みます。",
+            SessionPreset::Build,
+            0,
+            0,
+            2,
+            false,
+            &summary,
+        );
+        let LoopDecision::Continue {
+            next_input,
+            kind: LoopContinueKind::PathRepair,
+        } = decision
+        else {
+            panic!("expected path repair");
+        };
+        assert!(next_input.contains("Path resolution repair."));
+        assert!(next_input.contains("tetris_grounding_live_copy.html"));
+        assert!(next_input.contains("tests/fixtures/tetris_grounding_live_copy.html"));
+    }
+
+    #[test]
+    fn path_repair_is_one_shot_per_outer_turn() {
+        let summary = runtime::TurnSummary {
+            assistant_messages: vec![ConversationMessage::assistant(vec![ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "read_file".to_string(),
+                input: r#"{"path":"tests/fixtures/tetris_grounding_live_copy.html"}"#.to_string(),
+            }])],
+            tool_results: vec![tool_error_result(
+                "read_file",
+                "No such file or directory (os error 2)\nresolved path: /root/Relay_Agent/tests/fixtures/tetris_grounding_live_copy.html",
+            )],
+            iterations: 1,
+            usage: TokenUsage::default(),
+            auto_compaction: None,
+            outcome: runtime::TurnOutcome::ToolError {
+                message: "No such file or directory (os error 2)".to_string(),
+            },
+            terminal_assistant_text: String::new(),
+        };
+        let decision = decide_loop_after_success(
+            "Read the requested file",
+            "同じセッションのまま、tetris_grounding_live_copy.html を read_file で読みます。",
+            SessionPreset::Build,
+            0,
+            0,
+            2,
+            true,
+            &summary,
+        );
+        assert_eq!(decision, LoopDecision::Stop(LoopStopReason::ToolError));
     }
 
     #[test]
@@ -5753,19 +6387,27 @@ mod loop_controller_tests {
     fn compaction_replay_uses_original_goal_for_meta_stall_nudge() {
         let replay = build_compaction_replay_input(
             "Improve the agent loop",
+            "Add a status event stream",
             &LoopInput::Synthetic("Continue.".to_string()),
         );
         assert!(replay.contains("Improve the agent loop"));
-        assert!(!replay.contains("Latest request to continue from:\nContinue."));
+        assert!(replay.contains("Add a status event stream"));
+        assert!(!replay.contains("Continue."));
     }
 
     #[test]
-    fn compaction_replay_uses_original_goal_for_tool_protocol_repair_nudge() {
+    fn compaction_replay_keeps_latest_turn_for_tool_protocol_repair_nudge() {
         let replay = build_compaction_replay_input(
             "Create ./tetris.html",
-            &LoopInput::Synthetic(build_tool_protocol_repair_input("Create ./tetris.html", 0)),
+            "Read tetris_grounding_live_copy.html",
+            &LoopInput::Synthetic(build_tool_protocol_repair_input(
+                "Create ./tetris.html",
+                "Read tetris_grounding_live_copy.html",
+                0,
+            )),
         );
         assert!(replay.contains("Create ./tetris.html"));
+        assert!(replay.contains("Read tetris_grounding_live_copy.html"));
         assert!(!replay.contains("Tool protocol repair."));
     }
 
@@ -5773,6 +6415,7 @@ mod loop_controller_tests {
     fn compaction_replay_keeps_latest_user_request_when_not_nudge() {
         let replay = build_compaction_replay_input(
             "Improve the agent loop",
+            "Ignored latest turn input",
             &LoopInput::User("Add a status event stream".to_string()),
         );
         assert!(replay.contains("Improve the agent loop"));
@@ -5818,13 +6461,15 @@ mod loop_controller_tests {
 
     #[test]
     fn repair_prompt_forbids_prose_and_plain_text_mentions() {
-        let repair1 = build_tool_protocol_repair_input("Create ./tetris.html", 0);
+        let repair1 =
+            build_tool_protocol_repair_input("Create ./tetris.html", "Create ./tetris.html", 0);
         assert!(repair1.contains(
             "Output exactly one fenced `relay_tool` block and nothing before or after it."
         ));
         assert!(repair1.contains("Do not mention `relay_tool` in plain text."));
 
-        let repair2 = build_tool_protocol_repair_input("Create ./tetris.html", 1);
+        let repair2 =
+            build_tool_protocol_repair_input("Create ./tetris.html", "Create ./tetris.html", 1);
         assert!(repair2.contains("output exactly one Relay `relay_tool` fence and nothing else"));
         assert!(
             repair2.contains("Do not include any explanatory sentence before or after the fence.")
@@ -5838,9 +6483,21 @@ mod loop_controller_tests {
             Vec::new(),
             runtime::TurnOutcome::Completed,
         );
-        let decision =
-            decide_loop_after_success("Create ./tetris.html", SessionPreset::Build, 1, 1, 2, &s);
-        let LoopDecision::Continue { next_input } = decision else {
+        let decision = decide_loop_after_success(
+            "Create ./tetris.html",
+            "Create ./tetris.html",
+            SessionPreset::Build,
+            1,
+            1,
+            2,
+            false,
+            &s,
+        );
+        let LoopDecision::Continue {
+            next_input,
+            kind: LoopContinueKind::MetaNudge,
+        } = decision
+        else {
             panic!("expected repair refusal to escalate");
         };
         assert!(next_input.contains("Tool protocol repair."));
@@ -5856,13 +6513,19 @@ mod loop_controller_tests {
         );
         let decision = decide_loop_after_success(
             "Create ./repair_small_case.txt",
+            "Create ./repair_small_case.txt",
             SessionPreset::Build,
             1,
             0,
             2,
+            false,
             &s,
         );
-        let LoopDecision::Continue { next_input } = decision else {
+        let LoopDecision::Continue {
+            next_input,
+            kind: LoopContinueKind::MetaNudge,
+        } = decision
+        else {
             panic!("expected false completion to escalate to repair");
         };
         assert!(next_input.contains("Tool protocol repair."));
@@ -5877,10 +6540,12 @@ mod loop_controller_tests {
         );
         let decision = decide_loop_after_success(
             "Create ./repair_small_case.txt",
+            "Create ./repair_small_case.txt",
             SessionPreset::Build,
             1,
             2,
             2,
+            false,
             &s,
         );
         assert_eq!(decision, LoopDecision::Stop(LoopStopReason::MetaStall));
@@ -5895,10 +6560,12 @@ mod loop_controller_tests {
         );
         let decision = decide_loop_after_success(
             "Create ./repair_small_case.txt",
+            "Create ./repair_small_case.txt",
             SessionPreset::Explore,
             1,
             0,
             2,
+            false,
             &s,
         );
         assert_eq!(decision, LoopDecision::Stop(LoopStopReason::Completed));
@@ -5911,9 +6578,21 @@ mod loop_controller_tests {
             Vec::new(),
             runtime::TurnOutcome::Completed,
         );
-        let decision =
-            decide_loop_after_success("Create ./tetris.html", SessionPreset::Build, 1, 1, 2, &s);
-        let LoopDecision::Continue { next_input } = decision else {
+        let decision = decide_loop_after_success(
+            "Create ./tetris.html",
+            "Create ./tetris.html",
+            SessionPreset::Build,
+            1,
+            1,
+            2,
+            false,
+            &s,
+        );
+        let LoopDecision::Continue {
+            next_input,
+            kind: LoopContinueKind::MetaNudge,
+        } = decision
+        else {
             panic!("expected stronger repair nudge");
         };
         assert!(next_input.contains("output exactly one Relay `relay_tool` fence and nothing else"));
@@ -5951,16 +6630,25 @@ mod loop_controller_tests {
                 .expect("repair send test turn should succeed");
             match decide_loop_after_success(
                 goal,
+                goal,
                 SessionPreset::Build,
                 turn_index,
                 meta_stall_nudges_used,
                 2,
+                false,
                 &turn,
             ) {
-                LoopDecision::Continue { next_input } => {
+                LoopDecision::Continue {
+                    next_input,
+                    kind: LoopContinueKind::MetaNudge,
+                } => {
                     meta_stall_nudges_used += 1;
                     current_input = LoopInput::Synthetic(next_input);
                 }
+                LoopDecision::Continue {
+                    kind: LoopContinueKind::PathRepair,
+                    ..
+                } => panic!("unexpected path repair in tool-protocol repair test"),
                 LoopDecision::Stop(reason) => {
                     final_reason = Some(reason);
                     break;
@@ -5993,7 +6681,7 @@ mod loop_controller_tests {
         let system_prompt =
             build_desktop_system_prompt(goal, Some("/root/Relay_Agent"), SessionPreset::Build);
         let messages = vec![
-            ConversationMessage::user_text(build_tool_protocol_repair_input(goal, 0)),
+            ConversationMessage::user_text(build_tool_protocol_repair_input(goal, goal, 0)),
             ConversationMessage::assistant(vec![ContentBlock::Text {
                 text: "I will write the file next.".to_string(),
             }]),
@@ -6083,7 +6771,7 @@ mod loop_controller_tests {
             truncate_for_log(&first_text, 240)
         );
 
-        let repair1 = build_tool_protocol_repair_input(goal, 0);
+        let repair1 = build_tool_protocol_repair_input(goal, goal, 0);
         let repair1_messages = vec![ConversationMessage::user_text(repair1.clone())];
         let repair1_text = send_live_probe_stage(
             &mut server,
@@ -6099,7 +6787,7 @@ mod loop_controller_tests {
             truncate_for_log(&repair1_text, 240)
         );
 
-        let repair2 = build_tool_protocol_repair_input(goal, 1);
+        let repair2 = build_tool_protocol_repair_input(goal, goal, 1);
         let repair2_messages = vec![ConversationMessage::user_text(repair2.clone())];
         let repair2_text = send_live_probe_stage(
             &mut server,
