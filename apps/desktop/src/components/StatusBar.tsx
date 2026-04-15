@@ -5,13 +5,13 @@ import type { SessionStatusSnapshot } from "./shell-types";
 function footerLabel(status: SessionStatusSnapshot): string {
   switch (status.phase) {
     case "running":
-      return "Conversation in progress";
+      return "Working";
     case "retrying":
       return "Retrying";
     case "compacting":
-      return "Compacting context";
+      return "Making room";
     case "waiting_approval":
-      return "Waiting for approval";
+      return "Needs your approval";
     case "cancelling":
       return "Cancelling";
     case "idle":
@@ -28,7 +28,7 @@ export function StatusBar(props: {
       class={`ra-shell-footer px-3 py-1 flex items-center gap-2 ra-type-button-label ${ui.mutedText}`}
       data-ra-footer-session={props.sessionStatus.phase}
     >
-      <span class="text-[var(--ra-text-muted)]">Status</span>
+      <span class="text-[var(--ra-text-muted)]">Relay</span>
       <span class={`ra-type-caption ${ui.textSecondary}`}>{footerLabel(props.sessionStatus)}</span>
     </footer>
   );

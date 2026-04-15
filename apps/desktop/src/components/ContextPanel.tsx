@@ -128,7 +128,7 @@ export function ContextPanel(props: {
           <Match when={activeTab() === "plan"}>
             <div class="flex flex-col gap-2" data-ra-execution-plan>
               <div class="ra-context-note">
-                <span class={`ra-type-system-micro ${ui.mutedText}`}>Conversation mode</span>
+                <span class={`ra-type-system-micro ${ui.mutedText}`}>How Relay is working</span>
                 <p class={`ra-type-button-label ${ui.textPrimary} mt-1`}>{modeLabel()}</p>
                 <p class={`ra-type-caption ${ui.mutedText} mt-1 leading-relaxed`}>{modeSummary()}</p>
               </div>
@@ -136,11 +136,11 @@ export function ContextPanel(props: {
                 when={planNewestFirst()}
                 fallback={
                   <div class="ra-context-empty-card">
-                    <div class={`ra-type-button-label ${ui.textPrimary}`}>What appears here once work starts</div>
+                    <div class={`ra-type-button-label ${ui.textPrimary}`}>What you will see here</div>
                     <ul class={`ra-context-empty-list ra-type-caption ${ui.mutedText}`}>
-                      <li>Relay writes the live checklist here after it inspects the repo.</li>
-                      <li>Approvals still interrupt the flow before risky changes go through.</li>
-                      <li>Use Integrations to review project instructions and connected servers.</li>
+                      <li>Relay writes its live checklist here after it inspects the project.</li>
+                      <li>Approvals still stop risky changes before they go through.</li>
+                      <li>Use Integrations to review project instructions and connected services.</li>
                     </ul>
                   </div>
                 }
@@ -207,13 +207,13 @@ export function ContextPanel(props: {
               <details class={`ra-policy-card ${ui.radiusFeatured} border ${ui.border} mt-2`} data-ra-tool-policy>
                 <summary class={`cursor-pointer list-none [&::-webkit-details-marker]:hidden`}>
                   <div class="ra-policy-card__summary">
-                    <span class={`ra-type-system-micro ${ui.mutedText}`}>Tool rules</span>
+                    <span class={`ra-type-system-micro ${ui.mutedText}`}>Permissions</span>
                     <span class={`ra-type-caption ${ui.mutedText}`}>{modeLabel()}</span>
                   </div>
                 </summary>
                 <div class="ra-policy-card__body">
                   <p class={`ra-type-caption leading-relaxed ${ui.mutedText}`}>
-                    {modeSummary()} Workspace-specific rules and approvals still apply.
+                    {modeSummary()} Project-specific approvals still apply.
                   </p>
                   <Show
                     when={permissionRows().length > 0}
@@ -269,7 +269,7 @@ export function ContextPanel(props: {
           <Match when={activeTab() === "servers"}>
             <div class="flex flex-col gap-2">
               <p class={`ra-type-system-caption leading-relaxed ${ui.mutedText}`}>
-                Manage connected servers and project instructions here.
+                Review connected services and project instructions here.
               </p>
               <div class={`${ui.radiusFeatured} border ${ui.border} p-2 space-y-1.5`}>
                 <span class={`ra-type-system-micro ${ui.mutedText}`}>Workspace instructions</span>

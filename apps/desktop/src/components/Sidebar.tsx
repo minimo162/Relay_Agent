@@ -63,9 +63,9 @@ export function Sidebar(props: {
       <div class="ra-sidebar-shell">
         <div class="ra-sidebar-shell__header">
           <div class="flex items-center justify-between gap-2 mb-2">
-            <h2 class={`ra-display-title ra-type-body-sans ${ui.textPrimary}`}>Conversations</h2>
+            <h2 class={`ra-display-title ra-type-body-sans ${ui.textPrimary}`}>Chats</h2>
             <Button variant="secondary" class="ra-type-caption ra-button--pill-tight" onClick={props.onNewSession}>
-              New conversation
+              New chat
             </Button>
           </div>
           <button
@@ -74,12 +74,12 @@ export function Sidebar(props: {
             onClick={props.onWorkspaceChipClick}
             title={workspaceName() ? props.workspacePath : "Choose project folder"}
           >
-            <span class={`ra-type-caption ${ui.mutedText}`}>Project folder</span>
+            <span class={`ra-type-caption ${ui.mutedText}`}>Project</span>
             <span class={`ra-type-button-label ${workspaceName() ? ui.textPrimary : "text-[var(--ra-red)]"}`}>
               {workspaceName() ?? "Unset"}
             </span>
             <span class={`ra-type-caption ${ui.mutedText}`}>
-              {workspaceName() ? "Change the project folder." : "Set a project folder to give Relay context."}
+              {workspaceName() ? "Change the project." : "Set a project so Relay has the right context."}
             </span>
           </button>
           <Show when={hasSessions()}>

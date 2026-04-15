@@ -7,7 +7,7 @@ import type { SessionStatusSnapshot } from "./shell-types";
 function statusLabel(status: SessionStatusSnapshot): string {
   switch (status.phase) {
     case "waiting_approval":
-      return "Approval needed";
+      return "Needs your approval";
     case "running":
     case "retrying":
     case "compacting":
@@ -16,7 +16,7 @@ function statusLabel(status: SessionStatusSnapshot): string {
       return "Cancelling request";
     case "idle":
     default:
-      return "Ready for the next task";
+      return "Ready";
   }
 }
 
@@ -33,7 +33,7 @@ export function ShellHeader(props: {
   const pathTrimmed = createMemo(() => props.workspacePath().trim());
   const hasWorkspace = createMemo(() => pathTrimmed().length > 0);
   const chipLabel = createMemo(() =>
-    hasWorkspace() ? workspaceBasename(pathTrimmed()) : "Project folder not set",
+    hasWorkspace() ? workspaceBasename(pathTrimmed()) : "Project not set",
   );
   const busy = createMemo(() => props.sessionStatus.phase !== "idle");
   const showWriteActions = createMemo(() => props.canUndo || props.canRedo);
@@ -57,8 +57,8 @@ export function ShellHeader(props: {
                 : "border-dashed border-[var(--ra-border)] text-[var(--ra-text-muted)] hover:border-[var(--ra-text-muted)] hover:text-[var(--ra-text-secondary)]"
             }`}
             data-ra-workspace-chip
-            title={hasWorkspace() ? pathTrimmed() : "No project folder set. Open settings to configure one."}
-            aria-label={hasWorkspace() ? `Project folder: ${pathTrimmed()}` : "Project folder not set"}
+            title={hasWorkspace() ? pathTrimmed() : "No project set. Open Settings to choose one."}
+            aria-label={hasWorkspace() ? `Project: ${pathTrimmed()}` : "Project not set"}
             onClick={() => props.onOpenSettings()}
           >
             <span class="block truncate font-medium">{chipLabel()}</span>

@@ -28,12 +28,12 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 
 ## What the app does
 
-- **Conversations** — The sidebar tracks conversations, not one-shot runs. Sending while the active conversation is idle continues that conversation; **New conversation** starts a separate one. Tool steps always show **inline in chat**.
-- **First run** — The zero-state is a dedicated onboarding shell with a **Preflight** block for workspace, Copilot sign-in, CDP reachability, and default work mode plus the first request composer. Sidebar, context panel, and footer stay hidden until the first conversation starts.
+- **Chats** — The sidebar tracks chats, not one-shot runs. Sending while the active chat is idle continues that chat; **New chat** starts a separate one. Tool steps always show **inline in chat**.
+- **First run** — The zero-state is a dedicated three-step onboarding shell: choose the **Project**, confirm **Copilot**, then send the first request. The first request stays disabled until project selection and Copilot readiness are satisfied. Sidebar, context panel, and footer stay hidden until the first chat starts.
 - **Approvals** — **Allow once**, **Always allow in this conversation**, or **Always allow in this folder** for gated tools. Technical payloads are tucked under **Advanced details**.
-- **Settings** — The Settings modal now includes **Workspace folder**, **Default work mode**, **Copilot connection**, **Reconnect Copilot**, **CDP port**, **response timeout**, **auto-launch Edge**, **always on top**, and **Export diagnostics**.
-- **Context panel** — **Plan** (default): `TodoWrite` timeline + **Tool rules** disclosure; **Integrations** shows MCP servers and workspace instruction surfaces when `cwd` is set. The panel stays hidden on first run.
-- **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or **Send** submits. Work mode is chosen for a new conversation and then stays fixed for that conversation; switching mode means starting **New conversation**. Explore = `read_file` / `glob_search` / `grep_search` only in the Copilot tool list.
+- **Settings** — The Settings modal now keeps **Project** and **Copilot** in the Basic section, with default chat mode and browser/troubleshooting controls under collapsed Advanced details.
+- **Context panel** — **Plan** (default): `TodoWrite` timeline + collapsed **Permissions** disclosure; **Integrations** shows MCP servers and workspace instruction surfaces when `cwd` is set. The panel stays hidden on first run.
+- **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or **Send** submits. The first request always starts in the standard edit-capable mode. After that, new chats can still choose **Standard**, **Plan only**, or **Read only** through a low-emphasis **How Relay works** control; the chosen mode stays fixed for that chat. Explore = `read_file` / `glob_search` / `grep_search` only in the Copilot tool list.
 - **Undo / Redo** — Header actions reverse the last successful workspace writes from the active session (`write_file`, `edit_file`, `NotebookEdit`, PDF tools), when the agent is idle.
 - **Audit readability** — Tool rows prefer human labels and per-tool summaries (`Read file`, `Search file contents`, PDF actions, file writes) instead of raw internal tool ids.
 - **Extras** — PDF via LiteParse + bundled Node; Windows Office hybrid read (COM + PDF); MCP over stdio.

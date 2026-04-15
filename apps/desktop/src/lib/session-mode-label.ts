@@ -1,9 +1,9 @@
 import type { SessionPreset } from "./ipc";
 
 const SESSION_MODE_LABELS: Record<SessionPreset, string> = {
-  build: "Edit files",
-  plan: "Read-only plan",
-  explore: "Read and search",
+  build: "Standard",
+  plan: "Plan only",
+  explore: "Read only",
 };
 
 export function sessionModeLabel(preset: SessionPreset): string {
@@ -13,14 +13,14 @@ export function sessionModeLabel(preset: SessionPreset): string {
 export function sessionModeSummary(preset: SessionPreset): string {
   switch (preset) {
     case "plan":
-      return "Relay can inspect and plan, but it will not edit files.";
+      return "Relay reviews what is there and returns a plan without changing files.";
     case "explore":
-      return "Relay can inspect files and searches without changing the workspace.";
+      return "Relay reads and searches without changing the project.";
     default:
-      return "Relay can read and edit files. Sensitive actions may still require approval.";
+      return "Relay can inspect and update the project. Sensitive actions may still need approval.";
   }
 }
 
 export function sessionModeDefaultNote(preset: SessionPreset): string {
-  return `Default mode: ${sessionModeLabel(preset)}. ${sessionModeSummary(preset)}`;
+  return `Default: ${sessionModeLabel(preset)}. ${sessionModeSummary(preset)}`;
 }

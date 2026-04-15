@@ -87,8 +87,10 @@ export function Composer(props: {
   allowModeSelection?: boolean;
   modeLockedNote?: string | null;
   autoFocus?: boolean;
+  disabledReason?: string | null;
 }): JSX.Element {
   const [text, setText] = createSignal("");
+  const [modePickerOpen, setModePickerOpen] = createSignal(false);
   const [slashMode, setSlashMode] = createSignal<{
     query: string;
     commands: SlashCommand[];
@@ -122,6 +124,7 @@ export function Composer(props: {
   const selectCommand = (cmd: SlashCommand) => {
     setText(`${cmd.command} `);
     closeSlashDropdown();
+    setModePickerOpen(false);
     textareaRef.focus();
   };
 
@@ -144,6 +147,7 @@ export function Composer(props: {
 
     props.onSend(value);
     setText("");
+    setModePickerOpen(false);
     queueMicrotask(() => {
       if (textareaRef) adjustComposerTextareaHeight(textareaRef);
     });
@@ -210,22 +214,22 @@ export function Composer(props: {
     }
   };
 
-  const canSend = () => text().trim().length > 0 && !props.running;
+  const canSend = () => text().trim().length > 0 && !props.running && !props.disabled;
   const placeholder = () => {
     if (!props.hero) {
       return props.sessionPreset === "build"
-        ? "Describe the result you want. Type / for commands."
+        ? "Describe what you want Relay to do. Type / for commands."
         : props.sessionPreset === "plan"
-          ? "Describe what Relay should inspect and plan. Type / for commands."
-          : "Describe what Relay should read or search. Type / for commands.";
+          ? "Describe what you want reviewed. Type / for commands."
+          : "Describe what you want Relay to read or search. Type / for commands.";
     }
     switch (props.sessionPreset) {
       case "plan":
-        return "Example: Review the onboarding flow and propose the smallest safe UI fix.";
+        return "Example: Review this setup flow and tell me the safest next change.";
       case "explore":
-        return "Example: Find where first-run instructions are rendered and explain the flow.";
+        return "Example: Find where this setup flow is defined and explain it.";
       default:
-        return "Example: Fix the first-run setup flow so new developers know what to do.";
+        return "Example: Make this setup flow easier to understand for first-time users.";
     }
   };
   const helperHint = createMemo(() => {
@@ -236,34 +240,38 @@ export function Composer(props: {
         case "explore":
           return "Describe what you want to inspect. Relay will read and search without changing files.";
         default:
-          return "Describe the result you want. Relay will inspect the repo before it proposes or makes changes.";
+          return "Describe the result you want. Relay will inspect the project before it proposes or makes changes.";
       }
     }
-    return "Ask for the result you want, not the implementation steps.";
+    return "Ask for the result you want, not the step-by-step implementation.";
   });
+  const modeSummary = createMemo(() =>
+    props.modeLockedNote ?? `${sessionModeLabel(props.sessionPreset)} · ${sessionModeSummary(props.sessionPreset)}`,
+  );
   const heroExamples = createMemo(() => {
     switch (props.sessionPreset) {
       case "plan":
         return [
-          "Review this repo and propose the smallest safe fix for the onboarding flow.",
-          "Explain how Copilot warmup works and list the files involved.",
-          "Plan a refactor that makes first-run setup easier to understand.",
+          "Review this setup flow and propose the smallest safe improvement.",
+          "Explain why this app asks for project and Copilot setup first.",
+          "Plan a cleanup that makes the first screen easier to understand.",
         ];
       case "explore":
         return [
-          "Find where the first-run instructions are rendered and summarize the flow.",
-          "Search for how conversation mode is stored and used.",
+          "Find where the first screen is rendered and summarize the flow.",
+          "Search for how the current chat mode is stored and used.",
           "Inspect the settings UI and explain the basic setup path.",
         ];
       default:
         return [
-          "Fix the failing first-run guidance so new developers know what to do.",
-          "Trace why settings do not persist and update the code safely.",
-          "Add a clearer loading state to the Copilot connection check.",
+          "Make the first screen simpler for someone opening the app for the first time.",
+          "Trace why settings do not persist and fix it safely.",
+          "Add a clearer loading state to the Copilot check.",
         ];
     }
   });
   const allowModeSelection = () => props.allowModeSelection ?? true;
+  const currentModeLabel = createMemo(() => sessionModeLabel(props.sessionPreset));
 
   return (
     <div class={`ra-composer relative shrink-0 ${props.hero ? "ra-composer--hero" : ""}`}>
@@ -296,43 +304,47 @@ export function Composer(props: {
           <div class="ra-composer-toolbar">
             <div class="ra-composer-toolbar-main">
               <p class="ra-composer-hint">{helperHint()}</p>
-              <p class="ra-composer-mode-summary">
-                {props.modeLockedNote ?? `${sessionModeLabel(props.sessionPreset)} · ${sessionModeSummary(props.sessionPreset)}`}
-              </p>
+              <p class="ra-composer-mode-summary">{modeSummary()}</p>
+              <Show when={props.disabledReason}>
+                {(reason) => (
+                  <p class="ra-composer-disabled-note" role="status">
+                    {reason()}
+                  </p>
+                )}
+              </Show>
               <p class="ra-composer-shortcut-hint">⌘/Ctrl+Enter to send · Enter for new line</p>
             </div>
             <div class="ra-composer-toolbar-actions">
               <Show when={allowModeSelection()}>
-                <div
-                  class={`ra-composer-mode-control ${ui.radiusCompact}`}
-                  data-ra-session-mode
-                  role="group"
-                  aria-label="Work mode"
-                >
+                <div class="ra-composer-mode-picker" data-ra-session-mode>
                   <button
                     type="button"
-                    class={`ra-composer-mode-option ${props.sessionPreset === "build" ? "is-selected" : ""}`}
-                    aria-pressed={props.sessionPreset === "build"}
-                    onClick={() => props.onSessionPresetChange("build")}
+                    class="ra-composer-mode-trigger"
+                    aria-expanded={modePickerOpen()}
+                    aria-label="How Relay is working"
+                    onClick={() => setModePickerOpen((open) => !open)}
                   >
-                    {sessionModeLabel("build")}
+                    <span>How Relay works</span>
+                    <span class="ra-composer-mode-trigger__value">{currentModeLabel()}</span>
                   </button>
-                  <button
-                    type="button"
-                    class={`ra-composer-mode-option ${props.sessionPreset === "plan" ? "is-selected" : ""}`}
-                    aria-pressed={props.sessionPreset === "plan"}
-                    onClick={() => props.onSessionPresetChange("plan")}
-                  >
-                    {sessionModeLabel("plan")}
-                  </button>
-                  <button
-                    type="button"
-                    class={`ra-composer-mode-option ${props.sessionPreset === "explore" ? "is-selected" : ""}`}
-                    aria-pressed={props.sessionPreset === "explore"}
-                    onClick={() => props.onSessionPresetChange("explore")}
-                  >
-                    {sessionModeLabel("explore")}
-                  </button>
+                  <Show when={modePickerOpen()}>
+                    <div class={`ra-composer-mode-control ${ui.radiusCompact}`} role="group" aria-label="How Relay works">
+                      {(["build", "plan", "explore"] as SessionPreset[]).map((preset) => (
+                        <button
+                          type="button"
+                          class={`ra-composer-mode-option ${props.sessionPreset === preset ? "is-selected" : ""}`}
+                          aria-pressed={props.sessionPreset === preset}
+                          onClick={() => {
+                            props.onSessionPresetChange(preset);
+                            setModePickerOpen(false);
+                          }}
+                        >
+                          <span>{sessionModeLabel(preset)}</span>
+                          <span class="ra-composer-mode-option__summary">{sessionModeSummary(preset)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </Show>
                 </div>
               </Show>
               <Show when={props.running}>
@@ -356,7 +368,7 @@ export function Composer(props: {
           </div>
           <Show when={props.hero}>
             <div class="ra-composer-examples" aria-label="Example requests">
-              <span class={`ra-type-system-micro text-[var(--ra-text-muted)]`}>Try a developer request</span>
+              <span class={`ra-type-system-micro text-[var(--ra-text-muted)]`}>Try one of these</span>
               <div class="ra-composer-examples__list">
                 <For each={heroExamples()}>
                   {(example) => (

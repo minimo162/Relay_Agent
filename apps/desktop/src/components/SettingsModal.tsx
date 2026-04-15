@@ -202,11 +202,11 @@ export function SettingsModal(props: {
               <section class="ra-settings-card">
                 <p class="ra-type-system-micro text-[var(--ra-text-muted)]">Basic</p>
                 <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                  Set the project folder, confirm Copilot is ready, and choose how new conversations should start.
+                  Choose the project and confirm that Copilot is ready.
                 </p>
                 <div class="mt-3 space-y-4">
                   <div class="ra-settings-step ra-settings-step--highlight">
-                    <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Step 1 · Project folder</span>
+                    <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Step 1 · Project</span>
                     <div class="flex gap-2 mt-1 items-stretch">
                       <Input
                         ref={workspaceInputRef}
@@ -228,13 +228,13 @@ export function SettingsModal(props: {
                       </Show>
                     </div>
                     <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                      Relay reads and edits within this folder, so point it at the repo you want this window to work on.
+                      Relay reads and edits within this folder, so point it at the project you want this window to use.
                     </p>
                   </div>
 
                   <div class="ra-settings-status ra-settings-status--highlight">
                     <div>
-                      <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Step 2 · Copilot connection</span>
+                      <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Step 2 · Copilot</span>
                       <p class="ra-type-button-label text-[var(--ra-text-primary)] mt-1">
                         {copilotWarmupHeadline(props.copilotState)}
                       </p>
@@ -244,17 +244,29 @@ export function SettingsModal(props: {
                           ?? "Run a check to verify the Edge/CDP connection."}
                       </p>
                       <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                        Relay uses the Edge + CDP path to reach Copilot. If this is not ready, reconnect after signing in.
+                        Relay uses Edge to reach Copilot. If this is not ready, reconnect after signing in.
                       </p>
                     </div>
                     <Button variant="secondary" type="button" class="ra-type-button-label" onClick={props.onReconnectCopilot}>
                       Reconnect Copilot
                     </Button>
                   </div>
+                </div>
+              </section>
 
+              <details class="ra-settings-card ra-settings-details">
+                <summary class="ra-settings-details__summary">
+                  <div>
+                    <p class="ra-type-system-micro text-[var(--ra-text-muted)]">Advanced</p>
+                    <p class="ra-type-button-label text-[var(--ra-text-primary)] mt-1">Browser and troubleshooting options</p>
+                  </div>
+                  <span class="ra-type-caption text-[var(--ra-text-muted)]">Show</span>
+                </summary>
+                <div class="mt-3 space-y-4">
                   <div class="ra-settings-step">
-                    <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Step 3 · New conversation mode</span>
-                    <div class="ra-settings-segmented mt-1" role="group" aria-label="New conversation mode">
+                    <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Conversation defaults</span>
+                    <p class="ra-type-button-label text-[var(--ra-text-primary)] mt-1">Default chat mode</p>
+                    <div class="ra-settings-segmented mt-2" role="group" aria-label="Default chat mode">
                       {(["build", "plan", "explore"] as SessionPreset[]).map((preset) => (
                         <button
                           type="button"
@@ -269,22 +281,8 @@ export function SettingsModal(props: {
                     <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
                       {sessionModeSummary(sessionPreset())}
                     </p>
-                    <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                      This is the default starting mode for each new conversation. You can still choose a different mode when you start one.
-                    </p>
                   </div>
-                </div>
-              </section>
 
-              <details class="ra-settings-card ra-settings-details">
-                <summary class="ra-settings-details__summary">
-                  <div>
-                    <p class="ra-type-system-micro text-[var(--ra-text-muted)]">Advanced</p>
-                    <p class="ra-type-button-label text-[var(--ra-text-primary)] mt-1">Browser and troubleshooting options</p>
-                  </div>
-                  <span class="ra-type-caption text-[var(--ra-text-muted)]">Show</span>
-                </summary>
-                <div class="mt-3 space-y-4">
                   <div class="ra-settings-field-grid">
                     <label class="block">
                       <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Max turns</span>

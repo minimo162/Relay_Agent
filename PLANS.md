@@ -156,6 +156,29 @@ Acceptance criteria:
 - Windows executes bundled-node prep, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, and `pnpm smoke:windows`.
 - CI also guards the live docs map against stale removed-package or spreadsheet-era references.
 
+### Phase 5: First-Use UI Simplification
+
+Goal: make the desktop shell easier to understand for first-time users without changing IPC or runtime behavior.
+
+Change targets:
+
+- `apps/desktop/src/components/{FirstRunPanel,Composer,SettingsModal,ShellHeader,Sidebar,MessageFeed,ContextPanel,StatusBar}.tsx`
+- `apps/desktop/src/shell/{Shell,useCopilotWarmup}.ts*`
+- `apps/desktop/src/lib/session-mode-label.ts`
+- `apps/desktop/src/index.css`
+- `apps/desktop/tests/{app.e2e.spec.ts,e2e-comprehensive.spec.ts}`
+- `README.md`
+- `docs/IMPLEMENTATION.md`
+
+Acceptance criteria:
+
+- First run is a single three-step flow: project, Copilot, first request.
+- The first request stays disabled until project selection and Copilot readiness are satisfied.
+- The first request always starts in `build`; `plan` and `explore` remain available but are not exposed on first run.
+- User-facing labels prefer `Project`, `Chats`, `Needs your approval`, and `How Relay works`.
+- New-chat mode selection is present only as a low-emphasis secondary control.
+- Root `pnpm check` passes and Playwright coverage confirms first-run gating plus the simplified shell labels.
+
 ## Out Of Scope
 
 - Broad backend decomposition unrelated to doctor sharing or deterministic harness support.

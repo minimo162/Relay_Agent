@@ -51,6 +51,30 @@ export function useCopilotWarmup(loadSettings: () => BrowserAutomationSettings |
   });
 
   const runCopilotWarmup = (focusMainWindow: boolean) => {
+    const mockedUiSession =
+      typeof window !== "undefined" &&
+      (((window as unknown as { __RELAY_MOCK__?: unknown }).__RELAY_MOCK__ != null) ||
+        ((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ != null && !isTauri()));
+
+    if (!isTauri() || mockedUiSession) {
+      setCopilotState({
+        status: "ready",
+        message: "Preview mode: Copilot warmup is mocked.",
+        result: {
+          requestId: "preview-mode",
+          connected: true,
+          loginRequired: false,
+          bootTokenPresent: false,
+          cdpPort: loadSettings()?.cdpPort ?? 9360,
+          stage: "ready",
+          message: "Preview mode: Copilot warmup is mocked.",
+          failureCode: null,
+          statusCode: null,
+          url: null,
+        },
+      });
+      return;
+    }
     setCopilotState({ status: "checking", message: "Checking Copilot connection…", result: null });
     void warmupCopilotBridge(loadSettings() ?? null)
       .then((r) => {

@@ -11,6 +11,12 @@ async function openApp(page: any) {
   await expect(page.getByRole("banner").getByText("Relay Agent", { exact: true })).toBeVisible();
 }
 
+async function seedWorkspace(page: any, path = "/mock/project") {
+  await page.addInitScript((workspacePath) => {
+    window.localStorage.setItem("relay.settings.workspacePath", workspacePath);
+  }, path);
+}
+
 async function sendPrompt(page: any, text: string) {
   const textarea = page.locator("textarea");
   await expect(textarea).toBeEditable({ timeout: 5000 });
@@ -21,6 +27,7 @@ async function sendPrompt(page: any, text: string) {
 test.describe("Conversation model", () => {
   test("continuing an idle conversation does not create a new row", async ({ page }) => {
     await injectRelayMock(page, { autoComplete: true });
+    await seedWorkspace(page);
     await openApp(page);
     await sendPrompt(page, "first task");
     await expect(page.locator(".ra-session-row")).toHaveCount(1);
@@ -32,12 +39,15 @@ test.describe("Conversation model", () => {
 
   test("starting a new conversation creates a second row", async ({ page }) => {
     await injectRelayMock(page, { autoComplete: true });
+    await seedWorkspace(page);
     await openApp(page);
     await sendPrompt(page, "task one");
-    await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible({ timeout: 5000 });
-    await page.getByRole("button", { name: "New conversation" }).click();
+    await expect(page.getByRole("heading", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+    await page.getByRole("button", { name: "New chat" }).click();
     await sendPrompt(page, "task two");
     await expect(page.locator(".ra-session-row")).toHaveCount(2);
+    await page.getByRole("button", { name: "New chat" }).click();
+    await expect(page.getByLabel("How Relay is working")).toBeVisible();
   });
 });
 
@@ -45,11 +55,12 @@ test.describe("Settings and first-run UX", () => {
   test("first-run keeps sidebar and context panel hidden", async ({ page }) => {
     await injectRelayMock(page, { autoComplete: true });
     await openApp(page);
-    await expect(page.getByRole("heading", { name: "Conversations" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Chats" })).toHaveCount(0);
     await expect(page.getByRole("tab", { name: "Integrations" })).toHaveCount(0);
-    await expect(page.getByText("Set up once, then ask for the result you want")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Open Settings" })).toBeVisible();
+    await expect(page.getByText("Set up once, then tell Relay what you want done")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Reconnect Copilot" })).toHaveCount(0);
+    await expect(page.locator("[data-ra-session-mode]")).toHaveCount(0);
   });
 
   test("settings modal shows connection and advanced controls", async ({ page }) => {
@@ -63,6 +74,7 @@ test.describe("Settings and first-run UX", () => {
     await expect(advanced).not.toHaveAttribute("open", "");
     await expect(dialog.getByText("Browser debug port")).not.toBeVisible();
     await advanced.locator("summary").click();
+    await expect(dialog.getByText("Default chat mode")).toBeVisible();
     await expect(dialog.getByText("Browser debug port")).toBeVisible();
     await expect(dialog.getByText("Response timeout (ms)")).toBeVisible();
     await expect(dialog.getByText("Always on top")).toBeVisible();
@@ -72,6 +84,7 @@ test.describe("Settings and first-run UX", () => {
 test.describe("Audit and approvals", () => {
   test("tool audit row renders human labels with input-derived target", async ({ page }) => {
     await injectRelayMock(page, { autoComplete: false });
+    await seedWorkspace(page);
     await openApp(page);
     await sendPrompt(page, "inspect files");
     await waitForMockSession(page, "session-e2e-1");
@@ -97,6 +110,7 @@ test.describe("Audit and approvals", () => {
 
   test("approval requests render inline with conversation/folder actions", async ({ page }) => {
     await injectRelayMock(page, { autoComplete: false });
+    await seedWorkspace(page);
     await openApp(page);
     await sendPrompt(page, "prepare approval");
     await waitForMockSession(page, "session-e2e-1");

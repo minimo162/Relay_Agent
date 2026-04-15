@@ -391,6 +391,21 @@ export default function Shell(): JSX.Element {
   });
 
   const sessionBusy = createMemo(() => sessions.activeSessionStatus().phase !== "idle");
+  const firstRunProjectReady = createMemo(() => workspaceLabel().trim().length > 0);
+  const firstRunCopilotReady = createMemo(
+    () => copilotState().result?.connected || copilotState().status === "ready",
+  );
+  const firstRunCanStart = createMemo(() => firstRunProjectReady() && firstRunCopilotReady());
+  const firstRunDisabledReason = createMemo(() => {
+    if (firstRunCanStart()) return null;
+    if (!firstRunProjectReady() && !firstRunCopilotReady()) {
+      return "Choose a project and wait for Copilot to be ready before sending your first request.";
+    }
+    if (!firstRunProjectReady()) {
+      return "Choose a project before sending your first request.";
+    }
+    return "Wait for Copilot to be ready before sending your first request.";
+  });
   const activeSessionPreset = createMemo<SessionPreset>(() => {
     const sid = sessions.activeSessionId();
     if (!sid) return defaultSessionPreset();
@@ -470,7 +485,7 @@ export default function Shell(): JSX.Element {
         return;
       }
 
-      const preset = defaultSessionPreset();
+      const preset: SessionPreset = sessions.isFirstRun() ? "build" : defaultSessionPreset();
       const sessionId = await startAgent({
         goal: trimmed,
         files: [],
@@ -707,14 +722,16 @@ export default function Shell(): JSX.Element {
             workspacePath={workspaceLabel}
             onOpenSettings={() => setSettingsOpen(true)}
             onReconnectCopilot={() => runCopilotWarmup(false)}
-            sessionPreset={defaultSessionPreset()}
+            sessionPreset="build"
             copilotState={copilotState()}
+            canStart={firstRunCanStart()}
+            startDisabledReason={firstRunDisabledReason()}
           >
             <Composer
-              sessionPreset={defaultSessionPreset()}
+              sessionPreset="build"
               onSessionPresetChange={handleDefaultPresetChange}
               onSend={handleSend}
-              disabled={sessionBusy()}
+              disabled={sessionBusy() || !firstRunCanStart()}
               running={sessionBusy()}
               onCancel={handleCancel}
               onSlashCommand={(input) => {
@@ -733,6 +750,7 @@ export default function Shell(): JSX.Element {
               hero
               allowModeSelection={false}
               autoFocus={!settingsOpen()}
+              disabledReason={firstRunDisabledReason()}
             />
           </FirstRunPanel>
         </Show>

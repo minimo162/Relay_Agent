@@ -11,22 +11,38 @@ async function openApp(page: any) {
   await expect(page.getByRole("banner").getByText("Relay Agent", { exact: true })).toBeVisible();
 }
 
+async function seedWorkspace(page: any, path = "/mock/project") {
+  await page.addInitScript((workspacePath) => {
+    window.localStorage.setItem("relay.settings.workspacePath", workspacePath);
+  }, path);
+}
+
 function composer(page: any) {
   return page.locator("textarea");
 }
 
+async function sendPrompt(page: any, text: string) {
+  const textarea = composer(page);
+  await expect(textarea).toBeEditable({ timeout: 5000 });
+  await textarea.fill(text);
+  await textarea.press("Control+Enter");
+}
+
 test("first run shows onboarding preflight and hides app chrome", async ({ page }) => {
   await openApp(page);
-  await expect(page.getByText("Set up once, then ask for the result you want")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Confirm the Copilot connection" })).toBeVisible();
+  await expect(page.getByText("Set up once, then tell Relay what you want done")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Check Copilot" })).toBeVisible();
   await expect(page.getByText("Copilot signed in", { exact: true })).toHaveCount(0);
   await expect(page.getByText("CDP reachable", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Choose folder" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Reconnect Copilot" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Conversations" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Choose project" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Chats" })).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "Integrations" })).toHaveCount(0);
   await expect(page.locator("[data-ra-footer-session]")).toHaveCount(0);
+  await expect(page.locator("[data-ra-session-mode]")).toHaveCount(0);
+  await expect(composer(page)).toBeDisabled();
+  await expect(page.getByTestId("composer-send")).toBeDisabled();
+  await expect(page.getByRole("status")).toBeVisible();
 });
 
 test("settings modal exposes setup and advanced controls", async ({ page }) => {
@@ -34,26 +50,26 @@ test("settings modal exposes setup and advanced controls", async ({ page }) => {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText(/Project folder/)).toBeVisible();
-  await expect(dialog.getByText(/New conversation mode/)).toBeVisible();
-  await expect(dialog.getByText("Step 2 · Copilot connection")).toBeVisible();
+  await expect(dialog.getByText(/Step 1 · Project/)).toBeVisible();
+  await expect(dialog.getByText("Step 2 · Copilot")).toBeVisible();
   const advanced = dialog.locator("details.ra-settings-details");
   await expect(advanced).not.toHaveAttribute("open", "");
   await expect(dialog.getByText("Browser debug port", { exact: true })).not.toBeVisible();
   await advanced.locator("summary").click();
+  await expect(dialog.getByText("Default chat mode")).toBeVisible();
   await expect(dialog.getByText("Browser debug port", { exact: true })).toBeVisible();
   await expect(dialog.getByText("Always on top", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Export diagnostics" })).toBeVisible();
 });
 
 test("sending the first prompt exits onboarding and creates one conversation", async ({ page }) => {
-  await injectRelayMock(page, { autoComplete: true });
+  await injectRelayMock(page, { autoComplete: false });
+  await seedWorkspace(page);
   await openApp(page);
-  await composer(page).fill("review the workspace");
-  await composer(page).press("Control+Enter");
-  await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible({ timeout: 5000 });
+  await sendPrompt(page, "review the workspace");
+  await expect(page.getByRole("heading", { name: "Chats" })).toBeVisible({ timeout: 5000 });
   await expect(page.locator(".ra-session-row")).toHaveCount(1);
-  await expect(page.getByText("What appears here once work starts")).toBeVisible();
+  await expect(page.getByText("What you will see here")).toBeVisible();
   await expect(page.getByRole("button", { name: "Undo" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Redo" })).toHaveCount(0);
   await expect(page.getByRole("contentinfo")).toBeVisible();
@@ -61,10 +77,10 @@ test("sending the first prompt exits onboarding and creates one conversation", a
 
 test("tool rows use human labels instead of raw tool names", async ({ page }) => {
   await injectRelayMock(page, { autoComplete: false });
+  await seedWorkspace(page);
   await openApp(page);
-  await composer(page).fill("inspect file");
-  await composer(page).press("Control+Enter");
-  await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible({ timeout: 5000 });
+  await sendPrompt(page, "inspect file");
+  await expect(page.getByRole("heading", { name: "Chats" })).toBeVisible({ timeout: 5000 });
   await waitForMockSession(page, "session-e2e-1");
   await waitForAgentListener(page, "agent:tool_start");
   await waitForAgentListener(page, "agent:tool_result");
@@ -95,10 +111,10 @@ test("tool rows use human labels instead of raw tool names", async ({ page }) =>
 
 test("approval requests render inline instead of blocking the feed", async ({ page }) => {
   await injectRelayMock(page, { autoComplete: false });
+  await seedWorkspace(page);
   await openApp(page);
-  await composer(page).fill("prepare approval");
-  await composer(page).press("Control+Enter");
-  await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible({ timeout: 5000 });
+  await sendPrompt(page, "prepare approval");
+  await expect(page.getByRole("heading", { name: "Chats" })).toBeVisible({ timeout: 5000 });
   await waitForMockSession(page, "session-e2e-1");
   await waitForAgentListener(page, "agent:approval_needed");
 
@@ -122,10 +138,10 @@ test("approval requests render inline instead of blocking the feed", async ({ pa
 
 test("streaming assistant text shows Drafting and suppresses generic working state", async ({ page }) => {
   await injectRelayMock(page, { autoComplete: false });
+  await seedWorkspace(page);
   await openApp(page);
-  await composer(page).fill("stream a reply");
-  await composer(page).press("Control+Enter");
-  await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible({ timeout: 5000 });
+  await sendPrompt(page, "stream a reply");
+  await expect(page.getByRole("heading", { name: "Chats" })).toBeVisible({ timeout: 5000 });
   await waitForMockSession(page, "session-e2e-1");
   await waitForAgentListener(page, "agent:text_delta");
 

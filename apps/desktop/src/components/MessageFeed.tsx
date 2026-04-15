@@ -78,7 +78,7 @@ export function MessageFeed(props: {
       case "compacting":
         return "Compacting context…";
       case "waiting_approval":
-        return visiblePendingApproval() ? null : "Approval needed…";
+        return visiblePendingApproval() ? null : "Needs your approval…";
       case "cancelling":
         return "Cancelling…";
       case "idle":
@@ -154,12 +154,12 @@ export function MessageFeed(props: {
 
   const emptyEyebrow = createMemo(() => {
     const p = props.workspacePath().trim();
-    return p ? workspaceBasename(p) : "Workspace";
+    return p ? workspaceBasename(p) : "Project";
   });
 
   const emptyTitle = createMemo(() => {
-    if (props.sessionPreset === "plan") return "Start with the part of the project you want understood";
-    if (props.sessionPreset === "explore") return "Start with the question you want answered from the codebase";
+    if (props.sessionPreset === "plan") return "Start with what you want reviewed";
+    if (props.sessionPreset === "explore") return "Start with what you want checked";
     return "Start with the result you want";
   });
 
@@ -168,43 +168,43 @@ export function MessageFeed(props: {
     const location =
       p.length > 0
         ? `Relay will work in ${ellipsisPath(p, 72)}.`
-        : "Choose the project folder from the header first so Relay knows which codebase to use.";
+        : "Choose the project from the header first so Relay knows where to work.";
     if (props.sessionPreset === "plan") {
-      return `${location} This conversation stays read-only and returns a plan, explanation, or review.`;
+      return `${location} This chat stays read-only and returns a plan, explanation, or review.`;
     }
     if (props.sessionPreset === "explore") {
-      return `${location} This conversation can read and search only, so it is safe for quick codebase exploration.`;
+      return `${location} This chat can only read and search, so it is safe for quick checks.`;
     }
-    return `${location} Relay can inspect the repo, decide whether a plan is needed, and edit files when the request calls for it.`;
+    return `${location} Relay can inspect the project, decide whether a plan is needed, and edit files when the request calls for it.`;
   });
 
   const emptyNextSteps = createMemo(() => {
     if (props.sessionPreset === "plan") {
       return [
         "Relay will inspect the repo first and write its checklist in the Plan panel.",
-        `If you want file changes later, start a new conversation in ${sessionModeLabel("build")}.`,
+        `If you want file changes later, start a new chat in ${sessionModeLabel("build")}.`,
       ];
     }
     if (props.sessionPreset === "explore") {
       return [
         "Relay will read files and run searches only.",
-        `For a plan or code changes, start a new conversation in ${sessionModeLabel("plan")} or ${sessionModeLabel("build")}.`,
+        `For a plan or changes, start a new chat in ${sessionModeLabel("plan")} or ${sessionModeLabel("build")}.`,
       ];
     }
     return [
-      "Relay will inspect the repo before deciding whether a plan or approval is needed.",
-      "Approvals appear before risky changes, and progress continues inline in the conversation.",
+      "Relay will inspect the project before deciding whether a plan or approval is needed.",
+      "Approvals appear before risky changes, and progress stays inline in the chat.",
     ];
   });
 
   const emptyExample = createMemo(() => {
     if (props.sessionPreset === "plan") {
-      return "Review the onboarding flow and propose the smallest safe change that would make setup clearer for new developers.";
+      return "Review this setup flow and propose the smallest safe change that would make it easier to understand.";
     }
     if (props.sessionPreset === "explore") {
-      return "Find where the first-run setup is rendered and explain how the UI decides what to show.";
+      return "Find where the first screen is rendered and explain how the app decides what to show.";
     }
-    return "Fix the first-run setup flow so a new developer can understand what to do without opening the docs.";
+    return "Make the first screen easier to understand for someone using the app for the first time.";
   });
 
   return (

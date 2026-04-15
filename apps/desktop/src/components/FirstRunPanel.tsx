@@ -68,6 +68,8 @@ export function FirstRunPanel(props: {
   onReconnectCopilot: () => void;
   sessionPreset: SessionPreset;
   copilotState: CopilotWarmupState;
+  canStart: boolean;
+  startDisabledReason: string | null;
   children: JSX.Element;
 }): JSX.Element {
   const workspace = createMemo(() => props.workspacePath().trim());
@@ -78,7 +80,7 @@ export function FirstRunPanel(props: {
   const workspaceHint = createMemo(() =>
     hasWorkspace()
       ? ellipsisPath(workspace(), 72)
-      : "Open settings and choose the folder Relay should inspect and edit.",
+      : "Open Settings and choose the project Relay should work in.",
   );
   const connectionReady = createMemo(
     () => props.copilotState.result?.connected || props.copilotState.status === "ready",
@@ -115,13 +117,13 @@ export function FirstRunPanel(props: {
   );
   const requestStatusLabel = createMemo(() => `Default: ${modeLabel()}`);
   const requestSummary = createMemo(() => {
-    if (hasWorkspace() && connectionReady()) {
-      return "Describe the result you want. Relay can inspect the project as soon as you send.";
+    if (props.canStart) {
+      return "Describe the result you want. Relay can start as soon as you send.";
     }
-    return "Start with the result you want. Relay will flag missing setup before it tries to do full agent work.";
+    return "Finish the first two steps before sending your first request.";
   });
   const requestDetail = createMemo(() =>
-    `New conversations start in ${modeLabel()}. ${sessionModeSummary(props.sessionPreset)}`,
+    props.startDisabledReason ?? `Your first chat starts in ${modeLabel()}. ${sessionModeSummary(props.sessionPreset)}`,
   );
   const connectionAction = createMemo<JSX.Element>(() => {
     if (props.copilotState.status === "needs_sign_in" || props.copilotState.status === "checking") {
@@ -150,50 +152,50 @@ export function FirstRunPanel(props: {
       <div class="ra-first-run__panel">
         <div class="ra-first-run__lead">
           <p class="ra-empty-state__eyebrow">Relay Agent</p>
-          <h1 class={`ra-type-section-heading ${ui.textPrimary}`}>Set up once, then ask for the result you want</h1>
+          <h1 class={`ra-type-section-heading ${ui.textPrimary}`}>Set up once, then tell Relay what you want done</h1>
           <p class={`ra-type-body-sans ${ui.textSecondary}`}>
-            Relay works best when the project folder is set, Copilot is reachable, and the first request describes the outcome instead of the implementation.
+            Start by choosing a project and making sure Copilot is ready. After that, you can simply describe the outcome you want.
           </p>
           <ol class="ra-first-run__steps">
-            <li>Pick the project folder Relay should inspect.</li>
-            <li>Check that Copilot is reachable from this app.</li>
-            <li>Describe the result you want, not the implementation steps.</li>
+            <li>Choose the project Relay should work in.</li>
+            <li>Check that Copilot is ready in this app.</li>
+            <li>Describe the result you want.</li>
           </ol>
           <p class={`ra-type-caption ${ui.mutedText} mt-3`}>
-            Nothing here blocks you. These steps just surface missing setup before you spend a turn on the wrong context or a broken connection.
+            This keeps your first request from failing because the wrong project is selected or Copilot is not ready yet.
           </p>
         </div>
 
         <div class="ra-first-run__flow">
           <StepCard
             step="Step 1"
-            title="Choose a project folder"
+            title="Choose a project"
             statusLabel={hasWorkspace() ? "Ready" : "Needs setup"}
             statusState={hasWorkspace() ? "good" : "warn"}
             summary={
               hasWorkspace()
                 ? `Relay is pointed at ${workspaceName()}.`
-                : "Pick the repository or project folder Relay should read and edit."
+                : "Pick the folder Relay should read and update."
             }
             detail={workspaceHint()}
             action={
               <Button variant="primary" type="button" class="ra-type-button-label" onClick={props.onOpenSettings}>
-                {hasWorkspace() ? "Change folder" : "Choose folder"}
+                {hasWorkspace() ? "Change project" : "Choose project"}
               </Button>
             }
           />
 
           <StepCard
             step="Step 2"
-            title="Confirm the Copilot connection"
+            title="Check Copilot"
             statusLabel={connectionStatus()}
             statusState={connectionReady() ? "good" : props.copilotState.status === "checking" ? "neutral" : "warn"}
             summary={
               connectionReady()
-                ? "Copilot is ready in this app."
+                ? "Copilot is ready."
                 : props.copilotState.status === "checking"
-                  ? "Relay is checking the browser connection now."
-                  : "Relay needs Edge and Copilot ready before it can complete full agent work."
+                  ? "Relay is checking the connection now."
+                  : "Relay needs Copilot ready before it can complete your first request."
             }
             detail={connectionDetail()}
             technicalDetail={connectionTechnicalDetail()}
@@ -202,9 +204,9 @@ export function FirstRunPanel(props: {
 
           <StepCard
             step="Step 3"
-            title="Send the first request"
+            title="Send your first request"
             statusLabel={requestStatusLabel()}
-            statusState="neutral"
+            statusState={props.canStart ? "good" : "neutral"}
             summary={requestSummary()}
             detail={requestDetail()}
             featured
