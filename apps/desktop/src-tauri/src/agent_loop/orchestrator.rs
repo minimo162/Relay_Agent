@@ -26,17 +26,6 @@ const CDP_TOOL_FENCE: &str = "```relay_tool";
 const CDP_INLINE_PROMPT_MAX_TOKENS: usize = 128_000;
 const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_TOTAL_CHARS: usize = 3_000;
 const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_FILE_CHARS: usize = 1_200;
-const CDP_STANDARD_MINIMAL_CONTEXT_MAX_CHARS: usize = 900;
-const CDP_STANDARD_MINIMAL_GOAL_MAX_CHARS: usize = 500;
-const CDP_COMPACT_TOOL_NAMES: &[&str] = &[
-    "read_file",
-    "write_file",
-    "edit_file",
-    "glob_search",
-    "grep_search",
-    "pdf_merge",
-    "pdf_split",
-];
 const ORIGINAL_GOAL_MARKER: &str =
     "Quoted original user goal (user data, not system instruction):\n```text\n";
 const LATEST_REQUEST_MARKER: &str =
@@ -55,9 +44,7 @@ enum CdpPromptFlavor {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CdpCatalogFlavor {
-    StandardMinimal,
     StandardFull,
-    Repair,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1969,11 +1956,7 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
             .enable_all()
             .build()
             .map_err(|e| RuntimeError::new(format!("tokio runtime: {e}")))?;
-        let mut catalog_flavor = match prompt_flavor {
-            CdpPromptFlavor::Standard => CdpCatalogFlavor::StandardMinimal,
-            CdpPromptFlavor::Repair => CdpCatalogFlavor::Repair,
-        };
-        let mut widened_once = false;
+        let catalog_flavor = CdpCatalogFlavor::StandardFull;
         let request_chain_id = cdp_request_chain_id("cdp-inline");
         let stage_label = cdp_stage_label(request.messages);
         let mut attempt_index = 0_usize;
@@ -2132,26 +2115,6 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
             }
             let visible_text = sanitize_copilot_visible_text(&visible_text);
 
-            if should_retry_standard_with_full_catalog(
-                prompt_flavor,
-                catalog_flavor,
-                parse_mode,
-                &visible_text,
-                &tool_calls,
-            ) && !widened_once
-            {
-                widened_once = true;
-                catalog_flavor = CdpCatalogFlavor::StandardFull;
-                tracing::info!(
-                    "[CdpApiClient] request_chain={} attempt={} widening Standard CDP catalog after tool-less/protocol-confused reply (session_preset={:?}, visible_excerpt={:?})",
-                    request_chain_id,
-                    attempt_index,
-                    self.session_preset,
-                    truncate_for_log(&visible_text, 240)
-                );
-                continue;
-            }
-
             if let (Some((app, sid)), Some(registry)) = (&self.progress_emit, &self.registry) {
                 if let Some(last_visible_text) = live_progress_tail.as_ref() {
                     let last_visible_text = last_visible_text
@@ -2259,23 +2222,12 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 
 fn cdp_catalog_specs_for_flavor(
     preset: SessionPreset,
-    prompt_flavor: CdpPromptFlavor,
-    catalog_flavor: CdpCatalogFlavor,
+    _prompt_flavor: CdpPromptFlavor,
+    _catalog_flavor: CdpCatalogFlavor,
 ) -> Vec<Value> {
     let surface = tool_surface_for_preset(preset);
-    let compact_tool_names = CDP_COMPACT_TOOL_NAMES
-        .iter()
-        .copied()
-        .collect::<HashSet<_>>();
     tools::tool_specs_for_surface(surface)
         .into_iter()
-        .filter(|spec| match catalog_flavor {
-            CdpCatalogFlavor::StandardFull => true,
-            CdpCatalogFlavor::StandardMinimal | CdpCatalogFlavor::Repair => {
-                let _ = prompt_flavor;
-                compact_tool_names.contains(spec.name)
-            }
-        })
         .map(|s| {
             json!({
                 "name": s.name,
@@ -2295,58 +2247,6 @@ fn cdp_tool_catalog_section_for_flavor(
     let catalog = cdp_catalog_specs_for_flavor(preset, prompt_flavor, catalog_flavor);
     let json_pretty = serde_json::to_string_pretty(&catalog).unwrap_or_else(|_| "[]".to_string());
     match catalog_flavor {
-        CdpCatalogFlavor::Repair => format!(
-            r#"## Relay Agent repair tools
-
-This is a repair resend. Use the reduced local Relay workspace tool catalog below to satisfy the workspace request in this reply.
-
-The JSON array below lists the only tools relevant for this repair turn. Each entry has `name`, `description`, and `input_schema` (JSON Schema for the tool's `input` object).
-```json
-{json_pretty}
-```
-
-- Emit the next required `relay_tool` JSON in this reply.
-- Keep the fence body JSON-only.
-- Include `"relay_tool_call": true` on each tool object.
-- Prefer `write_file` / `edit_file` when the local file content is already known.
-
-```relay_tool
-{{"name":"read_file","relay_tool_call":true,"input":{{"path":"README.md"}}}}
-```
-"#,
-            json_pretty = json_pretty,
-        ),
-        CdpCatalogFlavor::StandardMinimal => format!(
-            r#"{CDP_RELAY_RUNTIME_CATALOG_LEAD}## Relay Agent local workspace tools
-
-This is the default compact Relay catalog for this turn. Use the local workspace tools below first, including PDF workspace operations when present.
-
-The JSON array below lists the tools you may invoke. Each entry has `name`, `description`, and `input_schema` (JSON Schema for the tool's `input` object).
-
-```json
-{json_pretty}
-```
-
-## Tool invocation protocol
-
-When you need to call one or more tools, you may write a short user-facing explanation, then append a Markdown fenced block whose **info string is exactly** `relay_tool`. Inside the fence put **only** JSON.
-
-- Emit the next required `relay_tool` JSON in this reply.
-- Include `"relay_tool_call": true` on each tool object.
-- Prefer `write_file` / `edit_file` for local file creation or edits when the target content is already known.
-- Use `read_file` first when you need current file contents before editing.
-- Use `glob_search` / `grep_search` only to locate files or text in the local workspace.
-- Use `pdf_merge` / `pdf_split` for workspace PDF combine or split tasks instead of describing bash steps.
-- Do **not** switch to Python, WebSearch, citations, uploads, Pages, or remote artifacts for a local workspace task.
-
-Example:
-
-```relay_tool
-{{"name":"read_file","relay_tool_call":true,"input":{{"path":"README.md"}}}}
-```
-"#,
-            json_pretty = json_pretty,
-        ),
         CdpCatalogFlavor::StandardFull => {
             let surface = tool_surface_for_preset(preset);
             let win_addon = cdp_windows_office_catalog_addon();
@@ -2710,7 +2610,7 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
             "## Relay repair mode\n",
             "You are in a recovery turn because the previous reply did not emit usable Relay local tool JSON.\n",
             "Return the next required `relay_tool` JSON now.\n",
-            "Only local file/search Relay tools are relevant in this repair turn.\n",
+            "Use the current Relay tool catalog in this prompt; do not invent unavailable tools.\n",
             "Prefer `write_file` / `edit_file` for local file creation or edits; use `read_file` only when needed.\n",
             "If the latest real user turn named a concrete path, reuse that exact string in tool input. Do not rewrite it to another directory or prior-turn variant.\n",
             "If a successful `read_file` Tool Result already shows `content:`, treat that body as the real file text. Do not claim it is escaped or corrupted based only on quotes or backslashes.\n",
@@ -2723,52 +2623,6 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
         latest_request = latest_request.trim(),
         goal = goal.trim()
     )
-}
-
-fn truncate_for_prompt_chars(text: &str, max_chars: usize) -> String {
-    truncate_cdp_instruction_content(text, max_chars)
-}
-
-fn build_standard_minimal_cdp_system_prompt(
-    system_prompt: &[String],
-    messages: &[ConversationMessage],
-) -> String {
-    let goal = latest_actionable_user_text(messages)
-        .map(|text| truncate_for_prompt_chars(&text, CDP_STANDARD_MINIMAL_GOAL_MAX_CHARS))
-        .unwrap_or_default();
-    let context_summary = system_prompt
-        .iter()
-        .skip(2)
-        .map(|section| section.trim())
-        .filter(|section| !section.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    let trimmed_context =
-        truncate_for_prompt_chars(&context_summary, CDP_STANDARD_MINIMAL_CONTEXT_MAX_CHARS);
-    let mut parts = vec![concat!(
-        "## Relay desktop CDP mode\n",
-        "You are Relay Agent in the desktop app using M365 Copilot over CDP.\n",
-        "Use Relay local workspace tools when the task needs file or search actions.\n",
-        "When a tool is needed, emit fenced `relay_tool` JSON in this reply.\n",
-        "Do not claim this Copilot chat cannot use tools; Relay executes parsed local tool calls.\n",
-        "Prefer `read_file` before edits unless the new file content is already fully known.\n",
-        "If the latest user turn names a concrete path, use that exact string in tool input. Do not rewrite it to another directory from prior turns.\n",
-        "Stay inside the current workspace and avoid remote artifacts, Python, WebSearch, citations, or uploads for local file tasks."
-    )
-    .to_string()];
-    if !goal.is_empty() {
-        parts.push(format!(
-            "Current task summary:\n```text\n{}\n```",
-            goal.trim()
-        ));
-    }
-    if !trimmed_context.trim().is_empty() {
-        parts.push(format!(
-            "Compact workspace/system context:\n```text\n{}\n```",
-            trimmed_context.trim()
-        ));
-    }
-    parts.join("\n\n")
 }
 
 fn cdp_request_chain_id(prefix: &str) -> String {
@@ -2812,23 +2666,6 @@ fn cdp_tool_parse_mode(messages: &[ConversationMessage]) -> CdpToolParseMode {
     } else {
         CdpToolParseMode::Initial
     }
-}
-
-fn should_retry_standard_with_full_catalog(
-    prompt_flavor: CdpPromptFlavor,
-    catalog_flavor: CdpCatalogFlavor,
-    parse_mode: CdpToolParseMode,
-    visible_text: &str,
-    tool_calls: &[(String, String, String)],
-) -> bool {
-    if prompt_flavor != CdpPromptFlavor::Standard
-        || catalog_flavor != CdpCatalogFlavor::StandardMinimal
-        || parse_mode != CdpToolParseMode::Initial
-        || !tool_calls.is_empty()
-    {
-        return false;
-    }
-    is_meta_stall_text(visible_text) || is_tool_protocol_confusion_text(visible_text)
 }
 
 fn filter_whitelisted_tool_calls(
@@ -3433,12 +3270,9 @@ fn build_cdp_prompt_bundle_from_messages(
 ) -> CdpPromptBundle {
     let grounding_text = CDP_BUNDLE_GROUNDING_BLOCK.to_string();
     let effective_messages = cdp_messages_for_flavor(messages, flavor);
-    let mut system_text = match (flavor, catalog_flavor) {
-        (CdpPromptFlavor::Standard, CdpCatalogFlavor::StandardMinimal) => {
-            build_standard_minimal_cdp_system_prompt(system_prompt, messages)
-        }
-        (CdpPromptFlavor::Standard, _) => system_prompt.join("\n\n"),
-        (CdpPromptFlavor::Repair, _) => build_repair_cdp_system_prompt(messages),
+    let mut system_text = match flavor {
+        CdpPromptFlavor::Standard => system_prompt.join("\n\n"),
+        CdpPromptFlavor::Repair => build_repair_cdp_system_prompt(messages),
     };
     if let Some(paths_section) = build_latest_requested_paths_section(messages) {
         if !system_text.is_empty() {
@@ -4993,31 +4827,48 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn repair_catalog_is_reduced_to_local_workspace_tools() {
-        let s = cdp_tool_catalog_section_for_flavor(
+    fn repair_prompt_uses_latest_repair_message_and_full_catalog() {
+        let system = vec![
+            "# Project context\nWorking directory: /tmp/workspace".to_string(),
+            "# Workspace instructions\nVery long instructions".to_string(),
+        ];
+        let repair =
+            build_tool_protocol_repair_input("Original request", "Create ./tetris.html", 0);
+        let messages = vec![
+            ConversationMessage::user_text("Original request".to_string()),
+            ConversationMessage::assistant(vec![ContentBlock::Text {
+                text: "I will use Python to create the page.".to_string(),
+            }]),
+            ConversationMessage::user_text(repair.clone()),
+        ];
+
+        let bundle = build_cdp_prompt_bundle_from_messages(
+            &system,
+            &messages,
             SessionPreset::Build,
             CdpPromptFlavor::Repair,
-            CdpCatalogFlavor::Repair,
+            CdpCatalogFlavor::StandardFull,
         );
-        assert!(s.contains("read_file"));
-        assert!(s.contains("write_file"));
-        assert!(s.contains("edit_file"));
-        assert!(s.contains("glob_search"));
-        assert!(s.contains("grep_search"));
-        assert!(s.contains("pdf_merge"));
-        assert!(s.contains("pdf_split"));
-        assert!(!s.contains("\"name\": \"bash\""));
-        assert!(!s.contains("\"name\": \"WebFetch\""));
-        assert!(!s.contains("\"name\": \"WebSearch\""));
-        assert!(s.contains("repair resend"));
+
+        assert!(bundle.system_text.contains("## Relay repair mode"));
+        assert!(bundle.system_text.contains("Create ./tetris.html"));
+        assert!(bundle
+            .system_text
+            .contains("Use the current Relay tool catalog"));
+        assert!(bundle.message_text.contains("Tool protocol repair."));
+        assert!(!bundle.message_text.contains("I will use Python"));
+        assert!(!bundle.system_text.contains("# Project context"));
+        assert!(bundle.catalog_text.contains("\"name\": \"write_file\""));
+        assert!(bundle.catalog_text.contains("\"name\": \"bash\""));
+        assert!(bundle.catalog_text.contains("\"name\": \"WebFetch\""));
     }
 
     #[test]
-    fn standard_minimal_catalog_is_reduced_to_local_workspace_tools() {
+    fn standard_catalog_lists_full_build_tooling() {
         let s = cdp_tool_catalog_section_for_flavor(
             SessionPreset::Build,
             CdpPromptFlavor::Standard,
-            CdpCatalogFlavor::StandardMinimal,
+            CdpCatalogFlavor::StandardFull,
         );
         assert!(s.contains("read_file"));
         assert!(s.contains("write_file"));
@@ -5026,13 +4877,14 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("grep_search"));
         assert!(s.contains("pdf_merge"));
         assert!(s.contains("pdf_split"));
-        assert!(!s.contains("\"name\": \"bash\""));
-        assert!(!s.contains("\"name\": \"WebFetch\""));
-        assert!(s.contains("local workspace tools"));
+        assert!(s.contains("\"name\": \"bash\""));
+        assert!(s.contains("\"name\": \"WebFetch\""));
+        assert!(s.contains("\"name\": \"WebSearch\""));
+        assert!(s.contains("Relay Agent tools"));
     }
 
     #[test]
-    fn standard_minimal_system_prompt_is_short_and_goal_focused() {
+    fn standard_build_prompt_uses_full_system_prompt() {
         let system = vec![
             "## Relay desktop runtime\nUse registered tools.".to_string(),
             "## Relay desktop constraints\nPrefer read-only tools.".to_string(),
@@ -5048,20 +4900,9 @@ mod cdp_copilot_tool_tests {
             CdpPromptFlavor::Standard,
             CdpCatalogFlavor::StandardFull,
         );
-        let minimal = build_cdp_prompt_bundle_from_messages(
-            &system,
-            &messages,
-            SessionPreset::Build,
-            CdpPromptFlavor::Standard,
-            CdpCatalogFlavor::StandardMinimal,
-        );
-
-        assert!(minimal.system_text.contains("## Relay desktop CDP mode"));
-        assert!(minimal.system_text.contains("tetris.html"));
-        assert!(minimal
-            .system_text
-            .contains("Compact workspace/system context"));
-        assert!(minimal.system_chars() < full.system_chars());
+        assert_eq!(full.system_text, system.join("\n\n"));
+        assert!(full.system_text.contains("# Workspace instructions"));
+        assert!(full.system_text.contains(&"A".repeat(1800)));
     }
 
     #[test]
@@ -5142,39 +4983,6 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn repair_prompt_uses_latest_repair_message_and_minimal_catalog() {
-        let system = vec![
-            "# Project context\nWorking directory: /tmp/workspace".to_string(),
-            "# Workspace instructions\nVery long instructions".to_string(),
-        ];
-        let repair =
-            build_tool_protocol_repair_input("Original request", "Create ./tetris.html", 0);
-        let messages = vec![
-            ConversationMessage::user_text("Original request".to_string()),
-            ConversationMessage::assistant(vec![ContentBlock::Text {
-                text: "I will use Python to create the page.".to_string(),
-            }]),
-            ConversationMessage::user_text(repair.clone()),
-        ];
-
-        let bundle = build_cdp_prompt_bundle_from_messages(
-            &system,
-            &messages,
-            SessionPreset::Build,
-            CdpPromptFlavor::Repair,
-            CdpCatalogFlavor::Repair,
-        );
-
-        assert!(bundle.system_text.contains("## Relay repair mode"));
-        assert!(bundle.system_text.contains("Create ./tetris.html"));
-        assert!(bundle.message_text.contains("Tool protocol repair."));
-        assert!(!bundle.message_text.contains("I will use Python"));
-        assert!(!bundle.system_text.contains("# Project context"));
-        assert!(bundle.catalog_text.contains("\"name\": \"write_file\""));
-        assert!(!bundle.catalog_text.contains("\"name\": \"bash\""));
-    }
-
-    #[test]
     fn latest_actionable_user_turn_skips_synthetic_control_prompts() {
         let messages = vec![
             ConversationMessage::user_text(
@@ -5204,7 +5012,7 @@ mod cdp_copilot_tool_tests {
             &messages,
             SessionPreset::Build,
             CdpPromptFlavor::Standard,
-            CdpCatalogFlavor::StandardMinimal,
+            CdpCatalogFlavor::StandardFull,
         );
         assert!(bundle.system_text.contains("Latest requested paths"));
         assert!(bundle
@@ -5228,34 +5036,6 @@ mod cdp_copilot_tool_tests {
             CdpToolParseMode::RetryRepair
         );
         assert_eq!(cdp_prompt_flavor(&messages), CdpPromptFlavor::Repair);
-    }
-
-    #[test]
-    fn standard_catalog_retry_policy_widens_once_for_protocol_confusion() {
-        let visible =
-            "I'll search for single-file HTML Tetris with WebSearch and include citations.";
-        let no_tools: Vec<(String, String, String)> = Vec::new();
-        assert!(should_retry_standard_with_full_catalog(
-            CdpPromptFlavor::Standard,
-            CdpCatalogFlavor::StandardMinimal,
-            CdpToolParseMode::Initial,
-            visible,
-            &no_tools,
-        ));
-        assert!(!should_retry_standard_with_full_catalog(
-            CdpPromptFlavor::Standard,
-            CdpCatalogFlavor::StandardFull,
-            CdpToolParseMode::Initial,
-            visible,
-            &no_tools,
-        ));
-        assert!(!should_retry_standard_with_full_catalog(
-            CdpPromptFlavor::Repair,
-            CdpCatalogFlavor::Repair,
-            CdpToolParseMode::RetryRepair,
-            visible,
-            &no_tools,
-        ));
     }
 
     #[test]
@@ -5288,23 +5068,23 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn standard_minimal_build_prompt_for_pdf_merge_request_includes_pdf_merge_tool() {
+    fn standard_build_prompt_for_pdf_merge_request_keeps_full_catalog() {
         let system = vec!["## Relay desktop runtime\nUse registered tools.".to_string()];
         let messages = vec![ConversationMessage::user_text(
             "Merge /root/Relay_Agent/a.pdf and /root/Relay_Agent/b.pdf into /root/Relay_Agent/out.pdf."
                 .to_string(),
         )];
-        let minimal = build_cdp_prompt_bundle_from_messages(
+        let bundle = build_cdp_prompt_bundle_from_messages(
             &system,
             &messages,
             SessionPreset::Build,
             CdpPromptFlavor::Standard,
-            CdpCatalogFlavor::StandardMinimal,
+            CdpCatalogFlavor::StandardFull,
         );
 
-        assert!(minimal.catalog_text.contains("\"name\": \"pdf_merge\""));
-        assert!(minimal.catalog_text.contains("\"name\": \"pdf_split\""));
-        assert!(!minimal.catalog_text.contains("\"name\": \"bash\""));
+        assert!(bundle.catalog_text.contains("\"name\": \"pdf_merge\""));
+        assert!(bundle.catalog_text.contains("\"name\": \"pdf_split\""));
+        assert!(bundle.catalog_text.contains("\"name\": \"bash\""));
     }
 
     /// Fixture must not contain strings that models often hallucinate as "bugs" (see docs/AGENT_EVALUATION_CRITERIA.md).
@@ -6136,14 +5916,8 @@ mod loop_controller_tests {
         response_timeout_secs: u64,
         stage_timeout_secs: u64,
     ) -> String {
-        let flavor = cdp_prompt_flavor(messages);
-        let parse_mode = cdp_tool_parse_mode(messages);
         let request_chain_id = cdp_request_chain_id(&format!("live-repair-{stage_name}"));
-        let mut catalog_flavor = match flavor {
-            CdpPromptFlavor::Standard => CdpCatalogFlavor::StandardMinimal,
-            CdpPromptFlavor::Repair => CdpCatalogFlavor::Repair,
-        };
-        let mut widened_once = false;
+        let catalog_flavor = CdpCatalogFlavor::StandardFull;
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -6209,31 +5983,6 @@ mod loop_controller_tests {
                         started.elapsed(),
                         truncate_for_log(&text, 240)
                     );
-                    let (mut visible_text, tool_calls) = parse_copilot_tool_response(&text, parse_mode);
-                    if visible_text.trim().is_empty() && !text.trim().is_empty() {
-                        visible_text = text.trim().to_string();
-                    }
-                    let visible_text = sanitize_copilot_visible_text(&visible_text);
-                    if should_retry_standard_with_full_catalog(
-                        flavor,
-                        catalog_flavor,
-                        parse_mode,
-                        &visible_text,
-                        &tool_calls,
-                    ) && !widened_once
-                    {
-                        widened_once = true;
-                        catalog_flavor = CdpCatalogFlavor::StandardFull;
-                        tracing::info!(
-                            "[live-repair-probe] stage={} request_chain={} attempt={} widening to {:?} after visible_excerpt={:?}",
-                            stage_name,
-                            request_chain_id,
-                            attempt_index,
-                            catalog_flavor,
-                            truncate_for_log(&visible_text, 240)
-                        );
-                        continue;
-                    }
                     return text;
                 }
                 Ok(Err(error)) => panic!(
@@ -7035,7 +6784,7 @@ mod loop_controller_tests {
         ];
 
         let (flavor, bundle, estimated_tokens, removed_message_count) =
-            build_live_probe_prompt(&system_prompt, &messages, CdpCatalogFlavor::Repair);
+            build_live_probe_prompt(&system_prompt, &messages, CdpCatalogFlavor::StandardFull);
 
         assert_eq!(flavor, CdpPromptFlavor::Repair);
         assert!(estimated_tokens > 0);

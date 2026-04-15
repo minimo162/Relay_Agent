@@ -5588,3 +5588,27 @@ Observed result:
   - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`: passed
   - `pnpm check`: passed
   - `pnpm --filter @relay-agent/desktop live:m365:desktop-smoke`: passed on artifact run `/tmp/relay-live-m365-smoke-Bo8E2i`
+
+CDP StandardFull catalog unification (2026-04-16):
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml repair_prompt_uses_latest_repair_message_and_full_catalog -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core build_cdp_prompt_repair_turn_keeps_repair_prompt_and_full_catalog -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness
+git diff --check
+```
+
+Observed result:
+
+- [`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs) no longer starts CDP requests with `StandardMinimal` or `Repair`-specific reduced catalogs. Standard and repair turns now both use the full session-surface tool catalog from the first attempt, and the old widen-after-confusion retry branch was removed.
+- The standard minimal system-prompt builder and compact-tool-name whitelist were removed. Standard turns now always use the normal full system prompt; repair turns still use the repair-specific system prompt, but with the same full catalog visible to the model.
+- [`apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs`](../apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs) was aligned to the same behavior so the headless desktop-core prompt/catalog path matches the app crate.
+- Regression coverage was updated to assert full-catalog visibility for both standard and repair turns, while preserving the existing `Plan` / `Explore` surface constraints and permission-policy tests.
+- Verification passed:
+  - app-crate targeted repair catalog test
+  - desktop-core targeted repair catalog test
+  - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`
+  - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`
+  - `git diff --check`
