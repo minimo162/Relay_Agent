@@ -15,6 +15,14 @@
 
 ## Milestone Log
 
+### 2026-04-16 Desktop UI: unified first-run and chat shell
+
+**Problem:** First run and normal conversation still behaved like two different products. The app hid the normal header and drawers before the first send, replaced the message feed with a dedicated onboarding shell, and then switched information architecture immediately after the first request. That reduced some initial options, but it also forced users to re-orient once the first chat started.
+
+**Change:** Unified the Solid desktop UI around one persistent shell without changing Rust IPC or backend behavior. [`apps/desktop/src/shell/Shell.tsx`](../apps/desktop/src/shell/Shell.tsx) now keeps the standard header, drawers, message feed, and composer visible from the first launch onward; initial setup is now a send-time guard instead of a separate layout branch. [`apps/desktop/src/components/FirstRunPanel.tsx`](../apps/desktop/src/components/FirstRunPanel.tsx) was rebuilt as a compact inline setup card rendered inside [`apps/desktop/src/components/MessageFeed.tsx`](../apps/desktop/src/components/MessageFeed.tsx), with direct `Project` and `Copilot` actions plus a focused requirement card that appears only after the user tries to send before setup is complete. [`apps/desktop/src/components/Composer.tsx`](../apps/desktop/src/components/Composer.tsx) now preserves the draft when the shell rejects that first send, and [`apps/desktop/src/components/ShellHeader.tsx`](../apps/desktop/src/components/SettingsModal.tsx) now share the same conversation-first setup language. Added [`apps/desktop/src/lib/workspace-picker.ts`](../apps/desktop/src/lib/workspace-picker.ts) so the project picker can be triggered directly from the chat surface and from Settings without duplicating dialog logic. Updated [`apps/desktop/src/index.css`](../apps/desktop/src/index.css) for a lighter warm-editorial setup card treatment and updated [`apps/desktop/tests/app.e2e.spec.ts`](../apps/desktop/tests/app.e2e.spec.ts) plus [`apps/desktop/tests/e2e-comprehensive.spec.ts`](../apps/desktop/tests/e2e-comprehensive.spec.ts) to cover persistent shell chrome, draft-preserving first-run gating, and unchanged post-send shell structure.
+
+**Verification:** `pnpm --filter @relay-agent/desktop typecheck` — pass. `pnpm exec playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts` (from `apps/desktop/`) — pass (16 tests). `pnpm check` — pass.
+
 ### 2026-04-16 Desktop UI: warm minimal shell refresh
 
 **Problem:** The desktop shell was already conversation-first, but several surfaces still carried more chrome and explanation than necessary. First-run, the composer, drawers, and settings all worked, yet too many borders, shadows, helper lines, and equally emphasized panels made the UI feel busier than the underlying workflow.

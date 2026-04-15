@@ -77,7 +77,7 @@ function SlashAutocomplete(props: {
 export function Composer(props: {
   sessionPreset: SessionPreset;
   onSessionPresetChange: (preset: SessionPreset) => void;
-  onSend: (text: string) => void;
+  onSend: (text: string) => boolean | Promise<boolean>;
   disabled: boolean;
   running: boolean;
   onCancel: () => void;
@@ -133,6 +133,8 @@ export function Composer(props: {
     if (!value || props.disabled) return;
 
     if (value.startsWith("/") && props.onSlashCommand) {
+      const accepted = await props.onSend(value);
+      if (!accepted) return;
       const response = await props.onSlashCommand(value);
       setText("");
       queueMicrotask(() => {
@@ -141,11 +143,11 @@ export function Composer(props: {
       if (response && props.onAppendAssistant) {
         props.onAppendAssistant(response);
       }
-      props.onSend(value);
       return;
     }
 
-    props.onSend(value);
+    const accepted = await props.onSend(value);
+    if (!accepted) return;
     setText("");
     setModePickerOpen(false);
     queueMicrotask(() => {

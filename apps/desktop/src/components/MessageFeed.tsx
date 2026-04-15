@@ -12,7 +12,9 @@ import {
 } from "solid-js";
 import { friendlyToolActivityLabel, type SessionPreset, type UiChunk } from "../lib/ipc";
 import { ellipsisPath, workspaceBasename } from "../lib/workspace-display";
+import type { CopilotWarmupState } from "../shell/useCopilotWarmup";
 import { EmptyState } from "./primitives";
+import { FirstRunPanel } from "./FirstRunPanel";
 import { InlineApprovalCard } from "./InlineApprovalCard";
 import { InlineQuestionCard } from "./InlineQuestionCard";
 import { MessageBubble } from "./MessageBubble";
@@ -29,6 +31,13 @@ export function MessageFeed(props: {
   workspacePath: () => string;
   /** Composer session mode (empty-state copy for Plan / Explore). */
   sessionPreset: SessionPreset;
+  firstRun: boolean;
+  copilotState: CopilotWarmupState;
+  showFirstRunRequirements: boolean;
+  missingProject: boolean;
+  missingCopilot: boolean;
+  onChooseProject: () => void;
+  onReconnectCopilot: () => void;
   onApproveOnce: (approvalId: string) => void;
   onApproveForSession: (approvalId: string) => void;
   onApproveForWorkspace: (approvalId: string) => void;
@@ -186,12 +195,27 @@ export function MessageFeed(props: {
   return (
     <div ref={container!} class="flex-1 min-h-0 overflow-y-auto px-6 py-4">
       <Show when={empty() && props.chunks.length === 0}>
-        <EmptyState
-          eyebrow={emptyEyebrow()}
-          title={emptyTitle()}
-          subtitle={emptySubtitle()}
-          example={emptyExample()}
-        />
+        <Show
+          when={props.firstRun}
+          fallback={
+            <EmptyState
+              eyebrow={emptyEyebrow()}
+              title={emptyTitle()}
+              subtitle={emptySubtitle()}
+              example={emptyExample()}
+            />
+          }
+        >
+          <FirstRunPanel
+            workspacePath={props.workspacePath}
+            onChooseProject={props.onChooseProject}
+            onReconnectCopilot={props.onReconnectCopilot}
+            copilotState={props.copilotState}
+            showRequirements={props.showFirstRunRequirements}
+            missingProject={props.missingProject}
+            missingCopilot={props.missingCopilot}
+          />
+        </Show>
       </Show>
       <For each={feedChunks()}>
         {(chunk) => {

@@ -1209,105 +1209,46 @@ body a:focus-visible {
 }
 
 .ra-first-run {
-  flex: 1;
-  min-height: 0;
   display: flex;
-  align-items: flex-start;
   justify-content: center;
-  padding: 1.5rem 1.5rem 1.75rem;
-  overflow-y: auto;
-}
-
-.ra-first-run__panel {
-  width: min(100%, 52rem);
-  display: grid;
-  gap: 0.9rem;
+  padding: 0.4rem 0 1.25rem;
 }
 
 .ra-first-run__card {
+  width: min(100%, 42rem);
   display: grid;
-  gap: 0.9rem;
-  border: 1px solid var(--ra-border);
-  border-radius: 1rem;
-  background: color-mix(in oklab, var(--ra-surface-100) 98%, white);
-  padding: 1.2rem;
-  box-shadow: 0 12px 30px rgba(38, 37, 30, 0.045);
+  gap: 0.95rem;
+  border: 1px solid color-mix(in oklab, var(--ra-border) 88%, transparent);
+  border-radius: 1.1rem;
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--ra-accent) 2%, var(--ra-surface-100)) 0%, color-mix(in oklab, var(--ra-surface-100) 99%, white) 100%);
+  padding: 1.1rem 1.15rem;
+  box-shadow: 0 14px 34px rgba(38, 37, 30, 0.04);
 }
 
 .ra-first-run__intro {
-  max-width: 40rem;
+  max-width: 34rem;
   display: grid;
-  gap: 0.45rem;
-}
-
-.ra-first-run__progress {
-  margin: 0.1rem 0 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.55rem;
-}
-
-.ra-first-run__progress-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.3rem 0.55rem;
-  border: 1px solid var(--ra-border);
-  border-radius: var(--ra-radius-pill);
-  background: color-mix(in oklab, var(--ra-surface-100) 88%, transparent);
-  color: var(--ra-text-secondary);
-  font-family: var(--ra-font-ui);
-  font-size: var(--ra-text-caption);
-  line-height: 1.2;
-}
-
-.ra-first-run__progress-number {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.2rem;
-  height: 1.2rem;
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--ra-accent) 10%, var(--ra-surface-100));
-  color: var(--ra-accent);
-  font-size: var(--ra-text-micro);
-  font-weight: 600;
-}
-
-.ra-first-run__readiness,
-.ra-first-run__request-card {
-  display: grid;
-  gap: 0.75rem;
-  border: 1px solid color-mix(in oklab, var(--ra-border) 78%, transparent);
-  border-radius: 0.95rem;
-  background: color-mix(in oklab, var(--ra-surface-100) 99%, transparent);
-  padding: 0.9rem 0.95rem;
+  gap: 0.4rem;
 }
 
 .ra-first-run__readiness {
-  gap: 0.6rem;
-  background: transparent;
-  box-shadow: none;
-}
-
-.ra-first-run__readiness-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+  display: grid;
+  gap: 0.7rem;
 }
 
 .ra-first-run__setup-row {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 0.8rem;
-  padding: 0.75rem 0.8rem;
-  border: 1px solid color-mix(in oklab, var(--ra-border) 72%, transparent);
-  border-radius: 0.8rem;
-  background: color-mix(in oklab, var(--ra-surface-100) 96%, transparent);
+  gap: 0.9rem;
+  padding: 0.85rem 0;
+  border-top: 1px solid color-mix(in oklab, var(--ra-border) 72%, transparent);
+}
+
+.ra-first-run__setup-row:first-child {
+  border-top: none;
+  padding-top: 0;
 }
 
 .ra-first-run__setup-row-main {
@@ -1320,7 +1261,7 @@ body a:focus-visible {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.4rem 0.55rem;
+  gap: 0.45rem 0.55rem;
 }
 
 .ra-first-run__setup-row-copy {
@@ -1339,20 +1280,6 @@ body a:focus-visible {
   flex-shrink: 0;
 }
 
-.ra-first-run__request-card {
-  border-color: color-mix(in oklab, var(--ra-accent) 18%, var(--ra-border));
-  background:
-    linear-gradient(180deg, color-mix(in oklab, var(--ra-accent) 4%, var(--ra-surface-100)) 0%, var(--ra-surface-100) 100%);
-  box-shadow: 0 8px 20px rgba(38, 37, 30, 0.035);
-}
-
-.ra-first-run__request-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
 .ra-first-run__step-kicker {
   margin: 0;
   color: var(--ra-text-muted);
@@ -1369,7 +1296,7 @@ body a:focus-visible {
   justify-content: center;
   white-space: nowrap;
   border-radius: var(--ra-radius-pill);
-  border: 1px solid var(--ra-border);
+  border: 1px solid color-mix(in oklab, var(--ra-border) 78%, transparent);
   padding: 0.3rem 0.55rem;
   line-height: 1;
 }
@@ -1389,10 +1316,6 @@ body a:focus-visible {
   color: var(--ra-accent);
 }
 
-.ra-first-run__request-composer {
-  margin-top: 0.15rem;
-}
-
 .ra-preflight-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1407,23 +1330,36 @@ body a:focus-visible {
 }
 
 .ra-first-run__example {
-  margin-top: 0.9rem;
+  margin-top: 0.15rem;
   padding: 0.75rem 0.85rem;
-  border: 1px solid var(--ra-border);
-  border-radius: 0.85rem;
-  background: var(--ra-surface-200);
+  border: 1px solid color-mix(in oklab, var(--ra-border) 80%, transparent);
+  border-radius: 0.95rem;
+  background: color-mix(in oklab, var(--ra-surface-100) 98%, transparent);
 }
 
-.ra-first-run__mode-note {
-  margin: 0.65rem 0 0;
-  padding: 0.55rem 0.75rem;
-  border: 1px solid var(--ra-border);
-  border-radius: var(--ra-radius);
-  background: var(--ra-surface-200);
-  color: var(--ra-text-secondary);
-  font-family: var(--ra-font-ui);
-  font-size: var(--ra-text-caption);
-  line-height: 1.45;
+.ra-first-run__example p {
+  margin: 0;
+}
+
+.ra-first-run__requirement-card {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem 0.95rem;
+  border: 1px solid color-mix(in oklab, var(--ra-accent) 22%, var(--ra-border));
+  border-radius: 0.95rem;
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--ra-accent) 5%, var(--ra-surface-100)) 0%, color-mix(in oklab, var(--ra-surface-100) 98%, transparent) 100%);
+}
+
+.ra-first-run__requirement-card h2,
+.ra-first-run__requirement-card p {
+  margin: 0;
+}
+
+.ra-first-run__requirement-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
 }
 
 .ra-sidebar-shell__header {

@@ -1,6 +1,6 @@
 import { Show, createEffect, createSignal, type JSX } from "solid-js";
 import { isTauri } from "@tauri-apps/api/core";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { save } from "@tauri-apps/plugin-dialog";
 import type { BrowserAutomationSettings, SessionPreset } from "../lib/ipc";
 import { getRelayDiagnostics, writeTextExport } from "../lib/ipc";
 import {
@@ -21,6 +21,7 @@ import {
   copilotWarmupStageDetail,
   type CopilotWarmupState,
 } from "../shell/useCopilotWarmup";
+import { pickWorkspaceFolder } from "../lib/workspace-picker";
 import { Button, Input } from "./ui";
 
 export interface ShellSettingsDraft {
@@ -130,14 +131,9 @@ export function SettingsModal(props: {
     props.onClose();
   };
 
-  const pickWorkspaceFolder = async () => {
-    if (!isTauri()) return;
+  const handlePickWorkspaceFolder = async () => {
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        defaultPath: workspace().trim() || undefined,
-      });
+      const selected = await pickWorkspaceFolder(workspace());
       if (selected == null) return;
       setWorkspace(selected);
     } catch (error) {
@@ -202,7 +198,7 @@ export function SettingsModal(props: {
               <section class="ra-settings-card">
                 <p class="ra-type-system-micro text-[var(--ra-text-muted)]">Basic</p>
                 <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                  Choose the project and make sure Copilot is ready.
+                  Set the project, check Copilot, then return to the chat.
                 </p>
                 <div class="mt-3 space-y-4">
                   <div class="ra-settings-step ra-settings-step--highlight">
@@ -221,14 +217,14 @@ export function SettingsModal(props: {
                           variant="secondary"
                           type="button"
                           class="ra-type-button-label shrink-0 px-3"
-                          onClick={() => void pickWorkspaceFolder()}
+                          onClick={() => void handlePickWorkspaceFolder()}
                         >
                           Browse…
                         </Button>
                       </Show>
                     </div>
                     <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                      Relay reads and edits in this folder for this window.
+                      Relay uses this folder when it reads, searches, or edits.
                     </p>
                   </div>
 
@@ -244,7 +240,7 @@ export function SettingsModal(props: {
                           ?? "Run a check to verify the Edge/CDP connection."}
                       </p>
                       <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                        Relay uses Edge to reach Copilot. If this is not ready, sign in there and reconnect.
+                        Relay reaches Copilot through Edge. If this is not ready, sign in there and reconnect.
                       </p>
                     </div>
                     <Button variant="secondary" type="button" class="ra-type-button-label" onClick={props.onReconnectCopilot}>

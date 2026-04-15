@@ -33,7 +33,6 @@ import { ApprovalOverlay } from "../components/ApprovalOverlay";
 import { UserQuestionOverlay } from "../components/UserQuestionOverlay";
 import { Composer } from "../components/Composer";
 import { ContextPanel } from "../components/ContextPanel";
-import { FirstRunPanel } from "../components/FirstRunPanel";
 import { MessageFeed } from "../components/MessageFeed";
 import { SettingsModal, type ShellSettingsDraft } from "../components/SettingsModal";
 import { ShellHeader } from "../components/ShellHeader";
@@ -51,6 +50,7 @@ import {
   saveMaxTurns,
   saveWorkspacePath,
 } from "../lib/settings-storage";
+import { pickWorkspaceFolder } from "../lib/workspace-picker";
 import { buildPlanTimelineFromUiChunks } from "../context/todo-write-parse";
 import { sessionModeLabel } from "../lib/session-mode-label";
 import { createSessionStore } from "./sessionStore";
@@ -123,6 +123,7 @@ export default function Shell(): JSX.Element {
   const [alwaysOnTop, setAlwaysOnTop] = createSignal(loadAlwaysOnTop());
   const [writeUndoStatus, setWriteUndoStatus] = createSignal({ canUndo: false, canRedo: false });
   const [activeDrawer, setActiveDrawer] = createSignal<ShellDrawer>("none");
+  const [showFirstRunGate, setShowFirstRunGate] = createSignal(false);
   const { copilotState, runCopilotWarmup } = useCopilotWarmup(browserSettings);
 
   const mergeChunksWithInline = (sessionId: string, baseChunks: UiChunk[]): UiChunk[] => {
@@ -255,10 +256,6 @@ export default function Shell(): JSX.Element {
     }
     if ((sessions.statusBySession()[sid]?.phase ?? "idle") !== "idle") return;
     void refreshWriteUndoStatus();
-  });
-
-  createEffect(() => {
-    if (sessions.isFirstRun()) setActiveDrawer("none");
   });
 
   const [mcpServers, setMcpServers] = createSignal<McpServer[]>([]);
@@ -409,25 +406,27 @@ export default function Shell(): JSX.Element {
     () => copilotState().result?.connected || copilotState().status === "ready",
   );
   const firstRunCanStart = createMemo(() => firstRunProjectReady() && firstRunCopilotReady());
-  const firstRunDisabledReason = createMemo(() => {
-    if (firstRunCanStart()) return null;
-    if (!firstRunProjectReady() && !firstRunCopilotReady()) {
-      return "Choose a project and wait for Copilot to be ready before sending your first request.";
-    }
-    if (!firstRunProjectReady()) {
-      return "Choose a project before sending your first request.";
-    }
-    return "Wait for Copilot to be ready before sending your first request.";
-  });
+  const firstRunMissingProject = createMemo(() => sessions.isFirstRun() && !firstRunProjectReady());
+  const firstRunMissingCopilot = createMemo(() => sessions.isFirstRun() && !firstRunCopilotReady());
+  const showFirstRunRequirements = createMemo(
+    () => showFirstRunGate() && (firstRunMissingProject() || firstRunMissingCopilot()),
+  );
   const activeSessionPreset = createMemo<SessionPreset>(() => {
     const sid = sessions.activeSessionId();
-    if (!sid) return defaultSessionPreset();
+    if (!sid) return sessions.isFirstRun() ? "build" : defaultSessionPreset();
     return sessions.sessionMeta()[sid]?.preset ?? defaultSessionPreset();
   });
   const modeLockedNote = createMemo(() => {
     const sid = sessions.activeSessionId();
     if (!sid) return null;
     return `This chat uses ${sessionModeLabel(activeSessionPreset())}. Start a new chat to change it.`;
+  });
+
+  createEffect(() => {
+    if (!showFirstRunGate()) return;
+    if (!sessions.isFirstRun() || firstRunCanStart()) {
+      setShowFirstRunGate(false);
+    }
   });
 
   const reloadHistory = async (
@@ -479,9 +478,14 @@ export default function Shell(): JSX.Element {
 
   const handleSend = async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed) return false;
 
     setSessionError(null);
+    if (sessions.isFirstRun() && !firstRunCanStart()) {
+      setShowFirstRunGate(true);
+      return false;
+    }
+
     approvals.clearPending();
 
     const prevChunks = sessions.chunks();
@@ -495,7 +499,7 @@ export default function Shell(): JSX.Element {
         await continueAgentSession({ sessionId: activeId, message: trimmed });
         sessions.setStatusBySession((prev) => ({ ...prev, [activeId]: { phase: "running" } }));
         sessions.setHasStartedConversation(true);
-        return;
+        return true;
       }
 
       const preset: SessionPreset = sessions.isFirstRun() ? "build" : defaultSessionPreset();
@@ -519,10 +523,12 @@ export default function Shell(): JSX.Element {
       }));
       sessions.setStatusBySession((prev) => ({ ...prev, [sessionId]: { phase: "running" } }));
       sessions.setHasStartedConversation(true);
+      return true;
     } catch (err) {
       sessions.setChunks(prevChunks);
       const msg = err instanceof Error ? err.message : String(err);
       setSessionError(msg);
+      return false;
     }
   };
 
@@ -604,6 +610,7 @@ export default function Shell(): JSX.Element {
 
   const selectSession = (id: string) => {
     setActiveDrawer("none");
+    setShowFirstRunGate(false);
     sessions.setActiveSessionId(id);
     sessions.setHasStartedConversation(true);
     setSessionError(null);
@@ -612,6 +619,7 @@ export default function Shell(): JSX.Element {
 
   const handleNewSession = () => {
     setActiveDrawer("none");
+    setShowFirstRunGate(false);
     sessions.setActiveSessionId(null);
     sessions.setChunks([]);
     setSessionError(null);
@@ -637,13 +645,41 @@ export default function Shell(): JSX.Element {
     setSettingsOpen(true);
   };
 
+  const handleChooseProject = async () => {
+    try {
+      const selected = await pickWorkspaceFolder(workspaceLabel());
+      if (selected) {
+        const next = selected.trim();
+        setWorkspaceLabel(next);
+        saveWorkspacePath(next);
+        return;
+      }
+    } catch (error) {
+      console.error("[Shell] workspace dialog failed", error);
+      openSettings();
+      return;
+    }
+    if (!isTauri()) openSettings();
+  };
+
   const toggleDrawer = (drawer: Exclude<ShellDrawer, "none">) => {
     setActiveDrawer((current) => (current === drawer ? "none" : drawer));
   };
 
+  const runSlashCommand = (input: string) => {
+    const ctx: SlashCommandContext = {
+      sessionId: sessions.activeSessionId(),
+      clearChunks: () => sessions.setChunks([]),
+      compactSession: (sid) => compactAgentSession({ sessionId: sid }),
+      sessionRunning: sessionBusy(),
+      chunksCount: sessions.chunks().length,
+    };
+    return executeSlashCommand(input, ctx);
+  };
+
   return (
     <div classList={{ "ra-shell": true, "ra-shell--first-run": sessions.isFirstRun() }}>
-      <Show when={!sessions.isFirstRun() && activeDrawer() !== "none"}>
+      <Show when={activeDrawer() !== "none"}>
         <button
           type="button"
           class="ra-shell-drawer-backdrop"
@@ -684,7 +720,6 @@ export default function Shell(): JSX.Element {
             setSessionError(msg);
           }
         }}
-        firstRun={sessions.isFirstRun()}
       />
 
       <main class="ra-shell-main">
@@ -701,85 +736,46 @@ export default function Shell(): JSX.Element {
           </div>
         </Show>
 
-        <Show
-          when={sessions.isFirstRun()}
-          fallback={
-            <>
-              <MessageFeed
-                chunks={sessions.chunks()}
-                sessionStatus={sessions.activeSessionStatus()}
-                workspacePath={workspaceLabel}
-                sessionPreset={activeSessionPreset()}
-                onApproveOnce={handleApproveOnce}
-                onApproveForSession={handleApproveForSession}
-                onApproveForWorkspace={handleApproveForWorkspace}
-                onReject={handleReject}
-                onSubmitUserQuestion={handleUserQuestionSubmit}
-                onCancelUserQuestion={handleUserQuestionCancel}
-              />
-              <Composer
-                sessionPreset={activeSessionPreset()}
-                onSessionPresetChange={handleDefaultPresetChange}
-                onSend={handleSend}
-                disabled={sessionBusy()}
-                running={sessionBusy()}
-                onCancel={handleCancel}
-                onSlashCommand={(input) => {
-                  const ctx: SlashCommandContext = {
-                    sessionId: sessions.activeSessionId(),
-                    clearChunks: () => sessions.setChunks([]),
-                    compactSession: (sid) => compactAgentSession({ sessionId: sid }),
-                    sessionRunning: sessionBusy(),
-                    chunksCount: sessions.chunks().length,
-                  };
-                  return executeSlashCommand(input, ctx);
-                }}
-                onAppendAssistant={(text: string) => {
-                  sessions.setChunks((prev) => [...prev, { kind: "assistant", text }]);
-                }}
-                allowModeSelection={sessions.activeSessionId() === null}
-                modeLockedNote={modeLockedNote()}
-                autoFocus={!settingsOpen()}
-              />
-            </>
+        <MessageFeed
+          chunks={sessions.chunks()}
+          sessionStatus={sessions.activeSessionStatus()}
+          workspacePath={workspaceLabel}
+          sessionPreset={activeSessionPreset()}
+          firstRun={sessions.isFirstRun()}
+          copilotState={copilotState()}
+          showFirstRunRequirements={showFirstRunRequirements()}
+          missingProject={firstRunMissingProject()}
+          missingCopilot={firstRunMissingCopilot()}
+          onChooseProject={() => void handleChooseProject()}
+          onReconnectCopilot={() => runCopilotWarmup(false)}
+          onApproveOnce={handleApproveOnce}
+          onApproveForSession={handleApproveForSession}
+          onApproveForWorkspace={handleApproveForWorkspace}
+          onReject={handleReject}
+          onSubmitUserQuestion={handleUserQuestionSubmit}
+          onCancelUserQuestion={handleUserQuestionCancel}
+        />
+        <Composer
+          sessionPreset={activeSessionPreset()}
+          onSessionPresetChange={handleDefaultPresetChange}
+          onSend={handleSend}
+          disabled={sessionBusy()}
+          running={sessionBusy()}
+          onCancel={handleCancel}
+          onSlashCommand={runSlashCommand}
+          onAppendAssistant={(text: string) => {
+            sessions.setChunks((prev) => [...prev, { kind: "assistant", text }]);
+          }}
+          hero={sessions.isFirstRun()}
+          allowModeSelection={!sessions.isFirstRun() && sessions.activeSessionId() === null}
+          modeLockedNote={modeLockedNote()}
+          autoFocus={!settingsOpen()}
+          disabledReason={
+            sessions.isFirstRun()
+              ? "The first request starts in Standard. Relay keeps the same chat surface and asks for setup only when needed."
+              : modeLockedNote()
           }
-        >
-          <FirstRunPanel
-            workspacePath={workspaceLabel}
-            onOpenSettings={openSettings}
-            onReconnectCopilot={() => runCopilotWarmup(false)}
-            sessionPreset="build"
-            copilotState={copilotState()}
-            canStart={firstRunCanStart()}
-            startDisabledReason={firstRunDisabledReason()}
-          >
-            <Composer
-              sessionPreset="build"
-              onSessionPresetChange={handleDefaultPresetChange}
-              onSend={handleSend}
-              disabled={sessionBusy() || !firstRunCanStart()}
-              running={sessionBusy()}
-              onCancel={handleCancel}
-              onSlashCommand={(input) => {
-                const ctx: SlashCommandContext = {
-                  sessionId: sessions.activeSessionId(),
-                  clearChunks: () => sessions.setChunks([]),
-                  compactSession: (sid) => compactAgentSession({ sessionId: sid }),
-                  sessionRunning: sessionBusy(),
-                  chunksCount: sessions.chunks().length,
-                };
-                return executeSlashCommand(input, ctx);
-              }}
-              onAppendAssistant={(text: string) => {
-                sessions.setChunks((prev) => [...prev, { kind: "assistant", text }]);
-              }}
-              hero
-              allowModeSelection={false}
-              autoFocus={!settingsOpen()}
-              disabledReason={firstRunDisabledReason()}
-            />
-          </FirstRunPanel>
-        </Show>
+        />
 
         <ApprovalOverlay
           enabled={false}
@@ -804,40 +800,38 @@ export default function Shell(): JSX.Element {
         />
       </main>
 
-      <Show when={!sessions.isFirstRun()}>
-        <Show when={activeDrawer() === "sessions"}>
-          <aside
-            id="ra-drawer-sessions"
-            class="ra-shell-drawer ra-shell-drawer--left"
-            aria-label="Chats"
-            data-ra-shell-drawer="sessions"
-          >
-            <Sidebar
-              sessions={sessions.sessionEntries()}
-              activeSessionId={sessions.activeSessionId()}
-              onSelect={selectSession}
-              onNewSession={handleNewSession}
-              workspacePath={workspaceLabel()}
-              onWorkspaceChipClick={openSettings}
-            />
-          </aside>
-        </Show>
-        <Show when={activeDrawer() === "context"}>
-          <aside
-            id="ra-drawer-context"
-            class="ra-shell-drawer ra-shell-drawer--right"
-            aria-label="Context"
-            data-ra-shell-drawer="context"
-          >
-            <ContextPanel
-              mcpServers={mcpServers}
-              setMcpServers={setMcpServers}
-              workspacePath={workspaceLabel}
-              sessionPreset={activeSessionPreset}
-              planTimeline={sessions.planTimelineForActiveSession}
-            />
-          </aside>
-        </Show>
+      <Show when={activeDrawer() === "sessions"}>
+        <aside
+          id="ra-drawer-sessions"
+          class="ra-shell-drawer ra-shell-drawer--left"
+          aria-label="Chats"
+          data-ra-shell-drawer="sessions"
+        >
+          <Sidebar
+            sessions={sessions.sessionEntries()}
+            activeSessionId={sessions.activeSessionId()}
+            onSelect={selectSession}
+            onNewSession={handleNewSession}
+            workspacePath={workspaceLabel()}
+            onWorkspaceChipClick={openSettings}
+          />
+        </aside>
+      </Show>
+      <Show when={activeDrawer() === "context"}>
+        <aside
+          id="ra-drawer-context"
+          class="ra-shell-drawer ra-shell-drawer--right"
+          aria-label="Context"
+          data-ra-shell-drawer="context"
+        >
+          <ContextPanel
+            mcpServers={mcpServers}
+            setMcpServers={setMcpServers}
+            workspacePath={workspaceLabel}
+            sessionPreset={activeSessionPreset}
+            planTimeline={sessions.planTimelineForActiveSession}
+          />
+        </aside>
       </Show>
     </div>
   );

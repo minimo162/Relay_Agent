@@ -57,25 +57,22 @@ test.describe("Conversation model", () => {
 });
 
 test.describe("Settings and first-run UX", () => {
-  test("first-run keeps sidebar and context panel hidden", async ({ page }) => {
+  test("first-run keeps the normal shell and shows setup in the feed", async ({ page }) => {
     await injectRelayMock(page, { autoComplete: true });
     await openApp(page);
-    await expect(page.getByRole("heading", { name: "Chats" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Chats" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Context" })).toHaveCount(0);
-    await expect(page.getByRole("tab", { name: "Integrations" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Chats" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Context" })).toBeVisible();
     await expect(
       page.getByRole("heading", {
         level: 1,
-        name: "Set the project, check Copilot, then send the first request",
+        name: "Write the request now. Relay will help finish setup if needed.",
       }),
     ).toBeVisible();
-    await expect(page.getByRole("heading", { level: 2, name: "Check the two requirements" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Reconnect Copilot" })).toHaveCount(0);
+    await expect(page.locator("[data-ra-setup-card]")).toBeVisible();
     await expect(page.locator("[data-ra-session-mode]")).toHaveCount(0);
     await expect(page.locator("[data-ra-composer-disabled-note]")).toHaveText(
-      "Choose a project before sending your first request.",
+      "The first request starts in Standard. Relay keeps the same chat surface and asks for setup only when needed.",
     );
   });
 
@@ -123,6 +120,15 @@ test.describe("Settings and first-run UX", () => {
     await expect(page.getByTestId("composer-send")).toBeVisible();
     await page.getByRole("button", { name: "Chats" }).click();
     await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible();
+  });
+
+  test("first-run send keeps the draft and shows setup requirements", async ({ page }) => {
+    await injectRelayMock(page, { autoComplete: true });
+    await openApp(page);
+    await sendPrompt(page, "open the shell");
+    await expect(page.locator("[data-ra-first-run-requirements]")).toBeVisible();
+    await expect(page.locator("textarea")).toHaveValue("open the shell");
+    await expect(page.locator(".ra-session-row")).toHaveCount(0);
   });
 });
 

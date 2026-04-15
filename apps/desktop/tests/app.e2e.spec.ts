@@ -28,33 +28,27 @@ async function sendPrompt(page: any, text: string) {
   await textarea.press("Control+Enter");
 }
 
-test("first run shows onboarding preflight and hides app chrome", async ({ page }) => {
+test("first run keeps the normal shell visible and renders setup inline", async ({ page }) => {
   await openApp(page);
   await expect(
     page.getByRole("heading", {
       level: 1,
-      name: "Set the project, check Copilot, then send the first request",
+      name: "Write the request now. Relay will help finish setup if needed.",
     }),
   ).toBeVisible();
-  await expect(page.locator(".ra-first-run__card")).toBeVisible();
-  await expect(page.getByRole("heading", { level: 2, name: "Check the two requirements" })).toBeVisible();
-  await expect(page.getByRole("heading", { level: 2, name: "Send the first request" })).toBeVisible();
+  await expect(page.locator("[data-ra-setup-card]")).toBeVisible();
   await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Context" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Choose project" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Chats" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Chats" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Context" })).toHaveCount(0);
-  await expect(page.getByRole("tab", { name: "Integrations" })).toHaveCount(0);
   await expect(page.locator("[data-ra-session-mode]")).toHaveCount(0);
-  await expect(composer(page)).toBeDisabled();
-  await expect(page.getByTestId("composer-send")).toBeDisabled();
+  await expect(composer(page)).toBeEditable();
   await expect(page.locator("[data-ra-composer-disabled-note]")).toHaveText(
-    "Choose a project before sending your first request.",
+    "The first request starts in Standard. Relay keeps the same chat surface and asks for setup only when needed.",
   );
-  await page.keyboard.press("Tab");
-  await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(page.getByRole("button", { name: "Choose project" })).toBeFocused();
+  await page.getByRole("button", { name: "Chats" }).click();
+  await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible();
+  await expect(page.getByText("No chats yet")).toBeVisible();
 });
 
 test("settings modal exposes setup and advanced controls", async ({ page }) => {
@@ -79,7 +73,7 @@ test("sending the first prompt exits onboarding and creates one conversation", a
   await seedWorkspace(page);
   await openApp(page);
   await sendPrompt(page, "review the workspace");
-  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await expect(page.locator("[data-ra-setup-card]")).toHaveCount(0);
   await expect(page.locator("[data-ra-shell-drawer='sessions']")).toHaveCount(0);
   await page.getByRole("button", { name: "Chats" }).click();
   await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible();
@@ -90,6 +84,16 @@ test("sending the first prompt exits onboarding and creates one conversation", a
   await expect(page.locator("[data-ra-permissions-details]")).not.toHaveAttribute("open", "");
   await expect(page.getByRole("button", { name: "Undo" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Redo" })).toHaveCount(0);
+});
+
+test("first-run send keeps the draft and shows setup actions when project is missing", async ({ page }) => {
+  await openApp(page);
+  await sendPrompt(page, "make the setup simpler");
+  const requirements = page.locator("[data-ra-first-run-requirements]");
+  await expect(requirements).toBeVisible();
+  await expect(requirements.getByRole("button", { name: "Choose project" })).toBeFocused();
+  await expect(composer(page)).toHaveValue("make the setup simpler");
+  await expect(page.locator(".ra-session-row")).toHaveCount(0);
 });
 
 test("tool rows use human labels instead of raw tool names", async ({ page }) => {
