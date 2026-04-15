@@ -251,6 +251,59 @@ pub enum CopilotPromptFailure {
     Bridge(CopilotBridgeFailureInfo),
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopilotProgressSnapshot {
+    pub relay_session_id: String,
+    pub relay_request_id: String,
+    pub visible_text: String,
+    pub done: bool,
+    pub phase: String,
+    pub updated_at: u64,
+}
+
+#[derive(Clone)]
+pub struct CopilotProgressProbe {
+    server_url: String,
+    boot_token: Option<String>,
+    client: Client,
+}
+
+impl CopilotProgressProbe {
+    pub async fn fetch(
+        &self,
+        relay_session_id: &str,
+        relay_request_id: &str,
+    ) -> Result<Option<CopilotProgressSnapshot>, CopilotError> {
+        let url = format!("{}/v1/chat/progress", self.server_url);
+        let mut request = self
+            .client
+            .get(url)
+            .query(&[
+                ("relay_session_id", relay_session_id),
+                ("relay_request_id", relay_request_id),
+            ])
+            .timeout(Duration::from_secs(3));
+        if let Some(token) = &self.boot_token {
+            request = request.header("X-Relay-Boot-Token", token);
+        }
+        let response = request.send().await.map_err(CopilotError::Http)?;
+        let status = response.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(parse_prompt_error_body(status, &body));
+        }
+        let snapshot = response
+            .json::<CopilotProgressSnapshot>()
+            .await
+            .map_err(CopilotError::Http)?;
+        Ok(Some(snapshot))
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct CopilotSendPromptRequest<'a> {
     pub relay_session_id: &'a str,
@@ -958,6 +1011,14 @@ impl CopilotServer {
 
     pub fn server_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
+    }
+
+    pub fn progress_probe(&self) -> CopilotProgressProbe {
+        CopilotProgressProbe {
+            server_url: self.server_url(),
+            boot_token: self.boot_token.clone(),
+            client: self.client.clone(),
+        }
     }
 }
 

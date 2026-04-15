@@ -41,6 +41,10 @@ pub struct SessionState {
     pub last_error_summary: Option<String>,
     pub terminal_status_emitted: bool,
     pub current_copilot_request_id: Option<String>,
+    pub stream_delta_count: usize,
+    pub first_stream_at_ms: Option<u64>,
+    pub last_stream_at_ms: Option<u64>,
+    pub stream_preview_text: Option<String>,
 }
 
 impl SessionState {
@@ -59,6 +63,10 @@ impl SessionState {
             last_error_summary: None,
             terminal_status_emitted: false,
             current_copilot_request_id: None,
+            stream_delta_count: 0,
+            first_stream_at_ms: None,
+            last_stream_at_ms: None,
+            stream_preview_text: None,
         }
     }
 
@@ -80,6 +88,13 @@ impl SessionState {
         if self.finished_at.is_none() {
             self.finished_at = Some(Utc::now().timestamp());
         }
+    }
+
+    pub fn reset_stream_metrics(&mut self) {
+        self.stream_delta_count = 0;
+        self.first_stream_at_ms = None;
+        self.last_stream_at_ms = None;
+        self.stream_preview_text = None;
     }
 }
 

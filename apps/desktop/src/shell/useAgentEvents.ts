@@ -35,16 +35,20 @@ export function useAgentEvents(options: UseAgentEventsOptions) {
     const appendAssistantText = (sessionId: string, text: string, isComplete: boolean) => {
       if (!text && !isComplete) return;
       if (options.activeSessionId() !== sessionId) return;
-      if (!text && isComplete) return;
 
       options.setChunks((prev) => {
         const next = [...prev];
         const last = next.at(-1);
         if (last?.kind === "assistant") {
-          last.text += text;
+          next[next.length - 1] = {
+            kind: "assistant",
+            text: last.text + text,
+            streaming: !isComplete,
+          };
           return next;
         }
-        next.push({ kind: "assistant", text });
+        if (!text && isComplete) return next;
+        next.push({ kind: "assistant", text, streaming: !isComplete });
         return next;
       });
     };

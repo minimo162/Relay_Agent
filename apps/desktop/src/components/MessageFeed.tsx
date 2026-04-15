@@ -40,6 +40,9 @@ export function MessageFeed(props: {
     }
     return null as string | null;
   });
+  const hasStreamingAssistant = createMemo(() =>
+    props.chunks.some((chunk) => chunk.kind === "assistant" && Boolean(chunk.streaming)),
+  );
   const [nowMs, setNowMs] = createSignal(Date.now());
   createRenderEffect(() => {
     if (props.sessionStatus.phase !== "retrying") return;
@@ -49,6 +52,7 @@ export function MessageFeed(props: {
   const statusLine = createMemo(() => {
     switch (props.sessionStatus.phase) {
       case "running": {
+        if (hasStreamingAssistant()) return null;
         const name = runningToolName();
         return name ? friendlyToolActivityLabel(name) : "Working…";
       }
@@ -196,7 +200,13 @@ export function MessageFeed(props: {
               />
             );
           }
-          return <MessageBubble role={chunk.kind} text={chunk.text} />;
+          return (
+            <MessageBubble
+              role={chunk.kind}
+              text={chunk.text}
+              streaming={chunk.kind === "assistant" ? Boolean(chunk.streaming) : false}
+            />
+          );
         }}
       </For>
 

@@ -517,7 +517,7 @@ export function chunksFromHistory(messages: AgentMessage[]): UiChunk[] {
     if (msg.role === "assistant") {
       for (const block of msg.content) {
         if (block.type === "text" && block.text) {
-          chunks.push({ kind: "assistant" as const, text: block.text });
+          chunks.push({ kind: "assistant" as const, text: block.text, streaming: false });
         }
         if (block.type === "toolUse") {
           const chunk = {
@@ -546,7 +546,7 @@ export function chunksFromHistory(messages: AgentMessage[]): UiChunk[] {
 
 export type UiChunk =
   | { kind: "user"; text: string }
-  | { kind: "assistant"; text: string }
+  | { kind: "assistant"; text: string; streaming?: boolean }
   | {
       kind: "tool_call";
       toolUseId: string;

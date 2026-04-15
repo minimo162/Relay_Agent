@@ -98,6 +98,10 @@ struct DevSessionState {
     tool_error_counts: BTreeMap<String, usize>,
     last_assistant_text: Option<String>,
     current_copilot_request_id: Option<String>,
+    stream_delta_count: usize,
+    first_stream_at_ms: Option<u64>,
+    last_stream_at_ms: Option<u64>,
+    stream_preview_text: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -551,6 +555,10 @@ fn build_session_state(
         tool_error_counts,
         last_assistant_text,
         current_copilot_request_id: state.current_copilot_request_id.clone(),
+        stream_delta_count: state.stream_delta_count,
+        first_stream_at_ms: state.first_stream_at_ms,
+        last_stream_at_ms: state.last_stream_at_ms,
+        stream_preview_text: state.stream_preview_text.clone(),
     }
 }
 

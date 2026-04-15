@@ -429,6 +429,43 @@ class CopilotSession {
     return state;
   }
 
+  _newProgressSnapshot(relaySessionId, relayRequestId) {
+    return {
+      relaySessionId,
+      relayRequestId,
+      visibleText: "",
+      done: false,
+      phase: "queued",
+      updatedAt: Date.now(),
+    };
+  }
+
+  _updateRequestProgress(requestState, patch = {}) {
+    const current = requestState.progressSnapshot || this._newProgressSnapshot(
+      requestState.relaySessionId,
+      requestState.relayRequestId,
+    );
+    const next = {
+      ...current,
+      ...patch,
+      updatedAt: Number.isFinite(patch.updatedAt) ? patch.updatedAt : Date.now(),
+    };
+    requestState.progressSnapshot = next;
+    return next;
+  }
+
+  getRequestProgress(relaySessionId, relayRequestId) {
+    const completed = this.completedRequests.get(relayRequestId);
+    if (completed && completed.relaySessionId === relaySessionId) {
+      return completed.progressSnapshot || null;
+    }
+    const inflight = this.inflightRequests.get(relayRequestId);
+    if (inflight && inflight.relaySessionId === relaySessionId) {
+      return inflight.requestState.progressSnapshot || null;
+    }
+    return null;
+  }
+
   _claimedTargetIds(exceptRelaySessionId = null) {
     const claimed = new Set();
     for (const [relaySessionId, state] of this.relaySessions.entries()) {
@@ -799,16 +836,29 @@ class CopilotSession {
       relayRequestId,
       aborted: false,
       probeMode: params.relayProbeMode === true,
+      progressSnapshot: this._newProgressSnapshot(relaySessionId, relayRequestId),
     };
 
     const execute = async () => {
       try {
         const description = await this.describeImpl(params, requestState);
+        this._updateRequestProgress(requestState, {
+          visibleText: String(description || "").trim(),
+          done: true,
+          phase: "completed",
+        });
         return {
           status: 200,
           body: { choices: [{ message: { role: "assistant", content: description } }] },
         };
       } catch (error) {
+        this._updateRequestProgress(requestState, {
+          done: true,
+          phase:
+            requestState.aborted || String(error?.message || error).includes("relay_copilot_aborted")
+              ? "aborted"
+              : "error",
+        });
         return responseRecordFromError(error);
       }
     };
@@ -816,7 +866,11 @@ class CopilotSession {
     const promise = this._describeChain
       .then(execute)
       .then((record) => {
-        this.completedRequests.set(relayRequestId, { relaySessionId, record });
+        this.completedRequests.set(relayRequestId, {
+          relaySessionId,
+          record,
+          progressSnapshot: requestState.progressSnapshot || this._newProgressSnapshot(relaySessionId, relayRequestId),
+        });
         this._pruneCompletedRequests();
         this.inflightRequests.delete(relayRequestId);
         return record;
@@ -835,6 +889,7 @@ class CopilotSession {
     const inflight = this.inflightRequests.get(relayRequestId);
     if (!inflight || inflight.relaySessionId !== relaySessionId) return false;
     inflight.requestState.aborted = true;
+    this._updateRequestProgress(inflight.requestState, { done: true, phase: "aborted" });
     return true;
   }
 
@@ -842,6 +897,7 @@ class CopilotSession {
     const relaySessionId = requestState.relaySessionId;
     const relaySession = this._getRelaySessionState(relaySessionId);
     relaySession.probeMode = requestState.probeMode === true;
+    this._updateRequestProgress(requestState, { phase: "connecting", done: false, visibleText: "" });
     const requestChain = String(params.relayRequestChain || requestState.relayRequestId || "").trim() || requestState.relayRequestId;
     const requestAttempt =
       Number.isFinite(params.relayRequestAttempt) && params.relayRequestAttempt >= 1
@@ -879,6 +935,7 @@ class CopilotSession {
         logDescribeTrace("[copilot:describe] connecting", trace, {
           recoverable_retry: recoverableAttempt > 0,
         });
+        this._updateRequestProgress(requestState, { phase: "connecting", done: false });
         await this.connect(globalOptions.cdpPort);
         console.error(
           "[copilot:describe] finding copilot page for relay session",
@@ -1008,6 +1065,7 @@ class CopilotSession {
             let phase = "paste";
             let phaseStartedAt = Date.now();
             try {
+              this._updateRequestProgress(requestState, { phase: "pasting", done: false });
               console.error(
                 "[copilot:describe] phase=paste begin prompt_chars=",
                 fullPrompt.length,
@@ -1029,12 +1087,16 @@ class CopilotSession {
 
               phase = "submit";
               phaseStartedAt = Date.now();
+              this._updateRequestProgress(requestState, { phase: "waiting", done: false });
               console.error("[copilot:describe] phase=submit begin");
               const responseText = await submitPromptRaw(pageSession, fullPrompt.length, netCapture, {
                 hadAttachments,
                 abortCheck: () => requestState.aborted === true,
                 trace,
                 responseTimeoutMs: bridgeResponseTimeoutMs(stageLabel, requestState.probeMode),
+                onProgress: (snapshot) => {
+                  this._updateRequestProgress(requestState, snapshot);
+                },
               });
               trace.networkSeedSeen = !!netCapture?.sawAnySeed?.();
               trace.waitResponseElapsedMs = Date.now() - phaseStartedAt;
@@ -4240,6 +4302,19 @@ function createServer(session) {
         );
         const record = await session.startOrJoinDescribe(prompt);
         return writeJson(res, record.status, record.body);
+      }
+      if (req.method === "GET" && reqUrl.pathname === "/v1/chat/progress") {
+        if (!requireBridgeAuth(req, res)) return;
+        const relaySessionId = String(reqUrl.searchParams.get("relay_session_id") || "").trim();
+        const relayRequestId = String(reqUrl.searchParams.get("relay_request_id") || "").trim();
+        if (!relaySessionId || !relayRequestId) {
+          return writeJson(res, 400, { error: "relay_session_id and relay_request_id are required" });
+        }
+        const snapshot = session.getRequestProgress(relaySessionId, relayRequestId);
+        if (!snapshot) {
+          return writeJson(res, 404, { error: "progress_not_found" });
+        }
+        return writeJson(res, 200, snapshot);
       }
       return writeJson(res, 404, { error: "Not found" });
     } catch (error) {

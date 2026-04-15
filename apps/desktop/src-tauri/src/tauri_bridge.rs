@@ -519,6 +519,7 @@ fn prepare_session_continuation(
             state.last_error_summary = None;
             state.terminal_status_emitted = false;
             state.current_copilot_request_id = None;
+            state.reset_stream_metrics();
 
             Ok((
                 state.session.clone(),

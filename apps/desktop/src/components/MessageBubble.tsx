@@ -3,7 +3,7 @@ import { IconButton } from "./ui";
 import { assistantMarkdownToSafeHtml } from "../lib/assistant-markdown";
 import { ui } from "../lib/ui-tokens";
 
-const COLLAPSE_CHAR_THRESHOLD = 480;
+const COLLAPSE_CHAR_THRESHOLD = 1400;
 
 function CopyIcon() {
   return (
@@ -19,12 +19,16 @@ function CopyIcon() {
   );
 }
 
-export function MessageBubble(props: { role: "user" | "assistant"; text: string }): JSX.Element {
+export function MessageBubble(props: {
+  role: "user" | "assistant";
+  text: string;
+  streaming?: boolean;
+}): JSX.Element {
   const isUser = props.role === "user";
   const [expanded, setExpanded] = createSignal(false);
   const assistantHtml = createMemo(() => assistantMarkdownToSafeHtml(props.text));
   const long = () => props.text.length > COLLAPSE_CHAR_THRESHOLD;
-  const collapsed = () => long() && !expanded();
+  const collapsed = () => !props.streaming && long() && !expanded();
 
   const copy = async () => {
     try {
@@ -77,7 +81,7 @@ export function MessageBubble(props: { role: "user" | "assistant"; text: string 
             {props.text}
           </div>
         </Show>
-        <Show when={long()}>
+        <Show when={long() && !props.streaming}>
           <div class="px-4 pb-2 -mt-1">
             <button
               type="button"

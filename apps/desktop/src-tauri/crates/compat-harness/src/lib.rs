@@ -373,7 +373,13 @@ mod full_session_harness {
         ));
 
         assert_eq!(summary.status, "ok", "{summary:?}");
-        assert!(summary.text_delta_count > 0, "{summary:?}");
+        assert!(summary.text_delta_count > 1, "{summary:?}");
+        assert!(
+            summary.first_stream_at_ms.zip(summary.completion_event_at_ms).is_some_and(
+                |(first_stream_at_ms, completion_event_at_ms)| first_stream_at_ms < completion_event_at_ms
+            ),
+            "{summary:?}"
+        );
         assert!(summary.tool_start_count > 0, "{summary:?}");
         assert!(summary.approval_seen, "{summary:?}");
         assert_eq!(summary.final_stop_reason.as_deref(), Some("completed"));

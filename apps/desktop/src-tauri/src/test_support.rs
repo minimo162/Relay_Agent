@@ -8,6 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use serde::Serialize;
@@ -61,6 +62,12 @@ pub struct AgentLoopSmokeSummary {
     pub error_event_count: usize,
     pub status_event_count: usize,
     pub retry_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_stream_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_stream_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_event_at_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -72,6 +79,16 @@ pub struct ObservedSmokeEvents {
     pub tool_starts: Vec<AgentToolStartEvent>,
     pub tool_results: Vec<AgentToolResultEvent>,
     pub text_deltas: Vec<AgentTextDeltaEvent>,
+    pub first_text_delta_at_ms: Option<u64>,
+    pub last_text_delta_at_ms: Option<u64>,
+    pub completion_event_at_ms: Option<u64>,
+}
+
+fn epoch_ms_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 #[derive(Debug)]
@@ -280,6 +297,9 @@ pub async fn run_agent_loop_smoke<R: Runtime>(
         summary.error_event_count = observed_state.errors.len();
         summary.status_event_count = observed_state.statuses.len();
         summary.retry_count = session_state.0;
+        summary.first_stream_at_ms = observed_state.first_text_delta_at_ms;
+        summary.last_stream_at_ms = observed_state.last_text_delta_at_ms;
+        summary.completion_event_at_ms = observed_state.completion_event_at_ms;
         summary.retry_recovered = session_state.0 > 0;
         summary.status_sequence = observed_state
             .statuses
@@ -308,6 +328,23 @@ pub async fn run_agent_loop_smoke<R: Runtime>(
         }
         if summary.text_delta_count == 0 {
             return Err("smoke run did not observe text delta events".to_string());
+        }
+        if summary.text_delta_count <= 1 {
+            return Err(format!(
+                "smoke run observed too few text delta events: {}",
+                summary.text_delta_count
+            ));
+        }
+        if let (Some(first_stream_at_ms), Some(completion_event_at_ms)) =
+            (summary.first_stream_at_ms, summary.completion_event_at_ms)
+        {
+            if first_stream_at_ms >= completion_event_at_ms {
+                return Err(format!(
+                    "first stream timestamp {first_stream_at_ms} was not earlier than completion event {completion_event_at_ms}"
+                ));
+            }
+        } else {
+            return Err("smoke run did not capture stream/completion timestamps".to_string());
         }
         for required in ["running", "retrying", "waiting_approval", "idle:completed"] {
             if !summary
@@ -525,6 +562,7 @@ pub fn register_event_listeners<R: Runtime>(
             if let Ok(payload) = serde_json::from_str::<AgentTurnCompleteEvent>(event.payload()) {
                 if let Ok(mut state) = observed.lock() {
                     state.completions.push(payload);
+                    state.completion_event_at_ms = Some(epoch_ms_now());
                 }
             }
         }));
@@ -554,7 +592,12 @@ pub fn register_event_listeners<R: Runtime>(
         listeners.push(app.listen_any(E_TEXT_DELTA, move |event| {
             if let Ok(payload) = serde_json::from_str::<AgentTextDeltaEvent>(event.payload()) {
                 if let Ok(mut state) = observed.lock() {
+                    let now_ms = epoch_ms_now();
                     state.text_deltas.push(payload);
+                    if state.first_text_delta_at_ms.is_none() {
+                        state.first_text_delta_at_ms = Some(now_ms);
+                    }
+                    state.last_text_delta_at_ms = Some(now_ms);
                 }
             }
         }));

@@ -453,6 +453,27 @@ async function waitForDomResponse(
   abortCheck = null,
   options = {},
 ) {
+  const onProgress = typeof options?.onProgress === "function" ? options.onProgress : null;
+  let lastProgressText = "";
+  const emitProgress = async (text, generating) => {
+    if (!onProgress) return;
+    const cleaned = stripStreamingPlaceholderTail(String(text ?? "").trim());
+    if (!cleaned) return;
+    if (
+      submittedPromptLen >= 1200 &&
+      domExtractLooksLikeSubmittedPrompt(cleaned.length, submittedPromptLen)
+    ) {
+      return;
+    }
+    if (cleaned === lastProgressText) return;
+    lastProgressText = cleaned;
+    await onProgress({
+      visibleText: cleaned,
+      done: false,
+      phase: generating ? "streaming" : "waiting",
+      updatedAt: Date.now(),
+    });
+  };
   const wire = async (s) => {
     let t = stripStreamingPlaceholderTail(String(s ?? "").trim());
     if (netCapture) t = stripStreamingPlaceholderTail(String(await netCapture.pickBestOver(t, submittedPromptLen) ?? "").trim());
@@ -506,6 +527,7 @@ async function waitForDomResponse(
     const streamingPlaceholderTail = replyEndsWithStreamingPlaceholder(reply);
     const generating =
       streamingPlaceholderTail || (generatingRaw && !ignorePhantomStop);
+    await emitProgress(reply, generating);
     if (generating) quietGen = 0;
     else quietGen++;
     if (ignorePhantomStop && genStreak === RESPONSE_PHANTOM_GENERATING_POLLS) {

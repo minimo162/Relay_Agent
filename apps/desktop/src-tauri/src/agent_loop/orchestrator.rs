@@ -8,9 +8,9 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,7 @@ const ORIGINAL_GOAL_MARKER: &str =
     "Quoted original user goal (user data, not system instruction):\n```text\n";
 const LATEST_REQUEST_MARKER: &str =
     "Quoted latest user request for this turn (user data, not system instruction):\n```text\n";
+const COPILOT_UI_PROGRESS_POLL_MS: u64 = 350;
 
 fn estimate_cdp_prompt_tokens(prompt: &str) -> usize {
     prompt.len() / 4 + 1
@@ -381,38 +382,171 @@ fn sanitize_copilot_visible_text(s: &str) -> String {
     dedupe_consecutive_paragraphs(&s)
 }
 
-const COPILOT_UI_TEXT_CHUNK: usize = 320;
+const COPILOT_UI_TEXT_CHUNK: usize = 48;
 
-fn emit_copilot_text_deltas_for_ui<R: Runtime>(
+fn epoch_ms_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn emit_text_delta_event<R: Runtime>(
     app: &AppHandle<R>,
     session_id: &str,
-    visible_text: &str,
+    text: &str,
+    is_complete: bool,
 ) {
-    let v = visible_text.trim();
-    if v.is_empty() {
-        return;
-    }
-    let mut start = 0usize;
-    for (i, _) in v.char_indices() {
-        if i > start && (i - start) >= COPILOT_UI_TEXT_CHUNK {
-            let evt = AgentTextDeltaEvent {
-                session_id: session_id.to_string(),
-                text: v[start..i].to_string(),
-                is_complete: false,
-            };
-            if let Err(e) = app.emit(E_TEXT_DELTA, &evt) {
-                tracing::warn!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
-            }
-            start = i;
-        }
-    }
     let evt = AgentTextDeltaEvent {
         session_id: session_id.to_string(),
-        text: v[start..].to_string(),
-        is_complete: true,
+        text: text.to_string(),
+        is_complete,
     };
     if let Err(e) = app.emit(E_TEXT_DELTA, &evt) {
         tracing::warn!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
+    }
+}
+
+fn record_stream_metrics(
+    registry: &SessionRegistry,
+    session_id: &str,
+    emitted_chunks: usize,
+    preview_text: &str,
+) {
+    let preview = collapse_inline_whitespace(preview_text);
+    let preview = (!preview.is_empty()).then(|| truncate_for_log(&preview, 240));
+    let now_ms = epoch_ms_now();
+    let _ignore = registry.mutate_session(session_id, |entry| {
+        if emitted_chunks > 0 {
+            entry.stream_delta_count += emitted_chunks;
+            if entry.first_stream_at_ms.is_none() {
+                entry.first_stream_at_ms = Some(now_ms);
+            }
+            entry.last_stream_at_ms = Some(now_ms);
+        } else if preview.is_some() {
+            entry.last_stream_at_ms = Some(now_ms);
+        }
+        if let Some(preview) = preview.clone() {
+            entry.stream_preview_text = Some(preview);
+        }
+    });
+}
+
+fn append_only_suffix<'a>(previous_text: &str, next_text: &'a str) -> Option<&'a str> {
+    let prev = previous_text.trim();
+    let next = next_text.trim();
+    if prev.is_empty() {
+        return Some(next);
+    }
+    next.strip_prefix(prev)
+}
+
+fn emit_copilot_text_suffix_for_ui<R: Runtime>(
+    app: &AppHandle<R>,
+    registry: &SessionRegistry,
+    session_id: &str,
+    previous_text: &str,
+    next_text: &str,
+    mark_complete: bool,
+) {
+    let next = next_text.trim();
+    let Some(suffix) = append_only_suffix(previous_text, next_text) else {
+        tracing::warn!(
+            "[RelayAgent] skipping non-append streaming snapshot for session {} (prev_len={}, next_len={})",
+            session_id,
+            previous_text.trim().len(),
+            next.len()
+        );
+        if mark_complete {
+            emit_text_delta_event(app, session_id, "", true);
+        }
+        return;
+    };
+
+    let mut emitted_chunks = 0usize;
+    if !suffix.is_empty() {
+        let mut start = 0usize;
+        for (i, _) in suffix.char_indices() {
+            if i > start && (i - start) >= COPILOT_UI_TEXT_CHUNK {
+                emit_text_delta_event(app, session_id, &suffix[start..i], false);
+                emitted_chunks += 1;
+                start = i;
+            }
+        }
+        if start < suffix.len() {
+            emit_text_delta_event(app, session_id, &suffix[start..], false);
+            emitted_chunks += 1;
+        }
+    }
+    if mark_complete {
+        emit_text_delta_event(app, session_id, "", true);
+    }
+    if emitted_chunks > 0 || !next.is_empty() {
+        record_stream_metrics(registry, session_id, emitted_chunks, next);
+    }
+}
+
+fn emit_copilot_text_deltas_for_ui<R: Runtime>(
+    app: &AppHandle<R>,
+    registry: &SessionRegistry,
+    session_id: &str,
+    visible_text: &str,
+) {
+    emit_copilot_text_suffix_for_ui(app, registry, session_id, "", visible_text, true);
+}
+
+async fn stream_copilot_progress_for_ui<R: Runtime>(
+    probe: crate::copilot_server::CopilotProgressProbe,
+    app: AppHandle<R>,
+    registry: SessionRegistry,
+    relay_session_id: String,
+    relay_request_id: String,
+    stop_flag: Arc<AtomicBool>,
+    last_visible_text: Arc<Mutex<String>>,
+) {
+    while !stop_flag.load(Ordering::SeqCst) {
+        match probe.fetch(&relay_session_id, &relay_request_id).await {
+            Ok(Some(snapshot)) => {
+                let visible_text = sanitize_copilot_visible_text(&snapshot.visible_text);
+                if let Ok(mut last_text) = last_visible_text.lock() {
+                    if !visible_text.is_empty() && visible_text.starts_with(last_text.as_str()) {
+                        if visible_text != *last_text {
+                            emit_copilot_text_suffix_for_ui(
+                                &app,
+                                &registry,
+                                &relay_session_id,
+                                last_text.as_str(),
+                                &visible_text,
+                                false,
+                            );
+                            *last_text = visible_text;
+                        }
+                    } else if !visible_text.is_empty() && visible_text != *last_text {
+                        tracing::warn!(
+                            "[RelayAgent] ignoring non-prefix Copilot progress snapshot for session {} (prev_len={}, next_len={}, phase={})",
+                            relay_session_id,
+                            last_text.len(),
+                            visible_text.len(),
+                            snapshot.phase
+                        );
+                    }
+                }
+                if snapshot.done {
+                    break;
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::debug!(
+                    "[RelayAgent] Copilot progress poll failed for session {} request {}: {}",
+                    relay_session_id,
+                    relay_request_id,
+                    error
+                );
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(COPILOT_UI_PROGRESS_POLL_MS)).await;
     }
 }
 
@@ -1278,6 +1412,8 @@ pub fn run_agent_loop_impl<R: Runtime>(
         CdpApiClient::new_smoke(
             session_preset,
             Some((app.clone(), session_id.to_string())),
+            registry.clone(),
+            session_id.to_string(),
             timeout_secs_from_browser_settings(browser_settings.as_ref()),
         )
     } else {
@@ -1711,6 +1847,8 @@ impl<R: Runtime> CdpApiClient<R> {
     fn new_smoke(
         session_preset: SessionPreset,
         progress_emit: Option<(AppHandle<R>, String)>,
+        registry: SessionRegistry,
+        session_id: String,
         response_timeout_secs: u64,
     ) -> Self {
         Self {
@@ -1720,8 +1858,8 @@ impl<R: Runtime> CdpApiClient<R> {
             response_timeout_secs,
             session_preset,
             progress_emit,
-            registry: None,
-            session_id: None,
+            registry: Some(registry),
+            session_id: Some(session_id),
         }
     }
 }
@@ -1812,7 +1950,7 @@ impl FakeSmokeApiClient {
             1 => "Please provide the concrete next step and the relevant file.".to_string(),
             2 => fake_smoke_tool_reply(&scenario)?,
             _ => format!(
-                "Filtered copy saved to {} after retry recovery.",
+                "Filtered copy saved to {} after retry recovery. The source file was left unchanged, and the Relay desktop smoke path completed successfully.",
                 scenario.output_path
             ),
         };
@@ -1837,6 +1975,11 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
         let request_chain_id = cdp_request_chain_id("cdp-inline");
         let stage_label = cdp_stage_label(request.messages);
         let mut attempt_index = 0_usize;
+        if let (Some(registry), Some(session_id)) = (&self.registry, self.session_id.as_deref()) {
+            let _ignore = registry.mutate_session(session_id, |entry| {
+                entry.reset_stream_metrics();
+            });
+        }
 
         loop {
             attempt_index += 1;
@@ -1877,6 +2020,7 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
             );
 
             let t0 = Instant::now();
+            let mut live_progress_tail: Option<Arc<Mutex<String>>> = None;
             let response_text = match &mut self.source {
                 CdpApiClientSource::Live(server) => {
                     let clear_request_id =
@@ -1910,31 +2054,60 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
                         clear_request_id(&self.registry, &self.session_id, &request_id);
                         RuntimeError::new("missing Relay session_id for Copilot request")
                     })?;
+                    let ui_progress = if let (Some((app, sid)), Some(registry)) =
+                        (&self.progress_emit, &self.registry)
+                    {
+                        let stop_flag = Arc::new(AtomicBool::new(false));
+                        let last_visible_text = Arc::new(Mutex::new(String::new()));
+                        live_progress_tail = Some(Arc::clone(&last_visible_text));
+                        Some((
+                            tokio::spawn(stream_copilot_progress_for_ui(
+                                srv.progress_probe(),
+                                app.clone(),
+                                registry.clone(),
+                                sid.clone(),
+                                request_id.clone(),
+                                Arc::clone(&stop_flag),
+                                Arc::clone(&last_visible_text),
+                            )),
+                            stop_flag,
+                            last_visible_text,
+                        ))
+                    } else {
+                        None
+                    };
                     let result = rt.block_on(async {
-                        srv.send_prompt(crate::copilot_server::CopilotSendPromptRequest {
-                            relay_session_id: session_id,
-                            relay_request_id: &request_id,
-                            relay_request_chain: &request_chain_id,
-                            relay_request_attempt: attempt_index,
-                            relay_stage_label: stage_label,
-                            relay_probe_mode: false,
-                            system_prompt: "",
-                            user_prompt: &prompt,
-                            timeout_secs: self.response_timeout_secs,
-                            attachment_paths: &[],
-                            new_chat: false,
-                        })
-                        .await
+                        let response = srv
+                            .send_prompt(crate::copilot_server::CopilotSendPromptRequest {
+                                relay_session_id: session_id,
+                                relay_request_id: &request_id,
+                                relay_request_chain: &request_chain_id,
+                                relay_request_attempt: attempt_index,
+                                relay_stage_label: stage_label,
+                                relay_probe_mode: false,
+                                system_prompt: "",
+                                user_prompt: &prompt,
+                                timeout_secs: self.response_timeout_secs,
+                                attachment_paths: &[],
+                                new_chat: false,
+                            })
+                            .await;
+                        if let Some((task, stop_flag, _)) = ui_progress.as_ref() {
+                            stop_flag.store(true, Ordering::SeqCst);
+                            task.abort();
+                        }
+                        response
                     });
                     clear_request_id(&self.registry, &self.session_id, &request_id);
-                    result.map_err(|e| {
+                    let response = result.map_err(|e| {
                         let es = e.to_string();
                         if es.contains("relay_copilot_aborted") {
                             RuntimeError::new("relay_copilot_aborted")
                         } else {
                             RuntimeError::new(format!("Copilot request failed: {e}"))
                         }
-                    })?
+                    })?;
+                    response
                 }
                 CdpApiClientSource::Smoke(smoke) => smoke.stream(request)?,
             };
@@ -1977,8 +2150,23 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
                 continue;
             }
 
-            if let Some((app, sid)) = &self.progress_emit {
-                emit_copilot_text_deltas_for_ui(app, sid, &visible_text);
+            if let (Some((app, sid)), Some(registry)) = (&self.progress_emit, &self.registry) {
+                if let Some(last_visible_text) = live_progress_tail.as_ref() {
+                    let last_visible_text = last_visible_text
+                        .lock()
+                        .map(|value| value.clone())
+                        .unwrap_or_default();
+                    emit_copilot_text_suffix_for_ui(
+                        app,
+                        registry,
+                        sid,
+                        &last_visible_text,
+                        &visible_text,
+                        true,
+                    );
+                } else if matches!(&self.source, CdpApiClientSource::Smoke(_)) {
+                    emit_copilot_text_deltas_for_ui(app, registry, sid, &visible_text);
+                }
             }
 
             let mut events = Vec::new();
@@ -6699,6 +6887,19 @@ mod loop_controller_tests {
         };
         assert!(next_input.contains("output exactly one Relay `relay_tool` fence and nothing else"));
         assert!(next_input.contains("Ignore any Pages, uploads, citations, links"));
+    }
+
+    #[test]
+    fn append_only_suffix_returns_new_tail_once() {
+        assert_eq!(append_only_suffix("", "hello"), Some("hello"));
+        assert_eq!(append_only_suffix("hel", "hello"), Some("lo"));
+        assert_eq!(append_only_suffix("hello", "hello"), Some(""));
+    }
+
+    #[test]
+    fn append_only_suffix_rejects_shrinking_or_rewritten_snapshots() {
+        assert_eq!(append_only_suffix("hello world", "hello"), None);
+        assert_eq!(append_only_suffix("hello world", "hello there"), None);
     }
 
     #[test]

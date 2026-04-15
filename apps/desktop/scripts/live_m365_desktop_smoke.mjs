@@ -16,6 +16,7 @@ const edgeLogPath = join(artifactsDir, "edge-start.log");
 const doctorStdoutPath = join(artifactsDir, "doctor.stdout.log");
 const doctorStderrPath = join(artifactsDir, "doctor.stderr.log");
 const finalStatePath = join(artifactsDir, "final-state.json");
+const progressTracePath = join(artifactsDir, "progress-trace.json");
 const reportPath = join(artifactsDir, "report.json");
 const appLocalDataDir = join(artifactsDir, "app-local-data");
 
@@ -28,6 +29,8 @@ const prompt =
 
 let tauriChild = null;
 let xvfbChild = null;
+const progressTrace = [];
+let lastProgressFingerprint = null;
 
 function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
@@ -61,6 +64,28 @@ function sessionById(state, sessionId) {
 
 function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function recordProgressTrace(label, state, sessionId = null) {
+  const session = sessionId ? sessionById(state, sessionId) : latestSession(state);
+  if (!session) return;
+  const entry = {
+    label,
+    observedAtMs: Date.now(),
+    sessionId: session.sessionId,
+    running: session.running,
+    lastStopReason: session.lastStopReason ?? null,
+    currentCopilotRequestId: session.currentCopilotRequestId ?? null,
+    streamDeltaCount: session.streamDeltaCount ?? 0,
+    firstStreamAtMs: session.firstStreamAtMs ?? null,
+    lastStreamAtMs: session.lastStreamAtMs ?? null,
+    streamPreviewText: session.streamPreviewText ?? null,
+  };
+  const fingerprint = JSON.stringify(entry);
+  if (fingerprint === lastProgressFingerprint) return;
+  lastProgressFingerprint = fingerprint;
+  progressTrace.push(entry);
+  writeJson(progressTracePath, progressTrace);
 }
 
 async function fetchJson(url, options = {}) {
@@ -108,12 +133,13 @@ async function getState() {
   return fetchJson(`http://127.0.0.1:${devControlPort}/state`);
 }
 
-async function pollState(label, timeoutMs, predicate) {
+async function pollState(label, timeoutMs, predicate, sessionId = null) {
   const startedAt = Date.now();
   let lastState = null;
   while (Date.now() - startedAt < timeoutMs) {
     lastState = await getState();
     writeJson(join(artifactsDir, `${label}.json`), lastState);
+    recordProgressTrace(label, lastState, sessionId);
     const result = predicate(lastState);
     if (result?.fatal) {
       throw new Error(result.fatal);
@@ -320,6 +346,7 @@ async function main() {
     return { done: false };
   });
 
+  const startAgentAtMs = Date.now();
   const started = await postDevControl("/start-agent", {
     goal: prompt,
     cwd: workspacePath,
@@ -336,7 +363,7 @@ async function main() {
 
   const createdState = await pollState("session-created", 60_000, (state) => ({
     done: Boolean(sessionById(state, sessionId)),
-  }));
+  }), sessionId);
   const approvalState = await pollState("approval-needed", 300_000, (state) => {
     const session = sessionById(state, sessionId);
     if (!session) return { done: false };
@@ -349,7 +376,7 @@ async function main() {
       };
     }
     return { done: false };
-  });
+  }, sessionId);
 
   const approvalSession = sessionById(approvalState, sessionId);
   const firstApproval = approvalSession?.pendingApprovals?.[0] ?? null;
@@ -375,7 +402,7 @@ async function main() {
       };
     }
     return { done: false };
-  });
+  }, sessionId);
 
   writeJson(finalStatePath, completedState);
 
@@ -405,6 +432,12 @@ async function main() {
   if (writeFileCount < 1) {
     throw new Error("write_file/edit_file tool result was not observed");
   }
+  if ((finalSession?.streamDeltaCount ?? 0) <= 1) {
+    throw new Error(`expected multiple stream deltas, got ${finalSession?.streamDeltaCount ?? 0}`);
+  }
+  if (!finalSession?.firstStreamAtMs || !finalSession?.lastStreamAtMs) {
+    throw new Error("stream timing metrics were not captured in final session state");
+  }
 
   const report = {
     status: "passed",
@@ -416,6 +449,14 @@ async function main() {
     createdState,
     approvalState,
     completedState,
+    progressTracePath,
+    streamStats: {
+      streamDeltaCount: finalSession.streamDeltaCount,
+      firstStreamAtMs: finalSession.firstStreamAtMs,
+      lastStreamAtMs: finalSession.lastStreamAtMs,
+      firstStreamLatencyMs: Math.max(0, finalSession.firstStreamAtMs - startAgentAtMs),
+      streamPreviewText: finalSession.streamPreviewText ?? null,
+    },
     outputPath,
     output,
   };
