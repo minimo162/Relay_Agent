@@ -15,6 +15,68 @@
 
 ## Milestone Log
 
+### 2026-04-15 Live M365 Copilot same-session path-resolution harness
+
+**Problem:** The previous live same-session grounding / approval harness failed before approval reuse because Turn 1 treated `tests/fixtures/tetris_grounding.html` as missing. We needed a narrower live harness that proves workspace-path propagation into the Relay session, isolates `read_file` path resolution across three same-session turns, and captures enough state to distinguish `cwd` propagation failures from grounding failures.
+
+**Change:** Added [`apps/desktop/scripts/live_m365_same_session_path_resolution.mjs`](../apps/desktop/scripts/live_m365_same_session_path_resolution.mjs) plus script aliases in [`apps/desktop/package.json`](../apps/desktop/package.json) and [`package.json`](../package.json), and documented the command in [`README.md`](../README.md). The new harness prepares `/root/Relay_Agent/tetris_grounding_live_copy.html` from [`tests/fixtures/tetris_grounding.html`](../tests/fixtures/tetris_grounding.html), records SHA-256 hashes, captures `doctor` / preflight / per-turn state JSON / `final-state.json` / `prompt-response-excerpts.json` / `report.json`, and validates three same-session `read_file` turns for absolute, workspace-relative, and workspace-root-relative paths. To make the live automation deterministic, debug-only [`dev_control.rs`](../apps/desktop/src-tauri/src/dev_control.rs) now adds additive session `cwd` in `/state`, persists the latest `/configure` payload for automation, and lets `/first-run-send` start or continue the backend session directly when that config is present so the harness does not race the frontend signal path.
+
+Exact live prompts encoded in the harness and used on the artifact run:
+
+```text
+Turn 1:
+/root/Relay_Agent/tests/fixtures/tetris_grounding.html を read_file で読み、このファイル内に実在する文字列だけを根拠に、title 要素の文字列と、script 内の定数を 1 つだけ挙げてください。推測や一般論は禁止です。まだ編集しないでください。
+
+Turn 2:
+同じ Relay セッションのまま、今度は tests/fixtures/tetris_grounding.html を read_file で読み、body 内に実在する表示文言を 2 つだけ挙げてください。まだ編集しないでください。存在しない識別子は挙げないでください。
+
+Turn 3:
+同じセッションのまま、tetris_grounding_live_copy.html を read_file で読み、head 内にある要素を 2 つだけ挙げてください。まだ編集しないでください。
+```
+
+**Verification:** `node --check apps/desktop/scripts/live_m365_same_session_path_resolution.mjs` — pass. `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass. `pnpm check` — pass. `pnpm live:m365:path-resolution-same-session` — **failed intentionally with captured artifacts** at `/tmp/relay-live-m365-path-resolution-gYhPmv`.
+
+Observed live result from that run:
+
+- `doctor.json` passed the intended live gate after desktop warmup: `edge_cdp = ok`, `bridge_health = ok`, `bridge_status = ok`, `m365_sign_in = ok`.
+- Same-session continuity and workspace propagation were proven through the successful turns:
+  - `sessionId = session-d7cad72e-9a24-4f56-a476-abae093e27d2`
+  - `cwd = /root/Relay_Agent` in `turn1-completed.json`, `turn2-completed.json`, and `final-state.json`
+  - `tauri-dev.log` recorded one initial new chat and later `continuing in current Copilot thread (no new chat click)` five times
+- Per-turn verdicts from `report.json` / per-turn snapshots:
+  - absolute path: **pass**
+  - fixture-relative path: **pass**
+  - workspace-root-relative path: **fail**
+- Turn 1 absolute-path grounding passed:
+  - `toolUseCounts.read_file >= 1`
+  - `toolErrorCounts.read_file = 0`
+  - assistant reply cited real strings `Relay grounding — Tetris mini` and `const COLS = 10`
+- Turn 2 workspace-relative grounding passed:
+  - `toolUseCounts.read_file >= 1`
+  - `toolErrorCounts.read_file = 0`
+  - assistant reply cited real body strings `Score:` and `←/→ move · ↓ soft · Space hard`
+- Failure stage on the artifact run was `turn3_complete`, with final session state `lastStopReason = tool_error`.
+- Turn 3 workspace-root-relative read failed even though the copied file existed and remained unchanged:
+  - final session assistant reply reported ``tetris_grounding_live_copy.html`` as missing with `No such file or directory (os error 2)`
+  - `tauri-dev.log` showed the live model first proposed `read_file` against `tests/fixtures/tetris_grounding_live_copy.html`, i.e. it drifted back under `tests/fixtures/` instead of using the requested workspace-root-relative copy path
+  - `final-state.json` recorded `toolErrorCounts.read_file = 1`
+- File-integrity checks passed despite the Turn 3 failure:
+  - source fixture hash stayed unchanged: `424a423435ee392220285c9575f802221ddaa66fa315769ec43d595e96dd8579`
+  - `/root/Relay_Agent/tetris_grounding_live_copy.html` stayed unchanged with the same hash
+- Acceptance status after this run:
+  - `cwd` propagation: **fixed / verified**
+  - absolute path resolution: **verified**
+  - workspace-relative fixture resolution: **verified**
+  - workspace-root-relative live-copy resolution: **still failing live**
+  - approval-reuse retest remains blocked until the Turn 3 live-copy path issue is resolved
+- Captured artifact bundle for this run:
+  - `doctor-before-tauri.json`, `doctor.json`
+  - `preflight-ready.json`
+  - `turn1-session-created.json`, `turn1-completed.json`, `turn2-completed.json`, `turn3-completed.json`
+  - `final-state.json`
+  - `prompt-response-excerpts.json`
+  - `report.json`
+
 ### 2026-04-15 Live M365 Copilot same-session grounding / approval-reuse harness
 
 **Problem:** The repo already had a one-shot live desktop smoke, but it did not verify the next hardening slice: same-session multi-turn continuity, grounding honesty across turns, and `Always allow in this conversation` reuse on the second file mutation in the same Relay session. We needed a concrete harness and artifact bundle for the real Linux + Edge + M365 Copilot path without changing IPC or public contracts.

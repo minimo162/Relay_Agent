@@ -25,6 +25,7 @@
     "smoke:windows": "node ./scripts/e2e_windows_smoke.mjs",
     "live:m365:desktop-smoke": "node ./scripts/live_m365_desktop_smoke.mjs",
     "live:m365:grounding-approval-multiturn": "node ./scripts/live_m365_multiturn_grounding_approval.mjs",
+    "live:m365:path-resolution-same-session": "node ./scripts/live_m365_same_session_path_resolution.mjs",
     "test:e2e": "playwright test",
     "test:e2e:m365-cdp": "CDP_ENDPOINT=http://127.0.0.1:9333 playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat",
     "test:e2e:copilot-grounding": "RELAY_GROUNDING_E2E=1 playwright test --config=playwright-cdp.config.ts -g tetris",

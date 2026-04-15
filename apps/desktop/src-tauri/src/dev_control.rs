@@ -2,16 +2,20 @@ use crate::agent_loop::{msg_to_relay, MessageContent};
 use crate::app_services::AppServices;
 use crate::doctor::relay_diagnostics_blocking;
 use crate::models::{
-    BrowserAutomationSettings, RespondAgentApprovalRequest, SessionPreset, StartAgentRequest,
+    BrowserAutomationSettings, ContinueAgentSessionRequest, RespondAgentApprovalRequest,
+    SessionPreset, StartAgentRequest,
 };
 use crate::registry::SessionRunState;
-use crate::tauri_bridge::{respond_approval_inner, start_agent_inner};
+use crate::tauri_bridge::{
+    continue_agent_session_inner, respond_approval_inner, start_agent_inner,
+};
 use runtime::ConversationMessage;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -22,6 +26,7 @@ pub const DEV_APPROVE_LATEST_SESSION_EVENT: &str = "relay:dev-approve-latest-ses
 pub const DEV_APPROVE_LATEST_WORKSPACE_EVENT: &str = "relay:dev-approve-latest-workspace";
 pub const DEV_REJECT_LATEST_EVENT: &str = "relay:dev-reject-latest";
 const DEFAULT_DEV_CONTROL_PORT: u16 = 18_411;
+static DEV_AUTOMATION_CONFIG: OnceLock<Mutex<Option<DevConfigureRequest>>> = OnceLock::new();
 
 #[derive(Debug, Deserialize)]
 struct DevFirstRunSendRequest {
@@ -81,6 +86,7 @@ struct DevPendingApprovalState {
 #[serde(rename_all = "camelCase")]
 struct DevSessionState {
     session_id: String,
+    cwd: Option<String>,
     running: bool,
     run_state: String,
     last_stop_reason: Option<String>,
@@ -107,6 +113,10 @@ struct ParsedHttpRequest {
     method: String,
     path: String,
     body: Vec<u8>,
+}
+
+fn dev_automation_config() -> &'static Mutex<Option<DevConfigureRequest>> {
+    DEV_AUTOMATION_CONFIG.get_or_init(|| Mutex::new(None))
 }
 
 pub fn spawn(app: &AppHandle) {
@@ -285,6 +295,9 @@ fn handle_configure(
     body: &[u8],
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let payload: DevConfigureRequest = serde_json::from_slice(body)?;
+    *dev_automation_config()
+        .lock()
+        .map_err(|_| "dev automation config lock poisoned")? = Some(payload.clone());
     tracing::info!("[dev-control] emitting {}", DEV_CONFIGURE_EVENT);
     app.emit(DEV_CONFIGURE_EVENT, &payload)?;
     write_json_response(
@@ -372,6 +385,72 @@ fn handle_first_run_send(
         );
     }
     let event = DevFirstRunSendEvent { text };
+    let services = app.state::<AppServices>();
+    let registry = services.registry();
+    let latest_session_id = build_state_response(app)?.latest_session_id;
+
+    if let Some(session_id) = latest_session_id {
+        let continued_session_id = tauri::async_runtime::block_on(continue_agent_session_inner(
+            app.clone(),
+            registry,
+            services.agent_semaphore(),
+            services.config().clone(),
+            ContinueAgentSessionRequest {
+                session_id,
+                message: event.text.clone(),
+            },
+        ))
+        .map_err(|error| format!("continue_agent_session failed: {error}"))?;
+
+        return write_json_response(
+            stream,
+            202,
+            &json!({
+                "ok": true,
+                "mode": "backend_continue",
+                "event": DEV_FIRST_RUN_SEND_EVENT,
+                "sessionId": continued_session_id
+            }),
+        );
+    }
+
+    let config = dev_automation_config()
+        .lock()
+        .map_err(|_| "dev automation config lock poisoned")?
+        .clone();
+    if let Some(config) = config {
+        let started_session_id = tauri::async_runtime::block_on(start_agent_inner(
+            app.clone(),
+            registry,
+            services.agent_semaphore(),
+            services.config().clone(),
+            StartAgentRequest {
+                goal: event.text.clone(),
+                files: Vec::new(),
+                cwd: config.workspace_path.map(|value| value.trim().to_string()),
+                browser_settings: Some(BrowserAutomationSettings {
+                    cdp_port: config.cdp_port.unwrap_or(9360),
+                    auto_launch_edge: config.auto_launch_edge.unwrap_or(false),
+                    timeout_ms: config.timeout_ms.unwrap_or(60_000),
+                }),
+                max_turns: config.max_turns.map(|value| value as usize),
+                session_preset: parse_session_preset(config.session_preset.as_deref()),
+            },
+        ))
+        .map_err(|error| format!("start_agent failed: {error}"))?;
+
+        return write_json_response(
+            stream,
+            202,
+            &json!({
+                "ok": true,
+                "mode": "backend_start",
+                "event": DEV_FIRST_RUN_SEND_EVENT,
+                "sessionId": started_session_id
+            }),
+        );
+    }
+
     tracing::info!(
         "[dev-control] emitting {} via {} chars",
         DEV_FIRST_RUN_SEND_EVENT,
@@ -460,6 +539,7 @@ fn build_session_state(
 
     DevSessionState {
         session_id: session_id.to_string(),
+        cwd: state.session_config.cwd.clone(),
         running: state.running,
         run_state: run_state_label(state.run_state).to_string(),
         last_stop_reason: state.last_stop_reason.clone(),
