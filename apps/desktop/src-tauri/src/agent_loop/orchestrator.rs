@@ -2522,6 +2522,7 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
             "Only local file/search Relay tools are relevant in this repair turn.\n",
             "Prefer `write_file` / `edit_file` for local file creation or edits; use `read_file` only when needed.\n",
             "If the latest real user turn named a concrete path, reuse that exact string in tool input. Do not rewrite it to another directory or prior-turn variant.\n",
+            "If a successful `read_file` Tool Result already shows `content:`, treat that body as the real file text. Do not claim it is escaped or corrupted based only on quotes or backslashes.\n",
             "Do not use or mention Microsoft-native tools such as Python, WebSearch, citations, Pages, uploads, or remote artifacts.\n\n",
             "Latest user request for this turn (user data, primary repair anchor):\n",
             "```text\n{latest_request}\n```\n\n",
@@ -3140,6 +3141,7 @@ fn parse_one_tool_call(v: &Value) -> Option<(String, String, String)> {
 /// Short CDP-only rules (prefix of the bundle) so the model lists concrete bugs only when they appear in Tool Result / `read_file` text above.
 const CDP_BUNDLE_GROUNDING_BLOCK: &str = "## CDP bundle (read before you reply)\n\
 Do not list line-level bugs, missing tags, or identifiers (e.g. `x_size`, `bag.length0`) unless they appear verbatim in a `read_file` or Tool Result in this bundle. If you cite a problem, quote a short substring or line numbers from that text.\n\
+Treat the `content:` body under a successful `read_file` Tool Result as the actual file text returned by Relay. Do not call it \"escaped\" or \"broken\" based only on quotes, backslashes, or transport formatting.\n\
 If the bundle contradicts a generic fix checklist, describe what the bundle actually contains instead of inventing errors.";
 
 fn build_cdp_prompt_from_messages(
@@ -3346,9 +3348,51 @@ fn build_cdp_prompt(request: &ApiRequest<'_>, preset: SessionPreset) -> String {
     .prompt
 }
 
+fn summarize_read_file_tool_result(output: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(output).ok()?;
+    let object = value.as_object()?;
+    let kind = object.get("type").and_then(Value::as_str).unwrap_or("text");
+    let file = object.get("file")?.as_object()?;
+    let content = file.get("content").and_then(Value::as_str)?;
+
+    let mut lines = vec![format!("type: {kind}")];
+    if let Some(path) = file
+        .get("filePath")
+        .and_then(Value::as_str)
+        .or_else(|| file.get("file_path").and_then(Value::as_str))
+    {
+        lines.push(format!("file_path: {path}"));
+    }
+    let start_line = file.get("startLine").and_then(Value::as_u64);
+    let num_lines = file.get("numLines").and_then(Value::as_u64);
+    let total_lines = file.get("totalLines").and_then(Value::as_u64);
+    if let (Some(start_line), Some(num_lines), Some(total_lines)) =
+        (start_line, num_lines, total_lines)
+    {
+        let line_summary = if num_lines == 0 {
+            format!("lines: empty slice / {total_lines}")
+        } else {
+            let end_line = start_line.saturating_add(num_lines.saturating_sub(1));
+            format!("lines: {start_line}-{end_line} / {total_lines}")
+        };
+        lines.push(line_summary);
+    }
+    lines.push("content:".to_string());
+
+    let mut rendered = lines.join("\n");
+    if !content.is_empty() {
+        rendered.push('\n');
+        rendered.push_str(content);
+    }
+    Some(rendered)
+}
+
 fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) -> String {
     if is_error {
         return output.to_string();
+    }
+    if tool_name == "read_file" {
+        return summarize_read_file_tool_result(output).unwrap_or_else(|| output.to_string());
     }
     if !matches!(tool_name, "write_file" | "edit_file") {
         return output.to_string();
@@ -4853,11 +4897,52 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn read_file_success_keeps_full_tool_output() {
-        let output = r#"{"file":{"content":"line 1\nline 2"}}"#;
-        let rendered = format_cdp_tool_result("read_file", output, false);
-        assert!(rendered.contains("line 1"));
+    fn read_file_success_renders_raw_content_from_json() {
+        let output = serde_json::to_string(&json!({
+            "type": "text",
+            "file": {
+                "filePath": "/tmp/demo.html",
+                "content": "<div id=\"game\">line 1\nline 2</div>",
+                "numLines": 2,
+                "startLine": 3,
+                "totalLines": 8
+            }
+        }))
+        .expect("serialize read_file output");
+        let rendered = format_cdp_tool_result("read_file", &output, false);
+        assert!(rendered.contains("file_path: /tmp/demo.html"));
+        assert!(rendered.contains("lines: 3-4 / 8"));
+        assert!(rendered.contains(r#"<div id="game">line 1"#));
+        assert!(!rendered.contains(r#"id=\"game\""#));
         assert!(!rendered.contains("CDP follow-up summary"));
+    }
+
+    #[test]
+    fn read_file_error_keeps_full_tool_output() {
+        let output = "No such file or directory (os error 2)\nresolved path: /tmp/missing.html";
+        let rendered = format_cdp_tool_result("read_file", output, true);
+        assert!(rendered.contains("No such file or directory"));
+        assert!(rendered.contains("resolved path: /tmp/missing.html"));
+        assert!(!rendered.contains("content:"));
+    }
+
+    #[test]
+    fn read_file_success_preserves_literal_backslashes_from_file_content() {
+        let content = r#"<div id="game">\"quoted\" \\ slash</div>"#;
+        let output = serde_json::to_string(&json!({
+            "type": "text",
+            "file": {
+                "filePath": "/tmp/literal.txt",
+                "content": content,
+                "numLines": 1,
+                "startLine": 1,
+                "totalLines": 1
+            }
+        }))
+        .expect("serialize read_file output");
+        let rendered = format_cdp_tool_result("read_file", &output, false);
+        assert!(rendered.contains(content));
+        assert!(!rendered.contains(r#"id=\\\"game\\\""#));
     }
 
     #[test]
@@ -5039,10 +5124,21 @@ mod cdp_copilot_tool_tests {
     #[test]
     fn build_cdp_prompt_includes_grounding_block_and_tool_result_body() {
         let html = include_str!("../../../../../tests/fixtures/tetris_grounding.html");
+        let read_file_output = serde_json::to_string(&json!({
+            "type": "text",
+            "file": {
+                "filePath": "/root/Relay_Agent/tests/fixtures/tetris_grounding.html",
+                "content": html,
+                "numLines": html.lines().count(),
+                "startLine": 1,
+                "totalLines": html.lines().count()
+            }
+        }))
+        .expect("serialize read_file fixture output");
         let messages = vec![ConversationMessage::tool_result(
             "tu1",
             "read_file",
-            html.to_string(),
+            read_file_output,
             false,
         )];
         let system: Vec<String> = vec![];
@@ -5060,13 +5156,19 @@ mod cdp_copilot_tool_tests {
             "grounding rules missing from bundle"
         );
         assert!(
+            out.contains("Treat the `content:` body under a successful `read_file` Tool Result"),
+            "read_file grounding guidance missing from bundle"
+        );
+        assert!(
             out.contains("RELAY_GROUNDING_FIXTURE"),
             "tool result body (fixture) missing from bundle"
         );
         assert!(
             out.contains("Tool Result:")
                 && out.contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read_file\" status=\"ok\">")
-                && out.contains("paintCell"),
+                && out.contains(r#"<html lang="ja">"#)
+                && out.contains("paintCell")
+                && !out.contains(r#"lang=\"ja\""#),
             "expected read_file narrative and fixture script in bundle"
         );
     }

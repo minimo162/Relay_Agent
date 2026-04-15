@@ -15,6 +15,14 @@
 
 ## Milestone Log
 
+### 2026-04-15 CDP `read_file` raw-text rendering for HTML grounding
+
+**Problem:** `read_file` itself was returning UTF-8 text correctly, but successful `read_file` results were being embedded into the CDP prompt as JSON strings. For HTML and other text files, that meant Copilot could see transport escapes like `\"` and `\n` instead of a raw file body, misdiagnose the file as "escaped" or broken, and loop on unnecessary repair claims.
+
+**Change:** Updated [`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs) so successful `read_file` Tool Results are re-rendered for CDP as `type` / `file_path` / line-range metadata followed by a raw `content:` body, while keeping the existing `<UNTRUSTED_TOOL_OUTPUT ...>` wrapper and leaving the tool JSON contract unchanged for the UI and IPC layers. Added a small CDP grounding rule and repair-mode rule clarifying that a successful `read_file` `content:` block is the actual file text and must not be called "escaped" or "broken" based only on quotes, backslashes, or transport formatting. Expanded orchestrator tests to cover raw HTML rendering, escaped-fragment suppression, literal backslash preservation, unchanged `read_file` error rendering, and realistic fixture delivery through the bundle.
+
+**Verification:** `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot_tool_tests:: -- --nocapture` — pass (53 passed). `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass (lib: 105 passed, 1 ignored; doctor_cli: 5 passed). `pnpm check` — pass. `git diff --check` — pass.
+
 ### 2026-04-15 CDP path anchoring and `read_file` ENOENT repair
 
 **Problem:** The live same-session path-resolution artifact showed that workspace `cwd` propagation and baseline `read_file` resolution were already working. The remaining regression was a Turn 3 model drift: after the user explicitly requested `tetris_grounding_live_copy.html`, Copilot rewrote the path back under `tests/fixtures/`, hit `read_file` ENOENT, and the session stopped instead of recovering from the latest-turn path anchor.
