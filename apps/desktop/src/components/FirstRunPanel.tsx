@@ -85,24 +85,24 @@ export function FirstRunPanel(props: {
   });
   const connectionDetail = createMemo(() => {
     if (props.copilotState.status === "checking") {
-      return "Relay is checking the Copilot connection now.";
+      return "Relay is checking the connection now.";
     }
     if (connectionReady()) {
       return "Copilot is ready in this app.";
     }
     if (props.copilotState.status === "needs_sign_in") {
-      return "Open Settings, sign in to Copilot in Edge, then reconnect.";
+      return "Sign in to Copilot in Edge, then reconnect.";
     }
-    return "Open Settings to review the connection, then try again.";
+    return "Review the connection in Settings, then try again.";
   });
   const showReconnect = createMemo(
     () => props.copilotState.status !== "checking" && !connectionReady(),
   );
   const requestSummary = createMemo(() => {
     if (props.canStart) {
-      return "Describe the result you need, then send the first request.";
+      return "Describe the result you need and send the first request.";
     }
-    return "Finish the setup above before sending the first request.";
+    return "Finish these two checks before sending the first request.";
   });
   const requestDetail = createMemo(() =>
     props.startDisabledReason
@@ -136,9 +136,9 @@ export function FirstRunPanel(props: {
         <div class="ra-first-run__card">
           <div class="ra-first-run__intro">
             <p class="ra-empty-state__eyebrow">Relay Agent</p>
-            <h1 class={`ra-type-section-heading ${ui.textPrimary}`}>Set the project and Copilot, then send the first request</h1>
+            <h1 class={`ra-type-section-heading ${ui.textPrimary}`}>Set the project, check Copilot, then send the first request</h1>
             <p class={`ra-type-body-sans ${ui.textSecondary}`}>
-              Start with one clear path so Relay has the right project and a ready Copilot connection.
+              Start with one clear path so Relay opens in the right project and can reach Copilot.
             </p>
             <ol class="ra-first-run__progress" aria-label="First-run steps">
               <li class="ra-first-run__progress-item">
@@ -159,7 +159,7 @@ export function FirstRunPanel(props: {
           <section class="ra-first-run__readiness" aria-label="Setup before the first request">
             <div class="ra-first-run__readiness-header">
               <div>
-                <p class="ra-first-run__step-kicker">Ready before you send</p>
+                <p class="ra-first-run__step-kicker">Before you start</p>
                 <h2 class={`ra-type-title-sm ${ui.textPrimary}`}>Check the two requirements</h2>
               </div>
             </div>
@@ -171,8 +171,8 @@ export function FirstRunPanel(props: {
               statusState={hasWorkspace() ? "good" : "warn"}
               summary={
                 hasWorkspace()
-                  ? `Relay is pointed at ${workspaceName()}.`
-                  : "Choose the folder Relay should read and update."
+                  ? `Project set to ${workspaceName()}.`
+                  : "Choose the folder Relay should use."
               }
               detail={workspaceHint()}
               action={
@@ -191,8 +191,8 @@ export function FirstRunPanel(props: {
                 connectionReady()
                   ? "Copilot is ready."
                   : props.copilotState.status === "checking"
-                    ? "Relay is checking the connection now."
-                    : "Copilot needs to be ready before Relay can complete the first request."
+                    ? "Checking the connection now."
+                    : "Copilot needs to be ready."
               }
               detail={connectionDetail()}
               action={connectionAction()}
@@ -203,7 +203,7 @@ export function FirstRunPanel(props: {
             <div class="ra-first-run__request-header">
               <div>
                 <p class="ra-first-run__step-kicker">Step 3</p>
-                <h2 class={`ra-type-title-sm ${ui.textPrimary}`}>First request</h2>
+                <h2 class={`ra-type-title-sm ${ui.textPrimary}`}>Send the first request</h2>
               </div>
               <StepStatusBadge label={`Default: ${modeLabel()}`} state={props.canStart ? "good" : "neutral"} />
             </div>

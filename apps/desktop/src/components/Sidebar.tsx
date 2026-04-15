@@ -55,7 +55,7 @@ export function Sidebar(props: {
     return "No chats yet";
   });
   const emptySubtitle = createMemo(() =>
-    !hasSessions() ? "Your recent chats appear here after the first request." : null,
+    !hasSessions() ? "Recent chats appear here after the first request." : null,
   );
 
   return (
@@ -79,7 +79,7 @@ export function Sidebar(props: {
               {workspaceName() ?? "Not set"}
             </span>
             <span class={`ra-type-caption ${ui.mutedText}`}>
-              {workspaceName() ? "Change project" : "Choose project"}
+              {workspaceName() ? "Open settings to change" : "Choose project"}
             </span>
           </button>
           <Show when={hasSessions()}>

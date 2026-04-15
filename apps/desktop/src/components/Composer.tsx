@@ -218,28 +218,28 @@ export function Composer(props: {
   const placeholder = () => {
     if (!props.hero) {
       return props.sessionPreset === "build"
-        ? "Describe the result you need. Type / for commands."
+        ? "Describe the result you need."
         : props.sessionPreset === "plan"
-          ? "Describe what you want reviewed. Type / for commands."
-          : "Describe what you want Relay to inspect. Type / for commands.";
+          ? "Describe what you want reviewed."
+          : "Describe what you want Relay to inspect.";
     }
     switch (props.sessionPreset) {
       case "plan":
-        return "Example: Review this setup flow and propose the safest next change.";
+        return "Example: Review this setup flow and propose the smallest safe change.";
       case "explore":
         return "Example: Find where this setup flow is defined.";
       default:
-        return "Example: Make this setup flow easier to understand.";
+        return "Example: Make this setup flow easier to use.";
     }
   };
   const modeSummary = createMemo(() => {
     if (props.modeLockedNote) return props.modeLockedNote;
     const summary =
       props.sessionPreset === "build"
-        ? "Can read and edit."
+        ? "Can inspect and edit."
         : props.sessionPreset === "plan"
           ? "Read-only planning."
-          : "Read-only search.";
+          : "Read-only inspection.";
     return `${sessionModeLabel(props.sessionPreset)} · ${summary}`;
   });
   const allowModeSelection = () => props.allowModeSelection ?? true;
@@ -291,14 +291,14 @@ export function Composer(props: {
                     type="button"
                     class="ra-composer-mode-trigger"
                     aria-expanded={modePickerOpen()}
-                    aria-label="Chat mode"
+                    aria-label="How Relay works"
                     onClick={() => setModePickerOpen((open) => !open)}
                   >
-                    <span>Mode</span>
+                    <span>How Relay works</span>
                     <span class="ra-composer-mode-trigger__value">{currentModeLabel()}</span>
                   </button>
                   <Show when={modePickerOpen()}>
-                    <div class={`ra-composer-mode-control ${ui.radiusCompact}`} role="group" aria-label="Chat mode">
+                    <div class={`ra-composer-mode-control ${ui.radiusCompact}`} role="group" aria-label="How Relay works">
                       {(["build", "plan", "explore"] as SessionPreset[]).map((preset) => (
                         <button
                           type="button"

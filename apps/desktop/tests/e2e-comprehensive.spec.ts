@@ -52,7 +52,7 @@ test.describe("Conversation model", () => {
     await page.getByRole("button", { name: "Chats" }).click();
     await expect(page.locator(".ra-session-row")).toHaveCount(2);
     await page.getByRole("button", { name: "New chat" }).click();
-    await expect(page.getByLabel("Chat mode")).toBeVisible();
+    await expect(page.getByLabel("How Relay works")).toBeVisible();
   });
 });
 
@@ -67,7 +67,7 @@ test.describe("Settings and first-run UX", () => {
     await expect(
       page.getByRole("heading", {
         level: 1,
-        name: "Set the project and Copilot, then send the first request",
+        name: "Set the project, check Copilot, then send the first request",
       }),
     ).toBeVisible();
     await expect(page.getByRole("heading", { level: 2, name: "Check the two requirements" })).toBeVisible();
@@ -110,6 +110,19 @@ test.describe("Settings and first-run UX", () => {
     await expect(page.locator("[data-ra-shell-drawer='context']")).toBeVisible();
     await expect(page.getByRole("tab", { name: "Integrations" })).toBeVisible();
     await expect(page.locator("[data-ra-permissions-details]")).not.toHaveAttribute("open", "");
+  });
+
+  test("narrow layout keeps drawer controls and composer actions usable", async ({ page }) => {
+    await injectRelayMock(page, { autoComplete: true });
+    await seedWorkspace(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openApp(page);
+    await sendPrompt(page, "open the shell");
+    await expect(page.getByRole("button", { name: "Chats" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Context" })).toBeVisible();
+    await expect(page.getByTestId("composer-send")).toBeVisible();
+    await page.getByRole("button", { name: "Chats" }).click();
+    await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible();
   });
 });
 

@@ -15,6 +15,14 @@
 
 ## Milestone Log
 
+### 2026-04-16 Desktop UI: warm minimal shell refresh
+
+**Problem:** The desktop shell was already conversation-first, but several surfaces still carried more chrome and explanation than necessary. First-run, the composer, drawers, and settings all worked, yet too many borders, shadows, helper lines, and equally emphasized panels made the UI feel busier than the underlying workflow.
+
+**Change:** Refined the Solid desktop shell into a quieter warm-minimal pass without changing IPC or runtime behavior. [`apps/desktop/src/index.css`](../apps/desktop/src/index.css) now flattens elevation across the shell, drawers, sidebar, composer, first-run panels, settings, inline approval cards, and empty states while keeping the existing warm Relay tokens and default light theme. [`apps/desktop/src/components/FirstRunPanel.tsx`](../apps/desktop/src/components/FirstRunPanel.tsx), [`Composer.tsx`](../apps/desktop/src/components/Composer.tsx), [`MessageFeed.tsx`](../apps/desktop/src/components/MessageFeed.tsx), [`MessageBubble.tsx`](../apps/desktop/src/components/MessageBubble.tsx), [`Sidebar.tsx`](../apps/desktop/src/components/Sidebar.tsx), [`ContextPanel.tsx`](../apps/desktop/src/components/ContextPanel.tsx), and [`SettingsModal.tsx`](../apps/desktop/src/components/SettingsModal.tsx) now use shorter copy, calmer message spacing, a more clearly primary first-request block, and lower-emphasis secondary controls such as the mode picker (`How Relay works`) and drawer content. Updated [`apps/desktop/tests/app.e2e.spec.ts`](../apps/desktop/tests/app.e2e.spec.ts) and [`apps/desktop/tests/e2e-comprehensive.spec.ts`](../apps/desktop/tests/e2e-comprehensive.spec.ts) to match the revised labels and to cover a narrow-width shell path where drawer toggles and composer actions stay usable.
+
+**Verification:** `pnpm --filter @relay-agent/desktop typecheck` — pass. `pnpm --filter @relay-agent/desktop exec playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts` — pass (14 tests). `pnpm check` — pass.
+
 ### 2026-04-15 Desktop UI: minimal and clear refinement
 
 **Problem:** The conversation-first shell already hid secondary panels by default, but the desktop UI still exposed too much low-priority copy and too many equally emphasized surfaces. First-run onboarding, the normal composer, and the context drawers still asked users to scan more text and structure than necessary before they could understand the next action.

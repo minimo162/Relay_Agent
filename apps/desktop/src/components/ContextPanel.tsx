@@ -128,7 +128,7 @@ export function ContextPanel(props: {
           <Match when={activeTab() === "plan"}>
             <div class="flex flex-col gap-2" data-ra-execution-plan>
               <div class="ra-context-note">
-                <span class={`ra-type-system-micro ${ui.mutedText}`}>How this chat runs</span>
+                <span class={`ra-type-system-micro ${ui.mutedText}`}>This chat</span>
                 <p class={`ra-type-button-label ${ui.textPrimary} mt-1`}>{modeLabel()}</p>
                 <p class={`ra-type-caption ${ui.mutedText} mt-1 leading-relaxed`}>{modeSummary()}</p>
               </div>
@@ -136,7 +136,7 @@ export function ContextPanel(props: {
                 when={planNewestFirst()}
                 fallback={
                   <div class="ra-context-empty-card">
-                    <div class={`ra-type-button-label ${ui.textPrimary}`}>What you will see here</div>
+                    <div class={`ra-type-button-label ${ui.textPrimary}`}>What shows up here</div>
                     <ul class={`ra-context-empty-list ra-type-caption ${ui.mutedText}`}>
                       <li>Relay writes its live checklist here after it inspects the project.</li>
                       <li>Approvals still stop risky changes before they go through.</li>
@@ -325,7 +325,7 @@ export function ContextPanel(props: {
                     }
                   >
                     <p class={`ra-type-caption ${ui.mutedText}`}>
-                      Choose a project folder from the header to show instruction files here.
+                      Choose a project from the header to show instruction files here.
                     </p>
                   </Show>
                 </div>

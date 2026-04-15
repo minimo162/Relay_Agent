@@ -185,7 +185,7 @@ export function SettingsModal(props: {
               <div>
                 <p class="ra-modal-panel__title">Settings</p>
                 <p class="ra-type-button-label text-[var(--ra-text-secondary)] mt-1">
-                  Configure Relay&apos;s project folder, Copilot connection, and desktop behavior.
+                  Configure the project, Copilot connection, and desktop behavior.
                 </p>
               </div>
               <button
@@ -202,7 +202,7 @@ export function SettingsModal(props: {
               <section class="ra-settings-card">
                 <p class="ra-type-system-micro text-[var(--ra-text-muted)]">Basic</p>
                 <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                  Choose the project and make sure Copilot is ready before the first request.
+                  Choose the project and make sure Copilot is ready.
                 </p>
                 <div class="mt-3 space-y-4">
                   <div class="ra-settings-step ra-settings-step--highlight">
@@ -228,7 +228,7 @@ export function SettingsModal(props: {
                       </Show>
                     </div>
                     <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                      Relay reads and edits in this folder for the current window.
+                      Relay reads and edits in this folder for this window.
                     </p>
                   </div>
 
@@ -258,7 +258,7 @@ export function SettingsModal(props: {
                 <summary class="ra-settings-details__summary">
                   <div>
                     <p class="ra-type-system-micro text-[var(--ra-text-muted)]">Advanced</p>
-                    <p class="ra-type-button-label text-[var(--ra-text-primary)] mt-1">Browser and troubleshooting options</p>
+                    <p class="ra-type-button-label text-[var(--ra-text-primary)] mt-1">Browser and troubleshooting</p>
                   </div>
                   <span class="ra-type-caption text-[var(--ra-text-muted)]">Show</span>
                 </summary>
@@ -328,7 +328,7 @@ export function SettingsModal(props: {
                     <div>
                       <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Diagnostics</span>
                       <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                        Export a JSON support bundle with current runtime facts and connection hints.
+                        Export a JSON bundle with current runtime facts and connection hints.
                       </p>
                     </div>
                     <Button

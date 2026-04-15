@@ -155,7 +155,7 @@ export function MessageFeed(props: {
   const emptyTitle = createMemo(() => {
     if (props.sessionPreset === "plan") return "Ask for a review or plan";
     if (props.sessionPreset === "explore") return "Ask Relay to inspect the project";
-    return "Ask for the result you need";
+    return "Ask for the next result";
   });
 
   const emptySubtitle = createMemo(() => {
@@ -168,7 +168,7 @@ export function MessageFeed(props: {
       return `${location} This chat stays read-only and returns a plan, explanation, or review.`;
     }
     if (props.sessionPreset === "explore") {
-      return `${location} This chat can only read and search.`;
+      return `${location} This chat can only read and inspect.`;
     }
     return `${location} Relay can inspect the project and edit files when the request calls for it.`;
   });
@@ -180,7 +180,7 @@ export function MessageFeed(props: {
     if (props.sessionPreset === "explore") {
       return "Find where the first screen is rendered.";
     }
-    return "Make the first screen easier to understand for first-time users.";
+    return "Make the first screen easier to understand.";
   });
 
   return (
