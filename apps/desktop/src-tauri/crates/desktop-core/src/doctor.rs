@@ -4,6 +4,7 @@ use crate::models::{
 use chrono::Utc;
 use serde_json::Value as JsonValue;
 
+#[must_use]
 pub fn report_from_checks(
     browser_settings: BrowserAutomationSettings,
     checks: Vec<RelayDoctorCheck>,
@@ -57,6 +58,7 @@ pub fn failed_check(
     }
 }
 
+#[must_use]
 pub fn aggregate_status(checks: &[RelayDoctorCheck]) -> RelayDoctorStatus {
     if checks
         .iter()

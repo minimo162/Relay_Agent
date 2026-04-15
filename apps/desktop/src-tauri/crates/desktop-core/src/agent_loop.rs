@@ -53,6 +53,7 @@ fn tool_surface_for_preset(preset: SessionPreset) -> tools::ToolSurface {
     }
 }
 
+#[must_use]
 pub fn desktop_permission_policy(preset: SessionPreset) -> PermissionPolicy {
     let base = match preset {
         SessionPreset::Build => PermissionMode::WorkspaceWrite,
@@ -162,6 +163,7 @@ fn format_plan_tool_policy_markdown(rows: &[SessionToolPermissionRow]) -> String
     )
 }
 
+#[must_use]
 pub fn desktop_permission_summary_rows(preset: SessionPreset) -> Vec<DesktopPermissionSummaryRow> {
     preset_tool_permissions(preset)
         .into_iter()
@@ -233,12 +235,12 @@ fn sanitize_copilot_visible_text(s: &str) -> String {
     dedupe_consecutive_paragraphs(&s)
 }
 
-const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Agent's model
+const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r"## CDP session: you are Relay Agent's model
 
 - User messages are sent from the **Relay Agent** desktop app through Microsoft Edge (M365 Copilot over CDP).
 - Emit fenced tool JSON when needed; prose-only refusals block the agent loop.
 - If the latest user message already names the file task, call the needed Relay tools now.
-"#;
+";
 
 #[cfg(windows)]
 fn cdp_windows_office_catalog_addon() -> &'static str {
@@ -352,6 +354,7 @@ fn mvp_tool_names_whitelist() -> HashSet<String> {
         .collect()
 }
 
+#[must_use]
 pub fn parse_copilot_tool_response(
     raw: &str,
     parse_mode: CdpToolParseMode,
@@ -583,8 +586,10 @@ fn build_cdp_prompt_bundle_from_messages(
     let grounding_text = CDP_BUNDLE_GROUNDING_BLOCK.to_string();
     let effective_messages = cdp_messages_for_flavor(messages, flavor);
     let system_text = match (flavor, catalog_flavor) {
-        (CdpPromptFlavor::Standard, CdpCatalogFlavor::StandardFull)
-        | (CdpPromptFlavor::Standard, CdpCatalogFlavor::Repair) => system_prompt.join("\n\n"),
+        (
+            CdpPromptFlavor::Standard,
+            CdpCatalogFlavor::StandardFull | CdpCatalogFlavor::Repair,
+        ) => system_prompt.join("\n\n"),
         (CdpPromptFlavor::Repair, _) => build_repair_cdp_system_prompt(messages),
     };
     let (message_text, _) = render_cdp_messages_with_breakdown(&effective_messages);
@@ -600,6 +605,7 @@ fn build_cdp_prompt_bundle_from_messages(
     parts.join("\n\n")
 }
 
+#[must_use]
 pub fn build_cdp_prompt(request: &ApiRequest<'_>, preset: SessionPreset) -> String {
     let flavor = cdp_prompt_flavor(request.messages);
     let catalog_flavor = match flavor {
@@ -1273,6 +1279,7 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || is_repair_refusal_text(trimmed)
 }
 
+#[must_use]
 pub fn build_tool_protocol_repair_input(goal: &str, attempt_index: usize) -> String {
     let escalation = if attempt_index == 0 {
         concat!(
@@ -1397,6 +1404,7 @@ fn is_tool_protocol_repair_nudge(input: &LoopInput) -> bool {
     matches!(input, LoopInput::Synthetic(text) if text.trim_start().starts_with("Tool protocol repair."))
 }
 
+#[must_use]
 pub fn build_compaction_replay_input(goal: &str, current_input: &str) -> String {
     let latest_request = current_input.trim();
     format!(
@@ -1411,6 +1419,7 @@ pub fn build_compaction_replay_input(goal: &str, current_input: &str) -> String 
     )
 }
 
+#[must_use]
 pub fn runtime_error_needs_forced_compaction(error: &RuntimeError) -> bool {
     let lower = error.to_string().to_ascii_lowercase();
     lower.contains("token limit") || lower.contains("context window")

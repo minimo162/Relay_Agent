@@ -10,6 +10,7 @@ pub struct HealthBody {
     pub instance_id: Option<String>,
 }
 
+#[must_use]
 pub fn should_reclaim_listener(
     body: &HealthBody,
     expected_instance_id: &str,

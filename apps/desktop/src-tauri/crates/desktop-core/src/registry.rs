@@ -232,6 +232,12 @@ impl Clone for SessionRegistry {
     }
 }
 
+impl Default for SessionRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionRegistry {
     #[must_use]
     pub fn new() -> Self {

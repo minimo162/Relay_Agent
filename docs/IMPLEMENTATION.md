@@ -15,6 +15,14 @@
 
 ## Milestone Log
 
+### 2026-04-15 Desktop core: clear `desktop-core` Clippy `-D warnings` regressions
+
+**Problem:** `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings` was failing again after the `desktop-core` extraction. The remaining blockers were all inside the new crate: one needless raw-string hash, one unnested or-pattern, several pure helper functions missing `#[must_use]`, and `SessionRegistry::new()` lacking a matching `Default` impl.
+
+**Change:** Updated [`apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs`](../apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs) to remove the unnecessary raw-string hashes from `CDP_RELAY_RUNTIME_CATALOG_LEAD`, nest the `(Standard, StandardFull | Repair)` prompt-bundle match arm, and mark the pure prompt/policy/repair helpers as `#[must_use]`. Added `#[must_use]` to the affected pure helpers in [`cdp.rs`](../apps/desktop/src-tauri/crates/desktop-core/src/cdp.rs), [`copilot_port_reclaim.rs`](../apps/desktop/src-tauri/crates/desktop-core/src/copilot_port_reclaim.rs), [`doctor.rs`](../apps/desktop/src-tauri/crates/desktop-core/src/doctor.rs), and [`workspace_surfaces.rs`](../apps/desktop/src-tauri/crates/desktop-core/src/workspace_surfaces.rs). Added `impl Default for SessionRegistry` in [`registry.rs`](../apps/desktop/src-tauri/crates/desktop-core/src/registry.rs) as the additive companion to the existing `new()` constructor. No runtime behavior, IPC contracts, or prompt semantics changed.
+
+**Verification:** `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core -- -D warnings`; `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core`; `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings` — pass (2026-04-15). The pre-existing `ts-rs failed to parse serde attribute` warnings still appear during Rust builds/tests and were intentionally left out of scope for this lint-only pass.
+
 ### 2026-04-15 Windows CI fix: split headless desktop logic out of the Tauri lib test target
 
 **Problem:** Windows CI was still depending on the top-level `relay_agent_desktop_lib` unit-test executable. That binary was aborting during process startup with `STATUS_ENTRYPOINT_NOT_FOUND` before any Rust tests could run, even though the internal workspace crates and integration targets were already healthy.

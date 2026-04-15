@@ -23,6 +23,7 @@ pub fn relay_agent_edge_profile_dir() -> PathBuf {
 }
 
 /// Read the Chromium-written `DevToolsActivePort` file (first line = port).
+#[must_use]
 pub fn read_devtools_active_port(profile_dir: &Path) -> Option<u16> {
     let path = profile_dir.join("DevToolsActivePort");
     let data = std::fs::read_to_string(&path).ok()?;
@@ -79,6 +80,7 @@ pub fn cdp_dedicated_relay_profile_ok(info: &Value) -> bool {
         .is_some_and(|_| !cdp_definitely_google_chrome_only(info))
 }
 
+#[must_use]
 pub fn read_relay_cdp_port_marker(profile_dir: &Path) -> Option<u16> {
     let path = profile_dir.join(RELAY_CDP_PORT_MARKER);
     let raw = std::fs::read_to_string(&path).ok()?;

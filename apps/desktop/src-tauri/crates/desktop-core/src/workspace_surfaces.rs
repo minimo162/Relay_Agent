@@ -39,6 +39,7 @@ fn push_dir(out: &mut Vec<InstructionSurface>, root: &Path, rel_label: &str, rel
     });
 }
 
+#[must_use]
 pub fn scan_workspace_instructions(cwd: Option<String>) -> WorkspaceInstructionSurfaces {
     let Some(raw) = cwd.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) else {
         return WorkspaceInstructionSurfaces {
