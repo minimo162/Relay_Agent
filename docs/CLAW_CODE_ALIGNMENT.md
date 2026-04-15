@@ -55,7 +55,7 @@ Relay keeps claw-compatible JSON where possible and documents Relay-only additio
 - `Task*` accepts claw-style aliases such as `task_id` and `prompt`.
 - `AskUserQuestion` accepts claw’s single `question` + `options` shape and normalizes to Relay’s UI contract.
 - `LSP` advertises claw-style actions, but only `diagnostics` is implemented today.
-- `EnterPlanMode` / `ExitPlanMode` remain catalog stubs that return success JSON; session posture is chosen at session start.
+- `EnterPlanMode` / `ExitPlanMode` remain compat-only catalog stubs behind `RELAY_COMPAT_MODE`; normal desktop sessions stay on one standard posture.
 - Dynamic `mcp__<server>__<tool>` names remain the primary MCP surface, with meta tools layered on top.
 
 ## Deterministic Parity Coverage

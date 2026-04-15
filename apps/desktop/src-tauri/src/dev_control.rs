@@ -3,7 +3,7 @@ use crate::app_services::AppServices;
 use crate::doctor::relay_diagnostics_blocking;
 use crate::models::{
     BrowserAutomationSettings, ContinueAgentSessionRequest, RespondAgentApprovalRequest,
-    SessionPreset, StartAgentRequest,
+    StartAgentRequest,
 };
 use crate::registry::SessionRunState;
 use crate::tauri_bridge::{
@@ -336,7 +336,6 @@ fn handle_start_agent(
             timeout_ms: payload.timeout_ms.unwrap_or(60_000),
         }),
         max_turns: payload.max_turns,
-        session_preset: parse_session_preset(payload.session_preset.as_deref()),
     };
 
     let services = app.state::<AppServices>();
@@ -438,7 +437,6 @@ fn handle_first_run_send(
                     timeout_ms: config.timeout_ms.unwrap_or(60_000),
                 }),
                 max_turns: config.max_turns.map(|value| value as usize),
-                session_preset: parse_session_preset(config.session_preset.as_deref()),
             },
         ))
         .map_err(|error| format!("start_agent failed: {error}"))?;
@@ -624,14 +622,6 @@ fn run_state_label(state: SessionRunState) -> &'static str {
         SessionRunState::Compacting => "compacting",
         SessionRunState::Cancelling => "cancelling",
         SessionRunState::Finished => "finished",
-    }
-}
-
-fn parse_session_preset(raw: Option<&str>) -> SessionPreset {
-    match raw.map(str::trim) {
-        Some("plan") => SessionPreset::Plan,
-        Some("explore") => SessionPreset::Explore,
-        _ => SessionPreset::Build,
     }
 }
 

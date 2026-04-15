@@ -1,10 +1,8 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, type JSX } from "solid-js";
-import type { McpServer, Policy, SessionPreset } from "../lib/ipc";
-import { sessionModeLabel, sessionModeSummary } from "../lib/session-mode-label";
+import type { McpServer } from "../lib/ipc";
 import type { PlanTimelineEntry, PlanTodoItem } from "../context/todo-write-parse";
 import {
   fetchWorkspaceInstructionSurfaces,
-  getDesktopPermissionSummary,
   mcpAddServer,
   mcpRemoveServer,
   type WorkspaceInstructionSurfaces,
@@ -17,7 +15,7 @@ import { humanToolLabel } from "../lib/tool-timeline";
 type TabId = "plan" | "servers";
 
 const tabs: { id: TabId; label: string }[] = [
-  { id: "plan", label: "Plan" },
+  { id: "plan", label: "Activity" },
   { id: "servers", label: "Integrations" },
 ];
 
@@ -36,7 +34,6 @@ export function ContextPanel(props: {
   mcpServers: () => McpServer[];
   setMcpServers: (fn: (prev: McpServer[]) => McpServer[]) => void;
   workspacePath: () => string;
-  sessionPreset: () => SessionPreset;
   /** TodoWrite snapshots in order; UI shows newest first (OpenWork-style plan timeline). */
   planTimeline: () => PlanTimelineEntry[];
 }): JSX.Element {
@@ -44,7 +41,6 @@ export function ContextPanel(props: {
   const [instructionSurfaces, setInstructionSurfaces] = createSignal<WorkspaceInstructionSurfaces | null>(
     null,
   );
-  const [permissionRows, setPermissionRows] = createSignal<Policy[]>([]);
 
   createEffect(() => {
     const cwd = props.workspacePath()?.trim();
@@ -60,29 +56,10 @@ export function ContextPanel(props: {
       });
   });
 
-  createEffect(() => {
-    const preset = props.sessionPreset();
-    void getDesktopPermissionSummary(preset)
-      .then((rows) =>
-        setPermissionRows(
-          rows.map((r) => ({
-            name: r.name,
-            requirement: r.requirement,
-            description: r.description,
-          })),
-        ),
-      )
-      .catch((err) => {
-        console.error("[Context] permission summary failed", err);
-        setPermissionRows([]);
-      });
-  });
   const planNewestFirst = createMemo(() => {
     const t = props.planTimeline();
     return t.length > 0 ? [...t].reverse() : false;
   });
-  const modeLabel = createMemo(() => sessionModeLabel(props.sessionPreset()));
-  const modeSummary = createMemo(() => sessionModeSummary(props.sessionPreset()));
   const [showAddServer, setShowAddServer] = createSignal(false);
   const [newServerName, setNewServerName] = createSignal("");
   const [newServerCommand, setNewServerCommand] = createSignal("");
@@ -128,18 +105,20 @@ export function ContextPanel(props: {
           <Match when={activeTab() === "plan"}>
             <div class="flex flex-col gap-2" data-ra-execution-plan>
               <div class="ra-context-note">
-                <span class={`ra-type-system-micro ${ui.mutedText}`}>This chat</span>
-                <p class={`ra-type-button-label ${ui.textPrimary} mt-1`}>{modeLabel()}</p>
-                <p class={`ra-type-caption ${ui.mutedText} mt-1 leading-relaxed`}>{modeSummary()}</p>
+                <span class={`ra-type-system-micro ${ui.mutedText}`}>Activity</span>
+                <p class={`ra-type-button-label ${ui.textPrimary} mt-1`}>Relay works from the conversation.</p>
+                <p class={`ra-type-caption ${ui.mutedText} mt-1 leading-relaxed`}>
+                  Checklists appear here when Relay writes them. Risky actions still stop for approval.
+                </p>
               </div>
               <Show
                 when={planNewestFirst()}
                 fallback={
                   <div class="ra-context-empty-card">
-                    <div class={`ra-type-button-label ${ui.textPrimary}`}>What shows up here</div>
+                    <div class={`ra-type-button-label ${ui.textPrimary}`}>No checklist yet</div>
                     <ul class={`ra-context-empty-list ra-type-caption ${ui.mutedText}`}>
-                      <li>Relay writes its live checklist here after it inspects the project.</li>
-                      <li>Approvals still stop risky changes before they go through.</li>
+                      <li>Ask Relay to review, inspect, or make a change in the current project.</li>
+                      <li>If Relay writes a live checklist, the latest snapshot appears here.</li>
                       <li>Integrations shows project instructions and connected services.</li>
                     </ul>
                   </div>
@@ -203,70 +182,6 @@ export function ContextPanel(props: {
                   </div>
                 )}
               </Show>
-
-              <details
-                class={`ra-policy-card ${ui.radiusFeatured} border ${ui.border} mt-2`}
-                data-ra-tool-policy
-                data-ra-permissions-details
-              >
-                <summary class={`cursor-pointer list-none [&::-webkit-details-marker]:hidden`}>
-                  <div class="ra-policy-card__summary">
-                    <span class={`ra-type-system-micro ${ui.mutedText}`}>Permissions</span>
-                    <span class={`ra-type-caption ${ui.mutedText}`}>{modeLabel()}</span>
-                  </div>
-                </summary>
-                <div class="ra-policy-card__body">
-                  <p class={`ra-type-caption leading-relaxed ${ui.mutedText}`}>
-                    {modeSummary()} Project-specific approvals still apply.
-                  </p>
-                  <Show
-                    when={permissionRows().length > 0}
-                    fallback={
-                      <div class={`ra-type-caption ${ui.mutedText} text-center py-3`}>Checking tool rules…</div>
-                    }
-                  >
-                    <For each={permissionRows()}>
-                      {(policy) => {
-                        const badgeColor =
-                          policy.requirement === "require_approval"
-                            ? "bg-[var(--ra-yellow)]/20 text-[var(--ra-yellow)]"
-                            : policy.requirement === "auto_deny"
-                              ? "bg-[var(--ra-red)]/20 text-[var(--ra-red)]"
-                              : "bg-[var(--ra-green)]/20 text-[var(--ra-green)]";
-
-                        const badgeLabel =
-                          policy.requirement === "require_approval"
-                            ? "Needs approval"
-                            : policy.requirement === "auto_deny"
-                              ? "Blocked"
-                              : "Allowed";
-
-                        return (
-                          <div class="ra-quiet-row ra-quiet-row--align-center gap-2">
-                            <div class="flex-1 min-w-0">
-                              <div class={`ra-type-button-label font-medium ${ui.textPrimary}`}>{humanToolLabel(policy.name)}</div>
-                              <Show when={policy.description}>
-                                <div class={`ra-type-caption ${ui.mutedText}`}>{policy.description}</div>
-                              </Show>
-                              <Show when={humanToolLabel(policy.name) !== policy.name}>
-                                <details class="mt-1">
-                                  <summary class={`ra-type-caption ${ui.mutedText} cursor-pointer`}>Advanced details</summary>
-                                  <div class={`ra-type-mono-small ${ui.mutedText} mt-1`}>{policy.name}</div>
-                                </details>
-                              </Show>
-                            </div>
-                            <span
-                              class={`ra-type-caption px-2 py-0.5 ${ui.radiusPill} font-medium whitespace-nowrap shrink-0 ${badgeColor}`}
-                            >
-                              {badgeLabel}
-                            </span>
-                          </div>
-                        );
-                      }}
-                    </For>
-                  </Show>
-                </div>
-              </details>
             </div>
           </Match>
 

@@ -10,7 +10,7 @@ import {
   onMount,
   type JSX,
 } from "solid-js";
-import { friendlyToolActivityLabel, type SessionPreset, type UiChunk } from "../lib/ipc";
+import { friendlyToolActivityLabel, type UiChunk } from "../lib/ipc";
 import { ellipsisPath, workspaceBasename } from "../lib/workspace-display";
 import type { CopilotWarmupState } from "../shell/useCopilotWarmup";
 import { EmptyState } from "./primitives";
@@ -29,8 +29,6 @@ export function MessageFeed(props: {
   sessionStatus: SessionStatusSnapshot;
   /** Saved workspace cwd (empty = unset). */
   workspacePath: () => string;
-  /** Composer session mode (empty-state copy for Plan / Explore). */
-  sessionPreset: SessionPreset;
   firstRun: boolean;
   copilotState: CopilotWarmupState;
   showFirstRunRequirements: boolean;
@@ -162,8 +160,6 @@ export function MessageFeed(props: {
   });
 
   const emptyTitle = createMemo(() => {
-    if (props.sessionPreset === "plan") return "Ask for a review or plan";
-    if (props.sessionPreset === "explore") return "Ask Relay to inspect the project";
     return "Ask for the next result";
   });
 
@@ -173,24 +169,10 @@ export function MessageFeed(props: {
       p.length > 0
         ? `Relay will work in ${ellipsisPath(p, 72)}.`
         : "Choose the project from the header so Relay knows where to work.";
-    if (props.sessionPreset === "plan") {
-      return `${location} This chat stays read-only and returns a plan, explanation, or review.`;
-    }
-    if (props.sessionPreset === "explore") {
-      return `${location} This chat can only read and inspect.`;
-    }
     return `${location} Relay can inspect the project and edit files when the request calls for it.`;
   });
 
-  const emptyExample = createMemo(() => {
-    if (props.sessionPreset === "plan") {
-      return "Review this setup flow and propose the smallest safe change.";
-    }
-    if (props.sessionPreset === "explore") {
-      return "Find where the first screen is rendered.";
-    }
-    return "Make the first screen easier to understand.";
-  });
+  const emptyExample = createMemo(() => "Make the first screen easier to understand.");
 
   return (
     <div ref={container!} class="flex-1 min-h-0 overflow-y-auto px-6 py-4">

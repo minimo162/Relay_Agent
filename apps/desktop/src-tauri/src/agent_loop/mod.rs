@@ -10,4 +10,3 @@ pub mod transport;
 
 pub(crate) use events::*;
 pub(crate) use orchestrator::{msg_to_relay, run_agent_loop_impl, AgentSessionPhase};
-pub(crate) use permission::desktop_permission_summary_rows;

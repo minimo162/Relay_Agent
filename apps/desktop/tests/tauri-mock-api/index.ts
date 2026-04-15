@@ -136,8 +136,6 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
       return undefined;
     case "workspace_instruction_surfaces":
       return { workspaceRoot: null, surfaces: [] };
-    case "get_desktop_permission_summary":
-      return [];
     case "mcp_list_servers":
       return s.mcpServers;
     case "mcp_add_server": {

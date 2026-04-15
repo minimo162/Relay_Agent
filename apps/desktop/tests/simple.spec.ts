@@ -28,7 +28,6 @@ test('page loads HTML', async ({ page }) => {
         if (cmd === 'remove_workspace_allowlist_tool' || cmd === 'clear_workspace_allowlist') return undefined;
         if (cmd === 'list_workspace_slash_commands') return [];
         if (cmd === 'workspace_instruction_surfaces') return { workspaceRoot: null, surfaces: [] };
-        if (cmd === 'get_desktop_permission_summary') return [];
         throw new Error(`Unknown: ${cmd}`);
       }
     };

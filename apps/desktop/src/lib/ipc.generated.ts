@@ -1,8 +1,6 @@
 // Generated from Rust IPC source types via ts-rs.
 // Source: apps/desktop/src-tauri/src/models.rs, agent_loop/events, tauri_bridge.rs
 
-export type SessionPreset = "build" | "plan" | "explore";
-
 export interface BrowserAutomationSettings {
   cdpPort: number;
   autoLaunchEdge: boolean;
@@ -15,7 +13,6 @@ export interface StartAgentRequest {
   cwd?: string | null;
   browserSettings?: BrowserAutomationSettings | null;
   maxTurns?: number | null;
-  sessionPreset: SessionPreset;
 }
 
 export interface ContinueAgentSessionRequest {
@@ -135,18 +132,6 @@ export interface CompactAgentSessionRequest {
 export interface CompactAgentSessionResponse {
   message: string;
   removedMessageCount: number;
-}
-
-export interface DesktopPermissionSummaryRow {
-  name: string;
-  hostMode: string;
-  requiredMode: string;
-  requirement: "auto_allow" | "require_approval" | "auto_deny";
-  description: string;
-}
-
-export interface GetPermissionSummaryRequest {
-  sessionPreset: SessionPreset;
 }
 
 export interface McpServerInfo {

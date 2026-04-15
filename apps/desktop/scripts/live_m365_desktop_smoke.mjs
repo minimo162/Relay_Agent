@@ -325,7 +325,6 @@ async function main() {
 
   await postDevControl("/configure", {
     workspacePath,
-    sessionPreset: "build",
     cdpPort,
     autoLaunchEdge: false,
     timeoutMs: 60_000,
@@ -354,7 +353,6 @@ async function main() {
     autoLaunchEdge: false,
     timeoutMs: 60_000,
     maxTurns: 16,
-    sessionPreset: "build",
   });
   const sessionId = started?.sessionId;
   if (!sessionId) {

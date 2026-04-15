@@ -44,7 +44,7 @@ test("first run keeps the normal shell visible and renders setup inline", async 
   await expect(page.locator("[data-ra-session-mode]")).toHaveCount(0);
   await expect(composer(page)).toBeEditable();
   await expect(page.locator("[data-ra-composer-disabled-note]")).toHaveText(
-    "The first request starts in Standard. Relay keeps the same chat surface and asks for setup only when needed.",
+    "Relay keeps the same chat surface and asks for setup only when needed.",
   );
   await page.getByRole("button", { name: "Chats" }).click();
   await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible();
@@ -62,7 +62,6 @@ test("settings modal exposes setup and advanced controls", async ({ page }) => {
   await expect(advanced).not.toHaveAttribute("open", "");
   await expect(dialog.getByText("Browser debug port", { exact: true })).not.toBeVisible();
   await advanced.locator("summary").click();
-  await expect(dialog.getByText("Default chat mode")).toBeVisible();
   await expect(dialog.getByText("Browser debug port", { exact: true })).toBeVisible();
   await expect(dialog.getByText("Always on top", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Export diagnostics" })).toBeVisible();
@@ -80,8 +79,8 @@ test("sending the first prompt exits onboarding and creates one conversation", a
   await expect(page.locator(".ra-session-row")).toHaveCount(1);
   await page.getByRole("button", { name: "Context" }).click();
   await expect(page.locator("[data-ra-shell-drawer='context']")).toBeVisible();
-  await expect(page.getByText("What shows up here")).toBeVisible();
-  await expect(page.locator("[data-ra-permissions-details]")).not.toHaveAttribute("open", "");
+  await expect(page.getByRole("tab", { name: "Activity" })).toBeVisible();
+  await expect(page.getByText("Relay works from the conversation.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Undo" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Redo" })).toHaveCount(0);
 });

@@ -71,9 +71,7 @@ pub struct RedactionRule {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolSurface {
-    Build,
-    Plan,
-    Explore,
+    Standard,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +80,6 @@ pub struct ToolMetadata {
     pub target_extractor: ApprovalTargetExtractor,
     pub risky_fields: &'static [&'static str],
     pub redaction_rules: &'static [RedactionRule],
-    pub explore_visible: bool,
     pub tool_search_visible: bool,
 }
 
@@ -91,7 +88,6 @@ const DEFAULT_TOOL_METADATA: ToolMetadata = ToolMetadata {
     target_extractor: ApprovalTargetExtractor::None,
     risky_fields: &[],
     redaction_rules: &[],
-    explore_visible: false,
     tool_search_visible: true,
 };
 
@@ -100,12 +96,10 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
     match name {
         "read_file" => ToolMetadata {
             target_extractor: ApprovalTargetExtractor::PathLike,
-            explore_visible: true,
             tool_search_visible: false,
             ..DEFAULT_TOOL_METADATA
         },
         "glob_search" | "grep_search" => ToolMetadata {
-            explore_visible: true,
             tool_search_visible: false,
             ..DEFAULT_TOOL_METADATA
         },
@@ -272,35 +266,25 @@ pub fn is_tool_visible_in_tool_search(name: &str) -> bool {
 
 #[must_use]
 pub fn is_tool_visible_in_surface(name: &str, surface: ToolSurface) -> bool {
-    match surface {
-        ToolSurface::Build | ToolSurface::Plan => true,
-        ToolSurface::Explore => tool_metadata(name).explore_visible,
-    }
+    let _ = (name, surface);
+    true
 }
 
 #[must_use]
 pub fn tool_specs_for_surface(surface: ToolSurface) -> Vec<ToolSpec> {
+    let _ = surface;
     tool_catalog()
         .specs()
-        .iter()
-        .filter(|spec| is_tool_visible_in_surface(spec.name, surface))
-        .cloned()
-        .collect()
+        .to_vec()
 }
 
 #[must_use]
-pub fn required_permission_for_surface(spec: &ToolSpec, surface: ToolSurface) -> PermissionMode {
-    let mut required = if spec.required_permission == PermissionMode::WorkspaceWrite {
+pub fn required_permission_for_surface(spec: &ToolSpec) -> PermissionMode {
+    if spec.required_permission == PermissionMode::WorkspaceWrite {
         PermissionMode::DangerFullAccess
     } else {
         spec.required_permission
-    };
-
-    if matches!(surface, ToolSurface::Explore) && !is_tool_visible_in_surface(spec.name, surface) {
-        required = PermissionMode::DangerFullAccess;
     }
-
-    required
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1175,7 +1159,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         specs.extend(vec![
             ToolSpec {
                 name: "EnterPlanMode",
-                description: "Compat hook only. Relay session posture cannot change mid-session; choose Build / Plan / Explore at session start.",
+                description: "Compat hook only. Relay sessions stay in one standard posture; continue in the current chat.",
                 input_schema: json!({
                     "type": "object",
                     "properties": {},
@@ -1185,7 +1169,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
             },
             ToolSpec {
                 name: "ExitPlanMode",
-                description: "Compat hook only. Relay session posture cannot change mid-session; start a new Build session to apply edits.",
+                description: "Compat hook only. Relay sessions stay in one standard posture; continue in the current chat.",
                 input_schema: json!({
                     "type": "object",
                     "properties": {},
@@ -1354,8 +1338,8 @@ pub fn plan_mode_tool_json(entering: bool) -> Value {
     json!({
         "ok": false,
         "entering": entering,
-        "error": "Relay: session mode is locked after session start. Start a new Build / Plan / Explore session instead.",
-        "errorJa": "Relay: セッションモードは開始後に変更できません。Build / Plan / Explore で新しいセッションを開始してください。"
+        "error": "Relay: session posture is fixed for the current chat. Continue in the same conversation.",
+        "errorJa": "Relay: 現在の会話ではセッション姿勢は固定です。同じ会話を続けてください。"
     })
 }
 
@@ -3806,7 +3790,6 @@ mod tests {
     fn tool_metadata_matches_existing_behavior() {
         let read = tool_metadata("read_file");
         assert_eq!(read.target_extractor, ApprovalTargetExtractor::PathLike);
-        assert!(read.explore_visible);
         assert!(!read.tool_search_visible);
         assert_eq!(read.approval_title, None);
 
@@ -3831,17 +3814,18 @@ mod tests {
         assert_eq!(unknown.target_extractor, ApprovalTargetExtractor::None);
         assert!(unknown.risky_fields.is_empty());
         assert!(unknown.redaction_rules.is_empty());
-        assert!(!unknown.explore_visible);
         assert!(unknown.tool_search_visible);
     }
 
     #[test]
-    fn explore_surface_only_exposes_workspace_read_tools() {
-        let names = tool_specs_for_surface(ToolSurface::Explore)
+    fn standard_surface_exposes_full_catalog() {
+        let names = tool_specs_for_surface(ToolSurface::Standard)
             .into_iter()
             .map(|spec| spec.name)
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["read_file", "glob_search", "grep_search"]);
+        assert!(names.contains(&"read_file"));
+        assert!(names.contains(&"write_file"));
+        assert!(names.contains(&"WebFetch"));
     }
 
     #[test]
@@ -3852,11 +3836,7 @@ mod tests {
             .find(|spec| spec.name == "write_file")
             .expect("write_file spec");
         assert_eq!(
-            required_permission_for_surface(write, ToolSurface::Build),
-            PermissionMode::DangerFullAccess
-        );
-        assert_eq!(
-            required_permission_for_surface(write, ToolSurface::Plan),
+            required_permission_for_surface(write),
             PermissionMode::DangerFullAccess
         );
 
@@ -3865,7 +3845,7 @@ mod tests {
             .find(|spec| spec.name == "read_file")
             .expect("read_file spec");
         assert_eq!(
-            required_permission_for_surface(read, ToolSurface::Explore),
+            required_permission_for_surface(read),
             PermissionMode::ReadOnly
         );
 
@@ -3874,8 +3854,8 @@ mod tests {
             .find(|spec| spec.name == "WebFetch")
             .expect("WebFetch spec");
         assert_eq!(
-            required_permission_for_surface(web, ToolSurface::Explore),
-            PermissionMode::DangerFullAccess
+            required_permission_for_surface(web),
+            PermissionMode::ReadOnly
         );
     }
 

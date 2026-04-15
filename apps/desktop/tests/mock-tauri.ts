@@ -165,9 +165,6 @@ export async function mockInvoke(
     case "workspace_instruction_surfaces":
       return { workspaceRoot: null, surfaces: [] };
 
-    case "get_desktop_permission_summary":
-      return [];
-
     default:
       throw new Error(`Unknown mock command: ${cmd}`);
   }

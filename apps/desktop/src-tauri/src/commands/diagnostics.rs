@@ -1,9 +1,8 @@
 use crate::app_services::AppServices;
 use crate::models::{
-    GetPermissionSummaryRequest, ListWorkspaceSlashCommandsRequest, RelayDiagnostics,
-    RustAnalyzerProbeRequest, RustAnalyzerProbeResponse, WorkspaceAllowlistCwdRequest,
-    WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
-    WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
+    ListWorkspaceSlashCommandsRequest, RelayDiagnostics, RustAnalyzerProbeRequest,
+    RustAnalyzerProbeResponse, WorkspaceAllowlistCwdRequest, WorkspaceAllowlistRemoveToolRequest,
+    WorkspaceAllowlistSnapshot, WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
 };
 use tauri::State;
 
@@ -29,13 +28,6 @@ pub fn workspace_instruction_surfaces(
     request: WorkspaceInstructionSurfacesRequest,
 ) -> crate::workspace_surfaces::WorkspaceInstructionSurfaces {
     crate::tauri_bridge::workspace_instruction_surfaces(request)
-}
-
-#[tauri::command]
-pub fn get_desktop_permission_summary(
-    request: GetPermissionSummaryRequest,
-) -> Vec<crate::models::DesktopPermissionSummaryRow> {
-    crate::tauri_bridge::get_desktop_permission_summary(request)
 }
 
 #[tauri::command]

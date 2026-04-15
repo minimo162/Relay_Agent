@@ -34,7 +34,6 @@ import type {
   CompactAgentSessionResponse as GeneratedCompactAgentSessionResponse,
   ContinueAgentSessionRequest as GeneratedContinueAgentSessionRequest,
   ConnectCdpRequest as GeneratedConnectCdpRequest,
-  DesktopPermissionSummaryRow as GeneratedDesktopPermissionSummaryRow,
   GetAgentSessionHistoryRequest as GeneratedGetAgentSessionHistoryRequest,
   InstructionSurface as GeneratedInstructionSurface,
   McpAddServerRequest as GeneratedMcpAddServerRequest,
@@ -43,7 +42,6 @@ import type {
   RelayDiagnostics as GeneratedRelayDiagnostics,
   RustAnalyzerProbeRequest as GeneratedRustAnalyzerProbeRequest,
   RustAnalyzerProbeResponse as GeneratedRustAnalyzerProbeResponse,
-  SessionPreset as GeneratedSessionPreset,
   SessionWriteUndoRequest as GeneratedSessionWriteUndoRequest,
   SessionWriteUndoStatusResponse as GeneratedSessionWriteUndoStatusResponse,
   StartAgentRequest as GeneratedStartAgentRequest,
@@ -58,40 +56,13 @@ import type {
 
 export type BrowserAutomationSettings = GeneratedBrowserAutomationSettings;
 
-/** OpenCode-style session posture (see `SessionPreset` in `models.rs`). */
-export type SessionPreset = GeneratedSessionPreset;
-
-const LS_SESSION_PRESET = "relay.sessionPreset.v1";
-
-/** Last-composer session mode (Build / Plan / Explore). */
-export function readStoredSessionPreset(): SessionPreset {
-  try {
-    const v = typeof localStorage !== "undefined" ? localStorage.getItem(LS_SESSION_PRESET) : null;
-    if (v === "plan" || v === "build" || v === "explore") return v;
-  } catch {
-    /* ignore */
-  }
-  return "build";
-}
-
-export function writeStoredSessionPreset(p: SessionPreset): void {
-  try {
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem(LS_SESSION_PRESET, p);
-    }
-  } catch {
-    /* ignore */
-  }
-}
-
 export type StartAgentRequest = GeneratedStartAgentRequest;
 export type ContinueAgentSessionRequest = GeneratedContinueAgentSessionRequest;
 
 /**
  * Tool approvals (OpenWork-style): `approved` unblocks one execution; `rememberForSession`
  * adds the tool name to a session allow-list so the host skips further prompts for that tool
- * until the session ends. Context **Policy** lists effective gating per composer preset via
- * `get_desktop_permission_summary`; this request drives interactive prompts from the agent loop.
+ * until the session ends. This request drives interactive prompts from the agent loop.
  */
 export interface RespondAgentApprovalRequest {
   sessionId: string;
@@ -232,17 +203,6 @@ export async function fetchWorkspaceInstructionSurfaces(
 ): Promise<WorkspaceInstructionSurfaces> {
   return invoke<WorkspaceInstructionSurfaces>("workspace_instruction_surfaces", {
     request: { cwd: cwd?.trim() || null },
-  });
-}
-
-export type DesktopPermissionSummaryRow = GeneratedDesktopPermissionSummaryRow;
-
-/** Effective tool gating for the composer session preset (Context → Policy). */
-export async function getDesktopPermissionSummary(
-  sessionPreset: SessionPreset,
-): Promise<DesktopPermissionSummaryRow[]> {
-  return invoke<DesktopPermissionSummaryRow[]>("get_desktop_permission_summary", {
-    request: { sessionPreset },
   });
 }
 

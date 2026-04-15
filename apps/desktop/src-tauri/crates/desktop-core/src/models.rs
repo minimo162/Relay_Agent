@@ -158,15 +158,6 @@ pub struct RelayDoctorReport {
     pub doctor_hints: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase")]
-pub enum SessionPreset {
-    #[default]
-    Build,
-    Plan,
-    Explore,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserAutomationSettings {
@@ -188,8 +179,6 @@ pub struct StartAgentRequest {
     pub browser_settings: Option<BrowserAutomationSettings>,
     #[serde(default)]
     pub max_turns: Option<usize>,
-    #[serde(default)]
-    pub session_preset: SessionPreset,
 }
 
 #[derive(Clone, Debug, Deserialize, TS)]
@@ -257,22 +246,6 @@ pub struct RustAnalyzerProbeResponse {
     pub ok: bool,
     pub version_line: Option<String>,
     pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopPermissionSummaryRow {
-    pub name: String,
-    pub host_mode: String,
-    pub required_mode: String,
-    pub requirement: String,
-    pub description: String,
-}
-
-#[derive(Clone, Debug, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct GetPermissionSummaryRequest {
-    pub session_preset: SessionPreset,
 }
 
 #[derive(Clone, Debug, Deserialize, TS)]

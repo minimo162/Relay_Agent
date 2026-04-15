@@ -18,12 +18,12 @@ use crate::cdp_copilot;
 use crate::copilot_persistence::{self, PersistedSessionConfig};
 use crate::models::{
     BrowserAutomationSettings, CancelAgentRequest, ContinueAgentSessionRequest,
-    DesktopPermissionSummaryRow, GetAgentSessionHistoryRequest, GetPermissionSummaryRequest,
-    ListWorkspaceSlashCommandsRequest, McpAddServerRequest, McpServerInfo, RelayDiagnostics,
-    RespondAgentApprovalRequest, RespondUserQuestionRequest, RustAnalyzerProbeRequest,
-    RustAnalyzerProbeResponse, SessionWriteUndoRequest, SessionWriteUndoStatusResponse,
-    StartAgentRequest, WorkspaceAllowlistCwdRequest, WorkspaceAllowlistRemoveToolRequest,
-    WorkspaceAllowlistSnapshot, WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
+    GetAgentSessionHistoryRequest, ListWorkspaceSlashCommandsRequest, McpAddServerRequest,
+    McpServerInfo, RelayDiagnostics, RespondAgentApprovalRequest, RespondUserQuestionRequest,
+    RustAnalyzerProbeRequest, RustAnalyzerProbeResponse, SessionWriteUndoRequest,
+    SessionWriteUndoStatusResponse, StartAgentRequest, WorkspaceAllowlistCwdRequest,
+    WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
+    WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
 };
 use crate::registry::{SessionHandle, SessionRegistry, SessionRunState, SessionState};
 use runtime::MAX_TEXT_FILE_READ_BYTES;
@@ -438,7 +438,6 @@ fn start_request_session_config(request: &StartAgentRequest, goal: &str) -> Pers
         goal: Some(goal.to_string()),
         cwd: normalize_optional_string(request.cwd.as_deref()),
         max_turns: request.max_turns,
-        session_preset: Some(request.session_preset),
         browser_settings: request.browser_settings.clone(),
     }
 }
@@ -556,7 +555,6 @@ async fn spawn_session_loop<R: Runtime>(
     } = launch;
     let cwd = normalize_optional_string(session_config.cwd.as_deref());
     let max_turns = session_config.max_turns;
-    let session_preset = session_config.session_preset.unwrap_or_default();
     let browser_settings = session_config.browser_settings.clone();
 
     let ttl_seconds = i64::try_from(config.session_cleanup_ttl_minutes).unwrap_or(i64::MAX) * 60;
@@ -583,7 +581,6 @@ async fn spawn_session_loop<R: Runtime>(
                 turn_input,
                 cwd,
                 max_turns,
-                session_preset,
                 browser_settings,
                 cancelled,
                 initial_session,
@@ -1986,12 +1983,6 @@ pub fn workspace_instruction_surfaces(
     crate::workspace_surfaces::scan_workspace_instructions(request.cwd)
 }
 
-pub fn get_desktop_permission_summary(
-    request: GetPermissionSummaryRequest,
-) -> Vec<DesktopPermissionSummaryRow> {
-    crate::agent_loop::desktop_permission_summary_rows(request.session_preset)
-}
-
 pub fn get_workspace_allowlist() -> Result<WorkspaceAllowlistSnapshot, String> {
     crate::workspace_allowlist::snapshot()
 }
@@ -2023,7 +2014,6 @@ mod tests {
             goal: Some("Original task".to_string()),
             cwd: Some("/tmp/project".to_string()),
             max_turns: Some(8),
-            session_preset: Some(crate::models::SessionPreset::Plan),
             browser_settings: Some(BrowserAutomationSettings {
                 cdp_port: 9444,
                 auto_launch_edge: false,
@@ -2051,10 +2041,6 @@ mod tests {
 
         assert_eq!(loaded.messages.len(), session.messages.len());
         assert_eq!(config.goal.as_deref(), Some("Original task"));
-        assert_eq!(
-            config.session_preset,
-            Some(crate::models::SessionPreset::Plan)
-        );
         assert!(!cancelled.load(Ordering::SeqCst));
         let running = handle
             .read_state(|state| state.running)

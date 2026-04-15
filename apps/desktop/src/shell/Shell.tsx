@@ -19,7 +19,6 @@ import {
   startAgent,
   undoSessionWrite,
   type McpServer,
-  type SessionPreset,
   type UiChunk,
   type WorkspaceSlashCommandRow,
 } from "../lib/ipc";
@@ -41,18 +40,15 @@ import type { SessionStatusSnapshot } from "../components/shell-types";
 import {
   loadAlwaysOnTop,
   loadBrowserSettings,
-  loadDefaultSessionPreset,
   loadMaxTurns,
   loadWorkspacePath,
   saveAlwaysOnTop,
   saveBrowserSettings,
-  saveDefaultSessionPreset,
   saveMaxTurns,
   saveWorkspacePath,
 } from "../lib/settings-storage";
 import { pickWorkspaceFolder } from "../lib/workspace-picker";
 import { buildPlanTimelineFromUiChunks } from "../context/todo-write-parse";
-import { sessionModeLabel } from "../lib/session-mode-label";
 import { createSessionStore } from "./sessionStore";
 import { createApprovalStore } from "./approvalStore";
 import { useCopilotWarmup } from "./useCopilotWarmup";
@@ -71,7 +67,6 @@ type DevFirstRunSendPayload = {
 
 type DevConfigurePayload = {
   workspacePath?: string | null;
-  sessionPreset?: SessionPreset | null;
   cdpPort?: number | null;
   autoLaunchEdge?: boolean | null;
   timeoutMs?: number | null;
@@ -117,7 +112,6 @@ export default function Shell(): JSX.Element {
   const [sessionError, setSessionError] = createSignal<string | null>(null);
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [workspaceLabel, setWorkspaceLabel] = createSignal(loadWorkspacePath().trim());
-  const [defaultSessionPreset, setDefaultSessionPreset] = createSignal<SessionPreset>(loadDefaultSessionPreset());
   const [browserSettings, setBrowserSettings] = createSignal(loadBrowserSettings());
   const [maxTurns, setMaxTurns] = createSignal(loadMaxTurns());
   const [alwaysOnTop, setAlwaysOnTop] = createSignal(loadAlwaysOnTop());
@@ -306,10 +300,6 @@ export default function Shell(): JSX.Element {
         setWorkspaceLabel(next);
         if (persistSettings) saveWorkspacePath(next);
       }
-      if (payload.sessionPreset === "build" || payload.sessionPreset === "plan" || payload.sessionPreset === "explore") {
-        setDefaultSessionPreset(payload.sessionPreset);
-        if (persistSettings) saveDefaultSessionPreset(payload.sessionPreset);
-      }
       if (
         typeof payload.cdpPort === "number" ||
         typeof payload.autoLaunchEdge === "boolean" ||
@@ -411,16 +401,6 @@ export default function Shell(): JSX.Element {
   const showFirstRunRequirements = createMemo(
     () => showFirstRunGate() && (firstRunMissingProject() || firstRunMissingCopilot()),
   );
-  const activeSessionPreset = createMemo<SessionPreset>(() => {
-    const sid = sessions.activeSessionId();
-    if (!sid) return sessions.isFirstRun() ? "build" : defaultSessionPreset();
-    return sessions.sessionMeta()[sid]?.preset ?? defaultSessionPreset();
-  });
-  const modeLockedNote = createMemo(() => {
-    const sid = sessions.activeSessionId();
-    if (!sid) return null;
-    return `This chat uses ${sessionModeLabel(activeSessionPreset())}. Start a new chat to change it.`;
-  });
 
   createEffect(() => {
     if (!showFirstRunGate()) return;
@@ -502,14 +482,12 @@ export default function Shell(): JSX.Element {
         return true;
       }
 
-      const preset: SessionPreset = sessions.isFirstRun() ? "build" : defaultSessionPreset();
       const sessionId = await startAgent({
         goal: trimmed,
         files: [],
         cwd: workspaceLabel().trim() || null,
         maxTurns: maxTurns(),
         browserSettings: browserSettings(),
-        sessionPreset: preset,
       });
       sessions.setActiveSessionId(sessionId);
       sessions.setSessionIds((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
@@ -518,7 +496,6 @@ export default function Shell(): JSX.Element {
         [sessionId]: {
           createdAt: Date.now(),
           preview: truncatePromptPreview(trimmed, 52),
-          preset,
         },
       }));
       sessions.setStatusBySession((prev) => ({ ...prev, [sessionId]: { phase: "running" } }));
@@ -629,15 +606,9 @@ export default function Shell(): JSX.Element {
 
   const applySettings = (settings: ShellSettingsDraft) => {
     setWorkspaceLabel(settings.workspacePath);
-    setDefaultSessionPreset(settings.sessionPreset);
     setBrowserSettings(settings.browserSettings);
     setMaxTurns(settings.maxTurns);
     setAlwaysOnTop(settings.alwaysOnTop);
-  };
-
-  const handleDefaultPresetChange = (preset: SessionPreset) => {
-    setDefaultSessionPreset(preset);
-    saveDefaultSessionPreset(preset);
   };
 
   const openSettings = () => {
@@ -740,7 +711,6 @@ export default function Shell(): JSX.Element {
           chunks={sessions.chunks()}
           sessionStatus={sessions.activeSessionStatus()}
           workspacePath={workspaceLabel}
-          sessionPreset={activeSessionPreset()}
           firstRun={sessions.isFirstRun()}
           copilotState={copilotState()}
           showFirstRunRequirements={showFirstRunRequirements()}
@@ -756,8 +726,6 @@ export default function Shell(): JSX.Element {
           onCancelUserQuestion={handleUserQuestionCancel}
         />
         <Composer
-          sessionPreset={activeSessionPreset()}
-          onSessionPresetChange={handleDefaultPresetChange}
           onSend={handleSend}
           disabled={sessionBusy()}
           running={sessionBusy()}
@@ -767,14 +735,10 @@ export default function Shell(): JSX.Element {
             sessions.setChunks((prev) => [...prev, { kind: "assistant", text }]);
           }}
           hero={sessions.isFirstRun()}
-          allowModeSelection={!sessions.isFirstRun() && sessions.activeSessionId() === null}
-          modeLockedNote={modeLockedNote()}
           autoFocus={!settingsOpen()}
-          disabledReason={
-            sessions.isFirstRun()
-              ? "The first request starts in Standard. Relay keeps the same chat surface and asks for setup only when needed."
-              : modeLockedNote()
-          }
+          disabledReason={sessions.isFirstRun()
+            ? "Relay keeps the same chat surface and asks for setup only when needed."
+            : null}
         />
 
         <ApprovalOverlay
@@ -828,7 +792,6 @@ export default function Shell(): JSX.Element {
             mcpServers={mcpServers}
             setMcpServers={setMcpServers}
             workspacePath={workspaceLabel}
-            sessionPreset={activeSessionPreset}
             planTimeline={sessions.planTimelineForActiveSession}
           />
         </aside>

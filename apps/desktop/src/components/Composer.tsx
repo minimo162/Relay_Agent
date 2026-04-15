@@ -1,9 +1,7 @@
 import { Show, createEffect, createMemo, createSignal, onMount, type JSX } from "solid-js";
 import { Textarea } from "./ui";
 import { detectSlashMode, findSlashCommands, type SlashCommand } from "../lib/slash-commands";
-import type { SessionPreset } from "../lib/ipc";
 import { ui } from "../lib/ui-tokens";
-import { sessionModeLabel, sessionModeSummary } from "../lib/session-mode-label";
 
 /** Matches `.ra-composer-shell textarea` max-height in index.css */
 const COMPOSER_TEXTAREA_MAX_PX = 200;
@@ -75,8 +73,6 @@ function SlashAutocomplete(props: {
 }
 
 export function Composer(props: {
-  sessionPreset: SessionPreset;
-  onSessionPresetChange: (preset: SessionPreset) => void;
   onSend: (text: string) => boolean | Promise<boolean>;
   disabled: boolean;
   running: boolean;
@@ -84,13 +80,10 @@ export function Composer(props: {
   onSlashCommand?: (input: string) => Promise<string | null>;
   onAppendAssistant?: (text: string) => void;
   hero?: boolean;
-  allowModeSelection?: boolean;
-  modeLockedNote?: string | null;
   autoFocus?: boolean;
   disabledReason?: string | null;
 }): JSX.Element {
   const [text, setText] = createSignal("");
-  const [modePickerOpen, setModePickerOpen] = createSignal(false);
   const [slashMode, setSlashMode] = createSignal<{
     query: string;
     commands: SlashCommand[];
@@ -124,7 +117,6 @@ export function Composer(props: {
   const selectCommand = (cmd: SlashCommand) => {
     setText(`${cmd.command} `);
     closeSlashDropdown();
-    setModePickerOpen(false);
     textareaRef.focus();
   };
 
@@ -149,7 +141,6 @@ export function Composer(props: {
     const accepted = await props.onSend(value);
     if (!accepted) return;
     setText("");
-    setModePickerOpen(false);
     queueMicrotask(() => {
       if (textareaRef) adjustComposerTextareaHeight(textareaRef);
     });
@@ -218,34 +209,14 @@ export function Composer(props: {
 
   const canSend = () => text().trim().length > 0 && !props.running && !props.disabled;
   const placeholder = () => {
-    if (!props.hero) {
-      return props.sessionPreset === "build"
-        ? "Describe the result you need."
-        : props.sessionPreset === "plan"
-          ? "Describe what you want reviewed."
-          : "Describe what you want Relay to inspect.";
-    }
-    switch (props.sessionPreset) {
-      case "plan":
-        return "Example: Review this setup flow and propose the smallest safe change.";
-      case "explore":
-        return "Example: Find where this setup flow is defined.";
-      default:
-        return "Example: Make this setup flow easier to use.";
-    }
+    if (!props.hero) return "Describe the result you need.";
+    return "Example: Make this setup flow easier to use.";
   };
-  const modeSummary = createMemo(() => {
-    if (props.modeLockedNote) return props.modeLockedNote;
-    const summary =
-      props.sessionPreset === "build"
-        ? "Can inspect and edit."
-        : props.sessionPreset === "plan"
-          ? "Read-only planning."
-          : "Read-only inspection.";
-    return `${sessionModeLabel(props.sessionPreset)} · ${summary}`;
-  });
-  const allowModeSelection = () => props.allowModeSelection ?? true;
-  const currentModeLabel = createMemo(() => sessionModeLabel(props.sessionPreset));
+  const composerSummary = createMemo(() =>
+    props.running
+      ? "Relay is working in the current project."
+      : "Relay inspects first and asks for approval before risky changes.",
+  );
 
   return (
     <div class={`ra-composer relative shrink-0 ${props.hero ? "ra-composer--hero" : ""}`}>
@@ -277,7 +248,7 @@ export function Composer(props: {
           </div>
           <div class="ra-composer-toolbar">
             <div class="ra-composer-toolbar-main">
-              <p class="ra-composer-mode-summary">{modeSummary()}</p>
+              <p class="ra-composer-mode-summary">{composerSummary()}</p>
               <Show when={props.disabledReason}>
                 {(reason) => (
                   <p class="ra-composer-disabled-note" role="status" aria-live="polite" data-ra-composer-disabled-note="">
@@ -287,38 +258,6 @@ export function Composer(props: {
               </Show>
             </div>
             <div class="ra-composer-toolbar-actions">
-              <Show when={allowModeSelection()}>
-                <div class="ra-composer-mode-picker" data-ra-session-mode>
-                  <button
-                    type="button"
-                    class="ra-composer-mode-trigger"
-                    aria-expanded={modePickerOpen()}
-                    aria-label="How Relay works"
-                    onClick={() => setModePickerOpen((open) => !open)}
-                  >
-                    <span>How Relay works</span>
-                    <span class="ra-composer-mode-trigger__value">{currentModeLabel()}</span>
-                  </button>
-                  <Show when={modePickerOpen()}>
-                    <div class={`ra-composer-mode-control ${ui.radiusCompact}`} role="group" aria-label="How Relay works">
-                      {(["build", "plan", "explore"] as SessionPreset[]).map((preset) => (
-                        <button
-                          type="button"
-                          class={`ra-composer-mode-option ${props.sessionPreset === preset ? "is-selected" : ""}`}
-                          aria-pressed={props.sessionPreset === preset}
-                          onClick={() => {
-                            props.onSessionPresetChange(preset);
-                            setModePickerOpen(false);
-                          }}
-                        >
-                          <span>{sessionModeLabel(preset)}</span>
-                          <span class="ra-composer-mode-option__summary">{sessionModeSummary(preset)}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </Show>
-                </div>
-              </Show>
               <Show when={props.running}>
                 <button type="button" class="ra-composer-cancel" onClick={props.onCancel}>
                   Cancel

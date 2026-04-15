@@ -141,12 +141,6 @@ function initRelayMock(config: { autoComplete: boolean }) {
         return [];
       case "probe_rust_analyzer":
         return { ok: false, versionLine: null, error: "mock: rust-analyzer not available" };
-      case "get_desktop_permission_summary":
-        return [
-          { name: "read_file", requirement: "auto_allow", description: "Read files" },
-          { name: "write_file", requirement: "require_approval", description: "Write files" },
-          { name: "bash", requirement: "require_approval", description: "Shell commands" },
-        ];
       case "get_relay_diagnostics":
         return {
           appVersion: "0.0.0-mock",

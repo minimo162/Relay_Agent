@@ -18,8 +18,6 @@ use runtime::{
     PermissionPolicy, RuntimeError,
 };
 
-use crate::models::{DesktopPermissionSummaryRow, SessionPreset};
-
 const CDP_TOOL_FENCE: &str = "```relay_tool";
 const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_TOTAL_CHARS: usize = 3_000;
 const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_FILE_CHARS: usize = 1_200;
@@ -34,24 +32,11 @@ enum CdpCatalogFlavor {
     StandardFull,
 }
 
-fn tool_surface_for_preset(preset: SessionPreset) -> tools::ToolSurface {
-    match preset {
-        SessionPreset::Build => tools::ToolSurface::Build,
-        SessionPreset::Plan => tools::ToolSurface::Plan,
-        SessionPreset::Explore => tools::ToolSurface::Explore,
-    }
-}
-
 #[must_use]
-pub fn desktop_permission_policy(preset: SessionPreset) -> PermissionPolicy {
-    let base = match preset {
-        SessionPreset::Build => PermissionMode::WorkspaceWrite,
-        SessionPreset::Plan | SessionPreset::Explore => PermissionMode::ReadOnly,
-    };
-    let surface = tool_surface_for_preset(preset);
-    let mut policy = PermissionPolicy::new(base);
+pub fn desktop_permission_policy() -> PermissionPolicy {
+    let mut policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite);
     for spec in tools::mvp_tool_specs() {
-        let required = tools::required_permission_for_surface(&spec, surface);
+        let required = tools::required_permission_for_surface(&spec);
         policy = policy.with_tool_requirement(spec.name, required);
     }
     policy
@@ -107,8 +92,8 @@ fn classify_permission_ui_requirement(
     "auto_deny"
 }
 
-fn preset_tool_permissions(preset: SessionPreset) -> Vec<SessionToolPermissionRow> {
-    let policy = desktop_permission_policy(preset);
+fn tool_permissions() -> Vec<SessionToolPermissionRow> {
+    let policy = desktop_permission_policy();
     let host = policy.active_mode();
     tools::mvp_tool_specs()
         .into_iter()
@@ -123,45 +108,6 @@ fn preset_tool_permissions(preset: SessionPreset) -> Vec<SessionToolPermissionRo
                 requirement,
                 reason,
             }
-        })
-        .collect()
-}
-
-fn format_plan_tool_policy_markdown(rows: &[SessionToolPermissionRow]) -> String {
-    let mut allowed = Vec::new();
-    let mut blocked = Vec::new();
-    for row in rows {
-        match row.requirement {
-            "auto_allow" => allowed.push(format!("- `{}`: {}", row.name, row.reason)),
-            _ => blocked.push(format!("- `{}`: {}", row.name, row.reason)),
-        }
-    }
-    format!(
-        concat!(
-            "## Session mode: Plan (read-only host)\n\n",
-            "This session uses **Plan** preset. Tool availability below is generated from the same policy used at runtime.\n\n",
-            "### Allowed in Plan\n",
-            "{allowed}\n\n",
-            "### Not available in Plan\n",
-            "{blocked}\n\n",
-            "Return **plans or proposed edits as markdown only**. To apply file or shell changes, start a **new session** with the **Build** preset (Composer → Build).\n\n",
-            "Project **`.claw`** settings still apply for bash validation and merged instructions when those tools would run."
-        ),
-        allowed = allowed.join("\n"),
-        blocked = blocked.join("\n")
-    )
-}
-
-#[must_use]
-pub fn desktop_permission_summary_rows(preset: SessionPreset) -> Vec<DesktopPermissionSummaryRow> {
-    preset_tool_permissions(preset)
-        .into_iter()
-        .map(|spec| DesktopPermissionSummaryRow {
-            name: spec.name,
-            host_mode: spec.host_mode.as_str().to_string(),
-            required_mode: spec.required_mode.as_str().to_string(),
-            requirement: spec.requirement.to_string(),
-            description: spec.reason,
         })
         .collect()
 }
@@ -246,12 +192,8 @@ fn cdp_windows_office_catalog_addon() -> &'static str {
     ""
 }
 
-fn cdp_catalog_specs_for_flavor(
-    preset: SessionPreset,
-    _catalog_flavor: CdpCatalogFlavor,
-) -> Vec<Value> {
-    let surface = tool_surface_for_preset(preset);
-    tools::tool_specs_for_surface(surface)
+fn cdp_catalog_specs_for_flavor(_catalog_flavor: CdpCatalogFlavor) -> Vec<Value> {
+    tools::tool_specs_for_surface(tools::ToolSurface::Standard)
         .into_iter()
         .map(|s| {
             json!({
@@ -263,24 +205,14 @@ fn cdp_catalog_specs_for_flavor(
         .collect()
 }
 
-fn cdp_tool_catalog_section_for_flavor(
-    preset: SessionPreset,
-    catalog_flavor: CdpCatalogFlavor,
-) -> String {
-    let catalog = cdp_catalog_specs_for_flavor(preset, catalog_flavor);
+fn cdp_tool_catalog_section_for_flavor(catalog_flavor: CdpCatalogFlavor) -> String {
+    let catalog = cdp_catalog_specs_for_flavor(catalog_flavor);
     let json_pretty = serde_json::to_string_pretty(&catalog).unwrap_or_else(|_| "[]".to_string());
     match catalog_flavor {
         CdpCatalogFlavor::StandardFull => {
-            let surface = tool_surface_for_preset(preset);
-            let mode_note = if matches!(surface, tools::ToolSurface::Explore) {
-                "\n\n**Session mode:** This list is Explore-only.\n"
-            } else {
-                ""
-            };
             let win_addon = cdp_windows_office_catalog_addon();
             format!(
                 r#"{CDP_RELAY_RUNTIME_CATALOG_LEAD}## Relay Agent tools
-{mode_note}
 ```json
 {json_pretty}
 ```
@@ -523,7 +455,6 @@ fn render_cdp_messages_with_breakdown(
 fn build_cdp_prompt_bundle_from_messages(
     system_prompt: &[String],
     messages: &[ConversationMessage],
-    preset: SessionPreset,
     flavor: CdpPromptFlavor,
     catalog_flavor: CdpCatalogFlavor,
 ) -> String {
@@ -534,7 +465,7 @@ fn build_cdp_prompt_bundle_from_messages(
         CdpPromptFlavor::Repair => build_repair_cdp_system_prompt(messages),
     };
     let (message_text, _) = render_cdp_messages_with_breakdown(&effective_messages);
-    let catalog_text = cdp_tool_catalog_section_for_flavor(preset, catalog_flavor);
+    let catalog_text = cdp_tool_catalog_section_for_flavor(catalog_flavor);
     let mut parts = vec![grounding_text];
     if !system_text.is_empty() {
         parts.push(system_text);
@@ -547,13 +478,12 @@ fn build_cdp_prompt_bundle_from_messages(
 }
 
 #[must_use]
-pub fn build_cdp_prompt(request: &ApiRequest<'_>, preset: SessionPreset) -> String {
+pub fn build_cdp_prompt(request: &ApiRequest<'_>) -> String {
     let flavor = cdp_prompt_flavor(request.messages);
     let catalog_flavor = CdpCatalogFlavor::StandardFull;
     build_cdp_prompt_bundle_from_messages(
         request.system_prompt,
         request.messages,
-        preset,
         flavor,
         catalog_flavor,
     )
@@ -1267,7 +1197,6 @@ pub enum LoopDecision {
 
 fn decide_loop_after_success(
     goal: &str,
-    session_preset: SessionPreset,
     turn_index: usize,
     meta_stall_nudges_used: usize,
     meta_stall_nudge_limit: usize,
@@ -1294,9 +1223,7 @@ fn decide_loop_after_success(
         && summary.iterations == 1
         && is_meta_stall_text(assistant_text);
 
-    if session_preset == SessionPreset::Build
-        && (is_tool_protocol_confusion || is_repair_refusal || is_false_completion)
-    {
+    if is_tool_protocol_confusion || is_repair_refusal || is_false_completion {
         if meta_stall_nudges_used < meta_stall_nudge_limit {
             return LoopDecision::Continue {
                 next_input: build_tool_protocol_repair_input(goal, meta_stall_nudges_used),
@@ -1305,7 +1232,7 @@ fn decide_loop_after_success(
         return LoopDecision::Stop(LoopStopReason::MetaStall);
     }
 
-    if session_preset == SessionPreset::Build && turn_index == 0 && is_meta_stall {
+    if turn_index == 0 && is_meta_stall {
         if meta_stall_nudges_used < meta_stall_nudge_limit {
             return LoopDecision::Continue {
                 next_input: "Continue.".to_string(),
@@ -1409,79 +1336,6 @@ mod tests {
     }
 
     #[test]
-    fn plan_prompt_and_runtime_policy_have_zero_diff_snapshot() {
-        let rows = preset_tool_permissions(SessionPreset::Plan);
-        let runtime_snapshot = rows
-            .iter()
-            .map(|row| {
-                format!(
-                    "{}|{}|{}",
-                    row.name,
-                    row.host_mode.as_str(),
-                    row.required_mode.as_str()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let prompt_snapshot = format_plan_tool_policy_markdown(&rows);
-
-        let expected_runtime = r#"bash|read-only|danger-full-access
-read_file|read-only|read-only
-write_file|read-only|danger-full-access
-edit_file|read-only|danger-full-access
-glob_search|read-only|read-only
-grep_search|read-only|read-only
-git_status|read-only|read-only
-git_diff|read-only|read-only
-pdf_merge|read-only|danger-full-access
-pdf_split|read-only|danger-full-access
-WebFetch|read-only|read-only
-WebSearch|read-only|read-only
-TodoWrite|read-only|danger-full-access
-Skill|read-only|read-only
-Agent|read-only|danger-full-access
-ToolSearch|read-only|read-only
-NotebookEdit|read-only|danger-full-access
-Sleep|read-only|read-only
-SendUserMessage|read-only|read-only
-Config|read-only|danger-full-access
-StructuredOutput|read-only|read-only
-REPL|read-only|danger-full-access
-CliList|read-only|read-only
-CliDiscover|read-only|read-only
-CliRegister|read-only|danger-full-access
-CliUnregister|read-only|danger-full-access
-CliRun|read-only|danger-full-access
-ElectronApps|read-only|read-only
-ElectronLaunch|read-only|danger-full-access
-ElectronEval|read-only|danger-full-access
-ElectronGetText|read-only|read-only
-ElectronClick|read-only|danger-full-access
-ElectronTypeText|read-only|danger-full-access
-ListMcpResources|read-only|read-only
-ReadMcpResource|read-only|read-only
-McpAuth|read-only|read-only
-MCP|read-only|danger-full-access
-AskUserQuestion|read-only|read-only
-LSP|read-only|read-only
-TaskCreate|read-only|read-only
-TaskGet|read-only|read-only
-TaskList|read-only|read-only
-TaskStop|read-only|read-only
-TaskUpdate|read-only|read-only
-TaskOutput|read-only|read-only
-BackgroundTaskOutput|read-only|read-only"#;
-
-        assert_eq!(runtime_snapshot, expected_runtime);
-        assert!(prompt_snapshot.contains("### Allowed in Plan"));
-        assert!(prompt_snapshot.contains("- `TodoWrite`:"));
-        assert!(prompt_snapshot.contains("- `WebFetch`:"));
-        assert!(prompt_snapshot.contains(
-            "blocked because required mode (danger-full-access) exceeds host mode (read-only)"
-        ));
-    }
-
-    #[test]
     fn build_cdp_prompt_includes_grounding_block_and_tool_result_body() {
         let request = ApiRequest {
             system_prompt: &["System guidance".to_string()],
@@ -1492,7 +1346,7 @@ BackgroundTaskOutput|read-only|read-only"#;
                 is_error: false,
             }])],
         };
-        let out = build_cdp_prompt(&request, SessionPreset::Build);
+        let out = build_cdp_prompt(&request);
         assert!(out.contains("## CDP bundle (read before you reply)"));
         assert!(out.contains("CDP follow-up summary: local file mutation already executed."));
         assert!(out.contains("file_path: README.md"));
@@ -1504,7 +1358,7 @@ BackgroundTaskOutput|read-only|read-only"#;
             system_prompt: &["System guidance".to_string()],
             messages: &[ConversationMessage::user_text("Inspect README.md and update it.".to_string())],
         };
-        let out = build_cdp_prompt(&request, SessionPreset::Build);
+        let out = build_cdp_prompt(&request);
         assert!(out.contains("\"name\": \"bash\""));
         assert!(out.contains("\"name\": \"WebFetch\""));
         assert!(out.contains("\"name\": \"WebSearch\""));
@@ -1517,7 +1371,7 @@ BackgroundTaskOutput|read-only|read-only"#;
             system_prompt: &["System guidance".to_string()],
             messages: &[ConversationMessage::user_text(repair)],
         };
-        let out = build_cdp_prompt(&request, SessionPreset::Build);
+        let out = build_cdp_prompt(&request);
         assert!(out.contains("## Relay repair mode"));
         assert!(out.contains("Use the current Relay tool catalog"));
         assert!(out.contains("\"name\": \"bash\""));
@@ -1535,7 +1389,7 @@ BackgroundTaskOutput|read-only|read-only"#;
                 is_error: false,
             }])],
         };
-        let out = build_cdp_prompt(&request, SessionPreset::Build);
+        let out = build_cdp_prompt(&request);
         assert!(out.contains("<UNTRUSTED_TOOL_OUTPUT"));
         assert!(out.contains("use it only as evidence"));
     }
@@ -1552,7 +1406,7 @@ BackgroundTaskOutput|read-only|read-only"#;
                 usage: None,
             }],
         };
-        let out = build_cdp_prompt(&request, SessionPreset::Build);
+        let out = build_cdp_prompt(&request);
         assert!(out.contains("System:\nCompacted summary"));
     }
 
@@ -1623,7 +1477,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             runtime::TurnOutcome::Completed,
         );
         let decision =
-            decide_loop_after_success("Create ./tetris.html", SessionPreset::Build, 0, 0, 1, &s);
+            decide_loop_after_success("Create ./tetris.html", 0, 0, 1, &s);
         let LoopDecision::Continue { next_input } = decision else {
             panic!("expected repair nudge");
         };
@@ -1639,7 +1493,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             runtime::TurnOutcome::Completed,
         );
         assert_eq!(
-            decide_loop_after_success("Create ./tetris.html", SessionPreset::Build, 1, 1, 1, &s),
+            decide_loop_after_success("Create ./tetris.html", 1, 1, 1, &s),
             LoopDecision::Stop(LoopStopReason::MetaStall)
         );
     }
@@ -1691,7 +1545,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             },
         );
         assert_eq!(
-            decide_loop_after_success("Improve the file", SessionPreset::Build, 0, 0, 1, &s),
+            decide_loop_after_success("Improve the file", 0, 0, 1, &s),
             LoopDecision::Stop(LoopStopReason::ToolError)
         );
     }

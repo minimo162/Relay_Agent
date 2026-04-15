@@ -52,7 +52,7 @@ test.describe("Conversation model", () => {
     await page.getByRole("button", { name: "Chats" }).click();
     await expect(page.locator(".ra-session-row")).toHaveCount(2);
     await page.getByRole("button", { name: "New chat" }).click();
-    await expect(page.getByLabel("How Relay works")).toBeVisible();
+    await expect(page.locator("[data-ra-composer-textarea]")).toBeEditable();
   });
 });
 
@@ -72,7 +72,7 @@ test.describe("Settings and first-run UX", () => {
     await expect(page.locator("[data-ra-setup-card]")).toBeVisible();
     await expect(page.locator("[data-ra-session-mode]")).toHaveCount(0);
     await expect(page.locator("[data-ra-composer-disabled-note]")).toHaveText(
-      "The first request starts in Standard. Relay keeps the same chat surface and asks for setup only when needed.",
+      "Relay keeps the same chat surface and asks for setup only when needed.",
     );
   });
 
@@ -87,7 +87,6 @@ test.describe("Settings and first-run UX", () => {
     await expect(advanced).not.toHaveAttribute("open", "");
     await expect(dialog.getByText("Browser debug port")).not.toBeVisible();
     await advanced.locator("summary").click();
-    await expect(dialog.getByText("Default chat mode")).toBeVisible();
     await expect(dialog.getByText("Browser debug port")).toBeVisible();
     await expect(dialog.getByText("Response timeout (ms)")).toBeVisible();
     await expect(dialog.getByText("Always on top")).toBeVisible();
@@ -105,8 +104,9 @@ test.describe("Settings and first-run UX", () => {
     await expect(page.locator("[data-ra-shell-drawer='sessions']")).toHaveCount(0);
     await page.getByRole("button", { name: "Context" }).click();
     await expect(page.locator("[data-ra-shell-drawer='context']")).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Activity" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Integrations" })).toBeVisible();
-    await expect(page.locator("[data-ra-permissions-details]")).not.toHaveAttribute("open", "");
+    await expect(page.getByText("Relay works from the conversation.")).toBeVisible();
   });
 
   test("narrow layout keeps drawer controls and composer actions usable", async ({ page }) => {

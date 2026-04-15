@@ -95,7 +95,6 @@ pub fn run() {
             commands::mcp::mcp_check_server_status,
             commands::diagnostics::write_text_export,
             commands::diagnostics::workspace_instruction_surfaces,
-            commands::diagnostics::get_desktop_permission_summary,
             commands::diagnostics::get_workspace_allowlist,
             commands::diagnostics::remove_workspace_allowlist_tool,
             commands::diagnostics::clear_workspace_allowlist,

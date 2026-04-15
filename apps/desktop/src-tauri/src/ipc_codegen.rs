@@ -10,10 +10,9 @@ use crate::agent_loop::{
 use crate::models::{
     BrowserAutomationSettings, CancelAgentRequest, ContinueAgentSessionRequest,
     CopilotBridgeFailureInfo, CopilotRepairStageFailureCount, CopilotRepairStageStats,
-    DesktopPermissionSummaryRow, GetAgentSessionHistoryRequest, GetPermissionSummaryRequest,
-    ListWorkspaceSlashCommandsRequest, McpAddServerRequest, McpServerInfo, RelayDiagnostics,
-    RespondAgentApprovalRequest, RespondUserQuestionRequest, RustAnalyzerProbeRequest,
-    RustAnalyzerProbeResponse, SessionPreset, SessionWriteUndoRequest,
+    GetAgentSessionHistoryRequest, ListWorkspaceSlashCommandsRequest, McpAddServerRequest,
+    McpServerInfo, RelayDiagnostics, RespondAgentApprovalRequest, RespondUserQuestionRequest,
+    RustAnalyzerProbeRequest, RustAnalyzerProbeResponse, SessionWriteUndoRequest,
     SessionWriteUndoStatusResponse, StartAgentRequest, WorkspaceAllowlistCwdRequest,
     WorkspaceAllowlistEntryRow, WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
     WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
@@ -32,7 +31,6 @@ fn decl<T: TS>() -> String {
 pub fn render_ipc_generated_ts() -> String {
     let sections = [
         decl::<BrowserAutomationSettings>(),
-        decl::<SessionPreset>(),
         decl::<StartAgentRequest>(),
         decl::<ContinueAgentSessionRequest>(),
         decl::<RespondAgentApprovalRequest>(),
@@ -49,8 +47,6 @@ pub fn render_ipc_generated_ts() -> String {
         decl::<RustAnalyzerProbeResponse>(),
         decl::<CompactAgentSessionRequest>(),
         decl::<CompactAgentSessionResponse>(),
-        decl::<DesktopPermissionSummaryRow>(),
-        decl::<GetPermissionSummaryRequest>(),
         decl::<McpServerInfo>(),
         decl::<McpAddServerRequest>(),
         decl::<WorkspaceAllowlistEntryRow>(),
@@ -102,7 +98,6 @@ mod tests {
     fn rendered_ipc_bindings_include_core_contracts() {
         let rendered = render_ipc_generated_ts();
         for required in [
-            "type SessionPreset",
             "StartAgentRequest",
             "AgentSessionHistoryResponse",
             "AgentSessionStatusEvent",

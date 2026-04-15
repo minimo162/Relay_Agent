@@ -20,7 +20,7 @@ use crate::agent_loop::{
     E_STATUS, E_TEXT_DELTA, E_TOOL_RESULT, E_TOOL_START, E_TURN_COMPLETE,
 };
 use crate::app_services::AppServices;
-use crate::models::{RespondAgentApprovalRequest, SessionPreset, StartAgentRequest};
+use crate::models::{RespondAgentApprovalRequest, StartAgentRequest};
 use crate::tauri_bridge::{respond_approval_inner, start_agent_inner};
 
 pub const SMOKE_EVENT_TIMEOUT: Duration = Duration::from_secs(45);
@@ -207,7 +207,6 @@ pub async fn run_agent_loop_smoke<R: Runtime>(
             cwd: Some(workspace.root.to_string_lossy().into_owned()),
             browser_settings: None,
             max_turns: Some(4),
-            session_preset: SessionPreset::Build,
         };
 
         let session_id = start_agent_inner(

@@ -1,21 +1,18 @@
 import { Show, createEffect, createSignal, type JSX } from "solid-js";
 import { isTauri } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import type { BrowserAutomationSettings, SessionPreset } from "../lib/ipc";
+import type { BrowserAutomationSettings } from "../lib/ipc";
 import { getRelayDiagnostics, writeTextExport } from "../lib/ipc";
 import {
   loadAlwaysOnTop,
   loadBrowserSettings,
-  loadDefaultSessionPreset,
   loadMaxTurns,
   loadWorkspacePath,
   saveAlwaysOnTop,
   saveBrowserSettings,
-  saveDefaultSessionPreset,
   saveMaxTurns,
   saveWorkspacePath,
 } from "../lib/settings-storage";
-import { sessionModeLabel, sessionModeSummary } from "../lib/session-mode-label";
 import {
   copilotWarmupHeadline,
   copilotWarmupStageDetail,
@@ -28,7 +25,6 @@ export interface ShellSettingsDraft {
   workspacePath: string;
   browserSettings: BrowserAutomationSettings;
   maxTurns: number;
-  sessionPreset: SessionPreset;
   alwaysOnTop: boolean;
 }
 
@@ -45,7 +41,6 @@ export function SettingsModal(props: {
   let lastFocusedElement: HTMLElement | null = null;
   let wasOpen = false;
   const [workspace, setWorkspace] = createSignal("");
-  const [sessionPreset, setSessionPreset] = createSignal<SessionPreset>("build");
   const [maxTurns, setMaxTurns] = createSignal("16");
   const [cdpPort, setCdpPort] = createSignal("9360");
   const [timeoutMs, setTimeoutMs] = createSignal("120000");
@@ -59,7 +54,6 @@ export function SettingsModal(props: {
       lastFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       const browser = loadBrowserSettings();
       setWorkspace(loadWorkspacePath());
-      setSessionPreset(loadDefaultSessionPreset());
       setMaxTurns(String(loadMaxTurns()));
       setCdpPort(String(browser.cdpPort));
       setTimeoutMs(String(browser.timeoutMs));
@@ -118,11 +112,9 @@ export function SettingsModal(props: {
       workspacePath: workspace().trim(),
       browserSettings: nextBrowserSettings,
       maxTurns: nextMaxTurns,
-      sessionPreset: sessionPreset(),
       alwaysOnTop: alwaysOnTop(),
     };
     saveWorkspacePath(next.workspacePath);
-    saveDefaultSessionPreset(next.sessionPreset);
     saveMaxTurns(next.maxTurns);
     saveBrowserSettings(next.browserSettings);
     saveAlwaysOnTop(next.alwaysOnTop);
@@ -259,26 +251,6 @@ export function SettingsModal(props: {
                   <span class="ra-type-caption text-[var(--ra-text-muted)]">Show</span>
                 </summary>
                 <div class="mt-3 space-y-4">
-                  <div class="ra-settings-step">
-                    <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Conversation defaults</span>
-                    <p class="ra-type-button-label text-[var(--ra-text-primary)] mt-1">Default chat mode after onboarding</p>
-                    <div class="ra-settings-segmented mt-2" role="group" aria-label="Default chat mode">
-                      {(["build", "plan", "explore"] as SessionPreset[]).map((preset) => (
-                        <button
-                          type="button"
-                          class={`ra-settings-segmented__option ${sessionPreset() === preset ? "is-selected" : ""}`}
-                          aria-pressed={sessionPreset() === preset}
-                          onClick={() => setSessionPreset(preset)}
-                        >
-                          <span>{sessionModeLabel(preset)}</span>
-                        </button>
-                      ))}
-                    </div>
-                    <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
-                      {sessionModeSummary(sessionPreset())}
-                    </p>
-                  </div>
-
                   <div class="ra-settings-field-grid">
                     <label class="block">
                       <span class="ra-type-system-micro text-[var(--ra-text-muted)]">Max turns</span>

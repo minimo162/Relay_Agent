@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use runtime::{ContentBlock, ConversationMessage, RuntimeError, Session, TokenUsage};
 use serde::{Deserialize, Serialize};
 
-use crate::models::{BrowserAutomationSettings, SessionPreset};
+use crate::models::BrowserAutomationSettings;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,8 +15,6 @@ pub struct PersistedSessionConfig {
     pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_preset: Option<SessionPreset>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub browser_settings: Option<BrowserAutomationSettings>,
 }

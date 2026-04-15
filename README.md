@@ -31,9 +31,9 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 - **Chats** — The sidebar tracks chats, not one-shot runs. Sending while the active chat is idle continues that chat; **New chat** starts a separate one. Tool steps always show **inline in chat**.
 - **First run** — The app now opens in the same chat shell used later. The empty conversation surface shows a compact setup card for **Project** and **Copilot**, while `Chats`, `Context`, and `Settings` stay visible from the start. You can type the first request immediately; if setup is still missing, Relay keeps the draft in place and shows inline actions to finish setup before sending.
 - **Approvals** — **Allow once**, **Always allow in this conversation**, or **Always allow in this folder** for gated tools. Technical payloads are tucked under **Advanced details**.
-- **Settings** — The Settings modal keeps **Project** and **Copilot** in the Basic section, with the same setup language used in the chat surface. Default chat mode and browser/troubleshooting controls stay under collapsed Advanced details.
-- **Context panel** — **Plan** (default): `TodoWrite` timeline + collapsed **Permissions** disclosure; **Integrations** shows MCP servers and workspace instruction surfaces when `cwd` is set. The panel stays hidden on first run.
-- **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or **Send** submits. The first request always starts in the standard edit-capable mode. After that, new chats can still choose **Standard**, **Plan only**, or **Read only** through a low-emphasis **How Relay works** control; the chosen mode stays fixed for that chat. Explore = `read_file` / `glob_search` / `grep_search` only in the Copilot tool list.
+- **Settings** — The Settings modal keeps **Project** and **Copilot** in the Basic section, with browser/troubleshooting controls under collapsed Advanced details.
+- **Context panel** — **Activity** shows `TodoWrite` snapshots when Relay writes a checklist and otherwise stays minimal; **Integrations** shows MCP servers and workspace instruction surfaces when `cwd` is set. The panel stays hidden on first run.
+- **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or **Send** submits. Relay uses one standard conversation surface: it inspects first, answers directly for review/explanation requests, and asks for approval only when a risky tool run is needed.
 - **Undo / Redo** — Header actions reverse the last successful workspace writes from the active session (`write_file`, `edit_file`, `NotebookEdit`, PDF tools), when the agent is idle.
 - **Audit readability** — Tool rows prefer human labels and per-tool summaries (`Read file`, `Search file contents`, PDF actions, file writes) instead of raw internal tool ids.
 - **Extras** — PDF via LiteParse + bundled Node; Windows Office hybrid read (COM + PDF); MCP over stdio.
@@ -72,7 +72,7 @@ Relay_Agent/
 
 | Command | Purpose |
 |---------|---------|
-| `start_agent` | Start a new conversation (`goal`, optional `cwd`, `files`, `maxTurns`, `browserSettings`, `sessionPreset`: `build` \| `plan` \| `explore`) |
+| `start_agent` | Start a new conversation (`goal`, optional `cwd`, `files`, `maxTurns`, `browserSettings`) |
 | `continue_agent_session` | Continue an existing idle conversation (`sessionId`, `message`) |
 | `respond_approval` | Approve/deny; optional `rememberForSession` |
 | `cancel_agent`, `get_session_history`, `compact_agent_session` | Session control |

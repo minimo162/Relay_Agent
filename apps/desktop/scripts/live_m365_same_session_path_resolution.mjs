@@ -694,7 +694,6 @@ async function main() {
     currentStage = "configure";
     await postDevControl("/configure", {
       workspacePath,
-      sessionPreset: "build",
       cdpPort,
       autoLaunchEdge: false,
       timeoutMs: 60_000,

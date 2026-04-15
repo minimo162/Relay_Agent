@@ -158,13 +158,12 @@ Acceptance criteria:
 
 ### Phase 5: First-Use UI Simplification
 
-Goal: make the desktop shell easier to understand for first-time users without changing IPC or runtime behavior.
+Goal: keep the desktop shell easy to understand by using one standard conversation surface instead of mode-based UX.
 
 Change targets:
 
 - `apps/desktop/src/components/{FirstRunPanel,Composer,SettingsModal,ShellHeader,Sidebar,MessageFeed,ContextPanel,StatusBar}.tsx`
 - `apps/desktop/src/shell/{Shell,useCopilotWarmup}.ts*`
-- `apps/desktop/src/lib/session-mode-label.ts`
 - `apps/desktop/src/index.css`
 - `apps/desktop/tests/{app.e2e.spec.ts,e2e-comprehensive.spec.ts}`
 - `README.md`
@@ -174,9 +173,9 @@ Acceptance criteria:
 
 - First run is a single three-step flow: project, Copilot, first request.
 - The first request stays disabled until project selection and Copilot readiness are satisfied.
-- The first request always starts in `build`; `plan` and `explore` remain available but are not exposed on first run.
-- User-facing labels prefer `Project`, `Chats`, `Needs your approval`, and `How Relay works`.
-- New-chat mode selection is present only as a low-emphasis secondary control.
+- The app keeps one standard session posture for all chats; review and explanation requests are handled by intent, not by mode switches.
+- User-facing labels prefer `Project`, `Chats`, `Needs your approval`, `Activity`, and `Integrations`.
+- Risky actions are explained through inline approval requests instead of a separate mode or permission matrix.
 - Root `pnpm check` passes and Playwright coverage confirms first-run gating plus the simplified shell labels.
 
 ## Out Of Scope
