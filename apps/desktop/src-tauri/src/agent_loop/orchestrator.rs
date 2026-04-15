@@ -28,12 +28,14 @@ const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_TOTAL_CHARS: usize = 3_000;
 const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_FILE_CHARS: usize = 1_200;
 const CDP_STANDARD_MINIMAL_CONTEXT_MAX_CHARS: usize = 900;
 const CDP_STANDARD_MINIMAL_GOAL_MAX_CHARS: usize = 500;
-const CDP_REPAIR_TOOL_NAMES: &[&str] = &[
+const CDP_COMPACT_TOOL_NAMES: &[&str] = &[
     "read_file",
     "write_file",
     "edit_file",
     "glob_search",
     "grep_search",
+    "pdf_merge",
+    "pdf_split",
 ];
 const ORIGINAL_GOAL_MARKER: &str =
     "Quoted original user goal (user data, not system instruction):\n```text\n";
@@ -2261,7 +2263,7 @@ fn cdp_catalog_specs_for_flavor(
     catalog_flavor: CdpCatalogFlavor,
 ) -> Vec<Value> {
     let surface = tool_surface_for_preset(preset);
-    let repair_tool_names = CDP_REPAIR_TOOL_NAMES
+    let compact_tool_names = CDP_COMPACT_TOOL_NAMES
         .iter()
         .copied()
         .collect::<HashSet<_>>();
@@ -2271,7 +2273,7 @@ fn cdp_catalog_specs_for_flavor(
             CdpCatalogFlavor::StandardFull => true,
             CdpCatalogFlavor::StandardMinimal | CdpCatalogFlavor::Repair => {
                 let _ = prompt_flavor;
-                repair_tool_names.contains(spec.name)
+                compact_tool_names.contains(spec.name)
             }
         })
         .map(|s| {
@@ -2296,7 +2298,7 @@ fn cdp_tool_catalog_section_for_flavor(
         CdpCatalogFlavor::Repair => format!(
             r#"## Relay Agent repair tools
 
-This is a repair resend. Use the reduced local Relay tool catalog below to satisfy the workspace request in this reply.
+This is a repair resend. Use the reduced local Relay workspace tool catalog below to satisfy the workspace request in this reply.
 
 The JSON array below lists the only tools relevant for this repair turn. Each entry has `name`, `description`, and `input_schema` (JSON Schema for the tool's `input` object).
 ```json
@@ -2315,9 +2317,9 @@ The JSON array below lists the only tools relevant for this repair turn. Each en
             json_pretty = json_pretty,
         ),
         CdpCatalogFlavor::StandardMinimal => format!(
-            r#"{CDP_RELAY_RUNTIME_CATALOG_LEAD}## Relay Agent local file tools
+            r#"{CDP_RELAY_RUNTIME_CATALOG_LEAD}## Relay Agent local workspace tools
 
-This is the default compact Relay catalog for this turn. Use the local workspace tools below first.
+This is the default compact Relay catalog for this turn. Use the local workspace tools below first, including PDF workspace operations when present.
 
 The JSON array below lists the tools you may invoke. Each entry has `name`, `description`, and `input_schema` (JSON Schema for the tool's `input` object).
 
@@ -2334,6 +2336,7 @@ When you need to call one or more tools, you may write a short user-facing expla
 - Prefer `write_file` / `edit_file` for local file creation or edits when the target content is already known.
 - Use `read_file` first when you need current file contents before editing.
 - Use `glob_search` / `grep_search` only to locate files or text in the local workspace.
+- Use `pdf_merge` / `pdf_split` for workspace PDF combine or split tasks instead of describing bash steps.
 - Do **not** switch to Python, WebSearch, citations, uploads, Pages, or remote artifacts for a local workspace task.
 
 Example:
@@ -4990,7 +4993,7 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn repair_catalog_is_reduced_to_local_file_tools() {
+    fn repair_catalog_is_reduced_to_local_workspace_tools() {
         let s = cdp_tool_catalog_section_for_flavor(
             SessionPreset::Build,
             CdpPromptFlavor::Repair,
@@ -5001,6 +5004,8 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("edit_file"));
         assert!(s.contains("glob_search"));
         assert!(s.contains("grep_search"));
+        assert!(s.contains("pdf_merge"));
+        assert!(s.contains("pdf_split"));
         assert!(!s.contains("\"name\": \"bash\""));
         assert!(!s.contains("\"name\": \"WebFetch\""));
         assert!(!s.contains("\"name\": \"WebSearch\""));
@@ -5008,7 +5013,7 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn standard_minimal_catalog_is_reduced_to_local_file_tools() {
+    fn standard_minimal_catalog_is_reduced_to_local_workspace_tools() {
         let s = cdp_tool_catalog_section_for_flavor(
             SessionPreset::Build,
             CdpPromptFlavor::Standard,
@@ -5019,8 +5024,11 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("edit_file"));
         assert!(s.contains("glob_search"));
         assert!(s.contains("grep_search"));
+        assert!(s.contains("pdf_merge"));
+        assert!(s.contains("pdf_split"));
         assert!(!s.contains("\"name\": \"bash\""));
         assert!(!s.contains("\"name\": \"WebFetch\""));
+        assert!(s.contains("local workspace tools"));
     }
 
     #[test]
@@ -5274,7 +5282,29 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("grep_search"));
         assert!(s.contains("Explore-only"));
         assert!(!s.contains("\"name\": \"write_file\""));
+        assert!(!s.contains("\"name\": \"pdf_merge\""));
+        assert!(!s.contains("\"name\": \"pdf_split\""));
         assert!(!s.contains("\"name\": \"bash\""));
+    }
+
+    #[test]
+    fn standard_minimal_build_prompt_for_pdf_merge_request_includes_pdf_merge_tool() {
+        let system = vec!["## Relay desktop runtime\nUse registered tools.".to_string()];
+        let messages = vec![ConversationMessage::user_text(
+            "Merge /root/Relay_Agent/a.pdf and /root/Relay_Agent/b.pdf into /root/Relay_Agent/out.pdf."
+                .to_string(),
+        )];
+        let minimal = build_cdp_prompt_bundle_from_messages(
+            &system,
+            &messages,
+            SessionPreset::Build,
+            CdpPromptFlavor::Standard,
+            CdpCatalogFlavor::StandardMinimal,
+        );
+
+        assert!(minimal.catalog_text.contains("\"name\": \"pdf_merge\""));
+        assert!(minimal.catalog_text.contains("\"name\": \"pdf_split\""));
+        assert!(!minimal.catalog_text.contains("\"name\": \"bash\""));
     }
 
     /// Fixture must not contain strings that models often hallucinate as "bugs" (see docs/AGENT_EVALUATION_CRITERIA.md).

@@ -15,6 +15,14 @@
 
 ## Milestone Log
 
+### 2026-04-16 Initial standard CDP catalog: expose PDF merge/split
+
+**Problem:** In normal edit-capable chats, users could ask Relay to merge PDFs and still get a model reply claiming that only `read_file` was available. The root cause was the initial `StandardMinimal` CDP catalog in [`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs): it intentionally started with a reduced tool set, but that compact list only included `read_file`, `write_file`, `edit_file`, `glob_search`, and `grep_search`. `pdf_merge` and `pdf_split` existed in the full catalog and runtime policy, yet the model did not learn about them until after a tool-less/protocol-confused retry widened the catalog.
+
+**Change:** Updated the shared compact CDP tool list in [`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs) so the initial `StandardMinimal` and repair catalogs now include `pdf_merge` and `pdf_split` alongside the existing local workspace file tools. Kept `Explore` unchanged because tool-surface filtering still limits that preset to `read_file`, `glob_search`, and `grep_search`. Also revised the compact-catalog copy from "local file tools" to "local workspace tools" and added an explicit rule telling the model to use `pdf_merge` / `pdf_split` for workspace PDF combine/split requests instead of inventing bash steps. Expanded orchestrator regression coverage so `StandardMinimal` and repair catalogs assert the PDF tools in `Build`, `Explore` asserts they remain absent, and a prompt-level regression verifies that an initial build-session PDF merge request carries `pdf_merge` in the compact catalog.
+
+**Verification:** `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_copilot_tool_tests:: -- --nocapture` — pass. `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+
 ### 2026-04-16 Desktop UI: unified first-run and chat shell
 
 **Problem:** First run and normal conversation still behaved like two different products. The app hid the normal header and drawers before the first send, replaced the message feed with a dedicated onboarding shell, and then switched information architecture immediately after the first request. That reduced some initial options, but it also forced users to re-orient once the first chat started.
