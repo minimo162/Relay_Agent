@@ -7,7 +7,7 @@ import {
 } from "./relay-e2e-harness";
 
 async function openApp(page: any) {
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "networkidle", timeout: 15000 });
   await expect(page.getByRole("banner").getByText("Relay Agent", { exact: true })).toBeVisible();
 }
 
@@ -93,7 +93,7 @@ test("tool rows use human labels instead of raw tool names", async ({ page }) =>
   await expect(toolRow.getByText("Read file", { exact: true })).toBeVisible();
 });
 
-test("approval overlay uses updated copy and advanced details label", async ({ page }) => {
+test("approval requests render inline instead of blocking the feed", async ({ page }) => {
   await injectRelayMock(page, { autoComplete: false });
   await openApp(page);
   await composer(page).fill("prepare approval");
@@ -112,9 +112,38 @@ test("approval overlay uses updated copy and advanced details label", async ({ p
     workspaceCwdConfigured: true,
   });
 
-  const approvalDialog = page.getByRole("dialog", { name: "Permission required" });
-  await expect(approvalDialog.getByRole("button", { name: "Allow once" })).toBeVisible();
-  await expect(approvalDialog.getByRole("button", { name: "Always allow in this conversation" })).toBeVisible();
-  await expect(approvalDialog.getByRole("button", { name: "Always allow in this folder" })).toBeVisible();
-  await expect(approvalDialog.getByText("Advanced details", { exact: true })).toBeVisible();
+  const approvalCard = page.locator("[data-ra-approval-card][data-approval-id='approval-1']");
+  await expect(page.getByRole("dialog", { name: "Permission required" })).toHaveCount(0);
+  await expect(approvalCard.getByRole("button", { name: "Allow once" })).toBeVisible();
+  await expect(approvalCard.getByRole("button", { name: "Always allow in this conversation" })).toBeVisible();
+  await expect(approvalCard.getByRole("button", { name: "Always allow in this folder" })).toBeVisible();
+  await expect(approvalCard.getByText("/tmp/output.txt")).toBeVisible();
+});
+
+test("streaming assistant text shows Drafting and suppresses generic working state", async ({ page }) => {
+  await injectRelayMock(page, { autoComplete: false });
+  await openApp(page);
+  await composer(page).fill("stream a reply");
+  await composer(page).press("Control+Enter");
+  await expect(page.getByRole("heading", { name: "Conversations" })).toBeVisible({ timeout: 5000 });
+  await waitForMockSession(page, "session-e2e-1");
+  await waitForAgentListener(page, "agent:text_delta");
+
+  await emitAgentEvent(page, "agent:text_delta", {
+    sessionId: "session-e2e-1",
+    text: "First streamed sentence.",
+    isComplete: false,
+  });
+
+  await expect(page.getByText("Drafting…")).toBeVisible();
+  await expect(page.locator("[data-ra-agent-thinking]")).toHaveCount(0);
+  await expect(page.getByText("First streamed sentence.")).toBeVisible();
+
+  await emitAgentEvent(page, "agent:text_delta", {
+    sessionId: "session-e2e-1",
+    text: "",
+    isComplete: true,
+  });
+
+  await expect(page.getByText("Drafting…")).toHaveCount(0);
 });

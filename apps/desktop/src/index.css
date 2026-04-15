@@ -98,6 +98,14 @@
   --ra-btn-primary-bg: var(--ra-surface-300);
   --ra-btn-primary-fg: var(--ra-text-primary);
   --ra-focus-elevated: 0 0 0 3px color-mix(in oklab, #f54e00 16%, transparent);
+  --ra-inline-approval-bg: color-mix(in oklab, var(--ra-surface-100) 88%, #f54e00 12%);
+  --ra-inline-approval-border: color-mix(in oklab, var(--ra-accent) 24%, var(--ra-border));
+  --ra-inline-question-bg: color-mix(in oklab, var(--ra-surface-100) 90%, #c08532 10%);
+  --ra-inline-question-border: color-mix(in oklab, var(--ra-accent-secondary) 22%, var(--ra-border));
+  --ra-streaming-badge-bg: color-mix(in oklab, var(--ra-accent) 10%, var(--ra-surface-100));
+  --ra-streaming-badge-fg: var(--ra-accent);
+  --ra-tool-row-bg: color-mix(in oklab, var(--ra-surface-100) 82%, transparent);
+  --ra-tool-row-border: color-mix(in oklab, #26251e 8%, transparent);
 
   --ra-color-page: var(--ra-surface);
   --ra-color-surface: var(--ra-surface-card);
@@ -177,6 +185,14 @@
   --ra-btn-primary-bg: var(--ra-surface-100);
   --ra-btn-primary-fg: var(--ra-text-primary);
   --ra-focus-elevated: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --ra-inline-approval-bg: color-mix(in oklab, var(--ra-surface-200) 80%, #f54e00 20%);
+  --ra-inline-approval-border: color-mix(in oklab, var(--ra-accent) 28%, var(--ra-border));
+  --ra-inline-question-bg: color-mix(in oklab, var(--ra-surface-200) 84%, #c08532 16%);
+  --ra-inline-question-border: color-mix(in oklab, var(--ra-accent-secondary) 26%, var(--ra-border));
+  --ra-streaming-badge-bg: color-mix(in oklab, var(--ra-accent) 16%, var(--ra-surface-100));
+  --ra-streaming-badge-fg: #ffd4bf;
+  --ra-tool-row-bg: color-mix(in oklab, var(--ra-surface-100) 70%, transparent);
+  --ra-tool-row-border: color-mix(in oklab, #f2f1ed 14%, transparent);
 
   --ra-color-page: var(--ra-surface);
   --ra-color-surface: var(--ra-surface-card);
@@ -1677,6 +1693,18 @@ body a:focus-visible {
   background: var(--ra-red);
 }
 
+.ra-tool-row {
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--ra-tool-row-border);
+  border-radius: 0.85rem;
+  background: var(--ra-tool-row-bg);
+}
+
+.ra-tool-row--done,
+.ra-tool-row--error {
+  opacity: 0.88;
+}
+
 /* AI timeline — running dot hue by tool category (DESIGN.md) */
 .ra-tool-row--thinking .ra-tool-status--running {
   background: var(--ra-timeline-thinking);
@@ -1720,6 +1748,77 @@ body a:focus-visible {
   text-transform: uppercase;
   color: var(--ra-text-muted);
   margin-bottom: 0.35rem;
+}
+
+.ra-inline-card {
+  display: grid;
+  gap: 0.75rem;
+  max-width: min(80%, 42rem);
+  margin: 0 0 0.85rem;
+  padding: 0.95rem 1rem;
+  border: 1px solid var(--ra-border);
+  border-radius: 0.95rem;
+  box-shadow: var(--ra-shadow-sm);
+}
+
+.ra-inline-card--approval {
+  background: var(--ra-inline-approval-bg);
+  border-color: var(--ra-inline-approval-border);
+}
+
+.ra-inline-card--question {
+  background: var(--ra-inline-question-bg);
+  border-color: var(--ra-inline-question-border);
+}
+
+.ra-inline-card__eyebrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ra-inline-card__title {
+  font-size: var(--ra-text-micro);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ra-text-muted);
+}
+
+.ra-inline-card__status {
+  font-family: var(--ra-font-ui);
+  font-size: var(--ra-text-micro);
+  color: var(--ra-text-secondary);
+}
+
+.ra-inline-card__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.ra-inline-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.ra-inline-card__remember {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.ra-inline-card__note {
+  margin: 0;
+  font-size: var(--ra-text-caption);
+  color: var(--ra-text-secondary);
+  line-height: 1.5;
+}
+
+.ra-inline-question__textarea {
+  min-height: 5.5rem;
+  background: color-mix(in oklab, var(--ra-surface-100) 80%, transparent);
 }
 
 .ra-settings-grid {
@@ -1848,6 +1947,19 @@ body a:focus-visible {
   font-size: 0.95rem;
   font-weight: 400;
   line-height: 1.55;
+}
+
+.ra-assistant-streaming-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.35rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--ra-radius-pill);
+  background: var(--ra-streaming-badge-bg);
+  color: var(--ra-streaming-badge-fg);
+  font-family: var(--ra-font-ui);
+  font-size: var(--ra-text-micro);
+  line-height: 1;
 }
 
 .ra-md-assistant :first-child {

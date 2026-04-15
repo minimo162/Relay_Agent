@@ -65,12 +65,19 @@ export function MessageBubble(props: {
         <Show
           when={isUser}
           fallback={
-            <div
-              class={`ra-md-assistant px-4 py-2.5 break-words ${
-                collapsed() ? "max-h-48 overflow-hidden" : ""
-              }`}
-              innerHTML={assistantHtml()}
-            />
+            <>
+              <Show when={props.streaming}>
+                <div class="px-4 pt-3 pb-0.5">
+                  <span class="ra-assistant-streaming-badge">Drafting…</span>
+                </div>
+              </Show>
+              <div
+                class={`ra-md-assistant px-4 py-2.5 break-words ${
+                  collapsed() ? "max-h-48 overflow-hidden" : ""
+                } ${props.streaming ? "pt-2" : ""}`}
+                innerHTML={assistantHtml()}
+              />
+            </>
           }
         >
           <div

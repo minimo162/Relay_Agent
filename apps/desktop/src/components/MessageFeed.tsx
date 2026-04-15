@@ -14,6 +14,8 @@ import { friendlyToolActivityLabel, type SessionPreset, type UiChunk } from "../
 import { ellipsisPath, workspaceBasename } from "../lib/workspace-display";
 import { sessionModeLabel } from "../lib/session-mode-label";
 import { EmptyState } from "./primitives";
+import { InlineApprovalCard } from "./InlineApprovalCard";
+import { InlineQuestionCard } from "./InlineQuestionCard";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCallRow } from "./ToolCallRow";
 import type { SessionStatusSnapshot } from "./shell-types";
@@ -28,9 +30,16 @@ export function MessageFeed(props: {
   workspacePath: () => string;
   /** Composer session mode (empty-state copy for Plan / Explore). */
   sessionPreset: SessionPreset;
+  onApproveOnce: (approvalId: string) => void;
+  onApproveForSession: (approvalId: string) => void;
+  onApproveForWorkspace: (approvalId: string) => void;
+  onReject: (approvalId: string) => void;
+  onSubmitUserQuestion: (questionId: string, answer: string) => void;
+  onCancelUserQuestion: (questionId: string) => void;
 }): JSX.Element {
   let container!: HTMLDivElement;
   const [stickToBottom, setStickToBottom] = createSignal(true);
+  const [visiblePendingApproval, setVisiblePendingApproval] = createSignal(false);
 
   const feedChunks = createMemo(() => props.chunks);
   const runningToolName = createMemo(() => {
@@ -69,7 +78,7 @@ export function MessageFeed(props: {
       case "compacting":
         return "Compacting context…";
       case "waiting_approval":
-        return "Waiting for approval…";
+        return visiblePendingApproval() ? null : "Approval needed…";
       case "cancelling":
         return "Cancelling…";
       case "idle":
@@ -84,8 +93,12 @@ export function MessageFeed(props: {
     for (const c of props.chunks) {
       if (c.kind === "user" || c.kind === "assistant") {
         parts.push(`${c.kind}:${c.text.length}`);
-      } else {
+      } else if (c.kind === "tool_call") {
         parts.push(`tool:${c.toolUseId}:${c.status}:${String(c.result ?? "").length}`);
+      } else if (c.kind === "approval_request") {
+        parts.push(`approval:${c.approvalId}:${c.status}`);
+      } else {
+        parts.push(`question:${c.questionId}:${c.status}`);
       }
     }
     return parts.join("\u001f");
@@ -104,18 +117,36 @@ export function MessageFeed(props: {
     });
   }
 
+  function updateVisiblePendingApproval() {
+    const el = container;
+    if (!el) return;
+    const bounds = el.getBoundingClientRect();
+    const cards = Array.from(
+      el.querySelectorAll<HTMLElement>("[data-ra-approval-card][data-status='pending']"),
+    );
+    setVisiblePendingApproval(
+      cards.some((card) => {
+        const rect = card.getBoundingClientRect();
+        return rect.bottom >= bounds.top + 8 && rect.top <= bounds.bottom - 8;
+      }),
+    );
+  }
+
   onMount(() => {
     const el = container;
     const onScroll = () => {
       setStickToBottom(distanceFromBottom(el) <= NEAR_BOTTOM_PX);
+      updateVisiblePendingApproval();
     };
     el.addEventListener("scroll", onScroll, { passive: true });
+    updateVisiblePendingApproval();
     onCleanup(() => el.removeEventListener("scroll", onScroll));
   });
 
   createEffect(
     on(feedScrollSignature, () => {
       scrollToBottomIfStuck();
+      requestAnimationFrame(() => updateVisiblePendingApproval());
     }),
   );
 
@@ -197,6 +228,26 @@ export function MessageFeed(props: {
                 input={chunk.input}
                 status={chunk.status}
                 result={chunk.result}
+              />
+            );
+          }
+          if (chunk.kind === "approval_request") {
+            return (
+              <InlineApprovalCard
+                chunk={chunk}
+                onApproveOnce={props.onApproveOnce}
+                onApproveForSession={props.onApproveForSession}
+                onApproveForWorkspace={props.onApproveForWorkspace}
+                onReject={props.onReject}
+              />
+            );
+          }
+          if (chunk.kind === "user_question") {
+            return (
+              <InlineQuestionCard
+                chunk={chunk}
+                onSubmit={props.onSubmitUserQuestion}
+                onCancel={props.onCancelUserQuestion}
               />
             );
           }

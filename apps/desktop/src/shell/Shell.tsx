@@ -20,6 +20,7 @@ import {
   undoSessionWrite,
   type McpServer,
   type SessionPreset,
+  type UiChunk,
   type WorkspaceSlashCommandRow,
 } from "../lib/ipc";
 import {
@@ -109,6 +110,9 @@ async function applyAlwaysOnTopSetting(enabled: boolean) {
 export default function Shell(): JSX.Element {
   const sessions = createSessionStore();
   const approvals = createApprovalStore();
+  const [inlineChunksBySession, setInlineChunksBySession] = createSignal<
+    Record<string, Extract<UiChunk, { kind: "approval_request" | "user_question" }>[]>
+  >({});
   const [sessionError, setSessionError] = createSignal<string | null>(null);
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [workspaceLabel, setWorkspaceLabel] = createSignal(loadWorkspacePath().trim());
@@ -118,6 +122,99 @@ export default function Shell(): JSX.Element {
   const [alwaysOnTop, setAlwaysOnTop] = createSignal(loadAlwaysOnTop());
   const [writeUndoStatus, setWriteUndoStatus] = createSignal({ canUndo: false, canRedo: false });
   const { copilotState, runCopilotWarmup } = useCopilotWarmup(browserSettings);
+
+  const mergeChunksWithInline = (sessionId: string, baseChunks: UiChunk[]): UiChunk[] => {
+    const inlineChunks = inlineChunksBySession()[sessionId] ?? [];
+    if (inlineChunks.length === 0) return baseChunks;
+    return [...baseChunks, ...inlineChunks];
+  };
+
+  const appendInlineChunk = (
+    sessionId: string,
+    chunk: Extract<UiChunk, { kind: "approval_request" | "user_question" }>,
+  ) => {
+    setInlineChunksBySession((prev) => {
+      const current = prev[sessionId] ?? [];
+      const exists = current.some((entry) =>
+        chunk.kind === "approval_request"
+          ? entry.kind === "approval_request" && entry.approvalId === chunk.approvalId
+          : entry.kind === "user_question" && entry.questionId === chunk.questionId,
+      );
+      if (exists) return prev;
+      return { ...prev, [sessionId]: [...current, chunk] };
+    });
+    if (sessions.activeSessionId() !== sessionId) return;
+    sessions.setChunks((prev) => {
+      const exists = prev.some((entry) =>
+        chunk.kind === "approval_request"
+          ? entry.kind === "approval_request" && entry.approvalId === chunk.approvalId
+          : entry.kind === "user_question" && entry.questionId === chunk.questionId,
+      );
+      if (exists) return prev;
+      return [...prev, chunk];
+    });
+  };
+
+  const updateInlineChunk = (
+    sessionId: string,
+    predicate: (chunk: Extract<UiChunk, { kind: "approval_request" | "user_question" }>) => boolean,
+    updater: (chunk: Extract<UiChunk, { kind: "approval_request" | "user_question" }>) => Extract<
+      UiChunk,
+      { kind: "approval_request" | "user_question" }
+    >,
+  ) => {
+    setInlineChunksBySession((prev) => {
+      const current = prev[sessionId];
+      if (!current?.length) return prev;
+      let changed = false;
+      const next = current.map((chunk) => {
+        if (!predicate(chunk)) return chunk;
+        changed = true;
+        return updater(chunk);
+      });
+      if (!changed) return prev;
+      return { ...prev, [sessionId]: next };
+    });
+    if (sessions.activeSessionId() !== sessionId) return;
+    sessions.setChunks((prev) => {
+      let changed = false;
+      const next = prev.map((chunk) => {
+        if (
+          (chunk.kind !== "approval_request" && chunk.kind !== "user_question") ||
+          !predicate(chunk)
+        ) {
+          return chunk;
+        }
+        changed = true;
+        return updater(chunk);
+      });
+      return changed ? next : prev;
+    });
+  };
+
+  const markApprovalStatus = (
+    sessionId: string,
+    approvalId: string,
+    status: Extract<UiChunk, { kind: "approval_request" }>["status"],
+  ) => {
+    updateInlineChunk(
+      sessionId,
+      (chunk) => chunk.kind === "approval_request" && chunk.approvalId === approvalId,
+      (chunk) => (chunk.kind === "approval_request" ? { ...chunk, status } : chunk),
+    );
+  };
+
+  const markUserQuestionStatus = (
+    sessionId: string,
+    questionId: string,
+    status: Extract<UiChunk, { kind: "user_question" }>["status"],
+  ) => {
+    updateInlineChunk(
+      sessionId,
+      (chunk) => chunk.kind === "user_question" && chunk.questionId === questionId,
+      (chunk) => (chunk.kind === "user_question" ? { ...chunk, status } : chunk),
+    );
+  };
 
   createEffect(() => {
     const cwd = workspaceLabel();
@@ -317,6 +414,7 @@ export default function Shell(): JSX.Element {
       if (!hasAssistantText && fb) {
         next = [...next, { kind: "assistant" as const, text: fb }];
       }
+      next = mergeChunksWithInline(sessionId, next);
       sessions.setChunks(next);
       sessions.setPlanBySession((prev) => ({
         ...prev,
@@ -346,6 +444,7 @@ export default function Shell(): JSX.Element {
     setStatusBySession: sessions.setStatusBySession,
     setApprovals: approvals.setApprovals,
     setUserQuestions: approvals.setUserQuestions,
+    appendInlineChunk,
     setSessionError,
     reloadHistory,
   });
@@ -403,6 +502,7 @@ export default function Shell(): JSX.Element {
     const sid = sessions.activeSessionId();
     if (!sid) return;
     await respondApproval({ sessionId: sid, approvalId, approved: true, rememberForSession: false });
+    markApprovalStatus(sid, approvalId, "approved");
     approvals.removeApproval(approvalId);
   };
 
@@ -410,6 +510,7 @@ export default function Shell(): JSX.Element {
     const sid = sessions.activeSessionId();
     if (!sid) return;
     await respondApproval({ sessionId: sid, approvalId, approved: true, rememberForSession: true });
+    markApprovalStatus(sid, approvalId, "approved");
     approvals.removeApproval(approvalId);
   };
 
@@ -423,6 +524,7 @@ export default function Shell(): JSX.Element {
       rememberForSession: false,
       rememberForWorkspace: true,
     });
+    markApprovalStatus(sid, approvalId, "approved");
     approvals.removeApproval(approvalId);
   };
 
@@ -430,6 +532,7 @@ export default function Shell(): JSX.Element {
     const sid = sessions.activeSessionId();
     if (!sid) return;
     await respondApproval({ sessionId: sid, approvalId, approved: false });
+    markApprovalStatus(sid, approvalId, "rejected");
     approvals.removeApproval(approvalId);
   };
 
@@ -438,6 +541,7 @@ export default function Shell(): JSX.Element {
     if (!sid || !answer) return;
     try {
       await respondUserQuestion({ sessionId: sid, questionId, answer });
+      markUserQuestionStatus(sid, questionId, "answered");
       approvals.removeQuestion(questionId);
     } catch (err) {
       console.error("[IPC] respond_user_question failed", err);
@@ -449,6 +553,7 @@ export default function Shell(): JSX.Element {
     if (!sid) return;
     try {
       await respondUserQuestion({ sessionId: sid, questionId, answer: "" });
+      markUserQuestionStatus(sid, questionId, "cancelled");
       approvals.removeQuestion(questionId);
     } catch (err) {
       console.error("[IPC] respond_user_question cancel failed", err);
@@ -564,6 +669,12 @@ export default function Shell(): JSX.Element {
                 sessionStatus={sessions.activeSessionStatus()}
                 workspacePath={workspaceLabel}
                 sessionPreset={activeSessionPreset()}
+                onApproveOnce={handleApproveOnce}
+                onApproveForSession={handleApproveForSession}
+                onApproveForWorkspace={handleApproveForWorkspace}
+                onReject={handleReject}
+                onSubmitUserQuestion={handleUserQuestionSubmit}
+                onCancelUserQuestion={handleUserQuestionCancel}
               />
               <Composer
                 sessionPreset={activeSessionPreset()}
@@ -627,6 +738,7 @@ export default function Shell(): JSX.Element {
         </Show>
 
         <ApprovalOverlay
+          enabled={false}
           approvals={approvals.approvals()}
           onApproveOnce={handleApproveOnce}
           onApproveForSession={handleApproveForSession}
@@ -634,6 +746,7 @@ export default function Shell(): JSX.Element {
           onReject={handleReject}
         />
         <UserQuestionOverlay
+          enabled={false}
           questions={approvals.userQuestions()}
           onSubmit={handleUserQuestionSubmit}
           onCancel={handleUserQuestionCancel}

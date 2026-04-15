@@ -4,6 +4,7 @@ import type { Approval } from "./shell-types";
 
 export function ApprovalOverlay(props: {
   approvals: Approval[];
+  enabled?: boolean;
   /** Approve this request only (default OpenWork-style once). */
   onApproveOnce: (id: string) => void;
   /** Approve and skip further prompts for this tool name until the session ends. */
@@ -13,7 +14,7 @@ export function ApprovalOverlay(props: {
   onReject: (id: string) => void;
 }): JSX.Element {
   return (
-    <Show when={props.approvals.length > 0}>
+    <Show when={props.enabled === true && props.approvals.length > 0}>
       <div class="absolute inset-0 z-10" role="dialog" aria-modal="true" aria-label="Permission required">
         <div class="ra-modal-backdrop absolute inset-0" aria-hidden />
         <div class="absolute inset-x-0 bottom-0 p-4 z-10 flex justify-center pointer-events-none">

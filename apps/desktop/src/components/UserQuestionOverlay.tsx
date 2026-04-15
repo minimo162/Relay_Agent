@@ -5,13 +5,14 @@ import type { UserQuestion } from "./shell-types";
 
 export function UserQuestionOverlay(props: {
   questions: UserQuestion[];
+  enabled?: boolean;
   onSubmit: (questionId: string, answer: string) => void;
   onCancel: (questionId: string) => void;
 }): JSX.Element {
   const [drafts, setDrafts] = createSignal<Record<string, string>>({});
 
   return (
-    <Show when={props.questions.length > 0}>
+    <Show when={props.enabled === true && props.questions.length > 0}>
       <div class="absolute inset-0 z-[11]" role="dialog" aria-modal="true" aria-label="Agent question">
         <div class="ra-modal-backdrop absolute inset-0" aria-hidden />
         <div class="absolute inset-x-0 bottom-0 p-4 z-10 flex justify-center pointer-events-none">

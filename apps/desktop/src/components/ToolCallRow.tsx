@@ -15,15 +15,16 @@ export function ToolCallRow(props: {
   const showDetails = () => shouldCollapseToolResult(presentation().detailBody ?? null);
   return (
     <div
-      class={`my-2 ra-type-button-label ${ui.mutedText} flex items-start gap-2 ra-tool-row ra-tool-row--${tl()}`}
+      class={`my-1.5 ra-type-button-label ${ui.mutedText} flex items-start gap-2 ra-tool-row ra-tool-row--${tl()} ra-tool-row--${props.status}`}
       data-ra-tool-row
       data-ra-tool-use-id={props.toolUseId}
+      data-ra-tool-status={props.status}
     >
       <ToolStatusDot status={props.status} />
       <div class="flex-1 min-w-0">
         <div class="flex flex-col gap-0.5 min-w-0">
           <div class="flex items-center gap-2 min-w-0">
-            <span class="ra-type-button-label text-[var(--ra-text-primary)] shrink-0">
+            <span class="ra-type-button-label text-[var(--ra-text-secondary)] shrink-0">
               {presentation().label}
             </span>
             <span class="ra-type-caption text-[var(--ra-text-muted)] truncate">{presentation().summary}</span>

@@ -23,6 +23,7 @@ interface UseAgentEventsOptions {
   setStatusBySession: Setter<Record<string, SessionStatusSnapshot>>;
   setApprovals: Setter<Approval[]>;
   setUserQuestions: Setter<UserQuestion[]>;
+  appendInlineChunk: (sessionId: string, chunk: Extract<UiChunk, { kind: "approval_request" | "user_question" }>) => void;
   setSessionError: Setter<string | null>;
   reloadHistory: (
     sessionId: string,
@@ -173,29 +174,50 @@ export function useAgentEvents(options: UseAgentEventsOptions) {
         }
         case "approval_needed": {
           const e = event.data as AgentApprovalNeededEvent;
-          options.setApprovals((prev) => [
-            ...prev,
-            {
-              sessionId: e.sessionId,
-              approvalId: e.approvalId,
-              toolName: e.toolName,
-              description: e.description,
-              target: e.target ?? undefined,
-              workspaceCwdConfigured: Boolean(e.workspaceCwdConfigured),
-            },
-          ]);
+          options.setApprovals((prev) => {
+            if (prev.some((approval) => approval.approvalId === e.approvalId)) return prev;
+            return [
+              ...prev,
+              {
+                sessionId: e.sessionId,
+                approvalId: e.approvalId,
+                toolName: e.toolName,
+                description: e.description,
+                target: e.target ?? undefined,
+                workspaceCwdConfigured: Boolean(e.workspaceCwdConfigured),
+              },
+            ];
+          });
+          options.appendInlineChunk(e.sessionId, {
+            kind: "approval_request",
+            approvalId: e.approvalId,
+            toolName: e.toolName,
+            description: e.description,
+            target: e.target ?? undefined,
+            workspaceCwdConfigured: Boolean(e.workspaceCwdConfigured),
+            status: "pending",
+          });
           break;
         }
         case "user_question": {
           const e = event.data as AgentUserQuestionNeededEvent;
-          options.setUserQuestions((prev) => [
-            ...prev,
-            {
-              sessionId: e.sessionId,
-              questionId: e.questionId,
-              prompt: e.prompt,
-            },
-          ]);
+          options.setUserQuestions((prev) => {
+            if (prev.some((question) => question.questionId === e.questionId)) return prev;
+            return [
+              ...prev,
+              {
+                sessionId: e.sessionId,
+                questionId: e.questionId,
+                prompt: e.prompt,
+              },
+            ];
+          });
+          options.appendInlineChunk(e.sessionId, {
+            kind: "user_question",
+            questionId: e.questionId,
+            prompt: e.prompt,
+            status: "pending",
+          });
           break;
         }
         case "tool_start":

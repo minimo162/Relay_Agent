@@ -544,17 +544,49 @@ export function chunksFromHistory(messages: AgentMessage[]): UiChunk[] {
   return chunks;
 }
 
+export interface UiUserChunk {
+  kind: "user";
+  text: string;
+}
+
+export interface UiAssistantChunk {
+  kind: "assistant";
+  text: string;
+  streaming?: boolean;
+}
+
+export interface UiToolCallChunk {
+  kind: "tool_call";
+  toolUseId: string;
+  toolName: string;
+  input?: Record<string, unknown>;
+  status: "running" | "done" | "error";
+  result: string | null;
+}
+
+export interface UiApprovalRequestChunk {
+  kind: "approval_request";
+  approvalId: string;
+  toolName: string;
+  description: string;
+  target?: string;
+  workspaceCwdConfigured?: boolean;
+  status: "pending" | "approved" | "rejected";
+}
+
+export interface UiUserQuestionChunk {
+  kind: "user_question";
+  questionId: string;
+  prompt: string;
+  status: "pending" | "answered" | "cancelled";
+}
+
 export type UiChunk =
-  | { kind: "user"; text: string }
-  | { kind: "assistant"; text: string; streaming?: boolean }
-  | {
-      kind: "tool_call";
-      toolUseId: string;
-      toolName: string;
-      input?: Record<string, unknown>;
-      status: "running" | "done" | "error";
-      result: string | null;
-    };
+  | UiUserChunk
+  | UiAssistantChunk
+  | UiToolCallChunk
+  | UiApprovalRequestChunk
+  | UiUserQuestionChunk;
 
 /** User-facing status while a tool runs (no internal tool names in the main line). */
 export function friendlyToolActivityLabel(toolName: string): string {

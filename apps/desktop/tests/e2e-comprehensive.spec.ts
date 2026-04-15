@@ -95,7 +95,7 @@ test.describe("Audit and approvals", () => {
     await expect(page.getByText("4 hits across 2 files")).toBeVisible();
   });
 
-  test("approval overlay uses conversation/folder wording", async ({ page }) => {
+  test("approval requests render inline with conversation/folder actions", async ({ page }) => {
     await injectRelayMock(page, { autoComplete: false });
     await openApp(page);
     await sendPrompt(page, "prepare approval");
@@ -110,10 +110,15 @@ test.describe("Audit and approvals", () => {
       input: { command: "npm test", cwd: "/tmp/project" },
       workspaceCwdConfigured: true,
     });
-    const approvalDialog = page.getByRole("dialog", { name: "Permission required" });
-    await expect(approvalDialog.getByRole("button", { name: "Allow once" })).toBeVisible();
-    await expect(approvalDialog.getByRole("button", { name: "Always allow in this conversation" })).toBeVisible();
-    await expect(approvalDialog.getByRole("button", { name: "Always allow in this folder" })).toBeVisible();
-    await expect(approvalDialog.getByText("Advanced details", { exact: true })).toBeVisible();
+    const approvalCard = page.locator("[data-ra-approval-card][data-approval-id='approval-1']");
+    await expect(page.getByRole("dialog", { name: "Permission required" })).toHaveCount(0);
+    await expect(approvalCard.getByRole("button", { name: "Allow once" })).toBeVisible();
+    await expect(approvalCard.getByRole("button", { name: "Always allow in this conversation" })).toBeVisible();
+    await expect(approvalCard.getByRole("button", { name: "Always allow in this folder" })).toBeVisible();
+    await expect(approvalCard.getByText("bash")).toBeVisible();
+    await expect(approvalCard.getByText("npm test @ /tmp/project")).toBeVisible();
+    await approvalCard.getByRole("button", { name: "Allow once" }).click();
+    await expect(approvalCard).toContainText("Allowed");
+    await expect(approvalCard.getByRole("button", { name: "Allow once" })).toHaveCount(0);
   });
 });
