@@ -209,13 +209,13 @@ export function Composer(props: {
 
   const canSend = () => text().trim().length > 0 && !props.running && !props.disabled;
   const placeholder = () => {
-    if (!props.hero) return "Describe the result you need.";
-    return "Example: Make this setup flow easier to use.";
+    if (!props.hero) return "Ask for the result you need.";
+    return "Example: simplify this setup flow.";
   };
   const composerSummary = createMemo(() =>
     props.running
       ? "Relay is working in the current project."
-      : "Relay inspects first and asks for approval before risky changes.",
+      : "Inspects first. Pauses before risky changes.",
   );
 
   return (

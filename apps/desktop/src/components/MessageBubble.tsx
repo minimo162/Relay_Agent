@@ -41,11 +41,7 @@ export function MessageBubble(props: {
   return (
     <div class={`flex ${isUser ? "justify-end" : "justify-start"} mb-3`}>
       <div
-        class={`group relative max-w-[min(82%,46rem)] ${ui.radiusFeatured} ${
-          isUser
-            ? "ra-bubble-user"
-            : `${ui.surfaceCard} ${ui.border} border text-[var(--ra-text-primary)]`
-        }`}
+        class={`group relative max-w-[min(82%,46rem)] ra-bubble ${isUser ? "ra-bubble-user" : "ra-bubble-assistant"}`}
         data-ra-bubble-role={props.role}
       >
         <div

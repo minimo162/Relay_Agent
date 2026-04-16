@@ -736,9 +736,7 @@ export default function Shell(): JSX.Element {
           }}
           hero={sessions.isFirstRun()}
           autoFocus={!settingsOpen()}
-          disabledReason={sessions.isFirstRun()
-            ? "Relay keeps the same chat surface and asks for setup only when needed."
-            : null}
+          disabledReason={null}
         />
 
         <ApprovalOverlay

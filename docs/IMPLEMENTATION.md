@@ -15,6 +15,14 @@
 
 ## Milestone Log
 
+### 2026-04-16 Desktop UI: quiet editorial minimalism refresh
+
+**Problem:** The desktop shell already used the warm token system, but the overall presentation still felt busier than intended. Header controls, drawer surfaces, sidebar selection states, first-run messaging, and the composer each used slightly different emphasis levels, so the conversation canvas did not feel clearly primary.
+
+**Change:** Refined the Solid desktop presentation layer without changing IPC, backend behavior, or session flow. Updated [`apps/desktop/src/index.css`](../apps/desktop/src/index.css) to soften shadows, reduce gradient strength, quiet the shell chrome, unify drawer/card surfaces, tighten selected session states, calm tool/approval cards, and add a `prefers-reduced-motion` guard. Adjusted [`ShellHeader.tsx`](../apps/desktop/src/components/ShellHeader.tsx), [`Sidebar.tsx`](../apps/desktop/src/components/Sidebar.tsx), [`ContextPanel.tsx`](../apps/desktop/src/components/ContextPanel.tsx), [`FirstRunPanel.tsx`](../apps/desktop/src/components/FirstRunPanel.tsx), [`MessageFeed.tsx`](../apps/desktop/src/components/MessageFeed.tsx), [`Composer.tsx`](../apps/desktop/src/components/Composer.tsx), [`MessageBubble.tsx`](../apps/desktop/src/components/MessageBubble.tsx), [`primitives.tsx`](../apps/desktop/src/components/primitives.tsx), and [`shell/Shell.tsx`](../apps/desktop/src/shell/Shell.tsx) so the UI reads as one quieter editorial system: shorter first-run and empty-state copy, subtler header/project metadata, calmer context drawer language, cleaner bubble treatment, and a roomier composer with less supporting noise. Updated Playwright expectations in [`apps/desktop/tests/app.e2e.spec.ts`](../apps/desktop/tests/app.e2e.spec.ts) and [`apps/desktop/tests/e2e-comprehensive.spec.ts`](../apps/desktop/tests/e2e-comprehensive.spec.ts) for the revised copy.
+
+**Verification:** `pnpm --filter @relay-agent/desktop typecheck` — pass. `pnpm --filter @relay-agent/desktop build` — pass. `pnpm --filter @relay-agent/desktop exec playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts` — pass (16 tests).
+
 ### 2026-04-16 Single-mode Relay
 
 **Problem:** The desktop shell and Rust agent loop had accumulated too many session-mode branches. `StartAgentRequest` still carried `sessionPreset`, the UI still exposed `Standard` / `Plan only` / `Read only` selection plus a preset-based permission summary, and the runtime still split tool catalogs, prompt addons, and repair behavior by `Build` / `Plan` / `Explore`. That made the product concept heavier than the actual safety model, which was already centered on approval-gated tool execution.

@@ -100,9 +100,9 @@ export function FirstRunPanel(props: {
       <div class="ra-first-run__card">
         <div class="ra-first-run__intro">
           <p class="ra-empty-state__eyebrow">Relay Agent</p>
-          <h1 class={`ra-type-title-sm ${ui.textPrimary}`}>Write the request now. Relay will help finish setup if needed.</h1>
+          <h1 class={`ra-type-title-sm ${ui.textPrimary}`}>Start with the outcome you need.</h1>
           <p class={`ra-type-body-sans ${ui.textSecondary}`}>
-            Keep the same chat surface from the first request onward. Set the project and make sure Copilot is ready.
+            Set the project, confirm Copilot, and keep working in this same conversation.
           </p>
         </div>
 
@@ -148,14 +148,14 @@ export function FirstRunPanel(props: {
 
         <div class="ra-first-run__example">
           <p class={`ra-type-system-micro ${ui.mutedText}`}>Example request</p>
-          <p class={`ra-type-body-sans ${ui.textPrimary}`}>Make the first screen easier to understand.</p>
+          <p class={`ra-type-body-sans ${ui.textPrimary}`}>Clarify this setup flow and reduce friction.</p>
         </div>
 
         {props.showRequirements ? (
           <div class="ra-first-run__requirement-card" role="status" aria-live="polite" data-ra-first-run-requirements="">
             <div>
               <p class="ra-first-run__step-kicker">Before sending</p>
-              <h2 class={`ra-type-button-label ${ui.textPrimary}`}>Finish these checks. Your draft stays in place.</h2>
+              <h2 class={`ra-type-button-label ${ui.textPrimary}`}>Finish setup. Your draft stays here.</h2>
             </div>
             <div class="ra-first-run__requirement-actions">
               {props.missingProject ? (

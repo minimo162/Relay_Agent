@@ -33,7 +33,7 @@ test("first run keeps the normal shell visible and renders setup inline", async 
   await expect(
     page.getByRole("heading", {
       level: 1,
-      name: "Write the request now. Relay will help finish setup if needed.",
+      name: "Start with the outcome you need.",
     }),
   ).toBeVisible();
   await expect(page.locator("[data-ra-setup-card]")).toBeVisible();
@@ -43,9 +43,7 @@ test("first run keeps the normal shell visible and renders setup inline", async 
   await expect(page.getByRole("button", { name: "Choose project" })).toBeVisible();
   await expect(page.locator("[data-ra-session-mode]")).toHaveCount(0);
   await expect(composer(page)).toBeEditable();
-  await expect(page.locator("[data-ra-composer-disabled-note]")).toHaveText(
-    "Relay keeps the same chat surface and asks for setup only when needed.",
-  );
+  await expect(page.locator("[data-ra-composer-disabled-note]")).toHaveCount(0);
   await page.getByRole("button", { name: "Chats" }).click();
   await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible();
   await expect(page.getByText("No chats yet")).toBeVisible();
@@ -80,7 +78,7 @@ test("sending the first prompt exits onboarding and creates one conversation", a
   await page.getByRole("button", { name: "Context" }).click();
   await expect(page.locator("[data-ra-shell-drawer='context']")).toBeVisible();
   await expect(page.getByRole("tab", { name: "Activity" })).toBeVisible();
-  await expect(page.getByText("Relay works from the conversation.")).toBeVisible();
+  await expect(page.getByText("Conversation drives the work.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Undo" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Redo" })).toHaveCount(0);
 });

@@ -106,20 +106,19 @@ export function ContextPanel(props: {
             <div class="flex flex-col gap-2" data-ra-execution-plan>
               <div class="ra-context-note">
                 <span class={`ra-type-system-micro ${ui.mutedText}`}>Activity</span>
-                <p class={`ra-type-button-label ${ui.textPrimary} mt-1`}>Relay works from the conversation.</p>
+                <p class={`ra-type-button-label ${ui.textPrimary} mt-1`}>Conversation drives the work.</p>
                 <p class={`ra-type-caption ${ui.mutedText} mt-1 leading-relaxed`}>
-                  Checklists appear here when Relay writes them. Risky actions still stop for approval.
+                  Checklists appear only when Relay writes them. Risky steps still pause for approval.
                 </p>
               </div>
               <Show
                 when={planNewestFirst()}
                 fallback={
                   <div class="ra-context-empty-card">
-                    <div class={`ra-type-button-label ${ui.textPrimary}`}>No checklist yet</div>
+                    <div class={`ra-type-button-label ${ui.textPrimary}`}>No activity yet</div>
                     <ul class={`ra-context-empty-list ra-type-caption ${ui.mutedText}`}>
-                      <li>Ask Relay to review, inspect, or make a change in the current project.</li>
-                      <li>If Relay writes a live checklist, the latest snapshot appears here.</li>
-                      <li>Integrations shows project instructions and connected services.</li>
+                      <li>Ask Relay to inspect, review, or change something in the current project.</li>
+                      <li>Any live checklist Relay writes will appear here.</li>
                     </ul>
                   </div>
                 }
@@ -188,7 +187,7 @@ export function ContextPanel(props: {
           <Match when={activeTab() === "servers"}>
             <div class="flex flex-col gap-2">
               <p class={`ra-type-system-caption leading-relaxed ${ui.mutedText}`}>
-                Review connected services and project instructions here.
+                Review project guidance and connected services here.
               </p>
               <details
                 class={`${ui.radiusFeatured} border ${ui.border} ra-policy-card`}

@@ -38,15 +38,15 @@ export function EmptyState(props: {
   nextSteps?: string[];
 }): JSX.Element {
   return (
-    <div class="flex h-full min-h-[12rem] items-center justify-center px-4 text-center">
-      <div>
+    <div class="ra-empty-state flex h-full min-h-[12rem] items-center justify-center px-4 text-center">
+      <div class="ra-empty-state__body">
         <div class="ra-empty-state__mark" aria-hidden />
         <Show when={props.eyebrow}>
           <p class="ra-empty-state__eyebrow">{props.eyebrow}</p>
         </Show>
-        <p class={`ra-type-title-sm ${ui.textPrimary}`}>{props.title}</p>
+        <p class={`ra-empty-state__title ra-type-title-sm ${ui.textPrimary}`}>{props.title}</p>
         <Show when={props.subtitle}>
-          <p class={`ra-type-body-sans ${ui.mutedText} mt-1 max-w-[18rem] mx-auto`}>{props.subtitle}</p>
+          <p class={`ra-empty-state__subtitle ra-type-body-sans ${ui.mutedText}`}>{props.subtitle}</p>
         </Show>
         <Show when={props.nextSteps && props.nextSteps.length > 0}>
           <div class="ra-empty-state__steps">

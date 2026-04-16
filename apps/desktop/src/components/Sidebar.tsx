@@ -79,7 +79,7 @@ export function Sidebar(props: {
               {workspaceName() ?? "Not set"}
             </span>
             <span class={`ra-type-caption ${ui.mutedText}`}>
-              {workspaceName() ? "Open settings to change" : "Choose project"}
+              {workspaceName() ? "Change in settings" : "Choose project"}
             </span>
           </button>
           <Show when={hasSessions()}>

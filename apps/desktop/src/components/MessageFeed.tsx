@@ -160,19 +160,19 @@ export function MessageFeed(props: {
   });
 
   const emptyTitle = createMemo(() => {
-    return "Ask for the next result";
+    return "Start with the result you need.";
   });
 
   const emptySubtitle = createMemo(() => {
     const p = props.workspacePath().trim();
     const location =
       p.length > 0
-        ? `Relay will work in ${ellipsisPath(p, 72)}.`
-        : "Choose the project from the header so Relay knows where to work.";
-    return `${location} Relay can inspect the project and edit files when the request calls for it.`;
+        ? `Working in ${ellipsisPath(p, 72)}.`
+        : "Choose a project from the header first.";
+    return `${location} Relay inspects first and edits only when the request calls for it.`;
   });
 
-  const emptyExample = createMemo(() => "Make the first screen easier to understand.");
+  const emptyExample = createMemo(() => "Make this screen easier to scan.");
 
   return (
     <div ref={container!} class="flex-1 min-h-0 overflow-y-auto px-6 py-4">

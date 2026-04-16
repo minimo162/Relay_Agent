@@ -65,15 +65,13 @@ test.describe("Settings and first-run UX", () => {
     await expect(
       page.getByRole("heading", {
         level: 1,
-        name: "Write the request now. Relay will help finish setup if needed.",
+        name: "Start with the outcome you need.",
       }),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
     await expect(page.locator("[data-ra-setup-card]")).toBeVisible();
     await expect(page.locator("[data-ra-session-mode]")).toHaveCount(0);
-    await expect(page.locator("[data-ra-composer-disabled-note]")).toHaveText(
-      "Relay keeps the same chat surface and asks for setup only when needed.",
-    );
+    await expect(page.locator("[data-ra-composer-disabled-note]")).toHaveCount(0);
   });
 
   test("settings modal shows connection and advanced controls", async ({ page }) => {
@@ -106,7 +104,7 @@ test.describe("Settings and first-run UX", () => {
     await expect(page.locator("[data-ra-shell-drawer='context']")).toBeVisible();
     await expect(page.getByRole("tab", { name: "Activity" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Integrations" })).toBeVisible();
-    await expect(page.getByText("Relay works from the conversation.")).toBeVisible();
+    await expect(page.getByText("Conversation drives the work.")).toBeVisible();
   });
 
   test("narrow layout keeps drawer controls and composer actions usable", async ({ page }) => {
