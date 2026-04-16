@@ -1,5 +1,6 @@
 import { onCleanup, onMount, type Accessor } from "solid-js";
 import {
+  normalizeAssistantVisibleText,
   onAgentEvent,
   type AgentApprovalNeededEvent,
   type AgentErrorEvent,
@@ -33,23 +34,34 @@ interface UseAgentEventsOptions {
 
 export function useAgentEvents(options: UseAgentEventsOptions) {
   onMount(async () => {
-    const appendAssistantText = (sessionId: string, text: string, isComplete: boolean) => {
-      if (!text && !isComplete) return;
+    const appendAssistantText = (
+      sessionId: string,
+      text: string,
+      isComplete: boolean,
+      replaceExisting: boolean,
+    ) => {
+      const normalizedText = normalizeAssistantVisibleText(text);
+      if (!normalizedText && !isComplete) return;
       if (options.activeSessionId() !== sessionId) return;
 
       options.setChunks((prev) => {
         const next = [...prev];
         const last = next.at(-1);
         if (last?.kind === "assistant" && last.streaming) {
+          const nextText = normalizeAssistantVisibleText(
+            replaceExisting ? text : `${last.text}${text}`,
+          );
+          if (!nextText && !isComplete) return next;
           next[next.length - 1] = {
             kind: "assistant",
-            text: last.text + text,
+            text: nextText,
             streaming: !isComplete,
           };
           return next;
         }
         if (!text && isComplete) return next;
-        next.push({ kind: "assistant", text, streaming: !isComplete });
+        if (!normalizedText) return next;
+        next.push({ kind: "assistant", text: normalizedText, streaming: !isComplete });
         return next;
       });
     };
@@ -148,7 +160,7 @@ export function useAgentEvents(options: UseAgentEventsOptions) {
         }
         case "text_delta": {
           const e = event.data as AgentTextDeltaEvent;
-          appendAssistantText(e.sessionId, e.text, e.isComplete);
+          appendAssistantText(e.sessionId, e.text, e.isComplete, Boolean(e.replaceExisting));
           break;
         }
         case "turn_complete": {

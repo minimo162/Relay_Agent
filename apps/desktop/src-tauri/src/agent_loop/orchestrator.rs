@@ -342,11 +342,13 @@ fn emit_text_delta_event<R: Runtime>(
     session_id: &str,
     text: &str,
     is_complete: bool,
+    replace_existing: bool,
 ) {
     let evt = AgentTextDeltaEvent {
         session_id: session_id.to_string(),
         text: text.to_string(),
         is_complete,
+        replace_existing,
     };
     if let Err(e) = app.emit(E_TEXT_DELTA, &evt) {
         tracing::warn!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
@@ -387,6 +389,27 @@ fn append_only_suffix<'a>(previous_text: &str, next_text: &'a str) -> Option<&'a
     next.strip_prefix(prev)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StreamTextUpdate {
+    NoChange,
+    Append(String),
+    Replace(String),
+}
+
+fn classify_stream_text_update(previous_text: &str, next_text: &str) -> StreamTextUpdate {
+    let next = next_text.trim();
+    if next.is_empty() {
+        return StreamTextUpdate::NoChange;
+    }
+    if let Some(suffix) = append_only_suffix(previous_text, next_text) {
+        if suffix.is_empty() {
+            return StreamTextUpdate::NoChange;
+        }
+        return StreamTextUpdate::Append(suffix.to_string());
+    }
+    StreamTextUpdate::Replace(next.to_string())
+}
+
 fn emit_copilot_text_suffix_for_ui<R: Runtime>(
     app: &AppHandle<R>,
     registry: &SessionRegistry,
@@ -396,36 +419,54 @@ fn emit_copilot_text_suffix_for_ui<R: Runtime>(
     mark_complete: bool,
 ) {
     let next = next_text.trim();
-    let Some(suffix) = append_only_suffix(previous_text, next_text) else {
-        tracing::warn!(
-            "[RelayAgent] skipping non-append streaming snapshot for session {} (prev_len={}, next_len={})",
-            session_id,
-            previous_text.trim().len(),
-            next.len()
-        );
-        if mark_complete {
-            emit_text_delta_event(app, session_id, "", true);
-        }
-        return;
-    };
-
     let mut emitted_chunks = 0usize;
-    if !suffix.is_empty() {
-        let mut start = 0usize;
-        for (i, _) in suffix.char_indices() {
-            if i > start && (i - start) >= COPILOT_UI_TEXT_CHUNK {
-                emit_text_delta_event(app, session_id, &suffix[start..i], false);
+    match classify_stream_text_update(previous_text, next_text) {
+        StreamTextUpdate::NoChange => {}
+        StreamTextUpdate::Append(suffix) => {
+            let mut start = 0usize;
+            for (i, _) in suffix.char_indices() {
+                if i > start && (i - start) >= COPILOT_UI_TEXT_CHUNK {
+                    emit_text_delta_event(app, session_id, &suffix[start..i], false, false);
+                    emitted_chunks += 1;
+                    start = i;
+                }
+            }
+            if start < suffix.len() {
+                emit_text_delta_event(app, session_id, &suffix[start..], false, false);
                 emitted_chunks += 1;
-                start = i;
             }
         }
-        if start < suffix.len() {
-            emit_text_delta_event(app, session_id, &suffix[start..], false);
-            emitted_chunks += 1;
+        StreamTextUpdate::Replace(replacement) => {
+            tracing::debug!(
+                "[RelayAgent] replacing streaming snapshot for session {} (prev_len={}, next_len={})",
+                session_id,
+                previous_text.trim().len(),
+                replacement.len()
+            );
+            let mut start = 0usize;
+            let mut first_chunk = true;
+            for (i, _) in replacement.char_indices() {
+                if i > start && (i - start) >= COPILOT_UI_TEXT_CHUNK {
+                    emit_text_delta_event(
+                        app,
+                        session_id,
+                        &replacement[start..i],
+                        false,
+                        first_chunk,
+                    );
+                    emitted_chunks += 1;
+                    first_chunk = false;
+                    start = i;
+                }
+            }
+            if start < replacement.len() {
+                emit_text_delta_event(app, session_id, &replacement[start..], false, first_chunk);
+                emitted_chunks += 1;
+            }
         }
     }
     if mark_complete {
-        emit_text_delta_event(app, session_id, "", true);
+        emit_text_delta_event(app, session_id, "", true, false);
     }
     if emitted_chunks > 0 || !next.is_empty() {
         record_stream_metrics(registry, session_id, emitted_chunks, next);
@@ -455,26 +496,16 @@ async fn stream_copilot_progress_for_ui<R: Runtime>(
             Ok(Some(snapshot)) => {
                 let visible_text = sanitize_copilot_visible_text(&snapshot.visible_text);
                 if let Ok(mut last_text) = last_visible_text.lock() {
-                    if !visible_text.is_empty() && visible_text.starts_with(last_text.as_str()) {
-                        if visible_text != *last_text {
-                            emit_copilot_text_suffix_for_ui(
-                                &app,
-                                &registry,
-                                &relay_session_id,
-                                last_text.as_str(),
-                                &visible_text,
-                                false,
-                            );
-                            *last_text = visible_text;
-                        }
-                    } else if !visible_text.is_empty() && visible_text != *last_text {
-                        tracing::warn!(
-                            "[RelayAgent] ignoring non-prefix Copilot progress snapshot for session {} (prev_len={}, next_len={}, phase={})",
-                            relay_session_id,
-                            last_text.len(),
-                            visible_text.len(),
-                            snapshot.phase
+                    if !visible_text.is_empty() && visible_text != *last_text {
+                        emit_copilot_text_suffix_for_ui(
+                            &app,
+                            &registry,
+                            &relay_session_id,
+                            last_text.as_str(),
+                            &visible_text,
+                            false,
                         );
+                        *last_text = visible_text;
                     }
                 }
                 if snapshot.done {
@@ -2058,18 +2089,26 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
 
             if let (Some((app, sid)), Some(registry)) = (&self.progress_emit, &self.registry) {
                 if let Some(last_visible_text) = live_progress_tail.as_ref() {
-                    let last_visible_text = last_visible_text
-                        .lock()
-                        .map(|value| value.clone())
-                        .unwrap_or_default();
-                    emit_copilot_text_suffix_for_ui(
-                        app,
-                        registry,
-                        sid,
-                        &last_visible_text,
-                        &visible_text,
-                        true,
-                    );
+                    if let Ok(mut last_visible_text) = last_visible_text.lock() {
+                        emit_copilot_text_suffix_for_ui(
+                            app,
+                            registry,
+                            sid,
+                            last_visible_text.as_str(),
+                            &visible_text,
+                            true,
+                        );
+                        *last_visible_text = visible_text.clone();
+                    } else {
+                        emit_copilot_text_suffix_for_ui(
+                            app,
+                            registry,
+                            sid,
+                            "",
+                            &visible_text,
+                            true,
+                        );
+                    }
                 } else if matches!(&self.source, CdpApiClientSource::Smoke(_)) {
                     emit_copilot_text_deltas_for_ui(app, registry, sid, &visible_text);
                 }
@@ -4648,6 +4687,8 @@ pub struct AgentTextDeltaEvent {
     pub session_id: String,
     pub text: String,
     pub is_complete: bool,
+    #[serde(default)]
+    pub replace_existing: bool,
 }
 
 #[derive(Clone, Debug, Serialize, TS)]
@@ -6403,20 +6444,42 @@ mod loop_controller_tests {
     }
 
     #[test]
-    fn append_only_suffix_rejects_shrinking_or_rewritten_snapshots() {
-        assert_eq!(append_only_suffix("hello world", "hello"), None);
-        assert_eq!(append_only_suffix("hello world", "hello there"), None);
+    fn classify_stream_text_update_returns_append_for_append_only_progress() {
+        assert_eq!(
+            classify_stream_text_update("hello", "hello world"),
+            StreamTextUpdate::Append(" world".to_string())
+        );
     }
 
     #[test]
-    fn append_only_suffix_accepts_sanitized_progress_after_image_noise_removal() {
+    fn classify_stream_text_update_returns_replace_for_rewritten_progress() {
+        assert_eq!(
+            classify_stream_text_update("hello world", "hello there"),
+            StreamTextUpdate::Replace("hello there".to_string())
+        );
+    }
+
+    #[test]
+    fn classify_stream_text_update_returns_no_change_for_empty_or_same_progress() {
+        assert_eq!(
+            classify_stream_text_update("hello world", "hello world"),
+            StreamTextUpdate::NoChange
+        );
+        assert_eq!(
+            classify_stream_text_update("hello world", ""),
+            StreamTextUpdate::NoChange
+        );
+    }
+
+    #[test]
+    fn classify_stream_text_update_accepts_sanitized_progress_after_image_noise_removal() {
         let previous = sanitize_copilot_visible_text("了解しました。");
         let next = sanitize_copilot_visible_text(
             "了解しました。\nLoading image\nImage has been generated\n\n最終結果です。",
         );
         assert_eq!(
-            append_only_suffix(&previous, &next),
-            Some("\n\n最終結果です。")
+            classify_stream_text_update(&previous, &next),
+            StreamTextUpdate::Append("\n\n最終結果です。".to_string())
         );
     }
 

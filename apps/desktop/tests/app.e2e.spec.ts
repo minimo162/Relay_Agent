@@ -168,6 +168,7 @@ test("streaming assistant text shows Drafting and suppresses generic working sta
     sessionId: "session-e2e-1",
     text: "First streamed sentence.",
     isComplete: false,
+    replaceExisting: false,
   });
 
   await expect(page.getByText("Drafting…")).toBeVisible();
@@ -178,6 +179,7 @@ test("streaming assistant text shows Drafting and suppresses generic working sta
     sessionId: "session-e2e-1",
     text: " More detail follows.",
     isComplete: false,
+    replaceExisting: false,
   });
 
   await expect(page.getByText("First streamed sentence. More detail follows.")).toBeVisible();
@@ -186,6 +188,7 @@ test("streaming assistant text shows Drafting and suppresses generic working sta
     sessionId: "session-e2e-1",
     text: "",
     isComplete: true,
+    replaceExisting: false,
   });
 
   await expect(page.getByText("Drafting…")).toHaveCount(0);
@@ -204,16 +207,19 @@ test("separate text-delta sequences render as separate assistant bubbles", async
     sessionId: "session-e2e-1",
     text: "First streamed reply.",
     isComplete: false,
+    replaceExisting: false,
   });
   await emitAgentEvent(page, "agent:text_delta", {
     sessionId: "session-e2e-1",
     text: "",
     isComplete: true,
+    replaceExisting: false,
   });
   await emitAgentEvent(page, "agent:text_delta", {
     sessionId: "session-e2e-1",
     text: "Second streamed reply.",
     isComplete: false,
+    replaceExisting: false,
   });
 
   const assistantBubbles = page.locator("[data-ra-bubble-role='assistant']");
@@ -235,16 +241,19 @@ test("a new streamed reply that starts with previous text does not get appended 
     sessionId: "session-e2e-1",
     text: "HTMLでテトリスを作成します！",
     isComplete: false,
+    replaceExisting: false,
   });
   await emitAgentEvent(page, "agent:text_delta", {
     sessionId: "session-e2e-1",
     text: "",
     isComplete: true,
+    replaceExisting: false,
   });
   await emitAgentEvent(page, "agent:text_delta", {
     sessionId: "session-e2e-1",
     text: "HTMLでテトリスを作成します！\n\nテトリスの HTML ファイルを作成しました ✅",
     isComplete: false,
+    replaceExisting: false,
   });
 
   const assistantBubbles = page.locator("[data-ra-bubble-role='assistant']");
@@ -269,11 +278,13 @@ test("turn completion keeps one assistant bubble and strips transient image stat
     sessionId: "session-e2e-1",
     text: "了解しました。\n\n最終結果です。",
     isComplete: false,
+    replaceExisting: false,
   });
   await emitAgentEvent(page, "agent:text_delta", {
     sessionId: "session-e2e-1",
     text: "",
     isComplete: true,
+    replaceExisting: false,
   });
 
   await setMockSessionHistory(page, "session-e2e-1", [
@@ -311,4 +322,32 @@ test("turn completion keeps one assistant bubble and strips transient image stat
   await expect(assistantBubbles.first()).toContainText("最終結果です。");
   await expect(page.getByText("Loading image")).toHaveCount(0);
   await expect(page.getByText("Image has been generated")).toHaveCount(0);
+});
+
+test("replaceExisting rewrites the active assistant bubble without showing thinking text", async ({ page }) => {
+  await injectRelayMock(page, { autoComplete: false });
+  await seedWorkspace(page);
+  await openApp(page);
+  await sendPrompt(page, "rewrite the draft");
+  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await waitForMockSession(page, "session-e2e-1");
+  await waitForAgentListener(page, "agent:text_delta");
+
+  await emitAgentEvent(page, "agent:text_delta", {
+    sessionId: "session-e2e-1",
+    text: "最初の下書きです。",
+    isComplete: false,
+    replaceExisting: false,
+  });
+  await emitAgentEvent(page, "agent:text_delta", {
+    sessionId: "session-e2e-1",
+    text: "更新後の本文です。",
+    isComplete: false,
+    replaceExisting: true,
+  });
+
+  const assistantBubble = page.locator("[data-ra-bubble-role='assistant']").first();
+  await expect(assistantBubble).toContainText("更新後の本文です。");
+  await expect(assistantBubble).not.toContainText("最初の下書きです。");
+  await expect(page.getByText("The user wants me")).toHaveCount(0);
 });

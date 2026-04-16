@@ -280,6 +280,7 @@ export interface AgentTextDeltaEvent {
   sessionId: string;
   text: string;
   isComplete: boolean;
+  replaceExisting: boolean;
 }
 
 export type MessageContent =

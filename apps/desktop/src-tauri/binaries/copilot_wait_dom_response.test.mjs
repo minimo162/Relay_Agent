@@ -28,6 +28,32 @@ test("normalizeProgressTextForUi keeps clearly new reply text intact", () => {
   );
 });
 
+test("normalizeProgressTextForUi drops internal thinking-style draft text", () => {
+  assert.equal(
+    normalizeProgressTextForUi(
+      "The user wants me to create a Tetris game in HTML. I'll create a complete, playable Tetris game as a single HTML file.",
+      "",
+    ),
+    "",
+  );
+});
+
+test("normalizeProgressTextForUi trims relay_tool blocks from streamed text", () => {
+  assert.equal(
+    normalizeProgressTextForUi(
+      [
+        "ファイルを作成します。",
+        "",
+        "```relay_tool",
+        '{"name":"write_file","relay_tool_call":true,"input":{"path":"tetris.html"}}',
+        "```",
+      ].join("\n"),
+      "",
+    ),
+    "ファイルを作成します。",
+  );
+});
+
 test("normalizeCopilotVisibleText strips transient image status noise and duplicate paragraphs", () => {
   assert.equal(
     normalizeCopilotVisibleText(
@@ -131,5 +157,45 @@ test("waitForDomResponse suppresses transient image noise from streamed progress
   assert.deepEqual(
     progress.map((snapshot) => snapshot.visibleText),
     ["最終結果です。"],
+  );
+});
+
+test("waitForDomResponse suppresses internal draft progress and keeps only visible rewrites", async () => {
+  const snapshots = [
+    { generating: false, reply: "" },
+    {
+      generating: true,
+      reply: "The user wants me to create a Tetris game in HTML. I'll create a complete, playable Tetris game.",
+    },
+    {
+      generating: true,
+      reply: "HTML で遊べるテトリスを 1 ファイルで作成します。",
+    },
+    {
+      generating: false,
+      reply: "HTML で遊べるテトリスを 1 ファイルで作成します。",
+    },
+  ];
+  let pollIndex = 0;
+  const session = {
+    async evaluate() {
+      const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
+      pollIndex += 1;
+      return { value: snapshot };
+    },
+  };
+  const progress = [];
+
+  const response = await waitForDomResponse(session, null, 0, null, {
+    timeoutMs: 2_500,
+    onProgress: async (snapshot) => {
+      progress.push(snapshot);
+    },
+  });
+
+  assert.equal(response, "HTML で遊べるテトリスを 1 ファイルで作成します。");
+  assert.deepEqual(
+    progress.map((snapshot) => snapshot.visibleText),
+    ["HTML で遊べるテトリスを 1 ファイルで作成します。"],
   );
 });

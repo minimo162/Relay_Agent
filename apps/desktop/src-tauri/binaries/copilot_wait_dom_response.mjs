@@ -179,6 +179,73 @@ function normalizeCopilotVisibleText(text) {
   return cleaned.trim();
 }
 
+const INTERNAL_PROGRESS_PREFIXES = [
+  "the user wants me to ",
+  "i'll ",
+  "i will ",
+  "let me ",
+  "i need to ",
+  "i should ",
+  "i'm going to ",
+  "first, i'll ",
+  "first, i will ",
+];
+
+function looksLikeInternalDraftParagraph(text) {
+  const normalized = String(text ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return false;
+  return INTERNAL_PROGRESS_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+function findProgressToolCutoff(text) {
+  const raw = String(text ?? "");
+  if (!raw) return -1;
+  const candidates = [
+    raw.indexOf("```relay_tool"),
+    raw.indexOf("relay_tool_call"),
+    raw.indexOf("```json"),
+  ].filter((index) => index >= 0);
+  for (const pattern of [
+    /\n\s*\[\s*\{\s*"name"\s*:/u,
+    /\n\s*\{\s*"name"\s*:/u,
+    /\n\s*`?relay_tool`?/iu,
+  ]) {
+    const match = pattern.exec(raw);
+    if (match?.index != null) {
+      candidates.push(match.index);
+    }
+  }
+  if (!candidates.length) return -1;
+  return Math.min(...candidates);
+}
+
+function extractUserVisibleProgressText(text) {
+  let cleaned = normalizeCopilotVisibleText(text);
+  if (!cleaned) return "";
+
+  const cutoff = findProgressToolCutoff(cleaned);
+  if (cutoff >= 0) {
+    cleaned = cleaned.slice(0, cutoff).trimEnd();
+  }
+  if (!cleaned) return "";
+
+  const paragraphs = cleaned.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+  while (paragraphs.length > 0 && looksLikeInternalDraftParagraph(paragraphs[0])) {
+    paragraphs.shift();
+  }
+  cleaned = paragraphs.join("\n\n").trim();
+  if (!cleaned) return "";
+
+  if (looksLikeInternalDraftParagraph(cleaned)) {
+    return "";
+  }
+
+  return cleaned;
+}
+
 async function pollCopilotGeneratingAndReply(session) {
   const r = await session
     .evaluate(copilotDomPollGeneratingAndReplyExpression())
@@ -495,10 +562,10 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
 }
 
 function normalizeProgressTextForUi(text, baselineText = "") {
-  let cleaned = normalizeCopilotVisibleText(text);
+  let cleaned = extractUserVisibleProgressText(text);
   if (!cleaned) return "";
 
-  const baseline = normalizeCopilotVisibleText(baselineText);
+  const baseline = extractUserVisibleProgressText(baselineText);
   if (!baseline) return cleaned;
   if (cleaned === baseline) return "";
   if (baseline.startsWith(cleaned)) return "";
