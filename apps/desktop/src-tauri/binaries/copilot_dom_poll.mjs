@@ -40,6 +40,12 @@ export const ASSISTANT_REPLY_DOM_SELECTORS = [
   "cib-rich-card"
 ];
 
+export const M365_SUGGESTION_NOISE_SELECTORS = [
+  ".fai-SuggestionList",
+  ".fai-Suggestion",
+  '[data-testid="chat-suggestion"]',
+];
+
 const M365_NOISY_REPLY_LINE_PATTERNS = [
   /^show less$/i,
   /^feedback$/i,
@@ -310,6 +316,7 @@ async function isCopilotGenerating(session) {
  */
 function copilotDomReplyExtractIifeExpression() {
   return `(() => {
+    const suggestionSelectors = ${JSON.stringify(M365_SUGGESTION_NOISE_SELECTORS)};
     function visible(el) {
       return el && el.offsetParent !== null;
     }
@@ -346,9 +353,11 @@ function copilotDomReplyExtractIifeExpression() {
             ".fai-CopilotMessage__actions",
             ".scc-ChainOfThought",
             ".fai-SuggestionList",
+            ".fai-Suggestion",
             ".fui-MessageBar",
             ".fai-Citation",
             ".fai-CitationCard",
+            '[data-testid="chat-suggestion"]',
             '[data-citation-group-id]',
             '[data-grouped-citations]',
             '[data-testid="loading-message"]',
@@ -391,13 +400,49 @@ function copilotDomReplyExtractIifeExpression() {
               node.remove();
             }
           }
-          for (const node of target.querySelectorAll('button, [role="button"], [role="menuitem"], [role="progressbar"]')) {
+          for (const node of target.querySelectorAll('button, [role="button"], [role="menuitem"], [role="progressbar"], [role="toolbar"]')) {
             node.remove();
           }
         }
       } catch (_) {}
       const t = (target.innerText || target.textContent || "").trim();
       return t;
+    }
+    function isSuggestionToolbar(el) {
+      if (!el || !el.getAttribute) return false;
+      const role = (el.getAttribute("role") || "").toLowerCase();
+      if (role !== "toolbar") return false;
+      const label = [
+        el.getAttribute("aria-label") || "",
+        el.getAttribute("title") || "",
+      ].join(" ").toLowerCase();
+      return /\\bsuggestions?\\b/.test(label);
+    }
+    function isSuggestionNode(el) {
+      if (!el || !el.closest) return false;
+      try {
+        for (const selector of suggestionSelectors) {
+          if (el.matches?.(selector) || el.closest(selector)) return true;
+        }
+        const toolbar = el.matches?.('[role="toolbar"]') ? el : el.closest('[role="toolbar"]');
+        return !!toolbar && isSuggestionToolbar(toolbar);
+      } catch (_) {
+        return false;
+      }
+    }
+    function hasSuggestionSurfaceOutsideReply(container, replyRoot) {
+      if (!container || !container.querySelectorAll) return false;
+      try {
+        const candidates = container.querySelectorAll(
+          suggestionSelectors.join(", ") + ', [role="toolbar"]'
+        );
+        for (const node of candidates) {
+          if (!visible(node)) continue;
+          if (replyRoot && replyRoot.contains(node)) continue;
+          if (isSuggestionNode(node)) return true;
+        }
+      } catch (_) {}
+      return false;
     }
     function proseNodeTextWithoutCodePreview(el) {
       if (!el) return "";
@@ -524,6 +569,7 @@ function copilotDomReplyExtractIifeExpression() {
         if (!visible(cur) || inComposer(cur) || inUserTurn(cur)) continue;
         const t = nodeText(cur);
         if (!t || t.length > maxLen) continue;
+        if (hasSuggestionSurfaceOutsideReply(cur, el)) continue;
         const score = assistantRootScore(cur);
         if (score > bestScore || (score === bestScore && t.length > bestLen)) {
           best = cur;

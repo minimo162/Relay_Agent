@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  assistantReplyAddsOnlySuggestionSuffix,
   assistantReplyHasStrongCompletionSignal,
   normalizeCopilotVisibleText,
   normalizeProgressTextForUi,
+  resolveAssistantReplyForReturn,
   waitForDomResponse,
 } from "./copilot_wait_dom_response.mjs";
 
@@ -182,6 +184,54 @@ test("assistantReplyHasStrongCompletionSignal waits for closing html on document
     ].join("\n")),
     true,
   );
+});
+
+test("assistantReplyAddsOnlySuggestionSuffix detects short follow-up suggestion tails", () => {
+  assert.equal(
+    assistantReplyAddsOnlySuggestionSuffix(
+      [
+        "relay-probe-ok",
+        "",
+        "他のメッセージに対しても同じように返してください。",
+        "relay-probe-ok の意味を教えてください。",
+        "relay-probe-ok を使った例を教えてください。",
+      ].join("\n"),
+      "relay-probe-ok",
+    ),
+    true,
+  );
+  assert.equal(
+    assistantReplyAddsOnlySuggestionSuffix(
+      "relay-probe-ok\n\n補足: この応答は自動化プローブ用です。",
+      "relay-probe-ok",
+    ),
+    false,
+  );
+});
+
+test("resolveAssistantReplyForReturn keeps structured body when strict and heuristic only add suggestions", async () => {
+  const structuredReply = "relay-probe-ok";
+  const suggestionReply = [
+    "relay-probe-ok",
+    "",
+    "他のメッセージに対しても同じように返してください。",
+    "relay-probe-ok の意味を教えてください。",
+    "relay-probe-ok を使った例を教えてください。",
+  ].join("\n");
+  const session = {
+    async evaluate(script) {
+      if (String(script).includes("const includeGenericSelectors = false")) {
+        return { value: suggestionReply };
+      }
+      if (String(script).includes("const includeGenericSelectors = true")) {
+        return { value: suggestionReply };
+      }
+      return { value: structuredReply };
+    },
+  };
+
+  const response = await resolveAssistantReplyForReturn(session, structuredReply, 0, null);
+  assert.equal(response, structuredReply);
 });
 
 test("normalizeProgressTextForUi keeps append-only progress after transient image noise is removed", () => {

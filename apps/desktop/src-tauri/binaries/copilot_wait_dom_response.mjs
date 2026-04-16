@@ -4,6 +4,7 @@
 import {
   ASSISTANT_REPLY_DOM_SELECTORS,
   COMPOSER_ANCESTOR_CLOSEST,
+  M365_SUGGESTION_NOISE_SELECTORS,
   assistantTextHasStructuredContent,
   copilotDomPollGeneratingAndReplyExpression,
   copilotDomReplyExtractIifeExpression,
@@ -344,6 +345,25 @@ function shouldPreferAssistantText(candidate, baseline = "") {
   );
 }
 
+function assistantReplyAddsOnlySuggestionSuffix(candidate, baseline = "") {
+  const next = normalizeCopilotVisibleText(candidate);
+  const current = normalizeCopilotVisibleText(baseline);
+  if (!next || !current || next === current || !next.startsWith(current)) return false;
+  const suffix = next.slice(current.length).trim();
+  if (!suffix) return false;
+  if (assistantTextHasStructuredContent(suffix)) return false;
+  if (assistantReplyHasStrongCompletionSignal(suffix)) return false;
+  const lines = suffix.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length || lines.length > 6) return false;
+  return lines.every((line) => {
+    if (line.length > 120) return false;
+    if (/[?？]$/.test(line)) return true;
+    if (/ください/u.test(line)) return true;
+    if (/教えて/u.test(line)) return true;
+    return /\b(?:same|meaning|example|examples|reply|respond|prompt|message|suggest)\b/i.test(line);
+  });
+}
+
 function findProgressToolCutoff(text) {
   const raw = String(text ?? "");
   if (!raw) return -1;
@@ -424,6 +444,7 @@ async function extractAssistantReplyStructured(session) {
 function assistantTurnExtractionIifeExpression({ includeGenericSelectors = true } = {}) {
   return `(() => {
     const includeGenericSelectors = ${includeGenericSelectors ? "true" : "false"};
+    const suggestionSelectors = ${JSON.stringify(M365_SUGGESTION_NOISE_SELECTORS)};
     function visible(el) {
       return el && el.offsetParent !== null;
     }
@@ -449,7 +470,98 @@ function assistantTurnExtractionIifeExpression({ includeGenericSelectors = true 
       return false;
     }
     function nodeText(el) {
-      return (el && (el.innerText || el.textContent) ? (el.innerText || el.textContent) : "").trim();
+      if (!el) return "";
+      let target = el;
+      try {
+        if (typeof el.cloneNode === "function") {
+          target = el.cloneNode(true);
+          const noisySelectors = [
+            ".fai-CopilotMessage__footnote",
+            ".fai-CopilotMessage__actions",
+            ".scc-ChainOfThought",
+            ".fai-SuggestionList",
+            ".fai-Suggestion",
+            ".fui-MessageBar",
+            ".fai-Citation",
+            ".fai-CitationCard",
+            '[data-testid="chat-suggestion"]',
+            '[data-citation-group-id]',
+            '[data-grouped-citations]',
+            '[data-testid="loading-message"]',
+            '[data-testid="narrator-announcement"]',
+            '[data-testid="sources-button-testid"]',
+            '[data-testid*="source"]',
+            '[data-testid*="Source"]',
+            '[data-testid*="citation"]',
+            '[data-testid*="Citation"]',
+            '[data-testid="chat-response-message-disclaimer"]',
+            '[data-testid="feedback-button-testid"]',
+            '[data-testid="CopyButtonContainerTestId"]',
+            '[data-testid="CopyButtonTestId"]',
+            '[data-testid="overflow-menu-button"]',
+            '[data-testid="SchedulePromptButtonTestId"]',
+            '[data-testid="pages-split-button-primary"]',
+            '[data-testid="pages-split-button-menu"]',
+            '[data-testid="message-footer"]',
+            '[data-testid="message-toolbar"]',
+            '[class*="Citation"]',
+            '[class*="citation"]',
+            '[class*="Source"]',
+            '[class*="source"]',
+            '[class*="Footnote"]',
+            '[class*="footnote"]',
+            '[class*="Feedback"]',
+            '[class*="feedback"]',
+            '[class*="Toolbar"]',
+            '[class*="toolbar"]',
+          ];
+          for (const selector of noisySelectors) {
+            for (const node of target.querySelectorAll(selector)) {
+              node.remove();
+            }
+          }
+          for (const node of target.querySelectorAll('button, [role="button"], [role="menuitem"], [role="progressbar"], [role="toolbar"]')) {
+            node.remove();
+          }
+        }
+      } catch (_) {}
+      return (target && (target.innerText || target.textContent) ? (target.innerText || target.textContent) : "").trim();
+    }
+    function isSuggestionToolbar(el) {
+      if (!el || !el.getAttribute) return false;
+      const role = (el.getAttribute("role") || "").toLowerCase();
+      if (role !== "toolbar") return false;
+      const label = [
+        el.getAttribute("aria-label") || "",
+        el.getAttribute("title") || "",
+      ].join(" ").toLowerCase();
+      return /\\bsuggestions?\\b/.test(label);
+    }
+    function isSuggestionNode(el) {
+      if (!el || !el.closest) return false;
+      try {
+        for (const selector of suggestionSelectors) {
+          if (el.matches?.(selector) || el.closest(selector)) return true;
+        }
+        const toolbar = el.matches?.('[role="toolbar"]') ? el : el.closest('[role="toolbar"]');
+        return !!toolbar && isSuggestionToolbar(toolbar);
+      } catch (_) {
+        return false;
+      }
+    }
+    function hasSuggestionSurfaceOutsideReply(container, replyRoot) {
+      if (!container || !container.querySelectorAll) return false;
+      try {
+        const candidates = container.querySelectorAll(
+          suggestionSelectors.join(", ") + ', [role="toolbar"]'
+        );
+        for (const node of candidates) {
+          if (!visible(node)) continue;
+          if (replyRoot && replyRoot.contains(node)) continue;
+          if (isSuggestionNode(node)) return true;
+        }
+      } catch (_) {}
+      return false;
     }
     function hasStructuredContent(text) {
       const s = String(text || "");
@@ -545,6 +657,7 @@ function assistantTurnExtractionIifeExpression({ includeGenericSelectors = true 
         if (!visible(cur) || inComposer(cur) || inUserTurn(cur)) continue;
         const t = nodeText(cur);
         if (!t || t.length > maxLen) continue;
+        if (hasSuggestionSurfaceOutsideReply(cur, el)) continue;
         const score = assistantRootScore(cur);
         if (score > bestScore || (score === bestScore && t.length > bestLen)) {
           best = cur;
@@ -757,9 +870,14 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
   const strict = normalizeCopilotVisibleText(await extractAssistantReplyStrict(session));
   const strictLooksLikePrompt = domExtractLooksLikeSubmittedPrompt(strict.length, submittedPromptLen);
   const strictNeedsExpansionProbe = assistantReplyNeedsExpansionProbe(strict, submittedPromptLen);
+  const strictAddsOnlySuggestionSuffix =
+    !!strict &&
+    !!structured &&
+    assistantReplyAddsOnlySuggestionSuffix(strict, structured);
   const strictClearlyMoreCompleteThanStructured =
     !!strict &&
     !strictLooksLikePrompt &&
+    !strictAddsOnlySuggestionSuffix &&
     (!!structured &&
       !structuredLooksLikePrompt &&
       ((assistantReplyHasStrongCompletionSignal(strict) &&
@@ -777,6 +895,9 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
     if (!candidate) return false;
     if (networkExtractLooksLikeGarbage(candidate)) return false;
     if (looksLikeSearchProgressText(candidate)) return false;
+    if (structured && assistantReplyAddsOnlySuggestionSuffix(candidate, structured)) {
+      return false;
+    }
     if (!allowPromptBand && domExtractLooksLikeSubmittedPrompt(candidate.length, submittedPromptLen)) {
       return false;
     }
@@ -1223,6 +1344,7 @@ export {
   extractAssistantReplyText,
   extractAssistantReplyHeuristic,
   assistantReplyHasStrongCompletionSignal,
+  assistantReplyAddsOnlySuggestionSuffix,
   domExtractLooksLikeSubmittedPrompt,
   normalizeCopilotVisibleText,
   normalizeProgressTextForUi,

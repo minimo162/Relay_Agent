@@ -252,8 +252,45 @@ test.describe("M365 Copilot via CDP", () => {
 /** Real Copilot: assert the model does not cite typo tokens that are absent from the fixture (see docs/AGENT_EVALUATION_CRITERIA.md). */
 const RELAY_GROUNDING_E2E =
   process.env.RELAY_GROUNDING_E2E === "1" || process.env.RELAY_GROUNDING_E2E === "true";
+const RELAY_EXACT_RESPONSE_E2E =
+  process.env.RELAY_EXACT_RESPONSE_E2E === "1" || process.env.RELAY_EXACT_RESPONSE_E2E === "true";
 
 const groundingDescribe = RELAY_GROUNDING_E2E ? test.describe : test.describe.skip;
+const exactResponseDescribe = RELAY_EXACT_RESPONSE_E2E ? test.describe : test.describe.skip;
+
+exactResponseDescribe(
+  "Exact Response E2E (RELAY_EXACT_RESPONSE_E2E=1) — real M365 Copilot via CDP",
+  () => {
+    test.setTimeout(360_000);
+
+    let browser: any;
+    let page: any;
+
+    test.beforeAll(async () => {
+      assertCopilotServerPrecondition(await copilotServerHealth());
+      browser = await connectViaCDP();
+      page = await findCopilotPage(browser);
+    });
+
+    test("06 — exact response excludes follow-up suggestions from assistant.content", async () => {
+      await startNewChat(page);
+
+      const expected = "relay-exact-ok";
+      const { assistantText } = await postCopilotChatCompletion({
+        userPrompt: "このメッセージに対して relay-exact-ok だけを返してください。説明や追加候補は不要です。",
+        relayNewChat: true,
+        timeoutMs: 300_000,
+      });
+
+      expect(assistantText).toBe(expected);
+
+      await page.screenshot({
+        path: "test-results-cdp-06-exact-response.png",
+        fullPage: true,
+      });
+    });
+  },
+);
 
 /** Tokens models often invent as "bugs" though absent from `tetris_grounding.html` / `tetris.html` (see AGENT_EVALUATION_CRITERIA). */
 const GROUNDING_HALLUCINATION_TOKENS = ["x_size", "y_size", "bag.length0"] as const;
