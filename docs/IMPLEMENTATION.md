@@ -15,6 +15,14 @@
 
 ## Milestone Log
 
+### 2026-04-16 Copilot inline prompt fast path for attachment-free sends
+
+**Problem:** Relay already moved most Copilot grounding from file attachment uploads into inline prompt delivery, but the bundled Node bridge still treated normal attachment-free sends like the older upload-heavy path. It spent extra fixed waits around composer focus, paste settling, and submit confirmation, and long prompts could still fall back quickly into chunked insertion paths that look slower and more incremental than a single inline paste.
+
+**Change:** Added an attachment-aware inline-fast timing policy and applied it to both Copilot send paths. [`apps/desktop/src-tauri/binaries/copilot_send_timing.mjs`](../apps/desktop/src-tauri/binaries/copilot_send_timing.mjs) now defines the shared no-attachment fast path versus attachment-safe delays, with [`copilot_send_timing.test.mjs`](../apps/desktop/src-tauri/binaries/copilot_send_timing.test.mjs) locking those values. [`apps/desktop/src-tauri/binaries/copilot_server.js`](../apps/desktop/src-tauri/binaries/copilot_server.js) now logs `fast_inline` plus submit timing, attempts a single full `Input.insertText` first for attachment-free sends, shortens the fixed waits around composer readiness and submit confirmation in that path, and only falls back to the existing clipboard / execCommand / chunked CDP strategies when the one-shot inline insert still leaves the composer short. Attachment-bearing sends continue to use the slower safety timings. [`apps/desktop/src-tauri/src/cdp_copilot.rs`](../apps/desktop/src-tauri/src/cdp_copilot.rs) now mirrors the same shorter post-insert and post-submit waits for the direct CDP helper path while keeping the existing `need_min` validation, execCommand fallback, and 8-second composer-clear timeout.
+
+**Verification:** `node --check apps/desktop/src-tauri/binaries/copilot_server.js` — pass. `node --test apps/desktop/src-tauri/binaries/copilot_send_timing.test.mjs` — pass. `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass (with the existing non-fatal `ts-rs` serde attribute warnings). `pnpm check` — pass.
+
 ### 2026-04-16 Live Copilot streaming and duplicate assistant bubble fix
 
 **Problem:** The live M365 Copilot path only surfaced assistant text after the full reply completed, even though the desktop stack already had `agent:text_delta` and `/v1/chat/progress` plumbing. At the same time, the Solid UI appended every new assistant delta onto the most recent assistant bubble regardless of whether that bubble had already completed, which could produce duplicated text such as repeated Copilot intro lines followed by the final answer in the same rendered bubble.

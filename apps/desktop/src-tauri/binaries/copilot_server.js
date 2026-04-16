@@ -11,6 +11,7 @@ import {
   CHATHUB_ASSISTANT_MIN_CHARS,
   copilotDomGeneratingIifeExpression,
 } from "./copilot_dom_poll.mjs";
+import { getCopilotPromptTiming } from "./copilot_send_timing.mjs";
 import { domExtractLooksLikeSubmittedPrompt, waitForDomResponse } from "./copilot_wait_dom_response.mjs";
 
 async function isCopilotGenerating(session) {
@@ -107,8 +108,6 @@ var ATTACHMENT_PENDING_SELECTORS = [
   '[data-testid*="progress"]',
   '[data-testid*="loading"]',
 ];
-var SEND_BUTTON_STABLE_MS_DEFAULT = 500;
-var SEND_BUTTON_STABLE_MS_AFTER_ATTACH = 750;
 var RESPONSE_URL_PATTERN =
   /substrate\.office\.com|copilot\.microsoft\.com|m365\.cloud\.microsoft|api\.bing\.microsoft\.com|services\.actions\.ms|graph\.microsoft\.com|teams\.live\.com/i;
 
@@ -1075,7 +1074,7 @@ class CopilotSession {
                 "stage_label=",
                 stageLabel,
               );
-              await pastePromptRaw(pageSession, fullPrompt);
+              await pastePromptRaw(pageSession, fullPrompt, { hadAttachments });
               trace.pasteDone = true;
               trace.pasteElapsedMs = Date.now() - phaseStartedAt;
               console.error(
@@ -2124,21 +2123,23 @@ async function insertTextViaKeyChars(session, text) {
   }
 }
 
-async function pastePromptRaw(session, text) {
+async function pastePromptRaw(session, text, options = {}) {
+  const timing = getCopilotPromptTiming({ hadAttachments: options.hadAttachments === true });
   console.error("[copilot:paste] begin (", text.length, "chars )");
+  console.error("[copilot:paste] fast_inline=", timing.fastInline);
   await session.send("Runtime.enable", {}).catch(() => {});
   await session.send("DOM.enable", {}).catch(() => {});
   await cdpInputEnable(session);
   await waitForComposer(session);
-  await sleep(420);
+  await sleep(timing.composerReadyDelayMs);
 
   const preClearLen = await getComposerTextLength(session);
   if (preClearLen > 0) {
     await clearComposerViaKeyboard(session);
-    await sleep(120);
+    await sleep(timing.afterClearDelayMs);
   }
   await focusComposer(session);
-  await sleep(120);
+  await sleep(timing.afterRefocusDelayMs);
 
   let errInsert = null;
   let len = 0;
@@ -2147,7 +2148,27 @@ async function pastePromptRaw(session, text) {
   const skipSyncInPage = text.length > LONG_PROMPT_SKIP_SYNC_IN_PAGE_CHARS;
 
   let skipBulkFallbacks = false;
-  if (text.length <= 16_000) {
+  if (timing.fastInline) {
+    console.error("[copilot:paste] fast inline Input.insertText");
+    try {
+      await session.send("Input.insertText", { text });
+      len = await waitForComposerPasteSettle(session, text.length, {
+        maxPollMs: 360,
+        fallbackMs: 120,
+      });
+      if (pasteLooksComplete(len, text.length)) {
+        skipBulkFallbacks = true;
+        console.error("[copilot:paste] fast inline Input.insertText satisfied pasteLooksComplete");
+      } else {
+        console.error("[copilot:paste] fast inline Input.insertText short; falling back", len);
+      }
+    } catch (e) {
+      errInsert = e;
+      console.error("[copilot:paste] fast inline Input.insertText failed:", e?.message || e);
+    }
+  }
+
+  if (!skipBulkFallbacks && text.length <= 16_000) {
     const kOuter = await pasteViaKirokuOuterClipboardOnly(session, text);
     if (kOuter) {
       len = await waitForComposerPasteSettle(session, text.length, {
@@ -2201,7 +2222,7 @@ async function pastePromptRaw(session, text) {
         console.error("[copilot:paste] CDP-first incomplete vs heuristic, clearing and trying synthetic…");
         if (len > 0) {
           await clearComposerViaKeyboard(session);
-          await sleep(120);
+          await sleep(timing.afterClearDelayMs);
           await focusComposer(session);
           await sleep(80);
         }
@@ -2257,7 +2278,7 @@ async function pastePromptRaw(session, text) {
     console.error("[copilot:paste] pasteLooksComplete OK, visible len:", len);
   }
 
-  await sleep(200);
+  await sleep(timing.postPasteDelayMs);
   len = await getComposerTextLength(session);
 
   if (!skipBulkFallbacks && len < needMin && text.length >= 20) {
@@ -2326,7 +2347,7 @@ async function pastePromptRaw(session, text) {
   }
 
   console.error("[copilot:paste] composer length OK:", len);
-  await sleep(220);
+  await sleep(timing.postPasteDelayMs);
 }
 
 /** Lexical often does not expose the full prompt in innerText — cap so we do not spin 15s waiting. */
@@ -2366,8 +2387,8 @@ async function trySubmitViaCtrlEnter(session) {
   await dispatchEnterKey(session, 2);
 }
 
-async function composerSubmitLooksSent(session, lenBefore) {
-  await sleep(700);
+async function composerSubmitLooksSent(session, lenBefore, confirmDelayMs) {
+  await sleep(confirmDelayMs);
   const generating = await isCopilotGenerating(session);
   const lenNow = await getComposerTextLength(session);
   return generating || lenNow + 25 < lenBefore;
@@ -2518,6 +2539,7 @@ async function clickSendViaCdpMouse(session) {
 
 async function submitPromptRaw(session, expectedPromptLen, netCapture = null, opts = {}) {
   const hadAttachments = opts.hadAttachments === true;
+  const timing = getCopilotPromptTiming({ hadAttachments });
   const abortCheck = typeof opts.abortCheck === "function" ? opts.abortCheck : null;
   const onProgress = typeof opts.onProgress === "function" ? opts.onProgress : null;
   const trace = opts.trace || null;
@@ -2525,7 +2547,16 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
     Number.isFinite(opts.responseTimeoutMs) && opts.responseTimeoutMs > 0
       ? opts.responseTimeoutMs
       : RESPONSE_TIMEOUT_MS;
-  const stableMs = hadAttachments ? SEND_BUTTON_STABLE_MS_AFTER_ATTACH : SEND_BUTTON_STABLE_MS_DEFAULT;
+  const stableMs = timing.sendButtonStableMs;
+  const confirmDelayMs = timing.submitConfirmDelayMs;
+  console.error(
+    "[copilot:submit] fast_inline=",
+    timing.fastInline,
+    "confirm_delay_ms=",
+    confirmDelayMs,
+    "stable_ms=",
+    stableMs,
+  );
 
   const minComposer = minComposerThresholdForSubmit(expectedPromptLen);
 
@@ -2551,7 +2582,7 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
   let sendClicked = false;
   try {
     await trySubmitViaEnter(session);
-    sendClicked = await composerSubmitLooksSent(session, lenBefore);
+    sendClicked = await composerSubmitLooksSent(session, lenBefore, confirmDelayMs);
   } catch (error) {
     console.error("[copilot:submit] Enter failed:", error?.message || error);
   }
@@ -2559,7 +2590,7 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
     console.error("[copilot:submit] Enter not confirmed; trying Ctrl+Enter");
     try {
       await trySubmitViaCtrlEnter(session);
-      sendClicked = await composerSubmitLooksSent(session, lenBefore);
+      sendClicked = await composerSubmitLooksSent(session, lenBefore, confirmDelayMs);
     } catch (error) {
       console.error("[copilot:submit] Ctrl+Enter failed:", error?.message || error);
     }

@@ -631,7 +631,7 @@ impl CopilotPage {
             .await
             .context("Input.insertText")?;
 
-        tokio::time::sleep(Duration::from_millis(400)).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
 
         let text_len = text.chars().count();
         let need_min = copilot_composer_need_min(text_len);
@@ -641,7 +641,7 @@ impl CopilotPage {
                 "[CDP] Input.insertText left composer short (len={visible_len}, need~{need_min}); trying execCommand"
             );
             Self::cdp_insert_exec_command(&ctx, text).await?;
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            tokio::time::sleep(Duration::from_millis(80)).await;
             visible_len = Self::cdp_composer_visible_len(&ctx).await?;
         }
         if text_len >= 20 && visible_len < need_min {
@@ -666,7 +666,7 @@ impl CopilotPage {
         }
 
         // 3. Wait for composer to clear (confirms prompt was dispatched)
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(180)).await;
         timeout(Duration::from_secs(8), async {
             loop {
                 if let Ok(r) = ctx
@@ -699,7 +699,7 @@ impl CopilotPage {
                         return Ok::<(), anyhow::Error>(());
                     }
                 }
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                tokio::time::sleep(Duration::from_millis(200)).await;
             }
         })
         .await
