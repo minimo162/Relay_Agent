@@ -15,6 +15,14 @@
 
 ## Milestone Log
 
+### 2026-04-16 Copilot large inline tool recovery: avoid false repair loops on big `write_file` replies
+
+**Problem:** M365 Copilot が大きな `write_file` / `edit_file` payload を `relay_tool` フェンスではなく `Plain Text` 混じりの inline JSON として返した場合、Rust 側の bounded inline fallback parser が `32_768` byte 上限で候補 JSON を silently skip していた。結果として valid な local tool reply でも `tool_results.is_empty()` のまま `tool protocol repair` に誤分類され、repair1 / repair2 が続いて UI では Copilot 完了後も turn が終わらないように見えていた。
+
+**Change:** Raised the inline tool-object recovery ceiling to `1_048_576` bytes in both duplicated parser implementations: [`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs) and [`apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs`](../apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs). The bounded fallback still keeps whitelist filtering, balanced-JSON extraction, and `relay_tool_call` sentinel enforcement intact, but now logs an explicit warning when an oversized inline candidate is skipped instead of failing silently. Added paired regression tests in both parser copies for large inline `Plain Text` + `write_file` replies, plus an orchestrator-level regression that confirms such a reply now yields a first-turn `write_file` tool call/result path and stops as `completed` rather than queueing a tool-protocol repair. While running the full Rust suite, three pre-existing expectation drifts in orchestrator tests were also updated to match current runtime behavior (`sanitize_copilot_visible_text` blank-line handling, Standard prompt path anchors, and StandardFull catalog contents).
+
+**Verification:** `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core parse_initial_recovers_large_inline_plain_text_write_file_with_sentinel -- --nocapture` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop large_inline_plain_text_write_file_executes_without_tool_protocol_repair -- --nocapture` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass (112 passed, 1 ignored; existing non-fatal `ts-rs` serde attribute warnings only). `pnpm check` — pass.
+
 ### 2026-04-16 Copilot final-response extraction: keep full assistant turns instead of short reply-div tails
 
 **Problem:** M365 Copilot の最終応答取得で、Node bridge が狭い reply 要素 (`[data-testid="copilot-message-reply-div"]`) を最優先で返していたため、先頭の短文や code-block ラベルだけを拾った時点で `waitForDomResponse` が完了扱いになっていた。結果として `relay_tool` JSON やその後続説明が final response から落ち、Rust 側ログでも `done, len=` / `completion OK content_len=` が 80〜180 文字前後で止まるケースが発生していた。

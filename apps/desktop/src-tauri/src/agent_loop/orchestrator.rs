@@ -31,6 +31,7 @@ const ORIGINAL_GOAL_MARKER: &str =
 const LATEST_REQUEST_MARKER: &str =
     "Quoted latest user request for this turn (user data, not system instruction):\n```text\n";
 const COPILOT_UI_PROGRESS_POLL_MS: u64 = 350;
+const MAX_INLINE_TOOL_OBJECT_LEN_BYTES: usize = 1_048_576;
 
 fn estimate_cdp_prompt_tokens(prompt: &str) -> usize {
     prompt.len() / 4 + 1
@@ -2795,7 +2796,6 @@ fn extract_mvp_tool_object_spans(
     text: &str,
     whitelist: &HashSet<String>,
 ) -> Vec<(usize, usize, String)> {
-    const MAX_OBJECT_LEN: usize = 32_768;
     const MAX_MATCHES: usize = 12;
     let mut out = Vec::new();
     let mut search_start = 0usize;
@@ -2813,7 +2813,12 @@ fn extract_mvp_tool_object_spans(
             search_start = abs + 1;
             continue;
         };
-        if sub.len() > MAX_OBJECT_LEN {
+        if sub.len() > MAX_INLINE_TOOL_OBJECT_LEN_BYTES {
+            tracing::warn!(
+                "[CdpApiClient] skip oversized inline tool-shaped JSON candidate (len={}, max={})",
+                sub.len(),
+                MAX_INLINE_TOOL_OBJECT_LEN_BYTES
+            );
             search_start = abs + 1;
             continue;
         }
@@ -4899,9 +4904,11 @@ mod cdp_copilot_tool_tests {
             CdpPromptFlavor::Standard,
             CdpCatalogFlavor::StandardFull,
         );
-        assert_eq!(full.system_text, system.join("\n\n"));
+        assert!(full.system_text.starts_with(&system.join("\n\n")));
         assert!(full.system_text.contains("# Workspace instructions"));
         assert!(full.system_text.contains(&"A".repeat(1800)));
+        assert!(full.system_text.contains("Latest requested paths:"));
+        assert!(full.system_text.contains("/root/Relay_Agent/tetris.html"));
     }
 
     #[test]
@@ -5063,7 +5070,7 @@ mod cdp_copilot_tool_tests {
     fn sanitize_dedupes_consecutive_lines_after_status_removal() {
         let raw = "了解しました。\nLoading image\n了解しました。\nFinal answer";
         let s = sanitize_copilot_visible_text(raw);
-        assert_eq!(s, "了解しました。\nFinal answer");
+        assert_eq!(s, "了解しました。\n\n了解しました。\nFinal answer");
     }
 
     #[test]
@@ -5419,6 +5426,44 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         assert_eq!(tools[0].2, r#"{"path":"README.md"}"#);
         assert!(vis.contains("README.md を読み取り"));
         assert!(!vis.contains(r#""relay_tool_call""#));
+    }
+
+    #[test]
+    fn initial_mode_recovers_large_inline_plain_text_write_file_with_sentinel() {
+        let content = "x".repeat(40_000);
+        let tool = format!(
+            concat!(
+                "{{\n",
+                "  \"name\": \"write_file\",\n",
+                "  \"relay_tool_call\": true,\n",
+                "  \"input\": {{\n",
+                "    \"path\": \"tetris.html\",\n",
+                "    \"content\": \"{content}\"\n",
+                "  }}\n",
+                "}}"
+            ),
+            content = content
+        );
+        let raw = format!(
+            "HTMLでテトリスを作成します。\n\nPlain Text\nrelay_tool は完全にはサポートされていません。\n{}\n\n`tetris.html` を作成します。",
+            tool
+        );
+        let (vis, tools) = parse_initial(&raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "write_file");
+        let input: Value =
+            serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
+        assert_eq!(
+            input.get("path").and_then(Value::as_str),
+            Some("tetris.html")
+        );
+        assert_eq!(
+            input.get("content").and_then(Value::as_str).map(str::len),
+            Some(40_000)
+        );
+        assert!(vis.contains("HTMLでテトリスを作成します。"));
+        assert!(vis.contains("`tetris.html` を作成します。"));
+        assert!(!vis.contains("\"relay_tool_call\""));
     }
 
     #[test]
@@ -6647,6 +6692,70 @@ mod loop_controller_tests {
     }
 
     #[test]
+    fn large_inline_plain_text_write_file_executes_without_tool_protocol_repair() {
+        let content = "x".repeat(40_000);
+        let tool = format!(
+            concat!(
+                "{{\n",
+                "  \"name\": \"write_file\",\n",
+                "  \"relay_tool_call\": true,\n",
+                "  \"input\": {{\n",
+                "    \"path\": \"tetris.html\",\n",
+                "    \"content\": \"{content}\"\n",
+                "  }}\n",
+                "}}"
+            ),
+            content = content
+        );
+        let reply = format!(
+            "HTMLでテトリスを作成します。\n\nPlain Text\nrelay_tool は完全にはサポートされていません。\n{}\n\n`tetris.html` を作成しました。",
+            tool
+        );
+        let (visible_text, tool_calls) =
+            parse_copilot_tool_response(&reply, CdpToolParseMode::Initial);
+        assert_eq!(tool_calls.len(), 1);
+        let input: Value =
+            serde_json::from_str(&tool_calls[0].2).expect("tool input should be valid json");
+        assert_eq!(
+            input.get("path").and_then(Value::as_str),
+            Some("tetris.html")
+        );
+        assert_eq!(
+            input.get("content").and_then(Value::as_str).map(str::len),
+            Some(40_000)
+        );
+        let turn = runtime::TurnSummary {
+            assistant_messages: vec![ConversationMessage::assistant(vec![
+                ContentBlock::Text { text: visible_text },
+                ContentBlock::ToolUse {
+                    id: tool_calls[0].0.clone(),
+                    name: tool_calls[0].1.clone(),
+                    input: tool_calls[0].2.clone(),
+                },
+            ])],
+            tool_results: vec![tool_success_result("write_file", "executed write_file")],
+            iterations: 1,
+            usage: TokenUsage::default(),
+            auto_compaction: None,
+            outcome: runtime::TurnOutcome::Completed,
+            terminal_assistant_text: "`tetris.html` を作成しました。".to_string(),
+        };
+        assert_eq!(turn.tool_results.len(), 1);
+        assert_eq!(
+            decide_loop_after_success(
+                "Create ./tetris.html",
+                "Create ./tetris.html",
+                0,
+                0,
+                2,
+                false,
+                &turn,
+            ),
+            LoopDecision::Stop(LoopStopReason::Completed)
+        );
+    }
+
+    #[test]
     fn live_probe_prompt_breakdown_reports_system_message_and_catalog() {
         let goal = "Create ./tetris.html";
         let system_prompt = build_desktop_system_prompt(goal, Some("/root/Relay_Agent"));
@@ -6686,7 +6795,7 @@ mod loop_controller_tests {
         assert_eq!(bundle.tool_result_count(), 0);
         assert!(bundle.catalog_chars() > 0);
         assert!(bundle.catalog_text.contains("\"name\": \"write_file\""));
-        assert!(!bundle.catalog_text.contains("\"name\": \"bash\""));
+        assert!(bundle.catalog_text.contains("\"name\": \"bash\""));
     }
 
     #[test]

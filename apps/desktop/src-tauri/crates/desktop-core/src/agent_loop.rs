@@ -21,6 +21,7 @@ use runtime::{
 const CDP_TOOL_FENCE: &str = "```relay_tool";
 const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_TOTAL_CHARS: usize = 3_000;
 const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_FILE_CHARS: usize = 1_200;
+const MAX_INLINE_TOOL_OBJECT_LEN_BYTES: usize = 1_048_576;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CdpPromptFlavor {
     Standard,
@@ -620,7 +621,6 @@ fn extract_mvp_tool_object_spans(
     text: &str,
     whitelist: &HashSet<String>,
 ) -> Vec<(usize, usize, String)> {
-    const MAX_OBJECT_LEN: usize = 32_768;
     const MAX_MATCHES: usize = 12;
     let mut out = Vec::new();
     let mut search_start = 0usize;
@@ -638,7 +638,12 @@ fn extract_mvp_tool_object_spans(
             search_start = abs + 1;
             continue;
         };
-        if sub.len() > MAX_OBJECT_LEN {
+        if sub.len() > MAX_INLINE_TOOL_OBJECT_LEN_BYTES {
+            tracing::warn!(
+                "[CdpApiClient] skip oversized inline tool-shaped JSON candidate (len={}, max={})",
+                sub.len(),
+                MAX_INLINE_TOOL_OBJECT_LEN_BYTES
+            );
             search_start = abs + 1;
             continue;
         }
@@ -1466,6 +1471,44 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         assert_eq!(calls[0].1, "read_file");
         assert_eq!(calls[0].2, r#"{"path":"README.md"}"#);
         assert!(display.contains("README.md を読み取り"));
+        assert!(!display.contains(r#""relay_tool_call""#));
+    }
+
+    #[test]
+    fn parse_initial_recovers_large_inline_plain_text_write_file_with_sentinel() {
+        let content = "x".repeat(40_000);
+        let tool = format!(
+            concat!(
+                "{{\n",
+                "  \"name\": \"write_file\",\n",
+                "  \"relay_tool_call\": true,\n",
+                "  \"input\": {{\n",
+                "    \"path\": \"tetris.html\",\n",
+                "    \"content\": \"{content}\"\n",
+                "  }}\n",
+                "}}"
+            ),
+            content = content
+        );
+        let raw = format!(
+            "HTMLでテトリスを作成します。\n\nPlain Text\nrelay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.\n{}\n\n`tetris.html` を作成します。",
+            tool
+        );
+        let (display, calls) = parse_initial(&raw);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, "write_file");
+        let input: Value =
+            serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
+        assert_eq!(input.get("path").and_then(Value::as_str), Some("tetris.html"));
+        assert_eq!(
+            input
+                .get("content")
+                .and_then(Value::as_str)
+                .map(str::len),
+            Some(40_000)
+        );
+        assert!(display.contains("HTMLでテトリスを作成します。"));
+        assert!(display.contains("`tetris.html` を作成します。"));
         assert!(!display.contains(r#""relay_tool_call""#));
     }
 
