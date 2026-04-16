@@ -234,6 +234,18 @@ test("resolveAssistantReplyForReturn keeps structured body when strict and heuri
   assert.equal(response, structuredReply);
 });
 
+test("resolveAssistantReplyForReturn rejects incomplete relay_tool snippets as final assistant text", async () => {
+  const truncatedReply = '{ "name": "write_file", "relay_tool_call": true, "input": { "path": "tetris.html",';
+  const session = {
+    async evaluate() {
+      return { value: truncatedReply };
+    },
+  };
+
+  const response = await resolveAssistantReplyForReturn(session, truncatedReply, 0, null);
+  assert.equal(response, null);
+});
+
 test("normalizeProgressTextForUi keeps append-only progress after transient image noise is removed", () => {
   assert.equal(
     normalizeProgressTextForUi(
@@ -621,6 +633,70 @@ test("waitForDomResponse expands show-more code blocks before returning the assi
   });
 
   assert.equal(response, fullReply);
+  assert.equal(expandCalls, 1);
+  assert.ok(pollIndex >= 3);
+});
+
+test("waitForDomResponse expands incomplete relay_tool replies even without the explicit expandable flag", async () => {
+  const truncatedReply = '{ "name": "write_file", "relay_tool_call": true, "input": { "path": "tetris.html",';
+  const fullReply = [
+    "```relay_tool",
+    "{",
+    '  "name": "write_file",',
+    '  "relay_tool_call": true,',
+    '  "input": {',
+    '    "path": "tetris.html",',
+    '    "content": "<!doctype html><html lang=\\"ja\\"></html>"',
+    "  }",
+    "}",
+    "```",
+  ].join("\n");
+  let expanded = false;
+  let expandCalls = 0;
+  let pollIndex = 0;
+  const session = {
+    async evaluate(script) {
+      const source = String(script);
+      if (source.includes("reply: replyRaw")) {
+        pollIndex += 1;
+        return {
+          value: {
+            generating: false,
+            reply: expanded ? fullReply : truncatedReply,
+            progressOnly: false,
+            hasVisibleAssistantChat: true,
+            hasExpandableCodeBlock: false,
+          },
+        };
+      }
+      if (source.includes("const includeGenericSelectors = false")) {
+        return { value: expanded ? fullReply : truncatedReply };
+      }
+      if (source.includes("const includeGenericSelectors = true")) {
+        return { value: expanded ? fullReply : truncatedReply };
+      }
+      if (source.includes("show more lines|show more|もっと表示")) {
+        expandCalls += 1;
+        expanded = true;
+        return { value: { clicked: true, label: "Show more lines" } };
+      }
+      if (source.includes("document.body && document.body.innerText")) {
+        return { value: "" };
+      }
+      return { value: expanded ? fullReply : truncatedReply };
+    },
+  };
+
+  const response = await waitForDomResponse(session, null, 0, null, {
+    timeoutMs: 8_500,
+  });
+
+  assert.match(response, /^```relay_tool/u);
+  assert.match(response, /"name": "write_file"/u);
+  assert.match(response, /"relay_tool_call": true/u);
+  assert.match(response, /"path": "tetris\.html"/u);
+  assert.match(response, /"content": "<!doctype html><html lang=\\"ja\\"><\/html>"/u);
+  assert.equal(response.endsWith("}\n}\n```"), true);
   assert.equal(expandCalls, 1);
   assert.ok(pollIndex >= 3);
 });

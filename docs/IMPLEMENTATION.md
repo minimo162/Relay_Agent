@@ -6002,3 +6002,76 @@ Observed result:
   - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core`: passed
   - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed
   - `pnpm check`: passed
+
+## 2026-04-17 - Live `htmlでテトリスを作成して` regression hardening
+
+Commands run:
+
+```bash
+node --check apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs
+node --check apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs
+node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs
+DISPLAY=:99 RELAY_SKIP_PRESTART_EDGE=1 RELAY_DEV_APP_CONTROL_PORT=18411 RELAY_AGENT_TEST_APP_LOCAL_DATA_DIR=/tmp/relay-agent-tetris-app pnpm --filter @relay-agent/desktop tauri:dev
+```
+
+Observed live runs against the real signed-in M365 Copilot session on CDP `9360` with the exact goal `htmlでテトリスを作成して`:
+
+- Before the extractor fix, repair replies could collapse to an 82-char partial `write_file` JSON and the app incorrectly marked the session `completed` with no tool executions.
+- `copilot_wait_dom_response.mjs` now refuses incomplete `relay_tool` payloads, preserves structured/fenced replies without line-dedup corruption, and opportunistically expands hidden assistant turns even when the explicit expandable flag is missing.
+- New JS regressions in [`apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`](../apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs) cover incomplete `relay_tool` rejection and hidden-code expansion for truncated tool replies; `node --test ...copilot_wait_dom_response.test.mjs` passed locally.
+- The live app path now no longer stops on the old partial-tool bug. The same prompt progressed through tool-protocol repair stages `1/3`, `2/3`, and `3/3` after repeated planning-only / filename-selection drift from Copilot.
+- Added new planning-drift heuristics in both [`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs) and [`apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs`](../apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs) for replies like `Show**Planning...`, `Show**Determining file name choice...`, and similar prose that mentions `relay tools` / `write_file` but still does not emit usable tool JSON.
+- Increased [`apps/desktop/src-tauri/src/config.rs`](../apps/desktop/src-tauri/src/config.rs) `meta_stall_nudge_limit` from `2` to `3` so the live CDP loop can spend one more repair turn on these filename-selection drifts.
+
+Current limitation after the 2026-04-17 run:
+
+- Even with the stronger extractor and `3` repair nudges, this specific live Copilot session still ended with prose-only drift (`Show**Creating HTML for Tetris**...`) and did **not** create `/root/Relay_Agent/tetris.html`.
+- The regression is narrower now: Relay is no longer dropping a usable tool reply due to DOM truncation; the remaining blocker is Copilot repeatedly refusing to emit final `relay_tool` JSON for this prompt in this live session.
+
+Follow-up tightening on 2026-04-17 (same exact live goal `htmlでテトリスを作成して`):
+
+- A fresh app-path run against the signed-in session produced a very long plain HTML answer first (`~95k` chars) instead of tool JSON; Relay correctly classified that as tool-protocol confusion and queued `repair1`.
+- The next observed `repair1` failures surfaced new prose-only variants:
+  - `Show**Preparing file request**Looking into generating a full HTML file that includes Tetris functionality, using a relay tool to write the complete file...`
+  - `Show**Generating file output**Preparing to utilize a relay tool to write a full HTML version of Tetris, without any added prose...`
+- Both `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs` and `apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs` now treat these `Show**...` + `relay tool` + `write/file` planning wrappers as tool-protocol confusion via a broader heuristic instead of chasing only exact headings.
+- The same repair builder also now tells Copilot not to switch to `index.html` for pathless HTML/Tetris requests and to emit `write_file` for `tetris.html` immediately.
+
+Additional verification after those tightenings:
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml pathless_html_tetris_request_uses_default_tetris_write_file_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_confusion_heuristic_catches_foreign_tool_drift -- --nocapture
+```
+
+Results:
+
+- `pathless_html_tetris_request_uses_default_tetris_write_file_repair`: passed after aligning the orchestrator-side heuristic with the new pathless `tetris.html` repair flow.
+- `tool_protocol_confusion_heuristic_catches_foreign_tool_drift`: passed after extending the heuristic to cover the newly observed `Show**Preparing file request**...` and `Show**Generating file output**...` drifts, including the broader `Show**...` + `relay tool` + `write/file` wrapper catch-all.
+- The final heuristic generalization was validated by unit tests and by the captured live assistant texts above. A fresh end-to-end app rerun after that last generalization is still pending; the most recent live run before the final generalization still stopped at `repair1` on `Show**Generating file output**...`.
+
+Additional tightening later on 2026-04-17 for the same exact prompt:
+
+- A later real app-path run finally crossed the earlier prose-only failure and executed the first salvaged file write from a huge plain HTML reply, but Copilot chose `index.html` and then drifted into follow-up `edit_file` repairs against HTML-escaped content (`&lt;!doctype html&gt; ...`).
+- `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs` and `apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs` now salvage large generated HTML fences more aggressively for Tetris replies: when Copilot emits a full HTML/Tetris document and either mentions no filename or invents `index.html`, Relay rewrites that initial create step to `tetris.html`.
+- The same parser path now also decodes HTML entities inside `.html` `write_file` / `edit_file` payloads when the decoded text is clearly a real HTML document, so Copilot can no longer persist an escaped HTML file body as the final artifact.
+- Added parser regressions in both Rust implementations proving that a generated reply like ``完成版は `index.html` にまとめます`` with a full `HTML Tetris` document is normalized into a `write_file` call for `tetris.html`.
+
+Verification after that tightening:
+
+```bash
+node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml parse_initial_rewrites_generated_index_html_tetris_reply_to_tetris_html -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml tool_protocol_confusion_heuristic_catches_foreign_tool_drift -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml initial_mode_rewrites_generated_index_html_tetris_reply_to_tetris_html -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_confusion_heuristic_catches_foreign_tool_drift -- --nocapture
+```
+
+Results:
+
+- `node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`: passed (`28` tests).
+- `parse_initial_rewrites_generated_index_html_tetris_reply_to_tetris_html`: passed in `desktop-core`.
+- `tool_protocol_confusion_heuristic_catches_foreign_tool_drift`: passed in `desktop-core`.
+- `initial_mode_rewrites_generated_index_html_tetris_reply_to_tetris_html`: passed in the desktop app crate.
+- `tool_protocol_confusion_heuristic_catches_foreign_tool_drift`: passed in the desktop app crate.
+- A fresh full app-path rerun with `htmlでテトリスを作成して` was started after these changes, but that attempt stalled earlier in Copilot submit/rejoin timeout handling before the first assistant reply was returned, so it did not yet supersede the previous live evidence.

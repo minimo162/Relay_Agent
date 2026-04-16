@@ -32,7 +32,7 @@ impl Default for AgentConfig {
             session_cleanup_ttl_minutes: 30,
             max_turn_retries: 2,
             max_inner_iterations: 8,
-            meta_stall_nudge_limit: 2,
+            meta_stall_nudge_limit: 3,
             compact_retry_limit: 1,
         }
     }

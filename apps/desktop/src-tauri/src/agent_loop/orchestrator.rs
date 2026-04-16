@@ -1001,6 +1001,46 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
             || lower.contains("creating the tetris game file")
             || lower.contains("create a playable html tetris")
             || lower.contains("tetris game file"));
+    let relay_planning_write_drift = (lower.contains("show**planning")
+        || lower.contains("planning tetris html creation")
+        || lower.contains("show**preparing file request")
+        || lower.contains("show**generating file output")
+        || lower.contains("looking into generating a full html file")
+        || lower.contains("preparing to use the relay tool")
+        || lower.contains("preparing to utilize a relay tool")
+        || lower.contains("show**creating html for tetris")
+        || lower.contains("working on creating an html file")
+        || lower.contains("organizing the process to create")
+        || lower.contains("show**deciding on file output")
+        || lower.contains("show**determining file name choice")
+        || lower.contains("deciding on the filename")
+        || lower.contains("deciding on using")
+        || lower.contains("single-file approach")
+        || lower.contains("single file approach"))
+        && ((lower.contains("relay tools") || lower.contains("relay tool"))
+            || lower.contains("write the new")
+            || lower.contains("write the complete file")
+            || lower.contains("using specific tools to write")
+            || lower.contains("using a relay tool to write the complete file")
+            || lower.contains("write_file function")
+            || lower.contains("relay_tool's write_file action")
+            || lower.contains("index.html")
+            || lower.contains("html, js, and css")
+            || lower.contains("no specific path was provided")
+            || lower.contains("reasonable and straightforward naming convention"));
+    let generic_show_hide_relay_write_drift = lower.contains("show**")
+        && (lower.contains("relay tool") || lower.contains("relay tools"))
+        && (lower.contains("write") || lower.contains("file"))
+        && !lower.contains("\"relay_tool_call\"");
+    let generic_show_hide_html_creation_drift = lower.contains("show**")
+        && lower.contains("tetris")
+        && (lower.contains("html file")
+            || lower.contains("single document")
+            || lower.contains("canvas and controls")
+            || lower.contains("full html"))
+        && !lower.contains("\"relay_tool_call\"")
+        && !lower.contains("<!doctype html")
+        && !lower.contains("<html");
     let mentioned_relay_tools_without_payload = (lower.contains("write_file")
         || lower.contains("edit_file")
         || lower.contains("read_file")
@@ -1025,6 +1065,9 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || local_write_refusal
         || foreign_tool_drift
         || planning_only_file_drift
+        || relay_planning_write_drift
+        || generic_show_hide_relay_write_drift
+        || generic_show_hide_html_creation_drift
         || mentioned_relay_tools_without_payload
         || defers_concrete_local_read_without_tool
         || is_repair_refusal_text(trimmed)
@@ -1046,6 +1089,7 @@ fn tool_protocol_repair_escalation(attempt_index: usize) -> &'static str {
             "In this reply, output exactly one Relay `relay_tool` fence and nothing else.\n",
             "Do not include any explanatory sentence before or after the fence.\n",
             "Do not emit plain-text `relay_tool` mentions.\n",
+            "Replies that only describe planning, choosing a filename, or preparing to use Relay tools are invalid.\n",
             "If the task is to create or overwrite a workspace file and you already know the content, emit `write_file` now instead of describing Python or page creation.\n\n",
         )
     }
@@ -1074,7 +1118,21 @@ fn is_concrete_new_file_create_request(text: &str) -> bool {
         || trimmed.contains("修正")
         || trimmed.contains("編集")
         || trimmed.contains("更新");
-    create_markers && !existing_file_markers && !extract_path_anchors_from_text(trimmed).is_empty()
+    create_markers && !existing_file_markers
+}
+
+fn infer_default_new_file_path(latest_request: &str) -> Option<String> {
+    let trimmed = latest_request.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let wants_html = lower.contains("html") || trimmed.contains("HTML");
+    let wants_tetris = lower.contains("tetris") || trimmed.contains("テトリス");
+    if wants_html && wants_tetris {
+        return Some("tetris.html".to_string());
+    }
+    None
 }
 
 fn build_targeted_tool_protocol_repair_input(
@@ -1145,11 +1203,11 @@ fn build_best_tool_protocol_repair_input(
     latest_request: &str,
     attempt_index: usize,
 ) -> String {
-    if let Some(requested_path) = extract_path_anchors_from_text(latest_request)
-        .into_iter()
-        .next()
-    {
-        if is_concrete_new_file_create_request(latest_request) {
+    if is_concrete_new_file_create_request(latest_request) {
+        if let Some(requested_path) = extract_path_anchors_from_text(latest_request)
+            .into_iter()
+            .next()
+        {
             return build_targeted_tool_protocol_repair_input(
                 goal,
                 latest_request,
@@ -1163,6 +1221,25 @@ fn build_best_tool_protocol_repair_input(
                 "Emit exactly one `write_file` Relay tool call for this concrete file-creation request. Do not describe the content in prose; put the final file body in `input.content`.",
             );
         }
+        if let Some(inferred_path) = infer_default_new_file_path(latest_request) {
+            return build_targeted_tool_protocol_repair_input(
+                goal,
+                latest_request,
+                attempt_index,
+                "write_file",
+                &inferred_path,
+                json!({
+                    "path": inferred_path.clone(),
+                    "content": "<full file content here>"
+                }),
+                "No file path was supplied by the user. Use the workspace-root-relative filename below exactly as written and emit exactly one `write_file` Relay tool call now. Do not spend another turn choosing or explaining the filename. Do not switch to `index.html` or any other filename; use `tetris.html`. Put the final file body in `input.content`.",
+            );
+        }
+    }
+    if let Some(requested_path) = extract_path_anchors_from_text(latest_request)
+        .into_iter()
+        .next()
+    {
         return build_targeted_tool_protocol_repair_input(
             goal,
             latest_request,
@@ -2822,6 +2899,12 @@ pub(crate) fn parse_copilot_tool_response(
     let mut calls = parse_tool_payloads(&payloads);
     let mut display = stripped;
     if calls.is_empty() {
+        if let Some((d, call)) = salvage_generated_write_file_from_reply(&display) {
+            display = d;
+            calls.push(call);
+        }
+    }
+    if calls.is_empty() {
         let (d, fb_payloads) = extract_fallback_markdown_fences(&display, &whitelist);
         display = d;
         calls.extend(parse_fallback_payloads(
@@ -2880,6 +2963,171 @@ fn has_inline_local_file_mutation_tool_candidate(text: &str) -> bool {
                 })
                 .unwrap_or(false)
         })
+}
+
+fn salvage_generated_write_file_from_reply(
+    text: &str,
+) -> Option<(String, (String, String, String))> {
+    let (display, content) = extract_generated_html_code_block(text)?;
+    let path = select_generated_file_path_from_reply(text, &content)?;
+    let value = json!({
+        "name": "write_file",
+        "relay_tool_call": true,
+        "input": {
+            "path": path,
+            "content": content,
+        }
+    });
+    let call = parse_one_tool_call(&value)?;
+    Some((display.trim().to_string(), call))
+}
+
+fn select_generated_file_path_from_reply(text: &str, content: &str) -> Option<String> {
+    let mut html_paths = extract_path_anchors_from_text(text)
+        .into_iter()
+        .filter(|path| {
+            std::path::Path::new(path)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "html" | "htm"))
+        })
+        .collect::<Vec<_>>();
+    if prefers_default_tetris_html_path(text, content) {
+        if let Some(explicit_tetris) = html_paths
+            .iter()
+            .find(|path| path.to_ascii_lowercase().ends_with("tetris.html"))
+        {
+            return Some(explicit_tetris.clone());
+        }
+        if let Some(rewritten_index) = html_paths
+            .iter()
+            .find(|path| path.to_ascii_lowercase().ends_with("index.html"))
+            .map(|path| rewrite_html_basename(path, "index.html", "tetris.html"))
+        {
+            return Some(rewritten_index);
+        }
+        return Some("tetris.html".to_string());
+    }
+    if html_paths.is_empty() {
+        return None;
+    }
+    html_paths.sort_by_key(|path| {
+        let lower = path.to_ascii_lowercase();
+        if lower.ends_with("tetris.html") {
+            0
+        } else if lower.ends_with("index.html") {
+            1
+        } else {
+            2
+        }
+    });
+    html_paths.into_iter().next()
+}
+
+fn prefers_default_tetris_html_path(text: &str, content: &str) -> bool {
+    let lower_text = text.to_ascii_lowercase();
+    let lower_content = content.to_ascii_lowercase();
+    let mentions_tetris = lower_text.contains("tetris")
+        || text.contains("テトリス")
+        || lower_content.contains("tetris")
+        || lower_content.contains("tetromino")
+        || lower_content.contains("hold")
+        || lower_content.contains("next");
+    let looks_like_html_document = lower_content.starts_with("<!doctype html")
+        || lower_content.starts_with("<html")
+        || (lower_content.contains("<canvas") && lower_content.contains("</html>"));
+    mentions_tetris && looks_like_html_document
+}
+
+fn rewrite_html_basename(path: &str, from: &str, to: &str) -> String {
+    if let Some(prefix) = path.strip_suffix(from) {
+        format!("{prefix}{to}")
+    } else {
+        to.to_string()
+    }
+}
+
+fn extract_generated_html_code_block(text: &str) -> Option<(String, String)> {
+    const OPEN: &str = "```";
+    let mut rest = text;
+    let mut display = String::new();
+
+    while let Some(idx) = rest.find(OPEN) {
+        display.push_str(&rest[..idx]);
+        let after_ticks = &rest[idx + OPEN.len()..];
+        let (info, body_start) = match after_ticks.find('\n') {
+            Some(nl) => {
+                let fl = after_ticks[..nl].trim();
+                if fl.starts_with('{') {
+                    ("", 0usize)
+                } else {
+                    (fl, nl + 1)
+                }
+            }
+            None => {
+                display.push_str(OPEN);
+                display.push_str(after_ticks);
+                return None;
+            }
+        };
+        let body_region = &after_ticks[body_start..];
+        let Some(inner_end) = find_generic_markdown_fence_inner_end(body_region) else {
+            display.push_str(OPEN);
+            display.push_str(after_ticks);
+            return None;
+        };
+        let inner = body_region[..inner_end].trim();
+        let after_inner = &body_region[inner_end..];
+        let rest_after_fence = if let Some(tail) = after_inner.strip_prefix("\n```") {
+            tail
+        } else if let Some(tail) = after_inner.strip_prefix("\r\n```") {
+            tail
+        } else if let Some(tail) = after_inner.strip_prefix("```") {
+            tail
+        } else {
+            display.push_str(OPEN);
+            display.push_str(after_ticks);
+            return None;
+        };
+        let rest_after_fence = rest_after_fence
+            .strip_prefix('\n')
+            .or_else(|| rest_after_fence.strip_prefix("\r\n"))
+            .unwrap_or(rest_after_fence);
+
+        let info_lower = info.to_ascii_lowercase();
+        if is_generated_html_document_fence(&info_lower, inner) {
+            display.push_str(rest_after_fence);
+            return Some((display, inner.to_string()));
+        }
+
+        display.push_str(OPEN);
+        display.push_str(after_ticks[..body_start].trim_end_matches('\n'));
+        if body_start > 0 || !inner.is_empty() {
+            display.push('\n');
+            display.push_str(inner);
+        }
+        display.push_str("\n```");
+        rest = rest_after_fence;
+    }
+
+    None
+}
+
+fn is_generated_html_document_fence(info_lower: &str, inner: &str) -> bool {
+    if inner.len() < 200 {
+        return false;
+    }
+    let trimmed = inner.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+    let htmlish = lower.starts_with("<!doctype html")
+        || (lower.starts_with("<html") && lower.contains("</html>"))
+        || (lower.contains("<canvas") && lower.contains("</html>"));
+    let fence_matches = info_lower.is_empty()
+        || matches!(
+            info_lower,
+            "html" | "htm" | "text/html" | "application/html"
+        );
+    htmlish && fence_matches
 }
 
 fn latest_user_text(messages: &[ConversationMessage]) -> Option<String> {
@@ -3830,12 +4078,72 @@ fn parse_one_tool_call(v: &Value) -> Option<(String, String, String)> {
         .map(String::from)
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let input = obj
+    let mut input = obj
         .get("input")
         .cloned()
         .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    normalize_html_file_mutation_input(&name, &mut input);
     let input_str = serde_json::to_string(&input).ok()?;
     Some((id, name, input_str))
+}
+
+fn normalize_html_file_mutation_input(tool_name: &str, input: &mut Value) {
+    if !matches!(tool_name, "write_file" | "edit_file") {
+        return;
+    }
+    let Some(obj) = input.as_object_mut() else {
+        return;
+    };
+    let is_html_path = obj
+        .get("path")
+        .and_then(Value::as_str)
+        .map(|path| {
+            let lower = path.to_ascii_lowercase();
+            lower.ends_with(".html") || lower.ends_with(".htm")
+        })
+        .unwrap_or(false);
+    if !is_html_path {
+        return;
+    }
+    for key in ["content", "new_string"] {
+        let Some(current) = obj.get(key).and_then(Value::as_str) else {
+            continue;
+        };
+        if let Some(decoded) = decode_html_document_entities(current) {
+            obj.insert(key.to_string(), Value::String(decoded));
+        }
+    }
+}
+
+fn decode_html_document_entities(text: &str) -> Option<String> {
+    if !(text.contains("&lt;") || text.contains("&gt;") || text.contains("&amp;")) {
+        return None;
+    }
+    let mut decoded = text.to_string();
+    for _ in 0..3 {
+        let next = decoded
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&apos;", "'")
+            .replace("&nbsp;", " ")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&");
+        if next == decoded {
+            break;
+        }
+        decoded = next;
+    }
+    let trimmed = decoded.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+    let looks_like_html_document = lower.starts_with("<!doctype html")
+        || lower.starts_with("<html")
+        || (lower.contains("<canvas") && lower.contains("</html>"));
+    if looks_like_html_document && decoded != text {
+        Some(decoded)
+    } else {
+        None
+    }
 }
 
 /// Short CDP-only rules (prefix of the bundle) so the model lists concrete bugs only when they appear in Tool Result / `read_file` text above.
@@ -6353,6 +6661,73 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     }
 
     #[test]
+    fn initial_mode_salvages_large_html_code_fence_into_write_file() {
+        let raw = concat!(
+            "以下を `tetris.html` として保存してブラウザで開いてください。\n\n",
+            "```html\n",
+            "<!doctype html>\n",
+            "<html lang=\"ja\">\n",
+            "<head><meta charset=\"utf-8\" /><title>Tetris</title></head>\n",
+            "<body><canvas id=\"game\"></canvas><script>",
+            "const cells = Array.from({length: 240}, (_, i) => i % 10);",
+            "const palette = ['#111','#0ea5e9','#22c55e','#f59e0b'];",
+            "function boot(){ document.body.dataset.ready = '1'; }",
+            "boot();",
+            "</script></body>\n",
+            "</html>\n",
+            "```\n\n",
+            "必要なら `tetris.html` をさらに調整します。"
+        );
+        let (vis, tools) = parse_initial(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "write_file");
+        let input: Value =
+            serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
+        assert_eq!(
+            input.get("path").and_then(Value::as_str),
+            Some("tetris.html")
+        );
+        let content = input
+            .get("content")
+            .and_then(Value::as_str)
+            .expect("content");
+        assert!(content.starts_with("<!doctype html>"));
+        assert!(content.contains("<canvas id=\"game\"></canvas>"));
+        assert!(vis.contains("`tetris.html` として保存"));
+        assert!(vis.contains("さらに調整します"));
+        assert!(!vis.contains("<!doctype html>"));
+        assert!(!vis.contains("```html"));
+    }
+
+    #[test]
+    fn initial_mode_rewrites_generated_index_html_tetris_reply_to_tetris_html() {
+        let raw = concat!(
+            "完成版は `index.html` にまとめます。\n\n",
+            "```html\n",
+            "<!doctype html>\n",
+            "<html lang=\"ja\">\n",
+            "<head><meta charset=\"utf-8\" /><title>HTML Tetris</title></head>\n",
+            "<body><canvas id=\"board\"></canvas><script>",
+            "const nextQueue = ['I','T','L'];",
+            "const holdPiece = 'O';",
+            "function bootTetris(){ document.body.dataset.mode = 'tetris'; }",
+            "bootTetris();",
+            "</script></body>\n",
+            "</html>\n",
+            "```\n"
+        );
+        let (_vis, tools) = parse_initial(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "write_file");
+        let input: Value =
+            serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
+        assert_eq!(
+            input.get("path").and_then(Value::as_str),
+            Some("tetris.html")
+        );
+    }
+
+    #[test]
     fn initial_mode_recovers_compact_inline_write_file_in_prose_with_sentinel() {
         let raw = concat!(
             "README.md の冒頭説明を使って指定のファイルを作成します。\n\n",
@@ -7395,6 +7770,24 @@ mod loop_controller_tests {
             "Planning file creation process. I am considering the steps to create a playable HTML Tetris game file and weighing the options of checking for existing files versus directly writing to the file."
         ));
         assert!(is_tool_protocol_confusion_text(
+            "Show**Planning Tetris HTML creation**I'm organizing the process to create a Tetris game using HTML. I'll utilize relay tools to write the new index.html file, focusing on a single-file approach for HTML, JS, and CSS.Hide了解了解"
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Show**Determining file name choice**Deciding on using \"tetris.html\" for the file name since no specific path was provided, focusing on a reasonable and straightforward naming convention.Hide``````"
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Show**Creating HTML for Tetris**I am working on creating an HTML file for a Tetris game, using specific tools to write the `index.html` directly and focusing on conciseness.Hide`t`t"
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Show**Preparing file request**Looking into generating a full HTML file that includes Tetris functionality, using a relay tool to write the complete file.Hide``````"
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Show**Generating file output**Preparing to utilize a relay tool to write a full HTML version of Tetris, without any added prose.Hide``````"
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Show**Requesting full HTML file**I’m working on creating a complete HTML file for a Tetris game that includes the canvas and controls in a single document.Hide``````"
+        ));
+        assert!(is_tool_protocol_confusion_text(
             "LOCAL_TOOLS_UNAVAILABLE because I can't use local workspace editing tools."
         ));
         assert!(is_tool_protocol_confusion_text(
@@ -7540,6 +7933,35 @@ mod loop_controller_tests {
         assert!(next_input.contains("Tool protocol repair."));
         assert!(next_input.contains(r#""name": "write_file""#));
         assert!(next_input.contains(r#""path": "./tetris.html""#));
+    }
+
+    #[test]
+    fn pathless_html_tetris_request_uses_default_tetris_write_file_repair() {
+        let s = summary(
+            "Show**Planning Tetris HTML creation**I’m preparing to use the relay tool after deciding on the filename.",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let decision = decide_loop_after_success(
+            "htmlでテトリスを作成して",
+            "htmlでテトリスを作成して",
+            0,
+            0,
+            3,
+            false,
+            &s,
+        );
+        let LoopDecision::Continue {
+            next_input,
+            kind: LoopContinueKind::MetaNudge,
+        } = decision
+        else {
+            panic!("expected targeted write_file repair for pathless html tetris request");
+        };
+        assert!(next_input.contains(r#""name": "write_file""#));
+        assert!(next_input.contains(r#""path": "tetris.html""#));
+        assert!(next_input.contains("Do not spend another turn choosing or explaining the filename"));
+        assert!(next_input.contains("Do not switch to `index.html` or any other filename"));
     }
 
     #[test]

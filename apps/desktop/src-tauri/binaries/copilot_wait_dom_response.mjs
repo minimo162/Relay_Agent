@@ -270,6 +270,9 @@ function normalizeCopilotVisibleText(text) {
   cleaned = stripStreamingPlaceholderTail(cleaned);
   cleaned = stripTransientCopilotStatus(cleaned);
   cleaned = stripInternalReasoningParagraphs(cleaned);
+  if (assistantTextHasStructuredContent(cleaned) || /relay_tool_call/u.test(cleaned)) {
+    return cleaned.trim();
+  }
   cleaned = dedupeConsecutiveLines(cleaned);
   cleaned = dedupeConsecutiveParagraphs(cleaned);
   return cleaned.trim();
@@ -281,6 +284,63 @@ function assistantReplyHasClosedFence(text) {
   return Array.isArray(fences) && fences.length >= 2 && fences.length % 2 === 0;
 }
 
+function hasBalancedStructuredPayload(text) {
+  const raw = String(text ?? "");
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let started = false;
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (!started) {
+      if (ch === "{" || ch === "[") {
+        started = true;
+        depth = 1;
+      }
+      continue;
+    }
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+    if (ch === "{" || ch === "[") {
+      depth += 1;
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function assistantReplyLooksIncompleteRelayTool(text) {
+  const cleaned = normalizeCopilotVisibleText(text);
+  if (!cleaned) return false;
+  if (!/relay_tool_call|```relay_tool|^\s*[\[{]\s*"name"\s*:/u.test(cleaned)) return false;
+  if (assistantReplyHasClosedFence(cleaned) && hasBalancedStructuredPayload(cleaned)) return false;
+  const sentinelIndex = cleaned.search(/relay_tool_call|"name"\s*:/u);
+  if (sentinelIndex < 0) return false;
+  const objectStart = cleaned.lastIndexOf("{", sentinelIndex);
+  const arrayStart = cleaned.lastIndexOf("[", sentinelIndex);
+  const payloadStart = Math.max(objectStart, arrayStart);
+  if (payloadStart < 0) return false;
+  return !hasBalancedStructuredPayload(cleaned.slice(payloadStart));
+}
+
 function assistantReplyHasStrongCompletionSignal(text) {
   const cleaned = normalizeCopilotVisibleText(text);
   if (!cleaned || replyEndsWithStreamingPlaceholder(cleaned)) return false;
@@ -288,6 +348,7 @@ function assistantReplyHasStrongCompletionSignal(text) {
   if (looksLikeHtmlDocument) {
     return /<\/html>/i.test(cleaned);
   }
+  if (assistantReplyLooksIncompleteRelayTool(cleaned)) return false;
   if (assistantReplyHasClosedFence(cleaned)) return true;
   if (assistantTextHasStructuredContent(cleaned) && cleaned.length >= 180) return true;
   return false;
@@ -774,6 +835,7 @@ function assistantReplyNeedsExpansionProbe(text, submittedPromptLen) {
   const cleaned = normalizeCopilotVisibleText(text);
   if (!cleaned) return true;
   if (looksLikeSearchProgressText(cleaned)) return true;
+  if (assistantReplyLooksIncompleteRelayTool(cleaned)) return true;
   if (domExtractLooksLikeSubmittedPrompt(cleaned.length, submittedPromptLen)) return true;
   return cleaned.length < 220 && !assistantTextHasStructuredContent(cleaned);
 }
@@ -895,6 +957,7 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
     if (!candidate) return false;
     if (networkExtractLooksLikeGarbage(candidate)) return false;
     if (looksLikeSearchProgressText(candidate)) return false;
+    if (assistantReplyLooksIncompleteRelayTool(candidate)) return false;
     if (structured && assistantReplyAddsOnlySuggestionSuffix(candidate, structured)) {
       return false;
     }
@@ -952,6 +1015,7 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
     }
   }
   if (best) return best;
+  if (assistantReplyLooksIncompleteRelayTool(loose)) return null;
   return looseLooksLikePrompt ? null : loose;
 }
 
@@ -1133,7 +1197,11 @@ async function waitForDomResponse(
       continue;
     }
 
-    if (!generating && hasExpandableCodeBlock && !expandAttempted) {
+    if (
+      !generating &&
+      !expandAttempted &&
+      (hasExpandableCodeBlock || assistantReplyLooksIncompleteRelayTool(reply))
+    ) {
       const expanded = await expandLastAssistantTurnIfNeeded(session);
       expandAttempted = expanded;
       if (expanded) {
@@ -1197,7 +1265,11 @@ async function waitForDomResponse(
           prev = replyLate.length;
           continue;
         }
-        if (lateState.hasExpandableCodeBlock || /\bshow more lines\b/i.test(replyLate)) {
+        if (
+          lateState.hasExpandableCodeBlock ||
+          /\bshow more lines\b/i.test(replyLate) ||
+          assistantReplyLooksIncompleteRelayTool(replyLate)
+        ) {
           const expanded = await expandLastAssistantTurnIfNeeded(session);
           if (expanded) {
             console.error("[copilot:response] expanded last assistant turn for hidden code");
