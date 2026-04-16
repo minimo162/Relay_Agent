@@ -15,6 +15,14 @@
 
 ## Milestone Log
 
+### 2026-04-16 Copilot final-response extraction: keep full assistant turns instead of short reply-div tails
+
+**Problem:** M365 Copilot の最終応答取得で、Node bridge が狭い reply 要素 (`[data-testid="copilot-message-reply-div"]`) を最優先で返していたため、先頭の短文や code-block ラベルだけを拾った時点で `waitForDomResponse` が完了扱いになっていた。結果として `relay_tool` JSON やその後続説明が final response から落ち、Rust 側ログでも `done, len=` / `completion OK content_len=` が 80〜180 文字前後で止まるケースが発生していた。
+
+**Change:** [`apps/desktop/src-tauri/binaries/copilot_dom_poll.mjs`](../apps/desktop/src-tauri/binaries/copilot_dom_poll.mjs) に full-turn 優先の DOM 抽出を追加し、reply-div から親 assistant turn をたどって、より長く構造化された assistant reply が見えている場合はそちらを採用するようにした。 [`apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs`](../apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs) では strict / heuristic 抽出を共通ロジックへ寄せ、短い loose 候補や prompt-echo 疑いのある候補に対して strict / heuristic / network 候補を再評価し、tool fence や後続本文を含む完全な assistant reply を優先するようにした。進捗表示の `relay_tool` 切り落としはそのまま維持し、final response だけ完全な返答を返す。 [`apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`](../apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs) には、短い reply-div 候補から full-turn へ昇格するケースと、progress は tool-free のまま final result に `relay_tool` fence を含めて返すケースを追加した。あわせて [`apps/desktop/src-tauri/binaries/build-copilot-dom-modules.mjs`](../apps/desktop/src-tauri/binaries/build-copilot-dom-modules.mjs) は、現在の helper modules を検証・保持する安全な再実行スクリプトに置き換えた。
+
+**Verification:** `node --check apps/desktop/src-tauri/binaries/copilot_dom_poll.mjs` — pass. `node --check apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs` — pass. `node --check apps/desktop/src-tauri/binaries/build-copilot-dom-modules.mjs` — pass. `node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs` — pass (14 tests). `node apps/desktop/src-tauri/binaries/build-copilot-dom-modules.mjs` — pass (`Verified copilot_dom_poll.mjs and copilot_wait_dom_response.mjs`). `node --check apps/desktop/src-tauri/binaries/copilot_server.js` — pass. `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass (existing non-fatal `ts-rs` serde attribute warnings only). Live M365 手動再現確認はこの環境では未実施。
+
 ### 2026-04-16 README truth refresh for current desktop implementation
 
 **Problem:** `README.md` already described the current desktop product at a high level, but a few public-facing details had drifted behind the live implementation. The documented IPC surface was missing the inline user-question and workspace-surface commands/events now exposed by the Tauri bridge, the architecture section under-described the packaged Node/LiteParse runtime path, and the behavior/development sections did not clearly call out live rewrite-safe streaming or the `live:m365:desktop-smoke` script.

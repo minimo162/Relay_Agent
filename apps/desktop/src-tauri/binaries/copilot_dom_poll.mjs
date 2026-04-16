@@ -108,6 +108,28 @@ function stripStreamingPlaceholderTail(text) {
   return s.trim();
 }
 
+function assistantTextHasStructuredContent(text) {
+  const s = String(text || "");
+  return (
+    /```/.test(s) ||
+    /^\s*(?:[-*]|\d+\.)\s+/m.test(s) ||
+    /^\s*\|.+\|\s*$/m.test(s)
+  );
+}
+
+function shouldPreferExpandedAssistantTurn(replyText, turnText) {
+  const reply = stripStreamingPlaceholderTail(stripM365CopilotReplyChrome(replyText));
+  const turn = stripStreamingPlaceholderTail(stripM365CopilotReplyChrome(turnText));
+  if (!turn) return false;
+  if (!reply) return true;
+  const delta = turn.length - reply.length;
+  if (delta < 20) return false;
+  if (assistantTextHasStructuredContent(turn) && !assistantTextHasStructuredContent(reply)) {
+    return true;
+  }
+  return delta >= Math.max(60, Math.floor(reply.length * 0.45));
+}
+
 export const RESPONSE_TIMEOUT_MS = 18e4;
 /** Main loop sleep in waitForDomResponse (was 1000ms → ~3min wall time on phantom “generating”). */
 export const RESPONSE_POLL_INTERVAL_MS = 500;
@@ -230,6 +252,89 @@ function copilotDomReplyExtractIifeExpression() {
       const t = (el.innerText || el.textContent || "").trim();
       return t;
     }
+    function hasStructuredContent(text) {
+      const s = String(text || "");
+      return /\\\`\\\`\\\`/.test(s) || /^\\s*(?:[-*]|\\d+\\.)\\s+/m.test(s) || /^\\s*\\|.+\\|\\s*$/m.test(s);
+    }
+    function shouldPreferFullTurn(replyText, turnText) {
+      const reply = nodeText({ innerText: replyText, textContent: replyText });
+      const turn = nodeText({ innerText: turnText, textContent: turnText });
+      if (!turn) return false;
+      if (!reply) return true;
+      const delta = turn.length - reply.length;
+      if (delta < 20) return false;
+      if (hasStructuredContent(turn) && !hasStructuredContent(reply)) return true;
+      return delta >= Math.max(60, Math.floor(reply.length * 0.45));
+    }
+    function assistantRootScore(el) {
+      if (!el || !el.getAttribute) return 0;
+      let score = 0;
+      const role =
+        (el.getAttribute("data-message-author-role") ||
+          el.getAttribute("data-conversation-role") ||
+          el.getAttribute("data-participant") ||
+          "").toLowerCase();
+      const testid = (el.getAttribute("data-testid") || "").toLowerCase();
+      const cls = String(el.className || "").toLowerCase();
+      const tag = (el.tagName || "").toLowerCase();
+      if (role === "assistant") score += 8;
+      if (tag === "cib-message" && (el.getAttribute("type") || "").toLowerCase() === "response") score += 8;
+      if (tag === "cib-turn" && (el.getAttribute("type") || "").toLowerCase() === "response") score += 8;
+      if (/assistant|bot|copilot/.test(testid)) score += 5;
+      if (/reply|message|turn|chat/.test(testid)) score += 2;
+      if (/assistant|bot|copilot/.test(cls)) score += 4;
+      if (/message|turn|chat/.test(cls)) score += 1;
+      if (tag === "article") score += 1;
+      return score;
+    }
+    function sortedVisibleAssistantRoots(doc) {
+      const byRole = [...new Set([
+        ...queryDeepAll('[data-message-author-role="assistant"]', doc),
+        ...queryDeepAll('[data-conversation-role="assistant"]', doc),
+        ...queryDeepAll('[data-participant="assistant"]', doc),
+        ...queryDeepAll('article[data-message-author-role="assistant"]', doc),
+        ...queryDeepAll('cib-message[type="response"]', doc),
+        ...queryDeepAll('cib-turn[type="response"]', doc),
+      ])];
+      const roots = [];
+      for (const el of byRole) {
+        if (!visible(el) || inComposer(el) || inUserTurn(el)) continue;
+        const inner = byRole.some((other) => other !== el && other.contains(el));
+        if (inner) continue;
+        roots.push(el);
+      }
+      roots.sort((a, b) => {
+        const p = a.compareDocumentPosition(b);
+        if (p & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+        return 0;
+      });
+      return roots;
+    }
+    function findAssistantTurnRoot(el) {
+      if (!el) return null;
+      const replyLen = nodeText(el).length;
+      const maxLen = Math.max(1200, replyLen * 12, replyLen + 16000);
+      let best = el;
+      let bestScore = assistantRootScore(el);
+      let bestLen = replyLen;
+      let cur = el;
+      let depth = 0;
+      while (cur && cur.parentElement && depth < 12) {
+        cur = cur.parentElement;
+        depth++;
+        if (!visible(cur) || inComposer(cur) || inUserTurn(cur)) continue;
+        const t = nodeText(cur);
+        if (!t || t.length > maxLen) continue;
+        const score = assistantRootScore(cur);
+        if (score > bestScore || (score === bestScore && t.length > bestLen)) {
+          best = cur;
+          bestScore = score;
+          bestLen = t.length;
+        }
+      }
+      return best;
+    }
     function walkElements(root, visit) {
       if (!root) return;
       if (root.nodeType === 1) visit(root);
@@ -251,6 +356,12 @@ function copilotDomReplyExtractIifeExpression() {
       return out;
     }
     function extractFromDoc(doc) {
+      const roots = sortedVisibleAssistantRoots(doc);
+      if (roots.length) {
+        const lastTurn = roots[roots.length - 1];
+        const t = nodeText(lastTurn);
+        if (t.length > 0) return t;
+      }
       const m365Replies = queryDeepAll('[data-testid="copilot-message-reply-div"]', doc).filter(
         (el) => visible(el) && !inComposer(el) && !inUserTurn(el),
       );
@@ -262,30 +373,14 @@ function copilotDomReplyExtractIifeExpression() {
           return 0;
         });
         const lastM365 = m365Replies[m365Replies.length - 1];
-        const tm = nodeText(lastM365);
-        if (tm.length > 0) return tm;
-      }
-      const byRole = [...new Set([
-        ...queryDeepAll('[data-message-author-role="assistant"]', doc),
-        ...queryDeepAll('article[data-message-author-role="assistant"]', doc)
-      ])];
-      const roots = [];
-      for (const el of byRole) {
-        if (!visible(el) || inComposer(el) || inUserTurn(el)) continue;
-        const inner = byRole.some((other) => other !== el && other.contains(el));
-        if (inner) continue;
-        roots.push(el);
-      }
-      roots.sort((a, b) => {
-        const p = a.compareDocumentPosition(b);
-        if (p & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
-        if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
-        return 0;
-      });
-      if (roots.length) {
-        const lastTurn = roots[roots.length - 1];
-        const t = nodeText(lastTurn);
-        if (t.length > 0) return t;
+        const replyText = nodeText(lastM365);
+        const turnRoot = findAssistantTurnRoot(lastM365);
+        const turnText = turnRoot ? nodeText(turnRoot) : "";
+        if (shouldPreferFullTurn(replyText, turnText)) {
+          return turnText;
+        }
+        if (replyText.length > 0) return replyText;
+        if (turnText.length > 0) return turnText;
       }
 
       const selectors = ${JSON.stringify(ASSISTANT_REPLY_DOM_SELECTORS)};
@@ -355,10 +450,11 @@ export {
   copilotDomGeneratingIifeExpression,
   copilotDomReplyExtractIifeExpression,
   copilotDomPollGeneratingAndReplyExpression,
+  assistantTextHasStructuredContent,
+  shouldPreferExpandedAssistantTurn,
   stripM365CopilotReplyChrome,
   normalizeStreamingLine,
   lineMatchesStreamingPlaceholder,
   replyEndsWithStreamingPlaceholder,
   stripStreamingPlaceholderTail,
 };
-

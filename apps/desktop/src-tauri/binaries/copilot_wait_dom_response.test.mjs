@@ -215,6 +215,103 @@ test("waitForDomResponse suppresses internal draft progress and keeps only visib
   );
 });
 
+test("waitForDomResponse prefers a fuller assistant turn over a short reply-div candidate", async () => {
+  const shortReply = "HTMLでテトリスを作成します！";
+  const fullReply = [
+    "HTMLでテトリスを作成します！",
+    "",
+    "次の手順で 1 ファイルの実装を作成します。",
+    "",
+    "1. キャンバスを配置します。",
+    "2. 落下ロジックを実装します。",
+  ].join("\n");
+  const snapshots = [
+    { generating: false, reply: "" },
+    { generating: true, reply: shortReply },
+    { generating: false, reply: shortReply },
+  ];
+  let pollIndex = 0;
+  const session = {
+    async evaluate(script) {
+      if (String(script).includes("return { generating, reply: replyRaw };")) {
+        const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
+        pollIndex += 1;
+        return { value: snapshot };
+      }
+      if (String(script).includes("const includeGenericSelectors = false")) {
+        return { value: fullReply };
+      }
+      if (String(script).includes("const includeGenericSelectors = true")) {
+        return { value: fullReply };
+      }
+      return { value: "" };
+    },
+  };
+  const progress = [];
+
+  const response = await waitForDomResponse(session, null, 0, null, {
+    timeoutMs: 2_500,
+    onProgress: async (snapshot) => {
+      progress.push(snapshot);
+    },
+  });
+
+  assert.equal(response, fullReply);
+  assert.deepEqual(
+    progress.map((snapshot) => snapshot.visibleText),
+    [shortReply],
+  );
+});
+
+test("waitForDomResponse returns the full relay_tool reply while progress stays tool-free", async () => {
+  const shortReply = "HTMLでテトリスを作成します！";
+  const fullReply = [
+    "HTMLでテトリスを作成します！",
+    "",
+    "```relay_tool",
+    '{"name":"write_file","relay_tool_call":true,"input":{"path":"tetris.html"}}',
+    "```",
+    "",
+    "`tetris.html` をワークスペースに作成しました。",
+  ].join("\n");
+  const snapshots = [
+    { generating: false, reply: "" },
+    { generating: true, reply: shortReply },
+    { generating: false, reply: shortReply },
+  ];
+  let pollIndex = 0;
+  const session = {
+    async evaluate(script) {
+      if (String(script).includes("return { generating, reply: replyRaw };")) {
+        const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
+        pollIndex += 1;
+        return { value: snapshot };
+      }
+      if (String(script).includes("const includeGenericSelectors = false")) {
+        return { value: fullReply };
+      }
+      if (String(script).includes("const includeGenericSelectors = true")) {
+        return { value: fullReply };
+      }
+      return { value: "" };
+    },
+  };
+  const progress = [];
+
+  const response = await waitForDomResponse(session, null, 0, null, {
+    timeoutMs: 2_500,
+    onProgress: async (snapshot) => {
+      progress.push(snapshot);
+    },
+  });
+
+  assert.equal(response, fullReply);
+  assert.deepEqual(
+    progress.map((snapshot) => snapshot.visibleText),
+    [shortReply],
+  );
+});
+
 test("waitForDomResponse keeps a short valid DOM reply over longer thought-like network text", async () => {
   const snapshots = [
     { generating: false, reply: "" },
