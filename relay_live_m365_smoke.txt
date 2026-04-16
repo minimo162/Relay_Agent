@@ -1,0 +1,2 @@
+source: README.md
+summary: Desktop agent app: **Tauri v2**, **SolidJS**, **Rust**.

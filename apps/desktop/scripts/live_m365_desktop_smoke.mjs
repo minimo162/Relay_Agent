@@ -155,6 +155,73 @@ async function pollState(label, timeoutMs, predicate, sessionId = null) {
   throw new Error(`Timed out waiting for ${label}`);
 }
 
+async function waitForSessionCompletionWithAutoApprovals(sessionId, timeoutMs) {
+  const startedAt = Date.now();
+  let lastState = null;
+  let firstApprovalState = null;
+  const approvalHistory = [];
+  const lastApprovalAttemptAt = new Map();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    lastState = await getState();
+    writeJson(join(artifactsDir, "completed.json"), lastState);
+    recordProgressTrace("completed", lastState, sessionId);
+
+    const session = sessionById(lastState, sessionId);
+    if (!session) {
+      await sleep(1500);
+      continue;
+    }
+
+    const pendingApprovals = Array.isArray(session.pendingApprovals) ? session.pendingApprovals : [];
+    if (pendingApprovals.length > 0) {
+      if (!firstApprovalState) {
+        firstApprovalState = lastState;
+      }
+      const approval = pendingApprovals[0];
+      if (!["write_file", "edit_file"].includes(approval.toolName)) {
+        throw new Error(`unexpected approval tool: ${approval.toolName ?? "none"}`);
+      }
+      const approvalKey = `${approval.approvalId}:${approval.toolName}`;
+      const now = Date.now();
+      const lastApprovedAt = lastApprovalAttemptAt.get(approvalKey) ?? 0;
+      if (now - lastApprovedAt >= 3000) {
+        await postDevControl("/approve", {
+          sessionId,
+          approvalId: approval.approvalId,
+          approved: true,
+        });
+        lastApprovalAttemptAt.set(approvalKey, now);
+        approvalHistory.push({
+          observedAtMs: now,
+          approvalId: approval.approvalId,
+          toolName: approval.toolName,
+        });
+      }
+      await sleep(1500);
+      continue;
+    }
+
+    if (!session.running) {
+      if (session.lastStopReason === "completed") {
+        return {
+          completedState: lastState,
+          firstApprovalState,
+          approvalHistory,
+        };
+      }
+      throw new Error(`session stopped with ${session.lastStopReason ?? "unknown"}`);
+    }
+
+    await sleep(1500);
+  }
+
+  if (lastState) {
+    writeJson(finalStatePath, lastState);
+  }
+  throw new Error("Timed out waiting for session completion");
+}
+
 function runDoctor(displayValue) {
   const env = { ...process.env };
   if (displayValue) env.DISPLAY = displayValue;
@@ -362,47 +429,17 @@ async function main() {
   const createdState = await pollState("session-created", 60_000, (state) => ({
     done: Boolean(sessionById(state, sessionId)),
   }), sessionId);
-  const approvalState = await pollState("approval-needed", 300_000, (state) => {
-    const session = sessionById(state, sessionId);
-    if (!session) return { done: false };
-    if (Array.isArray(session.pendingApprovals) && session.pendingApprovals.length > 0) {
-      return { done: true };
-    }
-    if (!session.running && session.lastStopReason) {
-      return {
-        fatal: `session stopped before approval: ${session.lastStopReason}`,
-      };
-    }
-    return { done: false };
-  }, sessionId);
-
-  const approvalSession = sessionById(approvalState, sessionId);
-  const firstApproval = approvalSession?.pendingApprovals?.[0] ?? null;
-  if (!firstApproval || !["write_file", "edit_file"].includes(firstApproval.toolName)) {
-    throw new Error(`unexpected approval tool: ${firstApproval?.toolName ?? "none"}`);
-  }
-
-  await postDevControl("/approve", {
-    sessionId,
-    approvalId: firstApproval.approvalId,
-    approved: true,
-  });
-
-  const completedState = await pollState("completed", 300_000, (state) => {
-    const session = sessionById(state, sessionId);
-    if (!session) return { done: false };
-    if (!session.running) {
-      if (session.lastStopReason === "completed") {
-        return { done: true };
-      }
-      return {
-        fatal: `session stopped with ${session.lastStopReason ?? "unknown"}`,
-      };
-    }
-    return { done: false };
-  }, sessionId);
+  const {
+    completedState,
+    firstApprovalState: approvalState,
+    approvalHistory,
+  } = await waitForSessionCompletionWithAutoApprovals(sessionId, 420_000);
 
   writeJson(finalStatePath, completedState);
+
+  if (!approvalState || approvalHistory.length === 0) {
+    throw new Error("session completed without surfacing a write approval");
+  }
 
   if (!existsSync(outputPath)) {
     throw new Error(`expected output file was not created: ${outputPath}`);
@@ -446,6 +483,7 @@ async function main() {
     preflightState,
     createdState,
     approvalState,
+    approvalHistory,
     completedState,
     progressTracePath,
     streamStats: {

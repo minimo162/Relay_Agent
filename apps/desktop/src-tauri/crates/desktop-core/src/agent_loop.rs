@@ -403,6 +403,25 @@ fn should_try_inline_tool_json_fallback(
         || display_lower.contains("relay_tool")
         || is_tool_protocol_confusion_text(raw)
         || is_tool_protocol_confusion_text(display)
+        || has_inline_local_file_mutation_tool_candidate(raw)
+        || has_inline_local_file_mutation_tool_candidate(display)
+}
+
+fn has_inline_local_file_mutation_tool_candidate(text: &str) -> bool {
+    let whitelist = mvp_tool_names_whitelist();
+    extract_mvp_tool_object_spans(text, &whitelist)
+        .into_iter()
+        .any(|(_, _, payload)| {
+            serde_json::from_str::<Value>(&payload)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(|name| matches!(name, "write_file" | "edit_file"))
+                })
+                .unwrap_or(false)
+        })
 }
 
 fn latest_user_text(messages: &[ConversationMessage]) -> Option<String> {
@@ -637,10 +656,14 @@ fn cdp_messages_for_flavor(
 ) -> Vec<ConversationMessage> {
     match flavor {
         CdpPromptFlavor::Standard => messages.to_vec(),
-        CdpPromptFlavor::Repair => {
-            latest_user_message(messages).map_or_else(|| messages.to_vec(), |message| vec![message])
-        }
+        CdpPromptFlavor::Repair => messages_from_latest_user(messages)
+            .unwrap_or_else(|| messages.to_vec()),
     }
+}
+
+fn messages_from_latest_user(messages: &[ConversationMessage]) -> Option<Vec<ConversationMessage>> {
+    let start = messages.iter().rposition(|message| message.role == MessageRole::User)?;
+    Some(messages[start..].to_vec())
 }
 
 fn render_cdp_messages_with_breakdown(
@@ -934,7 +957,14 @@ fn extract_mvp_tool_object_spans(
             search_start = abs + 1;
             continue;
         }
-        let Some(sub) = extract_balanced_json_object(text, abs) else {
+        let sub = if let Some(sub) = extract_balanced_json_object(text, abs) {
+            sub.to_string()
+        } else if let Some(repaired) = text
+            .get(abs..)
+            .and_then(autoclose_unbalanced_json_payload)
+        {
+            repaired
+        } else {
             search_start = abs + 1;
             continue;
         };
@@ -947,7 +977,7 @@ fn extract_mvp_tool_object_spans(
             search_start = abs + 1;
             continue;
         }
-        let Ok(v) = serde_json::from_str::<Value>(sub) else {
+        let Ok(v) = serde_json::from_str::<Value>(&sub) else {
             search_start = abs + 1;
             continue;
         };
@@ -971,8 +1001,8 @@ fn extract_mvp_tool_object_spans(
             search_start = abs + 1;
             continue;
         }
-        let end = abs + sub.len();
-        out.push((abs, end, sub.to_string()));
+        let end = abs.saturating_add(sub.len()).min(text.len());
+        out.push((abs, end, sub));
         search_start = end;
     }
     out
@@ -1262,12 +1292,74 @@ fn find_relay_tool_fence_end(rest: &str) -> Option<usize> {
     rest.rfind("```")
 }
 
+fn autoclose_unbalanced_json_payload(payload: &str) -> Option<String> {
+    let trimmed = payload.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let first = trimmed.chars().next()?;
+    if !matches!(first, '{' | '[') {
+        return None;
+    }
+
+    let mut stack: Vec<char> = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    for ch in trimmed.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '{' => stack.push('}'),
+            '[' => stack.push(']'),
+            '}' | ']' => {
+                let expected = stack.pop()?;
+                if ch != expected {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if in_string || stack.is_empty() || stack.len() > 8 {
+        return None;
+    }
+
+    let mut repaired = trimmed.to_string();
+    while let Some(ch) = stack.pop() {
+        repaired.push(ch);
+    }
+    Some(repaired)
+}
+
+fn parse_tool_payload_value(payload: &str) -> Option<Value> {
+    match serde_json::from_str::<Value>(payload) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            let repaired = autoclose_unbalanced_json_payload(payload)?;
+            serde_json::from_str::<Value>(&repaired).ok()
+        }
+    }
+}
+
 fn parse_tool_payloads(payloads: &[String]) -> Vec<(String, String, String)> {
     let mut out = Vec::new();
     for p in payloads {
-        let v: Value = match serde_json::from_str(p) {
-            Ok(v) => v,
-            Err(_) => continue,
+        let v: Value = match parse_tool_payload_value(p) {
+            Some(v) => v,
+            None => continue,
         };
         match v {
             Value::Array(arr) => {
@@ -1350,6 +1442,13 @@ fn is_meta_stall_text(text: &str) -> bool {
             "restate",
             "provide the file path",
             "which path",
+            "lining things up",
+            "lining this up",
+            "working on it",
+            "one moment",
+            "just a moment",
+            "hang tight",
+            "getting things ready",
         ]
         .iter()
         .any(|needle| lower.contains(needle))
@@ -1531,11 +1630,24 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         && (lower.contains("```")
             || contains_plain_relay_tool_mention(&lower)
             || lower.contains("adjusting tool use"));
+    let defers_concrete_local_read_without_tool = trimmed.chars().count() <= 500
+        && ((lower.contains("need to read")
+            || lower.contains("need to inspect")
+            || lower.contains("need to review")
+            || lower.contains("must read")
+            || lower.contains("must inspect"))
+            || trimmed.contains("読む必要があります")
+            || trimmed.contains("読み取る必要があります")
+            || trimmed.contains("確認する必要があります")
+            || trimmed.contains("以下で読み取ります")
+            || trimmed.contains("以下で確認します"))
+        && (lower.contains("first") || trimmed.contains("まず") || trimmed.contains("以下で"));
     local_tool_refusal
         || local_write_refusal
         || foreign_tool_drift
         || planning_only_file_drift
         || mentioned_relay_tools_without_payload
+        || defers_concrete_local_read_without_tool
         || is_repair_refusal_text(trimmed)
 }
 
@@ -1700,7 +1812,7 @@ pub enum LoopDecision {
 fn decide_loop_after_success(
     goal: &str,
     latest_turn_input: &str,
-    turn_index: usize,
+    _turn_index: usize,
     meta_stall_nudges_used: usize,
     meta_stall_nudge_limit: usize,
     summary: &runtime::TurnSummary,
@@ -1728,6 +1840,22 @@ fn decide_loop_after_success(
         && summary.iterations == 1
         && is_meta_stall_text(assistant_text);
 
+    if summary.tool_results.is_empty() {
+        tracing::info!(
+            "[desktop-core] post-turn classification: outcome={:?} iterations={} meta_nudges_used={}/{} tool_protocol_confusion={} repair_refusal={} false_completion={} plain_file_body={} meta_stall={} assistant_excerpt={:?}",
+            summary.outcome,
+            summary.iterations,
+            meta_stall_nudges_used,
+            meta_stall_nudge_limit,
+            is_tool_protocol_confusion,
+            is_repair_refusal,
+            is_false_completion,
+            is_plain_file_body_completion,
+            is_meta_stall,
+            assistant_text
+        );
+    }
+
     if is_tool_protocol_confusion
         || is_repair_refusal
         || is_false_completion
@@ -1745,16 +1873,12 @@ fn decide_loop_after_success(
         return LoopDecision::Stop(LoopStopReason::MetaStall);
     }
 
-    if turn_index == 0 && is_meta_stall {
+    if is_meta_stall {
         if meta_stall_nudges_used < meta_stall_nudge_limit {
             return LoopDecision::Continue {
                 next_input: "Continue.".to_string(),
             };
         }
-        return LoopDecision::Stop(LoopStopReason::MetaStall);
-    }
-
-    if is_meta_stall {
         return LoopDecision::Stop(LoopStopReason::MetaStall);
     }
 
@@ -2105,6 +2229,62 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     }
 
     #[test]
+    fn parse_initial_recovers_compact_inline_write_file_in_prose_with_sentinel() {
+        let raw = concat!(
+            "README.md の冒頭説明を使って指定のファイルを作成します。\n\n",
+            "{\"name\":\"write_file\",\"relay_tool_call\":true,\"input\":",
+            "{\"path\":\"/root/Relay_Agent/relay_live_m365_smoke.txt\",",
+            "\"content\":\"source: README.md\\nsummary: Desktop agent app: **Tauri v2**, **SolidJS**, **Rust**.\"}}\n\n",
+            "この操作以外に、他のファイルは変更しません。"
+        );
+        let (display, calls) = parse_initial(raw);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, "write_file");
+        let input: Value =
+            serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
+        assert_eq!(
+            input.get("path").and_then(Value::as_str),
+            Some("/root/Relay_Agent/relay_live_m365_smoke.txt")
+        );
+        assert_eq!(
+            input.get("content").and_then(Value::as_str),
+            Some(
+                "source: README.md\nsummary: Desktop agent app: **Tauri v2**, **SolidJS**, **Rust**."
+            )
+        );
+        assert!(display.contains("README.md の冒頭説明を使って指定のファイルを作成します。"));
+        assert!(display.contains("この操作以外に、他のファイルは変更しません。"));
+        assert!(!display.contains(r#""relay_tool_call""#));
+    }
+
+    #[test]
+    fn parse_initial_repairs_unbalanced_relay_tool_fence_json() {
+        let raw = concat!(
+            "```relay_tool\n",
+            "{ \"name\": \"read_file\", \"relay_tool_call\": true, \"input\": { \"path\": \"README.md\" }\n",
+            "```"
+        );
+        let (_display, calls) = parse_initial(raw);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, "read_file");
+        let input: Value =
+            serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
+        assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
+    }
+
+    #[test]
+    fn parse_retry_repairs_unbalanced_unfenced_tool_json() {
+        let raw =
+            "{ \"name\": \"read_file\", \"relay_tool_call\": true, \"input\": { \"path\": \"README.md\" }\n";
+        let (_display, calls) = parse_copilot_tool_response(raw, CdpToolParseMode::RetryRepair);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, "read_file");
+        let input: Value =
+            serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
+        assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
+    }
+
+    #[test]
     fn first_build_turn_tool_protocol_confusion_gets_repair_nudge() {
         let s = summary(
             "I can't use the desired local workspace editing tools, so I'll respond with LOCAL_TOOLS_UNAVAILABLE.",
@@ -2135,6 +2315,17 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     }
 
     #[test]
+    fn later_turn_meta_stall_gets_continue_nudge_with_budget_remaining() {
+        let s = summary("Lining things up...", Vec::new(), runtime::TurnOutcome::Completed);
+        assert_eq!(
+            decide_loop_after_success("Improve the file", "Improve the file", 1, 0, 2, &s),
+            LoopDecision::Continue {
+                next_input: "Continue.".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn existing_file_tool_drift_escalates_to_targeted_read_file_repair() {
         let s = summary(
             "I will use Pages and Python next, then include citations.",
@@ -2154,6 +2345,28 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         };
         assert!(next_input.contains(r#""name": "read_file""#));
         assert!(next_input.contains(r#""path": "src/main.rs""#));
+    }
+
+    #[test]
+    fn readme_read_deferral_escalates_to_targeted_read_file_repair() {
+        let s = summary(
+            "了解しました。\nまず README.md の内容を正確に読む必要があります。以下で読み取ります。",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let decision = decide_loop_after_success(
+            "Create /root/Relay_Agent/relay_live_m365_smoke.txt from README.md.",
+            "Create /root/Relay_Agent/relay_live_m365_smoke.txt from README.md.",
+            0,
+            0,
+            2,
+            &s,
+        );
+        let LoopDecision::Continue { next_input } = decision else {
+            panic!("expected README deferral to escalate to targeted read_file repair");
+        };
+        assert!(next_input.contains(r#""name": "read_file""#));
+        assert!(next_input.contains("README.md"));
     }
 
     #[test]
@@ -2202,6 +2415,81 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     }
 
     #[test]
+    fn repair_prompt_keeps_same_turn_tool_context_after_latest_user() {
+        let repair =
+            build_tool_protocol_repair_input("Original request", "Create ./tetris.html", 0);
+        let tool_output = serde_json::json!({
+            "path": "README.md",
+            "content": "Desktop agent app: **Tauri v2**, **SolidJS**, **Rust**."
+        })
+        .to_string();
+        let messages = vec![
+            ConversationMessage::user_text(repair),
+            ConversationMessage::assistant(vec![ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "read_file".to_string(),
+                input: r#"{"path":"README.md"}"#.to_string(),
+            }]),
+            ConversationMessage::tool_result("tool-1", "read_file", tool_output, false),
+        ];
+
+        let bundle = build_cdp_prompt_bundle_from_messages(
+            &[],
+            &messages,
+            CdpPromptFlavor::Repair,
+            CdpCatalogFlavor::StandardFull,
+        );
+        let (_rendered, breakdown) =
+            render_cdp_messages_with_breakdown(&cdp_messages_for_flavor(&messages, CdpPromptFlavor::Repair));
+
+        assert!(bundle.contains("Tool protocol repair."));
+        assert!(bundle.contains("[Tool Call: read_file]"));
+        assert!(bundle
+            .contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read_file\" status=\"ok\">"));
+        assert_eq!(breakdown.3, 1);
+        assert!(breakdown.2 > 0);
+    }
+
+    #[test]
+    fn repair_prompt_excludes_older_turns_but_keeps_messages_after_synthetic_repair_user() {
+        let repair =
+            build_tool_protocol_repair_input("Original request", "Create ./tetris.html", 0);
+        let messages = vec![
+            ConversationMessage::user_text("Original request".to_string()),
+            ConversationMessage::assistant(vec![ContentBlock::Text {
+                text: "Older assistant text".to_string(),
+            }]),
+            ConversationMessage::user_text(repair),
+            ConversationMessage::assistant(vec![ContentBlock::Text {
+                text: "Repair follow-up".to_string(),
+            }]),
+            ConversationMessage::tool_result(
+                "tool-1",
+                "read_file",
+                serde_json::json!({
+                    "path": "README.md",
+                    "content": "Desktop agent app: **Tauri v2**, **SolidJS**, **Rust**."
+                })
+                .to_string(),
+                false,
+            ),
+        ];
+
+        let sliced = cdp_messages_for_flavor(&messages, CdpPromptFlavor::Repair);
+
+        assert_eq!(sliced.len(), 3);
+        assert!(matches!(sliced[0].role, MessageRole::User));
+        assert!(matches!(sliced[1].role, MessageRole::Assistant));
+        assert!(matches!(sliced[2].role, MessageRole::Tool));
+        let (rendered, _) = render_cdp_messages_with_breakdown(&sliced);
+        assert!(rendered.contains("Repair follow-up"));
+        assert!(rendered.contains(
+            "<UNTRUSTED_TOOL_OUTPUT tool=\"read_file\" status=\"ok\">"
+        ));
+        assert!(!rendered.contains("Older assistant text"));
+    }
+
+    #[test]
     fn tool_protocol_confusion_heuristic_catches_foreign_tool_drift() {
         assert!(is_tool_protocol_confusion_text(
             "Creating a file with Python after office365_search."
@@ -2221,9 +2509,13 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         assert!(is_tool_protocol_confusion_text(
             "LOCAL_TOOLS_UNAVAILABLE because I can't use local workspace editing tools."
         ));
+        assert!(is_tool_protocol_confusion_text(
+            "了解しました。まず README.md の内容を正確に読む必要があります。以下で読み取ります。"
+        ));
         assert!(!is_tool_protocol_confusion_text(
             "I inspected the file and here is the fix."
         ));
+        assert!(is_meta_stall_text("Lining things up..."));
     }
 
     #[test]

@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 
+use serde_json::Value;
+
 use crate::compact::{
     compact_session, estimate_session_tokens, CompactionConfig, CompactionResult,
 };
@@ -82,6 +84,76 @@ impl Display for RuntimeError {
 }
 
 impl std::error::Error for RuntimeError {}
+
+fn extract_mutation_text_fields(tool_name: &str, input: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<Value>(input) else {
+        return Vec::new();
+    };
+    let Some(obj) = value.as_object() else {
+        return Vec::new();
+    };
+    match tool_name {
+        "write_file" => obj
+            .get("content")
+            .and_then(Value::as_str)
+            .map(|text| vec![text.to_string()])
+            .unwrap_or_default(),
+        "edit_file" => ["old_string", "new_string", "replace", "with", "content"]
+            .into_iter()
+            .filter_map(|key| obj.get(key).and_then(Value::as_str))
+            .map(ToString::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn looks_like_unresolved_local_file_placeholder(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("<full file content here>")
+        || lower.contains("<first sentence>")
+        || lower.contains("summary: <")
+        || text.contains("<最初の文>")
+    {
+        return true;
+    }
+
+    let mut cursor = 0usize;
+    while let Some(open_rel) = text[cursor..].find('<') {
+        let open = cursor + open_rel;
+        let Some(close_rel) = text[open + 1..].find('>') else {
+            break;
+        };
+        let close = open + 1 + close_rel;
+        let inner = text[open + 1..close].trim();
+        if !inner.is_empty()
+            && inner.len() <= 160
+            && (inner.contains("最初の文")
+                || inner.contains("README.md")
+                || inner.to_ascii_lowercase().contains("first sentence")
+                || inner.to_ascii_lowercase().contains("placeholder"))
+        {
+            return true;
+        }
+        cursor = close + 1;
+    }
+
+    false
+}
+
+fn invalid_local_file_mutation_reason(tool_name: &str, input: &str) -> Option<String> {
+    if !matches!(tool_name, "write_file" | "edit_file") {
+        return None;
+    }
+    if extract_mutation_text_fields(tool_name, input)
+        .into_iter()
+        .any(|field| looks_like_unresolved_local_file_placeholder(&field))
+    {
+        return Some(format!(
+            "{tool_name} input contains an unresolved placeholder marker. Read the source file first and send the final concrete file content instead of angle-bracket placeholders."
+        ));
+    }
+    None
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnSummary {
@@ -343,6 +415,18 @@ where
         input: &str,
         prompter: &mut Option<&mut dyn PermissionPrompter>,
     ) -> (ConversationMessage, Option<TurnOutcome>) {
+        if let Some(reason) = invalid_local_file_mutation_reason(&tool_name, input) {
+            return (
+                ConversationMessage::tool_result(
+                    tool_use_id,
+                    tool_name,
+                    reason.clone(),
+                    true,
+                ),
+                Some(TurnOutcome::ToolError { message: reason }),
+            );
+        }
+
         let permission_outcome = if let Some(prompt) = prompter.as_mut() {
             self.permission_policy
                 .authorize(&tool_name, input, Some(*prompt))
@@ -703,6 +787,14 @@ mod tests {
         }
     }
 
+    struct PromptMustNotRun;
+
+    impl PermissionPrompter for PromptMustNotRun {
+        fn decide(&mut self, request: &PermissionRequest) -> PermissionPromptDecision {
+            panic!("permission prompt should not run for {}", request.tool_name);
+        }
+    }
+
     #[test]
     fn runs_user_to_tool_to_result_loop_end_to_end_and_tracks_usage() {
         let api_client = ScriptedApiClient { call_count: 0 };
@@ -755,6 +847,91 @@ mod tests {
         ));
         assert_eq!(summary.outcome, TurnOutcome::Completed);
         assert_eq!(summary.terminal_assistant_text, "The answer is 4.");
+    }
+
+    #[test]
+    fn unresolved_write_file_placeholder_is_rejected_before_permission_prompt() {
+        let tool_calls = Arc::new(AtomicUsize::new(0));
+        let executor_calls = Arc::clone(&tool_calls);
+        let tool_executor = StaticToolExecutor::new().register("write_file", move |_input| {
+            executor_calls.fetch_add(1, Ordering::SeqCst);
+            Ok("should not execute".to_string())
+        });
+        let permission_policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite);
+        let system_prompt = vec!["system".to_string()];
+        let api_client = ScriptedApiClient { call_count: 0 };
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            api_client,
+            tool_executor,
+            permission_policy,
+            system_prompt,
+        );
+        let mut prompter = PromptMustNotRun;
+        let mut prompt = Some(&mut prompter as &mut dyn PermissionPrompter);
+
+        let (message, outcome) = runtime.build_tool_result_message(
+            "tool-1".to_string(),
+            "write_file".to_string(),
+            r#"{"path":"out.txt","content":"source: README.md\nsummary: <最初の文>"}"#,
+            &mut prompt,
+        );
+
+        assert_eq!(tool_calls.load(Ordering::SeqCst), 0);
+        let Some(TurnOutcome::ToolError { message: error_message }) = outcome else {
+            panic!("expected unresolved placeholder to produce a tool error");
+        };
+        assert!(error_message.contains("unresolved placeholder marker"));
+        match &message.blocks[0] {
+            ContentBlock::ToolResult {
+                is_error, output, ..
+            } => {
+                assert!(*is_error);
+                assert!(output.contains("unresolved placeholder marker"));
+            }
+            other => panic!("expected tool result block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn html_write_file_content_is_not_treated_as_placeholder() {
+        let tool_calls = Arc::new(AtomicUsize::new(0));
+        let executor_calls = Arc::clone(&tool_calls);
+        let tool_executor = StaticToolExecutor::new().register("write_file", move |_input| {
+            executor_calls.fetch_add(1, Ordering::SeqCst);
+            Ok("ok".to_string())
+        });
+        let permission_policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite);
+        let system_prompt = vec!["system".to_string()];
+        let api_client = ScriptedApiClient { call_count: 0 };
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            api_client,
+            tool_executor,
+            permission_policy,
+            system_prompt,
+        );
+
+        let (message, outcome) = runtime.build_tool_result_message(
+            "tool-1".to_string(),
+            "write_file".to_string(),
+            r#"{"path":"index.html","content":"<!doctype html>\n<html><body>Hello</body></html>"}"#,
+            &mut None,
+        );
+
+        assert_eq!(tool_calls.load(Ordering::SeqCst), 1);
+        assert!(outcome.is_none());
+        match &message.blocks[0] {
+            ContentBlock::ToolResult {
+                is_error, output, ..
+            } => {
+                assert!(!is_error);
+                assert_eq!(output, "ok");
+            }
+            other => panic!("expected tool result block, got {other:?}"),
+        }
     }
 
     #[test]

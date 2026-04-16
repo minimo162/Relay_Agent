@@ -5703,6 +5703,39 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml build_send_prompt_b
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_repairs_force_fresh_chat_but_path_repairs_do_not -- --nocapture
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml desktop_prompt_prioritizes_direct_file_tools_for_concrete_file_write_goals -- --nocapture
 cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+Repair-turn same-turn Tool Result preservation (2026-04-16):
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib repair_prompt_keeps_same_turn_tool_context_after_latest_user -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib repair_prompt_excludes_older_turns_but_keeps_messages_after_synthetic_repair_user -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib live_probe_prompt_breakdown_reports_system_message_and_catalog -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib readme_read_deferral_escalates_to_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib parse_retry_repairs_unbalanced_unfenced_tool_json -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core repair_prompt_keeps_same_turn_tool_context_after_latest_user -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core repair_prompt_excludes_older_turns_but_keeps_messages_after_synthetic_repair_user -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core readme_read_deferral_escalates_to_targeted_read_file_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core parse_retry_repairs_unbalanced_unfenced_tool_json -- --nocapture
+pnpm live:m365:desktop-smoke
+```
+
+Observed result:
+
+- [`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs) and [`apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs`](../apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs) no longer collapse `CdpPromptFlavor::Repair` to the latest user message only. Repair turns now keep the suffix of messages starting at the latest user turn, so same-turn assistant tool calls and `Tool Result` evidence survive into the follow-up Copilot request.
+- Added regression coverage in both crates to pin that slicing rule:
+  - repair prompts keep `[user, assistant tool_use, tool_result]` when those messages occur in the same turn
+  - repair prompts still exclude earlier unrelated turns while preserving assistant/tool-result messages after a synthetic repair user message
+  - the live-probe prompt breakdown test now asserts repair/continuation bundles carry tool-result bytes instead of dropping them
+- Real desktop smoke passed again on the new artifact run:
+  - artifact: `/tmp/relay-live-m365-smoke-0ETwOF`
+  - preflight/live doctor gates were `ok` for `edge_cdp`, `bridge_health`, `bridge_status`, and `m365_sign_in`
+  - the session reached one `write_file` approval, then completed with `lastStopReason = completed`
+  - final session state recorded `toolUseCounts.read_file = 1`, `toolResultCounts.read_file = 1`, `toolUseCounts.write_file = 2`, `toolResultCounts.write_file = 2`, and populated stream timing fields
+  - the acceptance output [`relay_live_m365_smoke.txt`](../relay_live_m365_smoke.txt) contained exactly:
+    - `source: README.md`
+    - `summary: Desktop agent app: **Tauri v2**, **SolidJS**, **Rust**.`
+- The passing live artifact also shows the originally broken placeholder path was recovered in-session rather than looping on `repair1`: the second Standard request carried `tool_result_count=2`, and the run moved on to the approved final local write instead of repeating `read_file`.
 cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
 pnpm --filter @relay-agent/desktop typecheck
 pnpm check
