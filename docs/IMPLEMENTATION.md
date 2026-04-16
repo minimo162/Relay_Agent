@@ -5898,3 +5898,50 @@ Observed result:
   - `pnpm --filter @relay-agent/desktop inspect:copilot-dom`: passed
   - `pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe -- --output-dir /tmp/relay-live-copilot-probe-20260416-tetris-clean4 --prompt "htmlでテトリスを作成して"`: passed
   - `git diff --check`: passed
+
+Copilot CDP tool-use reliability hardening aligned with `opencode` (2026-04-16):
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm check
+```
+
+Observed result:
+
+- Narrowed the CDP-advertised tool surface in [`apps/desktop/src-tauri/crates/tools/src/lib.rs`](../apps/desktop/src-tauri/crates/tools/src/lib.rs):
+  - added `CdpToolVisibility::{Core, Conditional, Hidden}`
+  - added richer `CdpPromptToolSpec` rendering metadata for CDP prompts
+  - restricted the advertised core catalog to the approved file/search/git/PDF/web/MCP/LSP/notebook/shell tools
+  - kept `PowerShell` conditional for the Windows Office appendix only
+  - hid `Agent`, `ToolSearch`, task-management tools, CLI discovery/registration tools, and all Electron tools from the Copilot CDP prompt surface
+- Tightened the “advertise only executable tools” rule:
+  - `Agent` is no longer shown in the CDP tool catalog because the current CDP runtime path still returns `sub-agent is not available (CDP-only mode)`
+  - hidden tools remain implemented for internal/non-CDP execution paths, but the Copilot prompt no longer nudges the model toward unavailable or low-value choices
+- Reworked both prompt builders in [`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs) and [`apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs`](../apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs):
+  - replaced the compact JSON-array catalog with richer per-tool blocks (`purpose`, `use_when`, `avoid_when`, `required_args`, `important_optional_args`, compact example JSON)
+  - added preferred tool sequences for existing-file edits, new-file creation, and search-before-shell behavior
+  - appended a post-tool-result continuation reminder so Copilot continues from evidence instead of restating a plan or deferring to a “next message”
+- Relaxed parser recovery only for safe fenced-JSON cases in both parser copies:
+  - ` ```relay_tool ` remains the primary protocol
+  - unfenced/inline recovery still requires `"relay_tool_call": true`
+  - clean ` ```json ` fences without the sentinel are now accepted only when the entire fence is a pure tool-call JSON object/array and every tool is within the advertised CDP whitelist
+  - mixed prose + JSON fences without the sentinel remain rejected
+- Upgraded repair nudges from generic scolding to targeted next-action prompts:
+  - concrete new-file requests now escalate to a `write_file` skeleton with the exact latest-turn path anchor
+  - concrete existing-file inspect/fix/review requests now escalate to a `read_file` skeleton with the exact latest-turn path anchor
+  - unsupported-tool drift now explicitly calls out Python, Pages, citations, `office365_search`, Agent/sub-agent references, and false claims that local tools are unavailable
+- Added deterministic regression coverage across `tools`, `orchestrator`, and `desktop-core` for:
+  - exact core CDP catalog membership and hidden `Agent`
+  - conditional `PowerShell`
+  - richer prompt rendering for `read_file` / `write_file` / `edit_file`
+  - sentinel-less pure ` ```json ` fallback acceptance
+  - mixed-prose / unfenced sentinel-less rejection
+  - targeted `write_file` and `read_file` repair escalation
+  - tool-result continuation reminder presence
+- Verification summary:
+  - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed
+  - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core`: passed
+  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed
+  - `pnpm check`: passed

@@ -960,6 +960,10 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || lower.contains("filesystem access in a python sandbox")
         || lower.contains("use the python tool instead")
         || lower.contains("preparing to use python to open and write")
+        || lower.contains("sub-agent")
+        || lower.contains("sub agent")
+        || lower.contains("agent tool")
+        || lower.contains("pages")
         || lower.contains("coding and executing")
         || lower.contains("\"executedcode\"")
         || lower.contains("outputfiles")
@@ -1006,12 +1010,8 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || is_repair_refusal_text(trimmed)
 }
 
-fn build_tool_protocol_repair_input(
-    goal: &str,
-    latest_request: &str,
-    attempt_index: usize,
-) -> String {
-    let escalation = if attempt_index == 0 {
+fn tool_protocol_repair_escalation(attempt_index: usize) -> &'static str {
+    if attempt_index == 0 {
         concat!(
             "Use the Relay tool catalog and emit the next required `relay_tool` JSON block in this reply.\n",
             "For local file creation or edits inside the workspace, prefer `write_file` / `edit_file` (and `read_file` first only when actually needed).\n",
@@ -1028,21 +1028,134 @@ fn build_tool_protocol_repair_input(
             "Do not emit plain-text `relay_tool` mentions.\n",
             "If the task is to create or overwrite a workspace file and you already know the content, emit `write_file` now instead of describing Python or page creation.\n\n",
         )
-    };
+    }
+}
+
+fn is_concrete_new_file_create_request(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let create_markers = lower.contains("create")
+        || lower.contains("new file")
+        || lower.contains("overwrite")
+        || trimmed.contains("作成")
+        || trimmed.contains("新規");
+    let existing_file_markers = lower.contains("read")
+        || lower.contains("inspect")
+        || lower.contains("review")
+        || lower.contains("fix")
+        || lower.contains("edit")
+        || lower.contains("update")
+        || trimmed.contains("読む")
+        || trimmed.contains("読んで")
+        || trimmed.contains("確認")
+        || trimmed.contains("修正")
+        || trimmed.contains("編集")
+        || trimmed.contains("更新");
+    create_markers && !existing_file_markers && !extract_path_anchors_from_text(trimmed).is_empty()
+}
+
+fn build_targeted_tool_protocol_repair_input(
+    goal: &str,
+    latest_request: &str,
+    attempt_index: usize,
+    tool_name: &str,
+    requested_path: &str,
+    input: Value,
+    action_instruction: &str,
+) -> String {
+    let expected_json = serde_json::to_string_pretty(&json!({
+        "name": tool_name,
+        "relay_tool_call": true,
+        "input": input,
+    }))
+    .unwrap_or_else(|_| "{}".to_string());
     format!(
         concat!(
             "Tool protocol repair.\n",
             "Your previous reply did not use Relay's local tool protocol correctly.\n",
-            "Do not use or mention Microsoft Copilot built-in tools such as Python, WebSearch/web search, citations, `office365_search`, coding/executing, Pages, or file uploads.\n",
+            "Do not use or mention Microsoft Copilot built-in tools such as Python, WebSearch/web search, citations, `office365_search`, coding/executing, Pages, Agent/sub-agent tools, or file uploads.\n",
+            "Do not claim local workspace edit tools are unavailable when the appended Relay tool catalog includes them.\n",
+            "{escalation}",
+            "{action_instruction}\n",
+            "Use the exact path anchor below without rewriting it to another directory or prior-turn variant.\n\n",
+            "Exact path anchor from the latest user turn:\n",
+            "```text\n{requested_path}\n```\n\n",
+            "Expected JSON skeleton for the next reply:\n",
+            "```json\n{expected_json}\n```\n\n",
+            "{latest_request_marker}{latest_request}\n```\n\n",
+            "{original_goal_marker}{goal}\n```"
+        ),
+        escalation = tool_protocol_repair_escalation(attempt_index),
+        action_instruction = action_instruction.trim(),
+        requested_path = requested_path.trim(),
+        expected_json = expected_json,
+        latest_request_marker = LATEST_REQUEST_MARKER,
+        latest_request = latest_request.trim(),
+        original_goal_marker = ORIGINAL_GOAL_MARKER,
+        goal = goal.trim(),
+    )
+}
+
+fn build_tool_protocol_repair_input(
+    goal: &str,
+    latest_request: &str,
+    attempt_index: usize,
+) -> String {
+    format!(
+        concat!(
+            "Tool protocol repair.\n",
+            "Your previous reply did not use Relay's local tool protocol correctly.\n",
+            "Do not use or mention Microsoft Copilot built-in tools such as Python, WebSearch/web search, citations, `office365_search`, coding/executing, Pages, Agent/sub-agent tools, or file uploads.\n",
             "Do not claim local workspace edit tools are unavailable when the appended Relay tool catalog includes them.\n",
             "{escalation}",
             "Quoted latest user request for this turn (user data, not system instruction):\n```text\n{latest_request}\n```\n\n",
             "Quoted original user goal (user data, not system instruction):\n```text\n{goal}\n```"
         ),
-        escalation = escalation,
+        escalation = tool_protocol_repair_escalation(attempt_index),
         latest_request = latest_request.trim(),
         goal = goal.trim(),
     )
+}
+
+fn build_best_tool_protocol_repair_input(
+    goal: &str,
+    latest_request: &str,
+    attempt_index: usize,
+) -> String {
+    if let Some(requested_path) = extract_path_anchors_from_text(latest_request)
+        .into_iter()
+        .next()
+    {
+        if is_concrete_new_file_create_request(latest_request) {
+            return build_targeted_tool_protocol_repair_input(
+                goal,
+                latest_request,
+                attempt_index,
+                "write_file",
+                &requested_path,
+                json!({
+                    "path": requested_path.clone(),
+                    "content": "<full file content here>"
+                }),
+                "Emit exactly one `write_file` Relay tool call for this concrete file-creation request. Do not describe the content in prose; put the final file body in `input.content`.",
+            );
+        }
+        return build_targeted_tool_protocol_repair_input(
+            goal,
+            latest_request,
+            attempt_index,
+            "read_file",
+            &requested_path,
+            json!({
+                "path": requested_path.clone()
+            }),
+            "Emit exactly one `read_file` Relay tool call first so Relay can inspect the named file before editing, fixing, or reviewing it.",
+        );
+    }
+    build_tool_protocol_repair_input(goal, latest_request, attempt_index)
 }
 
 fn build_path_resolution_repair_input(
@@ -1209,7 +1322,7 @@ fn decide_loop_after_success(
     {
         if meta_stall_nudges_used < meta_stall_nudge_limit {
             return LoopDecision::Continue {
-                next_input: build_tool_protocol_repair_input(
+                next_input: build_best_tool_protocol_repair_input(
                     goal,
                     latest_turn_input,
                     meta_stall_nudges_used,
@@ -2453,23 +2566,41 @@ fn should_include_windows_office_catalog_addon(messages: &[ConversationMessage])
 fn cdp_catalog_specs_for_flavor(
     _prompt_flavor: CdpPromptFlavor,
     _catalog_flavor: CdpCatalogFlavor,
-) -> Vec<Value> {
-    let mut specs = tools::tool_specs_for_surface(tools::ToolSurface::Standard);
-    specs.sort_by(|a, b| {
-        cdp_catalog_sort_key(a.name)
-            .cmp(&cdp_catalog_sort_key(b.name))
-            .then_with(|| a.name.cmp(b.name))
-    });
-    specs.into_iter()
-        .map(|spec| {
-            json!({
-                "name": spec.name,
-                "primary_use": cdp_tool_primary_use(spec.name, spec.description),
-                "required_args": cdp_required_args(&spec.input_schema),
-                "important_optional_args": cdp_tool_important_optional_args(spec.name, &spec.input_schema),
-            })
-        })
-        .collect()
+) -> Vec<tools::CdpPromptToolSpec> {
+    tools::cdp_prompt_tool_specs()
+}
+
+fn format_cdp_tool_arg_list(items: &[String]) -> String {
+    if items.is_empty() {
+        "none".to_string()
+    } else {
+        items.join(", ")
+    }
+}
+
+fn render_cdp_tool_entry(spec: &tools::CdpPromptToolSpec) -> String {
+    let example = serde_json::to_string_pretty(&spec.example).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        concat!(
+            "### `{name}`\n",
+            "purpose: {purpose}\n",
+            "use_when: {use_when}\n",
+            "avoid_when: {avoid_when}\n",
+            "required_args: {required_args}\n",
+            "important_optional_args: {important_optional_args}\n",
+            "example:\n",
+            "```json\n",
+            "{example}\n",
+            "```"
+        ),
+        name = spec.name,
+        purpose = spec.purpose,
+        use_when = spec.use_when,
+        avoid_when = spec.avoid_when,
+        required_args = format_cdp_tool_arg_list(&spec.required_args),
+        important_optional_args = format_cdp_tool_arg_list(&spec.important_optional_args),
+        example = example,
+    )
 }
 
 fn compact_standard_cdp_system_prompt(system_prompt: &[String]) -> String {
@@ -2513,6 +2644,14 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 
 "#;
 
+const CDP_TOOL_RESULT_CONTINUATION_REMINDER: &str = r#"## Continue from tool results
+
+- Tool results in this bundle are authoritative evidence. Continue the task from them immediately.
+- Do not restate the plan, repeat the same prose, or promise to do the real work in a later message.
+- Ask the user a question only if the tool results leave a genuine blocker that local inspection cannot resolve.
+- If the current turn can already take the next tool step, emit that tool call now instead of saying "next message" or "next turn".
+"#;
+
 /// Serialize built-in tool specs for the Copilot text prompt.
 fn cdp_tool_catalog_section_for_flavor(
     prompt_flavor: CdpPromptFlavor,
@@ -2520,7 +2659,6 @@ fn cdp_tool_catalog_section_for_flavor(
     messages: &[ConversationMessage],
 ) -> String {
     let catalog = cdp_catalog_specs_for_flavor(prompt_flavor, catalog_flavor);
-    let json_pretty = serde_json::to_string_pretty(&catalog).unwrap_or_else(|_| "[]".to_string());
     match catalog_flavor {
         CdpCatalogFlavor::StandardFull => {
             let win_addon = if should_include_windows_office_catalog_addon(messages) {
@@ -2528,13 +2666,24 @@ fn cdp_tool_catalog_section_for_flavor(
             } else {
                 ""
             };
+            let rendered_tools = catalog
+                .iter()
+                .map(render_cdp_tool_entry)
+                .collect::<Vec<_>>()
+                .join("\n\n");
             format!(
                 r#"{CDP_RELAY_RUNTIME_CATALOG_LEAD}## Relay Agent tools
 
-The JSON array below lists every tool available in this Relay session. Each entry includes the tool `name`, a compact `primary_use`, its `required_args`, and the most relevant `important_optional_args`.
-```json
-{json_pretty}
-```
+Only the tools documented below are intentionally advertised to Copilot for this CDP turn. Do not switch to hidden tools such as `Agent` or `ToolSearch` unless a future Relay prompt explicitly advertises them.
+
+## Preferred sequences
+
+- named existing file inspect/edit/review => `read_file` then `edit_file`
+- named new file create => `write_file`
+- codebase search/investigation => `glob_search` / `grep_search` before `bash`
+- concrete path + concrete action already present => call the tool now, not a plan or checklist
+
+{rendered_tools}
 
 ## Tool invocation protocol
 
@@ -2558,7 +2707,7 @@ Example:
 {{"name":"read_file","relay_tool_call":true,"input":{{"path":"README.md"}}}}
 ```
 "#,
-                json_pretty = json_pretty,
+                rendered_tools = rendered_tools,
                 win_addon = win_addon,
             )
         }
@@ -3065,6 +3214,46 @@ fn parse_fallback_value(
     }
 }
 
+fn canonicalize_json_fence_tool_payload(
+    value: &Value,
+    whitelist: &HashSet<String>,
+) -> Option<Value> {
+    match value {
+        Value::Array(items) => {
+            let normalized = items
+                .iter()
+                .map(|item| canonicalize_json_fence_tool_payload(item, whitelist))
+                .collect::<Option<Vec<_>>>()?;
+            Some(Value::Array(normalized))
+        }
+        Value::Object(obj) => {
+            let name = obj.get("name").and_then(Value::as_str)?;
+            if !whitelist.contains(name) {
+                return None;
+            }
+            if !obj.get("input").is_none_or(Value::is_object) {
+                return None;
+            }
+            let mut normalized = obj.clone();
+            normalized.insert(FALLBACK_TOOL_SENTINEL_KEY.to_string(), Value::Bool(true));
+            let value = Value::Object(normalized);
+            parse_one_tool_call(&value)?;
+            Some(value)
+        }
+        _ => None,
+    }
+}
+
+fn cdp_json_fence_whitelist() -> HashSet<String> {
+    tools::cdp_tool_specs_for_visibility(tools::CdpToolVisibility::Core)
+        .into_iter()
+        .chain(tools::cdp_tool_specs_for_visibility(
+            tools::CdpToolVisibility::Conditional,
+        ))
+        .map(|spec| spec.name.to_string())
+        .collect()
+}
+
 /// After ` ``` `, find end of inner content (index in `body` before the closing fence).
 fn find_generic_markdown_fence_inner_end(body: &str) -> Option<usize> {
     if let Some(i) = body.find("\n```") {
@@ -3163,6 +3352,7 @@ fn extract_fallback_markdown_fences(
     whitelist: &HashSet<String>,
 ) -> (String, Vec<String>) {
     const OPEN: &str = "```";
+    let json_fence_whitelist = cdp_json_fence_whitelist();
     let mut display = String::new();
     let mut payloads = Vec::new();
     let mut rest = text;
@@ -3224,7 +3414,24 @@ fn extract_fallback_markdown_fences(
         }
 
         if !inner.is_empty() {
-            if serde_json::from_str::<Value>(inner).is_ok() {
+            if info.eq_ignore_ascii_case("json") {
+                if let Ok(value) = serde_json::from_str::<Value>(inner) {
+                    if let Some(normalized) =
+                        canonicalize_json_fence_tool_payload(&value, &json_fence_whitelist)
+                    {
+                        payloads.push(
+                            serde_json::to_string(&normalized)
+                                .unwrap_or_else(|_| inner.to_string()),
+                        );
+                    } else {
+                        payloads.push(inner.to_string());
+                    }
+                } else if inner.contains(FALLBACK_TOOL_SENTINEL_KEY) {
+                    for (_, _, p) in extract_mvp_tool_object_spans(inner, whitelist) {
+                        payloads.push(p);
+                    }
+                }
+            } else if serde_json::from_str::<Value>(inner).is_ok() {
                 payloads.push(inner.to_string());
             } else {
                 for (_, _, p) in extract_mvp_tool_object_spans(inner, whitelist) {
@@ -3598,6 +3805,9 @@ fn build_cdp_prompt_bundle_from_messages(
     }
     if !message_text.is_empty() {
         parts.push(message_text.clone());
+    }
+    if message_breakdown.3 > 0 {
+        parts.push(CDP_TOOL_RESULT_CONTINUATION_REMINDER.to_string());
     }
     parts.push(catalog_text.clone());
     CdpPromptBundle {
@@ -5123,9 +5333,13 @@ mod cdp_copilot_tool_tests {
         let s = cdp_tool_catalog_section();
         assert!(s.contains("read_file"));
         assert!(s.contains("relay_tool"));
-        assert!(s.contains("primary_use"));
+        assert!(s.contains("purpose:"));
+        assert!(s.contains("use_when:"));
+        assert!(s.contains("avoid_when:"));
         assert!(s.contains("required_args"));
         assert!(s.contains("important_optional_args"));
+        assert!(s.contains("Preferred sequences"));
+        assert!(!s.contains("### `Agent`"));
         assert!(s.contains("CDP session: you are Relay Agent"));
         assert!(s.contains("Relay host execution"));
         assert!(s.contains("wrong for this session"));
@@ -5170,10 +5384,11 @@ mod cdp_copilot_tool_tests {
         assert!(bundle.message_text.contains("Tool protocol repair."));
         assert!(!bundle.message_text.contains("I will use Python"));
         assert!(!bundle.system_text.contains("# Project context"));
-        assert!(bundle.catalog_text.contains("\"name\": \"write_file\""));
-        assert!(bundle.catalog_text.contains("\"name\": \"bash\""));
-        assert!(bundle.catalog_text.contains("\"name\": \"WebFetch\""));
-        assert!(bundle.catalog_text.contains("\"primary_use\""));
+        assert!(bundle.catalog_text.contains("### `write_file`"));
+        assert!(bundle.catalog_text.contains("### `bash`"));
+        assert!(bundle.catalog_text.contains("### `WebFetch`"));
+        assert!(bundle.catalog_text.contains("purpose:"));
+        assert!(!bundle.catalog_text.contains("### `Agent`"));
     }
 
     #[test]
@@ -5190,10 +5405,14 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("grep_search"));
         assert!(s.contains("pdf_merge"));
         assert!(s.contains("pdf_split"));
-        assert!(s.contains("\"name\": \"bash\""));
-        assert!(s.contains("\"name\": \"WebFetch\""));
-        assert!(s.contains("\"name\": \"WebSearch\""));
-        assert!(s.contains("\"primary_use\": \"Read local text or PDF content.\""));
+        assert!(s.contains("### `bash`"));
+        assert!(s.contains("### `WebFetch`"));
+        assert!(s.contains("### `WebSearch`"));
+        assert!(s.contains("purpose: Read local text or PDF content as grounded evidence."));
+        assert!(s.contains(
+            "use_when: Use for grounded inspection, PDF reading, or before editing an existing file."
+        ));
+        assert!(!s.contains("### `Agent`"));
         assert!(s.contains("Relay Agent tools"));
     }
 
@@ -5274,9 +5493,9 @@ mod cdp_copilot_tool_tests {
             CdpCatalogFlavor::StandardFull,
             &[],
         );
-        let read_index = s.find("\"name\": \"read_file\"").expect("read_file");
-        let write_index = s.find("\"name\": \"write_file\"").expect("write_file");
-        let bash_index = s.find("\"name\": \"bash\"").expect("bash");
+        let read_index = s.find("### `read_file`").expect("read_file");
+        let write_index = s.find("### `write_file`").expect("write_file");
+        let bash_index = s.find("### `bash`").expect("bash");
         assert!(read_index < bash_index);
         assert!(write_index < bash_index);
     }
@@ -5457,9 +5676,9 @@ mod cdp_copilot_tool_tests {
             CdpCatalogFlavor::StandardFull,
         );
 
-        assert!(bundle.catalog_text.contains("\"name\": \"pdf_merge\""));
-        assert!(bundle.catalog_text.contains("\"name\": \"pdf_split\""));
-        assert!(bundle.catalog_text.contains("\"name\": \"bash\""));
+        assert!(bundle.catalog_text.contains("### `pdf_merge`"));
+        assert!(bundle.catalog_text.contains("### `pdf_split`"));
+        assert!(bundle.catalog_text.contains("### `bash`"));
     }
 
     /// Fixture must not contain strings that models often hallucinate as "bugs" (see docs/AGENT_EVALUATION_CRITERIA.md).
@@ -5544,6 +5763,36 @@ mod cdp_copilot_tool_tests {
                 && !out.contains(r#"lang=\"ja\""#),
             "expected read_file narrative and fixture script in bundle"
         );
+    }
+
+    #[test]
+    fn build_cdp_prompt_adds_tool_result_continuation_reminder() {
+        let messages = vec![ConversationMessage::tool_result(
+            "tu1",
+            "read_file",
+            serde_json::to_string(&json!({
+                "type": "text",
+                "file": {
+                    "filePath": "/tmp/demo.txt",
+                    "content": "hello",
+                    "numLines": 1,
+                    "startLine": 1,
+                    "totalLines": 1
+                }
+            }))
+            .expect("serialize read_file output"),
+            false,
+        )];
+        let bundle = build_cdp_prompt_bundle_from_messages(
+            &[],
+            &messages,
+            CdpPromptFlavor::Standard,
+            CdpCatalogFlavor::StandardFull,
+        );
+        assert!(bundle.prompt.contains("## Continue from tool results"));
+        assert!(bundle
+            .prompt
+            .contains("instead of saying \"next message\" or \"next turn\""));
     }
 
     #[test]
@@ -5674,6 +5923,17 @@ mod cdp_copilot_tool_tests {
         assert!(tools[0].2.contains("テトリス.html"));
         assert!(!vis.contains("read_file"));
         assert!(!vis.contains("```json"));
+    }
+
+    #[test]
+    fn fallback_json_fence_without_sentinel_is_recovered_when_whitelisted() {
+        let raw = r#"```json
+{"name":"read_file","input":{"path":"README.md"}}
+```"#;
+        let (_vis, tools) = parse_initial(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "read_file");
+        assert_eq!(tools[0].2, r#"{"path":"README.md"}"#);
     }
 
     #[test]
@@ -5863,23 +6123,9 @@ post"#;
     }
 
     #[test]
-    fn fallback_observe_mode_accepts_missing_sentinel() {
-        let _guard = env_lock();
-        std::env::set_var("RELAY_FALLBACK_SENTINEL_POLICY", "observe");
+    fn mixed_prose_json_fence_without_sentinel_is_rejected() {
         let raw = r#"```json
-{"name":"read_file","input":{"path":"README.md"}}
-```"#;
-        let (_vis, tools) = parse_initial(raw);
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "read_file");
-        std::env::remove_var("RELAY_FALLBACK_SENTINEL_POLICY");
-    }
-
-    #[test]
-    fn fallback_default_mode_rejects_missing_sentinel() {
-        let _guard = env_lock();
-        std::env::remove_var("RELAY_FALLBACK_SENTINEL_POLICY");
-        let raw = r#"```json
+I will inspect the file.
 {"name":"read_file","input":{"path":"README.md"}}
 ```"#;
         let (_vis, tools) = parse_initial(raw);
@@ -5887,15 +6133,12 @@ post"#;
     }
 
     #[test]
-    fn fallback_enforce_mode_rejects_missing_sentinel() {
-        let _guard = env_lock();
-        std::env::set_var("RELAY_FALLBACK_SENTINEL_POLICY", "enforce");
-        let raw = r#"```json
-{"name":"read_file","input":{"path":"README.md"}}
-```"#;
-        let (_vis, tools) = parse_initial(raw);
+    fn unfenced_json_without_sentinel_is_rejected_even_on_retry() {
+        let raw = r#"了解。
+
+{"name":"read_file","input":{"path":"README.md"}}"#;
+        let (_vis, tools) = parse_retry(raw);
         assert!(tools.is_empty());
-        std::env::remove_var("RELAY_FALLBACK_SENTINEL_POLICY");
     }
 
     #[test]
@@ -6479,6 +6722,36 @@ mod loop_controller_tests {
         };
         assert!(next_input.contains("Tool protocol repair."));
         assert!(next_input.contains("Create ./tetris.html"));
+        assert!(next_input.contains(r#""name": "write_file""#));
+        assert!(next_input.contains(r#""path": "./tetris.html""#));
+    }
+
+    #[test]
+    fn existing_file_tool_drift_escalates_to_targeted_read_file_repair() {
+        let s = summary(
+            "I will use Pages and Python next, then include citations.",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let decision = decide_loop_after_success(
+            "Review src/main.rs",
+            "Inspect src/main.rs and fix the import ordering.",
+            0,
+            0,
+            2,
+            false,
+            &s,
+        );
+        let LoopDecision::Continue {
+            next_input,
+            kind: LoopContinueKind::MetaNudge,
+        } = decision
+        else {
+            panic!("expected targeted read_file repair");
+        };
+        assert!(next_input.contains(r#""name": "read_file""#));
+        assert!(next_input.contains(r#""path": "src/main.rs""#));
+        assert!(next_input.contains("Inspect src/main.rs and fix the import ordering."));
     }
 
     #[test]
@@ -6804,6 +7077,9 @@ mod loop_controller_tests {
             "I'll use write_file to create the file. Adjusting tool use... ```"
         ));
         assert!(is_tool_protocol_confusion_text(
+            "I need to switch to the Agent tool and Pages before I can continue."
+        ));
+        assert!(is_tool_protocol_confusion_text(
             "Sorry, it looks like I can’t respond to this. Let’s try a different topic New chat"
         ));
         assert!(!is_tool_protocol_confusion_text(
@@ -6879,6 +7155,8 @@ mod loop_controller_tests {
             panic!("expected false completion to escalate to repair");
         };
         assert!(next_input.contains("Tool protocol repair."));
+        assert!(next_input.contains(r#""name": "write_file""#));
+        assert!(next_input.contains("repair_small_case.txt"));
     }
 
     #[test]
@@ -6905,6 +7183,8 @@ mod loop_controller_tests {
             panic!("expected plain file body completion to escalate to repair");
         };
         assert!(next_input.contains("Tool protocol repair."));
+        assert!(next_input.contains(r#""name": "write_file""#));
+        assert!(next_input.contains(r#""path": "./tetris.html""#));
     }
 
     #[test]
@@ -7197,8 +7477,8 @@ mod loop_controller_tests {
         assert_eq!(bundle.tool_result_chars(), 0);
         assert_eq!(bundle.tool_result_count(), 0);
         assert!(bundle.catalog_chars() > 0);
-        assert!(bundle.catalog_text.contains("\"name\": \"write_file\""));
-        assert!(bundle.catalog_text.contains("\"name\": \"bash\""));
+        assert!(bundle.catalog_text.contains("### `write_file`"));
+        assert!(bundle.catalog_text.contains("### `bash`"));
     }
 
     #[test]

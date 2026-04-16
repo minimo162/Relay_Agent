@@ -75,12 +75,20 @@ pub enum ToolSurface {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CdpToolVisibility {
+    Core,
+    Conditional,
+    Hidden,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolMetadata {
     pub approval_title: Option<&'static str>,
     pub target_extractor: ApprovalTargetExtractor,
     pub risky_fields: &'static [&'static str],
     pub redaction_rules: &'static [RedactionRule],
     pub tool_search_visible: bool,
+    pub cdp_visibility: CdpToolVisibility,
 }
 
 const DEFAULT_TOOL_METADATA: ToolMetadata = ToolMetadata {
@@ -89,7 +97,19 @@ const DEFAULT_TOOL_METADATA: ToolMetadata = ToolMetadata {
     risky_fields: &[],
     redaction_rules: &[],
     tool_search_visible: true,
+    cdp_visibility: CdpToolVisibility::Hidden,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CdpPromptToolSpec {
+    pub name: &'static str,
+    pub purpose: &'static str,
+    pub use_when: &'static str,
+    pub avoid_when: &'static str,
+    pub required_args: Vec<String>,
+    pub important_optional_args: Vec<String>,
+    pub example: Value,
+}
 
 #[must_use]
 pub fn tool_metadata(name: &str) -> ToolMetadata {
@@ -97,10 +117,12 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
         "read_file" => ToolMetadata {
             target_extractor: ApprovalTargetExtractor::PathLike,
             tool_search_visible: false,
+            cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
         "glob_search" | "grep_search" => ToolMetadata {
             tool_search_visible: false,
+            cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
         "write_file" => ToolMetadata {
@@ -108,6 +130,7 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
             target_extractor: ApprovalTargetExtractor::PathLike,
             risky_fields: &["path"],
             tool_search_visible: false,
+            cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
         "edit_file" => ToolMetadata {
@@ -115,52 +138,70 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
             target_extractor: ApprovalTargetExtractor::PathLike,
             risky_fields: &["path", "replace_all"],
             tool_search_visible: false,
+            cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
         "pdf_merge" | "pdf_split" => ToolMetadata {
             target_extractor: ApprovalTargetExtractor::PathLike,
             tool_search_visible: false,
+            cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
         "WebFetch" => ToolMetadata {
             target_extractor: ApprovalTargetExtractor::UrlLike,
+            cdp_visibility: CdpToolVisibility::Core,
+            ..DEFAULT_TOOL_METADATA
+        },
+        "WebSearch" => ToolMetadata {
+            cdp_visibility: CdpToolVisibility::Core,
+            ..DEFAULT_TOOL_METADATA
+        },
+        "TodoWrite" | "Skill" | "AskUserQuestion" | "LSP" | "NotebookEdit" => ToolMetadata {
+            cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
         "bash" => ToolMetadata {
             approval_title: Some("Run a shell command?"),
             risky_fields: &["command", "run_in_background"],
             tool_search_visible: false,
+            cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
         "PowerShell" => ToolMetadata {
             risky_fields: &["command", "run_in_background"],
+            cdp_visibility: CdpToolVisibility::Conditional,
             ..DEFAULT_TOOL_METADATA
         },
         "CliRun" => ToolMetadata {
             approval_title: Some("Run an external CLI command?"),
             target_extractor: ApprovalTargetExtractor::CliRun,
             risky_fields: &["cli", "args", "timeout_ms"],
+            cdp_visibility: CdpToolVisibility::Hidden,
             ..DEFAULT_TOOL_METADATA
         },
         "ElectronLaunch" => ToolMetadata {
             approval_title: Some("Launch and control an Electron app?"),
             target_extractor: ApprovalTargetExtractor::ElectronApp,
+            cdp_visibility: CdpToolVisibility::Hidden,
             ..DEFAULT_TOOL_METADATA
         },
         "ElectronEval" => ToolMetadata {
             approval_title: Some("Execute JavaScript in an Electron app?"),
             target_extractor: ApprovalTargetExtractor::ElectronApp,
             risky_fields: &["app", "cdp_port", "expression"],
+            cdp_visibility: CdpToolVisibility::Hidden,
             ..DEFAULT_TOOL_METADATA
         },
         "ElectronGetText" => ToolMetadata {
             target_extractor: ApprovalTargetExtractor::ElectronApp,
+            cdp_visibility: CdpToolVisibility::Hidden,
             ..DEFAULT_TOOL_METADATA
         },
         "ElectronClick" => ToolMetadata {
             approval_title: Some("Click an element in an Electron app?"),
             target_extractor: ApprovalTargetExtractor::ElectronApp,
             risky_fields: &["app", "selector"],
+            cdp_visibility: CdpToolVisibility::Hidden,
             ..DEFAULT_TOOL_METADATA
         },
         "ElectronTypeText" => ToolMetadata {
@@ -168,6 +209,7 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
             target_extractor: ApprovalTargetExtractor::ElectronApp,
             risky_fields: &["app", "selector", "text"],
             redaction_rules: &[RedactionRule { field: "text" }],
+            cdp_visibility: CdpToolVisibility::Hidden,
             ..DEFAULT_TOOL_METADATA
         },
         "MCP" => ToolMetadata {
@@ -175,6 +217,36 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
             target_extractor: ApprovalTargetExtractor::McpQualifiedTool,
             risky_fields: &["name", "arguments", "server", "serverName"],
             redaction_rules: &[RedactionRule { field: "arguments" }],
+            cdp_visibility: CdpToolVisibility::Core,
+            ..DEFAULT_TOOL_METADATA
+        },
+        "git_status" | "git_diff" => ToolMetadata {
+            cdp_visibility: CdpToolVisibility::Core,
+            ..DEFAULT_TOOL_METADATA
+        },
+        "Agent"
+        | "ToolSearch"
+        | "TaskCreate"
+        | "TaskGet"
+        | "TaskList"
+        | "TaskStop"
+        | "TaskUpdate"
+        | "TaskOutput"
+        | "BackgroundTaskOutput"
+        | "SendUserMessage"
+        | "Sleep"
+        | "Config"
+        | "CliList"
+        | "CliDiscover"
+        | "CliRegister"
+        | "CliUnregister"
+        | "ElectronApps"
+        | "StructuredOutput"
+        | "REPL"
+        | "ListMcpResources"
+        | "ReadMcpResource"
+        | "McpAuth" => ToolMetadata {
+            cdp_visibility: CdpToolVisibility::Hidden,
             ..DEFAULT_TOOL_METADATA
         },
         _ => DEFAULT_TOOL_METADATA,
@@ -276,6 +348,253 @@ pub fn tool_specs_for_surface(surface: ToolSurface) -> Vec<ToolSpec> {
     tool_catalog()
         .specs()
         .to_vec()
+}
+
+#[must_use]
+pub fn cdp_tool_visibility(name: &str) -> CdpToolVisibility {
+    tool_metadata(name).cdp_visibility
+}
+
+#[must_use]
+pub fn cdp_tool_specs_for_visibility(visibility: CdpToolVisibility) -> Vec<ToolSpec> {
+    let mut specs = tool_catalog()
+        .specs()
+        .iter()
+        .filter(|spec| cdp_tool_visibility(spec.name) == visibility)
+        .cloned()
+        .collect::<Vec<_>>();
+    specs.sort_by(|a, b| {
+        cdp_catalog_sort_key(a.name)
+            .cmp(&cdp_catalog_sort_key(b.name))
+            .then_with(|| a.name.cmp(b.name))
+    });
+    specs
+}
+
+fn cdp_catalog_sort_key(name: &str) -> usize {
+    match name {
+        "read_file" => 0,
+        "write_file" => 1,
+        "edit_file" => 2,
+        "glob_search" => 3,
+        "grep_search" => 4,
+        "git_status" => 5,
+        "git_diff" => 6,
+        "pdf_merge" => 10,
+        "pdf_split" => 11,
+        "WebFetch" => 20,
+        "WebSearch" => 21,
+        "MCP" => 33,
+        "AskUserQuestion" => 40,
+        "TodoWrite" => 41,
+        "Skill" => 50,
+        "LSP" => 52,
+        "NotebookEdit" => 53,
+        "bash" => 90,
+        "PowerShell" => 91,
+        _ => 1_000,
+    }
+}
+
+fn cdp_required_args(schema: &Value) -> Vec<String> {
+    let direct_required = |value: &Value| {
+        value
+            .get("required")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+
+    if let Some(any_of) = schema.get("anyOf").and_then(Value::as_array) {
+        let variants = any_of
+            .iter()
+            .map(direct_required)
+            .filter(|items| !items.is_empty())
+            .map(|items| items.join(" + "))
+            .collect::<Vec<_>>();
+        if !variants.is_empty() {
+            return vec![variants.join(" or ")];
+        }
+    }
+
+    direct_required(schema)
+}
+
+fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
+    let curated = match name {
+        "read_file" => vec!["offset", "limit", "pages"],
+        "glob_search" => vec!["path"],
+        "grep_search" => vec!["path", "glob", "context"],
+        "git_status" => vec!["path"],
+        "git_diff" => vec!["path", "staged"],
+        "WebSearch" => vec!["allowed_domains", "blocked_domains"],
+        "WebFetch" => vec!["prompt"],
+        "edit_file" => vec!["replace_all"],
+        "bash" => vec!["timeout", "description", "run_in_background"],
+        "PowerShell" => vec!["timeout", "description", "run_in_background"],
+        "MCP" => vec!["server", "name", "arguments"],
+        "AskUserQuestion" => vec!["options"],
+        _ => Vec::new(),
+    };
+    if !curated.is_empty() {
+        return curated.into_iter().map(ToString::to_string).collect();
+    }
+
+    let required = cdp_required_args(schema);
+    let required_set = required
+        .iter()
+        .flat_map(|item| item.split(" or "))
+        .collect::<BTreeSet<_>>();
+    let mut optional = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .map(|properties| {
+            properties
+                .keys()
+                .filter(|key| !required_set.contains(key.as_str()))
+                .filter(|key| {
+                    !matches!(
+                        key.as_str(),
+                        "dangerously_disable_sandbox"
+                            | "dangerouslyDisableSandbox"
+                            | "backgroundedBy"
+                            | "namespaceRestrictions"
+                            | "isolateNetwork"
+                            | "allowedMounts"
+                            | "serverName"
+                            | "task_id"
+                            | "file_path"
+                    )
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    optional.sort();
+    optional.truncate(3);
+    optional
+}
+
+fn cdp_tool_example(name: &str) -> Value {
+    match name {
+        "read_file" => json!({"name":"read_file","relay_tool_call":true,"input":{"path":"src/main.rs"}}),
+        "write_file" => json!({"name":"write_file","relay_tool_call":true,"input":{"path":"notes.txt","content":"hello\n"}}),
+        "edit_file" => json!({"name":"edit_file","relay_tool_call":true,"input":{"path":"src/main.rs","old_string":"foo","new_string":"bar"}}),
+        "glob_search" => json!({"name":"glob_search","relay_tool_call":true,"input":{"pattern":"src/**/*.rs"}}),
+        "grep_search" => json!({"name":"grep_search","relay_tool_call":true,"input":{"pattern":"TODO","path":"src"}}),
+        "git_status" => json!({"name":"git_status","relay_tool_call":true,"input":{"path":"."}}),
+        "git_diff" => json!({"name":"git_diff","relay_tool_call":true,"input":{"path":".","staged":true}}),
+        "pdf_merge" => json!({"name":"pdf_merge","relay_tool_call":true,"input":{"output_path":"merged.pdf","input_paths":["a.pdf","b.pdf"]}}),
+        "pdf_split" => json!({"name":"pdf_split","relay_tool_call":true,"input":{"input_path":"report.pdf","segments":[{"output_path":"report-part1.pdf","pages":"1-3"}]}}),
+        "WebFetch" => json!({"name":"WebFetch","relay_tool_call":true,"input":{"url":"https://example.com","prompt":"Summarize the API surface."}}),
+        "WebSearch" => json!({"name":"WebSearch","relay_tool_call":true,"input":{"query":"rust tauri latest stable release"}}),
+        "MCP" => json!({"name":"MCP","relay_tool_call":true,"input":{"action":"call_tool","name":"mcp__server__tool","arguments":{}}}),
+        "AskUserQuestion" => json!({"name":"AskUserQuestion","relay_tool_call":true,"input":{"question":"Which config file should I update?","options":["package.json","Cargo.toml"]}}),
+        "TodoWrite" => json!({"name":"TodoWrite","relay_tool_call":true,"input":{"todos":[{"content":"Implement parser change","activeForm":"Implementing parser change","status":"in_progress"}]}}),
+        "Skill" => json!({"name":"Skill","relay_tool_call":true,"input":{"skill":"openai-docs"}}),
+        "LSP" => json!({"name":"LSP","relay_tool_call":true,"input":{"action":"diagnostics","path":"src/main.rs"}}),
+        "NotebookEdit" => json!({"name":"NotebookEdit","relay_tool_call":true,"input":{"notebook_path":"analysis.ipynb","edit_mode":"replace","index":0,"new_source":"print('ok')","cell_type":"code"}}),
+        "bash" => json!({"name":"bash","relay_tool_call":true,"input":{"command":"cargo test","description":"Run the targeted test suite"}}),
+        "PowerShell" => json!({"name":"PowerShell","relay_tool_call":true,"input":{"command":"Get-ChildItem","description":"Inspect the target directory"}}),
+        _ => json!({"name":name,"relay_tool_call":true,"input":{}}),
+    }
+}
+
+fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
+    match name {
+        "read_file" => "Read local text or PDF content as grounded evidence.",
+        "write_file" => "Create or overwrite a workspace text file when the final content is known.",
+        "edit_file" => "Apply a targeted replacement inside an existing workspace file.",
+        "glob_search" => "Find candidate files by path pattern before reading or editing.",
+        "grep_search" => "Search code or text content for concrete strings or regex matches.",
+        "git_status" => "Inspect working tree changes without invoking a shell.",
+        "git_diff" => "Inspect staged or unstaged diffs without invoking a shell.",
+        "pdf_merge" => "Merge existing PDF files inside the workspace.",
+        "pdf_split" => "Split one workspace PDF into multiple files.",
+        "WebFetch" => "Read one known URL and answer from its contents.",
+        "WebSearch" => "Look up current external information on the web.",
+        "MCP" => "Call a connected MCP integration tool.",
+        "AskUserQuestion" => "Ask the user for a required decision when local evidence is insufficient.",
+        "TodoWrite" => "Track a multi-step task in the session todo list.",
+        "Skill" => "Load a local skill with specialized instructions.",
+        "LSP" => "Request supported language-server diagnostics.",
+        "NotebookEdit" => "Replace, insert, or delete a notebook cell.",
+        "bash" => "Run a sandboxed shell command only when file or built-in tools do not apply.",
+        "PowerShell" => "Run Windows PowerShell automation when the Windows-only path is required.",
+        _ => description,
+    }
+}
+
+fn cdp_tool_use_when(name: &str) -> &'static str {
+    match name {
+        "read_file" => "Use for grounded inspection, PDF reading, or before editing an existing file.",
+        "write_file" => "Use when creating a new target file or replacing a file with fully known content.",
+        "edit_file" => "Use after reading the file when you need a targeted text replacement.",
+        "glob_search" => "Use to discover likely file paths before reading them.",
+        "grep_search" => "Use to find identifiers, strings, or patterns in the codebase before reading or editing.",
+        "git_status" => "Use for a quick change overview when the task depends on current git state.",
+        "git_diff" => "Use when you need to inspect exact code changes already present in the workspace.",
+        "pdf_merge" => "Use when the user explicitly wants to combine PDF files in the workspace.",
+        "pdf_split" => "Use when the user explicitly wants pages extracted into separate PDF files.",
+        "WebFetch" => "Use when the user or local files already gave you a specific URL to inspect.",
+        "WebSearch" => "Use when the answer depends on current external information that is not in the workspace.",
+        "MCP" => "Use when a connected integration tool is clearly the right execution path.",
+        "AskUserQuestion" => "Use only when essential ambiguity remains after local inspection.",
+        "TodoWrite" => "Use to keep a real multi-step implementation organized while you keep taking action.",
+        "Skill" => "Use when the task matches a known local skill and its instructions will materially help.",
+        "LSP" => "Use when supported diagnostics are relevant to the current file.",
+        "NotebookEdit" => "Use when the target is a `.ipynb` cell rather than a plain text file.",
+        "bash" => "Use for commands like tests, builds, or git inspection when a file tool does not apply.",
+        "PowerShell" => "Use on Windows for Office COM automation or Windows-specific scripting.",
+        _ => "Use when the user's request clearly requires this tool.",
+    }
+}
+
+fn cdp_tool_avoid_when(name: &str) -> &'static str {
+    match name {
+        "read_file" => "Avoid using bash or PowerShell for file reads when `read_file` applies.",
+        "write_file" => "Avoid for incremental edits to an existing file; prefer `edit_file` after `read_file`.",
+        "edit_file" => "Avoid when the file does not exist or when replacing the full file would be simpler.",
+        "glob_search" => "Avoid when the exact file path is already known.",
+        "grep_search" => "Avoid when the exact file path is already known and a direct `read_file` is enough.",
+        "git_status" => "Avoid when the task is pure file reading or editing with no git-state dependency.",
+        "git_diff" => "Avoid when you only need the current file contents rather than a diff.",
+        "pdf_merge" => "Avoid using bash for PDF merge when this dedicated tool applies.",
+        "pdf_split" => "Avoid using bash for PDF split when this dedicated tool applies.",
+        "WebFetch" => "Avoid for vague discovery tasks; use `WebSearch` if you do not already have a URL.",
+        "WebSearch" => "Avoid when the workspace or a known URL already contains the needed answer.",
+        "MCP" => "Avoid inventing integration calls when a local workspace tool already solves the task.",
+        "AskUserQuestion" => "Avoid asking the user to restate a task that is already concrete in the latest turn.",
+        "TodoWrite" => "Avoid using it as a substitute for taking the next concrete action.",
+        "Skill" => "Avoid loading unrelated skills just because they exist.",
+        "LSP" => "Avoid unsupported actions or generic code inspection that normal file tools already cover.",
+        "NotebookEdit" => "Avoid for normal text files; use `read_file`, `write_file`, or `edit_file` instead.",
+        "bash" => "Avoid for local file I/O when `read_file`, `write_file`, `edit_file`, or PDF tools apply.",
+        "PowerShell" => "Avoid for non-Windows tasks or normal local file I/O that dedicated tools already cover.",
+        _ => "Avoid when a more specific Relay tool already fits the task.",
+    }
+}
+
+#[must_use]
+pub fn cdp_prompt_tool_specs() -> Vec<CdpPromptToolSpec> {
+    cdp_tool_specs_for_visibility(CdpToolVisibility::Core)
+        .into_iter()
+        .map(|spec| CdpPromptToolSpec {
+            name: spec.name,
+            purpose: cdp_tool_purpose(spec.name, spec.description),
+            use_when: cdp_tool_use_when(spec.name),
+            avoid_when: cdp_tool_avoid_when(spec.name),
+            required_args: cdp_required_args(&spec.input_schema),
+            important_optional_args: cdp_tool_important_optional_args(spec.name, &spec.input_schema),
+            example: cdp_tool_example(spec.name),
+        })
+        .collect()
 }
 
 #[must_use]
@@ -3792,22 +4111,32 @@ mod tests {
         assert_eq!(read.target_extractor, ApprovalTargetExtractor::PathLike);
         assert!(!read.tool_search_visible);
         assert_eq!(read.approval_title, None);
+        assert_eq!(read.cdp_visibility, CdpToolVisibility::Core);
 
         let write = tool_metadata("write_file");
         assert_eq!(write.approval_title, Some("Create or overwrite a file?"));
         assert_eq!(write.risky_fields, &["path"]);
         assert!(!write.tool_search_visible);
+        assert_eq!(write.cdp_visibility, CdpToolVisibility::Core);
 
         let bash = tool_metadata("bash");
         assert_eq!(bash.approval_title, Some("Run a shell command?"));
         assert_eq!(bash.risky_fields, &["command", "run_in_background"]);
         assert!(!bash.tool_search_visible);
+        assert_eq!(bash.cdp_visibility, CdpToolVisibility::Core);
 
         let mcp = tool_metadata("MCP");
         assert_eq!(mcp.approval_title, Some("Call a connected integration tool?"));
         assert_eq!(mcp.target_extractor, ApprovalTargetExtractor::McpQualifiedTool);
         assert_eq!(mcp.redaction_rules, &[super::RedactionRule { field: "arguments" }]);
         assert!(mcp.tool_search_visible);
+        assert_eq!(mcp.cdp_visibility, CdpToolVisibility::Core);
+
+        let agent = tool_metadata("Agent");
+        assert_eq!(agent.cdp_visibility, CdpToolVisibility::Hidden);
+
+        let powershell = tool_metadata("PowerShell");
+        assert_eq!(powershell.cdp_visibility, CdpToolVisibility::Conditional);
 
         let unknown = tool_metadata("nope");
         assert_eq!(unknown.approval_title, None);
@@ -3815,6 +4144,7 @@ mod tests {
         assert!(unknown.risky_fields.is_empty());
         assert!(unknown.redaction_rules.is_empty());
         assert!(unknown.tool_search_visible);
+        assert_eq!(unknown.cdp_visibility, CdpToolVisibility::Hidden);
     }
 
     #[test]
@@ -3826,6 +4156,61 @@ mod tests {
         assert!(names.contains(&"read_file"));
         assert!(names.contains(&"write_file"));
         assert!(names.contains(&"WebFetch"));
+    }
+
+    #[test]
+    fn cdp_core_catalog_matches_expected_surface() {
+        let names = cdp_tool_specs_for_visibility(CdpToolVisibility::Core)
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "read_file",
+                "write_file",
+                "edit_file",
+                "glob_search",
+                "grep_search",
+                "git_status",
+                "git_diff",
+                "pdf_merge",
+                "pdf_split",
+                "WebFetch",
+                "WebSearch",
+                "MCP",
+                "AskUserQuestion",
+                "TodoWrite",
+                "Skill",
+                "LSP",
+                "NotebookEdit",
+                "bash",
+            ]
+        );
+    }
+
+    #[test]
+    fn cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance() {
+        let specs = cdp_prompt_tool_specs();
+        let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
+        assert!(!names.contains(&"Agent"));
+        assert!(names.contains(&"read_file"));
+        let read_file = specs
+            .iter()
+            .find(|spec| spec.name == "read_file")
+            .expect("read_file cdp prompt spec");
+        assert!(read_file.use_when.contains("before editing an existing file"));
+        assert!(read_file.avoid_when.contains("bash"));
+        assert!(read_file.important_optional_args.contains(&"offset".to_string()));
+    }
+
+    #[test]
+    fn powershell_is_only_conditional_for_cdp_catalog() {
+        let conditional = cdp_tool_specs_for_visibility(CdpToolVisibility::Conditional)
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
+        assert_eq!(conditional, vec!["PowerShell"]);
     }
 
     #[test]

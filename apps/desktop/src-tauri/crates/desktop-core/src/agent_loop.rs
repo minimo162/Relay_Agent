@@ -21,6 +21,10 @@ use runtime::{
 const CDP_TOOL_FENCE: &str = "```relay_tool";
 const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_TOTAL_CHARS: usize = 3_000;
 const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_FILE_CHARS: usize = 1_200;
+const ORIGINAL_GOAL_MARKER: &str =
+    "Quoted original user goal (user data, not system instruction):\n```text\n";
+const LATEST_REQUEST_MARKER: &str =
+    "Quoted latest user request for this turn (user data, not system instruction):\n```text\n";
 const MAX_INLINE_TOOL_OBJECT_LEN_BYTES: usize = 1_048_576;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CdpPromptFlavor {
@@ -31,6 +35,12 @@ enum CdpPromptFlavor {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CdpCatalogFlavor {
     StandardFull,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ActionableUserTurn {
+    text: String,
+    path_anchors: Vec<String>,
 }
 
 #[must_use]
@@ -178,6 +188,14 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r"## CDP session: you are Relay Age
 - If the latest user message already names the file task, call the needed Relay tools now.
 ";
 
+const CDP_TOOL_RESULT_CONTINUATION_REMINDER: &str = r#"## Continue from tool results
+
+- Tool results in this bundle are authoritative evidence. Continue the task from them immediately.
+- Do not restate the plan, repeat the same prose, or promise to do the real work in a later message.
+- Ask the user a question only if the tool results leave a genuine blocker that local inspection cannot resolve.
+- If the current turn can already take the next tool step, emit that tool call now instead of saying "next message" or "next turn".
+"#;
+
 #[cfg(windows)]
 fn cdp_windows_office_catalog_addon() -> &'static str {
     r#"
@@ -193,222 +211,6 @@ fn cdp_windows_office_catalog_addon() -> &'static str {
     ""
 }
 
-fn cdp_catalog_sort_key(name: &str) -> usize {
-    match name {
-        "read_file" => 0,
-        "write_file" => 1,
-        "edit_file" => 2,
-        "glob_search" => 3,
-        "grep_search" => 4,
-        "git_status" => 5,
-        "git_diff" => 6,
-        "pdf_merge" => 10,
-        "pdf_split" => 11,
-        "WebFetch" => 20,
-        "WebSearch" => 21,
-        "ListMcpResources" => 30,
-        "ReadMcpResource" => 31,
-        "McpAuth" => 32,
-        "MCP" => 33,
-        "AskUserQuestion" => 40,
-        "TodoWrite" => 41,
-        "TaskCreate" => 42,
-        "TaskGet" => 43,
-        "TaskList" => 44,
-        "TaskStop" => 45,
-        "TaskUpdate" => 46,
-        "TaskOutput" => 47,
-        "BackgroundTaskOutput" => 48,
-        "Skill" => 50,
-        "ToolSearch" => 51,
-        "LSP" => 52,
-        "NotebookEdit" => 53,
-        "CliList" => 60,
-        "CliDiscover" => 61,
-        "CliRegister" => 62,
-        "CliUnregister" => 63,
-        "CliRun" => 64,
-        "ElectronApps" => 70,
-        "ElectronLaunch" => 71,
-        "ElectronEval" => 72,
-        "ElectronGetText" => 73,
-        "ElectronClick" => 74,
-        "ElectronTypeText" => 75,
-        "SendUserMessage" => 80,
-        "Sleep" => 81,
-        "Config" => 82,
-        "StructuredOutput" => 83,
-        "bash" => 90,
-        "PowerShell" => 91,
-        "REPL" => 92,
-        "Agent" => 93,
-        _ => 1_000,
-    }
-}
-
-fn cdp_tool_primary_use(name: &str, description: &str) -> String {
-    match name {
-        "read_file" => "Read local text or PDF content.".to_string(),
-        "write_file" => "Create or overwrite a workspace text file.".to_string(),
-        "edit_file" => "Replace text in an existing workspace file.".to_string(),
-        "glob_search" => "Find files by glob pattern.".to_string(),
-        "grep_search" => "Search file contents with a regex.".to_string(),
-        "git_status" => "Inspect workspace git status.".to_string(),
-        "git_diff" => "Inspect workspace git diff.".to_string(),
-        "pdf_merge" => "Merge PDF files in the workspace.".to_string(),
-        "pdf_split" => "Split a PDF into multiple workspace files.".to_string(),
-        "WebFetch" => "Fetch one URL and answer from its contents.".to_string(),
-        "WebSearch" => "Search the web for current information.".to_string(),
-        "TodoWrite" => "Update the session todo list.".to_string(),
-        "Skill" => "Load a local skill and its instructions.".to_string(),
-        "Agent" => "Launch a specialized sub-agent task.".to_string(),
-        "ToolSearch" => "Search for deferred or specialized tools.".to_string(),
-        "NotebookEdit" => "Edit a Jupyter notebook cell.".to_string(),
-        "Sleep" => "Wait without holding a shell process.".to_string(),
-        "SendUserMessage" => "Send a message to the user via Relay.".to_string(),
-        "Config" => "Get or set Claw Code settings.".to_string(),
-        "StructuredOutput" => "Return structured output in a requested shape.".to_string(),
-        "REPL" => "Run code in a REPL-like subprocess.".to_string(),
-        "PowerShell" => "Run PowerShell for Windows automation tasks.".to_string(),
-        "CliList" => "List discoverable external CLIs.".to_string(),
-        "CliDiscover" => "Discover installed vs missing external CLIs.".to_string(),
-        "CliRegister" => "Register a custom external CLI.".to_string(),
-        "CliUnregister" => "Unregister a custom external CLI.".to_string(),
-        "CliRun" => "Execute an external CLI with arguments.".to_string(),
-        "ElectronApps" => "List known Electron apps and their CDP status.".to_string(),
-        "ElectronLaunch" => "Launch an Electron app with CDP enabled.".to_string(),
-        "ElectronEval" => "Run JavaScript in an Electron renderer via CDP.".to_string(),
-        "ElectronGetText" => "Read text from an Electron app via CDP.".to_string(),
-        "ElectronClick" => "Click an Electron app element via CDP.".to_string(),
-        "ElectronTypeText" => "Type text in an Electron app via CDP.".to_string(),
-        "ListMcpResources" => "List MCP resources from configured servers.".to_string(),
-        "ReadMcpResource" => "Read one MCP resource by URI.".to_string(),
-        "McpAuth" => "Inspect MCP OAuth or remote transport status.".to_string(),
-        "MCP" => "Use the unified MCP control surface.".to_string(),
-        "AskUserQuestion" => "Ask the user a question and wait for answers.".to_string(),
-        "LSP" => "Run supported language-server actions such as diagnostics.".to_string(),
-        "TaskCreate" => "Create an in-memory task record.".to_string(),
-        "TaskGet" => "Fetch one task by id.".to_string(),
-        "TaskList" => "List in-memory tasks.".to_string(),
-        "TaskStop" => "Mark a task as stopped.".to_string(),
-        "TaskUpdate" => "Update task state or append output.".to_string(),
-        "TaskOutput" => "Read or append task output.".to_string(),
-        "BackgroundTaskOutput" => "Read stdout or stderr from a background task.".to_string(),
-        "bash" => "Run a sandboxed shell command when file tools do not apply.".to_string(),
-        _ => {
-            let trimmed = description.trim();
-            let sentence = trimmed
-                .split_terminator(['.', '\n'])
-                .next()
-                .unwrap_or(trimmed)
-                .trim();
-            let mut out = sentence.chars().take(120).collect::<String>();
-            if sentence.chars().count() > 120 {
-                out.push_str("...");
-            }
-            if out.is_empty() {
-                name.to_string()
-            } else {
-                out
-            }
-        }
-    }
-}
-
-fn cdp_required_args(schema: &Value) -> Vec<String> {
-    let direct_required = |value: &Value| {
-        value
-            .get("required")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
-    };
-
-    if let Some(any_of) = schema.get("anyOf").and_then(Value::as_array) {
-        let variants = any_of
-            .iter()
-            .map(direct_required)
-            .filter(|items| !items.is_empty())
-            .map(|items| items.join(" + "))
-            .collect::<Vec<_>>();
-        if !variants.is_empty() {
-            return vec![variants.join(" or ")];
-        }
-    }
-
-    direct_required(schema)
-}
-
-fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
-    let curated = match name {
-        "read_file" => vec!["offset", "limit", "pages"],
-        "glob_search" => vec!["path"],
-        "grep_search" => vec!["path", "glob", "context"],
-        "git_status" => vec!["path"],
-        "git_diff" => vec!["path", "staged"],
-        "WebSearch" => vec!["allowed_domains", "blocked_domains"],
-        "WebFetch" => vec!["prompt"],
-        "edit_file" => vec!["replace_all"],
-        "bash" => vec!["timeout", "description", "run_in_background"],
-        "PowerShell" => vec!["timeout", "description", "run_in_background"],
-        "CliRun" => vec!["timeout_ms"],
-        "ElectronLaunch" => vec!["cdp_port"],
-        "ElectronEval" => vec!["cdp_port"],
-        "ElectronGetText" => vec!["cdp_port", "selector"],
-        "ElectronClick" => vec!["cdp_port"],
-        "ElectronTypeText" => vec!["cdp_port"],
-        "MCP" => vec!["server", "name", "arguments"],
-        "AskUserQuestion" => vec!["options"],
-        "TaskUpdate" => vec!["status", "message", "output"],
-        "TaskOutput" => vec!["append", "offset", "tail"],
-        "BackgroundTaskOutput" => vec!["stream", "offset", "tail"],
-        _ => Vec::new(),
-    };
-    if !curated.is_empty() {
-        return curated.into_iter().map(ToString::to_string).collect();
-    }
-
-    let required = cdp_required_args(schema);
-    let required_set = required
-        .iter()
-        .flat_map(|item| item.split(" or "))
-        .collect::<HashSet<_>>();
-    let mut optional = schema
-        .get("properties")
-        .and_then(Value::as_object)
-        .map(|properties| {
-            properties
-                .keys()
-                .filter(|key| !required_set.contains(key.as_str()))
-                .filter(|key| {
-                    !matches!(
-                        key.as_str(),
-                        "dangerously_disable_sandbox"
-                            | "dangerouslyDisableSandbox"
-                            | "backgroundedBy"
-                            | "namespaceRestrictions"
-                            | "isolateNetwork"
-                            | "allowedMounts"
-                            | "serverName"
-                            | "task_id"
-                            | "file_path"
-                    )
-                })
-                .cloned()
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    optional.sort();
-    optional.truncate(3);
-    optional
-}
-
 fn text_mentions_windows_office_file(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     [".docx", ".xlsx", ".pptx", ".msg"]
@@ -421,24 +223,41 @@ fn should_include_windows_office_catalog_addon(messages: &[ConversationMessage])
         .is_some_and(|text| text_mentions_windows_office_file(&text))
 }
 
-fn cdp_catalog_specs_for_flavor(_catalog_flavor: CdpCatalogFlavor) -> Vec<Value> {
-    let mut specs = tools::tool_specs_for_surface(tools::ToolSurface::Standard);
-    specs.sort_by(|a, b| {
-        cdp_catalog_sort_key(a.name)
-            .cmp(&cdp_catalog_sort_key(b.name))
-            .then_with(|| a.name.cmp(b.name))
-    });
-    specs
-        .into_iter()
-        .map(|spec| {
-            json!({
-                "name": spec.name,
-                "primary_use": cdp_tool_primary_use(spec.name, spec.description),
-                "required_args": cdp_required_args(&spec.input_schema),
-                "important_optional_args": cdp_tool_important_optional_args(spec.name, &spec.input_schema),
-            })
-        })
-        .collect()
+fn cdp_catalog_specs_for_flavor(_catalog_flavor: CdpCatalogFlavor) -> Vec<tools::CdpPromptToolSpec> {
+    tools::cdp_prompt_tool_specs()
+}
+
+fn format_cdp_tool_arg_list(items: &[String]) -> String {
+    if items.is_empty() {
+        "none".to_string()
+    } else {
+        items.join(", ")
+    }
+}
+
+fn render_cdp_tool_entry(spec: &tools::CdpPromptToolSpec) -> String {
+    let example = serde_json::to_string_pretty(&spec.example).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        concat!(
+            "### `{name}`\n",
+            "purpose: {purpose}\n",
+            "use_when: {use_when}\n",
+            "avoid_when: {avoid_when}\n",
+            "required_args: {required_args}\n",
+            "important_optional_args: {important_optional_args}\n",
+            "example:\n",
+            "```json\n",
+            "{example}\n",
+            "```"
+        ),
+        name = spec.name,
+        purpose = spec.purpose,
+        use_when = spec.use_when,
+        avoid_when = spec.avoid_when,
+        required_args = format_cdp_tool_arg_list(&spec.required_args),
+        important_optional_args = format_cdp_tool_arg_list(&spec.important_optional_args),
+        example = example,
+    )
 }
 
 fn compact_standard_cdp_system_prompt(system_prompt: &[String]) -> String {
@@ -471,7 +290,6 @@ fn cdp_tool_catalog_section_for_flavor(
     messages: &[ConversationMessage],
 ) -> String {
     let catalog = cdp_catalog_specs_for_flavor(catalog_flavor);
-    let json_pretty = serde_json::to_string_pretty(&catalog).unwrap_or_else(|_| "[]".to_string());
     match catalog_flavor {
         CdpCatalogFlavor::StandardFull => {
             let win_addon = if should_include_windows_office_catalog_addon(messages) {
@@ -479,13 +297,24 @@ fn cdp_tool_catalog_section_for_flavor(
             } else {
                 ""
             };
+            let rendered_tools = catalog
+                .iter()
+                .map(render_cdp_tool_entry)
+                .collect::<Vec<_>>()
+                .join("\n\n");
             format!(
                 r#"{CDP_RELAY_RUNTIME_CATALOG_LEAD}## Relay Agent tools
 
-The JSON array below lists every tool available in this Relay session. Each entry includes the tool `name`, a compact `primary_use`, its `required_args`, and the most relevant `important_optional_args`.
-```json
-{json_pretty}
-```
+Only the tools documented below are intentionally advertised to Copilot for this CDP turn. Do not switch to hidden tools such as `Agent` or `ToolSearch` unless a future Relay prompt explicitly advertises them.
+
+## Preferred sequences
+
+- named existing file inspect/edit/review => `read_file` then `edit_file`
+- named new file create => `write_file`
+- codebase search/investigation => `glob_search` / `grep_search` before `bash`
+- concrete path + concrete action already present => call the tool now, not a plan or checklist
+
+{rendered_tools}
 
 When you need to call tools, append a fenced `relay_tool` block with JSON only.
 
@@ -494,6 +323,7 @@ When you need to call tools, append a fenced `relay_tool` block with JSON only.
 ```
 {win_addon}
 "#,
+                rendered_tools = rendered_tools,
             )
         }
     }
@@ -603,6 +433,154 @@ fn collect_message_text(message: &ConversationMessage) -> String {
         .join("\n")
 }
 
+fn is_synthetic_control_user_text(text: &str) -> bool {
+    let trimmed = text.trim();
+    trimmed == "Continue."
+        || trimmed.starts_with("Resume the existing task from the compacted summary")
+        || trimmed.starts_with("Please resend the tool call using a fenced relay_tool block")
+        || is_tool_protocol_repair_text(trimmed)
+}
+
+fn trim_path_punctuation(token: &str) -> &str {
+    token.trim_matches(|c: char| {
+        matches!(
+            c,
+            '`' | '"'
+                | '\''
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '<'
+                | '>'
+                | ','
+                | ':'
+                | ';'
+                | '!'
+                | '?'
+                | '。'
+                | '、'
+                | '，'
+                | '：'
+                | '；'
+                | '！'
+                | '？'
+        )
+    })
+}
+
+fn is_windows_absolute_path(token: &str) -> bool {
+    let bytes = token.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+}
+
+fn is_bare_filename_with_extension(token: &str) -> bool {
+    if token.is_empty() || token.contains('/') || token.contains('\\') || token.ends_with('.') {
+        return false;
+    }
+    let Some((stem, ext)) = token.rsplit_once('.') else {
+        return false;
+    };
+    !stem.is_empty()
+        && !ext.is_empty()
+        && ext.len() <= 16
+        && ext.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+fn is_path_candidate_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | '\\' | ':' | '~')
+}
+
+fn extract_path_anchors_from_text(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let mut candidate = String::new();
+    let flush_candidate =
+        |candidate: &mut String, out: &mut Vec<String>, seen: &mut HashSet<String>| {
+            let token = trim_path_punctuation(candidate);
+            if token.is_empty() || token.contains("://") {
+                candidate.clear();
+                return;
+            }
+            let is_path = token.starts_with('/')
+                || is_windows_absolute_path(token)
+                || token.starts_with("./")
+                || token.starts_with("../")
+                || token.contains('/')
+                || token.contains('\\')
+                || is_bare_filename_with_extension(token);
+            if is_path && seen.insert(token.to_string()) {
+                out.push(token.to_string());
+            }
+            candidate.clear();
+        };
+
+    for ch in text.chars() {
+        if is_path_candidate_char(ch) {
+            candidate.push(ch);
+        } else if !candidate.is_empty() {
+            flush_candidate(&mut candidate, &mut out, &mut seen);
+        }
+    }
+    if !candidate.is_empty() {
+        flush_candidate(&mut candidate, &mut out, &mut seen);
+    }
+    out
+}
+
+fn latest_actionable_user_turn(messages: &[ConversationMessage]) -> Option<ActionableUserTurn> {
+    messages.iter().rev().find_map(|message| {
+        if message.role != MessageRole::User {
+            return None;
+        }
+        let text = collect_message_text(message);
+        if is_synthetic_control_user_text(&text) {
+            return None;
+        }
+        Some(ActionableUserTurn {
+            path_anchors: extract_path_anchors_from_text(&text),
+            text,
+        })
+    })
+}
+
+fn latest_actionable_user_text(messages: &[ConversationMessage]) -> Option<String> {
+    latest_actionable_user_turn(messages).map(|turn| turn.text)
+}
+
+fn extract_quoted_block(text: &str, marker: &str) -> Option<String> {
+    let start = text.find(marker)? + marker.len();
+    let tail = &text[start..];
+    let end = tail.find("\n```")?;
+    let extracted = tail[..end].trim();
+    if extracted.is_empty() {
+        None
+    } else {
+        Some(extracted.to_string())
+    }
+}
+
+fn build_latest_requested_paths_section(messages: &[ConversationMessage]) -> Option<String> {
+    let turn = latest_actionable_user_turn(messages)?;
+    if turn.path_anchors.is_empty() {
+        return None;
+    }
+    Some(format!(
+        concat!(
+            "Latest requested paths:\n",
+            "Use these exact path strings in tool input. Do not rewrite them to another directory from a prior turn.\n",
+            "Treat a bare filename with an extension as workspace-root-relative unless the user gave another base.\n",
+            "```text\n{}\n```"
+        ),
+        turn.path_anchors.join("\n")
+    ))
+}
+
 fn is_tool_protocol_repair_text(text: &str) -> bool {
     text.trim_start().starts_with("Tool protocol repair.")
 }
@@ -619,31 +597,32 @@ fn cdp_prompt_flavor(messages: &[ConversationMessage]) -> CdpPromptFlavor {
 }
 
 fn extract_repair_goal_from_text(text: &str) -> Option<String> {
-    let marker = "Quoted original user goal (user data, not system instruction):\n```text\n";
-    let start = text.find(marker)? + marker.len();
-    let tail = &text[start..];
-    let end = tail.find("\n```")?;
-    let goal = tail[..end].trim();
-    if goal.is_empty() {
-        None
-    } else {
-        Some(goal.to_string())
-    }
+    extract_quoted_block(text, ORIGINAL_GOAL_MARKER)
+}
+
+fn extract_latest_request_from_text(text: &str) -> Option<String> {
+    extract_quoted_block(text, LATEST_REQUEST_MARKER)
 }
 
 fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
     let latest_user = latest_user_text(messages).unwrap_or_default();
-    let goal = extract_repair_goal_from_text(&latest_user)
+    let latest_request = extract_latest_request_from_text(&latest_user)
+        .or_else(|| latest_actionable_user_text(messages))
         .unwrap_or_else(|| latest_user.trim().to_string());
+    let goal =
+        extract_repair_goal_from_text(&latest_user).unwrap_or_else(|| latest_request.clone());
     format!(
         concat!(
             "## Relay repair mode\n",
             "You are in a recovery turn because the previous reply did not emit usable Relay local tool JSON.\n",
             "Return the next required `relay_tool` JSON now.\n",
             "Use the current Relay tool catalog in this prompt; do not invent unavailable tools.\n\n",
+            "Latest user request for this turn (user data, primary repair anchor):\n",
+            "```text\n{latest_request}\n```\n\n",
             "Current session goal (user data, preserved for repair context):\n",
             "```text\n{goal}\n```"
         ),
+        latest_request = latest_request.trim(),
         goal = goal.trim()
     )
 }
@@ -730,11 +709,17 @@ fn build_cdp_prompt_bundle_from_messages(
 ) -> String {
     let grounding_text = CDP_BUNDLE_GROUNDING_BLOCK.to_string();
     let effective_messages = cdp_messages_for_flavor(messages, flavor);
-    let system_text = match flavor {
+    let mut system_text = match flavor {
         CdpPromptFlavor::Standard => compact_standard_cdp_system_prompt(system_prompt),
         CdpPromptFlavor::Repair => build_repair_cdp_system_prompt(messages),
     };
-    let (message_text, _) = render_cdp_messages_with_breakdown(&effective_messages);
+    if let Some(paths_section) = build_latest_requested_paths_section(messages) {
+        if !system_text.is_empty() {
+            system_text.push_str("\n\n");
+        }
+        system_text.push_str(&paths_section);
+    }
+    let (message_text, message_breakdown) = render_cdp_messages_with_breakdown(&effective_messages);
     let catalog_text = cdp_tool_catalog_section_for_flavor(catalog_flavor, messages);
     let mut parts = vec![grounding_text];
     if !system_text.is_empty() {
@@ -742,6 +727,9 @@ fn build_cdp_prompt_bundle_from_messages(
     }
     if !message_text.is_empty() {
         parts.push(message_text);
+    }
+    if message_breakdown.3 > 0 {
+        parts.push(CDP_TOOL_RESULT_CONTINUATION_REMINDER.to_string());
     }
     parts.push(catalog_text);
     parts.join("\n\n")
@@ -859,6 +847,49 @@ fn parse_fallback_value(
     }
 }
 
+fn canonicalize_json_fence_tool_payload(
+    value: &Value,
+    whitelist: &HashSet<String>,
+) -> Option<Value> {
+    match value {
+        Value::Array(items) => {
+            let normalized = items
+                .iter()
+                .map(|item| canonicalize_json_fence_tool_payload(item, whitelist))
+                .collect::<Option<Vec<_>>>()?;
+            Some(Value::Array(normalized))
+        }
+        Value::Object(obj) => {
+            let name = obj.get("name").and_then(Value::as_str)?;
+            if !whitelist.contains(name) {
+                return None;
+            }
+            if !obj.get("input").is_none_or(Value::is_object) {
+                return None;
+            }
+            let mut normalized = obj.clone();
+            normalized.insert(
+                FALLBACK_TOOL_SENTINEL_KEY.to_string(),
+                Value::Bool(true),
+            );
+            let value = Value::Object(normalized);
+            parse_one_tool_call(&value)?;
+            Some(value)
+        }
+        _ => None,
+    }
+}
+
+fn cdp_json_fence_whitelist() -> HashSet<String> {
+    tools::cdp_tool_specs_for_visibility(tools::CdpToolVisibility::Core)
+        .into_iter()
+        .chain(tools::cdp_tool_specs_for_visibility(
+            tools::CdpToolVisibility::Conditional,
+        ))
+        .map(|spec| spec.name.to_string())
+        .collect()
+}
+
 fn find_generic_markdown_fence_inner_end(body: &str) -> Option<usize> {
     if let Some(i) = body.find("\n```") {
         return Some(i);
@@ -952,6 +983,7 @@ fn extract_fallback_markdown_fences(
     whitelist: &HashSet<String>,
 ) -> (String, Vec<String>) {
     const OPEN: &str = "```";
+    let json_fence_whitelist = cdp_json_fence_whitelist();
     let mut display = String::new();
     let mut payloads = Vec::new();
     let mut rest = text;
@@ -1013,7 +1045,24 @@ fn extract_fallback_markdown_fences(
         }
 
         if !inner.is_empty() {
-            if serde_json::from_str::<Value>(inner).is_ok() {
+            if info.eq_ignore_ascii_case("json") {
+                if let Ok(value) = serde_json::from_str::<Value>(inner) {
+                    if let Some(normalized) =
+                        canonicalize_json_fence_tool_payload(&value, &json_fence_whitelist)
+                    {
+                        payloads.push(
+                            serde_json::to_string(&normalized)
+                                .unwrap_or_else(|_| inner.to_string()),
+                        );
+                    } else {
+                        payloads.push(inner.to_string());
+                    }
+                } else if inner.contains(FALLBACK_TOOL_SENTINEL_KEY) {
+                    for (_, _, p) in extract_mvp_tool_object_spans(inner, whitelist) {
+                        payloads.push(p);
+                    }
+                }
+            } else if serde_json::from_str::<Value>(inner).is_ok() {
                 payloads.push(inner.to_string());
             } else {
                 for (_, _, p) in extract_mvp_tool_object_spans(inner, whitelist) {
@@ -1354,6 +1403,71 @@ fn is_false_completion_success_claim_text(text: &str) -> bool {
     mentions_local_file && success_claim
 }
 
+fn is_concrete_local_file_write_goal(goal: &str) -> bool {
+    let trimmed = goal.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let mentions_target_file = lower.contains("write_file")
+        || lower.contains("edit_file")
+        || lower.contains("workspace")
+        || lower.contains("/root/")
+        || lower.contains("./")
+        || lower.contains("../")
+        || lower.contains(".html")
+        || lower.contains(".txt")
+        || lower.contains(".md")
+        || lower.contains(".json")
+        || lower.contains(".js")
+        || lower.contains(".ts")
+        || trimmed.contains("ファイル")
+        || trimmed.contains("内容");
+    let requests_write = lower.contains("create")
+        || lower.contains("write")
+        || lower.contains("overwrite")
+        || lower.contains("edit")
+        || lower.contains("update")
+        || lower.contains("save")
+        || trimmed.contains("作成")
+        || trimmed.contains("保存")
+        || trimmed.contains("書")
+        || trimmed.contains("更新")
+        || trimmed.contains("編集");
+    mentions_target_file && requests_write
+}
+
+fn is_concrete_local_write_body_without_tools(
+    latest_turn_input: &str,
+    assistant_text: &str,
+) -> bool {
+    if !is_concrete_local_file_write_goal(latest_turn_input) {
+        return false;
+    }
+    let trimmed = assistant_text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let looks_like_generated_file_body = lower.contains("<!doctype html")
+        || lower.contains("<html")
+        || lower.contains("```html")
+        || lower.contains("```css")
+        || lower.contains("```javascript")
+        || lower.contains("```js")
+        || lower.contains("```json")
+        || lower.contains("```")
+        || trimmed.chars().count() >= 900;
+    looks_like_generated_file_body && !is_tool_protocol_confusion_text(trimmed)
+}
+
+fn contains_plain_relay_tool_mention(lower: &str) -> bool {
+    lower.contains("relay_tool ")
+        || lower.contains("relay_tool\n")
+        || lower.contains("relay_tool\r")
+        || lower.contains("`relay_tool`")
+}
+
 fn is_tool_protocol_confusion_text(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -1375,6 +1489,10 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || lower.contains("filesystem access in a python sandbox")
         || lower.contains("use the python tool instead")
         || lower.contains("preparing to use python to open and write")
+        || lower.contains("sub-agent")
+        || lower.contains("sub agent")
+        || lower.contains("agent tool")
+        || lower.contains("pages")
         || lower.contains("coding and executing")
         || lower.contains("\"executedcode\"")
         || lower.contains("outputfiles")
@@ -1411,7 +1529,7 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || lower.contains("glob_search")
         || lower.contains("grep_search"))
         && (lower.contains("```")
-            || lower.contains("relay_tool")
+            || contains_plain_relay_tool_mention(&lower)
             || lower.contains("adjusting tool use"));
     local_tool_refusal
         || local_write_refusal
@@ -1421,9 +1539,8 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || is_repair_refusal_text(trimmed)
 }
 
-#[must_use]
-pub fn build_tool_protocol_repair_input(goal: &str, attempt_index: usize) -> String {
-    let escalation = if attempt_index == 0 {
+fn tool_protocol_repair_escalation(attempt_index: usize) -> &'static str {
+    if attempt_index == 0 {
         concat!(
             "Use the Relay tool catalog and emit the next required `relay_tool` JSON block in this reply.\n",
             "For local file creation or edits inside the workspace, prefer `write_file` / `edit_file` (and `read_file` first only when actually needed).\n",
@@ -1440,19 +1557,130 @@ pub fn build_tool_protocol_repair_input(goal: &str, attempt_index: usize) -> Str
             "Do not emit plain-text `relay_tool` mentions.\n",
             "If the task is to create or overwrite a workspace file and you already know the content, emit `write_file` now instead of describing Python or page creation.\n\n",
         )
-    };
+    }
+}
+
+fn is_concrete_new_file_create_request(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let create_markers = lower.contains("create")
+        || lower.contains("new file")
+        || lower.contains("overwrite")
+        || trimmed.contains("作成")
+        || trimmed.contains("新規");
+    let existing_file_markers = lower.contains("read")
+        || lower.contains("inspect")
+        || lower.contains("review")
+        || lower.contains("fix")
+        || lower.contains("edit")
+        || lower.contains("update")
+        || trimmed.contains("読む")
+        || trimmed.contains("読んで")
+        || trimmed.contains("確認")
+        || trimmed.contains("修正")
+        || trimmed.contains("編集")
+        || trimmed.contains("更新");
+    create_markers && !existing_file_markers && !extract_path_anchors_from_text(trimmed).is_empty()
+}
+
+fn build_targeted_tool_protocol_repair_input(
+    goal: &str,
+    latest_request: &str,
+    attempt_index: usize,
+    tool_name: &str,
+    requested_path: &str,
+    input: Value,
+    action_instruction: &str,
+) -> String {
+    let expected_json = serde_json::to_string_pretty(&json!({
+        "name": tool_name,
+        "relay_tool_call": true,
+        "input": input,
+    }))
+    .unwrap_or_else(|_| "{}".to_string());
     format!(
         concat!(
             "Tool protocol repair.\n",
             "Your previous reply did not use Relay's local tool protocol correctly.\n",
-            "Do not use or mention Microsoft Copilot built-in tools such as Python, WebSearch/web search, citations, `office365_search`, coding/executing, Pages, or file uploads.\n",
+            "Do not use or mention Microsoft Copilot built-in tools such as Python, WebSearch/web search, citations, `office365_search`, coding/executing, Pages, Agent/sub-agent tools, or file uploads.\n",
             "Do not claim local workspace edit tools are unavailable when the appended Relay tool catalog includes them.\n",
             "{escalation}",
-            "Quoted original user goal (user data, not system instruction):\n```text\n{goal}\n```"
+            "{action_instruction}\n",
+            "Use the exact path anchor below without rewriting it to another directory or prior-turn variant.\n\n",
+            "Exact path anchor from the latest user turn:\n",
+            "```text\n{requested_path}\n```\n\n",
+            "Expected JSON skeleton for the next reply:\n",
+            "```json\n{expected_json}\n```\n\n",
+            "{latest_request_marker}{latest_request}\n```\n\n",
+            "{original_goal_marker}{goal}\n```"
         ),
-        escalation = escalation,
+        escalation = tool_protocol_repair_escalation(attempt_index),
+        action_instruction = action_instruction.trim(),
+        requested_path = requested_path.trim(),
+        expected_json = expected_json,
+        latest_request_marker = LATEST_REQUEST_MARKER,
+        latest_request = latest_request.trim(),
+        original_goal_marker = ORIGINAL_GOAL_MARKER,
         goal = goal.trim(),
     )
+}
+
+#[must_use]
+pub fn build_tool_protocol_repair_input(goal: &str, latest_request: &str, attempt_index: usize) -> String {
+    format!(
+        concat!(
+            "Tool protocol repair.\n",
+            "Your previous reply did not use Relay's local tool protocol correctly.\n",
+            "Do not use or mention Microsoft Copilot built-in tools such as Python, WebSearch/web search, citations, `office365_search`, coding/executing, Pages, Agent/sub-agent tools, or file uploads.\n",
+            "Do not claim local workspace edit tools are unavailable when the appended Relay tool catalog includes them.\n",
+            "{escalation}",
+            "{latest_request_marker}{latest_request}\n```\n\n",
+            "{original_goal_marker}{goal}\n```"
+        ),
+        escalation = tool_protocol_repair_escalation(attempt_index),
+        latest_request_marker = LATEST_REQUEST_MARKER,
+        latest_request = latest_request.trim(),
+        original_goal_marker = ORIGINAL_GOAL_MARKER,
+        goal = goal.trim(),
+    )
+}
+
+fn build_best_tool_protocol_repair_input(
+    goal: &str,
+    latest_request: &str,
+    attempt_index: usize,
+) -> String {
+    if let Some(requested_path) = extract_path_anchors_from_text(latest_request).into_iter().next() {
+        if is_concrete_new_file_create_request(latest_request) {
+            return build_targeted_tool_protocol_repair_input(
+                goal,
+                latest_request,
+                attempt_index,
+                "write_file",
+                &requested_path,
+                json!({
+                    "path": requested_path.clone(),
+                    "content": "<full file content here>"
+                }),
+                "Emit exactly one `write_file` Relay tool call for this concrete file-creation request. Do not describe the content in prose; put the final file body in `input.content`.",
+            );
+        }
+        return build_targeted_tool_protocol_repair_input(
+            goal,
+            latest_request,
+            attempt_index,
+            "read_file",
+            &requested_path,
+            json!({
+                "path": requested_path.clone()
+            }),
+            "Emit exactly one `read_file` Relay tool call first so Relay can inspect the named file before editing, fixing, or reviewing it.",
+        );
+    }
+    build_tool_protocol_repair_input(goal, latest_request, attempt_index)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1471,6 +1699,7 @@ pub enum LoopDecision {
 
 fn decide_loop_after_success(
     goal: &str,
+    latest_turn_input: &str,
     turn_index: usize,
     meta_stall_nudges_used: usize,
     meta_stall_nudge_limit: usize,
@@ -1493,14 +1722,24 @@ fn decide_loop_after_success(
         summary.tool_results.is_empty() && is_repair_refusal_text(assistant_text);
     let is_false_completion =
         summary.tool_results.is_empty() && is_false_completion_success_claim_text(assistant_text);
+    let is_plain_file_body_completion = summary.tool_results.is_empty()
+        && is_concrete_local_write_body_without_tools(latest_turn_input, assistant_text);
     let is_meta_stall = summary.tool_results.is_empty()
         && summary.iterations == 1
         && is_meta_stall_text(assistant_text);
 
-    if is_tool_protocol_confusion || is_repair_refusal || is_false_completion {
+    if is_tool_protocol_confusion
+        || is_repair_refusal
+        || is_false_completion
+        || is_plain_file_body_completion
+    {
         if meta_stall_nudges_used < meta_stall_nudge_limit {
             return LoopDecision::Continue {
-                next_input: build_tool_protocol_repair_input(goal, meta_stall_nudges_used),
+                next_input: build_best_tool_protocol_repair_input(
+                    goal,
+                    latest_turn_input,
+                    meta_stall_nudges_used,
+                ),
             };
         }
         return LoopDecision::Stop(LoopStopReason::MetaStall);
@@ -1633,16 +1872,17 @@ mod tests {
             messages: &[ConversationMessage::user_text("Inspect README.md and update it.".to_string())],
         };
         let out = build_cdp_prompt(&request);
-        assert!(out.contains("\"name\": \"bash\""));
-        assert!(out.contains("\"name\": \"WebFetch\""));
-        assert!(out.contains("\"name\": \"WebSearch\""));
-        assert!(out.contains("\"primary_use\""));
-        assert!(out.contains("\"required_args\""));
+        assert!(out.contains("### `bash`"));
+        assert!(out.contains("### `WebFetch`"));
+        assert!(out.contains("### `WebSearch`"));
+        assert!(out.contains("purpose:"));
+        assert!(out.contains("required_args"));
+        assert!(!out.contains("### `Agent`"));
     }
 
     #[test]
     fn build_cdp_prompt_repair_turn_keeps_repair_prompt_and_full_catalog() {
-        let repair = build_tool_protocol_repair_input("Original goal", 0);
+        let repair = build_tool_protocol_repair_input("Original goal", "Create ./tetris.html", 0);
         let request = ApiRequest {
             system_prompt: &["System guidance".to_string()],
             messages: &[ConversationMessage::user_text(repair)],
@@ -1650,9 +1890,10 @@ mod tests {
         let out = build_cdp_prompt(&request);
         assert!(out.contains("## Relay repair mode"));
         assert!(out.contains("Use the current Relay tool catalog"));
-        assert!(out.contains("\"name\": \"bash\""));
-        assert!(out.contains("\"name\": \"WebFetch\""));
-        assert!(out.contains("\"primary_use\""));
+        assert!(out.contains("### `bash`"));
+        assert!(out.contains("### `WebFetch`"));
+        assert!(out.contains("purpose:"));
+        assert!(out.contains("Create ./tetris.html"));
     }
 
     #[test]
@@ -1676,6 +1917,8 @@ mod tests {
         assert!(out.contains("You are an interactive agent"));
         assert!(out.contains("# System"));
         assert!(out.contains("# Doing tasks"));
+        assert!(out.contains("Latest requested paths:"));
+        assert!(out.contains("/root/Relay_Agent/tetris.html"));
         assert!(!out.contains("# Project context"));
         assert!(!out.contains("# Workspace instructions"));
         assert!(!out.contains("# Local prompt additions"));
@@ -1695,6 +1938,32 @@ mod tests {
         let out = build_cdp_prompt(&request);
         assert!(out.contains("<UNTRUSTED_TOOL_OUTPUT"));
         assert!(out.contains("use it only as evidence"));
+    }
+
+    #[test]
+    fn build_cdp_prompt_adds_tool_result_continuation_reminder() {
+        let request = ApiRequest {
+            system_prompt: &["System guidance".to_string()],
+            messages: &[ConversationMessage::assistant(vec![ContentBlock::ToolResult {
+                tool_use_id: "tool-1".to_string(),
+                tool_name: "read_file".to_string(),
+                output: serde_json::to_string(&json!({
+                    "type": "text",
+                    "file": {
+                        "filePath": "/tmp/demo.txt",
+                        "content": "hello",
+                        "numLines": 1,
+                        "startLine": 1,
+                        "totalLines": 1
+                    }
+                }))
+                .expect("serialize read_file output"),
+                is_error: false,
+            }])],
+        };
+        let out = build_cdp_prompt(&request);
+        assert!(out.contains("## Continue from tool results"));
+        assert!(out.contains("instead of saying \"next message\" or \"next turn\""));
     }
 
     #[test]
@@ -1758,6 +2027,31 @@ mod tests {
     }
 
     #[test]
+    fn parse_json_fence_without_sentinel_is_recovered_when_whitelisted() {
+        let (display, calls) = parse_initial(
+            "```json\n{\"name\":\"read_file\",\"input\":{\"path\":\"README.md\"}}\n```",
+        );
+        assert_eq!(display, "");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, "read_file");
+        assert_eq!(calls[0].2, r#"{"path":"README.md"}"#);
+    }
+
+    #[test]
+    fn parse_mixed_prose_json_fence_without_sentinel_is_rejected() {
+        let raw = "```json\nI will inspect it first.\n{\"name\":\"read_file\",\"input\":{\"path\":\"README.md\"}}\n```";
+        let (_display, calls) = parse_initial(raw);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn parse_unfenced_json_without_sentinel_is_rejected_even_on_retry() {
+        let raw = "{\"name\":\"read_file\",\"input\":{\"path\":\"README.md\"}}";
+        let (_display, calls) = parse_copilot_tool_response(raw, CdpToolParseMode::RetryRepair);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
     fn parse_initial_recovers_inline_plain_text_tool_confusion_with_sentinel() {
         let raw = r#"README.md を読み取り、冒頭説明の最初の文を取得します。取得後に指定どおりの 2 行ファイルを作成します。
 
@@ -1818,12 +2112,13 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             runtime::TurnOutcome::Completed,
         );
         let decision =
-            decide_loop_after_success("Create ./tetris.html", 0, 0, 1, &s);
+            decide_loop_after_success("Create ./tetris.html", "Create ./tetris.html", 0, 0, 1, &s);
         let LoopDecision::Continue { next_input } = decision else {
             panic!("expected repair nudge");
         };
         assert!(next_input.contains("Tool protocol repair."));
         assert!(next_input.contains("Create ./tetris.html"));
+        assert!(next_input.contains(r#""name": "write_file""#));
     }
 
     #[test]
@@ -1834,20 +2129,72 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             runtime::TurnOutcome::Completed,
         );
         assert_eq!(
-            decide_loop_after_success("Create ./tetris.html", 1, 1, 1, &s),
+            decide_loop_after_success("Create ./tetris.html", "Create ./tetris.html", 1, 1, 1, &s),
             LoopDecision::Stop(LoopStopReason::MetaStall)
         );
     }
 
     #[test]
+    fn existing_file_tool_drift_escalates_to_targeted_read_file_repair() {
+        let s = summary(
+            "I will use Pages and Python next, then include citations.",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let decision = decide_loop_after_success(
+            "Review src/main.rs",
+            "Inspect src/main.rs and fix the import ordering.",
+            0,
+            0,
+            2,
+            &s,
+        );
+        let LoopDecision::Continue { next_input } = decision else {
+            panic!("expected targeted read_file repair");
+        };
+        assert!(next_input.contains(r#""name": "read_file""#));
+        assert!(next_input.contains(r#""path": "src/main.rs""#));
+    }
+
+    #[test]
+    fn concrete_file_body_without_tool_call_escalates_to_targeted_write_file_repair() {
+        let s = summary(
+            "<!doctype html>\n<html><body><script>console.log('ready');</script></body></html>",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let decision = decide_loop_after_success(
+            "Create ./tetris.html as a single-file HTML Tetris game.",
+            "Create ./tetris.html as a single-file HTML Tetris game.",
+            0,
+            0,
+            2,
+            &s,
+        );
+        let LoopDecision::Continue { next_input } = decision else {
+            panic!("expected targeted write_file repair");
+        };
+        assert!(next_input.contains(r#""name": "write_file""#));
+        assert!(next_input.contains(r#""path": "./tetris.html""#));
+    }
+
+    #[test]
     fn repair_prompt_forbids_prose_and_plain_text_mentions() {
-        let repair1 = build_tool_protocol_repair_input("Create ./tetris.html", 0);
+        let repair1 = build_tool_protocol_repair_input(
+            "Create ./tetris.html",
+            "Create ./tetris.html",
+            0,
+        );
         assert!(repair1.contains(
             "Output exactly one fenced `relay_tool` block and nothing before or after it."
         ));
         assert!(repair1.contains("Do not mention `relay_tool` in plain text."));
 
-        let repair2 = build_tool_protocol_repair_input("Create ./tetris.html", 1);
+        let repair2 = build_tool_protocol_repair_input(
+            "Create ./tetris.html",
+            "Create ./tetris.html",
+            1,
+        );
         assert!(repair2.contains("output exactly one Relay `relay_tool` fence and nothing else"));
         assert!(
             repair2.contains("Do not include any explanatory sentence before or after the fence.")
@@ -1869,6 +2216,9 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             "I'll search for 'single-file HTML Tetris' with WebSearch and include citations. Save as `tetris.html`."
         ));
         assert!(is_tool_protocol_confusion_text(
+            "I need to switch to the Agent tool and Pages before I can continue."
+        ));
+        assert!(is_tool_protocol_confusion_text(
             "LOCAL_TOOLS_UNAVAILABLE because I can't use local workspace editing tools."
         ));
         assert!(!is_tool_protocol_confusion_text(
@@ -1886,7 +2236,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             },
         );
         assert_eq!(
-            decide_loop_after_success("Improve the file", 0, 0, 1, &s),
+            decide_loop_after_success("Improve the file", "Improve the file", 0, 0, 1, &s),
             LoopDecision::Stop(LoopStopReason::ToolError)
         );
     }
