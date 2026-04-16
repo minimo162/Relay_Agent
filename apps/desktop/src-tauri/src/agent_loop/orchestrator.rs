@@ -545,8 +545,8 @@ pub(crate) fn posix_shell_escape(s: &str) -> Result<String, String> {
 /* ── Agent loop ─── */
 
 #[allow(clippy::needless_pass_by_value)]
-fn timeout_secs_from_browser_settings(bs: Option<&BrowserAutomationSettings>) -> u64 {
-    let ms = bs.map_or(120_000, |b| b.timeout_ms);
+fn completion_timeout_secs_from_browser_settings(bs: Option<&BrowserAutomationSettings>) -> u64 {
+    let ms = bs.map_or(120_000, |b| b.timeout_ms).max(240_000);
     let secs = (u64::from(ms).div_ceil(1000)).max(1);
     secs.clamp(10, 900)
 }
@@ -908,6 +908,30 @@ fn is_false_completion_success_claim_text(text: &str) -> bool {
     mentions_local_file && success_claim
 }
 
+fn is_concrete_local_write_body_without_tools(
+    latest_turn_input: &str,
+    assistant_text: &str,
+) -> bool {
+    if !is_concrete_local_file_write_goal(latest_turn_input) {
+        return false;
+    }
+    let trimmed = assistant_text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let looks_like_generated_file_body = lower.contains("<!doctype html")
+        || lower.contains("<html")
+        || lower.contains("```html")
+        || lower.contains("```css")
+        || lower.contains("```javascript")
+        || lower.contains("```js")
+        || lower.contains("```json")
+        || lower.contains("```")
+        || trimmed.chars().count() >= 900;
+    looks_like_generated_file_body && !is_tool_protocol_confusion_text(trimmed)
+}
+
 fn contains_plain_relay_tool_mention(lower: &str) -> bool {
     lower.contains("relay_tool ")
         || lower.contains("relay_tool\n")
@@ -1172,11 +1196,17 @@ fn decide_loop_after_success(
         summary.tool_results.is_empty() && is_repair_refusal_text(assistant_text);
     let is_false_completion =
         summary.tool_results.is_empty() && is_false_completion_success_claim_text(assistant_text);
+    let is_plain_file_body_completion = summary.tool_results.is_empty()
+        && is_concrete_local_write_body_without_tools(latest_turn_input, assistant_text);
     let is_meta_stall = summary.tool_results.is_empty()
         && summary.iterations == 1
         && is_meta_stall_text(assistant_text);
 
-    if is_tool_protocol_confusion || is_repair_refusal || is_false_completion {
+    if is_tool_protocol_confusion
+        || is_repair_refusal
+        || is_false_completion
+        || is_plain_file_body_completion
+    {
         if meta_stall_nudges_used < meta_stall_nudge_limit {
             return LoopDecision::Continue {
                 next_input: build_tool_protocol_repair_input(
@@ -1387,7 +1417,7 @@ pub fn run_agent_loop_impl<R: Runtime>(
             Some((app.clone(), session_id.to_string())),
             registry.clone(),
             session_id.to_string(),
-            timeout_secs_from_browser_settings(browser_settings.as_ref()),
+            completion_timeout_secs_from_browser_settings(browser_settings.as_ref()),
         )
     } else {
         let server = tauri_bridge::ensure_copilot_server(
@@ -1402,7 +1432,7 @@ pub fn run_agent_loop_impl<R: Runtime>(
             Some((app.clone(), session_id.to_string())),
             registry.clone(),
             session_id.to_string(),
-            timeout_secs_from_browser_settings(browser_settings.as_ref()),
+            completion_timeout_secs_from_browser_settings(browser_settings.as_ref()),
         )
     };
 
@@ -2187,6 +2217,286 @@ fn cdp_windows_office_catalog_addon() -> &'static str {
     ""
 }
 
+fn cdp_catalog_sort_key(name: &str) -> usize {
+    match name {
+        "read_file" => 0,
+        "write_file" => 1,
+        "edit_file" => 2,
+        "glob_search" => 3,
+        "grep_search" => 4,
+        "git_status" => 5,
+        "git_diff" => 6,
+        "pdf_merge" => 10,
+        "pdf_split" => 11,
+        "WebFetch" => 20,
+        "WebSearch" => 21,
+        "ListMcpResources" => 30,
+        "ReadMcpResource" => 31,
+        "McpAuth" => 32,
+        "MCP" => 33,
+        "AskUserQuestion" => 40,
+        "TodoWrite" => 41,
+        "TaskCreate" => 42,
+        "TaskGet" => 43,
+        "TaskList" => 44,
+        "TaskStop" => 45,
+        "TaskUpdate" => 46,
+        "TaskOutput" => 47,
+        "BackgroundTaskOutput" => 48,
+        "Skill" => 50,
+        "ToolSearch" => 51,
+        "LSP" => 52,
+        "NotebookEdit" => 53,
+        "CliList" => 60,
+        "CliDiscover" => 61,
+        "CliRegister" => 62,
+        "CliUnregister" => 63,
+        "CliRun" => 64,
+        "ElectronApps" => 70,
+        "ElectronLaunch" => 71,
+        "ElectronEval" => 72,
+        "ElectronGetText" => 73,
+        "ElectronClick" => 74,
+        "ElectronTypeText" => 75,
+        "SendUserMessage" => 80,
+        "Sleep" => 81,
+        "Config" => 82,
+        "StructuredOutput" => 83,
+        "bash" => 90,
+        "PowerShell" => 91,
+        "REPL" => 92,
+        "Agent" => 93,
+        _ => 1_000,
+    }
+}
+
+fn cdp_tool_primary_use(name: &str, description: &str) -> String {
+    match name {
+        "read_file" => "Read local text or PDF content.".to_string(),
+        "write_file" => "Create or overwrite a workspace text file.".to_string(),
+        "edit_file" => "Replace text in an existing workspace file.".to_string(),
+        "glob_search" => "Find files by glob pattern.".to_string(),
+        "grep_search" => "Search file contents with a regex.".to_string(),
+        "git_status" => "Inspect workspace git status.".to_string(),
+        "git_diff" => "Inspect workspace git diff.".to_string(),
+        "pdf_merge" => "Merge PDF files in the workspace.".to_string(),
+        "pdf_split" => "Split a PDF into multiple workspace files.".to_string(),
+        "WebFetch" => "Fetch one URL and answer from its contents.".to_string(),
+        "WebSearch" => "Search the web for current information.".to_string(),
+        "TodoWrite" => "Update the session todo list.".to_string(),
+        "Skill" => "Load a local skill and its instructions.".to_string(),
+        "Agent" => "Launch a specialized sub-agent task.".to_string(),
+        "ToolSearch" => "Search for deferred or specialized tools.".to_string(),
+        "NotebookEdit" => "Edit a Jupyter notebook cell.".to_string(),
+        "Sleep" => "Wait without holding a shell process.".to_string(),
+        "SendUserMessage" => "Send a message to the user via Relay.".to_string(),
+        "Config" => "Get or set Claw Code settings.".to_string(),
+        "StructuredOutput" => "Return structured output in a requested shape.".to_string(),
+        "REPL" => "Run code in a REPL-like subprocess.".to_string(),
+        "PowerShell" => "Run PowerShell for Windows automation tasks.".to_string(),
+        "CliList" => "List discoverable external CLIs.".to_string(),
+        "CliDiscover" => "Discover installed vs missing external CLIs.".to_string(),
+        "CliRegister" => "Register a custom external CLI.".to_string(),
+        "CliUnregister" => "Unregister a custom external CLI.".to_string(),
+        "CliRun" => "Execute an external CLI with arguments.".to_string(),
+        "ElectronApps" => "List known Electron apps and their CDP status.".to_string(),
+        "ElectronLaunch" => "Launch an Electron app with CDP enabled.".to_string(),
+        "ElectronEval" => "Run JavaScript in an Electron renderer via CDP.".to_string(),
+        "ElectronGetText" => "Read text from an Electron app via CDP.".to_string(),
+        "ElectronClick" => "Click an Electron app element via CDP.".to_string(),
+        "ElectronTypeText" => "Type text in an Electron app via CDP.".to_string(),
+        "ListMcpResources" => "List MCP resources from configured servers.".to_string(),
+        "ReadMcpResource" => "Read one MCP resource by URI.".to_string(),
+        "McpAuth" => "Inspect MCP OAuth or remote transport status.".to_string(),
+        "MCP" => "Use the unified MCP control surface.".to_string(),
+        "AskUserQuestion" => "Ask the user a question and wait for answers.".to_string(),
+        "LSP" => "Run supported language-server actions such as diagnostics.".to_string(),
+        "TaskCreate" => "Create an in-memory task record.".to_string(),
+        "TaskGet" => "Fetch one task by id.".to_string(),
+        "TaskList" => "List in-memory tasks.".to_string(),
+        "TaskStop" => "Mark a task as stopped.".to_string(),
+        "TaskUpdate" => "Update task state or append output.".to_string(),
+        "TaskOutput" => "Read or append task output.".to_string(),
+        "BackgroundTaskOutput" => "Read stdout or stderr from a background task.".to_string(),
+        "bash" => "Run a sandboxed shell command when file tools do not apply.".to_string(),
+        _ => {
+            let trimmed = description.trim();
+            let sentence = trimmed
+                .split_terminator(['.', '\n'])
+                .next()
+                .unwrap_or(trimmed)
+                .trim();
+            let mut out = sentence.chars().take(120).collect::<String>();
+            if sentence.chars().count() > 120 {
+                out.push_str("...");
+            }
+            if out.is_empty() {
+                name.to_string()
+            } else {
+                out
+            }
+        }
+    }
+}
+
+fn cdp_required_args(schema: &Value) -> Vec<String> {
+    let direct_required = |value: &Value| {
+        value
+            .get("required")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+
+    if let Some(any_of) = schema.get("anyOf").and_then(Value::as_array) {
+        let variants = any_of
+            .iter()
+            .map(direct_required)
+            .filter(|items| !items.is_empty())
+            .map(|items| items.join(" + "))
+            .collect::<Vec<_>>();
+        if !variants.is_empty() {
+            return vec![variants.join(" or ")];
+        }
+    }
+
+    direct_required(schema)
+}
+
+fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
+    let curated = match name {
+        "read_file" => vec!["offset", "limit", "pages"],
+        "glob_search" => vec!["path"],
+        "grep_search" => vec!["path", "glob", "context"],
+        "git_status" => vec!["path"],
+        "git_diff" => vec!["path", "staged"],
+        "WebSearch" => vec!["allowed_domains", "blocked_domains"],
+        "WebFetch" => vec!["prompt"],
+        "edit_file" => vec!["replace_all"],
+        "bash" => vec!["timeout", "description", "run_in_background"],
+        "PowerShell" => vec!["timeout", "description", "run_in_background"],
+        "CliRun" => vec!["timeout_ms"],
+        "ElectronLaunch" => vec!["cdp_port"],
+        "ElectronEval" => vec!["cdp_port"],
+        "ElectronGetText" => vec!["cdp_port", "selector"],
+        "ElectronClick" => vec!["cdp_port"],
+        "ElectronTypeText" => vec!["cdp_port"],
+        "MCP" => vec!["server", "name", "arguments"],
+        "AskUserQuestion" => vec!["options"],
+        "TaskUpdate" => vec!["status", "message", "output"],
+        "TaskOutput" => vec!["append", "offset", "tail"],
+        "BackgroundTaskOutput" => vec!["stream", "offset", "tail"],
+        _ => Vec::new(),
+    };
+    if !curated.is_empty() {
+        return curated.into_iter().map(ToString::to_string).collect();
+    }
+
+    let required = cdp_required_args(schema);
+    let required_set = required
+        .iter()
+        .flat_map(|item| item.split(" or "))
+        .collect::<HashSet<_>>();
+    let mut optional = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .map(|properties| {
+            properties
+                .keys()
+                .filter(|key| !required_set.contains(key.as_str()))
+                .filter(|key| {
+                    !matches!(
+                        key.as_str(),
+                        "dangerously_disable_sandbox"
+                            | "dangerouslyDisableSandbox"
+                            | "backgroundedBy"
+                            | "namespaceRestrictions"
+                            | "isolateNetwork"
+                            | "allowedMounts"
+                            | "serverName"
+                            | "task_id"
+                            | "file_path"
+                    )
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    optional.sort();
+    optional.truncate(3);
+    optional
+}
+
+fn text_mentions_windows_office_file(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    [".docx", ".xlsx", ".pptx", ".msg"]
+        .iter()
+        .any(|ext| lower.contains(ext))
+}
+
+fn should_include_windows_office_catalog_addon(messages: &[ConversationMessage]) -> bool {
+    latest_actionable_user_turn(messages).is_some_and(|turn| {
+        text_mentions_windows_office_file(&turn.text)
+            || turn
+                .path_anchors
+                .iter()
+                .any(|path| text_mentions_windows_office_file(path))
+    })
+}
+
+fn cdp_catalog_specs_for_flavor(
+    _prompt_flavor: CdpPromptFlavor,
+    _catalog_flavor: CdpCatalogFlavor,
+) -> Vec<Value> {
+    let mut specs = tools::tool_specs_for_surface(tools::ToolSurface::Standard);
+    specs.sort_by(|a, b| {
+        cdp_catalog_sort_key(a.name)
+            .cmp(&cdp_catalog_sort_key(b.name))
+            .then_with(|| a.name.cmp(b.name))
+    });
+    specs.into_iter()
+        .map(|spec| {
+            json!({
+                "name": spec.name,
+                "primary_use": cdp_tool_primary_use(spec.name, spec.description),
+                "required_args": cdp_required_args(&spec.input_schema),
+                "important_optional_args": cdp_tool_important_optional_args(spec.name, &spec.input_schema),
+            })
+        })
+        .collect()
+}
+
+fn compact_standard_cdp_system_prompt(system_prompt: &[String]) -> String {
+    let keep_section = |section: &str| {
+        let trimmed = section.trim_start();
+        trimmed.starts_with("You are an interactive agent")
+            || trimmed.starts_with("# System")
+            || trimmed.starts_with("# Doing tasks")
+            || trimmed.starts_with("# Executing actions with care")
+            || trimmed.starts_with("# Environment context")
+            || trimmed.starts_with("## Relay desktop runtime")
+            || trimmed.starts_with("## Relay desktop constraints")
+            || trimmed.starts_with("## Concrete workspace file action")
+    };
+
+    let filtered = system_prompt
+        .iter()
+        .filter(|section| keep_section(section))
+        .cloned()
+        .collect::<Vec<_>>();
+    if filtered.is_empty() {
+        system_prompt.join("\n\n")
+    } else {
+        filtered.join("\n\n")
+    }
+}
+
 /// Prepended to every CDP prompt so the model does not confuse this session with consumer Copilot chat (no tools).
 const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Agent's model
 
@@ -2203,36 +2513,25 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 
 "#;
 
-fn cdp_catalog_specs_for_flavor(
-    _prompt_flavor: CdpPromptFlavor,
-    _catalog_flavor: CdpCatalogFlavor,
-) -> Vec<Value> {
-    tools::tool_specs_for_surface(tools::ToolSurface::Standard)
-        .into_iter()
-        .map(|s| {
-            json!({
-                "name": s.name,
-                "description": s.description,
-                "input_schema": s.input_schema,
-            })
-        })
-        .collect()
-}
-
 /// Serialize built-in tool specs for the Copilot text prompt.
 fn cdp_tool_catalog_section_for_flavor(
     prompt_flavor: CdpPromptFlavor,
     catalog_flavor: CdpCatalogFlavor,
+    messages: &[ConversationMessage],
 ) -> String {
     let catalog = cdp_catalog_specs_for_flavor(prompt_flavor, catalog_flavor);
     let json_pretty = serde_json::to_string_pretty(&catalog).unwrap_or_else(|_| "[]".to_string());
     match catalog_flavor {
         CdpCatalogFlavor::StandardFull => {
-            let win_addon = cdp_windows_office_catalog_addon();
+            let win_addon = if should_include_windows_office_catalog_addon(messages) {
+                cdp_windows_office_catalog_addon()
+            } else {
+                ""
+            };
             format!(
                 r#"{CDP_RELAY_RUNTIME_CATALOG_LEAD}## Relay Agent tools
 
-The JSON array below lists every tool you may invoke. Each entry has `name`, `description`, and `input_schema` (JSON Schema for the tool's `input` object).
+The JSON array below lists every tool available in this Relay session. Each entry includes the tool `name`, a compact `primary_use`, its `required_args`, and the most relevant `important_optional_args`.
 ```json
 {json_pretty}
 ```
@@ -2267,7 +2566,11 @@ Example:
 }
 
 fn cdp_tool_catalog_section() -> String {
-    cdp_tool_catalog_section_for_flavor(CdpPromptFlavor::Standard, CdpCatalogFlavor::StandardFull)
+    cdp_tool_catalog_section_for_flavor(
+        CdpPromptFlavor::Standard,
+        CdpCatalogFlavor::StandardFull,
+        &[],
+    )
 }
 
 fn mvp_tool_names_whitelist() -> HashSet<String> {
@@ -3278,7 +3581,7 @@ fn build_cdp_prompt_bundle_from_messages(
     let grounding_text = CDP_BUNDLE_GROUNDING_BLOCK.to_string();
     let effective_messages = cdp_messages_for_flavor(messages, flavor);
     let mut system_text = match flavor {
-        CdpPromptFlavor::Standard => system_prompt.join("\n\n"),
+        CdpPromptFlavor::Standard => compact_standard_cdp_system_prompt(system_prompt),
         CdpPromptFlavor::Repair => build_repair_cdp_system_prompt(messages),
     };
     if let Some(paths_section) = build_latest_requested_paths_section(messages) {
@@ -3288,7 +3591,7 @@ fn build_cdp_prompt_bundle_from_messages(
         system_text.push_str(&paths_section);
     }
     let (message_text, message_breakdown) = render_cdp_messages_with_breakdown(&effective_messages);
-    let catalog_text = cdp_tool_catalog_section_for_flavor(flavor, catalog_flavor);
+    let catalog_text = cdp_tool_catalog_section_for_flavor(flavor, catalog_flavor, messages);
     let mut parts = vec![grounding_text.clone()];
     if !system_text.is_empty() {
         parts.push(system_text.clone());
@@ -4608,6 +4911,7 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "The current task is a concrete local workspace file create/edit request.\n",
                 "Do not start with WebSearch, web search, citations, Pages, uploads, or `office365_search`.\n",
                 "If the user already named the target path or file, use `write_file` / `edit_file` in the first response instead of searching for examples first.\n",
+                "If the requested content can be produced directly from the user instruction, emit `write_file` now instead of returning the file body as plain assistant text.\n",
                 "Do not answer with a plan to search before using the local file tools."
             ),
         );
@@ -4819,7 +5123,9 @@ mod cdp_copilot_tool_tests {
         let s = cdp_tool_catalog_section();
         assert!(s.contains("read_file"));
         assert!(s.contains("relay_tool"));
-        assert!(s.contains("input_schema"));
+        assert!(s.contains("primary_use"));
+        assert!(s.contains("required_args"));
+        assert!(s.contains("important_optional_args"));
         assert!(s.contains("CDP session: you are Relay Agent"));
         assert!(s.contains("Relay host execution"));
         assert!(s.contains("wrong for this session"));
@@ -4867,6 +5173,7 @@ mod cdp_copilot_tool_tests {
         assert!(bundle.catalog_text.contains("\"name\": \"write_file\""));
         assert!(bundle.catalog_text.contains("\"name\": \"bash\""));
         assert!(bundle.catalog_text.contains("\"name\": \"WebFetch\""));
+        assert!(bundle.catalog_text.contains("\"primary_use\""));
     }
 
     #[test]
@@ -4874,6 +5181,7 @@ mod cdp_copilot_tool_tests {
         let s = cdp_tool_catalog_section_for_flavor(
             CdpPromptFlavor::Standard,
             CdpCatalogFlavor::StandardFull,
+            &[],
         );
         assert!(s.contains("read_file"));
         assert!(s.contains("write_file"));
@@ -4885,15 +5193,22 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("\"name\": \"bash\""));
         assert!(s.contains("\"name\": \"WebFetch\""));
         assert!(s.contains("\"name\": \"WebSearch\""));
+        assert!(s.contains("\"primary_use\": \"Read local text or PDF content.\""));
         assert!(s.contains("Relay Agent tools"));
     }
 
     #[test]
-    fn standard_build_prompt_uses_full_system_prompt() {
+    fn standard_build_prompt_uses_compact_system_prompt() {
         let system = vec![
+            "You are an interactive agent that helps users with software engineering tasks."
+                .to_string(),
+            "# System\n- Tools are available.".to_string(),
+            "# Doing tasks\n- Inspect before editing.".to_string(),
             "## Relay desktop runtime\nUse registered tools.".to_string(),
             "## Relay desktop constraints\nPrefer read-only tools.".to_string(),
+            "# Project context\nWorking directory: /tmp/workspace".to_string(),
             "# Workspace instructions\n".to_string() + &"A".repeat(1800),
+            "# Local prompt additions\nDo something custom.".to_string(),
         ];
         let messages = vec![ConversationMessage::user_text(
             "Create /root/Relay_Agent/tetris.html as a single-file HTML Tetris game.".to_string(),
@@ -4904,11 +5219,66 @@ mod cdp_copilot_tool_tests {
             CdpPromptFlavor::Standard,
             CdpCatalogFlavor::StandardFull,
         );
-        assert!(full.system_text.starts_with(&system.join("\n\n")));
-        assert!(full.system_text.contains("# Workspace instructions"));
-        assert!(full.system_text.contains(&"A".repeat(1800)));
+        assert!(full.system_text.contains("You are an interactive agent"));
+        assert!(full.system_text.contains("# System"));
+        assert!(full.system_text.contains("# Doing tasks"));
         assert!(full.system_text.contains("Latest requested paths:"));
         assert!(full.system_text.contains("/root/Relay_Agent/tetris.html"));
+        assert!(!full.system_text.contains("# Project context"));
+        assert!(!full.system_text.contains("# Workspace instructions"));
+        assert!(!full.system_text.contains("# Local prompt additions"));
+    }
+
+    #[test]
+    fn completion_timeout_enforces_minimum_floor_for_copilot_replies() {
+        assert_eq!(completion_timeout_secs_from_browser_settings(None), 240);
+        assert_eq!(
+            completion_timeout_secs_from_browser_settings(Some(&BrowserAutomationSettings {
+                cdp_port: 9360,
+                auto_launch_edge: true,
+                timeout_ms: 120_000,
+            })),
+            240
+        );
+        assert_eq!(
+            completion_timeout_secs_from_browser_settings(Some(&BrowserAutomationSettings {
+                cdp_port: 9360,
+                auto_launch_edge: true,
+                timeout_ms: 360_000,
+            })),
+            360
+        );
+    }
+
+    #[test]
+    fn office_catalog_addon_is_detected_from_latest_user_turn() {
+        let office_messages = vec![ConversationMessage::user_text(
+            "sales.xlsx を確認して集計してください。".to_string(),
+        )];
+        assert!(should_include_windows_office_catalog_addon(
+            &office_messages
+        ));
+
+        let plain_messages = vec![ConversationMessage::user_text(
+            "README.md を読んでください。".to_string(),
+        )];
+        assert!(!should_include_windows_office_catalog_addon(
+            &plain_messages
+        ));
+    }
+
+    #[test]
+    fn standard_catalog_orders_core_tools_first_even_in_full_catalog() {
+        let s = cdp_tool_catalog_section_for_flavor(
+            CdpPromptFlavor::Standard,
+            CdpCatalogFlavor::StandardFull,
+            &[],
+        );
+        let read_index = s.find("\"name\": \"read_file\"").expect("read_file");
+        let write_index = s.find("\"name\": \"write_file\"").expect("write_file");
+        let bash_index = s.find("\"name\": \"bash\"").expect("bash");
+        assert!(read_index < bash_index);
+        assert!(write_index < bash_index);
     }
 
     #[test]
@@ -5252,7 +5622,14 @@ mod cdp_copilot_tool_tests {
     #[cfg(windows)]
     #[test]
     fn catalog_includes_windows_office_powershell_guidance() {
-        let s = cdp_tool_catalog_section();
+        let messages = vec![ConversationMessage::user_text(
+            "budget.xlsx を確認して必要なら PDF 化して読んでください。".to_string(),
+        )];
+        let s = cdp_tool_catalog_section_for_flavor(
+            CdpPromptFlavor::Standard,
+            CdpCatalogFlavor::StandardFull,
+            &messages,
+        );
         assert!(s.contains("Windows desktop Office"));
         assert!(s.contains("PowerShell"));
         assert!(s.contains("Range.Value2"));
@@ -6500,6 +6877,32 @@ mod loop_controller_tests {
         } = decision
         else {
             panic!("expected false completion to escalate to repair");
+        };
+        assert!(next_input.contains("Tool protocol repair."));
+    }
+
+    #[test]
+    fn concrete_file_body_without_tool_call_escalates_to_repair() {
+        let s = summary(
+            "<!doctype html>\n<html><head><title>Tetris</title></head><body><script>console.log('ready');</script></body></html>",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let decision = decide_loop_after_success(
+            "Create ./tetris.html as a single-file HTML Tetris game.",
+            "Create ./tetris.html as a single-file HTML Tetris game.",
+            0,
+            0,
+            2,
+            false,
+            &s,
+        );
+        let LoopDecision::Continue {
+            next_input,
+            kind: LoopContinueKind::MetaNudge,
+        } = decision
+        else {
+            panic!("expected plain file body completion to escalate to repair");
         };
         assert!(next_input.contains("Tool protocol repair."));
     }

@@ -20,6 +20,8 @@ const READY_TIMEOUT_SECS: u64 = 30;
 const HEALTH_POLL_INTERVAL_MS: u64 = 500;
 /// `GET /status` drives Edge launch + navigation; allow longer than default HTTP client timeout.
 const WARMUP_STATUS_TIMEOUT_SECS: u64 = 120;
+const COMPLETION_REJOIN_TIMEOUT_SECS: u64 = 90;
+const ABORT_REQUEST_TIMEOUT_SECS: u64 = 5;
 /// If `127.0.0.1:18080` is held by a stray `node copilot_server.js` (e.g. after `--keep-app`), try the next ports.
 const COPILOT_HTTP_PORT_FALLBACKS: u16 = 32;
 pub(crate) const RELAY_COPILOT_SERVICE_NAME: &str = "relay_copilot_server";
@@ -769,9 +771,22 @@ impl CopilotServer {
         self.status_with_timeout(WARMUP_STATUS_TIMEOUT_SECS).await
     }
 
-    fn http_error_recoverable(err: &CopilotError) -> bool {
+    fn http_error_is_timeout(err: &CopilotError) -> bool {
+        matches!(err, CopilotError::Http(error) if error.is_timeout())
+    }
+
+    fn http_error_is_connect(err: &CopilotError) -> bool {
+        matches!(err, CopilotError::Http(error) if error.is_connect())
+    }
+
+    fn is_aborted_error(err: &CopilotError) -> bool {
         match err {
-            CopilotError::Http(e) => e.is_connect() || e.is_timeout(),
+            CopilotError::PromptError(prompt_error) => {
+                matches!(
+                    prompt_error.as_ref(),
+                    CopilotPromptFailure::Message(message) if message.contains("relay_copilot_aborted")
+                )
+            }
             _ => false,
         }
     }
@@ -831,6 +846,13 @@ impl CopilotServer {
             body["relay_new_chat"] = json!(true);
         }
         body
+    }
+
+    fn build_abort_prompt_body(relay_session_id: &str, relay_request_id: &str) -> Value {
+        json!({
+            "relay_session_id": relay_session_id,
+            "relay_request_id": relay_request_id,
+        })
     }
 
     fn record_send_prompt_error(&mut self, error: &CopilotError) {
@@ -947,6 +969,90 @@ impl CopilotServer {
         Ok(content)
     }
 
+    async fn abort_prompt_request(
+        &self,
+        relay_session_id: &str,
+        relay_request_id: &str,
+    ) -> Result<bool, CopilotError> {
+        let url = format!("{}/v1/chat/abort", self.server_url());
+        let mut http_request = self
+            .client
+            .post(url)
+            .json(&Self::build_abort_prompt_body(
+                relay_session_id,
+                relay_request_id,
+            ))
+            .timeout(Duration::from_secs(ABORT_REQUEST_TIMEOUT_SECS));
+        if let Some(token) = &self.boot_token {
+            http_request = http_request.header("X-Relay-Boot-Token", token);
+        }
+        let response = http_request.send().await.map_err(CopilotError::Http)?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(parse_prompt_error_body(status, &body));
+        }
+        let body = response.json::<Value>().await.map_err(CopilotError::Http)?;
+        Ok(body
+            .get("aborted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false))
+    }
+
+    async fn abort_prompt_request_best_effort(
+        &self,
+        relay_session_id: &str,
+        relay_request_id: &str,
+        reason: &str,
+    ) {
+        match self
+            .abort_prompt_request(relay_session_id, relay_request_id)
+            .await
+        {
+            Ok(aborted) => info!(
+                "[copilot] best-effort abort before replay reason={} relay_session_id={} relay_request_id={} aborted={}",
+                reason, relay_session_id, relay_request_id, aborted
+            ),
+            Err(error) => warn!(
+                "[copilot] best-effort abort failed before replay reason={} relay_session_id={} relay_request_id={} error={}",
+                reason, relay_session_id, relay_request_id, error
+            ),
+        }
+    }
+
+    async fn rejoin_prompt_after_timeout(
+        &mut self,
+        request: CopilotSendPromptRequest<'_>,
+    ) -> Result<String, CopilotError> {
+        warn!(
+            "[copilot] chat/completions timed out; attempting same-request rejoin on the existing bridge for up to {}s (relay_request_id={}, request_chain={})",
+            COMPLETION_REJOIN_TIMEOUT_SECS,
+            request.relay_request_id,
+            request.relay_request_chain
+        );
+        self.send_prompt_once(CopilotSendPromptRequest {
+            timeout_secs: COMPLETION_REJOIN_TIMEOUT_SECS,
+            ..request
+        })
+        .await
+    }
+
+    async fn restart_bridge_and_retry_prompt(
+        &mut self,
+        request: CopilotSendPromptRequest<'_>,
+        reason: &str,
+    ) -> Result<String, CopilotError> {
+        warn!("[copilot] {reason}; restarting Node bridge and retrying once");
+        self.abort_prompt_request_best_effort(
+            request.relay_session_id,
+            request.relay_request_id,
+            reason,
+        )
+        .await;
+        self.start().await?;
+        self.send_prompt_once(request).await
+    }
+
     /// POST to the Node bridge; on connect/timeout failure, restart `copilot_server.js` once and retry.
     ///
     /// `new_chat`: when `true`, Node may click Copilot "new chat" before pasting (see `relay_new_chat` in `copilot_server.js`). Default agent path uses `false` so turns append to the current Copilot thread.
@@ -956,19 +1062,41 @@ impl CopilotServer {
     ) -> Result<String, CopilotError> {
         match self.send_prompt_once(request).await {
             Ok(t) => Ok(t),
-            Err(e) if Self::http_error_recoverable(&e) => {
-                warn!(
-                    "[copilot] chat/completions failed ({e}); restarting Node bridge and retrying once"
-                );
-                self.start().await?;
-                self.send_prompt_once(request).await
+            Err(e) if Self::http_error_is_timeout(&e) => {
+                match self.rejoin_prompt_after_timeout(request).await {
+                    Ok(text) => Ok(text),
+                    Err(rejoin_error) if Self::is_aborted_error(&rejoin_error) => Err(rejoin_error),
+                    Err(rejoin_error) if Self::boot_token_error_recoverable(&rejoin_error) => {
+                        self.restart_bridge_and_retry_prompt(
+                            request,
+                            &format!(
+                                "same-request rejoin after timeout hit probable stale boot token ({rejoin_error})"
+                            ),
+                        )
+                        .await
+                    }
+                    Err(rejoin_error) => {
+                        self.restart_bridge_and_retry_prompt(
+                            request,
+                            &format!("same-request rejoin after timeout failed ({rejoin_error})"),
+                        )
+                        .await
+                    }
+                }
+            }
+            Err(e) if Self::http_error_is_connect(&e) => {
+                self.restart_bridge_and_retry_prompt(
+                    request,
+                    &format!("chat/completions connect failed ({e})"),
+                )
+                .await
             }
             Err(e) if Self::boot_token_error_recoverable(&e) => {
-                warn!(
-                    "[copilot] chat/completions failed with probable stale boot token ({e}); restarting Node bridge and retrying once"
-                );
-                self.start().await?;
-                self.send_prompt_once(request).await
+                self.restart_bridge_and_retry_prompt(
+                    request,
+                    &format!("chat/completions failed with probable stale boot token ({e})"),
+                )
+                .await
             }
             Err(e) => Err(e),
         }
@@ -1182,5 +1310,12 @@ mod tests {
         });
         assert_eq!(body["relay_force_fresh_chat"], serde_json::json!(true));
         assert_eq!(body["relay_stage_label"], serde_json::json!("repair1"));
+    }
+
+    #[test]
+    fn build_abort_prompt_body_targets_specific_request() {
+        let body = CopilotServer::build_abort_prompt_body("session-1", "request-1");
+        assert_eq!(body["relay_session_id"], serde_json::json!("session-1"));
+        assert_eq!(body["relay_request_id"], serde_json::json!("request-1"));
     }
 }
