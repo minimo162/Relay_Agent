@@ -1,9 +1,10 @@
 import { defineConfig } from "@playwright/test";
+import { relayCdpEndpointFromEnv } from "./tests/cdp-endpoint";
 
 /* Standalone Playwright config for CDP-connected M365 Copilot E2E tests.
  *
  * IMPORTANT: This config uses connectOverCDP to attach to a running Edge/Chrome
- * instance. You MUST start the browser with --remote-debugging-port (Playwright 既定: **9333**; Relay アプリ既定は 9360 — `CDP_ENDPOINT` で上書き)
+ * instance. You MUST start the browser with --remote-debugging-port (Relay / Playwright live default: **9360** — `CDP_ENDPOINT` で上書き)
  * before running tests. Do NOT use the default `chromium.launch()` path — it creates
  * an isolated profile that has NO M365 session cookies.
  *
@@ -11,8 +12,8 @@ import { defineConfig } from "@playwright/test";
  * otherwise tests hit login.microsoftonline.com and fail for the wrong reason.
  *
  * Usage:
- *   1. Launch Edge (tests 既定):  e.g. --remote-debugging-port=9333
- *   2. Run tests:    pnpm run test:e2e:m365-cdp   (or: CDP_ENDPOINT=http://127.0.0.1:9333 npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat)
+ *   1. Launch Edge (tests 既定):  e.g. --remote-debugging-port=9360
+ *   2. Run tests:    pnpm run test:e2e:m365-cdp   (or: CDP_ENDPOINT=http://127.0.0.1:9360 npx playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat)
  *
  * Grounding (real Copilot, opt-in): sign in to M365 Copilot in that profile, then
  *   RELAY_GROUNDING_E2E=1 pnpm run test:e2e:copilot-grounding
@@ -27,8 +28,7 @@ import { defineConfig } from "@playwright/test";
  *     and re-authenticate via MFA when tests start redirecting to login.microsoftonline.com.
  */
 
-const CDP_ENDPOINT =
-  process.env.CDP_ENDPOINT || "http://127.0.0.1:9333";
+const CDP_ENDPOINT = relayCdpEndpointFromEnv();
 
 export default defineConfig({
   testDir: "./tests",

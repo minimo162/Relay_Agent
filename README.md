@@ -15,7 +15,7 @@ pnpm install
 - **Full desktop (Tauri + Rust):** `pnpm --filter @relay-agent/desktop tauri:dev` (Unix prestarts Edge/Copilot helper; see package script).
 - **Frontend only (Vite):** `pnpm dev` (same as `vite` in `apps/desktop`; no native shell).
 
-Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E2E_CDP_PITFALLS.md](docs/COPILOT_E2E_CDP_PITFALLS.md) (Relay / `pnpm relay:edge`: **9360**; Playwright CDP tests: default **9333** — override with `CDP_ENDPOINT`).
+Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E2E_CDP_PITFALLS.md](docs/COPILOT_E2E_CDP_PITFALLS.md) (Relay / `pnpm relay:edge` / Playwright live CDP tests: default **9360** — override with `CDP_ENDPOINT`).
 
 ## Stack
 

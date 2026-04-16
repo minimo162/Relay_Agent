@@ -1,7 +1,7 @@
 import { test, expect, chromium } from "@playwright/test";
+import { relayCdpEndpointFromEnv } from "./cdp-endpoint";
 
-const CDP_ENDPOINT =
-  process.env.CDP_ENDPOINT || "http://127.0.0.1:9333";
+const CDP_ENDPOINT = relayCdpEndpointFromEnv();
 const M365_COPILOT_URL = "https://m365.cloud.microsoft/chat";
 
 /* ── Helpers ─────────────────────────────────────────────────── */

@@ -28,7 +28,7 @@
     "live:m365:path-resolution-same-session": "node ./scripts/live_m365_same_session_path_resolution.mjs",
     "live:m365:copilot-response-probe": "node ./scripts/live_m365_copilot_response_probe.mjs",
     "test:e2e": "playwright test",
-    "test:e2e:m365-cdp": "CDP_ENDPOINT=http://127.0.0.1:9333 playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat",
+    "test:e2e:m365-cdp": "playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat",
     "test:e2e:copilot-grounding": "RELAY_GROUNDING_E2E=1 playwright test --config=playwright-cdp.config.ts -g tetris",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui",
