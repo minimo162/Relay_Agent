@@ -274,6 +274,24 @@ function normalizeCopilotVisibleText(text) {
   return cleaned.trim();
 }
 
+function assistantReplyHasClosedFence(text) {
+  const raw = String(text ?? "");
+  const fences = raw.match(/```/g);
+  return Array.isArray(fences) && fences.length >= 2 && fences.length % 2 === 0;
+}
+
+function assistantReplyHasStrongCompletionSignal(text) {
+  const cleaned = normalizeCopilotVisibleText(text);
+  if (!cleaned || replyEndsWithStreamingPlaceholder(cleaned)) return false;
+  const looksLikeHtmlDocument = /<!doctype html>|<html\b/i.test(cleaned);
+  if (looksLikeHtmlDocument) {
+    return /<\/html>/i.test(cleaned);
+  }
+  if (assistantReplyHasClosedFence(cleaned)) return true;
+  if (assistantTextHasStructuredContent(cleaned) && cleaned.length >= 180) return true;
+  return false;
+}
+
 const INTERNAL_PROGRESS_PREFIXES = [
   "the user wants me to ",
   "i'll ",
@@ -397,6 +415,10 @@ async function pollCopilotGeneratingAndReply(session) {
 async function extractAssistantReplyText(session) {
   const r = await session.evaluate(copilotDomReplyExtractIifeExpression()).catch(() => ({ value: "" }));
   return normalizeCopilotVisibleText(typeof r?.value === "string" ? r.value : "");
+}
+
+async function extractAssistantReplyStructured(session) {
+  return extractAssistantReplyText(session);
 }
 
 function assistantTurnExtractionIifeExpression({ includeGenericSelectors = true } = {}) {
@@ -729,9 +751,23 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
   const loose = normalizeCopilotVisibleText(looseText);
   const looseLooksLikePrompt = domExtractLooksLikeSubmittedPrompt(loose.length, submittedPromptLen);
   const needsExpansionProbe = assistantReplyNeedsExpansionProbe(loose, submittedPromptLen);
+  const structured = normalizeCopilotVisibleText(await extractAssistantReplyStructured(session));
+  const structuredLooksLikePrompt = domExtractLooksLikeSubmittedPrompt(structured.length, submittedPromptLen);
+  const structuredNeedsExpansionProbe = assistantReplyNeedsExpansionProbe(structured, submittedPromptLen);
   const strict = normalizeCopilotVisibleText(await extractAssistantReplyStrict(session));
   const strictLooksLikePrompt = domExtractLooksLikeSubmittedPrompt(strict.length, submittedPromptLen);
   const strictNeedsExpansionProbe = assistantReplyNeedsExpansionProbe(strict, submittedPromptLen);
+  const strictClearlyMoreCompleteThanStructured =
+    !!strict &&
+    !strictLooksLikePrompt &&
+    (!!structured &&
+      !structuredLooksLikePrompt &&
+      ((assistantReplyHasStrongCompletionSignal(strict) &&
+        !assistantReplyHasStrongCompletionSignal(structured)) ||
+        shouldPreferExpandedAssistantTurn(structured, strict) ||
+        (strict.startsWith(structured) && strict.length >= structured.length + 10)));
+  if (strictClearlyMoreCompleteThanStructured) return strict;
+  if (structured && !structuredLooksLikePrompt && !structuredNeedsExpansionProbe) return structured;
   if (strict && !strictLooksLikePrompt && !strictNeedsExpansionProbe) return strict;
   if (!strict && !looseLooksLikePrompt && !needsExpansionProbe) return loose;
 
@@ -760,6 +796,9 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
     return false;
   };
 
+  if (structured && !structuredLooksLikePrompt) {
+    acceptCandidate("prefer structured assistant extract", structured);
+  }
   if (strict && !strictLooksLikePrompt) {
     acceptCandidate("prefer strict assistant extract", strict);
   } else if (!looseLooksLikePrompt) {
@@ -817,7 +856,17 @@ async function waitForDomResponse(
   options = {},
 ) {
   const onProgress = typeof options?.onProgress === "function" ? options.onProgress : null;
+  const onFinalize = typeof options?.onFinalize === "function" ? options.onFinalize : null;
   let lastProgressText = "";
+  const finalize = async (mode, text) => {
+    if (onFinalize) {
+      await onFinalize({
+        mode,
+        textLength: String(text ?? "").length,
+      });
+    }
+    return await wire(text);
+  };
   const emitProgress = async (text, generating) => {
     if (!onProgress) return;
     const cleaned = normalizeProgressTextForUi(text, baselineProgressText);
@@ -1058,10 +1107,27 @@ async function waitForDomResponse(
           continue;
         }
         console.error("[copilot:response] done, len=", out.length, "stable=", stable);
-        return await wire(out);
+        return await finalize("stable_resolved", out);
       }
     } else {
       stable = 0;
+    }
+
+    if (
+      !generating &&
+      !progressOnly &&
+      hasVisibleAssistantChat &&
+      (ignorePhantomStop || quietGen >= 5) &&
+      (streamed || len >= baselineLen + 8 || len >= 120)
+    ) {
+      const earlyResolved = await resolveAssistantReplyForReturn(session, reply, submittedPromptLen, netCapture);
+      if (earlyResolved != null && assistantReplyHasStrongCompletionSignal(earlyResolved)) {
+        console.error(
+          "[copilot:response] done (strong structured reply after stalled generating) len=",
+          earlyResolved.length,
+        );
+        return await finalize("stable_strong_signal", earlyResolved);
+      }
     }
 
     /** Generation ended long ago but len stayed at a huge false positive — finish and return best strict assistant extract. */
@@ -1079,7 +1145,7 @@ async function waitForDomResponse(
           "domLen=",
           len,
         );
-        return await wire(strict);
+        return await finalize("stable_quiet_strict", strict);
       }
     }
 
@@ -1095,7 +1161,7 @@ async function waitForDomResponse(
       const early = await resolveAssistantReplyForReturn(session, reply, submittedPromptLen, netCapture);
       if (early != null) {
         console.error("[copilot:response] done (resolved during echo wait) len=", early.length);
-        return await wire(early);
+        return await finalize("stable_echo_wait", early);
       }
     }
 
@@ -1106,11 +1172,11 @@ async function waitForDomResponse(
   const fbResolved = await resolveAssistantReplyForReturn(session, fbLoose, submittedPromptLen, netCapture);
   if (fbResolved != null) {
     console.error("[copilot:response] timeout, using resolved assistant len=", fbResolved.length);
-    return await wire(fbResolved);
+    return await finalize("timeout_resolved", fbResolved);
   }
   if (fbLoose.length >= 12 && !domExtractLooksLikeSubmittedPrompt(fbLoose.length, submittedPromptLen)) {
     console.error("[copilot:response] timeout, returning partial len=", fbLoose.length);
-    return await wire(fbLoose);
+    return await finalize("timeout_partial", fbLoose);
   }
   if (fbLoose.length >= 12) {
     console.error(
@@ -1130,7 +1196,7 @@ async function waitForDomResponse(
   const bodyStr = typeof bodyFb?.value === "string" ? bodyFb.value : "";
   if (bodyStr.length >= 80) {
     console.error("[copilot:response] timeout body tail fallback len=", bodyStr.length);
-    return await wire(bodyStr);
+    return await finalize("timeout_body_tail", bodyStr);
   }
   if (netCapture) {
     const sn = normalizeCopilotVisibleText(
@@ -1138,12 +1204,12 @@ async function waitForDomResponse(
     );
     if (sn.length >= CHATHUB_ASSISTANT_MIN_CHARS) {
       console.error("[copilot:response] DOM empty; using network short-assistant len=", sn.length);
-      return await wire(sn);
+      return await finalize("timeout_network_short", sn);
     }
     const nwTrim = normalizeCopilotVisibleText(await netCapture.pickBestOver("", submittedPromptLen));
     if (nwTrim.length >= CHATHUB_ASSISTANT_MIN_CHARS && !networkExtractLooksLikeGarbage(nwTrim)) {
       console.error("[copilot:response] DOM empty; using network-only len=", nwTrim.length);
-      return await wire(nwTrim);
+      return await finalize("timeout_network_only", nwTrim);
     }
   }
   throw new Error("Copilot response not found in DOM");
@@ -1152,9 +1218,11 @@ async function waitForDomResponse(
 export {
   sleep,
   pollCopilotGeneratingAndReply,
+  extractAssistantReplyStructured,
   extractAssistantReplyStrict,
   extractAssistantReplyText,
   extractAssistantReplyHeuristic,
+  assistantReplyHasStrongCompletionSignal,
   domExtractLooksLikeSubmittedPrompt,
   normalizeCopilotVisibleText,
   normalizeProgressTextForUi,

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  assistantReplyHasStrongCompletionSignal,
   normalizeCopilotVisibleText,
   normalizeProgressTextForUi,
   waitForDomResponse,
@@ -137,6 +138,49 @@ test("normalizeCopilotVisibleText strips reasoning chrome, show-more chrome, and
       ].join("\n"),
     ),
     ["了解です。", "", "<!doctype html>", "<html lang=\"en\">"].join("\n"),
+  );
+});
+
+test("normalizeCopilotVisibleText strips M365 citation card residue but keeps prose and code", () => {
+  assert.equal(
+    normalizeCopilotVisibleText(
+      [
+        "Reasoning completed in 5 steps",
+        "了解です。",
+        "jakesgordon",
+        "+1",
+        "",
+        "<!doctype html>",
+        "<html lang=\"ja\">",
+        "</html>",
+        "Show less",
+      ].join("\n"),
+    ),
+    ["了解です。", "", "<!doctype html>", "<html lang=\"ja\">", "</html>"].join("\n"),
+  );
+});
+
+test("assistantReplyHasStrongCompletionSignal waits for closing html on document-like replies", () => {
+  assert.equal(
+    assistantReplyHasStrongCompletionSignal([
+      "了解です。",
+      "",
+      "<!doctype html>",
+      "<html lang=\"ja\">",
+      "<style>",
+      "* { box-sizing: border-box; }",
+    ].join("\n")),
+    false,
+  );
+  assert.equal(
+    assistantReplyHasStrongCompletionSignal([
+      "了解です。",
+      "",
+      "<!doctype html>",
+      "<html lang=\"ja\">",
+      "</html>",
+    ].join("\n")),
+    true,
   );
 });
 
@@ -529,4 +573,110 @@ test("waitForDomResponse expands show-more code blocks before returning the assi
   assert.equal(response, fullReply);
   assert.equal(expandCalls, 1);
   assert.ok(pollIndex >= 3);
+});
+
+test("waitForDomResponse finalizes long HTML replies after phantom generating without timeout fallback", async () => {
+  const fullReply = [
+    "了解です。",
+    "",
+    "<!doctype html>",
+    "<html lang=\"ja\">",
+    "<body></body>",
+    "</html>",
+  ].join("\n");
+  let pollIndex = 0;
+  let finalizationMode = "";
+  const session = {
+    async evaluate(script) {
+      const source = String(script);
+      if (source.includes("reply: replyRaw")) {
+        pollIndex += 1;
+        return {
+          value: {
+            generating: true,
+            reply: fullReply,
+            progressOnly: false,
+            hasVisibleAssistantChat: true,
+            hasExpandableCodeBlock: false,
+          },
+        };
+      }
+      if (source.includes("const includeGenericSelectors = false")) {
+        return { value: fullReply };
+      }
+      if (source.includes("const includeGenericSelectors = true")) {
+        return { value: fullReply };
+      }
+      if (source.includes("document.body && document.body.innerText")) {
+        return { value: "" };
+      }
+      return { value: fullReply };
+    },
+  };
+
+  const response = await waitForDomResponse(session, null, 0, null, {
+    timeoutMs: 13_500,
+    onFinalize: async (event) => {
+      finalizationMode = event.mode;
+    },
+  });
+
+  assert.equal(response, fullReply);
+  assert.equal(finalizationMode, "stable_strong_signal");
+  assert.ok(pollIndex >= 22);
+});
+
+test("waitForDomResponse finalizes from strict extraction when loose stalled reply is still truncated", async () => {
+  const truncatedReply = [
+    "了解です。",
+    "",
+    "<!doctype html>",
+    "<html lang=\"ja\">",
+    "<body>",
+  ].join("\n");
+  const fullReply = [
+    "了解です。",
+    "",
+    "<!doctype html>",
+    "<html lang=\"ja\">",
+    "<body></body>",
+    "</html>",
+  ].join("\n");
+  let pollIndex = 0;
+  let finalizationMode = "";
+  const session = {
+    async evaluate(script) {
+      const source = String(script);
+      if (source.includes("reply: replyRaw")) {
+        pollIndex += 1;
+        return {
+          value: {
+            generating: true,
+            reply: truncatedReply,
+            progressOnly: false,
+            hasVisibleAssistantChat: true,
+            hasExpandableCodeBlock: false,
+          },
+        };
+      }
+      if (source.includes("const includeGenericSelectors = false")) {
+        return { value: fullReply };
+      }
+      if (source.includes("document.body && document.body.innerText")) {
+        return { value: "" };
+      }
+      return { value: truncatedReply };
+    },
+  };
+
+  const response = await waitForDomResponse(session, null, 0, null, {
+    timeoutMs: 13_500,
+    onFinalize: async (event) => {
+      finalizationMode = event.mode;
+    },
+  });
+
+  assert.equal(response, fullReply);
+  assert.equal(finalizationMode, "stable_strong_signal");
+  assert.ok(pollIndex >= 22);
 });

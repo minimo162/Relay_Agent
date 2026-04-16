@@ -5836,3 +5836,57 @@ Observed result:
     - `hasShowMore=false`
     - the resolved preview began with the expected HTML Tetris answer instead of search/reasoning progress
   - `git diff --check`: passed
+
+M365 Copilot long-form code reply extraction follow-up (2026-04-16, HTML Tetris live probe):
+
+```bash
+node --check apps/desktop/src-tauri/binaries/copilot_dom_poll.mjs
+node --check apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs
+node --check apps/desktop/scripts/live_m365_copilot_response_probe.mjs
+node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs
+pnpm --filter @relay-agent/desktop inspect:copilot-dom
+pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe -- --output-dir /tmp/relay-live-copilot-probe-20260416-tetris-clean4 --prompt "htmlでテトリスを作成して"
+git diff --check
+```
+
+Observed result:
+
+- [`apps/desktop/src-tauri/binaries/copilot_dom_poll.mjs`](../apps/desktop/src-tauri/binaries/copilot_dom_poll.mjs) now has an M365-specific structured extraction path that reads the last assistant reply root as ordered `prose -> code preview -> prose` blocks instead of relying on raw `innerText`.
+- The structured extractor bug was twofold on live M365 pages:
+  - `queryDeepAll()` inside the reply-extract IIFE still assumed a `document` root and returned nothing when passed an element root such as `copilot-message-reply-div`.
+  - the previous prose extraction collapsed text before and after the code preview into a single block, so even when code was present the final ordering was not stable enough for priority use.
+- The fixed extractor now:
+  - supports element roots in deep queries
+  - chooses the largest visible `markdown-reply`
+  - finds the code-preview segment within that reply
+  - emits ordered prose/code/prose blocks
+  - strips `Show less`, reasoning chrome, citation/source residue, and action/footer chrome before returning text
+- [`apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs`](../apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs) now rejects partial HTML documents as a strong completion signal. This fixed a live false positive where CSS lines such as `* { box-sizing: border-box; }` were misread as generic list structure and caused early finalization before `</html>`.
+- `resolveAssistantReplyForReturn()` now prefers `strict` over `structured` when `strict` is clearly more complete, which preserves the full reply in the stalled-generating case where the loose DOM tail is still truncated.
+- [`apps/desktop/scripts/live_m365_copilot_response_probe.mjs`](../apps/desktop/scripts/live_m365_copilot_response_probe.mjs) now records both `relayStructuredExtract` and `finalizationMode` in `summary.json`, so live artifacts show whether the response finished via stable completion or timeout fallback.
+- Added regression coverage in [`apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`](../apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs) for:
+  - M365 citation-card residue stripping while preserving prose and code
+  - HTML-document strong-signal gating on `</html>`
+  - phantom-generating completion from `strict` when the loose reply is still truncated
+- Live verification against the signed-in M365 Copilot tab:
+  - `pnpm --filter @relay-agent/desktop inspect:copilot-dom`: passed, and confirmed the live DOM shape still uses `copilot-message-reply-div`, `markdown-reply`, `role="group"[aria-label="Code Preview"]`, and `.scriptor-pageContainer[role="document"]`.
+  - Direct CDP spot-check after the fix reported:
+    - `structuredChars=14782`
+    - `strictChars=14778`
+    - `resolvedChars=14782`
+    - `structuredHasCloseHtml=true`
+    - `resolvedHasCloseHtml=true`
+  - Acceptance artifact: `/tmp/relay-live-copilot-probe-20260416-tetris-clean4`
+    - `summary.json` recorded `finalizationMode: stable_strong_signal`
+    - `turn-01/reply.txt` contains `<!doctype html>` and `</html>`
+    - `reply.txt` does not contain `jakesgordon`, `Show less`, or `Reasoning completed in`
+    - the returned text keeps the natural-language preamble before the code and the prose tail after the code
+- An intermediate artifact `/tmp/relay-live-copilot-probe-20260416-tetris-clean3` finalized too early and missed `</html>`. That run was kept as the reproduction artifact for the HTML strong-signal false positive; the final acceptance artifact is `clean4`.
+- Verification summary:
+  - `node --check apps/desktop/src-tauri/binaries/copilot_dom_poll.mjs`: passed
+  - `node --check apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs`: passed
+  - `node --check apps/desktop/scripts/live_m365_copilot_response_probe.mjs`: passed
+  - `node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`: passed (`24` tests)
+  - `pnpm --filter @relay-agent/desktop inspect:copilot-dom`: passed
+  - `pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe -- --output-dir /tmp/relay-live-copilot-probe-20260416-tetris-clean4 --prompt "htmlでテトリスを作成して"`: passed
+  - `git diff --check`: passed

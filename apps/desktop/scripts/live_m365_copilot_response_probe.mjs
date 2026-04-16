@@ -20,6 +20,7 @@ import {
 } from "../src-tauri/binaries/copilot_dom_poll.mjs";
 import {
   extractAssistantReplyHeuristic,
+  extractAssistantReplyStructured,
   extractAssistantReplyStrict,
   extractAssistantReplyText,
   normalizeCopilotVisibleText,
@@ -229,6 +230,7 @@ async function clickSend(page, timeoutMs) {
 async function captureDomState(page, promptText) {
   const relaySession = relaySessionAdapter(page);
   const relayLooseExtract = normalizeCopilotVisibleText(await extractAssistantReplyText(relaySession));
+  const relayStructuredExtract = normalizeCopilotVisibleText(await extractAssistantReplyStructured(relaySession));
   const relayStrictExtract = normalizeCopilotVisibleText(await extractAssistantReplyStrict(relaySession));
   const relayHeuristicExtract = normalizeCopilotVisibleText(await extractAssistantReplyHeuristic(relaySession));
   const relayResolvedExtract =
@@ -367,6 +369,7 @@ async function captureDomState(page, promptText) {
 
   return {
     relayLooseExtract,
+    relayStructuredExtract,
     relayStrictExtract,
     relayHeuristicExtract,
     relayResolvedExtract,
@@ -407,12 +410,18 @@ async function runTurn(page, turnIndex, prompt, options) {
     const screenshotBeforeSend = path.join(turnDir, "before-send.png");
     await page.screenshot({ path: screenshotBeforeSend, fullPage: true });
     const sendSelector = await clickSend(page, options.timeoutMs);
+    let finalizationMode = "unknown";
     const relayReply = await waitForDomResponse(
       relaySessionAdapter(page),
       null,
       prompt.length,
       null,
-      { timeoutMs: options.timeoutMs },
+      {
+        timeoutMs: options.timeoutMs,
+        onFinalize: async (event) => {
+          finalizationMode = event?.mode ?? "unknown";
+        },
+      },
     );
     await page.waitForTimeout(1_000);
     const afterState = await captureDomState(page, prompt);
@@ -431,8 +440,10 @@ async function runTurn(page, turnIndex, prompt, options) {
       promptChars: prompt.length,
       composerSelector,
       sendSelector,
+      finalizationMode,
       replyChars: relayReply.length,
       relayReply,
+      relayStructuredExtract: afterState.relayStructuredExtract,
       relayResolvedExtract: afterState.relayResolvedExtract,
       messageListTextChars: afterState.messageListText.length,
       artifactDir: turnDir,
