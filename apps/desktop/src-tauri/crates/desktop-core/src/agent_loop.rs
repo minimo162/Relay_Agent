@@ -185,7 +185,27 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r"## CDP session: you are Relay Age
 
 - User messages are sent from the **Relay Agent** desktop app through Microsoft Edge (M365 Copilot over CDP).
 - Emit fenced tool JSON when needed; prose-only refusals block the agent loop.
+
+## Output style
+
+- Keep user-visible prose concise, direct, and grounded in the current task.
+- Use at most one short paragraph before a tool fence unless the user asked for detail.
+- Avoid unnecessary preamble, postamble, repeated summaries, or protocol checklists.
+- Do not paste Copilot UI markers or search chrome into the user-visible answer.
+- Do not repeat the same paragraph or checklist multiple times in one reply.
+
+## Immediate action rules
+
 - If the latest user message already names the file task, call the needed Relay tools now.
+- Do not ask the user to restate a concrete path or action they already gave.
+- If the latest user turn names a concrete path, reuse that exact string in tool input instead of rewriting it.
+- Do not defer all tools to a later assistant message when the current turn already has enough information.
+
+## Grounding and anti-stall
+
+- Tool results in this bundle are authoritative evidence for the current turn.
+- Do not claim bugs, fixes, identifiers, or file state unless those claims are traceable to tool results, user messages, or file text in this prompt.
+- When tools are clearly needed, do not answer with only promises, plans, or protocol explanations.
 ";
 
 const CDP_TOOL_RESULT_CONTINUATION_REMINDER: &str = r#"## Continue from tool results
@@ -264,11 +284,14 @@ fn compact_standard_cdp_system_prompt(system_prompt: &[String]) -> String {
     let keep_section = |section: &str| {
         let trimmed = section.trim_start();
         trimmed.starts_with("You are an interactive agent")
+            || trimmed.starts_with("# Output style")
+            || trimmed.starts_with("# Output Style:")
             || trimmed.starts_with("# System")
             || trimmed.starts_with("# Doing tasks")
             || trimmed.starts_with("# Executing actions with care")
             || trimmed.starts_with("# Environment context")
             || trimmed.starts_with("## Relay desktop runtime")
+            || trimmed.starts_with("## Relay desktop response style")
             || trimmed.starts_with("## Relay desktop constraints")
             || trimmed.starts_with("## Concrete workspace file action")
     };
@@ -316,7 +339,12 @@ Only the tools documented below are intentionally advertised to Copilot for this
 
 {rendered_tools}
 
-When you need to call tools, append a fenced `relay_tool` block with JSON only.
+## Tool invocation protocol
+
+When you need to call tools, you may write a short user-facing explanation, then append a fenced `relay_tool` block with JSON only.
+
+- Keep any prose before the fence to one short paragraph unless the user asked for detail.
+- If the user already named files and an action, call tools now instead of asking them to repeat the request.
 
 ```relay_tool
 {{"name":"read_file","relay_tool_call":true,"input":{{"path":"README.md"}}}}
@@ -635,7 +663,11 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
             "## Relay repair mode\n",
             "You are in a recovery turn because the previous reply did not emit usable Relay local tool JSON.\n",
             "Return the next required `relay_tool` JSON now.\n",
-            "Use the current Relay tool catalog in this prompt; do not invent unavailable tools.\n\n",
+            "Output exactly one usable fenced `relay_tool` block in this reply.\n",
+            "No preamble, no apology, no extra explanation.\n",
+            "Use the current Relay tool catalog in this prompt; do not invent unavailable tools.\n",
+            "If the latest real user turn named a concrete path, reuse that exact string in tool input.\n",
+            "Do not claim a successful `read_file` result is escaped or corrupted based only on quotes or backslashes.\n\n",
             "Latest user request for this turn (user data, primary repair anchor):\n",
             "```text\n{latest_request}\n```\n\n",
             "Current session goal (user data, preserved for repair context):\n",
@@ -2014,6 +2046,7 @@ mod tests {
         let out = build_cdp_prompt(&request);
         assert!(out.contains("## Relay repair mode"));
         assert!(out.contains("Use the current Relay tool catalog"));
+        assert!(out.contains("Output exactly one usable fenced `relay_tool` block"));
         assert!(out.contains("### `bash`"));
         assert!(out.contains("### `WebFetch`"));
         assert!(out.contains("purpose:"));
@@ -2025,9 +2058,11 @@ mod tests {
         let request = ApiRequest {
             system_prompt: &[
                 "You are an interactive agent that helps users with software engineering tasks.".to_string(),
+                "# Output style\n- Keep prose concise.".to_string(),
                 "# System\n- Tools are available.".to_string(),
                 "# Doing tasks\n- Inspect before editing.".to_string(),
                 "## Relay desktop runtime\nUse registered tools.".to_string(),
+                "## Relay desktop response style\nKeep replies brief.".to_string(),
                 "# Project context\nWorking directory: /tmp/workspace".to_string(),
                 "# Workspace instructions\nDo not keep this long section.".to_string(),
                 "# Local prompt additions\nDo not keep this either.".to_string(),
@@ -2039,8 +2074,10 @@ mod tests {
         };
         let out = build_cdp_prompt(&request);
         assert!(out.contains("You are an interactive agent"));
+        assert!(out.contains("# Output style"));
         assert!(out.contains("# System"));
         assert!(out.contains("# Doing tasks"));
+        assert!(out.contains("## Relay desktop response style"));
         assert!(out.contains("Latest requested paths:"));
         assert!(out.contains("/root/Relay_Agent/tetris.html"));
         assert!(!out.contains("# Project context"));

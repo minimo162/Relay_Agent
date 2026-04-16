@@ -138,6 +138,7 @@ impl SystemPromptBuilder {
     pub fn build(&self) -> Vec<String> {
         let mut sections = Vec::new();
         sections.push(get_simple_intro_section(self.output_style_name.is_some()));
+        sections.push(get_output_style_section());
         if let (Some(name), Some(prompt)) = (&self.output_style_name, &self.output_style_prompt) {
             sections.push(format!("# Output Style: {name}\n{prompt}"));
         }
@@ -511,6 +512,21 @@ fn get_simple_intro_section(has_output_style: bool) -> String {
     )
 }
 
+fn get_output_style_section() -> String {
+    let items = prepend_bullets(vec![
+        "Keep user-visible prose concise, direct, and focused on the current task.".to_string(),
+        "Avoid unnecessary preamble, postamble, repeated summaries, or meta commentary about what you will do next.".to_string(),
+        "Prefer one short paragraph or a few bullets unless the user asked for detailed explanation.".to_string(),
+        "If the request already names a concrete file, path, or action, do not ask the user to restate it before taking the next grounded step.".to_string(),
+        "Do not use tool calls or code comments as a substitute for communicating with the user in normal prose.".to_string(),
+    ]);
+
+    std::iter::once("# Output style".to_string())
+        .chain(items)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn get_simple_system_section() -> String {
     let items = prepend_bullets(vec![
         "All text you output outside of tool use is displayed to the user.".to_string(),
@@ -530,11 +546,14 @@ fn get_simple_system_section() -> String {
 fn get_simple_doing_tasks_section() -> String {
     let items = prepend_bullets(vec![
         "Read relevant code before changing it and keep changes tightly scoped to the request.".to_string(),
+        "Follow the existing codebase conventions and reuse libraries, patterns, and utilities already present in the workspace when they fit.".to_string(),
+        "Prefer the smallest grounded change that completes the task.".to_string(),
         "Do not add speculative abstractions, compatibility shims, or unrelated cleanup.".to_string(),
         "Do not create files unless they are required to complete the task.".to_string(),
         "If an approach fails, diagnose the failure before switching tactics.".to_string(),
         "Be careful not to introduce security vulnerabilities such as command injection, XSS, or SQL injection.".to_string(),
         "Report outcomes faithfully: if verification fails or was not run, say so explicitly.".to_string(),
+        "If the current turn already has enough information to inspect, edit, or answer, take that next step instead of returning only a plan or asking the user to restate the request.".to_string(),
         "Do not assert that something exists, occurred, or was fixed unless it is grounded in tool output, user messages, or file contents you read—never invent plausible-sounding bugs, identifiers, numbers, events, or edits (code or otherwise).".to_string(),
         "When read_file output, Tool Result content, or file text in the session bundle is present, treat it as the source of truth for that file: claims about syntax, structure, bugs, or symbols must be traceable to those strings (quote a short substring, cite line numbers from the tool output, or paraphrase only what appears there).".to_string(),
         "If a file is large or you only saw a slice, say so; use read_file with offset/limit (line-based) or a follow-up read before claiming behavior in parts you have not read.".to_string(),
@@ -806,6 +825,7 @@ mod tests {
             .with_runtime_config(config)
             .render();
 
+        assert!(prompt.contains("# Output style"));
         assert!(prompt.contains("# System"));
         assert!(prompt.contains("# Project context"));
         assert!(prompt.contains("# Workspace instructions"));
@@ -822,6 +842,15 @@ mod tests {
         let rendered = truncate_instruction_content(&content, 4_000);
         assert!(rendered.contains("[truncated]"));
         assert!(rendered.chars().count() <= 4_000 + "\n\n[truncated]".chars().count());
+    }
+
+    #[test]
+    fn output_style_section_emphasizes_concise_and_concrete_execution() {
+        let prompt = SystemPromptBuilder::new().render();
+        assert!(prompt.contains("# Output style"));
+        assert!(prompt.contains("Keep user-visible prose concise, direct"));
+        assert!(prompt.contains("do not ask the user to restate"));
+        assert!(prompt.contains("instead of returning only a plan"));
     }
 
     #[test]

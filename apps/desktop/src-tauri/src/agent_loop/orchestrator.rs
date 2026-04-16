@@ -2640,11 +2640,14 @@ fn compact_standard_cdp_system_prompt(system_prompt: &[String]) -> String {
     let keep_section = |section: &str| {
         let trimmed = section.trim_start();
         trimmed.starts_with("You are an interactive agent")
+            || trimmed.starts_with("# Output style")
+            || trimmed.starts_with("# Output Style:")
             || trimmed.starts_with("# System")
             || trimmed.starts_with("# Doing tasks")
             || trimmed.starts_with("# Executing actions with care")
             || trimmed.starts_with("# Environment context")
             || trimmed.starts_with("## Relay desktop runtime")
+            || trimmed.starts_with("## Relay desktop response style")
             || trimmed.starts_with("## Relay desktop constraints")
             || trimmed.starts_with("## Concrete workspace file action")
     };
@@ -2668,12 +2671,28 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - **Relay host execution:** Tool calls here are **not** Microsoft first-party Copilot action plugins. The Relay desktop parses tool-shaped JSON from your message (` ```relay_tool ` first, then accepted fenced JSON, and only in retry/repair mode bounded unfenced recovery). For parser fallback paths (` ```json `, generic fences, or inline object recovery), include `"relay_tool_call": true` on each tool object; Relay requires that sentinel by default and only relaxes it when explicitly configured for compatibility.
 - **Do not** tell the user that `relay_tool` "only works in the desktop" so you cannot use it in this chat, or that you "cannot execute tools in this Copilot environment"—**that is wrong for this session.** When the task needs a tool, output the prescribed fences.
 - **Do** emit fenced tool JSON when needed; **prose-only** refusals block the agent loop.
-- **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read_file` first** before edits. Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
+
+## Output style
+
+- Keep user-visible prose concise, direct, and grounded in the current task.
+- Use at most one short paragraph before a tool fence unless the user asked for detail.
+- Avoid unnecessary preamble, postamble, repeated summaries, or protocol checklists.
+- **No Copilot chrome in prose:** Do **not** paste internal UI markers, search preambles, or bracketed IDs (e.g. `【richwebanswer-…】`) into the user-visible answer.
+- **Single copy of prose:** Do **not** repeat the same paragraph, checklist, or “了解しました” block multiple times in one reply.
+
+## Immediate action rules
+
+- **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read_file` first** before edits.
+- Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
 - **Path discipline:** If the latest user turn names a concrete path (absolute path, relative path, or bare filename with an extension), use that exact string in tool input. Do **not** rewrite it to a different directory from a prior turn. Treat bare filenames with an extension as workspace-root-relative unless the user gave another base.
-- **No meta-only stall:** When the work clearly needs tools, do **not** answer with only protocol checklists or promises; the host needs **parsed fences** in this message.
-- **Single copy of prose:** Do **not** repeat the same paragraph, checklist, or “了解しました” block multiple times in one reply. One clear statement is enough.
-- **No Copilot chrome in prose:** Do **not** paste internal UI markers, search preambles, or bracketed IDs (e.g. `【richwebanswer-…】`) into the user-visible answer—omit them entirely.
-- **This turn, not “next message”:** Do **not** defer all tools to a follow-up assistant message when the current turn can already run `read_file` / `write_file` / `edit_file`. If you must wait for tool output, say so **once** briefly—do not duplicate the same “next turn” plan many times.
+- **This turn, not “next message”:** Do **not** defer all tools to a follow-up assistant message when the current turn can already run `read_file` / `write_file` / `edit_file`.
+
+## Grounding and anti-stall
+
+- Tool results in this bundle are authoritative evidence for the current turn.
+- Do **not** claim bugs, fixes, identifiers, or file state unless those claims are traceable to tool results, user messages, or file text in this prompt.
+- **No meta-only stall:** When the work clearly needs tools, do **not** answer with only protocol explanations, promises, or plans; the host needs **parsed fences** in this message.
+- If you must wait for tool output, say so **once** briefly—do not duplicate the same “next turn” plan many times.
 
 "#;
 
@@ -3117,6 +3136,8 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
             "## Relay repair mode\n",
             "You are in a recovery turn because the previous reply did not emit usable Relay local tool JSON.\n",
             "Return the next required `relay_tool` JSON now.\n",
+            "Output exactly one usable fenced `relay_tool` block in this reply.\n",
+            "No preamble, no apology, no extra explanation.\n",
             "Use the current Relay tool catalog in this prompt; do not invent unavailable tools.\n",
             "Prefer `write_file` / `edit_file` for local file creation or edits; use `read_file` only when needed.\n",
             "If the latest real user turn named a concrete path, reuse that exact string in tool input. Do not rewrite it to another directory or prior-turn variant.\n",
@@ -5241,6 +5262,14 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
         )
         .append_section(
             concat!(
+                "## Relay desktop response style\n",
+                "- Keep user-visible prose concise, direct, and grounded in tool results or file text.\n",
+                "- Avoid unnecessary preamble, postamble, repeated status summaries, or protocol-only checklists.\n",
+                "- If the request already names a concrete workspace path or action, take the next tool step instead of asking the user to restate it."
+            ),
+        )
+        .append_section(
+            concat!(
                 "## Relay desktop constraints\n",
                 "- Prefer read-only tools before mutating tools.\n",
                 "- When modifying files, prefer saving copies.\n",
@@ -5489,6 +5518,9 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("Prefer a clean fence body"));
         assert!(s.contains("Single copy of prose"));
         assert!(s.contains("No Copilot chrome in prose"));
+        assert!(s.contains("## Output style"));
+        assert!(s.contains("## Immediate action rules"));
+        assert!(s.contains("## Grounding and anti-stall"));
     }
 
     #[test]
@@ -5519,6 +5551,9 @@ mod cdp_copilot_tool_tests {
         assert!(bundle
             .system_text
             .contains("Use the current Relay tool catalog"));
+        assert!(bundle
+            .system_text
+            .contains("Output exactly one usable fenced `relay_tool` block"));
         assert!(bundle.message_text.contains("Tool protocol repair."));
         assert!(!bundle.message_text.contains("I will use Python"));
         assert!(!bundle.system_text.contains("# Project context"));
@@ -5631,9 +5666,11 @@ mod cdp_copilot_tool_tests {
         let system = vec![
             "You are an interactive agent that helps users with software engineering tasks."
                 .to_string(),
+            "# Output style\n- Keep prose concise.".to_string(),
             "# System\n- Tools are available.".to_string(),
             "# Doing tasks\n- Inspect before editing.".to_string(),
             "## Relay desktop runtime\nUse registered tools.".to_string(),
+            "## Relay desktop response style\nKeep replies brief.".to_string(),
             "## Relay desktop constraints\nPrefer read-only tools.".to_string(),
             "# Project context\nWorking directory: /tmp/workspace".to_string(),
             "# Workspace instructions\n".to_string() + &"A".repeat(1800),
@@ -5649,8 +5686,10 @@ mod cdp_copilot_tool_tests {
             CdpCatalogFlavor::StandardFull,
         );
         assert!(full.system_text.contains("You are an interactive agent"));
+        assert!(full.system_text.contains("# Output style"));
         assert!(full.system_text.contains("# System"));
         assert!(full.system_text.contains("# Doing tasks"));
+        assert!(full.system_text.contains("## Relay desktop response style"));
         assert!(full.system_text.contains("Latest requested paths:"));
         assert!(full.system_text.contains("/root/Relay_Agent/tetris.html"));
         assert!(!full.system_text.contains("# Project context"));
@@ -6562,6 +6601,7 @@ I will inspect the file.
             std::env::remove_var("HOME");
         }
 
+        assert!(prompt.contains("# Output style"));
         assert!(prompt.contains("# System"));
         assert!(prompt.contains("# Doing tasks"));
         assert!(prompt.contains("# Local prompt additions"));
@@ -6575,6 +6615,7 @@ I will inspect the file.
     fn desktop_prompt_describes_workspace_containment() {
         let prompt =
             build_desktop_system_prompt("Inspect src/lib.rs", Some("/tmp/workspace")).join("\n\n");
+        assert!(prompt.contains("## Relay desktop response style"));
         assert!(prompt.contains("file-tool paths are resolved within that workspace"));
         assert!(prompt.contains("__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__"));
     }
