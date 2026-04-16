@@ -276,6 +276,33 @@ fn strip_richwebanswer_spans(s: &str) -> String {
     out
 }
 
+fn strip_transient_copilot_status_fragments(s: &str) -> String {
+    let mut cleaned = s.to_string();
+    for marker in ["Loading image", "Image has been generated"] {
+        cleaned = cleaned.replace(marker, "\n");
+    }
+    cleaned
+}
+
+fn dedupe_consecutive_lines(s: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut prev_nonempty: Option<String> = None;
+    for line in s.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            out.push(String::new());
+            prev_nonempty = None;
+            continue;
+        }
+        if prev_nonempty.as_deref() == Some(trimmed) {
+            continue;
+        }
+        out.push(trimmed.to_string());
+        prev_nonempty = Some(trimmed.to_string());
+    }
+    out.join("\n")
+}
+
 /// Drop consecutive duplicate paragraphs (Copilot sometimes pastes the same block many times).
 fn dedupe_consecutive_paragraphs(s: &str) -> String {
     let parts: Vec<&str> = s.split("\n\n").collect();
@@ -296,6 +323,8 @@ fn dedupe_consecutive_paragraphs(s: &str) -> String {
 /// Normalize Copilot assistant-visible text before persisting and before UI emission.
 fn sanitize_copilot_visible_text(s: &str) -> String {
     let s = strip_richwebanswer_spans(s);
+    let s = strip_transient_copilot_status_fragments(&s);
+    let s = dedupe_consecutive_lines(&s);
     dedupe_consecutive_paragraphs(&s)
 }
 
@@ -4931,6 +4960,20 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
+    fn sanitize_strips_transient_image_status_lines() {
+        let raw = "Loading image\nImage has been generated\nFinal answer";
+        let s = sanitize_copilot_visible_text(raw);
+        assert_eq!(s, "Final answer");
+    }
+
+    #[test]
+    fn sanitize_dedupes_consecutive_lines_after_status_removal() {
+        let raw = "了解しました。\nLoading image\n了解しました。\nFinal answer";
+        let s = sanitize_copilot_visible_text(raw);
+        assert_eq!(s, "了解しました。\nFinal answer");
+    }
+
+    #[test]
     fn standard_build_prompt_for_pdf_merge_request_keeps_full_catalog() {
         let system = vec!["## Relay desktop runtime\nUse registered tools.".to_string()];
         let messages = vec![ConversationMessage::user_text(
@@ -6363,6 +6406,18 @@ mod loop_controller_tests {
     fn append_only_suffix_rejects_shrinking_or_rewritten_snapshots() {
         assert_eq!(append_only_suffix("hello world", "hello"), None);
         assert_eq!(append_only_suffix("hello world", "hello there"), None);
+    }
+
+    #[test]
+    fn append_only_suffix_accepts_sanitized_progress_after_image_noise_removal() {
+        let previous = sanitize_copilot_visible_text("了解しました。");
+        let next = sanitize_copilot_visible_text(
+            "了解しました。\nLoading image\nImage has been generated\n\n最終結果です。",
+        );
+        assert_eq!(
+            append_only_suffix(&previous, &next),
+            Some("\n\n最終結果です。")
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import {
   emitAgentEvent,
   injectRelayMock,
+  setMockSessionHistory,
   waitForAgentListener,
   waitForMockSession,
 } from "./relay-e2e-harness";
@@ -252,4 +253,62 @@ test("a new streamed reply that starts with previous text does not get appended 
   await expect(assistantBubbles.nth(0)).not.toContainText("テトリスの HTML ファイルを作成しました");
   await expect(assistantBubbles.nth(1)).toContainText("HTMLでテトリスを作成します！");
   await expect(assistantBubbles.nth(1)).toContainText("テトリスの HTML ファイルを作成しました ✅");
+});
+
+test("turn completion keeps one assistant bubble and strips transient image status noise", async ({ page }) => {
+  await injectRelayMock(page, { autoComplete: false });
+  await seedWorkspace(page);
+  await openApp(page);
+  await sendPrompt(page, "stream a noisy reply");
+  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await waitForMockSession(page, "session-e2e-1");
+  await waitForAgentListener(page, "agent:text_delta");
+  await waitForAgentListener(page, "agent:turn_complete");
+
+  await emitAgentEvent(page, "agent:text_delta", {
+    sessionId: "session-e2e-1",
+    text: "了解しました。\n\n最終結果です。",
+    isComplete: false,
+  });
+  await emitAgentEvent(page, "agent:text_delta", {
+    sessionId: "session-e2e-1",
+    text: "",
+    isComplete: true,
+  });
+
+  await setMockSessionHistory(page, "session-e2e-1", [
+    { role: "user", text: "stream a noisy reply" },
+    {
+      role: "assistant",
+      text: [
+        "Loading image",
+        "了解しました。",
+        "Image has been generated",
+        "",
+        "最終結果です。",
+        "",
+        "最終結果です。",
+      ].join("\n"),
+    },
+  ]);
+
+  await emitAgentEvent(page, "agent:turn_complete", {
+    sessionId: "session-e2e-1",
+    stopReason: "completed",
+    assistantMessage: [
+      "Loading image",
+      "了解しました。",
+      "Image has been generated",
+      "",
+      "最終結果です。",
+    ].join("\n"),
+    messageCount: 2,
+  });
+
+  const assistantBubbles = page.locator("[data-ra-bubble-role='assistant']");
+  await expect(assistantBubbles).toHaveCount(1);
+  await expect(assistantBubbles.first()).toContainText("了解しました。");
+  await expect(assistantBubbles.first()).toContainText("最終結果です。");
+  await expect(page.getByText("Loading image")).toHaveCount(0);
+  await expect(page.getByText("Image has been generated")).toHaveCount(0);
 });

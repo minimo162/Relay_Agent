@@ -4,9 +4,14 @@ type RelayMockConfig = {
   autoComplete?: boolean;
 };
 
+type RelayHistoryEntry = {
+  role: "user" | "assistant";
+  text: string;
+};
+
 type RelayMockState = {
   sessionCounter: number;
-  sessions: Map<string, { running: boolean; messages: string[] }>;
+  sessions: Map<string, { running: boolean; history: RelayHistoryEntry[] }>;
   listeners: Map<string, Set<(event: { payload: unknown }) => void>>;
   listenerCounts: Map<string, number>;
   mcpServers: Array<{
@@ -73,7 +78,10 @@ function initRelayMock(config: { autoComplete: boolean }) {
       case "start_agent": {
         state.sessionCounter += 1;
         const id = `session-e2e-${state.sessionCounter}`;
-        state.sessions.set(id, { running: true, messages: [req.goal] });
+        state.sessions.set(id, {
+          running: true,
+          history: [{ role: "user", text: String(req.goal ?? "") }],
+        });
         autoCompleteTurn(id);
         return id;
       }
@@ -81,7 +89,10 @@ function initRelayMock(config: { autoComplete: boolean }) {
         const session = state.sessions.get(req.sessionId);
         if (!session) throw new Error(`[mock] Unknown session ${req.sessionId}`);
         session.running = true;
-        session.messages = [...(session.messages ?? []), req.message];
+        session.history = [
+          ...(session.history ?? []),
+          { role: "user", text: String(req.message ?? "") },
+        ];
         autoCompleteTurn(req.sessionId);
         return req.sessionId;
       }
@@ -105,9 +116,9 @@ function initRelayMock(config: { autoComplete: boolean }) {
         return {
           sessionId: req.sessionId,
           running: session?.running ?? false,
-          messages: (session?.messages ?? []).map((text: string) => ({
-            role: "user",
-            content: [{ type: "text", text }],
+          messages: (session?.history ?? []).map((entry: RelayHistoryEntry) => ({
+            role: entry.role,
+            content: [{ type: "text", text: entry.text }],
           })),
         };
       }
@@ -225,6 +236,22 @@ export async function waitForMockSession(page: Page, sessionId: string) {
   await page.waitForFunction(
     (id) => Boolean((window as any).__RELAY_MOCK__?.sessions?.has(id)),
     sessionId,
+  );
+}
+
+export async function setMockSessionHistory(
+  page: Page,
+  sessionId: string,
+  history: RelayHistoryEntry[],
+) {
+  await page.evaluate(
+    ({ sessionId, history }) => {
+      const state = (window as any).__RELAY_MOCK__;
+      const session = state?.sessions?.get(sessionId);
+      if (!session) throw new Error(`Unknown mock session ${sessionId}`);
+      session.history = history;
+    },
+    { sessionId, history },
   );
 }
 

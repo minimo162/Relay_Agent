@@ -127,6 +127,58 @@ function networkExtractLooksLikeGarbage(text) {
   return false;
 }
 
+const COPILOT_TRANSIENT_STATUS_PATTERNS = [
+  /Loading image/gi,
+  /Image has been generated/gi,
+];
+
+function stripTransientCopilotStatus(text) {
+  let cleaned = String(text ?? "");
+  for (const pattern of COPILOT_TRANSIENT_STATUS_PATTERNS) {
+    cleaned = cleaned.replace(pattern, "\n");
+  }
+  return cleaned;
+}
+
+function dedupeConsecutiveLines(text) {
+  const lines = String(text ?? "").split(/\r?\n/);
+  const out = [];
+  let prev = null;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      out.push("");
+      prev = null;
+      continue;
+    }
+    if (trimmed === prev) continue;
+    out.push(trimmed);
+    prev = trimmed;
+  }
+  return out.join("\n");
+}
+
+function dedupeConsecutiveParagraphs(text) {
+  const parts = String(text ?? "").split(/\n{2,}/);
+  const out = [];
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    if (out.at(-1) === trimmed) continue;
+    out.push(trimmed);
+  }
+  return out.join("\n\n");
+}
+
+function normalizeCopilotVisibleText(text) {
+  let cleaned = stripM365CopilotReplyChrome(String(text ?? ""));
+  cleaned = stripStreamingPlaceholderTail(cleaned);
+  cleaned = stripTransientCopilotStatus(cleaned);
+  cleaned = dedupeConsecutiveLines(cleaned);
+  cleaned = dedupeConsecutiveParagraphs(cleaned);
+  return cleaned.trim();
+}
+
 async function pollCopilotGeneratingAndReply(session) {
   const r = await session
     .evaluate(copilotDomPollGeneratingAndReplyExpression())
@@ -139,9 +191,7 @@ async function pollCopilotGeneratingAndReply(session) {
 
 async function extractAssistantReplyText(session) {
   const r = await session.evaluate(copilotDomReplyExtractIifeExpression()).catch(() => ({ value: "" }));
-  return stripStreamingPlaceholderTail(
-    stripM365CopilotReplyChrome(typeof r?.value === "string" ? r.value : ""),
-  );
+  return normalizeCopilotVisibleText(typeof r?.value === "string" ? r.value : "");
 }
 
 async function extractAssistantReplyStrict(session) {
@@ -248,7 +298,7 @@ async function extractAssistantReplyStrict(session) {
     }
     return bestAcrossIframes(document, 0);
   })()`).catch(() => ({ value: "" }));
-  return stripM365CopilotReplyChrome(typeof r?.value === "string" ? r.value : "");
+  return normalizeCopilotVisibleText(typeof r?.value === "string" ? r.value : "");
 }
 
 async function extractAssistantReplyHeuristic(session) {
@@ -372,7 +422,7 @@ async function extractAssistantReplyHeuristic(session) {
     }
     return bestAcrossIframes(document, 0);
   })()`).catch(() => ({ value: "" }));
-  return stripM365CopilotReplyChrome(typeof r?.value === "string" ? r.value : "");
+  return normalizeCopilotVisibleText(typeof r?.value === "string" ? r.value : "");
 }
 
 /** Loose DOM extract length ≈ pasted prompt → still showing user wall, not a real assistant reply. */
@@ -384,9 +434,9 @@ function domExtractLooksLikeSubmittedPrompt(textLen, submittedLen) {
 }
 
 async function resolveAssistantReplyForReturn(session, looseText, submittedPromptLen, netCapture = null) {
-  const loose = stripStreamingPlaceholderTail((looseText || "").trim());
+  const loose = normalizeCopilotVisibleText(looseText);
   if (!domExtractLooksLikeSubmittedPrompt(loose.length, submittedPromptLen)) return loose;
-  const strict = stripStreamingPlaceholderTail((await extractAssistantReplyStrict(session)).trim());
+  const strict = normalizeCopilotVisibleText(await extractAssistantReplyStrict(session));
   if (strict.length >= 20 && strict.length < loose.length * 0.88) {
     console.error(
       "[copilot:response] prefer strict assistant over prompt-length loose extract strictLen=",
@@ -398,7 +448,7 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
     );
     return strict;
   }
-  const heur = stripStreamingPlaceholderTail((await extractAssistantReplyHeuristic(session)).trim());
+  const heur = normalizeCopilotVisibleText(await extractAssistantReplyHeuristic(session));
   if (heur.length >= 15) {
     if (!domExtractLooksLikeSubmittedPrompt(heur.length, submittedPromptLen)) {
       console.error("[copilot:response] prefer heuristic assistant extract len=", heur.length);
@@ -415,22 +465,20 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
   if (netCapture) {
     try {
       if (typeof netCapture.pickAssistantFromChathubWs === "function") {
-        const chw = stripStreamingPlaceholderTail(netCapture.pickAssistantFromChathubWs().trim());
+        const chw = normalizeCopilotVisibleText(netCapture.pickAssistantFromChathubWs());
         if (chw.length >= CHATHUB_ASSISTANT_MIN_CHARS && !networkExtractLooksLikeGarbage(chw)) {
           console.error("[copilot:response] M365 Chathub WebSocket assistant len=", chw.length);
           return chw;
         }
       }
-      const shortN = stripStreamingPlaceholderTail(
-        (await netCapture.pickBestShortAssistant(loose.length, submittedPromptLen)).trim(),
+      const shortN = normalizeCopilotVisibleText(
+        await netCapture.pickBestShortAssistant(loose.length, submittedPromptLen),
       );
       if (shortN.length >= 20) {
         console.error("[copilot:response] network short-assistant len=", shortN.length);
         return shortN;
       }
-      const nw = stripStreamingPlaceholderTail(
-        (await netCapture.pickBestOver("", submittedPromptLen)).trim(),
-      );
+      const nw = normalizeCopilotVisibleText(await netCapture.pickBestOver("", submittedPromptLen));
       if (
         nw.length >= CHATHUB_ASSISTANT_MIN_CHARS &&
         !networkExtractLooksLikeGarbage(nw) &&
@@ -447,10 +495,10 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
 }
 
 function normalizeProgressTextForUi(text, baselineText = "") {
-  let cleaned = stripStreamingPlaceholderTail(String(text ?? "").trim());
+  let cleaned = normalizeCopilotVisibleText(text);
   if (!cleaned) return "";
 
-  const baseline = stripStreamingPlaceholderTail(String(baselineText ?? "").trim());
+  const baseline = normalizeCopilotVisibleText(baselineText);
   if (!baseline) return cleaned;
   if (cleaned === baseline) return "";
   if (baseline.startsWith(cleaned)) return "";
@@ -489,14 +537,14 @@ async function waitForDomResponse(
     });
   };
   const wire = async (s) => {
-    let t = stripStreamingPlaceholderTail(String(s ?? "").trim());
-    if (netCapture) t = stripStreamingPlaceholderTail(String(await netCapture.pickBestOver(t, submittedPromptLen) ?? "").trim());
+    let t = normalizeCopilotVisibleText(s);
+    if (netCapture) t = normalizeCopilotVisibleText(await netCapture.pickBestOver(t, submittedPromptLen) ?? "");
     return t;
   };
 
   await sleep(520);
-  let baselineProgressText = stripStreamingPlaceholderTail(
-    (await pollCopilotGeneratingAndReply(session)).reply.trim(),
+  let baselineProgressText = normalizeCopilotVisibleText(
+    (await pollCopilotGeneratingAndReply(session)).reply,
   );
   let baselineLen = baselineProgressText.length;
   /** If we captured the user's long prompt as "assistant", minDoneLen becomes unreachable (baseline+2 > len forever). */
@@ -533,7 +581,7 @@ async function waitForDomResponse(
     }
     await sleep(RESPONSE_POLL_INTERVAL_MS);
     const { generating: generatingRaw, reply: replyRaw } = await pollCopilotGeneratingAndReply(session);
-    const reply = replyRaw.trim();
+    const reply = normalizeCopilotVisibleText(replyRaw);
     const len = reply.length;
 
     if (generatingRaw) {
@@ -635,7 +683,7 @@ async function waitForDomResponse(
       if (stable >= needStableTicks) {
         const postStableMs = len < 500 ? Math.min(750, RESPONSE_POST_STABLE_MS) : RESPONSE_POST_STABLE_MS;
         await sleep(postStableMs);
-        const replyLate = (await pollCopilotGeneratingAndReply(session)).reply.trim();
+        const replyLate = normalizeCopilotVisibleText((await pollCopilotGeneratingAndReply(session)).reply);
         if (replyLate.length > len + 40) {
           console.error("[copilot:response] post-stable growth, keep waiting", len, "->", replyLate.length);
           stable = 0;
@@ -707,7 +755,7 @@ async function waitForDomResponse(
     prev = len;
   }
 
-  const fbLoose = (await extractAssistantReplyText(session)).trim();
+  const fbLoose = normalizeCopilotVisibleText(await extractAssistantReplyText(session));
   const fbResolved = await resolveAssistantReplyForReturn(session, fbLoose, submittedPromptLen, netCapture);
   if (fbResolved != null) {
     console.error("[copilot:response] timeout, using resolved assistant len=", fbResolved.length);
@@ -738,13 +786,14 @@ async function waitForDomResponse(
     return await wire(bodyStr);
   }
   if (netCapture) {
-    const sn = (await netCapture.pickBestShortAssistant(fbLoose.length, submittedPromptLen)).trim();
+    const sn = normalizeCopilotVisibleText(
+      await netCapture.pickBestShortAssistant(fbLoose.length, submittedPromptLen),
+    );
     if (sn.length >= CHATHUB_ASSISTANT_MIN_CHARS) {
       console.error("[copilot:response] DOM empty; using network short-assistant len=", sn.length);
       return await wire(sn);
     }
-    const nw = await netCapture.pickBestOver("", submittedPromptLen);
-    const nwTrim = nw.trim();
+    const nwTrim = normalizeCopilotVisibleText(await netCapture.pickBestOver("", submittedPromptLen));
     if (nwTrim.length >= CHATHUB_ASSISTANT_MIN_CHARS && !networkExtractLooksLikeGarbage(nwTrim)) {
       console.error("[copilot:response] DOM empty; using network-only len=", nwTrim.length);
       return await wire(nwTrim);
@@ -760,6 +809,7 @@ export {
   extractAssistantReplyText,
   extractAssistantReplyHeuristic,
   domExtractLooksLikeSubmittedPrompt,
+  normalizeCopilotVisibleText,
   normalizeProgressTextForUi,
   resolveAssistantReplyForReturn,
   waitForDomResponse,

@@ -462,6 +462,56 @@ export type UiMessageChunk =
       isError: boolean;
     };
 
+const COPILOT_TRANSIENT_STATUS_PATTERNS = [
+  /Loading image/gi,
+  /Image has been generated/gi,
+];
+
+function stripTransientCopilotStatus(text: string): string {
+  let cleaned = text;
+  for (const pattern of COPILOT_TRANSIENT_STATUS_PATTERNS) {
+    cleaned = cleaned.replace(pattern, "\n");
+  }
+  return cleaned;
+}
+
+function dedupeConsecutiveLines(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const out: string[] = [];
+  let prev: string | null = null;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      out.push("");
+      prev = null;
+      continue;
+    }
+    if (trimmed === prev) continue;
+    out.push(trimmed);
+    prev = trimmed;
+  }
+  return out.join("\n");
+}
+
+function dedupeConsecutiveParagraphs(text: string): string {
+  const parts = text.split(/\n{2,}/);
+  const out: string[] = [];
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    if (out.at(-1) === trimmed) continue;
+    out.push(trimmed);
+  }
+  return out.join("\n\n");
+}
+
+export function normalizeAssistantVisibleText(text: string): string {
+  const cleaned = dedupeConsecutiveParagraphs(
+    dedupeConsecutiveLines(stripTransientCopilotStatus(String(text ?? ""))),
+  );
+  return cleaned.trim();
+}
+
 /** Convert full history to a flat array of UI chunks (ordered) */
 export function chunksFromHistory(messages: AgentMessage[]): UiChunk[] {
   const chunks: UiChunk[] = [];
@@ -477,7 +527,9 @@ export function chunksFromHistory(messages: AgentMessage[]): UiChunk[] {
     if (msg.role === "assistant") {
       for (const block of msg.content) {
         if (block.type === "text" && block.text) {
-          chunks.push({ kind: "assistant" as const, text: block.text, streaming: false });
+          const text = normalizeAssistantVisibleText(block.text);
+          if (!text) continue;
+          chunks.push({ kind: "assistant" as const, text, streaming: false });
         }
         if (block.type === "toolUse") {
           const chunk = {

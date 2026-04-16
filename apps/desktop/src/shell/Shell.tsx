@@ -13,6 +13,7 @@ import {
   getSessionWriteUndoStatus,
   listWorkspaceSlashCommands,
   mcpListServers,
+  normalizeAssistantVisibleText,
   redoSessionWrite,
   respondApproval,
   respondUserQuestion,
@@ -416,18 +417,20 @@ export default function Shell(): JSX.Element {
     try {
       const res = await getSessionHistory({ sessionId });
       let next = chunksFromHistory(res.messages);
-      const fb = opts?.fallbackAssistantText?.trim();
+      const fb = normalizeAssistantVisibleText(opts?.fallbackAssistantText ?? "");
       const activeAssistantTexts = sessions
         .chunks()
         .filter((chunk): chunk is Extract<UiChunk, { kind: "assistant" }> => chunk.kind === "assistant")
-        .map((chunk) => chunk.text.trim())
+        .map((chunk) => normalizeAssistantVisibleText(chunk.text))
         .filter((text) => text.length > 0);
       const hasAssistantText = next.some((c) => c.kind === "assistant" && c.text.trim().length > 0);
       const historyAlreadyHasFallback = fb
-        ? next.some((chunk) => chunk.kind === "assistant" && chunk.text.trim() === fb)
+        ? next.some(
+            (chunk) =>
+              chunk.kind === "assistant" && normalizeAssistantVisibleText(chunk.text) === fb,
+          )
         : false;
-      const activeAlreadyHasFallback = fb ? activeAssistantTexts.includes(fb) : false;
-      if (!hasAssistantText && fb && !historyAlreadyHasFallback && !activeAlreadyHasFallback) {
+      if (!hasAssistantText && fb && !historyAlreadyHasFallback) {
         next = [...next, { kind: "assistant" as const, text: fb }];
       }
       next = mergeChunksWithInline(sessionId, next);
@@ -443,11 +446,14 @@ export default function Shell(): JSX.Element {
       if (nextStatus.phase === "idle") setSessionError(null);
     } catch (err) {
       console.error("[IPC] load history failed", err);
-      const fb = opts?.fallbackAssistantText?.trim();
+      const fb = normalizeAssistantVisibleText(opts?.fallbackAssistantText ?? "");
       const activeAlreadyHasFallback = fb
         ? sessions
             .chunks()
-            .some((chunk) => chunk.kind === "assistant" && chunk.text.trim() === fb)
+            .some(
+              (chunk) =>
+                chunk.kind === "assistant" && normalizeAssistantVisibleText(chunk.text) === fb,
+            )
         : false;
       if (fb && !activeAlreadyHasFallback) {
         sessions.setChunks((prev) => [...prev, { kind: "assistant", text: fb }]);
