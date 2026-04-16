@@ -24,26 +24,29 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 | UI | SolidJS, Vite, TypeScript, Tailwind — conversation-first desktop shell in [`apps/desktop/src/index.css`](apps/desktop/src/index.css), aligned with [`apps/desktop/DESIGN.md`](apps/desktop/DESIGN.md). Light theme uses warm `--ra-*` tokens, cream surfaces, and border-led cards; dark theme is the paired warm-charcoal scale. **Default theme is light** (`data-theme` + `localStorage` `relay-agent/theme`). Details: `docs/IMPLEMENTATION.md` (Milestone Log, **2026-04-14** warm-token realignment) |
 | Shell | Tauri v2, `tauri-plugin-shell`, `tauri-plugin-dialog` |
 | Agent / tools | Rust (`apps/desktop/src-tauri/`, internal crates) |
-| AI surface | M365 Copilot in Edge via **Node** `copilot_server.js` + CDP; this is the production path. Direct Rust `cdp_*` commands remain diagnostics/manual helpers, and `agent_browser_daemon.rs` stays experimental/inactive. The desktop sends the Relay turn bundle **inline in the prompt body** for the paid-license path, compacting context before the effective **128000-token** ceiling when needed. The host parses tool calls from **` ```relay_tool `** JSON and, if none, from accepted fenced JSON; bounded unfenced tool-shaped object recovery is **retry/repair only**, not the normal protocol. Fallback parser candidates require **`"relay_tool_call": true`** per tool object by default; opt out only with `RELAY_FALLBACK_SENTINEL_POLICY=observe` for compatibility ([`agent_loop/orchestrator.rs`](apps/desktop/src-tauri/src/agent_loop/orchestrator.rs)) |
+| AI surface | M365 Copilot in Edge via **Node** `copilot_server.js` + CDP; this is the production path. Direct Rust `cdp_*` commands remain diagnostics/manual helpers, and `agent_browser_daemon.rs` stays experimental/inactive. The desktop sends the Relay turn bundle **inline in the prompt body** for the paid-license path, compacting context before the effective **128000-token** ceiling when needed. Assistant streaming is live and rewrite-safe: if Copilot rewrites a draft mid-stream, the desktop replaces the active assistant bubble instead of blindly appending duplicate text. The host parses tool calls from **` ```relay_tool `** JSON and, if none, from accepted fenced JSON; bounded unfenced tool-shaped object recovery is **retry/repair only**, not the normal protocol. Fallback parser candidates require **`"relay_tool_call": true`** per tool object by default; opt out only with `RELAY_FALLBACK_SENTINEL_POLICY=observe` for compatibility ([`agent_loop/orchestrator.rs`](apps/desktop/src-tauri/src/agent_loop/orchestrator.rs)) |
 
 ## What the app does
 
-- **Chats** — The sidebar tracks chats, not one-shot runs. Sending while the active chat is idle continues that chat; **New chat** starts a separate one. Tool steps always show **inline in chat**.
+- **Chats** — The sidebar tracks chats, not one-shot runs. Sending while the active chat is idle continues that chat; **New chat** starts a separate one. Tool steps, approvals, and user-question prompts stay **inline in chat**.
 - **First run** — The app now opens in the same chat shell used later. The empty conversation surface shows a compact setup card for **Project** and **Copilot**, while `Chats`, `Context`, and `Settings` stay visible from the start. You can type the first request immediately; if setup is still missing, Relay keeps the draft in place and shows inline actions to finish setup before sending.
 - **Approvals** — **Allow once**, **Always allow in this conversation**, or **Always allow in this folder** for gated tools. Technical payloads are tucked under **Advanced details**.
+- **Inline prompts** — Approval requests and `AskUserQuestion` follow-ups stay inside the conversation flow instead of switching to a separate mode or modal-first workflow.
 - **Settings** — The Settings modal keeps **Project** and **Copilot** in the Basic section, with browser/troubleshooting controls under collapsed Advanced details.
 - **Context panel** — **Activity** shows `TodoWrite` snapshots when Relay writes a checklist and otherwise stays minimal; **Integrations** shows MCP servers and workspace instruction surfaces when `cwd` is set. The panel stays hidden on first run.
-- **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or **Send** submits. Relay uses one standard conversation surface: it inspects first, answers directly for review/explanation requests, and asks for approval only when a risky tool run is needed.
+- **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or **Send** submits. Relay uses one standard conversation surface: it inspects first, answers directly for review/explanation requests, and asks for approval only when a risky tool run is needed. Assistant text streams live, and rewritten Copilot drafts replace the active bubble cleanly instead of duplicating text.
 - **Undo / Redo** — Header actions reverse the last successful workspace writes from the active session (`write_file`, `edit_file`, `NotebookEdit`, PDF tools), when the agent is idle.
 - **Audit readability** — Tool rows prefer human labels and per-tool summaries (`Read file`, `Search file contents`, PDF actions, file writes) instead of raw internal tool ids.
-- **Extras** — PDF via LiteParse + bundled Node; Windows Office hybrid read (COM + PDF); MCP over stdio.
+- **Extras** — PDF via LiteParse through the bundled `relay-node` sidecar; Windows Office hybrid read (COM + PDF); MCP over stdio.
 
 Details, limits, and milestone notes: **[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)**. Roadmap and guardrails: **[PLANS.md](PLANS.md)**. Repo rules: **[AGENTS.md](AGENTS.md)**. Manual criteria for model grounding and tool protocol: **[docs/AGENT_EVALUATION_CRITERIA.md](docs/AGENT_EVALUATION_CRITERIA.md)**. Claw-code selective alignment (upstream pin, tool-shape notes, `compat-harness` parity-style tests, and deterministic full-session harness coverage): **[docs/CLAW_CODE_ALIGNMENT.md](docs/CLAW_CODE_ALIGNMENT.md)**.
 
 ## Architecture (high level)
 
 ```
-SolidJS (apps/desktop/src)  ←→  Tauri IPC  ←→  Rust (agent_loop, tools, CDP bridge)
+SolidJS (apps/desktop/src)  ←→  Tauri IPC  ←→  Rust (agent_loop, tools, IPC)
+                                                      ↓
+                                      Node Copilot bridge + LiteParse runtime
                                                       ↓
                                     Edge + M365 Copilot (CDP)
 ```
@@ -68,21 +71,24 @@ Relay_Agent/
 
 **App icons:** Vector source is `apps/desktop/src-tauri/icons/source/relay-agent.svg`. From `apps/desktop/`, run `pnpm exec tauri icon src-tauri/icons/source/relay-agent.svg -o src-tauri/icons` to refresh `icon.ico`, `icon.icns`, and PNGs referenced in `tauri.conf.json`. Details: `docs/IMPLEMENTATION.md` (Milestone Log, 2026-04-09 Relay Agent app icon and favicon).
 
+**Bundled runtime assets:** `apps/desktop/src-tauri/tauri.conf.json` packages the `relay-node` external binary plus the `liteparse-runner/` resource directory. The production desktop path uses those bundled assets for the Copilot bridge and PDF parsing in release builds.
+
 ## IPC (commands you invoke)
 
 | Command | Purpose |
 |---------|---------|
 | `start_agent` | Start a new conversation (`goal`, optional `cwd`, `files`, `maxTurns`, `browserSettings`) |
 | `continue_agent_session` | Continue an existing idle conversation (`sessionId`, `message`) |
-| `respond_approval` | Approve/deny; optional `rememberForSession` |
+| `respond_approval`, `respond_user_question` | Resolve inline approval and user-question prompts |
 | `cancel_agent`, `get_session_history`, `compact_agent_session` | Session control |
 | `undo_session_write`, `redo_session_write`, `get_session_write_undo_status` | Per-session file-write undo stack |
 | `probe_rust_analyzer` | LSP milestone probe: `rust-analyzer --version` in a folder (`docs/LSP_MILESTONE.md`) |
-| `warmup_copilot_bridge` (optional `browserSettings`), `get_relay_diagnostics` | Copilot readiness / support bundle |
+| `warmup_copilot_bridge` (optional `browserSettings`), `get_relay_diagnostics`, `write_text_export` | Copilot readiness and support-bundle export |
+| `workspace_instruction_surfaces`, `get_workspace_allowlist`, `remove_workspace_allowlist_tool`, `clear_workspace_allowlist`, `list_workspace_slash_commands` | Workspace instruction and allowlist surfaces for the current folder |
 | `connect_cdp`, `cdp_*`, `disconnect_cdp` | Direct CDP helpers |
 | `mcp_*` | MCP server registry |
 
-**Events:** `agent:text_delta`, `agent:tool_start`, `agent:tool_result`, `agent:approval_needed`, `agent:turn_complete`, `agent:error`. Shapes are generated into `apps/desktop/src/lib/ipc.generated.ts` and consumed via `apps/desktop/src/lib/ipc.ts`.
+**Events:** `agent:text_delta`, `agent:tool_start`, `agent:tool_result`, `agent:approval_needed`, `agent:user_question`, `agent:status`, `agent:turn_complete`, `agent:error`. Shapes are generated into `apps/desktop/src/lib/ipc.generated.ts` and consumed via `apps/desktop/src/lib/ipc.ts`. `agent:text_delta` can append or replace the in-flight assistant bubble when Copilot rewrites streamed text.
 
 ## Configuration
 
@@ -127,6 +133,8 @@ RELAY_LIVE_REPAIR_TIMEOUT_SECS=90 RELAY_LIVE_REPAIR_STAGE_TIMEOUT_SECS=90 \
 Use the signed-in `RelayAgentEdgeProfile` on the same CDP port. A good run logs `original`, `repair1`, and `repair2` stage sends/replies. If it fails, the panic/log output now includes typed bridge metadata such as `failureClass`, `stageLabel`, and `requestChain`. Detailed prerequisites and failure meanings: [docs/COPILOT_E2E_CDP_PITFALLS.md](docs/COPILOT_E2E_CDP_PITFALLS.md).
 
 **Headless launched-app smokes:** `pnpm launch:test` verifies `tauri:dev` launch stability in Linux/Xvfb, and `pnpm agent-loop:test` runs the env-gated Rust autorun smoke that exercises retry recovery, approval handling, emitted `agent:*` events, the pushed `agent:status` phase sequence (`running` → `retrying` → `waiting_approval` → `idle:completed` minimum), and final `stopReason: "completed"` through the real desktop bridge.
+
+**Live desktop smoke:** `pnpm live:m365:desktop-smoke` drives the real desktop app against signed-in M365 Copilot and validates the end-to-end app launch plus desktop/Copilot bridge path before the narrower multiturn live scenarios below.
 
 **Live same-session grounding / approval smoke:** `pnpm live:m365:grounding-approval-multiturn` drives three turns through the real desktop app against signed-in M365 Copilot, checks Turn 1 grounding on `tests/fixtures/tetris_grounding.html`, verifies `Always allow in this conversation` reuse on Turn 3, and writes JSON artifacts under `/tmp/relay-live-m365-grounding-approval-*`.
 

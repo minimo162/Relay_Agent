@@ -15,6 +15,14 @@
 
 ## Milestone Log
 
+### 2026-04-16 README truth refresh for current desktop implementation
+
+**Problem:** `README.md` already described the current desktop product at a high level, but a few public-facing details had drifted behind the live implementation. The documented IPC surface was missing the inline user-question and workspace-surface commands/events now exposed by the Tauri bridge, the architecture section under-described the packaged Node/LiteParse runtime path, and the behavior/development sections did not clearly call out live rewrite-safe streaming or the `live:m365:desktop-smoke` script.
+
+**Change:** Updated [`README.md`](../README.md) in place to match the current desktop implementation without changing runtime behavior. Refreshed the app-overview bullets to mention inline approvals plus user-question prompts, live rewrite-safe assistant streaming, and bundled `relay-node`-backed PDF parsing. Updated the architecture section to show the production path through the Node Copilot bridge and LiteParse runtime, added a packaging note for `externalBin`/resource assets from [`apps/desktop/src-tauri/tauri.conf.json`](../apps/desktop/src-tauri/tauri.conf.json), expanded the IPC table/events list to match [`apps/desktop/src-tauri/src/lib.rs`](../apps/desktop/src-tauri/src/lib.rs) and [`apps/desktop/src/lib/ipc.ts`](../apps/desktop/src/lib/ipc.ts), and added the live desktop smoke command from the package manifests.
+
+**Verification:** Reconciled README commands/events against [`apps/desktop/src-tauri/src/lib.rs`](../apps/desktop/src-tauri/src/lib.rs), [`apps/desktop/src/lib/ipc.ts`](../apps/desktop/src/lib/ipc.ts), [`package.json`](../package.json), [`apps/desktop/package.json`](../apps/desktop/package.json), and [`apps/desktop/src-tauri/tauri.conf.json`](../apps/desktop/src-tauri/tauri.conf.json); `git diff --check -- README.md docs/IMPLEMENTATION.md` — pass.
+
 ### 2026-04-16 Copilot streaming rewrite handling: hide thinking drafts and keep tool flow alive
 
 **Problem:** Live M365 Copilot streaming still had a second failure mode beyond image-status noise: the bridge could surface internal draft text such as `The user wants me to...` or partial `relay_tool` output, and the Rust/UI streaming path still assumed every progress snapshot was append-only. When Copilot rewrote the draft mid-stream, the desktop ignored the non-prefix snapshot, so the assistant bubble appeared to stall and later tool use could look desynchronized from the visible reply.
