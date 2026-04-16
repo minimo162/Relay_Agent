@@ -175,9 +175,81 @@ test("streaming assistant text shows Drafting and suppresses generic working sta
 
   await emitAgentEvent(page, "agent:text_delta", {
     sessionId: "session-e2e-1",
+    text: " More detail follows.",
+    isComplete: false,
+  });
+
+  await expect(page.getByText("First streamed sentence. More detail follows.")).toBeVisible();
+
+  await emitAgentEvent(page, "agent:text_delta", {
+    sessionId: "session-e2e-1",
     text: "",
     isComplete: true,
   });
 
   await expect(page.getByText("Drafting…")).toHaveCount(0);
+});
+
+test("separate text-delta sequences render as separate assistant bubbles", async ({ page }) => {
+  await injectRelayMock(page, { autoComplete: false });
+  await seedWorkspace(page);
+  await openApp(page);
+  await sendPrompt(page, "stream two replies");
+  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await waitForMockSession(page, "session-e2e-1");
+  await waitForAgentListener(page, "agent:text_delta");
+
+  await emitAgentEvent(page, "agent:text_delta", {
+    sessionId: "session-e2e-1",
+    text: "First streamed reply.",
+    isComplete: false,
+  });
+  await emitAgentEvent(page, "agent:text_delta", {
+    sessionId: "session-e2e-1",
+    text: "",
+    isComplete: true,
+  });
+  await emitAgentEvent(page, "agent:text_delta", {
+    sessionId: "session-e2e-1",
+    text: "Second streamed reply.",
+    isComplete: false,
+  });
+
+  const assistantBubbles = page.locator("[data-ra-bubble-role='assistant']");
+  await expect(assistantBubbles).toHaveCount(2);
+  await expect(assistantBubbles.nth(0)).toContainText("First streamed reply.");
+  await expect(assistantBubbles.nth(1)).toContainText("Second streamed reply.");
+});
+
+test("a new streamed reply that starts with previous text does not get appended to the completed bubble", async ({ page }) => {
+  await injectRelayMock(page, { autoComplete: false });
+  await seedWorkspace(page);
+  await openApp(page);
+  await sendPrompt(page, "stream a duplicated prefix");
+  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await waitForMockSession(page, "session-e2e-1");
+  await waitForAgentListener(page, "agent:text_delta");
+
+  await emitAgentEvent(page, "agent:text_delta", {
+    sessionId: "session-e2e-1",
+    text: "HTMLでテトリスを作成します！",
+    isComplete: false,
+  });
+  await emitAgentEvent(page, "agent:text_delta", {
+    sessionId: "session-e2e-1",
+    text: "",
+    isComplete: true,
+  });
+  await emitAgentEvent(page, "agent:text_delta", {
+    sessionId: "session-e2e-1",
+    text: "HTMLでテトリスを作成します！\n\nテトリスの HTML ファイルを作成しました ✅",
+    isComplete: false,
+  });
+
+  const assistantBubbles = page.locator("[data-ra-bubble-role='assistant']");
+  await expect(assistantBubbles).toHaveCount(2);
+  await expect(assistantBubbles.nth(0)).toContainText("HTMLでテトリスを作成します！");
+  await expect(assistantBubbles.nth(0)).not.toContainText("テトリスの HTML ファイルを作成しました");
+  await expect(assistantBubbles.nth(1)).toContainText("HTMLでテトリスを作成します！");
+  await expect(assistantBubbles.nth(1)).toContainText("テトリスの HTML ファイルを作成しました ✅");
 });

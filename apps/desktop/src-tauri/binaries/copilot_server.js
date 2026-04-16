@@ -2519,6 +2519,7 @@ async function clickSendViaCdpMouse(session) {
 async function submitPromptRaw(session, expectedPromptLen, netCapture = null, opts = {}) {
   const hadAttachments = opts.hadAttachments === true;
   const abortCheck = typeof opts.abortCheck === "function" ? opts.abortCheck : null;
+  const onProgress = typeof opts.onProgress === "function" ? opts.onProgress : null;
   const trace = opts.trace || null;
   const responseTimeoutMs =
     Number.isFinite(opts.responseTimeoutMs) && opts.responseTimeoutMs > 0
@@ -2650,6 +2651,7 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
   );
   try {
     const response = await waitForDomResponse(session, netCapture, expectedPromptLen, abortCheck, {
+      onProgress,
       timeoutMs: responseTimeoutMs,
     });
     if (trace) {

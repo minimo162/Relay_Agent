@@ -15,6 +15,14 @@
 
 ## Milestone Log
 
+### 2026-04-16 Live Copilot streaming and duplicate assistant bubble fix
+
+**Problem:** The live M365 Copilot path only surfaced assistant text after the full reply completed, even though the desktop stack already had `agent:text_delta` and `/v1/chat/progress` plumbing. At the same time, the Solid UI appended every new assistant delta onto the most recent assistant bubble regardless of whether that bubble had already completed, which could produce duplicated text such as repeated Copilot intro lines followed by the final answer in the same rendered bubble.
+
+**Change:** Wired live DOM progress all the way through the Node bridge and tightened frontend assistant-chunk assembly. [`apps/desktop/src-tauri/binaries/copilot_server.js`](../apps/desktop/src-tauri/binaries/copilot_server.js) now forwards `onProgress` into [`waitForDomResponse`](../apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs), so live Copilot requests publish incremental assistant-visible text while the DOM is still generating. [`copilot_wait_dom_response.mjs`](../apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs) now normalizes progress against the pre-request assistant baseline, suppressing unchanged previous-turn text and trimming repeated baseline prefixes before publishing progress snapshots; added [`copilot_wait_dom_response.test.mjs`](../apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs) to lock that behavior. On the frontend, [`apps/desktop/src/shell/useAgentEvents.ts`](../apps/desktop/src/shell/useAgentEvents.ts) now appends deltas only to an actively streaming assistant chunk, starts a new assistant bubble after a completion marker, and ignores empty completion markers when no stream is active. [`apps/desktop/src/shell/Shell.tsx`](../apps/desktop/src/shell/Shell.tsx) now avoids re-appending the `turn_complete` fallback assistant text when the active UI already contains the same completed assistant text. Expanded [`apps/desktop/tests/app.e2e.spec.ts`](../apps/desktop/tests/app.e2e.spec.ts) to cover multi-delta streaming, separate assistant bubbles across sequential delta streams, and duplicated-prefix regression handling.
+
+**Verification:** `node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs` — pass. `pnpm check` — pass. `pnpm --filter @relay-agent/desktop exec playwright test tests/app.e2e.spec.ts tests/e2e-comprehensive.spec.ts` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness` — pass.
+
 ### 2026-04-16 Desktop UI: quiet editorial minimalism refresh
 
 **Problem:** The desktop shell already used the warm token system, but the overall presentation still felt busier than intended. Header controls, drawer surfaces, sidebar selection states, first-run messaging, and the composer each used slightly different emphasis levels, so the conversation canvas did not feel clearly primary.

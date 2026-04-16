@@ -40,7 +40,7 @@ export function useAgentEvents(options: UseAgentEventsOptions) {
       options.setChunks((prev) => {
         const next = [...prev];
         const last = next.at(-1);
-        if (last?.kind === "assistant") {
+        if (last?.kind === "assistant" && last.streaming) {
           next[next.length - 1] = {
             kind: "assistant",
             text: last.text + text,

@@ -446,6 +446,20 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
   return null;
 }
 
+function normalizeProgressTextForUi(text, baselineText = "") {
+  let cleaned = stripStreamingPlaceholderTail(String(text ?? "").trim());
+  if (!cleaned) return "";
+
+  const baseline = stripStreamingPlaceholderTail(String(baselineText ?? "").trim());
+  if (!baseline) return cleaned;
+  if (cleaned === baseline) return "";
+  if (baseline.startsWith(cleaned)) return "";
+  if (cleaned.startsWith(baseline)) {
+    cleaned = stripStreamingPlaceholderTail(cleaned.slice(baseline.length).trimStart());
+  }
+  return cleaned;
+}
+
 async function waitForDomResponse(
   session,
   netCapture = null,
@@ -457,7 +471,7 @@ async function waitForDomResponse(
   let lastProgressText = "";
   const emitProgress = async (text, generating) => {
     if (!onProgress) return;
-    const cleaned = stripStreamingPlaceholderTail(String(text ?? "").trim());
+    const cleaned = normalizeProgressTextForUi(text, baselineProgressText);
     if (!cleaned) return;
     if (
       submittedPromptLen >= 1200 &&
@@ -481,13 +495,17 @@ async function waitForDomResponse(
   };
 
   await sleep(520);
-  let baselineLen = (await pollCopilotGeneratingAndReply(session)).reply.trim().length;
+  let baselineProgressText = stripStreamingPlaceholderTail(
+    (await pollCopilotGeneratingAndReply(session)).reply.trim(),
+  );
+  let baselineLen = baselineProgressText.length;
   /** If we captured the user's long prompt as "assistant", minDoneLen becomes unreachable (baseline+2 > len forever). */
   if (baselineLen > 12_000) {
     console.error(
       "[copilot:response] baseline assistant extract is huge (likely user bubble); resetting baseline for completion logic, was",
       baselineLen,
     );
+    baselineProgressText = "";
     baselineLen = 0;
   }
   const waitStarted = Date.now();
@@ -742,6 +760,7 @@ export {
   extractAssistantReplyText,
   extractAssistantReplyHeuristic,
   domExtractLooksLikeSubmittedPrompt,
+  normalizeProgressTextForUi,
   resolveAssistantReplyForReturn,
   waitForDomResponse,
 };

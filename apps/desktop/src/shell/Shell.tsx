@@ -416,9 +416,18 @@ export default function Shell(): JSX.Element {
     try {
       const res = await getSessionHistory({ sessionId });
       let next = chunksFromHistory(res.messages);
-      const hasAssistantText = next.some((c) => c.kind === "assistant" && c.text.trim().length > 0);
       const fb = opts?.fallbackAssistantText?.trim();
-      if (!hasAssistantText && fb) {
+      const activeAssistantTexts = sessions
+        .chunks()
+        .filter((chunk): chunk is Extract<UiChunk, { kind: "assistant" }> => chunk.kind === "assistant")
+        .map((chunk) => chunk.text.trim())
+        .filter((text) => text.length > 0);
+      const hasAssistantText = next.some((c) => c.kind === "assistant" && c.text.trim().length > 0);
+      const historyAlreadyHasFallback = fb
+        ? next.some((chunk) => chunk.kind === "assistant" && chunk.text.trim() === fb)
+        : false;
+      const activeAlreadyHasFallback = fb ? activeAssistantTexts.includes(fb) : false;
+      if (!hasAssistantText && fb && !historyAlreadyHasFallback && !activeAlreadyHasFallback) {
         next = [...next, { kind: "assistant" as const, text: fb }];
       }
       next = mergeChunksWithInline(sessionId, next);
@@ -435,7 +444,12 @@ export default function Shell(): JSX.Element {
     } catch (err) {
       console.error("[IPC] load history failed", err);
       const fb = opts?.fallbackAssistantText?.trim();
-      if (fb) {
+      const activeAlreadyHasFallback = fb
+        ? sessions
+            .chunks()
+            .some((chunk) => chunk.kind === "assistant" && chunk.text.trim() === fb)
+        : false;
+      if (fb && !activeAlreadyHasFallback) {
         sessions.setChunks((prev) => [...prev, { kind: "assistant", text: fb }]);
       }
       if (opts?.afterTurnComplete) {
