@@ -8,6 +8,14 @@
  * The browser profile must already be signed in to M365 (same as Relay / `m365-cdp-chat` E2E).
  */
 import { chromium } from "playwright";
+import { ASSISTANT_REPLY_DOM_SELECTORS } from "../src-tauri/binaries/copilot_dom_poll.mjs";
+import {
+  extractAssistantReplyHeuristic,
+  extractAssistantReplyStrict,
+  extractAssistantReplyText,
+  normalizeCopilotVisibleText,
+  resolveAssistantReplyForReturn,
+} from "../src-tauri/binaries/copilot_wait_dom_response.mjs";
 
 const CDP = process.env.CDP_HTTP || "http://127.0.0.1:9360";
 
@@ -81,6 +89,16 @@ const PROBE_JS = `(() => {
   };
 })()`;
 
+function relaySessionAdapter(page) {
+  return {
+    async evaluate(expression) {
+      return {
+        value: await page.evaluate(expression),
+      };
+    },
+  };
+}
+
 async function main() {
   let browser;
   try {
@@ -102,6 +120,7 @@ async function main() {
       process.exit(1);
     }
     await chat.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => {});
+    const relaySession = relaySessionAdapter(chat);
     const frames = chat.frames();
     const perFrame = [];
     let replyDivTotal = 0;
@@ -121,6 +140,57 @@ async function main() {
       } catch (e) {
         perFrame.push({ index: i, frameUrl: f.url(), error: String(e.message || e) });
       }
+    }
+    const relayLooseExtract = normalizeCopilotVisibleText(await extractAssistantReplyText(relaySession));
+    const relayStrictExtract = normalizeCopilotVisibleText(await extractAssistantReplyStrict(relaySession));
+    const relayHeuristicExtract = normalizeCopilotVisibleText(await extractAssistantReplyHeuristic(relaySession));
+    const relayResolvedExtract =
+      (await resolveAssistantReplyForReturn(
+        relaySession,
+        relayLooseExtract,
+        0,
+        null,
+      ).catch(() => null)) ?? "";
+    const assistantSelectorMatches = [];
+    for (const selector of ASSISTANT_REPLY_DOM_SELECTORS) {
+      const locator = chat.locator(selector);
+      const count = await locator.count().catch(() => 0);
+      const last = count > 0 ? locator.nth(count - 1) : null;
+      assistantSelectorMatches.push({
+        selector,
+        count,
+        visibleCount:
+          count > 0
+            ? await locator.evaluateAll(
+                (nodes) =>
+                  nodes.filter((node) => {
+                    const rect = node.getBoundingClientRect?.();
+                    if (!rect) return false;
+                    const style = getComputedStyle(node);
+                    return (
+                      style.display !== "none" &&
+                      style.visibility !== "hidden" &&
+                      Number(style.opacity || "1") !== 0 &&
+                      rect.width > 0 &&
+                      rect.height > 0
+                    );
+                  }).length,
+              ).catch(() => 0)
+            : 0,
+        lastTag: last ? await last.evaluate((el) => el.tagName.toLowerCase()).catch(() => null) : null,
+        lastTestId: last ? await last.getAttribute("data-testid").catch(() => null) : null,
+        lastClass:
+          last
+            ? await last.evaluate((el) => (el.className ? String(el.className).slice(0, 120) : null)).catch(() => null)
+            : null,
+        lastSample:
+          last
+            ? await last.evaluate((el) => {
+                const t = (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ");
+                return t.length > 240 ? `${t.slice(0, 240)}…` : t;
+              }).catch(() => null)
+            : null,
+      });
     }
     let a11y = null;
     try {
@@ -142,6 +212,17 @@ async function main() {
         listHtmlLen = h;
       } catch (_) {}
     }
+    let listTextLen = 0;
+    let listTextTail = "";
+    if (listCount) {
+      try {
+        listTextTail = await listContainer.first().evaluate((el) => {
+          const text = (el.innerText || el.textContent || "").trim();
+          return text.length > 12000 ? text.slice(-12000) : text;
+        });
+        listTextLen = listTextTail.length;
+      } catch (_) {}
+    }
     const a11yOut =
       a11y && typeof a11y === "object" && "error" in a11y
         ? a11y
@@ -153,7 +234,14 @@ async function main() {
         {
           mainUrl: chat.url(),
           messageListContainerHtmlLen: listHtmlLen,
+          messageListContainerTextLen: listTextLen,
+          messageListContainerTextTail: listTextTail,
           a11ySnippet: a11yOut,
+          relayLooseExtract,
+          relayStrictExtract,
+          relayHeuristicExtract,
+          relayResolvedExtract,
+          assistantSelectorMatches,
           copilotMessageReplyDivTotal: replyDivTotal,
           copilotMessageReplyDivBestFrameIndex: replyDivBestFrame,
           lastCopilotReplySampleFromBestFrame: replyDivBestSample,

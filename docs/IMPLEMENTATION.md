@@ -5726,3 +5726,48 @@ Observed result:
   - `pnpm check`
   - `git diff --check`
 - Live signed-in M365 validation was not rerun in this Linux workspace during this pass, so the remaining acceptance artifact is a real desktop repro confirming that the original drift case now reaches `repair1` fresh-chat isolation and stops surfacing internal reasoning text in the final assistant excerpt.
+
+Playwright live Copilot response probe + extractor drift investigation (2026-04-16):
+
+```bash
+node --check apps/desktop/scripts/inspect-copilot-dom.mjs
+node --check apps/desktop/scripts/live_m365_copilot_response_probe.mjs
+node --check apps/desktop/src-tauri/binaries/copilot_dom_poll.mjs
+node --check apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs
+node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs
+pnpm --filter @relay-agent/desktop inspect:copilot-dom
+pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe -- --output-dir /tmp/relay-live-copilot-probe-20260416-fixed --prompt "日本の首都はどこですか？一言で答えてください。" --prompt $'次の fenced block をそのまま返してください。\n```relay_tool\n{"relay_tool_call":true,"name":"noop","input":{}}\n```'
+pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe -- --output-dir /tmp/relay-live-copilot-probe-20260416-ok2 --prompt "Please reply with exactly OK and nothing else."
+git diff --check
+```
+
+Observed result:
+
+- Added a real signed-in Playwright/CDP investigation path for Copilot replies:
+  - [`apps/desktop/scripts/live_m365_copilot_response_probe.mjs`](../apps/desktop/scripts/live_m365_copilot_response_probe.mjs) now opens a signed-in M365 Copilot tab over `connectOverCDP`, starts a fresh chat per prompt by default, sends prompts through the real composer, waits with the same Relay DOM-response logic, and saves per-turn artifacts (`prompt.txt`, `reply.txt`, `after.json`, screenshots, transcript HTML/text, observed response metadata) under a caller-provided temp directory.
+  - [`apps/desktop/scripts/inspect-copilot-dom.mjs`](../apps/desktop/scripts/inspect-copilot-dom.mjs) now reports Relay-style DOM extracts plus concrete selector hits for the current page, so the live M365 DOM shape can be compared directly with the desktop extractor instead of relying only on ad hoc HTML dumps.
+  - [`apps/desktop/package.json`](../apps/desktop/package.json) and [`README.md`](../README.md) now expose the new `live:m365:copilot-response-probe` command as a documented real-CDP investigation tool.
+- The live DOM inspection showed the actual current M365 web reply nodes used by Copilot:
+  - `data-testid="copilot-message-reply-div"`
+  - `data-testid="markdown-reply"`
+  - `role="article"` on the outer assistant card
+  - The reply card also contains UI chrome inside the same subtree: inline citation chips (`bing`), `narrator-announcement` / `Generating response`, `Sources`, code-block language badges such as `Plain Text`, and message-bar warnings like `relay_tool isn’t fully supported...`.
+- Hardened the shared extractor so Relay no longer treats that UI chrome as assistant content:
+  - [`apps/desktop/src-tauri/binaries/copilot_dom_poll.mjs`](../apps/desktop/src-tauri/binaries/copilot_dom_poll.mjs) now clones the assistant subtree and removes known non-answer descendants before reading text, including citation chips, footnotes, action bars, suggestion chips, code-block controls, and plain-text warning banners.
+  - The same module now strips extra M365-only text chrome from the normalized string path: standalone `Sources`, `Plain Text`, `relay_tool isn’t fully supported...`, streaming placeholders, source-host labels such as `bing` when they trail a real answer, and the `Copilot` prefix when it is glued directly onto the visible reply (`CopilotOK`).
+  - [`apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`](../apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs) now covers the newly observed live failures: short-answer source/streaming chrome, plain-text wrapper chrome around fenced tool output, and the glued `Copilot` prefix case.
+- Live artifacts confirmed the drift and the fix path:
+  - `inspect:copilot-dom` against the signed-in tab now reports selector hits for `copilot-message-reply-div`, `markdown-reply`, and `role="article"` instead of leaving the current DOM shape opaque.
+  - Artifact run `/tmp/relay-live-copilot-probe-20260416-fixed` reproduced the real M365 plain-text-wrapper behavior for the fenced-block prompt and extracted the visible answer as `React` plus the JSON payload, without the earlier `Plain Text` / warning banner chrome.
+  - Clean probe run `/tmp/relay-live-copilot-probe-20260416-ok2` extracted `OK` from a live signed-in Copilot reply for the exact-OK prompt. The saved `reply.txt` is the authoritative final reply artifact for that run.
+  - The geography prompt remained noisy and occasionally unstable in separate runs (web citation injection, transient Copilot error card, or loading-state chrome), which is why the exact-OK probe was added as a no-citation control case.
+- Verification summary:
+  - `node --check apps/desktop/scripts/inspect-copilot-dom.mjs`: passed
+  - `node --check apps/desktop/scripts/live_m365_copilot_response_probe.mjs`: passed
+  - `node --check apps/desktop/src-tauri/binaries/copilot_dom_poll.mjs`: passed
+  - `node --check apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs`: passed
+  - `node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`: passed (`17` tests)
+  - `pnpm --filter @relay-agent/desktop inspect:copilot-dom`: passed against the signed-in CDP session
+  - `pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe ... /tmp/relay-live-copilot-probe-20260416-fixed`: passed and wrote two-turn artifacts
+  - `pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe ... /tmp/relay-live-copilot-probe-20260416-ok2`: passed and wrote a clean one-turn control artifact
+  - `git diff --check`: pending final workspace check after this doc update

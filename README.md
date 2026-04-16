@@ -150,6 +150,8 @@ Use the signed-in `RelayAgentEdgeProfile` on the same CDP port. A good run logs 
 
 **Inspect Copilot DOM (real CDP):** `pnpm --filter @relay-agent/desktop inspect:copilot-dom` (signed-in Edge on 9360).
 
+**Live Copilot response probe (real CDP):** `pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe -- --prompt "<prompt>" [--prompt "<prompt 2>"]` sends prompts through Playwright `connectOverCDP`, saves screenshots plus DOM/transcript artifacts under a temp directory, and records Relay-style DOM extracts next to the visible Copilot reply for mismatch analysis.
+
 **CI:** see `.github/workflows/` — main CI now runs a matrix: `ubuntu-latest` executes bundled-node prep, Linux Tauri deps, docs truth guards, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, `pnpm launch:test`, and `pnpm agent-loop:test`; `windows-latest` runs bundled-node prep, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, and `pnpm smoke:windows`.
 
 ## License

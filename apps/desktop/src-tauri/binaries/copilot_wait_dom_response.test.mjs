@@ -88,6 +88,40 @@ test("normalizeCopilotVisibleText strips internal reasoning lead-ins and search-
   );
 });
 
+test("normalizeCopilotVisibleText strips M365 source and streaming chrome from short answers", () => {
+  assert.equal(
+    normalizeCopilotVisibleText(
+      [
+        "Copilot said:",
+        "Copilot",
+        "東京",
+        "bing",
+        "",
+        "Generating response",
+        "Sources",
+      ].join("\n"),
+    ),
+    "東京",
+  );
+});
+
+test("normalizeCopilotVisibleText strips plain-text wrapper chrome around fenced tool output", () => {
+  assert.equal(
+    normalizeCopilotVisibleText(
+      [
+        "Plain Text",
+        "relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.",
+        '{"relay_tool_call":true,"name":"noop","input":{}}',
+      ].join("\n"),
+    ),
+    '{"relay_tool_call":true,"name":"noop","input":{}}',
+  );
+});
+
+test("normalizeCopilotVisibleText strips a Copilot prefix glued to the visible reply", () => {
+  assert.equal(normalizeCopilotVisibleText("CopilotOK"), "OK");
+});
+
 test("normalizeProgressTextForUi keeps append-only progress after transient image noise is removed", () => {
   assert.equal(
     normalizeProgressTextForUi(

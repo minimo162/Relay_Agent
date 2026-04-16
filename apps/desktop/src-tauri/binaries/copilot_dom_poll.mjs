@@ -46,6 +46,40 @@ function stripM365CopilotReplyChrome(text) {
   if (!s) return s;
   s = s.replace(/^Copilot said:\s*/i, "");
   s = s.replace(/^Copilot\s*(\n+|$)/im, "");
+  s = s.replace(/^Copilot(?=\S)/i, "");
+  const lines = s.split(/\r?\n/).map((line) => line.trim());
+  const previousNonEmptyLine = (index) => {
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (lines[i]) return lines[i];
+    }
+    return "";
+  };
+  const nextNonEmptyLine = (index) => {
+    for (let i = index + 1; i < lines.length; i += 1) {
+      if (lines[i]) return lines[i];
+    }
+    return "";
+  };
+  const isLikelySourceLabelLine = (line) => {
+    if (/^bing$/i.test(line)) return true;
+    return /^(?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|ai|co|jp|us|uk)$/i.test(line);
+  };
+  const filtered = lines.filter((line, index) => {
+      if (!line) return true;
+      if (/^copilot$/i.test(line)) return false;
+      if (/^plain text$/i.test(line)) return false;
+      if (/^sources?$/i.test(line)) return false;
+      if (/^relay_tool isn.?t fully supported\./i.test(line)) return false;
+      if (lineMatchesStreamingPlaceholder(line)) return false;
+      if (isLikelySourceLabelLine(line) && previousNonEmptyLine(index)) {
+        const next = nextNonEmptyLine(index);
+        if (!next || /^sources?$/i.test(next) || lineMatchesStreamingPlaceholder(next)) {
+          return false;
+        }
+      }
+      return true;
+    });
+  s = filtered.join("\n");
   return s.trim();
 }
 
@@ -249,7 +283,44 @@ function copilotDomReplyExtractIifeExpression() {
       return false;
     }
     function nodeText(el) {
-      const t = (el.innerText || el.textContent || "").trim();
+      if (!el) return "";
+      let target = el;
+      try {
+        if (typeof el.cloneNode === "function") {
+          target = el.cloneNode(true);
+          const noisySelectors = [
+            ".fai-CopilotMessage__footnote",
+            ".fai-CopilotMessage__actions",
+            ".fai-SuggestionList",
+            ".fui-MessageBar",
+            ".fai-Citation",
+            '[data-citation-group-id]',
+            '[data-grouped-citations]',
+            '[data-testid="narrator-announcement"]',
+            '[data-testid="sources-button-testid"]',
+            '[data-testid="chat-response-message-disclaimer"]',
+            '[data-testid="feedback-button-testid"]',
+            '[data-testid="CopyButtonContainerTestId"]',
+            '[data-testid="CopyButtonTestId"]',
+            '[data-testid="overflow-menu-button"]',
+            '[data-testid="SchedulePromptButtonTestId"]',
+            '[data-testid="pages-split-button-primary"]',
+            '[data-testid="pages-split-button-menu"]',
+            '#language-badge',
+            '#message-banner',
+            '#go-to-line-button',
+            '#copy-button',
+            '#codeblock-footer',
+            '[data-testid="message-bar-body-info"]',
+          ];
+          for (const selector of noisySelectors) {
+            for (const node of target.querySelectorAll(selector)) {
+              node.remove();
+            }
+          }
+        }
+      } catch (_) {}
+      const t = (target.innerText || target.textContent || "").trim();
       return t;
     }
     function hasStructuredContent(text) {
