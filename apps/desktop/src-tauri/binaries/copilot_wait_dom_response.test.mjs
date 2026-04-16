@@ -122,6 +122,24 @@ test("normalizeCopilotVisibleText strips a Copilot prefix glued to the visible r
   assert.equal(normalizeCopilotVisibleText("CopilotOK"), "OK");
 });
 
+test("normalizeCopilotVisibleText strips reasoning chrome, show-more chrome, and code badges", () => {
+  assert.equal(
+    normalizeCopilotVisibleText(
+      [
+        "Reasoning completed in 5 steps",
+        "了解です。",
+        "cloud",
+        "",
+        "HTML",
+        "<!doctype html>",
+        "<html lang=\"en\">",
+        "Show more lines",
+      ].join("\n"),
+    ),
+    ["了解です。", "", "<!doctype html>", "<html lang=\"en\">"].join("\n"),
+  );
+});
+
 test("normalizeProgressTextForUi keeps append-only progress after transient image noise is removed", () => {
   assert.equal(
     normalizeProgressTextForUi(
@@ -267,7 +285,7 @@ test("waitForDomResponse prefers a fuller assistant turn over a short reply-div 
   let pollIndex = 0;
   const session = {
     async evaluate(script) {
-      if (String(script).includes("return { generating, reply: replyRaw };")) {
+      if (String(script).includes("reply: replyRaw")) {
         const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
         pollIndex += 1;
         return { value: snapshot };
@@ -316,7 +334,7 @@ test("waitForDomResponse returns the full relay_tool reply while progress stays 
   let pollIndex = 0;
   const session = {
     async evaluate(script) {
-      if (String(script).includes("return { generating, reply: replyRaw };")) {
+      if (String(script).includes("reply: replyRaw")) {
         const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
         pollIndex += 1;
         return { value: snapshot };
@@ -372,4 +390,143 @@ test("waitForDomResponse keeps a short valid DOM reply over longer thought-like 
   });
 
   assert.equal(response, "最終結果です。");
+});
+
+test("waitForDomResponse waits past progress-only search UI until a real assistant reply appears", async () => {
+  const finalReply = [
+    "了解です。単一 HTML のテトリスを作成します。",
+    "",
+    "```html",
+    "<!doctype html>",
+    "<html lang=\"en\">",
+    "```",
+  ].join("\n");
+  const snapshots = [
+    {
+      generating: false,
+      reply: "",
+      progressOnly: false,
+      hasVisibleAssistantChat: false,
+      hasExpandableCodeBlock: false,
+    },
+    {
+      generating: true,
+      reply: "Get a quick answer\nRetrying searches\n\nOK, I'll search for 'html テトリス'...",
+      progressOnly: true,
+      hasVisibleAssistantChat: false,
+      hasExpandableCodeBlock: false,
+    },
+    {
+      generating: false,
+      reply: "Get a quick answer\nRetrying searches\n\nIt seems there was an error retrieving the expected results, so I'm planning to retry with separate calls and also conduct a web search for the Tetris HTML file.",
+      progressOnly: true,
+      hasVisibleAssistantChat: false,
+      hasExpandableCodeBlock: false,
+    },
+    {
+      generating: false,
+      reply: finalReply,
+      progressOnly: false,
+      hasVisibleAssistantChat: true,
+      hasExpandableCodeBlock: false,
+    },
+    {
+      generating: false,
+      reply: finalReply,
+      progressOnly: false,
+      hasVisibleAssistantChat: true,
+      hasExpandableCodeBlock: false,
+    },
+    {
+      generating: false,
+      reply: finalReply,
+      progressOnly: false,
+      hasVisibleAssistantChat: true,
+      hasExpandableCodeBlock: false,
+    },
+  ];
+  let pollIndex = 0;
+  const progress = [];
+  const session = {
+    async evaluate(script) {
+      if (String(script).includes("reply: replyRaw")) {
+        const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
+        pollIndex += 1;
+        return { value: snapshot };
+      }
+      if (String(script).includes("const includeGenericSelectors = false")) {
+        return { value: finalReply };
+      }
+      if (String(script).includes("const includeGenericSelectors = true")) {
+        return { value: finalReply };
+      }
+      return { value: "" };
+    },
+  };
+
+  const response = await waitForDomResponse(session, null, 0, null, {
+    timeoutMs: 3_500,
+    onProgress: async (snapshot) => {
+      progress.push(snapshot.visibleText);
+    },
+  });
+
+  assert.equal(response, finalReply);
+  assert.equal(progress.some((text) => /Get a quick answer|Retrying searches|I'll search/i.test(text)), false);
+  assert.equal(progress.at(-1), finalReply);
+});
+
+test("waitForDomResponse expands show-more code blocks before returning the assistant reply", async () => {
+  const truncatedReply = [
+    "了解です。",
+    "<!doctype html>",
+    "Show more lines",
+  ].join("\n");
+  const fullReply = [
+    "了解です。",
+    "<!doctype html>",
+    "<html lang=\"en\">",
+    "<body></body>",
+    "</html>",
+  ].join("\n");
+  let expanded = false;
+  let expandCalls = 0;
+  let pollIndex = 0;
+  const session = {
+    async evaluate(script) {
+      const source = String(script);
+      if (source.includes("reply: replyRaw")) {
+        pollIndex += 1;
+        return {
+          value: {
+            generating: false,
+            reply: expanded ? fullReply : truncatedReply,
+            progressOnly: false,
+            hasVisibleAssistantChat: true,
+            hasExpandableCodeBlock: !expanded,
+          },
+        };
+      }
+      if (source.includes("const includeGenericSelectors = false")) {
+        return { value: expanded ? fullReply : truncatedReply };
+      }
+      if (source.includes("const includeGenericSelectors = true")) {
+        return { value: expanded ? fullReply : truncatedReply };
+      }
+      if (source.includes("show more lines|show more|もっと表示")) {
+        expandCalls += 1;
+        expanded = true;
+        return { value: { clicked: true, label: "Show more lines" } };
+      }
+      return { value: "" };
+    },
+  };
+
+  const response = await waitForDomResponse(session, null, 0, null, {
+    timeoutMs: 8_500,
+  });
+
+  assert.equal(response, fullReply);
+  assert.equal(expandCalls, 1);
+  assert.ok(pollIndex >= 3);
 });

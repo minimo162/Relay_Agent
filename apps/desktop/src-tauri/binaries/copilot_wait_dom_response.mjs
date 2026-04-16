@@ -154,17 +154,48 @@ function normalizeReasoningDetectionText(text) {
 function stripInternalReasoningLeadIns(text) {
   let cleaned = String(text ?? "").trimStart();
   cleaned = cleaned.replace(/^推論が\s*\d+\s*ステップで完了しました[:：]?\s*/u, "");
+  cleaned = cleaned.replace(/^reasoning completed in\s*\d+\s*steps[:：]?\s*/i, "");
   cleaned = cleaned.replace(/^show\*+\s*considering[^*]{0,160}\*+\s*/i, "");
   cleaned = cleaned.replace(/^show\s*considering\s+/i, "");
   return cleaned;
+}
+
+function looksLikeSearchProgressText(text) {
+  const normalized = normalizeReasoningDetectionText(text);
+  if (!normalized) return false;
+  if (
+    /\bget a quick answer\b/.test(normalized) ||
+    /\bretrying searches\b/.test(normalized) ||
+    /^(?:searches|get a quick answer)\b/.test(normalized)
+  ) {
+    return true;
+  }
+  if (/^(?:ok[, ]+)?i(?:'|’)?ll search\b/.test(normalized) || /^let me search\b/.test(normalized)) {
+    return true;
+  }
+  if (
+    /\bplanning to retry\b/.test(normalized) &&
+    (/\bweb search\b/.test(normalized) || /\bsearch\b/.test(normalized))
+  ) {
+    return true;
+  }
+  if (
+    /\bconduct(?:ing)? a web search\b/.test(normalized) ||
+    /\bretrieving the expected results\b/.test(normalized)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function looksLikeInternalReasoningParagraph(text) {
   const raw = String(text ?? "").trim();
   if (!raw) return false;
   if (/^推論が\s*\d+\s*ステップで完了しました/u.test(raw)) return true;
+  if (/^reasoning completed in\s*\d+\s*steps/i.test(raw)) return true;
   const normalized = normalizeReasoningDetectionText(raw);
   if (!normalized) return false;
+  if (looksLikeSearchProgressText(normalized)) return true;
   if (/^the user wants me to\b/.test(normalized)) return true;
   if (/^show\s*considering\b/.test(normalized)) return true;
   if (
@@ -270,6 +301,7 @@ function looksLikeInternalDraftParagraph(text) {
 function assistantTextQualityScore(text) {
   const cleaned = normalizeCopilotVisibleText(text);
   if (!cleaned) return -100;
+  if (looksLikeSearchProgressText(cleaned)) return -80;
   let score = 0;
   if (cleaned.length >= 12) score += 2;
   if (cleaned.length >= 40) score += 1;
@@ -283,7 +315,7 @@ function assistantTextQualityScore(text) {
 function shouldPreferAssistantText(candidate, baseline = "") {
   const next = normalizeCopilotVisibleText(candidate);
   const current = normalizeCopilotVisibleText(baseline);
-  if (!next || looksLikeInternalReasoningParagraph(next)) return false;
+  if (!next || looksLikeInternalReasoningParagraph(next) || looksLikeSearchProgressText(next)) return false;
   if (!current) return true;
   const nextScore = assistantTextQualityScore(next);
   const currentScore = assistantTextQualityScore(current);
@@ -319,6 +351,7 @@ function findProgressToolCutoff(text) {
 function extractUserVisibleProgressText(text) {
   let cleaned = normalizeCopilotVisibleText(text);
   if (!cleaned) return "";
+  if (looksLikeSearchProgressText(cleaned)) return "";
 
   const cutoff = findProgressToolCutoff(cleaned);
   if (cutoff >= 0) {
@@ -347,7 +380,18 @@ async function pollCopilotGeneratingAndReply(session) {
   const v = r?.value;
   const gen = v?.generating === true;
   const reply = stripM365CopilotReplyChrome(typeof v?.reply === "string" ? v.reply : "");
-  return { generating: gen, reply };
+  const progressOnly = v?.progressOnly === true;
+  const hasVisibleAssistantChat =
+    typeof v?.hasVisibleAssistantChat === "boolean"
+      ? v.hasVisibleAssistantChat
+      : !!normalizeCopilotVisibleText(reply);
+  return {
+    generating: gen,
+    reply,
+    progressOnly,
+    hasVisibleAssistantChat,
+    hasExpandableCodeBlock: v?.hasExpandableCodeBlock === true,
+  };
 }
 
 async function extractAssistantReplyText(session) {
@@ -594,21 +638,109 @@ function domExtractLooksLikeSubmittedPrompt(textLen, submittedLen) {
 function assistantReplyNeedsExpansionProbe(text, submittedPromptLen) {
   const cleaned = normalizeCopilotVisibleText(text);
   if (!cleaned) return true;
+  if (looksLikeSearchProgressText(cleaned)) return true;
   if (domExtractLooksLikeSubmittedPrompt(cleaned.length, submittedPromptLen)) return true;
   return cleaned.length < 220 && !assistantTextHasStructuredContent(cleaned);
+}
+
+function copilotExpandLastAssistantTurnIifeExpression() {
+  return `(() => {
+    function visible(el) {
+      return el && el.offsetParent !== null;
+    }
+    function inComposer(el) {
+      return !!(el && el.closest(${JSON.stringify(COMPOSER_ANCESTOR_CLOSEST)}));
+    }
+    function inUserTurn(el) {
+      if (!el) return false;
+      try {
+        if (el.closest('[data-message-author-role="user"]')) return true;
+        if (el.closest('[data-message-author-role="User"]')) return true;
+        if (el.closest('[data-testid="userMessage"]')) return true;
+        if (el.closest('[data-testid*="user-message"]')) return true;
+        if (el.closest('[data-testid*="UserMessage"]')) return true;
+        if (el.matches && el.matches('cib-message[type="user"]')) return true;
+        if (el.closest('[aria-label*="Your message"]')) return true;
+        if (el.closest('[aria-label*="your message"]')) return true;
+        if (el.closest('[aria-label*="送信した"]')) return true;
+        if (el.closest('[aria-label*="自分のメッセージ"]')) return true;
+        if (el.closest('[class*="fai-UserMessage"]')) return true;
+        if (el.closest('[data-testid="chatQuestion"]')) return true;
+      } catch (_) {}
+      return false;
+    }
+    function walkElements(root, visit) {
+      if (!root) return;
+      if (root.nodeType === 1) visit(root);
+      const tree = root.nodeType === 9 ? root.documentElement : root;
+      if (!tree) return;
+      const kids = tree.children || [];
+      for (let i = 0; i < kids.length; i++) walkElements(kids[i], visit);
+      if (tree.shadowRoot) walkElements(tree.shadowRoot, visit);
+    }
+    function queryDeepAll(selector, root) {
+      const top = root?.nodeType === 9 ? (root.documentElement || root.body) : root;
+      if (!top) return [];
+      const out = [];
+      walkElements(top, (el) => {
+        try {
+          if (el.matches && el.matches(selector)) out.push(el);
+        } catch (_) {}
+      });
+      return out;
+    }
+    function nodeText(el) {
+      return (el && (el.innerText || el.textContent) ? (el.innerText || el.textContent) : "").trim();
+    }
+    function matchesShowMoreControl(el) {
+      const text = [
+        nodeText(el),
+        el?.getAttribute?.("aria-label") || "",
+        el?.getAttribute?.("title") || "",
+      ].join(" ").toLowerCase();
+      return /show more lines|show more|もっと表示/.test(text);
+    }
+    const roots = queryDeepAll('[data-testid="copilot-message-reply-div"]', document).filter(
+      (el) => visible(el) && !inComposer(el) && !inUserTurn(el),
+    );
+    if (!roots.length) return { clicked: false };
+    roots.sort((a, b) => {
+      const p = a.compareDocumentPosition(b);
+      if (p & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+      if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+      return 0;
+    });
+    const root = roots[roots.length - 1];
+    const buttons = queryDeepAll('button, [role="button"]', root).filter(
+      (el) => visible(el) && matchesShowMoreControl(el),
+    );
+    if (!buttons.length) return { clicked: false };
+    buttons[0].click();
+    return { clicked: true, label: nodeText(buttons[0]) };
+  })()`;
+}
+
+async function expandLastAssistantTurnIfNeeded(session) {
+  const r = await session.evaluate(copilotExpandLastAssistantTurnIifeExpression()).catch(() => ({ value: { clicked: false } }));
+  return r?.value?.clicked === true;
 }
 
 async function resolveAssistantReplyForReturn(session, looseText, submittedPromptLen, netCapture = null) {
   const loose = normalizeCopilotVisibleText(looseText);
   const looseLooksLikePrompt = domExtractLooksLikeSubmittedPrompt(loose.length, submittedPromptLen);
   const needsExpansionProbe = assistantReplyNeedsExpansionProbe(loose, submittedPromptLen);
-  if (!looseLooksLikePrompt && !needsExpansionProbe) return loose;
+  const strict = normalizeCopilotVisibleText(await extractAssistantReplyStrict(session));
+  const strictLooksLikePrompt = domExtractLooksLikeSubmittedPrompt(strict.length, submittedPromptLen);
+  const strictNeedsExpansionProbe = assistantReplyNeedsExpansionProbe(strict, submittedPromptLen);
+  if (strict && !strictLooksLikePrompt && !strictNeedsExpansionProbe) return strict;
+  if (!strict && !looseLooksLikePrompt && !needsExpansionProbe) return loose;
 
-  let best = looseLooksLikePrompt ? "" : loose;
+  let best = "";
   const acceptCandidate = (label, rawCandidate, { allowPromptBand = false } = {}) => {
     const candidate = normalizeCopilotVisibleText(rawCandidate);
     if (!candidate) return false;
     if (networkExtractLooksLikeGarbage(candidate)) return false;
+    if (looksLikeSearchProgressText(candidate)) return false;
     if (!allowPromptBand && domExtractLooksLikeSubmittedPrompt(candidate.length, submittedPromptLen)) {
       return false;
     }
@@ -628,11 +760,16 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
     return false;
   };
 
-  const strict = normalizeCopilotVisibleText(await extractAssistantReplyStrict(session));
-  acceptCandidate("prefer strict assistant extract", strict);
-  const heur = normalizeCopilotVisibleText(await extractAssistantReplyHeuristic(session));
-  acceptCandidate("prefer heuristic assistant extract", heur);
-  if (netCapture) {
+  if (strict && !strictLooksLikePrompt) {
+    acceptCandidate("prefer strict assistant extract", strict);
+  } else if (!looseLooksLikePrompt) {
+    acceptCandidate("prefer loose assistant extract", loose);
+  }
+  if (!best || assistantReplyNeedsExpansionProbe(best, submittedPromptLen)) {
+    const heur = normalizeCopilotVisibleText(await extractAssistantReplyHeuristic(session));
+    acceptCandidate("prefer heuristic assistant extract", heur);
+  }
+  if (netCapture && (!best || assistantReplyNeedsExpansionProbe(best, submittedPromptLen))) {
     try {
       if (typeof netCapture.pickAssistantFromChathubWs === "function") {
         const chw = normalizeCopilotVisibleText(netCapture.pickAssistantFromChathubWs());
@@ -702,17 +839,16 @@ async function waitForDomResponse(
   };
   const wire = async (s) => {
     const dom = normalizeCopilotVisibleText(s);
-    if (!netCapture) return dom;
+    if (dom || !netCapture) return dom;
     const networkCandidate = normalizeCopilotVisibleText(
       (await netCapture.pickBestOver(dom, submittedPromptLen)) ?? "",
     );
-    return shouldPreferAssistantText(networkCandidate, dom) ? networkCandidate : dom;
+    return shouldPreferAssistantText(networkCandidate, "") ? networkCandidate : dom;
   };
 
   await sleep(520);
-  let baselineProgressText = normalizeCopilotVisibleText(
-    (await pollCopilotGeneratingAndReply(session)).reply,
-  );
+  const baselineState = await pollCopilotGeneratingAndReply(session);
+  let baselineProgressText = normalizeCopilotVisibleText(baselineState.reply);
   let baselineLen = baselineProgressText.length;
   /** If we captured the user's long prompt as "assistant", minDoneLen becomes unreachable (baseline+2 > len forever). */
   if (baselineLen > 12_000) {
@@ -738,6 +874,8 @@ async function waitForDomResponse(
   let quietGen = 0;
   /** Phantom “stop generating” in DOM keeps this true forever — ignore after N seconds. */
   let genStreak = 0;
+  /** Long code replies may hide trailing lines behind a one-shot expansion control. */
+  let expandAttempted = false;
   /** M365 reply-div yields short answers (e.g. "OK"); keep floor low but still require growth vs baseline. */
   const minDoneLen = () =>
     Math.max(streamed ? 2 : 5, baselineLen + (streamed ? 1 : 5));
@@ -747,7 +885,13 @@ async function waitForDomResponse(
       throw new Error("relay_copilot_aborted");
     }
     await sleep(RESPONSE_POLL_INTERVAL_MS);
-    const { generating: generatingRaw, reply: replyRaw } = await pollCopilotGeneratingAndReply(session);
+    const {
+      generating: generatingRaw,
+      reply: replyRaw,
+      progressOnly,
+      hasVisibleAssistantChat,
+      hasExpandableCodeBlock,
+    } = await pollCopilotGeneratingAndReply(session);
     const reply = normalizeCopilotVisibleText(replyRaw);
     const len = reply.length;
 
@@ -760,7 +904,7 @@ async function waitForDomResponse(
     const streamingPlaceholderTail = replyEndsWithStreamingPlaceholder(reply);
     const generating =
       streamingPlaceholderTail || (generatingRaw && !ignorePhantomStop);
-    await emitProgress(reply, generating);
+    await emitProgress(reply, generating || progressOnly);
     if (generating) quietGen = 0;
     else quietGen++;
     if (ignorePhantomStop && genStreak === RESPONSE_PHANTOM_GENERATING_POLLS) {
@@ -812,6 +956,25 @@ async function waitForDomResponse(
 
     if (len > baselineLen + 18) streamed = true;
 
+    if (progressOnly || !hasVisibleAssistantChat) {
+      streamed = true;
+      stable = 0;
+      prev = len;
+      continue;
+    }
+
+    if (!generating && hasExpandableCodeBlock && !expandAttempted) {
+      const expanded = await expandLastAssistantTurnIfNeeded(session);
+      expandAttempted = expanded;
+      if (expanded) {
+        console.error("[copilot:response] expanded last assistant turn for hidden code");
+        await sleep(450);
+        stable = 0;
+        prev = len;
+        continue;
+      }
+    }
+
     if (generating) {
       streamed = true;
       stable = 0;
@@ -850,12 +1013,29 @@ async function waitForDomResponse(
       if (stable >= needStableTicks) {
         const postStableMs = len < 500 ? Math.min(750, RESPONSE_POST_STABLE_MS) : RESPONSE_POST_STABLE_MS;
         await sleep(postStableMs);
-        const replyLate = normalizeCopilotVisibleText((await pollCopilotGeneratingAndReply(session)).reply);
+        const lateState = await pollCopilotGeneratingAndReply(session);
+        const replyLate = normalizeCopilotVisibleText(lateState.reply);
         if (replyLate.length > len + 40) {
           console.error("[copilot:response] post-stable growth, keep waiting", len, "->", replyLate.length);
           stable = 0;
           prev = len;
           continue;
+        }
+        if (lateState.progressOnly || !lateState.hasVisibleAssistantChat) {
+          console.error("[copilot:response] post-stable state is still progress-only; keep waiting");
+          stable = 0;
+          prev = replyLate.length;
+          continue;
+        }
+        if (lateState.hasExpandableCodeBlock || /\bshow more lines\b/i.test(replyLate)) {
+          const expanded = await expandLastAssistantTurnIfNeeded(session);
+          if (expanded) {
+            console.error("[copilot:response] expanded last assistant turn for hidden code");
+            await sleep(450);
+            stable = 0;
+            prev = replyLate.length;
+            continue;
+          }
         }
         const candidate = replyLate.length >= len ? replyLate : reply;
         if (replyEndsWithStreamingPlaceholder(candidate)) {

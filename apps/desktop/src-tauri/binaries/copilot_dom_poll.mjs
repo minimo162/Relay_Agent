@@ -64,12 +64,43 @@ function stripM365CopilotReplyChrome(text) {
     if (/^bing$/i.test(line)) return true;
     return /^(?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|ai|co|jp|us|uk)$/i.test(line);
   };
+  const isLikelyCodeStartLine = (line) => {
+    if (!line) return false;
+    return (
+      /^<!doctype html>/i.test(line) ||
+      /^<(?:html|head|body|style|script|main|div|section|canvas)\b/i.test(line) ||
+      /^(?:const|let|var|function|class)\b/.test(line)
+    );
+  };
+  const isLikelyCodeBadgeLine = (line, index) => {
+    if (!line) return false;
+    const next = nextNonEmptyLine(index);
+    const prev = previousNonEmptyLine(index);
+    if (/^show more lines$/i.test(line)) return true;
+    if (/^reasoning completed in \d+ steps$/i.test(line)) return true;
+    if (/^推論が\s*\d+\s*ステップで完了しました$/u.test(line)) return true;
+    if (/^(?:get a quick answer|searches|retrying searches)$/i.test(line)) return true;
+    if (
+      /^(?:html|javascript|typescript|tsx|jsx|json|css|xml|yaml|sql|shell|bash|python|rust|markdown)$/i.test(line) &&
+      isLikelyCodeStartLine(next)
+    ) {
+      return true;
+    }
+    if (/^cloud$/i.test(line) && (/^(?:html|javascript|typescript|json|css)$/i.test(next) || isLikelyCodeStartLine(next))) {
+      return true;
+    }
+    if (/^[A-Z][A-Za-z0-9+.# -]{1,18}$/.test(line) && isLikelyCodeStartLine(next) && /^cloud$/i.test(prev)) {
+      return true;
+    }
+    return false;
+  };
   const filtered = lines.filter((line, index) => {
       if (!line) return true;
       if (/^copilot$/i.test(line)) return false;
       if (/^plain text$/i.test(line)) return false;
       if (/^sources?$/i.test(line)) return false;
       if (/^relay_tool isn.?t fully supported\./i.test(line)) return false;
+      if (isLikelyCodeBadgeLine(line, index)) return false;
       if (lineMatchesStreamingPlaceholder(line)) return false;
       if (isLikelySourceLabelLine(line) && previousNonEmptyLine(index)) {
         const next = nextNonEmptyLine(index);
@@ -291,11 +322,13 @@ function copilotDomReplyExtractIifeExpression() {
           const noisySelectors = [
             ".fai-CopilotMessage__footnote",
             ".fai-CopilotMessage__actions",
+            ".scc-ChainOfThought",
             ".fai-SuggestionList",
             ".fui-MessageBar",
             ".fai-Citation",
             '[data-citation-group-id]',
             '[data-grouped-citations]',
+            '[data-testid="loading-message"]',
             '[data-testid="narrator-announcement"]',
             '[data-testid="sources-button-testid"]',
             '[data-testid="chat-response-message-disclaimer"]',
@@ -311,12 +344,16 @@ function copilotDomReplyExtractIifeExpression() {
             '#go-to-line-button',
             '#copy-button',
             '#codeblock-footer',
+            '[data-message-type="Progress"]',
             '[data-testid="message-bar-body-info"]',
           ];
           for (const selector of noisySelectors) {
             for (const node of target.querySelectorAll(selector)) {
               node.remove();
             }
+          }
+          for (const node of target.querySelectorAll('button, [role="button"], [role="menuitem"], [role="progressbar"]')) {
+            node.remove();
           }
         }
       } catch (_) {}
@@ -511,9 +548,100 @@ function copilotDomReplyExtractIifeExpression() {
  */
 function copilotDomPollGeneratingAndReplyExpression() {
   return `(() => {
+    function visible(el) {
+      return el && el.offsetParent !== null;
+    }
+    function inComposer(el) {
+      return !!(el && el.closest(${JSON.stringify(COMPOSER_ANCESTOR_CLOSEST)}));
+    }
+    function inUserTurn(el) {
+      if (!el) return false;
+      try {
+        if (el.closest('[data-message-author-role="user"]')) return true;
+        if (el.closest('[data-message-author-role="User"]')) return true;
+        if (el.closest('[data-testid="userMessage"]')) return true;
+        if (el.closest('[data-testid*="user-message"]')) return true;
+        if (el.closest('[data-testid*="UserMessage"]')) return true;
+        if (el.matches && el.matches('cib-message[type="user"]')) return true;
+        if (el.closest('[aria-label*="Your message"]')) return true;
+        if (el.closest('[aria-label*="your message"]')) return true;
+        if (el.closest('[aria-label*="送信した"]')) return true;
+        if (el.closest('[aria-label*="自分のメッセージ"]')) return true;
+        if (el.closest('[class*="fai-UserMessage"]')) return true;
+        if (el.closest('[data-testid="chatQuestion"]')) return true;
+      } catch (_) {}
+      return false;
+    }
+    function walkElements(root, visit) {
+      if (!root) return;
+      if (root.nodeType === 1) visit(root);
+      const tree = root.nodeType === 9 ? root.documentElement : root;
+      if (!tree) return;
+      const kids = tree.children || [];
+      for (let i = 0; i < kids.length; i++) walkElements(kids[i], visit);
+      if (tree.shadowRoot) walkElements(tree.shadowRoot, visit);
+    }
+    function queryDeepAll(selector, root) {
+      const top = root?.nodeType === 9 ? (root.documentElement || root.body) : root;
+      if (!top) return [];
+      const out = [];
+      walkElements(top, (el) => {
+        try {
+          if (el.matches && el.matches(selector)) out.push(el);
+        } catch (_) {}
+      });
+      return out;
+    }
+    function nodeText(el) {
+      return (el && (el.innerText || el.textContent) ? (el.innerText || el.textContent) : "").trim();
+    }
+    function matchesShowMoreControl(el) {
+      const text = [
+        nodeText(el),
+        el?.getAttribute?.("aria-label") || "",
+        el?.getAttribute?.("title") || "",
+      ].join(" ").toLowerCase();
+      return /show more lines|show more|もっと表示/.test(text);
+    }
+    function lastAssistantTurn(doc) {
+      const roots = queryDeepAll('[data-testid="copilot-message-reply-div"]', doc).filter(
+        (el) => visible(el) && !inComposer(el) && !inUserTurn(el),
+      );
+      if (!roots.length) return null;
+      roots.sort((a, b) => {
+        const p = a.compareDocumentPosition(b);
+        if (p & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        if (p & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+        return 0;
+      });
+      return roots[roots.length - 1];
+    }
+    function assistantTurnState(root) {
+      if (!root) {
+        return { progressOnly: false, hasVisibleAssistantChat: false, hasExpandableCodeBlock: false };
+      }
+      const progressEls = queryDeepAll(
+        '[data-message-type="Progress"], [data-testid="loading-message"], [role="progressbar"], .scc-ChainOfThought',
+        root,
+      ).filter((el) => visible(el));
+      const chatEls = queryDeepAll(
+        '[data-testid="markdown-reply"][data-message-type="Chat"], div[data-message-type="Chat"], pre, code',
+        root,
+      ).filter((el) => visible(el));
+      const hasVisibleAssistantChat = chatEls.some((el) => nodeText(el).trim().length > 0);
+      const hasExpandableCodeBlock = queryDeepAll('button, [role="button"]', root).some(
+        (el) => visible(el) && matchesShowMoreControl(el),
+      );
+      return {
+        progressOnly: progressEls.length > 0 && !hasVisibleAssistantChat,
+        hasVisibleAssistantChat,
+        hasExpandableCodeBlock,
+      };
+    }
     const generating = ${copilotDomGeneratingIifeExpression()};
     const replyRaw = ${copilotDomReplyExtractIifeExpression()};
-    return { generating, reply: replyRaw };
+    const turnState = assistantTurnState(lastAssistantTurn(document));
+    return { generating, reply: replyRaw, ...turnState };
   })()`;
 }
 

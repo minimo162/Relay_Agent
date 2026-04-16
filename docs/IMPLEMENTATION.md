@@ -5771,3 +5771,68 @@ Observed result:
   - `pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe ... /tmp/relay-live-copilot-probe-20260416-fixed`: passed and wrote two-turn artifacts
   - `pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe ... /tmp/relay-live-copilot-probe-20260416-ok2`: passed and wrote a clean one-turn control artifact
   - `git diff --check`: pending final workspace check after this doc update
+
+Long-form M365 Copilot code-response extraction hardening (2026-04-16):
+
+```bash
+node --check apps/desktop/src-tauri/binaries/copilot_dom_poll.mjs
+node --check apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs
+node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs
+pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe -- --output-dir /tmp/relay-live-copilot-probe-20260416-tetris-fixed --prompt "htmlでテトリスを作成して"
+cd apps/desktop && node --input-type=module <<'EOF'
+import { chromium } from 'playwright';
+import { extractAssistantReplyStrict, extractAssistantReplyText, resolveAssistantReplyForReturn } from './src-tauri/binaries/copilot_wait_dom_response.mjs';
+const browser = await chromium.connectOverCDP('http://127.0.0.1:9360');
+try {
+  const pages = browser.contexts().flatMap((context) => context.pages());
+  const page = pages.find((candidate) => /m365\.cloud\.microsoft.*chat/i.test(candidate.url())) || pages[0];
+  const session = { async evaluate(expression) { return { value: await page.evaluate(expression) }; } };
+  const loose = await extractAssistantReplyText(session);
+  const strict = await extractAssistantReplyStrict(session);
+  const resolved = await resolveAssistantReplyForReturn(session, loose, 14, null);
+  console.log(JSON.stringify({
+    url: page.url(),
+    looseChars: loose.length,
+    strictChars: strict.length,
+    resolvedChars: resolved?.length ?? null,
+    hasQuickAnswer: /Get a quick answer|Retrying searches|I'\\?ll search|I'll search/i.test(resolved || ''),
+    hasReasoning: /Reasoning completed in|推論が\\s*\\d+\\s*ステップ/i.test(resolved || ''),
+    hasShowMore: /Show more lines|もっと表示/i.test(resolved || ''),
+    hasDoctype: /<!doctype html>/i.test(resolved || ''),
+  }, null, 2));
+} finally {
+  await browser.close();
+}
+EOF
+git diff --check
+```
+
+Observed result:
+
+- [`apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs`](../apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs) now treats M365 search / reasoning progress as non-final state. `Get a quick answer`, `Retrying searches`, `OK, I'll search ...`, and similar search-progress text are no longer accepted as final assistant answers or streamed progress deltas.
+- The same wait loop now prefers strict assistant DOM extraction over heuristic/network candidates, and it no longer lets network-only search-start text outrank a real DOM answer once the assistant chat body exists.
+- Long code replies now attempt a one-shot `Show more lines` expansion before finalizing the turn. That expansion is driven from the shared wait path so the same behavior applies to the live probe and the production bridge path.
+- [`apps/desktop/src-tauri/binaries/copilot_dom_poll.mjs`](../apps/desktop/src-tauri/binaries/copilot_dom_poll.mjs) now strips additional M365 reply chrome from normalized output:
+  - `Reasoning completed in N steps`
+  - `Show more lines`
+  - progress/search buttons such as `Get a quick answer` / `Retrying searches`
+  - code-adjacent badge text such as `cloud` and `HTML` when they are UI labels rather than answer content
+- The DOM clone step now removes generic buttons, progressbars, chain-of-thought containers, and loading blocks before reading `innerText`, which keeps assistant extraction focused on the visible answer body rather than the surrounding Fluent UI controls.
+- Added regression coverage in [`apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`](../apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs) for:
+  - progress-only search UI that later resolves into a real HTML/code answer
+  - reasoning / show-more / badge chrome stripping
+  - one-shot `Show more lines` expansion before final answer extraction
+- Verification summary:
+  - `node --check apps/desktop/src-tauri/binaries/copilot_dom_poll.mjs`: passed
+  - `node --check apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs`: passed
+  - `node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`: passed (`20` tests)
+  - Real signed-in probe `pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe -- --output-dir /tmp/relay-live-copilot-probe-20260416-tetris-fixed --prompt "htmlでテトリスを作成して"` reached the new behavior on Linux: the wait loop logged `stop-button heuristic stuck; ignoring phantom generating`, then `expanded last assistant turn for hidden code`, then `timeout, using resolved assistant len=13309`. In this workspace the probe process did not finish writing its artifact files after that point, so it was not used as the final acceptance artifact.
+  - Direct CDP spot-check against the same signed-in Copilot tab confirmed the fix on the actual `htmlでテトリスを作成して` conversation:
+    - `strictChars=19035`
+    - `resolvedChars=19035`
+    - `hasDoctype=true`
+    - `hasQuickAnswer=false`
+    - `hasReasoning=false`
+    - `hasShowMore=false`
+    - the resolved preview began with the expected HTML Tetris answer instead of search/reasoning progress
+  - `git diff --check`: passed
