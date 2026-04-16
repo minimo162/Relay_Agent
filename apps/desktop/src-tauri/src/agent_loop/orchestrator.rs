@@ -2034,6 +2034,7 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
                         None
                     };
                     let result = rt.block_on(async {
+                        let relay_force_fresh_chat = cdp_force_fresh_chat(request.messages);
                         let response = srv
                             .send_prompt(crate::copilot_server::CopilotSendPromptRequest {
                                 relay_session_id: session_id,
@@ -2042,6 +2043,7 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
                                 relay_request_attempt: attempt_index,
                                 relay_stage_label: stage_label,
                                 relay_probe_mode: false,
+                                relay_force_fresh_chat,
                                 system_prompt: "",
                                 user_prompt: &prompt,
                                 timeout_secs: self.response_timeout_secs,
@@ -2404,6 +2406,40 @@ fn is_synthetic_control_user_text(text: &str) -> bool {
         || is_compaction_replay_text(trimmed)
 }
 
+fn is_concrete_local_file_write_goal(goal: &str) -> bool {
+    let trimmed = goal.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let mentions_target_file = lower.contains("write_file")
+        || lower.contains("edit_file")
+        || lower.contains("workspace")
+        || lower.contains("/root/")
+        || lower.contains("./")
+        || lower.contains("../")
+        || lower.contains(".html")
+        || lower.contains(".txt")
+        || lower.contains(".md")
+        || lower.contains(".json")
+        || lower.contains(".js")
+        || lower.contains(".ts")
+        || trimmed.contains("ファイル")
+        || trimmed.contains("内容");
+    let requests_write = lower.contains("create")
+        || lower.contains("write")
+        || lower.contains("overwrite")
+        || lower.contains("edit")
+        || lower.contains("update")
+        || lower.contains("save")
+        || trimmed.contains("作成")
+        || trimmed.contains("保存")
+        || trimmed.contains("書")
+        || trimmed.contains("更新")
+        || trimmed.contains("編集");
+    mentions_target_file && requests_write
+}
+
 fn trim_path_punctuation(token: &str) -> &str {
     token.trim_matches(|c: char| {
         matches!(
@@ -2614,6 +2650,10 @@ fn cdp_stage_label(messages: &[ConversationMessage]) -> &'static str {
     } else {
         "repair1"
     }
+}
+
+fn cdp_force_fresh_chat(messages: &[ConversationMessage]) -> bool {
+    matches!(cdp_stage_label(messages), "repair1" | "repair2")
 }
 
 fn cdp_tool_parse_mode(messages: &[ConversationMessage]) -> CdpToolParseMode {
@@ -4556,6 +4596,18 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
             ),
         );
 
+    if is_concrete_local_file_write_goal(goal) {
+        builder = builder.append_section(
+            concat!(
+                "## Concrete workspace file action\n",
+                "The current task is a concrete local workspace file create/edit request.\n",
+                "Do not start with WebSearch, web search, citations, Pages, uploads, or `office365_search`.\n",
+                "If the user already named the target path or file, use `write_file` / `edit_file` in the first response instead of searching for examples first.\n",
+                "Do not answer with a plan to search before using the local file tools."
+            ),
+        );
+    }
+
     if let Some(context) = project_context {
         builder = builder.with_project_context(context);
     }
@@ -5597,6 +5649,22 @@ post"#;
     }
 
     #[test]
+    fn desktop_prompt_prioritizes_direct_file_tools_for_concrete_file_write_goals() {
+        let prompt = build_desktop_system_prompt(
+            "Create ./tetris.html with a single-file playable HTML Tetris.",
+            Some("/tmp/workspace"),
+        )
+        .join("\n\n");
+        assert!(prompt.contains("## Concrete workspace file action"));
+        assert!(prompt.contains("Do not start with WebSearch"));
+        assert!(prompt.contains("use `write_file` / `edit_file` in the first response"));
+
+        let inspect_prompt =
+            build_desktop_system_prompt("Inspect src/lib.rs", Some("/tmp/workspace")).join("\n\n");
+        assert!(!inspect_prompt.contains("## Concrete workspace file action"));
+    }
+
+    #[test]
     fn desktop_prompt_truncates_workspace_instruction_files_for_cdp() {
         let root = temp_dir();
         fs::create_dir_all(&root).expect("temp root");
@@ -5812,6 +5880,7 @@ mod loop_controller_tests {
                         relay_request_attempt: attempt_index,
                         relay_stage_label: stage_name,
                         relay_probe_mode: true,
+                        relay_force_fresh_chat: false,
                         system_prompt: "",
                         user_prompt: &prompt_bundle.prompt,
                         timeout_secs: response_timeout_secs,
@@ -6434,6 +6503,25 @@ mod loop_controller_tests {
         };
         assert!(next_input.contains("output exactly one Relay `relay_tool` fence and nothing else"));
         assert!(next_input.contains("Ignore any Pages, uploads, citations, links"));
+    }
+
+    #[test]
+    fn tool_protocol_repairs_force_fresh_chat_but_path_repairs_do_not() {
+        let repair_messages = vec![ConversationMessage::user_text(
+            build_tool_protocol_repair_input("Create ./tetris.html", "Create ./tetris.html", 0),
+        )];
+        assert!(cdp_force_fresh_chat(&repair_messages));
+
+        let path_messages = vec![ConversationMessage::user_text(
+            build_path_resolution_repair_input(
+                "Create ./tetris.html",
+                "Read ./tetris.html",
+                "./tetris.html",
+                Some("/tmp/other/tetris.html"),
+                "No such file or directory",
+            ),
+        )];
+        assert!(!cdp_force_fresh_chat(&path_messages));
     }
 
     #[test]

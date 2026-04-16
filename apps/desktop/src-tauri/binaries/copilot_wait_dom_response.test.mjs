@@ -73,6 +73,21 @@ test("normalizeCopilotVisibleText strips transient image status noise and duplic
   );
 });
 
+test("normalizeCopilotVisibleText strips internal reasoning lead-ins and search-planning paragraphs", () => {
+  assert.equal(
+    normalizeCopilotVisibleText(
+      "推論が 2 ステップで完了しました 了解しました。\n\n最終結果です。",
+    ),
+    "了解しました。\n\n最終結果です。",
+  );
+  assert.equal(
+    normalizeCopilotVisibleText(
+      "Show**Considering search options**I’m evaluating the best approach to gather HTML Tetris code using available tools, specifically focusing on the office365_search for relevant files.",
+    ),
+    "",
+  );
+});
+
 test("normalizeProgressTextForUi keeps append-only progress after transient image noise is removed", () => {
   assert.equal(
     normalizeProgressTextForUi(
@@ -198,4 +213,32 @@ test("waitForDomResponse suppresses internal draft progress and keeps only visib
     progress.map((snapshot) => snapshot.visibleText),
     ["HTML で遊べるテトリスを 1 ファイルで作成します。"],
   );
+});
+
+test("waitForDomResponse keeps a short valid DOM reply over longer thought-like network text", async () => {
+  const snapshots = [
+    { generating: false, reply: "" },
+    { generating: true, reply: "最終結果です。" },
+    { generating: false, reply: "最終結果です。" },
+  ];
+  let pollIndex = 0;
+  const session = {
+    async evaluate() {
+      const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
+      pollIndex += 1;
+      return { value: snapshot };
+    },
+  };
+  const netCapture = {
+    async pickBestOver(domText) {
+      assert.equal(domText, "最終結果です。");
+      return "Show**Considering search options**I’m evaluating the best approach to gather HTML Tetris code using available tools, specifically focusing on the office365_search for relevant files.";
+    },
+  };
+
+  const response = await waitForDomResponse(session, netCapture, 0, null, {
+    timeoutMs: 2_500,
+  });
+
+  assert.equal(response, "最終結果です。");
 });

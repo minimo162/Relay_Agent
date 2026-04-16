@@ -312,6 +312,7 @@ pub struct CopilotSendPromptRequest<'a> {
     pub relay_request_attempt: usize,
     pub relay_stage_label: &'a str,
     pub relay_probe_mode: bool,
+    pub relay_force_fresh_chat: bool,
     pub system_prompt: &'a str,
     pub user_prompt: &'a str,
     pub timeout_secs: u64,
@@ -821,6 +822,7 @@ impl CopilotServer {
             "relay_request_attempt": request.relay_request_attempt,
             "relay_stage_label": request.relay_stage_label,
             "relay_probe_mode": request.relay_probe_mode,
+            "relay_force_fresh_chat": request.relay_force_fresh_chat,
         });
         if !request.attachment_paths.is_empty() {
             body["relay_attachments"] = json!(request.attachment_paths);
@@ -885,13 +887,14 @@ impl CopilotServer {
     ) -> Result<String, CopilotError> {
         let url = format!("{}/v1/chat/completions", self.server_url());
         info!(
-            "[copilot] POST {} (timeout {}s, user_prompt_chars={}, system_chars={}, attachments={}, relay_new_chat={}, stage_label={}, request_chain={}, request_attempt={}, probe_mode={})",
+            "[copilot] POST {} (timeout {}s, user_prompt_chars={}, system_chars={}, attachments={}, relay_new_chat={}, relay_force_fresh_chat={}, stage_label={}, request_chain={}, request_attempt={}, probe_mode={})",
             url,
             request.timeout_secs,
             request.user_prompt.len(),
             request.system_prompt.len(),
             request.attachment_paths.len(),
             request.new_chat,
+            request.relay_force_fresh_chat,
             request.relay_stage_label,
             request.relay_request_chain,
             request.relay_request_attempt,
@@ -1072,7 +1075,7 @@ fn find_node() -> Option<String> {
 mod tests {
     use super::{
         parse_prompt_error_body, validate_health_body, CopilotError, CopilotPromptFailure,
-        HealthBody, RELAY_COPILOT_SERVICE_NAME,
+        CopilotSendPromptRequest, CopilotServer, HealthBody, RELAY_COPILOT_SERVICE_NAME,
     };
     use reqwest::StatusCode;
 
@@ -1159,5 +1162,25 @@ mod tests {
         assert_eq!(failure.stage_label.as_deref(), Some("repair2"));
         assert_eq!(failure.submit_observed, Some(true));
         assert_eq!(failure.failure_class, None);
+    }
+
+    #[test]
+    fn build_send_prompt_body_includes_force_fresh_chat_flag() {
+        let body = CopilotServer::build_send_prompt_body(CopilotSendPromptRequest {
+            relay_session_id: "session-1",
+            relay_request_id: "request-1",
+            relay_request_chain: "chain-1",
+            relay_request_attempt: 1,
+            relay_stage_label: "repair1",
+            relay_probe_mode: false,
+            relay_force_fresh_chat: true,
+            system_prompt: "",
+            user_prompt: "Tool protocol repair.",
+            timeout_secs: 30,
+            attachment_paths: &[],
+            new_chat: false,
+        });
+        assert_eq!(body["relay_force_fresh_chat"], serde_json::json!(true));
+        assert_eq!(body["relay_stage_label"], serde_json::json!("repair1"));
     }
 }

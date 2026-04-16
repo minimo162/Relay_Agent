@@ -12,7 +12,11 @@ import {
   copilotDomGeneratingIifeExpression,
 } from "./copilot_dom_poll.mjs";
 import { getCopilotPromptTiming } from "./copilot_send_timing.mjs";
-import { domExtractLooksLikeSubmittedPrompt, waitForDomResponse } from "./copilot_wait_dom_response.mjs";
+import {
+  domExtractLooksLikeSubmittedPrompt,
+  normalizeCopilotVisibleText,
+  waitForDomResponse,
+} from "./copilot_wait_dom_response.mjs";
 
 async function isCopilotGenerating(session) {
   const r = await session.evaluate(copilotDomGeneratingIifeExpression()).catch(() => ({ value: false }));
@@ -988,10 +992,17 @@ class CopilotSession {
 
         const netCapture = createCopilotNetworkCapture(pageSession);
         await netCapture.enable();
+        if (repairStage && netCapture.networkEnableError()) {
+          trace.failureClass = "network_enable_failed";
+          const enableError = new Error(netCapture.networkEnableError());
+          enableError.repairReplayReason = trace.failureClass;
+          throw enableError;
+        }
 
         let hadAttachments = false;
         try {
-          const forceRepairNewChat = repairStage && repairReplayUsed;
+          const forceRepairNewChat =
+            repairStage && (repairReplayUsed || params.relayForceFreshChat === true);
           const wantNewChat =
             requestState.probeMode ||
             forceRepairNewChat ||
@@ -1009,6 +1020,8 @@ class CopilotSession {
             envEach ? "on" : "off",
             "relayNewChat=",
             params.relayNewChat === true,
+            "relayForceFreshChat=",
+            params.relayForceFreshChat === true,
             "relaySessionId=",
             relaySessionId,
             "request_chain=",
@@ -1192,7 +1205,9 @@ class CopilotSession {
         if (
           repairStage &&
           !repairReplayUsed &&
-          ["network_seed_missing", "dom_response_timeout"].includes(trace.failureClass)
+          ["network_seed_missing", "dom_response_timeout", "network_enable_failed"].includes(
+            trace.failureClass,
+          )
         ) {
           repairReplayUsed = true;
           console.error(
@@ -2966,6 +2981,32 @@ function stringLooksLikeM365ClientTelemetry(text) {
   return score >= 4;
 }
 
+function assistantTextQualityScore(text) {
+  const cleaned = normalizeCopilotVisibleText(text);
+  if (!cleaned) return -100;
+  let score = 0;
+  if (cleaned.length >= 12) score += 2;
+  if (cleaned.length >= 40) score += 1;
+  if (/[。.!?]/u.test(cleaned)) score += 1;
+  if (/\n/.test(cleaned)) score += 1;
+  if (/```|`[^`]+`/.test(cleaned)) score += 1;
+  return score;
+}
+
+function shouldPreferAssistantText(candidate, baseline = "") {
+  const next = normalizeCopilotVisibleText(candidate);
+  const current = normalizeCopilotVisibleText(baseline);
+  if (!next) return false;
+  if (!current) return true;
+  const nextScore = assistantTextQualityScore(next);
+  const currentScore = assistantTextQualityScore(current);
+  return (
+    nextScore > currentScore ||
+    (nextScore === currentScore &&
+      next.length > current.length + Math.max(40, Math.floor(current.length * 0.35)))
+  );
+}
+
 /** Correlation / trace / event IDs from telemetry APIs — not user-visible Copilot text. */
 function stringLooksLikeBareUuidOrHexId(text) {
   const t = String(text || "").trim();
@@ -3264,6 +3305,7 @@ function createCopilotNetworkCapture(session) {
   const chathubRequestIds = new Set();
   const chathubFramePayloads = [];
   const maxChathubBufferChars = 2_500_000;
+  let networkEnableError = null;
 
   const pickAssistantFromChathubWsSync = () => {
     const allPieces = [];
@@ -3286,8 +3328,10 @@ function createCopilotNetworkCapture(session) {
       }
     }
     if (!allPieces.length) return "";
-    const merged = mergeChathubBotTextPieces(allPieces).trim();
-    const bestSingle = allPieces.reduce((a, b) => (b.length > a.length ? b : a), "");
+    const merged = normalizeCopilotVisibleText(mergeChathubBotTextPieces(allPieces).trim());
+    const bestSingle = normalizeCopilotVisibleText(
+      allPieces.reduce((a, b) => (b.length > a.length ? b : a), ""),
+    );
     const cand = merged.length >= bestSingle.length ? merged : bestSingle;
     if (!cand || networkExtractLooksLikeGarbage(cand)) return "";
     return cand;
@@ -3346,9 +3390,13 @@ function createCopilotNetworkCapture(session) {
           maxResourceBufferSize: 50_000_000,
         })
         .catch((e) => {
-          console.error("[copilot:network] Network.enable failed:", e?.message || e);
+          networkEnableError = String(e?.message || e);
+          console.error("[copilot:network] Network.enable failed:", networkEnableError);
         });
       await session.send("Network.setCacheDisabled", { cacheDisabled: true }).catch(() => {});
+    },
+    networkEnableError() {
+      return networkEnableError;
     },
     sawAnySeed() {
       return metas.length > 0 || chathubRequestIds.size > 0 || chathubFramePayloads.length > 0;
@@ -3362,11 +3410,11 @@ function createCopilotNetworkCapture(session) {
      * @param {number} [submittedPromptLen] when set, skip HTTP bodies whose length matches pasted prompt (user echo from REST).
      */
     async pickBestOver(domText, submittedPromptLen = 0) {
-      const dom = (domText || "").trim();
+      const dom = normalizeCopilotVisibleText(domText || "");
       let best = dom;
-      const ch = pickAssistantFromChathubWsSync().trim();
+      const ch = normalizeCopilotVisibleText(pickAssistantFromChathubWsSync().trim());
       if (
-        ch.length > best.length &&
+        shouldPreferAssistantText(ch, best) &&
         ch.length >= CHATHUB_ASSISTANT_MIN_CHARS &&
         !networkExtractLooksLikeGarbage(ch)
       ) {
@@ -3390,7 +3438,7 @@ function createCopilotNetworkCapture(session) {
           const raw = rb.base64Encoded
             ? Buffer.from(rb.body, "base64").toString("utf8")
             : rb.body;
-          const t = extractAssistantFromNetworkPayload(raw).trim();
+          const t = normalizeCopilotVisibleText(extractAssistantFromNetworkPayload(raw).trim());
           if (networkExtractLooksLikeGarbage(t)) {
             console.error(
               "[copilot:network] skip garbage extract len=",
@@ -3412,7 +3460,7 @@ function createCopilotNetworkCapture(session) {
             );
             continue;
           }
-          if (t.length > best.length && t.length >= 8) {
+          if (t.length >= 8 && shouldPreferAssistantText(t, best)) {
             console.error(
               "[copilot:network] candidate len=",
               t.length,
@@ -3426,14 +3474,14 @@ function createCopilotNetworkCapture(session) {
         }
         if (best.length > 12_000) break;
       }
-      const chEnd = pickAssistantFromChathubWsSync().trim();
+      const chEnd = normalizeCopilotVisibleText(pickAssistantFromChathubWsSync().trim());
       if (chEnd.length >= CHATHUB_ASSISTANT_MIN_CHARS && !networkExtractLooksLikeGarbage(chEnd)) {
-        if (networkExtractLooksLikeGarbage(best) || chEnd.length > best.length) {
+        if (networkExtractLooksLikeGarbage(best) || shouldPreferAssistantText(chEnd, best)) {
           best = chEnd;
           console.error("[copilot:network] Chathub WS final pickBestOver len=", chEnd.length);
         }
       }
-      if (best.length > dom.length) {
+      if (best.length > dom.length && best !== dom) {
         console.error("[copilot:network] using network text over DOM (dom len=", dom.length, ")");
       }
       return best;
@@ -3444,7 +3492,7 @@ function createCopilotNetworkCapture(session) {
      */
     async pickBestShortAssistant(domEchoLen, submittedLen) {
       await sleep(500);
-      const ch = pickAssistantFromChathubWsSync().trim();
+      const ch = normalizeCopilotVisibleText(pickAssistantFromChathubWsSync().trim());
       if (ch.length >= CHATHUB_ASSISTANT_MIN_CHARS && !networkExtractLooksLikeGarbage(ch)) {
         if (!(submittedLen >= 1200 && domExtractLooksLikeSubmittedPrompt(ch.length, submittedLen))) {
           console.error("[copilot:network] Chathub WS assistant (short path) len=", ch.length);
@@ -3467,12 +3515,12 @@ function createCopilotNetworkCapture(session) {
           const raw = rb.base64Encoded
             ? Buffer.from(rb.body, "base64").toString("utf8")
             : rb.body;
-          const t = extractAssistantFromNetworkPayload(raw).trim();
+          const t = normalizeCopilotVisibleText(extractAssistantFromNetworkPayload(raw).trim());
           if (networkExtractLooksLikeGarbage(t)) continue;
           if (t.length < 16) continue;
           if (t.length >= low && t.length <= high) continue;
           if (t.length >= domEchoLen * 0.94) continue;
-          if (t.length > best.length) {
+          if (shouldPreferAssistantText(t, best)) {
             console.error(
               "[copilot:network] short-assistant candidate len=",
               t.length,
@@ -4400,12 +4448,14 @@ function parseOpenAiRequest(payload) {
   const relayStageLabel = String(payload.relay_stage_label || "original").trim() || "original";
   const relayProbeMode = payload.relay_probe_mode === true;
   const relayNewChat = payload.relay_new_chat === true;
+  const relayForceFreshChat = payload.relay_force_fresh_chat === true;
   return {
     systemPrompt,
     userPrompt,
     imageB64,
     attachmentPaths,
     relayNewChat,
+    relayForceFreshChat,
     relaySessionId,
     relayRequestId,
     relayRequestChain,

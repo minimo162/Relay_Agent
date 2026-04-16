@@ -5668,3 +5668,45 @@ Observed result:
   - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`
   - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`
   - `git diff --check`
+
+Copilot CDP response extraction hardening + repair fresh-chat isolation (2026-04-16):
+
+```bash
+node --check apps/desktop/src-tauri/binaries/copilot_server.js
+node --check apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs
+node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml build_send_prompt_body_includes_force_fresh_chat_flag -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_repairs_force_fresh_chat_but_path_repairs_do_not -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml desktop_prompt_prioritizes_direct_file_tools_for_concrete_file_write_goals -- --nocapture
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm --filter @relay-agent/desktop typecheck
+pnpm check
+git diff --check
+```
+
+Observed result:
+
+- [`apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs`](../apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs) now strips internal reasoning / planning text from visible assistant output and streamed progress before the host sees it. This specifically covers the live failure shapes observed in the field, including `推論が ... ステップで完了しました`, `Show**Considering ...**`, `I’m evaluating the best approach ...`, and search-planning text that drifted into `office365_search` / WebSearch-like prose.
+- The DOM-vs-network response selection is no longer "longest string wins". When DOM already has a short but plausible assistant reply, network-only candidates must beat it on assistant-visible quality instead of length alone, so short valid replies are not overwritten by longer internal-progress text.
+- [`apps/desktop/src-tauri/binaries/copilot_server.js`](../apps/desktop/src-tauri/binaries/copilot_server.js) now carries the same quality gate into the bridge-side network capture path. Chathub / HTTP candidates are normalized before selection, thought-like network strings no longer outrank short visible DOM answers by length alone, and repair-stage `Network.enable` timeout now records `failureClass=network_enable_failed` so the bridge can force a fresh-chat replay instead of continuing on a degraded tab.
+- Repair turns now support an explicit host-to-bridge `relay_force_fresh_chat` flag:
+  - [`apps/desktop/src-tauri/src/copilot_server.rs`](../apps/desktop/src-tauri/src/copilot_server.rs) adds the field to the local bridge request body and logs it in the POST trace.
+  - [`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs) now marks `repair1` / `repair2` turns for forced fresh-chat transport, while path-repair turns continue to reuse the current thread.
+- The standard desktop system prompt now adds a dedicated "Concrete workspace file action" section when the user request is already a concrete local file create/edit task. In those cases the model is told not to start with WebSearch, citations, Pages, uploads, or `office365_search`, and to use `write_file` / `edit_file` first.
+- Added focused regression coverage for the new behavior:
+  - JS tests now verify internal reasoning text is stripped and that a short valid DOM reply beats a longer thought-like network candidate.
+  - Rust tests now verify the bridge request includes `relay_force_fresh_chat`, repair turns force fresh-chat transport, path repairs do not, and concrete workspace file-write goals receive the strengthened prompt section.
+- Verification passed in this workspace:
+  - `node --check apps/desktop/src-tauri/binaries/copilot_server.js`
+  - `node --check apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs`
+  - `node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`
+  - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml build_send_prompt_body_includes_force_fresh_chat_flag -- --nocapture`
+  - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_repairs_force_fresh_chat_but_path_repairs_do_not -- --nocapture`
+  - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml desktop_prompt_prioritizes_direct_file_tools_for_concrete_file_write_goals -- --nocapture`
+  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`
+  - `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`
+  - `pnpm --filter @relay-agent/desktop typecheck`
+  - `pnpm check`
+  - `git diff --check`
+- Live signed-in M365 validation was not rerun in this Linux workspace during this pass, so the remaining acceptance artifact is a real desktop repro confirming that the original drift case now reaches `repair1` fresh-chat isolation and stops surfacing internal reasoning text in the final assistant excerpt.

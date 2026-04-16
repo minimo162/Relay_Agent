@@ -140,6 +140,66 @@ function stripTransientCopilotStatus(text) {
   return cleaned;
 }
 
+function normalizeReasoningDetectionText(text) {
+  return String(text ?? "")
+    .replace(/[*_`>#]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function stripInternalReasoningLeadIns(text) {
+  let cleaned = String(text ?? "").trimStart();
+  cleaned = cleaned.replace(/^推論が\s*\d+\s*ステップで完了しました[:：]?\s*/u, "");
+  cleaned = cleaned.replace(/^show\*+\s*considering[^*]{0,160}\*+\s*/i, "");
+  cleaned = cleaned.replace(/^show\s*considering\s+/i, "");
+  return cleaned;
+}
+
+function looksLikeInternalReasoningParagraph(text) {
+  const raw = String(text ?? "").trim();
+  if (!raw) return false;
+  if (/^推論が\s*\d+\s*ステップで完了しました/u.test(raw)) return true;
+  const normalized = normalizeReasoningDetectionText(raw);
+  if (!normalized) return false;
+  if (/^the user wants me to\b/.test(normalized)) return true;
+  if (/^show\s*considering\b/.test(normalized)) return true;
+  if (
+    /\bconsidering\b.*\b(search|tool|options|approach|next step|file)\b/.test(normalized) ||
+    /\bi(?:'|’)?m evaluating the best approach\b/.test(normalized) ||
+    /\bweighing the options\b/.test(normalized) ||
+    /\bdetermining the approach\b/.test(normalized)
+  ) {
+    return true;
+  }
+  if (
+    (/^i(?:'|’)?ll search\b/.test(normalized) ||
+      /^let me search\b/.test(normalized) ||
+      /^はい[、,]?\s*['"`].+['"`]\s*を検索します/.test(raw) ||
+      /^['"`].+['"`]\s*を検索します/.test(raw)) &&
+    /\b(search|websearch|office365_search)\b/.test(normalized)
+  ) {
+    return true;
+  }
+  if (
+    (normalized.includes("office365_search") || normalized.includes("websearch")) &&
+    (normalized.includes("search") || normalized.includes("citation") || normalized.includes("tool"))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function stripInternalReasoningParagraphs(text) {
+  const cleaned = stripInternalReasoningLeadIns(text);
+  const paragraphs = cleaned
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !looksLikeInternalReasoningParagraph(part));
+  return paragraphs.join("\n\n");
+}
+
 function dedupeConsecutiveLines(text) {
   const lines = String(text ?? "").split(/\r?\n/);
   const out = [];
@@ -174,6 +234,7 @@ function normalizeCopilotVisibleText(text) {
   let cleaned = stripM365CopilotReplyChrome(String(text ?? ""));
   cleaned = stripStreamingPlaceholderTail(cleaned);
   cleaned = stripTransientCopilotStatus(cleaned);
+  cleaned = stripInternalReasoningParagraphs(cleaned);
   cleaned = dedupeConsecutiveLines(cleaned);
   cleaned = dedupeConsecutiveParagraphs(cleaned);
   return cleaned.trim();
@@ -197,7 +258,37 @@ function looksLikeInternalDraftParagraph(text) {
     .trim()
     .toLowerCase();
   if (!normalized) return false;
-  return INTERNAL_PROGRESS_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+  return (
+    INTERNAL_PROGRESS_PREFIXES.some((prefix) => normalized.startsWith(prefix)) ||
+    looksLikeInternalReasoningParagraph(text)
+  );
+}
+
+function assistantTextQualityScore(text) {
+  const cleaned = normalizeCopilotVisibleText(text);
+  if (!cleaned) return -100;
+  let score = 0;
+  if (cleaned.length >= 12) score += 2;
+  if (cleaned.length >= 40) score += 1;
+  if (/[。.!?]/u.test(cleaned)) score += 1;
+  if (/\n/.test(cleaned)) score += 1;
+  if (/```|`[^`]+`/.test(cleaned)) score += 1;
+  if (!looksLikeInternalReasoningParagraph(cleaned)) score += 3;
+  return score;
+}
+
+function shouldPreferAssistantText(candidate, baseline = "") {
+  const next = normalizeCopilotVisibleText(candidate);
+  const current = normalizeCopilotVisibleText(baseline);
+  if (!next || looksLikeInternalReasoningParagraph(next)) return false;
+  if (!current) return true;
+  const nextScore = assistantTextQualityScore(next);
+  const currentScore = assistantTextQualityScore(current);
+  return (
+    nextScore > currentScore ||
+    (nextScore === currentScore &&
+      next.length > current.length + Math.max(40, Math.floor(current.length * 0.35)))
+  );
 }
 
 function findProgressToolCutoff(text) {
@@ -604,9 +695,12 @@ async function waitForDomResponse(
     });
   };
   const wire = async (s) => {
-    let t = normalizeCopilotVisibleText(s);
-    if (netCapture) t = normalizeCopilotVisibleText(await netCapture.pickBestOver(t, submittedPromptLen) ?? "");
-    return t;
+    const dom = normalizeCopilotVisibleText(s);
+    if (!netCapture) return dom;
+    const networkCandidate = normalizeCopilotVisibleText(
+      (await netCapture.pickBestOver(dom, submittedPromptLen)) ?? "",
+    );
+    return shouldPreferAssistantText(networkCandidate, dom) ? networkCandidate : dom;
   };
 
   await sleep(520);
