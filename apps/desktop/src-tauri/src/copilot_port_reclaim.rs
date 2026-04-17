@@ -21,10 +21,7 @@ pub(crate) async fn maybe_reclaim_stale_copilot_http_port(
     port: u16,
     expected_instance_id: &str,
 ) {
-    if env::var("RELAY_COPILOT_RECLAIM_STALE_HTTP")
-        .map(|v| v == "0")
-        .unwrap_or(false)
-    {
+    if env::var("RELAY_COPILOT_RECLAIM_STALE_HTTP").is_ok_and(|v| v == "0") {
         return;
     }
 

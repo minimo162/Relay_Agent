@@ -169,8 +169,7 @@ pub fn cli_installed(name: &str) -> bool {
         Command::new("where")
             .arg(name)
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
     } else {
         Command::new("which")
             .arg(name)

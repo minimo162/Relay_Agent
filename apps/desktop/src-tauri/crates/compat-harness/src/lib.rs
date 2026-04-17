@@ -341,7 +341,12 @@ mod parity_style {
     }
 }
 
-#[cfg(test)]
+// The full-session harness links `relay_agent_desktop_lib`, which is the
+// Tauri cdylib. On Windows CI runners the WebView2 / Win32 DLLs it depends
+// on are unavailable and the test binary fails to load with
+// STATUS_ENTRYPOINT_NOT_FOUND before any test runs. Cargo.toml already
+// platform-gates the dev-dep, so match it on the consumer side.
+#[cfg(all(test, not(windows)))]
 mod full_session_harness {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};

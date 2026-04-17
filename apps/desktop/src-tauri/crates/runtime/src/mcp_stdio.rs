@@ -989,7 +989,12 @@ fn default_initialize_params() -> McpInitializeParams {
     }
 }
 
-#[cfg(test)]
+// The MCP stdio test suite seeds `/bin/sh` and `#!/usr/bin/env python3`
+// scripts that it `chmod 0o755`s before spawning — `set_mode` is only
+// available through `std::os::unix::fs::PermissionsExt`. None of the
+// spawned scripts would execute on Windows anyway, so gate the entire
+// suite on Unix rather than port the fixtures.
+#[cfg(all(test, unix))]
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;

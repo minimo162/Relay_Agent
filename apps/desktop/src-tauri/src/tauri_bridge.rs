@@ -1801,8 +1801,7 @@ fn relay_doctor_hints() -> Vec<String> {
     ));
     if std::env::var("ANTHROPIC_API_KEY")
         .ok()
-        .filter(|s| !s.trim().is_empty())
-        .is_some()
+        .is_some_and(|s| !s.trim().is_empty())
     {
         hints.push(
             "ANTHROPIC_API_KEY is set. The M365 Copilot CDP path does not use it; direct Anthropic APIs are out of scope for this surface."
@@ -1817,8 +1816,7 @@ fn relay_doctor_hints() -> Vec<String> {
         if std::env::var(key)
             .ok()
             .or_else(|| std::env::var(key.to_lowercase()).ok())
-            .filter(|s| !s.trim().is_empty())
-            .is_some()
+            .is_some_and(|s| !s.trim().is_empty())
         {
             hints.push(format!(
                 "{label} is set; ensure proxies allow localhost CDP/WebSocket to Edge if connections fail."
@@ -1833,14 +1831,12 @@ fn relay_doctor_hints() -> Vec<String> {
 }
 
 fn relay_diagnostics_base() -> RelayDiagnostics {
-    let dev = std::env::var("RELAY_AGENT_DEV_MODE")
-        .map(|v| {
-            matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false);
+    let dev = std::env::var("RELAY_AGENT_DEV_MODE").is_ok_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    });
     let process_cwd = std::env::current_dir().map_or_else(
         |e| format!("(unavailable: {e})"),
         |p| p.display().to_string(),

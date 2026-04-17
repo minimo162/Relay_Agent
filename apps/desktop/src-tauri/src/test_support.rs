@@ -85,10 +85,14 @@ pub struct ObservedSmokeEvents {
 }
 
 fn epoch_ms_now() -> u64 {
-    SystemTime::now()
+    // Unix-ms timestamp overflows u64 ~584M years from the epoch; the
+    // truncation cast is safe for any value we'll ever observe.
+    #[allow(clippy::cast_possible_truncation)]
+    let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as u64
+        .as_millis() as u64;
+    ms
 }
 
 #[derive(Debug)]

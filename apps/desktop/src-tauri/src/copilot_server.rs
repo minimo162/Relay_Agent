@@ -1190,8 +1190,7 @@ fn find_node() -> Option<String> {
         if Command::new(name)
             .arg("--version")
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+            .is_ok_and(|o| o.status.success())
         {
             return Some(name.to_string());
         }

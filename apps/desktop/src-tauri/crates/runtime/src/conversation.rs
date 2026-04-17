@@ -1027,6 +1027,10 @@ mod tests {
         ));
     }
 
+    // Relies on a POSIX `printf 'blocked by hook'; exit 2` hook snippet that
+    // Windows `cmd.exe` cannot execute as-is (no native `printf`). The hook
+    // layer's own test is also gated to non-Windows; match it here.
+    #[cfg(not(windows))]
     #[test]
     fn denies_tool_use_when_pre_tool_hook_blocks() {
         struct SingleCallApiClient;

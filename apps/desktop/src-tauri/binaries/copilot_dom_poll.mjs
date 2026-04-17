@@ -186,6 +186,28 @@ function replyEndsWithStreamingPlaceholder(text) {
   return false;
 }
 
+/**
+ * Detect M365 Copilot's reasoning-disclosure placeholder — emitted while the
+ * model has finished its "thinking" step but the actual reply code block is
+ * still streaming into an empty fence. Live capture from a signed-in run:
+ *   "Show**Creating HTML file**Starting to prepare a relay tool…Hide``````"
+ * `Show` and `Hide` are the disclosure toggle button labels; the trailing
+ * backticks are an empty code fence the body will stream into. Treat this
+ * shape as a streaming placeholder so the harness does not finalize before
+ * the body arrives.
+ */
+function replyIsOnlyReasoningDisclosurePlaceholder(text) {
+  const raw = String(text || "")
+    .replace(/^Copilot said:\s*/i, "")
+    .replace(/^Copilot\s+Reasoning[^\n]*?\bstep(?:s)?\s*/i, "")
+    .trim();
+  if (!raw) return false;
+  const match = raw.match(/^(Show\b[\s\S]*?\bHide\b)([\s\S]*)$/);
+  if (!match) return false;
+  const tail = match[2].replace(/`+/g, "").trim();
+  return tail === "";
+}
+
 /** Remove trailing placeholder lines Copilot appends to innerText during streaming. */
 function stripStreamingPlaceholderTail(text) {
   let s = String(text || "");
@@ -900,5 +922,6 @@ export {
   normalizeStreamingLine,
   lineMatchesStreamingPlaceholder,
   replyEndsWithStreamingPlaceholder,
+  replyIsOnlyReasoningDisclosurePlaceholder,
   stripStreamingPlaceholderTail,
 };

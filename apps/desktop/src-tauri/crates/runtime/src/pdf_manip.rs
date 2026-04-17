@@ -474,7 +474,13 @@ mod tests {
             b.to_string_lossy().into_owned(),
         ];
         let got = merge_pdfs(out.to_str().unwrap(), &paths).expect("merge");
-        assert_eq!(got, out);
+        // On Windows `merge_pdfs` canonicalizes to the `\\?\` extended-length
+        // form, while `out` is still the non-prefixed path. Compare by
+        // `fs::canonicalize` so both sides go through the same normalizer.
+        assert_eq!(
+            std::fs::canonicalize(&got).expect("canonicalize got"),
+            std::fs::canonicalize(&out).expect("canonicalize out"),
+        );
         assert!(out.is_file());
 
         let merged = Document::load(&out).expect("load merged");
