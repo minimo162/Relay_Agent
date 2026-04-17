@@ -24,6 +24,7 @@
     "agent-loop:test": "node ./scripts/launch_agent_loop_smoke.mjs",
     "smoke:windows": "node ./scripts/e2e_windows_smoke.mjs",
     "live:m365:desktop-smoke": "node ./scripts/live_m365_desktop_smoke.mjs",
+    "live:m365:tetris-html": "node ./scripts/live_m365_tetris_html_smoke.mjs",
     "live:m365:grounding-approval-multiturn": "node ./scripts/live_m365_multiturn_grounding_approval.mjs",
     "live:m365:path-resolution-same-session": "node ./scripts/live_m365_same_session_path_resolution.mjs",
     "live:m365:copilot-response-probe": "node ./scripts/live_m365_copilot_response_probe.mjs",

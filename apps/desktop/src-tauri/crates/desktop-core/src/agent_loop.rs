@@ -839,6 +839,7 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
             "Use the current Relay tool catalog in this prompt; do not invent unavailable tools.\n",
             "If the latest real user turn named a concrete path, reuse that exact string in tool input.\n",
             "Do not claim a successful `read_file` result is escaped or corrupted based only on quotes or backslashes.\n\n",
+            "If a successful `.html` `read_file` result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not use `bash`, `PowerShell`, backups, or copy commands to \"unescape\" it.\n\n",
             "Latest user request for this turn (user data, primary repair anchor):\n",
             "```text\n{latest_request}\n```\n\n",
             "Current session goal (user data, preserved for repair context):\n",
@@ -851,7 +852,8 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
 
 const CDP_BUNDLE_GROUNDING_BLOCK: &str = "## CDP bundle (read before you reply)\n\
 Do not list line-level bugs, missing tags, or identifiers unless they appear verbatim in a `read_file` or Tool Result in this bundle.\n\
-If you cite a problem, quote a short substring or line numbers from that text.";
+If you cite a problem, quote a short substring or line numbers from that text.\n\
+If a successful `.html` `read_file` Tool Result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not propose `bash`, `PowerShell`, backups, or copy commands to \"fix\" escaping.";
 
 fn cdp_messages_for_flavor(
     messages: &[ConversationMessage],
@@ -1889,11 +1891,13 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || lower.contains("planning tetris html creation")
         || lower.contains("show**preparing file request")
         || lower.contains("show**generating file output")
+        || lower.contains("show**requesting html output")
         || lower.contains("looking into generating a full html file")
         || lower.contains("preparing to use the relay tool")
         || lower.contains("preparing to utilize a relay tool")
         || lower.contains("show**creating html for tetris")
         || lower.contains("working on creating an html file")
+        || lower.contains("preparing to generate a single-file html version of tetris")
         || lower.contains("organizing the process to create")
         || lower.contains("show**deciding on file output")
         || lower.contains("show**determining file name choice")
@@ -1910,6 +1914,8 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
             || lower.contains("relay_tool's write_file action")
             || lower.contains("index.html")
             || lower.contains("html, js, and css")
+            || lower.contains("specified tool")
+            || lower.contains("relay via a specified tool")
             || lower.contains("no specific path was provided")
             || lower.contains("reasonable and straightforward naming convention"));
     let generic_show_hide_relay_write_drift = lower.contains("show**")
@@ -1945,6 +1951,24 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
             || trimmed.contains("以下で読み取ります")
             || trimmed.contains("以下で確認します"))
         && (lower.contains("first") || trimmed.contains("まず") || trimmed.contains("以下で"));
+    let defers_concrete_local_write_without_tool = trimmed.chars().count() <= 500
+        && !lower.contains("\"relay_tool_call\"")
+        && !lower.contains("```relay_tool")
+        && (lower.contains("need to create")
+            || lower.contains("need to write")
+            || lower.contains("need to edit")
+            || lower.contains("preparing to create")
+            || lower.contains("preparing to write"))
+        && (lower.contains("html file")
+            || lower.contains("tetris.html")
+            || lower.contains("write_file")
+            || trimmed.contains("ファイルを作成")
+            || trimmed.contains("書き込みます"))
+        && (lower.contains("available tools")
+            || lower.contains("utilizing available tools")
+            || lower.contains("using the available tools")
+            || lower.contains("following the instructions")
+            || lower.contains("addressing conflicting guidance"));
     local_tool_refusal
         || local_write_refusal
         || foreign_tool_drift
@@ -1954,6 +1978,7 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || generic_show_hide_html_creation_drift
         || mentioned_relay_tools_without_payload
         || defers_concrete_local_read_without_tool
+        || defers_concrete_local_write_without_tool
         || is_repair_refusal_text(trimmed)
 }
 
@@ -2324,6 +2349,7 @@ mod tests {
         assert!(out.contains("## CDP bundle (read before you reply)"));
         assert!(out.contains("CDP follow-up summary: local file mutation already executed."));
         assert!(out.contains("file_path: README.md"));
+        assert!(out.contains("Do not propose `bash`, `PowerShell`, backups, or copy commands"));
     }
 
     #[test]
@@ -2352,6 +2378,7 @@ mod tests {
         assert!(out.contains("## Relay repair mode"));
         assert!(out.contains("Use the current Relay tool catalog"));
         assert!(out.contains("Output exactly one usable fenced `relay_tool` block"));
+        assert!(out.contains("Do not use `bash`, `PowerShell`, backups, or copy commands to \"unescape\" it"));
         assert!(out.contains("### `bash`"));
         assert!(out.contains("### `WebFetch`"));
         assert!(out.contains("purpose:"));
@@ -2950,6 +2977,12 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         ));
         assert!(is_tool_protocol_confusion_text(
             "Show**Requesting full HTML file**I’m working on creating a complete HTML file for a Tetris game that includes the canvas and controls in a single document.Hide``````"
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Show**Requesting HTML output**I am preparing to generate a single-file HTML version of Tetris to relay via a specified tool.Hide``````"
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "I need to create an HTML file for Tetris, specifically tetris.html, following the instructions and utilizing available tools while addressing conflicting guidance from the developer.Hide"
         ));
         assert!(is_tool_protocol_confusion_text(
             "I need to switch to the Agent tool and Pages before I can continue."

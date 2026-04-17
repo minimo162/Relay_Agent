@@ -6075,3 +6075,38 @@ Results:
 - `initial_mode_rewrites_generated_index_html_tetris_reply_to_tetris_html`: passed in the desktop app crate.
 - `tool_protocol_confusion_heuristic_catches_foreign_tool_drift`: passed in the desktop app crate.
 - A fresh full app-path rerun with `htmlでテトリスを作成して` was started after these changes, but that attempt stalled earlier in Copilot submit/rejoin timeout handling before the first assistant reply was returned, so it did not yet supersede the previous live evidence.
+
+Reusable live harness and follow-up reruns later on 2026-04-17:
+
+- Added a dedicated reusable live harness at [`apps/desktop/scripts/live_m365_tetris_html_smoke.mjs`](../apps/desktop/scripts/live_m365_tetris_html_smoke.mjs) plus `live:m365:tetris-html` script entries in [`apps/desktop/package.json`](../apps/desktop/package.json) and [`package.json`](../package.json). The harness drives the real desktop app through dev-control, records `doctor` / `preflight-ready` / `session-created` / `final-state` / `progress-trace` / `tauri-dev.log`, and validates workspace-root `tetris.html` / `index.html` outcomes. It also reuses an already-running `:99` Xvfb instead of failing on an existing lock.
+- Fresh harness rerun `pnpm live:m365:tetris-html` first reproduced the remaining prose-only drift with a new wording, `Show**Requesting HTML output**I am preparing to generate a single-file HTML version of Tetris to relay via a specified tool.Hide```````, at artifact `/tmp/relay-live-m365-tetris-html-G578Ft`.
+- Tightened `is_tool_protocol_confusion_text` in both duplicated parser/loop copies ([`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs) and [`apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs`](../apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs)) to catch that `Show**Requesting HTML output**... specified tool` variant, plus the next shorter prose-only drift `I need to create an HTML file for Tetris, specifically tetris.html, following the instructions and utilizing available tools while addressing conflicting guidance from the developer.Hide`.
+- A later fresh harness rerun progressed substantially further and produced a real workspace-root `/root/Relay_Agent/tetris.html` artifact before stopping on an unexpected `bash` approval, with artifact bundle `/tmp/relay-live-m365-tetris-html-ETT5Nf`. The harness captured:
+  - `outputExists = true`
+  - `outputSha256 = aa8f79c1e65ae37a7381d5bfc0b088e1bfdb2185be0d79e50947e1b17f926ec0`
+  - `outputBytes = 23105`
+  - valid HTML preview head/tail from `<!doctype html>` through `</html>`
+  - no `index.html` creation and no persisted escaped document-level entities
+- The same `/tmp/relay-live-m365-tetris-html-ETT5Nf` run showed the remaining post-write blocker clearly in `tauri-dev.log`: after successful HTML generation and follow-up `read_file`, Copilot hallucinated that the file still began with `&lt;!doctype html&gt;` and proposed a `bash` backup/copy flow instead of stopping or using only file tools.
+- Strengthened CDP prompt guidance in both prompt builders so successful `.html` `read_file` results that start with `<!doctype html>` / `<html` must be treated as already-decoded HTML, and the model is explicitly told not to use `bash`, `PowerShell`, backups, or copy commands to “fix” escaping.
+- The final clean rerun after that prompt tightening still did not reach end-to-end success. Artifact `/tmp/relay-live-m365-tetris-html-mEp6ov` stopped with `lastStopReason = meta_stall` after repair 3/3, with final drift text `Show**Requesting HTML file creation**I am looking to create a single file for Tetris, specifically requesting the content of tetris.html to be written.Hide```````, and no final `tetris.html` persisted from that run.
+
+Verification after adding the harness and follow-up tightenings:
+
+```bash
+node --check apps/desktop/scripts/live_m365_tetris_html_smoke.mjs
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml tool_protocol_confusion_heuristic_catches_foreign_tool_drift -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_confusion_heuristic_catches_foreign_tool_drift -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml build_cdp_prompt_ -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml build_cdp_prompt_ -- --nocapture
+pnpm live:m365:tetris-html
+pnpm check
+```
+
+Results:
+
+- `node --check apps/desktop/scripts/live_m365_tetris_html_smoke.mjs`: passed.
+- `tool_protocol_confusion_heuristic_catches_foreign_tool_drift`: passed in both `desktop-core` and the desktop app crate after the new prose-drift additions.
+- `build_cdp_prompt_ ...`: passed in both `desktop-core` and the desktop app crate after adding the `.html read_file` anti-shell guidance.
+- `pnpm live:m365:tetris-html`: still failing overall, but now leaves reusable artifacts for each rerun and proved one live path (`/tmp/relay-live-m365-tetris-html-ETT5Nf`) where Relay actually created a valid `tetris.html` before the model drifted into an unnecessary `bash` approval.
+- `pnpm check`: passed.

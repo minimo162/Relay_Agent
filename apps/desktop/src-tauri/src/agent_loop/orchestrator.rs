@@ -1005,11 +1005,13 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || lower.contains("planning tetris html creation")
         || lower.contains("show**preparing file request")
         || lower.contains("show**generating file output")
+        || lower.contains("show**requesting html output")
         || lower.contains("looking into generating a full html file")
         || lower.contains("preparing to use the relay tool")
         || lower.contains("preparing to utilize a relay tool")
         || lower.contains("show**creating html for tetris")
         || lower.contains("working on creating an html file")
+        || lower.contains("preparing to generate a single-file html version of tetris")
         || lower.contains("organizing the process to create")
         || lower.contains("show**deciding on file output")
         || lower.contains("show**determining file name choice")
@@ -1026,6 +1028,8 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
             || lower.contains("relay_tool's write_file action")
             || lower.contains("index.html")
             || lower.contains("html, js, and css")
+            || lower.contains("specified tool")
+            || lower.contains("relay via a specified tool")
             || lower.contains("no specific path was provided")
             || lower.contains("reasonable and straightforward naming convention"));
     let generic_show_hide_relay_write_drift = lower.contains("show**")
@@ -1061,6 +1065,24 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
             || trimmed.contains("以下で読み取ります")
             || trimmed.contains("以下で確認します"))
         && (lower.contains("first") || trimmed.contains("まず") || trimmed.contains("以下で"));
+    let defers_concrete_local_write_without_tool = trimmed.chars().count() <= 500
+        && !lower.contains("\"relay_tool_call\"")
+        && !lower.contains("```relay_tool")
+        && (lower.contains("need to create")
+            || lower.contains("need to write")
+            || lower.contains("need to edit")
+            || lower.contains("preparing to create")
+            || lower.contains("preparing to write"))
+        && (lower.contains("html file")
+            || lower.contains("tetris.html")
+            || lower.contains("write_file")
+            || trimmed.contains("ファイルを作成")
+            || trimmed.contains("書き込みます"))
+        && (lower.contains("available tools")
+            || lower.contains("utilizing available tools")
+            || lower.contains("using the available tools")
+            || lower.contains("following the instructions")
+            || lower.contains("addressing conflicting guidance"));
     local_tool_refusal
         || local_write_refusal
         || foreign_tool_drift
@@ -1070,6 +1092,7 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || generic_show_hide_html_creation_drift
         || mentioned_relay_tools_without_payload
         || defers_concrete_local_read_without_tool
+        || defers_concrete_local_write_without_tool
         || is_repair_refusal_text(trimmed)
 }
 
@@ -3390,6 +3413,7 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
             "Prefer `write_file` / `edit_file` for local file creation or edits; use `read_file` only when needed.\n",
             "If the latest real user turn named a concrete path, reuse that exact string in tool input. Do not rewrite it to another directory or prior-turn variant.\n",
             "If a successful `read_file` Tool Result already shows `content:`, treat that body as the real file text. Do not claim it is escaped or corrupted based only on quotes or backslashes.\n",
+            "If a successful `.html` `read_file` result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not use `bash`, `PowerShell`, backups, or copy commands to \"unescape\" it.\n",
             "Do not use or mention Microsoft-native tools such as Python, WebSearch, citations, Pages, uploads, or remote artifacts.\n\n",
             "Latest user request for this turn (user data, primary repair anchor):\n",
             "```text\n{latest_request}\n```\n\n",
@@ -4150,6 +4174,7 @@ fn decode_html_document_entities(text: &str) -> Option<String> {
 const CDP_BUNDLE_GROUNDING_BLOCK: &str = "## CDP bundle (read before you reply)\n\
 Do not list line-level bugs, missing tags, or identifiers (e.g. `x_size`, `bag.length0`) unless they appear verbatim in a `read_file` or Tool Result in this bundle. If you cite a problem, quote a short substring or line numbers from that text.\n\
 Treat the `content:` body under a successful `read_file` Tool Result as the actual file text returned by Relay. Do not call it \"escaped\" or \"broken\" based only on quotes, backslashes, or transport formatting.\n\
+If a successful `.html` `read_file` Tool Result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not propose `bash`, `PowerShell`, backups, or copy commands to \"fix\" escaping.\n\
 If the bundle contradicts a generic fix checklist, describe what the bundle actually contains instead of inventing errors.";
 
 fn build_cdp_prompt_from_messages(
@@ -5862,6 +5887,9 @@ mod cdp_copilot_tool_tests {
         assert!(bundle
             .system_text
             .contains("Output exactly one usable fenced `relay_tool` block"));
+        assert!(bundle.system_text.contains(
+            "Do not use `bash`, `PowerShell`, backups, or copy commands to \"unescape\" it"
+        ));
         assert!(bundle.message_text.contains("Tool protocol repair."));
         assert!(!bundle.message_text.contains("I will use Python"));
         assert!(!bundle.system_text.contains("# Project context"));
@@ -6307,6 +6335,10 @@ mod cdp_copilot_tool_tests {
         assert!(
             out.contains("Treat the `content:` body under a successful `read_file` Tool Result"),
             "read_file grounding guidance missing from bundle"
+        );
+        assert!(
+            out.contains("Do not propose `bash`, `PowerShell`, backups, or copy commands"),
+            "html anti-shell grounding guidance missing from bundle"
         );
         assert!(
             out.contains("RELAY_GROUNDING_FIXTURE"),
@@ -7786,6 +7818,12 @@ mod loop_controller_tests {
         ));
         assert!(is_tool_protocol_confusion_text(
             "Show**Requesting full HTML file**I’m working on creating a complete HTML file for a Tetris game that includes the canvas and controls in a single document.Hide``````"
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Show**Requesting HTML output**I am preparing to generate a single-file HTML version of Tetris to relay via a specified tool.Hide``````"
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "I need to create an HTML file for Tetris, specifically tetris.html, following the instructions and utilizing available tools while addressing conflicting guidance from the developer.Hide"
         ));
         assert!(is_tool_protocol_confusion_text(
             "LOCAL_TOOLS_UNAVAILABLE because I can't use local workspace editing tools."
