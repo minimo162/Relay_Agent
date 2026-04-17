@@ -90,7 +90,7 @@ fn process_running(name: &str) -> bool {
         Command::new("pgrep").arg(name).output()
     };
 
-    result.map(|o| o.status.success()).unwrap_or(false)
+    result.is_ok_and(|o| o.status.success())
 }
 
 /// List detected Electron apps (running or installed).
@@ -109,16 +109,14 @@ pub fn electron_apps_status() -> Value {
                     Command::new("where")
                         .arg(p)
                         .output()
-                        .map(|o| o.status.success())
-                        .unwrap_or(false)
+                        .is_ok_and(|o| o.status.success())
                 })
             } else {
                 // Linux: check PATH
                 Command::new("which")
                     .arg(&app.process_name)
                     .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false)
+                    .is_ok_and(|o| o.status.success())
             };
 
             let launch_hint = app.macos_path.or(app.windows_path).map(|p| {

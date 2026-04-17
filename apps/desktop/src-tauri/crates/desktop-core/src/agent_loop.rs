@@ -608,20 +608,16 @@ fn extract_generated_html_code_block(text: &str) -> Option<(String, String)> {
     while let Some(idx) = rest.find(OPEN) {
         display.push_str(&rest[..idx]);
         let after_ticks = &rest[idx + OPEN.len()..];
-        let (info, body_start) = match after_ticks.find('\n') {
-            Some(nl) => {
-                let fl = after_ticks[..nl].trim();
-                if fl.starts_with('{') {
-                    ("", 0usize)
-                } else {
-                    (fl, nl + 1)
-                }
-            }
-            None => {
-                display.push_str(OPEN);
-                display.push_str(after_ticks);
-                return None;
-            }
+        let Some(nl) = after_ticks.find('\n') else {
+            display.push_str(OPEN);
+            display.push_str(after_ticks);
+            return None;
+        };
+        let fl = after_ticks[..nl].trim();
+        let (info, body_start) = if fl.starts_with('{') {
+            ("", 0usize)
+        } else {
+            (fl, nl + 1)
         };
         let body_region = &after_ticks[body_start..];
         let Some(inner_end) = find_generic_markdown_fence_inner_end(body_region) else {
@@ -1119,8 +1115,9 @@ fn summarize_read_file_tool_result(output: &str) -> Option<String> {
 }
 
 fn is_html_file_path(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
-    lower.ends_with(".html") || lower.ends_with(".htm")
+    std::path::Path::new(path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm"))
 }
 
 fn looks_like_decoded_html_document(text: &str) -> bool {
@@ -1733,13 +1730,11 @@ fn autoclose_unbalanced_json_payload(payload: &str) -> Option<String> {
 }
 
 fn parse_tool_payload_value(payload: &str) -> Option<Value> {
-    match serde_json::from_str::<Value>(payload) {
-        Ok(value) => Some(value),
-        Err(_) => {
-            let repaired = autoclose_unbalanced_json_payload(payload)?;
-            serde_json::from_str::<Value>(&repaired).ok()
-        }
+    if let Ok(value) = serde_json::from_str::<Value>(payload) {
+        return Some(value);
     }
+    let repaired = autoclose_unbalanced_json_payload(payload)?;
+    serde_json::from_str::<Value>(&repaired).ok()
 }
 
 fn parse_tool_payloads(payloads: &[String]) -> Vec<(String, String, String)> {
@@ -1796,11 +1791,7 @@ fn normalize_html_file_mutation_input(tool_name: &str, input: &mut Value) {
     let is_html_path = obj
         .get("path")
         .and_then(Value::as_str)
-        .map(|path| {
-            let lower = path.to_ascii_lowercase();
-            lower.ends_with(".html") || lower.ends_with(".htm")
-        })
-        .unwrap_or(false);
+        .is_some_and(is_html_file_path);
     if !is_html_path {
         return;
     }
@@ -2036,7 +2027,7 @@ fn looks_like_truncated_relay_tool_fragment(trimmed: &str) -> bool {
         return false;
     }
     let first = trimmed.chars().next();
-    if !matches!(first, Some('{') | Some('[')) {
+    if !matches!(first, Some('{' | '[')) {
         return false;
     }
     let char_count = trimmed.chars().count();

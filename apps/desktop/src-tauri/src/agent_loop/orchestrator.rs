@@ -354,10 +354,14 @@ fn sanitize_copilot_visible_text(s: &str) -> String {
 const COPILOT_UI_TEXT_CHUNK: usize = 48;
 
 fn epoch_ms_now() -> u64 {
-    SystemTime::now()
+    // Unix-ms timestamp overflows u64 ~584M years from the epoch; the
+    // truncation cast is safe for any value we'll ever observe.
+    #[allow(clippy::cast_possible_truncation)]
+    let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as u64
+        .as_millis() as u64;
+    ms
 }
 
 fn emit_text_delta_event<R: Runtime>(
@@ -981,7 +985,7 @@ fn looks_like_truncated_relay_tool_fragment(trimmed: &str) -> bool {
         return false;
     }
     let first = trimmed.chars().next();
-    if !matches!(first, Some('{') | Some('[')) {
+    if !matches!(first, Some('{' | '[')) {
         return false;
     }
     let char_count = trimmed.chars().count();
@@ -2406,6 +2410,11 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
             });
         }
 
+        // The loop currently always returns on its first iteration; earlier
+        // prototypes retried here and the control-flow may grow back. Keep
+        // the `loop {}` scaffold rather than flatten it into straight-line
+        // code so future retry additions stay additive.
+        #[allow(clippy::never_loop)]
         loop {
             attempt_index += 1;
             let request_id = cdp_attempt_request_id(&request_chain_id, attempt_index);
@@ -2566,7 +2575,7 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
                             &visible_text,
                             true,
                         );
-                        *last_visible_text = visible_text.clone();
+                        (*last_visible_text).clone_from(&visible_text);
                     } else {
                         emit_copilot_text_suffix_for_ui(
                             app,
@@ -2805,6 +2814,10 @@ fn cdp_required_args(schema: &Value) -> Vec<String> {
 }
 
 fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
+    // Per-tool optional-arg curation kept one arm per tool for readability;
+    // collapsing identical arms now would make future per-tool tweaks noisier
+    // than the lint is worth.
+    #[allow(clippy::match_same_arms)]
     let curated = match name {
         "read_file" => vec!["offset", "limit", "pages"],
         "glob_search" => vec!["path"],
@@ -3308,20 +3321,16 @@ fn extract_generated_html_code_block(text: &str) -> Option<(String, String)> {
     while let Some(idx) = rest.find(OPEN) {
         display.push_str(&rest[..idx]);
         let after_ticks = &rest[idx + OPEN.len()..];
-        let (info, body_start) = match after_ticks.find('\n') {
-            Some(nl) => {
-                let fl = after_ticks[..nl].trim();
-                if fl.starts_with('{') {
-                    ("", 0usize)
-                } else {
-                    (fl, nl + 1)
-                }
-            }
-            None => {
-                display.push_str(OPEN);
-                display.push_str(after_ticks);
-                return None;
-            }
+        let Some(nl) = after_ticks.find('\n') else {
+            display.push_str(OPEN);
+            display.push_str(after_ticks);
+            return None;
+        };
+        let fl = after_ticks[..nl].trim();
+        let (info, body_start) = if fl.starts_with('{') {
+            ("", 0usize)
+        } else {
+            (fl, nl + 1)
         };
         let body_region = &after_ticks[body_start..];
         let Some(inner_end) = find_generic_markdown_fence_inner_end(body_region) else {
@@ -4323,16 +4332,12 @@ fn parse_tool_payload_value(payload: &str) -> Option<Value> {
 fn parse_tool_payloads(payloads: &[String]) -> Vec<(String, String, String)> {
     let mut out = Vec::new();
     for p in payloads {
-        let v: Value = match parse_tool_payload_value(p) {
-            Some(v) => v,
-            None => {
-                let e = serde_json::from_str::<Value>(p)
-                    .err()
-                    .map(|err| err.to_string())
-                    .unwrap_or_else(|| "unrecoverable relay_tool JSON".to_string());
-                tracing::warn!("[CdpApiClient] skip invalid relay_tool JSON: {e}");
-                continue;
-            }
+        let Some(v) = parse_tool_payload_value(p) else {
+            let e = serde_json::from_str::<Value>(p)
+                .err()
+                .map_or_else(|| "unrecoverable relay_tool JSON".to_string(), |err| err.to_string());
+            tracing::warn!("[CdpApiClient] skip invalid relay_tool JSON: {e}");
+            continue;
         };
         match v {
             Value::Array(arr) => {
@@ -4381,11 +4386,7 @@ fn normalize_html_file_mutation_input(tool_name: &str, input: &mut Value) {
     let is_html_path = obj
         .get("path")
         .and_then(Value::as_str)
-        .map(|path| {
-            let lower = path.to_ascii_lowercase();
-            lower.ends_with(".html") || lower.ends_with(".htm")
-        })
-        .unwrap_or(false);
+        .is_some_and(is_html_file_path);
     if !is_html_path {
         return;
     }
@@ -4692,8 +4693,9 @@ fn summarize_read_file_tool_result(output: &str) -> Option<String> {
 }
 
 fn is_html_file_path(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
-    lower.ends_with(".html") || lower.ends_with(".htm")
+    std::path::Path::new(path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm"))
 }
 
 fn looks_like_decoded_html_document(text: &str) -> bool {
@@ -5161,7 +5163,7 @@ fn enrich_read_file_tool_error(
     };
     let Some(file_name) = std::path::Path::new(original_path)
         .file_name()
-        .map(|value| value.to_owned())
+        .map(std::ffi::OsStr::to_owned)
     else {
         return lines.join("\n");
     };

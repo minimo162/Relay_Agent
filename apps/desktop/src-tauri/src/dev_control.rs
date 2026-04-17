@@ -560,6 +560,7 @@ fn build_session_state(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn summarize_session_messages(
     messages: &[ConversationMessage],
 ) -> (

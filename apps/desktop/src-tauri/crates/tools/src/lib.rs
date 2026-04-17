@@ -111,6 +111,13 @@ pub struct CdpPromptToolSpec {
     pub example: Value,
 }
 
+// The per-tool metadata table is exhaustive by design: each arm documents a
+// distinct tool's approval title, redaction rules, and CDP visibility. Keeping
+// every tool on its own arm (even when a handful produce identical
+// `ToolMetadata` literals today) preserves readability and makes future
+// per-tool tweaks additive. The pedantic `match_same_arms` / `too_many_lines`
+// lints are silenced for this one registry function rather than restructured.
+#[allow(clippy::match_same_arms, clippy::too_many_lines)]
 #[must_use]
 pub fn tool_metadata(name: &str) -> ToolMetadata {
     match name {
@@ -427,6 +434,10 @@ fn cdp_required_args(schema: &Value) -> Vec<String> {
 }
 
 fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
+    // Identical arms (e.g., `glob_search`/`git_status`) stay expanded so each
+    // tool's curated optional-arg list is easy to tweak in place. Silence
+    // pedantic `match_same_arms` rather than collapse them with `|`.
+    #[allow(clippy::match_same_arms)]
     let curated = match name {
         "read_file" => vec!["offset", "limit", "pages"],
         "glob_search" => vec!["path"],
@@ -3819,8 +3830,7 @@ fn command_exists(command: &str) -> bool {
         .arg("-lc")
         .arg(format!("command -v {command} >/dev/null 2>&1"))
         .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+        .is_ok_and(|status| status.success())
 }
 
 #[cfg(windows)]
