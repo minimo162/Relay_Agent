@@ -3328,8 +3328,15 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             repair2.contains("Do not include any explanatory sentence before or after the fence.")
         );
 
-        let repair3 =
-            build_tool_protocol_repair_input("Create ./tetris.html", "Create ./tetris.html", 2);
+        // The stage-3 placeholder guard only fires in the path-aware
+        // `build_best_tool_protocol_repair_input` branch, which is what the
+        // orchestrator actually dispatches for concrete file-write goals.
+        // Route through that builder so the assertion matches the live prompt.
+        let repair3 = build_best_tool_protocol_repair_input(
+            "Create ./tetris.html",
+            "Create ./tetris.html",
+            2,
+        );
         assert!(repair3.contains("Any text before or after the fence is a failed repair."));
         assert!(repair3.contains("Do not use placeholders like `<full file content here>`"));
     }

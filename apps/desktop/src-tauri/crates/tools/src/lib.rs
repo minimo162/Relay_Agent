@@ -4050,9 +4050,10 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        execute_tool, is_tool_visible_in_tool_search, mvp_tool_specs,
-        required_permission_for_surface, tool_metadata, tool_registry, tool_specs_for_surface,
-        ApprovalTargetExtractor, ToolSource, ToolSurface,
+        cdp_prompt_tool_specs, cdp_tool_specs_for_visibility, execute_tool,
+        is_tool_visible_in_tool_search, mvp_tool_specs, required_permission_for_surface,
+        tool_metadata, tool_registry, tool_specs_for_surface, ApprovalTargetExtractor,
+        CdpToolVisibility, ToolSource, ToolSurface,
     };
     use runtime::PermissionMode;
     use serde_json::json;
@@ -4214,6 +4215,10 @@ mod tests {
         assert!(read_file.important_optional_args.contains(&"offset".to_string()));
     }
 
+    // `PowerShell` is only registered in the catalog under `#[cfg(windows)]`
+    // (see the `tool_catalog` builder). On non-Windows targets the
+    // Conditional bucket is empty, so scope the assertion accordingly.
+    #[cfg(windows)]
     #[test]
     fn powershell_is_only_conditional_for_cdp_catalog() {
         let conditional = cdp_tool_specs_for_visibility(CdpToolVisibility::Conditional)
@@ -4221,6 +4226,19 @@ mod tests {
             .map(|spec| spec.name)
             .collect::<Vec<_>>();
         assert_eq!(conditional, vec!["PowerShell"]);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn powershell_is_absent_from_cdp_catalog_on_non_windows() {
+        let conditional = cdp_tool_specs_for_visibility(CdpToolVisibility::Conditional)
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
+        assert!(
+            conditional.is_empty(),
+            "Conditional bucket should be empty on non-Windows, got {conditional:?}"
+        );
     }
 
     #[test]
