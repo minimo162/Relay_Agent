@@ -4924,9 +4924,7 @@ impl<R: Runtime> PermissionPrompter for TauriApprovalPrompter<R> {
                 .session_config
                 .cwd
                 .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .is_some()
+                .is_some_and(|s| !s.trim().is_empty())
         }) {
             Ok(Some(configured)) => configured,
             Ok(None) | Err(_) => false,
