@@ -186,6 +186,37 @@ test("assistantReplyHasStrongCompletionSignal waits for closing html on document
   );
 });
 
+test("assistantReplyHasStrongCompletionSignal rejects M365 Show/Hide reasoning disclosure with empty fence", () => {
+  // Live capture from a signed-in M365 Copilot run (2026-04-17): the streamed
+  // message still only contained the reasoning disclosure button labels and an
+  // empty `\`\`\`\`\`\`` fence placeholder; the actual body had not arrived yet.
+  // Treating this as a strong completion signal caused a premature meta_stall.
+  const placeholder =
+    "Show**Creating HTML file**Starting to prepare a relay tool to write a complete HTML file for Tetris, ensuring to include a single code fence only.Hide``````";
+  assert.equal(assistantReplyHasStrongCompletionSignal(placeholder), false);
+  const placeholderJa =
+    "Show**HTML を準備中**Tetris 用の HTML を relay_tool で書き出す準備中。Hide``````";
+  assert.equal(assistantReplyHasStrongCompletionSignal(placeholderJa), false);
+});
+
+test("assistantReplyHasStrongCompletionSignal still accepts a real fenced relay_tool body after Show/Hide", () => {
+  const completed = [
+    "Show**Writing file**Preparing the write.Hide",
+    "```relay_tool",
+    '{"relay_tool_call":true,"name":"write_file","input":{"path":"note.txt","content":"hello"}}',
+    "```",
+  ].join("\n");
+  assert.equal(assistantReplyHasStrongCompletionSignal(completed), true);
+});
+
+test("normalizeCopilotVisibleText strips M365 Show/Hide reasoning disclosure from real bodies", () => {
+  const body = [
+    "Show**Writing HTML**Preparing the HTML body.Hide",
+    "最終的な回答を書きます。",
+  ].join("\n");
+  assert.equal(normalizeCopilotVisibleText(body), "最終的な回答を書きます。");
+});
+
 test("assistantReplyAddsOnlySuggestionSuffix detects short follow-up suggestion tails", () => {
   assert.equal(
     assistantReplyAddsOnlySuggestionSuffix(
@@ -244,6 +275,36 @@ test("resolveAssistantReplyForReturn rejects incomplete relay_tool snippets as f
 
   const response = await resolveAssistantReplyForReturn(session, truncatedReply, 0, null);
   assert.equal(response, null);
+});
+
+test("resolveAssistantReplyForReturn rejects input-first unbalanced tool fragments that lack a visible name key", async () => {
+  // Live capture 2026-04-18 (logged-in M365 Copilot, repair stage 1/3 for
+  // "htmlでテトリスを作成して"): the DOM-structured extract froze at exactly
+  // `{ "input": {` — the `"name"` field never streamed through before the
+  // assistant turn was truncated. The original incomplete-relay-tool heuristic
+  // only caught fragments whose first key was `"name":`, so this 12-char
+  // fragment slipped through and the session finalized without a write_file
+  // approval. The detector now also recognizes input/path/content-first
+  // fragments as incomplete.
+  const truncatedReply = '{\n"input": {';
+  const session = {
+    async evaluate() {
+      return { value: truncatedReply };
+    },
+  };
+
+  const response = await resolveAssistantReplyForReturn(session, truncatedReply, 0, null);
+  assert.equal(response, null);
+});
+
+test("assistantReplyHasStrongCompletionSignal rejects input-first unbalanced tool fragments", () => {
+  // Same live shape as above — the strong-completion gate must keep polling
+  // rather than treating the truncated JSON as done.
+  assert.equal(assistantReplyHasStrongCompletionSignal('{ "input": {'), false);
+  assert.equal(
+    assistantReplyHasStrongCompletionSignal('{\n"path": "tetris.html",\n"content":'),
+    false,
+  );
 });
 
 test("normalizeProgressTextForUi keeps append-only progress after transient image noise is removed", () => {

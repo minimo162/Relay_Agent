@@ -12,6 +12,7 @@ import {
   stripM365CopilotReplyChrome,
   stripStreamingPlaceholderTail,
   replyEndsWithStreamingPlaceholder,
+  replyIsOnlyReasoningDisclosurePlaceholder,
   CHATHUB_ASSISTANT_MIN_CHARS,
   RESPONSE_POLL_INTERVAL_MS,
   RESPONSE_TIMEOUT_MS,
@@ -158,6 +159,13 @@ function stripInternalReasoningLeadIns(text) {
   cleaned = cleaned.replace(/^reasoning completed in\s*\d+\s*steps[:：]?\s*/i, "");
   cleaned = cleaned.replace(/^show\*+\s*considering[^*]{0,160}\*+\s*/i, "");
   cleaned = cleaned.replace(/^show\s*considering\s+/i, "");
+  // Strip M365 disclosure toggle wrappers only when the remainder is non-empty
+  // real content; otherwise `replyIsOnlyReasoningDisclosurePlaceholder` needs
+  // the raw shape to stay intact so `waitForDomResponse` can keep polling.
+  cleaned = cleaned.replace(
+    /^Show\b[\s\S]{0,2000}?\bHide\b\s*(?=[^`\s])/,
+    "",
+  );
   return cleaned;
 }
 
@@ -327,12 +335,29 @@ function hasBalancedStructuredPayload(text) {
   return false;
 }
 
+// Tool-shaped object keys the repair/fallback parsers recognize. When a short
+// assistant reply is already an unbalanced JSON fragment starting with any of
+// these keys, treat it as a still-streaming relay_tool call instead of a final
+// answer so extraction keeps polling. Live capture 2026-04-17 (logged-in M365
+// repair stage 1/3): Copilot returned just `{ "input": {` (12 chars). The old
+// regex only triggered on `"name":`-first fragments, so the 12-char extract
+// was accepted as the final assistant text and no write_file approval ever
+// surfaced. Keep this list aligned with the tool-object key names the Rust
+// side tolerates in `parse_initial`.
+const INCOMPLETE_TOOL_KEY_RE =
+  /"(?:name|input|path|content|arguments|parameters|relay_tool_call)"\s*:/u;
+
 function assistantReplyLooksIncompleteRelayTool(text) {
   const cleaned = normalizeCopilotVisibleText(text);
   if (!cleaned) return false;
-  if (!/relay_tool_call|```relay_tool|^\s*[\[{]\s*"name"\s*:/u.test(cleaned)) return false;
+  const looksLikeToolShape =
+    /relay_tool_call|```relay_tool/u.test(cleaned) ||
+    (/^\s*[\[{]/u.test(cleaned) && INCOMPLETE_TOOL_KEY_RE.test(cleaned));
+  if (!looksLikeToolShape) return false;
   if (assistantReplyHasClosedFence(cleaned) && hasBalancedStructuredPayload(cleaned)) return false;
-  const sentinelIndex = cleaned.search(/relay_tool_call|"name"\s*:/u);
+  const sentinelIndex = cleaned.search(
+    /relay_tool_call|"(?:name|input|path|content|arguments|parameters)"\s*:/u,
+  );
   if (sentinelIndex < 0) return false;
   const objectStart = cleaned.lastIndexOf("{", sentinelIndex);
   const arrayStart = cleaned.lastIndexOf("[", sentinelIndex);
@@ -344,6 +369,7 @@ function assistantReplyLooksIncompleteRelayTool(text) {
 function assistantReplyHasStrongCompletionSignal(text) {
   const cleaned = normalizeCopilotVisibleText(text);
   if (!cleaned || replyEndsWithStreamingPlaceholder(cleaned)) return false;
+  if (replyIsOnlyReasoningDisclosurePlaceholder(cleaned)) return false;
   const looksLikeHtmlDocument = /<!doctype html>|<html\b/i.test(cleaned);
   if (looksLikeHtmlDocument) {
     return /<\/html>/i.test(cleaned);
@@ -836,6 +862,7 @@ function assistantReplyNeedsExpansionProbe(text, submittedPromptLen) {
   if (!cleaned) return true;
   if (looksLikeSearchProgressText(cleaned)) return true;
   if (assistantReplyLooksIncompleteRelayTool(cleaned)) return true;
+  if (replyIsOnlyReasoningDisclosurePlaceholder(cleaned)) return true;
   if (domExtractLooksLikeSubmittedPrompt(cleaned.length, submittedPromptLen)) return true;
   return cleaned.length < 220 && !assistantTextHasStructuredContent(cleaned);
 }
@@ -958,6 +985,7 @@ async function resolveAssistantReplyForReturn(session, looseText, submittedPromp
     if (networkExtractLooksLikeGarbage(candidate)) return false;
     if (looksLikeSearchProgressText(candidate)) return false;
     if (assistantReplyLooksIncompleteRelayTool(candidate)) return false;
+    if (replyIsOnlyReasoningDisclosurePlaceholder(candidate)) return false;
     if (structured && assistantReplyAddsOnlySuggestionSuffix(candidate, structured)) {
       return false;
     }
@@ -1136,8 +1164,11 @@ async function waitForDomResponse(
     }
     const ignorePhantomStop = genStreak >= RESPONSE_PHANTOM_GENERATING_POLLS;
     const streamingPlaceholderTail = replyEndsWithStreamingPlaceholder(reply);
+    const reasoningDisclosurePlaceholder = replyIsOnlyReasoningDisclosurePlaceholder(reply);
     const generating =
-      streamingPlaceholderTail || (generatingRaw && !ignorePhantomStop);
+      streamingPlaceholderTail ||
+      reasoningDisclosurePlaceholder ||
+      (generatingRaw && !ignorePhantomStop);
     await emitProgress(reply, generating || progressOnly);
     if (generating) quietGen = 0;
     else quietGen++;
@@ -1282,6 +1313,12 @@ async function waitForDomResponse(
         const candidate = replyLate.length >= len ? replyLate : reply;
         if (replyEndsWithStreamingPlaceholder(candidate)) {
           console.error("[copilot:response] post-stable reply still ends with streaming placeholder; keep waiting");
+          stable = 0;
+          prev = len;
+          continue;
+        }
+        if (replyIsOnlyReasoningDisclosurePlaceholder(candidate)) {
+          console.error("[copilot:response] post-stable reply is only a reasoning disclosure placeholder; keep waiting");
           stable = 0;
           prev = len;
           continue;

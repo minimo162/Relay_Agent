@@ -1678,7 +1678,8 @@ fn autoclose_unbalanced_json_payload(payload: &str) -> Option<String> {
     let mut stack: Vec<char> = Vec::new();
     let mut in_string = false;
     let mut escaped = false;
-    for ch in trimmed.chars() {
+    let mut truncate_at: Option<usize> = None;
+    for (idx, ch) in trimmed.char_indices() {
         if in_string {
             if escaped {
                 escaped = false;
@@ -1697,20 +1698,34 @@ fn autoclose_unbalanced_json_payload(payload: &str) -> Option<String> {
             '{' => stack.push('}'),
             '[' => stack.push(']'),
             '}' | ']' => {
-                let expected = stack.pop()?;
-                if ch != expected {
-                    return None;
+                if stack.last().copied() == Some(ch) {
+                    stack.pop();
+                } else {
+                    // Unmatched closer (e.g., trailing `]` from an outer array we
+                    // started mid-stream). Treat the prior content as the complete
+                    // candidate and drop everything from this closer onward.
+                    truncate_at = Some(idx);
+                    break;
                 }
             }
             _ => {}
         }
     }
 
-    if in_string || stack.is_empty() || stack.len() > 8 {
+    if in_string || stack.len() > 8 {
+        return None;
+    }
+    if stack.is_empty() && truncate_at.is_none() {
         return None;
     }
 
-    let mut repaired = trimmed.to_string();
+    let mut repaired = match truncate_at {
+        Some(idx) => trimmed[..idx].to_string(),
+        None => trimmed.to_string(),
+    };
+    while matches!(repaired.chars().last(), Some(c) if c.is_whitespace() || c == ',') {
+        repaired.pop();
+    }
     while let Some(ch) = stack.pop() {
         repaired.push(ch);
     }
@@ -1973,15 +1988,23 @@ fn is_concrete_local_write_body_without_tools(
     latest_turn_input: &str,
     assistant_text: &str,
 ) -> bool {
-    if !is_concrete_local_file_write_goal(latest_turn_input) {
-        return false;
-    }
     let trimmed = assistant_text.trim();
     if trimmed.is_empty() {
         return false;
     }
     let lower = trimmed.to_ascii_lowercase();
-    let looks_like_generated_file_body = lower.contains("<!doctype html")
+    let body_is_complete_html_document = (lower.contains("<!doctype html")
+        || lower.contains("<html"))
+        && lower.contains("</html>");
+    // A full `<!doctype html>…</html>` (or the `<html>…</html>` pair) reply is
+    // a strong enough deliverable-file signal on its own: the model clearly
+    // produced file-shaped content, so a missing write_file call is a
+    // tool-protocol miss even when the goal does not name an explicit path.
+    if !body_is_complete_html_document && !is_concrete_local_file_write_goal(latest_turn_input) {
+        return false;
+    }
+    let looks_like_generated_file_body = body_is_complete_html_document
+        || lower.contains("<!doctype html")
         || lower.contains("<html")
         || lower.contains("```html")
         || lower.contains("```css")
@@ -2000,10 +2023,69 @@ fn contains_plain_relay_tool_mention(lower: &str) -> bool {
         || lower.contains("`relay_tool`")
 }
 
+/// Live capture 2026-04-18 (logged-in M365 Copilot, repair stage 1/3): the
+/// repair reply finalized at exactly `{ "input": {` — a 12-char unbalanced
+/// JSON fragment with no `"name"` key yet. `parse_initial` cannot recover a
+/// tool call from it, and none of the prose-based confusion heuristics below
+/// match, so without this check the turn classified as `outcome=Completed`
+/// with no repair queued and the session exited cleanly without ever calling
+/// `write_file`. Treat any short (<400 char) unbalanced JSON opener that
+/// mentions a tool-shape key as confusion so the repair escalator fires.
+fn looks_like_truncated_relay_tool_fragment(trimmed: &str) -> bool {
+    if trimmed.is_empty() {
+        return false;
+    }
+    let first = trimmed.chars().next();
+    if !matches!(first, Some('{') | Some('[')) {
+        return false;
+    }
+    let char_count = trimmed.chars().count();
+    if char_count > 400 {
+        return false;
+    }
+    let has_tool_key = trimmed.contains("\"name\"")
+        || trimmed.contains("\"input\"")
+        || trimmed.contains("\"path\"")
+        || trimmed.contains("\"content\"")
+        || trimmed.contains("\"arguments\"")
+        || trimmed.contains("\"parameters\"")
+        || trimmed.contains("\"relay_tool_call\"");
+    if !has_tool_key {
+        return false;
+    }
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    for ch in trimmed.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' | '[' => depth += 1,
+            '}' | ']' => depth -= 1,
+            _ => {}
+        }
+    }
+    depth > 0 || in_string
+}
+
 fn is_tool_protocol_confusion_text(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return false;
+    }
+    if looks_like_truncated_relay_tool_fragment(trimmed) {
+        return true;
     }
     let lower = trimmed.to_ascii_lowercase();
     let local_tool_refusal = lower.contains("local_tools_unavailable")
@@ -2144,6 +2226,37 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
             || lower.contains("using the available tools")
             || lower.contains("following the instructions")
             || lower.contains("addressing conflicting guidance"));
+    // Live capture 2026-04-18 (logged-in M365, original turn): Copilot's
+    // entire reply was the stripped Show/Hide planning narration —
+    // `**Creating HTML Tetris**I'm planning to create a Tetris game in HTML
+    // with a single file that includes a canvas and controls, and I'll use
+    // Relay to save it as tetris.html.` No tool call, no file body. The
+    // earlier `relay_planning_write_drift` heuristic required an intact
+    // `show**` prefix, but the DOM normalizer strips the Show/Hide chrome
+    // before the classifier sees the text, so the same drift slips past.
+    // Catch the post-strip form by matching future-tense commitments to use
+    // Relay to write/save a workspace file, in a short reply that has no
+    // relay_tool payload and no HTML document body.
+    let planning_commits_to_relay_without_payload = trimmed.chars().count() <= 800
+        && !lower.contains("\"relay_tool_call\"")
+        && !lower.contains("```relay_tool")
+        && !lower.contains("<!doctype html")
+        && !lower.contains("<html")
+        && (lower.contains("i'll use relay")
+            || lower.contains("i'll use the relay")
+            || lower.contains("i will use relay")
+            || lower.contains("i will use the relay")
+            || lower.contains("use relay to save")
+            || lower.contains("use relay to write")
+            || lower.contains("use the relay to save")
+            || lower.contains("use the relay to write")
+            || lower.contains("using relay to save")
+            || lower.contains("using relay to write")
+            || lower.contains("save it as tetris")
+            || lower.contains("save this as tetris")
+            || lower.contains("planning to create a tetris")
+            || lower.contains("planning to write tetris")
+            || lower.contains("planning to save tetris"));
     local_tool_refusal
         || local_write_refusal
         || foreign_tool_drift
@@ -2154,6 +2267,7 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || mentioned_relay_tools_without_payload
         || defers_concrete_local_read_without_tool
         || defers_concrete_local_write_without_tool
+        || planning_commits_to_relay_without_payload
         || is_repair_refusal_text(trimmed)
 }
 
@@ -2814,6 +2928,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_initial_recovers_bare_json_array_of_tool_calls_missing_final_brace() {
+        // Real output captured from a signed-in Copilot run: the model emitted an
+        // unfenced JSON array of two tool-shaped objects and forgot the trailing
+        // `}` for the second object, so the array closed early with `]`. Autoclose
+        // should truncate at the stray `]` and recover both tool calls as long as
+        // the `"relay_tool_call": true` sentinel is present.
+        let raw = "了解しました。\n指定どおり 読み取り専用の調査として、まずツールを実行します。\n\n[\n{\n\"name\": \"glob_search\",\n\"relay_tool_call\": true,\n\"input\": {\n\"pattern\": \"**/*live_m365*\"\n}\n},\n{\n\"name\": \"grep_search\",\n\"relay_tool_call\": true,\n\"input\": {\n\"pattern\": \"relay_tool_call\",\n\"path\": \"apps/desktop/scripts\",\n\"output_mode\": \"files_with_matches\"\n}\n]\n\nツール結果が返り次第、その出力だけを根拠に報告します。";
+        let (_display, calls) = parse_initial(raw);
+        let names: Vec<&str> = calls.iter().map(|(_, name, _)| name.as_str()).collect();
+        assert!(
+            names.contains(&"glob_search"),
+            "expected glob_search in {names:?}"
+        );
+        assert!(
+            names.contains(&"grep_search"),
+            "expected grep_search in {names:?}"
+        );
+    }
+
+    #[test]
     fn parse_initial_recovers_inline_plain_text_tool_confusion_with_sentinel() {
         let raw = r#"README.md を読み取り、冒頭説明の最初の文を取得します。取得後に指定どおりの 2 行ファイルを作成します。
 
@@ -3101,6 +3235,42 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     }
 
     #[test]
+    fn pathless_html_tetris_request_with_full_document_body_escalates_to_write_file_repair() {
+        // Live capture 2026-04-17: a signed-in M365 Copilot run answered the
+        // prompt "htmlでテトリスを作成して" by streaming a complete
+        // `<!doctype html>…</html>` document inline, with no `relay_tool_call`.
+        // The goal does not name an explicit file path, so the original
+        // `is_concrete_local_file_write_goal` gate treated it as "not
+        // concrete" and no file-body repair fired, causing the harness to
+        // complete without creating `tetris.html`. The detector now short-
+        // circuits on a full-document body regardless of goal specificity.
+        let body = [
+            "以下は 単一 HTML ファイルで動く、シンプルなテトリス実装です。ブラウザでそのまま開けます。",
+            "",
+            "<!doctype html>",
+            "<html lang=\"ja\">",
+            "<head><meta charset=\"utf-8\" /><title>Tetris</title></head>",
+            "<body><canvas id=\"c\"></canvas><script>/*…*/</script></body>",
+            "</html>",
+        ]
+        .join("\n");
+        let s = summary(&body, Vec::new(), runtime::TurnOutcome::Completed);
+        let decision = decide_loop_after_success(
+            "htmlでテトリスを作成して",
+            "htmlでテトリスを作成して",
+            0,
+            0,
+            1,
+            &s,
+        );
+        let LoopDecision::Continue { next_input } = decision else {
+            panic!("expected targeted write_file repair for pathless full-document HTML body");
+        };
+        assert!(next_input.contains(r#""name": "write_file""#));
+        assert!(next_input.contains(r#""path": "tetris.html""#));
+    }
+
+    #[test]
     fn pathless_html_tetris_request_uses_default_tetris_write_file_repair() {
         let s = summary(
             "Show**Planning Tetris HTML creation**I’m preparing to use the relay tool after deciding on the filename.",
@@ -3327,6 +3497,65 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         ));
         assert!(!is_tool_protocol_confusion_text(
             "I inspected the file and here is the fix."
+        ));
+        // Live capture 2026-04-18 from a signed-in M365 Copilot repair turn:
+        // DOM extraction stabilized at exactly `{ "input": {` (12 chars) with
+        // no `"name"` key yet. The truncated-fragment branch must classify
+        // this as tool-protocol confusion so the repair escalator refires.
+        // Both the newline-separated form (from the assistant turn JSON) and
+        // the space-separated form (from the orchestrator's tracing log) must
+        // trigger — the second is the exact byte sequence observed on the
+        // 2026-04-17 rerun where the heuristic failed at runtime because the
+        // test only covered the newline form.
+        assert!(is_tool_protocol_confusion_text("{\n\"input\": {"));
+        assert!(is_tool_protocol_confusion_text("{ \"input\": {"));
+        assert!(is_tool_protocol_confusion_text(
+            "{\n\"path\": \"tetris.html\",\n\"content\":"
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "[\n{\n\"name\": \"write_file\","
+        ));
+        // Live capture 2026-04-18 (logged-in M365, original turn): the entire
+        // reply was the stripped Show/Hide planning narration with no tool
+        // call and no document body. Must classify as confusion so the repair
+        // escalator queues a stage 1/3 rewrite instead of completing cleanly.
+        assert!(is_tool_protocol_confusion_text(
+            "**Creating HTML Tetris**I'm planning to create a Tetris game in HTML with a single file that includes a canvas and controls, and I'll use Relay to save it as tetris.html."
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "I'll use the Relay write_file tool to save tetris.html now."
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Planning to create a Tetris game as a single HTML file with canvas controls."
+        ));
+        // A reply that includes the generated HTML body itself should be
+        // handled by the false_completion branch, not flagged as drift by
+        // the stripped-planning guard (which requires no `<!doctype html>` /
+        // `<html` in the text).
+        assert!(
+            !matches!(
+                (
+                    "I'll use Relay to save it. <!doctype html><html>…</html>"
+                        .to_ascii_lowercase()
+                        .contains("<!doctype html"),
+                    "I'll use Relay to save it. <!doctype html><html>…</html>"
+                        .to_ascii_lowercase()
+                        .contains("<html"),
+                ),
+                (false, false),
+            ),
+            "planning guard should short-circuit when the reply carries an HTML body",
+        );
+        // But a balanced, complete tool object is NOT confusion — the outer
+        // parser would have turned it into a tool call, and this check is
+        // only reached when `summary.tool_results.is_empty()`. Still, guard
+        // against a false positive on well-formed short objects.
+        assert!(!is_tool_protocol_confusion_text(
+            "{\"name\":\"read_file\",\"input\":{\"path\":\"README.md\"},\"relay_tool_call\":true}"
+        ));
+        // Long-form prose that happens to mention `"input"` must not match.
+        assert!(!is_tool_protocol_confusion_text(
+            "The agent previously stored data in a field labeled \"input\" inside the configuration object."
         ));
         assert!(is_meta_stall_text("Lining things up..."));
     }

@@ -968,10 +968,69 @@ fn contains_plain_relay_tool_mention(lower: &str) -> bool {
         || lower.contains("`relay_tool`")
 }
 
+/// Live capture 2026-04-18 (logged-in M365 Copilot, repair stage 1/3): the
+/// repair reply finalized at exactly `{ "input": {` — a 12-char unbalanced
+/// JSON fragment with no `"name"` key yet. `parse_initial` cannot recover a
+/// tool call from it, and none of the prose-based confusion heuristics below
+/// match, so without this check the turn classified as `outcome=Completed`
+/// with no repair queued and the session exited cleanly without ever calling
+/// `write_file`. Treat any short (<400 char) unbalanced JSON opener that
+/// mentions a tool-shape key as confusion so the repair escalator fires.
+fn looks_like_truncated_relay_tool_fragment(trimmed: &str) -> bool {
+    if trimmed.is_empty() {
+        return false;
+    }
+    let first = trimmed.chars().next();
+    if !matches!(first, Some('{') | Some('[')) {
+        return false;
+    }
+    let char_count = trimmed.chars().count();
+    if char_count > 400 {
+        return false;
+    }
+    let has_tool_key = trimmed.contains("\"name\"")
+        || trimmed.contains("\"input\"")
+        || trimmed.contains("\"path\"")
+        || trimmed.contains("\"content\"")
+        || trimmed.contains("\"arguments\"")
+        || trimmed.contains("\"parameters\"")
+        || trimmed.contains("\"relay_tool_call\"");
+    if !has_tool_key {
+        return false;
+    }
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    for ch in trimmed.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' | '[' => depth += 1,
+            '}' | ']' => depth -= 1,
+            _ => {}
+        }
+    }
+    depth > 0 || in_string
+}
+
 fn is_tool_protocol_confusion_text(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return false;
+    }
+    if looks_like_truncated_relay_tool_fragment(trimmed) {
+        return true;
     }
     let lower = trimmed.to_ascii_lowercase();
     let local_tool_refusal = lower.contains("local_tools_unavailable")
@@ -1112,6 +1171,74 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
             || lower.contains("using the available tools")
             || lower.contains("following the instructions")
             || lower.contains("addressing conflicting guidance"));
+    // Live capture 2026-04-18 (logged-in M365, original turn): the entire
+    // reply was the stripped Show/Hide planning narration —
+    // `**Creating HTML Tetris**I'm planning to create a Tetris game in HTML
+    // with a single file that includes a canvas and controls, and I'll use
+    // Relay to save it as tetris.html.` No tool call, no file body. The
+    // earlier `relay_planning_write_drift` heuristic required an intact
+    // `show**` prefix, but the DOM normalizer strips the Show/Hide chrome
+    // before the classifier sees the text, so the same drift slips past.
+    // Catch the post-strip form by matching future-tense commitments to use
+    // Relay to write/save a workspace file, in a short reply that has no
+    // relay_tool payload and no HTML document body.
+    let planning_commits_to_relay_without_payload = trimmed.chars().count() <= 800
+        && !lower.contains("\"relay_tool_call\"")
+        && !lower.contains("```relay_tool")
+        && !lower.contains("<!doctype html")
+        && !lower.contains("<html")
+        && (lower.contains("i'll use relay")
+            || lower.contains("i'll use the relay")
+            || lower.contains("i will use relay")
+            || lower.contains("i will use the relay")
+            || lower.contains("use relay to save")
+            || lower.contains("use relay to write")
+            || lower.contains("use the relay to save")
+            || lower.contains("use the relay to write")
+            || lower.contains("using relay to save")
+            || lower.contains("using relay to write")
+            || lower.contains("save it as tetris")
+            || lower.contains("save this as tetris")
+            || lower.contains("planning to create a tetris")
+            || lower.contains("planning to write tetris")
+            || lower.contains("planning to save tetris"));
+    // Live capture 2026-04-18 (logged-in M365, attempt 6 original turn):
+    // `**Deciding on file creation**I’m opting to create a simple `index.html`
+    // file in the workspace root for generating the Tetris game with a canvas
+    // and controls, avoiding unnecessary tools.` The reply explicitly refuses
+    // to invoke Relay tools ("avoiding unnecessary tools") and targets the
+    // wrong filename (`index.html` instead of the requested `tetris.html`).
+    // Both phrasings — "opting to create ..." and "avoiding unnecessary
+    // tools" — are strong drift signals on their own, and the smart-apostrophe
+    // `’` form of `I'm` did not match the ASCII `i'm` substring even once the
+    // planning branch was extended. Match either of the standalone signals
+    // plus the file-goal context so the repair escalator fires.
+    let declines_tools_for_local_write = trimmed.chars().count() <= 800
+        && !lower.contains("\"relay_tool_call\"")
+        && !lower.contains("```relay_tool")
+        && !lower.contains("<!doctype html")
+        && !lower.contains("<html")
+        && (lower.contains("avoiding unnecessary tools")
+            || lower.contains("without using tools")
+            || lower.contains("without the need for tools")
+            || lower.contains("bypassing the need for tool")
+            || lower.contains("bypassing the tool")
+            || lower.contains("no need to use tools")
+            || lower.contains("no need for tools")
+            || lower.contains("avoiding the tool")
+            || lower.contains("avoid unnecessary tool")
+            || lower.contains("opting to create")
+            || lower.contains("opting to write")
+            || lower.contains("opting to save")
+            || lower.contains("opting for a simple")
+            || lower.contains("deciding on file creation"))
+        && (lower.contains("tetris")
+            || lower.contains("tetris.html")
+            || lower.contains("index.html")
+            || lower.contains("html file")
+            || lower.contains("canvas")
+            || lower.contains("single file")
+            || lower.contains("workspace"));
     local_tool_refusal
         || local_write_refusal
         || foreign_tool_drift
@@ -1122,6 +1249,8 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || mentioned_relay_tools_without_payload
         || defers_concrete_local_read_without_tool
         || defers_concrete_local_write_without_tool
+        || planning_commits_to_relay_without_payload
+        || declines_tools_for_local_write
         || is_repair_refusal_text(trimmed)
 }
 
@@ -8080,6 +8209,51 @@ mod loop_controller_tests {
         ));
         assert!(!is_tool_protocol_confusion_text(
             "I inspected the file and here is the fix."
+        ));
+        // Live capture 2026-04-18 (logged-in M365 Copilot, repair stage 1/3):
+        // DOM extraction stabilized at exactly `{ "input": {` (12 chars) with
+        // no `"name"` key yet. Both the newline- and space-separated forms
+        // occur in practice — the orchestrator's tracing::info! format shows
+        // the space variant, the session state snapshot shows the newline
+        // variant. The truncated-fragment branch must classify both as
+        // confusion so the repair escalator refires instead of completing.
+        assert!(is_tool_protocol_confusion_text("{\n\"input\": {"));
+        assert!(is_tool_protocol_confusion_text("{ \"input\": {"));
+        assert!(is_tool_protocol_confusion_text(
+            "{\n\"path\": \"tetris.html\",\n\"content\":"
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "[\n{\n\"name\": \"write_file\","
+        ));
+        // Long-form prose that happens to mention `"input"` must not match.
+        assert!(!is_tool_protocol_confusion_text(
+            "The agent previously stored data in a field labeled \"input\" inside the configuration object."
+        ));
+        // Live capture 2026-04-18 (logged-in M365, original turn): the entire
+        // reply was the stripped Show/Hide planning narration with no tool
+        // call and no document body. Must classify as confusion so the repair
+        // escalator queues a stage 1/3 rewrite instead of completing cleanly.
+        assert!(is_tool_protocol_confusion_text(
+            "**Creating HTML Tetris**I'm planning to create a Tetris game in HTML with a single file that includes a canvas and controls, and I'll use Relay to save it as tetris.html."
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "I'll use the Relay write_file tool to save tetris.html now."
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Planning to create a Tetris game as a single HTML file with canvas controls."
+        ));
+        // Live capture 2026-04-18 (logged-in M365, attempt 6 original turn):
+        // the reply both targeted the wrong filename and explicitly refused to
+        // invoke Relay tools. Must classify as confusion so the repair
+        // escalator queues a rewrite instead of completing cleanly.
+        assert!(is_tool_protocol_confusion_text(
+            "**Deciding on file creation**I’m opting to create a simple `index.html` file in the workspace root for generating the Tetris game with a canvas and controls, avoiding unnecessary tools."
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Opting to create a single-file Tetris. Canvas and controls inline."
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Bypassing the tool search; writing the Tetris HTML body inline instead."
         ));
     }
 
