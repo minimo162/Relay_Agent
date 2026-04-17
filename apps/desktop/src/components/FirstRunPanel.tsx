@@ -100,7 +100,7 @@ export function FirstRunPanel(props: {
       <div class="ra-first-run__card">
         <div class="ra-first-run__intro">
           <p class="ra-empty-state__eyebrow">Relay Agent</p>
-          <h1 class={`ra-type-title-sm ${ui.textPrimary}`}>Start with the outcome you need.</h1>
+          <h1 class="ra-first-run__hero-heading">Start with the outcome you need.</h1>
           <p class={`ra-type-body-sans ${ui.textSecondary}`}>
             Set the project, confirm Copilot, and keep working in this same conversation.
           </p>
