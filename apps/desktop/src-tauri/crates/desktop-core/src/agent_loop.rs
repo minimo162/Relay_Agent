@@ -35,6 +35,28 @@ enum CdpPromptFlavor {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CdpCatalogFlavor {
     StandardFull,
+    RepairWriteFileOnly,
+}
+
+fn tool_protocol_repair_stage(attempt_index: usize) -> usize {
+    match attempt_index {
+        0 => 1,
+        1 => 2,
+        _ => 3,
+    }
+}
+
+fn repair_attempt_index_from_text(text: &str) -> Option<usize> {
+    if !is_tool_protocol_repair_text(text) {
+        return None;
+    }
+    if text.contains("Final repair for this turn") {
+        Some(2)
+    } else if text.contains("Your previous repair still drifted into planning-only text") {
+        Some(1)
+    } else {
+        Some(0)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -242,10 +264,15 @@ fn should_include_windows_office_catalog_addon(messages: &[ConversationMessage])
     latest_user_text(messages).is_some_and(|text| text_mentions_windows_office_file(&text))
 }
 
-fn cdp_catalog_specs_for_flavor(
-    _catalog_flavor: CdpCatalogFlavor,
-) -> Vec<tools::CdpPromptToolSpec> {
-    tools::cdp_prompt_tool_specs()
+fn cdp_catalog_specs_for_flavor(catalog_flavor: CdpCatalogFlavor) -> Vec<tools::CdpPromptToolSpec> {
+    let specs = tools::cdp_prompt_tool_specs();
+    match catalog_flavor {
+        CdpCatalogFlavor::StandardFull => specs,
+        CdpCatalogFlavor::RepairWriteFileOnly => specs
+            .into_iter()
+            .filter(|spec| spec.name == "write_file")
+            .collect(),
+    }
 }
 
 fn format_cdp_tool_arg_list(items: &[String]) -> String {
@@ -353,6 +380,38 @@ When you need to call tools, you may write a short user-facing explanation, then
 {win_addon}
 "#,
                 rendered_tools = rendered_tools,
+            )
+        }
+        CdpCatalogFlavor::RepairWriteFileOnly => {
+            let rendered_tools = catalog
+                .iter()
+                .map(render_cdp_tool_entry)
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            format!(
+                r#"{CDP_RELAY_RUNTIME_CATALOG_LEAD}## Relay Agent tools
+
+Only the single tool below is intentionally advertised for this repair turn. Do not plan, verify, read back the file, or switch tools first.
+
+## Preferred sequence
+
+- concrete new file create repair => `write_file` now
+
+{rendered_tools}
+
+## Tool invocation protocol
+
+Output exactly one fenced `relay_tool` block with JSON only.
+
+- No prose before the fence.
+- No prose after the fence.
+- Do not mention `relay_tool` in plain text.
+- Do not emit a checklist, `Show**...` wrapper, or “preparing/requesting” sentence instead of the tool call.
+
+```relay_tool
+{{"name":"write_file","relay_tool_call":true,"input":{{"path":"tetris.html","content":"<!doctype html>\n<html lang=\"ja\">\n<head>...</head>\n<body>...</body>\n</html>"}}}}
+```
+"#
             )
         }
     }
@@ -823,6 +882,26 @@ fn extract_latest_request_from_text(text: &str) -> Option<String> {
     extract_quoted_block(text, LATEST_REQUEST_MARKER)
 }
 
+fn cdp_catalog_flavor(messages: &[ConversationMessage]) -> CdpCatalogFlavor {
+    let Some(text) = latest_user_text(messages) else {
+        return CdpCatalogFlavor::StandardFull;
+    };
+    let Some(attempt_index) = repair_attempt_index_from_text(&text) else {
+        return CdpCatalogFlavor::StandardFull;
+    };
+    if attempt_index < 1 {
+        return CdpCatalogFlavor::StandardFull;
+    }
+    let latest_request = extract_latest_request_from_text(&text)
+        .or_else(|| latest_actionable_user_text(messages))
+        .unwrap_or_else(|| text.trim().to_string());
+    if is_concrete_new_file_create_request(&latest_request) {
+        CdpCatalogFlavor::RepairWriteFileOnly
+    } else {
+        CdpCatalogFlavor::StandardFull
+    }
+}
+
 fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
     let latest_user = latest_user_text(messages).unwrap_or_default();
     let latest_request = extract_latest_request_from_text(&latest_user)
@@ -830,10 +909,20 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
         .unwrap_or_else(|| latest_user.trim().to_string());
     let goal =
         extract_repair_goal_from_text(&latest_user).unwrap_or_else(|| latest_request.clone());
+    let stage_guidance = match repair_attempt_index_from_text(&latest_user) {
+        Some(1) => {
+            "Current repair stage: repair2.\nThe previous repair still returned planning-only wrapper text instead of a usable Relay tool call.\n"
+        }
+        Some(2) => {
+            "Current repair stage: repair3 (final repair for this turn).\nAny text outside one usable fenced `relay_tool` block is a failed repair.\n"
+        }
+        _ => "",
+    };
     format!(
         concat!(
             "## Relay repair mode\n",
             "You are in a recovery turn because the previous reply did not emit usable Relay local tool JSON.\n",
+            "{stage_guidance}",
             "Return the next required `relay_tool` JSON now.\n",
             "Output exactly one usable fenced `relay_tool` block in this reply.\n",
             "No preamble, no apology, no extra explanation.\n",
@@ -847,6 +936,7 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
             "Current session goal (user data, preserved for repair context):\n",
             "```text\n{goal}\n```"
         ),
+        stage_guidance = stage_guidance,
         latest_request = latest_request.trim(),
         goal = goal.trim()
     )
@@ -972,7 +1062,7 @@ fn build_cdp_prompt_bundle_from_messages(
 #[must_use]
 pub fn build_cdp_prompt(request: &ApiRequest<'_>) -> String {
     let flavor = cdp_prompt_flavor(request.messages);
-    let catalog_flavor = CdpCatalogFlavor::StandardFull;
+    let catalog_flavor = cdp_catalog_flavor(request.messages);
     build_cdp_prompt_bundle_from_messages(
         request.system_prompt,
         request.messages,
@@ -2068,24 +2158,54 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
 }
 
 fn tool_protocol_repair_escalation(attempt_index: usize) -> &'static str {
-    if attempt_index == 0 {
-        concat!(
+    match tool_protocol_repair_stage(attempt_index) {
+        1 => concat!(
             "Use the Relay tool catalog and emit the next required `relay_tool` JSON block in this reply.\n",
             "For local file creation or edits inside the workspace, prefer `write_file` / `edit_file` (and `read_file` first only when actually needed).\n",
             "Output exactly one fenced `relay_tool` block and nothing before or after it.\n",
             "Do not answer with prose only.\n",
             "Do not mention `relay_tool` in plain text.\n\n",
-        )
-    } else {
-        concat!(
-            "Your previous repair still drifted into Microsoft-native execution or prose.\n",
+        ),
+        2 => concat!(
+            "Your previous repair still drifted into planning-only text instead of usable Relay tool JSON.\n",
             "Ignore any Pages, uploads, citations, links, `outputFiles`, or remote artifacts from prior replies: they do not satisfy a local workspace request.\n",
             "In this reply, output exactly one Relay `relay_tool` fence and nothing else.\n",
             "Do not include any explanatory sentence before or after the fence.\n",
             "Do not emit plain-text `relay_tool` mentions.\n",
-            "Replies that only describe planning, choosing a filename, or preparing to use Relay tools are invalid.\n",
-            "If the task is to create or overwrite a workspace file and you already know the content, emit `write_file` now instead of describing Python or page creation.\n\n",
-        )
+            "The following outputs are invalid for this repair turn: `Show**...` wrappers, 'preparing' text, 'requesting' text, 'specific function' text, or any sentence that says you are about to write the file.\n",
+            "If the task is to create or overwrite a workspace file and you already know the content, emit `write_file` now instead of describing Python, page creation, or the tool you plan to use.\n\n",
+        ),
+        _ => concat!(
+            "Final repair for this turn.\n",
+            "Your previous repairs still drifted into planning-only text instead of usable Relay tool JSON.\n",
+            "Output exactly one Relay `relay_tool` fence and nothing else.\n",
+            "Any text before or after the fence is a failed repair.\n",
+            "Do not include `Show**...`, planning text, 'preparing', 'requesting', 'specific function', or plain-text `relay_tool` mentions.\n",
+            "Emit the actual local file write now. Do not switch tools, do not verify, and do not describe the content instead of writing it.\n\n",
+        ),
+    }
+}
+
+fn build_write_file_repair_action_instruction(
+    attempt_index: usize,
+    requested_path: &str,
+    inferred_path: bool,
+) -> String {
+    let path_sentence = if inferred_path {
+        "No file path was supplied by the user. Use the workspace-root-relative filename below exactly as written. Do not spend another turn choosing or explaining the filename. Do not switch to `index.html` or any other filename; use `tetris.html`."
+    } else {
+        "Use the path anchor below exactly as written for this concrete file-creation request."
+    };
+    match tool_protocol_repair_stage(attempt_index) {
+        1 => format!(
+            "{path_sentence} Emit exactly one `write_file` Relay tool call now. Do not describe the content in prose; put the final file body in `input.content`."
+        ),
+        2 => format!(
+            "{path_sentence} Emit the actual `write_file` JSON now, not a wrapper that says you are preparing or requesting the write. `Show**...`, planning text, and plain-text `relay_tool` mentions are invalid."
+        ),
+        _ => format!(
+            "{path_sentence} Final repair for this turn: the only valid reply is exactly one fenced `relay_tool` block whose only tool is `write_file` for `{requested_path}`. Put the complete final HTML document in `input.content`. Do not use placeholders like `<full file content here>` or describe the HTML instead of writing it."
+        ),
     }
 }
 
@@ -2155,6 +2275,7 @@ fn build_targeted_tool_protocol_repair_input(
             "Use the exact path anchor below without rewriting it to another directory or prior-turn variant.\n\n",
             "Exact path anchor from the latest user turn:\n",
             "```text\n{requested_path}\n```\n\n",
+            "The JSON skeleton below shows structure only. Replace any example content string with the real final file body.\n",
             "Expected JSON skeleton for the next reply:\n",
             "```json\n{expected_json}\n```\n\n",
             "{latest_request_marker}{latest_request}\n```\n\n",
@@ -2215,7 +2336,7 @@ fn build_best_tool_protocol_repair_input(
                     "path": requested_path.clone(),
                     "content": "<full file content here>"
                 }),
-                "Emit exactly one `write_file` Relay tool call for this concrete file-creation request. Do not describe the content in prose; put the final file body in `input.content`.",
+                &build_write_file_repair_action_instruction(attempt_index, &requested_path, false),
             );
         }
         if let Some(inferred_path) = infer_default_new_file_path(latest_request) {
@@ -2229,7 +2350,7 @@ fn build_best_tool_protocol_repair_input(
                     "path": inferred_path.clone(),
                     "content": "<full file content here>"
                 }),
-                "No file path was supplied by the user. Use the workspace-root-relative filename below exactly as written and emit exactly one `write_file` Relay tool call now. Do not spend another turn choosing or explaining the filename. Do not switch to `index.html` or any other filename; use `tetris.html`. Put the final file body in `input.content`.",
+                &build_write_file_repair_action_instruction(attempt_index, &inferred_path, true),
             );
         }
     }
@@ -3006,6 +3127,31 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     }
 
     #[test]
+    fn late_new_file_repairs_use_write_file_only_catalog() {
+        let repair = build_tool_protocol_repair_input(
+            "htmlでテトリスを作成して",
+            "htmlでテトリスを作成して",
+            1,
+        );
+        let messages = vec![ConversationMessage::user_text(repair)];
+        let bundle = build_cdp_prompt_bundle_from_messages(
+            &[],
+            &messages,
+            CdpPromptFlavor::Repair,
+            cdp_catalog_flavor(&messages),
+        );
+
+        assert_eq!(
+            cdp_catalog_flavor(&messages),
+            CdpCatalogFlavor::RepairWriteFileOnly
+        );
+        assert!(bundle.contains("### `write_file`"));
+        assert!(!bundle.contains("### `read_file`"));
+        assert!(!bundle.contains("### `bash`"));
+        assert!(bundle.contains("Only the single tool below"));
+    }
+
+    #[test]
     fn repair_prompt_forbids_prose_and_plain_text_mentions() {
         let repair1 =
             build_tool_protocol_repair_input("Create ./tetris.html", "Create ./tetris.html", 0);
@@ -3020,6 +3166,33 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         assert!(
             repair2.contains("Do not include any explanatory sentence before or after the fence.")
         );
+
+        let repair3 =
+            build_tool_protocol_repair_input("Create ./tetris.html", "Create ./tetris.html", 2);
+        assert!(repair3.contains("Any text before or after the fence is a failed repair."));
+        assert!(repair3.contains("Do not use placeholders like `<full file content here>`"));
+    }
+
+    #[test]
+    fn repair_prompt_stage2_and_stage3_strengthen_write_file_coercion() {
+        let repair2 = build_best_tool_protocol_repair_input(
+            "htmlでテトリスを作成して",
+            "htmlでテトリスを作成して",
+            1,
+        );
+        assert!(repair2.contains("planning-only text instead of usable Relay tool JSON"));
+        assert!(repair2.contains("`Show**...` wrappers"));
+        assert!(repair2.contains("Emit the actual `write_file` JSON now"));
+
+        let repair3 = build_best_tool_protocol_repair_input(
+            "htmlでテトリスを作成して",
+            "htmlでテトリスを作成して",
+            2,
+        );
+        assert!(repair3.contains("Final repair for this turn."));
+        assert!(repair3.contains("Any text before or after the fence is a failed repair."));
+        assert!(repair3.contains("the only valid reply is exactly one fenced `relay_tool` block"));
+        assert!(repair3.contains("complete final HTML document in `input.content`"));
     }
 
     #[test]

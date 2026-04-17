@@ -6164,3 +6164,61 @@ Current conclusion after this follow-up:
 - The approved pass succeeded in tightening confusion detection and HTML post-write grounding, but the newest live rerun shows the remaining blocker has shifted back to repeated repair-stage prose drift before any usable `write_file` payload is emitted.
 - That means the remaining issue is no longer specifically the old post-write `bash` / “unescape” path in this run; instead the session exhausts all three repair nudges on progressively narrower prose-only planning/request wrappers.
 - If the next iteration stays within this milestone, the remaining work should target stronger repair-turn coercion and/or repair-budget policy rather than more `.html` post-write summary text alone.
+
+## 2026-04-17 - Live full success after repair coercion tightening
+
+Commands run:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all
+node --check apps/desktop/scripts/live_m365_tetris_html_smoke.mjs
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml repair_prompt_stage2_and_stage3_strengthen_write_file_coercion -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml late_new_file_repairs_use_write_file_only_catalog -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml pathless_html_tetris_request_uses_default_tetris_write_file_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml tool_protocol_confusion_heuristic_catches_foreign_tool_drift -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml build_cdp_prompt_ -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml repair_prompt_stage2_and_stage3_strengthen_write_file_coercion -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml late_new_file_repairs_use_write_file_only_catalog -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_repair_stage_labels_distinguish_all_three_repairs -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml pathless_html_tetris_request_uses_default_tetris_write_file_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_confusion_heuristic_catches_foreign_tool_drift -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml build_cdp_prompt_ -- --nocapture
+pnpm live:m365:tetris-html
+pnpm check
+```
+
+Implemented changes in both duplicated loop/prompt copies:
+
+- split tool-protocol repair escalation into three concrete stages instead of the previous `0` vs `>=1` split
+- stage 2 now explicitly rejects the observed prose wrappers (`Show**...`, “preparing”, “requesting”, “specific function”, plain-text `relay_tool`)
+- stage 3 now treats any text outside one fenced `relay_tool` block as a failed repair and requires a single `write_file` call with the final HTML in `input.content`
+- added `CdpCatalogFlavor::RepairWriteFileOnly` and switched late concrete new-file repairs onto a `write_file`-only advertised catalog so Copilot is not invited to switch to `read_file`, `bash`, or other tools before the first write
+- expanded the internal repair-stage labeling to `repair1` / `repair2` / `repair3` and kept fresh-chat behavior for all tool-protocol repair turns
+- added focused regressions for the stronger repair text, write-only repair catalog, pathless `tetris.html` repair targeting, and three-stage repair labeling
+
+Observed live outcome:
+
+- `pnpm live:m365:tetris-html`: passed with artifact `/tmp/relay-live-m365-tetris-html-afW3Gv`
+- harness result: `status = passed`, `stage = validate_output`
+- session result: `lastStopReason = completed`
+- `outputExists = true`
+- `outputPath = /root/Relay_Agent/tetris.html`
+- `outputSha256 = 4161b22a9466d6baa6b798d5b9274fe400f53cb42e634186135a6c0a12c3888e`
+- `outputBytes = 20059`
+- `indexHtmlCreated = false`
+- `escapedHtmlDetected = false`
+- `toolUseCounts = { "write_file": 1 }`
+- `toolResultCounts = { "write_file": 1 }`
+
+Notable behavior in the successful live run:
+
+- this rerun did not enter the repair loop at all; Copilot produced a successful `write_file` path on the first turn and then stopped cleanly without the earlier post-write `bash` drift
+- the final assistant prose still contained Copilot chrome-like `Show**Responding concisely**...` duplication, but it arrived after a successful `write_file` tool result and the Relay session still terminated as `completed`
+- the success artifact proves the current app path can now reach the original goal end-to-end and leave a valid workspace-root `tetris.html`
+
+Verification summary:
+
+- `node --check apps/desktop/scripts/live_m365_tetris_html_smoke.mjs`: passed
+- all listed focused `cargo test` commands passed in both `desktop-core` and the desktop app crate
+- `pnpm live:m365:tetris-html`: passed, producing `/tmp/relay-live-m365-tetris-html-afW3Gv` and `/root/Relay_Agent/tetris.html`
+- `pnpm check`: passed
