@@ -6110,3 +6110,57 @@ Results:
 - `build_cdp_prompt_ ...`: passed in both `desktop-core` and the desktop app crate after adding the `.html read_file` anti-shell guidance.
 - `pnpm live:m365:tetris-html`: still failing overall, but now leaves reusable artifacts for each rerun and proved one live path (`/tmp/relay-live-m365-tetris-html-ETT5Nf`) where Relay actually created a valid `tetris.html` before the model drifted into an unnecessary `bash` approval.
 - `pnpm check`: passed.
+
+Additional follow-up on 2026-04-17 after the approved live full-success hardening pass:
+
+- Tightened both duplicated loop/parser copies in [`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs) and [`apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs`](../apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs) so the prose-only `Show**...requesting...written` shape is caught more generally, including the observed `Show**Requesting HTML file creation**... requesting the content of tetris.html to be written` wording.
+- The same two files now summarize successful `.html` `write_file` / `read_file` tool results more explicitly for CDP follow-up: valid HTML writes are marked as already satisfying the local create request, and valid HTML reads are marked as already-decoded so Copilot is told not to re-check or “unescape” them with `read_file`, `bash`, `PowerShell`, backups, or copy commands.
+- Repair-mode grounding in both duplicated prompt builders now also says that a successful valid `.html` `write_file` should be treated as task completion unless the user explicitly asked for verification or more edits.
+- Added/updated Rust regressions covering the new prose-only drift variants plus the HTML follow-up summary/grounding behavior in both duplicated implementations.
+
+Commands run for this follow-up:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all
+node --check apps/desktop/scripts/live_m365_tetris_html_smoke.mjs
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml tool_protocol_confusion_heuristic_catches_foreign_tool_drift -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_confusion_heuristic_catches_foreign_tool_drift -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml build_cdp_prompt_ -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml build_cdp_prompt_ -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml write_file_success_is_summarized_for_html_followup -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml read_file_success_summarizes_decoded_html_guidance -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml write_file_success_is_summarized_for_cdp_followup -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml read_file_success_renders_raw_content_from_json -- --nocapture
+pnpm live:m365:tetris-html
+pnpm check
+```
+
+Results from those commands:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all`: passed.
+- `node --check apps/desktop/scripts/live_m365_tetris_html_smoke.mjs`: passed.
+- All listed focused Rust tests passed in both `desktop-core` and the desktop app crate after the new heuristic/summary changes.
+- `pnpm check`: passed.
+- `pnpm live:m365:tetris-html`: still failed overall, with new artifact `/tmp/relay-live-m365-tetris-html-kROO6N`.
+
+Observed live outcome for `/tmp/relay-live-m365-tetris-html-kROO6N`:
+
+- Harness result: `kind = session_stopped`, `lastStopReason = meta_stall`
+- `outputExists = false`
+- `indexHtmlCreated = false`
+- `escapedHtmlDetected = false`
+- No workspace-root `tetris.html` persisted from this rerun
+- The live session never reached the earlier post-write verification path, so the new `.html` tool-result summary guidance was not exercised in this run
+
+Observed assistant drift chain in that rerun:
+
+- original reply: `Show**Creating Tetris HTML file**Planning to create a Tetris HTML file using Relay tools to write the file in the workspace root, without needing Office365 search.Hide了解了解`
+- repair 1/3: `Show**Requesting file creation**I am preparing to create an HTML file containing Tetris content, which includes JavaScript.Hide```````
+- repair 2/3: `Show**Preparing file output**I am generating the output for the tetris.html file using the specified format, ensuring it contains full HTML and JavaScript without any additional text.Hide```````
+- repair 3/3: `Show**Requesting specific function**I am focusing on implementing a single HTML file for a Tetris game using the relay_tool's write_file function.Hide```````
+
+Current conclusion after this follow-up:
+
+- The approved pass succeeded in tightening confusion detection and HTML post-write grounding, but the newest live rerun shows the remaining blocker has shifted back to repeated repair-stage prose drift before any usable `write_file` payload is emitted.
+- That means the remaining issue is no longer specifically the old post-write `bash` / “unescape” path in this run; instead the session exhausts all three repair nudges on progressively narrower prose-only planning/request wrappers.
+- If the next iteration stays within this milestone, the remaining work should target stronger repair-turn coercion and/or repair-budget policy rather than more `.html` post-write summary text alone.

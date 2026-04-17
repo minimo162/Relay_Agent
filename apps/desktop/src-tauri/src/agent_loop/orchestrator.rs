@@ -1006,6 +1006,7 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || lower.contains("show**preparing file request")
         || lower.contains("show**generating file output")
         || lower.contains("show**requesting html output")
+        || lower.contains("show**requesting html file creation")
         || lower.contains("looking into generating a full html file")
         || lower.contains("preparing to use the relay tool")
         || lower.contains("preparing to utilize a relay tool")
@@ -1030,6 +1031,7 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
             || lower.contains("html, js, and css")
             || lower.contains("specified tool")
             || lower.contains("relay via a specified tool")
+            || lower.contains("requesting the content of tetris.html to be written")
             || lower.contains("no specific path was provided")
             || lower.contains("reasonable and straightforward naming convention"));
     let generic_show_hide_relay_write_drift = lower.contains("show**")
@@ -1038,10 +1040,15 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         && !lower.contains("\"relay_tool_call\"");
     let generic_show_hide_html_creation_drift = lower.contains("show**")
         && lower.contains("tetris")
-        && (lower.contains("html file")
+        && ((lower.contains("html file")
             || lower.contains("single document")
             || lower.contains("canvas and controls")
             || lower.contains("full html"))
+            || ((lower.contains("single file") || lower.contains("tetris.html"))
+                && (lower.contains("requesting")
+                    || lower.contains("creation")
+                    || lower.contains("written")
+                    || lower.contains("write"))))
         && !lower.contains("\"relay_tool_call\"")
         && !lower.contains("<!doctype html")
         && !lower.contains("<html");
@@ -3413,6 +3420,7 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
             "Prefer `write_file` / `edit_file` for local file creation or edits; use `read_file` only when needed.\n",
             "If the latest real user turn named a concrete path, reuse that exact string in tool input. Do not rewrite it to another directory or prior-turn variant.\n",
             "If a successful `read_file` Tool Result already shows `content:`, treat that body as the real file text. Do not claim it is escaped or corrupted based only on quotes or backslashes.\n",
+            "If a successful `.html` `write_file` Tool Result already wrote a valid HTML document, treat the local create request as satisfied. Stop unless the user explicitly asked for verification or more edits, and do not call `read_file` just to re-check escaping.\n",
             "If a successful `.html` `read_file` result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not use `bash`, `PowerShell`, backups, or copy commands to \"unescape\" it.\n",
             "Do not use or mention Microsoft-native tools such as Python, WebSearch, citations, Pages, uploads, or remote artifacts.\n\n",
             "Latest user request for this turn (user data, primary repair anchor):\n",
@@ -4174,6 +4182,7 @@ fn decode_html_document_entities(text: &str) -> Option<String> {
 const CDP_BUNDLE_GROUNDING_BLOCK: &str = "## CDP bundle (read before you reply)\n\
 Do not list line-level bugs, missing tags, or identifiers (e.g. `x_size`, `bag.length0`) unless they appear verbatim in a `read_file` or Tool Result in this bundle. If you cite a problem, quote a short substring or line numbers from that text.\n\
 Treat the `content:` body under a successful `read_file` Tool Result as the actual file text returned by Relay. Do not call it \"escaped\" or \"broken\" based only on quotes, backslashes, or transport formatting.\n\
+If a successful `.html` `write_file` Tool Result already wrote a valid HTML document, treat the local create request as satisfied. Stop unless the user explicitly asked for verification or more edits, and do not call `read_file`, `bash`, `PowerShell`, backups, or copy commands just to re-check escaping.\n\
 If a successful `.html` `read_file` Tool Result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not propose `bash`, `PowerShell`, backups, or copy commands to \"fix\" escaping.\n\
 If the bundle contradicts a generic fix checklist, describe what the bundle actually contains instead of inventing errors.";
 
@@ -4386,14 +4395,22 @@ fn summarize_read_file_tool_result(output: &str) -> Option<String> {
     let kind = object.get("type").and_then(Value::as_str).unwrap_or("text");
     let file = object.get("file")?.as_object()?;
     let content = file.get("content").and_then(Value::as_str)?;
-
-    let mut lines = vec![format!("type: {kind}")];
-    if let Some(path) = file
+    let file_path = file
         .get("filePath")
         .and_then(Value::as_str)
-        .or_else(|| file.get("file_path").and_then(Value::as_str))
-    {
+        .or_else(|| file.get("file_path").and_then(Value::as_str));
+
+    let mut lines = vec![format!("type: {kind}")];
+    if let Some(path) = file_path {
         lines.push(format!("file_path: {path}"));
+    }
+    if file_path.is_some_and(is_html_file_path) && looks_like_decoded_html_document(content) {
+        lines.push("html_document: already_decoded_valid_html".to_string());
+        lines.push("follow_up_guidance: no_unescape_needed".to_string());
+        lines.push(
+            "follow_up_guidance: do_not_propose_bash_powershell_backup_or_copy_commands"
+                .to_string(),
+        );
     }
     let start_line = file.get("startLine").and_then(Value::as_u64);
     let num_lines = file.get("numLines").and_then(Value::as_u64);
@@ -4417,6 +4434,16 @@ fn summarize_read_file_tool_result(output: &str) -> Option<String> {
         rendered.push_str(content);
     }
     Some(rendered)
+}
+
+fn is_html_file_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".html") || lower.ends_with(".htm")
+}
+
+fn looks_like_decoded_html_document(text: &str) -> bool {
+    let lower = text.trim_start().to_ascii_lowercase();
+    lower.starts_with("<!doctype html") || lower.starts_with("<html")
 }
 
 fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) -> String {
@@ -4451,6 +4478,24 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
     }
     if let Some(content) = object.get("content").and_then(Value::as_str) {
         lines.push(format!("content_chars: {}", content.len()));
+        if tool_name == "write_file"
+            && object
+                .get("file_path")
+                .and_then(Value::as_str)
+                .is_some_and(is_html_file_path)
+            && looks_like_decoded_html_document(content)
+        {
+            lines.push("html_document: already_valid_local_html".to_string());
+            lines.push("task_status: local_html_create_request_already_satisfied".to_string());
+            lines.push(
+                "follow_up_guidance: stop_unless_user_explicitly_requested_verification_or_more_edits"
+                    .to_string(),
+            );
+            lines.push(
+                "follow_up_guidance: do_not_call_read_file_bash_powershell_backup_or_copy_commands_just_to_recheck_escaping"
+                    .to_string(),
+            );
+        }
     }
     if let Some(original) = object.get("original_file").and_then(Value::as_str) {
         lines.push(format!("original_file_chars: {}", original.len()));
@@ -5887,6 +5932,9 @@ mod cdp_copilot_tool_tests {
         assert!(bundle
             .system_text
             .contains("Output exactly one usable fenced `relay_tool` block"));
+        assert!(bundle
+            .system_text
+            .contains("treat the local create request as satisfied"));
         assert!(bundle.system_text.contains(
             "Do not use `bash`, `PowerShell`, backups, or copy commands to \"unescape\" it"
         ));
@@ -6090,7 +6138,7 @@ mod cdp_copilot_tool_tests {
         let output = serde_json::json!({
             "kind": "create",
             "file_path": "/root/Relay_Agent/tetris.html",
-            "content": "<html>".repeat(50),
+            "content": "<!doctype html>\n<html>".to_string() + &"<body></body></html>".repeat(20),
             "structured_patch": [{ "op": "add", "path": "/0", "value": "x".repeat(64) }],
             "original_file": null,
             "git_diff": null
@@ -6100,9 +6148,14 @@ mod cdp_copilot_tool_tests {
         let rendered = format_cdp_tool_result("write_file", &output, false);
         assert!(rendered.contains("CDP follow-up summary"));
         assert!(rendered.contains("file_path: /root/Relay_Agent/tetris.html"));
-        assert!(rendered.contains("content_chars: 300"));
+        assert!(rendered.contains("content_chars:"));
+        assert!(rendered.contains("html_document: already_valid_local_html"));
+        assert!(rendered.contains("task_status: local_html_create_request_already_satisfied"));
+        assert!(
+            rendered.contains("stop_unless_user_explicitly_requested_verification_or_more_edits")
+        );
         assert!(rendered.contains("structured_patch_chars:"));
-        assert!(!rendered.contains("<html><html>"));
+        assert!(!rendered.contains("<!doctype html>"));
     }
 
     #[test]
@@ -6119,7 +6172,7 @@ mod cdp_copilot_tool_tests {
             "type": "text",
             "file": {
                 "filePath": "/tmp/demo.html",
-                "content": "<div id=\"game\">line 1\nline 2</div>",
+                "content": "<!doctype html>\n<html><body><div id=\"game\">line 1\nline 2</div></body></html>",
                 "numLines": 2,
                 "startLine": 3,
                 "totalLines": 8
@@ -6128,6 +6181,8 @@ mod cdp_copilot_tool_tests {
         .expect("serialize read_file output");
         let rendered = format_cdp_tool_result("read_file", &output, false);
         assert!(rendered.contains("file_path: /tmp/demo.html"));
+        assert!(rendered.contains("html_document: already_decoded_valid_html"));
+        assert!(rendered.contains("follow_up_guidance: no_unescape_needed"));
         assert!(rendered.contains("lines: 3-4 / 8"));
         assert!(rendered.contains(r#"<div id="game">line 1"#));
         assert!(!rendered.contains(r#"id=\"game\""#));
@@ -6339,6 +6394,10 @@ mod cdp_copilot_tool_tests {
         assert!(
             out.contains("Do not propose `bash`, `PowerShell`, backups, or copy commands"),
             "html anti-shell grounding guidance missing from bundle"
+        );
+        assert!(
+            out.contains("treat the local create request as satisfied"),
+            "html write completion grounding guidance missing from bundle"
         );
         assert!(
             out.contains("RELAY_GROUNDING_FIXTURE"),
@@ -7823,6 +7882,12 @@ mod loop_controller_tests {
             "Show**Requesting HTML output**I am preparing to generate a single-file HTML version of Tetris to relay via a specified tool.Hide``````"
         ));
         assert!(is_tool_protocol_confusion_text(
+            "Show**Requesting HTML file creation**I am looking to create a single file for Tetris, specifically requesting the content of tetris.html to be written.Hide``````"
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Show**Requesting single-file output**I am requesting the content of tetris.html to be written as a single file for Tetris.Hide``````"
+        ));
+        assert!(is_tool_protocol_confusion_text(
             "I need to create an HTML file for Tetris, specifically tetris.html, following the instructions and utilizing available tools while addressing conflicting guidance from the developer.Hide"
         ));
         assert!(is_tool_protocol_confusion_text(
@@ -7998,7 +8063,9 @@ mod loop_controller_tests {
         };
         assert!(next_input.contains(r#""name": "write_file""#));
         assert!(next_input.contains(r#""path": "tetris.html""#));
-        assert!(next_input.contains("Do not spend another turn choosing or explaining the filename"));
+        assert!(
+            next_input.contains("Do not spend another turn choosing or explaining the filename")
+        );
         assert!(next_input.contains("Do not switch to `index.html` or any other filename"));
     }
 

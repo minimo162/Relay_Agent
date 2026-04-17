@@ -239,11 +239,12 @@ fn text_mentions_windows_office_file(text: &str) -> bool {
 }
 
 fn should_include_windows_office_catalog_addon(messages: &[ConversationMessage]) -> bool {
-    latest_user_text(messages)
-        .is_some_and(|text| text_mentions_windows_office_file(&text))
+    latest_user_text(messages).is_some_and(|text| text_mentions_windows_office_file(&text))
 }
 
-fn cdp_catalog_specs_for_flavor(_catalog_flavor: CdpCatalogFlavor) -> Vec<tools::CdpPromptToolSpec> {
+fn cdp_catalog_specs_for_flavor(
+    _catalog_flavor: CdpCatalogFlavor,
+) -> Vec<tools::CdpPromptToolSpec> {
     tools::cdp_prompt_tool_specs()
 }
 
@@ -839,6 +840,7 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
             "Use the current Relay tool catalog in this prompt; do not invent unavailable tools.\n",
             "If the latest real user turn named a concrete path, reuse that exact string in tool input.\n",
             "Do not claim a successful `read_file` result is escaped or corrupted based only on quotes or backslashes.\n\n",
+            "If a successful `.html` `write_file` Tool Result already wrote a valid HTML document, treat the local create request as satisfied. Stop unless the user explicitly asked for verification or more edits, and do not call `read_file` just to re-check escaping.\n\n",
             "If a successful `.html` `read_file` result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not use `bash`, `PowerShell`, backups, or copy commands to \"unescape\" it.\n\n",
             "Latest user request for this turn (user data, primary repair anchor):\n",
             "```text\n{latest_request}\n```\n\n",
@@ -853,6 +855,7 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
 const CDP_BUNDLE_GROUNDING_BLOCK: &str = "## CDP bundle (read before you reply)\n\
 Do not list line-level bugs, missing tags, or identifiers unless they appear verbatim in a `read_file` or Tool Result in this bundle.\n\
 If you cite a problem, quote a short substring or line numbers from that text.\n\
+If a successful `.html` `write_file` Tool Result already wrote a valid HTML document, treat the local create request as satisfied. Stop unless the user explicitly asked for verification or more edits, and do not call `read_file`, `bash`, `PowerShell`, backups, or copy commands just to re-check escaping.\n\
 If a successful `.html` `read_file` Tool Result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not propose `bash`, `PowerShell`, backups, or copy commands to \"fix\" escaping.";
 
 fn cdp_messages_for_flavor(
@@ -861,13 +864,16 @@ fn cdp_messages_for_flavor(
 ) -> Vec<ConversationMessage> {
     match flavor {
         CdpPromptFlavor::Standard => messages.to_vec(),
-        CdpPromptFlavor::Repair => messages_from_latest_user(messages)
-            .unwrap_or_else(|| messages.to_vec()),
+        CdpPromptFlavor::Repair => {
+            messages_from_latest_user(messages).unwrap_or_else(|| messages.to_vec())
+        }
     }
 }
 
 fn messages_from_latest_user(messages: &[ConversationMessage]) -> Option<Vec<ConversationMessage>> {
-    let start = messages.iter().rposition(|message| message.role == MessageRole::User)?;
+    let start = messages
+        .iter()
+        .rposition(|message| message.role == MessageRole::User)?;
     Some(messages[start..].to_vec())
 }
 
@@ -975,9 +981,69 @@ pub fn build_cdp_prompt(request: &ApiRequest<'_>) -> String {
     )
 }
 
+fn summarize_read_file_tool_result(output: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(output).ok()?;
+    let object = value.as_object()?;
+    let kind = object.get("type").and_then(Value::as_str).unwrap_or("text");
+    let file = object.get("file")?.as_object()?;
+    let content = file.get("content").and_then(Value::as_str)?;
+    let file_path = file
+        .get("filePath")
+        .and_then(Value::as_str)
+        .or_else(|| file.get("file_path").and_then(Value::as_str));
+
+    let mut lines = vec![format!("type: {kind}")];
+    if let Some(path) = file_path {
+        lines.push(format!("file_path: {path}"));
+    }
+    if file_path.is_some_and(is_html_file_path) && looks_like_decoded_html_document(content) {
+        lines.push("html_document: already_decoded_valid_html".to_string());
+        lines.push("follow_up_guidance: no_unescape_needed".to_string());
+        lines.push(
+            "follow_up_guidance: do_not_propose_bash_powershell_backup_or_copy_commands"
+                .to_string(),
+        );
+    }
+    let start_line = file.get("startLine").and_then(Value::as_u64);
+    let num_lines = file.get("numLines").and_then(Value::as_u64);
+    let total_lines = file.get("totalLines").and_then(Value::as_u64);
+    if let (Some(start_line), Some(num_lines), Some(total_lines)) =
+        (start_line, num_lines, total_lines)
+    {
+        let line_summary = if num_lines == 0 {
+            format!("lines: empty slice / {total_lines}")
+        } else {
+            let end_line = start_line.saturating_add(num_lines.saturating_sub(1));
+            format!("lines: {start_line}-{end_line} / {total_lines}")
+        };
+        lines.push(line_summary);
+    }
+    lines.push("content:".to_string());
+
+    let mut rendered = lines.join("\n");
+    if !content.is_empty() {
+        rendered.push('\n');
+        rendered.push_str(content);
+    }
+    Some(rendered)
+}
+
+fn is_html_file_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".html") || lower.ends_with(".htm")
+}
+
+fn looks_like_decoded_html_document(text: &str) -> bool {
+    let lower = text.trim_start().to_ascii_lowercase();
+    lower.starts_with("<!doctype html") || lower.starts_with("<html")
+}
+
 fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) -> String {
     if is_error {
         return output.to_string();
+    }
+    if tool_name == "read_file" {
+        return summarize_read_file_tool_result(output).unwrap_or_else(|| output.to_string());
     }
     if !matches!(tool_name, "write_file" | "edit_file") {
         return output.to_string();
@@ -1004,6 +1070,24 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
     }
     if let Some(content) = object.get("content").and_then(Value::as_str) {
         lines.push(format!("content_chars: {}", content.len()));
+        if tool_name == "write_file"
+            && object
+                .get("file_path")
+                .and_then(Value::as_str)
+                .is_some_and(is_html_file_path)
+            && looks_like_decoded_html_document(content)
+        {
+            lines.push("html_document: already_valid_local_html".to_string());
+            lines.push("task_status: local_html_create_request_already_satisfied".to_string());
+            lines.push(
+                "follow_up_guidance: stop_unless_user_explicitly_requested_verification_or_more_edits"
+                    .to_string(),
+            );
+            lines.push(
+                "follow_up_guidance: do_not_call_read_file_bash_powershell_backup_or_copy_commands_just_to_recheck_escaping"
+                    .to_string(),
+            );
+        }
     }
     lines.join("\n")
 }
@@ -1096,10 +1180,7 @@ fn canonicalize_json_fence_tool_payload(
                 return None;
             }
             let mut normalized = obj.clone();
-            normalized.insert(
-                FALLBACK_TOOL_SENTINEL_KEY.to_string(),
-                Value::Bool(true),
-            );
+            normalized.insert(FALLBACK_TOOL_SENTINEL_KEY.to_string(), Value::Bool(true));
             let value = Value::Object(normalized);
             parse_one_tool_call(&value)?;
             Some(value)
@@ -1164,10 +1245,7 @@ fn extract_mvp_tool_object_spans(
         }
         let sub = if let Some(sub) = extract_balanced_json_object(text, abs) {
             sub.to_string()
-        } else if let Some(repaired) = text
-            .get(abs..)
-            .and_then(autoclose_unbalanced_json_payload)
-        {
+        } else if let Some(repaired) = text.get(abs..).and_then(autoclose_unbalanced_json_payload) {
             repaired
         } else {
             search_start = abs + 1;
@@ -1892,6 +1970,7 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         || lower.contains("show**preparing file request")
         || lower.contains("show**generating file output")
         || lower.contains("show**requesting html output")
+        || lower.contains("show**requesting html file creation")
         || lower.contains("looking into generating a full html file")
         || lower.contains("preparing to use the relay tool")
         || lower.contains("preparing to utilize a relay tool")
@@ -1916,6 +1995,7 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
             || lower.contains("html, js, and css")
             || lower.contains("specified tool")
             || lower.contains("relay via a specified tool")
+            || lower.contains("requesting the content of tetris.html to be written")
             || lower.contains("no specific path was provided")
             || lower.contains("reasonable and straightforward naming convention"));
     let generic_show_hide_relay_write_drift = lower.contains("show**")
@@ -1924,10 +2004,15 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         && !lower.contains("\"relay_tool_call\"");
     let generic_show_hide_html_creation_drift = lower.contains("show**")
         && lower.contains("tetris")
-        && (lower.contains("html file")
+        && ((lower.contains("html file")
             || lower.contains("single document")
             || lower.contains("canvas and controls")
             || lower.contains("full html"))
+            || ((lower.contains("single file") || lower.contains("tetris.html"))
+                && (lower.contains("requesting")
+                    || lower.contains("creation")
+                    || lower.contains("written")
+                    || lower.contains("write"))))
         && !lower.contains("\"relay_tool_call\"")
         && !lower.contains("<!doctype html")
         && !lower.contains("<html");
@@ -2087,7 +2172,11 @@ fn build_targeted_tool_protocol_repair_input(
 }
 
 #[must_use]
-pub fn build_tool_protocol_repair_input(goal: &str, latest_request: &str, attempt_index: usize) -> String {
+pub fn build_tool_protocol_repair_input(
+    goal: &str,
+    latest_request: &str,
+    attempt_index: usize,
+) -> String {
     format!(
         concat!(
             "Tool protocol repair.\n",
@@ -2112,7 +2201,10 @@ fn build_best_tool_protocol_repair_input(
     attempt_index: usize,
 ) -> String {
     if is_concrete_new_file_create_request(latest_request) {
-        if let Some(requested_path) = extract_path_anchors_from_text(latest_request).into_iter().next() {
+        if let Some(requested_path) = extract_path_anchors_from_text(latest_request)
+            .into_iter()
+            .next()
+        {
             return build_targeted_tool_protocol_repair_input(
                 goal,
                 latest_request,
@@ -2141,7 +2233,10 @@ fn build_best_tool_protocol_repair_input(
             );
         }
     }
-    if let Some(requested_path) = extract_path_anchors_from_text(latest_request).into_iter().next() {
+    if let Some(requested_path) = extract_path_anchors_from_text(latest_request)
+        .into_iter()
+        .next()
+    {
         return build_targeted_tool_protocol_repair_input(
             goal,
             latest_request,
@@ -2338,17 +2433,21 @@ mod tests {
     fn build_cdp_prompt_includes_grounding_block_and_tool_result_body() {
         let request = ApiRequest {
             system_prompt: &["System guidance".to_string()],
-            messages: &[ConversationMessage::assistant(vec![ContentBlock::ToolResult {
-                tool_use_id: "tool-1".to_string(),
-                tool_name: "write_file".to_string(),
-                output: r#"{"file_path":"README.md","kind":"update","content":"hello"}"#.to_string(),
-                is_error: false,
-            }])],
+            messages: &[ConversationMessage::assistant(vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "tool-1".to_string(),
+                    tool_name: "write_file".to_string(),
+                    output: r#"{"file_path":"README.md","kind":"update","content":"hello"}"#
+                        .to_string(),
+                    is_error: false,
+                },
+            ])],
         };
         let out = build_cdp_prompt(&request);
         assert!(out.contains("## CDP bundle (read before you reply)"));
         assert!(out.contains("CDP follow-up summary: local file mutation already executed."));
         assert!(out.contains("file_path: README.md"));
+        assert!(out.contains("treat the local create request as satisfied"));
         assert!(out.contains("Do not propose `bash`, `PowerShell`, backups, or copy commands"));
     }
 
@@ -2356,7 +2455,9 @@ mod tests {
     fn build_cdp_prompt_standard_turn_includes_full_catalog_tools() {
         let request = ApiRequest {
             system_prompt: &["System guidance".to_string()],
-            messages: &[ConversationMessage::user_text("Inspect README.md and update it.".to_string())],
+            messages: &[ConversationMessage::user_text(
+                "Inspect README.md and update it.".to_string(),
+            )],
         };
         let out = build_cdp_prompt(&request);
         assert!(out.contains("### `bash`"));
@@ -2378,7 +2479,10 @@ mod tests {
         assert!(out.contains("## Relay repair mode"));
         assert!(out.contains("Use the current Relay tool catalog"));
         assert!(out.contains("Output exactly one usable fenced `relay_tool` block"));
-        assert!(out.contains("Do not use `bash`, `PowerShell`, backups, or copy commands to \"unescape\" it"));
+        assert!(out.contains("treat the local create request as satisfied"));
+        assert!(out.contains(
+            "Do not use `bash`, `PowerShell`, backups, or copy commands to \"unescape\" it"
+        ));
         assert!(out.contains("### `bash`"));
         assert!(out.contains("### `WebFetch`"));
         assert!(out.contains("purpose:"));
@@ -2386,10 +2490,51 @@ mod tests {
     }
 
     #[test]
+    fn write_file_success_is_summarized_for_html_followup() {
+        let output = serde_json::json!({
+            "kind": "create",
+            "file_path": "/root/Relay_Agent/tetris.html",
+            "content": "<!doctype html>\n<html><body></body></html>",
+            "replace_all": false
+        })
+        .to_string();
+        let rendered = format_cdp_tool_result("write_file", &output, false);
+        assert!(rendered.contains("CDP follow-up summary"));
+        assert!(rendered.contains("html_document: already_valid_local_html"));
+        assert!(rendered.contains("task_status: local_html_create_request_already_satisfied"));
+        assert!(
+            rendered.contains("stop_unless_user_explicitly_requested_verification_or_more_edits")
+        );
+        assert!(!rendered.contains("<!doctype html>"));
+    }
+
+    #[test]
+    fn read_file_success_summarizes_decoded_html_guidance() {
+        let output = serde_json::to_string(&json!({
+            "type": "text",
+            "file": {
+                "filePath": "/root/Relay_Agent/tetris.html",
+                "content": "<!doctype html>\n<html><body><canvas></canvas></body></html>",
+                "numLines": 2,
+                "startLine": 1,
+                "totalLines": 2
+            }
+        }))
+        .expect("serialize read_file output");
+        let rendered = format_cdp_tool_result("read_file", &output, false);
+        assert!(rendered.contains("file_path: /root/Relay_Agent/tetris.html"));
+        assert!(rendered.contains("html_document: already_decoded_valid_html"));
+        assert!(rendered.contains("follow_up_guidance: no_unescape_needed"));
+        assert!(rendered.contains("<canvas>"));
+        assert!(!rendered.contains("CDP follow-up summary"));
+    }
+
+    #[test]
     fn build_cdp_prompt_standard_turn_uses_compact_system_sections() {
         let request = ApiRequest {
             system_prompt: &[
-                "You are an interactive agent that helps users with software engineering tasks.".to_string(),
+                "You are an interactive agent that helps users with software engineering tasks."
+                    .to_string(),
                 "# Output style\n- Keep prose concise.".to_string(),
                 "# System\n- Tools are available.".to_string(),
                 "# Doing tasks\n- Inspect before editing.".to_string(),
@@ -2421,12 +2566,14 @@ mod tests {
     fn build_cdp_prompt_marks_tool_output_as_untrusted() {
         let request = ApiRequest {
             system_prompt: &["System guidance".to_string()],
-            messages: &[ConversationMessage::assistant(vec![ContentBlock::ToolResult {
-                tool_use_id: "tool-1".to_string(),
-                tool_name: "read_file".to_string(),
-                output: "secret".to_string(),
-                is_error: false,
-            }])],
+            messages: &[ConversationMessage::assistant(vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "tool-1".to_string(),
+                    tool_name: "read_file".to_string(),
+                    output: "secret".to_string(),
+                    is_error: false,
+                },
+            ])],
         };
         let out = build_cdp_prompt(&request);
         assert!(out.contains("<UNTRUSTED_TOOL_OUTPUT"));
@@ -2437,22 +2584,24 @@ mod tests {
     fn build_cdp_prompt_adds_tool_result_continuation_reminder() {
         let request = ApiRequest {
             system_prompt: &["System guidance".to_string()],
-            messages: &[ConversationMessage::assistant(vec![ContentBlock::ToolResult {
-                tool_use_id: "tool-1".to_string(),
-                tool_name: "read_file".to_string(),
-                output: serde_json::to_string(&json!({
-                    "type": "text",
-                    "file": {
-                        "filePath": "/tmp/demo.txt",
-                        "content": "hello",
-                        "numLines": 1,
-                        "startLine": 1,
-                        "totalLines": 1
-                    }
-                }))
-                .expect("serialize read_file output"),
-                is_error: false,
-            }])],
+            messages: &[ConversationMessage::assistant(vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "tool-1".to_string(),
+                    tool_name: "read_file".to_string(),
+                    output: serde_json::to_string(&json!({
+                        "type": "text",
+                        "file": {
+                            "filePath": "/tmp/demo.txt",
+                            "content": "hello",
+                            "numLines": 1,
+                            "startLine": 1,
+                            "totalLines": 1
+                        }
+                    }))
+                    .expect("serialize read_file output"),
+                    is_error: false,
+                },
+            ])],
         };
         let out = build_cdp_prompt(&request);
         assert!(out.contains("## Continue from tool results"));
@@ -2505,8 +2654,7 @@ mod tests {
 
     #[test]
     fn parse_invalid_json_skipped_but_fence_stripped() {
-        let (display, calls) =
-            parse_initial("Text\n```relay_tool\n{invalid}\n```\nMore text");
+        let (display, calls) = parse_initial("Text\n```relay_tool\n{invalid}\n```\nMore text");
         assert_eq!(display, "Text\nMore text");
         assert!(calls.is_empty());
     }
@@ -2584,12 +2732,12 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         assert_eq!(calls[0].1, "write_file");
         let input: Value =
             serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
-        assert_eq!(input.get("path").and_then(Value::as_str), Some("tetris.html"));
         assert_eq!(
-            input
-                .get("content")
-                .and_then(Value::as_str)
-                .map(str::len),
+            input.get("path").and_then(Value::as_str),
+            Some("tetris.html")
+        );
+        assert_eq!(
+            input.get("content").and_then(Value::as_str).map(str::len),
             Some(40_000)
         );
         assert!(display.contains("HTMLでテトリスを作成します。"));
@@ -2620,7 +2768,10 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         assert_eq!(calls[0].1, "write_file");
         let input: Value =
             serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
-        assert_eq!(input.get("path").and_then(Value::as_str), Some("tetris.html"));
+        assert_eq!(
+            input.get("path").and_then(Value::as_str),
+            Some("tetris.html")
+        );
         let content = input
             .get("content")
             .and_then(Value::as_str)
@@ -2655,7 +2806,10 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         assert_eq!(calls[0].1, "write_file");
         let input: Value =
             serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
-        assert_eq!(input.get("path").and_then(Value::as_str), Some("tetris.html"));
+        assert_eq!(
+            input.get("path").and_then(Value::as_str),
+            Some("tetris.html")
+        );
     }
 
     #[test]
@@ -2746,7 +2900,11 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
 
     #[test]
     fn later_turn_meta_stall_gets_continue_nudge_with_budget_remaining() {
-        let s = summary("Lining things up...", Vec::new(), runtime::TurnOutcome::Completed);
+        let s = summary(
+            "Lining things up...",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
         assert_eq!(
             decide_loop_after_success("Improve the file", "Improve the file", 1, 0, 2, &s),
             LoopDecision::Continue {
@@ -2841,27 +2999,23 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         };
         assert!(next_input.contains(r#""name": "write_file""#));
         assert!(next_input.contains(r#""path": "tetris.html""#));
-        assert!(next_input.contains("Do not spend another turn choosing or explaining the filename"));
+        assert!(
+            next_input.contains("Do not spend another turn choosing or explaining the filename")
+        );
         assert!(next_input.contains("Do not switch to `index.html` or any other filename"));
     }
 
     #[test]
     fn repair_prompt_forbids_prose_and_plain_text_mentions() {
-        let repair1 = build_tool_protocol_repair_input(
-            "Create ./tetris.html",
-            "Create ./tetris.html",
-            0,
-        );
+        let repair1 =
+            build_tool_protocol_repair_input("Create ./tetris.html", "Create ./tetris.html", 0);
         assert!(repair1.contains(
             "Output exactly one fenced `relay_tool` block and nothing before or after it."
         ));
         assert!(repair1.contains("Do not mention `relay_tool` in plain text."));
 
-        let repair2 = build_tool_protocol_repair_input(
-            "Create ./tetris.html",
-            "Create ./tetris.html",
-            1,
-        );
+        let repair2 =
+            build_tool_protocol_repair_input("Create ./tetris.html", "Create ./tetris.html", 1);
         assert!(repair2.contains("output exactly one Relay `relay_tool` fence and nothing else"));
         assert!(
             repair2.contains("Do not include any explanatory sentence before or after the fence.")
@@ -2893,13 +3047,14 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             CdpPromptFlavor::Repair,
             CdpCatalogFlavor::StandardFull,
         );
-        let (_rendered, breakdown) =
-            render_cdp_messages_with_breakdown(&cdp_messages_for_flavor(&messages, CdpPromptFlavor::Repair));
+        let (_rendered, breakdown) = render_cdp_messages_with_breakdown(&cdp_messages_for_flavor(
+            &messages,
+            CdpPromptFlavor::Repair,
+        ));
 
         assert!(bundle.contains("Tool protocol repair."));
         assert!(bundle.contains("[Tool Call: read_file]"));
-        assert!(bundle
-            .contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read_file\" status=\"ok\">"));
+        assert!(bundle.contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read_file\" status=\"ok\">"));
         assert_eq!(breakdown.3, 1);
         assert!(breakdown.2 > 0);
     }
@@ -2937,9 +3092,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         assert!(matches!(sliced[2].role, MessageRole::Tool));
         let (rendered, _) = render_cdp_messages_with_breakdown(&sliced);
         assert!(rendered.contains("Repair follow-up"));
-        assert!(rendered.contains(
-            "<UNTRUSTED_TOOL_OUTPUT tool=\"read_file\" status=\"ok\">"
-        ));
+        assert!(rendered.contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read_file\" status=\"ok\">"));
         assert!(!rendered.contains("Older assistant text"));
     }
 
@@ -2980,6 +3133,12 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         ));
         assert!(is_tool_protocol_confusion_text(
             "Show**Requesting HTML output**I am preparing to generate a single-file HTML version of Tetris to relay via a specified tool.Hide``````"
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Show**Requesting HTML file creation**I am looking to create a single file for Tetris, specifically requesting the content of tetris.html to be written.Hide``````"
+        ));
+        assert!(is_tool_protocol_confusion_text(
+            "Show**Requesting single-file output**I am requesting the content of tetris.html to be written as a single file for Tetris.Hide``````"
         ));
         assert!(is_tool_protocol_confusion_text(
             "I need to create an HTML file for Tetris, specifically tetris.html, following the instructions and utilizing available tools while addressing conflicting guidance from the developer.Hide"
