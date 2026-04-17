@@ -270,6 +270,12 @@ export default function Shell(): JSX.Element {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && activeDrawer() !== "none") {
         setActiveDrawer("none");
+        return;
+      }
+      const isAccelerator = event.metaKey || event.ctrlKey;
+      if (isAccelerator && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        handleNewSession();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -683,6 +689,7 @@ export default function Shell(): JSX.Element {
         sessionStatus={sessions.activeSessionStatus()}
         workspacePath={workspaceLabel}
         onOpenSettings={openSettings}
+        onNewSession={handleNewSession}
         onToggleChats={() => toggleDrawer("sessions")}
         onToggleContext={() => toggleDrawer("context")}
         chatsOpen={activeDrawer() === "sessions"}

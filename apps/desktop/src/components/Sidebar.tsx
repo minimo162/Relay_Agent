@@ -2,8 +2,25 @@ import { For, Show, createMemo, createSignal, type JSX } from "solid-js";
 import type { SessionMeta } from "../session/session-display";
 import { formatSessionSubtitle, sessionPrimaryLine } from "../session/session-display";
 import type { SessionStatusSnapshot } from "./shell-types";
-import { Button, Input } from "./ui";
+import { Input } from "./ui";
 import { ui } from "../lib/ui-tokens";
+
+function NewChatIcon(): JSX.Element {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12.5 3.5H4.75A1.25 1.25 0 0 0 3.5 4.75V11.25A1.25 1.25 0 0 0 4.75 12.5H11.25" />
+      <path d="M13 2.75V6.25M11.25 4.5H14.75" />
+    </svg>
+  );
+}
 
 export type SessionListEntry = { id: string; meta?: SessionMeta; status?: SessionStatusSnapshot };
 
@@ -62,12 +79,18 @@ export function Sidebar(props: {
     <aside class="ra-shell-sidebar" aria-label="Sessions">
       <div class="ra-sidebar-shell">
         <div class="ra-sidebar-shell__header">
-          <div class="flex items-center justify-between gap-2 mb-2">
-            <h2 class={`ra-display-title ra-type-body-sans ${ui.textPrimary}`}>Chats</h2>
-            <Button variant="secondary" class="ra-type-caption ra-button--pill-tight" onClick={props.onNewSession}>
-              New chat
-            </Button>
-          </div>
+          <h2 class={`ra-display-title ra-type-body-sans mb-2 ${ui.textPrimary}`}>Chats</h2>
+          <button
+            type="button"
+            class="ra-sidebar-new-chat"
+            onClick={props.onNewSession}
+            aria-label="Start a new chat"
+          >
+            <span class="ra-sidebar-new-chat__icon">
+              <NewChatIcon />
+            </span>
+            <span>New chat</span>
+          </button>
           <button
             type="button"
             class="ra-sidebar-workspace-chip"

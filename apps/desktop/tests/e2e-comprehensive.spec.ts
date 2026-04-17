@@ -47,11 +47,17 @@ test.describe("Conversation model", () => {
     await sendPrompt(page, "task one");
     await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
     await page.getByRole("button", { name: "Chats" }).click();
-    await page.getByRole("button", { name: "New chat" }).click();
+    await page
+      .locator("[data-ra-shell-drawer='sessions']")
+      .getByRole("button", { name: "New chat" })
+      .click();
     await sendPrompt(page, "task two");
     await page.getByRole("button", { name: "Chats" }).click();
     await expect(page.locator(".ra-session-row")).toHaveCount(2);
-    await page.getByRole("button", { name: "New chat" }).click();
+    await page
+      .locator("[data-ra-shell-drawer='sessions']")
+      .getByRole("button", { name: "New chat" })
+      .click();
     await expect(page.locator("[data-ra-composer-textarea]")).toBeEditable();
   });
 });

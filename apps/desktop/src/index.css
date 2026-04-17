@@ -2210,3 +2210,138 @@ body a:focus-visible {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--ra-text-muted);
 }
+
+/* ============================================================
+ * New chat — prominent primary action, header + sidebar
+ * ============================================================ */
+
+.ra-new-chat-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2rem;
+  padding: 0 0.9rem 0 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--ra-accent) 22%, var(--ra-border));
+  border-radius: var(--ra-radius-pill);
+  background: color-mix(in oklab, var(--ra-accent) 6%, var(--ra-surface-100));
+  color: var(--ra-text-primary);
+  font-family: var(--ra-font-display);
+  font-size: var(--ra-text-button);
+  letter-spacing: -0.005em;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 140ms ease;
+  flex-shrink: 0;
+}
+
+.ra-new-chat-btn:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--ra-accent) 11%, var(--ra-surface-100));
+  border-color: color-mix(in oklab, var(--ra-accent) 32%, var(--ra-border));
+  box-shadow: 0 2px 10px color-mix(in oklab, var(--ra-accent) 10%, transparent);
+}
+
+.ra-new-chat-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--ra-focus-elevated);
+}
+
+.ra-new-chat-btn:active:not(:disabled) {
+  transform: translateY(0.5px);
+}
+
+.ra-new-chat-btn__icon {
+  display: inline-grid;
+  place-items: center;
+  color: var(--ra-accent);
+  flex-shrink: 0;
+}
+
+.ra-new-chat-btn__icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.ra-new-chat-btn__kbd {
+  display: none;
+  margin-left: 0.1rem;
+  padding: 0.1rem 0.35rem;
+  font-family: var(--ra-font-mono);
+  font-size: 0.65rem;
+  color: var(--ra-text-muted);
+  background: color-mix(in oklab, var(--ra-surface-300) 72%, transparent);
+  border: 1px solid color-mix(in oklab, var(--ra-border) 70%, transparent);
+  border-radius: 4px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+@media (min-width: 960px) {
+  .ra-new-chat-btn__kbd {
+    display: inline-flex;
+    align-items: center;
+  }
+}
+
+/* Sidebar variant — full-width inside drawer */
+.ra-sidebar-new-chat {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.35rem;
+  padding: 0 0.9rem;
+  border: 1px solid color-mix(in oklab, var(--ra-accent) 22%, var(--ra-border));
+  border-radius: 0.75rem;
+  background: color-mix(in oklab, var(--ra-accent) 6%, var(--ra-surface-100));
+  color: var(--ra-text-primary);
+  font-family: var(--ra-font-display);
+  font-size: var(--ra-text-button);
+  letter-spacing: -0.005em;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+  margin-bottom: 0.75rem;
+}
+
+.ra-sidebar-new-chat:hover {
+  background: color-mix(in oklab, var(--ra-accent) 12%, var(--ra-surface-100));
+  border-color: color-mix(in oklab, var(--ra-accent) 34%, var(--ra-border));
+  box-shadow: 0 3px 14px color-mix(in oklab, var(--ra-accent) 12%, transparent);
+}
+
+.ra-sidebar-new-chat:focus-visible {
+  outline: none;
+  box-shadow: var(--ra-focus-elevated);
+}
+
+.ra-sidebar-new-chat__icon {
+  display: inline-grid;
+  place-items: center;
+  color: var(--ra-accent);
+}
+
+.ra-sidebar-new-chat__icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* ============================================================
+ * First-run hero — editorial serif headline for more character
+ * ============================================================ */
+
+.ra-first-run__hero-heading {
+  margin: 0;
+  font-family: var(--ra-font-editorial);
+  font-weight: 500;
+  font-size: clamp(1.55rem, 1.4vw + 1.15rem, 2rem);
+  line-height: 1.08;
+  letter-spacing: -0.012em;
+  color: var(--ra-text-primary);
+  font-feature-settings: "cswh" 1;
+}
+
+.ra-first-run__intro {
+  gap: 0.55rem;
+  max-width: 34rem;
+}

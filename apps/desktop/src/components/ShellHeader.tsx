@@ -20,10 +20,35 @@ function statusLabel(status: SessionStatusSnapshot): string {
   }
 }
 
+function NewChatIcon(): JSX.Element {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12.5 3.5H4.75A1.25 1.25 0 0 0 3.5 4.75V11.25A1.25 1.25 0 0 0 4.75 12.5H11.25" />
+      <path d="M13 2.75V6.25M11.25 4.5H14.75" />
+    </svg>
+  );
+}
+
+function isMacPlatform(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const platform = (navigator.platform || "").toLowerCase();
+  const ua = (navigator.userAgent || "").toLowerCase();
+  return platform.includes("mac") || ua.includes("mac os");
+}
+
 export function ShellHeader(props: {
   sessionStatus: SessionStatusSnapshot;
   workspacePath: () => string;
   onOpenSettings: () => void;
+  onNewSession?: () => void;
   onToggleChats?: () => void;
   onToggleContext?: () => void;
   chatsOpen?: boolean;
@@ -40,10 +65,30 @@ export function ShellHeader(props: {
   );
   const busy = createMemo(() => props.sessionStatus.phase !== "idle");
   const showWriteActions = createMemo(() => props.canUndo || props.canRedo);
+  const newChatShortcut = createMemo(() => (isMacPlatform() ? "⌘N" : "Ctrl+N"));
 
   return (
     <header class="ra-shell-header">
       <span class={`ra-shell-header__brand ra-display-title ra-type-body-sans ${ui.textPrimary}`}>Relay Agent</span>
+
+      {props.onNewSession ? (
+        <button
+          type="button"
+          class="ra-new-chat-btn"
+          onClick={() => props.onNewSession?.()}
+          title={`Start a new chat (${newChatShortcut()})`}
+          aria-label="Start a new chat"
+          aria-keyshortcuts={isMacPlatform() ? "Meta+N" : "Control+N"}
+          data-ra-new-chat-trigger=""
+        >
+          <span class="ra-new-chat-btn__icon">
+            <NewChatIcon />
+          </span>
+          <span>New chat</span>
+          <span class="ra-new-chat-btn__kbd" aria-hidden="true">{newChatShortcut()}</span>
+        </button>
+      ) : null}
+
       <div class="flex-1" />
 
       <button
