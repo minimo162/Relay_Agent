@@ -15,6 +15,27 @@
 
 ## Milestone Log
 
+### 2026-04-18 Live M365 Copilot workspace search harness
+
+**Problem:** The repo already had live harnesses for desktop launch, same-session grounding, and `read_file` path resolution, but nothing proved that a signed-in M365 Copilot session could actually use Relay's workspace search tools against a deterministic folder inside the current workspace. For the requested live validation slice, we needed a read-only harness that checks both filename search and content search in one Relay session, fails on unexpected mutation tools, and leaves enough artifacts to separate tool drift from thread continuity failures.
+
+**Change:** Added [`apps/desktop/scripts/live_m365_workspace_search_smoke.mjs`](../apps/desktop/scripts/live_m365_workspace_search_smoke.mjs) plus `live:m365:workspace-search` script aliases in [`apps/desktop/package.json`](../apps/desktop/package.json) and [`package.json`](../package.json), and documented the command in [`README.md`](../README.md). The new harness reuses the existing dev-control flow (`/configure`, `/state`, `/first-run-send`) and live doctor gating, prepares a disposable workspace fixture folder at `tests/live_search_fixture`, drives three read-only turns through the real desktop app, records per-turn state JSON, `final-state.json`, `prompt-response-excerpts.json`, `report.json`, and Tauri / Edge / Xvfb logs, then removes the temporary fixture folder during teardown. Validation requires same-session continuity, `glob_search` on Turn 1, `grep_search` on Turns 2 and 3, matching expected fixture filenames in the assistant reply, and zero usage of mutation tools or `bash`.
+
+Exact live prompts encoded in the harness:
+
+```text
+Turn 1:
+同じ Relay セッション内で、workspace 配下の tests/live_search_fixture からファイル名検索をしてください。glob_search だけを使い、pattern は **/*search-target*.txt、path は tests/live_search_fixture にしてください。返答は見つかったファイルパスを 1 つだけ。grep_search・read_file・bash・編集系ツールは禁止です。
+
+Turn 2:
+同じ Relay セッションのまま、tests/live_search_fixture 配下で内容検索をしてください。grep_search だけを使い、文字列 RELAY_SEARCH_TOKEN_7421 を検索してください。返答は一致したファイルパスを 1 つだけ。glob_search・read_file・bash・編集系ツールは禁止です。
+
+Turn 3:
+同じセッションのまま、tests/live_search_fixture 配下だけを対象に、Markdown ファイルから内容検索をしてください。grep_search だけを使い、glob を *.md に絞って文字列 RELAY_MARKDOWN_ONLY_TOKEN_8801 を検索してください。返答は一致した Markdown ファイルパスを 1 つだけ。glob_search・read_file・bash・編集系ツールは禁止です。
+```
+
+**Verification:** `node --check apps/desktop/scripts/live_m365_workspace_search_smoke.mjs` — pass. `pnpm check` — pass. `pnpm live:m365:workspace-search` — pass with artifact bundle `/tmp/relay-live-m365-workspace-search-zEoPvN`. Observed live result: one initial new chat plus continued same-thread reuse (`continueCurrentThreadCount = 5`), `sessionId = session-f4b5d169-502f-4ac6-be7f-aede15fd238d`, Turn 1 used `glob_search` and returned `/root/Relay_Agent/tests/live_search_fixture/nested/gamma-search-target.txt`, Turn 2 used `grep_search` and returned `/root/Relay_Agent/tests/live_search_fixture/alpha-report.txt`, Turn 3 used `grep_search` with Markdown filtering and returned `/root/Relay_Agent/tests/live_search_fixture/beta-notes.md`, with `toolErrorCounts = {}` and no mutation-tool usage across the run.
+
 ### 2026-04-17 Playwright live CDP defaults aligned to Relay app default port 9360
 
 **Problem:** Live Copilot response capture was healthy on the actual Relay path, but the repo still had a split default between the app/live scripts (`9360`) and multiple Playwright entrypoints (`9333`). That made `m365-cdp-chat` fail out of the box against the signed-in Relay Edge session with `ECONNREFUSED 127.0.0.1:9333`, even while direct Playwright CDP probing and the app-equivalent `copilot_server.js` HTTP path succeeded on `9360`.
