@@ -140,6 +140,8 @@ Use the signed-in `RelayAgentEdgeProfile` on the same CDP port. A good run logs 
 
 **Live same-session path-resolution smoke:** `pnpm live:m365:path-resolution-same-session` drives three read-only turns through the real desktop app against signed-in M365 Copilot, verifies absolute / workspace-relative / workspace-root-relative `read_file` resolution in one Relay session, and writes JSON artifacts under `/tmp/relay-live-m365-path-resolution-*`.
 
+**Live workspace-search smoke:** `pnpm live:m365:workspace-search` drives three read-only turns through the real desktop app against signed-in M365 Copilot, prepares a disposable `tests/live_search_fixture` folder under the workspace, verifies `glob_search` on filename search plus `grep_search` on text search in the same Relay session, forbids mutation tools, and writes JSON artifacts under `/tmp/relay-live-m365-workspace-search-*`.
+
 **Headless desktop coverage:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop` runs the workspace tests without invoking the Windows-hostile Tauri lib test binary. Headless desktop logic and its unit tests now live in `apps/desktop/src-tauri/crates/desktop-core`.
 
 **Doctor CLI integration:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli` covers doctor report shape and CLI-facing status handling.

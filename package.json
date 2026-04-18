@@ -15,6 +15,7 @@
     "live:m365:tetris-html": "pnpm --filter @relay-agent/desktop live:m365:tetris-html",
     "live:m365:grounding-approval-multiturn": "pnpm --filter @relay-agent/desktop live:m365:grounding-approval-multiturn",
     "live:m365:path-resolution-same-session": "pnpm --filter @relay-agent/desktop live:m365:path-resolution-same-session",
+    "live:m365:workspace-search": "pnpm --filter @relay-agent/desktop live:m365:workspace-search",
     "typecheck": "pnpm --filter @relay-agent/desktop typecheck",
     "test:e2e:local": "pnpm --filter @relay-agent/desktop test:e2e:local",
     "test:e2e:auth-save": "pnpm --filter @relay-agent/desktop test:e2e:auth-save",

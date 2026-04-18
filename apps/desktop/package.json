@@ -27,6 +27,7 @@
     "live:m365:tetris-html": "node ./scripts/live_m365_tetris_html_smoke.mjs",
     "live:m365:grounding-approval-multiturn": "node ./scripts/live_m365_multiturn_grounding_approval.mjs",
     "live:m365:path-resolution-same-session": "node ./scripts/live_m365_same_session_path_resolution.mjs",
+    "live:m365:workspace-search": "node ./scripts/live_m365_workspace_search_smoke.mjs",
     "live:m365:copilot-response-probe": "node ./scripts/live_m365_copilot_response_probe.mjs",
     "test:e2e": "playwright test",
     "test:e2e:m365-cdp": "playwright test --config=playwright-cdp.config.ts --project=m365-cdp-chat",
