@@ -45,7 +45,6 @@ test("first run keeps the normal shell visible and renders setup inline", async 
   await expect(page.locator("[data-ra-session-mode]")).toHaveCount(0);
   await expect(composer(page)).toBeEditable();
   await expect(page.locator("[data-ra-composer-disabled-note]")).toHaveCount(0);
-  await page.getByRole("button", { name: "Chats" }).click();
   await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible();
   await expect(page.getByText("No chats yet")).toBeVisible();
 });
@@ -72,14 +71,10 @@ test("sending the first prompt exits onboarding and creates one conversation", a
   await openApp(page);
   await sendPrompt(page, "review the workspace");
   await expect(page.locator("[data-ra-setup-card]")).toHaveCount(0);
-  await expect(page.locator("[data-ra-shell-drawer='sessions']")).toHaveCount(0);
-  await page.getByRole("button", { name: "Chats" }).click();
   await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible();
   await expect(page.locator(".ra-session-row")).toHaveCount(1);
-  await page.getByRole("button", { name: "Context" }).click();
   await expect(page.locator("[data-ra-shell-drawer='context']")).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Activity" })).toBeVisible();
-  await expect(page.getByText("Conversation drives the work.")).toBeVisible();
+  await expect(page.locator("[data-ra-shell-drawer='context']").getByText("Plan", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Undo" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Redo" })).toHaveCount(0);
 });
@@ -99,7 +94,7 @@ test("tool rows use human labels instead of raw tool names", async ({ page }) =>
   await seedWorkspace(page);
   await openApp(page);
   await sendPrompt(page, "inspect file");
-  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible({ timeout: 5000 });
   await waitForMockSession(page, "session-e2e-1");
   await waitForAgentListener(page, "agent:tool_start");
   await waitForAgentListener(page, "agent:tool_result");
@@ -133,7 +128,7 @@ test("approval requests render inline instead of blocking the feed", async ({ pa
   await seedWorkspace(page);
   await openApp(page);
   await sendPrompt(page, "prepare approval");
-  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible({ timeout: 5000 });
   await waitForMockSession(page, "session-e2e-1");
   await waitForAgentListener(page, "agent:approval_needed");
 
@@ -149,9 +144,11 @@ test("approval requests render inline instead of blocking the feed", async ({ pa
 
   const approvalCard = page.locator("[data-ra-approval-card][data-approval-id='approval-1']");
   await expect(page.getByRole("dialog", { name: "Permission required" })).toHaveCount(0);
-  await expect(approvalCard.getByRole("button", { name: "Allow once" })).toBeVisible();
-  await expect(approvalCard.getByRole("button", { name: "Always allow in this conversation" })).toBeVisible();
-  await expect(approvalCard.getByRole("button", { name: "Always allow in this folder" })).toBeVisible();
+  await expect(approvalCard.getByRole("button", { name: "Allow", exact: true })).toBeVisible();
+  await expect(approvalCard.getByRole("button", { name: "Reject", exact: true })).toBeVisible();
+  await approvalCard.getByRole("button", { name: /^Remember/ }).click();
+  await expect(approvalCard.getByRole("menuitem", { name: "Always in this conversation" })).toBeVisible();
+  await expect(approvalCard.getByRole("menuitem", { name: "Always in this project" })).toBeVisible();
   await expect(approvalCard.getByText("/tmp/output.txt")).toBeVisible();
 });
 
@@ -160,7 +157,7 @@ test("streaming assistant text shows Drafting and suppresses generic working sta
   await seedWorkspace(page);
   await openApp(page);
   await sendPrompt(page, "stream a reply");
-  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible({ timeout: 5000 });
   await waitForMockSession(page, "session-e2e-1");
   await waitForAgentListener(page, "agent:text_delta");
 
@@ -199,7 +196,7 @@ test("separate text-delta sequences render as separate assistant bubbles", async
   await seedWorkspace(page);
   await openApp(page);
   await sendPrompt(page, "stream two replies");
-  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible({ timeout: 5000 });
   await waitForMockSession(page, "session-e2e-1");
   await waitForAgentListener(page, "agent:text_delta");
 
@@ -233,7 +230,7 @@ test("a new streamed reply that starts with previous text does not get appended 
   await seedWorkspace(page);
   await openApp(page);
   await sendPrompt(page, "stream a duplicated prefix");
-  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible({ timeout: 5000 });
   await waitForMockSession(page, "session-e2e-1");
   await waitForAgentListener(page, "agent:text_delta");
 
@@ -269,7 +266,7 @@ test("turn completion keeps one assistant bubble and strips transient image stat
   await seedWorkspace(page);
   await openApp(page);
   await sendPrompt(page, "stream a noisy reply");
-  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible({ timeout: 5000 });
   await waitForMockSession(page, "session-e2e-1");
   await waitForAgentListener(page, "agent:text_delta");
   await waitForAgentListener(page, "agent:turn_complete");
@@ -329,7 +326,7 @@ test("replaceExisting rewrites the active assistant bubble without showing think
   await seedWorkspace(page);
   await openApp(page);
   await sendPrompt(page, "rewrite the draft");
-  await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
+  await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible({ timeout: 5000 });
   await waitForMockSession(page, "session-e2e-1");
   await waitForAgentListener(page, "agent:text_delta");
 

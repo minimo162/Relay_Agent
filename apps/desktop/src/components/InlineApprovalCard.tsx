@@ -1,5 +1,4 @@
-import { Show, type JSX } from "solid-js";
-import { Button } from "./ui";
+import { Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import type { UiApprovalRequestChunk } from "../lib/ipc";
 
 function approvalStateLabel(status: UiApprovalRequestChunk["status"]): string {
@@ -22,6 +21,19 @@ export function InlineApprovalCard(props: {
   onReject: (approvalId: string) => void;
 }): JSX.Element {
   const pending = () => props.chunk.status === "pending";
+  const [rememberOpen, setRememberOpen] = createSignal(false);
+  let rememberRef: HTMLDivElement | undefined;
+
+  onMount(() => {
+    const handleDocClick = (e: MouseEvent) => {
+      if (!rememberOpen()) return;
+      if (rememberRef && !rememberRef.contains(e.target as Node)) {
+        setRememberOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleDocClick);
+    onCleanup(() => document.removeEventListener("mousedown", handleDocClick));
+  });
 
   return (
     <section
@@ -54,45 +66,61 @@ export function InlineApprovalCard(props: {
           </p>
         }
       >
-        <p class="ra-inline-card__note">Relay is paused until you choose what to allow.</p>
-        <div class="ra-inline-card__actions">
-          <Button
-            variant="secondary"
+        <div class="ra-approval-actions">
+          <button
             type="button"
-            class="ra-type-button-label px-3 py-1.5"
-            onClick={() => props.onReject(props.chunk.approvalId)}
-          >
-            Don&apos;t allow
-          </Button>
-          <Button
-            variant="primary"
-            type="button"
-            class="ra-type-button-label px-3 py-1.5"
+            class="ra-approval-btn ra-approval-btn--primary"
             onClick={() => props.onApproveOnce(props.chunk.approvalId)}
           >
-            Allow once
-          </Button>
-        </div>
-        <div class="ra-inline-card__remember">
-          <span class="ra-type-caption text-[var(--ra-text-muted)]">Allow without asking again</span>
-          <div class="ra-inline-card__actions">
-            <Button
-              variant="secondary"
+            Allow
+          </button>
+          <button
+            type="button"
+            class="ra-approval-btn ra-approval-btn--ghost"
+            onClick={() => props.onReject(props.chunk.approvalId)}
+          >
+            Reject
+          </button>
+          <div
+            ref={rememberRef}
+            class="ra-approval-remember"
+            classList={{ "is-open": rememberOpen() }}
+          >
+            <button
               type="button"
-              class="ra-type-button-label px-3 py-1.5"
-              onClick={() => props.onApproveForSession(props.chunk.approvalId)}
+              class="ra-approval-btn ra-approval-btn--ghost ra-approval-remember__trigger"
+              aria-expanded={rememberOpen()}
+              onClick={() => setRememberOpen((v) => !v)}
             >
-              Always allow in this conversation
-            </Button>
-            <Show when={props.chunk.workspaceCwdConfigured}>
-              <Button
-                variant="secondary"
-                type="button"
-                class="ra-type-button-label px-3 py-1.5"
-                onClick={() => props.onApproveForWorkspace(props.chunk.approvalId)}
-              >
-                Always allow in this folder
-              </Button>
+              Remember <span aria-hidden="true">▾</span>
+            </button>
+            <Show when={rememberOpen()}>
+              <div class="ra-approval-remember__menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  class="ra-approval-remember__item"
+                  onClick={() => {
+                    setRememberOpen(false);
+                    props.onApproveForSession(props.chunk.approvalId);
+                  }}
+                >
+                  Always in this conversation
+                </button>
+                <Show when={props.chunk.workspaceCwdConfigured}>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="ra-approval-remember__item"
+                    onClick={() => {
+                      setRememberOpen(false);
+                      props.onApproveForWorkspace(props.chunk.approvalId);
+                    }}
+                  >
+                    Always in this project
+                  </button>
+                </Show>
+              </div>
             </Show>
           </div>
         </div>

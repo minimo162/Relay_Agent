@@ -1,7 +1,6 @@
-import { Show, createEffect, createMemo, createSignal, onMount, type JSX } from "solid-js";
+import { Show, createEffect, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { Textarea } from "./ui";
 import { detectSlashMode, findSlashCommands, type SlashCommand } from "../lib/slash-commands";
-import { ui } from "../lib/ui-tokens";
 
 /** Matches `.ra-composer-shell textarea` max-height in index.css */
 const COMPOSER_TEXTAREA_MAX_PX = 200;
@@ -39,34 +38,31 @@ function SlashAutocomplete(props: {
 }) {
   return (
     <div
-      class={`absolute left-0 bottom-full mb-1 min-w-full w-64 ${ui.radiusFeatured} py-1 overflow-hidden z-50 border border-[var(--ra-border)] bg-[var(--ra-surface-elevated)] shadow-[var(--ra-shadow-sm)]`}
+      class="ra-slash-palette"
       role="listbox"
       aria-label="Slash commands"
     >
       {props.commands.length === 0 ? (
-        <div class={`px-3 py-1.5 ra-type-button-label text-[var(--ra-text-muted)]`}>
-          No matching commands
-        </div>
+        <div class="ra-slash-palette__empty">No matching commands</div>
       ) : (
         props.commands.map((cmd, i) => (
           <div
             role="option"
             aria-selected={i === props.selectedIndex}
-            class={`flex items-center gap-2 px-3 py-1.5 cursor-pointer ra-type-button-label transition-colors ${
-              i === props.selectedIndex
-                ? "ra-surface-highlight"
-                : "text-[var(--ra-text-secondary)] hover:bg-[var(--ra-hover)]"
-            }`}
+            classList={{
+              "ra-slash-palette__option": true,
+              "is-selected": i === props.selectedIndex,
+            }}
             onClick={() => props.onSelect(cmd)}
             onMouseEnter={() => props.onSelectIndex(i)}
           >
-            <span class="ra-type-mono-small">{cmd.command}</span>
-            <span class="opacity-70 ml-auto truncate max-w-[120px]">{cmd.description}</span>
+            <span class="ra-slash-palette__command">{cmd.command}</span>
+            <span class="ra-slash-palette__desc">{cmd.description}</span>
           </div>
         ))
       )}
-      <div class={`px-3 py-1 ra-type-caption text-[var(--ra-text-muted)] border-t border-[var(--ra-border)]`}>
-        <kbd class="ra-type-mono-small">Tab</kbd> or <kbd class="ra-type-mono-small">Enter</kbd> to select
+      <div class="ra-slash-palette__hint">
+        <kbd>Tab</kbd> <kbd>Enter</kbd> select · <kbd>Esc</kbd> dismiss
       </div>
     </div>
   );
@@ -212,71 +208,108 @@ export function Composer(props: {
     if (!props.hero) return "Ask for the result you need.";
     return "Example: simplify this setup flow.";
   };
-  const composerSummary = createMemo(() =>
-    props.running
-      ? "Relay is working in the current project."
-      : "Inspects first. Pauses before risky changes.",
-  );
+
+  const openSlashPalette = () => {
+    if (props.disabled) return;
+    textareaRef?.focus();
+    const current = text();
+    if (!current.startsWith("/")) {
+      setText("/");
+      queueMicrotask(() => {
+        if (textareaRef) {
+          textareaRef.setSelectionRange(1, 1);
+          adjustComposerTextareaHeight(textareaRef);
+        }
+      });
+    }
+    setSlashMode({
+      query: "",
+      commands: findSlashCommands(""),
+      selectedIndex: 0,
+    });
+  };
+
+  onMount(() => {
+    const onGlobalKey = (event: KeyboardEvent) => {
+      const mod = event.metaKey || event.ctrlKey;
+      if (!mod || event.altKey || event.shiftKey) return;
+      const key = event.key;
+      if (key === "/") {
+        event.preventDefault();
+        openSlashPalette();
+        return;
+      }
+      if (key.toLowerCase() === "k") {
+        event.preventDefault();
+        textareaRef?.focus();
+      }
+    };
+    window.addEventListener("keydown", onGlobalKey);
+    onCleanup(() => window.removeEventListener("keydown", onGlobalKey));
+  });
 
   return (
     <div class={`ra-composer relative shrink-0 ${props.hero ? "ra-composer--hero" : ""}`}>
       <div class="ra-composer-inner">
         <div class="ra-composer-shell relative">
-          <div class="ra-composer-input-wrap">
-            <Textarea
-              ref={textareaRef}
-              rows={1}
-              placeholder={placeholder()}
-              value={text()}
-              onInput={onInput}
-              onKeyDown={onKey}
-              disabled={props.disabled}
-              class="ra-composer-input resize-none w-full"
-              data-ra-composer-textarea=""
-              data-testid="composer-textarea"
-            />
-            <Show when={slashMode()}>
-              {(m) => (
-                <SlashAutocomplete
-                  commands={m().commands}
-                  selectedIndex={m().selectedIndex}
-                  onSelect={selectCommand}
-                  onSelectIndex={(index) => setSlashMode({ ...m(), selectedIndex: index })}
-                />
-              )}
-            </Show>
-          </div>
-          <div class="ra-composer-toolbar">
-            <div class="ra-composer-toolbar-main">
-              <p class="ra-composer-mode-summary">{composerSummary()}</p>
-              <Show when={props.disabledReason}>
-                {(reason) => (
-                  <p class="ra-composer-disabled-note" role="status" aria-live="polite" data-ra-composer-disabled-note="">
-                    {reason()}
-                  </p>
+          <div class="ra-composer-row">
+            <div class="ra-composer-input-wrap">
+              <Textarea
+                ref={textareaRef}
+                rows={1}
+                placeholder={placeholder()}
+                value={text()}
+                onInput={onInput}
+                onKeyDown={onKey}
+                disabled={props.disabled}
+                class="ra-composer-input resize-none w-full"
+                data-ra-composer-textarea=""
+                data-testid="composer-textarea"
+              />
+              <Show when={slashMode()}>
+                {(m) => (
+                  <SlashAutocomplete
+                    commands={m().commands}
+                    selectedIndex={m().selectedIndex}
+                    onSelect={selectCommand}
+                    onSelectIndex={(index) => setSlashMode({ ...m(), selectedIndex: index })}
+                  />
                 )}
               </Show>
             </div>
-            <div class="ra-composer-toolbar-actions">
+            <button
+              type="button"
+              class="ra-composer-send"
+              disabled={!canSend()}
+              aria-label="Send"
+              data-ra-composer-send=""
+              data-testid="composer-send"
+              onClick={() => void send()}
+            >
+              <SendArrowIcon />
+            </button>
+          </div>
+          <Show when={props.disabledReason || props.running}>
+            <div class="ra-composer-footer">
+              <Show when={props.disabledReason}>
+                {(reason) => (
+                  <span
+                    class="ra-composer-disabled-note"
+                    role="status"
+                    aria-live="polite"
+                    data-ra-composer-disabled-note=""
+                  >
+                    {reason()}
+                  </span>
+                )}
+              </Show>
               <Show when={props.running}>
-                <button type="button" class="ra-composer-cancel" onClick={props.onCancel}>
+                <button type="button" class="ra-composer-cancel-link" onClick={props.onCancel}>
                   Cancel
                 </button>
               </Show>
-              <button
-                type="button"
-                class="ra-composer-send"
-                disabled={!canSend()}
-                aria-label="Send"
-                data-ra-composer-send=""
-                data-testid="composer-send"
-                onClick={() => void send()}
-              >
-                <SendArrowIcon />
-                <span>Send</span>
-              </button>
             </div>
-          </div>
+          </Show>
         </div>
       </div>
     </div>

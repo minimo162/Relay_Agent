@@ -30,12 +30,9 @@ test.describe("Conversation model", () => {
     await seedWorkspace(page);
     await openApp(page);
     await sendPrompt(page, "first task");
-    await page.getByRole("button", { name: "Chats" }).click();
     await expect(page.locator(".ra-session-row")).toHaveCount(1);
-    await page.getByRole("button", { name: "Chats" }).click();
 
     await sendPrompt(page, "follow-up task");
-    await page.getByRole("button", { name: "Chats" }).click();
     await expect(page.locator(".ra-session-row")).toHaveCount(1);
     await expect(page.getByText("follow-up task")).toBeVisible();
   });
@@ -45,14 +42,12 @@ test.describe("Conversation model", () => {
     await seedWorkspace(page);
     await openApp(page);
     await sendPrompt(page, "task one");
-    await expect(page.getByRole("button", { name: "Chats" })).toBeVisible({ timeout: 5000 });
-    await page.getByRole("button", { name: "Chats" }).click();
+    await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible({ timeout: 5000 });
     await page
       .locator("[data-ra-shell-drawer='sessions']")
       .getByRole("button", { name: "New chat" })
       .click();
     await sendPrompt(page, "task two");
-    await page.getByRole("button", { name: "Chats" }).click();
     await expect(page.locator(".ra-session-row")).toHaveCount(2);
     await page
       .locator("[data-ra-shell-drawer='sessions']")
@@ -96,21 +91,18 @@ test.describe("Settings and first-run UX", () => {
     await expect(dialog.getByText("Always on top")).toBeVisible();
   });
 
-  test("normal chat opens chats and context from drawer triggers", async ({ page }) => {
+  test("normal chat surfaces sidebar and context rail persistently on wide viewport", async ({ page }) => {
     await injectRelayMock(page, { autoComplete: true });
     await seedWorkspace(page);
     await openApp(page);
     await sendPrompt(page, "open the shell");
-    await page.getByRole("button", { name: "Chats" }).click();
     await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Chats" })).toBeVisible();
-    await page.getByRole("button", { name: "Chats" }).click();
-    await expect(page.locator("[data-ra-shell-drawer='sessions']")).toHaveCount(0);
-    await page.getByRole("button", { name: "Context" }).click();
     await expect(page.locator("[data-ra-shell-drawer='context']")).toBeVisible();
-    await expect(page.getByRole("tab", { name: "Activity" })).toBeVisible();
-    await expect(page.getByRole("tab", { name: "Integrations" })).toBeVisible();
-    await expect(page.getByText("Conversation drives the work.")).toBeVisible();
+    const rail = page.locator("[data-ra-shell-drawer='context']");
+    await expect(rail.getByText("Plan", { exact: true })).toBeVisible();
+    await expect(rail.getByText("Session", { exact: true })).toBeVisible();
+    await expect(rail.getByText("Integrations", { exact: true })).toBeVisible();
+    await expect(rail.getByText("Keys", { exact: true })).toBeVisible();
   });
 
   test("narrow layout keeps drawer controls and composer actions usable", async ({ page }) => {
@@ -181,13 +173,15 @@ test.describe("Audit and approvals", () => {
     });
     const approvalCard = page.locator("[data-ra-approval-card][data-approval-id='approval-1']");
     await expect(page.getByRole("dialog", { name: "Permission required" })).toHaveCount(0);
-    await expect(approvalCard.getByRole("button", { name: "Allow once" })).toBeVisible();
-    await expect(approvalCard.getByRole("button", { name: "Always allow in this conversation" })).toBeVisible();
-    await expect(approvalCard.getByRole("button", { name: "Always allow in this folder" })).toBeVisible();
+    await expect(approvalCard.getByRole("button", { name: "Allow", exact: true })).toBeVisible();
+    await expect(approvalCard.getByRole("button", { name: "Reject", exact: true })).toBeVisible();
+    await approvalCard.getByRole("button", { name: /^Remember/ }).click();
+    await expect(approvalCard.getByRole("menuitem", { name: "Always in this conversation" })).toBeVisible();
+    await expect(approvalCard.getByRole("menuitem", { name: "Always in this project" })).toBeVisible();
     await expect(approvalCard.getByText("bash")).toBeVisible();
     await expect(approvalCard.getByText("npm test @ /tmp/project")).toBeVisible();
-    await approvalCard.getByRole("button", { name: "Allow once" }).click();
+    await approvalCard.getByRole("button", { name: "Allow", exact: true }).click();
     await expect(approvalCard).toContainText("Allowed");
-    await expect(approvalCard.getByRole("button", { name: "Allow once" })).toHaveCount(0);
+    await expect(approvalCard.getByRole("button", { name: "Allow", exact: true })).toHaveCount(0);
   });
 });
