@@ -536,6 +536,10 @@ struct SessionLoopLaunch {
     session_config: PersistedSessionConfig,
     initial_session: runtime::Session,
     cancelled: Arc<AtomicBool>,
+    /// True only for the first turn of a brand-new session (from `start_agent`),
+    /// signalling that the first Copilot request should start a fresh chat
+    /// thread instead of continuing the previous one.
+    is_fresh_session: bool,
 }
 
 async fn spawn_session_loop<R: Runtime>(
@@ -552,6 +556,7 @@ async fn spawn_session_loop<R: Runtime>(
         session_config,
         initial_session,
         cancelled,
+        is_fresh_session,
     } = launch;
     let cwd = normalize_optional_string(session_config.cwd.as_deref());
     let max_turns = session_config.max_turns;
@@ -584,6 +589,7 @@ async fn spawn_session_loop<R: Runtime>(
                 browser_settings,
                 cancelled,
                 initial_session,
+                is_fresh_session,
             )
         }));
 
@@ -683,6 +689,7 @@ pub(crate) async fn start_agent_inner<R: Runtime>(
             session_config,
             initial_session: runtime::Session::new(),
             cancelled,
+            is_fresh_session: true,
         },
     )
     .await
@@ -724,6 +731,7 @@ pub(crate) async fn continue_agent_session_inner<R: Runtime>(
             session_config,
             initial_session,
             cancelled,
+            is_fresh_session: false,
         },
     )
     .await

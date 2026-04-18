@@ -1849,14 +1849,17 @@ pub fn run_agent_loop_impl<R: Runtime>(
     browser_settings: Option<BrowserAutomationSettings>,
     cancelled: Arc<AtomicBool>,
     initial_session: RuntimeSession,
+    is_fresh_session: bool,
 ) -> Result<(), AgentLoopError> {
     let loop_guard = LoopEpochGuard::new(registry, session_id);
+    let pending_new_chat = Arc::new(AtomicBool::new(is_fresh_session));
     let api_client = if smoke_provider_enabled() {
         CdpApiClient::new_smoke(
             Some((app.clone(), session_id.to_string())),
             registry.clone(),
             session_id.to_string(),
             completion_timeout_secs_from_browser_settings(browser_settings.as_ref()),
+            Arc::clone(&pending_new_chat),
         )
     } else {
         let server = tauri_bridge::ensure_copilot_server(
@@ -1872,6 +1875,7 @@ pub fn run_agent_loop_impl<R: Runtime>(
             registry.clone(),
             session_id.to_string(),
             completion_timeout_secs_from_browser_settings(browser_settings.as_ref()),
+            Arc::clone(&pending_new_chat),
         )
     };
 
@@ -2244,6 +2248,10 @@ pub struct CdpApiClient<R: Runtime> {
     progress_emit: Option<(AppHandle<R>, String)>,
     registry: Option<SessionRegistry>,
     session_id: Option<String>,
+    /// Consumed on the first `send_prompt` to request a fresh Copilot chat
+    /// thread. Swapped to `false` after that one use so subsequent requests
+    /// (retries, later turns within the same session) continue the thread.
+    pending_new_chat: Arc<AtomicBool>,
 }
 
 enum CdpApiClientSource {
@@ -2269,6 +2277,7 @@ impl<R: Runtime> CdpApiClient<R> {
         registry: SessionRegistry,
         session_id: String,
         response_timeout_secs: u64,
+        pending_new_chat: Arc<AtomicBool>,
     ) -> Self {
         Self {
             source: CdpApiClientSource::Live(server),
@@ -2276,6 +2285,7 @@ impl<R: Runtime> CdpApiClient<R> {
             progress_emit,
             registry: Some(registry),
             session_id: Some(session_id),
+            pending_new_chat,
         }
     }
 
@@ -2284,6 +2294,7 @@ impl<R: Runtime> CdpApiClient<R> {
         registry: SessionRegistry,
         session_id: String,
         response_timeout_secs: u64,
+        pending_new_chat: Arc<AtomicBool>,
     ) -> Self {
         Self {
             source: CdpApiClientSource::Smoke(FakeSmokeApiClient {
@@ -2293,6 +2304,7 @@ impl<R: Runtime> CdpApiClient<R> {
             progress_emit,
             registry: Some(registry),
             session_id: Some(session_id),
+            pending_new_chat,
         }
     }
 }
@@ -2508,6 +2520,7 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
                     } else {
                         None
                     };
+                    let new_chat = self.pending_new_chat.swap(false, Ordering::SeqCst);
                     let result = rt.block_on(async {
                         let relay_force_fresh_chat = cdp_force_fresh_chat(request.messages);
                         let response = srv
@@ -2523,7 +2536,7 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
                                 user_prompt: &prompt,
                                 timeout_secs: self.response_timeout_secs,
                                 attachment_paths: &[],
-                                new_chat: false,
+                                new_chat,
                             })
                             .await;
                         if let Some((task, stop_flag, _)) = ui_progress.as_ref() {
@@ -8465,6 +8478,28 @@ mod loop_controller_tests {
         };
         assert!(next_input.contains("output exactly one Relay `relay_tool` fence and nothing else"));
         assert!(next_input.contains("Ignore any Pages, uploads, citations, links"));
+    }
+
+    #[test]
+    fn pending_new_chat_fires_once_for_fresh_session_and_never_for_continuation() {
+        // Mirrors the `self.pending_new_chat.swap(false, Ordering::SeqCst)` call
+        // in CdpApiClient::stream. A fresh session flips `new_chat: true` exactly
+        // once; continuation sessions never fire it.
+        let fresh = Arc::new(AtomicBool::new(true));
+        assert!(
+            fresh.swap(false, Ordering::SeqCst),
+            "first send on a fresh session must request new_chat"
+        );
+        assert!(
+            !fresh.swap(false, Ordering::SeqCst),
+            "later sends within the same agent-loop invocation must not re-fire new_chat"
+        );
+
+        let continuation = Arc::new(AtomicBool::new(false));
+        assert!(
+            !continuation.swap(false, Ordering::SeqCst),
+            "continuation sessions must never request new_chat"
+        );
     }
 
     #[test]
