@@ -1,3 +1,7 @@
+/* Sei overlay fonts — Fraunces (display serif, variable), Instrument Sans (UI),
+ * Shippori Mincho (JP/kanji accents), JetBrains Mono. Must precede all other
+ * rules per CSS spec. Used by the overlay section near the end of this file. */
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;1,9..144,300;1,9..144,400&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&family=Shippori+Mincho:wght@400;500&display=swap");
 @import "tailwindcss";
 
 /* ============================================================
@@ -2344,4 +2348,770 @@ body a:focus-visible {
 .ra-first-run__intro {
   gap: 0.55rem;
   max-width: 34rem;
+}
+
+/* ============================================================
+ * 静 Sei — minimal overlay.
+ * Editorial serif + hairlines, a single vermillion accent (朱),
+ * and quiet paper surfaces. Overrides the production classes above
+ * without touching their markup. Remove this block to revert.
+ * ============================================================ */
+
+:root {
+  /* Type stacks — brand names stay first so that, when Berkeley / jjannon /
+   * CursorGothic are actually installed on disk, the overlay yields to them.
+   * Otherwise the overlay pulls in Fraunces / Instrument Sans / Shippori. */
+  --ra-font-display:
+    "CursorGothic", "CursorGothic Fallback", "Instrument Sans", "Fraunces", system-ui,
+    -apple-system, "Segoe UI", "Helvetica Neue", Helvetica, Arial, "Noto Sans JP", sans-serif;
+  --ra-font-editorial:
+    jjannon, "Fraunces", "Shippori Mincho", ui-serif, "Iowan Old Style", "Palatino Linotype",
+    "URW Palladio L", P052, Georgia, Cambria, "Times New Roman", Times, serif;
+  --ra-font-mono:
+    berkeleyMono, "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  --ra-font-ui:
+    "Instrument Sans", "Fraunces", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial,
+    sans-serif;
+  --ra-font-jp: "Shippori Mincho", "Fraunces", ui-serif, serif;
+
+  /* Vermillion kept as the single accent (matches --ra-accent). Expose a
+   * "paper" alias for cream surfaces used by the overlay. */
+  --ra-sei-shu: var(--ra-accent);
+  --ra-sei-shu-soft: color-mix(in oklab, var(--ra-accent) 10%, transparent);
+}
+
+[data-theme="light"] {
+  --ra-sei-paper: #f5f1e8;
+  --ra-sei-paper-soft: #efeadd;
+  --ra-sei-paper-deep: #e8e2d3;
+  --ra-sei-ink: #1b1815;
+  --ra-sei-hair: rgba(27, 24, 21, 0.08);
+  --ra-sei-hair-strong: rgba(27, 24, 21, 0.15);
+}
+
+[data-theme="dark"] {
+  --ra-sei-paper: #141311;
+  --ra-sei-paper-soft: #1b1a17;
+  --ra-sei-paper-deep: #232120;
+  --ra-sei-ink: #f2f1ed;
+  --ra-sei-hair: rgba(244, 243, 239, 0.09);
+  --ra-sei-hair-strong: rgba(244, 243, 239, 0.18);
+}
+
+/* Body base — serif display is decorative only, UI text is Instrument Sans.
+ * Feature settings tighten the small caps and stylistic alternates. */
+body {
+  font-family: var(--ra-font-ui);
+  font-feature-settings: "ss01", "ss02", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Shell surface: drop the radial glow for a flat paper wash ── */
+.ra-shell {
+  background:
+    linear-gradient(180deg, var(--ra-sei-paper) 0%, var(--ra-sei-paper) 100%);
+}
+
+/* ── Shell header: minimal crumb, hairline only ── */
+.ra-shell-header {
+  background: var(--ra-sei-paper);
+  backdrop-filter: none;
+  border-bottom: 1px solid var(--ra-sei-hair);
+  padding: 0.55rem 1.1rem;
+  min-height: 48px;
+}
+
+.ra-shell-header__brand {
+  font-family: var(--ra-font-editorial);
+  font-weight: 400;
+  font-size: 1.05rem;
+  letter-spacing: -0.012em;
+  font-variation-settings: "opsz" 120, "SOFT" 0;
+  position: relative;
+  padding-left: 1rem;
+}
+
+.ra-shell-header__brand::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ra-sei-shu);
+  transform: translateY(-50%);
+  box-shadow: 0 0 0 3px var(--ra-sei-paper), 0 0 0 4px var(--ra-sei-shu-soft);
+}
+
+/* Workspace chip in the header — quiet text, no pill */
+.ra-workspace-chip.ra-shell-header__workspace {
+  border: none;
+  background: transparent;
+  padding: 0.32rem 0.55rem;
+  border-radius: 4px;
+  color: var(--ra-text-secondary);
+  font-family: var(--ra-font-ui);
+  font-size: 0.8125rem;
+  gap: 0.5rem;
+}
+
+.ra-workspace-chip.ra-shell-header__workspace:hover {
+  background: color-mix(in oklab, var(--ra-sei-ink) 4%, transparent);
+}
+
+.ra-shell-header__workspace-label {
+  font-family: var(--ra-font-ui);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ra-text-muted);
+  font-weight: 500;
+}
+
+.ra-shell-header__workspace-label::after {
+  content: "／";
+  font-family: var(--ra-font-jp);
+  margin-left: 0.55rem;
+  color: color-mix(in oklab, var(--ra-sei-ink) 24%, transparent);
+  letter-spacing: 0;
+}
+
+.ra-shell-header__workspace-value {
+  font-family: var(--ra-font-editorial);
+  font-weight: 400;
+  font-size: 0.975rem;
+  letter-spacing: -0.008em;
+  font-variation-settings: "opsz" 120;
+  color: var(--ra-text-primary);
+}
+
+/* Nav toggles — ghost tabs, underline on open */
+.ra-shell-header__toggle {
+  background: transparent;
+  border: none;
+  color: var(--ra-text-secondary);
+  padding: 0.35rem 0.6rem;
+  border-radius: 4px;
+  font-family: var(--ra-font-ui);
+  font-size: 0.8125rem;
+  box-shadow: none;
+  position: relative;
+}
+
+.ra-shell-header__toggle:hover {
+  background: color-mix(in oklab, var(--ra-sei-ink) 4%, transparent);
+  color: var(--ra-text-primary);
+}
+
+.ra-shell-header__toggle.is-open {
+  color: var(--ra-text-primary);
+  background: transparent;
+}
+
+.ra-shell-header__toggle.is-open::after {
+  content: "";
+  position: absolute;
+  left: 0.6rem;
+  right: 0.6rem;
+  bottom: -10px;
+  height: 2px;
+  background: var(--ra-sei-shu);
+  border-radius: 1px;
+}
+
+.ra-shell-header__settings {
+  color: var(--ra-text-muted);
+}
+
+/* New chat pill — inked, not filled */
+.ra-new-chat-btn {
+  background: transparent;
+  border: 1px solid var(--ra-sei-hair-strong);
+  color: var(--ra-text-primary);
+  font-family: var(--ra-font-ui);
+  font-weight: 500;
+  border-radius: 999px;
+  padding: 0.32rem 0.7rem 0.32rem 0.55rem;
+  box-shadow: none;
+  gap: 0.45rem;
+}
+
+.ra-new-chat-btn:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--ra-sei-ink) 5%, transparent);
+  border-color: color-mix(in oklab, var(--ra-sei-ink) 28%, transparent);
+}
+
+.ra-new-chat-btn__kbd {
+  background: transparent;
+  border: 1px solid var(--ra-sei-hair);
+  color: var(--ra-text-muted);
+  font-family: var(--ra-font-mono);
+  font-size: 0.6875rem;
+  padding: 0 4px;
+}
+
+/* ── Sidebar ── */
+.ra-shell-sidebar {
+  background: var(--ra-sei-paper);
+  border-right: 1px solid var(--ra-sei-hair);
+}
+
+.ra-sidebar-shell {
+  background: var(--ra-sei-paper);
+}
+
+.ra-sidebar-shell__header {
+  padding: 1.4rem 1rem 0.75rem;
+  border-bottom: none;
+}
+
+.ra-sidebar-shell__header .ra-display-title {
+  font-family: var(--ra-font-ui);
+  font-size: 0.6875rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--ra-text-muted);
+  margin-bottom: 0.9rem;
+}
+
+.ra-sidebar-new-chat {
+  background: transparent;
+  border: 1px dashed var(--ra-sei-hair-strong);
+  color: var(--ra-text-secondary);
+  border-radius: 6px;
+  padding: 0.55rem 0.7rem;
+  gap: 0.55rem;
+  font-family: var(--ra-font-ui);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.ra-sidebar-new-chat:hover {
+  background: color-mix(in oklab, var(--ra-sei-ink) 4%, transparent);
+  border-color: color-mix(in oklab, var(--ra-sei-ink) 32%, transparent);
+  color: var(--ra-text-primary);
+}
+
+.ra-sidebar-new-chat__icon {
+  color: var(--ra-sei-shu);
+  background: transparent;
+}
+
+.ra-sidebar-workspace-chip {
+  border: none;
+  border-top: 1px solid var(--ra-sei-hair);
+  border-bottom: 1px solid var(--ra-sei-hair);
+  border-radius: 0;
+  background: transparent;
+  padding: 0.7rem 0.1rem;
+  margin: 0.9rem 0 0.55rem;
+  box-shadow: none;
+  gap: 0.25rem;
+}
+
+.ra-sidebar-workspace-chip:hover {
+  background: transparent;
+}
+
+.ra-sidebar-shell__list {
+  padding: 0.25rem 0.4rem 1rem;
+}
+
+/* Session row — hairline, with vermillion marker for active */
+.ra-session-row {
+  border: none;
+  border-radius: 4px;
+  padding: 0.7rem 0.7rem 0.7rem 0.85rem;
+  margin-bottom: 0.05rem;
+  background: transparent;
+  font-family: var(--ra-font-ui);
+  font-size: 0.8375rem;
+  line-height: 1.35;
+  color: var(--ra-text-primary);
+  position: relative;
+  transition: background-color 160ms ease;
+}
+
+.ra-session-row > span:first-child > span:first-child {
+  font-weight: 500;
+}
+
+.ra-session-row > span:last-child {
+  font-family: var(--ra-font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  color: var(--ra-text-muted);
+  margin-top: 2px;
+}
+
+.ra-session-row:hover {
+  background: color-mix(in oklab, var(--ra-sei-ink) 4%, transparent);
+  color: var(--ra-text-primary);
+}
+
+.ra-session-row--selected {
+  background: color-mix(in oklab, var(--ra-sei-ink) 7%, transparent);
+  border: none;
+  box-shadow: none;
+  color: var(--ra-text-primary);
+  font-weight: 500;
+}
+
+.ra-session-row--selected::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  background: var(--ra-sei-shu);
+  border-radius: 2px;
+}
+
+.ra-session-status-badge {
+  background: transparent;
+  border: none;
+  color: var(--ra-sei-shu);
+  padding: 0;
+  font-family: var(--ra-font-mono);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.ra-session-status-badge::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ra-sei-shu);
+  margin-right: 5px;
+  transform: translateY(-1px);
+  animation: sei-pulse 2s ease-in-out infinite;
+}
+
+@keyframes sei-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ── Message bubbles: no border, no shadow — just flowing text ── */
+.ra-bubble {
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.ra-bubble-user,
+.ra-bubble-assistant {
+  background: transparent;
+}
+
+/* User prose styled editorial-serif, a touch larger */
+.ra-bubble-user .ra-type-body-sans {
+  font-family: var(--ra-font-editorial);
+  font-size: 1.08rem;
+  line-height: 1.55;
+  letter-spacing: -0.005em;
+  font-variation-settings: "opsz" 96, "SOFT" 30;
+  font-weight: 400;
+  color: var(--ra-text-primary);
+  padding: 0;
+}
+
+/* Assistant body — UI sans, generous leading */
+.ra-bubble-assistant .ra-md-assistant {
+  font-family: var(--ra-font-ui);
+  font-size: 0.925rem;
+  line-height: 1.7;
+  color: var(--ra-text-primary);
+  padding: 0;
+}
+
+/* Flip the MessageBubble flex alignment so everything reads as one column */
+.ra-bubble-user,
+.ra-bubble-assistant {
+  max-width: 44rem !important;
+  width: 100%;
+}
+
+.ra-msg-feed .flex.justify-end,
+.ra-msg-feed .flex.justify-start {
+  justify-content: flex-start;
+}
+
+/* Turn marker — a kanji + uppercase role + monospace stamp, injected by a
+ * tiny new wrapper in MessageBubble (see .ra-sei-turn). */
+.ra-sei-turn {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  margin-bottom: 0.6rem;
+  color: var(--ra-text-muted);
+  font-family: var(--ra-font-ui);
+}
+
+.ra-sei-turn__char {
+  font-family: var(--ra-font-jp);
+  font-size: 0.8125rem;
+  color: var(--ra-sei-shu);
+  line-height: 1;
+}
+
+.ra-sei-turn__who {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--ra-text-secondary);
+  font-weight: 500;
+}
+
+.ra-sei-turn__stamp {
+  font-family: var(--ra-font-mono);
+  font-size: 0.65rem;
+  color: color-mix(in oklab, var(--ra-sei-ink) 30%, transparent);
+  letter-spacing: 0.02em;
+  margin-left: auto;
+}
+
+/* Inline streaming badge — quieter */
+.ra-assistant-streaming-badge {
+  background: transparent;
+  color: var(--ra-sei-shu);
+  font-family: var(--ra-font-ui);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  padding: 0;
+  border: none;
+  font-weight: 500;
+}
+
+.ra-assistant-streaming-badge::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ra-sei-shu);
+  margin-right: 6px;
+  transform: translateY(-1px);
+  animation: sei-pulse 1.6s ease-in-out infinite;
+}
+
+/* ── Tool row: single hairline strip ── */
+.ra-tool-row {
+  padding: 0.5rem 0 !important;
+  border: none !important;
+  border-top: 1px solid var(--ra-sei-hair) !important;
+  border-bottom: 1px solid var(--ra-sei-hair) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  margin: 0 !important;
+  font-size: 0.78rem;
+  color: var(--ra-text-secondary);
+  gap: 0.7rem !important;
+}
+
+.ra-tool-row + .ra-tool-row {
+  border-top: none !important;
+  margin-top: -1px !important;
+}
+
+.ra-tool-row .ra-type-button-label {
+  font-family: var(--ra-font-ui);
+  font-weight: 500;
+  color: var(--ra-text-primary);
+}
+
+.ra-tool-row .ra-type-caption {
+  color: var(--ra-text-secondary);
+  font-family: var(--ra-font-ui);
+}
+
+.ra-tool-row .ra-type-mono-small {
+  font-family: var(--ra-font-mono);
+  font-size: 0.7rem;
+  color: var(--ra-text-muted);
+  letter-spacing: 0.01em;
+}
+
+.ra-tool-row--done,
+.ra-tool-row--error {
+  opacity: 1;
+}
+
+/* ── Inline cards: hairline box, top accent bar ── */
+.ra-inline-card {
+  max-width: 44rem;
+  border: 1px solid var(--ra-sei-hair-strong);
+  border-radius: 6px;
+  box-shadow: none;
+  background: var(--ra-sei-paper-soft);
+  padding: 1rem 1.1rem 0.95rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.ra-inline-card--approval {
+  background: var(--ra-sei-paper-soft);
+  border-color: var(--ra-sei-hair-strong);
+}
+
+.ra-inline-card--approval::before {
+  content: "";
+  position: absolute;
+  left: 1.1rem;
+  top: 0;
+  width: 28px;
+  height: 2px;
+  background: var(--ra-sei-shu);
+}
+
+.ra-inline-card--question {
+  background: var(--ra-sei-paper-soft);
+  border-color: var(--ra-sei-hair-strong);
+}
+
+.ra-inline-card--question::before {
+  content: "";
+  position: absolute;
+  left: 1.1rem;
+  top: 0;
+  width: 28px;
+  height: 2px;
+  background: var(--ra-accent-secondary);
+}
+
+.ra-inline-card__title {
+  font-family: var(--ra-font-editorial);
+  font-size: 1rem;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: -0.008em;
+  color: var(--ra-text-primary);
+  font-variation-settings: "opsz" 120;
+}
+
+.ra-inline-card__status {
+  font-family: var(--ra-font-ui);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ra-sei-shu);
+  font-weight: 500;
+}
+
+.ra-inline-card--question .ra-inline-card__status {
+  color: var(--ra-accent-secondary);
+}
+
+.ra-inline-card__note {
+  color: var(--ra-text-secondary);
+  font-size: 0.78rem;
+}
+
+.ra-inline-card__meta .ra-type-mono-small {
+  font-family: var(--ra-font-mono);
+  font-size: 0.72rem;
+  color: var(--ra-text-muted);
+}
+
+/* ── Composer: single paper-soft field with 〉 prompt mark ── */
+.ra-composer {
+  border-top: 1px solid var(--ra-sei-hair);
+  background: var(--ra-sei-paper);
+  padding: 1rem 1.3rem 1.25rem;
+}
+
+.ra-composer-inner {
+  max-width: 44rem;
+}
+
+.ra-composer-shell {
+  position: relative;
+  background: var(--ra-sei-paper-soft);
+  border: 1px solid var(--ra-sei-hair);
+  border-radius: 8px;
+  padding: 0.75rem 0.85rem 0.55rem 2rem;
+  box-shadow: none;
+}
+
+.ra-composer-shell::before {
+  content: "〉";
+  position: absolute;
+  left: 0.85rem;
+  top: 0.85rem;
+  font-family: var(--ra-font-jp);
+  font-size: 0.95rem;
+  color: var(--ra-sei-shu);
+  line-height: 1;
+  pointer-events: none;
+}
+
+.ra-composer-shell:focus-within {
+  border-color: var(--ra-sei-hair-strong);
+  background: var(--ra-sei-paper);
+  box-shadow: none;
+}
+
+.ra-composer-shell textarea.ra-composer-input {
+  font-family: var(--ra-font-ui);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--ra-text-primary);
+  min-height: 2.8rem;
+}
+
+.ra-composer-shell textarea.ra-composer-input::placeholder {
+  font-family: var(--ra-font-editorial);
+  font-style: italic;
+  font-weight: 300;
+  color: color-mix(in oklab, var(--ra-sei-ink) 35%, transparent);
+  font-variation-settings: "opsz" 96;
+}
+
+.ra-composer-toolbar {
+  border-top: none;
+  padding-top: 0.25rem;
+  margin-top: 0;
+  gap: 0.5rem 0.75rem;
+}
+
+.ra-composer-mode-summary {
+  font-family: var(--ra-font-ui);
+  font-size: 0.68rem;
+  color: var(--ra-text-muted);
+  letter-spacing: 0.01em;
+}
+
+/* Send button — inked, flat */
+.ra-composer-send {
+  background: var(--ra-sei-ink);
+  color: var(--ra-sei-paper);
+  border-radius: 5px;
+  min-height: 2rem;
+  padding: 0.4rem 0.75rem;
+  font-family: var(--ra-font-ui);
+  font-weight: 500;
+  font-size: 0.8rem;
+  box-shadow: none;
+  letter-spacing: 0.005em;
+}
+
+.ra-composer-send:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--ra-sei-ink) 88%, var(--ra-sei-shu) 12%);
+  color: var(--ra-sei-paper);
+}
+
+.ra-composer-send:focus-visible {
+  outline: 2px solid var(--ra-sei-shu-soft);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+.ra-composer-send:disabled {
+  background: color-mix(in oklab, var(--ra-sei-ink) 20%, transparent);
+  color: color-mix(in oklab, var(--ra-sei-ink) 40%, transparent);
+  opacity: 1;
+}
+
+.ra-composer-cancel {
+  background: transparent;
+  border: 1px solid var(--ra-sei-hair-strong);
+  color: var(--ra-text-secondary);
+  border-radius: 5px;
+  min-height: 2rem;
+  padding: 0.4rem 0.75rem;
+  font-family: var(--ra-font-ui);
+  font-size: 0.78rem;
+  box-shadow: none;
+}
+
+.ra-composer-cancel:hover {
+  background: color-mix(in oklab, var(--ra-sei-ink) 4%, transparent);
+  color: var(--ra-text-primary);
+}
+
+/* Mode trigger (the copilot/workspace pill below the composer) — ghost */
+.ra-composer-mode-trigger {
+  border: 1px solid var(--ra-sei-hair);
+  background: transparent;
+  border-radius: 999px;
+  min-height: 1.85rem;
+  padding: 0.3rem 0.7rem;
+  font-family: var(--ra-font-ui);
+  font-size: 0.7rem;
+  color: var(--ra-text-secondary);
+}
+
+.ra-composer-mode-trigger:hover {
+  border-color: var(--ra-sei-hair-strong);
+  background: color-mix(in oklab, var(--ra-sei-ink) 4%, transparent);
+}
+
+.ra-composer-mode-trigger__value {
+  font-weight: 500;
+  color: var(--ra-text-primary);
+}
+
+/* ── Typography fine-tuning in the assistant markdown ── */
+.ra-md-assistant p { line-height: 1.7; }
+.ra-md-assistant p + p { margin-top: 0.85rem; }
+.ra-md-assistant code {
+  font-family: var(--ra-font-mono);
+  font-size: 0.82em;
+  background: color-mix(in oklab, var(--ra-sei-ink) 5%, transparent);
+  padding: 0.1em 0.4em;
+  border-radius: 3px;
+}
+.ra-md-assistant a {
+  color: var(--ra-sei-shu);
+  text-decoration: none;
+  border-bottom: 1px solid var(--ra-sei-shu-soft);
+}
+.ra-md-assistant blockquote {
+  border-left: 2px solid var(--ra-sei-shu);
+  padding: 0.1rem 0 0.1rem 1rem;
+  margin: 1rem 0;
+  font-family: var(--ra-font-editorial);
+  font-style: italic;
+  font-weight: 300;
+  font-size: 1.02rem;
+  color: var(--ra-text-secondary);
+  font-variation-settings: "opsz" 96;
+}
+
+/* Page-load choreography — a quiet staggered rise on first paint */
+.ra-bubble,
+.ra-inline-card,
+.ra-tool-row {
+  animation: sei-rise 0.5s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+@keyframes sei-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Dark theme tweaks — the overlay is theme-neutral, but the tool row hairlines
+ * read better with a slightly stronger divider when the paper is deep. */
+[data-theme="dark"] .ra-tool-row {
+  border-top-color: color-mix(in oklab, var(--ra-sei-ink) 12%, transparent) !important;
+  border-bottom-color: color-mix(in oklab, var(--ra-sei-ink) 12%, transparent) !important;
+}
+
+[data-theme="dark"] .ra-composer-send {
+  background: var(--ra-sei-ink);
+  color: var(--ra-sei-paper);
+}
+
+[data-theme="dark"] .ra-composer-send:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--ra-sei-ink) 85%, var(--ra-sei-shu) 15%);
 }
