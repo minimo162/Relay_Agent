@@ -65,6 +65,29 @@ test("settings modal exposes setup and advanced controls", async ({ page }) => {
   await expect(dialog.getByRole("button", { name: "Export diagnostics" })).toBeVisible();
 });
 
+test("settings modal surfaces workspace allowlist warnings", async ({ page }) => {
+  await injectRelayMock(page, { autoComplete: true });
+  await openApp(page);
+  await page.evaluate(() => {
+    (window as any).__RELAY_ALLOWLIST_SNAPSHOT__ = {
+      storePath: "/mock/.relay-agent/workspace_allowed_tools.json",
+      entries: [],
+      warnings: ["workspace allowlist store /mock/.relay-agent/workspace_allowed_tools.json contains invalid JSON"],
+    };
+  });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  const advanced = dialog.locator("details.ra-settings-details");
+  await advanced.locator("summary").click();
+  const warningCard = dialog.locator("[data-ra-allowlist-warning]");
+  await expect(warningCard).toBeVisible();
+  await expect(warningCard.getByText("Saved “Allow for this workspace” rules need attention.")).toBeVisible();
+  await expect(
+    warningCard.getByText("/mock/.relay-agent/workspace_allowed_tools.json", { exact: true }),
+  ).toBeVisible();
+  await expect(warningCard.getByText(/invalid JSON/)).toBeVisible();
+});
+
 test("sending the first prompt exits onboarding and creates one conversation", async ({ page }) => {
   await injectRelayMock(page, { autoComplete: false });
   await seedWorkspace(page);

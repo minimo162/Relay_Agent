@@ -1,8 +1,8 @@
-import { Show, createEffect, createSignal, type JSX } from "solid-js";
+import { For, Show, createEffect, createSignal, type JSX } from "solid-js";
 import { isTauri } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import type { BrowserAutomationSettings } from "../lib/ipc";
-import { getRelayDiagnostics, writeTextExport } from "../lib/ipc";
+import type { BrowserAutomationSettings, WorkspaceAllowlistSnapshot } from "../lib/ipc";
+import { getRelayDiagnostics, getWorkspaceAllowlist, writeTextExport } from "../lib/ipc";
 import {
   loadAlwaysOnTop,
   loadBrowserSettings,
@@ -28,6 +28,13 @@ export interface ShellSettingsDraft {
   alwaysOnTop: boolean;
 }
 
+function previewWorkspaceAllowlistSnapshot(): WorkspaceAllowlistSnapshot | null {
+  if (isTauri()) return null;
+  return (window as typeof window & {
+    __RELAY_ALLOWLIST_SNAPSHOT__?: WorkspaceAllowlistSnapshot;
+  }).__RELAY_ALLOWLIST_SNAPSHOT__ ?? null;
+}
+
 export function SettingsModal(props: {
   open: boolean;
   onClose: () => void;
@@ -48,6 +55,7 @@ export function SettingsModal(props: {
   const [alwaysOnTop, setAlwaysOnTop] = createSignal(false);
   const [hint, setHint] = createSignal<string | null>(null);
   const [exporting, setExporting] = createSignal(false);
+  const [allowlistSnapshot, setAllowlistSnapshot] = createSignal<WorkspaceAllowlistSnapshot | null>(null);
 
   createEffect(() => {
     if (props.open && !wasOpen) {
@@ -60,6 +68,22 @@ export function SettingsModal(props: {
       setAutoLaunchEdge(browser.autoLaunchEdge);
       setAlwaysOnTop(loadAlwaysOnTop());
       setHint(null);
+      const previewSnapshot = previewWorkspaceAllowlistSnapshot();
+      if (previewSnapshot) {
+        setAllowlistSnapshot(previewSnapshot);
+      } else {
+        setAllowlistSnapshot(null);
+        void getWorkspaceAllowlist()
+          .then((snapshot) => setAllowlistSnapshot(snapshot))
+          .catch((error) => {
+            console.error("[Settings] workspace allowlist load failed", error);
+            setAllowlistSnapshot({
+              storePath: "",
+              entries: [],
+              warnings: ["Couldn't load workspace allowlist diagnostics."],
+            });
+          });
+      }
       queueMicrotask(() => {
         (workspaceInputRef ?? closeButtonRef)?.focus();
       });
@@ -309,6 +333,33 @@ export function SettingsModal(props: {
                       {exporting() ? "Exporting…" : "Export diagnostics"}
                     </Button>
                   </div>
+
+                  <Show when={(allowlistSnapshot()?.warnings.length ?? 0) > 0}>
+                    <div
+                      class="ra-settings-status border-[var(--ra-warning-border)] bg-[var(--ra-warning-surface)]"
+                      data-ra-allowlist-warning=""
+                    >
+                      <div>
+                        <span class="ra-type-system-micro text-[var(--ra-warning-text)]">Workspace approvals</span>
+                        <p class="ra-type-button-label text-[var(--ra-text-primary)] mt-1">
+                          Saved “Allow for this workspace” rules need attention.
+                        </p>
+                        <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
+                          Relay could not safely read the persisted allowlist, so remembered workspace approvals were ignored until the store is repaired.
+                        </p>
+                        <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1 break-all">
+                          {allowlistSnapshot()?.storePath}
+                        </p>
+                        <For each={allowlistSnapshot()?.warnings ?? []}>
+                          {(warning) => (
+                            <p class="ra-type-caption text-[var(--ra-warning-text)] mt-2">
+                              {warning}
+                            </p>
+                          )}
+                        </For>
+                      </div>
+                    </div>
+                  </Show>
                 </div>
               </details>
             </div>

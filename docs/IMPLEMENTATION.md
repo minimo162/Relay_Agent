@@ -15,6 +15,192 @@
 
 ## Milestone Log
 
+### 2026-04-18 Workspace allowlist persistence hardening
+
+**Problem:** The persisted "Allow for this workspace" approvals lived in
+[`~/.relay-agent/workspace_allowed_tools.json`](../apps/desktop/src-tauri/src/workspace_allowlist.rs)
+but the store handling was still optimistic: reads silently fell back to an empty default on parse or I/O failures, and writes used direct `fs::write` without a temp file or lock. That made interrupted writes or corrupted JSON look like "all remembered approvals disappeared" and gave the user no in-product signal about what happened.
+
+**Change:** Hardened
+[`apps/desktop/src-tauri/src/workspace_allowlist.rs`](../apps/desktop/src-tauri/src/workspace_allowlist.rs)
+so the store now uses:
+
+- lock-file coordination (`workspace_allowed_tools.json.lock`) before mutations,
+- temp-file write + flush + replace for persisted updates,
+- deterministic sanitizing/sorting of remembered tool lists,
+- warning-bearing lenient reads for snapshot/load paths, and
+- strict reads for mutations so corrupt JSON is **not** overwritten by a new default.
+
+Extended
+[`WorkspaceAllowlistSnapshot`](../apps/desktop/src-tauri/crates/desktop-core/src/models.rs)
+with `warnings`, updated
+[`apps/desktop/src/lib/ipc.generated.ts`](../apps/desktop/src/lib/ipc.generated.ts)
+and test mocks, and surfaced warnings in
+[`apps/desktop/src/components/SettingsModal.tsx`](../apps/desktop/src/components/SettingsModal.tsx)
+under Advanced so damaged persisted approvals are visible in the desktop UI instead of only in logs. Added a Playwright regression in
+[`apps/desktop/tests/app.e2e.spec.ts`](../apps/desktop/tests/app.e2e.spec.ts)
+and Rust unit coverage for corrupt-store warning, non-destructive failure, and deterministic snapshot ordering.
+
+**Verification:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_allowlist` — pass (3 tests). `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings` — pass. `pnpm --filter @relay-agent/desktop typecheck` — pass. `pnpm --filter @relay-agent/desktop exec playwright test tests/app.e2e.spec.ts` — pass. `pnpm check` — pass.
+
+### 2026-04-18 Structured bash deny policy and agent-loop permission split
+
+**Problem:** Relay already had a useful hard denylist for `bash`, but it still depended mostly on regex over the full shell string. That catches many bad cases, but it is weaker around wrapper forms (`env`, `command`, `nice`, etc.) and makes it harder to reason about why a command was blocked. Separately, desktop-only permission explanation helpers still lived inside
+[`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs),
+which kept one more self-contained responsibility inside the large orchestrator file.
+
+**Change:** Reworked
+[`apps/desktop/src-tauri/crates/runtime/src/tool_hard_denylist.rs`](../apps/desktop/src-tauri/crates/runtime/src/tool_hard_denylist.rs)
+to inspect shell fragments and tokenized commands before falling back to the existing regex heuristics. The deny path now recognizes wrapped commands such as `env TMPDIR=/tmp command rm -rf ...`, `env ... sudo ...`, `find ... -exec /bin/rm`, `xargs /bin/rmdir`, `git push/commit/reset/rebase/config`, `brew install`, and octal `chmod 777/0777` via structured command-name / argument checks instead of only substring matching. Added `proptest`-backed regression coverage in
+[`apps/desktop/src-tauri/crates/runtime/Cargo.toml`](../apps/desktop/src-tauri/crates/runtime/Cargo.toml)
+for case-noise and wrapper variants, while preserving the existing regex fallback as a defense-in-depth backstop.
+
+Moved desktop permission-policy explanation helpers into
+[`apps/desktop/src-tauri/src/agent_loop/permission.rs`](../apps/desktop/src-tauri/src/agent_loop/permission.rs)
+and extracted the unfenced/fenced JSON fallback parser into
+[`apps/desktop/src-tauri/src/agent_loop/response_parser.rs`](../apps/desktop/src-tauri/src/agent_loop/response_parser.rs).
+[`orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs)
+now imports both modules, shrinking two isolated concerns out of the orchestrator without changing runtime behavior.
+
+**Verification:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime tool_hard_denylist` — pass (10 tests, including property-style cases). `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime -- -D warnings` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop bash_prompts_until_allowed` — pass. `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop -- -D warnings` — pass.
+
+### 2026-04-18 Prompt helper split from desktop orchestrator
+
+**Problem:** After the permission/helper split and response-parser extraction, the desktop orchestrator still owned several prompt-building helpers that were conceptually separate from turn execution: path-anchor extraction, actionable-user-turn discovery, CDP prompt flavor selection, repair-prompt construction, and CDP project-context slimming. Keeping those string-assembly and prompt-shaping helpers in
+[`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs)
+continued to blur the line between "run the loop" and "shape the Copilot prompt."
+
+**Change:** Rebuilt
+[`apps/desktop/src-tauri/src/agent_loop/prompt.rs`](../apps/desktop/src-tauri/src/agent_loop/prompt.rs)
+from a simple re-export shim into a real helper module. It now owns:
+
+- `CdpPromptFlavor`, `CdpCatalogFlavor`, and `CdpPromptBundle`,
+- CDP context slimming and instruction truncation,
+- path-anchor extraction and actionable-user-turn discovery,
+- latest-request path section generation, and
+- repair-prompt / catalog-flavor helper logic.
+
+In a follow-up pass the same module also absorbed the CDP prompt-bundle assembly path: message rendering, message-size breakdown accounting, flavor-specific message slicing, the tool-result continuation reminder, and the final prompt concatenation now live in `prompt.rs` behind a compact `PromptRenderFns` callback struct. That removes another dense prompt-construction block from
+[`orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs)
+without changing the generated bundle shape.
+
+[`orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs)
+now imports these helpers and keeps only thin wrappers where existing local logic already provided the necessary callbacks. This reduces orchestrator ownership over prompt-shaping concerns without changing the generated prompt contract.
+
+**Verification:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop bash_prompts_until_allowed` — pass. `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop -- -D warnings` — pass.
+
+### 2026-04-19 Retry and repair helper split from desktop orchestrator
+
+**Problem:** Even after prompt extraction, the desktop orchestrator still owned the retry / repair-heavy policy layer: tool-protocol confusion detection, targeted repair prompt construction, path-resolution repair prompting, runtime retry classification/backoff, and the post-success loop decision tree. That left one of the densest policy bundles inside
+[`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs),
+which made the main loop harder to scan and kept tests coupled to a single large file.
+
+**Change:** Rebuilt
+[`apps/desktop/src-tauri/src/agent_loop/retry.rs`](../apps/desktop/src-tauri/src/agent_loop/retry.rs)
+from a shim into a real helper module. It now owns:
+
+- `LoopStopReason`, `LoopDecision`, and `LoopContinueKind`,
+- tool-protocol confusion / repair-refusal / false-completion heuristics,
+- targeted tool-protocol and path-resolution repair input builders,
+- post-success loop classification via `decide_loop_after_success`, and
+- retry / compaction error classification plus backoff and cancellable sleep helpers.
+
+[`orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs)
+now imports these helpers and keeps compatibility wrappers only where other modules or existing tests already referenced the old local names. This moves another policy-dense responsibility out of the core turn loop without changing session behavior.
+
+**Verification:** `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop -- -D warnings` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop retryable_runtime_errors_are_classified` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop read_file_enoent_in_build_session_gets_path_repair` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop bash_prompts_until_allowed` — pass.
+
+### 2026-04-19 Session-state helper split from desktop orchestrator
+
+**Problem:** After prompt and retry extraction, the orchestrator still carried a separate bundle of loop-epoch/session-state plumbing: `LoopEpochGuard`, `AgentSessionPhase`, `AgentStatusOptions`, and the registry mutation helpers used to update run state, retry counts, stop reasons, and terminal-status flags. Those pieces are not turn execution logic, but they still occupied the top of
+[`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs)
+and made the loop harder to read.
+
+**Change:** Added
+[`apps/desktop/src-tauri/src/agent_loop/state.rs`](../apps/desktop/src-tauri/src/agent_loop/state.rs)
+and moved the session-state primitives there:
+
+- `LoopEpochGuard`,
+- `AgentSessionPhase`,
+- `AgentStatusOptions`,
+- guarded session mutation helpers, and
+- retry/error/stop-reason / terminal-status flag updates.
+
+[`orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs)
+now imports those helpers and keeps only the `emit_status_event` / `transition_session_state` wrappers that still depend on the local Tauri event payload types. [`apps/desktop/src-tauri/src/agent_loop/mod.rs`](../apps/desktop/src-tauri/src/agent_loop/mod.rs) now re-exports `AgentSessionPhase` from `state` instead of `orchestrator`.
+
+**Verification:** `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop -- -D warnings` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop agent_session_phase_strings` — pass (no matching test cases after filter, crate built successfully).
+
+### 2026-04-19 Event payload split from desktop orchestrator
+
+**Problem:** `events.rs` was only a re-export shim while the actual Tauri event constants and IPC-visible payload structs still lived in
+[`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs).
+That kept frontend contract definitions mixed with turn execution and approval logic.
+
+**Change:** Rebuilt
+[`apps/desktop/src-tauri/src/agent_loop/events.rs`](../apps/desktop/src-tauri/src/agent_loop/events.rs)
+as the source module for agent-loop event names and payload types: tool start/result, approval needed, user question, turn complete, session status, error, text delta, relay message content, and session history response. The orchestrator now imports those definitions and only owns the actual emission timing / Tauri calls.
+
+**Verification:** `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop -- -D warnings` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop bash_prompts_until_allowed` — pass.
+
+### 2026-04-19 Event emission helper split from desktop orchestrator
+
+**Problem:** After moving the event payload structs, the orchestrator still owned the helper functions that emitted status, turn-complete, error, and streamed text-delta events. The streaming path also kept append-vs-replace classification and stream metric updates in the same file as turn execution.
+
+**Change:** Extended
+[`apps/desktop/src-tauri/src/agent_loop/events.rs`](../apps/desktop/src-tauri/src/agent_loop/events.rs)
+to own the reusable Tauri emission helpers: text delta emission, Copilot progress append/replace classification, stream metric recording, session status emission, state transition + status emission, turn-complete emission, and error emission. The orchestrator now calls those helpers and keeps only the higher-level timing decisions for when events should be emitted.
+
+**Verification:** `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop -- -D warnings` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop classify_stream_text_update` — pass.
+
+### 2026-04-19 Approval prompter split from desktop orchestrator
+
+**Problem:** The desktop orchestrator still owned `TauriApprovalPrompter`, including approval event emission, pending approval registration, session auto-allow checks, and approval resolution state restoration. That wiring is permission UI plumbing rather than turn-loop control.
+
+**Change:** Added
+[`apps/desktop/src-tauri/src/agent_loop/approval.rs`](../apps/desktop/src-tauri/src/agent_loop/approval.rs)
+for `TauriApprovalPrompter`. The module now owns the approval-channel lifecycle, workspace-allow event payload creation, pending approval registration, auto-allow shortcut, and post-decision session state restoration. The orchestrator imports the prompter type and only wires it into `ConversationRuntime::run_turn_with_input`.
+
+**Verification:** `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop -- -D warnings` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop bash_prompts_until_allowed` — pass.
+
+### 2026-04-19 Outer-loop success decision helper split
+
+**Problem:** The main `run_agent_loop_impl` body still contained a large nested `match` for applying `LoopDecision` after a successful runtime turn. That block mixed logging, nudge counters, path-repair flags, max-turn enforcement, final stop reason updates, and error summary propagation into the core turn execution loop.
+
+**Change:** Added a local `SuccessDecisionState` carrier and `apply_success_loop_decision` helper in
+[`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs).
+The helper applies `LoopDecision::Continue` / `Stop`, queues synthetic repair or continue input, updates repair/nudge state, and records final stop/error state. The main loop now delegates that success-decision application after persistence and doom-loop checks, reducing one dense nested block without moving runtime execution itself yet.
+
+**Verification:** `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop -- -D warnings` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop first_build_turn_tool_protocol_confusion_gets_repair_nudge` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop read_file_enoent_in_build_session_gets_path_repair` — pass.
+
+### 2026-04-19 Outer-loop runtime-error decision helper split
+
+**Problem:** The same `run_agent_loop_impl` body still owned the runtime-turn `Err(error)` branch directly. That branch handled checkpoint rollback, cancellation detection, forced compaction, retry state, retry backoff, final stop reason classification, and error summary updates inline with normal turn execution.
+
+**Change:** Added a local `RuntimeErrorDecisionState` carrier and `apply_runtime_error_loop_decision` helper in
+[`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs).
+The helper now applies the error-side loop decision while preserving the existing sequence: restore the checkpoint, record the error summary, handle cancellation, attempt forced compaction when prompt overflow requires it, retry transient Copilot failures with status/backoff updates, and otherwise classify terminal failure as compaction failed, retry exhausted, or tool error. The main loop now delegates the error-decision application and only chooses whether the inner retry loop should continue or break.
+
+**Verification:** `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop retryable_runtime_errors_are_classified` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop prompt_overflow_requests_forced_compaction` — pass. `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop -- -D warnings` — pass.
+
+### 2026-04-19 Outer-loop doom-loop guard helper split
+
+**Problem:** Successful turns still performed the repeated-tool-call guard inline in the main loop: summarizing turn activity, maintaining the recent signature window, detecting three identical tool-call patterns, updating stop/error state, and recording the session error summary.
+
+**Change:** Added a local `DoomLoopGuardState` carrier and `apply_doom_loop_guard` helper in
+[`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs).
+The helper now owns the successful-turn doom-loop state transition while the main loop only asks whether it should break before applying the normal success-decision path.
+
+**Verification:** `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop -- -D warnings` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop doom_loop_trips_after_three_identical_turns` — pass.
+
+### 2026-04-19 ts-rs serde warning cleanup
+
+**Problem:** Rust verification emitted repeated `ts-rs failed to parse this attribute` warnings for `#[serde(skip_serializing_if = "Option::is_none")]` generated by `serde_with::skip_serializing_none`. `ts-rs` 10 documents `skip_serializing_if` as unsupported for serde compatibility and suggests the `no-serde-warnings` feature when unsupported serde attributes should be ignored.
+
+**Change:** Enabled `ts-rs` feature `no-serde-warnings` in the desktop crate and `desktop-core` crate. This keeps the existing serde serialization behavior intact while suppressing unsupported-attribute warnings during TS declaration generation.
+
+**Verification:** `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop` — pass without the previous `ts-rs` serde warnings. `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop -- -D warnings` — pass without the previous `ts-rs` serde warnings. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop rendered_ipc_bindings_include_core_contracts` — pass.
+
 ### 2026-04-18 Align live-smoke latency thresholds with measured M365 Copilot baseline
 
 **Problem:** The long-continuity live smoke

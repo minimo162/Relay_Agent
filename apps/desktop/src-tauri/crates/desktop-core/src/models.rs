@@ -288,6 +288,8 @@ pub struct WorkspaceAllowlistEntryRow {
 pub struct WorkspaceAllowlistSnapshot {
     pub store_path: String,
     pub entries: Vec<WorkspaceAllowlistEntryRow>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, TS)]

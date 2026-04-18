@@ -110,6 +110,9 @@
   --ra-streaming-badge-fg: var(--ra-accent);
   --ra-tool-row-bg: color-mix(in oklab, var(--ra-surface-100) 82%, transparent);
   --ra-tool-row-border: color-mix(in oklab, #26251e 8%, transparent);
+  --ra-warning-surface: color-mix(in oklab, var(--ra-surface-100) 86%, #c08532 14%);
+  --ra-warning-border: color-mix(in oklab, #c08532 34%, var(--ra-border));
+  --ra-warning-text: #8b4e14;
 
   --ra-color-page: var(--ra-surface);
   --ra-color-surface: var(--ra-surface-card);
@@ -197,6 +200,9 @@
   --ra-streaming-badge-fg: #ffd4bf;
   --ra-tool-row-bg: color-mix(in oklab, var(--ra-surface-100) 70%, transparent);
   --ra-tool-row-border: color-mix(in oklab, #f2f1ed 14%, transparent);
+  --ra-warning-surface: color-mix(in oklab, var(--ra-surface-200) 82%, #c08532 18%);
+  --ra-warning-border: color-mix(in oklab, #dfa88f 36%, var(--ra-border));
+  --ra-warning-text: #ffd4bf;
 
   --ra-color-page: var(--ra-surface);
   --ra-color-surface: var(--ra-surface-card);

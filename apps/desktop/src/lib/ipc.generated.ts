@@ -157,6 +157,7 @@ export interface WorkspaceAllowlistEntryRow {
 export interface WorkspaceAllowlistSnapshot {
   storePath: string;
   entries: WorkspaceAllowlistEntryRow[];
+  warnings: string[];
 }
 
 export interface WorkspaceAllowlistRemoveToolRequest {

@@ -179,6 +179,44 @@ Acceptance criteria:
 - Risky actions are explained through inline approval requests instead of a separate mode or permission matrix.
 - Root `pnpm check` passes and Playwright coverage confirms first-run gating plus the simplified shell labels.
 
+### Cross-Cutting Hardening: Workspace Approval Persistence
+
+Goal: make persisted "Allow for this workspace" approvals resilient to interrupted writes and visible when the store is damaged.
+
+Change targets:
+
+- `apps/desktop/src-tauri/src/workspace_allowlist.rs`
+- `apps/desktop/src-tauri/crates/desktop-core/src/models.rs`
+- `apps/desktop/src/components/SettingsModal.tsx`
+- `apps/desktop/src/lib/ipc.generated.ts`
+- `apps/desktop/tests/{app.e2e.spec.ts,relay-e2e-harness.ts,tauri-mock-*.ts,simple.spec.ts}`
+- `docs/IMPLEMENTATION.md`
+
+Acceptance criteria:
+
+- Workspace allowlist writes use a temp file plus locked replace instead of direct `fs::write`.
+- Corrupt or unreadable allowlist stores surface warnings through the IPC snapshot and Settings UI.
+- Mutating the allowlist refuses to overwrite a corrupt store.
+- Rust regression tests cover corrupt-store warning and non-destructive failure handling.
+
+### Cross-Cutting Hardening: Bash Policy And Agent-Loop Maintainability
+
+Goal: reduce reliance on regex-only shell blocking and trim one self-contained responsibility out of the desktop orchestrator.
+
+Change targets:
+
+- `apps/desktop/src-tauri/crates/runtime/src/tool_hard_denylist.rs`
+- `apps/desktop/src-tauri/crates/runtime/Cargo.toml`
+- `apps/desktop/src-tauri/src/agent_loop/{orchestrator.rs,permission.rs}`
+- `docs/IMPLEMENTATION.md`
+
+Acceptance criteria:
+
+- Bash deny decisions use shell-fragment/token inspection before regex fallback.
+- Wrapper forms such as `env ...`, `command ...`, `nice ...`, and mixed-case blocked verbs are covered by regression tests.
+- Runtime regression coverage includes property-style tests for blocked bash mutations and allowed git inspection commands.
+- Desktop agent-loop permission explanation helpers, approval prompting, prompt/path-repair helpers, CDP prompt-bundle/message rendering helpers, retry/repair helpers, success/error-decision application, doom-loop guard application, session-state helpers, event payload/emission helpers, and unfenced/fenced tool-JSON fallback parsing live outside the main `orchestrator.rs` turn loop.
+
 ## Out Of Scope
 
 - Broad backend decomposition unrelated to doctor sharing or deterministic harness support.

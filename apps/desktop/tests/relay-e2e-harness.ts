@@ -147,7 +147,11 @@ function initRelayMock(config: { autoComplete: boolean }) {
       case "workspace_instruction_surfaces":
         return { workspaceRoot: null, surfaces: [] };
       case "get_workspace_allowlist":
-        return { storePath: "/mock/.relay-agent/workspace_allowed_tools.json", entries: [] };
+        return (window as any).__RELAY_ALLOWLIST_SNAPSHOT__ ?? {
+          storePath: "/mock/.relay-agent/workspace_allowed_tools.json",
+          entries: [],
+          warnings: [],
+        };
       case "list_workspace_slash_commands":
         return [];
       case "probe_rust_analyzer":
