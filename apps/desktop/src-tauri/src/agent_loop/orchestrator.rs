@@ -965,6 +965,56 @@ fn is_concrete_local_write_body_without_tools(
     looks_like_generated_file_body && !is_tool_protocol_confusion_text(trimmed)
 }
 
+fn is_concrete_local_mutation_plan_without_tools(
+    latest_turn_input: &str,
+    assistant_text: &str,
+) -> bool {
+    if !is_concrete_local_file_write_goal(latest_turn_input) {
+        return false;
+    }
+    let trimmed = assistant_text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let mentions_target = lower.contains("/root/")
+        || lower.contains("workspace")
+        || lower.contains(".html")
+        || lower.contains(".txt")
+        || lower.contains(".md")
+        || trimmed.contains("ファイル")
+        || trimmed.contains("変更")
+        || trimmed.contains("適用");
+    let mutation_intent = lower.contains("apply")
+        || lower.contains("update")
+        || lower.contains("edit")
+        || lower.contains("change")
+        || lower.contains("modify")
+        || lower.contains("reflect")
+        || trimmed.contains("適用")
+        || trimmed.contains("変更")
+        || trimmed.contains("反映")
+        || trimmed.contains("追加");
+    let planning_language = lower.contains("will ")
+        || lower.contains("going to")
+        || lower.contains("only this change")
+        || lower.contains("this change only")
+        || lower.contains("existing")
+        || trimmed.contains("します")
+        || trimmed.contains("反映します")
+        || trimmed.contains("変更だけ")
+        || trimmed.contains("追加適用")
+        || trimmed.contains("既存の");
+    trimmed.chars().count() <= 1600
+        && mentions_target
+        && mutation_intent
+        && planning_language
+        && !lower.contains("\"relay_tool_call\"")
+        && !lower.contains("```relay_tool")
+        && !lower.contains("<!doctype html")
+        && !lower.contains("<html")
+}
+
 fn contains_plain_relay_tool_mention(lower: &str) -> bool {
     lower.contains("relay_tool ")
         || lower.contains("relay_tool\n")
@@ -1624,13 +1674,15 @@ fn decide_loop_after_success(
         summary.tool_results.is_empty() && is_false_completion_success_claim_text(assistant_text);
     let is_plain_file_body_completion = summary.tool_results.is_empty()
         && is_concrete_local_write_body_without_tools(latest_turn_input, assistant_text);
+    let is_mutation_plan_without_tools = summary.tool_results.is_empty()
+        && is_concrete_local_mutation_plan_without_tools(latest_turn_input, assistant_text);
     let is_meta_stall = summary.tool_results.is_empty()
         && summary.iterations == 1
         && is_meta_stall_text(assistant_text);
 
     if summary.tool_results.is_empty() {
         tracing::info!(
-            "[RelayAgent] post-turn classification: outcome={:?} iterations={} meta_nudges_used={}/{} path_repair_used={} tool_protocol_confusion={} repair_refusal={} false_completion={} plain_file_body={} meta_stall={} assistant_excerpt={:?}",
+            "[RelayAgent] post-turn classification: outcome={:?} iterations={} meta_nudges_used={}/{} path_repair_used={} tool_protocol_confusion={} repair_refusal={} false_completion={} plain_file_body={} mutation_plan_without_tools={} meta_stall={} assistant_excerpt={:?}",
             summary.outcome,
             summary.iterations,
             meta_stall_nudges_used,
@@ -1640,6 +1692,7 @@ fn decide_loop_after_success(
             is_repair_refusal,
             is_false_completion,
             is_plain_file_body_completion,
+            is_mutation_plan_without_tools,
             is_meta_stall,
             truncate_for_log(assistant_text, 240)
         );
@@ -1649,6 +1702,7 @@ fn decide_loop_after_success(
         || is_repair_refusal
         || is_false_completion
         || is_plain_file_body_completion
+        || is_mutation_plan_without_tools
     {
         if meta_stall_nudges_used < meta_stall_nudge_limit {
             return LoopDecision::Continue {
@@ -3480,11 +3534,15 @@ fn is_concrete_local_file_write_goal(goal: &str) -> bool {
         || lower.contains("edit")
         || lower.contains("update")
         || lower.contains("save")
+        || lower.contains("apply")
+        || lower.contains("reflect")
         || trimmed.contains("作成")
         || trimmed.contains("保存")
         || trimmed.contains("書")
         || trimmed.contains("更新")
-        || trimmed.contains("編集");
+        || trimmed.contains("編集")
+        || trimmed.contains("適用")
+        || trimmed.contains("反映");
     mentions_target_file && requests_write
 }
 
@@ -3734,7 +3792,13 @@ fn cdp_stage_label(messages: &[ConversationMessage]) -> &'static str {
 }
 
 fn cdp_force_fresh_chat(messages: &[ConversationMessage]) -> bool {
-    matches!(cdp_stage_label(messages), "repair1" | "repair2" | "repair3")
+    let Some(text) = latest_user_text(messages) else {
+        return false;
+    };
+    let trimmed = text.trim();
+    trimmed.contains("Fresh-chat replay required.")
+        || trimmed.contains("force fresh chat")
+        || trimmed.contains("start a fresh Copilot chat")
 }
 
 fn cdp_tool_parse_mode(messages: &[ConversationMessage]) -> CdpToolParseMode {
@@ -8289,7 +8353,7 @@ mod loop_controller_tests {
         let repair3 =
             build_tool_protocol_repair_input("Create ./tetris.html", "Create ./tetris.html", 2);
         assert!(repair3.contains("Any text before or after the fence is a failed repair."));
-        assert!(repair3.contains("Do not use placeholders like `<full file content here>`"));
+        assert!(repair3.contains("Emit the actual local file write now."));
     }
 
     #[test]
@@ -8404,6 +8468,33 @@ mod loop_controller_tests {
     }
 
     #[test]
+    fn prose_only_mutation_plan_without_tool_call_escalates_to_repair() {
+        let s = summary(
+            "既存の /root/Relay_Agent/tetris_grounding_live_copy.html に、残りの改善のうち 「インラインスタイルの分離」 を 1点のみ 追加適用します（fixture は変更しません）。\nこの変更だけを反映します。",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let decision = decide_loop_after_success(
+            "同じファイルに、残りの改善を 1 つだけ追加で適用してください。今回も元の fixture は変更しないでください。",
+            "同じファイルに、残りの改善を 1 つだけ追加で適用してください。今回も元の fixture は変更しないでください。",
+            0,
+            0,
+            2,
+            false,
+            &s,
+        );
+        let LoopDecision::Continue {
+            next_input,
+            kind: LoopContinueKind::MetaNudge,
+        } = decision
+        else {
+            panic!("expected prose-only mutation plan to escalate to repair");
+        };
+        assert!(next_input.contains("Tool protocol repair."));
+        assert!(next_input.contains("Tool protocol repair."));
+    }
+
+    #[test]
     fn pathless_html_tetris_request_uses_default_tetris_write_file_repair() {
         let s = summary(
             "Show**Planning Tetris HTML creation**I’m preparing to use the relay tool after deciding on the filename.",
@@ -8503,16 +8594,16 @@ mod loop_controller_tests {
     }
 
     #[test]
-    fn tool_protocol_repairs_force_fresh_chat_but_path_repairs_do_not() {
+    fn tool_protocol_repairs_do_not_force_fresh_chat_by_default() {
         let repair_messages = vec![ConversationMessage::user_text(
             build_tool_protocol_repair_input("Create ./tetris.html", "Create ./tetris.html", 0),
         )];
-        assert!(cdp_force_fresh_chat(&repair_messages));
+        assert!(!cdp_force_fresh_chat(&repair_messages));
 
         let repair3_messages = vec![ConversationMessage::user_text(
             build_tool_protocol_repair_input("Create ./tetris.html", "Create ./tetris.html", 2),
         )];
-        assert!(cdp_force_fresh_chat(&repair3_messages));
+        assert!(!cdp_force_fresh_chat(&repair3_messages));
 
         let path_messages = vec![ConversationMessage::user_text(
             build_path_resolution_repair_input(
@@ -8524,6 +8615,11 @@ mod loop_controller_tests {
             ),
         )];
         assert!(!cdp_force_fresh_chat(&path_messages));
+
+        let forced_messages = vec![ConversationMessage::user_text(
+            "Tool protocol repair.\nFresh-chat replay required.\nstart a fresh Copilot chat".to_string(),
+        )];
+        assert!(cdp_force_fresh_chat(&forced_messages));
     }
 
     #[test]
@@ -8657,9 +8753,8 @@ mod loop_controller_tests {
         assert!(requests[1].contains("Use the Relay tool catalog"));
         assert!(!requests[1].contains("Your previous repair still drifted"));
         assert!(requests[2].contains("Tool protocol repair."));
-        assert!(requests[2].contains(
-            "Your previous repair still drifted into Microsoft-native execution or prose."
-        ));
+        assert!(requests[2]
+            .contains("Your previous repair still drifted into planning-only text instead of usable Relay tool JSON."));
         assert!(
             requests[2].contains("output exactly one Relay `relay_tool` fence and nothing else")
         );

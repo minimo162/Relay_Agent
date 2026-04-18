@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   COMPOSER_ANCESTOR_CLOSEST,
   RESPONSE_TIMEOUT_MS,
@@ -37,6 +38,24 @@ var COPILOT_URL = "https://m365.cloud.microsoft/chat/";
  */
 function copilotWindowFocusAllowed() {
   return process.env.RELAY_COPILOT_NO_WINDOW_FOCUS !== "1";
+}
+
+export function shouldStartNewChatForRequest({
+  probeMode = false,
+  relayNewChat = false,
+  relayForceFreshChat = false,
+  relaySessionInitialized = false,
+  repairStage = false,
+  repairReplayUsed = false,
+  envNewChatEachTurn = false,
+} = {}) {
+  if (probeMode) return true;
+  if (relayForceFreshChat) return true;
+  if (envNewChatEachTurn) return true;
+  if (!relaySessionInitialized) return true;
+  if (relayNewChat && !repairStage) return true;
+  if (repairStage && repairReplayUsed) return true;
+  return false;
 }
 
 /**
@@ -1001,15 +1020,16 @@ class CopilotSession {
 
         let hadAttachments = false;
         try {
-          const forceRepairNewChat =
-            repairStage && (repairReplayUsed || params.relayForceFreshChat === true);
-          const wantNewChat =
-            requestState.probeMode ||
-            forceRepairNewChat ||
-            !relaySession.initialized ||
-            envNewChatEachTurn() ||
-            params.relayNewChat === true;
           const envEach = envNewChatEachTurn();
+          const wantNewChat = shouldStartNewChatForRequest({
+            probeMode: requestState.probeMode,
+            relayNewChat: params.relayNewChat === true,
+            relayForceFreshChat: params.relayForceFreshChat === true,
+            relaySessionInitialized: relaySession.initialized,
+            repairStage,
+            repairReplayUsed,
+            envNewChatEachTurn: envEach,
+          });
           trace.wantNewChat = wantNewChat;
           console.error(
             "[copilot:describe] wantNewChat=",
@@ -1032,6 +1052,20 @@ class CopilotSession {
             requestAttempt,
             "repair_replay_attempt=",
             trace.repairReplayAttempt,
+            "reason=",
+            requestState.probeMode
+              ? "probe_mode"
+              : params.relayForceFreshChat === true
+                ? "explicit_force_fresh"
+                : envEach
+                  ? "env_each_turn"
+                  : !relaySession.initialized
+                    ? "session_uninitialized"
+                    : repairStage && repairReplayUsed
+                      ? "repair_replay_retry"
+                      : params.relayNewChat === true
+                        ? "ignored_relay_new_chat_for_existing_session"
+                        : "continue_existing_session",
           );
           if (wantNewChat) {
             console.error("[copilot:describe] starting new chat...");
@@ -4518,7 +4552,19 @@ async function main() {
   process.on("SIGTERM", () => void shutdown());
 }
 
-main().catch((error) => {
-  console.error("[copilot] fatal:", error);
-  process.exit(1);
-});
+const isDirectEntry = (() => {
+  const argv1 = process.argv[1];
+  if (!argv1) return false;
+  try {
+    return import.meta.url === pathToFileURL(argv1).href;
+  } catch {
+    return fileURLToPath(import.meta.url) === argv1;
+  }
+})();
+
+if (isDirectEntry) {
+  main().catch((error) => {
+    console.error("[copilot] fatal:", error);
+    process.exit(1);
+  });
+}

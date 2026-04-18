@@ -46,6 +46,8 @@ apps/desktop/src-tauri/gen/schemas/windows-schema.json
 test-results/
 apps/desktop/test-results-cdp/
 tetris_grounding_live_copy.html
+.claude/
+tetris.html
 
 # Playwright saved Microsoft session (sensitive)
 apps/desktop/tests/.auth/*.json

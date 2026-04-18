@@ -762,9 +762,11 @@ pub(crate) fn respond_approval_inner(
         && (request.remember_for_session == Some(true)
             || request.remember_for_workspace == Some(true))
     {
-        handle
-            .add_auto_allowed_tool(&pending.tool_name)
-            .map_err(|e| e.to_string())?;
+        for tool_name in approval_memory_equivalent_tools(&pending.tool_name) {
+            handle
+                .add_auto_allowed_tool(tool_name)
+                .map_err(|e| e.to_string())?;
+        }
     }
 
     if request.approved && request.remember_for_workspace == Some(true) {
@@ -772,10 +774,12 @@ pub(crate) fn respond_approval_inner(
             .read_state(|state| state.session_config.cwd.clone())
             .map_err(|e| e.to_string())?
         {
-            if let Err(e) =
-                crate::workspace_allowlist::remember_tool_for_workspace(&cwd, &pending.tool_name)
-            {
-                tracing::warn!("[RelayAgent] workspace allowlist persist failed: {e}");
+            for tool_name in approval_memory_equivalent_tools(&pending.tool_name) {
+                if let Err(e) =
+                    crate::workspace_allowlist::remember_tool_for_workspace(&cwd, tool_name)
+                {
+                    tracing::warn!("[RelayAgent] workspace allowlist persist failed: {e}");
+                }
             }
         }
     }
@@ -784,6 +788,13 @@ pub(crate) fn respond_approval_inner(
         .tx
         .send(request.approved)
         .map_err(|_| "approval channel closed — session may have ended".into())
+}
+
+fn approval_memory_equivalent_tools(tool_name: &str) -> Vec<&str> {
+    match tool_name {
+        "write_file" | "edit_file" => vec!["write_file", "edit_file"],
+        _ => vec![tool_name],
+    }
 }
 
 pub async fn respond_user_question(
@@ -2010,6 +2021,7 @@ pub fn list_workspace_slash_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use desktop_core::registry::PendingApproval;
     use runtime::ConversationMessage;
     use tempfile::TempDir;
 
@@ -2163,5 +2175,53 @@ mod tests {
             Some(CopilotWarmupFailureCode::CopilotTabUnavailable)
         );
         assert!(!result.connected);
+    }
+
+    #[test]
+    fn remember_for_session_auto_allows_write_and_edit_file_together() {
+        let registry = SessionRegistry::new();
+        let session_id = "session-approval-alias";
+        registry
+            .insert(
+                session_id.to_string(),
+                SessionHandle::new(
+                    SessionState::new_idle(runtime::Session::new(), saved_session_config()),
+                    HashSet::new(),
+                ),
+            )
+            .expect("insert session");
+        let handle = registry
+            .get_handle(session_id)
+            .expect("get handle result")
+            .expect("handle present");
+        let (tx, _rx) = std::sync::mpsc::channel::<bool>();
+        handle
+            .insert_pending_approval(
+                "approval-1".to_string(),
+                PendingApproval {
+                    tx,
+                    tool_name: "write_file".to_string(),
+                },
+            )
+            .expect("insert pending approval");
+
+        respond_approval_inner(
+            registry,
+            RespondAgentApprovalRequest {
+                session_id: session_id.to_string(),
+                approval_id: "approval-1".to_string(),
+                approved: true,
+                remember_for_session: Some(true),
+                remember_for_workspace: Some(false),
+            },
+        )
+        .expect("respond approval");
+
+        assert!(handle
+            .is_tool_auto_allowed("write_file")
+            .expect("check write_file allow"));
+        assert!(handle
+            .is_tool_auto_allowed("edit_file")
+            .expect("check edit_file allow"));
     }
 }
