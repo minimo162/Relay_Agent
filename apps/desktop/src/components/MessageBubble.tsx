@@ -39,9 +39,13 @@ export function MessageBubble(props: {
   };
 
   return (
-    <div class={`flex ${isUser ? "justify-end" : "justify-start"} mb-3`}>
+    <div class={`flex flex-col items-start mb-5 ra-sei-bubble-wrap`}>
+      <div class="ra-sei-turn" aria-hidden="true">
+        <span class="ra-sei-turn__char">{isUser ? "人" : "相"}</span>
+        <span class="ra-sei-turn__who">{isUser ? "you" : "relay"}</span>
+      </div>
       <div
-        class={`group relative max-w-[min(82%,46rem)] ra-bubble ${isUser ? "ra-bubble-user" : "ra-bubble-assistant"}`}
+        class={`group relative w-full ra-bubble ${isUser ? "ra-bubble-user" : "ra-bubble-assistant"}`}
         data-ra-bubble-role={props.role}
       >
         <div
