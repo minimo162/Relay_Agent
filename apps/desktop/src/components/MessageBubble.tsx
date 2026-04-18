@@ -46,13 +46,10 @@ export function MessageBubble(props: {
       </div>
       <div
         class={`group relative w-full ra-bubble ${isUser ? "ra-bubble-user" : "ra-bubble-assistant"}`}
+        classList={{ "ra-bubble--collapsed": collapsed() }}
         data-ra-bubble-role={props.role}
       >
-        <div
-          class={`absolute top-1.5 z-10 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 ${
-            isUser ? "right-1.5" : "right-1.5"
-          }`}
-        >
+        <div class="absolute top-1.5 right-1.5 z-10 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           <IconButton
             label="Copy message"
             variant="default"
@@ -73,7 +70,7 @@ export function MessageBubble(props: {
               </Show>
               <div
                 class={`ra-md-assistant px-4 py-2.5 break-words ${
-                  collapsed() ? "max-h-48 overflow-hidden" : ""
+                  collapsed() ? "ra-bubble__body--collapsed" : ""
                 } ${props.streaming ? "pt-2" : ""}`}
                 innerHTML={assistantHtml()}
               />
@@ -82,22 +79,24 @@ export function MessageBubble(props: {
         >
           <div
             class={`ra-type-body-sans px-4 py-2.5 whitespace-pre-wrap break-words ${
-              collapsed() ? "max-h-48 overflow-hidden" : ""
+              collapsed() ? "ra-bubble__body--collapsed" : ""
             }`}
           >
             {props.text}
           </div>
         </Show>
         <Show when={long() && !props.streaming}>
-          <div class="px-4 pb-2 -mt-1">
-            <button
-              type="button"
-              class={`ra-type-button-label font-normal text-[var(--ra-accent)] underline-offset-2 hover:underline`}
-              onClick={() => setExpanded(!expanded())}
-            >
-              {expanded() ? "Show less" : "Show more"}
-            </button>
-          </div>
+          <Show when={collapsed()}>
+            <div class="ra-bubble__fade" aria-hidden="true" />
+          </Show>
+          <button
+            type="button"
+            class="ra-bubble__expand"
+            aria-expanded={expanded()}
+            onClick={() => setExpanded(!expanded())}
+          >
+            {expanded() ? "collapse" : "expand"}
+          </button>
         </Show>
       </div>
     </div>

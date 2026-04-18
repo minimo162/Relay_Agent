@@ -32,10 +32,10 @@ import {
 import { ApprovalOverlay } from "../components/ApprovalOverlay";
 import { UserQuestionOverlay } from "../components/UserQuestionOverlay";
 import { Composer } from "../components/Composer";
-import { ContextPanel } from "../components/ContextPanel";
+import { FeedCrumb } from "../components/FeedCrumb";
 import { MessageFeed } from "../components/MessageFeed";
+import { RailPanel } from "../components/RailPanel";
 import { SettingsModal, type ShellSettingsDraft } from "../components/SettingsModal";
-import { ShellHeader } from "../components/ShellHeader";
 import { Sidebar } from "../components/Sidebar";
 import type { SessionStatusSnapshot } from "../components/shell-types";
 import {
@@ -82,6 +82,9 @@ type DevApprovalPayload = {
 };
 
 type ShellDrawer = "none" | "sessions" | "context";
+
+const WIDE_BREAKPOINT_PX = 900;
+const RAIL_BREAKPOINT_PX = 1200;
 
 function workspaceSlashRowsToCommands(rows: WorkspaceSlashCommandRow[]): SlashCommand[] {
   return rows.map((row) => ({
@@ -273,9 +276,25 @@ export default function Shell(): JSX.Element {
         return;
       }
       const isAccelerator = event.metaKey || event.ctrlKey;
-      if (isAccelerator && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {
+      if (!isAccelerator || event.shiftKey || event.altKey) return;
+      const key = event.key;
+      if (key.toLowerCase() === "n") {
         event.preventDefault();
         handleNewSession();
+        return;
+      }
+      if (key === "[" || key === "]") {
+        const ids = sessions.sessionIds();
+        if (ids.length === 0) return;
+        event.preventDefault();
+        const currentId = sessions.activeSessionId();
+        const index = currentId ? ids.indexOf(currentId) : -1;
+        const step = key === "]" ? 1 : -1;
+        const nextIndex = index === -1
+          ? (step === 1 ? 0 : ids.length - 1)
+          : (index + step + ids.length) % ids.length;
+        const nextId = ids[nextIndex];
+        if (nextId && nextId !== currentId) selectSession(nextId);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -674,58 +693,71 @@ export default function Shell(): JSX.Element {
     return executeSlashCommand(input, ctx);
   };
 
-  return (
-    <div classList={{ "ra-shell": true, "ra-shell--first-run": sessions.isFirstRun() }}>
-      <Show when={activeDrawer() !== "none"}>
-        <button
-          type="button"
-          class="ra-shell-drawer-backdrop"
-          aria-label="Close panel"
-          onClick={() => setActiveDrawer("none")}
-        />
-      </Show>
+  const onUndoAction = async () => {
+    const sid = sessions.activeSessionId();
+    if (!sid) return;
+    try {
+      await undoSessionWrite({ sessionId: sid });
+      await refreshWriteUndoStatus();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setSessionError(msg);
+    }
+  };
 
-      <ShellHeader
-        sessionStatus={sessions.activeSessionStatus()}
-        workspacePath={workspaceLabel}
-        onOpenSettings={openSettings}
-        onNewSession={handleNewSession}
-        onToggleChats={() => toggleDrawer("sessions")}
-        onToggleContext={() => toggleDrawer("context")}
-        chatsOpen={activeDrawer() === "sessions"}
-        contextOpen={activeDrawer() === "context"}
-        canUndo={writeUndoStatus().canUndo}
-        canRedo={writeUndoStatus().canRedo}
-        onUndo={async () => {
-          const sid = sessions.activeSessionId();
-          if (!sid) return;
-          try {
-            await undoSessionWrite({ sessionId: sid });
-            await refreshWriteUndoStatus();
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            setSessionError(msg);
-          }
-        }}
-        onRedo={async () => {
-          const sid = sessions.activeSessionId();
-          if (!sid) return;
-          try {
-            await redoSessionWrite({ sessionId: sid });
-            await refreshWriteUndoStatus();
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            setSessionError(msg);
-          }
-        }}
-      />
+  const onRedoAction = async () => {
+    const sid = sessions.activeSessionId();
+    if (!sid) return;
+    try {
+      await redoSessionWrite({ sessionId: sid });
+      await refreshWriteUndoStatus();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setSessionError(msg);
+    }
+  };
+
+  return (
+    <div
+      classList={{
+        "ra-shell": true,
+        "ra-shell--first-run": sessions.isFirstRun(),
+        "ra-shell--sidebar-open": activeDrawer() === "sessions",
+        "ra-shell--rail-open": activeDrawer() === "context",
+      }}
+    >
+      <aside
+        class="ra-shell-sidebar"
+        aria-label="Chats"
+        data-ra-shell-drawer="sessions"
+      >
+        <Sidebar
+          sessions={sessions.sessionEntries()}
+          activeSessionId={sessions.activeSessionId()}
+          onSelect={selectSession}
+          onNewSession={handleNewSession}
+          workspacePath={workspaceLabel()}
+          onWorkspaceChipClick={openSettings}
+          onOpenSettings={openSettings}
+        />
+      </aside>
 
       <main class="ra-shell-main">
+        <FeedCrumb
+          sessionStatus={sessions.activeSessionStatus()}
+          workspacePath={workspaceLabel}
+          onOpenSettings={openSettings}
+          onToggleSidebar={() => toggleDrawer("sessions")}
+          onToggleRail={() => toggleDrawer("context")}
+          chatsOpen={activeDrawer() === "sessions"}
+          contextOpen={activeDrawer() === "context"}
+        />
+
         <Show when={sessionError()}>
           <div
             role="alert"
             data-ra-session-error
-            class="shrink-0 px-6 py-2.5 ra-type-button-label border-b border-[var(--ra-border)] bg-[var(--ra-surface-elevated)]"
+            class="ra-session-error"
           >
             <p class="ra-type-title-sm text-[var(--ra-text-primary)]">Couldn&apos;t complete that request</p>
             <p class={`mt-0.5 ra-type-body-sans text-[var(--ra-red)] whitespace-pre-wrap break-words`}>
@@ -789,38 +821,29 @@ export default function Shell(): JSX.Element {
         />
       </main>
 
-      <Show when={activeDrawer() === "sessions"}>
-        <aside
-          id="ra-drawer-sessions"
-          class="ra-shell-drawer ra-shell-drawer--left"
-          aria-label="Chats"
-          data-ra-shell-drawer="sessions"
-        >
-          <Sidebar
-            sessions={sessions.sessionEntries()}
-            activeSessionId={sessions.activeSessionId()}
-            onSelect={selectSession}
-            onNewSession={handleNewSession}
-            workspacePath={workspaceLabel()}
-            onWorkspaceChipClick={openSettings}
-          />
-        </aside>
-      </Show>
-      <Show when={activeDrawer() === "context"}>
-        <aside
-          id="ra-drawer-context"
-          class="ra-shell-drawer ra-shell-drawer--right"
-          aria-label="Context"
-          data-ra-shell-drawer="context"
-        >
-          <ContextPanel
-            mcpServers={mcpServers}
-            setMcpServers={setMcpServers}
-            workspacePath={workspaceLabel}
-            planTimeline={sessions.planTimelineForActiveSession}
-          />
-        </aside>
+      <RailPanel
+        mcpServers={mcpServers}
+        setMcpServers={setMcpServers}
+        workspacePath={workspaceLabel}
+        planTimeline={sessions.planTimelineForActiveSession}
+        maxTurns={maxTurns}
+        canUndo={writeUndoStatus().canUndo}
+        canRedo={writeUndoStatus().canRedo}
+        onUndo={() => void onUndoAction()}
+        onRedo={() => void onRedoAction()}
+      />
+
+      <Show when={activeDrawer() !== "none"}>
+        <button
+          type="button"
+          class="ra-shell-drawer-backdrop"
+          aria-label="Close panel"
+          onClick={() => setActiveDrawer("none")}
+        />
       </Show>
     </div>
   );
 }
+
+// Export breakpoints for other modules (used in CSS as documented constants)
+export { WIDE_BREAKPOINT_PX, RAIL_BREAKPOINT_PX };
