@@ -137,6 +137,7 @@ Acceptance criteria:
 - `compat-harness` reuses desktop test support rather than a separate smoke-only path.
 - Deterministic tests cover `streaming_text`, `plugin_tool_roundtrip`, `auto_compact_triggered`, and `token_cost_reporting`.
 - Alignment docs name the exact test covering each claw-style scenario.
+- Copilot tool-call parser tolerance is widened from mutation-only to any MVP-whitelisted tool for unfenced sentinel-bearing JSON on Initial parse (see `docs/IMPLEMENTATION.md` 2026-04-18 milestone).
 
 ### Phase 4: CI And Acceptance Alignment
 

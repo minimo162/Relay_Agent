@@ -497,25 +497,19 @@ fn should_try_inline_tool_json_fallback(
         || display_lower.contains("relay_tool")
         || is_tool_protocol_confusion_text(raw)
         || is_tool_protocol_confusion_text(display)
-        || has_inline_local_file_mutation_tool_candidate(raw)
-        || has_inline_local_file_mutation_tool_candidate(display)
+        || has_inline_whitelisted_tool_candidate(raw)
+        || has_inline_whitelisted_tool_candidate(display)
 }
 
-fn has_inline_local_file_mutation_tool_candidate(text: &str) -> bool {
+// Accepts a candidate if the unfenced JSON names any MVP-whitelisted tool.
+// Downstream safeguards (`"relay_tool_call"` sentinel, balanced JSON, per-tool
+// schema validation in `parse_fallback_payloads`) prevent false positives;
+// restricting to mutations alone (the old behavior) caused Copilot's
+// occasional fence-less tool emission for read-only tools to be dropped as
+// plain text.
+fn has_inline_whitelisted_tool_candidate(text: &str) -> bool {
     let whitelist = mvp_tool_names_whitelist();
-    extract_mvp_tool_object_spans(text, &whitelist)
-        .into_iter()
-        .any(|(_, _, payload)| {
-            serde_json::from_str::<Value>(&payload)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .map(|name| matches!(name, "write_file" | "edit_file"))
-                })
-                .unwrap_or(false)
-        })
+    !extract_mvp_tool_object_spans(text, &whitelist).is_empty()
 }
 
 fn salvage_generated_write_file_from_reply(
@@ -3107,6 +3101,19 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         let raw =
             "{ \"name\": \"read_file\", \"relay_tool_call\": true, \"input\": { \"path\": \"README.md\" }\n";
         let (_display, calls) = parse_copilot_tool_response(raw, CdpToolParseMode::RetryRepair);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, "read_file");
+        let input: Value =
+            serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
+        assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
+    }
+
+    // Parity with orchestrator.rs: Initial parse must recover unfenced tool
+    // JSON for read-only whitelisted tools when the sentinel is present.
+    #[test]
+    fn parse_initial_accepts_unfenced_read_file_with_sentinel() {
+        let raw = r#"{"name":"read_file","relay_tool_call":true,"input":{"path":"README.md"}}"#;
+        let (_display, calls) = parse_copilot_tool_response(raw, CdpToolParseMode::Initial);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, "read_file");
         let input: Value =
