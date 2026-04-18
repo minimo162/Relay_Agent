@@ -45,8 +45,16 @@ const prompts = [
 ];
 
 // Soft thresholds (warn-only). Live LLM latency varies; these catch outliers.
-const TTFS_WARN_MS = 20_000;
-const TURN_WALLTIME_WARN_MS = 90_000;
+// Baseline observed against signed-in M365 Copilot on Linux Edge CDP
+// (2026-04-18): TTFS median ~21s, max ~27s across 8 turns; turn wall-time
+// median ~27s, max ~36s. Defaults sit just above the observed max so normal
+// Copilot responses stay quiet and only true outliers warn. Override via
+// RELAY_TTFS_WARN_MS / RELAY_TURN_WALLTIME_WARN_MS if your baseline differs.
+const TTFS_WARN_MS = Number.parseInt(process.env.RELAY_TTFS_WARN_MS ?? "30000", 10);
+const TURN_WALLTIME_WARN_MS = Number.parseInt(
+  process.env.RELAY_TURN_WALLTIME_WARN_MS ?? "120000",
+  10,
+);
 const DEGRADATION_MULTIPLIER = 2.5;
 
 let tauriChild = null;

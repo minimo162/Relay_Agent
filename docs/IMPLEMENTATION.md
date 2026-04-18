@@ -15,6 +15,23 @@
 
 ## Milestone Log
 
+### 2026-04-18 Align live-smoke latency thresholds with measured M365 Copilot baseline
+
+**Problem:** The long-continuity live smoke
+([`apps/desktop/scripts/live_m365_long_continuity_smoke.mjs`](../apps/desktop/scripts/live_m365_long_continuity_smoke.mjs))
+used hard-coded `TTFS_WARN_MS = 20_000` and `TURN_WALLTIME_WARN_MS = 90_000`.
+Against signed-in M365 Copilot on Linux Edge CDP (measured 2026-04-18, 8
+turns) the observed baseline was TTFS median 21,418 ms / max 26,555 ms and
+turn wall-time median 27,000 ms / max 35,742 ms — normal responses tripped the
+warning in 7 of 8 turns, diluting the signal for real outliers.
+
+**Change:** Raised defaults in the long-continuity smoke to
+`TTFS_WARN_MS = 30_000` and `TURN_WALLTIME_WARN_MS = 120_000`, matching the
+heterogeneous-tools smoke. Both smokes now honour `RELAY_TTFS_WARN_MS` and
+`RELAY_TURN_WALLTIME_WARN_MS` env overrides so local experiments can tighten
+thresholds without editing the script. Documented the measured baseline
+alongside the constants.
+
 ### 2026-04-18 Widen Copilot unfenced-tool-JSON fallback to all MVP tools
 
 **Problem:** The live heterogeneous-tools smoke
