@@ -210,55 +210,16 @@ fn temp_store_path(paths: &StorePaths) -> PathBuf {
     ))
 }
 
-#[cfg(not(windows))]
 fn replace_store_file(temp_path: &Path, store_path: &Path) -> Result<(), String> {
-    fs::rename(temp_path, store_path).map_err(|error| {
-        format!(
-            "failed to replace workspace allowlist store {}: {}",
-            describe_store_path(store_path),
-            error
-        )
-    })
-}
-
-#[cfg(windows)]
-fn replace_store_file(temp_path: &Path, store_path: &Path) -> Result<(), String> {
-    use std::ffi::OsStr;
-    use std::iter::once;
-    use std::os::windows::ffi::OsStrExt;
-
-    type Bool = i32;
-    type Dword = u32;
-    type Lpcwstr = *const u16;
-
-    const MOVEFILE_REPLACE_EXISTING: Dword = 0x1;
-    const MOVEFILE_WRITE_THROUGH: Dword = 0x8;
-
-    #[link(name = "Kernel32")]
-    extern "system" {
-        fn MoveFileExW(
-            lp_existing_file_name: Lpcwstr,
-            lp_new_file_name: Lpcwstr,
-            dw_flags: Dword,
-        ) -> Bool;
-    }
-
-    fn wide(value: &OsStr) -> Vec<u16> {
-        value.encode_wide().chain(once(0)).collect()
-    }
-
-    let from = wide(temp_path.as_os_str());
-    let to = wide(store_path.as_os_str());
-    let flags = MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH;
-    let ok = unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), flags) };
-    if ok != 0 {
-        Ok(())
-    } else {
-        Err(format!(
-            "failed to replace workspace allowlist store {}",
-            describe_store_path(store_path)
-        ))
-    }
+    tempfile::TempPath::try_from_path(temp_path)
+        .and_then(|path| path.persist(store_path).map_err(|error| error.error))
+        .map_err(|error| {
+            format!(
+                "failed to replace workspace allowlist store {}: {}",
+                describe_store_path(store_path),
+                error
+            )
+        })
 }
 
 #[cfg(unix)]

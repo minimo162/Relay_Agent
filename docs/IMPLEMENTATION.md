@@ -201,6 +201,14 @@ The helper now owns the successful-turn doom-loop state transition while the mai
 
 **Verification:** `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop` — pass without the previous `ts-rs` serde warnings. `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop -- -D warnings` — pass without the previous `ts-rs` serde warnings. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop rendered_ipc_bindings_include_core_contracts` — pass.
 
+### 2026-04-19 CI compatibility cleanup before merge
+
+**Problem:** GitHub Actions ran Rust 1.95.0 and failed Ubuntu clippy on `clippy::while_let_loop` in the structured bash denylist tokenizer. Windows Acceptance also failed because workspace-wide `unsafe_code = "forbid"` rejected the Windows-only `MoveFileExW` block used for allowlist file replacement.
+
+**Change:** Rewrote the shell-fragment loop as `while let` and replaced the hand-written Windows FFI path with `tempfile::TempPath::persist`, which provides a safe atomic replacement API and keeps unsafe code out of the desktop crate.
+
+**Verification:** `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_allowlist` — pass (3 tests). `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime tool_hard_denylist` — pass (10 tests).
+
 ### 2026-04-18 Align live-smoke latency thresholds with measured M365 Copilot baseline
 
 **Problem:** The long-continuity live smoke

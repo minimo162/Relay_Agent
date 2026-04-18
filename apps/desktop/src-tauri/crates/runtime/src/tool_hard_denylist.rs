@@ -56,10 +56,7 @@ fn split_shell_fragments(command: &str) -> Vec<String> {
     let mut in_double = false;
     let mut escaped = false;
 
-    loop {
-        let Some(ch) = chars.next() else {
-            break;
-        };
+    while let Some(ch) = chars.next() {
         if escaped {
             current.push(ch);
             escaped = false;
