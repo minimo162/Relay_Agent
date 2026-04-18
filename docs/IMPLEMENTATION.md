@@ -15,6 +15,38 @@
 
 ## Milestone Log
 
+### 2026-04-18 Widen Copilot unfenced-tool-JSON fallback to all MVP tools
+
+**Problem:** The live heterogeneous-tools smoke
+([`apps/desktop/scripts/live_m365_heterogeneous_tools_smoke.mjs`](../apps/desktop/scripts/live_m365_heterogeneous_tools_smoke.mjs))
+surfaced a recurring parser tolerance bug: M365 Copilot occasionally emits a
+tool call as raw JSON without the expected ` ```relay_tool ` fence (e.g.
+`{"name":"read_file","relay_tool_call":true,"input":{...}}`). The Initial-parse
+fallback in `should_try_inline_tool_json_fallback` was gated to
+**write_file/edit_file only** via `has_inline_local_file_mutation_tool_candidate`
+(2026-04-16 hardening), so fence-less read-only tool emissions were dropped as
+plain text and the agent turn completed without executing the tool.
+
+**Change:** Renamed `has_inline_local_file_mutation_tool_candidate` →
+`has_inline_whitelisted_tool_candidate` in both parser copies
+([`apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`](../apps/desktop/src-tauri/src/agent_loop/orchestrator.rs)
+and
+[`apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs`](../apps/desktop/src-tauri/crates/desktop-core/src/agent_loop.rs))
+and widened it to accept any MVP-whitelisted tool name, not just mutations.
+The downstream safeguards are unchanged: the `"relay_tool_call"` sentinel is
+still required, `extract_mvp_tool_object_spans` still whitelist-filters, and
+`parse_fallback_payloads` still applies balanced-JSON + per-tool schema
+validation. Added three Initial-mode tests in `orchestrator.rs`
+(`parse_initial_accepts_unfenced_{read_file,glob_search,grep_search}_with_sentinel`),
+a sibling test in `desktop-core/src/agent_loop.rs`, and updated two existing
+tests (`unfenced_tool_json_in_prose`, `unfenced_pretty_printed_read_file`) that
+encoded the old policy.
+
+**Verification:** `cargo test -p desktop-core` (43 pass) and
+`cargo test -p relay-agent-desktop` (138 pass, 1 pre-existing ignored). Live
+smoke regression runs (`live:m365:long-continuity`,
+`live:m365:grounding-approval-multiturn`) continue to pass the fenced path.
+
 ### 2026-04-18 Live M365 Copilot workspace search harness
 
 **Problem:** The repo already had live harnesses for desktop launch, same-session grounding, and `read_file` path resolution, but nothing proved that a signed-in M365 Copilot session could actually use Relay's workspace search tools against a deterministic folder inside the current workspace. For the requested live validation slice, we needed a read-only harness that checks both filename search and content search in one Relay session, fails on unexpected mutation tools, and leaves enough artifacts to separate tool drift from thread continuity failures.

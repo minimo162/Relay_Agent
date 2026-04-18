@@ -275,52 +275,30 @@ function runDoctor(displayValue, paths = {}) {
   const noAutoLaunchEdge = paths.noAutoLaunchEdge ?? true;
   const env = { ...process.env };
   if (displayValue) env.DISPLAY = displayValue;
-  const doctorArgs = ["doctor", "--", "--json", "--cdp-port", String(cdpPort)];
-  if (noAutoLaunchEdge) {
-    doctorArgs.push("--no-auto-launch-edge");
-  }
-  const pnpmResult = runCommand(
-    "pnpm",
-    doctorArgs,
-    env,
-  );
-  let combinedStdout = `[pnpm doctor]\n${pnpmResult.stdout ?? ""}`;
-  let combinedStderr = `[pnpm doctor]\n${pnpmResult.stderr ?? ""}`;
-  let doctor = tryExtractJson(pnpmResult.stdout ?? "") ?? tryExtractJson(pnpmResult.stderr ?? "");
-  let parsedFrom = "pnpm";
-  let fallbackExitCode = null;
-
-  if (!doctor) {
-    const cargoArgs = [
-      "run",
-      "--manifest-path",
-      "apps/desktop/src-tauri/Cargo.toml",
-      "--bin",
-      "relay-agent-doctor",
-      "--",
-      "--json",
-      "--cdp-port",
-      String(cdpPort),
-    ];
-    if (noAutoLaunchEdge) {
-      cargoArgs.push("--no-auto-launch-edge");
-    }
-    const cargoResult = runCommand("cargo", cargoArgs, env);
-    combinedStdout += `\n[cargo run fallback]\n${cargoResult.stdout ?? ""}`;
-    combinedStderr += `\n[cargo run fallback]\n${cargoResult.stderr ?? ""}`;
-    doctor = extractJsonFromOutput(cargoResult.stdout ?? "", cargoResult.stderr ?? "", "doctor fallback");
-    parsedFrom = "cargo_fallback";
-    fallbackExitCode = cargoResult.status ?? 1;
-  }
-
+  // Direct cargo — `pnpm doctor` is shadowed by pnpm's builtin doctor subcommand
+  // in pnpm ≥10 and silently returns no output.
+  const cargoArgs = [
+    "run",
+    "--manifest-path",
+    "apps/desktop/src-tauri/Cargo.toml",
+    "--bin",
+    "relay-agent-doctor",
+    "--",
+    "--json",
+    "--cdp-port",
+    String(cdpPort),
+  ];
+  if (noAutoLaunchEdge) cargoArgs.push("--no-auto-launch-edge");
+  const cargoResult = runCommand("cargo", cargoArgs, env);
+  const combinedStdout = cargoResult.stdout ?? "";
+  const combinedStderr = cargoResult.stderr ?? "";
+  const doctor = extractJsonFromOutput(combinedStdout, combinedStderr, "relay-agent-doctor");
   writeFileSync(stdoutPath, combinedStdout, "utf8");
   writeFileSync(stderrPath, combinedStderr, "utf8");
   writeJson(jsonPath, doctor);
   return {
-    exitCode: fallbackExitCode ?? (pnpmResult.status ?? 1),
-    primaryExitCode: pnpmResult.status ?? 1,
-    fallbackExitCode,
-    parsedFrom,
+    exitCode: cargoResult.status ?? 1,
+    parsedFrom: "cargo",
     report: doctor,
   };
 }

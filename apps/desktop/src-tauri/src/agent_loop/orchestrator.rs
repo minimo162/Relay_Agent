@@ -3277,25 +3277,19 @@ fn should_try_inline_tool_json_fallback(
     }
     is_tool_protocol_confusion_text(raw)
         || is_tool_protocol_confusion_text(display)
-        || has_inline_local_file_mutation_tool_candidate(raw)
-        || has_inline_local_file_mutation_tool_candidate(display)
+        || has_inline_whitelisted_tool_candidate(raw)
+        || has_inline_whitelisted_tool_candidate(display)
 }
 
-fn has_inline_local_file_mutation_tool_candidate(text: &str) -> bool {
+// Accepts a candidate if the unfenced JSON names any MVP-whitelisted tool.
+// Downstream safeguards (`"relay_tool_call"` sentinel, balanced JSON, per-tool
+// schema validation in `parse_fallback_payloads`) prevent false positives;
+// restricting to mutations alone (the old behavior) caused Copilot's
+// occasional fence-less tool emission for read-only tools to be dropped as
+// plain text.
+fn has_inline_whitelisted_tool_candidate(text: &str) -> bool {
     let whitelist = mvp_tool_names_whitelist();
-    extract_mvp_tool_object_spans(text, &whitelist)
-        .into_iter()
-        .any(|(_, _, payload)| {
-            serde_json::from_str::<Value>(&payload)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .map(|name| matches!(name, "write_file" | "edit_file"))
-                })
-                .unwrap_or(false)
-        })
+    !extract_mvp_tool_object_spans(text, &whitelist).is_empty()
 }
 
 fn salvage_generated_write_file_from_reply(
@@ -7015,13 +7009,17 @@ Tail"#;
         assert_eq!(tools.len(), 1);
     }
 
+    // Updated policy (2026-04-18): sentinel-bearing unfenced tool JSON is
+    // accepted on Initial parse too (previously only RetryRepair). Widened to
+    // match Copilot's occasional fence-less emission for read-only tools.
     #[test]
     fn unfenced_tool_json_in_prose() {
         let raw =
             "了解。\n\n{\"name\":\"read_file\",\"relay_tool_call\":true,\"input\":{\"path\":\"C:\\\\x\\\\y.txt\"}}\n";
         let (vis, tools) = parse_initial(raw);
-        assert!(tools.is_empty());
-        assert!(vis.contains("read_file"));
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "read_file");
+        assert!(!vis.contains("read_file"));
 
         let (vis, tools) = parse_retry(raw);
         assert_eq!(tools.len(), 1);
@@ -7042,8 +7040,10 @@ Tail"#;
 }
 "#;
         let (vis, tools) = parse_initial(raw);
-        assert!(tools.is_empty());
-        assert!(vis.contains("\"name\""));
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "read_file");
+        assert!(tools[0].2.contains("テトリス.html"));
+        assert!(!vis.contains("\"name\""));
 
         let (vis, tools) = parse_retry(raw);
         assert_eq!(tools.len(), 1);
@@ -7251,6 +7251,44 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
+    }
+
+    // Copilot sometimes emits tool JSON without the ```relay_tool fence on the
+    // first turn. With the sentinel present and the tool name whitelisted, the
+    // unfenced fallback must recover the call on Initial parse — not only on
+    // RetryRepair.
+    #[test]
+    fn parse_initial_accepts_unfenced_read_file_with_sentinel() {
+        let raw = r#"{"name":"read_file","relay_tool_call":true,"input":{"path":"README.md"}}"#;
+        let (_vis, tools) = parse_initial(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "read_file");
+        let input: Value =
+            serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
+        assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
+    }
+
+    #[test]
+    fn parse_initial_accepts_unfenced_glob_search_with_sentinel() {
+        let raw = r#"{"name":"glob_search","relay_tool_call":true,"input":{"pattern":"**/*.html","path":"tests/fixtures/"}}"#;
+        let (_vis, tools) = parse_initial(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "glob_search");
+        let input: Value =
+            serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
+        assert_eq!(input.get("pattern").and_then(Value::as_str), Some("**/*.html"));
+    }
+
+    #[test]
+    fn parse_initial_accepts_unfenced_grep_search_with_sentinel() {
+        let raw = r#"{"name":"grep_search","relay_tool_call":true,"input":{"path":"README.md","pattern":"TODO","output_mode":"count"}}"#;
+        let (_vis, tools) = parse_initial(raw);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "grep_search");
+        let input: Value =
+            serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
+        assert_eq!(input.get("pattern").and_then(Value::as_str), Some("TODO"));
+        assert_eq!(input.get("output_mode").and_then(Value::as_str), Some("count"));
     }
 
     #[test]
