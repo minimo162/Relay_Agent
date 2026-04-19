@@ -4135,6 +4135,7 @@ mod tests {
                 "edit_file",
                 "glob_search",
                 "grep_search",
+                "office_search",
                 "git_status",
                 "git_diff",
                 "pdf_merge",
