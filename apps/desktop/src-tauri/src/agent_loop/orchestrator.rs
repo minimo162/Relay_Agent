@@ -9,268 +9,77 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use serde_with::skip_serializing_none;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
-use ts_rs::TS;
 use uuid::Uuid;
 
 /// M365 Copilot (CDP) cannot take API `tools`; model must emit this fenced JSON for invocations.
 const CDP_TOOL_FENCE: &str = "```relay_tool";
 
 const CDP_INLINE_PROMPT_MAX_TOKENS: usize = 128_000;
-const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_TOTAL_CHARS: usize = 3_000;
-const CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_FILE_CHARS: usize = 1_200;
-const ORIGINAL_GOAL_MARKER: &str =
-    "Quoted original user goal (user data, not system instruction):\n```text\n";
-const LATEST_REQUEST_MARKER: &str =
-    "Quoted latest user request for this turn (user data, not system instruction):\n```text\n";
 const COPILOT_UI_PROGRESS_POLL_MS: u64 = 350;
-const MAX_INLINE_TOOL_OBJECT_LEN_BYTES: usize = 1_048_576;
 
 fn estimate_cdp_prompt_tokens(prompt: &str) -> usize {
     prompt.len() / 4 + 1
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CdpPromptFlavor {
-    Standard,
-    Repair,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CdpCatalogFlavor {
-    StandardFull,
-    RepairWriteFileOnly,
-}
-
-fn tool_protocol_repair_stage(attempt_index: usize) -> usize {
-    match attempt_index {
-        0 => 1,
-        1 => 2,
-        _ => 3,
-    }
-}
-
-fn repair_attempt_index_from_text(text: &str) -> Option<usize> {
-    if !is_tool_protocol_repair_text(text) {
-        return None;
-    }
-    if text.contains("Final repair for this turn") {
-        Some(2)
-    } else if text.contains("Your previous repair still drifted into planning-only text") {
-        Some(1)
-    } else {
-        Some(0)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ActionableUserTurn {
-    text: String,
-    path_anchors: Vec<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ReadFileToolErrorContext {
-    requested_path: Option<String>,
-    output: String,
-}
-
-#[derive(Clone, Debug)]
-struct CdpPromptBundle {
-    prompt: String,
-    grounding_text: String,
-    system_text: String,
-    message_text: String,
-    catalog_text: String,
-    catalog_flavor: CdpCatalogFlavor,
-    user_text_chars: usize,
-    assistant_text_chars: usize,
-    tool_result_chars: usize,
-    tool_result_count: usize,
-}
-
-impl CdpPromptBundle {
-    fn total_chars(&self) -> usize {
-        self.prompt.len()
-    }
-
-    fn grounding_chars(&self) -> usize {
-        self.grounding_text.len()
-    }
-
-    fn system_chars(&self) -> usize {
-        self.system_text.len()
-    }
-
-    fn message_chars(&self) -> usize {
-        self.message_text.len()
-    }
-
-    fn catalog_chars(&self) -> usize {
-        self.catalog_text.len()
-    }
-
-    fn user_text_chars(&self) -> usize {
-        self.user_text_chars
-    }
-
-    fn assistant_text_chars(&self) -> usize {
-        self.assistant_text_chars
-    }
-
-    fn tool_result_chars(&self) -> usize {
-        self.tool_result_chars
-    }
-
-    fn tool_result_count(&self) -> usize {
-        self.tool_result_count
-    }
-}
-
 use runtime::{
     self, assert_path_in_workspace, lexical_normalize, pull_rust_diagnostics_blocking,
     resolve_against_workspace, ApiClient, ApiRequest, AssistantEvent, BashConfigCwdGuard,
-    ConfigLoader, ContentBlock, ConversationMessage, McpServerManager, MessageRole, PermissionMode,
-    PermissionPolicy, PermissionPromptDecision, PermissionPrompter, PermissionRequest,
-    RuntimeError, Session as RuntimeSession, TokenUsage, ToolExecutor,
+    ConfigLoader, ContentBlock, ConversationMessage, McpServerManager, MessageRole, RuntimeError,
+    Session as RuntimeSession, TokenUsage, ToolExecutor,
 };
 
+use crate::agent_loop::approval::TauriApprovalPrompter;
+#[cfg(test)]
+use crate::agent_loop::events::{
+    append_only_suffix, classify_stream_text_update, StreamTextUpdate,
+};
+use crate::agent_loop::events::{
+    emit_copilot_text_deltas_for_ui, emit_copilot_text_suffix_for_ui, emit_error,
+    emit_status_event, emit_turn_complete, transition_session_state, AgentToolResultEvent,
+    AgentToolStartEvent, AgentUserQuestionNeededEvent, MessageContent, RelayMessage, E_TOOL_RESULT,
+    E_TOOL_START, E_USER_QUESTION,
+};
+use crate::agent_loop::permission::desktop_permission_policy;
+#[cfg(test)]
+use crate::agent_loop::permission::tool_permissions;
+use crate::agent_loop::prompt::{
+    extract_path_anchors_from_text, slim_project_context_for_cdp, CdpCatalogFlavor,
+    CdpPromptBundle, CdpPromptFlavor, PromptRenderFns,
+};
+use crate::agent_loop::response_parser::{
+    extract_fallback_markdown_fences, extract_unfenced_tool_json_candidates,
+    fallback_sentinel_policy, find_generic_markdown_fence_inner_end,
+    has_inline_whitelisted_tool_candidate as parser_has_inline_whitelisted_tool_candidate,
+    parse_fallback_payloads,
+};
+use crate::agent_loop::retry::{
+    build_best_tool_protocol_repair_input as retry_build_best_tool_protocol_repair_input,
+    build_path_resolution_repair_input as retry_build_path_resolution_repair_input,
+    build_tool_protocol_repair_input as retry_build_tool_protocol_repair_input,
+    decide_loop_after_success as retry_decide_loop_after_success,
+    is_concrete_new_file_create_request as retry_is_concrete_new_file_create_request,
+    is_repair_refusal_text as retry_is_repair_refusal_text,
+    is_tool_protocol_confusion_text as retry_is_tool_protocol_confusion_text,
+    repair_attempt_index_from_text as retry_repair_attempt_index_from_text, retry_backoff,
+    runtime_error_is_retryable, sleep_with_cancel, LoopContinueKind, LoopDecision, LoopStopReason,
+    RetryHeuristicsFns,
+};
+use crate::agent_loop::state::{
+    clear_terminal_status_emitted, increment_session_retry_count, set_session_error_summary,
+    set_session_stop_reason, AgentSessionPhase, AgentStatusOptions, LoopEpochGuard,
+};
 use crate::app_services::AppServices;
 use crate::copilot_persistence::{self, PersistedSessionConfig};
 use crate::error::AgentLoopError;
 use crate::models::BrowserAutomationSettings;
-use crate::registry::{
-    PendingApproval, PendingUserQuestion, SessionRegistry, SessionRunState, SessionState,
-};
+use crate::registry::{PendingUserQuestion, SessionRegistry, SessionRunState};
 use crate::session_write_undo;
 use crate::tauri_bridge;
-
-pub(crate) fn desktop_permission_policy() -> PermissionPolicy {
-    let mut policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite);
-    for spec in tools::mvp_tool_specs() {
-        let required = tools::required_permission_for_surface(&spec);
-        policy = policy.with_tool_requirement(spec.name, required);
-    }
-    policy
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SessionToolPermissionRow {
-    name: String,
-    host_mode: PermissionMode,
-    required_mode: PermissionMode,
-    requirement: &'static str,
-    reason: String,
-}
-
-fn describe_permission_reason(
-    tool: &str,
-    host: PermissionMode,
-    required: PermissionMode,
-    requirement: &str,
-) -> String {
-    match requirement {
-        "auto_allow" => format!(
-            "{tool} is allowed because host mode ({}) satisfies required mode ({}).",
-            host.as_str(),
-            required.as_str()
-        ),
-        "require_approval" => format!(
-            "{tool} requires approval to escalate from host mode ({}) to required mode ({}).",
-            host.as_str(),
-            required.as_str()
-        ),
-        _ => format!(
-            "{tool} is blocked because required mode ({}) exceeds host mode ({}).",
-            required.as_str(),
-            host.as_str()
-        ),
-    }
-}
-
-fn classify_permission_ui_requirement(
-    host: PermissionMode,
-    required: PermissionMode,
-) -> &'static str {
-    if host == PermissionMode::Allow || host >= required {
-        return "auto_allow";
-    }
-    if host == PermissionMode::WorkspaceWrite && required == PermissionMode::DangerFullAccess {
-        return "require_approval";
-    }
-    if host == PermissionMode::Prompt {
-        return "require_approval";
-    }
-    "auto_deny"
-}
-
-fn tool_permissions() -> Vec<SessionToolPermissionRow> {
-    let policy = desktop_permission_policy();
-    let host = policy.active_mode();
-    tools::mvp_tool_specs()
-        .into_iter()
-        .map(|spec| {
-            let required = policy.required_mode_for(spec.name);
-            let requirement = classify_permission_ui_requirement(host, required);
-            let reason = describe_permission_reason(spec.name, host, required, requirement);
-            SessionToolPermissionRow {
-                name: spec.name.to_string(),
-                host_mode: host,
-                required_mode: required,
-                requirement,
-                reason,
-            }
-        })
-        .collect()
-}
-
-fn truncate_cdp_instruction_content(content: &str, max_chars: usize) -> String {
-    let trimmed = content.trim();
-    if trimmed.chars().count() <= max_chars {
-        return trimmed.to_string();
-    }
-
-    let mut output = trimmed.chars().take(max_chars).collect::<String>();
-    output.push_str("\n\n[truncated for M365 Copilot CDP prompt]");
-    output
-}
-
-fn slim_project_context_for_cdp(mut context: runtime::ProjectContext) -> runtime::ProjectContext {
-    context.git_status = None;
-    context.git_diff = None;
-
-    let mut remaining = CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_TOTAL_CHARS;
-    let mut slimmed = Vec::new();
-    for mut file in context.instruction_files {
-        if remaining == 0 {
-            break;
-        }
-        let budget = remaining.min(CDP_SYSTEM_PROMPT_MAX_INSTRUCTION_FILE_CHARS);
-        file.content = truncate_cdp_instruction_content(&file.content, budget);
-        remaining = remaining.saturating_sub(file.content.chars().count());
-        slimmed.push(file);
-    }
-    context.instruction_files = slimmed;
-    context
-}
-
-/* ── Event name constants ─── */
-
-pub(crate) const E_TOOL_START: &str = "agent:tool_start";
-pub(crate) const E_TOOL_RESULT: &str = "agent:tool_result";
-pub(crate) const E_APPROVAL_NEEDED: &str = "agent:approval_needed";
-pub(crate) const E_USER_QUESTION: &str = "agent:user_question";
-pub(crate) const E_TURN_COMPLETE: &str = "agent:turn_complete";
-pub(crate) const E_ERROR: &str = "agent:error";
-pub(crate) const E_TEXT_DELTA: &str = "agent:text_delta";
-pub(crate) const E_STATUS: &str = "agent:status";
 
 /// Remove M365 Copilot bracketed markers such as `【richwebanswer-…】` from visible prose.
 fn strip_richwebanswer_spans(s: &str) -> String {
@@ -351,164 +160,6 @@ fn sanitize_copilot_visible_text(s: &str) -> String {
     dedupe_consecutive_paragraphs(&s)
 }
 
-const COPILOT_UI_TEXT_CHUNK: usize = 48;
-
-fn epoch_ms_now() -> u64 {
-    // Unix-ms timestamp overflows u64 ~584M years from the epoch; the
-    // truncation cast is safe for any value we'll ever observe.
-    #[allow(clippy::cast_possible_truncation)]
-    let ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-    ms
-}
-
-fn emit_text_delta_event<R: Runtime>(
-    app: &AppHandle<R>,
-    session_id: &str,
-    text: &str,
-    is_complete: bool,
-    replace_existing: bool,
-) {
-    let evt = AgentTextDeltaEvent {
-        session_id: session_id.to_string(),
-        text: text.to_string(),
-        is_complete,
-        replace_existing,
-    };
-    if let Err(e) = app.emit(E_TEXT_DELTA, &evt) {
-        tracing::warn!("[RelayAgent] emit failed ({E_TEXT_DELTA}): {e}");
-    }
-}
-
-fn record_stream_metrics(
-    registry: &SessionRegistry,
-    session_id: &str,
-    emitted_chunks: usize,
-    preview_text: &str,
-) {
-    let preview = collapse_inline_whitespace(preview_text);
-    let preview = (!preview.is_empty()).then(|| truncate_for_log(&preview, 240));
-    let now_ms = epoch_ms_now();
-    let _ignore = registry.mutate_session(session_id, |entry| {
-        if emitted_chunks > 0 {
-            entry.stream_delta_count += emitted_chunks;
-            if entry.first_stream_at_ms.is_none() {
-                entry.first_stream_at_ms = Some(now_ms);
-            }
-            entry.last_stream_at_ms = Some(now_ms);
-        } else if preview.is_some() {
-            entry.last_stream_at_ms = Some(now_ms);
-        }
-        if let Some(preview) = preview.clone() {
-            entry.stream_preview_text = Some(preview);
-        }
-    });
-}
-
-fn append_only_suffix<'a>(previous_text: &str, next_text: &'a str) -> Option<&'a str> {
-    let prev = previous_text.trim();
-    let next = next_text.trim();
-    if prev.is_empty() {
-        return Some(next);
-    }
-    next.strip_prefix(prev)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum StreamTextUpdate {
-    NoChange,
-    Append(String),
-    Replace(String),
-}
-
-fn classify_stream_text_update(previous_text: &str, next_text: &str) -> StreamTextUpdate {
-    let next = next_text.trim();
-    if next.is_empty() {
-        return StreamTextUpdate::NoChange;
-    }
-    if let Some(suffix) = append_only_suffix(previous_text, next_text) {
-        if suffix.is_empty() {
-            return StreamTextUpdate::NoChange;
-        }
-        return StreamTextUpdate::Append(suffix.to_string());
-    }
-    StreamTextUpdate::Replace(next.to_string())
-}
-
-fn emit_copilot_text_suffix_for_ui<R: Runtime>(
-    app: &AppHandle<R>,
-    registry: &SessionRegistry,
-    session_id: &str,
-    previous_text: &str,
-    next_text: &str,
-    mark_complete: bool,
-) {
-    let next = next_text.trim();
-    let mut emitted_chunks = 0usize;
-    match classify_stream_text_update(previous_text, next_text) {
-        StreamTextUpdate::NoChange => {}
-        StreamTextUpdate::Append(suffix) => {
-            let mut start = 0usize;
-            for (i, _) in suffix.char_indices() {
-                if i > start && (i - start) >= COPILOT_UI_TEXT_CHUNK {
-                    emit_text_delta_event(app, session_id, &suffix[start..i], false, false);
-                    emitted_chunks += 1;
-                    start = i;
-                }
-            }
-            if start < suffix.len() {
-                emit_text_delta_event(app, session_id, &suffix[start..], false, false);
-                emitted_chunks += 1;
-            }
-        }
-        StreamTextUpdate::Replace(replacement) => {
-            tracing::debug!(
-                "[RelayAgent] replacing streaming snapshot for session {} (prev_len={}, next_len={})",
-                session_id,
-                previous_text.trim().len(),
-                replacement.len()
-            );
-            let mut start = 0usize;
-            let mut first_chunk = true;
-            for (i, _) in replacement.char_indices() {
-                if i > start && (i - start) >= COPILOT_UI_TEXT_CHUNK {
-                    emit_text_delta_event(
-                        app,
-                        session_id,
-                        &replacement[start..i],
-                        false,
-                        first_chunk,
-                    );
-                    emitted_chunks += 1;
-                    first_chunk = false;
-                    start = i;
-                }
-            }
-            if start < replacement.len() {
-                emit_text_delta_event(app, session_id, &replacement[start..], false, first_chunk);
-                emitted_chunks += 1;
-            }
-        }
-    }
-    if mark_complete {
-        emit_text_delta_event(app, session_id, "", true, false);
-    }
-    if emitted_chunks > 0 || !next.is_empty() {
-        record_stream_metrics(registry, session_id, emitted_chunks, next);
-    }
-}
-
-fn emit_copilot_text_deltas_for_ui<R: Runtime>(
-    app: &AppHandle<R>,
-    registry: &SessionRegistry,
-    session_id: &str,
-    visible_text: &str,
-) {
-    emit_copilot_text_suffix_for_ui(app, registry, session_id, "", visible_text, true);
-}
-
 async fn stream_copilot_progress_for_ui<R: Runtime>(
     probe: crate::copilot_server::CopilotProgressProbe,
     app: AppHandle<R>,
@@ -577,50 +228,6 @@ fn completion_timeout_secs_from_browser_settings(bs: Option<&BrowserAutomationSe
     secs.clamp(10, 900)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LoopStopReason {
-    Completed,
-    Cancelled,
-    MetaStall,
-    RetryExhausted,
-    CompactionFailed,
-    MaxTurnsReached,
-    PermissionDenied,
-    ToolError,
-    DoomLoop,
-}
-
-impl LoopStopReason {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Completed => "completed",
-            Self::Cancelled => "cancelled",
-            Self::MetaStall => "meta_stall",
-            Self::RetryExhausted => "retry_exhausted",
-            Self::CompactionFailed => "compaction_failed",
-            Self::MaxTurnsReached => "max_turns_reached",
-            Self::PermissionDenied => "permission_denied",
-            Self::ToolError => "tool_error",
-            Self::DoomLoop => "doom_loop",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum LoopDecision {
-    Continue {
-        next_input: String,
-        kind: LoopContinueKind,
-    },
-    Stop(LoopStopReason),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LoopContinueKind {
-    MetaNudge,
-    PathRepair,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LoopInput {
     User(String),
@@ -640,199 +247,6 @@ impl LoopInput {
             Self::Synthetic(text) => runtime::TurnInput::Synthetic(text.clone()),
         }
     }
-}
-
-#[derive(Clone)]
-struct LoopEpochGuard {
-    session_id: String,
-    registry: SessionRegistry,
-    epoch: u64,
-}
-
-impl LoopEpochGuard {
-    fn new(registry: &SessionRegistry, session_id: &str) -> Self {
-        let epoch = registry
-            .get_session(session_id, |entry| entry.loop_epoch)
-            .ok()
-            .flatten()
-            .unwrap_or(0);
-        Self {
-            session_id: session_id.to_string(),
-            registry: registry.clone(),
-            epoch,
-        }
-    }
-
-    fn is_current(&self) -> bool {
-        self.registry
-            .get_session(&self.session_id, |entry| entry.loop_epoch == self.epoch)
-            .ok()
-            .flatten()
-            .unwrap_or(false)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentSessionPhase {
-    Idle,
-    Running,
-    Retrying,
-    Compacting,
-    WaitingApproval,
-    Cancelling,
-}
-
-impl AgentSessionPhase {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Idle => "idle",
-            Self::Running => "running",
-            Self::Retrying => "retrying",
-            Self::Compacting => "compacting",
-            Self::WaitingApproval => "waiting_approval",
-            Self::Cancelling => "cancelling",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-struct AgentStatusOptions {
-    attempt: Option<usize>,
-    message: Option<String>,
-    next_retry_at_ms: Option<u64>,
-    tool_name: Option<String>,
-    stop_reason: Option<LoopStopReason>,
-}
-
-impl AgentStatusOptions {
-    fn with_attempt(mut self, attempt: usize) -> Self {
-        self.attempt = Some(attempt);
-        self
-    }
-
-    fn with_message(mut self, message: impl Into<String>) -> Self {
-        self.message = Some(message.into());
-        self
-    }
-
-    fn with_next_retry_at_ms(mut self, next_retry_at_ms: u64) -> Self {
-        self.next_retry_at_ms = Some(next_retry_at_ms);
-        self
-    }
-
-    fn with_tool_name(mut self, tool_name: impl Into<String>) -> Self {
-        self.tool_name = Some(tool_name.into());
-        self
-    }
-
-    fn with_stop_reason(mut self, stop_reason: LoopStopReason) -> Self {
-        self.stop_reason = Some(stop_reason);
-        self
-    }
-}
-
-fn mutate_session_if_current<F>(guard: &LoopEpochGuard, f: F)
-where
-    F: FnOnce(&mut SessionState),
-{
-    let _ignore = guard.registry.mutate_session(&guard.session_id, |entry| {
-        if entry.loop_epoch == guard.epoch {
-            f(entry);
-        }
-    });
-}
-
-fn set_session_run_state(guard: &LoopEpochGuard, run_state: SessionRunState) {
-    mutate_session_if_current(guard, |entry| {
-        entry.run_state = run_state;
-        entry.running = !matches!(
-            run_state,
-            SessionRunState::Cancelling | SessionRunState::Finished
-        );
-    });
-}
-
-fn increment_session_retry_count(guard: &LoopEpochGuard, error_summary: &str) {
-    let summary = error_summary.to_string();
-    mutate_session_if_current(guard, |entry| {
-        entry.retry_count += 1;
-        entry.last_error_summary = Some(summary);
-    });
-}
-
-fn set_session_error_summary(guard: &LoopEpochGuard, error_summary: &str) {
-    let summary = error_summary.to_string();
-    mutate_session_if_current(guard, |entry| {
-        entry.last_error_summary = Some(summary);
-    });
-}
-
-fn set_session_stop_reason(guard: &LoopEpochGuard, stop_reason: LoopStopReason) {
-    let reason = stop_reason.as_str().to_string();
-    mutate_session_if_current(guard, |entry| {
-        entry.last_stop_reason = Some(reason);
-    });
-}
-
-fn mark_terminal_status_emitted(guard: &LoopEpochGuard) -> bool {
-    guard
-        .registry
-        .mutate_session(&guard.session_id, |entry| {
-            if entry.loop_epoch != guard.epoch || entry.terminal_status_emitted {
-                return false;
-            }
-            entry.terminal_status_emitted = true;
-            true
-        })
-        .ok()
-        .flatten()
-        .unwrap_or(false)
-}
-
-fn clear_terminal_status_emitted(guard: &LoopEpochGuard) {
-    mutate_session_if_current(guard, |entry| {
-        entry.terminal_status_emitted = false;
-    });
-}
-
-fn emit_status_event<R: Runtime>(
-    app: &AppHandle<R>,
-    guard: &LoopEpochGuard,
-    phase: AgentSessionPhase,
-    options: AgentStatusOptions,
-) {
-    if !guard.is_current() {
-        return;
-    }
-    if phase == AgentSessionPhase::Idle && !mark_terminal_status_emitted(guard) {
-        return;
-    }
-    let evt = AgentSessionStatusEvent {
-        session_id: guard.session_id.clone(),
-        phase: phase.as_str().to_string(),
-        attempt: options.attempt,
-        message: options.message,
-        next_retry_at_ms: options.next_retry_at_ms,
-        tool_name: options.tool_name,
-        stop_reason: options
-            .stop_reason
-            .map(|reason| reason.as_str().to_string()),
-    };
-    if let Err(e) = app.emit(E_STATUS, &evt) {
-        tracing::warn!("[RelayAgent] emit failed ({E_STATUS}): {e}");
-    }
-}
-
-fn transition_session_state<R: Runtime>(
-    app: &AppHandle<R>,
-    guard: &LoopEpochGuard,
-    run_state: SessionRunState,
-    phase: AgentSessionPhase,
-    options: AgentStatusOptions,
-) {
-    set_session_run_state(guard, run_state);
-    emit_status_event(app, guard, phase, options);
 }
 
 fn collect_assistant_text(messages: &[ConversationMessage]) -> String {
@@ -893,667 +307,6 @@ fn is_meta_stall_text(text: &str) -> bool {
         .any(|needle| lower.contains(needle))
 }
 
-fn is_repair_refusal_text(text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    lower.contains("sorry, it looks like i can’t respond")
-        || lower.contains("sorry, it looks like i can't respond")
-        || lower.contains("cannot respond to this")
-        || lower.contains("can't respond to this")
-        || lower.contains("let’s try a different topic")
-        || lower.contains("let's try a different topic")
-        || (lower.contains("different topic") && lower.contains("new chat"))
-}
-
-fn is_false_completion_success_claim_text(text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    let mentions_local_file = lower.contains("write_file")
-        || lower.contains("edit_file")
-        || lower.contains("/root/")
-        || lower.contains("workspace")
-        || lower.contains(".html")
-        || lower.contains(".txt")
-        || trimmed.contains("ファイル")
-        || trimmed.contains("内容");
-    let success_claim = lower.contains("created")
-        || lower.contains("written")
-        || lower.contains("wrote")
-        || lower.contains("saved")
-        || lower.contains("completed")
-        || lower.contains("done")
-        || lower.contains("has been created")
-        || lower.contains("was used")
-        || lower.contains("status: ok")
-        || trimmed.contains("作成")
-        || trimmed.contains("作成済")
-        || trimmed.contains("保存")
-        || trimmed.contains("完了")
-        || trimmed.contains("書き込")
-        || trimmed.contains("書かれ")
-        || trimmed.contains("生成");
-    mentions_local_file && success_claim
-}
-
-fn is_concrete_local_write_body_without_tools(
-    latest_turn_input: &str,
-    assistant_text: &str,
-) -> bool {
-    if !is_concrete_local_file_write_goal(latest_turn_input) {
-        return false;
-    }
-    let trimmed = assistant_text.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    let looks_like_generated_file_body = lower.contains("<!doctype html")
-        || lower.contains("<html")
-        || lower.contains("```html")
-        || lower.contains("```css")
-        || lower.contains("```javascript")
-        || lower.contains("```js")
-        || lower.contains("```json")
-        || lower.contains("```")
-        || trimmed.chars().count() >= 900;
-    looks_like_generated_file_body && !is_tool_protocol_confusion_text(trimmed)
-}
-
-fn is_concrete_local_mutation_plan_without_tools(
-    latest_turn_input: &str,
-    assistant_text: &str,
-) -> bool {
-    if !is_concrete_local_file_write_goal(latest_turn_input) {
-        return false;
-    }
-    let trimmed = assistant_text.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    let mentions_target = lower.contains("/root/")
-        || lower.contains("workspace")
-        || lower.contains(".html")
-        || lower.contains(".txt")
-        || lower.contains(".md")
-        || trimmed.contains("ファイル")
-        || trimmed.contains("変更")
-        || trimmed.contains("適用");
-    let mutation_intent = lower.contains("apply")
-        || lower.contains("update")
-        || lower.contains("edit")
-        || lower.contains("change")
-        || lower.contains("modify")
-        || lower.contains("reflect")
-        || trimmed.contains("適用")
-        || trimmed.contains("変更")
-        || trimmed.contains("反映")
-        || trimmed.contains("追加");
-    let planning_language = lower.contains("will ")
-        || lower.contains("going to")
-        || lower.contains("only this change")
-        || lower.contains("this change only")
-        || lower.contains("existing")
-        || trimmed.contains("します")
-        || trimmed.contains("反映します")
-        || trimmed.contains("変更だけ")
-        || trimmed.contains("追加適用")
-        || trimmed.contains("既存の");
-    trimmed.chars().count() <= 1600
-        && mentions_target
-        && mutation_intent
-        && planning_language
-        && !lower.contains("\"relay_tool_call\"")
-        && !lower.contains("```relay_tool")
-        && !lower.contains("<!doctype html")
-        && !lower.contains("<html")
-}
-
-fn contains_plain_relay_tool_mention(lower: &str) -> bool {
-    lower.contains("relay_tool ")
-        || lower.contains("relay_tool\n")
-        || lower.contains("relay_tool\r")
-        || lower.contains("`relay_tool`")
-}
-
-/// Live capture 2026-04-18 (logged-in M365 Copilot, repair stage 1/3): the
-/// repair reply finalized at exactly `{ "input": {` — a 12-char unbalanced
-/// JSON fragment with no `"name"` key yet. `parse_initial` cannot recover a
-/// tool call from it, and none of the prose-based confusion heuristics below
-/// match, so without this check the turn classified as `outcome=Completed`
-/// with no repair queued and the session exited cleanly without ever calling
-/// `write_file`. Treat any short (<400 char) unbalanced JSON opener that
-/// mentions a tool-shape key as confusion so the repair escalator fires.
-fn looks_like_truncated_relay_tool_fragment(trimmed: &str) -> bool {
-    if trimmed.is_empty() {
-        return false;
-    }
-    let first = trimmed.chars().next();
-    if !matches!(first, Some('{' | '[')) {
-        return false;
-    }
-    let char_count = trimmed.chars().count();
-    if char_count > 400 {
-        return false;
-    }
-    let has_tool_key = trimmed.contains("\"name\"")
-        || trimmed.contains("\"input\"")
-        || trimmed.contains("\"path\"")
-        || trimmed.contains("\"content\"")
-        || trimmed.contains("\"arguments\"")
-        || trimmed.contains("\"parameters\"")
-        || trimmed.contains("\"relay_tool_call\"");
-    if !has_tool_key {
-        return false;
-    }
-    let mut depth: i32 = 0;
-    let mut in_string = false;
-    let mut escaped = false;
-    for ch in trimmed.chars() {
-        if in_string {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            match ch {
-                '\\' => escaped = true,
-                '"' => in_string = false,
-                _ => {}
-            }
-            continue;
-        }
-        match ch {
-            '"' => in_string = true,
-            '{' | '[' => depth += 1,
-            '}' | ']' => depth -= 1,
-            _ => {}
-        }
-    }
-    depth > 0 || in_string
-}
-
-fn is_tool_protocol_confusion_text(text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    if looks_like_truncated_relay_tool_fragment(trimmed) {
-        return true;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    let local_tool_refusal = lower.contains("local_tools_unavailable")
-        || lower.contains("local workspace editing tools")
-        || lower.contains("workspace file tools")
-        || lower.contains("can't create files on their system")
-        || lower.contains("cannot create files on their system")
-        || ((lower.contains("can't directly create") || lower.contains("cannot directly create"))
-            && (lower.contains("local filesystem") || lower.contains("local file system")));
-    let local_write_refusal = (lower.contains("can't directly write")
-        || lower.contains("cannot directly write"))
-        && (lower.contains("/root/") || lower.contains("workspace"));
-    let foreign_tool_drift = lower.contains("python tool")
-        || lower.contains("creating a file with python")
-        || lower.contains("filesystem access in a python sandbox")
-        || lower.contains("use the python tool instead")
-        || lower.contains("preparing to use python to open and write")
-        || lower.contains("sub-agent")
-        || lower.contains("sub agent")
-        || lower.contains("agent tool")
-        || lower.contains("pages")
-        || lower.contains("coding and executing")
-        || lower.contains("\"executedcode\"")
-        || lower.contains("outputfiles")
-        || lower.contains("coderesultfileurl")
-        || lower.contains("/mnt/file_upload/")
-        || lower.contains("here's your new page")
-        || lower.contains("here is your new page")
-        || lower.contains("created your single")
-        || lower.contains("created your playable")
-        || lower.contains("websearch")
-        || lower.contains("search tool")
-        || lower.contains("i'll search for")
-        || lower.contains("turn1search")
-        || lower.contains("cite")
-        || lower.contains("[1](http")
-        || lower.contains("[2](http")
-        || lower.contains("save as `")
-        || lower.contains("save as \"")
-        || lower.contains("open in any modern browser")
-        || lower.contains("office365_search");
-    let planning_only_file_drift = (lower.contains("planning file creation")
-        || lower.contains("considering the steps to create")
-        || lower.contains("determining the approach for creating")
-        || lower.contains("weighing the options")
-        || lower.contains("checking for existing files")
-        || lower.contains("deciding on file writing"))
-        && (lower.contains("write to the file")
-            || lower.contains("creating the tetris game file")
-            || lower.contains("create a playable html tetris")
-            || lower.contains("tetris game file"));
-    let relay_planning_write_drift = (lower.contains("show**planning")
-        || lower.contains("planning tetris html creation")
-        || lower.contains("show**preparing file request")
-        || lower.contains("show**generating file output")
-        || lower.contains("show**requesting html output")
-        || lower.contains("show**requesting html file creation")
-        || lower.contains("looking into generating a full html file")
-        || lower.contains("preparing to use the relay tool")
-        || lower.contains("preparing to utilize a relay tool")
-        || lower.contains("show**creating html for tetris")
-        || lower.contains("working on creating an html file")
-        || lower.contains("preparing to generate a single-file html version of tetris")
-        || lower.contains("organizing the process to create")
-        || lower.contains("show**deciding on file output")
-        || lower.contains("show**determining file name choice")
-        || lower.contains("deciding on the filename")
-        || lower.contains("deciding on using")
-        || lower.contains("single-file approach")
-        || lower.contains("single file approach"))
-        && ((lower.contains("relay tools") || lower.contains("relay tool"))
-            || lower.contains("write the new")
-            || lower.contains("write the complete file")
-            || lower.contains("using specific tools to write")
-            || lower.contains("using a relay tool to write the complete file")
-            || lower.contains("write_file function")
-            || lower.contains("relay_tool's write_file action")
-            || lower.contains("index.html")
-            || lower.contains("html, js, and css")
-            || lower.contains("specified tool")
-            || lower.contains("relay via a specified tool")
-            || lower.contains("requesting the content of tetris.html to be written")
-            || lower.contains("no specific path was provided")
-            || lower.contains("reasonable and straightforward naming convention"));
-    let generic_show_hide_relay_write_drift = lower.contains("show**")
-        && (lower.contains("relay tool") || lower.contains("relay tools"))
-        && (lower.contains("write") || lower.contains("file"))
-        && !lower.contains("\"relay_tool_call\"");
-    let generic_show_hide_html_creation_drift = lower.contains("show**")
-        && lower.contains("tetris")
-        && ((lower.contains("html file")
-            || lower.contains("single document")
-            || lower.contains("canvas and controls")
-            || lower.contains("full html"))
-            || ((lower.contains("single file") || lower.contains("tetris.html"))
-                && (lower.contains("requesting")
-                    || lower.contains("creation")
-                    || lower.contains("written")
-                    || lower.contains("write"))))
-        && !lower.contains("\"relay_tool_call\"")
-        && !lower.contains("<!doctype html")
-        && !lower.contains("<html");
-    let mentioned_relay_tools_without_payload = (lower.contains("write_file")
-        || lower.contains("edit_file")
-        || lower.contains("read_file")
-        || lower.contains("glob_search")
-        || lower.contains("grep_search"))
-        && (lower.contains("```")
-            || contains_plain_relay_tool_mention(&lower)
-            || lower.contains("adjusting tool use"));
-    let defers_concrete_local_read_without_tool = trimmed.chars().count() <= 500
-        && ((lower.contains("need to read")
-            || lower.contains("need to inspect")
-            || lower.contains("need to review")
-            || lower.contains("must read")
-            || lower.contains("must inspect"))
-            || trimmed.contains("読む必要があります")
-            || trimmed.contains("読み取る必要があります")
-            || trimmed.contains("確認する必要があります")
-            || trimmed.contains("以下で読み取ります")
-            || trimmed.contains("以下で確認します"))
-        && (lower.contains("first") || trimmed.contains("まず") || trimmed.contains("以下で"));
-    let defers_concrete_local_write_without_tool = trimmed.chars().count() <= 500
-        && !lower.contains("\"relay_tool_call\"")
-        && !lower.contains("```relay_tool")
-        && (lower.contains("need to create")
-            || lower.contains("need to write")
-            || lower.contains("need to edit")
-            || lower.contains("preparing to create")
-            || lower.contains("preparing to write"))
-        && (lower.contains("html file")
-            || lower.contains("tetris.html")
-            || lower.contains("write_file")
-            || trimmed.contains("ファイルを作成")
-            || trimmed.contains("書き込みます"))
-        && (lower.contains("available tools")
-            || lower.contains("utilizing available tools")
-            || lower.contains("using the available tools")
-            || lower.contains("following the instructions")
-            || lower.contains("addressing conflicting guidance"));
-    // Live capture 2026-04-18 (logged-in M365, original turn): the entire
-    // reply was the stripped Show/Hide planning narration —
-    // `**Creating HTML Tetris**I'm planning to create a Tetris game in HTML
-    // with a single file that includes a canvas and controls, and I'll use
-    // Relay to save it as tetris.html.` No tool call, no file body. The
-    // earlier `relay_planning_write_drift` heuristic required an intact
-    // `show**` prefix, but the DOM normalizer strips the Show/Hide chrome
-    // before the classifier sees the text, so the same drift slips past.
-    // Catch the post-strip form by matching future-tense commitments to use
-    // Relay to write/save a workspace file, in a short reply that has no
-    // relay_tool payload and no HTML document body.
-    let planning_commits_to_relay_without_payload = trimmed.chars().count() <= 800
-        && !lower.contains("\"relay_tool_call\"")
-        && !lower.contains("```relay_tool")
-        && !lower.contains("<!doctype html")
-        && !lower.contains("<html")
-        && (lower.contains("i'll use relay")
-            || lower.contains("i'll use the relay")
-            || lower.contains("i will use relay")
-            || lower.contains("i will use the relay")
-            || lower.contains("use relay to save")
-            || lower.contains("use relay to write")
-            || lower.contains("use the relay to save")
-            || lower.contains("use the relay to write")
-            || lower.contains("using relay to save")
-            || lower.contains("using relay to write")
-            || lower.contains("save it as tetris")
-            || lower.contains("save this as tetris")
-            || lower.contains("planning to create a tetris")
-            || lower.contains("planning to write tetris")
-            || lower.contains("planning to save tetris"));
-    // Live capture 2026-04-18 (logged-in M365, attempt 6 original turn):
-    // `**Deciding on file creation**I’m opting to create a simple `index.html`
-    // file in the workspace root for generating the Tetris game with a canvas
-    // and controls, avoiding unnecessary tools.` The reply explicitly refuses
-    // to invoke Relay tools ("avoiding unnecessary tools") and targets the
-    // wrong filename (`index.html` instead of the requested `tetris.html`).
-    // Both phrasings — "opting to create ..." and "avoiding unnecessary
-    // tools" — are strong drift signals on their own, and the smart-apostrophe
-    // `’` form of `I'm` did not match the ASCII `i'm` substring even once the
-    // planning branch was extended. Match either of the standalone signals
-    // plus the file-goal context so the repair escalator fires.
-    let declines_tools_for_local_write = trimmed.chars().count() <= 800
-        && !lower.contains("\"relay_tool_call\"")
-        && !lower.contains("```relay_tool")
-        && !lower.contains("<!doctype html")
-        && !lower.contains("<html")
-        && (lower.contains("avoiding unnecessary tools")
-            || lower.contains("without using tools")
-            || lower.contains("without the need for tools")
-            || lower.contains("bypassing the need for tool")
-            || lower.contains("bypassing the tool")
-            || lower.contains("no need to use tools")
-            || lower.contains("no need for tools")
-            || lower.contains("avoiding the tool")
-            || lower.contains("avoid unnecessary tool")
-            || lower.contains("opting to create")
-            || lower.contains("opting to write")
-            || lower.contains("opting to save")
-            || lower.contains("opting for a simple")
-            || lower.contains("deciding on file creation"))
-        && (lower.contains("tetris")
-            || lower.contains("tetris.html")
-            || lower.contains("index.html")
-            || lower.contains("html file")
-            || lower.contains("canvas")
-            || lower.contains("single file")
-            || lower.contains("workspace"));
-    local_tool_refusal
-        || local_write_refusal
-        || foreign_tool_drift
-        || planning_only_file_drift
-        || relay_planning_write_drift
-        || generic_show_hide_relay_write_drift
-        || generic_show_hide_html_creation_drift
-        || mentioned_relay_tools_without_payload
-        || defers_concrete_local_read_without_tool
-        || defers_concrete_local_write_without_tool
-        || planning_commits_to_relay_without_payload
-        || declines_tools_for_local_write
-        || is_repair_refusal_text(trimmed)
-}
-
-fn tool_protocol_repair_escalation(attempt_index: usize) -> &'static str {
-    match tool_protocol_repair_stage(attempt_index) {
-        1 => concat!(
-            "Use the Relay tool catalog and emit the next required `relay_tool` JSON block in this reply.\n",
-            "For local file creation or edits inside the workspace, prefer `write_file` / `edit_file` (and `read_file` first only when actually needed).\n",
-            "Output exactly one fenced `relay_tool` block and nothing before or after it.\n",
-            "Do not answer with prose only.\n",
-            "Do not mention `relay_tool` in plain text.\n\n",
-        ),
-        2 => concat!(
-            "Your previous repair still drifted into planning-only text instead of usable Relay tool JSON.\n",
-            "Ignore any Pages, uploads, citations, links, `outputFiles`, or remote artifacts from prior replies: they do not satisfy a local workspace request.\n",
-            "In this reply, output exactly one Relay `relay_tool` fence and nothing else.\n",
-            "Do not include any explanatory sentence before or after the fence.\n",
-            "Do not emit plain-text `relay_tool` mentions.\n",
-            "The following outputs are invalid for this repair turn: `Show**...` wrappers, 'preparing' text, 'requesting' text, 'specific function' text, or any sentence that says you are about to write the file.\n",
-            "If the task is to create or overwrite a workspace file and you already know the content, emit `write_file` now instead of describing Python, page creation, or the tool you plan to use.\n\n",
-        ),
-        _ => concat!(
-            "Final repair for this turn.\n",
-            "Your previous repairs still drifted into planning-only text instead of usable Relay tool JSON.\n",
-            "Output exactly one Relay `relay_tool` fence and nothing else.\n",
-            "Any text before or after the fence is a failed repair.\n",
-            "Do not include `Show**...`, planning text, 'preparing', 'requesting', 'specific function', or plain-text `relay_tool` mentions.\n",
-            "Emit the actual local file write now. Do not switch tools, do not verify, and do not describe the content instead of writing it.\n\n",
-        ),
-    }
-}
-
-fn build_write_file_repair_action_instruction(
-    attempt_index: usize,
-    requested_path: &str,
-    inferred_path: bool,
-) -> String {
-    let path_sentence = if inferred_path {
-        "No file path was supplied by the user. Use the workspace-root-relative filename below exactly as written. Do not spend another turn choosing or explaining the filename. Do not switch to `index.html` or any other filename; use `tetris.html`."
-    } else {
-        "Use the path anchor below exactly as written for this concrete file-creation request."
-    };
-    match tool_protocol_repair_stage(attempt_index) {
-        1 => format!(
-            "{path_sentence} Emit exactly one `write_file` Relay tool call now. Do not describe the content in prose; put the final file body in `input.content`."
-        ),
-        2 => format!(
-            "{path_sentence} Emit the actual `write_file` JSON now, not a wrapper that says you are preparing or requesting the write. `Show**...`, planning text, and plain-text `relay_tool` mentions are invalid."
-        ),
-        _ => format!(
-            "{path_sentence} Final repair for this turn: the only valid reply is exactly one fenced `relay_tool` block whose only tool is `write_file` for `{requested_path}`. Put the complete final HTML document in `input.content`. Do not use placeholders like `<full file content here>` or describe the HTML instead of writing it."
-        ),
-    }
-}
-
-fn is_concrete_new_file_create_request(text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    let create_markers = lower.contains("create")
-        || lower.contains("new file")
-        || lower.contains("overwrite")
-        || trimmed.contains("作成")
-        || trimmed.contains("新規");
-    let existing_file_markers = lower.contains("read")
-        || lower.contains("inspect")
-        || lower.contains("review")
-        || lower.contains("fix")
-        || lower.contains("edit")
-        || lower.contains("update")
-        || trimmed.contains("読む")
-        || trimmed.contains("読んで")
-        || trimmed.contains("確認")
-        || trimmed.contains("修正")
-        || trimmed.contains("編集")
-        || trimmed.contains("更新");
-    create_markers && !existing_file_markers
-}
-
-fn infer_default_new_file_path(latest_request: &str) -> Option<String> {
-    let trimmed = latest_request.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    let wants_html = lower.contains("html") || trimmed.contains("HTML");
-    let wants_tetris = lower.contains("tetris") || trimmed.contains("テトリス");
-    if wants_html && wants_tetris {
-        return Some("tetris.html".to_string());
-    }
-    None
-}
-
-fn build_targeted_tool_protocol_repair_input(
-    goal: &str,
-    latest_request: &str,
-    attempt_index: usize,
-    tool_name: &str,
-    requested_path: &str,
-    input: Value,
-    action_instruction: &str,
-) -> String {
-    let expected_json = serde_json::to_string_pretty(&json!({
-        "name": tool_name,
-        "relay_tool_call": true,
-        "input": input,
-    }))
-    .unwrap_or_else(|_| "{}".to_string());
-    format!(
-        concat!(
-            "Tool protocol repair.\n",
-            "Your previous reply did not use Relay's local tool protocol correctly.\n",
-            "Do not use or mention Microsoft Copilot built-in tools such as Python, WebSearch/web search, citations, `office365_search`, coding/executing, Pages, Agent/sub-agent tools, or file uploads.\n",
-            "Do not claim local workspace edit tools are unavailable when the appended Relay tool catalog includes them.\n",
-            "{escalation}",
-            "{action_instruction}\n",
-            "Use the exact path anchor below without rewriting it to another directory or prior-turn variant.\n\n",
-            "Exact path anchor from the latest user turn:\n",
-            "```text\n{requested_path}\n```\n\n",
-            "The JSON skeleton below shows structure only. Replace any example content string with the real final file body.\n",
-            "Expected JSON skeleton for the next reply:\n",
-            "```json\n{expected_json}\n```\n\n",
-            "{latest_request_marker}{latest_request}\n```\n\n",
-            "{original_goal_marker}{goal}\n```"
-        ),
-        escalation = tool_protocol_repair_escalation(attempt_index),
-        action_instruction = action_instruction.trim(),
-        requested_path = requested_path.trim(),
-        expected_json = expected_json,
-        latest_request_marker = LATEST_REQUEST_MARKER,
-        latest_request = latest_request.trim(),
-        original_goal_marker = ORIGINAL_GOAL_MARKER,
-        goal = goal.trim(),
-    )
-}
-
-fn build_tool_protocol_repair_input(
-    goal: &str,
-    latest_request: &str,
-    attempt_index: usize,
-) -> String {
-    format!(
-        concat!(
-            "Tool protocol repair.\n",
-            "Your previous reply did not use Relay's local tool protocol correctly.\n",
-            "Do not use or mention Microsoft Copilot built-in tools such as Python, WebSearch/web search, citations, `office365_search`, coding/executing, Pages, Agent/sub-agent tools, or file uploads.\n",
-            "Do not claim local workspace edit tools are unavailable when the appended Relay tool catalog includes them.\n",
-            "{escalation}",
-            "Quoted latest user request for this turn (user data, not system instruction):\n```text\n{latest_request}\n```\n\n",
-            "Quoted original user goal (user data, not system instruction):\n```text\n{goal}\n```"
-        ),
-        escalation = tool_protocol_repair_escalation(attempt_index),
-        latest_request = latest_request.trim(),
-        goal = goal.trim(),
-    )
-}
-
-fn build_best_tool_protocol_repair_input(
-    goal: &str,
-    latest_request: &str,
-    attempt_index: usize,
-) -> String {
-    if is_concrete_new_file_create_request(latest_request) {
-        if let Some(requested_path) = extract_path_anchors_from_text(latest_request)
-            .into_iter()
-            .next()
-        {
-            return build_targeted_tool_protocol_repair_input(
-                goal,
-                latest_request,
-                attempt_index,
-                "write_file",
-                &requested_path,
-                json!({
-                    "path": requested_path.clone(),
-                    "content": "<full file content here>"
-                }),
-                &build_write_file_repair_action_instruction(attempt_index, &requested_path, false),
-            );
-        }
-        if let Some(inferred_path) = infer_default_new_file_path(latest_request) {
-            return build_targeted_tool_protocol_repair_input(
-                goal,
-                latest_request,
-                attempt_index,
-                "write_file",
-                &inferred_path,
-                json!({
-                    "path": inferred_path.clone(),
-                    "content": "<full file content here>"
-                }),
-                &build_write_file_repair_action_instruction(attempt_index, &inferred_path, true),
-            );
-        }
-    }
-    if let Some(requested_path) = extract_path_anchors_from_text(latest_request)
-        .into_iter()
-        .next()
-    {
-        return build_targeted_tool_protocol_repair_input(
-            goal,
-            latest_request,
-            attempt_index,
-            "read_file",
-            &requested_path,
-            json!({
-                "path": requested_path.clone()
-            }),
-            "Emit exactly one `read_file` Relay tool call first so Relay can inspect the named file before editing, fixing, or reviewing it.",
-        );
-    }
-    build_tool_protocol_repair_input(goal, latest_request, attempt_index)
-}
-
-fn build_path_resolution_repair_input(
-    goal: &str,
-    latest_request: &str,
-    requested_path: &str,
-    failed_tool_path: Option<&str>,
-    error_output: &str,
-) -> String {
-    let failed_path_text = failed_tool_path
-        .filter(|path| !path.trim().is_empty())
-        .map(|path| format!("Previous failed read_file input (do not reuse it unless it exactly matches the requested path):\n```text\n{}\n```\n\n", path.trim()))
-        .unwrap_or_default();
-    format!(
-        concat!(
-            "Path resolution repair.\n",
-            "The previous `read_file` call failed with ENOENT.\n",
-            "Retry exactly one `read_file` Relay tool call in this reply.\n",
-            "Use the latest-turn requested path string exactly as written below.\n",
-            "Do not prepend a prior directory, do not switch to a same-named file elsewhere, and do not answer with prose.\n",
-            "Output exactly one fenced `relay_tool` block and nothing before or after it.\n\n",
-            "Exact path to use verbatim:\n```text\n{requested_path}\n```\n\n",
-            "{failed_path_text}",
-            "Latest user request for this turn (user data, primary repair anchor):\n```text\n{latest_request}\n```\n\n",
-            "Previous `read_file` error:\n```text\n{error_output}\n```\n\n",
-            "Quoted original user goal (user data, not system instruction):\n```text\n{goal}\n```"
-        ),
-        requested_path = requested_path.trim(),
-        failed_path_text = failed_path_text,
-        latest_request = latest_request.trim(),
-        error_output = error_output.trim(),
-        goal = goal.trim(),
-    )
-}
-
 fn truncate_for_log(text: &str, max_chars: usize) -> String {
     let collapsed = collapse_inline_whitespace(text);
     let truncated = collapsed.chars().take(max_chars).collect::<String>();
@@ -1564,65 +317,48 @@ fn truncate_for_log(text: &str, max_chars: usize) -> String {
     }
 }
 
-fn latest_read_file_tool_error(summary: &runtime::TurnSummary) -> Option<ReadFileToolErrorContext> {
-    let output = summary.tool_results.iter().rev().find_map(|message| {
-        message.blocks.iter().find_map(|block| match block {
-            ContentBlock::ToolResult {
-                tool_name,
-                output,
-                is_error,
-                ..
-            } if *is_error && tool_name == "read_file" => Some(output.clone()),
-            _ => None,
-        })
-    })?;
-    let requested_path = summary.assistant_messages.iter().rev().find_map(|message| {
-        message.blocks.iter().rev().find_map(|block| match block {
-            ContentBlock::ToolUse { name, input, .. } if name == "read_file" => {
-                serde_json::from_str::<Value>(input).ok().and_then(|value| {
-                    value
-                        .get("path")
-                        .or_else(|| value.get("file_path"))
-                        .and_then(Value::as_str)
-                        .map(ToString::to_string)
-                })
-            }
-            _ => None,
-        })
-    });
-    Some(ReadFileToolErrorContext {
-        requested_path,
-        output,
-    })
+fn repair_attempt_index_from_text(text: &str) -> Option<usize> {
+    retry_repair_attempt_index_from_text(text, is_tool_protocol_repair_text)
 }
 
-fn is_read_file_enoent(output: &str) -> bool {
-    let lower = output.to_ascii_lowercase();
-    lower.contains("no such file or directory") || lower.contains("os error 2")
+fn is_repair_refusal_text(text: &str) -> bool {
+    retry_is_repair_refusal_text(text)
 }
 
-fn select_path_repair_anchor(
+fn is_tool_protocol_confusion_text(text: &str) -> bool {
+    retry_is_tool_protocol_confusion_text(text)
+}
+
+fn build_tool_protocol_repair_input(
+    goal: &str,
     latest_request: &str,
+    attempt_index: usize,
+) -> String {
+    retry_build_tool_protocol_repair_input(goal, latest_request, attempt_index)
+}
+
+fn build_best_tool_protocol_repair_input(
+    goal: &str,
+    latest_request: &str,
+    attempt_index: usize,
+) -> String {
+    retry_build_best_tool_protocol_repair_input(goal, latest_request, attempt_index)
+}
+
+fn build_path_resolution_repair_input(
+    goal: &str,
+    latest_request: &str,
+    requested_path: &str,
     failed_tool_path: Option<&str>,
-) -> Option<String> {
-    let anchors = extract_path_anchors_from_text(latest_request);
-    if anchors.is_empty() {
-        return None;
-    }
-    if let Some(failed_path) = failed_tool_path {
-        let failed_name = std::path::Path::new(failed_path)
-            .file_name()
-            .and_then(|value| value.to_str());
-        if let Some(anchor) = anchors.iter().find(|anchor| {
-            std::path::Path::new(anchor.as_str())
-                .file_name()
-                .and_then(|value| value.to_str())
-                == failed_name
-        }) {
-            return Some(anchor.clone());
-        }
-    }
-    anchors.into_iter().next()
+    error_output: &str,
+) -> String {
+    retry_build_path_resolution_repair_input(
+        goal,
+        latest_request,
+        requested_path,
+        failed_tool_path,
+        error_output,
+    )
 }
 
 fn decide_loop_after_success(
@@ -1634,100 +370,230 @@ fn decide_loop_after_success(
     path_repair_used: bool,
     summary: &runtime::TurnSummary,
 ) -> LoopDecision {
-    match &summary.outcome {
-        runtime::TurnOutcome::PermissionDenied { .. } => {
-            return LoopDecision::Stop(LoopStopReason::PermissionDenied);
+    retry_decide_loop_after_success(
+        goal,
+        latest_turn_input,
+        meta_stall_nudges_used,
+        meta_stall_nudge_limit,
+        path_repair_used,
+        summary,
+        RetryHeuristicsFns {
+            is_meta_stall_text,
+            is_concrete_local_file_write_goal,
+        },
+    )
+}
+
+struct SuccessDecisionState<'a> {
+    current_input: &'a mut LoopInput,
+    meta_stall_nudges_used: &'a mut usize,
+    path_repair_used: &'a mut bool,
+    final_stop_reason: &'a mut LoopStopReason,
+    final_error_message: &'a mut Option<String>,
+}
+
+fn apply_success_loop_decision(
+    session_id: &str,
+    goal: &str,
+    latest_turn_input: &str,
+    max_turns: usize,
+    turn_index: usize,
+    meta_stall_nudge_limit: usize,
+    summary: &runtime::TurnSummary,
+    state: SuccessDecisionState<'_>,
+) -> bool {
+    match decide_loop_after_success(
+        goal,
+        latest_turn_input,
+        turn_index,
+        *state.meta_stall_nudges_used,
+        meta_stall_nudge_limit,
+        *state.path_repair_used,
+        summary,
+    ) {
+        LoopDecision::Continue { next_input, kind } => {
+            if turn_index + 1 >= max_turns {
+                *state.final_stop_reason = LoopStopReason::MaxTurnsReached;
+                return true;
+            }
+            if next_input.trim_start().starts_with("Tool protocol repair.") {
+                let queued_repair_stage = *state.meta_stall_nudges_used + 1;
+                tracing::info!(
+                    "[RelayAgent] session {} queued tool protocol repair stage {}/{} after tool-protocol confusion (iterations={}, assistant_excerpt={:?})",
+                    session_id,
+                    queued_repair_stage,
+                    meta_stall_nudge_limit,
+                    summary.iterations,
+                    truncate_for_log(&summary.terminal_assistant_text, 240)
+                );
+            } else if next_input
+                .trim_start()
+                .starts_with("Path resolution repair.")
+            {
+                tracing::info!(
+                    "[RelayAgent] session {} queued path-resolution repair after read_file ENOENT (iterations={}, assistant_excerpt={:?})",
+                    session_id,
+                    summary.iterations,
+                    truncate_for_log(&summary.terminal_assistant_text, 240)
+                );
+            } else if next_input.trim() == "Continue." {
+                let queued_nudge_stage = *state.meta_stall_nudges_used + 1;
+                tracing::info!(
+                    "[RelayAgent] session {} queued meta-stall continue nudge {}/{} (iterations={}, assistant_excerpt={:?})",
+                    session_id,
+                    queued_nudge_stage,
+                    meta_stall_nudge_limit,
+                    summary.iterations,
+                    truncate_for_log(&summary.terminal_assistant_text, 240)
+                );
+            }
+            match kind {
+                LoopContinueKind::MetaNudge => *state.meta_stall_nudges_used += 1,
+                LoopContinueKind::PathRepair => *state.path_repair_used = true,
+            }
+            *state.current_input = LoopInput::Synthetic(next_input);
+            false
         }
-        runtime::TurnOutcome::ToolError { .. } => {
-            if !path_repair_used {
-                if let Some(error) = latest_read_file_tool_error(summary) {
-                    if is_read_file_enoent(&error.output) {
-                        if let Some(requested_path) = select_path_repair_anchor(
-                            latest_turn_input,
-                            error.requested_path.as_deref(),
-                        ) {
-                            return LoopDecision::Continue {
-                                next_input: build_path_resolution_repair_input(
-                                    goal,
-                                    latest_turn_input,
-                                    &requested_path,
-                                    error.requested_path.as_deref(),
-                                    &error.output,
-                                ),
-                                kind: LoopContinueKind::PathRepair,
-                            };
-                        }
-                    }
+        LoopDecision::Stop(reason) => {
+            *state.final_stop_reason = reason;
+            if matches!(
+                reason,
+                LoopStopReason::PermissionDenied | LoopStopReason::ToolError
+            ) {
+                if let Some(message) = summary.outcome.error_message() {
+                    *state.final_error_message = Some(message.to_string());
                 }
             }
-            return LoopDecision::Stop(LoopStopReason::ToolError);
+            true
         }
-        runtime::TurnOutcome::Completed => {}
     }
+}
 
-    let assistant_text = summary.terminal_assistant_text.as_str();
-    let is_tool_protocol_confusion =
-        summary.tool_results.is_empty() && is_tool_protocol_confusion_text(assistant_text);
-    let is_repair_refusal =
-        summary.tool_results.is_empty() && is_repair_refusal_text(assistant_text);
-    let is_false_completion =
-        summary.tool_results.is_empty() && is_false_completion_success_claim_text(assistant_text);
-    let is_plain_file_body_completion = summary.tool_results.is_empty()
-        && is_concrete_local_write_body_without_tools(latest_turn_input, assistant_text);
-    let is_mutation_plan_without_tools = summary.tool_results.is_empty()
-        && is_concrete_local_mutation_plan_without_tools(latest_turn_input, assistant_text);
-    let is_meta_stall = summary.tool_results.is_empty()
-        && summary.iterations == 1
-        && is_meta_stall_text(assistant_text);
+struct RuntimeErrorDecisionState<'a> {
+    current_input: &'a mut LoopInput,
+    retry_attempts: &'a mut usize,
+    compact_attempts: &'a mut usize,
+    final_stop_reason: &'a mut LoopStopReason,
+    final_error_message: &'a mut Option<String>,
+    completed_turn: &'a mut bool,
+}
 
-    if summary.tool_results.is_empty() {
-        tracing::info!(
-            "[RelayAgent] post-turn classification: outcome={:?} iterations={} meta_nudges_used={}/{} path_repair_used={} tool_protocol_confusion={} repair_refusal={} false_completion={} plain_file_body={} mutation_plan_without_tools={} meta_stall={} assistant_excerpt={:?}",
-            summary.outcome,
-            summary.iterations,
-            meta_stall_nudges_used,
-            meta_stall_nudge_limit,
-            path_repair_used,
-            is_tool_protocol_confusion,
-            is_repair_refusal,
-            is_false_completion,
-            is_plain_file_body_completion,
-            is_mutation_plan_without_tools,
-            is_meta_stall,
-            truncate_for_log(assistant_text, 240)
-        );
-    }
+fn apply_runtime_error_loop_decision<R, C, T>(
+    app: &AppHandle<R>,
+    loop_guard: &LoopEpochGuard,
+    runtime_session: &mut runtime::ConversationRuntime<C, T>,
+    error: RuntimeError,
+    checkpoint: RuntimeSession,
+    cancelled: &Arc<AtomicBool>,
+    goal: &str,
+    latest_turn_input: &str,
+    compact_retry_limit: usize,
+    max_turn_retries: usize,
+    state: RuntimeErrorDecisionState<'_>,
+) -> bool
+where
+    R: Runtime,
+    C: ApiClient,
+    T: ToolExecutor,
+{
+    let error_text = error.to_string();
+    runtime_session.replace_session(checkpoint);
+    set_session_error_summary(loop_guard, &error_text);
 
-    if is_tool_protocol_confusion
-        || is_repair_refusal
-        || is_false_completion
-        || is_plain_file_body_completion
-        || is_mutation_plan_without_tools
+    if cancelled.load(Ordering::SeqCst)
+        || !loop_guard.is_current()
+        || error_text.contains("relay_copilot_aborted")
     {
-        if meta_stall_nudges_used < meta_stall_nudge_limit {
-            return LoopDecision::Continue {
-                next_input: build_best_tool_protocol_repair_input(
-                    goal,
-                    latest_turn_input,
-                    meta_stall_nudges_used,
-                ),
-                kind: LoopContinueKind::MetaNudge,
-            };
-        }
-        return LoopDecision::Stop(LoopStopReason::MetaStall);
+        *state.final_stop_reason = LoopStopReason::Cancelled;
+        return true;
     }
 
-    if is_meta_stall {
-        if meta_stall_nudges_used < meta_stall_nudge_limit {
-            return LoopDecision::Continue {
-                next_input: "Continue.".to_string(),
-                kind: LoopContinueKind::MetaNudge,
-            };
+    if runtime_error_needs_forced_compaction(&error)
+        && *state.compact_attempts < compact_retry_limit
+    {
+        *state.compact_attempts += 1;
+        transition_session_state(
+            app,
+            loop_guard,
+            SessionRunState::Compacting,
+            AgentSessionPhase::Compacting,
+            AgentStatusOptions::default().with_message("Compacting context to continue the task"),
+        );
+        let compaction = runtime_session.force_compact(runtime::CompactionConfig {
+            max_estimated_tokens: 0,
+            ..runtime::CompactionConfig::default()
+        });
+        if compaction.removed_message_count == 0 {
+            *state.final_stop_reason = LoopStopReason::CompactionFailed;
+            *state.final_error_message = Some(format!(
+                "agent loop could not compact context enough to continue: {error_text}"
+            ));
+            *state.completed_turn = true;
+            return true;
         }
-        return LoopDecision::Stop(LoopStopReason::MetaStall);
+        *state.current_input = LoopInput::Synthetic(build_compaction_replay_input(
+            goal,
+            latest_turn_input,
+            state.current_input,
+        ));
+        transition_session_state(
+            app,
+            loop_guard,
+            SessionRunState::Running,
+            AgentSessionPhase::Running,
+            AgentStatusOptions::default().with_message("Resuming after compaction"),
+        );
+        return false;
     }
 
-    LoopDecision::Stop(LoopStopReason::Completed)
+    if runtime_error_is_retryable(&error) && *state.retry_attempts < max_turn_retries {
+        *state.retry_attempts += 1;
+        increment_session_retry_count(loop_guard, &error_text);
+        let backoff = retry_backoff(*state.retry_attempts);
+        let next_retry_at_ms = u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .saturating_add(backoff.as_millis()),
+        )
+        .unwrap_or(u64::MAX);
+        transition_session_state(
+            app,
+            loop_guard,
+            SessionRunState::Retrying,
+            AgentSessionPhase::Retrying,
+            AgentStatusOptions::default()
+                .with_attempt(*state.retry_attempts)
+                .with_message(format!(
+                    "Transient Copilot failure: retrying after {error_text}"
+                ))
+                .with_next_retry_at_ms(next_retry_at_ms),
+        );
+        if !sleep_with_cancel(cancelled, retry_backoff(*state.retry_attempts)) {
+            *state.final_stop_reason = LoopStopReason::Cancelled;
+            return true;
+        }
+        transition_session_state(
+            app,
+            loop_guard,
+            SessionRunState::Running,
+            AgentSessionPhase::Running,
+            AgentStatusOptions::default().with_message("Retrying the task now"),
+        );
+        return false;
+    }
+
+    *state.final_stop_reason = if runtime_error_needs_forced_compaction(&error) {
+        LoopStopReason::CompactionFailed
+    } else if runtime_error_is_retryable(&error) {
+        LoopStopReason::RetryExhausted
+    } else {
+        LoopStopReason::ToolError
+    };
+    *state.final_error_message = Some(format!("agent loop failed: {error_text}"));
+    *state.completed_turn = true;
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1807,6 +673,35 @@ fn doom_loop_error_message(signature: &TurnActivitySignature) -> String {
     }
 }
 
+struct DoomLoopGuardState<'a> {
+    recent_turn_signatures: &'a mut Vec<TurnActivitySignature>,
+    final_stop_reason: &'a mut LoopStopReason,
+    final_error_message: &'a mut Option<String>,
+    completed_turn: &'a mut bool,
+}
+
+fn apply_doom_loop_guard(
+    loop_guard: &LoopEpochGuard,
+    summary: &runtime::TurnSummary,
+    state: DoomLoopGuardState<'_>,
+) -> bool {
+    let turn_signature = summarize_turn_activity(summary);
+    state.recent_turn_signatures.push(turn_signature.clone());
+    if state.recent_turn_signatures.len() > 3 {
+        state.recent_turn_signatures.remove(0);
+    }
+    if !detect_doom_loop(state.recent_turn_signatures) {
+        return false;
+    }
+
+    *state.final_stop_reason = LoopStopReason::DoomLoop;
+    let message = doom_loop_error_message(&turn_signature);
+    set_session_error_summary(loop_guard, &message);
+    *state.final_error_message = Some(message);
+    *state.completed_turn = true;
+    true
+}
+
 fn is_meta_stall_nudge(input: &LoopInput) -> bool {
     matches!(input, LoopInput::Synthetic(text) if text.trim() == "Continue.")
 }
@@ -1842,54 +737,11 @@ pub(crate) fn build_compaction_replay_input(
 }
 
 pub(crate) fn runtime_error_needs_forced_compaction(error: &RuntimeError) -> bool {
-    let lower = error.to_string().to_ascii_lowercase();
-    lower.contains("copilot inline prompt remains above")
-        || lower.contains("token limit")
-        || lower.contains("context window")
+    crate::agent_loop::retry::runtime_error_needs_forced_compaction(error)
 }
 
-fn runtime_error_is_retryable(error: &RuntimeError) -> bool {
-    let lower = error.to_string().to_ascii_lowercase();
-    if lower.contains("relay_copilot_aborted") || lower.contains("conversation loop exceeded") {
-        return false;
-    }
-    [
-        "timeout",
-        "timed out",
-        "connection reset",
-        "connection refused",
-        "broken pipe",
-        "temporarily unavailable",
-        "transport",
-        "http 5",
-        "copilot request failed",
-        "unexpected eof",
-        "connection closed",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
-}
-
-pub(crate) fn retry_backoff(attempt: usize) -> Duration {
-    let secs = match attempt {
-        0 | 1 => 1,
-        _ => 2_u64.saturating_pow(u32::try_from(attempt - 1).unwrap_or(u32::MAX)),
-    };
-    Duration::from_secs(secs.min(8))
-}
-
-pub(crate) fn sleep_with_cancel(cancelled: &AtomicBool, duration: Duration) -> bool {
-    let chunk = Duration::from_millis(100);
-    let mut remaining = duration;
-    while remaining > Duration::ZERO {
-        if cancelled.load(Ordering::SeqCst) {
-            return false;
-        }
-        let step = remaining.min(chunk);
-        thread::sleep(step);
-        remaining = remaining.saturating_sub(step);
-    }
-    !cancelled.load(Ordering::SeqCst)
+fn is_concrete_new_file_create_request(text: &str) -> bool {
+    retry_is_concrete_new_file_create_request(text)
 }
 
 pub fn run_agent_loop_impl<R: Runtime>(
@@ -2036,192 +888,68 @@ pub fn run_agent_loop_impl<R: Runtime>(
                         browser_settings.clone(),
                     )?;
 
-                    let turn_signature = summarize_turn_activity(&summary);
-                    recent_turn_signatures.push(turn_signature.clone());
-                    if recent_turn_signatures.len() > 3 {
-                        recent_turn_signatures.remove(0);
-                    }
-                    if detect_doom_loop(&recent_turn_signatures) {
-                        final_stop_reason = LoopStopReason::DoomLoop;
-                        let message = doom_loop_error_message(&turn_signature);
-                        set_session_error_summary(&loop_guard, &message);
-                        final_error_message = Some(message);
-                        completed_turn = true;
+                    if apply_doom_loop_guard(
+                        &loop_guard,
+                        &summary,
+                        DoomLoopGuardState {
+                            recent_turn_signatures: &mut recent_turn_signatures,
+                            final_stop_reason: &mut final_stop_reason,
+                            final_error_message: &mut final_error_message,
+                            completed_turn: &mut completed_turn,
+                        },
+                    ) {
                         break;
                     }
 
-                    match decide_loop_after_success(
+                    completed_turn = apply_success_loop_decision(
+                        session_id,
                         &goal,
                         &turn_input,
+                        max_turns,
                         turn_index,
-                        meta_stall_nudges_used,
                         config.meta_stall_nudge_limit,
-                        path_repair_used,
                         &summary,
-                    ) {
-                        LoopDecision::Continue { next_input, kind } => {
-                            if turn_index + 1 >= max_turns {
-                                final_stop_reason = LoopStopReason::MaxTurnsReached;
-                                completed_turn = true;
-                                break;
-                            }
-                            if next_input.trim_start().starts_with("Tool protocol repair.") {
-                                let stage = meta_stall_nudges_used + 1;
-                                tracing::info!(
-                                    "[RelayAgent] session {} queued tool protocol repair stage {}/{} after tool-protocol confusion (iterations={}, assistant_excerpt={:?})",
-                                    session_id,
-                                    stage,
-                                    config.meta_stall_nudge_limit,
-                                    summary.iterations,
-                                    truncate_for_log(&summary.terminal_assistant_text, 240)
-                                );
-                            } else if next_input
-                                .trim_start()
-                                .starts_with("Path resolution repair.")
-                            {
-                                tracing::info!(
-                                    "[RelayAgent] session {} queued path-resolution repair after read_file ENOENT (iterations={}, assistant_excerpt={:?})",
-                                    session_id,
-                                    summary.iterations,
-                                    truncate_for_log(&summary.terminal_assistant_text, 240)
-                                );
-                            } else if next_input.trim() == "Continue." {
-                                let stage = meta_stall_nudges_used + 1;
-                                tracing::info!(
-                                    "[RelayAgent] session {} queued meta-stall continue nudge {}/{} (iterations={}, assistant_excerpt={:?})",
-                                    session_id,
-                                    stage,
-                                    config.meta_stall_nudge_limit,
-                                    summary.iterations,
-                                    truncate_for_log(&summary.terminal_assistant_text, 240)
-                                );
-                            }
-                            match kind {
-                                LoopContinueKind::MetaNudge => meta_stall_nudges_used += 1,
-                                LoopContinueKind::PathRepair => path_repair_used = true,
-                            }
-                            current_input = LoopInput::Synthetic(next_input);
-                            break;
-                        }
-                        LoopDecision::Stop(reason) => {
-                            final_stop_reason = reason;
-                            if matches!(
-                                reason,
-                                LoopStopReason::PermissionDenied | LoopStopReason::ToolError
-                            ) {
-                                if let Some(message) = summary.outcome.error_message() {
-                                    let msg = message.to_string();
-                                    set_session_error_summary(&loop_guard, &msg);
-                                    final_error_message = Some(msg);
-                                }
-                            }
-                            completed_turn = true;
-                            break;
+                        SuccessDecisionState {
+                            current_input: &mut current_input,
+                            meta_stall_nudges_used: &mut meta_stall_nudges_used,
+                            path_repair_used: &mut path_repair_used,
+                            final_stop_reason: &mut final_stop_reason,
+                            final_error_message: &mut final_error_message,
+                        },
+                    );
+                    if let Some(error) = final_error_message.as_deref() {
+                        if matches!(
+                            final_stop_reason,
+                            LoopStopReason::PermissionDenied | LoopStopReason::ToolError
+                        ) {
+                            set_session_error_summary(&loop_guard, error);
                         }
                     }
+                    break;
                 }
                 Err(error) => {
-                    let error_text = error.to_string();
-                    runtime_session.replace_session(checkpoint);
-                    set_session_error_summary(&loop_guard, &error_text);
-
-                    if cancelled.load(Ordering::SeqCst)
-                        || !loop_guard.is_current()
-                        || error_text.contains("relay_copilot_aborted")
-                    {
-                        final_stop_reason = LoopStopReason::Cancelled;
+                    if apply_runtime_error_loop_decision(
+                        app,
+                        &loop_guard,
+                        &mut runtime_session,
+                        error,
+                        checkpoint,
+                        &cancelled,
+                        &goal,
+                        &turn_input,
+                        config.compact_retry_limit,
+                        config.max_turn_retries,
+                        RuntimeErrorDecisionState {
+                            current_input: &mut current_input,
+                            retry_attempts: &mut retry_attempts,
+                            compact_attempts: &mut compact_attempts,
+                            final_stop_reason: &mut final_stop_reason,
+                            final_error_message: &mut final_error_message,
+                            completed_turn: &mut completed_turn,
+                        },
+                    ) {
                         break;
                     }
-
-                    if runtime_error_needs_forced_compaction(&error)
-                        && compact_attempts < config.compact_retry_limit
-                    {
-                        compact_attempts += 1;
-                        transition_session_state(
-                            app,
-                            &loop_guard,
-                            SessionRunState::Compacting,
-                            AgentSessionPhase::Compacting,
-                            AgentStatusOptions::default()
-                                .with_message("Compacting context to continue the task"),
-                        );
-                        let compaction = runtime_session.force_compact(runtime::CompactionConfig {
-                            max_estimated_tokens: 0,
-                            ..runtime::CompactionConfig::default()
-                        });
-                        if compaction.removed_message_count == 0 {
-                            final_stop_reason = LoopStopReason::CompactionFailed;
-                            final_error_message = Some(format!(
-                                "agent loop could not compact context enough to continue: {error_text}"
-                            ));
-                            completed_turn = true;
-                            break;
-                        }
-                        current_input = LoopInput::Synthetic(build_compaction_replay_input(
-                            &goal,
-                            &turn_input,
-                            &current_input,
-                        ));
-                        transition_session_state(
-                            app,
-                            &loop_guard,
-                            SessionRunState::Running,
-                            AgentSessionPhase::Running,
-                            AgentStatusOptions::default().with_message("Resuming after compaction"),
-                        );
-                        continue;
-                    }
-
-                    if runtime_error_is_retryable(&error)
-                        && retry_attempts < config.max_turn_retries
-                    {
-                        retry_attempts += 1;
-                        increment_session_retry_count(&loop_guard, &error_text);
-                        let backoff = retry_backoff(retry_attempts);
-                        let next_retry_at_ms = u64::try_from(
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis()
-                                .saturating_add(backoff.as_millis()),
-                        )
-                        .unwrap_or(u64::MAX);
-                        transition_session_state(
-                            app,
-                            &loop_guard,
-                            SessionRunState::Retrying,
-                            AgentSessionPhase::Retrying,
-                            AgentStatusOptions::default()
-                                .with_attempt(retry_attempts)
-                                .with_message(format!(
-                                    "Transient Copilot failure: retrying after {error_text}"
-                                ))
-                                .with_next_retry_at_ms(next_retry_at_ms),
-                        );
-                        if !sleep_with_cancel(&cancelled, retry_backoff(retry_attempts)) {
-                            final_stop_reason = LoopStopReason::Cancelled;
-                            break;
-                        }
-                        transition_session_state(
-                            app,
-                            &loop_guard,
-                            SessionRunState::Running,
-                            AgentSessionPhase::Running,
-                            AgentStatusOptions::default().with_message("Retrying the task now"),
-                        );
-                        continue;
-                    }
-
-                    final_stop_reason = if runtime_error_needs_forced_compaction(&error) {
-                        LoopStopReason::CompactionFailed
-                    } else if runtime_error_is_retryable(&error) {
-                        LoopStopReason::RetryExhausted
-                    } else {
-                        LoopStopReason::ToolError
-                    };
-                    final_error_message = Some(format!("agent loop failed: {error_text}"));
-                    completed_turn = true;
-                    break;
                 }
             }
         }
@@ -3072,14 +1800,6 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 
 "#;
 
-const CDP_TOOL_RESULT_CONTINUATION_REMINDER: &str = r#"## Continue from tool results
-
-- Tool results in this bundle are authoritative evidence. Continue the task from them immediately.
-- Do not restate the plan, repeat the same prose, or promise to do the real work in a later message.
-- Ask the user a question only if the tool results leave a genuine blocker that local inspection cannot resolve.
-- If the current turn can already take the next tool step, emit that tool call now instead of saying "next message" or "next turn".
-"#;
-
 /// Serialize built-in tool specs for the Copilot text prompt.
 fn cdp_tool_catalog_section_for_flavor(
     prompt_flavor: CdpPromptFlavor,
@@ -3201,27 +1921,6 @@ pub(crate) enum CdpToolParseMode {
     RetryRepair,
 }
 
-const FALLBACK_TOOL_SENTINEL_KEY: &str = "relay_tool_call";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FallbackSentinelPolicy {
-    ObserveOnly,
-    Enforce,
-}
-
-fn fallback_sentinel_policy() -> FallbackSentinelPolicy {
-    match std::env::var("RELAY_FALLBACK_SENTINEL_POLICY")
-        .ok()
-        .as_deref()
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("observe" | "warn" | "compat") => FallbackSentinelPolicy::ObserveOnly,
-        _ => FallbackSentinelPolicy::Enforce,
-    }
-}
-
 pub(crate) fn parse_copilot_tool_response(
     raw: &str,
     parse_mode: CdpToolParseMode,
@@ -3238,23 +1937,29 @@ pub(crate) fn parse_copilot_tool_response(
         }
     }
     if calls.is_empty() {
-        let (d, fb_payloads) = extract_fallback_markdown_fences(&display, &whitelist);
+        let (d, fb_payloads) = extract_fallback_markdown_fences(&display, &whitelist, |v| {
+            parse_one_tool_call(v).is_some()
+        });
         display = d;
         calls.extend(parse_fallback_payloads(
             &fb_payloads,
             &whitelist,
             sentinel_policy,
             "fenced JSON fallback",
+            parse_one_tool_call,
         ));
     }
     if calls.is_empty() && should_try_inline_tool_json_fallback(raw, &display, parse_mode) {
-        let (d, uf_payloads) = extract_unfenced_tool_json_candidates(&display, &whitelist);
+        let (d, uf_payloads) = extract_unfenced_tool_json_candidates(&display, &whitelist, |v| {
+            parse_one_tool_call(v).is_some()
+        });
         display = d;
         calls.extend(parse_fallback_payloads(
             &uf_payloads,
             &whitelist,
             sentinel_policy,
             "inline tool-shaped object fallback",
+            parse_one_tool_call,
         ));
     }
     (display.trim().to_string(), dedupe_relay_tool_calls(calls))
@@ -3277,19 +1982,12 @@ fn should_try_inline_tool_json_fallback(
     }
     is_tool_protocol_confusion_text(raw)
         || is_tool_protocol_confusion_text(display)
-        || has_inline_whitelisted_tool_candidate(raw)
-        || has_inline_whitelisted_tool_candidate(display)
-}
-
-// Accepts a candidate if the unfenced JSON names any MVP-whitelisted tool.
-// Downstream safeguards (`"relay_tool_call"` sentinel, balanced JSON, per-tool
-// schema validation in `parse_fallback_payloads`) prevent false positives;
-// restricting to mutations alone (the old behavior) caused Copilot's
-// occasional fence-less tool emission for read-only tools to be dropped as
-// plain text.
-fn has_inline_whitelisted_tool_candidate(text: &str) -> bool {
-    let whitelist = mvp_tool_names_whitelist();
-    !extract_mvp_tool_object_spans(text, &whitelist).is_empty()
+        || parser_has_inline_whitelisted_tool_candidate(raw, &mvp_tool_names_whitelist(), |v| {
+            parse_one_tool_call(v).is_some()
+        })
+        || parser_has_inline_whitelisted_tool_candidate(display, &mvp_tool_names_whitelist(), |v| {
+            parse_one_tool_call(v).is_some()
+        })
 }
 
 fn salvage_generated_write_file_from_reply(
@@ -3481,6 +2179,62 @@ fn collect_message_text(message: &ConversationMessage) -> String {
         .join("\n")
 }
 
+fn latest_actionable_user_turn(
+    messages: &[ConversationMessage],
+) -> Option<crate::agent_loop::prompt::ActionableUserTurn> {
+    crate::agent_loop::prompt::latest_actionable_user_turn(
+        messages,
+        collect_message_text,
+        is_synthetic_control_user_text,
+    )
+}
+
+fn latest_actionable_user_text(messages: &[ConversationMessage]) -> Option<String> {
+    crate::agent_loop::prompt::latest_actionable_user_text(
+        messages,
+        collect_message_text,
+        is_synthetic_control_user_text,
+    )
+}
+
+fn build_latest_requested_paths_section(messages: &[ConversationMessage]) -> Option<String> {
+    crate::agent_loop::prompt::build_latest_requested_paths_section(
+        messages,
+        collect_message_text,
+        is_synthetic_control_user_text,
+    )
+}
+
+fn cdp_prompt_flavor(messages: &[ConversationMessage]) -> CdpPromptFlavor {
+    crate::agent_loop::prompt::cdp_prompt_flavor(
+        messages,
+        latest_user_text,
+        is_tool_protocol_repair_text,
+        is_path_resolution_repair_text,
+    )
+}
+
+fn cdp_catalog_flavor(messages: &[ConversationMessage]) -> CdpCatalogFlavor {
+    crate::agent_loop::prompt::cdp_catalog_flavor(
+        messages,
+        latest_user_text,
+        repair_attempt_index_from_text,
+        collect_message_text,
+        is_synthetic_control_user_text,
+        is_concrete_new_file_create_request,
+    )
+}
+
+fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
+    crate::agent_loop::prompt::build_repair_cdp_system_prompt(
+        messages,
+        latest_user_text,
+        collect_message_text,
+        is_synthetic_control_user_text,
+        cdp_stage_label,
+    )
+}
+
 fn is_tool_protocol_repair_text(text: &str) -> bool {
     text.trim_start().starts_with("Tool protocol repair.")
 }
@@ -3578,189 +2332,6 @@ fn is_windows_absolute_path(token: &str) -> bool {
         && matches!(bytes[2], b'/' | b'\\')
 }
 
-fn is_bare_filename_with_extension(token: &str) -> bool {
-    if token.is_empty() || token.contains('/') || token.contains('\\') || token.ends_with('.') {
-        return false;
-    }
-    let Some((stem, ext)) = token.rsplit_once('.') else {
-        return false;
-    };
-    !stem.is_empty()
-        && !ext.is_empty()
-        && ext.len() <= 16
-        && ext.chars().all(|c| c.is_ascii_alphanumeric())
-}
-
-fn is_path_candidate_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | '\\' | ':' | '~')
-}
-
-fn extract_path_anchors_from_text(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
-    let mut candidate = String::new();
-    let flush_candidate =
-        |candidate: &mut String, out: &mut Vec<String>, seen: &mut HashSet<String>| {
-            let token = trim_path_punctuation(candidate);
-            if token.is_empty() || token.contains("://") {
-                candidate.clear();
-                return;
-            }
-            let is_path = token.starts_with('/')
-                || is_windows_absolute_path(token)
-                || token.starts_with("./")
-                || token.starts_with("../")
-                || token.contains('/')
-                || token.contains('\\')
-                || is_bare_filename_with_extension(token);
-            if is_path && seen.insert(token.to_string()) {
-                out.push(token.to_string());
-            }
-            candidate.clear();
-        };
-
-    for ch in text.chars() {
-        if is_path_candidate_char(ch) {
-            candidate.push(ch);
-        } else if !candidate.is_empty() {
-            flush_candidate(&mut candidate, &mut out, &mut seen);
-        }
-    }
-    if !candidate.is_empty() {
-        flush_candidate(&mut candidate, &mut out, &mut seen);
-    }
-    out
-}
-
-fn latest_actionable_user_turn(messages: &[ConversationMessage]) -> Option<ActionableUserTurn> {
-    messages.iter().rev().find_map(|message| {
-        if message.role != MessageRole::User {
-            return None;
-        }
-        let text = collect_message_text(message);
-        if is_synthetic_control_user_text(&text) {
-            return None;
-        }
-        Some(ActionableUserTurn {
-            path_anchors: extract_path_anchors_from_text(&text),
-            text,
-        })
-    })
-}
-
-fn latest_actionable_user_text(messages: &[ConversationMessage]) -> Option<String> {
-    latest_actionable_user_turn(messages).map(|turn| turn.text)
-}
-
-fn extract_quoted_block(text: &str, marker: &str) -> Option<String> {
-    let start = text.find(marker)? + marker.len();
-    let tail = &text[start..];
-    let end = tail.find("\n```")?;
-    let extracted = tail[..end].trim();
-    if extracted.is_empty() {
-        None
-    } else {
-        Some(extracted.to_string())
-    }
-}
-
-fn build_latest_requested_paths_section(messages: &[ConversationMessage]) -> Option<String> {
-    let turn = latest_actionable_user_turn(messages)?;
-    if turn.path_anchors.is_empty() {
-        return None;
-    }
-    Some(format!(
-        concat!(
-            "Latest requested paths:\n",
-            "Use these exact path strings in tool input. Do not rewrite them to another directory from a prior turn.\n",
-            "Treat a bare filename with an extension as workspace-root-relative unless the user gave another base.\n",
-            "```text\n{}\n```"
-        ),
-        turn.path_anchors.join("\n")
-    ))
-}
-
-fn cdp_prompt_flavor(messages: &[ConversationMessage]) -> CdpPromptFlavor {
-    let Some(text) = latest_user_text(messages) else {
-        return CdpPromptFlavor::Standard;
-    };
-    if is_tool_protocol_repair_text(&text) || is_path_resolution_repair_text(&text) {
-        CdpPromptFlavor::Repair
-    } else {
-        CdpPromptFlavor::Standard
-    }
-}
-
-fn extract_repair_goal_from_text(text: &str) -> Option<String> {
-    extract_quoted_block(text, ORIGINAL_GOAL_MARKER)
-}
-
-fn extract_latest_request_from_text(text: &str) -> Option<String> {
-    extract_quoted_block(text, LATEST_REQUEST_MARKER)
-}
-
-fn cdp_catalog_flavor(messages: &[ConversationMessage]) -> CdpCatalogFlavor {
-    let Some(text) = latest_user_text(messages) else {
-        return CdpCatalogFlavor::StandardFull;
-    };
-    let Some(attempt_index) = repair_attempt_index_from_text(&text) else {
-        return CdpCatalogFlavor::StandardFull;
-    };
-    if attempt_index < 1 {
-        return CdpCatalogFlavor::StandardFull;
-    }
-    let latest_request = extract_latest_request_from_text(&text)
-        .or_else(|| latest_actionable_user_text(messages))
-        .unwrap_or_else(|| text.trim().to_string());
-    if is_concrete_new_file_create_request(&latest_request) {
-        CdpCatalogFlavor::RepairWriteFileOnly
-    } else {
-        CdpCatalogFlavor::StandardFull
-    }
-}
-
-fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
-    let latest_user = latest_user_text(messages).unwrap_or_default();
-    let latest_request = extract_latest_request_from_text(&latest_user)
-        .or_else(|| latest_actionable_user_text(messages))
-        .unwrap_or_else(|| latest_user.trim().to_string());
-    let goal =
-        extract_repair_goal_from_text(&latest_user).unwrap_or_else(|| latest_request.clone());
-    let stage_guidance = match cdp_stage_label(messages) {
-        "repair2" => {
-            "Current repair stage: repair2.\nThe previous repair still returned planning-only wrapper text instead of a usable Relay tool call.\n"
-        }
-        "repair3" => {
-            "Current repair stage: repair3 (final repair for this turn).\nAny text outside one usable fenced `relay_tool` block is a failed repair.\n"
-        }
-        _ => "",
-    };
-    format!(
-        concat!(
-            "## Relay repair mode\n",
-            "You are in a recovery turn because the previous reply did not emit usable Relay local tool JSON.\n",
-            "{stage_guidance}",
-            "Return the next required `relay_tool` JSON now.\n",
-            "Output exactly one usable fenced `relay_tool` block in this reply.\n",
-            "No preamble, no apology, no extra explanation.\n",
-            "Use the current Relay tool catalog in this prompt; do not invent unavailable tools.\n",
-            "Prefer `write_file` / `edit_file` for local file creation or edits; use `read_file` only when needed.\n",
-            "If the latest real user turn named a concrete path, reuse that exact string in tool input. Do not rewrite it to another directory or prior-turn variant.\n",
-            "If a successful `read_file` Tool Result already shows `content:`, treat that body as the real file text. Do not claim it is escaped or corrupted based only on quotes or backslashes.\n",
-            "If a successful `.html` `write_file` Tool Result already wrote a valid HTML document, treat the local create request as satisfied. Stop unless the user explicitly asked for verification or more edits, and do not call `read_file` just to re-check escaping.\n",
-            "If a successful `.html` `read_file` result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not use `bash`, `PowerShell`, backups, or copy commands to \"unescape\" it.\n",
-            "Do not use or mention Microsoft-native tools such as Python, WebSearch, citations, Pages, uploads, or remote artifacts.\n\n",
-            "Latest user request for this turn (user data, primary repair anchor):\n",
-            "```text\n{latest_request}\n```\n\n",
-            "Current session goal (user data, preserved for repair context):\n",
-            "```text\n{goal}\n```"
-        ),
-        stage_guidance = stage_guidance,
-        latest_request = latest_request.trim(),
-        goal = goal.trim()
-    )
-}
-
 fn cdp_request_chain_id(prefix: &str) -> String {
     format!("{prefix}-{}", Uuid::new_v4())
 }
@@ -3830,385 +2401,6 @@ fn filter_whitelisted_tool_calls(
             }
         })
         .collect()
-}
-
-fn parse_fallback_payloads(
-    payloads: &[String],
-    whitelist: &HashSet<String>,
-    sentinel_policy: FallbackSentinelPolicy,
-    source_label: &str,
-) -> Vec<(String, String, String)> {
-    let mut out = Vec::new();
-    for payload in payloads {
-        let v: Value = match serde_json::from_str(payload) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!("[CdpApiClient] skip invalid fallback JSON: {e}");
-                continue;
-            }
-        };
-        parse_fallback_value(&v, whitelist, sentinel_policy, source_label, &mut out);
-    }
-    out
-}
-
-fn parse_fallback_value(
-    v: &Value,
-    whitelist: &HashSet<String>,
-    sentinel_policy: FallbackSentinelPolicy,
-    source_label: &str,
-    out: &mut Vec<(String, String, String)>,
-) {
-    match v {
-        Value::Array(arr) => {
-            for item in arr {
-                parse_fallback_value(item, whitelist, sentinel_policy, source_label, out);
-            }
-        }
-        Value::Object(obj) => {
-            let Some(name) = obj.get("name").and_then(Value::as_str) else {
-                return;
-            };
-            if !whitelist.contains(name) {
-                tracing::debug!(
-                    name = %name,
-                    "[CdpApiClient] skipped fallback tool call: not in MVP catalog"
-                );
-                return;
-            }
-            let has_sentinel = obj
-                .get(FALLBACK_TOOL_SENTINEL_KEY)
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            if !has_sentinel {
-                tracing::warn!(
-                    name = %name,
-                    policy = ?sentinel_policy,
-                    source = %source_label,
-                    "[CdpApiClient] fallback tool candidate missing `{}` sentinel key",
-                    FALLBACK_TOOL_SENTINEL_KEY
-                );
-                if sentinel_policy == FallbackSentinelPolicy::Enforce {
-                    return;
-                }
-            }
-            if let Some(call) = parse_one_tool_call(v) {
-                out.push(call);
-            }
-        }
-        _ => tracing::warn!("[CdpApiClient] fallback JSON must be object or array"),
-    }
-}
-
-fn canonicalize_json_fence_tool_payload(
-    value: &Value,
-    whitelist: &HashSet<String>,
-) -> Option<Value> {
-    match value {
-        Value::Array(items) => {
-            let normalized = items
-                .iter()
-                .map(|item| canonicalize_json_fence_tool_payload(item, whitelist))
-                .collect::<Option<Vec<_>>>()?;
-            Some(Value::Array(normalized))
-        }
-        Value::Object(obj) => {
-            let name = obj.get("name").and_then(Value::as_str)?;
-            if !whitelist.contains(name) {
-                return None;
-            }
-            if !obj.get("input").is_none_or(Value::is_object) {
-                return None;
-            }
-            let mut normalized = obj.clone();
-            normalized.insert(FALLBACK_TOOL_SENTINEL_KEY.to_string(), Value::Bool(true));
-            let value = Value::Object(normalized);
-            parse_one_tool_call(&value)?;
-            Some(value)
-        }
-        _ => None,
-    }
-}
-
-fn cdp_json_fence_whitelist() -> HashSet<String> {
-    tools::cdp_tool_specs_for_visibility(tools::CdpToolVisibility::Core)
-        .into_iter()
-        .chain(tools::cdp_tool_specs_for_visibility(
-            tools::CdpToolVisibility::Conditional,
-        ))
-        .map(|spec| spec.name.to_string())
-        .collect()
-}
-
-/// After ` ``` `, find end of inner content (index in `body` before the closing fence).
-fn find_generic_markdown_fence_inner_end(body: &str) -> Option<usize> {
-    if let Some(i) = body.find("\n```") {
-        return Some(i);
-    }
-    if body.starts_with("```") {
-        return Some(0);
-    }
-    body.rfind("```")
-}
-
-fn skip_json_whitespace(s: &str, mut i: usize) -> usize {
-    let bytes = s.as_bytes();
-    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
-        i += 1;
-    }
-    i
-}
-
-/// True if `s[brace_idx..]` starts with `{` and the first JSON key (after whitespace) is `"name"`.
-fn brace_open_followed_by_name_key(s: &str, brace_idx: usize) -> bool {
-    let bytes = s.as_bytes();
-    if brace_idx >= bytes.len() || bytes[brace_idx] != b'{' {
-        return false;
-    }
-    let after = skip_json_whitespace(s, brace_idx + 1);
-    s.get(after..).is_some_and(|t| t.starts_with("\"name\""))
-}
-
-/// Scan `text` for balanced `{…}` objects whose first key is `"name"` and that pass MVP tool validation.
-fn extract_mvp_tool_object_spans(
-    text: &str,
-    whitelist: &HashSet<String>,
-) -> Vec<(usize, usize, String)> {
-    const MAX_MATCHES: usize = 12;
-    let mut out = Vec::new();
-    let mut search_start = 0usize;
-
-    while search_start < text.len() && out.len() < MAX_MATCHES {
-        let Some(rel) = text[search_start..].find('{') else {
-            break;
-        };
-        let abs = search_start + rel;
-        if !brace_open_followed_by_name_key(text, abs) {
-            search_start = abs + 1;
-            continue;
-        }
-        let sub = if let Some(sub) = extract_balanced_json_object(text, abs) {
-            sub.to_string()
-        } else if let Some(repaired) = text.get(abs..).and_then(autoclose_unbalanced_json_payload) {
-            repaired
-        } else {
-            search_start = abs + 1;
-            continue;
-        };
-        if sub.len() > MAX_INLINE_TOOL_OBJECT_LEN_BYTES {
-            tracing::warn!(
-                "[CdpApiClient] skip oversized inline tool-shaped JSON candidate (len={}, max={})",
-                sub.len(),
-                MAX_INLINE_TOOL_OBJECT_LEN_BYTES
-            );
-            search_start = abs + 1;
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<Value>(&sub) else {
-            search_start = abs + 1;
-            continue;
-        };
-        let Some(obj) = v.as_object() else {
-            search_start = abs + 1;
-            continue;
-        };
-        let Some(name) = obj.get("name").and_then(|x| x.as_str()) else {
-            search_start = abs + 1;
-            continue;
-        };
-        if !whitelist.contains(name) {
-            search_start = abs + 1;
-            continue;
-        }
-        if !obj.get("input").is_none_or(Value::is_object) {
-            search_start = abs + 1;
-            continue;
-        }
-        if parse_one_tool_call(&v).is_none() {
-            search_start = abs + 1;
-            continue;
-        }
-        let end = abs.saturating_add(sub.len()).min(text.len());
-        out.push((abs, end, sub));
-        search_start = end;
-    }
-    out
-}
-
-/// Strip normal Markdown code fences and return JSON bodies that may contain tool calls.
-/// Skips `relay_tool` fences (payloads already taken by [`extract_relay_tool_fences`]); strips them from display.
-fn extract_fallback_markdown_fences(
-    text: &str,
-    whitelist: &HashSet<String>,
-) -> (String, Vec<String>) {
-    const OPEN: &str = "```";
-    let json_fence_whitelist = cdp_json_fence_whitelist();
-    let mut display = String::new();
-    let mut payloads = Vec::new();
-    let mut rest = text;
-
-    while let Some(idx) = rest.find(OPEN) {
-        display.push_str(&rest[..idx]);
-        let after_ticks = &rest[idx + OPEN.len()..];
-
-        let (info, body_start) = match after_ticks.find('\n') {
-            Some(nl) => {
-                let fl = after_ticks[..nl].trim();
-                if fl.starts_with('{') {
-                    ("", 0usize)
-                } else {
-                    (fl, nl + 1)
-                }
-            }
-            None => {
-                if after_ticks.starts_with('{') {
-                    ("", 0usize)
-                } else {
-                    display.push_str(OPEN);
-                    display.push_str(after_ticks);
-                    rest = "";
-                    break;
-                }
-            }
-        };
-
-        let body_region = &after_ticks[body_start..];
-        let Some(inner_end) = find_generic_markdown_fence_inner_end(body_region) else {
-            display.push_str(OPEN);
-            display.push_str(after_ticks);
-            rest = "";
-            break;
-        };
-        let inner = body_region[..inner_end].trim();
-        let after_inner = &body_region[inner_end..];
-        let rest_after_fence = if let Some(tail) = after_inner.strip_prefix("\n```") {
-            tail
-        } else if let Some(tail) = after_inner.strip_prefix("\r\n```") {
-            tail
-        } else if let Some(tail) = after_inner.strip_prefix("```") {
-            tail
-        } else {
-            display.push_str(OPEN);
-            display.push_str(after_ticks);
-            rest = "";
-            break;
-        };
-        let rest_after_fence = rest_after_fence
-            .strip_prefix('\n')
-            .or_else(|| rest_after_fence.strip_prefix("\r\n"))
-            .unwrap_or(rest_after_fence);
-
-        if info == "relay_tool" {
-            rest = rest_after_fence;
-            continue;
-        }
-
-        if !inner.is_empty() {
-            if info.eq_ignore_ascii_case("json") {
-                if let Ok(value) = serde_json::from_str::<Value>(inner) {
-                    if let Some(normalized) =
-                        canonicalize_json_fence_tool_payload(&value, &json_fence_whitelist)
-                    {
-                        payloads.push(
-                            serde_json::to_string(&normalized)
-                                .unwrap_or_else(|_| inner.to_string()),
-                        );
-                    } else {
-                        payloads.push(inner.to_string());
-                    }
-                } else if inner.contains(FALLBACK_TOOL_SENTINEL_KEY) {
-                    for (_, _, p) in extract_mvp_tool_object_spans(inner, whitelist) {
-                        payloads.push(p);
-                    }
-                }
-            } else if serde_json::from_str::<Value>(inner).is_ok() {
-                payloads.push(inner.to_string());
-            } else {
-                for (_, _, p) in extract_mvp_tool_object_spans(inner, whitelist) {
-                    payloads.push(p);
-                }
-            }
-        }
-
-        rest = rest_after_fence;
-    }
-    display.push_str(rest);
-    (display, payloads)
-}
-
-/// Pull `{"name":"…","input":{…}}` objects from prose (Copilot "Plain Text" without fences, or pretty-printed `{` + newline + `"name"`). Bounded scan.
-fn extract_unfenced_tool_json_candidates(
-    text: &str,
-    whitelist: &HashSet<String>,
-) -> (String, Vec<String>) {
-    let spans = extract_mvp_tool_object_spans(text, whitelist);
-    let mut ranges = Vec::with_capacity(spans.len());
-    let mut payloads = Vec::with_capacity(spans.len());
-    for (a, b, p) in spans {
-        ranges.push((a, b));
-        payloads.push(p);
-    }
-
-    ranges.sort_by_key(|(a, _)| *a);
-    let mut merged: Vec<(usize, usize)> = Vec::new();
-    for (a, b) in ranges {
-        if let Some(last) = merged.last_mut() {
-            if a <= last.1 {
-                last.1 = last.1.max(b);
-                continue;
-            }
-        }
-        merged.push((a, b));
-    }
-
-    let mut display = String::with_capacity(text.len());
-    let mut cursor = 0usize;
-    for (a, b) in merged {
-        if a > cursor {
-            display.push_str(&text[cursor..a]);
-        }
-        cursor = b;
-    }
-    display.push_str(&text[cursor..]);
-    (display, payloads)
-}
-
-fn extract_balanced_json_object(s: &str, start: usize) -> Option<&str> {
-    let slice = s.get(start..)?;
-    if !slice.starts_with('{') {
-        return None;
-    }
-    let mut depth = 0u32;
-    let mut in_str = false;
-    let mut escape = false;
-    for (i, ch) in slice.char_indices() {
-        if in_str {
-            if escape {
-                escape = false;
-                continue;
-            }
-            if ch == '\\' {
-                escape = true;
-                continue;
-            }
-            if ch == '"' {
-                in_str = false;
-            }
-            continue;
-        }
-        match ch {
-            '"' => in_str = true,
-            '{' => depth += 1,
-            '}' => {
-                depth = depth.checked_sub(1)?;
-                if depth == 0 {
-                    return Some(&slice[..=i]);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 /// Recursively sort JSON object keys so equivalent objects produce one dedupe key.
@@ -4404,9 +2596,10 @@ fn parse_tool_payloads(payloads: &[String]) -> Vec<(String, String, String)> {
     let mut out = Vec::new();
     for p in payloads {
         let Some(v) = parse_tool_payload_value(p) else {
-            let e = serde_json::from_str::<Value>(p)
-                .err()
-                .map_or_else(|| "unrecoverable relay_tool JSON".to_string(), |err| err.to_string());
+            let e = serde_json::from_str::<Value>(p).err().map_or_else(
+                || "unrecoverable relay_tool JSON".to_string(),
+                |err| err.to_string(),
+            );
             tracing::warn!("[CdpApiClient] skip invalid relay_tool JSON: {e}");
             continue;
         };
@@ -4502,14 +2695,6 @@ fn decode_html_document_entities(text: &str) -> Option<String> {
     }
 }
 
-/// Short CDP-only rules (prefix of the bundle) so the model lists concrete bugs only when they appear in Tool Result / `read_file` text above.
-const CDP_BUNDLE_GROUNDING_BLOCK: &str = "## CDP bundle (read before you reply)\n\
-Do not list line-level bugs, missing tags, or identifiers (e.g. `x_size`, `bag.length0`) unless they appear verbatim in a `read_file` or Tool Result in this bundle. If you cite a problem, quote a short substring or line numbers from that text.\n\
-Treat the `content:` body under a successful `read_file` Tool Result as the actual file text returned by Relay. Do not call it \"escaped\" or \"broken\" based only on quotes, backslashes, or transport formatting.\n\
-If a successful `.html` `write_file` Tool Result already wrote a valid HTML document, treat the local create request as satisfied. Stop unless the user explicitly asked for verification or more edits, and do not call `read_file`, `bash`, `PowerShell`, backups, or copy commands just to re-check escaping.\n\
-If a successful `.html` `read_file` Tool Result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not propose `bash`, `PowerShell`, backups, or copy commands to \"fix\" escaping.\n\
-If the bundle contradicts a generic fix checklist, describe what the bundle actually contains instead of inventing errors.";
-
 fn build_cdp_prompt_from_messages(
     system_prompt: &[String],
     messages: &[ConversationMessage],
@@ -4528,81 +2713,11 @@ fn cdp_messages_for_flavor(
     messages: &[ConversationMessage],
     flavor: CdpPromptFlavor,
 ) -> Vec<ConversationMessage> {
-    match flavor {
-        CdpPromptFlavor::Standard => messages.to_vec(),
-        CdpPromptFlavor::Repair => {
-            messages_from_latest_user(messages).unwrap_or_else(|| messages.to_vec())
-        }
-    }
-}
-
-fn messages_from_latest_user(messages: &[ConversationMessage]) -> Option<Vec<ConversationMessage>> {
-    let start = messages
-        .iter()
-        .rposition(|message| message.role == MessageRole::User)?;
-    Some(messages[start..].to_vec())
+    crate::agent_loop::prompt::cdp_messages_for_flavor(messages, flavor)
 }
 
 fn render_cdp_messages(messages: &[ConversationMessage]) -> String {
-    render_cdp_messages_with_breakdown(messages).0
-}
-
-fn render_cdp_messages_with_breakdown(
-    messages: &[ConversationMessage],
-) -> (String, (usize, usize, usize, usize)) {
-    let mut parts = Vec::new();
-    let mut user_text_chars = 0;
-    let mut assistant_text_chars = 0;
-    let mut tool_result_chars = 0;
-    let mut tool_result_count = 0;
-    for msg in messages {
-        let role = match msg.role {
-            runtime::MessageRole::System => "System",
-            runtime::MessageRole::User => "User",
-            runtime::MessageRole::Assistant => "Assistant",
-            runtime::MessageRole::Tool => "Tool Result",
-        };
-
-        let text: Vec<String> = msg
-            .blocks
-            .iter()
-            .map(|b| match b {
-                ContentBlock::Text { text } => {
-                    match msg.role {
-                        runtime::MessageRole::User => user_text_chars += text.len(),
-                        runtime::MessageRole::Assistant => assistant_text_chars += text.len(),
-                        _ => {}
-                    }
-                    text.clone()
-                }
-                ContentBlock::ToolUse { name, input, .. } => {
-                    format!("[Tool Call: {name}] {input}")
-                }
-                ContentBlock::ToolResult {
-                    tool_name,
-                    output,
-                    is_error,
-                    ..
-                } => {
-                    let rendered = format_cdp_tool_result(tool_name, output, *is_error);
-                    tool_result_chars += rendered.len();
-                    tool_result_count += 1;
-                    rendered
-                }
-            })
-            .collect();
-
-        parts.push(format!("{role}:\n{}", text.join("\n")));
-    }
-    (
-        parts.join("\n\n"),
-        (
-            user_text_chars,
-            assistant_text_chars,
-            tool_result_chars,
-            tool_result_count,
-        ),
-    )
+    crate::agent_loop::prompt::render_cdp_messages(messages, format_cdp_tool_result)
 }
 
 fn build_cdp_prompt_bundle_from_messages(
@@ -4611,43 +2726,21 @@ fn build_cdp_prompt_bundle_from_messages(
     flavor: CdpPromptFlavor,
     catalog_flavor: CdpCatalogFlavor,
 ) -> CdpPromptBundle {
-    let grounding_text = CDP_BUNDLE_GROUNDING_BLOCK.to_string();
-    let effective_messages = cdp_messages_for_flavor(messages, flavor);
-    let mut system_text = match flavor {
-        CdpPromptFlavor::Standard => compact_standard_cdp_system_prompt(system_prompt),
-        CdpPromptFlavor::Repair => build_repair_cdp_system_prompt(messages),
-    };
-    if let Some(paths_section) = build_latest_requested_paths_section(messages) {
-        if !system_text.is_empty() {
-            system_text.push_str("\n\n");
-        }
-        system_text.push_str(&paths_section);
-    }
-    let (message_text, message_breakdown) = render_cdp_messages_with_breakdown(&effective_messages);
-    let catalog_text = cdp_tool_catalog_section_for_flavor(flavor, catalog_flavor, messages);
-    let mut parts = vec![grounding_text.clone()];
-    if !system_text.is_empty() {
-        parts.push(system_text.clone());
-    }
-    if !message_text.is_empty() {
-        parts.push(message_text.clone());
-    }
-    if message_breakdown.3 > 0 {
-        parts.push(CDP_TOOL_RESULT_CONTINUATION_REMINDER.to_string());
-    }
-    parts.push(catalog_text.clone());
-    CdpPromptBundle {
-        prompt: parts.join("\n\n"),
-        grounding_text,
-        system_text,
-        message_text,
-        catalog_text,
+    crate::agent_loop::prompt::build_cdp_prompt_bundle_from_messages(
+        system_prompt,
+        messages,
+        flavor,
         catalog_flavor,
-        user_text_chars: message_breakdown.0,
-        assistant_text_chars: message_breakdown.1,
-        tool_result_chars: message_breakdown.2,
-        tool_result_count: message_breakdown.3,
-    }
+        PromptRenderFns {
+            compact_standard_cdp_system_prompt,
+            cdp_tool_catalog_section_for_flavor,
+            format_tool_result: format_cdp_tool_result,
+            latest_user_text,
+            collect_message_text,
+            is_synthetic_control_user_text,
+            cdp_stage_label,
+        },
+    )
 }
 
 fn compact_request_messages_for_inline_cdp_with_flavor(
@@ -4887,223 +2980,6 @@ fn persist_turn<R: Runtime>(
         tracing::error!("[RelayAgent] failed to persist session {session_id}: {error}");
         AgentLoopError::PersistenceError(error.to_string())
     })
-}
-
-/// Emit the `turn_complete` event with the final assistant text and message count.
-fn emit_turn_complete<R: Runtime>(
-    app: &AppHandle<R>,
-    session_id: &str,
-    stop_reason: LoopStopReason,
-    message_count: usize,
-    assistant_message: &str,
-) {
-    if let Err(e) = app.emit(
-        E_TURN_COMPLETE,
-        AgentTurnCompleteEvent {
-            session_id: session_id.to_string(),
-            stop_reason: stop_reason.as_str().into(),
-            assistant_message: assistant_message.to_string(),
-            message_count,
-        },
-    ) {
-        tracing::warn!("[RelayAgent] emit failed ({E_TURN_COMPLETE}): {e}");
-    }
-}
-
-/// Emit an error event to the frontend.
-fn emit_error<R: Runtime>(app: &AppHandle<R>, session_id: &str, error: &str, cancelled: bool) {
-    let evt = AgentErrorEvent {
-        session_id: session_id.to_string(),
-        error: error.to_string(),
-        cancelled,
-    };
-    if let Err(e) = app.emit(E_ERROR, &evt) {
-        tracing::warn!("[RelayAgent] emit failed ({E_ERROR}): {e}");
-    }
-}
-
-/* ── Approval prompter with real channel wiring ─── */
-/* Fix #3: restructured to avoid nested registry + approvals lock */
-
-pub struct TauriApprovalPrompter<R: Runtime> {
-    pub app: AppHandle<R>,
-    pub session_id: String,
-    pub registry: SessionRegistry,
-}
-
-impl<R: Runtime> PermissionPrompter for TauriApprovalPrompter<R> {
-    fn decide(&mut self, request: &PermissionRequest) -> PermissionPromptDecision {
-        let loop_guard = LoopEpochGuard::new(&self.registry, &self.session_id);
-        // Step 1 — check cancelled (short, independent lock)
-        let cancelled = {
-            match self.registry.get_session(&self.session_id, |entry| {
-                entry.cancelled.load(Ordering::SeqCst) || entry.loop_epoch != loop_guard.epoch
-            }) {
-                Ok(Some(cancelled)) => cancelled,
-                Ok(None) => true,
-                Err(e) => {
-                    tracing::error!(
-                        "[RelayAgent] registry lock poisoned during permission check: {e}"
-                    );
-                    return PermissionPromptDecision::Deny {
-                        reason: "registry lock poisoned".into(),
-                    };
-                }
-            }
-        };
-
-        if cancelled {
-            return PermissionPromptDecision::Deny {
-                reason: "session was cancelled".into(),
-            };
-        }
-
-        // User chose "allow for this session" for this tool earlier in the same session.
-        let session_allows_tool = match self.registry.get_handle(&self.session_id) {
-            Ok(Some(handle)) => handle
-                .is_tool_auto_allowed(&request.tool_name)
-                .unwrap_or(false),
-            Ok(None) => false,
-            Err(e) => {
-                tracing::error!("[RelayAgent] registry lock poisoned during auto-allow check: {e}");
-                return PermissionPromptDecision::Deny {
-                    reason: "registry lock poisoned".into(),
-                };
-            }
-        };
-        if session_allows_tool {
-            return PermissionPromptDecision::Allow;
-        }
-
-        let approval_id = Uuid::new_v4().to_string();
-
-        let approval_display = tools::approval_display_for_tool(&request.tool_name, &request.input);
-        let mut description = approval_display.approval_title;
-        if !approval_display.important_args.is_empty() {
-            description = format!(
-                "{description}\n{}",
-                approval_display.important_args.join("\n")
-            );
-        }
-        let target = approval_display.approval_target_hint;
-
-        // Parse input for the event
-        let input_obj = serde_json::from_str(&request.input).unwrap_or(serde_json::json!({}));
-
-        let workspace_cwd_configured = match self.registry.get_session(&self.session_id, |entry| {
-            entry
-                .session_config
-                .cwd
-                .as_deref()
-                .is_some_and(|s| !s.trim().is_empty())
-        }) {
-            Ok(Some(configured)) => configured,
-            Ok(None) | Err(_) => false,
-        };
-
-        if let Err(e) = self.app.emit(
-            E_APPROVAL_NEEDED,
-            AgentApprovalNeededEvent {
-                session_id: self.session_id.clone(),
-                approval_id: approval_id.clone(),
-                tool_name: request.tool_name.clone(),
-                description,
-                target,
-                input: input_obj,
-                workspace_cwd_configured,
-            },
-        ) {
-            tracing::warn!("[RelayAgent] emit failed ({E_APPROVAL_NEEDED}): {e}");
-        }
-
-        // Create oneshot channel
-        let (tx, rx) = std::sync::mpsc::channel::<bool>();
-        {
-            let Some(handle) = self.registry.get_handle(&self.session_id).ok().flatten() else {
-                return PermissionPromptDecision::Deny {
-                    reason: "session was removed".into(),
-                };
-            };
-            match handle.read_state(|entry| entry.loop_epoch) {
-                Ok(epoch) if epoch == loop_guard.epoch => {}
-                Ok(_) => {
-                    return PermissionPromptDecision::Deny {
-                        reason: "session loop was replaced".into(),
-                    };
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "[RelayAgent] registry lock poisoned during approval registration: {e}"
-                    );
-                    return PermissionPromptDecision::Deny {
-                        reason: "registry lock poisoned".into(),
-                    };
-                }
-            }
-            if let Err(e) = handle.write_state(|entry| {
-                entry.run_state = SessionRunState::WaitingApproval;
-            }) {
-                tracing::error!("[RelayAgent] session state lock poisoned: {e}");
-                return PermissionPromptDecision::Deny {
-                    reason: "registry lock poisoned".into(),
-                };
-            }
-            if let Err(e) = handle.insert_pending_approval(
-                approval_id.clone(),
-                PendingApproval {
-                    tx,
-                    tool_name: request.tool_name.clone(),
-                },
-            ) {
-                tracing::error!("[RelayAgent] approvals lock poisoned: {e}");
-                return PermissionPromptDecision::Deny {
-                    reason: "registry lock poisoned".into(),
-                };
-            }
-        }
-        emit_status_event(
-            &self.app,
-            &loop_guard,
-            AgentSessionPhase::WaitingApproval,
-            AgentStatusOptions::default()
-                .with_tool_name(request.tool_name.clone())
-                .with_message("Waiting for tool approval"),
-        );
-
-        // Block until the user responds via respond_approval
-        let decision = match rx.recv() {
-            Ok(true) => PermissionPromptDecision::Allow,
-            Ok(false) => PermissionPromptDecision::Deny {
-                reason: "user rejected the tool execution".into(),
-            },
-            Err(_) => PermissionPromptDecision::Deny {
-                reason: "approval channel was closed (session ended or was cancelled)".into(),
-            },
-        };
-
-        let _ignore = self.registry.mutate_session(&self.session_id, |entry| {
-            if entry.loop_epoch != loop_guard.epoch {
-                return;
-            }
-            if entry.run_state != SessionRunState::Cancelling {
-                entry.run_state = SessionRunState::Running;
-                entry.running = true;
-            }
-            if let PermissionPromptDecision::Deny { reason } = &decision {
-                entry.last_error_summary = Some(reason.clone());
-            }
-        });
-        if loop_guard.is_current() {
-            emit_status_event(
-                &self.app,
-                &loop_guard,
-                AgentSessionPhase::Running,
-                AgentStatusOptions::default().with_message("Approval resolved; continuing"),
-            );
-        }
-
-        decision
-    }
 }
 
 /* ── Tool executor ─── */
@@ -6045,128 +3921,6 @@ pub(crate) fn load_local_system_prompt_addition(goal: &str) -> Option<String> {
         ),
         body = body.trim()
     ))
-}
-
-/* ── Event types ─── */
-
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentToolStartEvent {
-    pub session_id: String,
-    pub tool_use_id: String,
-    pub tool_name: String,
-    #[ts(type = "unknown")]
-    pub input: serde_json::Value,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentToolResultEvent {
-    pub session_id: String,
-    pub tool_use_id: String,
-    pub tool_name: String,
-    pub content: String,
-    pub is_error: bool,
-}
-
-#[derive(Clone, Debug, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentUserQuestionNeededEvent {
-    pub session_id: String,
-    pub question_id: String,
-    /// Plain text prompt (questions and optional option labels).
-    pub prompt: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[skip_serializing_none]
-pub struct AgentApprovalNeededEvent {
-    pub session_id: String,
-    pub approval_id: String,
-    pub tool_name: String,
-    pub description: String,
-    pub target: Option<String>,
-    #[ts(type = "unknown")]
-    pub input: serde_json::Value,
-    /// True when the session was started with a non-empty workspace `cwd` (enables "allow for workspace").
-    pub workspace_cwd_configured: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentTurnCompleteEvent {
-    pub session_id: String,
-    pub stop_reason: String,
-    pub assistant_message: String,
-    pub message_count: usize,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[skip_serializing_none]
-pub struct AgentSessionStatusEvent {
-    pub session_id: String,
-    pub phase: String,
-    pub attempt: Option<usize>,
-    pub message: Option<String>,
-    pub next_retry_at_ms: Option<u64>,
-    pub tool_name: Option<String>,
-    pub stop_reason: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentErrorEvent {
-    pub session_id: String,
-    pub error: String,
-    pub cancelled: bool,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentTextDeltaEvent {
-    pub session_id: String,
-    pub text: String,
-    pub is_complete: bool,
-    #[serde(default)]
-    pub replace_existing: bool,
-}
-
-#[derive(Clone, Debug, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct RelayMessage {
-    pub role: String,
-    pub content: Vec<MessageContent>,
-}
-
-#[derive(Clone, Debug, Serialize, TS)]
-#[serde(rename_all = "camelCase", tag = "type")]
-pub enum MessageContent {
-    Text {
-        text: String,
-    },
-    ToolUse {
-        id: String,
-        name: String,
-        #[ts(type = "unknown")]
-        input: serde_json::Value,
-    },
-    ToolResult {
-        #[serde(rename = "toolUseId")]
-        tool_use_id: String,
-        content: String,
-        #[serde(rename = "isError")]
-        is_error: bool,
-    },
-}
-
-#[derive(Clone, Debug, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentSessionHistoryResponse {
-    pub session_id: String,
-    pub running: bool,
-    pub messages: Vec<RelayMessage>,
 }
 
 #[cfg(test)]
@@ -7276,7 +5030,10 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         assert_eq!(tools[0].1, "glob_search");
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
-        assert_eq!(input.get("pattern").and_then(Value::as_str), Some("**/*.html"));
+        assert_eq!(
+            input.get("pattern").and_then(Value::as_str),
+            Some("**/*.html")
+        );
     }
 
     #[test]
@@ -7288,7 +5045,10 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(input.get("pattern").and_then(Value::as_str), Some("TODO"));
-        assert_eq!(input.get("output_mode").and_then(Value::as_str), Some("count"));
+        assert_eq!(
+            input.get("output_mode").and_then(Value::as_str),
+            Some("count")
+        );
     }
 
     #[test]
@@ -8655,7 +6415,8 @@ mod loop_controller_tests {
         assert!(!cdp_force_fresh_chat(&path_messages));
 
         let forced_messages = vec![ConversationMessage::user_text(
-            "Tool protocol repair.\nFresh-chat replay required.\nstart a fresh Copilot chat".to_string(),
+            "Tool protocol repair.\nFresh-chat replay required.\nstart a fresh Copilot chat"
+                .to_string(),
         )];
         assert!(cdp_force_fresh_chat(&forced_messages));
     }

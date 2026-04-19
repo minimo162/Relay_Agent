@@ -762,38 +762,48 @@ fn check_runtime_assets() -> RelayDoctorCheck {
 async fn check_cdp_reachability(cdp_port: u16, timeout_ms: u32) -> RelayDoctorCheck {
     let url = format!("http://127.0.0.1:{cdp_port}/json/version");
     let client = reqwest::Client::new();
-    match client
-        .get(&url)
-        .timeout(timeout_duration(timeout_ms))
-        .send()
-        .await
-    {
-        Ok(response) if response.status().is_success() => {
-            let details = response.json::<JsonValue>().await.ok();
-            ok_check(
-                "edge_cdp",
-                "Edge CDP endpoint is reachable.",
-                Some(json!({
-                    "url": url,
-                    "details": details,
-                })),
-            )
+    let timeout = timeout_duration(timeout_ms);
+    let retry_until = tokio::time::Instant::now() + timeout.min(Duration::from_millis(1_500));
+
+    loop {
+        match client.get(&url).timeout(timeout).send().await {
+            Ok(response) if response.status().is_success() => {
+                let details = response.json::<JsonValue>().await.ok();
+                return ok_check(
+                    "edge_cdp",
+                    "Edge CDP endpoint is reachable.",
+                    Some(json!({
+                        "url": url,
+                        "details": details,
+                    })),
+                );
+            }
+            Ok(response) => {
+                let status = response.status();
+                if tokio::time::Instant::now() >= retry_until {
+                    return failed_check(
+                        "edge_cdp",
+                        format!("Edge CDP probe returned HTTP {status}"),
+                        Some(json!({
+                            "url": url,
+                            "status": status.as_u16(),
+                        })),
+                    );
+                }
+            }
+            Err(error) => {
+                if tokio::time::Instant::now() >= retry_until {
+                    return failed_check(
+                        "edge_cdp",
+                        format!("Edge CDP probe failed: {error}"),
+                        Some(json!({
+                            "url": url,
+                        })),
+                    );
+                }
+            }
         }
-        Ok(response) => failed_check(
-            "edge_cdp",
-            format!("Edge CDP probe returned HTTP {}", response.status()),
-            Some(json!({
-                "url": url,
-                "status": response.status().as_u16(),
-            })),
-        ),
-        Err(error) => failed_check(
-            "edge_cdp",
-            format!("Edge CDP probe failed: {error}"),
-            Some(json!({
-                "url": url,
-            })),
-        ),
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 

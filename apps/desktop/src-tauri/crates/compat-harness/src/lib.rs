@@ -380,9 +380,13 @@ mod full_session_harness {
         assert_eq!(summary.status, "ok", "{summary:?}");
         assert!(summary.text_delta_count > 1, "{summary:?}");
         assert!(
-            summary.first_stream_at_ms.zip(summary.completion_event_at_ms).is_some_and(
-                |(first_stream_at_ms, completion_event_at_ms)| first_stream_at_ms < completion_event_at_ms
-            ),
+            summary
+                .first_stream_at_ms
+                .zip(summary.completion_event_at_ms)
+                .is_some_and(
+                    |(first_stream_at_ms, completion_event_at_ms)| first_stream_at_ms
+                        < completion_event_at_ms
+                ),
             "{summary:?}"
         );
         assert!(summary.tool_start_count > 0, "{summary:?}");
@@ -401,10 +405,10 @@ mod missing_scenarios {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use runtime::{
-        mcp_tool_name, ApiClient, ApiRequest, AssistantEvent, AutoCompactionEvent,
-        ConfigSource, ContentBlock, ConversationRuntime, McpServerConfig, McpServerManager,
-        McpStdioServerConfig, MessageRole, PermissionMode, PermissionPolicy, ScopedMcpServerConfig,
-        Session, StaticToolExecutor, TokenUsage, UsageTracker,
+        mcp_tool_name, ApiClient, ApiRequest, AssistantEvent, AutoCompactionEvent, ConfigSource,
+        ContentBlock, ConversationRuntime, McpServerConfig, McpServerManager, McpStdioServerConfig,
+        MessageRole, PermissionMode, PermissionPolicy, ScopedMcpServerConfig, Session,
+        StaticToolExecutor, TokenUsage, UsageTracker,
     };
     use serde_json::json;
 
@@ -512,10 +516,7 @@ mod missing_scenarios {
             config: McpServerConfig::Stdio(McpStdioServerConfig {
                 command: "python3".to_string(),
                 args: vec![script_path.to_string_lossy().into_owned()],
-                env: BTreeMap::from([(
-                    "MCP_SERVER_LABEL".to_string(),
-                    label.to_string(),
-                )]),
+                env: BTreeMap::from([("MCP_SERVER_LABEL".to_string(), label.to_string())]),
             }),
         }
     }
@@ -601,7 +602,9 @@ mod missing_scenarios {
         )
         .with_auto_compaction_input_tokens_threshold(100_000);
 
-        let summary = runtime.run_turn("trigger", None).expect("turn should succeed");
+        let summary = runtime
+            .run_turn("trigger", None)
+            .expect("turn should succeed");
 
         assert_eq!(
             summary.auto_compaction,
@@ -633,6 +636,9 @@ mod missing_scenarios {
 
         assert_eq!(usage.total_tokens(), 48);
         assert!(lines[0].contains("estimated_cost="), "{lines:?}");
-        assert!(lines[0].contains("model=claude-sonnet-4-20250514"), "{lines:?}");
+        assert!(
+            lines[0].contains("model=claude-sonnet-4-20250514"),
+            "{lines:?}"
+        );
     }
 }

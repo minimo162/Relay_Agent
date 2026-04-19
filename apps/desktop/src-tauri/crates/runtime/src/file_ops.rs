@@ -152,9 +152,9 @@ pub fn read_file(
 ) -> io::Result<ReadFileOutput> {
     let attempted_path = normalize_path_allow_missing(path)?;
     reject_sensitive_file_path(&attempted_path)?;
-    let absolute_path = attempted_path.canonicalize().map_err(|error| {
-        annotate_read_file_error(error, &attempted_path)
-    })?;
+    let absolute_path = attempted_path
+        .canonicalize()
+        .map_err(|error| annotate_read_file_error(error, &attempted_path))?;
     let lossy_path = absolute_path.to_string_lossy().into_owned();
 
     let ext = absolute_path

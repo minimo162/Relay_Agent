@@ -165,10 +165,7 @@ fn stable_hex_hash(value: &str) -> String {
 }
 
 fn short_stable_hex_hash(value: &str, len: usize) -> String {
-    stable_hex_hash(value)
-        .chars()
-        .take(len)
-        .collect::<String>()
+    stable_hex_hash(value).chars().take(len).collect::<String>()
 }
 
 fn normalize_name_with_hash_for_mcp(name: &str) -> String {

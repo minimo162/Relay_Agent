@@ -1978,9 +1978,8 @@ fn is_concrete_local_write_body_without_tools(
         return false;
     }
     let lower = trimmed.to_ascii_lowercase();
-    let body_is_complete_html_document = (lower.contains("<!doctype html")
-        || lower.contains("<html"))
-        && lower.contains("</html>");
+    let body_is_complete_html_document =
+        (lower.contains("<!doctype html") || lower.contains("<html")) && lower.contains("</html>");
     // A full `<!doctype html>…</html>` (or the `<html>…</html>` pair) reply is
     // a strong enough deliverable-file signal on its own: the model clearly
     // produced file-shaped content, so a missing write_file call is a

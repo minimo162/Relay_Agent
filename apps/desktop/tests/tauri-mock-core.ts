@@ -105,7 +105,7 @@ export async function invoke(cmd: string, args: any): Promise<unknown> {
         predictabilityNotes: ["mock predictability"],
       };
     case "get_workspace_allowlist":
-      return { storePath: "/mock/.relay-agent/workspace_allowed_tools.json", entries: [] };
+      return { storePath: "/mock/.relay-agent/workspace_allowed_tools.json", entries: [], warnings: [] };
     case "remove_workspace_allowlist_tool":
     case "clear_workspace_allowlist":
       return undefined;

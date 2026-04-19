@@ -11,13 +11,13 @@
 //! - **Auto-install**: Detects missing CLIs and offers install commands
 //! - **Passthrough**: Forwards arguments to the real CLI and captures output
 
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use runtime::sandbox::{
     build_linux_sandbox_command, resolve_sandbox_status_for_request, FilesystemIsolationMode,
     SandboxConfig,
 };
-use runtime::{ConfigLoader, ResolvedPermissionMode, validate_bash_hard_deny};
+use runtime::{validate_bash_hard_deny, ConfigLoader, ResolvedPermissionMode};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -454,11 +454,7 @@ mod tests {
 
     #[test]
     fn test_clirun_denylist_blocks_obfuscated_payloads() {
-        for command in [
-            "SuDo whoami",
-            "/bin/RM -Rf ./tmp",
-            "find . -name x -DeLeTe",
-        ] {
+        for command in ["SuDo whoami", "/bin/RM -Rf ./tmp", "find . -name x -DeLeTe"] {
             assert!(
                 validate_bash_hard_deny(command).is_err(),
                 "obfuscated command should be denied: {command}"
@@ -468,7 +464,12 @@ mod tests {
 
     #[test]
     fn test_clirun_denylist_keeps_safe_commands() {
-        for command in ["gh --version", "git status --short", "docker ps", "rg relay ."] {
+        for command in [
+            "gh --version",
+            "git status --short",
+            "docker ps",
+            "rg relay .",
+        ] {
             assert!(
                 validate_bash_hard_deny(command).is_ok(),
                 "safe command should not be denied: {command}"
