@@ -203,11 +203,11 @@ The helper now owns the successful-turn doom-loop state transition while the mai
 
 ### 2026-04-19 CI compatibility cleanup before merge
 
-**Problem:** GitHub Actions ran Rust 1.95.0 and failed Ubuntu clippy on `clippy::while_let_loop` in the structured bash denylist tokenizer. Windows Acceptance also failed because workspace-wide `unsafe_code = "forbid"` rejected the Windows-only `MoveFileExW` block used for allowlist file replacement.
+**Problem:** GitHub Actions ran Rust 1.95.0 and failed Ubuntu clippy on `clippy::while_let_loop` in the structured bash denylist tokenizer. Windows Acceptance also failed because workspace-wide `unsafe_code = "forbid"` rejected the Windows-only `MoveFileExW` block used for allowlist file replacement. After that fix, Windows still exposed a `doctor_cli` race where the first CDP probe could fail before the mock listener accepted connections.
 
-**Change:** Rewrote the shell-fragment loop as `while let` and replaced the hand-written Windows FFI path with `tempfile::TempPath::persist`, which provides a safe atomic replacement API and keeps unsafe code out of the desktop crate.
+**Change:** Rewrote the shell-fragment loop as `while let`, replaced the hand-written Windows FFI path with `tempfile::TempPath::persist`, which provides a safe atomic replacement API and keeps unsafe code out of the desktop crate, and added a short retry window to the doctor CDP reachability probe.
 
-**Verification:** `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_allowlist` — pass (3 tests). `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime tool_hard_denylist` — pass (10 tests).
+**Verification:** `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings` — pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_allowlist` — pass (3 tests). `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime tool_hard_denylist` — pass (10 tests). `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli` — pass (5 tests; required elevated local run because the sandbox blocks localhost bind).
 
 ### 2026-04-18 Align live-smoke latency thresholds with measured M365 Copilot baseline
 
