@@ -126,8 +126,8 @@ mod tests {
 
         let mut discovered: BTreeSet<String> = BTreeSet::new();
         for path in &ipc_source_files {
-            let contents = fs::read_to_string(path)
-                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let contents =
+                fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
             discovered.extend(extract_ts_deriving_type_names(&contents));
         }
 

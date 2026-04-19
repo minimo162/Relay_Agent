@@ -11,9 +11,10 @@ mod electron_cdp;
 use reqwest::blocking::Client;
 use runtime::{
     edit_file, execute_bash, glob_search, grep_search, merge_pdfs, pull_rust_diagnostics_blocking,
-    read_background_task_output, read_file, reject_sensitive_file_path, split_pdf, task_create,
-    task_get, task_list, task_output, task_stop, task_update, write_file,
-    BackgroundTaskOutputInput, BashCommandInput, GrepSearchInput, PdfSplitSegment, PermissionMode,
+    office_search, read_background_task_output, read_file, reject_sensitive_file_path, split_pdf,
+    task_create, task_get, task_list, task_output, task_stop, task_update, write_file,
+    BackgroundTaskOutputInput, BashCommandInput, GrepSearchInput, OfficeSearchInput,
+    PdfSplitSegment, PermissionMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -128,7 +129,7 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
-        "glob_search" | "grep_search" => ToolMetadata {
+        "glob_search" | "grep_search" | "office_search" => ToolMetadata {
             tool_search_visible: false,
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
@@ -385,8 +386,9 @@ fn cdp_catalog_sort_key(name: &str) -> usize {
         "edit_file" => 2,
         "glob_search" => 3,
         "grep_search" => 4,
-        "git_status" => 5,
-        "git_diff" => 6,
+        "office_search" => 5,
+        "git_status" => 6,
+        "git_diff" => 7,
         "pdf_merge" => 10,
         "pdf_split" => 11,
         "WebFetch" => 20,
@@ -439,9 +441,10 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
     // pedantic `match_same_arms` rather than collapse them with `|`.
     #[allow(clippy::match_same_arms)]
     let curated = match name {
-        "read_file" => vec!["offset", "limit", "pages"],
+        "read_file" => vec!["offset", "limit", "pages", "sheets", "slides"],
         "glob_search" => vec!["path"],
         "grep_search" => vec!["path", "glob", "context"],
+        "office_search" => vec!["paths", "include_ext", "context", "max_results", "max_files"],
         "git_status" => vec!["path"],
         "git_diff" => vec!["path", "staged"],
         "WebSearch" => vec!["allowed_domains", "blocked_domains"],
@@ -509,6 +512,9 @@ fn cdp_tool_example(name: &str) -> Value {
         "grep_search" => {
             json!({"name":"grep_search","relay_tool_call":true,"input":{"pattern":"TODO","path":"src"}})
         }
+        "office_search" => {
+            json!({"name":"office_search","relay_tool_call":true,"input":{"pattern":"forecast","paths":["reports/**/*.xlsx"]}})
+        }
         "git_status" => json!({"name":"git_status","relay_tool_call":true,"input":{"path":"."}}),
         "git_diff" => {
             json!({"name":"git_diff","relay_tool_call":true,"input":{"path":".","staged":true}})
@@ -553,13 +559,14 @@ fn cdp_tool_example(name: &str) -> Value {
 
 fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
     match name {
-        "read_file" => "Read local text or PDF content as grounded evidence.",
+        "read_file" => "Read local text, PDF, or Office content as grounded evidence.",
         "write_file" => {
             "Create or overwrite a workspace text file when the final content is known."
         }
         "edit_file" => "Apply a targeted replacement inside an existing workspace file.",
         "glob_search" => "Find candidate files by path pattern before reading or editing.",
         "grep_search" => "Search code or text content for concrete strings or regex matches.",
+        "office_search" => "Search extracted DOCX/XLSX/PPTX/PDF text for concrete strings or regex matches.",
         "git_status" => "Inspect working tree changes without invoking a shell.",
         "git_diff" => "Inspect staged or unstaged diffs without invoking a shell.",
         "pdf_merge" => "Merge existing PDF files inside the workspace.",
@@ -582,11 +589,12 @@ fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
 
 fn cdp_tool_use_when(name: &str) -> &'static str {
     match name {
-        "read_file" => "Use for grounded inspection, PDF reading, or before editing an existing file.",
+        "read_file" => "Use for grounded inspection, PDF/Office reading, or before editing an existing file.",
         "write_file" => "Use when creating a new target file or replacing a file with fully known content.",
         "edit_file" => "Use after reading the file when you need a targeted text replacement.",
         "glob_search" => "Use to discover likely file paths before reading them.",
         "grep_search" => "Use to find identifiers, strings, or patterns in the codebase before reading or editing.",
+        "office_search" => "Use for exact text or regex search across Office/PDF files; results cite path and anchor.",
         "git_status" => "Use for a quick change overview when the task depends on current git state.",
         "git_diff" => "Use when you need to inspect exact code changes already present in the workspace.",
         "pdf_merge" => "Use when the user explicitly wants to combine PDF files in the workspace.",
@@ -612,6 +620,7 @@ fn cdp_tool_avoid_when(name: &str) -> &'static str {
         "edit_file" => "Avoid when the file does not exist or when replacing the full file would be simpler.",
         "glob_search" => "Avoid when the exact file path is already known.",
         "grep_search" => "Avoid when the exact file path is already known and a direct `read_file` is enough.",
+        "office_search" => "Avoid for plaintext source files; use `grep_search` there.",
         "git_status" => "Avoid when the task is pure file reading or editing with no git-state dependency.",
         "git_diff" => "Avoid when you only need the current file contents rather than a diff.",
         "pdf_merge" => "Avoid using bash for PDF merge when this dedicated tool applies.",
@@ -729,7 +738,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "read_file",
-            description: "Read a file by path: UTF-8 text (line offset/limit), .ipynb as numbered text, .pdf via LiteParse spatial text with optional pages (1-based, e.g. \"1-3\" or \"5\"; OCR off), common images as metadata only (no multimodal tool result yet).",
+            description: "Read a file by path: UTF-8 text (line offset/limit), .ipynb as numbered text, .pdf via LiteParse spatial text with optional pages (1-based, e.g. \"1-3\" or \"5\"; OCR off), .docx/.xlsx/.pptx as extracted text, common images as metadata only (no multimodal tool result yet).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -737,7 +746,9 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
                     "file_path": { "type": "string", "description": "Claw-style alias for path" },
                     "offset": { "type": "integer", "minimum": 0 },
                     "limit": { "type": "integer", "minimum": 1 },
-                    "pages": { "type": "string", "description": "PDF only: page range such as \"1-5\", \"3\", or \"10-20\" (1-based)" }
+                    "pages": { "type": "string", "description": "PDF only: page range such as \"1-5\", \"3\", or \"10-20\" (1-based)" },
+                    "sheets": { "type": "string", "description": "XLSX only: comma-separated sheet names" },
+                    "slides": { "type": "string", "description": "PPTX only: slide range such as \"1-5\", \"3\", or \"10-20\" (1-based)" }
                 },
                 "anyOf": [
                     { "required": ["path"] },
@@ -813,6 +824,25 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
                     "multiline": { "type": "boolean" }
                 },
                 "required": ["pattern"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
+        ToolSpec {
+            name: "office_search",
+            description: "Search extracted text across .docx, .xlsx, .pptx, and .pdf files. Exact regex/substring search only; no semantic ranking. Results include path, anchor, match, and preview.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "pattern": { "type": "string" },
+                    "paths": { "type": "array", "items": { "type": "string" }, "description": "Concrete file paths or glob patterns such as reports/**/*.xlsx" },
+                    "include_ext": { "type": "array", "items": { "type": "string", "enum": ["docx", "xlsx", "pptx", "pdf", ".docx", ".xlsx", ".pptx", ".pdf"] } },
+                    "-i": { "type": "boolean" },
+                    "context": { "type": "integer", "minimum": 0 },
+                    "max_results": { "type": "integer", "minimum": 1, "maximum": 1000 },
+                    "max_files": { "type": "integer", "minimum": 1, "maximum": 1000 }
+                },
+                "required": ["pattern", "paths"],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
@@ -1579,6 +1609,7 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "edit_file" => from_value::<EditFileInput>(input).and_then(run_edit_file),
         "glob_search" => from_value::<GlobSearchInputValue>(input).and_then(run_glob_search),
         "grep_search" => from_value::<GrepSearchInput>(input).and_then(run_grep_search),
+        "office_search" => from_value::<OfficeSearchInput>(input).and_then(run_office_search),
         "git_status" => from_value::<GitCwdInput>(input).and_then(run_git_status),
         "git_diff" => from_value::<GitDiffToolInput>(input).and_then(run_git_diff),
         "pdf_merge" => from_value::<PdfMergeInput>(input).and_then(run_pdf_merge),
@@ -1678,8 +1709,15 @@ fn run_read_file(input: ReadFileInput) -> Result<String, String> {
         .or(input.file_path)
         .ok_or_else(|| String::from("read_file requires path or file_path"))?;
     to_pretty_json(
-        read_file(&path, input.offset, input.limit, input.pages.as_deref())
-            .map_err(io_to_string)?,
+        read_file(
+            &path,
+            input.offset,
+            input.limit,
+            input.pages.as_deref(),
+            input.sheets.as_deref(),
+            input.slides.as_deref(),
+        )
+        .map_err(io_to_string)?,
     )
 }
 
@@ -1783,6 +1821,11 @@ fn run_git_diff(input: GitDiffToolInput) -> Result<String, String> {
 #[allow(clippy::needless_pass_by_value)]
 fn run_grep_search(input: GrepSearchInput) -> Result<String, String> {
     to_pretty_json(grep_search(&input).map_err(io_to_string)?)
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_office_search(input: OfficeSearchInput) -> Result<String, String> {
+    to_pretty_json(office_search(&input).map_err(io_to_string)?)
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -1959,6 +2002,8 @@ struct ReadFileInput {
     offset: Option<usize>,
     limit: Option<usize>,
     pages: Option<String>,
+    sheets: Option<String>,
+    slides: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

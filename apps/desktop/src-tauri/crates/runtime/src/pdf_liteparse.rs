@@ -10,6 +10,8 @@ use wait_timeout::ChildExt;
 
 const MAX_PDF_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PDF_STDERR_BYTES: usize = 32 * 1024;
+pub const PDF_LITEPARSE_HEADER: &str =
+    "[PDF text via LiteParse — OCR disabled; spatial/layout-oriented extraction; quality varies by file.]\n\n";
 
 fn parse_timeout() -> Duration {
     let secs = std::env::var("RELAY_PDF_PARSE_TIMEOUT_SECS")
@@ -182,7 +184,7 @@ fn run_liteparse_child(
     Ok((stdout_bytes, stderr_bytes, status))
 }
 
-pub(crate) fn read_pdf_as_text(path: &Path, pages: Option<&str>) -> io::Result<String> {
+pub(crate) fn read_pdf_as_payload(path: &Path, pages: Option<&str>) -> io::Result<String> {
     if let Some(spec) = pages {
         if spec.trim().is_empty() {
             return Err(io::Error::new(
@@ -223,6 +225,10 @@ pub(crate) fn read_pdf_as_text(path: &Path, pages: Option<&str>) -> io::Result<S
         )
     })?;
 
-    let header = "[PDF text via LiteParse — OCR disabled; spatial/layout-oriented extraction; quality varies by file.]\n\n";
-    Ok(format!("{header}{text}"))
+    Ok(text)
+}
+
+pub(crate) fn read_pdf_as_text(path: &Path, pages: Option<&str>) -> io::Result<String> {
+    let payload = read_pdf_as_payload(path, pages)?;
+    Ok(format!("{PDF_LITEPARSE_HEADER}{payload}"))
 }

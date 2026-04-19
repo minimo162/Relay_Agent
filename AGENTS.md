@@ -5,7 +5,7 @@
 - This repository contains a working Tauri v2 + SolidJS desktop agent application under `apps/desktop/`.
 - Desktop **visual design** is driven by CSS variables in `apps/desktop/src/index.css` (`--ra-*`), aligned with **`apps/desktop/DESIGN.md`** (Cursor Inspiration spec). Light theme uses the warm-token palette now documented in `docs/IMPLEMENTATION.md` (2026-04-14 milestone); dark is the paired warm-charcoal scale. Default theme is **light**. Prefer tokens and `.ra-*` utilities over ad hoc colors.
 - Rust backend lives in `apps/desktop/src-tauri/` with internal crates under `crates/{api,desktop-core,runtime,tools,commands,compat-harness}`.
-- Desktop **`read_file`** on `.pdf` uses **LiteParse** (`liteparse-runner/`, OCR off) via **Node**; release bundles include a **Tauri `externalBin`** sidecar (`relay-node`). See `README.md`, `PLANS.md` (PDF reading), and `docs/IMPLEMENTATION.md` (2026-04-08 milestone).
+- Desktop **`read_file`** on `.pdf` uses **LiteParse** (`liteparse-runner/`, OCR off) via **Node**; release bundles include a **Tauri `externalBin`** sidecar (`relay-node`). `read_file` also extracts plaintext from `.docx`, `.xlsx`, and `.pptx`; `office_search` searches extracted `.docx` / `.xlsx` / `.pptx` / `.pdf` text with regex and citation anchors. See `README.md`, `PLANS.md`, `docs/OFFICE_SEARCH_DESIGN.md`, and `docs/IMPLEMENTATION.md`.
 - The legacy shared TypeScript contracts package has been removed; contracts are now defined inline within the Rust crates.
 - Use `PLANS.md` for the milestone roadmap and `docs/IMPLEMENTATION.md` for implementation notes.
 
@@ -43,6 +43,13 @@
 - Priority C: expand CDP browser automation and context-aware execution.
 - Do not implement arbitrary code execution, shell access, VBA, or external network execution outside agent-controlled tools.
 - Bash tool runs in a sandboxed context with approval gating for risky operations.
+
+## Office / PDF Search Tool Guidance
+
+- Use `office_search` for exact string or regex search across `.docx`, `.xlsx`, `.pptx`, and `.pdf` corpora, especially when the user gives a glob or asks to find where content appears.
+- Use `read_file` when the user names one Office/PDF file and needs its extracted plaintext. Use `pages` only for `.pdf`, `sheets` only for `.xlsx`, and `slides` only for `.pptx`.
+- Use `grep_search` for plaintext/code files. It is not a substitute for Office parsing because `.docx`, `.xlsx`, and `.pptx` are zipped XML containers.
+- PDF search anchors are document-level (`doc`) in this phase; Office anchors are granular (`pN`, `Sheet!A1`, `slideN`).
 
 ## Documentation Discipline
 

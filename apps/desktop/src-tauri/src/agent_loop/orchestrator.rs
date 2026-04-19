@@ -1348,7 +1348,7 @@ fn cdp_windows_office_catalog_addon() -> &'static str {
 
 ## Windows desktop Office and .msg (PowerShell + COM)
 
-On **Windows**, for **desktop Word, Excel, PowerPoint**, and **`.msg`**, use the **`PowerShell` tool** with COM (`Word.Application`, `Excel.Application`, `PowerPoint.Application`; `.msg` via `Outlook.Application` when Outlook is installed). Prefer COM over using `read_file`/`write_file`/`edit_file` on those binary formats unless the user has exported plain text or CSV.
+On **Windows**, for **desktop Word, Excel, PowerPoint**, and **`.msg`**, use the **`PowerShell` tool** with COM (`Word.Application`, `Excel.Application`, `PowerPoint.Application`; `.msg` via `Outlook.Application` when Outlook is installed) when the user needs high-fidelity layout, exact Excel formatting, or edits through Office itself. For text search or plaintext extraction from `.docx` / `.xlsx` / `.pptx`, use `office_search` or `read_file` first.
 
 ### Hybrid read (data + layout)
 
@@ -1386,8 +1386,9 @@ fn cdp_catalog_sort_key(name: &str) -> usize {
         "edit_file" => 2,
         "glob_search" => 3,
         "grep_search" => 4,
-        "git_status" => 5,
-        "git_diff" => 6,
+        "office_search" => 5,
+        "git_status" => 6,
+        "git_diff" => 7,
         "pdf_merge" => 10,
         "pdf_split" => 11,
         "WebFetch" => 20,
@@ -1434,11 +1435,12 @@ fn cdp_catalog_sort_key(name: &str) -> usize {
 
 fn cdp_tool_primary_use(name: &str, description: &str) -> String {
     match name {
-        "read_file" => "Read local text or PDF content.".to_string(),
+        "read_file" => "Read local text, PDF, or Office content.".to_string(),
         "write_file" => "Create or overwrite a workspace text file.".to_string(),
         "edit_file" => "Replace text in an existing workspace file.".to_string(),
         "glob_search" => "Find files by glob pattern.".to_string(),
         "grep_search" => "Search file contents with a regex.".to_string(),
+        "office_search" => "Search extracted Office/PDF text with a regex.".to_string(),
         "git_status" => "Inspect workspace git status.".to_string(),
         "git_diff" => "Inspect workspace git diff.".to_string(),
         "pdf_merge" => "Merge PDF files in the workspace.".to_string(),
@@ -1537,9 +1539,16 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
     // than the lint is worth.
     #[allow(clippy::match_same_arms)]
     let curated = match name {
-        "read_file" => vec!["offset", "limit", "pages"],
+        "read_file" => vec!["offset", "limit", "pages", "sheets", "slides"],
         "glob_search" => vec!["path"],
         "grep_search" => vec!["path", "glob", "context"],
+        "office_search" => vec![
+            "paths",
+            "include_ext",
+            "context",
+            "max_results",
+            "max_files",
+        ],
         "git_status" => vec!["path"],
         "git_diff" => vec!["path", "staged"],
         "WebSearch" => vec!["allowed_domains", "blocked_domains"],
@@ -3706,7 +3715,7 @@ pub fn msg_to_relay(msg: &ConversationMessage) -> RelayMessage {
 fn windows_desktop_office_system_prompt_addon() -> &'static str {
     r#"## Windows: desktop Office and .msg (PowerShell + COM)
 
-Use the **PowerShell** tool for **Word, Excel, PowerPoint**, and **`.msg`** (via `Outlook.Application` when Outlook is installed). Prefer COM for those formats over `read_file`/`write_file`/`edit_file` unless the user provided plain text or CSV.
+Use the **PowerShell** tool for **Word, Excel, PowerPoint**, and **`.msg`** (via `Outlook.Application` when Outlook is installed) when the user needs high-fidelity layout, exact Excel formatting, or edits through Office itself. For text search or plaintext extraction from `.docx` / `.xlsx` / `.pptx`, use `office_search` or `read_file` first.
 
 **Hybrid read (data + layout):** For **`.xlsx`/`.docx`/`.pptx`**, combine (a) **COM batch extraction** (`Range.Value2` → JSON, or `Export-Csv`) as the **numeric/table source of truth** for Excel, with (b) **COM `ExportAsFixedFormat`** to a **unique file under `%TEMP%\RelayAgent\office-layout\`**, then **`read_file` on that `.pdf`** in the **same** turn (same `relay_tool` JSON **array**: `PowerShell` then `read_file`). PowerShell stdout should be **one JSON** including **`pdfPath`**. PDF/LiteParse text is **layout hints** for Excel, not authoritative numbers. Use `OpenAfterPublish`/`OpenAfterExport` `$false`; `Quit()` in `finally`. Optional: `Remove-Item` temp files after.
 
@@ -3777,8 +3786,8 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "- Prefer read-only tools before mutating tools.\n",
                 "- When modifying files, prefer saving copies.\n",
                 "- If a session workspace (`cwd`) is set, file-tool paths are resolved within that workspace and may be rejected when they escape it. Do not promise reads outside the workspace boundary; call the tool and surface the actual path error if access is denied.\n",
-                "- If no workspace is set, read_file, glob_search, and grep_search may use absolute local paths the OS user can read.\n",
-                "- read_file returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted `.txt`/`.md` file.\n",
+                "- If no workspace is set, read_file, glob_search, grep_search, and office_search may use absolute local paths the OS user can read.\n",
+                "- read_file returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). `.docx`, `.xlsx`, and `.pptx` are parsed as plaintext extraction; use office_search for exact search across those files. Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted `.txt`/`.md` file.\n",
                 "- If the user's request is already concrete (paths, files, stated action), use tools in your first response; do not ask them to rephrase unless something essential is missing.\n",
                 "- To combine or split PDF files, use pdf_merge / pdf_split (workspace write); do not use bash for that."
             ),
@@ -4454,12 +4463,10 @@ mod cdp_copilot_tool_tests {
             CdpCatalogFlavor::StandardFull,
         );
         assert!(bundle.prompt.contains("## Continue from tool results"));
-        assert!(bundle
-            .prompt
-            .contains("If another tool is required, emit exactly one fenced `relay_tool` block next."));
-        assert!(bundle
-            .prompt
-            .contains("do not repeat the same tool call"));
+        assert!(bundle.prompt.contains(
+            "If another tool is required, emit exactly one fenced `relay_tool` block next."
+        ));
+        assert!(bundle.prompt.contains("do not repeat the same tool call"));
     }
 
     #[test]

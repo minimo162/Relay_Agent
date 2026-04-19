@@ -217,6 +217,33 @@ Acceptance criteria:
 - Runtime regression coverage includes property-style tests for blocked bash mutations and allowed git inspection commands.
 - Desktop agent-loop permission explanation helpers, approval prompting, prompt/path-repair helpers, CDP prompt-bundle/message rendering helpers, retry/repair helpers, success/error-decision application, doom-loop guard application, session-state helpers, event payload/emission helpers, and unfenced/fenced tool-JSON fallback parsing live outside the main `orchestrator.rs` turn loop.
 
+### Cross-Cutting Feature: Office File Search
+
+Goal: implement `docs/OFFICE_SEARCH_DESIGN.md` Phase A so the agent can extract and search Office/PDF plaintext without embeddings.
+
+Change targets:
+
+- `apps/desktop/src-tauri/crates/runtime/src/office/**`
+- `apps/desktop/src-tauri/crates/runtime/src/{file_ops,pdf_liteparse,lib}.rs`
+- `apps/desktop/src-tauri/crates/runtime/Cargo.toml`
+- `apps/desktop/src-tauri/crates/tools/src/lib.rs`
+- `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`
+- `AGENTS.md`
+- `docs/IMPLEMENTATION.md`
+
+Acceptance criteria:
+
+- `.docx`, `.xlsx`, and `.pptx` `read_file` calls return extracted plaintext through stable line serialization.
+- `.pdf` search uses `pdf_liteparse` payload-only extraction so the LiteParse banner is not indexed.
+- `office_search` accepts concrete paths or globs, validates `include_ext`, silently drops sensitive-path rejects, returns per-anchor hits, and reports parse failures in `errors`.
+- Extraction cache records are path-indexed, content-hash invalidated, schema-versioned, and store OS-native path bytes.
+- Office extraction enforces zip/XML/output limits, xlsx snapshot preflight, per-file timeout, per-path in-flight guarding, and a process-wide extraction cap.
+- Tool catalog and Copilot prompt guidance advertise `office_search` and remove the old blanket Office `read_file` exception.
+
+## Forward-Looking Designs (Not Yet Scheduled)
+
+- `docs/OFFICE_SEARCH_DESIGN.md` — Phase A has source implementation in progress/landed under the Office File Search track above. Future Phase B remains semantic retrieval on top of the extraction cache.
+
 ## Out Of Scope
 
 - Broad backend decomposition unrelated to doctor sharing or deterministic harness support.

@@ -783,8 +783,7 @@ pub(crate) fn respond_approval_inner(
                 }
             }
         } else {
-            workspace_persist_errors
-                .push("workspace path is unset for this session".to_string());
+            workspace_persist_errors.push("workspace path is unset for this session".to_string());
         }
     }
 

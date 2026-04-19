@@ -13,6 +13,7 @@ mod mcp_client;
 mod mcp_registry;
 mod mcp_stdio;
 mod oauth;
+mod office;
 mod pdf_liteparse;
 mod pdf_manip;
 mod permissions;
@@ -76,6 +77,10 @@ pub use oauth::{
     parse_oauth_callback_request_target, save_oauth_credentials, OAuthAuthorizationRequest,
     OAuthCallbackParams, OAuthRefreshRequest, OAuthTokenExchangeRequest, OAuthTokenSet,
     PkceChallengeMethod, PkceCodePair,
+};
+pub use office::{
+    extract as extract_office_document, office_search, OfficeSearchError, OfficeSearchHit,
+    OfficeSearchInput, OfficeSearchOutput,
 };
 pub use pdf_liteparse::{resolve_liteparse_paths, LiteparsePaths};
 pub use pdf_manip::{merge_pdfs, split_pdf, PdfSplitSegment};

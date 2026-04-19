@@ -15,6 +15,49 @@
 
 ## Milestone Log
 
+### 2026-04-20 Office file search Phase A
+
+**Problem:** Office files were effectively opaque to the local file tools:
+`grep_search` only saw zipped XML bytes for `.docx`, `.xlsx`, and `.pptx`, and
+`read_file` only had a transparent binary-text path for `.pdf` through
+LiteParse. `docs/OFFICE_SEARCH_DESIGN.md` specified a Phase A plaintext
+extraction and regex search path without embeddings.
+
+**Change:** Added the runtime `office` module under
+[`apps/desktop/src-tauri/crates/runtime/src/office/`](../apps/desktop/src-tauri/crates/runtime/src/office/)
+with pure-Rust `.docx`, `.xlsx`, and `.pptx` extraction, PDF delegation through a
+new payload-only `pdf_liteparse` API, path-indexed JSON cache records, content
+hash invalidation, OS-native cache source encoding, structural zip/XML/output
+limits, xlsx bounded snapshot preflight, per-file timeout, per-path in-flight
+guarding, and a process-wide extraction cap. Added `read_file` dispatch for
+`.docx`, `.xlsx`, and `.pptx` plus format-specific `sheets` / `slides`
+validation. Added the `office_search` tool for regex search over `.docx`,
+`.xlsx`, `.pptx`, and `.pdf` paths/globs with anchor citations and per-path parse
+errors.
+
+Updated the tools catalog and CDP prompt guidance so Office plaintext
+read/search uses `read_file` / `office_search` first, while Windows COM remains
+the path for high-fidelity layout, exact Excel formatting, or Office-native
+edits. Reintroduced direct runtime dependencies for `calamine`, `zip`,
+`quick-xml`, `dirs`, `base64`, and `num_cpus`, and enabled Tokio's `sync`
+feature for the extraction semaphore.
+
+**Known limitations:** Phase A remains non-semantic. PDF search anchors are still
+document-level (`doc`). XLSX cell rendering is best-effort and may differ from
+Excel display formatting. The parsers intentionally omit images, charts,
+SmartArt, and drawing-canvas text.
+
+**Verification:** `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+--check` — pass. `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -p
+runtime` — pass. `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+-p tools` — pass. `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`
+— pass. `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -p
+runtime -p tools -- -D warnings` — pass. `cargo test --manifest-path
+apps/desktop/src-tauri/Cargo.toml -p runtime --lib -- --nocapture` — pass (126
+passed). `pnpm typecheck` — pass. `cargo test --manifest-path
+apps/desktop/src-tauri/Cargo.toml -p tools tool_catalog -- --nocapture` — pass
+(0 matched, 43 filtered).
+
 ### 2026-04-19 Tools crate — approval display extraction
 
 **Problem:** `apps/desktop/src-tauri/crates/tools/src/lib.rs` had grown to 5,793
@@ -6659,3 +6702,17 @@ Results:
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
 - `pnpm check`: passed.
 - `git diff --check`: passed.
+
+## 2026-04-19 - Office search design review follow-up
+
+Updated `docs/OFFICE_SEARCH_DESIGN.md` from review feedback before Phase A implementation:
+
+- Added the Tokio blocking-boundary contract: `office_search` and Office-backed `read_file` paths must be invoked through `tokio::task::spawn_blocking` or an equivalent blocking-tool pool when called from Tokio.
+- Specified Windows cache-key normalization for `canonicalize()` verbatim paths (`\\?\` / `\\?\UNC\`) so equivalent paths do not split cache records.
+- Added zip entry-name validation rules before Office XML part lookup, including non-UTF-8, NUL, absolute, drive-prefixed, backslash, `.` / `..`, and empty-segment rejection.
+- Chose `pdf_liteparse::read_pdf_as_payload` as the Phase A4 payload API instead of leaving two API shapes open.
+- Documented the A5 double-thread tradeoff, post-timeout `ResourceBusy` behavior, release-note requirements, and moved revision history into a changelog section.
+
+Verification:
+
+- Documentation-only change; no runtime tests run.
