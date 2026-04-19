@@ -5,7 +5,7 @@ use std::path::Path;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use super::{read_zip_part, AnchoredText, Deadline, OfficeLimits};
+use super::{read_zip_part, validate_zip_archive, AnchoredText, Deadline, OfficeLimits};
 
 pub(crate) fn extract(
     path: &Path,
@@ -15,6 +15,7 @@ pub(crate) fn extract(
     let file = File::open(path)?;
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+    validate_zip_archive(&mut archive, limits)?;
     let mut produced = 0u64;
     let mut slide_numbers = (0..archive.len())
         .filter_map(|i| {
@@ -75,6 +76,10 @@ fn parse_text_runs(xml: &[u8], limits: &OfficeLimits, deadline: &Deadline) -> io
     let mut buf = Vec::new();
     let mut stack = Vec::<String>::new();
     let mut out = String::new();
+    // Buffers text runs for the *current* `<a:p>` so multi-run paragraphs become a single
+    // line in the output. Earlier code emitted a `\n` between every `<a:t>` event, which
+    // shredded paragraphs whenever Office split a styled phrase across runs.
+    let mut paragraph = String::new();
     let mut events = 0u64;
     loop {
         deadline.check()?;
@@ -109,12 +114,20 @@ fn parse_text_runs(xml: &[u8], limits: &OfficeLimits, deadline: &Deadline) -> io
                     .unescape()
                     .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?
                     .into_owned();
-                if !out.is_empty() {
-                    out.push('\n');
-                }
-                out.push_str(&text);
+                paragraph.push_str(&text);
             }
-            Event::End(_) => {
+            Event::End(event) => {
+                let name = local_name(event.name().as_ref());
+                if name == "p" {
+                    let trimmed = paragraph.trim();
+                    if !trimmed.is_empty() {
+                        if !out.is_empty() {
+                            out.push('\n');
+                        }
+                        out.push_str(trimmed);
+                    }
+                    paragraph.clear();
+                }
                 stack.pop();
             }
             Event::Eof => break,
@@ -128,4 +141,32 @@ fn parse_text_runs(xml: &[u8], limits: &OfficeLimits, deadline: &Deadline) -> io
 fn local_name(name: &[u8]) -> String {
     let raw = std::str::from_utf8(name).unwrap_or_default();
     raw.rsplit(':').next().unwrap_or(raw).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn multi_run_paragraph_joins_into_single_line() {
+        let xml = br#"
+            <p:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                      xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+                <a:p>
+                    <a:r><a:t>Quarterly </a:t></a:r>
+                    <a:r><a:t>revenue </a:t></a:r>
+                    <a:r><a:t>summary</a:t></a:r>
+                </a:p>
+                <a:p>
+                    <a:r><a:t>Region details</a:t></a:r>
+                </a:p>
+            </p:txBody>
+        "#;
+        let limits = OfficeLimits::from_env();
+        let deadline = Deadline::from_now(Duration::from_secs(5));
+
+        let text = parse_text_runs(xml, &limits, &deadline).expect("parse runs");
+        assert_eq!(text, "Quarterly revenue summary\nRegion details");
+    }
 }

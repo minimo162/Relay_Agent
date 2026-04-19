@@ -5,7 +5,7 @@ use std::path::Path;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-use super::{read_zip_part, AnchoredText, Deadline, OfficeLimits};
+use super::{read_zip_part, validate_zip_archive, AnchoredText, Deadline, OfficeLimits};
 
 pub(crate) fn extract(
     path: &Path,
@@ -15,6 +15,7 @@ pub(crate) fn extract(
     let file = File::open(path)?;
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+    validate_zip_archive(&mut archive, limits)?;
     let mut produced = 0u64;
     let mut anchors = Vec::new();
     let document = read_zip_part(&mut archive, "word/document.xml", limits, &mut produced)?;
@@ -121,7 +122,14 @@ fn parse_part(
                         let table = state.table_count;
                         let row = state.row_count;
                         let anchor = if part_prefix.is_empty() {
-                            format!("p{}:tbl{table}:row{row}", state.body_para_count)
+                            // A leading table (no body paragraphs yet) gets a
+                            // `tbl{j}:row{i}` anchor instead of the misleading
+                            // `p0:tbl{j}:row{i}` — there is no `p0` paragraph to cite.
+                            if state.body_para_count == 0 {
+                                format!("tbl{table}:row{row}")
+                            } else {
+                                format!("p{}:tbl{table}:row{row}", state.body_para_count)
+                            }
                         } else {
                             format!(
                                 "{}:tbl{table}:row{row}",
@@ -154,19 +162,19 @@ fn parse_part(
                     _ => {}
                 }
             }
-            Event::Text(event) => {
-                if state.in_deleted == 0 && is_text_node(&state.stack) {
-                    let text = event
-                        .unescape()
-                        .map_err(|error| {
-                            io::Error::new(io::ErrorKind::InvalidData, error.to_string())
-                        })?
-                        .into_owned();
-                    if state.row_anchor.is_some() {
-                        state.row_text.push_str(&text);
-                    } else if state.para_anchor.is_some() {
-                        state.para_text.push_str(&text);
-                    }
+            Event::Text(event)
+                if state.in_deleted == 0 && is_text_node(&state.stack) =>
+            {
+                let text = event
+                    .unescape()
+                    .map_err(|error| {
+                        io::Error::new(io::ErrorKind::InvalidData, error.to_string())
+                    })?
+                    .into_owned();
+                if state.row_anchor.is_some() {
+                    state.row_text.push_str(&text);
+                } else if state.para_anchor.is_some() {
+                    state.para_text.push_str(&text);
                 }
             }
             Event::End(event) => {
@@ -236,6 +244,36 @@ fn is_body_paragraph(stack: &[String]) -> bool {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn leading_table_uses_bare_anchor_without_p0() {
+        let xml = br#"
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                <w:body>
+                    <w:tbl>
+                        <w:tr>
+                            <w:tc><w:p><w:r><w:t>Top cell</w:t></w:r></w:p></w:tc>
+                        </w:tr>
+                    </w:tbl>
+                    <w:p><w:r><w:t>Body para</w:t></w:r></w:p>
+                </w:body>
+            </w:document>
+        "#;
+        let limits = OfficeLimits::from_env();
+        let deadline = Deadline::from_now(Duration::from_secs(5));
+
+        let anchors = parse_part(xml, "", &limits, &deadline).expect("parse leading table");
+        let row_anchor = anchors
+            .iter()
+            .find(|anchor| anchor.text == "Top cell")
+            .expect("leading-table cell should be emitted");
+        assert_eq!(row_anchor.anchor, "tbl1:row1");
+        let para_anchor = anchors
+            .iter()
+            .find(|anchor| anchor.text == "Body para")
+            .expect("body paragraph should be emitted");
+        assert_eq!(para_anchor.anchor, "p1");
+    }
 
     #[test]
     fn header_table_anchor_keeps_region_separator() {

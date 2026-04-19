@@ -3,7 +3,7 @@ use std::path::Path;
 
 use calamine::{open_workbook_from_rs, Data, Reader, Xlsx};
 
-use super::{validate_zip_archive, validate_zip_entry, AnchoredText, Deadline, OfficeLimits};
+use super::{validate_zip_entry, AnchoredText, Deadline, OfficeLimits};
 
 pub(crate) fn extract(
     path: &Path,
@@ -87,7 +87,18 @@ fn read_snapshot(path: &Path, cap: usize) -> io::Result<Vec<u8>> {
 fn preflight(snapshot: &[u8], limits: &OfficeLimits, deadline: &Deadline) -> io::Result<()> {
     let mut archive = zip::ZipArchive::new(Cursor::new(snapshot))
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-    validate_zip_archive(&mut archive, limits)?;
+    if archive.len() > limits.zip_max_entries {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "zip entries exceed RELAY_OFFICE_ZIP_MAX_ENTRIES={}",
+                limits.zip_max_entries
+            ),
+        ));
+    }
+    // Single sweep validates each entry and bounds decompressed bytes per part.
+    // The previous implementation also called `validate_zip_archive`, which walked
+    // the same entries again — pure duplicate work.
     let mut produced = 0u64;
     for i in 0..archive.len() {
         deadline.check()?;
@@ -150,7 +161,12 @@ fn cell_to_string(cell: &Data) -> String {
         Data::Int(value) => value.to_string(),
         Data::Bool(value) => value.to_string(),
         Data::Error(value) => format!("{value:?}"),
-        Data::DateTime(value) => value.to_string(),
+        // ExcelDateTime's Display impl writes the raw 1900-epoch f64 (e.g. `45000.5`),
+        // which is useless for plaintext search. Render an ISO 8601 string instead so
+        // queries like `2026-04-20` actually hit calendar cells.
+        Data::DateTime(value) => value
+            .as_datetime()
+            .map_or_else(|| value.to_string(), |dt| dt.format("%Y-%m-%dT%H:%M:%S").to_string()),
     }
 }
 
