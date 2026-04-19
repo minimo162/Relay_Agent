@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -13,7 +13,6 @@ use chrono::Utc;
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::sync::Semaphore;
 
 use crate::pdf_liteparse;
 use crate::tool_hard_denylist::reject_sensitive_file_path;
@@ -188,10 +187,79 @@ fn max_concurrent_extractions() -> usize {
     env_usize("RELAY_OFFICE_MAX_CONCURRENT_EXTRACTIONS", default, 1, 32)
 }
 
-fn global_semaphore() -> Arc<Semaphore> {
-    static SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+struct ExtractionSemaphore {
+    state: Mutex<usize>,
+    cv: Condvar,
+}
+
+impl ExtractionSemaphore {
+    fn new(permits: usize) -> Self {
+        Self {
+            state: Mutex::new(permits),
+            cv: Condvar::new(),
+        }
+    }
+
+    fn try_acquire(self: &Arc<Self>) -> Option<ExtractionPermit> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *state == 0 {
+            return None;
+        }
+        *state -= 1;
+        Some(ExtractionPermit {
+            sem: Arc::clone(self),
+        })
+    }
+
+    fn acquire_with_deadline(
+        self: &Arc<Self>,
+        deadline: Instant,
+    ) -> Option<ExtractionPermit> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while *state == 0 {
+            let now = Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            let waited = self.cv.wait_timeout(state, deadline - now);
+            state = match waited {
+                Ok((guard, _)) => guard,
+                Err(poison) => poison.into_inner().0,
+            };
+        }
+        *state -= 1;
+        Some(ExtractionPermit {
+            sem: Arc::clone(self),
+        })
+    }
+}
+
+struct ExtractionPermit {
+    sem: Arc<ExtractionSemaphore>,
+}
+
+impl Drop for ExtractionPermit {
+    fn drop(&mut self) {
+        let mut state = self
+            .sem
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *state += 1;
+        self.sem.cv.notify_one();
+    }
+}
+
+fn global_semaphore() -> Arc<ExtractionSemaphore> {
+    static SEMAPHORE: OnceLock<Arc<ExtractionSemaphore>> = OnceLock::new();
     SEMAPHORE
-        .get_or_init(|| Arc::new(Semaphore::new(max_concurrent_extractions())))
+        .get_or_init(|| Arc::new(ExtractionSemaphore::new(max_concurrent_extractions())))
         .clone()
 }
 
@@ -202,7 +270,6 @@ fn in_flight() -> &'static Mutex<HashSet<String>> {
 
 struct InFlightReservation {
     key: String,
-    active: bool,
 }
 
 impl InFlightReservation {
@@ -210,57 +277,52 @@ impl InFlightReservation {
         let mut slots = in_flight()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if slots.contains(&key) {
+        if !slots.insert(key.clone()) {
             return Err(io::Error::new(
                 io::ErrorKind::ResourceBusy,
                 "still cancelling or extracting previous Office extraction of this path",
             ));
         }
-        slots.insert(key.clone());
-        Ok(Self { key, active: true })
-    }
-
-    fn disarm(&mut self) {
-        self.active = false;
+        Ok(Self { key })
     }
 }
 
 impl Drop for InFlightReservation {
     fn drop(&mut self) {
-        if self.active {
-            let mut slots = in_flight()
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            slots.remove(&self.key);
-        }
+        let mut slots = in_flight()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        slots.remove(&self.key);
     }
 }
 
 pub fn extract_with_timeout(path: &Path) -> io::Result<ParsedDoc> {
     let canonical = fs::canonicalize(path)?;
     let path_hash = path_hash(&canonical);
-    let mut reservation = InFlightReservation::reserve(path_hash.clone())?;
-    let permit = global_semaphore().try_acquire_owned().map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::ResourceBusy,
-            "extraction concurrency cap reached; retry later",
-        )
-    })?;
+    let reservation = InFlightReservation::reserve(path_hash)?;
     let timeout = parse_timeout();
+    let permit = global_semaphore()
+        .acquire_with_deadline(Instant::now() + timeout)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::ResourceBusy,
+                format!(
+                    "extraction concurrency cap reached and acquire deadline expired ({}s); retry later",
+                    timeout.as_secs()
+                ),
+            )
+        })?;
     let (tx, rx) = mpsc::channel();
-    let worker_key = path_hash.clone();
     let worker_path = canonical.clone();
     let deadline = Deadline::from_now(timeout);
     let handle = thread::spawn(move || {
+        // Move both guards into the worker so that a panic during extraction
+        // still releases the semaphore and clears the in-flight slot via Drop.
+        let _reservation = reservation;
+        let _permit = permit;
         let result = extract_uncached(&worker_path, &deadline);
         let _ = tx.send(result);
-        drop(permit);
-        let mut slots = in_flight()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        slots.remove(&worker_key);
     });
-    reservation.disarm();
 
     match rx.recv_timeout(timeout) {
         Ok(result) => {
@@ -280,6 +342,7 @@ pub fn extract_with_timeout(path: &Path) -> io::Result<ParsedDoc> {
             ))
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
+            // Worker panicked — its Drop already released the reservation and permit.
             let _ = handle.join();
             Err(io::Error::other("Office extraction worker disconnected"))
         }
@@ -584,15 +647,24 @@ pub struct OfficeSearchOutput {
     pub wall_clock_truncated: bool,
 }
 
+/// Hard cap on the per-hit `context` size to keep result payloads bounded even when
+/// callers pass huge values (the JSON schema only enforces a non-negative minimum).
+pub const MAX_OFFICE_SEARCH_CONTEXT: usize = 1024;
+/// Soft cap on regex memory use during compilation, mirroring the `regex` crate's
+/// default but pinning the value so future bumps don't silently widen the surface.
+const REGEX_SIZE_LIMIT_BYTES: usize = 10 * 1024 * 1024;
+
 #[allow(clippy::too_many_lines)]
 pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput> {
     let regex = RegexBuilder::new(&input.pattern)
         .case_insensitive(input.case_insensitive.unwrap_or(false))
+        .size_limit(REGEX_SIZE_LIMIT_BYTES)
         .build()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
     let include_ext = normalize_include_ext(input.include_ext.as_ref())?;
     let max_results = input.max_results.unwrap_or(100).clamp(1, 1_000);
     let max_files = input.max_files.unwrap_or(50).clamp(1, 1_000);
+    let context = input.context.unwrap_or(80).min(MAX_OFFICE_SEARCH_CONTEXT);
     let mut candidates = expand_office_candidates(&input.paths, &include_ext)?;
     candidates.sort();
     candidates.dedup();
@@ -673,7 +745,7 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
                 outstanding = outstanding.saturating_sub(1);
                 fold_office_search_result(
                     &regex,
-                    input.context.unwrap_or(80),
+                    context,
                     max_results,
                     &path,
                     result,
@@ -820,10 +892,10 @@ fn expand_office_candidates(
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?
                 .flatten()
             {
-                push_candidate(&mut out, &entry, include_ext)?;
+                push_candidate(&mut out, &entry, include_ext);
             }
         } else {
-            push_candidate(&mut out, &PathBuf::from(raw), include_ext)?;
+            push_candidate(&mut out, &PathBuf::from(raw), include_ext);
         }
     }
     Ok(out)
@@ -846,26 +918,25 @@ fn sensitive_literal_glob(value: &str) -> bool {
             .is_some_and(|(_, ext)| matches!(ext, "pem" | "key"))
 }
 
-fn push_candidate(
-    out: &mut Vec<PathBuf>,
-    path: &Path,
-    include_ext: &BTreeSet<String>,
-) -> io::Result<()> {
+fn push_candidate(out: &mut Vec<PathBuf>, path: &Path, include_ext: &BTreeSet<String>) {
     let Some(ext) = path
         .extension()
         .and_then(|extension| extension.to_str())
         .map(str::to_ascii_lowercase)
     else {
-        return Ok(());
+        return;
     };
     if !include_ext.contains(&ext) || !path.is_file() {
-        return Ok(());
+        return;
     }
     if reject_sensitive_file_path(path).is_err() {
-        return Ok(());
+        return;
     }
-    out.push(fs::canonicalize(path)?);
-    Ok(())
+    // Files that disappear between glob expansion and canonicalize are skipped silently
+    // so a single missing path does not abort the entire search.
+    if let Ok(canonical) = fs::canonicalize(path) {
+        out.push(canonical);
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -890,66 +961,82 @@ fn load_or_extract(path: &Path) -> io::Result<ParsedDoc> {
     let size = metadata.len();
     let path_hash = path_hash(&canonical);
     let path_bytes = os_native_path_bytes(&normalize_cache_path(&canonical));
-    let cache_path = cache_record_path(&path_hash)?;
+    let cache_path = cache_record_path(&path_hash);
 
-    if let Ok(bytes) = fs::read(&cache_path) {
-        if let Ok(record) = serde_json::from_slice::<CacheRecord>(&bytes) {
-            if record.schema_version == CACHE_SCHEMA_VERSION
-                && record_source_bytes(&record).as_deref() == Some(path_bytes.as_slice())
-                && record.mtime_sec == modified_sec
-                && record.mtime_nsec == modified_nsec
-                && record.size == size
-            {
-                return Ok(ParsedDoc {
-                    source: canonical,
-                    format: record.format,
-                    anchors: record.anchors,
-                });
-            }
-            if record.schema_version == CACHE_SCHEMA_VERSION
-                && record_source_bytes(&record).as_deref() == Some(path_bytes.as_slice())
-            {
-                let current_hash = content_hash(&canonical)?;
-                if record.content_hash == current_hash {
-                    let updated = CacheRecord {
-                        mtime_sec: modified_sec,
-                        mtime_nsec: modified_nsec,
-                        size,
-                        ..record
-                    };
-                    let _ = write_cache_record(&cache_path, &updated);
+    if let Some(cache_path) = cache_path.as_ref() {
+        if let Ok(bytes) = fs::read(cache_path) {
+            if let Ok(record) = serde_json::from_slice::<CacheRecord>(&bytes) {
+                if record.schema_version == CACHE_SCHEMA_VERSION
+                    && record_source_bytes(&record).as_deref() == Some(path_bytes.as_slice())
+                    && record.mtime_sec == modified_sec
+                    && record.mtime_nsec == modified_nsec
+                    && record.size == size
+                {
                     return Ok(ParsedDoc {
                         source: canonical,
-                        format: updated.format,
-                        anchors: updated.anchors,
+                        format: record.format,
+                        anchors: record.anchors,
                     });
                 }
+                if record.schema_version == CACHE_SCHEMA_VERSION
+                    && record_source_bytes(&record).as_deref() == Some(path_bytes.as_slice())
+                {
+                    let current_hash = content_hash(&canonical)?;
+                    if record.content_hash == current_hash {
+                        let updated = CacheRecord {
+                            mtime_sec: modified_sec,
+                            mtime_nsec: modified_nsec,
+                            size,
+                            ..record
+                        };
+                        if let Err(error) = write_cache_record(cache_path, &updated) {
+                            tracing::debug!(
+                                cache_path = %cache_path.display(),
+                                error = %error,
+                                "office cache refresh write failed"
+                            );
+                        }
+                        return Ok(ParsedDoc {
+                            source: canonical,
+                            format: updated.format,
+                            anchors: updated.anchors,
+                        });
+                    }
+                }
+            } else {
+                let _ = fs::remove_file(cache_path);
             }
-        } else {
-            let _ = fs::remove_file(&cache_path);
         }
     }
 
     let parsed = extract_with_timeout(&canonical)?;
-    let metadata_after = fs::metadata(&canonical)?;
-    let (after_modified_sec, after_modified_nsec) = modified_parts(&metadata_after)?;
-    if after_modified_sec == modified_sec
-        && after_modified_nsec == modified_nsec
-        && metadata_after.len() == size
-    {
-        let record = CacheRecord {
-            source_encoding: source_encoding_tag().to_string(),
-            source: encode_source_path(&normalize_cache_path(&canonical)),
-            format: parsed.format,
-            mtime_sec: modified_sec,
-            mtime_nsec: modified_nsec,
-            size,
-            content_hash: content_hash(&canonical)?,
-            extracted_at: Utc::now().to_rfc3339(),
-            schema_version: CACHE_SCHEMA_VERSION,
-            anchors: parsed.anchors.clone(),
-        };
-        let _ = write_cache_record(&cache_path, &record);
+    if let Some(cache_path) = cache_path {
+        let metadata_after = fs::metadata(&canonical)?;
+        let (after_modified_sec, after_modified_nsec) = modified_parts(&metadata_after)?;
+        if after_modified_sec == modified_sec
+            && after_modified_nsec == modified_nsec
+            && metadata_after.len() == size
+        {
+            let record = CacheRecord {
+                source_encoding: source_encoding_tag().to_string(),
+                source: encode_source_path(&normalize_cache_path(&canonical)),
+                format: parsed.format,
+                mtime_sec: modified_sec,
+                mtime_nsec: modified_nsec,
+                size,
+                content_hash: content_hash(&canonical)?,
+                extracted_at: Utc::now().to_rfc3339(),
+                schema_version: CACHE_SCHEMA_VERSION,
+                anchors: parsed.anchors.clone(),
+            };
+            if let Err(error) = write_cache_record(&cache_path, &record) {
+                tracing::debug!(
+                    cache_path = %cache_path.display(),
+                    error = %error,
+                    "office cache write failed"
+                );
+            }
+        }
     }
     Ok(parsed)
 }
@@ -984,14 +1071,13 @@ fn path_hash(path: &Path) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn cache_record_path(path_hash: &str) -> io::Result<PathBuf> {
-    let base = dirs::cache_dir()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "cache directory not found"))?;
-    Ok(base
-        .join("relay")
-        .join("office_text")
-        .join("by_path")
-        .join(format!("{path_hash}.json")))
+fn cache_record_path(path_hash: &str) -> Option<PathBuf> {
+    dirs::cache_dir().map(|base| {
+        base.join("relay")
+            .join("office_text")
+            .join("by_path")
+            .join(format!("{path_hash}.json"))
+    })
 }
 
 fn write_cache_record(path: &Path, record: &CacheRecord) -> io::Result<()> {
@@ -1079,13 +1165,15 @@ fn normalize_cache_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+/// Reads a single zip entry by name. Callers MUST have already invoked
+/// [`validate_zip_archive`] on the archive once before walking entries — re-validating
+/// on every read would make multi-part formats (DOCX headers/footers, PPTX slides) O(N²).
 pub(crate) fn read_zip_part(
     archive: &mut zip::ZipArchive<impl Read + io::Seek>,
     name: &str,
     limits: &OfficeLimits,
     produced: &mut u64,
 ) -> io::Result<Vec<u8>> {
-    validate_zip_archive(archive, limits)?;
     let mut file = archive
         .by_name(name)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
