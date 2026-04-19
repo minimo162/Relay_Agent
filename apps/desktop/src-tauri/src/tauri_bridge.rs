@@ -32,8 +32,7 @@ use runtime::MAX_TEXT_FILE_READ_BYTES;
  * Spawns Node + copilot_server.js, which attaches to Edge via *
  * CDP and drives M365 Copilot (Input.insertText + Edge launch). *
  * This is the default path so Edge opens without a global       *
- * `agent-browser` install. See `agent_browser_daemon.rs` for   *
- * an optional alternate approach.                               */
+ * `agent-browser` install.                                      */
 
 /// Notify the Node `copilot_server.js` bridge to abort an in-flight request (best-effort).
 async fn request_copilot_bridge_abort(
@@ -769,6 +768,7 @@ pub(crate) fn respond_approval_inner(
         }
     }
 
+    let mut workspace_persist_errors: Vec<String> = Vec::new();
     if request.approved && request.remember_for_workspace == Some(true) {
         if let Some(cwd) = handle
             .read_state(|state| state.session_config.cwd.clone())
@@ -779,15 +779,31 @@ pub(crate) fn respond_approval_inner(
                     crate::workspace_allowlist::remember_tool_for_workspace(&cwd, tool_name)
                 {
                     tracing::warn!("[RelayAgent] workspace allowlist persist failed: {e}");
+                    workspace_persist_errors.push(format!("{tool_name}: {e}"));
                 }
             }
+        } else {
+            workspace_persist_errors
+                .push("workspace path is unset for this session".to_string());
         }
     }
 
+    // Always deliver the approval decision first so the waiting tool unblocks,
+    // even if the workspace-level persistence step below failed. Reporting a
+    // persistence error to the UI must not leave the session stuck.
     pending
         .tx
         .send(request.approved)
-        .map_err(|_| "approval channel closed — session may have ended".into())
+        .map_err(|_| "approval channel closed — session may have ended".to_string())?;
+
+    if workspace_persist_errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "approved, but workspace allow save failed: {}",
+            workspace_persist_errors.join("; ")
+        ))
+    }
 }
 
 fn approval_memory_equivalent_tools(tool_name: &str) -> Vec<&str> {
@@ -2223,5 +2239,72 @@ mod tests {
         assert!(handle
             .is_tool_auto_allowed("edit_file")
             .expect("check edit_file allow"));
+    }
+
+    #[test]
+    fn remember_for_workspace_persist_error_still_delivers_approval() {
+        let registry = SessionRegistry::new();
+        let session_id = "session-approval-persist-fail";
+        registry
+            .insert(
+                session_id.to_string(),
+                SessionHandle::new(
+                    SessionState::new_idle(runtime::Session::new(), saved_session_config()),
+                    HashSet::new(),
+                ),
+            )
+            .expect("insert session");
+        let handle = registry
+            .get_handle(session_id)
+            .expect("get handle result")
+            .expect("handle present");
+        let (tx, rx) = std::sync::mpsc::channel::<bool>();
+        handle
+            .insert_pending_approval(
+                "approval-persist-fail".to_string(),
+                PendingApproval {
+                    tx,
+                    tool_name: "write_file".to_string(),
+                },
+            )
+            .expect("insert pending approval");
+
+        // Force workspace_allowlist::remember_tool_for_workspace to fail by
+        // clearing both HOME and USERPROFILE so the relay-agent dir cannot be
+        // resolved. This simulates a real disk/home-dir persistence failure.
+        let previous_home = std::env::var("HOME").ok();
+        let previous_profile = std::env::var("USERPROFILE").ok();
+        std::env::remove_var("HOME");
+        std::env::remove_var("USERPROFILE");
+
+        let result = respond_approval_inner(
+            registry,
+            RespondAgentApprovalRequest {
+                session_id: session_id.to_string(),
+                approval_id: "approval-persist-fail".to_string(),
+                approved: true,
+                remember_for_session: Some(false),
+                remember_for_workspace: Some(true),
+            },
+        );
+
+        if let Some(home) = previous_home {
+            std::env::set_var("HOME", home);
+        }
+        if let Some(profile) = previous_profile {
+            std::env::set_var("USERPROFILE", profile);
+        }
+
+        let err = result.expect_err("persist failure should surface");
+        assert!(
+            err.contains("approved, but workspace allow save failed"),
+            "unexpected error: {err}"
+        );
+        // The approval decision must still have been delivered so the session
+        // does not deadlock.
+        let delivered = rx
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .expect("approval delivered");
+        assert!(delivered);
     }
 }

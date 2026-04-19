@@ -5,11 +5,16 @@ use std::process::Command;
 use std::time::Duration;
 
 use reqwest::Client;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tracing::{info, warn};
 
 use crate::copilot_server::RELAY_COPILOT_SERVICE_NAME;
 use desktop_core::copilot_port_reclaim::{should_reclaim_listener, HealthBody};
+
+/// Upper bound on the full `/health` probe (connect + headers + body read). Reclaim runs on
+/// startup, so this must never hang the app behind an unresponsive listener that happens to
+/// hold `127.0.0.1:<port>` without replying.
+const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Probes `/health` on `port`. If a Relay-owned bridge is present but its `instanceId` does not
 /// match `expected_instance_id`, terminates the process listening on that port (platform-specific).
@@ -26,22 +31,34 @@ pub(crate) async fn maybe_reclaim_stale_copilot_http_port(
     }
 
     let url = format!("http://127.0.0.1:{port}/health");
-    let Ok(response) = client
-        .get(&url)
-        .timeout(Duration::from_secs(2))
-        .send()
-        .await
-    else {
-        return;
+    // Wrap both the send() and body-parse phases in a single explicit deadline. The per-request
+    // reqwest `.timeout()` normally covers both, but piggy-backing on it leaves the bound brittle
+    // to client builder changes; the outer `timeout` guarantees the probe never exceeds
+    // `HEALTH_PROBE_TIMEOUT` regardless of future client configuration.
+    let probe = async {
+        let response = client
+            .get(&url)
+            .timeout(HEALTH_PROBE_TIMEOUT)
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        response.json::<HealthBody>().await.ok()
     };
 
-    if !response.status().is_success() {
-        return;
-    }
-
-    let body: HealthBody = match response.json().await {
-        Ok(b) => b,
-        Err(_) => return,
+    let body = match timeout(HEALTH_PROBE_TIMEOUT, probe).await {
+        Ok(Some(body)) => body,
+        Ok(None) => return,
+        Err(_) => {
+            warn!(
+                "[copilot] /health probe on port {} exceeded {}s; skipping reclaim",
+                port,
+                HEALTH_PROBE_TIMEOUT.as_secs()
+            );
+            return;
+        }
     };
 
     if !should_reclaim_listener(&body, expected_instance_id, RELAY_COPILOT_SERVICE_NAME) {

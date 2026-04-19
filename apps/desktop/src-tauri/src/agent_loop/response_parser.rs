@@ -3,11 +3,30 @@ use std::collections::HashSet;
 use serde_json::Value;
 
 const MAX_INLINE_TOOL_OBJECT_LEN_BYTES: usize = 1_048_576;
+/// Marker field that every fallback tool-call object must carry in `Enforce` mode. Protocol-correct
+/// Copilot replies already emit `"relay_tool_call": true`; see `docs/AGENT_EVALUATION_CRITERIA.md`.
 pub(crate) const FALLBACK_TOOL_SENTINEL_KEY: &str = "relay_tool_call";
 
+/// Policy applied to fallback parser candidates (accepted fenced JSON or bounded unfenced
+/// object recovery) when deciding whether a tool object without an explicit
+/// [`FALLBACK_TOOL_SENTINEL_KEY`] marker should be trusted.
+///
+/// Switch via env var `RELAY_FALLBACK_SENTINEL_POLICY`:
+/// * unset / anything else  → [`Enforce`] (default)
+/// * `observe` / `warn` / `compat` → [`ObserveOnly`]
+///
+/// The three opt-out spellings are historical aliases with identical runtime behavior: older
+/// builds emitted `warn`-style logs while newer builds use `observe`; `compat` predates both and
+/// is kept so pre-existing deployment configs keep working.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FallbackSentinelPolicy {
+    /// Reject fallback candidates that omit `"relay_tool_call": true`. This is the default
+    /// because protocol-drifting replies (e.g. copying a tool JSON from docs) would otherwise
+    /// be silently executed.
     Enforce,
+    /// Accept fallback candidates even without the sentinel, but log a warning. Used for
+    /// compatibility / diagnostic runs where the tradeoff of false-positive execution is
+    /// acceptable in exchange for observing drift without breaking the session.
     ObserveOnly,
 }
 

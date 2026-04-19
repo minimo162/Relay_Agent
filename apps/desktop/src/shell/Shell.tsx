@@ -565,15 +565,23 @@ export default function Shell(): JSX.Element {
   };
 
   const handleApproveForWorkspace = async (sessionId: string, approvalId: string) => {
-    await respondApproval({
-      sessionId,
-      approvalId,
-      approved: true,
-      rememberForSession: false,
-      rememberForWorkspace: true,
-    });
-    markApprovalStatus(sessionId, approvalId, "approved");
-    approvals.removeApproval(approvalId);
+    try {
+      await respondApproval({
+        sessionId,
+        approvalId,
+        approved: true,
+        rememberForSession: false,
+        rememberForWorkspace: true,
+      });
+    } catch (err) {
+      // The backend still delivers the approval decision even when workspace
+      // persistence fails; surface the error so the user knows the "Always
+      // allow in this folder" choice was not saved.
+      console.error("[IPC] respond_approval workspace persist failed", err);
+    } finally {
+      markApprovalStatus(sessionId, approvalId, "approved");
+      approvals.removeApproval(approvalId);
+    }
   };
 
   const handleReject = async (sessionId: string, approvalId: string) => {

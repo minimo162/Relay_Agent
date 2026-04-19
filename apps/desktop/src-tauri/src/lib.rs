@@ -1,5 +1,3 @@
-#[allow(dead_code)]
-mod agent_browser_daemon;
 mod agent_loop;
 mod agent_loop_smoke;
 mod app_services;

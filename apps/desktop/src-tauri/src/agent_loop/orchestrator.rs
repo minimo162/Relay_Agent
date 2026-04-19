@@ -4511,20 +4511,16 @@ mod cdp_copilot_tool_tests {
             "grounding header missing from bundle"
         );
         assert!(
-            out.contains("Do not list line-level bugs"),
-            "grounding rules missing from bundle"
+            out.contains("Only local Relay tools in the catalog below are available."),
+            "grounding tool-catalog rule missing from bundle"
         );
         assert!(
-            out.contains("Treat the `content:` body under a successful `read_file` Tool Result"),
-            "read_file grounding guidance missing from bundle"
+            out.contains("fenced `relay_tool` JSON block only"),
+            "grounding relay_tool rule missing from bundle"
         );
         assert!(
-            out.contains("Do not propose `bash`, `PowerShell`, backups, or copy commands"),
-            "html anti-shell grounding guidance missing from bundle"
-        );
-        assert!(
-            out.contains("treat the local create request as satisfied"),
-            "html write completion grounding guidance missing from bundle"
+            out.contains("Do not invent unavailable tools or Microsoft-native actions."),
+            "grounding anti-invent rule missing from bundle"
         );
         assert!(
             out.contains("RELAY_GROUNDING_FIXTURE"),
@@ -4567,7 +4563,10 @@ mod cdp_copilot_tool_tests {
         assert!(bundle.prompt.contains("## Continue from tool results"));
         assert!(bundle
             .prompt
-            .contains("instead of saying \"next message\" or \"next turn\""));
+            .contains("If another tool is required, emit exactly one fenced `relay_tool` block next."));
+        assert!(bundle
+            .prompt
+            .contains("do not repeat the same tool call"));
     }
 
     #[test]
