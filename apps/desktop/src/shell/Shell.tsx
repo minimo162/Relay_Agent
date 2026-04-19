@@ -443,11 +443,6 @@ export default function Shell(): JSX.Element {
       const res = await getSessionHistory({ sessionId });
       let next = chunksFromHistory(res.messages);
       const fb = normalizeAssistantVisibleText(opts?.fallbackAssistantText ?? "");
-      const activeAssistantTexts = sessions
-        .chunks()
-        .filter((chunk): chunk is Extract<UiChunk, { kind: "assistant" }> => chunk.kind === "assistant")
-        .map((chunk) => normalizeAssistantVisibleText(chunk.text))
-        .filter((text) => text.length > 0);
       const hasAssistantText = next.some((c) => c.kind === "assistant" && c.text.trim().length > 0);
       const historyAlreadyHasFallback = fb
         ? next.some(
@@ -459,7 +454,6 @@ export default function Shell(): JSX.Element {
         next = [...next, { kind: "assistant" as const, text: fb }];
       }
       next = mergeChunksWithInline(sessionId, next);
-      sessions.setChunks(next);
       sessions.setPlanBySession((prev) => ({
         ...prev,
         [sessionId]: buildPlanTimelineFromUiChunks(next),
@@ -468,9 +462,13 @@ export default function Shell(): JSX.Element {
         ? { phase: "idle" }
         : (sessions.statusBySession()[sessionId] ?? { phase: "running" });
       sessions.setStatusBySession((prev) => ({ ...prev, [sessionId]: nextStatus }));
-      if (nextStatus.phase === "idle") setSessionError(null);
+      if (sessions.activeSessionId() === sessionId) {
+        sessions.setChunks(next);
+        if (nextStatus.phase === "idle") setSessionError(null);
+      }
     } catch (err) {
       console.error("[IPC] load history failed", err);
+      if (sessions.activeSessionId() !== sessionId) return;
       const fb = normalizeAssistantVisibleText(opts?.fallbackAssistantText ?? "");
       const activeAlreadyHasFallback = fb
         ? sessions
@@ -555,7 +553,7 @@ export default function Shell(): JSX.Element {
   };
 
   const handleApproveOnce = async (approvalId: string) => {
-    const sid = sessions.activeSessionId();
+    const sid = approvals.approvals().find((approval) => approval.approvalId === approvalId)?.sessionId;
     if (!sid) return;
     await respondApproval({ sessionId: sid, approvalId, approved: true, rememberForSession: false });
     markApprovalStatus(sid, approvalId, "approved");
@@ -563,7 +561,7 @@ export default function Shell(): JSX.Element {
   };
 
   const handleApproveForSession = async (approvalId: string) => {
-    const sid = sessions.activeSessionId();
+    const sid = approvals.approvals().find((approval) => approval.approvalId === approvalId)?.sessionId;
     if (!sid) return;
     await respondApproval({ sessionId: sid, approvalId, approved: true, rememberForSession: true });
     markApprovalStatus(sid, approvalId, "approved");
@@ -571,7 +569,7 @@ export default function Shell(): JSX.Element {
   };
 
   const handleApproveForWorkspace = async (approvalId: string) => {
-    const sid = sessions.activeSessionId();
+    const sid = approvals.approvals().find((approval) => approval.approvalId === approvalId)?.sessionId;
     if (!sid) return;
     await respondApproval({
       sessionId: sid,
@@ -585,7 +583,7 @@ export default function Shell(): JSX.Element {
   };
 
   const handleReject = async (approvalId: string) => {
-    const sid = sessions.activeSessionId();
+    const sid = approvals.approvals().find((approval) => approval.approvalId === approvalId)?.sessionId;
     if (!sid) return;
     await respondApproval({ sessionId: sid, approvalId, approved: false });
     markApprovalStatus(sid, approvalId, "rejected");
@@ -593,7 +591,7 @@ export default function Shell(): JSX.Element {
   };
 
   const handleUserQuestionSubmit = async (questionId: string, answer: string) => {
-    const sid = sessions.activeSessionId();
+    const sid = approvals.userQuestions().find((question) => question.questionId === questionId)?.sessionId;
     if (!sid || !answer) return;
     try {
       await respondUserQuestion({ sessionId: sid, questionId, answer });
@@ -605,7 +603,7 @@ export default function Shell(): JSX.Element {
   };
 
   const handleUserQuestionCancel = async (questionId: string) => {
-    const sid = sessions.activeSessionId();
+    const sid = approvals.userQuestions().find((question) => question.questionId === questionId)?.sessionId;
     if (!sid) return;
     try {
       await respondUserQuestion({ sessionId: sid, questionId, answer: "" });

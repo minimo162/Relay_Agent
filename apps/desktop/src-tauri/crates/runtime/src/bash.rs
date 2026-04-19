@@ -290,8 +290,9 @@ pub struct BackgroundTaskOutputSlice {
 pub fn read_background_task_output(
     input: BackgroundTaskOutputInput,
 ) -> io::Result<BackgroundTaskOutputSlice> {
+    validate_background_task_id(&input.background_task_id)?;
     let stream = input.stream.unwrap_or_else(|| "stdout".to_string());
-    let log_path = background_task_stream_path(&input.background_task_id, &stream);
+    let log_path = background_task_stream_path(&input.background_task_id, &stream)?;
     let mut file = File::open(log_path)?;
     let file_len = file.metadata()?.len();
     let start = input
@@ -332,17 +333,47 @@ fn prepare_background_stdio_paths() -> io::Result<PreparedBackgroundTaskLogs> {
     })
 }
 
-fn background_task_stream_path(background_task_id: &str, stream: &str) -> PathBuf {
+fn validate_background_task_id(background_task_id: &str) -> io::Result<()> {
+    let Some((left, right)) = background_task_id.split_once('-') else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid backgroundTaskId",
+        ));
+    };
+    if left.is_empty()
+        || right.is_empty()
+        || !left.chars().all(|ch| ch.is_ascii_digit())
+        || !right.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid backgroundTaskId",
+        ));
+    }
+    Ok(())
+}
+
+fn background_task_stream_path(background_task_id: &str, stream: &str) -> io::Result<PathBuf> {
     let safe_stream = if stream.eq_ignore_ascii_case("stderr") {
         "stderr"
     } else {
         "stdout"
     };
-    env::current_dir()
+    let root = env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".relay/background-tasks")
+        .join(".relay/background-tasks");
+    let canonical_root = root.canonicalize()?;
+    let candidate = canonical_root
         .join(background_task_id)
-        .join(format!("{safe_stream}.log"))
+        .join(format!("{safe_stream}.log"));
+    let canonical_candidate = candidate.canonicalize()?;
+    if !canonical_candidate.starts_with(&canonical_root) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "background task log path escapes background task directory",
+        ));
+    }
+    Ok(canonical_candidate)
 }
 
 fn sandbox_status_for_input(
@@ -470,7 +501,10 @@ fn prepare_sandbox_dirs(cwd: &std::path::Path) {
 mod tests {
     use std::io;
 
-    use super::{ensure_sandbox_available_for_read_only, execute_bash, BashCommandInput};
+    use super::{
+        ensure_sandbox_available_for_read_only, execute_bash, read_background_task_output,
+        BackgroundTaskOutputInput, BashCommandInput,
+    };
     use crate::sandbox::FilesystemIsolationMode;
 
     #[test]
@@ -554,5 +588,51 @@ mod tests {
             .expect_err("inactive sandbox must fail-closed in read-only mode");
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         assert!(err.to_string().contains("requires OS sandbox"));
+    }
+
+    #[test]
+    fn background_task_output_rejects_path_traversal_ids() {
+        let err = read_background_task_output(BackgroundTaskOutputInput {
+            background_task_id: "../outside".to_string(),
+            stream: Some("stdout".to_string()),
+            offset: None,
+            tail: None,
+        })
+        .expect_err("path-like ids must be rejected before path resolution");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn background_task_output_rejects_symlink_escape() {
+        let _lock = crate::test_env_lock();
+        let root = std::env::temp_dir().join(format!(
+            "relay-background-task-symlink-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".relay/background-tasks/123-456"))
+            .expect("task dir");
+        std::fs::write(root.join("outside.log"), "secret").expect("outside log");
+        std::os::unix::fs::symlink(
+            root.join("outside.log"),
+            root.join(".relay/background-tasks/123-456/stdout.log"),
+        )
+        .expect("symlink");
+        let previous_cwd = std::env::current_dir().expect("cwd");
+        std::env::set_current_dir(&root).expect("set cwd");
+
+        let err = read_background_task_output(BackgroundTaskOutputInput {
+            background_task_id: "123-456".to_string(),
+            stream: Some("stdout".to_string()),
+            offset: None,
+            tail: None,
+        })
+        .expect_err("symlinked logs outside the task root must be rejected");
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        std::env::set_current_dir(previous_cwd).expect("restore cwd");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

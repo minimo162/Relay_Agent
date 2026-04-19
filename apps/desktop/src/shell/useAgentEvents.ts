@@ -33,7 +33,14 @@ interface UseAgentEventsOptions {
 }
 
 export function useAgentEvents(options: UseAgentEventsOptions) {
-  onMount(async () => {
+  onMount(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    onCleanup(() => {
+      disposed = true;
+      unlisten?.();
+    });
+
     const appendAssistantText = (
       sessionId: string,
       text: string,
@@ -138,7 +145,7 @@ export function useAgentEvents(options: UseAgentEventsOptions) {
       });
     };
 
-    const unlisten = await onAgentEvent((event) => {
+    void onAgentEvent((event) => {
       switch (event.type) {
         case "status": {
           const e = event.data as AgentSessionStatusEvent;
@@ -153,7 +160,11 @@ export function useAgentEvents(options: UseAgentEventsOptions) {
               stopReason: e.stopReason ?? undefined,
             },
           }));
-          if (e.phase === "idle" && e.stopReason !== "cancelled") {
+          if (
+            options.activeSessionId() === e.sessionId &&
+            e.phase === "idle" &&
+            e.stopReason !== "cancelled"
+          ) {
             options.setSessionError(null);
           }
           break;
@@ -169,10 +180,12 @@ export function useAgentEvents(options: UseAgentEventsOptions) {
             ...prev,
             [e.sessionId]: { phase: "idle", stopReason: e.stopReason },
           }));
-          void options.reloadHistory(e.sessionId, {
-            fallbackAssistantText: e.assistantMessage,
-            afterTurnComplete: true,
-          });
+          if (options.activeSessionId() === e.sessionId) {
+            void options.reloadHistory(e.sessionId, {
+              fallbackAssistantText: e.assistantMessage,
+              afterTurnComplete: true,
+            });
+          }
           break;
         }
         case "error": {
@@ -181,7 +194,9 @@ export function useAgentEvents(options: UseAgentEventsOptions) {
             ...prev,
             [e.sessionId]: prev[e.sessionId] ?? { phase: "idle" },
           }));
-          if (!e.cancelled) options.setSessionError(e.error);
+          if (options.activeSessionId() === e.sessionId && !e.cancelled) {
+            options.setSessionError(e.error);
+          }
           break;
         }
         case "approval_needed": {
@@ -239,8 +254,12 @@ export function useAgentEvents(options: UseAgentEventsOptions) {
           trackToolResult((event.data as AgentToolResultEvent).sessionId, event.data as AgentToolResultEvent);
           break;
       }
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+        return;
+      }
+      unlisten = fn;
     });
-
-    onCleanup(() => unlisten());
   });
 }

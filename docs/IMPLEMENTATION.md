@@ -15,6 +15,38 @@
 
 ## Milestone Log
 
+### 2026-04-19 Review follow-up fixes
+
+**Problem:** Project review found four reliability/security gaps: inactive
+session completion could overwrite the visible chat, Solid event cleanup was
+registered after an async listener setup boundary, approval/question replies
+used the currently active session instead of the pending request's session, and
+`BackgroundTaskOutput` accepted unsanitized task IDs when resolving persisted
+stdout/stderr logs.
+
+**Change:** Updated
+[`apps/desktop/src/shell/useAgentEvents.ts`](../apps/desktop/src/shell/useAgentEvents.ts)
+so event listener cleanup is registered synchronously and inactive session
+completion/error events no longer mutate the visible chat/error state. Updated
+[`apps/desktop/src/shell/Shell.tsx`](../apps/desktop/src/shell/Shell.tsx)
+so history reloads only write visible chunks for the active session and
+approval/question responses use the stored pending request `sessionId`.
+Hardened
+[`apps/desktop/src-tauri/crates/runtime/src/bash.rs`](../apps/desktop/src-tauri/crates/runtime/src/bash.rs)
+so `BackgroundTaskOutput` rejects path-like task IDs, canonicalizes log paths,
+and refuses symlink escapes outside `.relay/background-tasks`.
+
+**Verification:** `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`
+— pass. `pnpm typecheck` — pass. `cargo test --manifest-path
+apps/desktop/src-tauri/Cargo.toml -p runtime background_task_output --
+--nocapture` — pass (2 tests). `cargo test --manifest-path
+apps/desktop/src-tauri/Cargo.toml -p runtime tool_hard_denylist --
+--nocapture` — pass (10 tests). `cargo test --manifest-path
+apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop
+standard_policy_marks_mutating_tools_as_approval_gated -- --nocapture` —
+pass. `pnpm check` — pass. `cargo check --manifest-path
+apps/desktop/src-tauri/Cargo.toml -p runtime` — pass.
+
 ### 2026-04-18 Workspace allowlist persistence hardening
 
 **Problem:** The persisted "Allow for this workspace" approvals lived in
