@@ -1779,7 +1779,7 @@ When you need to call one or more tools, you may write a short user-facing expla
 - **Optional:** `"id": "<string>"` — omit if unsure; the host will assign one.
 - **Multiple tools:** prefer **one** `relay_tool` fence with a JSON **array** of tool objects. Use multiple fences only when unavoidable. Repeating the same tool with identical `input` across fences wastes user approvals (the host dedupes, but you should not rely on it).
 - **File I/O:** use `read_file`, `write_file`, and `edit_file` for local files. Do **not** use `bash`, `PowerShell`, or `REPL` to read or write files when a file tool applies—prose Python/shell examples are not executed and encourage duplicate `relay_tool` calls. This matches the explicit, permission-gated tool model described at https://claw-code.codes/tool-system
-- **Windows Office exception:** For **`.docx` / `.xlsx` / `.pptx` / `.msg`**, do **not** use `read_file` on the Office file itself. For **layout text**, you may use **`PowerShell` + COM** to write a **temporary `.pdf`**, then **`read_file` on that PDF** (LiteParse). See **Hybrid read** under the Windows desktop Office section below; put `PowerShell` and `read_file` in **one** `relay_tool` JSON **array** when both are needed in the same turn.
+- **Windows Office exception:** For **`.docx` / `.xlsx` / `.pptx`**, use `office_search` or `read_file` first for plaintext extraction and search. Use **`PowerShell` + COM** when the user needs high-fidelity layout, exact Excel formatting, edits through Office itself, or **`.msg`** handling. For layout text, COM may write a **temporary `.pdf`**, then `read_file` can read that PDF (LiteParse). See **Hybrid read** under the Windows desktop Office section below; put `PowerShell` and `read_file` in **one** `relay_tool` JSON **array** when both are needed in the same turn.
 {win_addon}
 Example:
 
@@ -2923,19 +2923,19 @@ fn enforce_workspace_tool_paths(
     input: &mut Value,
     workspace: &std::path::Path,
 ) -> Result<(), runtime::ToolError> {
+    let normalize_path_string = |s: &str| -> Result<String, runtime::ToolError> {
+        let joined = resolve_against_workspace(s, workspace);
+        let norm = lexical_normalize(&joined);
+        assert_path_in_workspace(&norm, workspace)
+            .map_err(|e| runtime::ToolError::new(e.to_string()))?;
+        Ok(norm.to_string_lossy().into_owned())
+    };
     let normalize_key =
         |obj: &mut serde_json::Map<String, Value>, key: &str| -> Result<(), runtime::ToolError> {
             let Some(Value::String(s)) = obj.get(key) else {
                 return Ok(());
             };
-            let joined = resolve_against_workspace(s, workspace);
-            let norm = lexical_normalize(&joined);
-            assert_path_in_workspace(&norm, workspace)
-                .map_err(|e| runtime::ToolError::new(e.to_string()))?;
-            obj.insert(
-                key.to_string(),
-                Value::String(norm.to_string_lossy().into_owned()),
-            );
+            obj.insert(key.to_string(), Value::String(normalize_path_string(s)?));
             Ok(())
         };
 
@@ -2968,16 +2968,21 @@ fn enforce_workspace_tool_paths(
             }
             normalize_key(obj, "path")?;
         }
+        "office_search" => {
+            if let Some(Value::Array(paths)) = obj.get_mut("paths") {
+                for path in paths.iter_mut() {
+                    if let Value::String(s) = path {
+                        *path = Value::String(normalize_path_string(s)?);
+                    }
+                }
+            }
+        }
         "pdf_merge" => {
             normalize_key(obj, "output_path")?;
             if let Some(Value::Array(paths)) = obj.get_mut("input_paths") {
                 for p in paths.iter_mut() {
                     if let Value::String(s) = p {
-                        let joined = resolve_against_workspace(s, workspace);
-                        let norm = lexical_normalize(&joined);
-                        assert_path_in_workspace(&norm, workspace)
-                            .map_err(|e| runtime::ToolError::new(e.to_string()))?;
-                        *p = Value::String(norm.to_string_lossy().into_owned());
+                        *p = Value::String(normalize_path_string(s)?);
                     }
                 }
             }
@@ -5160,6 +5165,39 @@ I will inspect the file.
         assert!(prompt.contains("## Relay desktop response style"));
         assert!(prompt.contains("file-tool paths are resolved within that workspace"));
         assert!(prompt.contains("__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__"));
+    }
+
+    #[test]
+    fn workspace_enforcement_normalizes_office_search_paths() {
+        let root = temp_dir();
+        fs::create_dir_all(root.join("reports")).expect("workspace reports dir");
+        let mut input = serde_json::json!({
+            "pattern": "forecast",
+            "paths": ["reports/**/*.xlsx", "./deck.pptx"]
+        });
+
+        enforce_workspace_tool_paths("office_search", &mut input, &root)
+            .expect("office_search paths should stay inside workspace");
+
+        let paths = input
+            .get("paths")
+            .and_then(Value::as_array)
+            .expect("paths array");
+        let expected_glob = root
+            .join("reports/**/*.xlsx")
+            .to_string_lossy()
+            .into_owned();
+        let expected_deck = root.join("deck.pptx").to_string_lossy().into_owned();
+        assert_eq!(paths[0].as_str(), Some(expected_glob.as_str()));
+        assert_eq!(paths[1].as_str(), Some(expected_deck.as_str()));
+
+        let mut outside = serde_json::json!({
+            "pattern": "secret",
+            "paths": ["../outside/**/*.docx"]
+        });
+        assert!(enforce_workspace_tool_paths("office_search", &mut outside, &root).is_err());
+
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

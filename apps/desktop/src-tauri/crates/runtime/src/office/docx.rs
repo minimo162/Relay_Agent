@@ -124,7 +124,7 @@ fn parse_part(
                             format!("p{}:tbl{table}:row{row}", state.body_para_count)
                         } else {
                             format!(
-                                "{}tbl{table}:row{row}",
+                                "{}:tbl{table}:row{row}",
                                 part_prefix.trim_end_matches(':')
                             )
                         };
@@ -230,4 +230,31 @@ fn is_body_paragraph(stack: &[String]) -> bool {
         .map(String::as_str)
         .unwrap_or_default();
     matches!(parent, "body" | "sdt" | "sdtContent" | "hdr" | "ftr")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn header_table_anchor_keeps_region_separator() {
+        let xml = br#"
+            <w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                <w:tbl>
+                    <w:tr>
+                        <w:tc><w:p><w:r><w:t>Header cell</w:t></w:r></w:p></w:tc>
+                    </w:tr>
+                </w:tbl>
+            </w:hdr>
+        "#;
+        let limits = OfficeLimits::from_env();
+        let deadline = Deadline::from_now(Duration::from_secs(5));
+
+        let anchors = parse_part(xml, "header1:", &limits, &deadline).expect("parse header table");
+
+        assert_eq!(anchors.len(), 1);
+        assert_eq!(anchors[0].anchor, "header1:tbl1:row1");
+        assert_eq!(anchors[0].text, "Header cell");
+    }
 }

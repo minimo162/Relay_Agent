@@ -6703,6 +6703,31 @@ Results:
 - `pnpm check`: passed.
 - `git diff --check`: passed.
 
+## 2026-04-20 - Office search review fixes
+
+Fixed follow-up findings from review of the Office search implementation:
+
+- Added workspace-boundary normalization for `office_search.paths`, including glob patterns, so workspace-scoped sessions cannot search Office/PDF files outside the configured workspace and relative paths resolve against the workspace root.
+- Updated the CDP tool protocol's Windows Office exception so `.docx` / `.xlsx` / `.pptx` plaintext extraction and search prefer `read_file` / `office_search`, reserving PowerShell COM for high-fidelity layout, exact Excel formatting, edits, and `.msg`.
+- Corrected DOCX header/footer table anchors from `header1tbl1:row1` to `header1:tbl1:row1`.
+- Added focused regression coverage for `office_search` workspace path enforcement and DOCX header table anchor formatting.
+
+Verification commands run locally:
+
+```bash
+cargo fmt
+cargo test -p runtime office::docx::tests::header_table_anchor_keeps_region_separator
+cargo test -p relay-agent-desktop cdp_copilot_tool_tests::workspace_enforcement_normalizes_office_search_paths
+cargo check -p runtime -p tools -p relay-agent-desktop
+```
+
+Results:
+
+- `cargo fmt`: passed.
+- `cargo test -p runtime office::docx::tests::header_table_anchor_keeps_region_separator`: passed.
+- `cargo test -p relay-agent-desktop cdp_copilot_tool_tests::workspace_enforcement_normalizes_office_search_paths`: passed.
+- `cargo check -p runtime -p tools -p relay-agent-desktop`: passed.
+
 ## 2026-04-19 - Office search design review follow-up
 
 Updated `docs/OFFICE_SEARCH_DESIGN.md` from review feedback before Phase A implementation:
