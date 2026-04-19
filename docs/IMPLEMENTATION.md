@@ -6494,7 +6494,7 @@ Follow-up changes made while preparing the review-hardening branch for merge:
 - Hardened the workspace allowlist persistence follow-up for Windows CI by replacing the earlier Windows-specific atomic-replace path with `tempfile::TempPath::persist`, keeping the atomic temp-file + rename behavior while preserving the workspace-wide `unsafe_code = "forbid"` policy.
 - Fixed the runtime hard-deny parser Clippy finding by rewriting the quoted-string scan as a `while let` loop.
 - Stabilized the doctor CLI CDP readiness probe with a short retry window so the mock listener is not raced on slower Windows CI startup.
-- Adjusted the tools crate bash integration test to verify command output in either stdout or stderr and use `echo` instead of `printf`, matching the test's structured-output intent without depending on shell stream behavior on Windows runners.
+- Adjusted the tools crate bash integration test to verify command output in either stdout or stderr, use `echo` instead of `printf`, and give non-timeout cases a wider process-start window, matching the test's structured-output intent without depending on shell stream behavior or runner startup latency on Windows.
 
 Verification commands run locally:
 

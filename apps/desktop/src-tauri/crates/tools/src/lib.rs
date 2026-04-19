@@ -5178,7 +5178,7 @@ mod tests {
             "bash",
             &json!({
                 "command": "echo hello",
-                "timeout": 1000,
+                "timeout": 10000,
                 "run_in_background": false,
                 "dangerouslyDisableSandbox": false,
                 "namespaceRestrictions": false,
@@ -5195,7 +5195,7 @@ mod tests {
             "bash",
             &json!({
                 "command": "echo oops >&2; exit 7",
-                "timeout": 1000,
+                "timeout": 10000,
                 "run_in_background": false,
                 "dangerouslyDisableSandbox": false,
                 "namespaceRestrictions": false,
