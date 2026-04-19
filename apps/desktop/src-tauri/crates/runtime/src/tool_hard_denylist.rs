@@ -252,16 +252,11 @@ fn inspect_segment_tokens(tokens: &[String]) -> Option<BashBlockReason> {
             {
                 return Some(BashBlockReason::FindDelete);
             }
-            tokens[1..]
-                .windows(2)
-                .find_map(|window| {
-                    (window[0].eq_ignore_ascii_case("-exec")
-                        && matches!(
-                            normalize_shell_token(&window[1]).as_str(),
-                            "rm" | "rmdir"
-                        ))
-                    .then_some(BashBlockReason::FindExecRm)
-                })
+            tokens[1..].windows(2).find_map(|window| {
+                (window[0].eq_ignore_ascii_case("-exec")
+                    && matches!(normalize_shell_token(&window[1]).as_str(), "rm" | "rmdir"))
+                .then_some(BashBlockReason::FindExecRm)
+            })
         }
         "xargs" => tokens[1..]
             .iter()
@@ -278,9 +273,9 @@ fn inspect_segment_tokens(tokens: &[String]) -> Option<BashBlockReason> {
                 }
                 _ => None,
             }),
-        "brew" => tokens
-            .get(1)
-            .and_then(|verb| (normalize_shell_token(verb) == "install").then_some(BashBlockReason::BrewInstall)),
+        "brew" => tokens.get(1).and_then(|verb| {
+            (normalize_shell_token(verb) == "install").then_some(BashBlockReason::BrewInstall)
+        }),
         "chmod" => tokens[1..]
             .iter()
             .any(|arg| chmod_mode_is_blocked(arg))
@@ -342,7 +337,8 @@ fn inspect_regex_fallback(command: &str) -> Option<BashBlockReason> {
 
 /// Reject bash `command` when it matches the host hard denylist.
 pub fn validate_bash_hard_deny(command: &str) -> io::Result<()> {
-    if inspect_structured_bash_policy(command).is_some() || inspect_regex_fallback(command).is_some()
+    if inspect_structured_bash_policy(command).is_some()
+        || inspect_regex_fallback(command).is_some()
     {
         return Err(deny());
     }
@@ -380,7 +376,8 @@ mod tests {
     use proptest::prelude::*;
 
     fn random_case(input: &str, flips: &[bool]) -> String {
-        input.chars()
+        input
+            .chars()
             .enumerate()
             .map(|(index, ch)| {
                 if ch.is_ascii_alphabetic() && flips.get(index).copied().unwrap_or(false) {

@@ -6486,3 +6486,32 @@ Verification summary:
 - all listed focused `cargo test` commands passed in both `desktop-core` and the desktop app crate
 - `pnpm live:m365:tetris-html`: passed, producing `/tmp/relay-live-m365-tetris-html-afW3Gv` and `/root/Relay_Agent/tetris.html`
 - `pnpm check`: passed
+
+## 2026-04-19 - CI compatibility cleanup before review-hardening merge
+
+Follow-up changes made while preparing the review-hardening branch for merge:
+
+- Hardened the workspace allowlist persistence follow-up for Windows CI by replacing the earlier Windows-specific atomic-replace path with `tempfile::TempPath::persist`, keeping the atomic temp-file + rename behavior while preserving the workspace-wide `unsafe_code = "forbid"` policy.
+- Fixed the runtime hard-deny parser Clippy finding by rewriting the quoted-string scan as a `while let` loop.
+- Stabilized the doctor CLI CDP readiness probe with a short retry window so the mock listener is not raced on slower Windows CI startup.
+- Adjusted the tools crate bash integration test to verify command output in either stdout or stderr and use `echo` instead of `printf`, matching the test's structured-output intent without depending on shell stream behavior on Windows runners.
+
+Verification commands run locally:
+
+```bash
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_allowlist
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime tool_hard_denylist
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools bash_tool_reports_success_exit_failure_timeout_and_background
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all
+```
+
+Results:
+
+- `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`: passed after the Windows-safe allowlist and tools-test follow-ups.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_allowlist`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime tool_hard_denylist`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`: passed with local sandbox escalation for the localhost mock server.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools bash_tool_reports_success_exit_failure_timeout_and_background`: passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all`: passed.

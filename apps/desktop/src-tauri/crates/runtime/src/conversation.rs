@@ -417,12 +417,7 @@ where
     ) -> (ConversationMessage, Option<TurnOutcome>) {
         if let Some(reason) = invalid_local_file_mutation_reason(&tool_name, input) {
             return (
-                ConversationMessage::tool_result(
-                    tool_use_id,
-                    tool_name,
-                    reason.clone(),
-                    true,
-                ),
+                ConversationMessage::tool_result(tool_use_id, tool_name, reason.clone(), true),
                 Some(TurnOutcome::ToolError { message: reason }),
             );
         }
@@ -879,7 +874,10 @@ mod tests {
         );
 
         assert_eq!(tool_calls.load(Ordering::SeqCst), 0);
-        let Some(TurnOutcome::ToolError { message: error_message }) = outcome else {
+        let Some(TurnOutcome::ToolError {
+            message: error_message,
+        }) = outcome
+        else {
             panic!("expected unresolved placeholder to produce a tool error");
         };
         assert!(error_message.contains("unresolved placeholder marker"));

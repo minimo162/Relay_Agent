@@ -471,7 +471,13 @@ mod tests {
             .expect("stale cleanup succeeds");
 
         assert_eq!(evicted, 1);
-        assert!(registry.get_handle("stale").expect("lookup stale").is_none());
-        assert!(registry.get_handle("fresh").expect("lookup fresh").is_some());
+        assert!(registry
+            .get_handle("stale")
+            .expect("lookup stale")
+            .is_none());
+        assert!(registry
+            .get_handle("fresh")
+            .expect("lookup fresh")
+            .is_some());
     }
 }

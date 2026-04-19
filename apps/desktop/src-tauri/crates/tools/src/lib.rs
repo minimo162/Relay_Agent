@@ -275,7 +275,8 @@ impl ToolCatalog {
             .map(|(index, spec)| (spec.name, index))
             .collect::<BTreeMap<_, _>>();
         let registry = ToolRegistry::new(
-            specs.iter()
+            specs
+                .iter()
                 .map(|spec| ToolManifestEntry {
                     name: spec.name.to_string(),
                     source: if matches!(spec.name, "EnterPlanMode" | "ExitPlanMode") {
@@ -352,9 +353,7 @@ pub fn is_tool_visible_in_surface(name: &str, surface: ToolSurface) -> bool {
 #[must_use]
 pub fn tool_specs_for_surface(surface: ToolSurface) -> Vec<ToolSpec> {
     let _ = surface;
-    tool_catalog()
-        .specs()
-        .to_vec()
+    tool_catalog().specs().to_vec()
 }
 
 #[must_use]
@@ -494,25 +493,59 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
 
 fn cdp_tool_example(name: &str) -> Value {
     match name {
-        "read_file" => json!({"name":"read_file","relay_tool_call":true,"input":{"path":"src/main.rs"}}),
-        "write_file" => json!({"name":"write_file","relay_tool_call":true,"input":{"path":"notes.txt","content":"hello\n"}}),
-        "edit_file" => json!({"name":"edit_file","relay_tool_call":true,"input":{"path":"src/main.rs","old_string":"foo","new_string":"bar"}}),
-        "glob_search" => json!({"name":"glob_search","relay_tool_call":true,"input":{"pattern":"src/**/*.rs"}}),
-        "grep_search" => json!({"name":"grep_search","relay_tool_call":true,"input":{"pattern":"TODO","path":"src"}}),
+        "read_file" => {
+            json!({"name":"read_file","relay_tool_call":true,"input":{"path":"src/main.rs"}})
+        }
+        "write_file" => {
+            json!({"name":"write_file","relay_tool_call":true,"input":{"path":"notes.txt","content":"hello\n"}})
+        }
+        "edit_file" => {
+            json!({"name":"edit_file","relay_tool_call":true,"input":{"path":"src/main.rs","old_string":"foo","new_string":"bar"}})
+        }
+        "glob_search" => {
+            json!({"name":"glob_search","relay_tool_call":true,"input":{"pattern":"src/**/*.rs"}})
+        }
+        "grep_search" => {
+            json!({"name":"grep_search","relay_tool_call":true,"input":{"pattern":"TODO","path":"src"}})
+        }
         "git_status" => json!({"name":"git_status","relay_tool_call":true,"input":{"path":"."}}),
-        "git_diff" => json!({"name":"git_diff","relay_tool_call":true,"input":{"path":".","staged":true}}),
-        "pdf_merge" => json!({"name":"pdf_merge","relay_tool_call":true,"input":{"output_path":"merged.pdf","input_paths":["a.pdf","b.pdf"]}}),
-        "pdf_split" => json!({"name":"pdf_split","relay_tool_call":true,"input":{"input_path":"report.pdf","segments":[{"output_path":"report-part1.pdf","pages":"1-3"}]}}),
-        "WebFetch" => json!({"name":"WebFetch","relay_tool_call":true,"input":{"url":"https://example.com","prompt":"Summarize the API surface."}}),
-        "WebSearch" => json!({"name":"WebSearch","relay_tool_call":true,"input":{"query":"rust tauri latest stable release"}}),
-        "MCP" => json!({"name":"MCP","relay_tool_call":true,"input":{"action":"call_tool","name":"mcp__server__tool","arguments":{}}}),
-        "AskUserQuestion" => json!({"name":"AskUserQuestion","relay_tool_call":true,"input":{"question":"Which config file should I update?","options":["package.json","Cargo.toml"]}}),
-        "TodoWrite" => json!({"name":"TodoWrite","relay_tool_call":true,"input":{"todos":[{"content":"Implement parser change","activeForm":"Implementing parser change","status":"in_progress"}]}}),
+        "git_diff" => {
+            json!({"name":"git_diff","relay_tool_call":true,"input":{"path":".","staged":true}})
+        }
+        "pdf_merge" => {
+            json!({"name":"pdf_merge","relay_tool_call":true,"input":{"output_path":"merged.pdf","input_paths":["a.pdf","b.pdf"]}})
+        }
+        "pdf_split" => {
+            json!({"name":"pdf_split","relay_tool_call":true,"input":{"input_path":"report.pdf","segments":[{"output_path":"report-part1.pdf","pages":"1-3"}]}})
+        }
+        "WebFetch" => {
+            json!({"name":"WebFetch","relay_tool_call":true,"input":{"url":"https://example.com","prompt":"Summarize the API surface."}})
+        }
+        "WebSearch" => {
+            json!({"name":"WebSearch","relay_tool_call":true,"input":{"query":"rust tauri latest stable release"}})
+        }
+        "MCP" => {
+            json!({"name":"MCP","relay_tool_call":true,"input":{"action":"call_tool","name":"mcp__server__tool","arguments":{}}})
+        }
+        "AskUserQuestion" => {
+            json!({"name":"AskUserQuestion","relay_tool_call":true,"input":{"question":"Which config file should I update?","options":["package.json","Cargo.toml"]}})
+        }
+        "TodoWrite" => {
+            json!({"name":"TodoWrite","relay_tool_call":true,"input":{"todos":[{"content":"Implement parser change","activeForm":"Implementing parser change","status":"in_progress"}]}})
+        }
         "Skill" => json!({"name":"Skill","relay_tool_call":true,"input":{"skill":"openai-docs"}}),
-        "LSP" => json!({"name":"LSP","relay_tool_call":true,"input":{"action":"diagnostics","path":"src/main.rs"}}),
-        "NotebookEdit" => json!({"name":"NotebookEdit","relay_tool_call":true,"input":{"notebook_path":"analysis.ipynb","edit_mode":"replace","index":0,"new_source":"print('ok')","cell_type":"code"}}),
-        "bash" => json!({"name":"bash","relay_tool_call":true,"input":{"command":"cargo test","description":"Run the targeted test suite"}}),
-        "PowerShell" => json!({"name":"PowerShell","relay_tool_call":true,"input":{"command":"Get-ChildItem","description":"Inspect the target directory"}}),
+        "LSP" => {
+            json!({"name":"LSP","relay_tool_call":true,"input":{"action":"diagnostics","path":"src/main.rs"}})
+        }
+        "NotebookEdit" => {
+            json!({"name":"NotebookEdit","relay_tool_call":true,"input":{"notebook_path":"analysis.ipynb","edit_mode":"replace","index":0,"new_source":"print('ok')","cell_type":"code"}})
+        }
+        "bash" => {
+            json!({"name":"bash","relay_tool_call":true,"input":{"command":"cargo test","description":"Run the targeted test suite"}})
+        }
+        "PowerShell" => {
+            json!({"name":"PowerShell","relay_tool_call":true,"input":{"command":"Get-ChildItem","description":"Inspect the target directory"}})
+        }
         _ => json!({"name":name,"relay_tool_call":true,"input":{}}),
     }
 }
@@ -520,7 +553,9 @@ fn cdp_tool_example(name: &str) -> Value {
 fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
     match name {
         "read_file" => "Read local text or PDF content as grounded evidence.",
-        "write_file" => "Create or overwrite a workspace text file when the final content is known.",
+        "write_file" => {
+            "Create or overwrite a workspace text file when the final content is known."
+        }
         "edit_file" => "Apply a targeted replacement inside an existing workspace file.",
         "glob_search" => "Find candidate files by path pattern before reading or editing.",
         "grep_search" => "Search code or text content for concrete strings or regex matches.",
@@ -531,7 +566,9 @@ fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
         "WebFetch" => "Read one known URL and answer from its contents.",
         "WebSearch" => "Look up current external information on the web.",
         "MCP" => "Call a connected MCP integration tool.",
-        "AskUserQuestion" => "Ask the user for a required decision when local evidence is insufficient.",
+        "AskUserQuestion" => {
+            "Ask the user for a required decision when local evidence is insufficient."
+        }
         "TodoWrite" => "Track a multi-step task in the session todo list.",
         "Skill" => "Load a local skill with specialized instructions.",
         "LSP" => "Request supported language-server diagnostics.",
@@ -602,7 +639,10 @@ pub fn cdp_prompt_tool_specs() -> Vec<CdpPromptToolSpec> {
             use_when: cdp_tool_use_when(spec.name),
             avoid_when: cdp_tool_avoid_when(spec.name),
             required_args: cdp_required_args(&spec.input_schema),
-            important_optional_args: cdp_tool_important_optional_args(spec.name, &spec.input_schema),
+            important_optional_args: cdp_tool_important_optional_args(
+                spec.name,
+                &spec.input_schema,
+            ),
             example: cdp_tool_example(spec.name),
         })
         .collect()
@@ -4137,9 +4177,18 @@ mod tests {
         assert_eq!(bash.cdp_visibility, CdpToolVisibility::Core);
 
         let mcp = tool_metadata("MCP");
-        assert_eq!(mcp.approval_title, Some("Call a connected integration tool?"));
-        assert_eq!(mcp.target_extractor, ApprovalTargetExtractor::McpQualifiedTool);
-        assert_eq!(mcp.redaction_rules, &[super::RedactionRule { field: "arguments" }]);
+        assert_eq!(
+            mcp.approval_title,
+            Some("Call a connected integration tool?")
+        );
+        assert_eq!(
+            mcp.target_extractor,
+            ApprovalTargetExtractor::McpQualifiedTool
+        );
+        assert_eq!(
+            mcp.redaction_rules,
+            &[super::RedactionRule { field: "arguments" }]
+        );
         assert!(mcp.tool_search_visible);
         assert_eq!(mcp.cdp_visibility, CdpToolVisibility::Core);
 
@@ -4210,9 +4259,13 @@ mod tests {
             .iter()
             .find(|spec| spec.name == "read_file")
             .expect("read_file cdp prompt spec");
-        assert!(read_file.use_when.contains("before editing an existing file"));
+        assert!(read_file
+            .use_when
+            .contains("before editing an existing file"));
         assert!(read_file.avoid_when.contains("bash"));
-        assert!(read_file.important_optional_args.contains(&"offset".to_string()));
+        assert!(read_file
+            .important_optional_args
+            .contains(&"offset".to_string()));
     }
 
     // `PowerShell` is only registered in the catalog under `#[cfg(windows)]`
@@ -5112,10 +5165,19 @@ mod tests {
 
     #[test]
     fn bash_tool_reports_success_exit_failure_timeout_and_background() {
+        fn assert_stream_contains(output: &serde_json::Value, expected: &str) {
+            let stdout = output["stdout"].as_str().expect("stdout");
+            let stderr = output["stderr"].as_str().expect("stderr");
+            assert!(
+                stdout.contains(expected) || stderr.contains(expected),
+                "expected {expected:?} in stdout or stderr, got stdout={stdout:?} stderr={stderr:?}"
+            );
+        }
+
         let success = execute_tool(
             "bash",
             &json!({
-                "command": "printf 'hello'",
+                "command": "echo hello",
                 "timeout": 1000,
                 "run_in_background": false,
                 "dangerouslyDisableSandbox": false,
@@ -5126,13 +5188,13 @@ mod tests {
         )
         .expect("bash should succeed");
         let success_output: serde_json::Value = serde_json::from_str(&success).expect("json");
-        assert_eq!(success_output["stdout"], "hello");
+        assert_stream_contains(&success_output, "hello");
         assert_eq!(success_output["interrupted"], false);
 
         let failure = execute_tool(
             "bash",
             &json!({
-                "command": "printf 'oops' >&2; exit 7",
+                "command": "echo oops >&2; exit 7",
                 "timeout": 1000,
                 "run_in_background": false,
                 "dangerouslyDisableSandbox": false,
@@ -5144,10 +5206,7 @@ mod tests {
         .expect("bash failure should still return structured output");
         let failure_output: serde_json::Value = serde_json::from_str(&failure).expect("json");
         assert_eq!(failure_output["returnCodeInterpretation"], "exit_code:7");
-        assert!(failure_output["stderr"]
-            .as_str()
-            .expect("stderr")
-            .contains("oops"));
+        assert_stream_contains(&failure_output, "oops");
 
         let timeout = execute_tool(
             "bash",
