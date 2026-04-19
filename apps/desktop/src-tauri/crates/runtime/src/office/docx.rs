@@ -162,19 +162,19 @@ fn parse_part(
                     _ => {}
                 }
             }
-            Event::Text(event) => {
-                if state.in_deleted == 0 && is_text_node(&state.stack) {
-                    let text = event
-                        .unescape()
-                        .map_err(|error| {
-                            io::Error::new(io::ErrorKind::InvalidData, error.to_string())
-                        })?
-                        .into_owned();
-                    if state.row_anchor.is_some() {
-                        state.row_text.push_str(&text);
-                    } else if state.para_anchor.is_some() {
-                        state.para_text.push_str(&text);
-                    }
+            Event::Text(event)
+                if state.in_deleted == 0 && is_text_node(&state.stack) =>
+            {
+                let text = event
+                    .unescape()
+                    .map_err(|error| {
+                        io::Error::new(io::ErrorKind::InvalidData, error.to_string())
+                    })?
+                    .into_owned();
+                if state.row_anchor.is_some() {
+                    state.row_text.push_str(&text);
+                } else if state.para_anchor.is_some() {
+                    state.para_text.push_str(&text);
                 }
             }
             Event::End(event) => {
