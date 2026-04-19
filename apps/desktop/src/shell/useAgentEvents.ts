@@ -217,6 +217,7 @@ export function useAgentEvents(options: UseAgentEventsOptions) {
           });
           options.appendInlineChunk(e.sessionId, {
             kind: "approval_request",
+            sessionId: e.sessionId,
             approvalId: e.approvalId,
             toolName: e.toolName,
             description: e.description,
@@ -241,6 +242,7 @@ export function useAgentEvents(options: UseAgentEventsOptions) {
           });
           options.appendInlineChunk(e.sessionId, {
             kind: "user_question",
+            sessionId: e.sessionId,
             questionId: e.questionId,
             prompt: e.prompt,
             status: "pending",

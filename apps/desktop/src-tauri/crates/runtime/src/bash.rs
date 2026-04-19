@@ -291,7 +291,7 @@ pub fn read_background_task_output(
     input: BackgroundTaskOutputInput,
 ) -> io::Result<BackgroundTaskOutputSlice> {
     validate_background_task_id(&input.background_task_id)?;
-    let stream = input.stream.unwrap_or_else(|| "stdout".to_string());
+    let stream = normalize_background_task_stream(input.stream.as_deref())?.to_string();
     let log_path = background_task_stream_path(&input.background_task_id, &stream)?;
     let mut file = File::open(log_path)?;
     let file_len = file.metadata()?.len();
@@ -353,12 +353,19 @@ fn validate_background_task_id(background_task_id: &str) -> io::Result<()> {
     Ok(())
 }
 
+fn normalize_background_task_stream(stream: Option<&str>) -> io::Result<&'static str> {
+    match stream.unwrap_or("stdout") {
+        "stdout" => Ok("stdout"),
+        "stderr" => Ok("stderr"),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "BackgroundTaskOutput.stream must be `stdout` or `stderr`",
+        )),
+    }
+}
+
 fn background_task_stream_path(background_task_id: &str, stream: &str) -> io::Result<PathBuf> {
-    let safe_stream = if stream.eq_ignore_ascii_case("stderr") {
-        "stderr"
-    } else {
-        "stdout"
-    };
+    let safe_stream = normalize_background_task_stream(Some(stream))?;
     let root = env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
         .join(".relay/background-tasks");
@@ -601,6 +608,20 @@ mod tests {
         .expect_err("path-like ids must be rejected before path resolution");
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn background_task_output_rejects_invalid_stream_names() {
+        let err = read_background_task_output(BackgroundTaskOutputInput {
+            background_task_id: "123-456".to_string(),
+            stream: Some("../stdout".to_string()),
+            offset: None,
+            tail: None,
+        })
+        .expect_err("invalid streams must be rejected before path resolution");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("stdout"));
     }
 
     #[cfg(unix)]

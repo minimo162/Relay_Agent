@@ -6,12 +6,12 @@ export function ApprovalOverlay(props: {
   approvals: Approval[];
   enabled?: boolean;
   /** Approve this request only (default OpenWork-style once). */
-  onApproveOnce: (id: string) => void;
+  onApproveOnce: (sessionId: string, id: string) => void;
   /** Approve and skip further prompts for this tool name until the session ends. */
-  onApproveForSession: (id: string) => void;
+  onApproveForSession: (sessionId: string, id: string) => void;
   /** Persist allow for this tool for the current workspace folder (requires cwd on session). */
-  onApproveForWorkspace?: (id: string) => void;
-  onReject: (id: string) => void;
+  onApproveForWorkspace?: (sessionId: string, id: string) => void;
+  onReject: (sessionId: string, id: string) => void;
 }): JSX.Element {
   return (
     <Show when={props.enabled === true && props.approvals.length > 0}>
@@ -43,14 +43,14 @@ export function ApprovalOverlay(props: {
                   <div class="flex flex-wrap gap-2 justify-end">
                     <Button
                       variant="secondary"
-                      onClick={() => props.onReject(approval.approvalId)}
+                      onClick={() => props.onReject(approval.sessionId, approval.approvalId)}
                       class="ra-type-button-label px-3 py-1.5"
                     >
                       Don&apos;t allow
                     </Button>
                     <Button
                       variant="primary"
-                      onClick={() => props.onApproveOnce(approval.approvalId)}
+                      onClick={() => props.onApproveOnce(approval.sessionId, approval.approvalId)}
                       class="ra-type-button-label px-3 py-1.5"
                     >
                       Allow once
@@ -61,7 +61,7 @@ export function ApprovalOverlay(props: {
                     <div class="flex flex-wrap gap-2 justify-end">
                       <Button
                         variant="secondary"
-                        onClick={() => props.onApproveForSession(approval.approvalId)}
+                        onClick={() => props.onApproveForSession(approval.sessionId, approval.approvalId)}
                         class="ra-type-button-label px-3 py-1.5"
                         title="Current session only"
                       >
@@ -70,7 +70,7 @@ export function ApprovalOverlay(props: {
                       <Show when={approval.workspaceCwdConfigured && props.onApproveForWorkspace}>
                         <Button
                           variant="secondary"
-                          onClick={() => props.onApproveForWorkspace!(approval.approvalId)}
+                          onClick={() => props.onApproveForWorkspace!(approval.sessionId, approval.approvalId)}
                           class="ra-type-button-label px-3 py-1.5"
                           title="Saved per workspace in ~/.relay-agent/workspace_allowed_tools.json"
                         >

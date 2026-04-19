@@ -36,12 +36,12 @@ export function MessageFeed(props: {
   missingCopilot: boolean;
   onChooseProject: () => void;
   onReconnectCopilot: () => void;
-  onApproveOnce: (approvalId: string) => void;
-  onApproveForSession: (approvalId: string) => void;
-  onApproveForWorkspace: (approvalId: string) => void;
-  onReject: (approvalId: string) => void;
-  onSubmitUserQuestion: (questionId: string, answer: string) => void;
-  onCancelUserQuestion: (questionId: string) => void;
+  onApproveOnce: (sessionId: string, approvalId: string) => void;
+  onApproveForSession: (sessionId: string, approvalId: string) => void;
+  onApproveForWorkspace: (sessionId: string, approvalId: string) => void;
+  onReject: (sessionId: string, approvalId: string) => void;
+  onSubmitUserQuestion: (sessionId: string, questionId: string, answer: string) => void;
+  onCancelUserQuestion: (sessionId: string, questionId: string) => void;
 }): JSX.Element {
   let container!: HTMLDivElement;
   const [stickToBottom, setStickToBottom] = createSignal(true);

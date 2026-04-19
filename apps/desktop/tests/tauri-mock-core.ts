@@ -9,6 +9,7 @@ export function isTauri(): boolean {
 const state = (window as any).__RELAY_MOCK__ ??= {
   sessionCounter: 0,
   sessions: new Map(),
+  invocations: [],
   listeners: new Map(),
   emit(event: string, payload: unknown) {
     const fns = this.listeners.get(event);
@@ -18,6 +19,8 @@ const state = (window as any).__RELAY_MOCK__ ??= {
 
 export async function invoke(cmd: string, args: any): Promise<unknown> {
   const req = args?.request ?? args ?? {};
+  state.invocations ??= [];
+  state.invocations.push({ cmd, request: req });
 
   switch (cmd) {
     case "start_agent": {

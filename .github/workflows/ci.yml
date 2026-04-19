@@ -72,11 +72,11 @@ jobs:
           ! rg -n "packages/contracts|spreadsheet-centric demo|minimal CSV end-to-end demo" README.md PLANS.md AGENTS.md docs/CLAW_CODE_ALIGNMENT.md
 
       - name: cargo check
-        run: cargo check
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
 
       - name: cargo clippy
         if: matrix.run_clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings
 
       - name: cargo test --workspace --exclude relay-agent-desktop
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop

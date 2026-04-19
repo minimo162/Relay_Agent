@@ -578,6 +578,7 @@ export interface UiToolCallChunk {
 
 export interface UiApprovalRequestChunk {
   kind: "approval_request";
+  sessionId: string;
   approvalId: string;
   toolName: string;
   description: string;
@@ -588,6 +589,7 @@ export interface UiApprovalRequestChunk {
 
 export interface UiUserQuestionChunk {
   kind: "user_question";
+  sessionId: string;
   questionId: string;
   prompt: string;
   status: "pending" | "answered" | "cancelled";

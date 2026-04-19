@@ -15,10 +15,10 @@ function approvalStateLabel(status: UiApprovalRequestChunk["status"]): string {
 
 export function InlineApprovalCard(props: {
   chunk: UiApprovalRequestChunk;
-  onApproveOnce: (approvalId: string) => void;
-  onApproveForSession: (approvalId: string) => void;
-  onApproveForWorkspace: (approvalId: string) => void;
-  onReject: (approvalId: string) => void;
+  onApproveOnce: (sessionId: string, approvalId: string) => void;
+  onApproveForSession: (sessionId: string, approvalId: string) => void;
+  onApproveForWorkspace: (sessionId: string, approvalId: string) => void;
+  onReject: (sessionId: string, approvalId: string) => void;
 }): JSX.Element {
   const pending = () => props.chunk.status === "pending";
   const [rememberOpen, setRememberOpen] = createSignal(false);
@@ -70,14 +70,14 @@ export function InlineApprovalCard(props: {
           <button
             type="button"
             class="ra-approval-btn ra-approval-btn--primary"
-            onClick={() => props.onApproveOnce(props.chunk.approvalId)}
+            onClick={() => props.onApproveOnce(props.chunk.sessionId, props.chunk.approvalId)}
           >
             Allow
           </button>
           <button
             type="button"
             class="ra-approval-btn ra-approval-btn--ghost"
-            onClick={() => props.onReject(props.chunk.approvalId)}
+            onClick={() => props.onReject(props.chunk.sessionId, props.chunk.approvalId)}
           >
             Reject
           </button>
@@ -102,7 +102,7 @@ export function InlineApprovalCard(props: {
                   class="ra-approval-remember__item"
                   onClick={() => {
                     setRememberOpen(false);
-                    props.onApproveForSession(props.chunk.approvalId);
+                    props.onApproveForSession(props.chunk.sessionId, props.chunk.approvalId);
                   }}
                 >
                   Always in this conversation
@@ -114,7 +114,7 @@ export function InlineApprovalCard(props: {
                     class="ra-approval-remember__item"
                     onClick={() => {
                       setRememberOpen(false);
-                      props.onApproveForWorkspace(props.chunk.approvalId);
+                      props.onApproveForWorkspace(props.chunk.sessionId, props.chunk.approvalId);
                     }}
                   >
                     Always in this project

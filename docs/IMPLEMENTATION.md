@@ -15,6 +15,33 @@
 
 ## Milestone Log
 
+### 2026-04-19 Review fixes for pending prompts, CI gates, and background streams
+
+**Problem:** Follow-up review found that pending approval/question cards could
+become visually present but non-actionable after switching to a new chat because
+the response handlers recovered `sessionId` only from the global pending store.
+The GitHub Actions cargo check/clippy steps also drifted from the documented
+manifest-path acceptance commands, and `BackgroundTaskOutput.stream` trusted the
+tool schema instead of validating invalid stream names at runtime.
+
+**Change:** Added `sessionId` to inline approval/question UI chunks and threaded
+it through inline cards, legacy overlays, dev approval shortcuts, and response
+handlers so prompt responses no longer depend on the global pending store being
+populated. Updated CI to run `cargo check --manifest-path
+apps/desktop/src-tauri/Cargo.toml` and matching manifest-path clippy. Hardened
+[`apps/desktop/src-tauri/crates/runtime/src/bash.rs`](../apps/desktop/src-tauri/crates/runtime/src/bash.rs)
+so `BackgroundTaskOutput` accepts only `stdout` or `stderr` at runtime and
+returns the normalized stream name.
+
+**Verification:** `pnpm typecheck` — pass. `pnpm check` — pass. `cargo fmt
+--manifest-path apps/desktop/src-tauri/Cargo.toml --check` — pass.
+`git diff --check` — pass. `cargo check --manifest-path
+apps/desktop/src-tauri/Cargo.toml -p runtime` — pass. `cargo test
+--manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime
+background_task_output -- --nocapture` — pass (3 tests). `pnpm --filter
+@relay-agent/desktop exec playwright test tests/app.e2e.spec.ts -g "pending
+approvals remain actionable"` — pass.
+
 ### 2026-04-19 Review follow-up fixes
 
 **Problem:** Project review found four reliability/security gaps: inactive

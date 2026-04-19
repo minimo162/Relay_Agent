@@ -364,7 +364,7 @@ export default function Shell(): JSX.Element {
     void listen<DevApprovalPayload>(DEV_APPROVE_LATEST_EVENT, () => {
       const approval = approvals.approvals()[0];
       if (!approval) return;
-      void handleApproveOnce(approval.approvalId);
+      void handleApproveOnce(approval.sessionId, approval.approvalId);
     }).then((fn) => {
       if (disposed) {
         fn();
@@ -375,7 +375,7 @@ export default function Shell(): JSX.Element {
     void listen<DevApprovalPayload>(DEV_APPROVE_LATEST_SESSION_EVENT, () => {
       const approval = approvals.approvals()[0];
       if (!approval) return;
-      void handleApproveForSession(approval.approvalId);
+      void handleApproveForSession(approval.sessionId, approval.approvalId);
     }).then((fn) => {
       if (disposed) {
         fn();
@@ -386,7 +386,7 @@ export default function Shell(): JSX.Element {
     void listen<DevApprovalPayload>(DEV_APPROVE_LATEST_WORKSPACE_EVENT, () => {
       const approval = approvals.approvals()[0];
       if (!approval || !approval.workspaceCwdConfigured) return;
-      void handleApproveForWorkspace(approval.approvalId);
+      void handleApproveForWorkspace(approval.sessionId, approval.approvalId);
     }).then((fn) => {
       if (disposed) {
         fn();
@@ -397,7 +397,7 @@ export default function Shell(): JSX.Element {
     void listen<DevApprovalPayload>(DEV_REJECT_LATEST_EVENT, () => {
       const approval = approvals.approvals()[0];
       if (!approval) return;
-      void handleReject(approval.approvalId);
+      void handleReject(approval.sessionId, approval.approvalId);
     }).then((fn) => {
       if (disposed) {
         fn();
@@ -552,62 +552,51 @@ export default function Shell(): JSX.Element {
     }
   };
 
-  const handleApproveOnce = async (approvalId: string) => {
-    const sid = approvals.approvals().find((approval) => approval.approvalId === approvalId)?.sessionId;
-    if (!sid) return;
-    await respondApproval({ sessionId: sid, approvalId, approved: true, rememberForSession: false });
-    markApprovalStatus(sid, approvalId, "approved");
+  const handleApproveOnce = async (sessionId: string, approvalId: string) => {
+    await respondApproval({ sessionId, approvalId, approved: true, rememberForSession: false });
+    markApprovalStatus(sessionId, approvalId, "approved");
     approvals.removeApproval(approvalId);
   };
 
-  const handleApproveForSession = async (approvalId: string) => {
-    const sid = approvals.approvals().find((approval) => approval.approvalId === approvalId)?.sessionId;
-    if (!sid) return;
-    await respondApproval({ sessionId: sid, approvalId, approved: true, rememberForSession: true });
-    markApprovalStatus(sid, approvalId, "approved");
+  const handleApproveForSession = async (sessionId: string, approvalId: string) => {
+    await respondApproval({ sessionId, approvalId, approved: true, rememberForSession: true });
+    markApprovalStatus(sessionId, approvalId, "approved");
     approvals.removeApproval(approvalId);
   };
 
-  const handleApproveForWorkspace = async (approvalId: string) => {
-    const sid = approvals.approvals().find((approval) => approval.approvalId === approvalId)?.sessionId;
-    if (!sid) return;
+  const handleApproveForWorkspace = async (sessionId: string, approvalId: string) => {
     await respondApproval({
-      sessionId: sid,
+      sessionId,
       approvalId,
       approved: true,
       rememberForSession: false,
       rememberForWorkspace: true,
     });
-    markApprovalStatus(sid, approvalId, "approved");
+    markApprovalStatus(sessionId, approvalId, "approved");
     approvals.removeApproval(approvalId);
   };
 
-  const handleReject = async (approvalId: string) => {
-    const sid = approvals.approvals().find((approval) => approval.approvalId === approvalId)?.sessionId;
-    if (!sid) return;
-    await respondApproval({ sessionId: sid, approvalId, approved: false });
-    markApprovalStatus(sid, approvalId, "rejected");
+  const handleReject = async (sessionId: string, approvalId: string) => {
+    await respondApproval({ sessionId, approvalId, approved: false });
+    markApprovalStatus(sessionId, approvalId, "rejected");
     approvals.removeApproval(approvalId);
   };
 
-  const handleUserQuestionSubmit = async (questionId: string, answer: string) => {
-    const sid = approvals.userQuestions().find((question) => question.questionId === questionId)?.sessionId;
-    if (!sid || !answer) return;
+  const handleUserQuestionSubmit = async (sessionId: string, questionId: string, answer: string) => {
+    if (!answer) return;
     try {
-      await respondUserQuestion({ sessionId: sid, questionId, answer });
-      markUserQuestionStatus(sid, questionId, "answered");
+      await respondUserQuestion({ sessionId, questionId, answer });
+      markUserQuestionStatus(sessionId, questionId, "answered");
       approvals.removeQuestion(questionId);
     } catch (err) {
       console.error("[IPC] respond_user_question failed", err);
     }
   };
 
-  const handleUserQuestionCancel = async (questionId: string) => {
-    const sid = approvals.userQuestions().find((question) => question.questionId === questionId)?.sessionId;
-    if (!sid) return;
+  const handleUserQuestionCancel = async (sessionId: string, questionId: string) => {
     try {
-      await respondUserQuestion({ sessionId: sid, questionId, answer: "" });
-      markUserQuestionStatus(sid, questionId, "cancelled");
+      await respondUserQuestion({ sessionId, questionId, answer: "" });
+      markUserQuestionStatus(sessionId, questionId, "cancelled");
       approvals.removeQuestion(questionId);
     } catch (err) {
       console.error("[IPC] respond_user_question cancel failed", err);

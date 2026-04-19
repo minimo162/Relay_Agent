@@ -16,8 +16,8 @@ function questionStateLabel(status: UiUserQuestionChunk["status"]): string {
 
 export function InlineQuestionCard(props: {
   chunk: UiUserQuestionChunk;
-  onSubmit: (questionId: string, answer: string) => void;
-  onCancel: (questionId: string) => void;
+  onSubmit: (sessionId: string, questionId: string, answer: string) => void;
+  onCancel: (sessionId: string, questionId: string) => void;
 }): JSX.Element {
   const [draft, setDraft] = createSignal("");
   const pending = () => props.chunk.status === "pending";
@@ -59,7 +59,7 @@ export function InlineQuestionCard(props: {
             variant="secondary"
             type="button"
             class="ra-type-button-label px-3 py-1.5"
-            onClick={() => props.onCancel(props.chunk.questionId)}
+            onClick={() => props.onCancel(props.chunk.sessionId, props.chunk.questionId)}
           >
             Cancel
           </Button>
@@ -68,7 +68,7 @@ export function InlineQuestionCard(props: {
             type="button"
             class="ra-type-button-label px-3 py-1.5"
             disabled={draft().trim().length === 0}
-            onClick={() => props.onSubmit(props.chunk.questionId, draft().trim())}
+            onClick={() => props.onSubmit(props.chunk.sessionId, props.chunk.questionId, draft().trim())}
           >
             Submit answer
           </Button>

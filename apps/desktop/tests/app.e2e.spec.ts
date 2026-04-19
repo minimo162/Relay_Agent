@@ -175,6 +175,48 @@ test("approval requests render inline instead of blocking the feed", async ({ pa
   await expect(approvalCard.getByText("/tmp/output.txt")).toBeVisible();
 });
 
+test("pending approvals remain actionable after starting a new chat", async ({ page }) => {
+  await injectRelayMock(page, { autoComplete: false });
+  await seedWorkspace(page);
+  await openApp(page);
+  await sendPrompt(page, "prepare approval then switch away");
+  await expect(page.locator("[data-ra-shell-drawer='sessions']")).toBeVisible({ timeout: 5000 });
+  await waitForMockSession(page, "session-e2e-1");
+  await waitForAgentListener(page, "agent:approval_needed");
+
+  await emitAgentEvent(page, "agent:approval_needed", {
+    sessionId: "session-e2e-1",
+    approvalId: "approval-switch-1",
+    toolName: "write_file",
+    description: "Create or overwrite a file?",
+    target: "/tmp/output.txt",
+    input: { path: "/tmp/output.txt", content: "hello" },
+    workspaceCwdConfigured: true,
+  });
+
+  await page.getByRole("button", { name: "Start a new chat" }).click();
+  await expect(page.locator("[data-ra-approval-card][data-approval-id='approval-switch-1']")).toHaveCount(0);
+  await page.getByRole("button", { name: /session-e2e-1\./ }).click();
+
+  const approvalCard = page.locator("[data-ra-approval-card][data-approval-id='approval-switch-1']");
+  await expect(approvalCard.getByRole("button", { name: "Allow", exact: true })).toBeVisible();
+  await approvalCard.getByRole("button", { name: "Allow", exact: true }).click();
+  await expect(approvalCard).toHaveAttribute("data-status", "approved");
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window as any).__RELAY_MOCK__?.invocations?.some(
+          (entry: any) =>
+            entry.cmd === "respond_approval" &&
+            entry.request?.sessionId === "session-e2e-1" &&
+            entry.request?.approvalId === "approval-switch-1" &&
+            entry.request?.approved === true,
+        ),
+      ),
+    )
+    .toBe(true);
+});
+
 test("streaming assistant text shows Drafting and suppresses generic working state", async ({ page }) => {
   await injectRelayMock(page, { autoComplete: false });
   await seedWorkspace(page);

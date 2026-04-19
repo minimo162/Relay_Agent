@@ -12,6 +12,7 @@ type RelayHistoryEntry = {
 type RelayMockState = {
   sessionCounter: number;
   sessions: Map<string, { running: boolean; history: RelayHistoryEntry[] }>;
+  invocations: Array<{ cmd: string; request: unknown }>;
   listeners: Map<string, Set<(event: { payload: unknown }) => void>>;
   listenerCounts: Map<string, number>;
   mcpServers: Array<{
@@ -32,6 +33,7 @@ function initRelayMock(config: { autoComplete: boolean }) {
   const state: RelayMockState = {
     sessionCounter: 0,
     sessions: new Map(),
+    invocations: [],
     listeners: new Map(),
     listenerCounts: new Map(),
     mcpServers: [],
@@ -74,6 +76,7 @@ function initRelayMock(config: { autoComplete: boolean }) {
 
   const invoke = async (cmd: string, args: any) => {
     const req = args?.request ?? args ?? {};
+    state.invocations.push({ cmd, request: req });
     switch (cmd) {
       case "start_agent": {
         state.sessionCounter += 1;

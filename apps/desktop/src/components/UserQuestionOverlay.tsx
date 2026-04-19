@@ -6,8 +6,8 @@ import type { UserQuestion } from "./shell-types";
 export function UserQuestionOverlay(props: {
   questions: UserQuestion[];
   enabled?: boolean;
-  onSubmit: (questionId: string, answer: string) => void;
-  onCancel: (questionId: string) => void;
+  onSubmit: (sessionId: string, questionId: string, answer: string) => void;
+  onCancel: (sessionId: string, questionId: string) => void;
 }): JSX.Element {
   const [drafts, setDrafts] = createSignal<Record<string, string>>({});
 
@@ -35,7 +35,7 @@ export function UserQuestionOverlay(props: {
                   <div class="flex flex-wrap gap-2 mt-3 justify-end">
                     <Button
                       variant="secondary"
-                      onClick={() => props.onCancel(q.questionId)}
+                      onClick={() => props.onCancel(q.sessionId, q.questionId)}
                       class="ra-type-button-label px-3 py-1.5"
                     >
                       Cancel
@@ -43,7 +43,7 @@ export function UserQuestionOverlay(props: {
                     <Button
                       variant="primary"
                       onClick={() =>
-                        props.onSubmit(q.questionId, (drafts()[q.questionId] ?? "").trim())
+                        props.onSubmit(q.sessionId, q.questionId, (drafts()[q.questionId] ?? "").trim())
                       }
                       class="ra-type-button-label px-3 py-1.5"
                     >
