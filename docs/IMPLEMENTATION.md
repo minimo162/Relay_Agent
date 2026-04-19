@@ -15,6 +15,64 @@
 
 ## Milestone Log
 
+### 2026-04-19 Tools crate — approval display extraction
+
+**Problem:** `apps/desktop/src-tauri/crates/tools/src/lib.rs` had grown to 5,793
+lines by housing the tool registry, tool metadata, CDP prompt helpers, MVP
+catalog, approval display rendering, and every per-tool `run_*` adapter in a
+single file. The review surfaced this as a maintainability risk.
+
+**Change:** Extracted `approval_display_for_tool` and its five private
+helpers (`extract_approval_target`, `summarize_important_args`,
+`summarize_value`, `parse_mcp_qualified_name`, `humanize_mcp_segment`) into
+[`apps/desktop/src-tauri/crates/tools/src/approval.rs`](../apps/desktop/src-tauri/crates/tools/src/approval.rs)
+and re-exported the public entry point from `lib.rs` via `pub use
+approval::approval_display_for_tool;`. External callers continue to reach the
+function through the same `tools::approval_display_for_tool(...)` path.
+`tools/lib.rs` shrank from 5,793 to 5,651 lines; no behavior change.
+
+**Verification:**
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+`cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`
+— pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+--workspace --exclude relay-agent-desktop` — 281 pass (commands 17,
+compat-harness 20, desktop-core 75, runtime 126, tools 43). `pnpm typecheck` —
+pass.
+
+### 2026-04-19 Agent-loop maintainability — copilot sanitize extraction and duplication policy
+
+**Problem:** `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs` still carried
+Copilot visible-text sanitization helpers (`strip_richwebanswer_spans`,
+`strip_transient_copilot_status_fragments`, `dedupe_consecutive_lines`,
+`dedupe_consecutive_paragraphs`, `sanitize_copilot_visible_text`) inline at 6,764
+lines, contradicting the PLANS.md Cross-Cutting Hardening criterion that
+self-contained helpers live outside the main turn loop. The `desktop-core`
+crate's parallel `agent_loop.rs` copy was also undocumented as an architectural
+choice, making the duplication look accidental instead of load-bearing.
+
+**Change:** Extracted the five sanitize helpers and their four unit tests to
+[`apps/desktop/src-tauri/src/agent_loop/copilot_sanitize.rs`](../apps/desktop/src-tauri/src/agent_loop/copilot_sanitize.rs),
+exposed `sanitize_copilot_visible_text` as `pub(crate)`, and updated
+`orchestrator.rs` to import it. `orchestrator.rs` shrank from 6,764 to 6,657
+lines; no behavior change. Duplication policy for `crates/desktop-core/src/agent_loop.rs`
+(3,581 lines) is intentional: it is the deterministic, non-Tauri parity-test
+implementation consumed by `compat-harness` and by
+`agent_loop/transport/tool_parse.rs` (re-exports `parse_copilot_tool_response`
+and `CdpToolParseMode`). The desktop-app orchestrator version carries Tauri
+event emission, streaming UI probes, and async session-registry wiring that the
+deterministic path intentionally omits. Both copies must stay
+behavior-equivalent for parser / repair / prompt helpers reachable from
+compat-harness fixtures; Tauri-only concerns live only in the desktop-app copy.
+
+**Verification:**
+`cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — pass.
+`cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`
+— pass. `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p
+relay-agent-desktop --lib agent_loop::copilot_sanitize` — 4 pass.
+`cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p
+relay-agent-desktop --lib classify_stream_text_update_accepts_sanitized_progress_after_image_noise_removal`
+— 1 pass.
+
 ### 2026-04-19 Review fixes for pending prompts, CI gates, and background streams
 
 **Problem:** Follow-up review found that pending approval/question cards could

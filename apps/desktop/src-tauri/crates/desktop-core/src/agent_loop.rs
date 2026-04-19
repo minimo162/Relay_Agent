@@ -1,3 +1,21 @@
+//! Deterministic agent-loop path used by `compat-harness` and parity fixtures.
+//!
+//! This module intentionally mirrors a subset of the Tauri desktop orchestrator in
+//! `apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`. The desktop copy carries
+//! Tauri event emission, streaming UI probes, session-registry wiring, and runtime
+//! async plumbing. This copy keeps only the pure pieces reachable from deterministic
+//! fixtures: CDP prompt construction, tool-JSON parsing (`parse_copilot_tool_response`,
+//! `CdpToolParseMode`), repair-stage heuristics, and loop-decision helpers.
+//!
+//! When adding or changing parser, repair, or prompt logic in the desktop copy,
+//! verify whether the deterministic copy should receive the same change so that
+//! compat-harness scenarios stay aligned with live desktop behavior. Tauri-only
+//! concerns (event emission, session registry mutation, UI streaming) must not
+//! leak into this module.
+//!
+//! See `docs/IMPLEMENTATION.md` (2026-04-19 duplication policy entry) and
+//! `docs/CLAW_CODE_ALIGNMENT.md` for the sync-discipline rationale.
+
 #![allow(
     clippy::needless_pass_by_value,
     clippy::uninlined_format_args,

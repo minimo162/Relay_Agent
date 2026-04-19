@@ -2,6 +2,7 @@ mod orchestrator;
 
 pub mod approval;
 pub mod compaction;
+pub mod copilot_sanitize;
 pub mod events;
 pub mod executor;
 pub mod permission;
