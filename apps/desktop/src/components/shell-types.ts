@@ -21,6 +21,11 @@ export interface Approval {
   workspaceCwdConfigured?: boolean;
 }
 
+export type ApprovalActionHandler = (
+  sessionId: string,
+  approvalId: string,
+) => void | Promise<void>;
+
 export interface UserQuestion {
   sessionId: string;
   questionId: string;

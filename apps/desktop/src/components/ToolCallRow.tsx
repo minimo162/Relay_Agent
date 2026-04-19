@@ -1,5 +1,5 @@
 import { Show, type JSX } from "solid-js";
-import { shouldCollapseToolResult, toolAuditPresentation, toolTimelineKind } from "../lib/tool-timeline";
+import { hasToolResultDetails, toolAuditPresentation, toolTimelineKind } from "../lib/tool-timeline";
 import { ToolStatusDot } from "./primitives";
 import { ui } from "../lib/ui-tokens";
 
@@ -12,7 +12,7 @@ export function ToolCallRow(props: {
 }): JSX.Element {
   const tl = () => toolTimelineKind(props.toolName);
   const presentation = () => toolAuditPresentation(props.toolName, props.status, props.result, props.input);
-  const showDetails = () => shouldCollapseToolResult(presentation().detailBody ?? null);
+  const showDetails = () => hasToolResultDetails(presentation().detailBody ?? null);
   return (
     <div
       class={`my-1.5 ra-type-button-label ${ui.mutedText} flex items-start gap-2 ra-tool-row ra-tool-row--${tl()} ra-tool-row--${props.status}`}

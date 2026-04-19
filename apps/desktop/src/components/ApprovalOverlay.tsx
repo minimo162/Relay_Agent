@@ -1,17 +1,17 @@
 import { For, Show, type JSX } from "solid-js";
 import { Button } from "./ui";
-import type { Approval } from "./shell-types";
+import type { Approval, ApprovalActionHandler } from "./shell-types";
 
 export function ApprovalOverlay(props: {
   approvals: Approval[];
   enabled?: boolean;
   /** Approve this request only (default OpenWork-style once). */
-  onApproveOnce: (sessionId: string, id: string) => void;
+  onApproveOnce: ApprovalActionHandler;
   /** Approve and skip further prompts for this tool name until the session ends. */
-  onApproveForSession: (sessionId: string, id: string) => void;
+  onApproveForSession: ApprovalActionHandler;
   /** Persist allow for this tool for the current workspace folder (requires cwd on session). */
-  onApproveForWorkspace?: (sessionId: string, id: string) => void;
-  onReject: (sessionId: string, id: string) => void;
+  onApproveForWorkspace?: ApprovalActionHandler;
+  onReject: ApprovalActionHandler;
 }): JSX.Element {
   return (
     <Show when={props.enabled === true && props.approvals.length > 0}>

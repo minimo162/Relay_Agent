@@ -11,10 +11,13 @@ supports three states:
 
 - `trusted-signing`: all required GitHub and Azure configuration is present, so
   the workflow signs the NSIS installer before release upload
-- `unsigned-fallback`: none of the Trusted Signing inputs are configured, so
-  the workflow still publishes an unsigned installer
+- `unsigned-prerelease`: none of the Trusted Signing inputs are configured, and
+  the workflow was manually dispatched for a prerelease tag containing `-`; the
+  workflow publishes an unsigned installer asset marked with `-unsigned.exe`
 - `partial-config`: some Trusted Signing values are present and some are
   missing, so the workflow fails fast instead of publishing an ambiguous asset
+
+Formal pushed `v*` release tags fail when Trusted Signing is not configured.
 
 ## GitHub secrets
 
@@ -84,8 +87,7 @@ The workflow uses:
 - `azure/login@v2` for GitHub OIDC authentication
 - `azure/artifact-signing-action@v1` for signing the generated NSIS installer
 - `Get-AuthenticodeSignature` to verify the signed asset before upload
-- `gh release upload --clobber` to replace an existing unsigned asset with the
-  signed one on the same tag
+- `gh release upload --clobber` to replace an existing asset on the same tag
 
 ## First signed release checklist
 
@@ -110,8 +112,9 @@ Get-AuthenticodeSignature .\Relay.Agent_0.1.0_x64-setup.exe
   SmartScreen warnings on the very first signed release.
 - Public Trust availability and identity validation requirements depend on the
   Microsoft eligibility rules for your region and entity type.
-- Until Azure setup is complete, this repo will continue to fall back to
-  unsigned release publication.
+- Until Azure setup is complete, formal pushed `v*` releases will fail instead
+  of publishing unsigned installers. Use a manually dispatched prerelease tag
+  containing `-` only for internal unsigned validation builds.
 
 ## Official references
 

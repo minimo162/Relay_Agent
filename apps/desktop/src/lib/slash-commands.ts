@@ -20,10 +20,15 @@ export interface SlashCommandContext {
   chunksCount: number;
 }
 
+export type SlashCommandResult =
+  | { kind: "local"; display?: string }
+  | { kind: "send"; text: string }
+  | { kind: "noop" };
+
 export interface SlashCommand {
   command: string;
   description: string;
-  handler: (args: string, ctx: SlashCommandContext) => Promise<string | null>;
+  handler: (args: string, ctx: SlashCommandContext) => Promise<SlashCommandResult>;
 }
 
 /** Workspace `.relay/commands` entries (set from shell when cwd changes). */
@@ -56,7 +61,7 @@ const builtinCommands: SlashCommand[] = [
       const list = mergedCommands()
         .map((c) => `  ${c.command.padEnd(14)} — ${c.description}`)
         .join("\n");
-      return `Available commands:\n\n${list}`;
+      return { kind: "local", display: `Available commands:\n\n${list}` };
     },
   },
   {
@@ -64,7 +69,7 @@ const builtinCommands: SlashCommand[] = [
     description: "Clear the current chat feed",
     handler: async (_args, ctx) => {
       ctx.clearChunks();
-      return "▎Chat cleared.";
+      return { kind: "local", display: "▎Chat cleared." };
     },
   },
   {
@@ -72,13 +77,16 @@ const builtinCommands: SlashCommand[] = [
     description: "Compact the agent session to free context",
     handler: async (_args, ctx) => {
       const sid = ctx.sessionId;
-      if (!sid) return "▎No active session to compact.";
+      if (!sid) return { kind: "local", display: "▎No active session to compact." };
       try {
         const res = await ctx.compactSession(sid);
-        return `▎Session compacted. Removed ${res.removedMessageCount} message(s).`;
+        return {
+          kind: "local",
+          display: `▎Session compacted. Removed ${res.removedMessageCount} message(s).`,
+        };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        return `▎Failed to compact: ${msg}`;
+        return { kind: "local", display: `▎Failed to compact: ${msg}` };
       }
     },
   },
@@ -88,11 +96,14 @@ const builtinCommands: SlashCommand[] = [
     handler: async (_args, ctx) => {
       const sid = ctx.sessionId;
       if (!sid) {
-        return "▎No active session. Feed is idle.";
+        return { kind: "local", display: "▎No active session. Feed is idle." };
       }
       const state = ctx.sessionRunning ? "running" : "idle";
       const msgs = ctx.chunksCount;
-      return `▎Session ${sid.slice(0, 8)}… | state: ${state} | messages: ${msgs}`;
+      return {
+        kind: "local",
+        display: `▎Session ${sid.slice(0, 8)}… | state: ${state} | messages: ${msgs}`,
+      };
     },
   },
 ];
@@ -112,25 +123,25 @@ export function findSlashCommands(query: string): SlashCommand[] {
 
 /**
  * Execute a slash command by its full text (e.g. "/compact --verbose").
- * Returns the response text to display, or null for no output.
+ * Returns whether the command is local-only, should be sent to the agent, or is a no-op.
  */
 export async function executeSlashCommand(
   input: string,
   ctx: SlashCommandContext,
-): Promise<string | null> {
+): Promise<SlashCommandResult> {
   const trimmed = input.trim();
   const parts = trimmed.split(/\s+/);
   const cmdName = parts[0].toLowerCase();
   const args = parts.slice(1).join(" ");
 
   const cmd = mergedCommands().find((c) => c.command === cmdName);
-  if (!cmd) return null;
+  if (!cmd) return { kind: "noop" };
 
   try {
     return await cmd.handler(args, ctx);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return `▎Command error: ${msg}`;
+    return { kind: "local", display: `▎Command error: ${msg}` };
   }
 }
 

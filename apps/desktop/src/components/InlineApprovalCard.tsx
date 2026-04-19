@@ -1,5 +1,6 @@
 import { Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import type { UiApprovalRequestChunk } from "../lib/ipc";
+import type { ApprovalActionHandler } from "./shell-types";
 
 function approvalStateLabel(status: UiApprovalRequestChunk["status"]): string {
   switch (status) {
@@ -15,10 +16,10 @@ function approvalStateLabel(status: UiApprovalRequestChunk["status"]): string {
 
 export function InlineApprovalCard(props: {
   chunk: UiApprovalRequestChunk;
-  onApproveOnce: (sessionId: string, approvalId: string) => void;
-  onApproveForSession: (sessionId: string, approvalId: string) => void;
-  onApproveForWorkspace: (sessionId: string, approvalId: string) => void;
-  onReject: (sessionId: string, approvalId: string) => void;
+  onApproveOnce: ApprovalActionHandler;
+  onApproveForSession: ApprovalActionHandler;
+  onApproveForWorkspace: ApprovalActionHandler;
+  onReject: ApprovalActionHandler;
 }): JSX.Element {
   const pending = () => props.chunk.status === "pending";
   const [rememberOpen, setRememberOpen] = createSignal(false);

@@ -277,6 +277,6 @@ export function toolAuditPresentation(
   }
 }
 
-export function shouldCollapseToolResult(result: string | null): boolean {
-  return Boolean(result && result.trim().length > 0);
+export function hasToolResultDetails(detailBody: string | null): boolean {
+  return Boolean(detailBody && detailBody.trim().length > 0);
 }

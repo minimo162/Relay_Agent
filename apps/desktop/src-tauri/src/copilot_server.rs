@@ -531,7 +531,7 @@ impl CopilotServer {
         let node = find_node().ok_or_else(|| {
             CopilotError::Spawn(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                "Node.js not found in PATH",
+                "Node.js not found; expected bundled relay-node or node on PATH",
             ))
         })?;
         let script_path = self.script_path.clone().ok_or_else(|| {
@@ -1185,14 +1185,52 @@ fn resolve_script_path() -> Option<PathBuf> {
     })
 }
 
-fn find_node() -> Option<String> {
+fn sidecar_base_dir() -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?;
+    let exe_dir = exe.parent()?;
+    let base = if exe_dir.ends_with("deps") {
+        exe_dir.parent().unwrap_or(exe_dir)
+    } else {
+        exe_dir
+    };
+    Some(base.to_path_buf())
+}
+
+fn bundled_node_path() -> Option<PathBuf> {
+    if let Ok(path) = env::var("RELAY_BUNDLED_NODE") {
+        let node = PathBuf::from(path);
+        if node.is_file() {
+            return Some(node);
+        }
+    }
+
+    let base = sidecar_base_dir()?;
+    #[cfg(windows)]
+    let node = base.join("relay-node.exe");
+    #[cfg(not(windows))]
+    let node = base.join("relay-node");
+
+    node.is_file().then_some(node)
+}
+
+fn find_node() -> Option<PathBuf> {
+    if let Some(node) = bundled_node_path() {
+        if Command::new(&node)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+        {
+            return Some(node);
+        }
+    }
+
     for name in &["node", "node.exe"] {
         if Command::new(name)
             .arg("--version")
             .output()
             .is_ok_and(|o| o.status.success())
         {
-            return Some(name.to_string());
+            return Some(PathBuf::from(name));
         }
     }
     None

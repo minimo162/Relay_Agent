@@ -19,7 +19,7 @@ import { InlineApprovalCard } from "./InlineApprovalCard";
 import { InlineQuestionCard } from "./InlineQuestionCard";
 import { MessageBubble } from "./MessageBubble";
 import { ToolCallRow } from "./ToolCallRow";
-import type { SessionStatusSnapshot } from "./shell-types";
+import type { ApprovalActionHandler, SessionStatusSnapshot } from "./shell-types";
 
 /** Pixels from bottom to treat as "following" the stream (sticky scroll). */
 const NEAR_BOTTOM_PX = 80;
@@ -36,10 +36,10 @@ export function MessageFeed(props: {
   missingCopilot: boolean;
   onChooseProject: () => void;
   onReconnectCopilot: () => void;
-  onApproveOnce: (sessionId: string, approvalId: string) => void;
-  onApproveForSession: (sessionId: string, approvalId: string) => void;
-  onApproveForWorkspace: (sessionId: string, approvalId: string) => void;
-  onReject: (sessionId: string, approvalId: string) => void;
+  onApproveOnce: ApprovalActionHandler;
+  onApproveForSession: ApprovalActionHandler;
+  onApproveForWorkspace: ApprovalActionHandler;
+  onReject: ApprovalActionHandler;
   onSubmitUserQuestion: (sessionId: string, questionId: string, answer: string) => void;
   onCancelUserQuestion: (sessionId: string, questionId: string) => void;
 }): JSX.Element {

@@ -92,8 +92,8 @@ function workspaceSlashRowsToCommands(rows: WorkspaceSlashCommandRow[]): SlashCo
     description: row.description?.trim() || "Workspace command (.relay/commands)",
     handler: async (args: string) => {
       const a = args.trim();
-      if (a.length) return `${row.body}\n\n${a}`;
-      return row.body;
+      if (a.length) return { kind: "send", text: `${row.body}\n\n${a}` };
+      return { kind: "send", text: row.body };
     },
   }));
 }

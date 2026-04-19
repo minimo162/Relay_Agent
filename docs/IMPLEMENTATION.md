@@ -1454,7 +1454,7 @@ Observed live result from that run:
 
 **Verification:** `cargo test -p runtime` — pass (88 tests). `cargo check -p relay-agent-desktop` (from `apps/desktop/src-tauri/`) — pass.
 
-**Build note:** `pnpm tauri build` runs `beforeBuildCommand` (fetch Node for `TAURI_ENV_TARGET_TRIPLE`, `npm ci` in `liteparse-runner`, Vite build). For **`tauri dev`**, run once: `pnpm run prep:liteparse-runner` (and optionally `pnpm run prep:bundled-node` if not using system Node). Native addons in `liteparse-runner/node_modules` must be installed on the OS/arch that produces the bundle.
+**Build note:** Bundle prerequisites are prepared explicitly with `pnpm run prep:tauri-bundle` (or the `tauri:build` package script / release CI). `beforeBuildCommand` only runs the Vite build. For **`tauri dev`**, run once: `pnpm run prep:liteparse-runner` (and optionally `pnpm run prep:bundled-node` if not using system Node). Native addons in `liteparse-runner/node_modules` must be installed on the OS/arch that produces the bundle.
 
 ### 2026-04-08 Windows Office hybrid read (COM data + temp PDF + `read_file` / LiteParse)
 
@@ -6632,3 +6632,30 @@ Results:
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`: passed with local sandbox escalation for the localhost mock server.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools bash_tool_reports_success_exit_failure_timeout_and_background`: passed.
 - `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all`: passed.
+
+## 2026-04-19 - Review hardening follow-up: slash commands, release trust, CSP, and bundled runtime prep
+
+Changes made from the GitHub static review follow-up:
+
+- Reworked Composer slash-command handling around a typed `SlashCommandResult` union. Built-in local commands (`/clear`, `/compact`, `/status`, `/help`) no longer call `onSend` first, and workspace `.relay/commands` now return `{ kind: "send", text }` so the expanded prompt is sent to the agent instead of being displayed as assistant text.
+- Enabled a Tauri CSP in `tauri.conf.json` with self-only scripts, inline styles for the existing UI, local IPC/localhost connect allowances, and blocked object/base/frame embedding. Assistant Markdown sanitization now also strips unsupported link protocols and forces safe external-link attributes.
+- Changed the Windows release workflow so formal `v*` release builds require Trusted Signing. Unsigned publishing is limited to `workflow_dispatch` prerelease tags and the asset is copied with an `-unsigned.exe` suffix before publishing.
+- Made Copilot bridge Node resolution prefer `RELAY_BUNDLED_NODE` / sidecar-adjacent `relay-node` before falling back to `node` on PATH, matching the PDF LiteParse runtime behavior.
+- Removed the root `package-lock.json`, added CI/release guards that enforce root `pnpm-lock.yaml` as the dependency lockfile, and moved Tauri bundle prerequisites out of `beforeBuildCommand` into explicit `prep:tauri-bundle` / CI steps.
+- Shared the approval action handler type across approval components and renamed the tool-result detail predicate so the argument reflects the actual `detailBody` input.
+
+Verification commands run locally:
+
+```bash
+pnpm typecheck
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+pnpm check
+git diff --check
+```
+
+Results:
+
+- `pnpm typecheck`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.

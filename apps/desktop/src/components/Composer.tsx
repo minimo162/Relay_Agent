@@ -1,6 +1,11 @@
 import { Show, createEffect, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { Textarea } from "./ui";
-import { detectSlashMode, findSlashCommands, type SlashCommand } from "../lib/slash-commands";
+import {
+  detectSlashMode,
+  findSlashCommands,
+  type SlashCommand,
+  type SlashCommandResult,
+} from "../lib/slash-commands";
 
 /** Matches `.ra-composer-shell textarea` max-height in index.css */
 const COMPOSER_TEXTAREA_MAX_PX = 200;
@@ -73,7 +78,7 @@ export function Composer(props: {
   disabled: boolean;
   running: boolean;
   onCancel: () => void;
-  onSlashCommand?: (input: string) => Promise<string | null>;
+  onSlashCommand?: (input: string) => Promise<SlashCommandResult>;
   onAppendAssistant?: (text: string) => void;
   hero?: boolean;
   autoFocus?: boolean;
@@ -121,16 +126,29 @@ export function Composer(props: {
     if (!value || props.disabled) return;
 
     if (value.startsWith("/") && props.onSlashCommand) {
-      const accepted = await props.onSend(value);
-      if (!accepted) return;
-      const response = await props.onSlashCommand(value);
-      setText("");
-      queueMicrotask(() => {
-        if (textareaRef) adjustComposerTextareaHeight(textareaRef);
-      });
-      if (response && props.onAppendAssistant) {
-        props.onAppendAssistant(response);
+      const result = await props.onSlashCommand(value);
+
+      if (result.kind === "local") {
+        setText("");
+        queueMicrotask(() => {
+          if (textareaRef) adjustComposerTextareaHeight(textareaRef);
+        });
+        if (result.display && props.onAppendAssistant) {
+          props.onAppendAssistant(result.display);
+        }
+        return;
       }
+
+      if (result.kind === "send") {
+        const accepted = await props.onSend(result.text);
+        if (!accepted) return;
+        setText("");
+        queueMicrotask(() => {
+          if (textareaRef) adjustComposerTextareaHeight(textareaRef);
+        });
+        return;
+      }
+
       return;
     }
 

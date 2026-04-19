@@ -45,9 +45,19 @@ jobs:
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Guard pnpm lockfile policy
+        shell: bash
+        run: |
+          test -f pnpm-lock.yaml
+          test ! -f package-lock.json
+
       - name: Fetch Tauri externalBin (relay-node)
         working-directory: apps/desktop
         run: node ./scripts/fetch-bundled-node.mjs
+
+      - name: Install LiteParse runner dependencies
+        working-directory: apps/desktop
+        run: npm ci --omit=dev --prefix ./src-tauri/liteparse-runner
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'

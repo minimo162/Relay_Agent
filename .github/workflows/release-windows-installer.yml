@@ -101,9 +101,13 @@ jobs:
           done
 
           if [ "$present" -eq 0 ]; then
+            if [ "${{ github.event_name }}" != "workflow_dispatch" ] || [[ "${{ steps.release_meta.outputs.tag }}" != *-* ]]; then
+              echo "Trusted Signing is required for formal v* releases. Use a prerelease tag via workflow_dispatch for unsigned internal builds." >&2
+              exit 1
+            fi
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "mode=unsigned-fallback" >> "$GITHUB_OUTPUT"
-            echo "summary=Trusted Signing is not configured, so the workflow will publish an unsigned installer." >> "$GITHUB_OUTPUT"
+            echo "mode=unsigned-prerelease" >> "$GITHUB_OUTPUT"
+            echo "summary=Trusted Signing is not configured; this workflow_dispatch prerelease will publish an unsigned installer asset marked as unsigned." >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -119,11 +123,21 @@ jobs:
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Guard pnpm lockfile policy
+        shell: bash
+        run: |
+          test -f pnpm-lock.yaml
+          test ! -f package-lock.json
+
       - name: Run workspace typecheck
         run: pnpm typecheck
 
       - name: Run desktop Rust tests
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+      - name: Prepare Tauri bundle prerequisites
+        working-directory: apps/desktop
+        run: pnpm run prep:tauri-bundle
 
       - name: Build Windows installer
         shell: bash
@@ -185,11 +199,31 @@ jobs:
           "subject=$($signature.SignerCertificate.Subject)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "thumbprint=$($signature.SignerCertificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
+      - name: Prepare release asset
+        id: release_asset
+        shell: pwsh
+        run: |
+          $path = "${{ steps.installer.outputs.path }}"
+          $name = "${{ steps.installer.outputs.name }}"
+
+          if ("${{ steps.signing_mode.outputs.enabled }}" -ne "true") {
+            $dir = Split-Path -Parent $path
+            $stem = [System.IO.Path]::GetFileNameWithoutExtension($name)
+            $unsignedName = "$stem-unsigned.exe"
+            $unsignedPath = Join-Path $dir $unsignedName
+            Copy-Item -Path $path -Destination $unsignedPath -Force
+            $path = $unsignedPath
+            $name = $unsignedName
+          }
+
+          "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "name=$name" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
       - name: Collect installer digest
         id: installer_digest
         shell: pwsh
         run: |
-          $hash = Get-FileHash "${{ steps.installer.outputs.path }}" -Algorithm SHA256
+          $hash = Get-FileHash "${{ steps.release_asset.outputs.path }}" -Algorithm SHA256
           "sha256=$($hash.Hash.ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Publish installer to GitHub Releases
@@ -199,7 +233,7 @@ jobs:
           RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
           RELEASE_NAME: ${{ steps.release_meta.outputs.release_name }}
           RELEASE_PRERELEASE: ${{ contains(steps.release_meta.outputs.tag, '-') }}
-          INSTALLER_PATH: ${{ steps.installer.outputs.path }}
+          INSTALLER_PATH: ${{ steps.release_asset.outputs.path }}
           SIGNING_MODE: ${{ steps.signing_mode.outputs.mode }}
         run: |
           $releaseNotes = @"
@@ -248,7 +282,7 @@ jobs:
             echo "- Release tag: \`${{ steps.release_meta.outputs.tag }}\`"
             echo "- Release name: \`${{ steps.release_meta.outputs.release_name }}\`"
             echo "- Bundle target: \`nsis\`"
-            echo "- Installer asset: \`${{ steps.installer.outputs.name }}\`"
+            echo "- Installer asset: \`${{ steps.release_asset.outputs.name }}\`"
             echo "- Installer SHA256: \`${{ steps.installer_digest.outputs.sha256 }}\`"
             echo "- Signing mode: \`${{ steps.signing_mode.outputs.mode }}\`"
             echo "- Signing summary: ${{ steps.signing_mode.outputs.summary }}"
@@ -256,7 +290,7 @@ jobs:
               echo "- Authenticode status: \`${{ steps.signature.outputs.status }}\`"
               echo "- Authenticode subject: \`${{ steps.signature.outputs.subject }}\`"
             else
-              echo "- Authenticode status: \`not checked (unsigned fallback)\`"
+              echo "- Authenticode status: \`not checked (unsigned prerelease)\`"
             fi
             echo "- Repo setup guide: \`docs/TRUSTED_SIGNING_SETUP.md\`"
           } >> "$GITHUB_STEP_SUMMARY"
