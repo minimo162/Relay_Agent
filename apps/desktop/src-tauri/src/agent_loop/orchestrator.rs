@@ -6226,7 +6226,7 @@ mod loop_controller_tests {
     }
 
     #[test]
-    fn local_search_plan_escalates_to_targeted_glob_search_repair() {
+    fn local_office_search_plan_escalates_to_filename_and_content_search_repair() {
         let s = summary(
             "了解。まず実ファイルを探します。ワークスペース配下で、キャッシュフロー計算書作成に関係しそうなファイル名を広く検索します。",
             Vec::new(),
@@ -6246,11 +6246,14 @@ mod loop_controller_tests {
             kind: LoopContinueKind::MetaNudge,
         } = decision
         else {
-            panic!("expected search plan to escalate to targeted glob_search repair");
+            panic!("expected search plan to escalate to targeted search repair");
         };
-        assert!(next_input.contains("This is a local file search request."));
+        assert!(next_input.contains("This is a local document search request."));
         assert!(next_input.contains(r#""name": "glob_search""#));
         assert!(next_input.contains(r#""pattern": "**/*キャッシュ*フロー*計算*書*""#));
+        assert!(next_input.contains(r#""name": "office_search""#));
+        assert!(next_input.contains(r#""pattern": "キャッシュフロー""#));
+        assert!(next_input.contains(r#""include_ext": ["#));
         assert!(!next_input.contains(r#""name": "write_file""#));
     }
 

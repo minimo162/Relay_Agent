@@ -624,6 +624,67 @@ fn infer_glob_pattern_for_search_request(text: &str) -> Option<String> {
     None
 }
 
+fn is_office_content_search_request(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    lower.contains(".docx")
+        || lower.contains(".xlsx")
+        || lower.contains(".pptx")
+        || lower.contains(".pdf")
+        || lower.contains("excel")
+        || lower.contains("spreadsheet")
+        || lower.contains("powerpoint")
+        || lower.contains("word")
+        || lower.contains("pdf")
+        || lower.contains("template")
+        || lower.contains("report")
+        || lower.contains("cash flow")
+        || trimmed.contains("Excel")
+        || trimmed.contains("エクセル")
+        || trimmed.contains("ワード")
+        || trimmed.contains("パワポ")
+        || trimmed.contains("パワーポイント")
+        || trimmed.contains("PDF")
+        || trimmed.contains("テンプレート")
+        || trimmed.contains("資料")
+        || trimmed.contains("帳票")
+        || trimmed.contains("報告書")
+        || trimmed.contains("計算書")
+        || trimmed.contains("精算表")
+        || (trimmed.contains("キャッシュ") && trimmed.contains("フロー"))
+}
+
+fn infer_office_search_pattern_for_search_request(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.contains("cash") && lower.contains("flow") {
+        return Some("cash flow".to_string());
+    }
+    if trimmed.contains("キャッシュ") && trimmed.contains("フロー") {
+        return Some("キャッシュフロー".to_string());
+    }
+    if trimmed.contains("計算書") {
+        return Some("計算書".to_string());
+    }
+    if trimmed.contains("精算表") {
+        return Some("精算表".to_string());
+    }
+    None
+}
+
+fn office_search_paths_for_anchor(path: Option<&str>) -> Vec<String> {
+    match path.map(str::trim).filter(|path| !path.is_empty()) {
+        Some(path) => vec![format!("{}/**/*", path.trim_end_matches(['/', '\\']))],
+        None => vec!["**/*".to_string()],
+    }
+}
+
 fn infer_default_new_file_path(latest_request: &str) -> Option<String> {
     let trimmed = latest_request.trim();
     if trimmed.is_empty() {
@@ -645,17 +706,47 @@ fn build_search_tool_protocol_repair_input(
     pattern: &str,
     path: Option<&str>,
 ) -> String {
-    let mut input = serde_json::Map::new();
-    input.insert("pattern".to_string(), Value::String(pattern.to_string()));
+    let mut glob_input = serde_json::Map::new();
+    glob_input.insert("pattern".to_string(), Value::String(pattern.to_string()));
     if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
-        input.insert("path".to_string(), Value::String(path.trim().to_string()));
+        glob_input.insert("path".to_string(), Value::String(path.trim().to_string()));
     }
-    let expected_json = serde_json::to_string_pretty(&json!({
+    let glob_call = json!({
         "name": "glob_search",
         "relay_tool_call": true,
-        "input": Value::Object(input),
-    }))
-    .unwrap_or_else(|_| "{}".to_string());
+        "input": Value::Object(glob_input),
+    });
+    let expected_payload = if is_office_content_search_request(latest_request) {
+        if let Some(office_pattern) = infer_office_search_pattern_for_search_request(latest_request)
+        {
+            json!([
+                glob_call,
+                {
+                    "name": "office_search",
+                    "relay_tool_call": true,
+                    "input": {
+                        "pattern": office_pattern,
+                        "paths": office_search_paths_for_anchor(path),
+                        "include_ext": ["docx", "xlsx", "pptx", "pdf"],
+                        "-i": true,
+                        "max_results": 100,
+                        "max_files": 200
+                    }
+                }
+            ])
+        } else {
+            glob_call
+        }
+    } else {
+        glob_call
+    };
+    let expected_json =
+        serde_json::to_string_pretty(&expected_payload).unwrap_or_else(|_| "{}".to_string());
+    let search_instruction = if expected_payload.is_array() {
+        "This is a local document search request. Emit exactly one `relay_tool` block containing the JSON array below: first `glob_search` for filename candidates, then `office_search` for Office/PDF contents."
+    } else {
+        "This is a local file search request. Emit exactly one `glob_search` Relay tool call now."
+    };
     format!(
         concat!(
             "Tool protocol repair.\n",
@@ -663,8 +754,8 @@ fn build_search_tool_protocol_repair_input(
             "Do not use or mention Microsoft Copilot built-in tools such as Python, WebSearch/web search, citations, `office365_search`, coding/executing, Pages, Agent/sub-agent tools, or file uploads.\n",
             "Do not answer with a plan, summary, or sentence that says you will search later.\n",
             "{escalation}",
-            "This is a local file search request. Emit exactly one `glob_search` Relay tool call now.\n",
-            "Use the JSON skeleton below exactly unless the latest request clearly requires only a smaller glob pattern.\n",
+            "{search_instruction}\n",
+            "Use the JSON skeleton below exactly unless the latest request clearly requires a smaller glob pattern or a narrower Office/PDF path set.\n",
             "Do not use `read_file` for a directory or workspace search.\n\n",
             "Expected JSON for the next reply:\n",
             "```json\n{expected_json}\n```\n\n",
@@ -672,6 +763,7 @@ fn build_search_tool_protocol_repair_input(
             "{original_goal_marker}{goal}\n```"
         ),
         escalation = tool_protocol_repair_escalation(attempt_index),
+        search_instruction = search_instruction,
         expected_json = expected_json,
         latest_request_marker = LATEST_REQUEST_MARKER,
         latest_request = latest_request.trim(),

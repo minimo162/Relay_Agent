@@ -6794,6 +6794,34 @@ Results:
 - `node --check apps/desktop/src-tauri/binaries/copilot_server.js`: passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agent_loop::orchestrator -- --nocapture`: passed, 120 passed, 1 ignored.
 
+## 2026-04-20 - Office/PDF content search repair escalation
+
+Fixed a CDP repair-loop gap where a local document search request could recover
+from prose-only Copilot output into only a `glob_search` filename search, then
+stop after zero filename matches while suggesting `office_search` as a manual
+next step. Search repair prompts now classify Office/PDF-like requests (for
+example cash-flow/計算書/template/document searches) as document searches and
+emit one Relay tool array: `glob_search` for filename candidates followed by
+`office_search` across `.docx`, `.xlsx`, `.pptx`, and `.pdf` contents.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml loop_controller_tests::local_office_search_plan_escalates_to_filename_and_content_search_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agent_loop::orchestrator::cdp_copilot_tool_tests -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agent_loop::orchestrator::loop_controller_tests -- --nocapture
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml loop_controller_tests::local_office_search_plan_escalates_to_filename_and_content_search_repair -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agent_loop::orchestrator::cdp_copilot_tool_tests -- --nocapture`: passed, 70 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agent_loop::orchestrator::loop_controller_tests -- --nocapture`: passed, 46 passed, 1 ignored.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Copilot tool repair and submit latency hardening
 
 Improved the CDP Copilot path based on a repair-loop log where M365 Copilot
