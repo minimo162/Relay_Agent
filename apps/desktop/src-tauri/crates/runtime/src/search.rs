@@ -395,6 +395,11 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
         candidates.truncate(budgets.max_files);
         state.truncated = true;
     }
+    let needs_clarification = candidates.is_empty()
+        || candidates
+            .windows(2)
+            .next()
+            .is_some_and(|pair| (pair[0].score - pair[1].score).abs() < f64::EPSILON);
 
     let output = WorkspaceSearchOutput {
         query: query.to_string(),
@@ -405,7 +410,7 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
             "snippet_expansion".to_string(),
             "office_preview_anchor_integration".to_string(),
         ],
-        needs_clarification: candidates.is_empty(),
+        needs_clarification,
         candidates,
         snippets,
         skipped: state.skipped,
@@ -739,7 +744,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_search_returns_ranked_candidates_snippets_and_limits() {
+    fn agentic_search_content_then_read() {
         let _guard = crate::test_env_lock();
         let original_dir = std::env::current_dir().expect("cwd");
         let dir = temp_path("workspace-search");
@@ -793,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_search_reports_not_found_with_scope() {
+    fn agentic_search_no_evidence_honesty() {
         let _guard = crate::test_env_lock();
         let original_dir = std::env::current_dir().expect("cwd");
         let dir = temp_path("workspace-search-empty");
@@ -825,7 +830,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_search_rejects_paths_outside_workspace() {
+    fn search_workspace_boundary() {
         let _guard = crate::test_env_lock();
         let original_dir = std::env::current_dir().expect("cwd");
         let dir = temp_path("workspace-search-boundary");
@@ -887,6 +892,187 @@ mod tests {
             .iter()
             .any(|skip| skip.reason == "gitignore"));
         assert!(output.skipped.iter().any(|skip| skip.reason == "binary"));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn agentic_search_path_discovery() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-path-discovery");
+        std::fs::create_dir_all(dir.join("src")).expect("src dir");
+        fs::write(dir.join("src/agentic_search_router.rs"), "pub fn route() {}\n")
+            .expect("path target");
+        fs::write(dir.join("src/unrelated.rs"), "pub fn route() {}\n").expect("other file");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("agentic search router"),
+            paths: Some(vec![String::from("src")]),
+            mode: Some(String::from("path")),
+            include_ext: Some(vec![String::from("rs")]),
+            max_files: Some(10),
+            max_snippets: Some(5),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(1),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert!(!output.candidates.is_empty());
+        assert!(output.candidates[0]
+            .path
+            .ends_with("src/agentic_search_router.rs"));
+        assert!(output.candidates[0]
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("path") || reason.contains("filename")));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn agentic_search_office_pdf() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-office-pdf");
+        std::fs::create_dir_all(&dir).expect("directory should be created");
+        fs::write(dir.join("contract.pdf"), b"%PDF-1.4\nsearch needle\n").expect("pdf fixture");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("search needle"),
+            paths: Some(vec![String::from(".")]),
+            mode: Some(String::from("office")),
+            include_ext: Some(vec![String::from("pdf")]),
+            max_files: Some(10),
+            max_snippets: Some(5),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(1),
+            literal: Some(true),
+        })
+        .expect("workspace_search should keep office/pdf routing read-only");
+
+        assert!(output
+            .strategy
+            .iter()
+            .any(|step| step == "office_preview_anchor_integration"));
+        assert!(output
+            .skipped
+            .iter()
+            .all(|skip| !skip.path.ends_with("contract.pdf") || skip.reason != "non_utf8"));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn search_budget_truncation() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-budget");
+        std::fs::create_dir_all(&dir).expect("directory should be created");
+        fs::write(dir.join("one.txt"), "needle one\n").expect("one");
+        fs::write(dir.join("two.txt"), "needle two\n").expect("two");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("needle"),
+            paths: None,
+            mode: Some(String::from("text")),
+            include_ext: Some(vec![String::from("txt")]),
+            max_files: Some(1),
+            max_snippets: Some(5),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(1),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert!(output.limits.truncated);
+        assert_eq!(output.candidates.len(), 1);
+        assert!(output.limits.scanned_files >= 1);
+        assert!(output.limits.skipped_files >= 1);
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn search_ignores_generated_dirs() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-generated");
+        for generated in ["node_modules/pkg", "target/debug", "dist/assets"] {
+            std::fs::create_dir_all(dir.join(generated)).expect("generated dir");
+        }
+        std::fs::create_dir_all(dir.join("src")).expect("src dir");
+        fs::write(dir.join("node_modules/pkg/hit.txt"), "generated needle\n").expect("node");
+        fs::write(dir.join("target/debug/hit.txt"), "generated needle\n").expect("target");
+        fs::write(dir.join("dist/assets/hit.txt"), "generated needle\n").expect("dist");
+        fs::write(dir.join("src/source.txt"), "generated needle\n").expect("source");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("generated needle"),
+            paths: None,
+            mode: Some(String::from("text")),
+            include_ext: Some(vec![String::from("txt")]),
+            max_files: Some(20),
+            max_snippets: Some(10),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(1),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert_eq!(output.candidates.len(), 1);
+        assert!(output.candidates[0].path.ends_with("src/source.txt"));
+        assert!(!output
+            .candidates
+            .iter()
+            .any(|candidate| candidate.path.contains("node_modules")
+                || candidate.path.contains("target")
+                || candidate.path.contains("dist")));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn search_ambiguous_candidates() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-ambiguous");
+        std::fs::create_dir_all(dir.join("src")).expect("src dir");
+        fs::write(dir.join("src/a.txt"), "shared ambiguous marker\n").expect("a");
+        fs::write(dir.join("src/b.txt"), "shared ambiguous marker\n").expect("b");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("shared ambiguous marker"),
+            paths: Some(vec![String::from("src")]),
+            mode: Some(String::from("text")),
+            include_ext: Some(vec![String::from("txt")]),
+            max_files: Some(10),
+            max_snippets: Some(10),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(1),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert!(output.candidates.len() >= 2);
+        assert_eq!(output.candidates[0].score, output.candidates[1].score);
+        assert!(output.needs_clarification);
 
         std::env::set_current_dir(original_dir).expect("restore cwd");
         let _ = fs::remove_dir_all(dir);

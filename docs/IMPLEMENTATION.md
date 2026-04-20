@@ -43,13 +43,19 @@ low-level tools perfectly.
   lookups use `workspace_search` first, with low-level tools reserved for
   concrete follow-up.
 - Added deterministic runtime and compat-harness coverage for ranked evidence,
-  honest not-found scope, workspace boundary rejection, and ignored generated
-  directories.
+  honest not-found scope, workspace boundary rejection, ignored generated
+  directories, budget truncation, ambiguous-candidate clarification, and
+  Office/PDF routing through the `office_search` preview/anchor lane.
+- Updated the live workspace-search smoke documentation so it now treats
+  `workspace_search` as the first broad-search behavior and keeps
+  `glob_search` / `grep_search` as low-level follow-up checks.
 
 Verification commands run locally:
 
 ```bash
 cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml agentic_search_ -- --nocapture
+cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml search_ -- --nocapture
 cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_search_ -- --nocapture
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance -- --nocapture
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agentic_search_implementation_lookup_starts_with_workspace_search -- --nocapture
@@ -66,7 +72,9 @@ git diff --check
 Results:
 
 - `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
-- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_search_ -- --nocapture`: passed, 7 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml agentic_search_ -- --nocapture`: passed, 4 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml search_ -- --nocapture`: passed, 23 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_search_ -- --nocapture`: passed, 4 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance -- --nocapture`: passed, 1 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agentic_search_implementation_lookup_starts_with_workspace_search -- --nocapture`: passed, 1 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_requires_search_before_general_answer -- --nocapture`: passed, 1 passed.
