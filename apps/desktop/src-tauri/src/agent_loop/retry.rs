@@ -137,6 +137,34 @@ fn is_false_completion_success_claim_text(text: &str) -> bool {
     mentions_local_file && success_claim
 }
 
+fn is_required_or_related_file_lookup(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let mentions_file = lower.contains("file")
+        || lower.contains("document")
+        || lower.contains("spreadsheet")
+        || trimmed.contains("ファイル")
+        || trimmed.contains("資料")
+        || trimmed.contains("帳票");
+    let lookup_marker = lower.contains("needed file")
+        || lower.contains("required file")
+        || lower.contains("relevant file")
+        || lower.contains("related file")
+        || lower.contains("which file")
+        || lower.contains("files needed")
+        || lower.contains("files required")
+        || trimmed.contains("必要")
+        || trimmed.contains("関連")
+        || trimmed.contains("関係")
+        || trimmed.contains("教えて")
+        || trimmed.contains("洗い出")
+        || trimmed.contains("候補");
+    mentions_file && lookup_marker
+}
+
 fn is_concrete_local_write_body_without_tools(
     latest_turn_input: &str,
     assistant_text: &str,
@@ -555,6 +583,9 @@ pub(crate) fn is_concrete_new_file_create_request(text: &str) -> bool {
     if trimmed.is_empty() {
         return false;
     }
+    if is_required_or_related_file_lookup(trimmed) {
+        return false;
+    }
     let lower = trimmed.to_ascii_lowercase();
     let create_markers = lower.contains("create")
         || lower.contains("new file")
@@ -571,6 +602,11 @@ pub(crate) fn is_concrete_new_file_create_request(text: &str) -> bool {
         || lower.contains("search")
         || lower.contains("list")
         || lower.contains("where")
+        || lower.contains("needed")
+        || lower.contains("required")
+        || lower.contains("relevant")
+        || lower.contains("related")
+        || lower.contains("which")
         || trimmed.contains("読む")
         || trimmed.contains("読んで")
         || trimmed.contains("確認")
@@ -580,7 +616,11 @@ pub(crate) fn is_concrete_new_file_create_request(text: &str) -> bool {
         || trimmed.contains("検索")
         || trimmed.contains("探")
         || trimmed.contains("一覧")
-        || trimmed.contains("どこ");
+        || trimmed.contains("どこ")
+        || trimmed.contains("必要")
+        || trimmed.contains("関連")
+        || trimmed.contains("関係")
+        || trimmed.contains("教えて");
     create_markers && !existing_file_markers
 }
 
@@ -595,10 +635,18 @@ fn is_local_file_search_request(text: &str) -> bool {
         || lower.contains("list")
         || lower.contains("locate")
         || lower.contains("where")
+        || lower.contains("needed file")
+        || lower.contains("required file")
+        || lower.contains("relevant file")
+        || lower.contains("related file")
+        || lower.contains("which file")
+        || lower.contains("files needed")
+        || lower.contains("files required")
         || trimmed.contains("検索")
         || trimmed.contains("探")
         || trimmed.contains("一覧")
-        || trimmed.contains("どこ");
+        || trimmed.contains("どこ")
+        || is_required_or_related_file_lookup(trimmed);
     if !wants_search {
         return false;
     }
@@ -633,14 +681,7 @@ fn infer_glob_pattern_for_search_request(text: &str) -> Option<String> {
         return Some("**/*cash*flow*".to_string());
     }
     if trimmed.contains("キャッシュ") && trimmed.contains("フロー") {
-        let mut pattern = "**/*キャッシュ*フロー*".to_string();
-        if trimmed.contains("計算") {
-            pattern.push_str("計算*");
-        }
-        if trimmed.contains('書') {
-            pattern.push_str("書*");
-        }
-        return Some(pattern);
+        return Some("**/*キャッシュ*フロー*".to_string());
     }
     None
 }
@@ -1113,6 +1154,7 @@ pub(crate) fn decide_loop_after_success(
     }
 
     let assistant_text = summary.terminal_assistant_text.as_str();
+    let is_local_file_search = is_local_file_search_request(latest_turn_input);
     let is_tool_protocol_confusion =
         summary.tool_results.is_empty() && is_tool_protocol_confusion_text(assistant_text);
     let is_tool_result_summary_needed = has_local_search_tool_result(summary)
@@ -1123,8 +1165,11 @@ pub(crate) fn decide_loop_after_success(
             || assistant_text.contains("```relay_tool"));
     let is_repair_refusal =
         summary.tool_results.is_empty() && is_repair_refusal_text(assistant_text);
-    let is_false_completion =
-        summary.tool_results.is_empty() && is_false_completion_success_claim_text(assistant_text);
+    let is_false_completion = summary.tool_results.is_empty()
+        && !is_local_file_search
+        && is_false_completion_success_claim_text(assistant_text);
+    let is_local_search_answer_without_tools =
+        summary.tool_results.is_empty() && is_local_file_search;
     let is_plain_file_body_completion = summary.tool_results.is_empty()
         && is_concrete_local_write_body_without_tools(
             latest_turn_input,
@@ -1143,7 +1188,7 @@ pub(crate) fn decide_loop_after_success(
 
     if summary.tool_results.is_empty() {
         tracing::info!(
-            "[RelayAgent] post-turn classification: outcome={:?} iterations={} meta_nudges_used={}/{} path_repair_used={} tool_protocol_confusion={} repair_refusal={} false_completion={} plain_file_body={} mutation_plan_without_tools={} meta_stall={} assistant_excerpt={:?}",
+            "[RelayAgent] post-turn classification: outcome={:?} iterations={} meta_nudges_used={}/{} path_repair_used={} tool_protocol_confusion={} repair_refusal={} false_completion={} local_search_without_tools={} plain_file_body={} mutation_plan_without_tools={} meta_stall={} assistant_excerpt={:?}",
             summary.outcome,
             summary.iterations,
             meta_stall_nudges_used,
@@ -1152,6 +1197,7 @@ pub(crate) fn decide_loop_after_success(
             is_tool_protocol_confusion,
             is_repair_refusal,
             is_false_completion,
+            is_local_search_answer_without_tools,
             is_plain_file_body_completion,
             is_mutation_plan_without_tools,
             is_meta_stall,
@@ -1186,6 +1232,7 @@ pub(crate) fn decide_loop_after_success(
     if is_tool_protocol_confusion
         || is_repair_refusal
         || is_false_completion
+        || is_local_search_answer_without_tools
         || is_plain_file_body_completion
         || is_mutation_plan_without_tools
     {

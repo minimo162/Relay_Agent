@@ -571,9 +571,9 @@ fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
             "Create or overwrite a workspace text file when the final content is known."
         }
         "edit_file" => "Apply a targeted replacement inside an existing workspace file.",
-        "glob_search" => "Find candidate files by path pattern before reading or editing.",
+        "glob_search" => "Find candidate files by path pattern before reading, editing, or answering a local file lookup.",
         "grep_search" => "Search code or text content for concrete strings or regex matches.",
-        "office_search" => "Search extracted DOCX/XLSX/PPTX/PDF text for concrete literal strings or regex matches.",
+        "office_search" => "Search extracted DOCX/XLSX/PPTX/PDF text for concrete literal strings or regex matches before answering Office/PDF lookup questions.",
         "git_status" => "Inspect working tree changes without invoking a shell.",
         "git_diff" => "Inspect staged or unstaged diffs without invoking a shell.",
         "pdf_merge" => "Merge existing PDF files inside the workspace.",
@@ -599,9 +599,9 @@ fn cdp_tool_use_when(name: &str) -> &'static str {
         "read_file" => "Use for grounded inspection, PDF/Office reading, or before editing an existing file.",
         "write_file" => "Use when creating a new target file or replacing a file with fully known content.",
         "edit_file" => "Use after reading the file when you need a targeted text replacement.",
-        "glob_search" => "Use to discover likely file paths before reading them.",
+        "glob_search" => "Use to discover likely file paths before reading them, especially when the user asks which files are needed, related, relevant, or available.",
         "grep_search" => "Use to find identifiers, strings, or patterns in the codebase before reading or editing.",
-        "office_search" => "Use for exact text across Office/PDF files; set `regex: true` only when a real regex is needed.",
+        "office_search" => "Use for Office/PDF content discovery, including needed-file or related-file questions; derive a literal search term from the user request and set `regex: true` only when a real regex is needed.",
         "git_status" => "Use for a quick change overview when the task depends on current git state.",
         "git_diff" => "Use when you need to inspect exact code changes already present in the workspace.",
         "pdf_merge" => "Use when the user explicitly wants to combine PDF files in the workspace.",
@@ -625,9 +625,9 @@ fn cdp_tool_avoid_when(name: &str) -> &'static str {
         "read_file" => "Avoid using bash or PowerShell for file reads when `read_file` applies.",
         "write_file" => "Avoid for incremental edits to an existing file; prefer `edit_file` after `read_file`.",
         "edit_file" => "Avoid when the file does not exist or when replacing the full file would be simpler.",
-        "glob_search" => "Avoid when the exact file path is already known.",
+        "glob_search" => "Avoid when the exact file path is already known and no broader candidate search is needed.",
         "grep_search" => "Avoid when the exact file path is already known and a direct `read_file` is enough.",
-        "office_search" => "Avoid for plaintext source files; use `grep_search` there.",
+        "office_search" => "Avoid for plaintext source files; use `grep_search` there. Do not use it as semantic ranking without a concrete search pattern.",
         "git_status" => "Avoid when the task is pure file reading or editing with no git-state dependency.",
         "git_diff" => "Avoid when you only need the current file contents rather than a diff.",
         "pdf_merge" => "Avoid using bash for PDF merge when this dedicated tool applies.",
@@ -797,7 +797,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "glob_search",
-            description: "Find files by glob pattern.",
+            description: "Find files by glob pattern. Use this before reading when the path is unknown, and for local lookup requests asking which files are needed, related, relevant, or available.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -811,7 +811,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "grep_search",
-            description: "Search file contents with a regex pattern.",
+            description: "Search plaintext/code file contents with a regex pattern. Use this for code or text repositories; use office_search for DOCX/XLSX/PPTX/PDF.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -837,7 +837,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "office_search",
-            description: "Search extracted text across .docx, .xlsx, .pptx, and .pdf files. Defaults to literal substring search; set regex=true for regex patterns. No semantic ranking. Results include path, anchor, match offsets, and preview. Extraction omits unsupported embedded image/chart/SmartArt text.",
+            description: "Search extracted text across .docx, .xlsx, .pptx, and .pdf files. Use this before answering local Office/PDF lookup requests, including questions about needed, related, relevant, or available files. Defaults to literal substring search; set regex=true for regex patterns. No semantic ranking. Results include path, anchor, match offsets, and preview. Extraction omits unsupported embedded image/chart/SmartArt text.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -4178,6 +4178,19 @@ mod tests {
         assert!(read_file
             .important_optional_args
             .contains(&"offset".to_string()));
+        let glob = specs
+            .iter()
+            .find(|spec| spec.name == "glob_search")
+            .expect("glob_search cdp prompt spec");
+        assert!(glob.use_when.contains("needed"));
+        assert!(glob.use_when.contains("related"));
+        let office = specs
+            .iter()
+            .find(|spec| spec.name == "office_search")
+            .expect("office_search cdp prompt spec");
+        assert!(office.purpose.contains("Office/PDF lookup"));
+        assert!(office.use_when.contains("needed-file"));
+        assert!(office.avoid_when.contains("semantic ranking"));
     }
 
     // `PowerShell` is only registered in the catalog under `#[cfg(windows)]`

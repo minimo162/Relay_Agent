@@ -15,6 +15,110 @@
 
 ## Milestone Log
 
+### 2026-04-20 opencode-inspired file search guidance
+
+Compared opencode's file-search flow and incorporated the parts that fit the
+M365 Copilot/CDP path: explicit tool-selection guidance and stronger
+search-before-answer catalog wording. Relay still cannot force structured
+`toolChoice` through M365 Copilot like opencode can, so this change makes the
+available `relay_tool` path clearer and more prescriptive.
+
+- Expanded `glob_search` CDP metadata so local "needed / related / relevant
+  files" requests are treated as candidate-file discovery.
+- Expanded `office_search` CDP metadata so Office/PDF lookup questions search
+  extracted document text before producing a general answer.
+- Added CDP catalog guidance to use `glob_search` for filenames, `grep_search`
+  for plaintext/code, and `office_search` for Office/PDF, with
+  `glob_search` + `office_search` batched in one `relay_tool` JSON array when
+  both are needed.
+- Added the same local-file-lookup rule to the desktop system prompt so
+  Japanese requests like `必要なファイル` / `関連ファイル` are not handled as
+  generic domain checklist prompts.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml catalog_lists_builtin_tools_and_protocol -- --nocapture
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup -- --nocapture`: passed, 3 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml catalog_lists_builtin_tools_and_protocol -- --nocapture`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-20 Initial file-lookup prompt hardening
+
+Followed up on the required-file search flow because the first Copilot response
+often answered from general accounting knowledge before Relay had any local
+tool evidence.
+
+- Strengthened the CDP catalog lead so "needed/required/related files" requests
+  are explicitly treated as local file lookup intents on the first response.
+- Added a "tools first" rule for Japanese `必要なファイル`, `関連ファイル`,
+  `関係するファイル`, and `ファイルを教えて` wording.
+- Added an anti-checklist rule: for local document/file lookup, Copilot must not
+  answer with a generic checklist such as BS/PL/fixed asset roll-forward before
+  `glob_search` / `office_search` results identify actual local files.
+- Added a regression test proving the initial standard prompt for
+  `キャッシュフロー計算書を作成する際に必要なファイルを教えて` includes the
+  search-before-general-answer guidance.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml catalog_lists_builtin_tools_and_protocol -- --nocapture
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup -- --nocapture`: passed, 3 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml catalog_lists_builtin_tools_and_protocol -- --nocapture`: passed.
+
+### 2026-04-20 Required-file search repair routing
+
+Followed up on a live run where the user asked for files needed to create a
+cash-flow statement. Copilot answered with a generic accounting checklist, Relay
+classified it as a false completion, and the repair turn drifted to `write_file`
+instead of searching local files.
+
+- Treat "needed/required/relevant files" and Japanese `必要なファイル` /
+  `関連ファイル` / `関係するファイル` requests as local file lookup intents even
+  when the latest user text does not literally say `検索`.
+- Exclude those lookup intents from concrete new-file creation classification,
+  so phrases like `計算書を作成する際に必要なファイル` no longer narrow repair to
+  write-only behavior.
+- Route no-tool answers to local lookup requests directly into the
+  `glob_search` + `office_search` repair path.
+- Broaden the inferred Japanese cash-flow filename glob from a too-specific
+  `**/*キャッシュ*フロー*計算*書*` to `**/*キャッシュ*フロー*`; terms such as
+  `計算書` remain covered by `office_search` content matching.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml file_lookup -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan_escalates_to_filename_and_content_search_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml malformed_office_search_tool_json_after_results_escalates_to_summary_repair -- --nocapture
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml file_lookup -- --nocapture`: passed, 2 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan_escalates_to_filename_and_content_search_repair -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml malformed_office_search_tool_json_after_results_escalates_to_summary_repair -- --nocapture`: passed.
+
 ### 2026-04-20 Office search repair loop hardening
 
 Improved the CDP repair path for local Office/PDF search requests after a live

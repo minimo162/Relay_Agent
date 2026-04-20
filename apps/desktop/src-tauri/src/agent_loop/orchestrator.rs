@@ -1733,6 +1733,8 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 ## Immediate action rules
 
 - **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read_file` first** before edits.
+- **Local file lookup means tools first:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; emit `glob_search` and, for Office/PDF workspaces, `office_search` in this reply.
+- **Search tool selection:** Use `glob_search` for candidate filenames and folders, `grep_search` for plaintext/code content, and `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content. When both filename and Office/PDF content matter, put `glob_search` and `office_search` in one `relay_tool` JSON array.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
 - **Path discipline:** If the latest user turn names a concrete path (absolute path, relative path, or bare filename with an extension), use that exact string in tool input. Do **not** rewrite it to a different directory from a prior turn. Treat bare filenames with an extension as workspace-root-relative unless the user gave another base.
 - **This turn, not “next message”:** Do **not** defer all tools to a follow-up assistant message when the current turn can already run `read_file` / `write_file` / `edit_file`.
@@ -1742,6 +1744,7 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - Tool results in this bundle are authoritative evidence for the current turn.
 - Do **not** claim bugs, fixes, identifiers, or file state unless those claims are traceable to tool results, user messages, or file text in this prompt.
 - **No meta-only stall:** When the work clearly needs tools, do **not** answer with only protocol explanations, promises, or plans; the host needs **parsed fences** in this message.
+- **No generic checklist before search:** For local document/file lookup, do not give a generic checklist such as "BS, PL, fixed asset roll-forward" until Relay tool results identify actual local files or show none were found.
 - If you must wait for tool output, say so **once** briefly—do not duplicate the same “next turn” plan many times.
 
 "#;
@@ -1774,6 +1777,7 @@ Only the tools documented below are intentionally advertised to Copilot for this
 
 - named existing file inspect/edit/review => `read_file` then `edit_file`
 - named new file create => `write_file`
+- local file lookup / needed files / related files => one `relay_tool` JSON array with `glob_search` plus `office_search` for Office/PDF content; do not answer from general knowledge before tools
 - codebase search/investigation => `glob_search` / `grep_search` before `bash`
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
 
@@ -3830,6 +3834,7 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "- If a session workspace (`cwd`) is set, file-tool paths are resolved within that workspace and may be rejected when they escape it. Do not promise reads outside the workspace boundary; call the tool and surface the actual path error if access is denied.\n",
                 "- If no workspace is set, read_file, glob_search, grep_search, and office_search may use absolute local paths the OS user can read.\n",
                 "- read_file returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). `.docx`, `.xlsx`, and `.pptx` are parsed as plaintext extraction; use office_search for exact search across those files. Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted `.txt`/`.md` file.\n",
+                "- For local file lookup requests, use glob_search for candidate paths, grep_search for plaintext/code contents, and office_search for Office/PDF contents before giving a general explanation. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
                 "- If the user's request is already concrete (paths, files, stated action), use tools in your first response; do not ask them to rephrase unless something essential is missing.\n",
                 "- To combine or split PDF files, use pdf_merge / pdf_split (workspace write); do not use bash for that."
             ),
@@ -3945,6 +3950,9 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("Parsed fences run on the user's machine"));
         assert!(s.contains("Copilot UI"));
         assert!(s.contains("Action in the same turn"));
+        assert!(s.contains("Local file lookup means tools first"));
+        assert!(s.contains("Search tool selection"));
+        assert!(s.contains("No generic checklist before search"));
         assert!(s.contains("No meta-only stall"));
         assert!(s.contains("Do not defer concrete requests"));
         assert!(s.contains("Prefer a clean fence body"));
@@ -4037,6 +4045,60 @@ mod cdp_copilot_tool_tests {
             cdp_catalog_flavor(&messages),
             CdpCatalogFlavor::StandardFull
         );
+    }
+
+    #[test]
+    fn required_file_lookup_creation_text_keeps_full_repair_catalog() {
+        let request = "キャッシュフロー計算書を作成する際に必要なファイルを教えて";
+        let repair = build_tool_protocol_repair_input(request, request, 1);
+        let messages = vec![ConversationMessage::user_text(repair)];
+
+        assert_eq!(
+            cdp_catalog_flavor(&messages),
+            CdpCatalogFlavor::StandardFull
+        );
+    }
+
+    #[test]
+    fn required_file_lookup_initial_prompt_requires_search_before_general_answer() {
+        let messages = vec![ConversationMessage::user_text(
+            "キャッシュフロー計算書を作成する際に必要なファイルを教えて",
+        )];
+        let bundle = build_cdp_prompt_bundle_from_messages(
+            &[],
+            &messages,
+            CdpPromptFlavor::Standard,
+            CdpCatalogFlavor::StandardFull,
+        );
+
+        assert!(bundle
+            .catalog_text
+            .contains("Local file lookup means tools first"));
+        assert!(bundle.catalog_text.contains("必要なファイル"));
+        assert!(bundle
+            .catalog_text
+            .contains("do not give a generic checklist"));
+        assert!(bundle
+            .catalog_text
+            .contains("one `relay_tool` JSON array with `glob_search` plus `office_search`"));
+        assert!(bundle
+            .catalog_text
+            .contains("Use `glob_search` for candidate filenames"));
+        assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::StandardFull);
+    }
+
+    #[test]
+    fn desktop_system_prompt_treats_required_file_questions_as_lookup() {
+        let system = build_desktop_system_prompt(
+            "キャッシュフロー計算書を作成する際に必要なファイルを教えて",
+            None,
+        )
+        .join("\n");
+
+        assert!(system.contains("use glob_search for candidate paths"));
+        assert!(system.contains("office_search for Office/PDF contents"));
+        assert!(system.contains("`必要なファイル`"));
+        assert!(system.contains("not invitations for generic domain checklists"));
     }
 
     #[test]
@@ -6268,11 +6330,32 @@ mod loop_controller_tests {
         };
         assert!(next_input.contains("This is a local document search request."));
         assert!(next_input.contains(r#""name": "glob_search""#));
-        assert!(next_input.contains(r#""pattern": "**/*キャッシュ*フロー*計算*書*""#));
+        assert!(next_input.contains(r#""pattern": "**/*キャッシュ*フロー*""#));
         assert!(next_input.contains(r#""name": "office_search""#));
         assert!(next_input.contains(r#""pattern": "キャッシュフロー""#));
         assert!(next_input.contains(r#""include_ext": ["#));
         assert!(!next_input.contains(r#""name": "write_file""#));
+    }
+
+    #[test]
+    fn required_file_lookup_answer_without_tools_escalates_to_local_search_repair() {
+        let s = summary(
+            "キャッシュフロー計算書を作成する際に最低限必要になる代表的なファイルは、BS、PL、固定資産明細、借入金明細などです。",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let request = "キャッシュフロー計算書を作成する際に必要なファイルを教えて";
+        let decision = decide_loop_after_success(request, request, 1, 0, 2, false, &s);
+        let LoopDecision::Continue { next_input, kind } = decision else {
+            panic!("expected required-file lookup to escalate to local search repair");
+        };
+        assert!(next_input.contains("This is a local document search request."));
+        assert!(next_input.contains(r#""name": "glob_search""#));
+        assert!(next_input.contains(r#""pattern": "**/*キャッシュ*フロー*""#));
+        assert!(next_input.contains(r#""name": "office_search""#));
+        assert!(next_input.contains(r#""pattern": "キャッシュフロー""#));
+        assert!(!next_input.contains(r#""name": "write_file""#));
+        assert_eq!(kind, LoopContinueKind::MetaNudge);
     }
 
     #[test]
