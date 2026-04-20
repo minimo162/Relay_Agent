@@ -1121,10 +1121,29 @@ fn has_local_search_tool_result(summary: &runtime::TurnSummary) -> bool {
             matches!(
                 block,
                 ContentBlock::ToolResult { tool_name, .. }
-                    if matches!(tool_name.as_str(), "glob_search" | "office_search")
+                    if matches!(tool_name.as_str(), "glob_search" | "grep_search" | "office_search")
             )
         })
     })
+}
+
+fn has_local_search_guard_notice(summary: &runtime::TurnSummary) -> bool {
+    let outcome_message_matches = matches!(
+        &summary.outcome,
+        runtime::TurnOutcome::ToolError { message }
+            if message.contains("local search tool budget")
+                || message.contains("repeated an identical tool call")
+    );
+    outcome_message_matches
+        || summary.tool_results.iter().any(|message| {
+            message.blocks.iter().any(|block| match block {
+                ContentBlock::ToolResult { output, .. } => {
+                    output.contains("Search tool budget reached")
+                        || output.contains("Duplicate tool call suppressed")
+                }
+                _ => false,
+            })
+        })
 }
 
 fn is_read_file_enoent(output: &str) -> bool {
@@ -1170,6 +1189,19 @@ pub(crate) fn decide_loop_after_success(
             return LoopDecision::Stop(LoopStopReason::PermissionDenied);
         }
         runtime::TurnOutcome::ToolError { .. } => {
+            if has_local_search_tool_result(summary) && has_local_search_guard_notice(summary) {
+                if meta_stall_nudges_used < meta_stall_nudge_limit {
+                    return LoopDecision::Continue {
+                        next_input: build_tool_result_summary_repair_input(
+                            goal,
+                            latest_turn_input,
+                            &summary.terminal_assistant_text,
+                        ),
+                        kind: LoopContinueKind::MetaNudge,
+                    };
+                }
+                return LoopDecision::Stop(LoopStopReason::MetaStall);
+            }
             if !path_repair_used {
                 if let Some(error) = latest_read_file_tool_error(summary) {
                     if is_read_file_enoent(&error.output) {

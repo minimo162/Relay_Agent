@@ -722,7 +722,9 @@ fn matches_optional_filters(
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| glob_filter.matches(name));
-        if !glob_filter.matches(&path_string) && !glob_filter.matches_path(path) && !filename_matches
+        if !glob_filter.matches(&path_string)
+            && !glob_filter.matches_path(path)
+            && !filename_matches
         {
             return false;
         }
@@ -959,10 +961,9 @@ mod tests {
 
     #[test]
     fn grep_search_accepts_opencode_include_alias() {
-        let input: GrepSearchInput = serde_json::from_str(
-            r#"{"pattern":"hello","path":"src","include":"*.rs"}"#,
-        )
-        .expect("include alias should deserialize");
+        let input: GrepSearchInput =
+            serde_json::from_str(r#"{"pattern":"hello","path":"src","include":"*.rs"}"#)
+                .expect("include alias should deserialize");
         assert_eq!(input.glob.as_deref(), Some("*.rs"));
     }
 

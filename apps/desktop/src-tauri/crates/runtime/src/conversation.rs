@@ -459,12 +459,8 @@ where
                     let notice = format!(
                         "Duplicate tool call suppressed: this `{tool_name}` call was already executed earlier in this turn with the same input. The prior tool output remains in the transcript above. Do not repeat this call. Either summarize the existing findings for the user, or issue a different tool call (for example, narrow or broaden the pattern, change the target path, or switch tools)."
                     );
-                    let synthetic = ConversationMessage::tool_result(
-                        tool_use_id,
-                        tool_name,
-                        notice,
-                        false,
-                    );
+                    let synthetic =
+                        ConversationMessage::tool_result(tool_use_id, tool_name, notice, false);
                     self.session.messages.push(synthetic.clone());
                     tool_results.push(synthetic);
                     if *duplicate_tool_hits >= TURN_TOOL_DUPLICATE_LIMIT {
@@ -1718,7 +1714,10 @@ mod tests {
         );
 
         let summary = runtime
-            .run_turn("search for cashflow files", None::<&mut dyn PermissionPrompter>)
+            .run_turn(
+                "search for cashflow files",
+                None::<&mut dyn PermissionPrompter>,
+            )
             .expect("loop should terminate via duplicate-hit guard, not an error");
 
         assert_eq!(
@@ -1806,7 +1805,10 @@ mod tests {
         );
 
         let summary = runtime
-            .run_turn("search for cashflow files", None::<&mut dyn PermissionPrompter>)
+            .run_turn(
+                "search for cashflow files",
+                None::<&mut dyn PermissionPrompter>,
+            )
             .expect("loop should terminate via local-search budget guard");
 
         assert_eq!(
@@ -1831,14 +1833,10 @@ mod tests {
 
     #[test]
     fn turn_level_dedup_key_is_insensitive_to_object_key_order() {
-        let key_a = super::turn_level_tool_dedup_key(
-            "glob_search",
-            r#"{"pattern":"**/*","path":"src"}"#,
-        );
-        let key_b = super::turn_level_tool_dedup_key(
-            "glob_search",
-            r#"{"path":"src","pattern":"**/*"}"#,
-        );
+        let key_a =
+            super::turn_level_tool_dedup_key("glob_search", r#"{"pattern":"**/*","path":"src"}"#);
+        let key_b =
+            super::turn_level_tool_dedup_key("glob_search", r#"{"path":"src","pattern":"**/*"}"#);
         assert_eq!(key_a, key_b);
     }
 }

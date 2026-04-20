@@ -5950,6 +5950,65 @@ mod loop_controller_tests {
     }
 
     #[test]
+    fn local_search_budget_tool_error_escalates_to_summary_repair() {
+        let s = summary(
+            r#"[{"name":"glob_search","relay_tool_call":true,"input":{"pattern":"**/*CF*"}}]"#,
+            vec![
+                tool_success_result("glob_search", r#"{"matches":["キャッシュフロー.xlsx"]}"#),
+                tool_success_result(
+                    "glob_search",
+                    "Search tool budget reached: Relay already executed 6 local search calls in this turn. The prior tool outputs remain in the transcript above. Do not issue more `glob_search`, `grep_search`, or `office_search` calls for this request; summarize the existing findings for the user.",
+                ),
+            ],
+            runtime::TurnOutcome::ToolError {
+                message: "Turn stopped: the assistant exceeded the local search tool budget (6) without summarizing results.".to_string(),
+            },
+        );
+        let decision = decide_loop_after_success(
+            "キャッシュフロー計算書の作成に関係するファイルを検索して",
+            "キャッシュフロー計算書の作成に関係するファイルを検索して",
+            1,
+            0,
+            2,
+            false,
+            &s,
+        );
+        let LoopDecision::Continue { next_input, kind } = decision else {
+            panic!("expected local search budget guard to request summary repair");
+        };
+        assert!(next_input.contains("Tool result summary repair."));
+        assert!(next_input.contains("Do not emit any `relay_tool` fence"));
+        assert!(next_input.contains("Use the prior tool results already present"));
+        assert_eq!(kind, LoopContinueKind::MetaNudge);
+    }
+
+    #[test]
+    fn local_search_guard_stops_after_summary_repair_limit() {
+        let s = summary(
+            r#"[{"name":"glob_search","relay_tool_call":true,"input":{"pattern":"**/*CF*"}}]"#,
+            vec![tool_success_result(
+                "glob_search",
+                "Search tool budget reached: Relay already executed 6 local search calls in this turn.",
+            )],
+            runtime::TurnOutcome::ToolError {
+                message: "Turn stopped: the assistant exceeded the local search tool budget (6) without summarizing results.".to_string(),
+            },
+        );
+        assert_eq!(
+            decide_loop_after_success(
+                "キャッシュフロー計算書の作成に関係するファイルを検索して",
+                "キャッシュフロー計算書の作成に関係するファイルを検索して",
+                1,
+                2,
+                2,
+                false,
+                &s,
+            ),
+            LoopDecision::Stop(LoopStopReason::MetaStall)
+        );
+    }
+
+    #[test]
     fn read_file_enoent_in_build_session_gets_path_repair() {
         let summary = runtime::TurnSummary {
             assistant_messages: vec![ConversationMessage::assistant(vec![ContentBlock::ToolUse {

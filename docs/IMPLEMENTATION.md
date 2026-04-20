@@ -7275,6 +7275,32 @@ Results:
 - `pnpm check`: passed.
 - `git diff --check`: passed.
 
+## 2026-04-20 - Local search budget summary repair
+
+Fixed a local file search loop where Copilot could keep emitting `glob_search`
+variants until Relay's turn-level search budget stopped the turn before the
+assistant summarized existing results. Search-budget and duplicate-search guard
+notices are now treated as recoverable summary-repair triggers when local search
+tool results already exist, so the outer loop asks for a plain-text answer from
+the prior `glob_search` / `grep_search` / `office_search` evidence instead of
+ending as a generic tool error. Generic tool failures still stop as tool errors.
+
+Verification commands run locally:
+
+```bash
+cargo fmt
+cargo fmt --check --all
+cargo test -p relay-agent-desktop local_search_
+git diff --check
+```
+
+Results:
+
+- `cargo fmt`: passed.
+- `cargo fmt --check --all`: passed.
+- `cargo test -p relay-agent-desktop local_search_`: passed, 4 passed.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Copilot bridge Node 20 startup fix
 
 Fixed a Windows startup failure where `copilot_server.js` exited under Node.js
