@@ -1787,7 +1787,7 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read_file` first** before edits.
 - **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; emit `glob_search` and, for Office/PDF workspaces, `office_search` in this reply.
 - **Initial lookup reply format:** When the latest user request is a local file/document lookup and there are no Relay Tool Result blocks for that lookup yet, the entire assistant reply must be exactly one fenced `relay_tool` or `json` block. Do not write `はい、...を検索します`, do not cite `turn*search*`, do not output `<File>...</File>` cards, and do not list candidate files from M365 before Relay tools run.
-- **Search tool selection:** Use `glob_search` for candidate filenames and folders, `grep_search` for plaintext/code content, and `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content. When both filename and Office/PDF content matter, put `glob_search` and `office_search` in one `relay_tool` JSON array.
+- **Search tool selection:** Use `glob_search` for candidate filenames and folders, `grep_search` for plaintext/code content, and `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content. `glob_search` supports brace groups, so use patterns like `**/*.{docx,xlsx,pptx,pdf}` or `**/*.{rs,ts,tsx}` when one extension-family search is enough. When both filename and Office/PDF content matter, put `glob_search` and `office_search` in one `relay_tool` JSON array.
 - **Cash-flow lookup variants:** For cash-flow / キャッシュフロー lookup requests, include filename globs for Japanese and common abbreviations in the same first batch: `**/*キャッシュ*フロー*`, `**/*CF*`, and `**/*CFS*`. For Office/PDF body search, prefer one `office_search` with `regex:true` and pattern `キャッシュ[・\s]*フロー|cash\s*flow|\bCF\b|\bCFS\b` so both `キャッシュフロー` and `キャッシュ・フロー` are covered without spending extra turns.
 - **Batch speculative searches:** For open-ended lookup, it is better to run a small batch of useful `glob_search` / `grep_search` / `office_search` calls in one reply than to spend a model turn announcing the first search. Keep each search concrete and narrow enough to be useful.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
@@ -1837,7 +1837,7 @@ M365 Copilot built-in results are outside the Relay tool protocol. Do not satisf
 - named new file create => `write_file`
 - local file lookup / needed files / related files => one `relay_tool` JSON array with `glob_search` plus `office_search` for Office/PDF content; do not answer from general knowledge before tools
 - codebase search/investigation => `glob_search` / `grep_search` before `bash`
-- open-ended search => batch a few likely useful searches in one `relay_tool` array instead of narrating a search plan
+- open-ended search => batch a few likely useful searches in one `relay_tool` array instead of narrating a search plan; use `glob_search` brace groups for extension families
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
 
 {rendered_tools}
@@ -4171,6 +4171,7 @@ mod cdp_copilot_tool_tests {
         assert!(bundle
             .catalog_text
             .contains("Use `glob_search` for candidate filenames"));
+        assert!(bundle.catalog_text.contains("**/*.{docx,xlsx,pptx,pdf}"));
         assert!(bundle.catalog_text.contains("Cash-flow lookup variants"));
         assert!(bundle.catalog_text.contains("**/*CF*"));
         assert!(bundle

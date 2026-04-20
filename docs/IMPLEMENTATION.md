@@ -15,6 +15,49 @@
 
 ## Milestone Log
 
+### 2026-04-20 claw-code agentic search brace-glob follow-up
+
+Reviewed `https://github.com/ultraworkers/claw-code.git` at
+`50e3fa3a834a7a5a603d69c372a2c4c190b7104b` for portable search behavior.
+Relay already had the recent file-search hardening that overlaps with claw and
+opencode. This follow-up brought over claw's low-risk glob brace expansion so
+the agent can issue one concrete discovery query for extension families such as
+`**/*.{docx,xlsx,pptx,pdf}` or `**/*.{rs,ts,tsx}` instead of spending extra turns
+or missing files because the Rust `glob` crate treats braces literally.
+
+- Added recursive `{a,b}` expansion inside `glob_search`.
+- Deduplicated expanded glob matches so repeated alternatives do not duplicate
+  filenames.
+- Updated CDP tool guidance so Copilot can use extension-family brace globs in
+  first-turn local search batches.
+- Kept Relay-specific `.git` exclusion, mtime ordering, and directory-base
+  validation intact.
+- Refreshed `docs/CLAW_CODE_ALIGNMENT.md` to the reviewed claw-code SHA.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml expand_braces_expands_extension_families -- --nocapture
+cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml glob_search_with_braces_finds_unique_files -- --nocapture
+cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml glob_search_ -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_requires_search_before_general_answer -- --nocapture
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml expand_braces_expands_extension_families -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml glob_search_with_braces_finds_unique_files -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml glob_search_ -- --nocapture`: passed, 2 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_requires_search_before_general_answer -- --nocapture`: passed, 1 passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-20 opencode file-search parity follow-up
 
 Reviewed `https://github.com/anomalyco/opencode.git` file-search behavior after

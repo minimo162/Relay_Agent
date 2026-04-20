@@ -1,4 +1,5 @@
 use std::cmp::Reverse;
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -514,12 +515,19 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
         base_dir.join(pattern).to_string_lossy().into_owned()
     };
 
+    // The `glob` crate does not expand `{a,b}` groups. Expand them here so
+    // agents can batch extension families like `**/*.{docx,xlsx,pptx,pdf}`.
+    let expanded = expand_braces(&search_pattern);
+
+    let mut seen = HashSet::new();
     let mut matches = Vec::new();
-    let entries = glob::glob(&search_pattern)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
-    for entry in entries.flatten() {
-        if entry.is_file() && !is_ignored_search_path(&entry) {
-            matches.push(entry);
+    for pattern in &expanded {
+        let entries = glob::glob(pattern)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
+        for entry in entries.flatten() {
+            if entry.is_file() && !is_ignored_search_path(&entry) && seen.insert(entry.clone()) {
+                matches.push(entry);
+            }
         }
     }
 
@@ -709,6 +717,24 @@ fn truncate_grep_line(line: &str) -> String {
         return "...".to_string();
     }
     format!("{}...", &line[..end])
+}
+
+fn expand_braces(pattern: &str) -> Vec<String> {
+    let Some(start) = pattern.find('{') else {
+        return vec![pattern.to_string()];
+    };
+    let Some(end_offset) = pattern[start + 1..].find('}') else {
+        return vec![pattern.to_string()];
+    };
+
+    let end = start + 1 + end_offset;
+    let prefix = &pattern[..start];
+    let body = &pattern[start + 1..end];
+    let suffix = &pattern[end + 1..];
+
+    body.split(',')
+        .flat_map(|part| expand_braces(&format!("{prefix}{part}{suffix}")))
+        .collect()
 }
 
 fn matches_optional_filters(
@@ -947,6 +973,37 @@ mod tests {
         })
         .expect("grep should succeed");
         assert!(grep_output.content.unwrap_or_default().contains("hello"));
+    }
+
+    #[test]
+    fn expand_braces_expands_extension_families() {
+        let mut expanded = super::expand_braces("docs/**/*.{docx,xlsx,pptx,pdf}");
+        expanded.sort();
+        assert_eq!(
+            expanded,
+            vec![
+                "docs/**/*.docx",
+                "docs/**/*.pdf",
+                "docs/**/*.pptx",
+                "docs/**/*.xlsx"
+            ]
+        );
+    }
+
+    #[test]
+    fn glob_search_with_braces_finds_unique_files() {
+        let dir = temp_path("glob-braces");
+        std::fs::create_dir_all(&dir).expect("directory should be created");
+        fs::write(dir.join("one.rs"), "fn one() {}\n").expect("write rs");
+        fs::write(dir.join("two.ts"), "const two = 2;\n").expect("write ts");
+        fs::write(dir.join("skip.md"), "# skip\n").expect("write md");
+
+        let globbed = glob_search("**/*.{rs,ts,rs}", Some(dir.to_string_lossy().as_ref()))
+            .expect("glob should succeed");
+        assert_eq!(globbed.num_files, 2);
+        assert!(globbed.filenames.iter().any(|path| path.ends_with("one.rs")));
+        assert!(globbed.filenames.iter().any(|path| path.ends_with("two.ts")));
+        assert!(!globbed.filenames.iter().any(|path| path.ends_with("skip.md")));
     }
 
     #[test]

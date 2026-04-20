@@ -571,7 +571,7 @@ fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
             "Create or overwrite a workspace text file when the final content is known."
         }
         "edit_file" => "Apply a targeted replacement inside an existing workspace file.",
-        "glob_search" => "Find candidate files by path pattern before reading, editing, or answering a local file lookup.",
+        "glob_search" => "Find candidate files by path pattern before reading, editing, or answering a local file lookup. Supports brace groups such as `**/*.{rs,ts,tsx}`.",
         "grep_search" => "Search code or text content for concrete strings or regex matches.",
         "office_search" => "Search extracted DOCX/XLSX/PPTX/PDF text for concrete literal strings or regex matches before answering Office/PDF lookup questions.",
         "git_status" => "Inspect working tree changes without invoking a shell.",
@@ -599,7 +599,7 @@ fn cdp_tool_use_when(name: &str) -> &'static str {
         "read_file" => "Use for grounded inspection, PDF/Office reading, or before editing an existing file.",
         "write_file" => "Use when creating a new target file or replacing a file with fully known content.",
         "edit_file" => "Use after reading the file when you need a targeted text replacement.",
-        "glob_search" => "Use to discover likely file paths before reading them, especially when the user asks which files are needed, related, relevant, or available.",
+        "glob_search" => "Use to discover likely file paths before reading them, especially when the user asks which files are needed, related, relevant, or available. Batch extension families with braces, e.g. `**/*.{docx,xlsx,pptx,pdf}`.",
         "grep_search" => "Use to find identifiers, strings, or patterns in the codebase before reading or editing.",
         "office_search" => "Use for Office/PDF content discovery, including needed-file or related-file questions; derive a literal search term from the user request and set `regex: true` only when a real regex is needed.",
         "git_status" => "Use for a quick change overview when the task depends on current git state.",
@@ -797,11 +797,11 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "glob_search",
-            description: "Find files by glob pattern. Use this before reading when the path is unknown, and for local lookup requests asking which files are needed, related, relevant, or available.",
+            description: "Find files by glob pattern. Use this before reading when the path is unknown, and for local lookup requests asking which files are needed, related, relevant, or available. Supports brace groups such as **/*.{rs,ts,tsx}.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "pattern": { "type": "string" },
+                    "pattern": { "type": "string", "description": "Glob pattern. Brace groups are expanded, e.g. **/*.{docx,xlsx,pptx,pdf}." },
                     "path": { "type": "string" }
                 },
                 "required": ["pattern"],
@@ -4185,6 +4185,7 @@ mod tests {
             .expect("glob_search cdp prompt spec");
         assert!(glob.use_when.contains("needed"));
         assert!(glob.use_when.contains("related"));
+        assert!(glob.use_when.contains("**/*.{docx,xlsx,pptx,pdf}"));
         let office = specs
             .iter()
             .find(|spec| spec.name == "office_search")

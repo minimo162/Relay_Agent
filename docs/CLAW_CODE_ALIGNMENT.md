@@ -8,8 +8,8 @@ Reference: [ultraworkers/claw-code](https://github.com/ultraworkers/claw-code) (
 |-------|--------|
 | Remote | `https://github.com/ultraworkers/claw-code.git` |
 | Branch | `main` |
-| Commit (last port batch) | `e4c38718824bda32c054664d1a01e591b489f635` |
-| Last verification | 2026-04-09 |
+| Commit (last port batch) | `50e3fa3a834a7a5a603d69c372a2c4c190b7104b` |
+| Last verification | 2026-04-20 |
 
 Refresh with:
 
