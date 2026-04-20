@@ -342,7 +342,7 @@ fn apply_success_loop_decision(
             if next_input.trim_start().starts_with("Tool protocol repair.") {
                 let queued_repair_stage = *state.meta_stall_nudges_used + 1;
                 tracing::info!(
-                    "[RelayAgent] session {} queued tool protocol repair stage {}/{} after tool-protocol confusion (iterations={}, assistant_excerpt={:?})",
+                    "[RelayAgent] session {} queued tool protocol repair stage {}/{} after missing tool protocol (see preceding post-turn classification for trigger; iterations={}, assistant_excerpt={:?})",
                     session_id,
                     queued_repair_stage,
                     meta_stall_nudge_limit,

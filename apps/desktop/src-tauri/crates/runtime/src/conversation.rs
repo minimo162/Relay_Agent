@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Display, Formatter};
 
 use serde_json::Value;
@@ -290,6 +290,8 @@ where
         let mut tool_results = Vec::new();
         let mut iterations = 0;
         let mut last_batch_outcome: Option<TurnOutcome> = None;
+        let mut executed_tool_dedup_keys: HashSet<String> = HashSet::new();
+        let mut duplicate_tool_hits: usize = 0;
 
         loop {
             iterations += 1;
@@ -318,8 +320,24 @@ where
                 break;
             }
 
-            last_batch_outcome =
-                self.execute_pending_tool_uses(pending_tool_uses, &mut prompter, &mut tool_results);
+            last_batch_outcome = self.execute_pending_tool_uses(
+                pending_tool_uses,
+                &mut prompter,
+                &mut tool_results,
+                &mut executed_tool_dedup_keys,
+                &mut duplicate_tool_hits,
+            );
+            if duplicate_tool_hits >= TURN_TOOL_DUPLICATE_LIMIT {
+                tracing::info!(
+                    "[runtime] aborting turn after {duplicate_tool_hits} duplicate tool calls within the turn"
+                );
+                last_batch_outcome = Some(TurnOutcome::ToolError {
+                    message: format!(
+                        "Turn aborted: the assistant repeated an identical tool call {duplicate_tool_hits} times without progress."
+                    ),
+                });
+                break;
+            }
         }
 
         let terminal_assistant_text = assistant_messages
@@ -393,9 +411,34 @@ where
         pending_tool_uses: Vec<(String, String, String)>,
         prompter: &mut Option<&mut dyn PermissionPrompter>,
         tool_results: &mut Vec<ConversationMessage>,
+        executed_dedup_keys: &mut HashSet<String>,
+        duplicate_tool_hits: &mut usize,
     ) -> Option<TurnOutcome> {
         let mut batch_outcome = None;
         for (tool_use_id, tool_name, input) in pending_tool_uses {
+            if let Some(key) = turn_level_tool_dedup_key(&tool_name, &input) {
+                if !executed_dedup_keys.insert(key) {
+                    *duplicate_tool_hits += 1;
+                    tracing::info!(
+                        "[runtime] synthesized no-op for duplicate tool call {tool_name} (turn-level dedup, hits={duplicate_tool_hits})"
+                    );
+                    let notice = format!(
+                        "Duplicate tool call suppressed: this `{tool_name}` call was already executed earlier in this turn with the same input. The prior tool output remains in the transcript above. Do not repeat this call. Either summarize the existing findings for the user, or issue a different tool call (for example, narrow or broaden the pattern, change the target path, or switch tools)."
+                    );
+                    let synthetic = ConversationMessage::tool_result(
+                        tool_use_id,
+                        tool_name,
+                        notice,
+                        false,
+                    );
+                    self.session.messages.push(synthetic.clone());
+                    tool_results.push(synthetic);
+                    if *duplicate_tool_hits >= TURN_TOOL_DUPLICATE_LIMIT {
+                        break;
+                    }
+                    continue;
+                }
+            }
             let (result_message, result_outcome) =
                 self.build_tool_result_message(tool_use_id, tool_name, &input, prompter);
             self.session.messages.push(result_message.clone());
@@ -581,6 +624,48 @@ fn parse_auto_compaction_threshold(value: Option<&str>) -> u32 {
         .filter(|threshold| *threshold > 0)
         .unwrap_or(DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD)
 }
+
+fn sort_json_value_in_place(v: &mut Value) {
+    match v {
+        Value::Object(map) => {
+            let mut entries: Vec<(String, Value)> =
+                map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            map.clear();
+            for (k, mut val) in entries {
+                sort_json_value_in_place(&mut val);
+                map.insert(k, val);
+            }
+        }
+        Value::Array(arr) => {
+            for val in arr {
+                sort_json_value_in_place(val);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Produce a stable dedup key for (tool_name, input) so that duplicate tool
+/// calls can be detected across iterations within a single turn.
+///
+/// Mirrors the normalization in the orchestrator's per-response dedup
+/// (`normalize_tool_input_for_dedup_key`) so that a call parsed there maps to
+/// the same key here.
+fn turn_level_tool_dedup_key(tool_name: &str, input: &str) -> Option<String> {
+    let mut value: Value = serde_json::from_str(input).ok()?;
+    if tool_name == "read_file" {
+        if let Some(obj) = value.as_object_mut() {
+            if let Some(path) = obj.remove("file_path") {
+                obj.entry("path".to_string()).or_insert(path);
+            }
+        }
+    }
+    sort_json_value_in_place(&mut value);
+    Some(format!("{tool_name}|{}", value))
+}
+
+const TURN_TOOL_DUPLICATE_LIMIT: usize = 3;
 
 fn pending_tool_uses_from_message(msg: &ConversationMessage) -> Vec<(String, String, String)> {
     msg.blocks
@@ -1544,5 +1629,106 @@ mod tests {
             parse_auto_compaction_threshold(Some("not-a-number")),
             DEFAULT_AUTO_COMPACTION_INPUT_TOKENS_THRESHOLD
         );
+    }
+
+    struct RepeatingSearchClient {
+        call_count: usize,
+    }
+
+    impl ApiClient for RepeatingSearchClient {
+        fn stream(
+            &mut self,
+            _request: &ApiRequest<'_>,
+        ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+            self.call_count += 1;
+            if self.call_count > 8 {
+                return Err(RuntimeError::new(
+                    "RepeatingSearchClient called more times than expected",
+                ));
+            }
+            let tool_id = format!("tool-{}", self.call_count);
+            Ok(vec![
+                AssistantEvent::ToolUse {
+                    id: tool_id,
+                    name: "glob_search".to_string(),
+                    input: r#"{"pattern":"**/*cash*flow*"}"#.to_string(),
+                },
+                AssistantEvent::MessageStop,
+            ])
+        }
+    }
+
+    #[test]
+    fn repeating_identical_tool_call_is_suppressed_and_turn_terminates() {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let run_counter = Arc::clone(&runs);
+        let tool_executor = StaticToolExecutor::new().register("glob_search", move |_input| {
+            run_counter.fetch_add(1, Ordering::SeqCst);
+            Ok("[]".to_string())
+        });
+        let permission_policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("glob_search", PermissionMode::ReadOnly);
+        let system_prompt = vec!["system".to_string()];
+        let api_client = RepeatingSearchClient { call_count: 0 };
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            api_client,
+            tool_executor,
+            permission_policy,
+            system_prompt,
+        );
+
+        let summary = runtime
+            .run_turn("search for cashflow files", None::<&mut dyn PermissionPrompter>)
+            .expect("loop should terminate via duplicate-hit guard, not an error");
+
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "the executor should run glob_search exactly once; repeats must be suppressed",
+        );
+
+        let synthetic_notices = summary
+            .tool_results
+            .iter()
+            .filter(|message| {
+                message.blocks.iter().any(|block| match block {
+                    ContentBlock::ToolResult { output, .. } => {
+                        output.contains("Duplicate tool call suppressed")
+                    }
+                    _ => false,
+                })
+            })
+            .count();
+        assert!(
+            synthetic_notices >= 1,
+            "expected at least one synthesized 'duplicate suppressed' tool result"
+        );
+        assert!(
+            matches!(summary.outcome, TurnOutcome::ToolError { .. }),
+            "duplicate-hit guard should report a ToolError outcome, got {:?}",
+            summary.outcome,
+        );
+    }
+
+    #[test]
+    fn turn_level_dedup_key_treats_read_file_path_and_file_path_as_equal() {
+        let key_a = super::turn_level_tool_dedup_key("read_file", r#"{"path":"a.txt"}"#);
+        let key_b = super::turn_level_tool_dedup_key("read_file", r#"{"file_path":"a.txt"}"#);
+        assert!(key_a.is_some());
+        assert_eq!(key_a, key_b);
+    }
+
+    #[test]
+    fn turn_level_dedup_key_is_insensitive_to_object_key_order() {
+        let key_a = super::turn_level_tool_dedup_key(
+            "glob_search",
+            r#"{"pattern":"**/*","path":"src"}"#,
+        );
+        let key_b = super::turn_level_tool_dedup_key(
+            "glob_search",
+            r#"{"path":"src","pattern":"**/*"}"#,
+        );
+        assert_eq!(key_a, key_b);
     }
 }
