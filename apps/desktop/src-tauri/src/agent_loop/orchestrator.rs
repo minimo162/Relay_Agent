@@ -1720,6 +1720,7 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - User messages are sent from the **Relay Agent** Tauri desktop app through Microsoft Edge (M365 Copilot over CDP). Your reply returns to that same Relay session.
 - **Relay host execution:** Tool calls here are **not** Microsoft first-party Copilot action plugins. The Relay desktop parses tool-shaped JSON from your message (` ```relay_tool ` first, then accepted fenced JSON, and only in retry/repair mode bounded unfenced recovery). For parser fallback paths (` ```json `, generic fences, or inline object recovery), include `"relay_tool_call": true` on each tool object; Relay requires that sentinel by default and only relaxes it when explicitly configured for compatibility.
 - **Do not** tell the user that `relay_tool` "only works in the desktop" so you cannot use it in this chat, or that you "cannot execute tools in this Copilot environment"—**that is wrong for this session.** When the task needs a tool, output the prescribed fences.
+- **Do not use M365 Copilot built-in actions as the execution path:** no Copilot enterprise/web search, citations such as `turn1search` or `cite`, Python/code execution, Pages, file uploads, or hidden Agent/sub-agent tools. For workspace files, Office/PDF documents, and local searches, the only valid execution path is a parsed Relay tool call from this reply.
 - **Do** emit fenced tool JSON when needed; **prose-only** refusals block the agent loop.
 
 ## Output style
@@ -1743,6 +1744,7 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 ## Grounding and anti-stall
 
 - Tool results in this bundle are authoritative evidence for the current turn.
+- M365/Copilot built-in search snippets, citations, and generated enterprise-search summaries are **not** Relay tool results. Do not present them as evidence for local files.
 - Do **not** claim bugs, fixes, identifiers, or file state unless those claims are traceable to tool results, user messages, or file text in this prompt.
 - **No meta-only stall:** When the work clearly needs tools, do **not** answer with only protocol explanations, promises, or plans; the host needs **parsed fences** in this message.
 - **No generic checklist before search:** For local document/file lookup, do not give a generic checklist such as "BS, PL, fixed asset roll-forward" until Relay tool results identify actual local files or show none were found.
@@ -1773,6 +1775,8 @@ fn cdp_tool_catalog_section_for_flavor(
                 r#"{CDP_RELAY_RUNTIME_CATALOG_LEAD}## Relay Agent tools
 
 Only the tools documented below are intentionally advertised to Copilot for this CDP turn. Do not switch to hidden tools such as `Agent` or `ToolSearch` unless a future Relay prompt explicitly advertises them.
+
+M365 Copilot built-in results are outside the Relay tool protocol. Do not satisfy a local workspace or Office/PDF lookup by using Copilot enterprise search, Copilot web search, citations, uploaded files, Python/code execution, Pages, or any `office365_search`-style action. Emit Relay tool JSON instead.
 
 ## Preferred sequences
 
@@ -3949,6 +3953,11 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("CDP session: you are Relay Agent"));
         assert!(s.contains("Relay host execution"));
         assert!(s.contains("wrong for this session"));
+        assert!(s.contains("Do not use M365 Copilot built-in actions"));
+        assert!(s.contains("M365 Copilot built-in results are outside the Relay tool protocol"));
+        assert!(s.contains("enterprise search"));
+        assert!(s.contains("turn1search"));
+        assert!(s.contains("file uploads"));
         assert!(s.contains("Parsed fences run on the user's machine"));
         assert!(s.contains("Copilot UI"));
         assert!(s.contains("Action in the same turn"));
@@ -4083,6 +4092,12 @@ mod cdp_copilot_tool_tests {
         assert!(bundle
             .catalog_text
             .contains("one `relay_tool` JSON array with `glob_search` plus `office_search`"));
+        assert!(bundle
+            .catalog_text
+            .contains("Do not satisfy a local workspace or Office/PDF lookup by using Copilot enterprise search"));
+        assert!(bundle
+            .catalog_text
+            .contains("M365/Copilot built-in search snippets, citations, and generated enterprise-search summaries are **not** Relay tool results"));
         assert!(bundle
             .catalog_text
             .contains("Use `glob_search` for candidate filenames"));
@@ -6341,6 +6356,9 @@ mod loop_controller_tests {
             panic!("expected search plan to escalate to targeted search repair");
         };
         assert!(next_input.contains("This is a local document search request."));
+        assert!(next_input.contains("enterprise search"));
+        assert!(next_input.contains("turn1search"));
+        assert!(next_input.contains("not Relay tool results"));
         assert!(next_input.contains(r#""name": "glob_search""#));
         assert!(next_input.contains(r#""pattern": "**/*キャッシュ*フロー*""#));
         assert!(next_input.contains(r#""name": "office_search""#));

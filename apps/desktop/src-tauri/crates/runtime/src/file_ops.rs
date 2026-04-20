@@ -22,6 +22,8 @@ pub const MAX_TEXT_FILE_READ_BYTES: u64 = 10 * 1024 * 1024;
 /// Upper bound for `write_file` body size (aligned with claw-code `MAX_WRITE_SIZE` at the pinned SHA).
 pub const MAX_WRITE_FILE_BYTES: usize = 10 * 1024 * 1024;
 
+const MAX_GREP_LINE_LENGTH: usize = 2_000;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TextFilePayload {
     #[serde(rename = "filePath")]
@@ -516,7 +518,7 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
     let entries = glob::glob(&search_pattern)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
     for entry in entries.flatten() {
-        if entry.is_file() {
+        if entry.is_file() && !is_ignored_search_path(&entry) {
             matches.push(entry);
         }
     }
@@ -539,6 +541,13 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
 }
 
 pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
+    if input.pattern.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "grep_search pattern is required",
+        ));
+    }
+
     let base_path = input
         .path
         .as_deref()
@@ -614,7 +623,7 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
                     } else {
                         format!("{}:", file_path.to_string_lossy())
                     };
-                    content_lines.push(format!("{prefix}{line}"));
+                    content_lines.push(format!("{prefix}{}", truncate_grep_line(line)));
                 }
             }
         }
@@ -656,7 +665,10 @@ fn collect_search_files(base_path: &Path) -> io::Result<Vec<PathBuf>> {
     }
 
     let mut files = Vec::new();
-    for entry in WalkDir::new(base_path) {
+    for entry in WalkDir::new(base_path).into_iter().filter_entry(|entry| {
+        let path = entry.path();
+        !is_ignored_search_path(path)
+    }) {
         let entry = entry.map_err(|error| io::Error::other(error.to_string()))?;
         if entry.file_type().is_file() {
             files.push(entry.path().to_path_buf());
@@ -675,6 +687,28 @@ fn modified_ms(path: &Path) -> u128 {
 
 fn sort_paths_by_modified_desc(paths: &mut [PathBuf]) {
     paths.sort_by_key(|path| Reverse(modified_ms(path)));
+}
+
+fn is_ignored_search_path(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == ".git")
+}
+
+fn truncate_grep_line(line: &str) -> String {
+    if line.len() <= MAX_GREP_LINE_LENGTH {
+        return line.to_string();
+    }
+    let mut end = 0;
+    for (index, _) in line.char_indices() {
+        if index > MAX_GREP_LINE_LENGTH {
+            break;
+        }
+        end = index;
+    }
+    if end == 0 {
+        return "...".to_string();
+    }
+    format!("{}...", &line[..end])
 }
 
 fn matches_optional_filters(
@@ -783,7 +817,7 @@ mod tests {
 
     use super::{
         edit_file, glob_search, grep_search, read_file, write_file, GrepSearchInput,
-        MAX_TEXT_FILE_READ_BYTES, MAX_WRITE_FILE_BYTES,
+        MAX_GREP_LINE_LENGTH, MAX_TEXT_FILE_READ_BYTES, MAX_WRITE_FILE_BYTES,
     };
 
     fn temp_path(name: &str) -> std::path::PathBuf {
@@ -963,5 +997,102 @@ mod tests {
         assert_eq!(output.filenames.len(), 2);
         assert!(output.filenames[0].ends_with("new.txt"));
         assert!(output.filenames[1].ends_with("old.txt"));
+    }
+
+    #[test]
+    fn search_excludes_git_internal_files() {
+        let dir = temp_path("search-ignore-git");
+        std::fs::create_dir_all(dir.join(".git/objects")).expect("git internals should be created");
+        std::fs::create_dir_all(dir.join("src")).expect("src should be created");
+        fs::write(dir.join(".git/objects/hidden.txt"), "needle hidden\n").expect("write git file");
+        fs::write(dir.join("src/visible.txt"), "needle visible\n").expect("write visible file");
+
+        let globbed = glob_search("**/*.txt", Some(dir.to_string_lossy().as_ref()))
+            .expect("glob should succeed");
+        assert_eq!(globbed.num_files, 1);
+        assert!(globbed.filenames[0].ends_with("visible.txt"));
+        assert!(!globbed.filenames.iter().any(|path| path.contains(".git")));
+
+        let grep_output = grep_search(&GrepSearchInput {
+            pattern: String::from("needle"),
+            path: Some(dir.to_string_lossy().into_owned()),
+            glob: Some(String::from("*.txt")),
+            output_mode: Some(String::from("files_with_matches")),
+            before: None,
+            after: None,
+            context_short: None,
+            context: None,
+            line_numbers: Some(true),
+            case_insensitive: Some(false),
+            file_type: None,
+            head_limit: Some(10),
+            offset: Some(0),
+            multiline: Some(false),
+        })
+        .expect("grep should succeed");
+        assert_eq!(grep_output.filenames.len(), 1);
+        assert!(grep_output.filenames[0].ends_with("visible.txt"));
+        assert!(!grep_output
+            .filenames
+            .iter()
+            .any(|path| path.contains(".git")));
+    }
+
+    #[test]
+    fn grep_search_rejects_empty_pattern() {
+        let dir = temp_path("grep-empty-pattern");
+        std::fs::create_dir_all(&dir).expect("directory should be created");
+        fs::write(dir.join("file.txt"), "anything\n").expect("write file");
+
+        let err = grep_search(&GrepSearchInput {
+            pattern: String::new(),
+            path: Some(dir.to_string_lossy().into_owned()),
+            glob: Some(String::from("*.txt")),
+            output_mode: Some(String::from("files_with_matches")),
+            before: None,
+            after: None,
+            context_short: None,
+            context: None,
+            line_numbers: Some(true),
+            case_insensitive: Some(false),
+            file_type: None,
+            head_limit: Some(10),
+            offset: Some(0),
+            multiline: Some(false),
+        })
+        .expect_err("empty pattern should be rejected");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("pattern is required"));
+    }
+
+    #[test]
+    fn grep_search_content_truncates_very_long_lines() {
+        let dir = temp_path("grep-long-lines");
+        std::fs::create_dir_all(&dir).expect("directory should be created");
+        let long_line = format!("needle {}", "x".repeat(MAX_GREP_LINE_LENGTH + 500));
+        fs::write(dir.join("long.txt"), format!("{long_line}\n")).expect("write long file");
+
+        let output = grep_search(&GrepSearchInput {
+            pattern: String::from("needle"),
+            path: Some(dir.to_string_lossy().into_owned()),
+            glob: Some(String::from("*.txt")),
+            output_mode: Some(String::from("content")),
+            before: None,
+            after: None,
+            context_short: None,
+            context: None,
+            line_numbers: Some(true),
+            case_insensitive: Some(false),
+            file_type: None,
+            head_limit: Some(10),
+            offset: Some(0),
+            multiline: Some(false),
+        })
+        .expect("grep should succeed");
+
+        let content = output.content.expect("content output");
+        assert!(content.contains("needle"));
+        assert!(content.ends_with("..."));
+        assert!(content.len() < long_line.len());
     }
 }

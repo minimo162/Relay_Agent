@@ -15,6 +15,83 @@
 
 ## Milestone Log
 
+### 2026-04-20 opencode file-search parity follow-up
+
+Reviewed `https://github.com/anomalyco/opencode.git` file-search behavior after
+the prior search hardening pass. Relay already had the useful opencode-style
+directory-only glob base validation, mtime ordering, and `grep_search.include`
+alias. This follow-up brought over the remaining low-risk behavior that fits
+Relay's built-in Rust tools.
+
+- Excluded `.git` internals from `glob_search` and `grep_search`, matching
+  opencode's ripgrep args (`--glob=!.git/*`) and reducing noisy or expensive
+  repository-internal matches.
+- Rejected empty `grep_search.pattern` instead of letting an empty regex match
+  every line in the workspace.
+- Truncated very long `grep_search` content lines at 2000 bytes with an
+  ellipsis, matching opencode's output-size guard for individual matches.
+- Added regression coverage for `.git` exclusion, empty-pattern rejection, and
+  long-line truncation.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml search_excludes_git_internal_files -- --nocapture
+cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml grep_search_rejects_empty_pattern -- --nocapture
+cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml grep_search_content_truncates_very_long_lines -- --nocapture
+cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml grep_search_ -- --nocapture
+cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml glob_search_ -- --nocapture
+git diff --check
+pnpm check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml search_excludes_git_internal_files -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml grep_search_rejects_empty_pattern -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml grep_search_content_truncates_very_long_lines -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml grep_search_ -- --nocapture`: passed, 4 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml glob_search_ -- --nocapture`: passed, 1 passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-04-20 M365 built-in tool drift hardening
+
+Followed up on a live CDP run where M365 Copilot answered a local Office/file
+lookup with its own enterprise-search style citations (`turn1search` /
+`cite`) instead of emitting Relay `glob_search` / `office_search` tool JSON.
+
+- Strengthened the CDP runtime lead to forbid M365 Copilot built-in execution
+  paths for workspace and Office/PDF lookup: enterprise/web search, citations,
+  Python/code execution, Pages, uploads, and hidden Agent/sub-agent tools.
+- Clarified that M365/Copilot search snippets and generated enterprise-search
+  summaries are not Relay tool results and cannot be used as evidence for local
+  file answers.
+- Strengthened local-search repair prompts so prior Copilot citations/search
+  summaries do not satisfy the repair; the model must emit Relay search JSON.
+- Added regression assertions covering the initial required-file lookup prompt
+  and the targeted search-repair prompt.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_requires_search_before_general_answer -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_answer_without_tools_escalates_to_local_search_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml catalog_lists_builtin_tools_and_protocol -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan_escalates_to_filename_and_content_search_repair -- --nocapture
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_requires_search_before_general_answer -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_answer_without_tools_escalates_to_local_search_repair -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml catalog_lists_builtin_tools_and_protocol -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan_escalates_to_filename_and_content_search_repair -- --nocapture`: passed, 1 passed.
+
 ### 2026-04-20 opencode-informed search hardening follow-up
 
 Compared the current `anomalyco/opencode` search implementation against Relay's

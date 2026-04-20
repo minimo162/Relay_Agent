@@ -879,7 +879,8 @@ fn build_search_tool_protocol_repair_input(
         concat!(
             "Tool protocol repair.\n",
             "Your previous reply said you would search local files but did not emit a usable Relay tool call.\n",
-            "Do not use or mention Microsoft Copilot built-in tools such as Python, WebSearch/web search, citations, `office365_search`, coding/executing, Pages, Agent/sub-agent tools, or file uploads.\n",
+            "Do not use or mention Microsoft Copilot built-in tools such as enterprise search, WebSearch/web search, citations like `turn1search` or `cite`, `office365_search`, Python/code execution, Pages, Agent/sub-agent tools, or file uploads.\n",
+            "Any prior M365 Copilot search snippets, citations, or generated enterprise-search summaries are not Relay tool results and do not satisfy this repair.\n",
             "Do not answer with a plan, summary, or sentence that says you will search later.\n",
             "{escalation}",
             "{search_instruction}\n",
