@@ -1,8 +1,10 @@
 // copilot_server.js — pure CDP (HTTP + WebSocket), no Playwright
 // Works in VBS-restricted corporate environments where Playwright connectOverCDP hangs.
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -24,9 +26,224 @@ async function isCopilotGenerating(session) {
   return r?.value === true;
 }
 
-// Use Node 22+ built-in WebSocket. If unavailable, fall back to bare-net via http upgrade.
-const WS = globalThis.WebSocket ?? globalThis.ws;
-if (!WS) throw new Error("WebSocket is not available. Use Node.js 22+ or install the 'ws' package.");
+// Use Node 22+ built-in WebSocket when present. Node 20 does not expose it by
+// default, so fall back to the optional `ws` package and finally to a minimal
+// local-CDP WebSocket client implemented with `net`.
+let WS;
+
+async function resolveWebSocketCtor() {
+  if (globalThis.WebSocket) return globalThis.WebSocket;
+  if (globalThis.ws) return globalThis.ws;
+  try {
+    const mod = await import("ws");
+    return mod.WebSocket ?? mod.default;
+  } catch {
+    console.error("[copilot] WebSocket global/ws package unavailable; using built-in local CDP WebSocket fallback");
+    return LocalCdpWebSocket;
+  }
+}
+
+class LocalCdpWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+
+  readyState = LocalCdpWebSocket.CONNECTING;
+  onopen = null;
+  onmessage = null;
+  onerror = null;
+  onclose = null;
+  #socket = null;
+  #listeners = new Map();
+  #buffer = Buffer.alloc(0);
+  #fragments = [];
+
+  constructor(rawUrl) {
+    let url;
+    try {
+      url = new URL(rawUrl);
+    } catch (error) {
+      queueMicrotask(() => this.#emitError(error));
+      return;
+    }
+    if (url.protocol !== "ws:") {
+      queueMicrotask(() => this.#emitError(new Error(`unsupported WebSocket protocol for fallback: ${url.protocol}`)));
+      return;
+    }
+    const host = url.hostname || "127.0.0.1";
+    const port = Number.parseInt(url.port || "80", 10);
+    const key = randomBytes(16).toString("base64");
+    const requestPath = `${url.pathname || "/"}${url.search || ""}`;
+    const socket = net.createConnection({ host, port });
+    this.#socket = socket;
+    socket.setNoDelay(true);
+    socket.once("connect", () => {
+      socket.write([
+        `GET ${requestPath} HTTP/1.1`,
+        `Host: ${host}:${port}`,
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        `Sec-WebSocket-Key: ${key}`,
+        "Sec-WebSocket-Version: 13",
+        "",
+        "",
+      ].join("\r\n"));
+    });
+    socket.on("data", (chunk) => this.#consume(chunk));
+    socket.on("error", (error) => this.#emitError(error));
+    socket.on("close", () => this.#close(1006));
+  }
+
+  addEventListener(type, listener, options = {}) {
+    if (!this.#listeners.has(type)) this.#listeners.set(type, new Set());
+    const wrapped = options.once
+      ? (event) => {
+          this.removeEventListener(type, wrapped);
+          listener(event);
+        }
+      : listener;
+    this.#listeners.get(type).add(wrapped);
+  }
+
+  removeEventListener(type, listener) {
+    this.#listeners.get(type)?.delete(listener);
+  }
+
+  send(data) {
+    if (this.readyState !== LocalCdpWebSocket.OPEN) {
+      throw new Error(`WebSocket is not open (state=${this.readyState})`);
+    }
+    this.#socket.write(this.#frame(Buffer.from(String(data)), 0x1));
+  }
+
+  close() {
+    if (this.readyState >= LocalCdpWebSocket.CLOSING) return;
+    this.readyState = LocalCdpWebSocket.CLOSING;
+    try {
+      this.#socket?.write(this.#frame(Buffer.alloc(0), 0x8));
+    } catch {
+      /* ignore close write failure */
+    }
+    this.#socket?.end();
+    this.#close(1000);
+  }
+
+  #consume(chunk) {
+    this.#buffer = Buffer.concat([this.#buffer, chunk]);
+    if (this.readyState === LocalCdpWebSocket.CONNECTING) {
+      const headerEnd = this.#buffer.indexOf("\r\n\r\n");
+      if (headerEnd < 0) return;
+      const header = this.#buffer.subarray(0, headerEnd).toString("latin1");
+      this.#buffer = this.#buffer.subarray(headerEnd + 4);
+      if (!/^HTTP\/1\.[01] 101\b/i.test(header)) {
+        this.#emitError(new Error(`CDP WebSocket upgrade failed: ${header.split("\r\n")[0] || "no status"}`));
+        return;
+      }
+      this.readyState = LocalCdpWebSocket.OPEN;
+      this.#dispatch("open", {});
+    }
+    this.#consumeFrames();
+  }
+
+  #consumeFrames() {
+    while (this.#buffer.length >= 2) {
+      const first = this.#buffer[0];
+      const second = this.#buffer[1];
+      const fin = (first & 0x80) !== 0;
+      const opcode = first & 0x0f;
+      const masked = (second & 0x80) !== 0;
+      let length = second & 0x7f;
+      let offset = 2;
+      if (length === 126) {
+        if (this.#buffer.length < offset + 2) return;
+        length = this.#buffer.readUInt16BE(offset);
+        offset += 2;
+      } else if (length === 127) {
+        if (this.#buffer.length < offset + 8) return;
+        const bigLength = this.#buffer.readBigUInt64BE(offset);
+        if (bigLength > BigInt(Number.MAX_SAFE_INTEGER)) {
+          this.#emitError(new Error("CDP WebSocket frame too large"));
+          return;
+        }
+        length = Number(bigLength);
+        offset += 8;
+      }
+      let mask;
+      if (masked) {
+        if (this.#buffer.length < offset + 4) return;
+        mask = this.#buffer.subarray(offset, offset + 4);
+        offset += 4;
+      }
+      if (this.#buffer.length < offset + length) return;
+      let payload = this.#buffer.subarray(offset, offset + length);
+      this.#buffer = this.#buffer.subarray(offset + length);
+      if (masked) {
+        payload = Buffer.from(payload);
+        for (let i = 0; i < payload.length; i += 1) payload[i] ^= mask[i % 4];
+      }
+      if (opcode === 0x8) {
+        this.#close(1000);
+        return;
+      }
+      if (opcode === 0x9) {
+        this.#socket?.write(this.#frame(payload, 0xA));
+        continue;
+      }
+      if (opcode === 0xA) continue;
+      if (opcode === 0x0 || opcode === 0x1 || opcode === 0x2) {
+        this.#fragments.push(payload);
+        if (!fin) continue;
+        const message = Buffer.concat(this.#fragments).toString("utf8");
+        this.#fragments = [];
+        this.#dispatch("message", { data: message });
+      }
+    }
+  }
+
+  #frame(payload, opcode) {
+    const length = payload.length;
+    const headerLength = length < 126 ? 2 : length <= 0xffff ? 4 : 10;
+    const maskOffset = headerLength;
+    const out = Buffer.alloc(headerLength + 4 + length);
+    out[0] = 0x80 | opcode;
+    if (length < 126) {
+      out[1] = 0x80 | length;
+    } else if (length <= 0xffff) {
+      out[1] = 0x80 | 126;
+      out.writeUInt16BE(length, 2);
+    } else {
+      out[1] = 0x80 | 127;
+      out.writeBigUInt64BE(BigInt(length), 2);
+    }
+    const mask = randomBytes(4);
+    mask.copy(out, maskOffset);
+    for (let i = 0; i < length; i += 1) out[maskOffset + 4 + i] = payload[i] ^ mask[i % 4];
+    return out;
+  }
+
+  #emitError(error) {
+    this.#dispatch("error", { error, message: error?.message });
+    this.#close(1006);
+  }
+
+  #close(code) {
+    if (this.readyState === LocalCdpWebSocket.CLOSED) return;
+    this.readyState = LocalCdpWebSocket.CLOSED;
+    this.#socket?.destroy();
+    this.#dispatch("close", { code });
+  }
+
+  #dispatch(type, event) {
+    if (type === "open") this.onopen?.(event);
+    if (type === "message") this.onmessage?.(event);
+    if (type === "error") this.onerror?.(event);
+    if (type === "close") this.onclose?.(event);
+    for (const listener of this.#listeners.get(type) ?? []) listener(event);
+  }
+}
+
+WS = await resolveWebSocketCtor();
 
 var DEFAULT_PORT = 18080;
 var DEFAULT_CDP_PORT = 9360;

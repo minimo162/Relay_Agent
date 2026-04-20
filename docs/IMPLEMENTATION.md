@@ -6762,6 +6762,40 @@ Results:
 - `git diff --check`: passed.
 - `pnpm check`: passed.
 
+## 2026-04-20 - Copilot bridge Node 20 startup fix
+
+Fixed a Windows startup failure where `copilot_server.js` exited under Node.js
+20 with `WebSocket is not available`. The bridge now prefers the Node 22+
+global WebSocket, falls back to the optional `ws` package, and finally uses a
+small local-CDP WebSocket client built on `node:net` so the desktop app can
+start even when the bundled/runtime Node lacks a WebSocket global. Also moved
+Unix-only OAuth random-token imports behind `#[cfg(unix)]` so Windows builds no
+longer warn about unused `File` / `Read` imports.
+
+Verification commands run locally:
+
+```bash
+node --check apps/desktop/src-tauri/binaries/copilot_server.js
+node --input-type=module -e "globalThis.WebSocket = undefined; await import('./apps/desktop/src-tauri/binaries/copilot_server.js'); console.log('copilot_server import ok')"
+node --input-type=module -e "globalThis.WebSocket = undefined; process.argv = ['node', './apps/desktop/src-tauri/binaries/copilot_server.js', '--help']; await import('./apps/desktop/src-tauri/binaries/copilot_server.js'); console.log('help import ok')"
+cargo check -p runtime
+cargo check -p relay-agent-desktop
+pnpm check
+cargo fmt --check --all
+git diff --check
+```
+
+Results:
+
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.js`: passed.
+- `node --input-type=module ... import`: passed.
+- `node --input-type=module ... --help`: passed.
+- `cargo check -p runtime`: passed.
+- `cargo check -p relay-agent-desktop`: passed.
+- `pnpm check`: passed.
+- `cargo fmt --check --all`: passed.
+- `git diff --check`: passed.
+
 ## 2026-04-19 - Office search design review follow-up
 
 Updated `docs/OFFICE_SEARCH_DESIGN.md` from review feedback before Phase A implementation:
