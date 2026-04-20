@@ -273,6 +273,9 @@ Acceptance criteria:
 - CDP prompt guidance prefers `workspace_search` for vague implementation,
   related-file, and evidence lookup requests before lower-level follow-up
   searches.
+- Important conclusions, reviews, edits, comparisons, and recommendations must
+  expand top `workspace_search` candidates with `read_file`; search snippets are
+  candidate evidence, not a substitute for full-file inspection.
 - Deterministic runtime and compat-harness coverage verifies the higher-level
   agentic search scenario.
 

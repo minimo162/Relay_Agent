@@ -1799,6 +1799,7 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; emit `workspace_search` first for vague lookup, and only fall back to `glob_search` / `grep_search` / `office_search` for narrower follow-up.
 - **Initial lookup reply format:** When the latest user request is a local file/document lookup and there are no Relay Tool Result blocks for that lookup yet, the entire assistant reply must be exactly one fenced `relay_tool` or `json` block. Do not write `はい、...を検索します`, do not cite `turn*search*`, do not output `<File>...</File>` cards, and do not list candidate files from M365 before Relay tools run.
 - **Search tool selection:** Use `workspace_search` first for vague implementation search, related-file search, or "find relevant evidence" requests because it returns ranked candidates, snippets, scope, and truncation data. Use `glob_search` for candidate filenames and folders, `grep_search` for plaintext/code content, and `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content when the follow-up search is already concrete. `glob_search` supports brace groups, so use patterns like `**/*.{docx,xlsx,pptx,pdf}` or `**/*.{rs,ts,tsx}` when one extension-family search is enough.
+- **Evidence expansion before judgments:** `workspace_search` snippets are candidate evidence for discovery. Before making important conclusions, reviews, edits, comparisons, or recommendations about a file, call `read_file` on the top candidate path(s) and ground the answer in that file text. If you have not read the file, describe the result as a candidate only.
 - **Cash-flow lookup variants:** For cash-flow / キャッシュフロー lookup requests, include filename globs for Japanese and common abbreviations in the same first batch: `**/*キャッシュ*フロー*`, `**/*CF*`, and `**/*CFS*`. For Office/PDF body search, prefer one `office_search` with `regex:true` and pattern `キャッシュ[・\s]*フロー|cash\s*flow|\bCF\b|\bCFS\b` so both `キャッシュフロー` and `キャッシュ・フロー` are covered without spending extra turns.
 - **Batch speculative searches:** For open-ended lookup, it is better to run a small batch of useful `glob_search` / `grep_search` / `office_search` calls in one reply than to spend a model turn announcing the first search. Keep each search concrete and narrow enough to be useful.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
@@ -1847,7 +1848,7 @@ M365 Copilot built-in results are outside the Relay tool protocol. Do not satisf
 - named existing file inspect/edit/review => `read_file` then `edit_file`
 - named new file create => `write_file`
 - local file lookup / needed files / related files => `workspace_search` first; do not answer from general knowledge before tools
-- codebase search/investigation => `workspace_search` before `glob_search` / `grep_search`, and all of those before `bash`
+- codebase search/investigation => `workspace_search` before `glob_search` / `grep_search`, then `read_file` the top candidate(s) before important conclusions or changes
 - open-ended search => use `workspace_search` first; if more precision is needed, batch a few useful `glob_search` / `grep_search` / `office_search` calls in one later `relay_tool` array
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
 
@@ -3909,6 +3910,7 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "- If no workspace is set, read_file, glob_search, grep_search, office_search, and workspace_search may use absolute local paths the OS user can read, except workspace_search always constrains itself to the current workspace root.\n",
                 "- read_file returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). `.docx`, `.xlsx`, and `.pptx` are parsed as plaintext extraction; use office_search for exact search across those files. Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted `.txt`/`.md` file.\n",
                 "- For local file lookup requests, use workspace_search first for ranked candidates and evidence snippets; use glob_search for candidate paths, grep_search for plaintext/code contents, and office_search for Office/PDF contents when the follow-up is concrete. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
+                "- Treat workspace_search snippets as discovery evidence. Before important conclusions, reviews, edits, comparisons, or recommendations, read_file the top candidate path(s); otherwise describe matches as candidates only.\n",
                 "- For cash-flow / キャッシュフロー lookup requests, include `**/*キャッシュ*フロー*`, `**/*CF*`, and `**/*CFS*` filename globs, and use an office_search regex such as `キャッシュ[・\\s]*フロー|cash\\s*flow|\\bCF\\b|\\bCFS\\b` for Office/PDF body search.\n",
                 "- If the user's request is already concrete (paths, files, stated action), use tools in your first response; do not ask them to rephrase unless something essential is missing.\n",
                 "- To combine or split PDF files, use pdf_merge / pdf_split (workspace write); do not use bash for that."
@@ -4182,6 +4184,12 @@ mod cdp_copilot_tool_tests {
         assert!(bundle
             .catalog_text
             .contains("Use `workspace_search` first for vague implementation search"));
+        assert!(bundle
+            .catalog_text
+            .contains("Evidence expansion before judgments"));
+        assert!(bundle
+            .catalog_text
+            .contains("If you have not read the file, describe the result as a candidate only"));
         assert!(bundle.catalog_text.contains("**/*.{docx,xlsx,pptx,pdf}"));
         assert!(bundle.catalog_text.contains("Cash-flow lookup variants"));
         assert!(bundle.catalog_text.contains("**/*CF*"));
@@ -4217,9 +4225,10 @@ mod cdp_copilot_tool_tests {
         );
 
         assert!(bundle.prompt.contains("## Local search continuation guard"));
+        assert!(bundle.prompt.contains("summarize those existing results"));
         assert!(bundle
             .prompt
-            .contains("summarize those existing results now"));
+            .contains("call `read_file` on the top candidate"));
         assert!(bundle
             .prompt
             .contains("Duplicate-tool suppression or search-budget notices"));
@@ -4235,6 +4244,8 @@ mod cdp_copilot_tool_tests {
 
         assert!(system.contains("use workspace_search first for ranked candidates"));
         assert!(system.contains("office_search for Office/PDF contents"));
+        assert!(system.contains("Before important conclusions"));
+        assert!(system.contains("read_file the top candidate path"));
         assert!(system.contains("`必要なファイル`"));
         assert!(system.contains("not invitations for generic domain checklists"));
         assert!(system.contains("**/*CF*"));

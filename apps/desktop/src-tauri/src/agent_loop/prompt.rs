@@ -20,7 +20,7 @@ const CDP_LOCAL_SEARCH_RESULT_CONTINUATION_GUARD: &str = r#"## Local search cont
 
 Relay already executed local search tools for this turn. Do not keep issuing `workspace_search`, `glob_search`, `grep_search`, or `office_search` just to try spelling, abbreviation, or wildcard variants.
 
-- If the Tool Results contain matches, paths, anchors, previews, or errors, summarize those existing results now.
+- If the Tool Results contain matches, paths, anchors, previews, or errors, summarize those existing results for simple locate/list requests. For important conclusions, reviews, edits, comparisons, or recommendations, call `read_file` on the top candidate(s) first; `workspace_search` snippets identify candidates but are not a substitute for file inspection.
 - If every search result is empty, at most one additional non-overlapping search batch is allowed; otherwise stop searching and answer from the evidence above.
 - Duplicate-tool suppression or search-budget notices mean summarize the prior results; they are not a request for more searches."#;
 const CDP_BUNDLE_GROUNDING_BLOCK: &str = "## CDP bundle (read before you reply)\n\

@@ -49,6 +49,10 @@ low-level tools perfectly.
 - Updated the live workspace-search smoke documentation so it now treats
   `workspace_search` as the first broad-search behavior and keeps
   `glob_search` / `grep_search` as low-level follow-up checks.
+- Added a prompt/tool-spec guard for the main remaining risk: search snippets
+  may identify candidates, but important conclusions, reviews, edits,
+  comparisons, and recommendations must first expand top candidates with
+  `read_file`.
 
 Verification commands run locally:
 
@@ -60,6 +64,8 @@ cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml workspac
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance -- --nocapture
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agentic_search_implementation_lookup_starts_with_workspace_search -- --nocapture
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_requires_search_before_general_answer -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml desktop_system_prompt_treats_required_file_questions_as_lookup -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_tool_results_add_continuation_guard -- --nocapture
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness workspace_search_agentic_scenario_returns_evidence_above_low_level_search -- --nocapture
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan_escalates_to_filename_and_content_search_repair -- --nocapture
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cash_flow_lookup_gets_deterministic_initial_search_plan -- --nocapture
@@ -78,6 +84,8 @@ Results:
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance -- --nocapture`: passed, 1 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agentic_search_implementation_lookup_starts_with_workspace_search -- --nocapture`: passed, 1 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_requires_search_before_general_answer -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml desktop_system_prompt_treats_required_file_questions_as_lookup -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_tool_results_add_continuation_guard -- --nocapture`: passed, 1 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness workspace_search_agentic_scenario_returns_evidence_above_low_level_search -- --nocapture`: passed, 1 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan_escalates_to_filename_and_content_search_repair -- --nocapture`: passed, 1 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cash_flow_lookup_gets_deterministic_initial_search_plan -- --nocapture`: passed, 1 passed.

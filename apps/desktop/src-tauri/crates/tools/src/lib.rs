@@ -584,7 +584,7 @@ fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
             "Create or overwrite a workspace text file when the final content is known."
         }
         "edit_file" => "Apply a targeted replacement inside an existing workspace file.",
-        "workspace_search" => "Run a read-only agentic workspace search that combines file discovery, text/Office evidence snippets, candidate ranking, and search-scope limits.",
+        "workspace_search" => "Run a read-only agentic workspace search that combines file discovery, text/Office evidence snippets, candidate ranking, and search-scope limits; follow with read_file before important judgments.",
         "glob_search" => "Find candidate files by path pattern before reading, editing, or answering a local file lookup. Supports brace groups such as `**/*.{rs,ts,tsx}`.",
         "grep_search" => "Search code or text content for concrete strings or regex matches.",
         "office_search" => "Search extracted DOCX/XLSX/PPTX/PDF text for concrete literal strings or regex matches before answering Office/PDF lookup questions.",
@@ -613,7 +613,7 @@ fn cdp_tool_use_when(name: &str) -> &'static str {
         "read_file" => "Use for grounded inspection, PDF/Office reading, or before editing an existing file.",
         "write_file" => "Use when creating a new target file or replacing a file with fully known content.",
         "edit_file" => "Use after reading the file when you need a targeted text replacement.",
-        "workspace_search" => "Use first for vague or open-ended local search requests such as finding an implementation, related files, or relevant evidence before deciding which files to read.",
+        "workspace_search" => "Use first for vague or open-ended local search requests such as finding an implementation, related files, or relevant evidence before deciding which files to read. Use read_file on top candidates before important conclusions, reviews, edits, comparisons, or recommendations.",
         "glob_search" => "Use to discover likely file paths before reading them, especially when the user asks which files are needed, related, relevant, or available. Batch extension families with braces, e.g. `**/*.{docx,xlsx,pptx,pdf}`.",
         "grep_search" => "Use to find identifiers, strings, or patterns in the codebase before reading or editing.",
         "office_search" => "Use for Office/PDF content discovery, including needed-file or related-file questions; derive a literal search term from the user request and set `regex: true` only when a real regex is needed.",
@@ -640,7 +640,7 @@ fn cdp_tool_avoid_when(name: &str) -> &'static str {
         "read_file" => "Avoid using bash or PowerShell for file reads when `read_file` applies.",
         "write_file" => "Avoid for incremental edits to an existing file; prefer `edit_file` after `read_file`.",
         "edit_file" => "Avoid when the file does not exist or when replacing the full file would be simpler.",
-        "workspace_search" => "Avoid when the exact file path is already known and a direct `read_file` is enough. This is Relay-only and does not replace claw-compatible low-level search schemas.",
+        "workspace_search" => "Avoid when the exact file path is already known and a direct `read_file` is enough. Do not treat snippets as full-file inspection for important decisions. This is Relay-only and does not replace claw-compatible low-level search schemas.",
         "glob_search" => "Avoid when the exact file path is already known and no broader candidate search is needed.",
         "grep_search" => "Avoid when the exact file path is already known and a direct `read_file` is enough.",
         "office_search" => "Avoid for plaintext source files; use `grep_search` there. Do not use it as semantic ranking without a concrete search pattern.",
@@ -813,7 +813,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "workspace_search",
-            description: "Relay-only read-only agentic search across the current workspace. Returns ranked candidate files, evidence snippets, scanned/skipped/truncation limits, and honest not-found state. Use before low-level glob/grep/office searches for vague implementation, related-file, or evidence lookup requests.",
+            description: "Relay-only read-only agentic search across the current workspace. Returns ranked candidate files, evidence snippets, scanned/skipped/truncation limits, and honest not-found state. Use before low-level glob/grep/office searches for vague implementation, related-file, or evidence lookup requests. For important conclusions, reviews, edits, comparisons, or recommendations, follow up with read_file on the top candidate path(s); snippets are discovery evidence, not full-file inspection.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -4231,6 +4231,10 @@ mod tests {
             .expect("workspace_search cdp prompt spec");
         assert!(workspace.purpose.contains("agentic workspace search"));
         assert!(workspace.use_when.contains("Use first"));
+        assert!(workspace.use_when.contains("read_file on top candidates"));
+        assert!(workspace
+            .avoid_when
+            .contains("Do not treat snippets as full-file inspection"));
         assert!(workspace.avoid_when.contains("Relay-only"));
         let glob = specs
             .iter()
