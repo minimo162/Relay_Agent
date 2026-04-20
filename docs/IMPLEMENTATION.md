@@ -15,6 +15,69 @@
 
 ## Milestone Log
 
+### 2026-04-20 Relay-only workspace_search agentic search layer
+
+Implemented the first Relay-only high-level search layer above
+`glob_search`, `grep_search`, `office_search`, and `read_file`-style evidence
+expansion. The goal is to make vague local lookup requests start with a safe,
+read-only host orchestration pass instead of depending on M365 Copilot to chain
+low-level tools perfectly.
+
+- Added `workspace_search` in `crates/runtime/src/search.rs` as a Relay-only read-only tool while leaving
+  claw-compatible `glob_search` / `grep_search` schemas unchanged.
+- `workspace_search` returns ranked candidate files, evidence snippets, search
+  strategy, structured `skipped` reasons, scanned/skipped byte and file limits,
+  truncation state, and `needs_clarification` for honest not-found results.
+- Constrained `workspace_search` to the current workspace root and skipped
+  escaped symlink/canonical paths instead of reading them.
+- Added `.gitignore` handling, default search exclusions for `.git`,
+  `node_modules`, `target`, `dist`, `build`, `.next`, `.turbo`, `.venv`,
+  `__pycache__`, `out`, and `coverage`, plus per-file byte and wall-clock
+  budgets.
+- Added baseline tracing for `glob_search`, `grep_search`, `office_search`, and
+  `workspace_search` with counts, elapsed time, truncation, and error/skip
+  surfaces.
+- Integrated Office/PDF results through `office_search` previews and anchors;
+  semantic ranking remains future work.
+- Updated CDP prompt/tool guidance so vague implementation/related-file/evidence
+  lookups use `workspace_search` first, with low-level tools reserved for
+  concrete follow-up.
+- Added deterministic runtime and compat-harness coverage for ranked evidence,
+  honest not-found scope, workspace boundary rejection, and ignored generated
+  directories.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_search_ -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agentic_search_implementation_lookup_starts_with_workspace_search -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_requires_search_before_general_answer -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness workspace_search_agentic_scenario_returns_evidence_above_low_level_search -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan_escalates_to_filename_and_content_search_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cash_flow_lookup_gets_deterministic_initial_search_plan -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_file_search_without_known_keyword_still_gets_workspace_search_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp_core_catalog_matches_expected_surface -- --nocapture
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_search_ -- --nocapture`: passed, 7 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agentic_search_implementation_lookup_starts_with_workspace_search -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_requires_search_before_general_answer -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness workspace_search_agentic_scenario_returns_evidence_above_low_level_search -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan_escalates_to_filename_and_content_search_repair -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cash_flow_lookup_gets_deterministic_initial_search_plan -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_file_search_without_known_keyword_still_gets_workspace_search_repair -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp_core_catalog_matches_expected_surface -- --nocapture`: passed, 1 passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-20 claw-code agentic search brace-glob follow-up
 
 Reviewed `https://github.com/ultraworkers/claw-code.git` at

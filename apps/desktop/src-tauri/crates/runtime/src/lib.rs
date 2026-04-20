@@ -19,6 +19,7 @@ mod pdf_manip;
 mod permissions;
 mod prompt;
 mod remote;
+mod search;
 pub mod sandbox;
 mod session;
 mod task_registry;
@@ -97,6 +98,10 @@ pub use remote::{
     inherited_upstream_proxy_env, no_proxy_list, read_token, upstream_proxy_ws_url,
     RemoteSessionContext, UpstreamProxyBootstrap, UpstreamProxyState, DEFAULT_REMOTE_BASE_URL,
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
+};
+pub use search::{
+    workspace_search, WorkspaceSearchCandidate, WorkspaceSearchInput, WorkspaceSearchLimits,
+    WorkspaceSearchOutput, WorkspaceSearchSkipped, WorkspaceSearchSnippet,
 };
 pub use session::{ContentBlock, ConversationMessage, MessageRole, Session, SessionError};
 pub use task_registry::{task_create, task_get, task_list, task_output, task_stop, task_update};

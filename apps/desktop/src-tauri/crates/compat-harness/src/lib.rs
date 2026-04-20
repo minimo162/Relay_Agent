@@ -51,6 +51,7 @@ mod mock_parity_manifest {
 #[cfg(test)]
 mod parity_style {
     use std::fs;
+    use std::sync::{Mutex, OnceLock};
 
     use runtime::{
         assert_path_in_workspace, BashConfigCwdGuard, PermissionMode, PermissionOutcome,
@@ -58,6 +59,13 @@ mod parity_style {
     };
     use serde_json::json;
     use tools::execute_tool;
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     #[test]
     fn read_file_roundtrip_under_temp_workspace() {
@@ -166,6 +174,52 @@ mod parity_style {
         )
         .expect("glob");
         assert!(glob.contains("a.rs") || glob.contains("numFiles"), "{glob}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_search_agentic_scenario_returns_evidence_above_low_level_search() {
+        let _guard = env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = std::env::temp_dir().join(format!(
+            "relay-agentic-search-parity-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::create_dir_all(dir.join("target/debug")).unwrap();
+        fs::write(
+            dir.join("src/search.rs"),
+            "pub fn agentic_search_flow() {\n    // ranked candidate evidence\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("target/debug/noise.rs"),
+            "pub fn agentic_search_flow() {}\n",
+        )
+        .unwrap();
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let out = execute_tool(
+            "workspace_search",
+            &json!({
+                "query": "agentic search flow",
+                "paths": ["."],
+                "include_ext": ["rs"],
+                "max_files": 20,
+                "max_snippets": 10,
+                "context": 1
+            }),
+        )
+        .expect("workspace_search");
+
+        assert!(out.contains("\"candidates\""), "{out}");
+        assert!(out.contains("\"snippets\""), "{out}");
+        assert!(out.contains("\"limits\""), "{out}");
+        assert!(out.contains("src/search.rs"), "{out}");
+        assert!(!out.contains("target/debug/noise.rs"), "{out}");
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
         let _ = fs::remove_dir_all(&dir);
     }
 

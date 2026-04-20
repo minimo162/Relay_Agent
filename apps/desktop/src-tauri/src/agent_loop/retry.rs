@@ -430,6 +430,7 @@ pub(crate) fn is_tool_protocol_confusion_text(text: &str) -> bool {
     let mentioned_relay_tools_without_payload = (lower.contains("write_file")
         || lower.contains("edit_file")
         || lower.contains("read_file")
+        || lower.contains("workspace_search")
         || lower.contains("glob_search")
         || lower.contains("grep_search"))
         && (lower.contains("```")
@@ -655,8 +656,13 @@ fn is_local_file_search_request(text: &str) -> bool {
         || lower.contains("directory")
         || lower.contains("workspace")
         || lower.contains("path")
+        || lower.contains("implementation")
+        || lower.contains("codebase")
+        || lower.contains("source")
         || trimmed.contains("ファイル")
         || trimmed.contains("資料")
+        || trimmed.contains("実装")
+        || trimmed.contains("コード")
         || trimmed.contains("配下")
         || trimmed.contains("フォルダ")
         || trimmed.contains("ワークスペース")
@@ -781,7 +787,40 @@ fn office_search_paths_for_anchor(path: Option<&str>) -> Vec<String> {
     }
 }
 
+fn build_workspace_search_tool_call(latest_request: &str, path: Option<&str>) -> Value {
+    let mut input = serde_json::Map::new();
+    input.insert(
+        "query".to_string(),
+        Value::String(latest_request.trim().to_string()),
+    );
+    if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
+        input.insert(
+            "paths".to_string(),
+            Value::Array(vec![Value::String(path.trim().to_string())]),
+        );
+    }
+    input.insert("mode".to_string(), Value::String("auto".to_string()));
+    input.insert(
+        "max_files".to_string(),
+        Value::Number(serde_json::Number::from(80)),
+    );
+    input.insert(
+        "max_snippets".to_string(),
+        Value::Number(serde_json::Number::from(40)),
+    );
+    input.insert(
+        "context".to_string(),
+        Value::Number(serde_json::Number::from(2)),
+    );
+    json!({
+        "name": "workspace_search",
+        "relay_tool_call": true,
+        "input": Value::Object(input),
+    })
+}
+
 fn build_search_tool_payload(latest_request: &str, pattern: &str, path: Option<&str>) -> Value {
+    let workspace_call = build_workspace_search_tool_call(latest_request, path);
     let mut glob_input = serde_json::Map::new();
     glob_input.insert("pattern".to_string(), Value::String(pattern.to_string()));
     if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
@@ -793,17 +832,18 @@ fn build_search_tool_payload(latest_request: &str, pattern: &str, path: Option<&
         "input": Value::Object(glob_input),
     });
     if !is_office_content_search_request(latest_request) {
-        return glob_call;
+        return Value::Array(vec![workspace_call, glob_call]);
     }
     let Some(office_pattern) = infer_office_search_pattern_for_search_request(latest_request)
     else {
-        return glob_call;
+        return Value::Array(vec![workspace_call, glob_call]);
     };
 
     let office_paths = office_search_paths_for_anchor(path);
     let office_regex = infer_office_search_regex_for_search_request(latest_request);
     let include_ext = office_search_include_ext_for_search_request(latest_request);
     let mut calls = vec![
+        workspace_call,
         glob_call,
         json!({
             "name": "office_search",
@@ -859,11 +899,14 @@ pub(crate) fn build_initial_local_search_tool_calls(
     if !is_local_file_search_request(latest_request) {
         return None;
     }
-    let pattern = infer_glob_pattern_for_search_request(latest_request)?;
     let path_anchor = extract_path_anchors_from_text(latest_request)
         .into_iter()
         .next();
-    let payload = build_search_tool_payload(latest_request, &pattern, path_anchor.as_deref());
+    let payload = infer_glob_pattern_for_search_request(latest_request)
+        .map(|pattern| build_search_tool_payload(latest_request, &pattern, path_anchor.as_deref()))
+        .unwrap_or_else(|| {
+            build_workspace_search_tool_call(latest_request, path_anchor.as_deref())
+        });
     let calls = match payload {
         Value::Array(items) => items,
         item => vec![item],
@@ -890,7 +933,7 @@ fn build_tool_result_summary_repair_input(
             "Relay already executed local tools for this turn. Your previous reply emitted repeated, malformed, or duplicate tool JSON instead of summarizing the tool results.\n",
             "Do not emit any `relay_tool` fence, JSON tool object, or additional tool call in the next reply.\n",
             "Use the prior tool results already present in the transcript as the only evidence. If duplicate-tool suppression notices are present, treat them only as a signal not to repeat the same search.\n",
-            "Now answer the user's original local document search request concisely, with file paths and anchors/previews from the existing `glob_search` / `office_search` results when available.\n\n",
+            "Now answer the user's original local document search request concisely, with file paths and anchors/previews from the existing `workspace_search` / `glob_search` / `office_search` results when available.\n\n",
             "Malformed or duplicate assistant text to replace:\n```text\n{assistant_text}\n```\n\n",
             "{latest_request_marker}{latest_request}\n```\n\n",
             "{original_goal_marker}{goal}\n```"
@@ -928,9 +971,9 @@ fn build_search_tool_protocol_repair_input(
     let expected_json =
         serde_json::to_string_pretty(&expected_payload).unwrap_or_else(|_| "{}".to_string());
     let search_instruction = if expected_payload.is_array() {
-        "This is a local document search request. Emit exactly one `relay_tool` block containing the JSON array below: first `glob_search` for filename candidates, then `office_search` for Office/PDF contents."
+        "This is a local document search request. Emit exactly one `relay_tool` block containing the JSON array below: first `workspace_search` for ranked candidates and evidence snippets, then narrower search calls when included."
     } else {
-        "This is a local file search request. Emit exactly one `glob_search` Relay tool call now."
+        "This is a local file search request. Emit exactly one `workspace_search` Relay tool call now."
     };
     format!(
         concat!(
@@ -1178,7 +1221,10 @@ fn has_local_search_tool_result(summary: &runtime::TurnSummary) -> bool {
             matches!(
                 block,
                 ContentBlock::ToolResult { tool_name, .. }
-                    if matches!(tool_name.as_str(), "glob_search" | "grep_search" | "office_search")
+                    if matches!(
+                        tool_name.as_str(),
+                        "workspace_search" | "glob_search" | "grep_search" | "office_search"
+                    )
             )
         })
     })

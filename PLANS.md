@@ -240,6 +240,42 @@ Acceptance criteria:
 - Office extraction enforces zip/XML/output limits, xlsx snapshot preflight, per-file timeout, per-path in-flight guarding, and a process-wide extraction cap.
 - Tool catalog and Copilot prompt guidance advertise `office_search` and remove the old blanket Office `read_file` exception.
 
+### Cross-Cutting Feature: Agentic Workspace Search
+
+Goal: add a Relay-only read-only orchestration layer above `glob_search`,
+`grep_search`, `office_search`, and `read_file` style evidence expansion so
+vague local lookup requests start with ranked candidates, snippets, searched
+scope, and truncation state instead of relying on the model to manually chain
+low-level tools.
+
+Change targets:
+
+- `apps/desktop/src-tauri/crates/runtime/src/{file_ops,lib}.rs`
+- `apps/desktop/src-tauri/crates/tools/src/lib.rs`
+- `apps/desktop/src-tauri/src/agent_loop/{orchestrator,prompt,retry}.rs`
+- `apps/desktop/src-tauri/crates/compat-harness/src/lib.rs`
+- `docs/IMPLEMENTATION.md`
+
+Acceptance criteria:
+
+- `workspace_search` is Relay-only and leaves claw-compatible
+  `glob_search` / `grep_search` schemas unchanged.
+- `workspace_search` returns ranked candidate files, evidence snippets,
+  searched/skipped file and byte counts, structured skip reasons, truncation
+  state, and an honest not-found / needs-clarification signal.
+- Standard ignore directories such as `.git`, `node_modules`, and `target`,
+  plus `.gitignore` patterns, are skipped by default, and
+  large/plainly unreadable/binary files do not bloat results.
+- Existing `glob_search`, `grep_search`, and `office_search` emit baseline
+  search telemetry for counts, elapsed time, truncation, and failure surfaces.
+- Search roots are constrained to the current workspace; paths or symlink
+  resolutions that escape the workspace are not read.
+- CDP prompt guidance prefers `workspace_search` for vague implementation,
+  related-file, and evidence lookup requests before lower-level follow-up
+  searches.
+- Deterministic runtime and compat-harness coverage verifies the higher-level
+  agentic search scenario.
+
 ## Forward-Looking Designs (Not Yet Scheduled)
 
 - `docs/OFFICE_SEARCH_DESIGN.md` — Phase A has source implementation in progress/landed under the Office File Search track above. Future Phase B remains semantic retrieval on top of the extraction cache.

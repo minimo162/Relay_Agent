@@ -1448,9 +1448,10 @@ fn cdp_catalog_sort_key(name: &str) -> usize {
         "read_file" => 0,
         "write_file" => 1,
         "edit_file" => 2,
-        "glob_search" => 3,
-        "grep_search" => 4,
-        "office_search" => 5,
+        "workspace_search" => 3,
+        "glob_search" => 4,
+        "grep_search" => 5,
+        "office_search" => 6,
         "git_status" => 6,
         "git_diff" => 7,
         "pdf_merge" => 10,
@@ -1502,6 +1503,7 @@ fn cdp_tool_primary_use(name: &str, description: &str) -> String {
         "read_file" => "Read local text, PDF, or Office content.".to_string(),
         "write_file" => "Create or overwrite a workspace text file.".to_string(),
         "edit_file" => "Replace text in an existing workspace file.".to_string(),
+        "workspace_search" => "Run a read-only Relay-only agentic workspace search with ranked files and evidence snippets.".to_string(),
         "glob_search" => "Find files by glob pattern.".to_string(),
         "grep_search" => "Search file contents with a regex.".to_string(),
         "office_search" => "Search extracted Office/PDF text literally or with regex.".to_string(),
@@ -1604,6 +1606,15 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
     #[allow(clippy::match_same_arms)]
     let curated = match name {
         "read_file" => vec!["offset", "limit", "pages", "sheets", "slides"],
+        "workspace_search" => vec![
+            "paths",
+            "include_ext",
+            "max_files",
+            "max_snippets",
+            "max_bytes",
+            "max_duration_ms",
+            "context",
+        ],
         "glob_search" => vec!["path"],
         "grep_search" => vec!["path", "glob", "include", "context"],
         "office_search" => vec![
@@ -1785,9 +1796,9 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 ## Immediate action rules
 
 - **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read_file` first** before edits.
-- **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; emit `glob_search` and, for Office/PDF workspaces, `office_search` in this reply.
+- **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; emit `workspace_search` first for vague lookup, and only fall back to `glob_search` / `grep_search` / `office_search` for narrower follow-up.
 - **Initial lookup reply format:** When the latest user request is a local file/document lookup and there are no Relay Tool Result blocks for that lookup yet, the entire assistant reply must be exactly one fenced `relay_tool` or `json` block. Do not write `はい、...を検索します`, do not cite `turn*search*`, do not output `<File>...</File>` cards, and do not list candidate files from M365 before Relay tools run.
-- **Search tool selection:** Use `glob_search` for candidate filenames and folders, `grep_search` for plaintext/code content, and `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content. `glob_search` supports brace groups, so use patterns like `**/*.{docx,xlsx,pptx,pdf}` or `**/*.{rs,ts,tsx}` when one extension-family search is enough. When both filename and Office/PDF content matter, put `glob_search` and `office_search` in one `relay_tool` JSON array.
+- **Search tool selection:** Use `workspace_search` first for vague implementation search, related-file search, or "find relevant evidence" requests because it returns ranked candidates, snippets, scope, and truncation data. Use `glob_search` for candidate filenames and folders, `grep_search` for plaintext/code content, and `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content when the follow-up search is already concrete. `glob_search` supports brace groups, so use patterns like `**/*.{docx,xlsx,pptx,pdf}` or `**/*.{rs,ts,tsx}` when one extension-family search is enough.
 - **Cash-flow lookup variants:** For cash-flow / キャッシュフロー lookup requests, include filename globs for Japanese and common abbreviations in the same first batch: `**/*キャッシュ*フロー*`, `**/*CF*`, and `**/*CFS*`. For Office/PDF body search, prefer one `office_search` with `regex:true` and pattern `キャッシュ[・\s]*フロー|cash\s*flow|\bCF\b|\bCFS\b` so both `キャッシュフロー` and `キャッシュ・フロー` are covered without spending extra turns.
 - **Batch speculative searches:** For open-ended lookup, it is better to run a small batch of useful `glob_search` / `grep_search` / `office_search` calls in one reply than to spend a model turn announcing the first search. Keep each search concrete and narrow enough to be useful.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
@@ -1835,9 +1846,9 @@ M365 Copilot built-in results are outside the Relay tool protocol. Do not satisf
 
 - named existing file inspect/edit/review => `read_file` then `edit_file`
 - named new file create => `write_file`
-- local file lookup / needed files / related files => one `relay_tool` JSON array with `glob_search` plus `office_search` for Office/PDF content; do not answer from general knowledge before tools
-- codebase search/investigation => `glob_search` / `grep_search` before `bash`
-- open-ended search => batch a few likely useful searches in one `relay_tool` array instead of narrating a search plan; use `glob_search` brace groups for extension families
+- local file lookup / needed files / related files => `workspace_search` first; do not answer from general knowledge before tools
+- codebase search/investigation => `workspace_search` before `glob_search` / `grep_search`, and all of those before `bash`
+- open-ended search => use `workspace_search` first; if more precision is needed, batch a few useful `glob_search` / `grep_search` / `office_search` calls in one later `relay_tool` array
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
 
 {rendered_tools}
@@ -3056,7 +3067,7 @@ fn enforce_workspace_tool_paths(
         "write_file" | "edit_file" | "LSP" => {
             normalize_key(obj, "path")?;
         }
-        "glob_search" | "grep_search" | "git_status" | "git_diff" => {
+        "workspace_search" | "glob_search" | "grep_search" | "git_status" | "git_diff" => {
             let has_path = obj
                 .get("path")
                 .and_then(|v| v.as_str())
@@ -3895,9 +3906,9 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "- Prefer read-only tools before mutating tools.\n",
                 "- When modifying files, prefer saving copies.\n",
                 "- If a session workspace (`cwd`) is set, file-tool paths are resolved within that workspace and may be rejected when they escape it. Do not promise reads outside the workspace boundary; call the tool and surface the actual path error if access is denied.\n",
-                "- If no workspace is set, read_file, glob_search, grep_search, and office_search may use absolute local paths the OS user can read.\n",
+                "- If no workspace is set, read_file, glob_search, grep_search, office_search, and workspace_search may use absolute local paths the OS user can read, except workspace_search always constrains itself to the current workspace root.\n",
                 "- read_file returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). `.docx`, `.xlsx`, and `.pptx` are parsed as plaintext extraction; use office_search for exact search across those files. Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted `.txt`/`.md` file.\n",
-                "- For local file lookup requests, use glob_search for candidate paths, grep_search for plaintext/code contents, and office_search for Office/PDF contents before giving a general explanation. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
+                "- For local file lookup requests, use workspace_search first for ranked candidates and evidence snippets; use glob_search for candidate paths, grep_search for plaintext/code contents, and office_search for Office/PDF contents when the follow-up is concrete. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
                 "- For cash-flow / キャッシュフロー lookup requests, include `**/*キャッシュ*フロー*`, `**/*CF*`, and `**/*CFS*` filename globs, and use an office_search regex such as `キャッシュ[・\\s]*フロー|cash\\s*flow|\\bCF\\b|\\bCFS\\b` for Office/PDF body search.\n",
                 "- If the user's request is already concrete (paths, files, stated action), use tools in your first response; do not ask them to rephrase unless something essential is missing.\n",
                 "- To combine or split PDF files, use pdf_merge / pdf_split (workspace write); do not use bash for that."
@@ -4159,9 +4170,9 @@ mod cdp_copilot_tool_tests {
         assert!(bundle
             .catalog_text
             .contains("do not give a generic checklist"));
-        assert!(bundle
-            .catalog_text
-            .contains("one `relay_tool` JSON array with `glob_search` plus `office_search`"));
+        assert!(bundle.catalog_text.contains(
+            "`workspace_search` first; do not answer from general knowledge before tools"
+        ));
         assert!(bundle
             .catalog_text
             .contains("Do not satisfy a local workspace or Office/PDF lookup by using Copilot enterprise search"));
@@ -4170,7 +4181,7 @@ mod cdp_copilot_tool_tests {
             .contains("M365/Copilot built-in search snippets, citations, and generated enterprise-search summaries are **not** Relay tool results"));
         assert!(bundle
             .catalog_text
-            .contains("Use `glob_search` for candidate filenames"));
+            .contains("Use `workspace_search` first for vague implementation search"));
         assert!(bundle.catalog_text.contains("**/*.{docx,xlsx,pptx,pdf}"));
         assert!(bundle.catalog_text.contains("Cash-flow lookup variants"));
         assert!(bundle.catalog_text.contains("**/*CF*"));
@@ -4222,7 +4233,7 @@ mod cdp_copilot_tool_tests {
         )
         .join("\n");
 
-        assert!(system.contains("use glob_search for candidate paths"));
+        assert!(system.contains("use workspace_search first for ranked candidates"));
         assert!(system.contains("office_search for Office/PDF contents"));
         assert!(system.contains("`必要なファイル`"));
         assert!(system.contains("not invitations for generic domain checklists"));
@@ -6022,7 +6033,7 @@ mod loop_controller_tests {
                 tool_success_result("glob_search", r#"{"matches":["キャッシュフロー.xlsx"]}"#),
                 tool_success_result(
                     "glob_search",
-                    "Search tool budget reached: Relay already executed 6 local search calls in this turn. The prior tool outputs remain in the transcript above. Do not issue more `glob_search`, `grep_search`, or `office_search` calls for this request; summarize the existing findings for the user.",
+                    "Search tool budget reached: Relay already executed 6 local search calls in this turn. The prior tool outputs remain in the transcript above. Do not issue more `workspace_search`, `glob_search`, `grep_search`, or `office_search` calls for this request; summarize the existing findings for the user.",
                 ),
             ],
             runtime::TurnOutcome::ToolError {
@@ -6530,6 +6541,7 @@ mod loop_controller_tests {
         assert!(next_input.contains("enterprise search"));
         assert!(next_input.contains("turn1search"));
         assert!(next_input.contains("not Relay tool results"));
+        assert!(next_input.contains(r#""name": "workspace_search""#));
         assert!(next_input.contains(r#""name": "glob_search""#));
         assert!(next_input.contains(r#""pattern": "**/*キャッシュ*フロー*""#));
         assert!(next_input.contains(r#""name": "office_search""#));
@@ -6549,23 +6561,27 @@ mod loop_controller_tests {
         )
         .expect("cash-flow lookup should get an initial local search plan");
 
-        assert_eq!(calls.len(), 4);
-        assert_eq!(calls[0].0, "glob_search");
-        assert!(calls[0].1.contains(r#""pattern":"**/*キャッシュ*フロー*""#));
-        assert_eq!(calls[1].0, "office_search");
-        assert!(calls[1].1.contains(r#""regex":true"#));
-        assert!(calls[1]
+        assert_eq!(calls.len(), 5);
+        assert_eq!(calls[0].0, "workspace_search");
+        assert!(calls[0]
+            .1
+            .contains("キャッシュフロー計算書の作成に関係するファイルを検索して"));
+        assert_eq!(calls[1].0, "glob_search");
+        assert!(calls[1].1.contains(r#""pattern":"**/*キャッシュ*フロー*""#));
+        assert_eq!(calls[2].0, "office_search");
+        assert!(calls[2].1.contains(r#""regex":true"#));
+        assert!(calls[2]
             .1
             .contains(r#""include_ext":["docx","xlsx","pptx"]"#));
-        assert!(calls[1].1.contains(r#""max_results":30"#));
-        assert!(calls[1].1.contains(r#""max_files":80"#));
-        assert!(calls[1]
+        assert!(calls[2].1.contains(r#""max_results":30"#));
+        assert!(calls[2].1.contains(r#""max_files":80"#));
+        assert!(calls[2]
             .1
             .contains(r#""pattern":"キャッシュ[・\\s]*フロー|cash\\s*flow|\\bCF\\b|\\bCFS\\b""#));
-        assert_eq!(calls[2].0, "glob_search");
-        assert!(calls[2].1.contains(r#""pattern":"**/*CF*""#));
         assert_eq!(calls[3].0, "glob_search");
-        assert!(calls[3].1.contains(r#""pattern":"**/*CFS*""#));
+        assert!(calls[3].1.contains(r#""pattern":"**/*CF*""#));
+        assert_eq!(calls[4].0, "glob_search");
+        assert!(calls[4].1.contains(r#""pattern":"**/*CFS*""#));
     }
 
     #[test]
@@ -6575,8 +6591,8 @@ mod loop_controller_tests {
         )
         .expect("PDF-specific cash-flow lookup should get an initial local search plan");
 
-        assert_eq!(calls[1].0, "office_search");
-        assert!(calls[1]
+        assert_eq!(calls[2].0, "office_search");
+        assert!(calls[2]
             .1
             .contains(r#""include_ext":["docx","xlsx","pptx","pdf"]"#));
     }
@@ -6594,6 +6610,7 @@ mod loop_controller_tests {
             panic!("expected required-file lookup to escalate to local search repair");
         };
         assert!(next_input.contains("This is a local document search request."));
+        assert!(next_input.contains(r#""name": "workspace_search""#));
         assert!(next_input.contains(r#""name": "glob_search""#));
         assert!(next_input.contains(r#""pattern": "**/*キャッシュ*フロー*""#));
         assert!(next_input.contains(r#""name": "office_search""#));
@@ -6607,7 +6624,7 @@ mod loop_controller_tests {
     }
 
     #[test]
-    fn local_file_search_without_known_keyword_still_gets_glob_repair() {
+    fn local_file_search_without_known_keyword_still_gets_workspace_search_repair() {
         let s = summary(
             "対象ファイルを確認してから回答します。",
             Vec::new(),
@@ -6616,12 +6633,25 @@ mod loop_controller_tests {
         let request = "ワークスペース配下の関連資料を検索して";
         let decision = decide_loop_after_success(request, request, 1, 0, 2, false, &s);
         let LoopDecision::Continue { next_input, kind } = decision else {
-            panic!("expected generic local search request to emit glob repair");
+            panic!("expected generic local search request to emit workspace_search repair");
         };
-        assert!(next_input.contains("This is a local file search request."));
-        assert!(next_input.contains(r#""name": "glob_search""#));
-        assert!(next_input.contains(r#""pattern": "**/*""#));
+        assert!(next_input.contains("This is a local"));
+        assert!(next_input.contains("search request."));
+        assert!(next_input.contains(r#""name": "workspace_search""#));
+        assert!(next_input.contains(r#""query": "ワークスペース配下の関連資料を検索して""#));
         assert_eq!(kind, LoopContinueKind::MetaNudge);
+    }
+
+    #[test]
+    fn agentic_search_implementation_lookup_starts_with_workspace_search() {
+        let calls = build_initial_local_search_tool_calls("agentic search の実装を探して")
+            .expect("agentic search lookup should get workspace_search");
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "workspace_search");
+        assert!(calls[0]
+            .1
+            .contains(r#""query":"agentic search の実装を探して""#));
     }
 
     #[test]

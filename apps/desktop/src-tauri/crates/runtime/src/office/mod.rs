@@ -789,14 +789,27 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
                 if fold_ready(&mut ready, &mut next_to_fold, &mut results, &mut errors) {
                     results_truncated = true;
                     drop(work_tx);
-                    return Ok(OfficeSearchOutput {
+                    let output = OfficeSearchOutput {
                         results,
                         errors,
                         files_scanned: cursor,
                         files_truncated,
                         results_truncated,
                         wall_clock_truncated,
-                    });
+                    };
+                    tracing::info!(
+                        target: "relay.runtime.search",
+                        tool = "office_search",
+                        files_scanned = output.files_scanned,
+                        results = output.results.len(),
+                        errors = output.errors.len(),
+                        files_truncated = output.files_truncated,
+                        results_truncated = output.results_truncated,
+                        wall_clock_truncated = output.wall_clock_truncated,
+                        elapsed_ms = started.elapsed().as_millis(),
+                        "office_search completed"
+                    );
+                    return Ok(output);
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -828,14 +841,27 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
         }
     }
 
-    Ok(OfficeSearchOutput {
+    let output = OfficeSearchOutput {
         results,
         errors,
         files_scanned: cursor,
         files_truncated,
         results_truncated,
         wall_clock_truncated,
-    })
+    };
+    tracing::info!(
+        target: "relay.runtime.search",
+        tool = "office_search",
+        files_scanned = output.files_scanned,
+        results = output.results.len(),
+        errors = output.errors.len(),
+        files_truncated = output.files_truncated,
+        results_truncated = output.results_truncated,
+        wall_clock_truncated = output.wall_clock_truncated,
+        elapsed_ms = started.elapsed().as_millis(),
+        "office_search completed"
+    );
+    Ok(output)
 }
 
 fn compile_office_search_regex(input: &OfficeSearchInput) -> io::Result<Regex> {

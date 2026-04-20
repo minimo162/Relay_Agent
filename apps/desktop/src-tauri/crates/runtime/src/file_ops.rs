@@ -24,6 +24,11 @@ pub const MAX_TEXT_FILE_READ_BYTES: u64 = 10 * 1024 * 1024;
 pub const MAX_WRITE_FILE_BYTES: usize = 10 * 1024 * 1024;
 
 const MAX_GREP_LINE_LENGTH: usize = 2_000;
+const MAX_WORKSPACE_SEARCH_TEXT_BYTES: u64 = 2 * 1024 * 1024;
+const DEFAULT_WORKSPACE_SEARCH_MAX_FILES: usize = 50;
+const DEFAULT_WORKSPACE_SEARCH_MAX_SNIPPETS: usize = 30;
+const MAX_WORKSPACE_SEARCH_MAX_FILES: usize = 500;
+const MAX_WORKSPACE_SEARCH_MAX_SNIPPETS: usize = 200;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TextFilePayload {
@@ -144,6 +149,63 @@ pub struct GrepSearchOutput {
     pub applied_limit: Option<usize>,
     #[serde(rename = "appliedOffset")]
     pub applied_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceSearchInput {
+    pub query: String,
+    pub paths: Option<Vec<String>>,
+    pub mode: Option<String>,
+    #[serde(rename = "include_ext")]
+    pub include_ext: Option<Vec<String>>,
+    #[serde(rename = "max_files")]
+    pub max_files: Option<usize>,
+    #[serde(rename = "max_snippets")]
+    pub max_snippets: Option<usize>,
+    pub context: Option<usize>,
+    pub literal: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkspaceSearchCandidate {
+    pub path: String,
+    pub score: f64,
+    pub reasons: Vec<String>,
+    #[serde(rename = "match_count")]
+    pub match_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceSearchSnippet {
+    pub path: String,
+    pub anchor: Option<String>,
+    #[serde(rename = "line_start")]
+    pub line_start: usize,
+    #[serde(rename = "line_end")]
+    pub line_end: usize,
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceSearchLimits {
+    #[serde(rename = "scanned_files")]
+    pub scanned_files: usize,
+    #[serde(rename = "skipped_files")]
+    pub skipped_files: usize,
+    pub truncated: bool,
+    #[serde(rename = "elapsed_ms")]
+    pub elapsed_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WorkspaceSearchOutput {
+    pub query: String,
+    pub strategy: Vec<String>,
+    pub candidates: Vec<WorkspaceSearchCandidate>,
+    pub snippets: Vec<WorkspaceSearchSnippet>,
+    pub limits: WorkspaceSearchLimits,
+    #[serde(rename = "needs_clarification")]
+    pub needs_clarification: bool,
 }
 
 /// Read a file as text for the agent. Plain UTF-8 text uses line-based `offset` / `limit`.
@@ -540,12 +602,21 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
         .map(|path| path.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
 
-    Ok(GlobSearchOutput {
+    let output = GlobSearchOutput {
         duration_ms: started.elapsed().as_millis(),
         num_files: filenames.len(),
         filenames,
         truncated,
-    })
+    };
+    tracing::info!(
+        target: "relay.runtime.search",
+        tool = "glob_search",
+        num_files = output.num_files,
+        truncated = output.truncated,
+        duration_ms = output.duration_ms,
+        "glob_search completed"
+    );
+    Ok(output)
 }
 
 pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
@@ -641,7 +712,7 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
         apply_limit(filenames, input.head_limit, input.offset);
     let content_output = if output_mode == "content" {
         let (lines, limit, offset) = apply_limit(content_lines, input.head_limit, input.offset);
-        return Ok(GrepSearchOutput {
+        let output = GrepSearchOutput {
             mode: Some(output_mode),
             num_files: filenames.len(),
             filenames,
@@ -650,12 +721,23 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
             num_matches: None,
             applied_limit: limit,
             applied_offset: offset,
-        });
+        };
+        tracing::info!(
+            target: "relay.runtime.search",
+            tool = "grep_search",
+            mode = ?output.mode,
+            num_files = output.num_files,
+            num_lines = output.num_lines.unwrap_or(0),
+            applied_limit = output.applied_limit.unwrap_or(0),
+            applied_offset = output.applied_offset.unwrap_or(0),
+            "grep_search completed"
+        );
+        return Ok(output);
     } else {
         None
     };
 
-    Ok(GrepSearchOutput {
+    let output = GrepSearchOutput {
         mode: Some(output_mode.clone()),
         num_files: filenames.len(),
         filenames,
@@ -664,7 +746,432 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
         num_matches: (output_mode == "count").then_some(total_matches),
         applied_limit,
         applied_offset,
+    };
+    tracing::info!(
+        target: "relay.runtime.search",
+        tool = "grep_search",
+        mode = ?output.mode,
+        num_files = output.num_files,
+        num_matches = output.num_matches.unwrap_or(0),
+        applied_limit = output.applied_limit.unwrap_or(0),
+        applied_offset = output.applied_offset.unwrap_or(0),
+        "grep_search completed"
+    );
+    Ok(output)
+}
+
+pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSearchOutput> {
+    let started = Instant::now();
+    let query = input.query.trim();
+    if query.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "workspace_search query is required",
+        ));
+    }
+
+    let workspace_root = std::env::current_dir()?.canonicalize()?;
+    let search_roots = workspace_search_roots(input.paths.as_ref(), &workspace_root)?;
+    let include_ext = normalize_workspace_search_exts(input.include_ext.as_ref());
+    let max_files = input
+        .max_files
+        .unwrap_or(DEFAULT_WORKSPACE_SEARCH_MAX_FILES)
+        .clamp(1, MAX_WORKSPACE_SEARCH_MAX_FILES);
+    let max_snippets = input
+        .max_snippets
+        .unwrap_or(DEFAULT_WORKSPACE_SEARCH_MAX_SNIPPETS)
+        .clamp(1, MAX_WORKSPACE_SEARCH_MAX_SNIPPETS);
+    let context = input.context.unwrap_or(2).min(10);
+    let terms = workspace_search_terms(query);
+    let mut scanned_files = 0usize;
+    let mut skipped_files = 0usize;
+    let mut truncated = false;
+    let mut candidate_map = std::collections::BTreeMap::<String, WorkspaceCandidateAccumulator>::new();
+    let mut snippets = Vec::new();
+    let mut file_budget_reached = false;
+
+    for root in &search_roots {
+        for entry in WalkDir::new(root).into_iter().filter_entry(|entry| {
+            !is_ignored_workspace_search_path(entry.path())
+        }) {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    skipped_files += 1;
+                    continue;
+                }
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path().to_path_buf();
+            if is_ignored_workspace_search_path(&path) {
+                skipped_files += 1;
+                continue;
+            }
+            if !workspace_search_ext_allowed(&path, include_ext.as_ref()) {
+                skipped_files += 1;
+                continue;
+            }
+            let canonical = match path.canonicalize() {
+                Ok(canonical) if canonical.starts_with(&workspace_root) => canonical,
+                _ => {
+                    skipped_files += 1;
+                    continue;
+                }
+            };
+            let metadata = match fs::metadata(&canonical) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    skipped_files += 1;
+                    continue;
+                }
+            };
+            if metadata.len() > MAX_WORKSPACE_SEARCH_TEXT_BYTES {
+                skipped_files += 1;
+                continue;
+            }
+            if scanned_files >= max_files {
+                truncated = true;
+                file_budget_reached = true;
+                break;
+            }
+            scanned_files += 1;
+
+            let path_string = canonical.to_string_lossy().into_owned();
+            let mut accumulator = WorkspaceCandidateAccumulator::new(path_string.clone());
+            score_workspace_path(&path_string, &terms, &mut accumulator);
+
+            if is_office_workspace_search_path(&canonical) {
+                // Office/PDF content is integrated through `office_search` below so
+                // anchors and previews stay consistent with the Office extraction layer.
+                if accumulator.score > 0.0 {
+                    candidate_map.insert(path_string, accumulator);
+                }
+                continue;
+            }
+
+            let Ok(content) = fs::read_to_string(&canonical) else {
+                skipped_files += 1;
+                continue;
+            };
+            let file_snippets =
+                score_workspace_text(&path_string, &content, &terms, context, &mut accumulator);
+            if accumulator.score > 0.0 {
+                candidate_map
+                    .entry(path_string)
+                    .and_modify(|existing| existing.merge(accumulator.clone()))
+                    .or_insert(accumulator);
+            }
+            for snippet in file_snippets {
+                if snippets.len() < max_snippets {
+                    snippets.push(snippet);
+                } else {
+                    truncated = true;
+                    break;
+                }
+            }
+        }
+        if file_budget_reached {
+            break;
+        }
+    }
+
+    if workspace_search_should_include_office(input.mode.as_deref(), include_ext.as_ref()) {
+        let office_paths = workspace_search_office_paths(&search_roots);
+        if !office_paths.is_empty() && snippets.len() < max_snippets {
+            if let Ok(office_output) = office::office_search(&office::OfficeSearchInput {
+                pattern: workspace_search_office_pattern(query, &terms),
+                paths: office_paths,
+                regex: Some(false),
+                include_ext: Some(vec![
+                    "docx".to_string(),
+                    "xlsx".to_string(),
+                    "pptx".to_string(),
+                    "pdf".to_string(),
+                ]),
+                case_insensitive: Some(true),
+                context: Some(120),
+                max_results: Some(max_snippets.saturating_sub(snippets.len()).max(1)),
+                max_files: Some(max_files),
+            }) {
+                truncated |= office_output.files_truncated
+                    || office_output.results_truncated
+                    || office_output.wall_clock_truncated;
+                for hit in office_output.results {
+                    let entry = candidate_map
+                        .entry(hit.path.clone())
+                        .or_insert_with(|| WorkspaceCandidateAccumulator::new(hit.path.clone()));
+                    entry.score += 4.0;
+                    entry.match_count += 1;
+                    entry.push_reason(format!("office:{}", hit.anchor));
+                    if snippets.len() < max_snippets {
+                        snippets.push(WorkspaceSearchSnippet {
+                            path: hit.path,
+                            anchor: Some(hit.anchor),
+                            line_start: 0,
+                            line_end: 0,
+                            preview: hit.preview,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    let mut candidates = candidate_map
+        .into_values()
+        .map(WorkspaceCandidateAccumulator::into_candidate)
+        .collect::<Vec<_>>();
+    candidates.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.match_count.cmp(&a.match_count))
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    if candidates.len() > max_files {
+        candidates.truncate(max_files);
+        truncated = true;
+    }
+
+    Ok(WorkspaceSearchOutput {
+        query: query.to_string(),
+        strategy: vec![
+            "path_discovery".to_string(),
+            "literal_grep".to_string(),
+            "snippet_expansion".to_string(),
+            "office_preview_anchor_integration".to_string(),
+        ],
+        needs_clarification: candidates.is_empty(),
+        candidates,
+        snippets,
+        limits: WorkspaceSearchLimits {
+            scanned_files,
+            skipped_files,
+            truncated,
+            elapsed_ms: started.elapsed().as_millis(),
+        },
     })
+}
+
+#[derive(Debug, Clone)]
+struct WorkspaceCandidateAccumulator {
+    path: String,
+    score: f64,
+    reasons: Vec<String>,
+    match_count: usize,
+}
+
+impl WorkspaceCandidateAccumulator {
+    fn new(path: String) -> Self {
+        Self {
+            path,
+            score: 0.0,
+            reasons: Vec::new(),
+            match_count: 0,
+        }
+    }
+
+    fn push_reason(&mut self, reason: String) {
+        if !self.reasons.iter().any(|existing| existing == &reason) {
+            self.reasons.push(reason);
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.score += other.score;
+        self.match_count += other.match_count;
+        for reason in other.reasons {
+            self.push_reason(reason);
+        }
+    }
+
+    fn into_candidate(self) -> WorkspaceSearchCandidate {
+        WorkspaceSearchCandidate {
+            path: self.path,
+            score: (self.score * 100.0).round() / 100.0,
+            reasons: self.reasons,
+            match_count: self.match_count,
+        }
+    }
+}
+
+fn workspace_search_roots(
+    paths: Option<&Vec<String>>,
+    workspace_root: &Path,
+) -> io::Result<Vec<PathBuf>> {
+    let requested = paths
+        .filter(|paths| !paths.is_empty())
+        .cloned()
+        .unwrap_or_else(|| vec![String::from(".")]);
+    let mut roots = Vec::new();
+    for path in requested {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let candidate = if Path::new(trimmed).is_absolute() {
+            PathBuf::from(trimmed)
+        } else {
+            workspace_root.join(trimmed)
+        };
+        let canonical = candidate.canonicalize()?;
+        if !canonical.starts_with(workspace_root) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "workspace_search path {} escapes workspace boundary {}",
+                    canonical.display(),
+                    workspace_root.display()
+                ),
+            ));
+        }
+        roots.push(canonical);
+    }
+    if roots.is_empty() {
+        roots.push(workspace_root.to_path_buf());
+    }
+    Ok(roots)
+}
+
+fn normalize_workspace_search_exts(input: Option<&Vec<String>>) -> Option<HashSet<String>> {
+    input.map(|items| {
+        items
+            .iter()
+            .filter_map(|item| {
+                let ext = item.trim().trim_start_matches('.').to_ascii_lowercase();
+                (!ext.is_empty()).then_some(ext)
+            })
+            .collect()
+    })
+    .filter(|items: &HashSet<String>| !items.is_empty())
+}
+
+fn workspace_search_ext_allowed(path: &Path, include_ext: Option<&HashSet<String>>) -> bool {
+    let Some(include_ext) = include_ext else {
+        return true;
+    };
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| include_ext.contains(&extension.to_ascii_lowercase()))
+        .unwrap_or(false)
+}
+
+fn workspace_search_terms(query: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    let lower_query = query.trim().to_ascii_lowercase();
+    if !lower_query.is_empty() {
+        terms.push(lower_query);
+    }
+    for token in query
+        .split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '-'))
+        .map(str::trim)
+        .filter(|token| token.chars().count() >= 2)
+    {
+        let token = token.to_ascii_lowercase();
+        if !terms.iter().any(|existing| existing == &token) {
+            terms.push(token);
+        }
+    }
+    terms
+}
+
+fn score_workspace_path(
+    path: &str,
+    terms: &[String],
+    accumulator: &mut WorkspaceCandidateAccumulator,
+) {
+    let lower = path.to_ascii_lowercase();
+    for term in terms {
+        if lower.contains(term) {
+            accumulator.score += 2.0;
+            accumulator.match_count += 1;
+            accumulator.push_reason(format!("filename:{term}"));
+        }
+    }
+}
+
+fn score_workspace_text(
+    path: &str,
+    content: &str,
+    terms: &[String],
+    context: usize,
+    accumulator: &mut WorkspaceCandidateAccumulator,
+) -> Vec<WorkspaceSearchSnippet> {
+    let mut snippets = Vec::new();
+    let lines = content.lines().collect::<Vec<_>>();
+    let lower_lines = lines
+        .iter()
+        .map(|line| line.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    for (index, lower_line) in lower_lines.iter().enumerate() {
+        let mut matched_terms = Vec::new();
+        for term in terms {
+            if lower_line.contains(term) {
+                matched_terms.push(term.as_str());
+            }
+        }
+        if matched_terms.is_empty() {
+            continue;
+        }
+        accumulator.score += 3.0 + matched_terms.len() as f64;
+        accumulator.match_count += matched_terms.len();
+        accumulator.push_reason(format!("grep:{}", matched_terms.join(",")));
+        let start = index.saturating_sub(context);
+        let end = (index + context + 1).min(lines.len());
+        snippets.push(WorkspaceSearchSnippet {
+            path: path.to_string(),
+            anchor: None,
+            line_start: start + 1,
+            line_end: end,
+            preview: lines[start..end].join("\n"),
+        });
+    }
+    snippets
+}
+
+fn is_office_workspace_search_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("docx" | "xlsx" | "pptx" | "pdf")
+    )
+}
+
+fn workspace_search_should_include_office(
+    mode: Option<&str>,
+    include_ext: Option<&HashSet<String>>,
+) -> bool {
+    if matches!(mode, Some("code" | "text")) {
+        return false;
+    }
+    include_ext.is_none_or(|exts| {
+        ["docx", "xlsx", "pptx", "pdf"]
+            .iter()
+            .any(|ext| exts.contains(*ext))
+    })
+}
+
+fn workspace_search_office_paths(search_roots: &[PathBuf]) -> Vec<String> {
+    let mut paths = Vec::new();
+    for root in search_roots {
+        let root = root.to_string_lossy();
+        for ext in ["docx", "xlsx", "pptx", "pdf"] {
+            paths.push(format!("{}/**/*.{}", root.trim_end_matches(['/', '\\']), ext));
+        }
+    }
+    paths
+}
+
+fn workspace_search_office_pattern(query: &str, terms: &[String]) -> String {
+    terms
+        .iter()
+        .find(|term| term.chars().count() >= 3)
+        .cloned()
+        .unwrap_or_else(|| query.to_string())
 }
 
 fn collect_search_files(base_path: &Path) -> io::Result<Vec<PathBuf>> {
@@ -700,6 +1207,23 @@ fn sort_paths_by_modified_desc(paths: &mut [PathBuf]) {
 fn is_ignored_search_path(path: &Path) -> bool {
     path.components()
         .any(|component| component.as_os_str() == ".git")
+}
+
+fn is_ignored_workspace_search_path(path: &Path) -> bool {
+    const IGNORED_DIRS: &[&str] = &[
+        ".git",
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        ".next",
+        "out",
+        "coverage",
+    ];
+    path.components().any(|component| {
+        let name = component.as_os_str().to_string_lossy();
+        IGNORED_DIRS.iter().any(|ignored| name == *ignored)
+    })
 }
 
 fn truncate_grep_line(line: &str) -> String {
@@ -844,8 +1368,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        edit_file, glob_search, grep_search, read_file, write_file, GrepSearchInput,
-        MAX_GREP_LINE_LENGTH, MAX_TEXT_FILE_READ_BYTES, MAX_WRITE_FILE_BYTES,
+        edit_file, glob_search, grep_search, read_file, workspace_search, write_file,
+        GrepSearchInput, WorkspaceSearchInput, MAX_GREP_LINE_LENGTH, MAX_TEXT_FILE_READ_BYTES,
+        MAX_WRITE_FILE_BYTES,
     };
 
     fn temp_path(name: &str) -> std::path::PathBuf {
@@ -1152,5 +1677,111 @@ mod tests {
         assert!(content.contains("needle"));
         assert!(content.ends_with("..."));
         assert!(content.len() < long_line.len());
+    }
+
+    #[test]
+    fn workspace_search_returns_ranked_candidates_snippets_and_limits() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search");
+        std::fs::create_dir_all(dir.join("src")).expect("src should be created");
+        std::fs::create_dir_all(dir.join("node_modules/pkg")).expect("ignored should be created");
+        fs::write(
+            dir.join("src/search.rs"),
+            "pub fn workspace_search() {\n    // agentic search implementation\n}\n",
+        )
+        .expect("write search file");
+        fs::write(
+            dir.join("node_modules/pkg/noise.rs"),
+            "agentic search implementation noise\n",
+        )
+        .expect("write ignored file");
+        fs::write(dir.join("src/skip.md"), "agentic search implementation\n")
+            .expect("write skipped extension");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("agentic search implementation"),
+            paths: Some(vec![String::from("src"), String::from("node_modules")]),
+            mode: Some(String::from("code")),
+            include_ext: Some(vec![String::from("rs")]),
+            max_files: Some(20),
+            max_snippets: Some(10),
+            context: Some(1),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert!(!output.needs_clarification);
+        assert_eq!(output.candidates.len(), 1);
+        assert!(output.candidates[0].path.ends_with("src/search.rs"));
+        assert!(output.candidates[0].score > 0.0);
+        assert!(output.snippets[0]
+            .preview
+            .contains("agentic search implementation"));
+        assert_eq!(output.limits.scanned_files, 1);
+        assert!(output.limits.skipped_files >= 1);
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_reports_not_found_with_scope() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-empty");
+        std::fs::create_dir_all(&dir).expect("directory should be created");
+        fs::write(dir.join("notes.txt"), "alpha beta\n").expect("write file");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("missing needle"),
+            paths: None,
+            mode: Some(String::from("text")),
+            include_ext: Some(vec![String::from("txt")]),
+            max_files: Some(10),
+            max_snippets: Some(10),
+            context: Some(1),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert!(output.needs_clarification);
+        assert!(output.candidates.is_empty());
+        assert!(output.snippets.is_empty());
+        assert_eq!(output.limits.scanned_files, 1);
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_rejects_paths_outside_workspace() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-boundary");
+        let outside = temp_path("workspace-search-outside");
+        std::fs::create_dir_all(&dir).expect("directory should be created");
+        std::fs::create_dir_all(&outside).expect("outside should be created");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let err = workspace_search(&WorkspaceSearchInput {
+            query: String::from("anything"),
+            paths: Some(vec![outside.to_string_lossy().into_owned()]),
+            mode: Some(String::from("text")),
+            include_ext: None,
+            max_files: None,
+            max_snippets: None,
+            context: None,
+            literal: None,
+        })
+        .expect_err("outside path should be rejected");
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(outside);
     }
 }

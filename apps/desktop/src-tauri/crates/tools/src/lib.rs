@@ -11,10 +11,10 @@ mod electron_cdp;
 use reqwest::blocking::Client;
 use runtime::{
     edit_file, execute_bash, glob_search, grep_search, merge_pdfs, office_search,
-    pull_rust_diagnostics_blocking, read_background_task_output, read_file,
+    pull_rust_diagnostics_blocking, read_background_task_output, read_file, workspace_search,
     reject_sensitive_file_path, split_pdf, task_create, task_get, task_list, task_output,
     task_stop, task_update, write_file, BackgroundTaskOutputInput, BashCommandInput,
-    GrepSearchInput, OfficeSearchInput, PdfSplitSegment, PermissionMode,
+    GrepSearchInput, OfficeSearchInput, PdfSplitSegment, PermissionMode, WorkspaceSearchInput,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -129,7 +129,7 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
-        "glob_search" | "grep_search" | "office_search" => ToolMetadata {
+        "workspace_search" | "glob_search" | "grep_search" | "office_search" => ToolMetadata {
             tool_search_visible: false,
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
@@ -384,11 +384,12 @@ fn cdp_catalog_sort_key(name: &str) -> usize {
         "read_file" => 0,
         "write_file" => 1,
         "edit_file" => 2,
-        "glob_search" => 3,
-        "grep_search" => 4,
-        "office_search" => 5,
-        "git_status" => 6,
-        "git_diff" => 7,
+        "workspace_search" => 3,
+        "glob_search" => 4,
+        "grep_search" => 5,
+        "office_search" => 6,
+        "git_status" => 7,
+        "git_diff" => 8,
         "pdf_merge" => 10,
         "pdf_split" => 11,
         "WebFetch" => 20,
@@ -442,6 +443,15 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
     #[allow(clippy::match_same_arms)]
     let curated = match name {
         "read_file" => vec!["offset", "limit", "pages", "sheets", "slides"],
+        "workspace_search" => vec![
+            "paths",
+            "include_ext",
+            "max_files",
+            "max_snippets",
+            "max_bytes",
+            "max_duration_ms",
+            "context",
+        ],
         "glob_search" => vec!["path"],
         "grep_search" => vec!["path", "glob", "context"],
         "office_search" => vec![
@@ -513,6 +523,9 @@ fn cdp_tool_example(name: &str) -> Value {
         "edit_file" => {
             json!({"name":"edit_file","relay_tool_call":true,"input":{"path":"src/main.rs","old_string":"foo","new_string":"bar"}})
         }
+        "workspace_search" => {
+            json!({"name":"workspace_search","relay_tool_call":true,"input":{"query":"agentic search implementation","paths":["apps/desktop/src-tauri"],"include_ext":["rs","md"],"max_files":50,"max_snippets":30,"context":2}})
+        }
         "glob_search" => {
             json!({"name":"glob_search","relay_tool_call":true,"input":{"pattern":"src/**/*.rs"}})
         }
@@ -571,6 +584,7 @@ fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
             "Create or overwrite a workspace text file when the final content is known."
         }
         "edit_file" => "Apply a targeted replacement inside an existing workspace file.",
+        "workspace_search" => "Run a read-only agentic workspace search that combines file discovery, text/Office evidence snippets, candidate ranking, and search-scope limits.",
         "glob_search" => "Find candidate files by path pattern before reading, editing, or answering a local file lookup. Supports brace groups such as `**/*.{rs,ts,tsx}`.",
         "grep_search" => "Search code or text content for concrete strings or regex matches.",
         "office_search" => "Search extracted DOCX/XLSX/PPTX/PDF text for concrete literal strings or regex matches before answering Office/PDF lookup questions.",
@@ -599,6 +613,7 @@ fn cdp_tool_use_when(name: &str) -> &'static str {
         "read_file" => "Use for grounded inspection, PDF/Office reading, or before editing an existing file.",
         "write_file" => "Use when creating a new target file or replacing a file with fully known content.",
         "edit_file" => "Use after reading the file when you need a targeted text replacement.",
+        "workspace_search" => "Use first for vague or open-ended local search requests such as finding an implementation, related files, or relevant evidence before deciding which files to read.",
         "glob_search" => "Use to discover likely file paths before reading them, especially when the user asks which files are needed, related, relevant, or available. Batch extension families with braces, e.g. `**/*.{docx,xlsx,pptx,pdf}`.",
         "grep_search" => "Use to find identifiers, strings, or patterns in the codebase before reading or editing.",
         "office_search" => "Use for Office/PDF content discovery, including needed-file or related-file questions; derive a literal search term from the user request and set `regex: true` only when a real regex is needed.",
@@ -625,6 +640,7 @@ fn cdp_tool_avoid_when(name: &str) -> &'static str {
         "read_file" => "Avoid using bash or PowerShell for file reads when `read_file` applies.",
         "write_file" => "Avoid for incremental edits to an existing file; prefer `edit_file` after `read_file`.",
         "edit_file" => "Avoid when the file does not exist or when replacing the full file would be simpler.",
+        "workspace_search" => "Avoid when the exact file path is already known and a direct `read_file` is enough. This is Relay-only and does not replace claw-compatible low-level search schemas.",
         "glob_search" => "Avoid when the exact file path is already known and no broader candidate search is needed.",
         "grep_search" => "Avoid when the exact file path is already known and a direct `read_file` is enough.",
         "office_search" => "Avoid for plaintext source files; use `grep_search` there. Do not use it as semantic ranking without a concrete search pattern.",
@@ -794,6 +810,28 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::WorkspaceWrite,
+        },
+        ToolSpec {
+            name: "workspace_search",
+            description: "Relay-only read-only agentic search across the current workspace. Returns ranked candidate files, evidence snippets, scanned/skipped/truncation limits, and honest not-found state. Use before low-level glob/grep/office searches for vague implementation, related-file, or evidence lookup requests.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "paths": { "type": "array", "items": { "type": "string" }, "description": "Workspace-relative search roots. Absolute paths must stay inside the current workspace." },
+                    "mode": { "type": "string", "enum": ["auto", "code", "text", "office"] },
+                    "include_ext": { "type": "array", "items": { "type": "string" }, "description": "Optional extensions such as rs, ts, tsx, md, docx, xlsx, pptx, pdf." },
+                    "max_files": { "type": "integer", "minimum": 1, "maximum": 500 },
+                    "max_snippets": { "type": "integer", "minimum": 1, "maximum": 200 },
+                    "max_bytes": { "type": "integer", "minimum": 1, "maximum": 10485760, "description": "Per-file text read budget in bytes." },
+                    "max_duration_ms": { "type": "integer", "minimum": 1, "maximum": 60000, "description": "Wall-clock search budget." },
+                    "context": { "type": "integer", "minimum": 0, "maximum": 10 },
+                    "literal": { "type": "boolean", "description": "Reserved for compatibility; current implementation uses literal term matching." }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
             name: "glob_search",
@@ -1616,6 +1654,7 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         "read_file" => from_value::<ReadFileInput>(input).and_then(run_read_file),
         "write_file" => from_value::<WriteFileInput>(input).and_then(run_write_file),
         "edit_file" => from_value::<EditFileInput>(input).and_then(run_edit_file),
+        "workspace_search" => from_value::<WorkspaceSearchInput>(input).and_then(run_workspace_search),
         "glob_search" => from_value::<GlobSearchInputValue>(input).and_then(run_glob_search),
         "grep_search" => from_value::<GrepSearchInput>(input).and_then(run_grep_search),
         "office_search" => from_value::<OfficeSearchInput>(input).and_then(run_office_search),
@@ -1825,6 +1864,11 @@ fn run_git_diff(input: GitDiffToolInput) -> Result<String, String> {
     } else {
         run_git_captured(&p, &["diff", "--no-color"])
     }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_workspace_search(input: WorkspaceSearchInput) -> Result<String, String> {
+    to_pretty_json(workspace_search(&input).map_err(io_to_string)?)
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -4142,6 +4186,7 @@ mod tests {
                 "read_file",
                 "write_file",
                 "edit_file",
+                "workspace_search",
                 "glob_search",
                 "grep_search",
                 "office_search",
@@ -4167,6 +4212,7 @@ mod tests {
         let specs = cdp_prompt_tool_specs();
         let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
         assert!(!names.contains(&"Agent"));
+        assert!(names.contains(&"workspace_search"));
         assert!(names.contains(&"read_file"));
         let read_file = specs
             .iter()
@@ -4179,6 +4225,13 @@ mod tests {
         assert!(read_file
             .important_optional_args
             .contains(&"offset".to_string()));
+        let workspace = specs
+            .iter()
+            .find(|spec| spec.name == "workspace_search")
+            .expect("workspace_search cdp prompt spec");
+        assert!(workspace.purpose.contains("agentic workspace search"));
+        assert!(workspace.use_when.contains("Use first"));
+        assert!(workspace.avoid_when.contains("Relay-only"));
         let glob = specs
             .iter()
             .find(|spec| spec.name == "glob_search")
