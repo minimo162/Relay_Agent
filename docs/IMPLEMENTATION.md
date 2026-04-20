@@ -7275,6 +7275,39 @@ Results:
 - `pnpm check`: passed.
 - `git diff --check`: passed.
 
+## 2026-04-20 - Cash-flow search variant coverage
+
+Adjusted local Office/PDF lookup guidance after a live M365 run showed the
+first search batch was too narrow for cash-flow requests: it searched `CFS` and
+one Japanese form, but missed common `CF` filename abbreviations and the
+`キャッシュフロー` / `キャッシュ・フロー` body-text variants. The standard CDP
+prompt and desktop system prompt now tell Copilot to include
+`**/*キャッシュ*フロー*`, `**/*CF*`, and `**/*CFS*` filename globs in the first
+batch. Tool-protocol repair now emits one regex `office_search` covering
+`キャッシュ[・\s]*フロー`, `cash flow`, `CF`, and `CFS`, plus abbreviation
+filename globs, instead of spending extra search budget on separate Office
+content searches for each alias.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --all
+cargo test -p relay-agent-desktop local_office_search_plan
+cargo test -p relay-agent-desktop required_file_lookup
+cargo test -p relay-agent-desktop local_search_
+cargo fmt --check --all
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --all`: passed.
+- `cargo test -p relay-agent-desktop local_office_search_plan`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop required_file_lookup`: passed, 3 passed.
+- `cargo test -p relay-agent-desktop local_search_`: passed, 4 passed.
+- `cargo fmt --check --all`: passed.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`

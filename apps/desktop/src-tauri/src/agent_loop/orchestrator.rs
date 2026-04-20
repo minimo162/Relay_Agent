@@ -1737,6 +1737,7 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; emit `glob_search` and, for Office/PDF workspaces, `office_search` in this reply.
 - **Initial lookup reply format:** When the latest user request is a local file/document lookup and there are no Relay Tool Result blocks for that lookup yet, the entire assistant reply must be exactly one fenced `relay_tool` or `json` block. Do not write `はい、...を検索します`, do not cite `turn*search*`, do not output `<File>...</File>` cards, and do not list candidate files from M365 before Relay tools run.
 - **Search tool selection:** Use `glob_search` for candidate filenames and folders, `grep_search` for plaintext/code content, and `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content. When both filename and Office/PDF content matter, put `glob_search` and `office_search` in one `relay_tool` JSON array.
+- **Cash-flow lookup variants:** For cash-flow / キャッシュフロー lookup requests, include filename globs for Japanese and common abbreviations in the same first batch: `**/*キャッシュ*フロー*`, `**/*CF*`, and `**/*CFS*`. For Office/PDF body search, prefer one `office_search` with `regex:true` and pattern `キャッシュ[・\s]*フロー|cash\s*flow|\bCF\b|\bCFS\b` so both `キャッシュフロー` and `キャッシュ・フロー` are covered without spending extra turns.
 - **Batch speculative searches:** For open-ended lookup, it is better to run a small batch of useful `glob_search` / `grep_search` / `office_search` calls in one reply than to spend a model turn announcing the first search. Keep each search concrete and narrow enough to be useful.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
 - **Path discipline:** If the latest user turn names a concrete path (absolute path, relative path, or bare filename with an extension), use that exact string in tool input. Do **not** rewrite it to a different directory from a prior turn. Treat bare filenames with an extension as workspace-root-relative unless the user gave another base.
@@ -3842,6 +3843,7 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "- If no workspace is set, read_file, glob_search, grep_search, and office_search may use absolute local paths the OS user can read.\n",
                 "- read_file returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). `.docx`, `.xlsx`, and `.pptx` are parsed as plaintext extraction; use office_search for exact search across those files. Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted `.txt`/`.md` file.\n",
                 "- For local file lookup requests, use glob_search for candidate paths, grep_search for plaintext/code contents, and office_search for Office/PDF contents before giving a general explanation. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
+                "- For cash-flow / キャッシュフロー lookup requests, include `**/*キャッシュ*フロー*`, `**/*CF*`, and `**/*CFS*` filename globs, and use an office_search regex such as `キャッシュ[・\\s]*フロー|cash\\s*flow|\\bCF\\b|\\bCFS\\b` for Office/PDF body search.\n",
                 "- If the user's request is already concrete (paths, files, stated action), use tools in your first response; do not ask them to rephrase unless something essential is missing.\n",
                 "- To combine or split PDF files, use pdf_merge / pdf_split (workspace write); do not use bash for that."
             ),
@@ -4114,6 +4116,11 @@ mod cdp_copilot_tool_tests {
         assert!(bundle
             .catalog_text
             .contains("Use `glob_search` for candidate filenames"));
+        assert!(bundle.catalog_text.contains("Cash-flow lookup variants"));
+        assert!(bundle.catalog_text.contains("**/*CF*"));
+        assert!(bundle
+            .catalog_text
+            .contains(r"キャッシュ[・\s]*フロー|cash\s*flow|\bCF\b|\bCFS\b"));
         assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::StandardFull);
     }
 
@@ -4163,6 +4170,8 @@ mod cdp_copilot_tool_tests {
         assert!(system.contains("office_search for Office/PDF contents"));
         assert!(system.contains("`必要なファイル`"));
         assert!(system.contains("not invitations for generic domain checklists"));
+        assert!(system.contains("**/*CF*"));
+        assert!(system.contains(r"キャッシュ[・\s]*フロー|cash\s*flow|\bCF\b|\bCFS\b"));
     }
 
     #[test]
@@ -6468,9 +6477,11 @@ mod loop_controller_tests {
         assert!(next_input.contains(r#""name": "glob_search""#));
         assert!(next_input.contains(r#""pattern": "**/*キャッシュ*フロー*""#));
         assert!(next_input.contains(r#""name": "office_search""#));
-        assert!(next_input.contains(r#""pattern": "キャッシュフロー""#));
+        assert!(next_input.contains(r#""regex": true"#));
+        assert!(next_input
+            .contains(r#""pattern": "キャッシュ[・\\s]*フロー|cash\\s*flow|\\bCF\\b|\\bCFS\\b""#));
+        assert!(next_input.contains(r#""pattern": "**/*CF*""#));
         assert!(next_input.contains(r#""pattern": "**/*CFS*""#));
-        assert!(next_input.contains(r#""pattern": "CFS""#));
         assert!(next_input.contains(r#""include_ext": ["#));
         assert!(!next_input.contains(r#""name": "write_file""#));
     }
@@ -6491,9 +6502,11 @@ mod loop_controller_tests {
         assert!(next_input.contains(r#""name": "glob_search""#));
         assert!(next_input.contains(r#""pattern": "**/*キャッシュ*フロー*""#));
         assert!(next_input.contains(r#""name": "office_search""#));
-        assert!(next_input.contains(r#""pattern": "キャッシュフロー""#));
+        assert!(next_input.contains(r#""regex": true"#));
+        assert!(next_input
+            .contains(r#""pattern": "キャッシュ[・\\s]*フロー|cash\\s*flow|\\bCF\\b|\\bCFS\\b""#));
+        assert!(next_input.contains(r#""pattern": "**/*CF*""#));
         assert!(next_input.contains(r#""pattern": "**/*CFS*""#));
-        assert!(next_input.contains(r#""pattern": "CFS""#));
         assert!(!next_input.contains(r#""name": "write_file""#));
         assert_eq!(kind, LoopContinueKind::MetaNudge);
     }
