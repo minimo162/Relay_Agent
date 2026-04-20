@@ -6226,6 +6226,35 @@ mod loop_controller_tests {
     }
 
     #[test]
+    fn local_search_plan_escalates_to_targeted_glob_search_repair() {
+        let s = summary(
+            "了解。まず実ファイルを探します。ワークスペース配下で、キャッシュフロー計算書作成に関係しそうなファイル名を広く検索します。",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let decision = decide_loop_after_success(
+            "キャッシュフロー計算書の作成に関係するファイルを検索して",
+            "キャッシュフロー計算書の作成に関係するファイルを検索して",
+            1,
+            0,
+            2,
+            false,
+            &s,
+        );
+        let LoopDecision::Continue {
+            next_input,
+            kind: LoopContinueKind::MetaNudge,
+        } = decision
+        else {
+            panic!("expected search plan to escalate to targeted glob_search repair");
+        };
+        assert!(next_input.contains("This is a local file search request."));
+        assert!(next_input.contains(r#""name": "glob_search""#));
+        assert!(next_input.contains(r#""pattern": "**/*キャッシュ*フロー*計算*書*""#));
+        assert!(!next_input.contains(r#""name": "write_file""#));
+    }
+
+    #[test]
     fn concrete_file_body_without_tool_call_escalates_to_repair() {
         let s = summary(
             "<!doctype html>\n<html><head><title>Tetris</title></head><body><script>console.log('ready');</script></body></html>",

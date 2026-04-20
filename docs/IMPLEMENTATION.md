@@ -6762,6 +6762,38 @@ Results:
 - `git diff --check`: passed.
 - `pnpm check`: passed.
 
+## 2026-04-20 - Targeted repair for local search planning loops
+
+Followed up on a CDP Copilot log where M365 Copilot repeatedly answered with
+"I will search local files" prose and never emitted a Relay tool call, even
+after generic tool-protocol repair prompts.
+
+- Added search-specific repair targeting: local file search/list/find requests
+  now produce a concrete `glob_search` repair skeleton instead of another
+  generic tool-protocol prompt.
+- Added a Japanese cash-flow filename pattern inference for requests containing
+  `キャッシュ` + `フロー` + `計算` / `書`, yielding
+  `**/*キャッシュ*フロー*計算*書*`.
+- Ensured explicit local path anchors in a search request become `glob_search`
+  `path` inputs instead of being misrouted to `read_file`.
+- Added submit diagnostics and a long-prompt fallback so a completed paste can
+  skip the 15-second pre-submit composer wait even if the initial composer
+  length is not propagated.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+node --check apps/desktop/src-tauri/binaries/copilot_server.js
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agent_loop::orchestrator -- --nocapture
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.js`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agent_loop::orchestrator -- --nocapture`: passed, 120 passed, 1 ignored.
+
 ## 2026-04-20 - Copilot tool repair and submit latency hardening
 
 Improved the CDP Copilot path based on a repair-loop log where M365 Copilot

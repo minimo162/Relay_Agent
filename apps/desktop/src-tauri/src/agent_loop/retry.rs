@@ -563,6 +563,67 @@ pub(crate) fn is_concrete_new_file_create_request(text: &str) -> bool {
     create_markers && !existing_file_markers
 }
 
+fn is_local_file_search_request(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let wants_search = lower.contains("find")
+        || lower.contains("search")
+        || lower.contains("list")
+        || lower.contains("locate")
+        || lower.contains("where")
+        || trimmed.contains("検索")
+        || trimmed.contains("探")
+        || trimmed.contains("一覧")
+        || trimmed.contains("どこ");
+    if !wants_search {
+        return false;
+    }
+    let local_target = lower.contains("file")
+        || lower.contains("folder")
+        || lower.contains("directory")
+        || lower.contains("workspace")
+        || lower.contains("path")
+        || trimmed.contains("ファイル")
+        || trimmed.contains("資料")
+        || trimmed.contains("配下")
+        || trimmed.contains("フォルダ")
+        || trimmed.contains("ワークスペース")
+        || !extract_path_anchors_from_text(trimmed).is_empty();
+    let web_target = lower.contains("web")
+        || lower.contains("internet")
+        || lower.contains("online")
+        || lower.contains("http://")
+        || lower.contains("https://")
+        || trimmed.contains("ウェブ")
+        || trimmed.contains("インターネット");
+    local_target && !web_target
+}
+
+fn infer_glob_pattern_for_search_request(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.contains("cash") && lower.contains("flow") {
+        return Some("**/*cash*flow*".to_string());
+    }
+    if trimmed.contains("キャッシュ") && trimmed.contains("フロー") {
+        let mut pattern = "**/*キャッシュ*フロー*".to_string();
+        if trimmed.contains("計算") {
+            pattern.push_str("計算*");
+        }
+        if trimmed.contains('書') {
+            pattern.push_str("書*");
+        }
+        return Some(pattern);
+    }
+    None
+}
+
 fn infer_default_new_file_path(latest_request: &str) -> Option<String> {
     let trimmed = latest_request.trim();
     if trimmed.is_empty() {
@@ -575,6 +636,48 @@ fn infer_default_new_file_path(latest_request: &str) -> Option<String> {
         return Some("tetris.html".to_string());
     }
     None
+}
+
+fn build_search_tool_protocol_repair_input(
+    goal: &str,
+    latest_request: &str,
+    attempt_index: usize,
+    pattern: &str,
+    path: Option<&str>,
+) -> String {
+    let mut input = serde_json::Map::new();
+    input.insert("pattern".to_string(), Value::String(pattern.to_string()));
+    if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
+        input.insert("path".to_string(), Value::String(path.trim().to_string()));
+    }
+    let expected_json = serde_json::to_string_pretty(&json!({
+        "name": "glob_search",
+        "relay_tool_call": true,
+        "input": Value::Object(input),
+    }))
+    .unwrap_or_else(|_| "{}".to_string());
+    format!(
+        concat!(
+            "Tool protocol repair.\n",
+            "Your previous reply said you would search local files but did not emit a usable Relay tool call.\n",
+            "Do not use or mention Microsoft Copilot built-in tools such as Python, WebSearch/web search, citations, `office365_search`, coding/executing, Pages, Agent/sub-agent tools, or file uploads.\n",
+            "Do not answer with a plan, summary, or sentence that says you will search later.\n",
+            "{escalation}",
+            "This is a local file search request. Emit exactly one `glob_search` Relay tool call now.\n",
+            "Use the JSON skeleton below exactly unless the latest request clearly requires only a smaller glob pattern.\n",
+            "Do not use `read_file` for a directory or workspace search.\n\n",
+            "Expected JSON for the next reply:\n",
+            "```json\n{expected_json}\n```\n\n",
+            "{latest_request_marker}{latest_request}\n```\n\n",
+            "{original_goal_marker}{goal}\n```"
+        ),
+        escalation = tool_protocol_repair_escalation(attempt_index),
+        expected_json = expected_json,
+        latest_request_marker = LATEST_REQUEST_MARKER,
+        latest_request = latest_request.trim(),
+        original_goal_marker = ORIGINAL_GOAL_MARKER,
+        goal = goal.trim(),
+    )
 }
 
 fn build_targeted_tool_protocol_repair_input(
@@ -646,6 +749,20 @@ pub(crate) fn build_best_tool_protocol_repair_input(
     latest_request: &str,
     attempt_index: usize,
 ) -> String {
+    if is_local_file_search_request(latest_request) {
+        if let Some(pattern) = infer_glob_pattern_for_search_request(latest_request) {
+            let path_anchor = extract_path_anchors_from_text(latest_request)
+                .into_iter()
+                .next();
+            return build_search_tool_protocol_repair_input(
+                goal,
+                latest_request,
+                attempt_index,
+                &pattern,
+                path_anchor.as_deref(),
+            );
+        }
+    }
     if is_concrete_new_file_create_request(latest_request) {
         if let Some(requested_path) = extract_path_anchors_from_text(latest_request)
             .into_iter()

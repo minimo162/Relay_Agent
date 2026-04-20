@@ -2835,6 +2835,11 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
     Number.isFinite(opts.initialComposerLen) && opts.initialComposerLen > 0
       ? opts.initialComposerLen
       : 0;
+  if (!hadAttachments && expectedPromptLen > LONG_PROMPT_SKIP_SYNC_IN_PAGE_CHARS && composerReadyLen <= 0) {
+    composerReadyLen = minComposer;
+    console.error("[copilot:submit] no initial composer length from paste; trusting completed long-prompt paste");
+  }
+  console.error("[copilot:submit] composer_ready_len=", composerReadyLen, "min_required=", minComposer);
   if (composerReadyLen < minComposer && expectedPromptLen >= 20) {
     const composeDeadline = Date.now() + 15e3;
     while (Date.now() < composeDeadline) {
