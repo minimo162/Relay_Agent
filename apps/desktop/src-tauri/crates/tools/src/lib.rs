@@ -818,6 +818,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
                     "pattern": { "type": "string" },
                     "path": { "type": "string" },
                     "glob": { "type": "string" },
+                    "include": { "type": "string", "description": "Alias for glob, compatible with opencode-style grep include filters such as *.js or *.{ts,tsx}" },
                     "output_mode": { "type": "string" },
                     "-B": { "type": "integer", "minimum": 0 },
                     "-A": { "type": "integer", "minimum": 0 },

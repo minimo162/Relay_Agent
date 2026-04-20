@@ -740,6 +740,18 @@ fn infer_office_search_pattern_for_search_request(text: &str) -> Option<String> 
     None
 }
 
+fn inferred_cash_flow_aliases(text: &str) -> Vec<&'static str> {
+    let trimmed = text.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if (lower.contains("cash") && lower.contains("flow"))
+        || (trimmed.contains("キャッシュ") && trimmed.contains("フロー"))
+    {
+        vec!["CFS"]
+    } else {
+        Vec::new()
+    }
+}
+
 fn office_search_paths_for_anchor(path: Option<&str>) -> Vec<String> {
     match path.map(str::trim).filter(|path| !path.is_empty()) {
         Some(path) => vec![format!("{}/**/*", path.trim_end_matches(['/', '\\']))],
@@ -805,21 +817,51 @@ fn build_search_tool_protocol_repair_input(
     let expected_payload = if is_office_content_search_request(latest_request) {
         if let Some(office_pattern) = infer_office_search_pattern_for_search_request(latest_request)
         {
-            json!([
+            let office_paths = office_search_paths_for_anchor(path);
+            let mut calls = vec![
                 glob_call,
-                {
+                json!({
                     "name": "office_search",
                     "relay_tool_call": true,
                     "input": {
                         "pattern": office_pattern,
+                        "paths": office_paths,
+                        "include_ext": ["docx", "xlsx", "pptx", "pdf"],
+                        "-i": true,
+                        "max_results": 100,
+                        "max_files": 200
+                    }
+                }),
+            ];
+            for alias in inferred_cash_flow_aliases(latest_request) {
+                let mut alias_glob_input = serde_json::Map::new();
+                alias_glob_input.insert(
+                    "pattern".to_string(),
+                    Value::String(format!("**/*{alias}*")),
+                );
+                if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
+                    alias_glob_input
+                        .insert("path".to_string(), Value::String(path.trim().to_string()));
+                }
+                calls.push(json!({
+                    "name": "glob_search",
+                    "relay_tool_call": true,
+                    "input": Value::Object(alias_glob_input),
+                }));
+                calls.push(json!({
+                    "name": "office_search",
+                    "relay_tool_call": true,
+                    "input": {
+                        "pattern": alias,
                         "paths": office_search_paths_for_anchor(path),
                         "include_ext": ["docx", "xlsx", "pptx", "pdf"],
                         "-i": true,
                         "max_results": 100,
                         "max_files": 200
                     }
-                }
-            ])
+                }));
+            }
+            Value::Array(calls)
         } else {
             glob_call
         }
@@ -928,18 +970,18 @@ pub(crate) fn build_best_tool_protocol_repair_input(
     attempt_index: usize,
 ) -> String {
     if is_local_file_search_request(latest_request) {
-        if let Some(pattern) = infer_glob_pattern_for_search_request(latest_request) {
-            let path_anchor = extract_path_anchors_from_text(latest_request)
-                .into_iter()
-                .next();
-            return build_search_tool_protocol_repair_input(
-                goal,
-                latest_request,
-                attempt_index,
-                &pattern,
-                path_anchor.as_deref(),
-            );
-        }
+        let pattern = infer_glob_pattern_for_search_request(latest_request)
+            .unwrap_or_else(|| "**/*".to_string());
+        let path_anchor = extract_path_anchors_from_text(latest_request)
+            .into_iter()
+            .next();
+        return build_search_tool_protocol_repair_input(
+            goal,
+            latest_request,
+            attempt_index,
+            &pattern,
+            path_anchor.as_deref(),
+        );
     }
     if is_concrete_new_file_create_request(latest_request) {
         if let Some(requested_path) = extract_path_anchors_from_text(latest_request)

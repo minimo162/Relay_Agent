@@ -381,6 +381,7 @@ Only the tools documented below are intentionally advertised to Copilot for this
 - named existing file inspect/edit/review => `read_file` then `edit_file`
 - named new file create => `write_file`
 - codebase search/investigation => `glob_search` / `grep_search` before `bash`
+- open-ended search => batch a few likely useful `glob_search` / `grep_search` calls in one `relay_tool` array instead of narrating a search plan
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
 
 {rendered_tools}
@@ -1308,23 +1309,6 @@ fn find_generic_markdown_fence_inner_end(body: &str) -> Option<usize> {
     body.rfind("```")
 }
 
-fn skip_json_whitespace(s: &str, mut i: usize) -> usize {
-    let bytes = s.as_bytes();
-    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
-        i += 1;
-    }
-    i
-}
-
-fn brace_open_followed_by_name_key(s: &str, brace_idx: usize) -> bool {
-    let bytes = s.as_bytes();
-    if brace_idx >= bytes.len() || bytes[brace_idx] != b'{' {
-        return false;
-    }
-    let after = skip_json_whitespace(s, brace_idx + 1);
-    s.get(after..).is_some_and(|t| t.starts_with("\"name\""))
-}
-
 fn extract_mvp_tool_object_spans(
     text: &str,
     whitelist: &HashSet<String>,
@@ -1338,10 +1322,6 @@ fn extract_mvp_tool_object_spans(
             break;
         };
         let abs = search_start + rel;
-        if !brace_open_followed_by_name_key(text, abs) {
-            search_start = abs + 1;
-            continue;
-        }
         let sub = if let Some(sub) = extract_balanced_json_object(text, abs) {
             sub.to_string()
         } else if let Some(repaired) = text.get(abs..).and_then(autoclose_unbalanced_json_payload) {
@@ -3123,6 +3103,16 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         let input: Value =
             serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
         assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
+    }
+
+    #[test]
+    fn parse_retry_recovers_unfenced_tool_array_when_name_is_not_first_key() {
+        let raw = r#"[ { "input": { "pattern": "**/*キャッシュ*フロー*" }, "name": "glob_search", "relay_tool_call": true }, { "input": { "-i": true, "include_ext": [ "docx", "xlsx", "pptx", "pdf" ], "max_files": 200, "max_results": 100, "paths": [ "**/*" ], "pattern": "キャッシュフロー" }, "name": "office_search", "relay_tool_call": true } ]"#;
+        let (display, calls) = parse_copilot_tool_response(raw, CdpToolParseMode::RetryRepair);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].1, "glob_search");
+        assert_eq!(calls[1].1, "office_search");
+        assert!(!display.contains(r#""relay_tool_call""#));
     }
 
     // Parity with orchestrator.rs: Initial parse must recover unfenced tool

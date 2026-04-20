@@ -343,23 +343,6 @@ where
     (display, payloads)
 }
 
-fn skip_json_whitespace(s: &str, mut i: usize) -> usize {
-    let bytes = s.as_bytes();
-    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r') {
-        i += 1;
-    }
-    i
-}
-
-fn brace_open_followed_by_name_key(s: &str, brace_idx: usize) -> bool {
-    let bytes = s.as_bytes();
-    if brace_idx >= bytes.len() || bytes[brace_idx] != b'{' {
-        return false;
-    }
-    let after = skip_json_whitespace(s, brace_idx + 1);
-    s.get(after..).is_some_and(|t| t.starts_with("\"name\""))
-}
-
 fn extract_mvp_tool_object_spans<F>(
     text: &str,
     whitelist: &HashSet<String>,
@@ -377,10 +360,6 @@ where
             break;
         };
         let abs = search_start + rel;
-        if !brace_open_followed_by_name_key(text, abs) {
-            search_start = abs + 1;
-            continue;
-        }
         let sub = if let Some(sub) = extract_balanced_json_object(text, abs) {
             sub.to_string()
         } else if let Some(repaired) = text.get(abs..).and_then(autoclose_unbalanced_json_payload) {

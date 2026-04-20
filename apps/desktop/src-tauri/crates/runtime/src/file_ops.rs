@@ -104,6 +104,7 @@ pub struct GlobSearchOutput {
 pub struct GrepSearchInput {
     pub pattern: String,
     pub path: Option<String>,
+    #[serde(alias = "include")]
     pub glob: Option<String>,
     #[serde(rename = "output_mode")]
     pub output_mode: Option<String>,
@@ -496,6 +497,15 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
         .map(normalize_path)
         .transpose()?
         .unwrap_or(std::env::current_dir()?);
+    if base_dir.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "glob_search path must be a directory: {}",
+                base_dir.to_string_lossy()
+            ),
+        ));
+    }
     let search_pattern = if Path::new(pattern).is_absolute() {
         pattern.to_owned()
     } else {
@@ -511,12 +521,7 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
         }
     }
 
-    matches.sort_by_key(|path| {
-        fs::metadata(path)
-            .and_then(|metadata| metadata.modified())
-            .ok()
-            .map(Reverse)
-    });
+    sort_paths_by_modified_desc(&mut matches);
 
     let truncated = matches.len() > 100;
     let filenames = matches
@@ -564,7 +569,10 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
     let mut content_lines = Vec::new();
     let mut total_matches = 0usize;
 
-    for file_path in collect_search_files(&base_path)? {
+    let mut search_files = collect_search_files(&base_path)?;
+    sort_paths_by_modified_desc(&mut search_files);
+
+    for file_path in search_files {
         if !matches_optional_filters(&file_path, glob_filter.as_ref(), file_type) {
             continue;
         }
@@ -657,6 +665,18 @@ fn collect_search_files(base_path: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+fn modified_ms(path: &Path) -> u128 {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_millis())
+}
+
+fn sort_paths_by_modified_desc(paths: &mut [PathBuf]) {
+    paths.sort_by_key(|path| Reverse(modified_ms(path)));
+}
+
 fn matches_optional_filters(
     path: &Path,
     glob_filter: Option<&Pattern>,
@@ -664,7 +684,12 @@ fn matches_optional_filters(
 ) -> bool {
     if let Some(glob_filter) = glob_filter {
         let path_string = path.to_string_lossy();
-        if !glob_filter.matches(&path_string) && !glob_filter.matches_path(path) {
+        let filename_matches = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| glob_filter.matches(name));
+        if !glob_filter.matches(&path_string) && !glob_filter.matches_path(path) && !filename_matches
+        {
             return false;
         }
     }
@@ -886,5 +911,57 @@ mod tests {
         })
         .expect("grep should succeed");
         assert!(grep_output.content.unwrap_or_default().contains("hello"));
+    }
+
+    #[test]
+    fn glob_search_rejects_file_path_base() {
+        let path = temp_path("glob-file-base.txt");
+        fs::write(&path, "hello").expect("write file");
+        let err = glob_search("*.txt", Some(path.to_string_lossy().as_ref()))
+            .expect_err("file base should be rejected");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("path must be a directory"));
+    }
+
+    #[test]
+    fn grep_search_accepts_opencode_include_alias() {
+        let input: GrepSearchInput = serde_json::from_str(
+            r#"{"pattern":"hello","path":"src","include":"*.rs"}"#,
+        )
+        .expect("include alias should deserialize");
+        assert_eq!(input.glob.as_deref(), Some("*.rs"));
+    }
+
+    #[test]
+    fn grep_search_orders_files_by_modified_time_desc() {
+        let dir = temp_path("grep-mtime");
+        std::fs::create_dir_all(&dir).expect("directory should be created");
+        let old = dir.join("old.txt");
+        let new = dir.join("new.txt");
+        fs::write(&old, "needle old\n").expect("write old file");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&new, "needle new\n").expect("write new file");
+
+        let output = grep_search(&GrepSearchInput {
+            pattern: String::from("needle"),
+            path: Some(dir.to_string_lossy().into_owned()),
+            glob: Some(String::from("*.txt")),
+            output_mode: Some(String::from("files_with_matches")),
+            before: None,
+            after: None,
+            context_short: None,
+            context: None,
+            line_numbers: Some(true),
+            case_insensitive: Some(false),
+            file_type: None,
+            head_limit: Some(10),
+            offset: Some(0),
+            multiline: Some(false),
+        })
+        .expect("grep should succeed");
+
+        assert_eq!(output.filenames.len(), 2);
+        assert!(output.filenames[0].ends_with("new.txt"));
+        assert!(output.filenames[1].ends_with("old.txt"));
     }
 }

@@ -1554,7 +1554,7 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
     let curated = match name {
         "read_file" => vec!["offset", "limit", "pages", "sheets", "slides"],
         "glob_search" => vec!["path"],
-        "grep_search" => vec!["path", "glob", "context"],
+        "grep_search" => vec!["path", "glob", "include", "context"],
         "office_search" => vec![
             "paths",
             "regex",
@@ -1735,6 +1735,7 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read_file` first** before edits.
 - **Local file lookup means tools first:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; emit `glob_search` and, for Office/PDF workspaces, `office_search` in this reply.
 - **Search tool selection:** Use `glob_search` for candidate filenames and folders, `grep_search` for plaintext/code content, and `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content. When both filename and Office/PDF content matter, put `glob_search` and `office_search` in one `relay_tool` JSON array.
+- **Batch speculative searches:** For open-ended lookup, it is better to run a small batch of useful `glob_search` / `grep_search` / `office_search` calls in one reply than to spend a model turn announcing the first search. Keep each search concrete and narrow enough to be useful.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
 - **Path discipline:** If the latest user turn names a concrete path (absolute path, relative path, or bare filename with an extension), use that exact string in tool input. Do **not** rewrite it to a different directory from a prior turn. Treat bare filenames with an extension as workspace-root-relative unless the user gave another base.
 - **This turn, not “next message”:** Do **not** defer all tools to a follow-up assistant message when the current turn can already run `read_file` / `write_file` / `edit_file`.
@@ -1779,6 +1780,7 @@ Only the tools documented below are intentionally advertised to Copilot for this
 - named new file create => `write_file`
 - local file lookup / needed files / related files => one `relay_tool` JSON array with `glob_search` plus `office_search` for Office/PDF content; do not answer from general knowledge before tools
 - codebase search/investigation => `glob_search` / `grep_search` before `bash`
+- open-ended search => batch a few likely useful searches in one `relay_tool` array instead of narrating a search plan
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
 
 {rendered_tools}
@@ -5024,6 +5026,16 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
     }
 
+    #[test]
+    fn parse_retry_recovers_unfenced_tool_array_when_name_is_not_first_key() {
+        let raw = r#"[ { "input": { "pattern": "**/*キャッシュ*フロー*" }, "name": "glob_search", "relay_tool_call": true }, { "input": { "-i": true, "include_ext": [ "docx", "xlsx", "pptx", "pdf" ], "max_files": 200, "max_results": 100, "paths": [ "**/*" ], "pattern": "キャッシュフロー" }, "name": "office_search", "relay_tool_call": true } ]"#;
+        let (vis, tools) = parse_retry(raw);
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].1, "glob_search");
+        assert_eq!(tools[1].1, "office_search");
+        assert!(!vis.contains(r#""relay_tool_call""#));
+    }
+
     // Copilot sometimes emits tool JSON without the ```relay_tool fence on the
     // first turn. With the sentinel present and the tool name whitelisted, the
     // unfenced fallback must recover the call on Initial parse — not only on
@@ -6333,6 +6345,8 @@ mod loop_controller_tests {
         assert!(next_input.contains(r#""pattern": "**/*キャッシュ*フロー*""#));
         assert!(next_input.contains(r#""name": "office_search""#));
         assert!(next_input.contains(r#""pattern": "キャッシュフロー""#));
+        assert!(next_input.contains(r#""pattern": "**/*CFS*""#));
+        assert!(next_input.contains(r#""pattern": "CFS""#));
         assert!(next_input.contains(r#""include_ext": ["#));
         assert!(!next_input.contains(r#""name": "write_file""#));
     }
@@ -6354,7 +6368,27 @@ mod loop_controller_tests {
         assert!(next_input.contains(r#""pattern": "**/*キャッシュ*フロー*""#));
         assert!(next_input.contains(r#""name": "office_search""#));
         assert!(next_input.contains(r#""pattern": "キャッシュフロー""#));
+        assert!(next_input.contains(r#""pattern": "**/*CFS*""#));
+        assert!(next_input.contains(r#""pattern": "CFS""#));
         assert!(!next_input.contains(r#""name": "write_file""#));
+        assert_eq!(kind, LoopContinueKind::MetaNudge);
+    }
+
+    #[test]
+    fn local_file_search_without_known_keyword_still_gets_glob_repair() {
+        let s = summary(
+            "対象ファイルを確認してから回答します。",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let request = "ワークスペース配下の関連資料を検索して";
+        let decision = decide_loop_after_success(request, request, 1, 0, 2, false, &s);
+        let LoopDecision::Continue { next_input, kind } = decision else {
+            panic!("expected generic local search request to emit glob repair");
+        };
+        assert!(next_input.contains("This is a local file search request."));
+        assert!(next_input.contains(r#""name": "glob_search""#));
+        assert!(next_input.contains(r#""pattern": "**/*""#));
         assert_eq!(kind, LoopContinueKind::MetaNudge);
     }
 

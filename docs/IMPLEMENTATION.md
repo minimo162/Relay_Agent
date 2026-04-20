@@ -15,6 +15,88 @@
 
 ## Milestone Log
 
+### 2026-04-20 opencode-informed search hardening follow-up
+
+Compared the current `anomalyco/opencode` search implementation against Relay's
+local tools. The useful portable pieces were: `glob`/`grep` results sorted by
+modified time, `grep` accepting an opencode-style `include` filter, explicit
+directory-only validation for `glob`, and guidance to batch likely searches in a
+single model response instead of narrating a first search step.
+
+- Updated `glob_search` to reject a file path passed as the search base, matching
+  opencode's directory-only `glob` contract.
+- Updated `grep_search` to sort candidate files by modification time descending,
+  so newest matching files surface first.
+- Added `include` as a serde/schema alias for `grep_search.glob`; basename-only
+  patterns such as `*.txt` now match absolute search paths by filename too.
+- Strengthened CDP search guidance to batch small useful `glob_search` /
+  `grep_search` / `office_search` calls for open-ended lookup.
+- Added a generic local-search repair fallback: even when Relay cannot infer a
+  domain-specific glob pattern, a tool-less local search reply now escalates to
+  a concrete `glob_search` with `**/*` instead of drifting into another plan.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml grep_search_ -- --nocapture
+cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml glob_search_rejects_file_path_base -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_file_search_without_known_keyword_still_gets_glob_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml catalog_lists_builtin_tools_and_protocol -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance -- --nocapture
+git diff --check
+pnpm check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml grep_search_ -- --nocapture`: passed, 2 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml glob_search_rejects_file_path_base -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_file_search_without_known_keyword_still_gets_glob_repair -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml catalog_lists_builtin_tools_and_protocol -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance -- --nocapture`: passed, 1 passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
+### 2026-04-20 Search repair parser and CFS alias hardening
+
+Followed up on a live M365/CDP search run where Copilot first claimed it had
+searched local files without tool evidence, then repair1 returned a bare JSON
+array whose tool objects used `input` before `name`. Relay's unfenced fallback
+only recovered objects where `"name"` was the first key, so it wasted another
+Copilot round before executing tools.
+
+- Relaxed unfenced tool-object recovery in both parser copies so sentinel-bearing
+  whitelisted tool objects are accepted regardless of JSON key order.
+- Added regression coverage for the observed repair shape:
+  `[{"input":...,"name":"glob_search","relay_tool_call":true}, ...]`.
+- Expanded cash-flow document-search repair skeletons with `CFS` filename and
+  Office/PDF content searches so files named like `連結CFS精算表` are not missed
+  by only searching `キャッシュフロー`.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml parse_retry_recovers_unfenced_tool_array_when_name_is_not_first_key -- --nocapture
+cargo test -p desktop-core parse_retry_recovers_unfenced_tool_array_when_name_is_not_first_key --manifest-path apps/desktop/src-tauri/Cargo.toml -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan_escalates_to_filename_and_content_search_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_answer_without_tools_escalates_to_local_search_repair -- --nocapture
+git diff --check
+pnpm check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml parse_retry_recovers_unfenced_tool_array_when_name_is_not_first_key -- --nocapture`: passed, 1 passed.
+- `cargo test -p desktop-core parse_retry_recovers_unfenced_tool_array_when_name_is_not_first_key --manifest-path apps/desktop/src-tauri/Cargo.toml -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan_escalates_to_filename_and_content_search_repair -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_answer_without_tools_escalates_to_local_search_repair -- --nocapture`: passed, 1 passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-04-20 opencode-inspired file search guidance
 
 Compared opencode's file-search flow and incorporated the parts that fit the
