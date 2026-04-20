@@ -762,6 +762,18 @@ fn inferred_cash_flow_aliases(text: &str) -> Vec<&'static str> {
     }
 }
 
+fn office_search_include_ext_for_search_request(text: &str) -> Vec<&'static str> {
+    let trimmed = text.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let explicitly_wants_pdf =
+        lower.contains(".pdf") || lower.contains("pdf") || trimmed.contains("PDF");
+    if is_cash_flow_search_request(text) && !explicitly_wants_pdf {
+        vec!["docx", "xlsx", "pptx"]
+    } else {
+        vec!["docx", "xlsx", "pptx", "pdf"]
+    }
+}
+
 fn office_search_paths_for_anchor(path: Option<&str>) -> Vec<String> {
     match path.map(str::trim).filter(|path| !path.is_empty()) {
         Some(path) => vec![format!("{}/**/*", path.trim_end_matches(['/', '\\']))],
@@ -790,6 +802,7 @@ fn build_search_tool_payload(latest_request: &str, pattern: &str, path: Option<&
 
     let office_paths = office_search_paths_for_anchor(path);
     let office_regex = infer_office_search_regex_for_search_request(latest_request);
+    let include_ext = office_search_include_ext_for_search_request(latest_request);
     let mut calls = vec![
         glob_call,
         json!({
@@ -799,10 +812,11 @@ fn build_search_tool_payload(latest_request: &str, pattern: &str, path: Option<&
                 "pattern": office_regex.as_deref().unwrap_or(office_pattern.as_str()),
                 "paths": office_paths,
                 "regex": office_regex.is_some(),
-                "include_ext": ["docx", "xlsx", "pptx", "pdf"],
+                "include_ext": include_ext,
                 "-i": true,
-                "max_results": 100,
-                "max_files": 200
+                "context": 40,
+                "max_results": 30,
+                "max_files": 80
             }
         }),
     ];
@@ -822,15 +836,16 @@ fn build_search_tool_payload(latest_request: &str, pattern: &str, path: Option<&
         }));
         if office_regex.is_none() {
             calls.push(json!({
-                "name": "office_search",
-                "relay_tool_call": true,
-                "input": {
+            "name": "office_search",
+            "relay_tool_call": true,
+            "input": {
                     "pattern": alias,
                     "paths": office_search_paths_for_anchor(path),
-                    "include_ext": ["docx", "xlsx", "pptx", "pdf"],
+                    "include_ext": office_search_include_ext_for_search_request(latest_request),
                     "-i": true,
-                    "max_results": 100,
-                    "max_files": 200
+                    "context": 40,
+                    "max_results": 30,
+                    "max_files": 80
                 }
             }));
         }

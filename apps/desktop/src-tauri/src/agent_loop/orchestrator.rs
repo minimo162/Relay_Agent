@@ -6555,11 +6555,29 @@ mod loop_controller_tests {
         assert!(calls[1].1.contains(r#""regex":true"#));
         assert!(calls[1]
             .1
+            .contains(r#""include_ext":["docx","xlsx","pptx"]"#));
+        assert!(calls[1].1.contains(r#""max_results":30"#));
+        assert!(calls[1].1.contains(r#""max_files":80"#));
+        assert!(calls[1]
+            .1
             .contains(r#""pattern":"キャッシュ[・\\s]*フロー|cash\\s*flow|\\bCF\\b|\\bCFS\\b""#));
         assert_eq!(calls[2].0, "glob_search");
         assert!(calls[2].1.contains(r#""pattern":"**/*CF*""#));
         assert_eq!(calls[3].0, "glob_search");
         assert!(calls[3].1.contains(r#""pattern":"**/*CFS*""#));
+    }
+
+    #[test]
+    fn cash_flow_lookup_keeps_pdf_when_user_asks_for_pdf() {
+        let calls = build_initial_local_search_tool_calls(
+            "キャッシュフロー計算書の作成に関係するPDFファイルを検索して",
+        )
+        .expect("PDF-specific cash-flow lookup should get an initial local search plan");
+
+        assert_eq!(calls[1].0, "office_search");
+        assert!(calls[1]
+            .1
+            .contains(r#""include_ext":["docx","xlsx","pptx","pdf"]"#));
     }
 
     #[test]

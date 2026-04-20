@@ -7275,6 +7275,46 @@ Results:
 - `pnpm check`: passed.
 - `git diff --check`: passed.
 
+## 2026-04-20 - Office search recency and PDF bias
+
+Fixed a live file-search quality issue where deterministic cash-flow lookup
+found many old disclosure PDFs before more useful working files. The root cause
+was twofold: `office_search` expanded glob candidates in path-name order, so
+old period folders could be scanned first, and the deterministic cash-flow body
+search included PDFs by default.
+
+Changes:
+
+- `office_search` candidate expansion now sorts candidates by filesystem
+  modified time descending before applying `max_files`, matching the intent of
+  `glob_search` / `grep_search` ordering.
+- Deterministic cash-flow lookup now searches Office body text in `.docx`,
+  `.xlsx`, and `.pptx` by default. PDF is included only when the user explicitly
+  asks for PDF files.
+- The deterministic Office body search was tightened to `max_results: 30`,
+  `max_files: 80`, and `context: 40` to keep the summary prompt from being
+  dominated by bulk PDF-like disclosure text.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --all
+cargo test -p runtime expand_office_candidates_orders_by_modified_time_desc
+cargo test -p relay-agent-desktop cash_flow
+cargo test -p relay-agent-desktop local_search_
+cargo fmt --check --all
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --all`: passed.
+- `cargo test -p runtime expand_office_candidates_orders_by_modified_time_desc`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop cash_flow`: passed, 2 passed.
+- `cargo test -p relay-agent-desktop local_search_`: passed, 4 passed.
+- `cargo fmt --check --all`: passed.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Deterministic initial local search plan
 
 Fixed a live-search latency issue where M365 Copilot spent roughly three

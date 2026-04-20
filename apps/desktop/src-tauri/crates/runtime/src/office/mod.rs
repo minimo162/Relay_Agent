@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
@@ -996,7 +997,7 @@ fn expand_office_candidates(
             }
         }
     }
-    out.sort();
+    sort_candidates_by_modified_desc(&mut out);
     out.truncate(max_files);
     Ok(CandidateExpansion {
         candidates: out,
@@ -1004,6 +1005,22 @@ fn expand_office_candidates(
         files_truncated,
         wall_clock_truncated,
     })
+}
+
+fn candidate_modified_ms(path: &Path) -> u128 {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_millis())
+}
+
+fn sort_candidates_by_modified_desc(paths: &mut [PathBuf]) {
+    paths.sort_by(|left, right| {
+        Reverse(candidate_modified_ms(left))
+            .cmp(&Reverse(candidate_modified_ms(right)))
+            .then_with(|| left.cmp(right))
+    });
 }
 
 fn contains_glob_meta(value: &str) -> bool {
@@ -1524,6 +1541,33 @@ mod tests {
         assert!(expansion.files_truncated);
         assert_eq!(expansion.candidates.len(), 2);
         assert!(expansion.errors.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expand_office_candidates_orders_by_modified_time_desc() {
+        let root = test_dir();
+        let older = root.join("older.xlsx");
+        let newer = root.join("newer.xlsx");
+        fs::write(&older, b"old").expect("write older candidate");
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(&newer, b"new").expect("write newer candidate");
+        let pattern = root.join("*.xlsx").to_string_lossy().into_owned();
+        let include_ext =
+            normalize_include_ext(Some(&vec![String::from("xlsx")])).expect("include ext");
+
+        let expansion = expand_office_candidates(
+            &[pattern],
+            &include_ext,
+            10,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .expect("expand candidates");
+
+        assert_eq!(expansion.candidates.len(), 2);
+        assert_eq!(expansion.candidates[0], fs::canonicalize(&newer).unwrap());
+        assert_eq!(expansion.candidates[1], fs::canonicalize(&older).unwrap());
 
         let _ = fs::remove_dir_all(root);
     }
