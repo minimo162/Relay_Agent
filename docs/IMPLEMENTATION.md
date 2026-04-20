@@ -7152,6 +7152,42 @@ Results:
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agent_loop::orchestrator -- --nocapture`: passed, 119 passed, 1 ignored.
 - `git diff --check`: passed.
 
+## 2026-04-20 - Copilot submit fallback and phantom generating latency
+
+Reviewed a live CDP log after search-loop hardening. The previous 15-second
+pre-submit attachment wait is gone, but the no-attachment send path still spent
+time on `Ctrl+Enter` after `Enter` was not confirmed, even though the DOM send
+button path succeeded. The response wait also kept phantom generating for about
+11 seconds before ignoring it.
+
+- Increased no-attachment keyboard-submit confirmation from 250 ms to 450 ms so
+  normal `Enter` has a little more time to show generation or composer shrink.
+- Changed the fallback order to go from `Enter` directly to the send button;
+  `Ctrl+Enter` is now a later fallback when send-button confirmation fails.
+- Kept attachment pending checks out of the no-attachment send-button wait path
+  so unrelated M365 progress indicators cannot block plain text sends.
+- Reduced phantom generating tolerance from 22 polls to 12 polls, cutting the
+  stuck stop-button wait from about 11 seconds to about 6 seconds while still
+  requiring a stable/strong assistant extraction before finalizing.
+
+Verification commands run locally:
+
+```bash
+node --check apps/desktop/src-tauri/binaries/copilot_server.js
+node --test apps/desktop/src-tauri/binaries/copilot_send_timing.test.mjs
+node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs
+pnpm check
+git diff --check
+```
+
+Results:
+
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.js`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_send_timing.test.mjs`: passed, 2 passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`: passed, 34 passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Copilot search loop and submit wait hardening
 
 Reviewed a live CDP log after the Relay tool-routing fix. The first turn now

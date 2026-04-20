@@ -860,7 +860,7 @@ test("waitForDomResponse finalizes long HTML replies after phantom generating wi
   };
 
   const response = await waitForDomResponse(session, null, 0, null, {
-    timeoutMs: 13_500,
+    timeoutMs: 9_500,
     onFinalize: async (event) => {
       finalizationMode = event.mode;
     },
@@ -868,7 +868,7 @@ test("waitForDomResponse finalizes long HTML replies after phantom generating wi
 
   assert.equal(response, fullReply);
   assert.equal(finalizationMode, "stable_strong_signal");
-  assert.ok(pollIndex >= 22);
+  assert.ok(pollIndex >= 12);
 });
 
 test("waitForDomResponse finalizes from strict extraction when loose stalled reply is still truncated", async () => {
@@ -915,7 +915,7 @@ test("waitForDomResponse finalizes from strict extraction when loose stalled rep
   };
 
   const response = await waitForDomResponse(session, null, 0, null, {
-    timeoutMs: 13_500,
+    timeoutMs: 9_500,
     onFinalize: async (event) => {
       finalizationMode = event.mode;
     },
@@ -923,5 +923,5 @@ test("waitForDomResponse finalizes from strict extraction when loose stalled rep
 
   assert.equal(response, fullReply);
   assert.equal(finalizationMode, "stable_strong_signal");
-  assert.ok(pollIndex >= 22);
+  assert.ok(pollIndex >= 12);
 });

@@ -248,8 +248,8 @@ function shouldPreferExpandedAssistantTurn(replyText, turnText) {
 export const RESPONSE_TIMEOUT_MS = 18e4;
 /** Main loop sleep in waitForDomResponse (was 1000ms → ~3min wall time on phantom “generating”). */
 export const RESPONSE_POLL_INTERVAL_MS = 500;
-/** Consecutive polls with raw generating=true before treating “stop” UI as phantom (was 55 @ 1s ≈ 55s lost). */
-export const RESPONSE_PHANTOM_GENERATING_POLLS = 22;
+/** Consecutive polls with raw generating=true before treating “stop” UI as phantom (was 22 @ 500ms ≈ 11s lost). */
+export const RESPONSE_PHANTOM_GENERATING_POLLS = 12;
 /** After DOM looks stable, pause before re-extract (was 2800ms). */
 export const RESPONSE_POST_STABLE_MS = 1000;
 

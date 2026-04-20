@@ -2876,15 +2876,7 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
   } catch (error) {
     console.error("[copilot:submit] Enter failed:", error?.message || error);
   }
-  if (!sendClicked) {
-    console.error("[copilot:submit] Enter not confirmed; trying Ctrl+Enter");
-    try {
-      await trySubmitViaCtrlEnter(session);
-      sendClicked = await composerSubmitLooksSent(session, lenBefore, confirmDelayMs);
-    } catch (error) {
-      console.error("[copilot:submit] Ctrl+Enter failed:", error?.message || error);
-    }
-  }
+  if (!sendClicked) console.error("[copilot:submit] Enter not confirmed; trying send button");
 
   // Wait for send button to become visible and enabled
   const deadline = Date.now() + 45e3;
@@ -2894,7 +2886,7 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
       throw new Error("relay_copilot_aborted");
     }
     const pos = await findSendButtonCenter(session);
-    const pending = await copilotAttachmentStillPending(session);
+    const pending = hadAttachments && await copilotAttachmentStillPending(session);
     if (pos.ok && !pending) {
       if (!stableSince) stableSince = Date.now();
       if (Date.now() - stableSince >= stableMs) {
@@ -2928,8 +2920,8 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
   }
 
   if (!sendClicked) {
-    console.error("[copilot:submit] no send button; trying Enter");
-    await trySubmitViaEnter(session);
+    console.error("[copilot:submit] no send button confirmation; trying Ctrl+Enter");
+    await trySubmitViaCtrlEnter(session);
     await sleep(2200);
     const { generating, len: lenAfter } = await getComposerLenAndCopilotGenerating(session);
     if (generating || lenAfter + 30 < lenBefore) {
