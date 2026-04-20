@@ -769,6 +769,101 @@ fn office_search_paths_for_anchor(path: Option<&str>) -> Vec<String> {
     }
 }
 
+fn build_search_tool_payload(latest_request: &str, pattern: &str, path: Option<&str>) -> Value {
+    let mut glob_input = serde_json::Map::new();
+    glob_input.insert("pattern".to_string(), Value::String(pattern.to_string()));
+    if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
+        glob_input.insert("path".to_string(), Value::String(path.trim().to_string()));
+    }
+    let glob_call = json!({
+        "name": "glob_search",
+        "relay_tool_call": true,
+        "input": Value::Object(glob_input),
+    });
+    if !is_office_content_search_request(latest_request) {
+        return glob_call;
+    }
+    let Some(office_pattern) = infer_office_search_pattern_for_search_request(latest_request)
+    else {
+        return glob_call;
+    };
+
+    let office_paths = office_search_paths_for_anchor(path);
+    let office_regex = infer_office_search_regex_for_search_request(latest_request);
+    let mut calls = vec![
+        glob_call,
+        json!({
+            "name": "office_search",
+            "relay_tool_call": true,
+            "input": {
+                "pattern": office_regex.as_deref().unwrap_or(office_pattern.as_str()),
+                "paths": office_paths,
+                "regex": office_regex.is_some(),
+                "include_ext": ["docx", "xlsx", "pptx", "pdf"],
+                "-i": true,
+                "max_results": 100,
+                "max_files": 200
+            }
+        }),
+    ];
+    for alias in inferred_cash_flow_aliases(latest_request) {
+        let mut alias_glob_input = serde_json::Map::new();
+        alias_glob_input.insert(
+            "pattern".to_string(),
+            Value::String(format!("**/*{alias}*")),
+        );
+        if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
+            alias_glob_input.insert("path".to_string(), Value::String(path.trim().to_string()));
+        }
+        calls.push(json!({
+            "name": "glob_search",
+            "relay_tool_call": true,
+            "input": Value::Object(alias_glob_input),
+        }));
+        if office_regex.is_none() {
+            calls.push(json!({
+                "name": "office_search",
+                "relay_tool_call": true,
+                "input": {
+                    "pattern": alias,
+                    "paths": office_search_paths_for_anchor(path),
+                    "include_ext": ["docx", "xlsx", "pptx", "pdf"],
+                    "-i": true,
+                    "max_results": 100,
+                    "max_files": 200
+                }
+            }));
+        }
+    }
+    Value::Array(calls)
+}
+
+pub(crate) fn build_initial_local_search_tool_calls(
+    latest_request: &str,
+) -> Option<Vec<(String, String)>> {
+    if !is_local_file_search_request(latest_request) {
+        return None;
+    }
+    let pattern = infer_glob_pattern_for_search_request(latest_request)?;
+    let path_anchor = extract_path_anchors_from_text(latest_request)
+        .into_iter()
+        .next();
+    let payload = build_search_tool_payload(latest_request, &pattern, path_anchor.as_deref());
+    let calls = match payload {
+        Value::Array(items) => items,
+        item => vec![item],
+    }
+    .into_iter()
+    .filter_map(|item| {
+        let name = item.get("name")?.as_str()?.to_string();
+        let input = item.get("input")?;
+        let input = serde_json::to_string(input).ok()?;
+        Some((name, input))
+    })
+    .collect::<Vec<_>>();
+    (!calls.is_empty()).then_some(calls)
+}
+
 fn build_tool_result_summary_repair_input(
     goal: &str,
     latest_request: &str,
@@ -814,74 +909,7 @@ fn build_search_tool_protocol_repair_input(
     pattern: &str,
     path: Option<&str>,
 ) -> String {
-    let mut glob_input = serde_json::Map::new();
-    glob_input.insert("pattern".to_string(), Value::String(pattern.to_string()));
-    if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
-        glob_input.insert("path".to_string(), Value::String(path.trim().to_string()));
-    }
-    let glob_call = json!({
-        "name": "glob_search",
-        "relay_tool_call": true,
-        "input": Value::Object(glob_input),
-    });
-    let expected_payload = if is_office_content_search_request(latest_request) {
-        if let Some(office_pattern) = infer_office_search_pattern_for_search_request(latest_request)
-        {
-            let office_paths = office_search_paths_for_anchor(path);
-            let office_regex = infer_office_search_regex_for_search_request(latest_request);
-            let mut calls = vec![
-                glob_call,
-                json!({
-                    "name": "office_search",
-                    "relay_tool_call": true,
-                    "input": {
-                        "pattern": office_regex.as_deref().unwrap_or(office_pattern.as_str()),
-                        "paths": office_paths,
-                        "regex": office_regex.is_some(),
-                        "include_ext": ["docx", "xlsx", "pptx", "pdf"],
-                        "-i": true,
-                        "max_results": 100,
-                        "max_files": 200
-                    }
-                }),
-            ];
-            for alias in inferred_cash_flow_aliases(latest_request) {
-                let mut alias_glob_input = serde_json::Map::new();
-                alias_glob_input.insert(
-                    "pattern".to_string(),
-                    Value::String(format!("**/*{alias}*")),
-                );
-                if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
-                    alias_glob_input
-                        .insert("path".to_string(), Value::String(path.trim().to_string()));
-                }
-                calls.push(json!({
-                    "name": "glob_search",
-                    "relay_tool_call": true,
-                    "input": Value::Object(alias_glob_input),
-                }));
-                if office_regex.is_none() {
-                    calls.push(json!({
-                        "name": "office_search",
-                        "relay_tool_call": true,
-                        "input": {
-                            "pattern": alias,
-                            "paths": office_search_paths_for_anchor(path),
-                            "include_ext": ["docx", "xlsx", "pptx", "pdf"],
-                            "-i": true,
-                            "max_results": 100,
-                            "max_files": 200
-                        }
-                    }));
-                }
-            }
-            Value::Array(calls)
-        } else {
-            glob_call
-        }
-    } else {
-        glob_call
-    };
+    let expected_payload = build_search_tool_payload(latest_request, pattern, path);
     let expected_json =
         serde_json::to_string_pretty(&expected_payload).unwrap_or_else(|_| "{}".to_string());
     let search_instruction = if expected_payload.is_array() {

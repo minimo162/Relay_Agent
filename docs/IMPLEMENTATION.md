@@ -7275,6 +7275,45 @@ Results:
 - `pnpm check`: passed.
 - `git diff --check`: passed.
 
+## 2026-04-20 - Deterministic initial local search plan
+
+Fixed a live-search latency issue where M365 Copilot spent roughly three
+minutes generating a `relay_tool` JSON block for a local cash-flow file lookup
+before Relay could execute the actual searches. For local search requests with a
+concrete inferred search pattern, the desktop loop now prepares the same
+validated search plan used by tool-protocol repair and injects it as the first
+assistant tool-use batch through a small `ApiClient` wrapper. This skips the
+initial Copilot round trip for deterministic file lookup while preserving the
+existing permission checks, tool execution, transcript persistence, and final
+Copilot summary over the real tool results.
+
+The deterministic shortcut is intentionally limited to local search requests
+where Relay can infer a concrete glob pattern, such as cash-flow /
+`キャッシュフロー`; generic broad searches still go through the existing model
+path instead of automatically running `**/*`.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --all
+cargo test -p relay-agent-desktop cash_flow
+cargo test -p relay-agent-desktop local_office_search_plan
+cargo test -p relay-agent-desktop required_file_lookup
+cargo test -p relay-agent-desktop local_search_
+cargo fmt --check --all
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --all`: passed.
+- `cargo test -p relay-agent-desktop cash_flow`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop local_office_search_plan`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop required_file_lookup`: passed, 3 passed.
+- `cargo test -p relay-agent-desktop local_search_`: passed, 4 passed.
+- `cargo fmt --check --all`: passed.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Cash-flow search variant coverage
 
 Adjusted local Office/PDF lookup guidance after a live M365 run showed the

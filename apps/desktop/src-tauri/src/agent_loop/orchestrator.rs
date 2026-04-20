@@ -59,6 +59,7 @@ use crate::agent_loop::response_parser::{
 };
 use crate::agent_loop::retry::{
     build_best_tool_protocol_repair_input as retry_build_best_tool_protocol_repair_input,
+    build_initial_local_search_tool_calls,
     build_path_resolution_repair_input as retry_build_path_resolution_repair_input,
     build_tool_protocol_repair_input as retry_build_tool_protocol_repair_input,
     decide_loop_after_success as retry_decide_loop_after_success,
@@ -313,6 +314,47 @@ struct SuccessDecisionState<'a> {
     path_repair_used: &'a mut bool,
     final_stop_reason: &'a mut LoopStopReason,
     final_error_message: &'a mut Option<String>,
+}
+
+struct InitialToolPlanApiClient<C> {
+    inner: C,
+    initial_tool_calls: Option<Vec<(String, String)>>,
+}
+
+impl<C> InitialToolPlanApiClient<C> {
+    fn new(inner: C, initial_tool_calls: Option<Vec<(String, String)>>) -> Self {
+        Self {
+            inner,
+            initial_tool_calls,
+        }
+    }
+}
+
+impl<C> ApiClient for InitialToolPlanApiClient<C>
+where
+    C: ApiClient,
+{
+    fn stream(&mut self, request: &ApiRequest<'_>) -> Result<Vec<AssistantEvent>, RuntimeError> {
+        let Some(tool_calls) = self.initial_tool_calls.take() else {
+            return self.inner.stream(request);
+        };
+        tracing::info!(
+            "[RelayAgent] using deterministic initial local-search tool plan (calls={})",
+            tool_calls.len()
+        );
+        let mut events = tool_calls
+            .into_iter()
+            .enumerate()
+            .map(|(index, (name, input))| AssistantEvent::ToolUse {
+                id: format!("initial-local-search-{}", index + 1),
+                name,
+                input,
+            })
+            .collect::<Vec<_>>();
+        events.push(AssistantEvent::Usage(TokenUsage::default()));
+        events.push(AssistantEvent::MessageStop);
+        Ok(events)
+    }
 }
 
 fn apply_success_loop_decision(
@@ -721,6 +763,15 @@ pub fn run_agent_loop_impl<R: Runtime>(
         )
     };
 
+    let initial_tool_calls = build_initial_local_search_tool_calls(&turn_input);
+    if let Some(tool_calls) = &initial_tool_calls {
+        tracing::info!(
+            "[RelayAgent] session {} prepared deterministic initial local-search tool plan (calls={})",
+            session_id,
+            tool_calls.len()
+        );
+    }
+    let api_client = InitialToolPlanApiClient::new(api_client, initial_tool_calls);
     let tool_executor = build_tool_executor(app, session_id, cwd.clone(), registry.clone());
     let permission_policy = desktop_permission_policy();
     let system_prompt = build_desktop_system_prompt(&goal, cwd.as_deref());
@@ -2934,16 +2985,20 @@ fn format_cdp_tool_result(tool_name: &str, output: &str, is_error: bool) -> Stri
 }
 
 /// Persist the session state after a turn: update registry + save to disk.
-fn persist_turn<R: Runtime>(
+fn persist_turn<R, C>(
     _app: &AppHandle<R>,
     registry: &SessionRegistry,
-    runtime_session: &runtime::ConversationRuntime<CdpApiClient<R>, TauriToolExecutor<R>>,
+    runtime_session: &runtime::ConversationRuntime<C, TauriToolExecutor<R>>,
     session_id: &str,
     goal: &str,
     cwd: Option<&String>,
     max_turns: usize,
     browser_settings: Option<BrowserAutomationSettings>,
-) -> Result<(), AgentLoopError> {
+) -> Result<(), AgentLoopError>
+where
+    R: Runtime,
+    C: ApiClient,
+{
     let _ignore = registry.mutate_session(session_id, |entry| {
         entry.session = runtime_session.session().clone();
     });
@@ -6484,6 +6539,27 @@ mod loop_controller_tests {
         assert!(next_input.contains(r#""pattern": "**/*CFS*""#));
         assert!(next_input.contains(r#""include_ext": ["#));
         assert!(!next_input.contains(r#""name": "write_file""#));
+    }
+
+    #[test]
+    fn cash_flow_lookup_gets_deterministic_initial_search_plan() {
+        let calls = build_initial_local_search_tool_calls(
+            "キャッシュフロー計算書の作成に関係するファイルを検索して",
+        )
+        .expect("cash-flow lookup should get an initial local search plan");
+
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[0].0, "glob_search");
+        assert!(calls[0].1.contains(r#""pattern":"**/*キャッシュ*フロー*""#));
+        assert_eq!(calls[1].0, "office_search");
+        assert!(calls[1].1.contains(r#""regex":true"#));
+        assert!(calls[1]
+            .1
+            .contains(r#""pattern":"キャッシュ[・\\s]*フロー|cash\\s*flow|\\bCF\\b|\\bCFS\\b""#));
+        assert_eq!(calls[2].0, "glob_search");
+        assert!(calls[2].1.contains(r#""pattern":"**/*CF*""#));
+        assert_eq!(calls[3].0, "glob_search");
+        assert!(calls[3].1.contains(r#""pattern":"**/*CFS*""#));
     }
 
     #[test]
