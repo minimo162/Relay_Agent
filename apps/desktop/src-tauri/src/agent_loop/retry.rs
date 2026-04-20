@@ -268,13 +268,34 @@ fn looks_like_truncated_relay_tool_fragment(trimmed: &str) -> bool {
     depth > 0 || in_string
 }
 
+fn looks_like_malformed_relay_tool_fragment(trimmed: &str) -> bool {
+    if trimmed.is_empty() {
+        return false;
+    }
+    if !matches!(trimmed.chars().next(), Some('{' | '[')) {
+        return false;
+    }
+    if trimmed.chars().count() > 1200 {
+        return false;
+    }
+    let has_tool_keys = trimmed.contains("\"name\"")
+        && trimmed.contains("\"input\"")
+        && trimmed.contains("\"relay_tool_call\"");
+    if !has_tool_keys {
+        return false;
+    }
+    serde_json::from_str::<Value>(trimmed).is_err()
+}
+
 #[allow(clippy::too_many_lines)]
 pub(crate) fn is_tool_protocol_confusion_text(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return false;
     }
-    if looks_like_truncated_relay_tool_fragment(trimmed) {
+    if looks_like_truncated_relay_tool_fragment(trimmed)
+        || looks_like_malformed_relay_tool_fragment(trimmed)
+    {
         return true;
     }
     let lower = trimmed.to_ascii_lowercase();
@@ -685,6 +706,30 @@ fn office_search_paths_for_anchor(path: Option<&str>) -> Vec<String> {
     }
 }
 
+fn build_tool_result_summary_repair_input(
+    goal: &str,
+    latest_request: &str,
+    assistant_text: &str,
+) -> String {
+    format!(
+        concat!(
+            "Tool result summary repair.\n",
+            "Relay already executed local tools for this turn. Your previous reply emitted repeated, malformed, or duplicate tool JSON instead of summarizing the tool results.\n",
+            "Do not emit any `relay_tool` fence, JSON tool object, or additional tool call in the next reply.\n",
+            "Use the prior tool results already present in the transcript as the only evidence. If duplicate-tool suppression notices are present, treat them only as a signal not to repeat the same search.\n",
+            "Now answer the user's original local document search request concisely, with file paths and anchors/previews from the existing `glob_search` / `office_search` results when available.\n\n",
+            "Malformed or duplicate assistant text to replace:\n```text\n{assistant_text}\n```\n\n",
+            "{latest_request_marker}{latest_request}\n```\n\n",
+            "{original_goal_marker}{goal}\n```"
+        ),
+        assistant_text = assistant_text.trim(),
+        latest_request_marker = LATEST_REQUEST_MARKER,
+        latest_request = latest_request.trim(),
+        original_goal_marker = ORIGINAL_GOAL_MARKER,
+        goal = goal.trim(),
+    )
+}
+
 fn infer_default_new_file_path(latest_request: &str) -> Option<String> {
     let trimmed = latest_request.trim();
     if trimmed.is_empty() {
@@ -986,6 +1031,18 @@ fn latest_read_file_tool_error(summary: &runtime::TurnSummary) -> Option<ReadFil
     })
 }
 
+fn has_local_search_tool_result(summary: &runtime::TurnSummary) -> bool {
+    summary.tool_results.iter().any(|message| {
+        message.blocks.iter().any(|block| {
+            matches!(
+                block,
+                ContentBlock::ToolResult { tool_name, .. }
+                    if matches!(tool_name.as_str(), "glob_search" | "office_search")
+            )
+        })
+    })
+}
+
 fn is_read_file_enoent(output: &str) -> bool {
     let lower = output.to_ascii_lowercase();
     lower.contains("no such file or directory") || lower.contains("os error 2")
@@ -1058,6 +1115,12 @@ pub(crate) fn decide_loop_after_success(
     let assistant_text = summary.terminal_assistant_text.as_str();
     let is_tool_protocol_confusion =
         summary.tool_results.is_empty() && is_tool_protocol_confusion_text(assistant_text);
+    let is_tool_result_summary_needed = has_local_search_tool_result(summary)
+        && is_tool_protocol_confusion_text(assistant_text)
+        && (assistant_text.contains("\"relay_tool_call\"")
+            || assistant_text.contains("\"name\"")
+            || assistant_text.contains("\"input\"")
+            || assistant_text.contains("```relay_tool"));
     let is_repair_refusal =
         summary.tool_results.is_empty() && is_repair_refusal_text(assistant_text);
     let is_false_completion =
@@ -1094,6 +1157,30 @@ pub(crate) fn decide_loop_after_success(
             is_meta_stall,
             truncate_for_log(assistant_text, 240)
         );
+    } else if is_tool_result_summary_needed {
+        tracing::info!(
+            "[RelayAgent] post-turn classification: outcome={:?} iterations={} meta_nudges_used={}/{} path_repair_used={} tool_result_summary_needed=true assistant_excerpt={:?}",
+            summary.outcome,
+            summary.iterations,
+            meta_stall_nudges_used,
+            meta_stall_nudge_limit,
+            path_repair_used,
+            truncate_for_log(assistant_text, 240)
+        );
+    }
+
+    if is_tool_result_summary_needed {
+        if meta_stall_nudges_used < meta_stall_nudge_limit {
+            return LoopDecision::Continue {
+                next_input: build_tool_result_summary_repair_input(
+                    goal,
+                    latest_turn_input,
+                    assistant_text,
+                ),
+                kind: LoopContinueKind::MetaNudge,
+            };
+        }
+        return LoopDecision::Stop(LoopStopReason::MetaStall);
     }
 
     if is_tool_protocol_confusion

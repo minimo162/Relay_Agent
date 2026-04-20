@@ -351,6 +351,19 @@ fn apply_success_loop_decision(
                 );
             } else if next_input
                 .trim_start()
+                .starts_with("Tool result summary repair.")
+            {
+                let queued_nudge_stage = *state.meta_stall_nudges_used + 1;
+                tracing::info!(
+                    "[RelayAgent] session {} queued tool-result summary repair {}/{} after malformed or duplicate tool JSON (iterations={}, assistant_excerpt={:?})",
+                    session_id,
+                    queued_nudge_stage,
+                    meta_stall_nudge_limit,
+                    summary.iterations,
+                    truncate_for_log(&summary.terminal_assistant_text, 240)
+                );
+            } else if next_input
+                .trim_start()
                 .starts_with("Path resolution repair.")
             {
                 tracing::info!(
@@ -2176,6 +2189,10 @@ fn is_path_resolution_repair_text(text: &str) -> bool {
     text.trim_start().starts_with("Path resolution repair.")
 }
 
+fn is_tool_result_summary_repair_text(text: &str) -> bool {
+    text.trim_start().starts_with("Tool result summary repair.")
+}
+
 fn is_compaction_replay_text(text: &str) -> bool {
     text.trim_start()
         .starts_with("Resume the existing task from the compacted summary")
@@ -2186,6 +2203,7 @@ fn is_synthetic_control_user_text(text: &str) -> bool {
     trimmed == "Continue."
         || is_tool_protocol_repair_text(trimmed)
         || is_path_resolution_repair_text(trimmed)
+        || is_tool_result_summary_repair_text(trimmed)
         || is_compaction_replay_text(trimmed)
 }
 
@@ -6255,6 +6273,41 @@ mod loop_controller_tests {
         assert!(next_input.contains(r#""pattern": "キャッシュフロー""#));
         assert!(next_input.contains(r#""include_ext": ["#));
         assert!(!next_input.contains(r#""name": "write_file""#));
+    }
+
+    #[test]
+    fn malformed_office_search_tool_json_after_results_escalates_to_summary_repair() {
+        let malformed = r#"[ { "name": "glob_search", "relay_tool_call": true, "input": { "pattern": "**/*キャッシュ*フロー*" } , }, "input": { "-i": true, "include_ext": [ "docx", "xlsx", "pptx", "pdf" ], "max_files": 200, "max_results": 100, "paths": [ "**/*" ], "pattern": "キャッシュフロー" } ]"#;
+        assert!(is_tool_protocol_confusion_text(malformed));
+
+        let s = summary(
+            malformed,
+            vec![
+                tool_success_result("glob_search", r#"{"matches":["キャッシュフロー.xlsx"]}"#),
+                tool_success_result(
+                    "office_search",
+                    r#"{"results":[{"path":"キャッシュフロー.xlsx","anchor":"Sheet1!A1","preview":"キャッシュフロー 作成"}]}"#,
+                ),
+            ],
+            runtime::TurnOutcome::Completed,
+        );
+        let decision = decide_loop_after_success(
+            "キャッシュフロー計算書の作成に関係するファイルを検索して",
+            "キャッシュフロー計算書の作成に関係するファイルを検索して",
+            1,
+            0,
+            2,
+            false,
+            &s,
+        );
+        let LoopDecision::Continue { next_input, kind } = decision else {
+            panic!("expected malformed duplicate tool JSON to request result summary repair");
+        };
+        assert!(next_input.contains("Tool result summary repair."));
+        assert!(next_input.contains("Do not emit any `relay_tool` fence"));
+        assert!(next_input.contains("Use the prior tool results already present"));
+        assert!(!next_input.contains("Expected JSON for the next reply"));
+        assert_eq!(kind, LoopContinueKind::MetaNudge);
     }
 
     #[test]

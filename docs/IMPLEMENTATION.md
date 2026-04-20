@@ -15,6 +15,39 @@
 
 ## Milestone Log
 
+### 2026-04-20 Office search repair loop hardening
+
+Improved the CDP repair path for local Office/PDF search requests after a live
+run where Copilot first answered from M365 citations, then eventually emitted
+`glob_search` / `office_search`, but kept repeating the same calls and ended on
+malformed JSON-like tool text.
+
+- Added a tool-result summary repair path: when Relay already has tool results
+  and the terminal assistant message is a malformed/repeated tool JSON fragment,
+  the next synthetic turn tells Copilot to stop calling tools and summarize the
+  existing `glob_search` / `office_search` output.
+- Classified short malformed JSON fragments containing `name`, `input`, and
+  `relay_tool_call` as tool-protocol confusion even when the braces are not
+  simply truncated.
+- Marked the new summary repair as a synthetic control turn so it does not
+  replace the latest actionable user request during prompt construction.
+- Added a regression test covering the logged Japanese
+  `キャッシュフロー` Office-search failure shape.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml malformed_office_search_tool_json_after_results_escalates_to_summary_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime repeating_identical_tool_call_is_suppressed_and_turn_terminates -- --nocapture
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml malformed_office_search_tool_json_after_results_escalates_to_summary_repair -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime repeating_identical_tool_call_is_suppressed_and_turn_terminates -- --nocapture`: passed.
+
 ### 2026-04-20 Office file search Phase A
 
 **Problem:** Office files were effectively opaque to the local file tools:
