@@ -4118,6 +4118,40 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
+    fn local_search_tool_results_add_continuation_guard() {
+        let messages = vec![
+            ConversationMessage::user_text(
+                "キャッシュフロー計算書を作成する際に必要なファイルを教えて",
+            ),
+            ConversationMessage::assistant(vec![ContentBlock::ToolUse {
+                id: "search-1".to_string(),
+                name: "glob_search".to_string(),
+                input: r#"{"path":"H:\\shr1","pattern":"**/*CF*"}"#.to_string(),
+            }]),
+            ConversationMessage::tool_result(
+                "search-1",
+                "glob_search",
+                r#"{"matches":["H:\\shr1\\キャッシュフロー.xlsx"]}"#,
+                false,
+            ),
+        ];
+        let bundle = build_cdp_prompt_bundle_from_messages(
+            &[],
+            &messages,
+            CdpPromptFlavor::Standard,
+            CdpCatalogFlavor::StandardFull,
+        );
+
+        assert!(bundle.prompt.contains("## Local search continuation guard"));
+        assert!(bundle
+            .prompt
+            .contains("summarize those existing results now"));
+        assert!(bundle
+            .prompt
+            .contains("Duplicate-tool suppression or search-budget notices"));
+    }
+
+    #[test]
     fn desktop_system_prompt_treats_required_file_questions_as_lookup() {
         let system = build_desktop_system_prompt(
             "キャッシュフロー計算書を作成する際に必要なファイルを教えて",

@@ -292,6 +292,8 @@ where
         let mut last_batch_outcome: Option<TurnOutcome> = None;
         let mut executed_tool_dedup_keys: HashSet<String> = HashSet::new();
         let mut duplicate_tool_hits: usize = 0;
+        let mut local_search_tool_calls: usize = 0;
+        let mut turn_guard_stop: Option<String> = None;
 
         loop {
             iterations += 1;
@@ -326,7 +328,14 @@ where
                 &mut tool_results,
                 &mut executed_tool_dedup_keys,
                 &mut duplicate_tool_hits,
+                &mut local_search_tool_calls,
+                &mut turn_guard_stop,
             );
+            if let Some(message) = turn_guard_stop.take() {
+                tracing::info!("[runtime] stopping turn: {message}");
+                last_batch_outcome = Some(TurnOutcome::ToolError { message });
+                break;
+            }
             if duplicate_tool_hits >= TURN_TOOL_DUPLICATE_LIMIT {
                 tracing::info!(
                     "[runtime] aborting turn after {duplicate_tool_hits} duplicate tool calls within the turn"
@@ -413,9 +422,34 @@ where
         tool_results: &mut Vec<ConversationMessage>,
         executed_dedup_keys: &mut HashSet<String>,
         duplicate_tool_hits: &mut usize,
+        local_search_tool_calls: &mut usize,
+        turn_guard_stop: &mut Option<String>,
     ) -> Option<TurnOutcome> {
         let mut batch_outcome = None;
         for (tool_use_id, tool_name, input) in pending_tool_uses {
+            if is_turn_level_local_search_tool(&tool_name) {
+                if *local_search_tool_calls >= TURN_LOCAL_SEARCH_TOOL_LIMIT {
+                    let notice = format!(
+                        "Search tool budget reached: Relay already executed {TURN_LOCAL_SEARCH_TOOL_LIMIT} local search calls in this turn. The prior tool outputs remain in the transcript above. Do not issue more `glob_search`, `grep_search`, or `office_search` calls for this request; summarize the existing findings for the user."
+                    );
+                    tracing::info!(
+                        "[runtime] synthesized no-op for search budget on {tool_name} (limit={TURN_LOCAL_SEARCH_TOOL_LIMIT})"
+                    );
+                    let synthetic = ConversationMessage::tool_result(
+                        tool_use_id,
+                        tool_name,
+                        notice.clone(),
+                        false,
+                    );
+                    self.session.messages.push(synthetic.clone());
+                    tool_results.push(synthetic);
+                    *turn_guard_stop = Some(format!(
+                        "Turn stopped: the assistant exceeded the local search tool budget ({TURN_LOCAL_SEARCH_TOOL_LIMIT}) without summarizing results."
+                    ));
+                    break;
+                }
+                *local_search_tool_calls += 1;
+            }
             if let Some(key) = turn_level_tool_dedup_key(&tool_name, &input) {
                 if !executed_dedup_keys.insert(key) {
                     *duplicate_tool_hits += 1;
@@ -666,6 +700,11 @@ fn turn_level_tool_dedup_key(tool_name: &str, input: &str) -> Option<String> {
 }
 
 const TURN_TOOL_DUPLICATE_LIMIT: usize = 3;
+const TURN_LOCAL_SEARCH_TOOL_LIMIT: usize = 6;
+
+fn is_turn_level_local_search_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "glob_search" | "grep_search" | "office_search")
+}
 
 fn pending_tool_uses_from_message(msg: &ConversationMessage) -> Vec<(String, String, String)> {
     msg.blocks
@@ -1717,6 +1756,77 @@ mod tests {
         let key_b = super::turn_level_tool_dedup_key("read_file", r#"{"file_path":"a.txt"}"#);
         assert!(key_a.is_some());
         assert_eq!(key_a, key_b);
+    }
+
+    struct VaryingSearchClient {
+        call_count: usize,
+    }
+
+    impl ApiClient for VaryingSearchClient {
+        fn stream(
+            &mut self,
+            _request: &ApiRequest<'_>,
+        ) -> Result<Vec<AssistantEvent>, RuntimeError> {
+            self.call_count += 1;
+            if self.call_count > 10 {
+                return Err(RuntimeError::new(
+                    "VaryingSearchClient called more times than expected",
+                ));
+            }
+            Ok(vec![
+                AssistantEvent::ToolUse {
+                    id: format!("search-{}", self.call_count),
+                    name: "glob_search".to_string(),
+                    input: format!(
+                        r#"{{"path":"H:\\shr1","pattern":"**/*cash*flow*{}"}}"#,
+                        self.call_count
+                    ),
+                },
+                AssistantEvent::MessageStop,
+            ])
+        }
+    }
+
+    #[test]
+    fn varying_search_loop_stops_at_turn_search_budget() {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let run_counter = Arc::clone(&runs);
+        let tool_executor = StaticToolExecutor::new().register("glob_search", move |_input| {
+            run_counter.fetch_add(1, Ordering::SeqCst);
+            Ok("[]".to_string())
+        });
+        let permission_policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("glob_search", PermissionMode::ReadOnly);
+        let mut runtime = ConversationRuntime::new(
+            Session::new(),
+            VaryingSearchClient { call_count: 0 },
+            tool_executor,
+            permission_policy,
+            vec!["system".to_string()],
+        );
+
+        let summary = runtime
+            .run_turn("search for cashflow files", None::<&mut dyn PermissionPrompter>)
+            .expect("loop should terminate via local-search budget guard");
+
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            super::TURN_LOCAL_SEARCH_TOOL_LIMIT,
+            "the executor should stop after the turn-level local search budget",
+        );
+        assert!(summary.tool_results.iter().any(|message| {
+            message.blocks.iter().any(|block| match block {
+                ContentBlock::ToolResult { output, .. } => {
+                    output.contains("Search tool budget reached")
+                }
+                _ => false,
+            })
+        }));
+        assert!(
+            matches!(summary.outcome, TurnOutcome::ToolError { .. }),
+            "search-budget guard should report a ToolError outcome, got {:?}",
+            summary.outcome,
+        );
     }
 
     #[test]

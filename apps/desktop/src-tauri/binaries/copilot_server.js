@@ -2846,7 +2846,7 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
       if (abortCheck && abortCheck()) {
         throw new Error("relay_copilot_aborted");
       }
-      if (await copilotAttachmentStillPending(session)) {
+      if (hadAttachments && await copilotAttachmentStillPending(session)) {
         await sleep(200);
         continue;
       }
@@ -2855,7 +2855,7 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
       if (n >= minComposer) break;
       await sleep(200);
     }
-  } else if (await copilotAttachmentStillPending(session)) {
+  } else if (hadAttachments && await copilotAttachmentStillPending(session)) {
     const composeDeadline = Date.now() + 15e3;
     while (Date.now() < composeDeadline && await copilotAttachmentStillPending(session)) {
       if (abortCheck && abortCheck()) {

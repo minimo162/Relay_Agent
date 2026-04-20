@@ -7152,6 +7152,50 @@ Results:
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agent_loop::orchestrator -- --nocapture`: passed, 119 passed, 1 ignored.
 - `git diff --check`: passed.
 
+## 2026-04-20 - Copilot search loop and submit wait hardening
+
+Reviewed a live CDP log after the Relay tool-routing fix. The first turn now
+uses Relay tool JSON, but Copilot kept issuing additional `glob_search` /
+`office_search` variants after tool results were already present, then hit
+turn-level duplicate suppression. The same log also showed a repeated 15-second
+submit delay on attachment-free text prompts.
+
+- Added a local-search continuation guard to CDP prompt bundles whenever prior
+  `glob_search`, `grep_search`, or `office_search` Tool Results are present.
+  The guard tells Copilot to summarize existing matches/previews/errors instead
+  of trying more spelling, abbreviation, or wildcard variants.
+- Added a runtime turn-level local search budget of 6 search-tool calls. If the
+  assistant exceeds it, Relay synthesizes a Tool Result explaining that the
+  search budget was reached and stops the inner turn so the outer repair path
+  can request a concise summary from existing results.
+- Kept exact duplicate suppression in place and added a regression test for the
+  new varying-pattern search loop guard.
+- Fixed the submit path so attachment-pending DOM checks are only used when the
+  request actually has attachments. This avoids the 15-second pre-submit wait
+  caused by unrelated M365 progress indicators during plain text prompts.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+node --check apps/desktop/src-tauri/binaries/copilot_server.js
+cargo test -p runtime varying_search_loop_stops_at_turn_search_budget -- --nocapture
+cargo test -p runtime repeating_identical_tool_call_is_suppressed_and_turn_terminates -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_tool_results_add_continuation_guard -- --nocapture
+pnpm check
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.js`: passed.
+- `cargo test -p runtime varying_search_loop_stops_at_turn_search_budget -- --nocapture`: passed.
+- `cargo test -p runtime repeating_identical_tool_call_is_suppressed_and_turn_terminates -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_tool_results_add_continuation_guard -- --nocapture`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Copilot Relay tool routing and streaming polish
 
 Fixed three Copilot CDP issues observed in live logs: the first assistant turn
