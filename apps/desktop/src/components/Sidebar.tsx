@@ -81,7 +81,10 @@ export function Sidebar(props: {
       <div class="ra-sidebar-shell__header">
         <h2 class="ra-sidebar-shell__brand">
           <span class="ra-sidebar-shell__brand-mark" aria-hidden="true" />
-          <span>Relay<em>Agent</em></span>
+          <span class="ra-sidebar-shell__brand-word">
+            <span class="ra-sidebar-shell__brand-name">Relay</span>
+            <span class="ra-sidebar-shell__brand-sub" aria-hidden="true">静 · AGENT</span>
+          </span>
         </h2>
         <button
           type="button"
