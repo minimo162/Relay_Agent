@@ -1,8 +1,6 @@
 use serde_json::{json, Value};
 
-use crate::{
-    tool_spec, ApprovalTargetExtractor, RedactionRule, ToolApprovalDisplay, ToolSpec,
-};
+use crate::{tool_spec, ApprovalTargetExtractor, RedactionRule, ToolApprovalDisplay, ToolSpec};
 
 #[must_use]
 pub fn approval_display_for_tool(tool_name: &str, input: &str) -> ToolApprovalDisplay {

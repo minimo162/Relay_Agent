@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use walkdir::WalkDir;
 
-use crate::pdf_liteparse;
 use crate::office;
+use crate::pdf_liteparse;
 use crate::tool_hard_denylist::reject_sensitive_file_path;
 
 /// Upper bound for loading a single file as UTF-8 text in `read_file` (plain text and `.ipynb` raw JSON).
@@ -784,7 +784,7 @@ mod tests {
             None,
             None,
         )
-            .expect("read should succeed");
+        .expect("read should succeed");
         assert_eq!(read_output.file.content, "two");
     }
 
@@ -813,8 +813,15 @@ mod tests {
         let path = temp_path("notebook").with_extension("ipynb");
         let nb = r#"{"cells":[{"cell_type":"code","metadata":{},"source":["print(1)"],"outputs":[]}],"metadata":{},"nbformat":4,"nbformat_minor":5}"#;
         fs::write(&path, nb).expect("write ipynb");
-        let out = read_file(path.to_string_lossy().as_ref(), None, None, None, None, None)
-            .expect("read ipynb");
+        let out = read_file(
+            path.to_string_lossy().as_ref(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("read ipynb");
         assert!(out.file.content.contains("Cell[0]"));
         assert!(out.file.content.contains("print(1)"));
     }
@@ -825,8 +832,15 @@ mod tests {
         let size = (MAX_TEXT_FILE_READ_BYTES as usize).saturating_add(1);
         let big = vec![b'n'; size];
         fs::write(&path, &big).expect("write");
-        let err = read_file(path.to_string_lossy().as_ref(), None, None, None, None, None)
-            .expect_err("oversized read should fail");
+        let err = read_file(
+            path.to_string_lossy().as_ref(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect_err("oversized read should fail");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 

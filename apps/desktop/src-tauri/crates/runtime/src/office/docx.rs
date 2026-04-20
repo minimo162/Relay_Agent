@@ -38,8 +38,7 @@ pub(crate) fn extract(
 #[allow(clippy::case_sensitive_file_extension_comparisons)]
 fn is_docx_header_footer(name: &str) -> bool {
     // OPC part names are case-sensitive; differently cased names are not the same part.
-    (name.starts_with("word/header") || name.starts_with("word/footer"))
-        && name.ends_with(".xml")
+    (name.starts_with("word/header") || name.starts_with("word/footer")) && name.ends_with(".xml")
 }
 
 fn part_prefix(name: &str) -> String {
@@ -131,10 +130,7 @@ fn parse_part(
                                 format!("p{}:tbl{table}:row{row}", state.body_para_count)
                             }
                         } else {
-                            format!(
-                                "{}:tbl{table}:row{row}",
-                                part_prefix.trim_end_matches(':')
-                            )
+                            format!("{}:tbl{table}:row{row}", part_prefix.trim_end_matches(':'))
                         };
                         state.row_anchor = Some(anchor);
                     }
@@ -162,14 +158,10 @@ fn parse_part(
                     _ => {}
                 }
             }
-            Event::Text(event)
-                if state.in_deleted == 0 && is_text_node(&state.stack) =>
-            {
+            Event::Text(event) if state.in_deleted == 0 && is_text_node(&state.stack) => {
                 let text = event
                     .unescape()
-                    .map_err(|error| {
-                        io::Error::new(io::ErrorKind::InvalidData, error.to_string())
-                    })?
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?
                     .into_owned();
                 if state.row_anchor.is_some() {
                     state.row_text.push_str(&text);
@@ -228,7 +220,10 @@ fn is_body_paragraph(stack: &[String]) -> bool {
     if stack.last().map(String::as_str) != Some("p") {
         return false;
     }
-    if stack.iter().any(|name| matches!(name.as_str(), "tbl" | "tr" | "tc")) {
+    if stack
+        .iter()
+        .any(|name| matches!(name.as_str(), "tbl" | "tr" | "tc"))
+    {
         return false;
     }
     let parent = stack

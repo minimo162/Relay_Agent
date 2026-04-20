@@ -6728,6 +6728,40 @@ Results:
 - `cargo test -p relay-agent-desktop cdp_copilot_tool_tests::workspace_enforcement_normalizes_office_search_paths`: passed.
 - `cargo check -p runtime -p tools -p relay-agent-desktop`: passed.
 
+## 2026-04-20 - Office search candidate and result hardening
+
+Tightened the runtime `office_search` implementation based on the Office search review:
+
+- Moved `max_files` and the wall-clock deadline into candidate expansion so large glob walks stop after `max_files + 1` accepted candidates or when the tool deadline is reached.
+- Preserved glob and explicit-path diagnostics in `OfficeSearchOutput.errors`; explicit non-glob misses now distinguish unsupported extension, missing path, and non-file inputs.
+- Rechecked `reject_sensitive_file_path` after `canonicalize()` so symlinks cannot hide sensitive basenames from the Office search candidate filter.
+- Fixed the wall-clock drain path to use the capped `context` value and to set `results_truncated` when drained results hit `max_results`.
+- Made result folding deterministic by preserving candidate order across parallel extraction results, and added `match_start` / `match_end` byte offsets to each hit.
+- Added `regex: true` as an opt-in mode; `office_search` now defaults to literal substring search so patterns like `Q1.2026`, `(draft)`, and `A+B` match literally.
+- Updated tool descriptions and CDP optional-argument guidance to advertise literal-by-default search and the extraction limitations for embedded image/chart/SmartArt text.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --all
+cargo fmt --check --all
+cargo test -p runtime office::tests::
+cargo check -p tools
+cargo check -p relay-agent-desktop
+git diff --check
+pnpm check
+```
+
+Results:
+
+- `cargo fmt --all`: passed.
+- `cargo fmt --check --all`: passed.
+- `cargo test -p runtime office::tests::`: passed.
+- `cargo check -p tools`: passed.
+- `cargo check -p relay-agent-desktop`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ## 2026-04-19 - Office search design review follow-up
 
 Updated `docs/OFFICE_SEARCH_DESIGN.md` from review feedback before Phase A implementation:

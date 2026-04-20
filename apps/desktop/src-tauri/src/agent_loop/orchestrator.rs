@@ -1440,7 +1440,7 @@ fn cdp_tool_primary_use(name: &str, description: &str) -> String {
         "edit_file" => "Replace text in an existing workspace file.".to_string(),
         "glob_search" => "Find files by glob pattern.".to_string(),
         "grep_search" => "Search file contents with a regex.".to_string(),
-        "office_search" => "Search extracted Office/PDF text with a regex.".to_string(),
+        "office_search" => "Search extracted Office/PDF text literally or with regex.".to_string(),
         "git_status" => "Inspect workspace git status.".to_string(),
         "git_diff" => "Inspect workspace git diff.".to_string(),
         "pdf_merge" => "Merge PDF files in the workspace.".to_string(),
@@ -1544,6 +1544,7 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
         "grep_search" => vec!["path", "glob", "context"],
         "office_search" => vec![
             "paths",
+            "regex",
             "include_ext",
             "context",
             "max_results",

@@ -633,8 +633,7 @@ mod tests {
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join(".relay/background-tasks/123-456"))
-            .expect("task dir");
+        std::fs::create_dir_all(root.join(".relay/background-tasks/123-456")).expect("task dir");
         std::fs::write(root.join("outside.log"), "secret").expect("outside log");
         std::os::unix::fs::symlink(
             root.join("outside.log"),

@@ -10,11 +10,11 @@ mod electron_cdp;
 
 use reqwest::blocking::Client;
 use runtime::{
-    edit_file, execute_bash, glob_search, grep_search, merge_pdfs, pull_rust_diagnostics_blocking,
-    office_search, read_background_task_output, read_file, reject_sensitive_file_path, split_pdf,
-    task_create, task_get, task_list, task_output, task_stop, task_update, write_file,
-    BackgroundTaskOutputInput, BashCommandInput, GrepSearchInput, OfficeSearchInput,
-    PdfSplitSegment, PermissionMode,
+    edit_file, execute_bash, glob_search, grep_search, merge_pdfs, office_search,
+    pull_rust_diagnostics_blocking, read_background_task_output, read_file,
+    reject_sensitive_file_path, split_pdf, task_create, task_get, task_list, task_output,
+    task_stop, task_update, write_file, BackgroundTaskOutputInput, BashCommandInput,
+    GrepSearchInput, OfficeSearchInput, PdfSplitSegment, PermissionMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -444,7 +444,14 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
         "read_file" => vec!["offset", "limit", "pages", "sheets", "slides"],
         "glob_search" => vec!["path"],
         "grep_search" => vec!["path", "glob", "context"],
-        "office_search" => vec!["paths", "include_ext", "context", "max_results", "max_files"],
+        "office_search" => vec![
+            "paths",
+            "regex",
+            "include_ext",
+            "context",
+            "max_results",
+            "max_files",
+        ],
         "git_status" => vec!["path"],
         "git_diff" => vec!["path", "staged"],
         "WebSearch" => vec!["allowed_domains", "blocked_domains"],
@@ -566,7 +573,7 @@ fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
         "edit_file" => "Apply a targeted replacement inside an existing workspace file.",
         "glob_search" => "Find candidate files by path pattern before reading or editing.",
         "grep_search" => "Search code or text content for concrete strings or regex matches.",
-        "office_search" => "Search extracted DOCX/XLSX/PPTX/PDF text for concrete strings or regex matches.",
+        "office_search" => "Search extracted DOCX/XLSX/PPTX/PDF text for concrete literal strings or regex matches.",
         "git_status" => "Inspect working tree changes without invoking a shell.",
         "git_diff" => "Inspect staged or unstaged diffs without invoking a shell.",
         "pdf_merge" => "Merge existing PDF files inside the workspace.",
@@ -594,7 +601,7 @@ fn cdp_tool_use_when(name: &str) -> &'static str {
         "edit_file" => "Use after reading the file when you need a targeted text replacement.",
         "glob_search" => "Use to discover likely file paths before reading them.",
         "grep_search" => "Use to find identifiers, strings, or patterns in the codebase before reading or editing.",
-        "office_search" => "Use for exact text or regex search across Office/PDF files; results cite path and anchor.",
+        "office_search" => "Use for exact text across Office/PDF files; set `regex: true` only when a real regex is needed.",
         "git_status" => "Use for a quick change overview when the task depends on current git state.",
         "git_diff" => "Use when you need to inspect exact code changes already present in the workspace.",
         "pdf_merge" => "Use when the user explicitly wants to combine PDF files in the workspace.",
@@ -830,12 +837,13 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "office_search",
-            description: "Search extracted text across .docx, .xlsx, .pptx, and .pdf files. Exact regex/substring search only; no semantic ranking. Results include path, anchor, match, and preview.",
+            description: "Search extracted text across .docx, .xlsx, .pptx, and .pdf files. Defaults to literal substring search; set regex=true for regex patterns. No semantic ranking. Results include path, anchor, match offsets, and preview. Extraction omits unsupported embedded image/chart/SmartArt text.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "pattern": { "type": "string" },
                     "paths": { "type": "array", "items": { "type": "string" }, "description": "Concrete file paths or glob patterns such as reports/**/*.xlsx" },
+                    "regex": { "type": "boolean", "description": "When true, treat pattern as a regex. Defaults to false literal substring search." },
                     "include_ext": { "type": "array", "items": { "type": "string", "enum": ["docx", "xlsx", "pptx", "pdf", ".docx", ".xlsx", ".pptx", ".pdf"] } },
                     "-i": { "type": "boolean" },
                     "context": { "type": "integer", "minimum": 0 },

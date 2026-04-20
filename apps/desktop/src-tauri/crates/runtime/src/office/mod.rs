@@ -214,10 +214,7 @@ impl ExtractionSemaphore {
         })
     }
 
-    fn acquire_with_deadline(
-        self: &Arc<Self>,
-        deadline: Instant,
-    ) -> Option<ExtractionPermit> {
+    fn acquire_with_deadline(self: &Arc<Self>, deadline: Instant) -> Option<ExtractionPermit> {
         let mut state = self
             .state
             .lock()
@@ -377,7 +374,10 @@ fn extract_uncached(path: &Path, deadline: &Deadline) -> io::Result<ParsedDoc> {
 }
 
 fn validate_total_text_bytes(anchors: &[AnchoredText]) -> io::Result<()> {
-    let total = anchors.iter().map(|anchor| anchor.text.len()).sum::<usize>();
+    let total = anchors
+        .iter()
+        .map(|anchor| anchor.text.len())
+        .sum::<usize>();
     if total > MAX_OFFICE_TEXT_BYTES {
         Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -427,16 +427,13 @@ fn serialize_docx(anchors: &[AnchoredText]) -> String {
     let mut out = Vec::new();
     let mut current_region = String::new();
     for anchor in anchors {
-        let region = anchor
-            .anchor
-            .split_once(':')
-            .map_or("", |(prefix, _)| {
-                if prefix.starts_with("header") || prefix.starts_with("footer") {
-                    prefix
-                } else {
-                    ""
-                }
-            });
+        let region = anchor.anchor.split_once(':').map_or("", |(prefix, _)| {
+            if prefix.starts_with("header") || prefix.starts_with("footer") {
+                prefix
+            } else {
+                ""
+            }
+        });
         if !region.is_empty() && region != current_region {
             out.push(format!("--- {region} ---"));
             current_region = region.to_string();
@@ -485,7 +482,12 @@ fn serialize_pptx(anchors: &[AnchoredText], slides: Option<&BTreeSet<u32>>) -> S
         } else {
             out.push(format!("--- slide {slide} ---"));
         }
-        for line in anchor.text.lines().map(normalize_line).filter(|s| !s.is_empty()) {
+        for line in anchor
+            .text
+            .lines()
+            .map(normalize_line)
+            .filter(|s| !s.is_empty())
+        {
             out.push(line);
         }
     }
@@ -508,14 +510,20 @@ fn parse_slide_filter(input: Option<&str>) -> io::Result<Option<BTreeSet<u32>>> 
         return Ok(None);
     };
     let mut set = BTreeSet::new();
-    for part in input.split(',').map(str::trim).filter(|part| !part.is_empty()) {
+    for part in input
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
         if let Some((start, end)) = part.split_once('-') {
-            let start = start.trim().parse::<u32>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, "invalid slides range")
-            })?;
-            let end = end.trim().parse::<u32>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, "invalid slides range")
-            })?;
+            let start = start
+                .trim()
+                .parse::<u32>()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid slides range"))?;
+            let end = end
+                .trim()
+                .parse::<u32>()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid slides range"))?;
             if start == 0 || end < start {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -526,9 +534,9 @@ fn parse_slide_filter(input: Option<&str>) -> io::Result<Option<BTreeSet<u32>>> 
                 set.insert(slide);
             }
         } else {
-            let slide = part.parse::<u32>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, "invalid slides range")
-            })?;
+            let slide = part
+                .parse::<u32>()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid slides range"))?;
             if slide == 0 {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -550,7 +558,12 @@ fn validate_xlsx_sheets(
     };
     let available = anchors
         .iter()
-        .filter_map(|anchor| anchor.anchor.split_once('!').map(|(sheet, _)| sheet.to_string()))
+        .filter_map(|anchor| {
+            anchor
+                .anchor
+                .split_once('!')
+                .map(|(sheet, _)| sheet.to_string())
+        })
         .collect::<BTreeSet<_>>();
     let missing = requested
         .iter()
@@ -606,6 +619,7 @@ fn slide_number_from_anchor(anchor: &str) -> Option<u32> {
 pub struct OfficeSearchInput {
     pub pattern: String,
     pub paths: Vec<String>,
+    pub regex: Option<bool>,
     #[serde(rename = "include_ext")]
     pub include_ext: Option<Vec<String>>,
     #[serde(rename = "-i")]
@@ -624,6 +638,8 @@ pub struct OfficeSearchHit {
     #[serde(rename = "match")]
     pub matched: String,
     pub preview: String,
+    pub match_start: usize,
+    pub match_end: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -654,59 +670,84 @@ pub const MAX_OFFICE_SEARCH_CONTEXT: usize = 1024;
 /// default but pinning the value so future bumps don't silently widen the surface.
 const REGEX_SIZE_LIMIT_BYTES: usize = 10 * 1024 * 1024;
 
+#[derive(Debug)]
+struct CandidateExpansion {
+    candidates: Vec<PathBuf>,
+    errors: Vec<OfficeSearchError>,
+    files_truncated: bool,
+    wall_clock_truncated: bool,
+}
+
 #[allow(clippy::too_many_lines)]
 pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput> {
-    let regex = RegexBuilder::new(&input.pattern)
-        .case_insensitive(input.case_insensitive.unwrap_or(false))
-        .size_limit(REGEX_SIZE_LIMIT_BYTES)
-        .build()
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
+    let regex = compile_office_search_regex(input)?;
     let include_ext = normalize_include_ext(input.include_ext.as_ref())?;
     let max_results = input.max_results.unwrap_or(100).clamp(1, 1_000);
     let max_files = input.max_files.unwrap_or(50).clamp(1, 1_000);
     let context = input.context.unwrap_or(80).min(MAX_OFFICE_SEARCH_CONTEXT);
-    let mut candidates = expand_office_candidates(&input.paths, &include_ext)?;
-    candidates.sort();
-    candidates.dedup();
-
-    let files_truncated = candidates.len() > max_files;
-    candidates.truncate(max_files);
-
     let started = Instant::now();
     let wall = Duration::from_secs(env_u64("RELAY_OFFICE_SEARCH_MAX_WALL_SECS", 600, 10, 3600));
+    let expansion =
+        expand_office_candidates(&input.paths, &include_ext, max_files, started + wall)?;
+    let candidates = expansion.candidates;
+    let files_truncated = expansion.files_truncated;
+    let mut errors = expansion.errors;
+    let mut wall_clock_truncated = expansion.wall_clock_truncated;
+
     let parse_timeout = parse_timeout();
     let worker_count = candidates.len().min(max_concurrent_extractions()).max(1);
-    let (work_tx, work_rx) = mpsc::sync_channel::<PathBuf>(0);
-    let (result_tx, result_rx) = mpsc::channel::<(PathBuf, io::Result<ParsedDoc>)>();
+    let (work_tx, work_rx) = mpsc::sync_channel::<(usize, PathBuf)>(0);
+    let (result_tx, result_rx) = mpsc::channel::<(usize, PathBuf, io::Result<ParsedDoc>)>();
     let work_rx = Arc::new(Mutex::new(work_rx));
 
     let mut handles = Vec::new();
     for _ in 0..worker_count {
         let work_rx = Arc::clone(&work_rx);
         let result_tx = result_tx.clone();
-        handles.push(thread::spawn(move || {
-            loop {
-                let received = {
-                    let rx = work_rx
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    rx.recv()
-                };
-                let Ok(path) = received else {
-                    break;
-                };
-                let result = load_or_extract(&path);
-                let _ = result_tx.send((path, result));
-            }
+        handles.push(thread::spawn(move || loop {
+            let received = {
+                let rx = work_rx
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                rx.recv()
+            };
+            let Ok((index, path)) = received else {
+                break;
+            };
+            let result = load_or_extract(&path);
+            let _ = result_tx.send((index, path, result));
         }));
     }
     drop(result_tx);
 
     let mut results = Vec::new();
-    let mut errors = Vec::new();
-    let mut wall_clock_truncated = false;
+    let mut ready = std::collections::BTreeMap::new();
+    let mut next_to_fold = 0usize;
     let mut cursor = 0usize;
     let mut outstanding = 0usize;
+    let mut results_truncated = false;
+
+    let fold_ready =
+        |ready: &mut std::collections::BTreeMap<usize, (PathBuf, io::Result<ParsedDoc>)>,
+         next_to_fold: &mut usize,
+         results: &mut Vec<OfficeSearchHit>,
+         errors: &mut Vec<OfficeSearchError>| {
+            while let Some((path, result)) = ready.remove(next_to_fold) {
+                if fold_office_search_result(
+                    &regex,
+                    context,
+                    max_results,
+                    &path,
+                    result,
+                    results,
+                    errors,
+                ) {
+                    return true;
+                }
+                *next_to_fold += 1;
+            }
+            false
+        };
 
     loop {
         if started.elapsed() >= wall {
@@ -725,7 +766,7 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
         }
 
         if cursor < candidates.len() && outstanding < worker_count {
-            if work_tx.send(candidates[cursor].clone()).is_err() {
+            if work_tx.send((cursor, candidates[cursor].clone())).is_err() {
                 break;
             }
             cursor += 1;
@@ -741,25 +782,18 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
             .unwrap_or_else(|| Duration::from_millis(0));
         let wait = remaining.min(Duration::from_millis(100));
         match result_rx.recv_timeout(wait) {
-            Ok((path, result)) => {
+            Ok((index, path, result)) => {
                 outstanding = outstanding.saturating_sub(1);
-                fold_office_search_result(
-                    &regex,
-                    context,
-                    max_results,
-                    &path,
-                    result,
-                    &mut results,
-                    &mut errors,
-                );
-                if results.len() >= max_results {
+                ready.insert(index, (path, result));
+                if fold_ready(&mut ready, &mut next_to_fold, &mut results, &mut errors) {
+                    results_truncated = true;
                     drop(work_tx);
                     return Ok(OfficeSearchOutput {
                         results,
                         errors,
                         files_scanned: cursor,
                         files_truncated,
-                        results_truncated: true,
+                        results_truncated,
                         wall_clock_truncated,
                     });
                 }
@@ -775,17 +809,13 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
         while outstanding > 0 && Instant::now() < drain_until {
             let wait = (drain_until - Instant::now()).min(Duration::from_millis(100));
             match result_rx.recv_timeout(wait) {
-                Ok((path, result)) => {
+                Ok((index, path, result)) => {
                     outstanding = outstanding.saturating_sub(1);
-                    fold_office_search_result(
-                        &regex,
-                        input.context.unwrap_or(80),
-                        max_results,
-                        &path,
-                        result,
-                        &mut results,
-                        &mut errors,
-                    );
+                    ready.insert(index, (path, result));
+                    if fold_ready(&mut ready, &mut next_to_fold, &mut results, &mut errors) {
+                        results_truncated = true;
+                        break;
+                    }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -802,9 +832,22 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
         errors,
         files_scanned: cursor,
         files_truncated,
-        results_truncated: false,
+        results_truncated,
         wall_clock_truncated,
     })
+}
+
+fn compile_office_search_regex(input: &OfficeSearchInput) -> io::Result<Regex> {
+    let pattern = if input.regex.unwrap_or(false) {
+        input.pattern.clone()
+    } else {
+        regex::escape(&input.pattern)
+    };
+    RegexBuilder::new(&pattern)
+        .case_insensitive(input.case_insensitive.unwrap_or(false))
+        .size_limit(REGEX_SIZE_LIMIT_BYTES)
+        .build()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))
 }
 
 fn fold_office_search_result(
@@ -815,7 +858,7 @@ fn fold_office_search_result(
     result: io::Result<ParsedDoc>,
     results: &mut Vec<OfficeSearchHit>,
     errors: &mut Vec<OfficeSearchError>,
-) {
+) -> bool {
     let parsed = match result {
         Ok(parsed) => parsed,
         Err(error) => {
@@ -824,13 +867,13 @@ fn fold_office_search_result(
                 kind: format!("{:?}", error.kind()),
                 reason: error.to_string(),
             });
-            return;
+            return false;
         }
     };
     for anchor in &parsed.anchors {
         for mat in regex.find_iter(&anchor.text) {
             if results.len() >= max_results {
-                return;
+                return true;
             }
             let start = mat.start().saturating_sub(context);
             let end = (mat.end() + context).min(anchor.text.len());
@@ -839,9 +882,15 @@ fn fold_office_search_result(
                 anchor: anchor.anchor.clone(),
                 matched: mat.as_str().to_string(),
                 preview: safe_preview(&anchor.text, start, end),
+                match_start: mat.start(),
+                match_end: mat.end(),
             });
+            if results.len() >= max_results {
+                return true;
+            }
         }
     }
+    false
 }
 
 fn safe_preview(text: &str, requested_start: usize, requested_end: usize) -> String {
@@ -881,24 +930,80 @@ fn normalize_include_ext(input: Option<&Vec<String>>) -> io::Result<BTreeSet<Str
 fn expand_office_candidates(
     paths: &[String],
     include_ext: &BTreeSet<String>,
-) -> io::Result<Vec<PathBuf>> {
+    max_files: usize,
+    deadline: Instant,
+) -> io::Result<CandidateExpansion> {
     let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut errors = Vec::new();
+    let mut files_truncated = false;
+    let mut wall_clock_truncated = false;
     for raw in paths {
+        if Instant::now() >= deadline {
+            wall_clock_truncated = true;
+            break;
+        }
         if sensitive_literal_glob(raw) {
             continue;
         }
         if contains_glob_meta(raw) {
-            for entry in glob::glob(raw)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?
-                .flatten()
-            {
-                push_candidate(&mut out, &entry, include_ext);
+            let glob_entries = match glob::glob(raw) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    errors.push(OfficeSearchError {
+                        path: raw.clone(),
+                        kind: String::from("InvalidInput"),
+                        reason: error.to_string(),
+                    });
+                    continue;
+                }
+            };
+            for entry in glob_entries {
+                if Instant::now() >= deadline {
+                    wall_clock_truncated = true;
+                    break;
+                }
+                match entry {
+                    Ok(entry) => {
+                        push_candidate(&mut out, &mut seen, &entry, include_ext, false, &mut errors)
+                    }
+                    Err(error) => errors.push(OfficeSearchError {
+                        path: error.path().to_string_lossy().into_owned(),
+                        kind: String::from("GlobError"),
+                        reason: error.error().to_string(),
+                    }),
+                }
+                if out.len() > max_files {
+                    files_truncated = true;
+                    break;
+                }
+            }
+            if files_truncated || wall_clock_truncated {
+                break;
             }
         } else {
-            push_candidate(&mut out, &PathBuf::from(raw), include_ext);
+            push_candidate(
+                &mut out,
+                &mut seen,
+                &PathBuf::from(raw),
+                include_ext,
+                true,
+                &mut errors,
+            );
+            if out.len() > max_files {
+                files_truncated = true;
+                break;
+            }
         }
     }
-    Ok(out)
+    out.sort();
+    out.truncate(max_files);
+    Ok(CandidateExpansion {
+        candidates: out,
+        errors,
+        files_truncated,
+        wall_clock_truncated,
+    })
 }
 
 fn contains_glob_meta(value: &str) -> bool {
@@ -918,15 +1023,56 @@ fn sensitive_literal_glob(value: &str) -> bool {
             .is_some_and(|(_, ext)| matches!(ext, "pem" | "key"))
 }
 
-fn push_candidate(out: &mut Vec<PathBuf>, path: &Path, include_ext: &BTreeSet<String>) {
+fn push_candidate(
+    out: &mut Vec<PathBuf>,
+    seen: &mut BTreeSet<PathBuf>,
+    path: &Path,
+    include_ext: &BTreeSet<String>,
+    report_explicit_errors: bool,
+    errors: &mut Vec<OfficeSearchError>,
+) {
     let Some(ext) = path
         .extension()
         .and_then(|extension| extension.to_str())
         .map(str::to_ascii_lowercase)
     else {
+        if report_explicit_errors {
+            errors.push(OfficeSearchError {
+                path: path.to_string_lossy().into_owned(),
+                kind: String::from("UnsupportedExtension"),
+                reason: String::from("missing or non-UTF-8 file extension"),
+            });
+        }
         return;
     };
-    if !include_ext.contains(&ext) || !path.is_file() {
+    if !include_ext.contains(&ext) {
+        if report_explicit_errors {
+            errors.push(OfficeSearchError {
+                path: path.to_string_lossy().into_owned(),
+                kind: String::from("UnsupportedExtension"),
+                reason: format!("extension .{ext} is not included"),
+            });
+        }
+        return;
+    }
+    if !path.exists() {
+        if report_explicit_errors {
+            errors.push(OfficeSearchError {
+                path: path.to_string_lossy().into_owned(),
+                kind: String::from("NotFound"),
+                reason: String::from("path does not exist"),
+            });
+        }
+        return;
+    }
+    if !path.is_file() {
+        if report_explicit_errors {
+            errors.push(OfficeSearchError {
+                path: path.to_string_lossy().into_owned(),
+                kind: String::from("NotFile"),
+                reason: String::from("path is not a regular file"),
+            });
+        }
         return;
     }
     if reject_sensitive_file_path(path).is_err() {
@@ -935,7 +1081,12 @@ fn push_candidate(out: &mut Vec<PathBuf>, path: &Path, include_ext: &BTreeSet<St
     // Files that disappear between glob expansion and canonicalize are skipped silently
     // so a single missing path does not abort the entire search.
     if let Ok(canonical) = fs::canonicalize(path) {
-        out.push(canonical);
+        if reject_sensitive_file_path(&canonical).is_err() {
+            return;
+        }
+        if seen.insert(canonical.clone()) {
+            out.push(canonical);
+        }
     }
 }
 
@@ -1220,7 +1371,9 @@ pub(crate) fn validate_zip_entry(
         || name.contains('\\')
         || name.starts_with('/')
         || name.contains("//")
-        || name.split('/').any(|part| part.is_empty() || part == "." || part == "..")
+        || name
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
         || name.as_bytes().get(1) == Some(&b':')
     {
         return Err(io::Error::new(
@@ -1270,5 +1423,157 @@ impl<R: Read> Read for BoundedRead<'_, R> {
             ));
         }
         Ok(n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_dir() -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "relay-office-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&path).expect("create test dir");
+        path
+    }
+
+    fn base_input(pattern: &str) -> OfficeSearchInput {
+        OfficeSearchInput {
+            pattern: pattern.to_string(),
+            paths: vec![String::from("unused")],
+            regex: None,
+            include_ext: None,
+            case_insensitive: None,
+            context: None,
+            max_results: None,
+            max_files: None,
+        }
+    }
+
+    #[test]
+    fn office_search_defaults_to_literal_pattern() {
+        let input = base_input("Q1.2026 (draft) A+B");
+        let regex = compile_office_search_regex(&input).expect("compile literal pattern");
+
+        assert!(regex.is_match("prefix Q1.2026 (draft) A+B suffix"));
+        assert!(!regex.is_match("Q1x2026 draft AAAB"));
+    }
+
+    #[test]
+    fn office_search_regex_mode_preserves_regex_behavior() {
+        let mut input = base_input("Q1.2026");
+        input.regex = Some(true);
+        let regex = compile_office_search_regex(&input).expect("compile regex pattern");
+
+        assert!(regex.is_match("Q1x2026"));
+    }
+
+    #[test]
+    fn fold_office_search_result_records_match_offsets() {
+        let regex = Regex::new("needle").expect("regex");
+        let parsed = ParsedDoc {
+            source: PathBuf::from("/tmp/report.docx"),
+            format: DocFormat::Docx,
+            anchors: vec![AnchoredText {
+                anchor: String::from("p1"),
+                text: String::from("before needle after"),
+            }],
+        };
+        let mut results = Vec::new();
+        let mut errors = Vec::new();
+
+        let truncated = fold_office_search_result(
+            &regex,
+            3,
+            10,
+            Path::new("/tmp/report.docx"),
+            Ok(parsed),
+            &mut results,
+            &mut errors,
+        );
+
+        assert!(!truncated);
+        assert!(errors.is_empty());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].matched, "needle");
+        assert_eq!(results[0].match_start, 7);
+        assert_eq!(results[0].match_end, 13);
+        assert_eq!(results[0].preview, "re needle af");
+    }
+
+    #[test]
+    fn expand_office_candidates_truncates_during_glob_expansion() {
+        let root = test_dir();
+        for name in ["b.xlsx", "a.xlsx", "c.xlsx"] {
+            fs::write(root.join(name), b"not a real workbook").expect("write candidate");
+        }
+        let pattern = root.join("*.xlsx").to_string_lossy().into_owned();
+        let include_ext = normalize_include_ext(None).expect("include ext");
+
+        let expansion = expand_office_candidates(
+            &[pattern],
+            &include_ext,
+            2,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .expect("expand candidates");
+
+        assert!(expansion.files_truncated);
+        assert_eq!(expansion.candidates.len(), 2);
+        assert!(expansion.errors.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expand_office_candidates_reports_explicit_path_typos() {
+        let root = test_dir();
+        let include_ext =
+            normalize_include_ext(Some(&vec![String::from("xlsx")])).expect("include ext");
+        let missing = root.join("report.xslx").to_string_lossy().into_owned();
+
+        let expansion = expand_office_candidates(
+            &[missing],
+            &include_ext,
+            10,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .expect("expand candidates");
+
+        assert!(expansion.candidates.is_empty());
+        assert_eq!(expansion.errors.len(), 1);
+        assert_eq!(expansion.errors[0].kind, "UnsupportedExtension");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn expand_office_candidates_rechecks_sensitive_canonical_path() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_dir();
+        let sensitive = root.join(".env.xlsx");
+        let link = root.join("safe.xlsx");
+        fs::write(&sensitive, b"secret").expect("write sensitive target");
+        symlink(&sensitive, &link).expect("create symlink");
+        let include_ext =
+            normalize_include_ext(Some(&vec![String::from("xlsx")])).expect("include ext");
+
+        let expansion = expand_office_candidates(
+            &[link.to_string_lossy().into_owned()],
+            &include_ext,
+            10,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .expect("expand candidates");
+
+        assert!(expansion.candidates.is_empty());
+        assert!(expansion.errors.is_empty());
+
+        let _ = fs::remove_dir_all(root);
     }
 }

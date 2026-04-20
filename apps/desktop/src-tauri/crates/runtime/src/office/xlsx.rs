@@ -15,7 +15,7 @@ pub(crate) fn extract(
     let cursor = Cursor::new(snapshot);
     let mut workbook: Xlsx<Cursor<Vec<u8>>> =
         open_workbook_from_rs::<Xlsx<Cursor<Vec<u8>>>, _>(cursor)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
     let mut anchors = Vec::new();
     let mut cell_count = 0usize;
     let sheet_names = workbook.sheet_names().clone();
@@ -72,9 +72,7 @@ fn open_snapshot_file(path: &Path) -> io::Result<std::fs::File> {
 fn read_snapshot(path: &Path, cap: usize) -> io::Result<Vec<u8>> {
     let mut file = open_snapshot_file(path)?;
     let mut buf = Vec::new();
-    file.by_ref()
-        .take(cap as u64 + 1)
-        .read_to_end(&mut buf)?;
+    file.by_ref().take(cap as u64 + 1).read_to_end(&mut buf)?;
     if buf.len() > cap {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -136,10 +134,9 @@ fn preflight(snapshot: &[u8], limits: &OfficeLimits, deadline: &Deadline) -> io:
             }
             // OPC part names are case-sensitive; differently cased names are not worksheet parts.
             #[allow(clippy::case_sensitive_file_extension_comparisons)]
-            let is_worksheet_xml = name.starts_with("xl/worksheets/sheet") && name.ends_with(".xml");
-            if is_worksheet_xml
-                && bytes > limits.xlsx_sheet_xml_max_bytes
-            {
+            let is_worksheet_xml =
+                name.starts_with("xl/worksheets/sheet") && name.ends_with(".xml");
+            if is_worksheet_xml && bytes > limits.xlsx_sheet_xml_max_bytes {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!(
@@ -164,9 +161,10 @@ fn cell_to_string(cell: &Data) -> String {
         // ExcelDateTime's Display impl writes the raw 1900-epoch f64 (e.g. `45000.5`),
         // which is useless for plaintext search. Render an ISO 8601 string instead so
         // queries like `2026-04-20` actually hit calendar cells.
-        Data::DateTime(value) => value
-            .as_datetime()
-            .map_or_else(|| value.to_string(), |dt| dt.format("%Y-%m-%dT%H:%M:%S").to_string()),
+        Data::DateTime(value) => value.as_datetime().map_or_else(
+            || value.to_string(),
+            |dt| dt.format("%Y-%m-%dT%H:%M:%S").to_string(),
+        ),
     }
 }
 
