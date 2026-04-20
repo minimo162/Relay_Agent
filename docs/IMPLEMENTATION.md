@@ -6762,6 +6762,40 @@ Results:
 - `git diff --check`: passed.
 - `pnpm check`: passed.
 
+## 2026-04-20 - Copilot tool repair and submit latency hardening
+
+Improved the CDP Copilot path based on a repair-loop log where M365 Copilot
+answered with remote citations, then emitted malformed tool JSON inside a
+`relay_tool` fence, and finally drifted into an unrelated `write_file` repair.
+
+- Recovered whitelisted tool JSON from mixed-content `relay_tool` fences when
+  Copilot includes explanatory prose before the JSON object. The recovery path
+  still requires the `relay_tool_call` sentinel for malformed fence salvage.
+- Tightened new-file repair classification so search/list/find requests that
+  contain Japanese "作成" as a subject phrase, such as "作成に関係するファイルを検索",
+  keep the full repair catalog instead of narrowing to `write_file` only.
+- Passed the composer length observed during paste into submit so long prompts
+  that already satisfied paste verification do not wait through the extra
+  15-second composer readiness loop before pressing Enter.
+- Updated the catalog assertion to match the current Office-aware `read_file`
+  prompt metadata.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+node --check apps/desktop/src-tauri/binaries/copilot_server.js
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agent_loop::orchestrator -- --nocapture
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.js`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agent_loop::orchestrator -- --nocapture`: passed, 119 passed, 1 ignored.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Copilot bridge Node 20 startup fix
 
 Fixed a Windows startup failure where `copilot_server.js` exited under Node.js

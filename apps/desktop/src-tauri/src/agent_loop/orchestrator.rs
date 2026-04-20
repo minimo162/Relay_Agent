@@ -55,7 +55,7 @@ use crate::agent_loop::response_parser::{
     extract_fallback_markdown_fences, extract_unfenced_tool_json_candidates,
     fallback_sentinel_policy, find_generic_markdown_fence_inner_end,
     has_inline_whitelisted_tool_candidate as parser_has_inline_whitelisted_tool_candidate,
-    parse_fallback_payloads,
+    parse_fallback_payloads, FallbackSentinelPolicy,
 };
 use crate::agent_loop::retry::{
     build_best_tool_protocol_repair_input as retry_build_best_tool_protocol_repair_input,
@@ -1861,7 +1861,7 @@ pub(crate) fn parse_copilot_tool_response(
     let whitelist = mvp_tool_names_whitelist();
     let sentinel_policy = fallback_sentinel_policy();
     let (stripped, payloads) = extract_relay_tool_fences(raw);
-    let mut calls = parse_tool_payloads(&payloads);
+    let mut calls = parse_tool_payloads(&payloads, &whitelist, sentinel_policy);
     let mut display = stripped;
     if calls.is_empty() {
         if let Some((d, call)) = salvage_generated_write_file_from_reply(&display) {
@@ -2525,10 +2525,28 @@ fn parse_tool_payload_value(payload: &str) -> Option<Value> {
     }
 }
 
-fn parse_tool_payloads(payloads: &[String]) -> Vec<(String, String, String)> {
+fn parse_tool_payloads(
+    payloads: &[String],
+    whitelist: &HashSet<String>,
+    sentinel_policy: FallbackSentinelPolicy,
+) -> Vec<(String, String, String)> {
     let mut out = Vec::new();
     for p in payloads {
         let Some(v) = parse_tool_payload_value(p) else {
+            let (_, recovered_payloads) =
+                extract_unfenced_tool_json_candidates(p, whitelist, |v| {
+                    parse_one_tool_call(v).is_some()
+                });
+            if !recovered_payloads.is_empty() {
+                out.extend(parse_fallback_payloads(
+                    &recovered_payloads,
+                    whitelist,
+                    sentinel_policy,
+                    "relay_tool mixed fence fallback",
+                    parse_one_tool_call,
+                ));
+                continue;
+            }
             let e = serde_json::from_str::<Value>(p).err().map_or_else(
                 || "unrecoverable relay_tool JSON".to_string(),
                 |err| err.to_string(),
@@ -3992,6 +4010,18 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
+    fn search_related_creation_text_keeps_full_repair_catalog() {
+        let request = "キャッシュフロー計算書の作成に関係するファイルを検索して";
+        let repair = build_tool_protocol_repair_input(request, request, 1);
+        let messages = vec![ConversationMessage::user_text(repair)];
+
+        assert_eq!(
+            cdp_catalog_flavor(&messages),
+            CdpCatalogFlavor::StandardFull
+        );
+    }
+
+    #[test]
     fn repair_prompt_stage2_and_stage3_strengthen_write_file_coercion() {
         let repair2 = build_best_tool_protocol_repair_input(
             "htmlでテトリスを作成して",
@@ -4102,9 +4132,11 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("### `bash`"));
         assert!(s.contains("### `WebFetch`"));
         assert!(s.contains("### `WebSearch`"));
-        assert!(s.contains("purpose: Read local text or PDF content as grounded evidence."));
+        assert!(
+            s.contains("purpose: Read local text, PDF, or Office content as grounded evidence.")
+        );
         assert!(s.contains(
-            "use_when: Use for grounded inspection, PDF reading, or before editing an existing file."
+            "use_when: Use for grounded inspection, PDF/Office reading, or before editing an existing file."
         ));
         assert!(!s.contains("### `Agent`"));
         assert!(s.contains("Relay Agent tools"));
@@ -5052,6 +5084,24 @@ I will inspect the file.
         assert!(vis.contains("Tail"));
         assert!(!vis.contains("not json"));
         assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn relay_tool_fence_with_explanatory_text_recovers_tool_json() {
+        let raw = r#"```relay_tool
+以下の条件でローカルから検索します。
+{"name":"glob_search","relay_tool_call":true,"input":{"pattern":"**/*キャッシュ*フロー*計算*書*"}}
+```"#;
+        let (vis, tools) = parse_initial(raw);
+        assert!(vis.is_empty());
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "glob_search");
+        let input: Value =
+            serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
+        assert_eq!(
+            input.get("pattern").and_then(Value::as_str),
+            Some("**/*キャッシュ*フロー*計算*書*")
+        );
     }
 
     #[test]

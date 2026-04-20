@@ -546,12 +546,20 @@ pub(crate) fn is_concrete_new_file_create_request(text: &str) -> bool {
         || lower.contains("fix")
         || lower.contains("edit")
         || lower.contains("update")
+        || lower.contains("find")
+        || lower.contains("search")
+        || lower.contains("list")
+        || lower.contains("where")
         || trimmed.contains("読む")
         || trimmed.contains("読んで")
         || trimmed.contains("確認")
         || trimmed.contains("修正")
         || trimmed.contains("編集")
-        || trimmed.contains("更新");
+        || trimmed.contains("更新")
+        || trimmed.contains("検索")
+        || trimmed.contains("探")
+        || trimmed.contains("一覧")
+        || trimmed.contains("どこ");
     create_markers && !existing_file_markers
 }
 

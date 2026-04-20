@@ -1338,7 +1338,9 @@ class CopilotSession {
                 "stage_label=",
                 stageLabel,
               );
-              await pastePromptRaw(pageSession, fullPrompt, { hadAttachments });
+              const pastedComposerLen = await pastePromptRaw(pageSession, fullPrompt, {
+                hadAttachments,
+              });
               trace.pasteDone = true;
               trace.pasteElapsedMs = Date.now() - phaseStartedAt;
               console.error(
@@ -1354,6 +1356,7 @@ class CopilotSession {
               console.error("[copilot:describe] phase=submit begin");
               const responseText = await submitPromptRaw(pageSession, fullPrompt.length, netCapture, {
                 hadAttachments,
+                initialComposerLen: pastedComposerLen,
                 abortCheck: () => requestState.aborted === true,
                 trace,
                 responseTimeoutMs: bridgeResponseTimeoutMs(stageLabel, requestState.probeMode),
@@ -2614,6 +2617,7 @@ async function pastePromptRaw(session, text, options = {}) {
 
   console.error("[copilot:paste] composer length OK:", len);
   await sleep(timing.postPasteDelayMs);
+  return len;
 }
 
 /** Lexical often does not expose the full prompt in innerText — cap so we do not spin 15s waiting. */
@@ -2827,18 +2831,33 @@ async function submitPromptRaw(session, expectedPromptLen, netCapture = null, op
   const minComposer = minComposerThresholdForSubmit(expectedPromptLen);
 
   // Until composer shows our text, Send often stays disabled
-  const composeDeadline = Date.now() + 15e3;
-  while (Date.now() < composeDeadline) {
-    if (abortCheck && abortCheck()) {
-      throw new Error("relay_copilot_aborted");
-    }
-    if (await copilotAttachmentStillPending(session)) {
+  let composerReadyLen =
+    Number.isFinite(opts.initialComposerLen) && opts.initialComposerLen > 0
+      ? opts.initialComposerLen
+      : 0;
+  if (composerReadyLen < minComposer && expectedPromptLen >= 20) {
+    const composeDeadline = Date.now() + 15e3;
+    while (Date.now() < composeDeadline) {
+      if (abortCheck && abortCheck()) {
+        throw new Error("relay_copilot_aborted");
+      }
+      if (await copilotAttachmentStillPending(session)) {
+        await sleep(200);
+        continue;
+      }
+      const n = await getComposerTextLength(session);
+      composerReadyLen = n;
+      if (n >= minComposer) break;
       await sleep(200);
-      continue;
     }
-    const n = await getComposerTextLength(session);
-    if (n >= minComposer || expectedPromptLen < 20) break;
-    await sleep(200);
+  } else if (await copilotAttachmentStillPending(session)) {
+    const composeDeadline = Date.now() + 15e3;
+    while (Date.now() < composeDeadline && await copilotAttachmentStillPending(session)) {
+      if (abortCheck && abortCheck()) {
+        throw new Error("relay_copilot_aborted");
+      }
+      await sleep(200);
+    }
   }
 
   const lenBefore = await getComposerTextLength(session);
