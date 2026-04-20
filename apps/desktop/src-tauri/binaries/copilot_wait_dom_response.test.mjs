@@ -357,6 +357,64 @@ test("waitForDomResponse emits streamed progress beyond the previous-turn baseli
   );
 });
 
+test("waitForDomResponse streams Chathub progress when DOM text stalls", async () => {
+  const domReply = "検索しています。";
+  const networkProgress = [
+    "",
+    "キャッシュフロー関連ファイルを確認しています。",
+    [
+      "キャッシュフロー関連ファイルを確認しています。",
+      "",
+      "```relay_tool",
+      '{"name":"office_search","relay_tool_call":true,"input":{"pattern":"キャッシュフロー"}}',
+      "```",
+    ].join("\n"),
+  ];
+  const finalReply = networkProgress[2];
+  const snapshots = [
+    { generating: false, reply: "" },
+    { generating: true, reply: domReply },
+    { generating: true, reply: domReply },
+    { generating: false, reply: domReply },
+  ];
+  let pollIndex = 0;
+  const session = {
+    async evaluate() {
+      const snapshot = snapshots[Math.min(pollIndex, snapshots.length - 1)];
+      pollIndex += 1;
+      return { value: snapshot };
+    },
+  };
+  let networkIndex = 0;
+  const netCapture = {
+    currentAssistantText() {
+      const text = networkProgress[Math.min(networkIndex, networkProgress.length - 1)];
+      networkIndex += 1;
+      return text;
+    },
+    async pickBestShortAssistant() {
+      return finalReply;
+    },
+    async pickBestOver() {
+      return finalReply;
+    },
+  };
+  const progress = [];
+
+  const response = await waitForDomResponse(session, netCapture, 0, null, {
+    timeoutMs: 2_500,
+    onProgress: async (snapshot) => {
+      progress.push(snapshot);
+    },
+  });
+
+  assert.equal(response, finalReply);
+  assert.deepEqual(
+    progress.map((snapshot) => snapshot.visibleText),
+    ["検索しています。", "キャッシュフロー関連ファイルを確認しています。"],
+  );
+});
+
 test("waitForDomResponse suppresses transient image noise from streamed progress and final text", async () => {
   const snapshots = [
     { generating: false, reply: "了解しました。" },

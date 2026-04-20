@@ -2852,7 +2852,7 @@ body {
   background: var(--ra-sei-shu);
   margin-right: 6px;
   transform: translateY(-1px);
-  animation: sei-pulse 1.6s ease-in-out infinite;
+  opacity: 0.82;
 }
 
 /* ── Tool row: single hairline strip ── */

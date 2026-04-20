@@ -247,7 +247,7 @@ export function MessageFeed(props: {
           class={`flex items-center gap-2 ra-type-caption mt-2 text-[var(--ra-text-secondary)]`}
           data-ra-agent-thinking
         >
-          <span class="inline-block w-2 h-2 rounded-full bg-[var(--ra-accent)] animate-pulse" />
+          <span class="inline-block w-2 h-2 rounded-full bg-[var(--ra-accent)] opacity-80" />
           {statusLine()}
         </div>
       </Show>

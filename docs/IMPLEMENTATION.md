@@ -7152,6 +7152,49 @@ Results:
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agent_loop::orchestrator -- --nocapture`: passed, 119 passed, 1 ignored.
 - `git diff --check`: passed.
 
+## 2026-04-20 - Copilot Relay tool routing and streaming polish
+
+Fixed three Copilot CDP issues observed in live logs: the first assistant turn
+using M365-style search instead of Relay tools, UI streaming stalling when DOM
+extraction stopped growing, and distracting streaming indicator blinking.
+
+- Added an early CDP routing guard before the normal prompt bundle so local
+  file/code/Office/PDF lookup requests must answer first with a single fenced
+  Relay tool JSON block and must not use M365 search, citations, `<File>` cards,
+  Python, Pages, uploads, or hidden assistant tools.
+- Tightened the Relay tool catalog rules for initial local lookup turns so
+  "はい、...を検索します", `turn*search*` citations, and M365 `<File>` cards are
+  explicitly invalid before Relay Tool Result blocks exist.
+- Exposed live Chathub assistant text from the Copilot network capture and used
+  it for UI progress when DOM assistant text stalls, while preserving the final
+  network-over-DOM selection path.
+- Removed pulse animations from the assistant streaming badge and thinking
+  status dot so streaming remains visible without blinking.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+node --check apps/desktop/src-tauri/binaries/copilot_server.js
+node --check apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs
+node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_requires_search_before_general_answer -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml catalog_lists_builtin_tools_and_protocol -- --nocapture
+pnpm check
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `node --check apps/desktop/src-tauri/binaries/copilot_server.js`: passed.
+- `node --check apps/desktop/src-tauri/binaries/copilot_wait_dom_response.mjs`: passed.
+- `node --test apps/desktop/src-tauri/binaries/copilot_wait_dom_response.test.mjs`: passed, 34 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_requires_search_before_general_answer -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml catalog_lists_builtin_tools_and_protocol -- --nocapture`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Copilot bridge Node 20 startup fix
 
 Fixed a Windows startup failure where `copilot_server.js` exited under Node.js

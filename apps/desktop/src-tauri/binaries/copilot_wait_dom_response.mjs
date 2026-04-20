@@ -1155,6 +1155,17 @@ async function waitForDomResponse(
       hasExpandableCodeBlock,
     } = await pollCopilotGeneratingAndReply(session);
     const reply = normalizeCopilotVisibleText(replyRaw);
+    let progressReply = reply;
+    if (netCapture && typeof netCapture.currentAssistantText === "function") {
+      const networkProgress = normalizeCopilotVisibleText(netCapture.currentAssistantText() || "");
+      if (
+        networkProgress.length >= CHATHUB_ASSISTANT_MIN_CHARS &&
+        !networkExtractLooksLikeGarbage(networkProgress) &&
+        shouldPreferAssistantText(networkProgress, progressReply)
+      ) {
+        progressReply = networkProgress;
+      }
+    }
     const len = reply.length;
 
     if (generatingRaw) {
@@ -1169,7 +1180,7 @@ async function waitForDomResponse(
       streamingPlaceholderTail ||
       reasoningDisclosurePlaceholder ||
       (generatingRaw && !ignorePhantomStop);
-    await emitProgress(reply, generating || progressOnly);
+    await emitProgress(progressReply, generating || progressOnly);
     if (generating) quietGen = 0;
     else quietGen++;
     if (ignorePhantomStop && genStreak === RESPONSE_PHANTOM_GENERATING_POLLS) {

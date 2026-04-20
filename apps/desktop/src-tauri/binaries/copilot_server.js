@@ -3813,6 +3813,8 @@ function createCopilotNetworkCapture(session) {
     },
     /** Best-effort assistant prose from M365 Chathub WebSocket frames (SignalR). */
     pickAssistantFromChathubWs: pickAssistantFromChathubWsSync,
+    /** Synchronous best-effort assistant prose for live UI progress. */
+    currentAssistantText: pickAssistantFromChathubWsSync,
     async disable() {
       session.off("Network.responseReceived", onResponse);
       session.off("Network.webSocketCreated", onWebSocketCreated);

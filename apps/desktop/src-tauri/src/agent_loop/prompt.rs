@@ -22,6 +22,11 @@ Only local Relay tools in the catalog below are available.\n\
 If you need a tool, respond with a fenced `relay_tool` JSON block only.\n\
 If no tool is needed, answer normally in plain text.\n\
 Do not invent unavailable tools or Microsoft-native actions.";
+const CDP_TOOL_ROUTING_GUARD: &str = r#"## Relay tool routing guard
+
+For workspace file lookup, Office/PDF document search, codebase search, or local path inspection, your first response must be exactly one fenced `relay_tool` JSON block with the appropriate Relay tools. Do not write any prose before or after it.
+
+Do not use M365/Copilot search, citations, `<File>` cards, Python, Pages, uploads, or hidden assistant tools for these requests. A reply such as "I'll search..." or a list of Copilot-found files is invalid unless it follows Relay Tool Result blocks."#;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CdpPromptFlavor {
@@ -501,7 +506,7 @@ pub(crate) fn build_cdp_prompt_bundle_from_messages(
     catalog_flavor: CdpCatalogFlavor,
     render_fns: PromptRenderFns,
 ) -> CdpPromptBundle {
-    let grounding_text = CDP_BUNDLE_GROUNDING_BLOCK.to_string();
+    let grounding_text = format!("{CDP_TOOL_ROUTING_GUARD}\n\n{CDP_BUNDLE_GROUNDING_BLOCK}");
     let effective_messages = cdp_messages_for_flavor(messages, flavor);
     let mut system_text = match flavor {
         CdpPromptFlavor::Standard => (render_fns.compact_standard_cdp_system_prompt)(system_prompt),

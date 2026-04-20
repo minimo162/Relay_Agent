@@ -1734,7 +1734,8 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 ## Immediate action rules
 
 - **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read_file` first** before edits.
-- **Local file lookup means tools first:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; emit `glob_search` and, for Office/PDF workspaces, `office_search` in this reply.
+- **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; emit `glob_search` and, for Office/PDF workspaces, `office_search` in this reply.
+- **Initial lookup reply format:** When the latest user request is a local file/document lookup and there are no Relay Tool Result blocks for that lookup yet, the entire assistant reply must be exactly one fenced `relay_tool` or `json` block. Do not write `はい、...を検索します`, do not cite `turn*search*`, do not output `<File>...</File>` cards, and do not list candidate files from M365 before Relay tools run.
 - **Search tool selection:** Use `glob_search` for candidate filenames and folders, `grep_search` for plaintext/code content, and `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content. When both filename and Office/PDF content matter, put `glob_search` and `office_search` in one `relay_tool` JSON array.
 - **Batch speculative searches:** For open-ended lookup, it is better to run a small batch of useful `glob_search` / `grep_search` / `office_search` calls in one reply than to spend a model turn announcing the first search. Keep each search concrete and narrow enough to be useful.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
@@ -1776,7 +1777,7 @@ fn cdp_tool_catalog_section_for_flavor(
 
 Only the tools documented below are intentionally advertised to Copilot for this CDP turn. Do not switch to hidden tools such as `Agent` or `ToolSearch` unless a future Relay prompt explicitly advertises them.
 
-M365 Copilot built-in results are outside the Relay tool protocol. Do not satisfy a local workspace or Office/PDF lookup by using Copilot enterprise search, Copilot web search, citations, uploaded files, Python/code execution, Pages, or any `office365_search`-style action. Emit Relay tool JSON instead.
+M365 Copilot built-in results are outside the Relay tool protocol. Do not satisfy a local workspace or Office/PDF lookup by using Copilot enterprise search, Copilot web search, citations, uploaded files, Python/code execution, Pages, `<File>` cards, or any `office365_search`-style action. Emit Relay tool JSON instead.
 
 ## Preferred sequences
 
@@ -3961,7 +3962,8 @@ mod cdp_copilot_tool_tests {
         assert!(s.contains("Parsed fences run on the user's machine"));
         assert!(s.contains("Copilot UI"));
         assert!(s.contains("Action in the same turn"));
-        assert!(s.contains("Local file lookup means tools first"));
+        assert!(s.contains("Local file lookup means Relay tools only"));
+        assert!(s.contains("Initial lookup reply format"));
         assert!(s.contains("Search tool selection"));
         assert!(s.contains("No generic checklist before search"));
         assert!(s.contains("No meta-only stall"));
@@ -4082,9 +4084,20 @@ mod cdp_copilot_tool_tests {
             CdpCatalogFlavor::StandardFull,
         );
 
+        assert!(bundle.prompt.starts_with("## Relay tool routing guard"));
+        assert!(bundle
+            .grounding_text
+            .contains("first response must be exactly one fenced `relay_tool` JSON block"));
         assert!(bundle
             .catalog_text
-            .contains("Local file lookup means tools first"));
+            .contains("Local file lookup means Relay tools only"));
+        assert!(bundle.catalog_text.contains("Initial lookup reply format"));
+        assert!(bundle
+            .catalog_text
+            .contains("Do not write `はい、...を検索します`"));
+        assert!(bundle
+            .catalog_text
+            .contains("do not output `<File>...</File>` cards"));
         assert!(bundle.catalog_text.contains("必要なファイル"));
         assert!(bundle
             .catalog_text
