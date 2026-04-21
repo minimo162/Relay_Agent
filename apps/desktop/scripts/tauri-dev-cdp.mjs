@@ -6,13 +6,13 @@
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 
-import { cleanupTauriDebugSidecars } from "./cleanup-tauri-debug-sidecars.mjs";
+import { prepareTauriDevSidecarsOrExit } from "./prepare-tauri-dev-sidecars.mjs";
 
 if (!process.env.RELAY_WEBVIEW2_CDP_PORT) {
   process.env.RELAY_WEBVIEW2_CDP_PORT = "9222";
 }
 
-cleanupTauriDebugSidecars();
+prepareTauriDevSidecarsOrExit();
 
 const r = spawnSync("pnpm", ["exec", "tauri", "dev"], {
   stdio: "inherit",

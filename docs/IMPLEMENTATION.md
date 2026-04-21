@@ -31,10 +31,20 @@ holding the copied executable open before the new app process has started.
 - Wired the same cleanup into `tauri:dev:cdp`, which invokes `tauri dev`
   directly.
 
+Follow-up fix: a fresh Windows checkout could pass the stale-lock cleanup but
+still fail before app startup because `externalBin` now also requires
+`binaries\relay-rg-x86_64-pc-windows-msvc.exe`, and downloaded sidecars are
+gitignored. Added `scripts/prepare-tauri-dev-sidecars.mjs`, which runs before
+`tauri dev`, cleans stale copied sidecars, detects the host target triple, and
+downloads any missing `relay-node` / `relay-rg` sidecar with the existing
+fetch scripts.
+
 Verification:
 
 - `node ./scripts/cleanup-tauri-debug-sidecars.mjs` from `apps/desktop`:
   passed; Linux path is a no-op.
+- `node ./scripts/prepare-tauri-dev-sidecars.mjs` from `apps/desktop`: passed;
+  local Linux sidecars already existed.
 - `pnpm typecheck` from `apps/desktop`: passed.
 - `pnpm check` from repo root: passed.
 - `git diff --check`: passed.
