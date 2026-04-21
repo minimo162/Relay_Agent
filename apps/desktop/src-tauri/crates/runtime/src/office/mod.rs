@@ -1000,12 +1000,8 @@ fn expand_office_candidates(
                         reason: error.error().to_string(),
                     }),
                 }
-                if out.len() > max_files {
-                    files_truncated = true;
-                    break;
-                }
             }
-            if files_truncated || wall_clock_truncated {
+            if wall_clock_truncated {
                 break;
             }
         } else {
@@ -1017,13 +1013,10 @@ fn expand_office_candidates(
                 true,
                 &mut errors,
             );
-            if out.len() > max_files {
-                files_truncated = true;
-                break;
-            }
         }
     }
     sort_candidates_by_modified_desc(&mut out);
+    files_truncated |= out.len() > max_files;
     out.truncate(max_files);
     Ok(CandidateExpansion {
         candidates: out,
@@ -1567,6 +1560,40 @@ mod tests {
         assert!(expansion.files_truncated);
         assert_eq!(expansion.candidates.len(), 2);
         assert!(expansion.errors.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expand_office_candidates_truncation_prefers_recent_files() {
+        let root = test_dir();
+        let oldest = root.join("a_oldest.xlsx");
+        let middle = root.join("m_middle.xlsx");
+        let newest = root.join("z_newest.xlsx");
+        fs::write(&oldest, b"oldest").expect("write oldest candidate");
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(&middle, b"middle").expect("write middle candidate");
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(&newest, b"newest").expect("write newest candidate");
+        let pattern = root.join("*.xlsx").to_string_lossy().into_owned();
+        let include_ext =
+            normalize_include_ext(Some(&vec![String::from("xlsx")])).expect("include ext");
+
+        let expansion = expand_office_candidates(
+            &[pattern],
+            &include_ext,
+            2,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .expect("expand candidates");
+
+        assert!(expansion.files_truncated);
+        assert_eq!(expansion.candidates.len(), 2);
+        assert_eq!(expansion.candidates[0], fs::canonicalize(&newest).unwrap());
+        assert_eq!(expansion.candidates[1], fs::canonicalize(&middle).unwrap());
+        assert!(!expansion
+            .candidates
+            .contains(&fs::canonicalize(&oldest).unwrap()));
 
         let _ = fs::remove_dir_all(root);
     }

@@ -15,6 +15,32 @@
 
 ## Milestone Log
 
+### 2026-04-21 office_search recent-file truncation fix
+
+Fixed a remaining local document search ordering issue where `office_search`
+could search older Office/PDF files first when a glob matched more files than
+the `max_files` budget. Candidate expansion already sorted by modified time, but
+it stopped during glob expansion as soon as it had `max_files + 1` matches. On
+filesystems or UNC shares that enumerate old paths first, newer files never made
+it into the sortable candidate set.
+
+- `office_search` now finishes candidate expansion within the wall-clock budget,
+  sorts all discovered candidates by modified time descending, and only then
+  truncates to `max_files`.
+- The `files_truncated` flag now reflects post-sort truncation, so callers still
+  know more candidates existed.
+- Added a regression where lexically later but newer files must win a tight
+  two-file Office search budget.
+
+Verification:
+
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml expand_office_candidates_truncation_prefers_recent_files -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml expand_office_candidates -- --nocapture`: passed, 5 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml office_search -- --nocapture`: passed, 3 passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
+- `cargo check -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-21 Copilot CDP prompt character budget
 
 Fixed a Copilot handoff failure where local search results could fit Relay's
