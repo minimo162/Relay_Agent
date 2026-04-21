@@ -8,6 +8,7 @@ use glob::Pattern;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
+use crate::tool_hard_denylist::reject_sensitive_file_path;
 use crate::office;
 
 const DEFAULT_WORKSPACE_SEARCH_MAX_FILES: usize = 50;
@@ -42,9 +43,30 @@ pub struct WorkspaceSearchInput {
 pub struct WorkspaceSearchCandidate {
     pub path: String,
     pub score: f64,
+    pub confidence: String,
+    pub features: WorkspaceSearchRankingFeatures,
+    pub why: Vec<String>,
     pub reasons: Vec<String>,
     #[serde(rename = "match_count")]
     pub match_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct WorkspaceSearchRankingFeatures {
+    #[serde(rename = "filename_match")]
+    pub filename_match: bool,
+    #[serde(rename = "path_match")]
+    pub path_match: bool,
+    #[serde(rename = "content_match_count")]
+    pub content_match_count: usize,
+    #[serde(rename = "symbol_match_count")]
+    pub symbol_match_count: usize,
+    #[serde(rename = "office_anchor")]
+    pub office_anchor: bool,
+    #[serde(rename = "recently_modified")]
+    pub recently_modified: bool,
+    #[serde(rename = "ignored_generated_penalty")]
+    pub ignored_generated_penalty: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -62,6 +84,8 @@ pub struct WorkspaceSearchSnippet {
 pub struct WorkspaceSearchSkipped {
     pub path: String,
     pub reason: String,
+    pub category: String,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -77,14 +101,48 @@ pub struct WorkspaceSearchLimits {
     pub elapsed_ms: u128,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceSearchPlan {
+    pub intent: String,
+    #[serde(rename = "query_variants")]
+    pub query_variants: Vec<String>,
+    pub retrievers: Vec<String>,
+    pub scope: Vec<String>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceSearchRecommendedNextTool {
+    pub tool: String,
+    pub path: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceSearchTrace {
+    #[serde(rename = "searched_files")]
+    pub searched_files: usize,
+    #[serde(rename = "skipped_files")]
+    pub skipped_files: usize,
+    pub truncated: bool,
+    #[serde(rename = "fallbacks_used")]
+    pub fallbacks_used: Vec<String>,
+    #[serde(rename = "needs_clarification")]
+    pub needs_clarification: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkspaceSearchOutput {
     pub query: String,
+    pub plan: WorkspaceSearchPlan,
     pub strategy: Vec<String>,
     pub candidates: Vec<WorkspaceSearchCandidate>,
     pub snippets: Vec<WorkspaceSearchSnippet>,
+    #[serde(rename = "recommended_next_tools")]
+    pub recommended_next_tools: Vec<WorkspaceSearchRecommendedNextTool>,
     pub skipped: Vec<WorkspaceSearchSkipped>,
     pub limits: WorkspaceSearchLimits,
+    pub trace: WorkspaceSearchTrace,
     #[serde(rename = "needs_clarification")]
     pub needs_clarification: bool,
 }
@@ -95,6 +153,7 @@ struct WorkspaceCandidateAccumulator {
     score: f64,
     reasons: Vec<String>,
     match_count: usize,
+    features: WorkspaceSearchRankingFeatures,
 }
 
 impl WorkspaceCandidateAccumulator {
@@ -104,6 +163,7 @@ impl WorkspaceCandidateAccumulator {
             score: 0.0,
             reasons: Vec::new(),
             match_count: 0,
+            features: WorkspaceSearchRankingFeatures::default(),
         }
     }
 
@@ -119,6 +179,13 @@ impl WorkspaceCandidateAccumulator {
     fn merge(&mut self, other: Self) {
         self.score += other.score;
         self.match_count += other.match_count;
+        self.features.filename_match |= other.features.filename_match;
+        self.features.path_match |= other.features.path_match;
+        self.features.content_match_count += other.features.content_match_count;
+        self.features.symbol_match_count += other.features.symbol_match_count;
+        self.features.office_anchor |= other.features.office_anchor;
+        self.features.recently_modified |= other.features.recently_modified;
+        self.features.ignored_generated_penalty += other.features.ignored_generated_penalty;
         for reason in other.reasons {
             if !self.reasons.iter().any(|existing| existing == &reason) {
                 self.reasons.push(reason);
@@ -127,9 +194,20 @@ impl WorkspaceCandidateAccumulator {
     }
 
     fn into_candidate(self) -> WorkspaceSearchCandidate {
+        let score = (self.score * 100.0).round() / 100.0;
+        let confidence = if score >= 80.0 || self.features.content_match_count >= 3 {
+            "high"
+        } else if score >= 35.0 || self.match_count > 0 {
+            "medium"
+        } else {
+            "low"
+        };
         WorkspaceSearchCandidate {
             path: self.path,
-            score: (self.score * 100.0).round() / 100.0,
+            score,
+            confidence: confidence.to_string(),
+            features: self.features,
+            why: self.reasons.clone(),
             reasons: self.reasons,
             match_count: self.match_count,
         }
@@ -165,34 +243,57 @@ impl SearchState {
     }
 
     fn skip(&mut self, path: impl Into<String>, reason: impl Into<String>) {
+        self.skip_structured(path, reason, None::<String>);
+    }
+
+    fn skip_structured(
+        &mut self,
+        path: impl Into<String>,
+        reason: impl Into<String>,
+        detail: Option<impl Into<String>>,
+    ) {
         self.skipped_files += 1;
         if self.skipped.len() < 100 {
+            let reason = reason.into();
             self.skipped.push(WorkspaceSearchSkipped {
                 path: path.into(),
-                reason: reason.into(),
+                category: reason
+                    .split_once(':')
+                    .map_or_else(|| reason.clone(), |(category, _)| category.to_string()),
+                reason,
+                detail: detail.map(Into::into),
             });
         }
+    }
+
+    fn skip_sensitive(&mut self) {
+        self.skip_structured(
+            "[redacted-sensitive-path]",
+            "sensitive_path",
+            Some("path blocked by Relay hard denylist"),
+        );
     }
 }
 
 #[derive(Debug)]
 struct GitIgnoreMatcher {
-    patterns: Vec<Pattern>,
+    patterns: Vec<GitIgnorePattern>,
+}
+
+#[derive(Debug)]
+struct GitIgnorePattern {
+    pattern: Pattern,
+    negated: bool,
+    directory_only: bool,
+    raw: String,
 }
 
 impl GitIgnoreMatcher {
     fn load(root: &Path) -> Self {
-        let patterns = fs::read_to_string(root.join(".gitignore"))
-            .ok()
+        let patterns = [".gitignore", ".ignore"]
             .into_iter()
-            .flat_map(|contents| {
-                contents
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with('!'))
-                    .filter_map(|line| Pattern::new(line.trim_start_matches('/')).ok())
-                    .collect::<Vec<_>>()
-            })
+            .filter_map(|name| fs::read_to_string(root.join(name)).ok())
+            .flat_map(|contents| parse_ignore_patterns(&contents))
             .collect();
         Self { patterns }
     }
@@ -201,10 +302,149 @@ impl GitIgnoreMatcher {
         let relative = path.strip_prefix(workspace_root).unwrap_or(path);
         let relative_string = relative.to_string_lossy();
         let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
-        self.patterns
-            .iter()
-            .any(|pattern| pattern.matches(&relative_string) || pattern.matches(file_name))
+        let mut ignored = false;
+        for rule in &self.patterns {
+            if ignore_pattern_matches(rule, &relative_string, file_name, relative) {
+                ignored = !rule.negated;
+            }
+        }
+        ignored
     }
+}
+
+fn parse_ignore_patterns(contents: &str) -> Vec<GitIgnorePattern> {
+    contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| {
+            let negated = line.starts_with('!');
+            let raw_pattern = line.trim_start_matches('!');
+            let directory_only = raw_pattern.ends_with('/');
+            let pattern = raw_pattern.trim_start_matches('/').trim_end_matches('/');
+            let raw = pattern.to_string();
+            Pattern::new(pattern)
+                .ok()
+                .map(|pattern| GitIgnorePattern {
+                    pattern,
+                    negated,
+                    directory_only,
+                    raw,
+                })
+        })
+        .collect()
+}
+
+fn ignore_pattern_matches(
+    rule: &GitIgnorePattern,
+    relative_string: &str,
+    file_name: &str,
+    relative: &Path,
+) -> bool {
+    if rule.pattern.matches(relative_string) || rule.pattern.matches(file_name) {
+        return true;
+    }
+    if !rule.directory_only {
+        return false;
+    }
+    let raw = rule.raw.trim_matches('/');
+    if raw.is_empty() {
+        return false;
+    }
+    if raw.contains('/') || raw.contains('\\') {
+        let normalized_raw = raw.replace('\\', "/");
+        let normalized_relative = relative_string.replace('\\', "/");
+        return normalized_relative == normalized_raw
+            || normalized_relative.starts_with(&format!("{normalized_raw}/"));
+    }
+    relative.components().any(|component| {
+        component.as_os_str().to_string_lossy() == raw
+    })
+}
+
+fn load_global_ignore_patterns() -> Vec<GitIgnorePattern> {
+    std::env::var_os("RELAY_WORKSPACE_SEARCH_IGNORE_FILE")
+        .map(PathBuf::from)
+        .into_iter()
+        .filter_map(|path| fs::read_to_string(path).ok())
+        .flat_map(|contents| parse_ignore_patterns(&contents))
+        .collect()
+}
+
+#[derive(Debug)]
+struct WorkspaceIgnoreMatcher {
+    local: GitIgnoreMatcher,
+    global: Vec<GitIgnorePattern>,
+}
+
+impl WorkspaceIgnoreMatcher {
+    fn load(root: &Path) -> Self {
+        Self {
+            local: GitIgnoreMatcher::load(root),
+            global: load_global_ignore_patterns(),
+        }
+    }
+
+    fn is_match(&self, workspace_root: &Path, path: &Path) -> bool {
+        if self.local.is_match(workspace_root, path) {
+            return true;
+        }
+        if self.global.is_empty() {
+            return false;
+        }
+        let relative = path.strip_prefix(workspace_root).unwrap_or(path);
+        let relative_string = relative.to_string_lossy();
+        let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        let mut ignored = false;
+        for rule in &self.global {
+            if ignore_pattern_matches(rule, &relative_string, file_name, relative) {
+                ignored = !rule.negated;
+            }
+        }
+        ignored
+    }
+}
+
+fn is_sensitive_workspace_search_path(path: &Path) -> bool {
+    if reject_sensitive_file_path(path).is_err() {
+        return true;
+    }
+    path.components().any(|component| {
+        let name = component.as_os_str().to_string_lossy().to_ascii_lowercase();
+        is_sensitive_workspace_search_component(&name)
+    })
+}
+
+fn is_sensitive_workspace_search_component(name: &str) -> bool {
+    let stem = name.split_once('.').map_or(name, |(stem, _)| stem);
+    matches!(
+        name,
+        ".ssh" | ".gnupg" | "private-key" | "private_key"
+    ) || matches!(
+        stem,
+        "credential" | "credentials" | "secret" | "secrets" | "token" | "tokens"
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchIntent {
+    ExactPath,
+    Filename,
+    CodeSymbol,
+    RelatedImplementation,
+    Documentation,
+    OfficeEvidence,
+    DiagnosticFollowup,
+    Unknown,
+}
+
+#[derive(Debug, Clone)]
+struct SearchToolAdvice {
+    intent: SearchIntent,
+    primary: &'static str,
+    fallbacks: Vec<&'static str>,
+    require_read_file_before_conclusion: bool,
+    reason: String,
 }
 
 pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSearchOutput> {
@@ -243,10 +483,12 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
     };
     let context = input.context.unwrap_or(2).min(10);
     let terms = workspace_search_terms(query);
-    let gitignore = GitIgnoreMatcher::load(&workspace_root);
+    let plan = build_workspace_search_plan(input, query, &terms, &search_roots, include_ext.as_ref());
+    let ignore_matcher = WorkspaceIgnoreMatcher::load(&workspace_root);
     let mut state = SearchState::new();
     let mut candidate_map = BTreeMap::<String, WorkspaceCandidateAccumulator>::new();
     let mut snippets = Vec::new();
+    let mut fallbacks_used = vec![String::from("path_search"), String::from("text_search")];
 
     for root in &search_roots {
         for entry in WalkDir::new(root)
@@ -267,6 +509,20 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
                 }
             };
             let path = entry.path().to_path_buf();
+            if entry.file_type().is_symlink() {
+                match path.canonicalize() {
+                    Ok(canonical) if canonical.starts_with(&workspace_root) => {
+                        state.skip(path.to_string_lossy(), "symlink");
+                    }
+                    Ok(canonical) => {
+                        state.skip(canonical.to_string_lossy(), "outside_workspace");
+                    }
+                    Err(error) => {
+                        state.skip(path.to_string_lossy(), format!("canonicalize_error:{error}"));
+                    }
+                }
+                continue;
+            }
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -274,8 +530,12 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
                 state.skip(path.to_string_lossy(), "default_ignore");
                 continue;
             }
-            if gitignore.is_match(&workspace_root, &path) {
-                state.skip(path.to_string_lossy(), "gitignore");
+            if ignore_matcher.is_match(&workspace_root, &path) {
+                state.skip(path.to_string_lossy(), "ignored_by_gitignore");
+                continue;
+            }
+            if is_sensitive_workspace_search_path(&path) {
+                state.skip_sensitive();
                 continue;
             }
             if !workspace_search_ext_allowed(&path, include_ext.as_ref()) {
@@ -285,7 +545,7 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
             let canonical = match path.canonicalize() {
                 Ok(canonical) if canonical.starts_with(&workspace_root) => canonical,
                 Ok(canonical) => {
-                    state.skip(canonical.to_string_lossy(), "workspace_boundary");
+                    state.skip(canonical.to_string_lossy(), "outside_workspace");
                     continue;
                 }
                 Err(error) => {
@@ -293,6 +553,10 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
                     continue;
                 }
             };
+            if is_sensitive_workspace_search_path(&canonical) {
+                state.skip_sensitive();
+                continue;
+            }
             let metadata = match fs::metadata(&canonical) {
                 Ok(metadata) => metadata,
                 Err(error) => {
@@ -368,6 +632,7 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
     if workspace_search_should_include_office(input.mode.as_deref(), include_ext.as_ref())
         && snippets.len() < budgets.max_snippets
     {
+        fallbacks_used.push(String::from("office_search"));
         integrate_office_search(
             query,
             &terms,
@@ -375,6 +640,7 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
             &mut candidate_map,
             &mut snippets,
             &mut state,
+            include_ext.as_ref(),
             budgets.max_files,
             budgets.max_snippets,
         );
@@ -400,9 +666,18 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
             .windows(2)
             .next()
             .is_some_and(|pair| (pair[0].score - pair[1].score).abs() < f64::EPSILON);
+    let recommended_next_tools = recommend_workspace_search_next_tools(&candidates);
+    let trace = WorkspaceSearchTrace {
+        searched_files: state.scanned_files,
+        skipped_files: state.skipped_files,
+        truncated: state.truncated,
+        fallbacks_used,
+        needs_clarification,
+    };
 
     let output = WorkspaceSearchOutput {
         query: query.to_string(),
+        plan,
         strategy: vec![
             "intent:auto".to_string(),
             "path_discovery".to_string(),
@@ -413,6 +688,7 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
         needs_clarification,
         candidates,
         snippets,
+        recommended_next_tools,
         skipped: state.skipped,
         limits: WorkspaceSearchLimits {
             scanned_files: state.scanned_files,
@@ -421,6 +697,7 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
             truncated: state.truncated,
             elapsed_ms: started.elapsed().as_millis(),
         },
+        trace,
     };
     tracing::info!(
         target: "relay.runtime.search",
@@ -439,6 +716,246 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
     Ok(output)
 }
 
+fn build_workspace_search_plan(
+    input: &WorkspaceSearchInput,
+    query: &str,
+    terms: &[String],
+    search_roots: &[PathBuf],
+    include_ext: Option<&HashSet<String>>,
+) -> WorkspaceSearchPlan {
+    let mode = input.mode.as_deref().unwrap_or("auto");
+    let exact_path = exact_workspace_search_path(query);
+    let advice = advise_workspace_search(input, query, exact_path.is_some(), include_ext);
+    let intent = match advice.intent {
+        SearchIntent::ExactPath => "exact_path_read_recommended",
+        SearchIntent::Filename => "path_discovery",
+        SearchIntent::CodeSymbol => "code_symbol_search",
+        SearchIntent::RelatedImplementation => "related_implementation_search",
+        SearchIntent::Documentation => "documentation_search",
+        SearchIntent::OfficeEvidence => "office_evidence_search",
+        SearchIntent::DiagnosticFollowup => "diagnostic_followup_search",
+        SearchIntent::Unknown => match mode {
+            "code" => "implementation_search",
+            "path" => "path_discovery",
+            "office" => "office_evidence_search",
+            "text" => "text_evidence_search",
+            _ => "workspace_evidence_search",
+        },
+    }
+    .to_string();
+
+    let mut query_variants = Vec::new();
+    for term in terms.iter().take(32) {
+        if !query_variants.iter().any(|existing| existing == term) {
+            query_variants.push(term.clone());
+        }
+    }
+
+    let mut retrievers = vec![advice.primary.to_string()];
+    for fallback in &advice.fallbacks {
+        if !retrievers.iter().any(|existing| existing == fallback) {
+            retrievers.push((*fallback).to_string());
+        }
+    }
+
+    let workspace_root = std::env::current_dir()
+        .ok()
+        .and_then(|path| path.canonicalize().ok());
+    let scope = search_roots
+        .iter()
+        .map(|root| {
+            workspace_root
+                .as_ref()
+                .and_then(|workspace_root| root.strip_prefix(workspace_root).ok())
+                .filter(|relative| !relative.as_os_str().is_empty())
+                .unwrap_or(root)
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect::<Vec<_>>();
+
+    WorkspaceSearchPlan {
+        intent,
+        query_variants,
+        retrievers,
+        scope,
+        reason: if let Some(path) = exact_path {
+            format!(
+                "query appears to name an exact workspace file {}; read_file is the preferred next tool; {}",
+                path.to_string_lossy(),
+                advice.reason
+            )
+        } else {
+            format!(
+                "{}; require_read_file_before_conclusion={}",
+                advice.reason, advice.require_read_file_before_conclusion
+            )
+        },
+    }
+}
+
+fn advise_workspace_search(
+    input: &WorkspaceSearchInput,
+    query: &str,
+    exact_path: bool,
+    include_ext: Option<&HashSet<String>>,
+) -> SearchToolAdvice {
+    let lower = query.to_ascii_lowercase();
+    if exact_path {
+        return SearchToolAdvice {
+            intent: SearchIntent::ExactPath,
+            primary: "read_file",
+            fallbacks: Vec::new(),
+            require_read_file_before_conclusion: true,
+            reason: String::from("SearchToolAdvisor: exact path queries should bypass broad search"),
+        };
+    }
+    if matches!(input.mode.as_deref(), Some("office"))
+        || workspace_search_should_include_office(input.mode.as_deref(), include_ext)
+            && (lower.contains("pdf")
+                || lower.contains("docx")
+                || lower.contains("xlsx")
+                || lower.contains("pptx")
+                || query.contains("文書"))
+    {
+        return SearchToolAdvice {
+            intent: SearchIntent::OfficeEvidence,
+            primary: "office",
+            fallbacks: vec!["path", "text"],
+            require_read_file_before_conclusion: true,
+            reason: String::from("SearchToolAdvisor: Office/PDF evidence can use office_search previews before read_file"),
+        };
+    }
+    if lower.contains("diagnostic") || lower.contains("error") || query.contains("診断") {
+        return SearchToolAdvice {
+            intent: SearchIntent::DiagnosticFollowup,
+            primary: "text",
+            fallbacks: vec!["path", "docs", "recent-change"],
+            require_read_file_before_conclusion: true,
+            reason: String::from("SearchToolAdvisor: diagnostics need text evidence plus nearby docs/recent changes"),
+        };
+    }
+    if lower.contains("readme")
+        || lower.contains("docs")
+        || lower.contains("plans")
+        || lower.contains("alignment")
+        || query.contains("ドキュメント")
+    {
+        return SearchToolAdvice {
+            intent: SearchIntent::Documentation,
+            primary: "docs",
+            fallbacks: vec!["path", "text"],
+            require_read_file_before_conclusion: true,
+            reason: String::from("SearchToolAdvisor: documentation lookup prioritizes docs retriever"),
+        };
+    }
+    if lower.contains("fn ")
+        || lower.contains("struct")
+        || lower.contains("enum")
+        || lower.contains("symbol")
+        || lower.contains("command")
+    {
+        return SearchToolAdvice {
+            intent: SearchIntent::CodeSymbol,
+            primary: "symbol",
+            fallbacks: vec!["path", "text", "recent-change"],
+            require_read_file_before_conclusion: true,
+            reason: String::from("SearchToolAdvisor: symbol-like lookup prioritizes symbol retriever"),
+        };
+    }
+    if matches!(input.mode.as_deref(), Some("path"))
+        || lower.contains(".rs")
+        || lower.contains(".ts")
+        || lower.contains("filename")
+        || query.contains("ファイル名")
+    {
+        return SearchToolAdvice {
+            intent: SearchIntent::Filename,
+            primary: "path",
+            fallbacks: vec!["text"],
+            require_read_file_before_conclusion: true,
+            reason: String::from("SearchToolAdvisor: filename lookup prioritizes path retriever"),
+        };
+    }
+    if lower.contains("implementation")
+        || lower.contains("implement")
+        || lower.contains("agentic")
+        || lower.contains("tool call")
+        || query.contains("実装")
+        || query.contains("改善")
+    {
+        return SearchToolAdvice {
+            intent: SearchIntent::RelatedImplementation,
+            primary: "text",
+            fallbacks: vec!["path", "symbol", "docs", "recent-change"],
+            require_read_file_before_conclusion: true,
+            reason: String::from("SearchToolAdvisor: implementation lookup uses hybrid path/text/symbol/docs/recent retrievers"),
+        };
+    }
+    SearchToolAdvice {
+        intent: SearchIntent::Unknown,
+        primary: "path",
+        fallbacks: vec!["text"],
+        require_read_file_before_conclusion: true,
+        reason: String::from("SearchToolAdvisor: default read-only workspace search"),
+    }
+}
+
+fn exact_workspace_search_path(query: &str) -> Option<PathBuf> {
+    let trimmed = query
+        .trim()
+        .trim_matches('`')
+        .trim_matches('"')
+        .trim_matches('\'');
+    if trimmed.is_empty() || trimmed.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let workspace_root = std::env::current_dir().ok()?.canonicalize().ok()?;
+    let candidate = if Path::new(trimmed).is_absolute() {
+        PathBuf::from(trimmed)
+    } else {
+        workspace_root.join(trimmed)
+    };
+    let canonical = candidate.canonicalize().ok()?;
+    if canonical.is_file() && canonical.starts_with(&workspace_root) {
+        Some(canonical)
+    } else {
+        None
+    }
+}
+
+fn recommend_workspace_search_next_tools(
+    candidates: &[WorkspaceSearchCandidate],
+) -> Vec<WorkspaceSearchRecommendedNextTool> {
+    let Some(top) = candidates.first() else {
+        return Vec::new();
+    };
+    let tied = candidates
+        .iter()
+        .take_while(|candidate| (candidate.score - top.score).abs() < f64::EPSILON)
+        .take(3)
+        .collect::<Vec<_>>();
+    if tied.len() > 1 {
+        return tied
+            .into_iter()
+            .map(|candidate| WorkspaceSearchRecommendedNextTool {
+                tool: String::from("read_file"),
+                path: candidate.path.clone(),
+                reason: String::from(
+                    "top candidates are tied; inspect each file before choosing or making a final judgment",
+                ),
+            })
+            .collect();
+    }
+    vec![WorkspaceSearchRecommendedNextTool {
+        tool: String::from("read_file"),
+        path: top.path.clone(),
+        reason: String::from(
+            "top ranked candidate; snippets are discovery evidence and need read_file expansion before important conclusions",
+        ),
+    }]
+}
+
 fn integrate_office_search(
     query: &str,
     terms: &[String],
@@ -446,10 +963,15 @@ fn integrate_office_search(
     candidate_map: &mut BTreeMap<String, WorkspaceCandidateAccumulator>,
     snippets: &mut Vec<WorkspaceSearchSnippet>,
     state: &mut SearchState,
+    include_ext: Option<&HashSet<String>>,
     max_files: usize,
     max_snippets: usize,
 ) {
-    let office_paths = workspace_search_office_paths(search_roots);
+    let office_exts = workspace_search_office_exts(include_ext);
+    if office_exts.is_empty() {
+        return;
+    }
+    let office_paths = workspace_search_office_paths(search_roots, &office_exts);
     if office_paths.is_empty() {
         return;
     }
@@ -457,12 +979,7 @@ fn integrate_office_search(
         pattern: workspace_search_office_pattern(query, terms),
         paths: office_paths,
         regex: Some(false),
-        include_ext: Some(vec![
-            "docx".to_string(),
-            "xlsx".to_string(),
-            "pptx".to_string(),
-            "pdf".to_string(),
-        ]),
+        include_ext: Some(office_exts),
         case_insensitive: Some(true),
         context: Some(120),
         max_results: Some(max_snippets.saturating_sub(snippets.len()).max(1)),
@@ -479,6 +996,7 @@ fn integrate_office_search(
                 let entry = candidate_map
                     .entry(hit.path.clone())
                     .or_insert_with(|| WorkspaceCandidateAccumulator::new(hit.path.clone()));
+                entry.features.office_anchor = true;
                 entry.add(25.0, 1, format!("office anchor {}", hit.anchor));
                 if snippets.len() < max_snippets {
                     snippets.push(WorkspaceSearchSnippet {
@@ -563,17 +1081,189 @@ fn workspace_search_terms(query: &str) -> Vec<String> {
     if !lower_query.is_empty() {
         terms.push(lower_query);
     }
-    for token in query
+    let normalized_query = normalize_fullwidth_ascii(query);
+    if normalized_query != query {
+        let normalized_lower = normalized_query.trim().to_ascii_lowercase();
+        if !normalized_lower.is_empty() && !terms.iter().any(|existing| existing == &normalized_lower)
+        {
+            terms.push(normalized_lower);
+        }
+    }
+    for token in normalized_query
         .split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '-'))
         .map(str::trim)
         .filter(|token| token.chars().count() >= 2)
     {
         let token = token.to_ascii_lowercase();
+        add_case_variants(&token, &mut terms);
         if !terms.iter().any(|existing| existing == &token) {
             terms.push(token);
         }
     }
+    expand_workspace_search_terms(&normalized_query, &mut terms);
     terms
+}
+
+fn normalize_fullwidth_ascii(input: &str) -> String {
+    input
+        .chars()
+        .map(|ch| match ch {
+            '\u{ff01}'..='\u{ff5e}' => char::from_u32(ch as u32 - 0xfee0).unwrap_or(ch),
+            '\u{3000}' => ' ',
+            _ => ch,
+        })
+        .collect()
+}
+
+fn add_unique_term(terms: &mut Vec<String>, term: String) {
+    if !term.is_empty() && !terms.iter().any(|existing| existing == &term) {
+        terms.push(term);
+    }
+}
+
+fn add_case_variants(token: &str, terms: &mut Vec<String>) {
+    let lower = token.to_ascii_lowercase();
+    for separator in ['_', '-'] {
+        if lower.contains(separator) {
+            let parts = lower
+                .split(separator)
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>();
+            if parts.len() >= 2 {
+                add_unique_term(terms, parts.join(if separator == '_' { "-" } else { "_" }));
+                add_unique_term(terms, parts.join(""));
+                let pascal = parts
+                    .iter()
+                    .map(|part| {
+                        let mut chars = part.chars();
+                        match chars.next() {
+                            Some(first) => {
+                                format!("{}{}", first.to_ascii_uppercase(), chars.as_str())
+                            }
+                            None => String::new(),
+                        }
+                    })
+                    .collect::<String>();
+                if !pascal.is_empty() {
+                    let mut camel = pascal.clone();
+                    if let Some(first) = camel.get_mut(0..1) {
+                        first.make_ascii_lowercase();
+                    }
+                    add_unique_term(terms, camel.to_ascii_lowercase());
+                    add_unique_term(terms, pascal.to_ascii_lowercase());
+                }
+            }
+        }
+    }
+    if lower.contains(' ') {
+        let parts = lower
+            .split_whitespace()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        if parts.len() >= 2 {
+            add_unique_term(terms, parts.join("_"));
+            add_unique_term(terms, parts.join("-"));
+            add_unique_term(terms, parts.join(""));
+        }
+    }
+}
+
+fn expand_workspace_search_terms(query: &str, terms: &mut Vec<String>) {
+    let lower = query.to_ascii_lowercase();
+    let mut add = |term: &str| {
+        let term = term.to_ascii_lowercase();
+        if !term.is_empty() && !terms.iter().any(|existing| existing == &term) {
+            terms.push(term);
+        }
+    };
+
+    if lower.contains("search") || query.contains("検索") || query.contains("探索") {
+        add("search");
+        add("workspace_search");
+        add("grep");
+        add("grep_search");
+        add("glob");
+        add("office_search");
+        add("ranking");
+        add("検索");
+        add("探索");
+    }
+    if lower.contains("implementation") || lower.contains("implement") || query.contains("実装") {
+        add("implementation");
+        add("implement");
+        add("実装");
+    }
+    if lower.contains("related") || query.contains("関連") || query.contains("関係") {
+        add("related");
+        add("関連");
+        add("関係");
+    }
+    if lower.contains("required")
+        || lower.contains("needed")
+        || query.contains("必要")
+        || query.contains("要る")
+    {
+        add("required");
+        add("needed");
+        add("必要");
+    }
+    if lower.contains("file") || query.contains("ファイル") {
+        add("file");
+        add("ファイル");
+    }
+    if lower.contains("agentic") || query.contains("エージェント") {
+        add("agentic");
+        add("agent");
+        add("エージェント");
+    }
+    if lower.contains("agentic search") || (lower.contains("agentic") && lower.contains("search"))
+    {
+        add("workspace_search");
+        add("grep_search");
+        add("search.rs");
+        add("retriever");
+        add("ranking");
+        add("検索改善");
+    }
+    if query.contains("検索改善") || (query.contains("検索") && query.contains("改善")) {
+        add("agentic");
+        add("workspace_search");
+        add("grep_search");
+        add("search.rs");
+        add("retriever");
+        add("ranking");
+        add("検索改善");
+    }
+    if lower.contains("tool call")
+        || lower.contains("toolcall")
+        || lower.contains("tool-call")
+        || query.contains("ツール呼び出し")
+    {
+        add("tool call");
+        add("relay_tool");
+        add("toolcall");
+        add("response_parser");
+        add("orchestrator");
+    }
+    if lower.contains("approval") || query.contains("承認") {
+        add("approval");
+        add("承認");
+        add("permission");
+        add("approval.rs");
+        add("approval_needed");
+        add("approval-needed");
+        add("approvalneeded");
+        add("orchestrator");
+    }
+    if lower.contains("cash flow") || lower.contains("cashflow") || query.contains("キャッシュフロー")
+    {
+        add("cash flow");
+        add("cashflow");
+        add("cf");
+        add("cfs");
+        add("キャッシュフロー");
+        add("キャッシュ・フロー");
+    }
 }
 
 fn score_workspace_path(
@@ -584,6 +1274,7 @@ fn score_workspace_path(
     let lower = path.to_ascii_lowercase();
     for term in terms {
         if lower.contains(term) {
+            accumulator.features.path_match = true;
             accumulator.add(30.0, 1, format!("query term appears in path: {term}"));
         }
     }
@@ -594,6 +1285,7 @@ fn score_workspace_path(
         .to_ascii_lowercase();
     for term in terms {
         if filename.contains(term) {
+            accumulator.features.filename_match = true;
             accumulator.add(30.0, 1, format!("query term appears in filename: {term}"));
         }
     }
@@ -620,6 +1312,7 @@ fn score_recency(path: &Path, accumulator: &mut WorkspaceCandidateAccumulator) {
         return;
     };
     if age.as_secs() <= 60 * 60 * 24 * 30 {
+        accumulator.features.recently_modified = true;
         accumulator.add(5.0, 0, "recently modified");
     }
 }
@@ -651,6 +1344,15 @@ fn score_workspace_text(
             matched_terms.len(),
             format!("{} content matches: {}", matched_terms.len(), matched_terms.join(",")),
         );
+        accumulator.features.content_match_count += matched_terms.len();
+        if looks_like_symbol_line(lines[index]) {
+            accumulator.features.symbol_match_count += matched_terms.len();
+            accumulator.add(
+                12.0,
+                matched_terms.len(),
+                format!("symbol-like line matches: {}", matched_terms.join(",")),
+            );
+        }
         let start = index.saturating_sub(context);
         let end = (index + context + 1).min(lines.len());
         snippets.push(WorkspaceSearchSnippet {
@@ -662,6 +1364,27 @@ fn score_workspace_text(
         });
     }
     snippets
+}
+
+fn looks_like_symbol_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    [
+        "fn ",
+        "pub fn ",
+        "struct ",
+        "pub struct ",
+        "enum ",
+        "pub enum ",
+        "impl ",
+        "trait ",
+        "pub trait ",
+        "function ",
+        "const ",
+        "pub const ",
+        "command ",
+    ]
+    .iter()
+    .any(|prefix| trimmed.starts_with(prefix))
 }
 
 fn is_office_workspace_search_path(path: &Path) -> bool {
@@ -688,11 +1411,20 @@ fn workspace_search_should_include_office(
     })
 }
 
-fn workspace_search_office_paths(search_roots: &[PathBuf]) -> Vec<String> {
+fn workspace_search_office_exts(include_ext: Option<&HashSet<String>>) -> Vec<String> {
+    let allowed = ["docx", "xlsx", "pptx", "pdf"];
+    allowed
+        .iter()
+        .filter(|ext| include_ext.is_none_or(|include_ext| include_ext.contains::<str>(*ext)))
+        .map(|ext| (*ext).to_string())
+        .collect()
+}
+
+fn workspace_search_office_paths(search_roots: &[PathBuf], office_exts: &[String]) -> Vec<String> {
     let mut paths = Vec::new();
     for root in search_roots {
         let root = root.to_string_lossy();
-        for ext in ["docx", "xlsx", "pptx", "pdf"] {
+        for ext in office_exts {
             paths.push(format!("{}/**/*.{}", root.trim_end_matches(['/', '\\']), ext));
         }
     }
@@ -779,8 +1511,28 @@ mod tests {
         .expect("workspace_search should succeed");
 
         assert!(!output.needs_clarification);
-        assert_eq!(output.candidates.len(), 1);
+        assert_eq!(output.plan.intent, "related_implementation_search");
+        assert!(output.plan.retrievers.contains(&String::from("path")));
+        assert!(output.plan.retrievers.contains(&String::from("text")));
+        assert!(!output.candidates.is_empty());
         assert!(output.candidates[0].path.ends_with("src/search.rs"));
+        assert_eq!(output.candidates[0].confidence, "high");
+        assert!(output.candidates[0].features.filename_match);
+        assert!(output.candidates[0].features.path_match);
+        assert!(output.candidates[0].features.content_match_count > 0);
+        assert!(output.candidates[0].features.symbol_match_count > 0);
+        assert!(output.candidates[0]
+            .why
+            .iter()
+            .any(|why| why.contains("content matches")));
+        assert_eq!(output.recommended_next_tools.len(), 1);
+        assert_eq!(output.recommended_next_tools[0].tool, "read_file");
+        assert!(output.recommended_next_tools[0]
+            .path
+            .ends_with("src/search.rs"));
+        assert!(output.recommended_next_tools[0]
+            .reason
+            .contains("top ranked candidate"));
         assert!(output.candidates[0].score > 0.0);
         assert!(output.candidates[0]
             .reasons
@@ -792,6 +1544,9 @@ mod tests {
         assert_eq!(output.limits.scanned_files, 1);
         assert!(output.limits.skipped_files >= 1);
         assert!(!output.skipped.is_empty());
+        assert_eq!(output.trace.searched_files, output.limits.scanned_files);
+        assert_eq!(output.trace.skipped_files, output.limits.skipped_files);
+        assert_eq!(output.trace.needs_clarification, output.needs_clarification);
 
         std::env::set_current_dir(original_dir).expect("restore cwd");
         let _ = fs::remove_dir_all(dir);
@@ -823,7 +1578,9 @@ mod tests {
         assert!(output.needs_clarification);
         assert!(output.candidates.is_empty());
         assert!(output.snippets.is_empty());
+        assert!(output.recommended_next_tools.is_empty());
         assert_eq!(output.limits.scanned_files, 1);
+        assert!(output.trace.needs_clarification);
 
         std::env::set_current_dir(original_dir).expect("restore cwd");
         let _ = fs::remove_dir_all(dir);
@@ -890,7 +1647,7 @@ mod tests {
         assert!(output
             .skipped
             .iter()
-            .any(|skip| skip.reason == "gitignore"));
+            .any(|skip| skip.reason == "ignored_by_gitignore"));
         assert!(output.skipped.iter().any(|skip| skip.reason == "binary"));
 
         std::env::set_current_dir(original_dir).expect("restore cwd");
@@ -996,7 +1753,7 @@ mod tests {
         .expect("workspace_search should succeed");
 
         assert!(output.limits.truncated);
-        assert_eq!(output.candidates.len(), 1);
+        assert!(!output.candidates.is_empty());
         assert!(output.limits.scanned_files >= 1);
         assert!(output.limits.skipped_files >= 1);
 
@@ -1073,8 +1830,601 @@ mod tests {
         assert!(output.candidates.len() >= 2);
         assert_eq!(output.candidates[0].score, output.candidates[1].score);
         assert!(output.needs_clarification);
+        assert!(output.recommended_next_tools.len() >= 2);
+        assert!(output
+            .recommended_next_tools
+            .iter()
+            .all(|tool| tool.tool == "read_file"));
+        assert!(output
+            .recommended_next_tools
+            .iter()
+            .any(|tool| tool.path.ends_with("src/a.txt")));
+        assert!(output
+            .recommended_next_tools
+            .iter()
+            .any(|tool| tool.path.ends_with("src/b.txt")));
+        assert!(output
+            .recommended_next_tools
+            .iter()
+            .all(|tool| tool.reason.contains("tied")));
 
         std::env::set_current_dir(original_dir).expect("restore cwd");
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_expands_english_japanese_query_terms() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-query-expansion");
+        std::fs::create_dir_all(dir.join("docs")).expect("docs dir");
+        fs::write(dir.join("docs/notes.md"), "検索 runtime evidence\n").expect("notes");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("search runtime evidence"),
+            paths: Some(vec![String::from("docs")]),
+            mode: Some(String::from("text")),
+            include_ext: Some(vec![String::from("md")]),
+            max_files: Some(10),
+            max_snippets: Some(10),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(0),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert!(output
+            .plan
+            .query_variants
+            .iter()
+            .any(|term| term == "検索"));
+        assert_eq!(output.candidates.len(), 1);
+        assert!(output.snippets[0].preview.contains("検索"));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_handles_ambiguous_japanese_search_improvement_query() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-ambiguous-ja");
+        std::fs::create_dir_all(dir.join("src")).expect("src dir");
+        fs::write(
+            dir.join("src/search.rs"),
+            "pub fn workspace_search_retriever() {\n    // ranking for agentic search\n}\n",
+        )
+        .expect("search file");
+        fs::write(dir.join("src/unrelated.rs"), "pub fn unrelated() {}\n").expect("unrelated");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("検索改善"),
+            paths: Some(vec![String::from("src")]),
+            mode: Some(String::from("code")),
+            include_ext: Some(vec![String::from("rs")]),
+            max_files: Some(10),
+            max_snippets: Some(10),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(0),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert!(!output.needs_clarification);
+        assert_eq!(output.trace.needs_clarification, output.needs_clarification);
+        assert_eq!(output.plan.intent, "related_implementation_search");
+        for expected in ["検索改善", "workspace_search", "retriever", "ranking"] {
+            assert!(
+                output
+                    .plan
+                    .query_variants
+                    .iter()
+                    .any(|term| term == expected),
+                "missing expansion term {expected:?}: {:?}",
+                output.plan.query_variants
+            );
+        }
+        assert!(!output.candidates.is_empty());
+        assert!(output.candidates[0].path.ends_with("src/search.rs"));
+        assert!(output.candidates[0].features.content_match_count > 0);
+        assert_eq!(output.recommended_next_tools.len(), 1);
+        assert_eq!(output.recommended_next_tools[0].tool, "read_file");
+        assert!(output.recommended_next_tools[0]
+            .path
+            .ends_with("src/search.rs"));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_expands_agentic_search_implementation_terms() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-agentic-expansion");
+        std::fs::create_dir_all(dir.join("src")).expect("src dir");
+        fs::write(
+            dir.join("src/search.rs"),
+            "pub fn rank_retriever() {\n    // workspace_search ranking\n}\n",
+        )
+        .expect("search file");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("agentic search"),
+            paths: Some(vec![String::from("src")]),
+            mode: Some(String::from("code")),
+            include_ext: Some(vec![String::from("rs")]),
+            max_files: Some(10),
+            max_snippets: Some(10),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(0),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        for expected in [
+            "search",
+            "workspace_search",
+            "grep",
+            "grep_search",
+            "glob",
+            "office_search",
+            "search.rs",
+            "retriever",
+            "ranking",
+            "検索改善",
+        ] {
+            assert!(
+                output
+                    .plan
+                    .query_variants
+                    .iter()
+                    .any(|term| term == expected),
+                "missing expansion term {expected:?}: {:?}",
+                output.plan.query_variants
+            );
+        }
+        assert_eq!(output.candidates.len(), 1);
+        assert!(output.candidates[0].path.ends_with("src/search.rs"));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_expands_tool_call_terms() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-tool-call-expansion");
+        std::fs::create_dir_all(dir.join("src/agent_loop")).expect("agent loop dir");
+        fs::write(
+            dir.join("src/agent_loop/response_parser.rs"),
+            "pub fn parse_relay_tool_call() {\n    // relay_tool ToolCall orchestrator\n}\n",
+        )
+        .expect("response parser");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("tool call"),
+            paths: Some(vec![String::from("src")]),
+            mode: Some(String::from("code")),
+            include_ext: Some(vec![String::from("rs")]),
+            max_files: Some(10),
+            max_snippets: Some(10),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(0),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        for expected in [
+            "tool call",
+            "relay_tool",
+            "toolcall",
+            "response_parser",
+            "orchestrator",
+        ] {
+            assert!(
+                output
+                    .plan
+                    .query_variants
+                    .iter()
+                    .any(|term| term == expected),
+                "missing expansion term {expected:?}: {:?}",
+                output.plan.query_variants
+            );
+        }
+        assert_eq!(output.candidates.len(), 1);
+        assert!(output.candidates[0]
+            .path
+            .ends_with("src/agent_loop/response_parser.rs"));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_expands_approval_terms() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-approval-expansion");
+        std::fs::create_dir_all(dir.join("src/agent_loop")).expect("agent loop dir");
+        fs::write(
+            dir.join("src/agent_loop/approval.rs"),
+            "pub fn request_permission() {\n    // approval 承認 orchestrator\n}\n",
+        )
+        .expect("approval");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("承認"),
+            paths: Some(vec![String::from("src")]),
+            mode: Some(String::from("code")),
+            include_ext: Some(vec![String::from("rs")]),
+            max_files: Some(10),
+            max_snippets: Some(10),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(0),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        for expected in [
+            "approval",
+            "承認",
+            "permission",
+            "approval.rs",
+            "approval_needed",
+            "approval-needed",
+            "approvalneeded",
+            "orchestrator",
+        ] {
+            assert!(
+                output
+                    .plan
+                    .query_variants
+                    .iter()
+                    .any(|term| term == expected),
+                "missing expansion term {expected:?}: {:?}",
+                output.plan.query_variants
+            );
+        }
+        assert_eq!(output.candidates.len(), 1);
+        assert!(output.candidates[0]
+            .path
+            .ends_with("src/agent_loop/approval.rs"));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_expands_case_and_fullwidth_variants() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-case-expansion");
+        std::fs::create_dir_all(dir.join("src")).expect("src dir");
+        fs::write(
+            dir.join("src/tool_call.rs"),
+            "pub fn handle_tool_call() {\n    // ToolCall relay_tool\n}\n",
+        )
+        .expect("tool call");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("ＴｏｏｌＣａｌｌ"),
+            paths: Some(vec![String::from("src")]),
+            mode: Some(String::from("code")),
+            include_ext: Some(vec![String::from("rs")]),
+            max_files: Some(10),
+            max_snippets: Some(10),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(0),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert!(output
+            .plan
+            .query_variants
+            .iter()
+            .any(|term| term == "toolcall"));
+        assert_eq!(output.candidates.len(), 1);
+        assert!(output.candidates[0].path.ends_with("src/tool_call.rs"));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_exact_path_recommends_read_file() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-exact-path");
+        std::fs::create_dir_all(dir.join("src")).expect("src dir");
+        fs::write(dir.join("src/exact.rs"), "pub fn exact() {}\n").expect("exact");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("src/exact.rs"),
+            paths: Some(vec![String::from("src")]),
+            mode: Some(String::from("path")),
+            include_ext: Some(vec![String::from("rs")]),
+            max_files: Some(10),
+            max_snippets: Some(10),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(0),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert_eq!(output.plan.intent, "exact_path_read_recommended");
+        assert_eq!(output.recommended_next_tools.len(), 1);
+        assert_eq!(output.recommended_next_tools[0].tool, "read_file");
+        assert!(output.recommended_next_tools[0]
+            .path
+            .ends_with("src/exact.rs"));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_ignore_negation_reincludes_file() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-gitignore-negation");
+        std::fs::create_dir_all(dir.join("ignored")).expect("ignored dir");
+        fs::write(dir.join(".gitignore"), "ignored/**\n!ignored/keep.txt\n").expect("gitignore");
+        fs::write(dir.join("ignored/drop.txt"), "needle drop\n").expect("drop");
+        fs::write(dir.join("ignored/keep.txt"), "needle keep\n").expect("keep");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("needle"),
+            paths: None,
+            mode: Some(String::from("text")),
+            include_ext: Some(vec![String::from("txt")]),
+            max_files: Some(10),
+            max_snippets: Some(10),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(0),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert_eq!(output.candidates.len(), 1);
+        assert!(output.candidates[0].path.ends_with("ignored/keep.txt"));
+        assert!(output.skipped.iter().any(|skip| skip.reason == "ignored_by_gitignore"
+            && skip.path.ends_with("ignored/drop.txt")));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_gitignore_directory_pattern_skips_children() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-gitignore-dir");
+        std::fs::create_dir_all(dir.join("generated")).expect("generated dir");
+        std::fs::create_dir_all(dir.join("src")).expect("src dir");
+        fs::write(dir.join(".gitignore"), "generated/\n").expect("gitignore");
+        fs::write(dir.join("generated/drop.txt"), "needle generated\n").expect("drop");
+        fs::write(dir.join("src/keep.txt"), "needle keep\n").expect("keep");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("needle"),
+            paths: None,
+            mode: Some(String::from("text")),
+            include_ext: Some(vec![String::from("txt")]),
+            max_files: Some(10),
+            max_snippets: Some(10),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(0),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert_eq!(output.candidates.len(), 1);
+        assert!(output.candidates[0].path.ends_with("src/keep.txt"));
+        assert!(output.skipped.iter().any(|skip| {
+            skip.reason == "ignored_by_gitignore" && skip.path.ends_with("generated/drop.txt")
+        }));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_dot_ignore_and_global_ignore_are_respected() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let original_ignore = std::env::var_os("RELAY_WORKSPACE_SEARCH_IGNORE_FILE");
+        let dir = temp_path("workspace-search-dot-ignore");
+        let global_ignore = temp_path("workspace-search-global-ignore");
+        std::fs::create_dir_all(dir.join("local")).expect("local dir");
+        std::fs::create_dir_all(dir.join("global")).expect("global dir");
+        std::fs::create_dir_all(dir.join("keep")).expect("keep dir");
+        fs::write(dir.join(".ignore"), "local/**\n").expect("dot ignore");
+        fs::write(&global_ignore, "global/**\n").expect("global ignore");
+        fs::write(dir.join("local/drop.txt"), "needle local\n").expect("local drop");
+        fs::write(dir.join("global/drop.txt"), "needle global\n").expect("global drop");
+        fs::write(dir.join("keep/hit.txt"), "needle keep\n").expect("keep hit");
+        std::env::set_var("RELAY_WORKSPACE_SEARCH_IGNORE_FILE", &global_ignore);
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("needle"),
+            paths: None,
+            mode: Some(String::from("text")),
+            include_ext: Some(vec![String::from("txt")]),
+            max_files: Some(10),
+            max_snippets: Some(10),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(0),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert_eq!(output.candidates.len(), 1);
+        assert!(output.candidates[0].path.ends_with("keep/hit.txt"));
+        assert_eq!(
+            output
+                .skipped
+                .iter()
+                .filter(|skip| skip.reason == "ignored_by_gitignore")
+                .count(),
+            2
+        );
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        if let Some(value) = original_ignore {
+            std::env::set_var("RELAY_WORKSPACE_SEARCH_IGNORE_FILE", value);
+        } else {
+            std::env::remove_var("RELAY_WORKSPACE_SEARCH_IGNORE_FILE");
+        }
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_file(global_ignore);
+    }
+
+    #[test]
+    fn workspace_search_skips_sensitive_and_huge_files_with_structured_reasons() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-sensitive-huge");
+        std::fs::create_dir_all(&dir).expect("dir");
+        fs::write(dir.join(".env.local"), "needle secret\n").expect("secret");
+        fs::write(dir.join("token.txt"), "needle token\n").expect("token");
+        fs::write(dir.join("huge.txt"), "needle".repeat(200)).expect("huge");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("needle"),
+            paths: None,
+            mode: Some(String::from("text")),
+            include_ext: Some(vec![String::from("txt")]),
+            max_files: Some(10),
+            max_snippets: Some(10),
+            max_bytes: Some(64),
+            max_duration_ms: Some(5_000),
+            context: Some(0),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert!(output.candidates.is_empty());
+        assert!(output.skipped.iter().any(|skip| {
+            skip.reason == "sensitive_path"
+                && skip.category == "sensitive_path"
+                && skip.path == "[redacted-sensitive-path]"
+        }));
+        assert!(output
+            .skipped
+            .iter()
+            .any(|skip| skip.reason == "max_bytes" && skip.category == "max_bytes"));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_does_not_treat_token_substrings_as_sensitive() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-tokenizer");
+        std::fs::create_dir_all(dir.join("src")).expect("src dir");
+        fs::write(dir.join("src/tokenizer.rs"), "pub fn tokenize_needle() {}\n")
+            .expect("tokenizer");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("tokenize_needle"),
+            paths: Some(vec![String::from("src")]),
+            mode: Some(String::from("code")),
+            include_ext: Some(vec![String::from("rs")]),
+            max_files: Some(10),
+            max_snippets: Some(10),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(0),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert_eq!(output.candidates.len(), 1);
+        assert!(output.candidates[0].path.ends_with("src/tokenizer.rs"));
+        assert!(!output
+            .skipped
+            .iter()
+            .any(|skip| skip.reason == "sensitive_path"));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_office_exts_respect_include_ext_filter() {
+        let mut include_ext = std::collections::HashSet::new();
+        include_ext.insert(String::from("pdf"));
+        include_ext.insert(String::from("rs"));
+
+        let exts = super::workspace_search_office_exts(Some(&include_ext));
+
+        assert_eq!(exts, vec![String::from("pdf")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_search_symlink_escape_is_skipped_as_outside_workspace() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-symlink");
+        let outside = temp_path("workspace-search-symlink-outside");
+        std::fs::create_dir_all(&dir).expect("dir");
+        std::fs::create_dir_all(&outside).expect("outside");
+        fs::write(outside.join("outside.txt"), "needle outside\n").expect("outside file");
+        std::os::unix::fs::symlink(outside.join("outside.txt"), dir.join("link.txt"))
+            .expect("symlink");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("needle"),
+            paths: None,
+            mode: Some(String::from("text")),
+            include_ext: Some(vec![String::from("txt")]),
+            max_files: Some(10),
+            max_snippets: Some(10),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(0),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert!(output.candidates.is_empty());
+        assert!(output
+            .skipped
+            .iter()
+            .any(|skip| skip.reason == "outside_workspace"));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(outside);
     }
 }

@@ -15,6 +15,64 @@
 
 ## Milestone Log
 
+### 2026-04-21 workspace_search plan/trace and evidence-expansion recommendations
+
+Tightened the Relay-only `workspace_search` contract so it behaves more like a
+search orchestration layer rather than a bare candidate finder.
+
+- Added machine-readable `plan`, `trace`, and `recommended_next_tools` fields to
+  `workspace_search` output without changing the existing input schema or
+  low-level `glob_search` / `grep_search` / `office_search` contracts.
+- `plan` records intent, query variants, retrievers, scope, and the reason for
+  the host-side search pass.
+- `trace` mirrors searched/skipped counts, truncation, fallback retrievers, and
+  `needs_clarification` for diagnostics.
+- `recommended_next_tools` now emits `read_file` for the top ranked candidate
+  when the winner is clear. If top candidates are tied, it emits `read_file`
+  recommendations for the tied candidates so the agent expands evidence before
+  choosing or making an important conclusion.
+- Added lightweight English/Japanese query expansion, exact-path detection that
+  marks `read_file` as the preferred next action, `.gitignore` / `.ignore` /
+  configured global ignore negation handling, symlink escape reporting as
+  `outside_workspace`, broader sensitive-path redaction, and structured skip
+  categories/details.
+- Added lightweight case/fullwidth query normalization plus targeted expansion
+  dictionaries for search, tool-call, and approval/permission vocabulary
+  (`approval_needed`, `relay_tool`, `ToolCall`/`toolcall`, `response_parser`,
+  `orchestrator`, and related search retriever terms).
+- Added structured ranking features on each candidate (`confidence`, `features`,
+  and `why`) while preserving the existing `reasons` array for compatibility.
+- Added an internal SearchToolAdvisor-style decision layer that classifies broad
+  search intent and records the primary/fallback retrievers in `plan.retrievers`
+  without exposing a separate ToolSearch surface to Copilot.
+- Added agent-loop repairs for important conclusions written after
+  `workspace_search` without `read_file`, and for M365/Copilot search leakage
+  after Relay local search results exist. The evidence-expansion repair now
+  states that `read_file` is authoritative if it conflicts with a
+  `workspace_search` snippet.
+- Added deterministic runtime and compat-harness assertions for the new output
+  fields and search edge cases.
+
+Follow-up review fixes:
+
+- `workspace_search` Office/PDF fallback now respects `include_ext` when
+  constructing Office glob paths and `office_search` extension filters.
+- `.gitignore` / `.ignore` directory-only patterns such as `generated/` now
+  skip child files, while existing negation behavior is preserved.
+- Sensitive path filtering no longer blocks ordinary substring names such as
+  `tokenizer.rs`; it still blocks exact sensitive components and stems such as
+  `token.txt`, `secret.json`, `.ssh`, and `.gnupg`.
+- The important-conclusion repair now checks successful `read_file` results
+  against the specific `workspace_search.recommended_next_tools` paths via
+  `tool_use_id`, so reading an unrelated file does not satisfy the evidence
+  requirement.
+
+Verification:
+
+- `cargo test -p runtime workspace_search --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed, 18 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml important_conclusion_after_workspace_search_without_read_file_repairs_to_read_file -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml unrelated_read_file_does_not_satisfy_workspace_search_recommendation -- --nocapture`: passed, 1 passed.
+
 ### 2026-04-20 Relay-only workspace_search agentic search layer
 
 Implemented the first Relay-only high-level search layer above

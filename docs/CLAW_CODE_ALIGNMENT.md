@@ -51,6 +51,12 @@ Relay-specific areas remain:
 
 Relay keeps claw-compatible JSON where possible and documents Relay-only additions explicitly.
 
+- `workspace_search` is Relay-only. It is intentionally above claw-compatible
+  low-level search tools and returns machine-readable `plan`, `trace`,
+  structured skip reasons, ranked candidates with structured ranking features,
+  snippets, and `recommended_next_tools` for `read_file` evidence expansion.
+  Its internal SearchToolAdvisor-style intent selection is host-only; Relay does
+  not expose a general ToolSearch surface to M365 Copilot.
 - `bash` accepts claw sandbox fields (`namespaceRestrictions`, `isolateNetwork`, `filesystemMode`, `allowedMounts`).
 - `Task*` accepts claw-style aliases such as `task_id` and `prompt`.
 - `AskUserQuestion` accepts claw’s single `question` + `options` shape and normalizes to Relay’s UI contract.
@@ -70,6 +76,14 @@ Relay uses **two** deterministic layers:
 
 - `parity_style`: direct tool / permission / workspace checks
 - `full_session_harness`: drives the real desktop session loop through `start_agent_inner`, approvals, `agent:*` events, and final state
+
+Search-specific parity now also checks the Relay-only orchestration behavior:
+query expansion, exact-path `read_file` preference, `.gitignore` / `.ignore` /
+configured global ignore handling with negation, symlink/outside-workspace
+skips, sensitive-path redaction, large-file truncation, Office/PDF routing, and
+repair loops for Copilot search leakage, missing Relay tool calls, repeated
+generic prose before tools, or important conclusions written from snippets
+without `read_file`.
 
 ### Scenario Map
 

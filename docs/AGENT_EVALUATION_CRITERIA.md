@@ -11,7 +11,48 @@ Use this checklist when validating **Relay + model** behavior (e.g. M365 Copilot
 ## Tool protocol (Relay)
 
 - When the user already gave a **concrete path** and action (read / improve / edit), the **first** substantive reply should include **`relay_tool`** (or accepted JSON fence) as required by the session bundle—not only prose.
+- When the user gave an **exact path**, prefer **`read_file` directly** over `workspace_search`.
+- For vague local lookup, `workspace_search` should return `plan`, `trace`,
+  ranked candidates, snippets, and `recommended_next_tools`. Treat snippets as
+  candidate discovery only.
+- For important conclusions, reviews, edits, comparisons, or recommendations
+  after `workspace_search`, the model must call `read_file` on the recommended
+  path(s) before final prose. If it writes a conclusion from snippets only,
+  Relay should repair the turn with an `ImportantConclusionWithoutEvidence`
+  prompt.
+- If `workspace_search` snippets and `read_file` content disagree, `read_file`
+  is authoritative evidence. Treat conclusions based on the stale/conflicting
+  snippet as grounding failures.
+- If the model leaks M365/Copilot search artifacts (`turn*search*`, citations,
+  `office365_search`, enterprise-search summaries) into a local-file answer,
+  Relay should repair back to Relay tool results.
+- File-specific final answers after `read_file` should cite the evidence path
+  and line anchor/startLine when available.
 - **No duplicate prose blocks** repeating the same “next steps” (per CDP session rules in the bundle).
+
+## Search behavior
+
+- English/Japanese query expansion should help common local lookup terms
+  (`search`/`検索`, `implementation`/`実装`, tool-call, approval/permission,
+  cash-flow variants) without replacing exact matches. Case variants and
+  fullwidth/halfwidth forms should resolve to the same practical search space.
+- Candidate ranking should expose structured `features`, `confidence`, and
+  `why` so the UI and tests can verify why a file was surfaced.
+- Tied top candidates should set `needs_clarification: true` and recommend
+  `read_file` for the tied candidates.
+- No-evidence searches should honestly report no candidates/snippets instead of
+  inferring from general knowledge.
+- `.gitignore`, `.ignore`, configured global ignore, includes, and negations
+  should be respected.
+- Generated directories, binary files, huge files, sensitive paths, and symlink
+  escapes should be skipped with structured reasons such as
+  `ignored_by_gitignore`, `binary`, `max_bytes`, `outside_workspace`, and
+  `sensitive_path`; sensitive paths should be redacted.
+- Large repos or budgets should surface truncation explicitly in `limits` and
+  `trace`.
+- Office/PDF discovery should flow through `workspace_search` into
+  `office_search` previews/anchors, followed by `read_file` for grounded
+  conclusions.
 
 ## Failure examples (treat as regression signals)
 

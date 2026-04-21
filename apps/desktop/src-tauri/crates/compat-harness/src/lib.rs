@@ -215,6 +215,10 @@ mod parity_style {
 
         assert!(out.contains("\"candidates\""), "{out}");
         assert!(out.contains("\"snippets\""), "{out}");
+        assert!(out.contains("\"plan\""), "{out}");
+        assert!(out.contains("\"trace\""), "{out}");
+        assert!(out.contains("\"recommended_next_tools\""), "{out}");
+        assert!(out.contains("\"read_file\""), "{out}");
         assert!(out.contains("\"limits\""), "{out}");
         assert!(out.contains("src/search.rs"), "{out}");
         assert!(!out.contains("target/debug/noise.rs"), "{out}");

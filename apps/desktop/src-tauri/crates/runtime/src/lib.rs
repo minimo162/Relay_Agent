@@ -101,7 +101,8 @@ pub use remote::{
 };
 pub use search::{
     workspace_search, WorkspaceSearchCandidate, WorkspaceSearchInput, WorkspaceSearchLimits,
-    WorkspaceSearchOutput, WorkspaceSearchSkipped, WorkspaceSearchSnippet,
+    WorkspaceSearchOutput, WorkspaceSearchPlan, WorkspaceSearchRecommendedNextTool,
+    WorkspaceSearchSkipped, WorkspaceSearchSnippet, WorkspaceSearchTrace,
 };
 pub use session::{ContentBlock, ConversationMessage, MessageRole, Session, SessionError};
 pub use task_registry::{task_create, task_get, task_list, task_output, task_stop, task_update};

@@ -584,7 +584,7 @@ fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
             "Create or overwrite a workspace text file when the final content is known."
         }
         "edit_file" => "Apply a targeted replacement inside an existing workspace file.",
-        "workspace_search" => "Run a read-only agentic workspace search that combines file discovery, text/Office evidence snippets, candidate ranking, and search-scope limits; follow with read_file before important judgments.",
+        "workspace_search" => "Run a read-only agentic workspace search that combines file discovery, text/Office evidence snippets, candidate ranking, search plan/trace diagnostics, and recommended read_file follow-up before important judgments.",
         "glob_search" => "Find candidate files by path pattern before reading, editing, or answering a local file lookup. Supports brace groups such as `**/*.{rs,ts,tsx}`.",
         "grep_search" => "Search code or text content for concrete strings or regex matches.",
         "office_search" => "Search extracted DOCX/XLSX/PPTX/PDF text for concrete literal strings or regex matches before answering Office/PDF lookup questions.",
@@ -813,13 +813,13 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "workspace_search",
-            description: "Relay-only read-only agentic search across the current workspace. Returns ranked candidate files, evidence snippets, scanned/skipped/truncation limits, and honest not-found state. Use before low-level glob/grep/office searches for vague implementation, related-file, or evidence lookup requests. For important conclusions, reviews, edits, comparisons, or recommendations, follow up with read_file on the top candidate path(s); snippets are discovery evidence, not full-file inspection.",
+            description: "Relay-only read-only agentic search across the current workspace. Returns a search plan, ranked candidate files, evidence snippets, recommended_next_tools read_file follow-up, trace diagnostics, scanned/skipped/truncation limits, and honest not-found state. Use before low-level glob/grep/office searches for vague implementation, related-file, or evidence lookup requests. For important conclusions, reviews, edits, comparisons, or recommendations, follow up with read_file on the recommended top candidate path(s); snippets are discovery evidence, not full-file inspection.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "query": { "type": "string" },
                     "paths": { "type": "array", "items": { "type": "string" }, "description": "Workspace-relative search roots. Absolute paths must stay inside the current workspace." },
-                    "mode": { "type": "string", "enum": ["auto", "code", "text", "office"] },
+                    "mode": { "type": "string", "enum": ["auto", "code", "text", "office", "path"] },
                     "include_ext": { "type": "array", "items": { "type": "string" }, "description": "Optional extensions such as rs, ts, tsx, md, docx, xlsx, pptx, pdf." },
                     "max_files": { "type": "integer", "minimum": 1, "maximum": 500 },
                     "max_snippets": { "type": "integer", "minimum": 1, "maximum": 200 },

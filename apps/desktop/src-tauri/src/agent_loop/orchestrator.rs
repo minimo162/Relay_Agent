@@ -1503,7 +1503,7 @@ fn cdp_tool_primary_use(name: &str, description: &str) -> String {
         "read_file" => "Read local text, PDF, or Office content.".to_string(),
         "write_file" => "Create or overwrite a workspace text file.".to_string(),
         "edit_file" => "Replace text in an existing workspace file.".to_string(),
-        "workspace_search" => "Run a read-only Relay-only agentic workspace search with ranked files and evidence snippets.".to_string(),
+        "workspace_search" => "Run a read-only Relay-only agentic workspace search with plan/trace diagnostics, ranked files, evidence snippets, and recommended read_file follow-up.".to_string(),
         "glob_search" => "Find files by glob pattern.".to_string(),
         "grep_search" => "Search file contents with a regex.".to_string(),
         "office_search" => "Search extracted Office/PDF text literally or with regex.".to_string(),
@@ -1796,10 +1796,13 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 ## Immediate action rules
 
 - **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read_file` first** before edits.
+- **Exact path:** If the latest user message gives an exact file path, prefer `read_file` directly instead of `workspace_search`.
 - **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; emit `workspace_search` first for vague lookup, and only fall back to `glob_search` / `grep_search` / `office_search` for narrower follow-up.
 - **Initial lookup reply format:** When the latest user request is a local file/document lookup and there are no Relay Tool Result blocks for that lookup yet, the entire assistant reply must be exactly one fenced `relay_tool` or `json` block. Do not write `はい、...を検索します`, do not cite `turn*search*`, do not output `<File>...</File>` cards, and do not list candidate files from M365 before Relay tools run.
-- **Search tool selection:** Use `workspace_search` first for vague implementation search, related-file search, or "find relevant evidence" requests because it returns ranked candidates, snippets, scope, and truncation data. Use `glob_search` for candidate filenames and folders, `grep_search` for plaintext/code content, and `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content when the follow-up search is already concrete. `glob_search` supports brace groups, so use patterns like `**/*.{docx,xlsx,pptx,pdf}` or `**/*.{rs,ts,tsx}` when one extension-family search is enough.
-- **Evidence expansion before judgments:** `workspace_search` snippets are candidate evidence for discovery. Before making important conclusions, reviews, edits, comparisons, or recommendations about a file, call `read_file` on the top candidate path(s) and ground the answer in that file text. If you have not read the file, describe the result as a candidate only.
+- **Search tool selection:** Use `workspace_search` first for vague implementation search, related-file search, or "find relevant evidence" requests because it returns a plan, ranked candidates, snippets, recommended next tools, scope, trace, and truncation data. Use `glob_search` for candidate filenames and folders, `grep_search` for plaintext/code content, and `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content when the follow-up search is already concrete. `glob_search` supports brace groups, so use patterns like `**/*.{docx,xlsx,pptx,pdf}` or `**/*.{rs,ts,tsx}` when one extension-family search is enough.
+- **Evidence expansion before judgments:** `workspace_search` snippets are candidate evidence for discovery. Before making important conclusions, reviews, edits, comparisons, or recommendations about a file, call the `recommended_next_tools` `read_file` path(s) and ground the answer in that file text. If you have not read the file, describe the result as a candidate only.
+- **Authoritative evidence:** If `workspace_search` snippets and `read_file` content conflict, the `read_file` Tool Result is authoritative.
+- **Grounded final answer:** After `read_file`, include the evidence path and line anchor/startLine when making file-specific conclusions.
 - **Cash-flow lookup variants:** For cash-flow / キャッシュフロー lookup requests, include filename globs for Japanese and common abbreviations in the same first batch: `**/*キャッシュ*フロー*`, `**/*CF*`, and `**/*CFS*`. For Office/PDF body search, prefer one `office_search` with `regex:true` and pattern `キャッシュ[・\s]*フロー|cash\s*flow|\bCF\b|\bCFS\b` so both `キャッシュフロー` and `キャッシュ・フロー` are covered without spending extra turns.
 - **Batch speculative searches:** For open-ended lookup, it is better to run a small batch of useful `glob_search` / `grep_search` / `office_search` calls in one reply than to spend a model turn announcing the first search. Keep each search concrete and narrow enough to be useful.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
@@ -3910,7 +3913,8 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "- If no workspace is set, read_file, glob_search, grep_search, office_search, and workspace_search may use absolute local paths the OS user can read, except workspace_search always constrains itself to the current workspace root.\n",
                 "- read_file returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). `.docx`, `.xlsx`, and `.pptx` are parsed as plaintext extraction; use office_search for exact search across those files. Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted `.txt`/`.md` file.\n",
                 "- For local file lookup requests, use workspace_search first for ranked candidates and evidence snippets; use glob_search for candidate paths, grep_search for plaintext/code contents, and office_search for Office/PDF contents when the follow-up is concrete. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
-                "- Treat workspace_search snippets as discovery evidence. Before important conclusions, reviews, edits, comparisons, or recommendations, read_file the top candidate path(s); otherwise describe matches as candidates only.\n",
+                "- If the user gives an exact file path, prefer read_file directly over workspace_search.\n",
+                "- Treat workspace_search snippets as discovery evidence. Before important conclusions, reviews, edits, comparisons, or recommendations, read_file the recommended_next_tools path(s); otherwise describe matches as candidates only. If snippets conflict with read_file, read_file is authoritative. After read_file, cite evidence path and line anchor/startLine when available.\n",
                 "- For cash-flow / キャッシュフロー lookup requests, include `**/*キャッシュ*フロー*`, `**/*CF*`, and `**/*CFS*` filename globs, and use an office_search regex such as `キャッシュ[・\\s]*フロー|cash\\s*flow|\\bCF\\b|\\bCFS\\b` for Office/PDF body search.\n",
                 "- If the user's request is already concrete (paths, files, stated action), use tools in your first response; do not ask them to rephrase unless something essential is missing.\n",
                 "- To combine or split PDF files, use pdf_merge / pdf_split (workspace write); do not use bash for that."
@@ -4228,7 +4232,7 @@ mod cdp_copilot_tool_tests {
         assert!(bundle.prompt.contains("summarize those existing results"));
         assert!(bundle
             .prompt
-            .contains("call `read_file` on the top candidate"));
+            .contains("call `read_file` on the recommended top candidate"));
         assert!(bundle
             .prompt
             .contains("Duplicate-tool suppression or search-budget notices"));
@@ -6654,6 +6658,43 @@ mod loop_controller_tests {
     }
 
     #[test]
+    fn no_relay_tool_call_for_local_lookup_repairs_to_minimal_workspace_search() {
+        let s = summary(
+            "関連しそうな実装を確認してから説明します。",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let request = "agentic search の関連実装を探して";
+        let decision = decide_loop_after_success(request, request, 0, 0, 2, false, &s);
+        let LoopDecision::Continue { next_input, kind } = decision else {
+            panic!("expected NoRelayToolCall local lookup repair");
+        };
+
+        assert_eq!(kind, LoopContinueKind::MetaNudge);
+        assert!(next_input.contains("Tool protocol repair."));
+        assert!(next_input.contains(r#""name": "workspace_search""#));
+        assert!(next_input.contains(r#""query": "agentic search の関連実装を探して""#));
+    }
+
+    #[test]
+    fn repeated_generic_prose_before_tool_repairs_to_workspace_search() {
+        let s = summary(
+            "確認します。関連ファイルを確認します。確認してから回答します。",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let request = "関連ファイルを検索して";
+        let decision = decide_loop_after_success(request, request, 0, 0, 2, false, &s);
+        let LoopDecision::Continue { next_input, kind } = decision else {
+            panic!("expected repeated generic prose before tool repair");
+        };
+
+        assert_eq!(kind, LoopContinueKind::MetaNudge);
+        assert!(next_input.contains("Tool protocol repair."));
+        assert!(next_input.contains(r#""name": "workspace_search""#));
+    }
+
+    #[test]
     fn agentic_search_implementation_lookup_starts_with_workspace_search() {
         let calls = build_initial_local_search_tool_calls("agentic search の実装を探して")
             .expect("agentic search lookup should get workspace_search");
@@ -6698,6 +6739,101 @@ mod loop_controller_tests {
         assert!(next_input.contains("Use the prior tool results already present"));
         assert!(!next_input.contains("Expected JSON for the next reply"));
         assert_eq!(kind, LoopContinueKind::MetaNudge);
+    }
+
+    #[test]
+    fn important_conclusion_after_workspace_search_without_read_file_repairs_to_read_file() {
+        let workspace_output = r#"{
+            "query": "agentic search 改善",
+            "candidates": [{"path": "/workspace/src/search.rs", "score": 42.0, "reasons": ["content matches"], "match_count": 1}],
+            "snippets": [{"path": "/workspace/src/search.rs", "anchor": null, "line_start": 10, "line_end": 12, "preview": "workspace_search snippets"}],
+            "recommended_next_tools": [{"tool": "read_file", "path": "/workspace/src/search.rs", "reason": "top ranked candidate"}],
+            "needs_clarification": false
+        }"#;
+        let s = summary(
+            "結論として search.rs を改善すべきです。",
+            vec![tool_success_result("workspace_search", workspace_output)],
+            runtime::TurnOutcome::Completed,
+        );
+        let request = "agentic search の改善案を実装して";
+        let decision = decide_loop_after_success(request, request, 0, 0, 2, false, &s);
+        let LoopDecision::Continue { next_input, kind } = decision else {
+            panic!("expected evidence expansion repair");
+        };
+
+        assert_eq!(kind, LoopContinueKind::MetaNudge);
+        assert!(next_input.contains("ImportantConclusionWithoutEvidence repair."));
+        assert!(next_input.contains(r#""name": "read_file""#));
+        assert!(next_input.contains("/workspace/src/search.rs"));
+    }
+
+    #[test]
+    fn unrelated_read_file_does_not_satisfy_workspace_search_recommendation() {
+        let workspace_output = r#"{
+            "query": "agentic search 改善",
+            "candidates": [{"path": "/workspace/src/search.rs", "score": 42.0, "reasons": ["content matches"], "match_count": 1}],
+            "snippets": [{"path": "/workspace/src/search.rs", "anchor": null, "line_start": 10, "line_end": 12, "preview": "workspace_search snippets"}],
+            "recommended_next_tools": [{"tool": "read_file", "path": "/workspace/src/search.rs", "reason": "top ranked candidate"}],
+            "needs_clarification": false
+        }"#;
+        let s = runtime::TurnSummary {
+            assistant_messages: vec![ConversationMessage::assistant(vec![
+                ContentBlock::ToolUse {
+                    id: "tool-read-other".to_string(),
+                    name: "read_file".to_string(),
+                    input: r#"{"path":"/workspace/src/other.rs"}"#.to_string(),
+                },
+                ContentBlock::Text {
+                    text: "結論として search.rs を改善すべきです。".to_string(),
+                },
+            ])],
+            tool_results: vec![
+                tool_success_result("workspace_search", workspace_output),
+                ConversationMessage::tool_result(
+                    "tool-read-other",
+                    "read_file",
+                    "other file content",
+                    false,
+                ),
+            ],
+            iterations: 1,
+            usage: TokenUsage::default(),
+            auto_compaction: None,
+            outcome: runtime::TurnOutcome::Completed,
+            terminal_assistant_text: "結論として search.rs を改善すべきです。".to_string(),
+        };
+        let request = "agentic search の改善案を実装して";
+        let decision = decide_loop_after_success(request, request, 0, 0, 2, false, &s);
+        let LoopDecision::Continue { next_input, kind } = decision else {
+            panic!("expected evidence expansion repair for unread recommended path");
+        };
+
+        assert_eq!(kind, LoopContinueKind::MetaNudge);
+        assert!(next_input.contains("ImportantConclusionWithoutEvidence repair."));
+        assert!(next_input.contains("/workspace/src/search.rs"));
+        assert!(!next_input.contains("/workspace/src/other.rs"));
+    }
+
+    #[test]
+    fn copilot_search_leak_after_local_search_repairs_to_relay_summary() {
+        let s = summary(
+            "Copilot enterprise search found a file citeturn1search0.",
+            vec![tool_success_result(
+                "workspace_search",
+                r#"{"candidates":[],"snippets":[],"recommended_next_tools":[]}"#,
+            )],
+            runtime::TurnOutcome::Completed,
+        );
+        let request = "関連ファイルを検索して";
+        let decision = decide_loop_after_success(request, request, 0, 0, 2, false, &s);
+        let LoopDecision::Continue { next_input, kind } = decision else {
+            panic!("expected Copilot search leak repair");
+        };
+
+        assert_eq!(kind, LoopContinueKind::MetaNudge);
+        assert!(next_input.contains("Tool result summary repair."));
+        assert!(next_input.contains("prior tool results"));
+        assert!(next_input.contains("turn1search"));
     }
 
     #[test]

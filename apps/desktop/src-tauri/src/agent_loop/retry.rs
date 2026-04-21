@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -1249,6 +1250,174 @@ fn has_local_search_guard_notice(summary: &runtime::TurnSummary) -> bool {
         })
 }
 
+fn successful_read_file_paths(summary: &runtime::TurnSummary) -> BTreeSet<String> {
+    let mut read_file_inputs = BTreeMap::<String, String>::new();
+    for message in &summary.assistant_messages {
+        for block in &message.blocks {
+            let ContentBlock::ToolUse { id, name, input } = block else {
+                continue;
+            };
+            if name != "read_file" {
+                continue;
+            }
+            let Some(path) = serde_json::from_str::<Value>(input).ok().and_then(|value| {
+                value
+                    .get("path")
+                    .or_else(|| value.get("file_path"))
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string)
+            }) else {
+                continue;
+            };
+            read_file_inputs.insert(id.clone(), path);
+        }
+    }
+
+    let mut paths = BTreeSet::new();
+    for message in &summary.tool_results {
+        for block in &message.blocks {
+            let ContentBlock::ToolResult {
+                tool_use_id,
+                tool_name,
+                is_error,
+                ..
+            } = block
+            else {
+                continue;
+            };
+            if tool_name == "read_file" && !is_error {
+                if let Some(path) = read_file_inputs.get(tool_use_id) {
+                    paths.insert(path.clone());
+                }
+            }
+        }
+    }
+    paths
+}
+
+fn unread_recommended_read_paths(
+    summary: &runtime::TurnSummary,
+    recommended_paths: &[String],
+) -> Vec<String> {
+    let read_paths = successful_read_file_paths(summary);
+    recommended_paths
+        .iter()
+        .filter(|recommended| !read_paths.contains(*recommended))
+        .cloned()
+        .collect()
+}
+
+fn workspace_search_recommended_read_paths(summary: &runtime::TurnSummary) -> Vec<String> {
+    let mut paths = Vec::new();
+    for message in &summary.tool_results {
+        for block in &message.blocks {
+            let ContentBlock::ToolResult {
+                tool_name, output, ..
+            } = block
+            else {
+                continue;
+            };
+            if tool_name != "workspace_search" {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<Value>(output) else {
+                continue;
+            };
+            let Some(items) = value
+                .get("recommended_next_tools")
+                .and_then(Value::as_array)
+            else {
+                continue;
+            };
+            for item in items {
+                let is_read_file = item
+                    .get("tool")
+                    .and_then(Value::as_str)
+                    .is_some_and(|tool| tool == "read_file");
+                let Some(path) = item.get("path").and_then(Value::as_str) else {
+                    continue;
+                };
+                if is_read_file && !paths.iter().any(|existing| existing == path) {
+                    paths.push(path.to_string());
+                }
+            }
+        }
+    }
+    paths
+}
+
+fn is_important_local_evidence_request(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("improve")
+        || lower.contains("fix")
+        || lower.contains("review")
+        || lower.contains("compare")
+        || lower.contains("recommend")
+        || lower.contains("proposal")
+        || lower.contains("implement")
+        || lower.contains("conclusion")
+        || text.contains("改善")
+        || text.contains("修正")
+        || text.contains("レビュー")
+        || text.contains("比較")
+        || text.contains("提案")
+        || text.contains("実装")
+        || text.contains("結論")
+}
+
+fn is_copilot_search_leak_text(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("turn1search")
+        || lower.contains("turn2search")
+        || lower.contains("cite")
+        || lower.contains("office365_search")
+        || lower.contains("<file>")
+        || lower.contains("enterprise search")
+        || lower.contains("copilot search")
+}
+
+fn build_evidence_expansion_repair_input(
+    goal: &str,
+    latest_request: &str,
+    assistant_text: &str,
+    paths: &[String],
+) -> String {
+    let calls = paths
+        .iter()
+        .take(3)
+        .map(|path| {
+            json!({
+                "name": "read_file",
+                "relay_tool_call": true,
+                "input": { "path": path }
+            })
+        })
+        .collect::<Vec<_>>();
+    let expected_json =
+        serde_json::to_string_pretty(&Value::Array(calls)).unwrap_or_else(|_| "[]".to_string());
+    format!(
+        concat!(
+            "ImportantConclusionWithoutEvidence repair.\n",
+            "Relay already executed `workspace_search`, but the previous reply moved toward an important conclusion using search snippets only.\n",
+            "`workspace_search` snippets are candidate discovery evidence, not final file evidence.\n",
+            "If a snippet conflicts with `read_file`, the `read_file` Tool Result is authoritative.\n",
+            "Emit exactly one `relay_tool` block containing the `read_file` call(s) below. Do not answer in prose yet.\n",
+            "After `read_file` returns, write the final answer with evidence path and line anchors when available.\n\n",
+            "Expected JSON for the next reply:\n",
+            "```json\n{expected_json}\n```\n\n",
+            "Previous assistant text to repair:\n```text\n{assistant_text}\n```\n\n",
+            "{latest_request_marker}{latest_request}\n```\n\n",
+            "{original_goal_marker}{goal}\n```"
+        ),
+        expected_json = expected_json,
+        assistant_text = assistant_text.trim(),
+        latest_request_marker = LATEST_REQUEST_MARKER,
+        latest_request = latest_request.trim(),
+        original_goal_marker = ORIGINAL_GOAL_MARKER,
+        goal = goal.trim(),
+    )
+}
+
 fn is_read_file_enoent(output: &str) -> bool {
     let lower = output.to_ascii_lowercase();
     lower.contains("no such file or directory") || lower.contains("os error 2")
@@ -1341,6 +1510,13 @@ pub(crate) fn decide_loop_after_success(
             || assistant_text.contains("\"name\"")
             || assistant_text.contains("\"input\"")
             || assistant_text.contains("```relay_tool"));
+    let is_copilot_search_leak_after_local_search =
+        has_local_search_tool_result(summary) && is_copilot_search_leak_text(assistant_text);
+    let recommended_read_paths = workspace_search_recommended_read_paths(summary);
+    let missing_read_paths = unread_recommended_read_paths(summary, &recommended_read_paths);
+    let is_important_conclusion_without_evidence = !missing_read_paths.is_empty()
+        && is_important_local_evidence_request(latest_turn_input)
+        && !assistant_text.trim().is_empty();
     let is_repair_refusal =
         summary.tool_results.is_empty() && is_repair_refusal_text(assistant_text);
     let is_false_completion = summary.tool_results.is_empty()
@@ -1391,6 +1567,35 @@ pub(crate) fn decide_loop_after_success(
             path_repair_used,
             truncate_for_log(assistant_text, 240)
         );
+    }
+
+    if is_copilot_search_leak_after_local_search {
+        if meta_stall_nudges_used < meta_stall_nudge_limit {
+            return LoopDecision::Continue {
+                next_input: build_tool_result_summary_repair_input(
+                    goal,
+                    latest_turn_input,
+                    assistant_text,
+                ),
+                kind: LoopContinueKind::MetaNudge,
+            };
+        }
+        return LoopDecision::Stop(LoopStopReason::MetaStall);
+    }
+
+    if is_important_conclusion_without_evidence {
+        if meta_stall_nudges_used < meta_stall_nudge_limit {
+            return LoopDecision::Continue {
+                next_input: build_evidence_expansion_repair_input(
+                    goal,
+                    latest_turn_input,
+                    assistant_text,
+                    &missing_read_paths,
+                ),
+                kind: LoopContinueKind::MetaNudge,
+            };
+        }
+        return LoopDecision::Stop(LoopStopReason::MetaStall);
     }
 
     if is_tool_result_summary_needed {
