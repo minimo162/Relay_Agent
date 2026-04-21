@@ -11,6 +11,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { cleanupTauriDebugSidecars } from "./cleanup-tauri-debug-sidecars.mjs";
+
+cleanupTauriDebugSidecars();
+
 if (process.env.RELAY_SKIP_PRESTART_EDGE === "1") {
   process.exit(0);
 }

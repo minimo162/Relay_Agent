@@ -15,6 +15,31 @@
 
 ## Milestone Log
 
+### 2026-04-21 Windows tauri dev sidecar lock cleanup
+
+Fixed a Windows `tauri dev` startup failure where `tauri-build` panicked while
+copying `externalBin` sidecars into `target/debug`:
+`PermissionDenied` / `アクセスが拒否されました。`. The root cause is a stale
+`target\debug\relay-node.exe` or `relay-rg.exe` process from a previous dev run
+holding the copied executable open before the new app process has started.
+
+- Added `scripts/cleanup-tauri-debug-sidecars.mjs`, which only targets sidecar
+  processes whose executable path is the repo's `target\debug\relay-node.exe`
+  or `target\debug\relay-rg.exe` (plus `CARGO_TARGET_DIR` when set).
+- Wired the cleanup into `tauri:dev` through the existing
+  `prestart-relay-edge.mjs` script, before the Edge prestart skip check.
+- Wired the same cleanup into `tauri:dev:cdp`, which invokes `tauri dev`
+  directly.
+
+Verification:
+
+- `node ./scripts/cleanup-tauri-debug-sidecars.mjs` from `apps/desktop`:
+  passed; Linux path is a no-op.
+- `pnpm typecheck` from `apps/desktop`: passed.
+- `pnpm check` from repo root: passed.
+- `git diff --check`: passed.
+- Windows process cleanup path was not executed in this Linux workspace.
+
 ### 2026-04-21 local search scope diagnostics
 
 Added enough search scope data to logs and tool results to diagnose misses such
