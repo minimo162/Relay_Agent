@@ -106,6 +106,13 @@ pub struct GlobSearchOutput {
     pub num_files: usize,
     pub filenames: Vec<String>,
     pub truncated: bool,
+    pub pattern: String,
+    #[serde(rename = "baseDir")]
+    pub base_dir: String,
+    #[serde(rename = "searchPattern")]
+    pub search_pattern: String,
+    #[serde(rename = "expandedPatterns")]
+    pub expanded_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -607,10 +614,18 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
         num_files: filenames.len(),
         filenames,
         truncated,
+        pattern: pattern.to_string(),
+        base_dir: base_dir.to_string_lossy().into_owned(),
+        search_pattern,
+        expanded_patterns: expanded,
     };
     tracing::info!(
         target: "relay.runtime.search",
         tool = "glob_search",
+        pattern = %output.pattern,
+        base_dir = %output.base_dir,
+        search_pattern = %output.search_pattern,
+        expanded_patterns = ?output.expanded_patterns,
         num_files = output.num_files,
         truncated = output.truncated,
         duration_ms = output.duration_ms,
@@ -1479,6 +1494,10 @@ mod tests {
         let globbed = glob_search("**/*.rs", Some(dir.to_string_lossy().as_ref()))
             .expect("glob should succeed");
         assert_eq!(globbed.num_files, 1);
+        assert_eq!(globbed.pattern, "**/*.rs");
+        assert_eq!(globbed.base_dir, dir.to_string_lossy());
+        assert!(globbed.search_pattern.ends_with("**/*.rs"));
+        assert_eq!(globbed.expanded_patterns.len(), 1);
 
         let grep_output = grep_search(&GrepSearchInput {
             pattern: String::from("hello"),

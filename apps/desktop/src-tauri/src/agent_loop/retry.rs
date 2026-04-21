@@ -929,7 +929,7 @@ pub(crate) fn build_initial_local_search_tool_calls(
         .next();
     let payload = infer_glob_pattern_for_search_request(latest_request)
         .map(|pattern| {
-            build_search_tool_payload(latest_request, &pattern, path_anchor.as_deref(), false)
+            build_search_tool_payload(latest_request, &pattern, path_anchor.as_deref(), true)
         })
         .unwrap_or_else(|| {
             build_workspace_search_tool_call(latest_request, path_anchor.as_deref())

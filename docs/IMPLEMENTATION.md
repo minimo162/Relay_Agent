@@ -15,6 +15,29 @@
 
 ## Milestone Log
 
+### 2026-04-21 local search scope diagnostics
+
+Added enough search scope data to logs and tool results to diagnose misses such
+as a known `FY160-4Q_連結CFS精算表(20260421).xlsx` file not appearing in
+`glob_search` results.
+
+- `glob_search` output and tracing now include the original `pattern`, resolved
+  `baseDir`, full `searchPattern`, and brace-expanded patterns. Empty glob
+  results rendered for CDP now preserve those fields while labeling the result
+  as a filename-pattern miss.
+- `office_search` output and tracing now include pattern, paths, regex mode,
+  include extensions, candidate count/sample, `max_files`, `max_results`, and
+  the expansion candidate cap. This makes it clear whether a UNC/share folder
+  was searched or whether the current workspace root was used instead.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml globs_and_greps_directory -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml expand_office_candidates -- --nocapture`: passed, 6 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml empty_glob_search_result_is_labeled_as_filename_only_miss -- --nocapture`: passed, 1 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop`: passed.
+
 ### 2026-04-21 agentic search staged retrieval
 
 Improved `workspace_search` speed and precision using the same practical shape
@@ -36,6 +59,23 @@ candidates are identified.
   `workspace_search` has already integrated Office/PDF previews.
 - The existing `office_search` candidate expansion cap from the latency fix is
   part of this staged retrieval approach for large local/UNC corpora.
+
+Follow-up correction:
+
+- Restored initial `office_search` for Office/document lookup requests after a
+  live cash-flow lookup showed Copilot over-weighting 0-result filename globs
+  and summarizing the request as no accounting files found, despite
+  `workspace_search` returning candidates/snippets. The search remains bounded
+  by `RELAY_OFFICE_SEARCH_EXPANSION_CANDIDATE_CAP`, so this restores recall
+  without reverting to unbounded broad Office candidate discovery.
+- Re-ran `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml cash_flow_lookup -- --nocapture`: passed, 2 passed.
+- Re-ran `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan_escalates_to_filename_and_content_search_repair -- --nocapture`: passed, 1 passed.
+- Added a CDP prompt/result guard matching the opencode distinction between
+  filename glob search and broader content search: an empty `glob_search` now
+  renders as a filename/glob-pattern miss and explicitly says it does not negate
+  `workspace_search`, `grep_search`, or `office_search` evidence.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml empty_glob_search_result_is_labeled_as_filename_only_miss -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_tool_results_add_continuation_guard -- --nocapture`: passed, 1 passed.
 
 References inspected:
 

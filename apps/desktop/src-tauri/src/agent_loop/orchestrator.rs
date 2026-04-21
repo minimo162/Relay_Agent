@@ -2929,6 +2929,9 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
     if tool_name == "read_file" {
         return summarize_read_file_tool_result(output).unwrap_or_else(|| output.to_string());
     }
+    if tool_name == "glob_search" {
+        return summarize_glob_search_tool_result(output).unwrap_or_else(|| output.to_string());
+    }
     if !matches!(tool_name, "write_file" | "edit_file") {
         return output.to_string();
     }
@@ -2987,6 +2990,50 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
         object.get("git_diff").is_some_and(|value| !value.is_null())
     ));
     lines.join("\n")
+}
+
+fn summarize_glob_search_tool_result(output: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(output).ok()?;
+    let object = value.as_object()?;
+    let num_files = object
+        .get("numFiles")
+        .or_else(|| object.get("num_files"))
+        .and_then(Value::as_u64)?;
+    if num_files != 0 {
+        return None;
+    }
+    let truncated = object
+        .get("truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let pattern = object
+        .get("pattern")
+        .and_then(Value::as_str)
+        .unwrap_or("(unknown)");
+    let base_dir = object
+        .get("baseDir")
+        .or_else(|| object.get("base_dir"))
+        .and_then(Value::as_str)
+        .unwrap_or("(unknown)");
+    let search_pattern = object
+        .get("searchPattern")
+        .or_else(|| object.get("search_pattern"))
+        .and_then(Value::as_str)
+        .unwrap_or("(unknown)");
+    Some(format!(
+        concat!(
+            "glob_search filename pattern matches: 0\n",
+            "pattern: {}\n",
+            "base_dir: {}\n",
+            "search_pattern: {}\n",
+            "scope_note: this is only a filename/glob-pattern miss; it does not mean workspace_search, grep_search, or office_search found no relevant files.\n",
+            "truncated: {}"
+        ),
+        pattern,
+        base_dir,
+        search_pattern,
+        truncated
+    ))
 }
 
 fn cdp_tool_result_max_chars(tool_name: &str, is_error: bool) -> Option<usize> {
@@ -4273,6 +4320,9 @@ mod cdp_copilot_tool_tests {
         assert!(bundle.prompt.contains("summarize those existing results"));
         assert!(bundle
             .prompt
+            .contains("A `glob_search` result with 0 files only means"));
+        assert!(bundle
+            .prompt
             .contains("call `read_file` on the recommended top candidate"));
         assert!(bundle
             .prompt
@@ -4606,6 +4656,28 @@ mod cdp_copilot_tool_tests {
         assert!(rendered.contains("path"));
         assert!(rendered.contains("truncated for M365 Copilot CDP prompt"));
         assert!(rendered.len() < CDP_LOCAL_SEARCH_TOOL_RESULT_MAX_CHARS + 1_000);
+    }
+
+    #[test]
+    fn empty_glob_search_result_is_labeled_as_filename_only_miss() {
+        let output = serde_json::to_string(&json!({
+            "durationMs": 23,
+            "numFiles": 0,
+            "filenames": [],
+            "truncated": false,
+            "pattern": "**/*CFS*",
+            "baseDir": "C:\\Users\\m242054\\Relay_Agent",
+            "searchPattern": "C:\\Users\\m242054\\Relay_Agent\\**\\*CFS*"
+        }))
+        .expect("serialize glob output");
+
+        let rendered = format_cdp_tool_result("glob_search", &output, false);
+        assert!(rendered.contains("glob_search filename pattern matches: 0"));
+        assert!(rendered.contains("pattern: **/*CFS*"));
+        assert!(rendered.contains("base_dir: C:\\Users\\m242054\\Relay_Agent"));
+        assert!(rendered.contains("filename/glob-pattern miss"));
+        assert!(rendered.contains("does not mean workspace_search"));
+        assert!(!rendered.contains(r#""filenames":[]"#));
     }
 
     #[test]
@@ -6687,18 +6759,27 @@ mod loop_controller_tests {
         )
         .expect("cash-flow lookup should get an initial local search plan");
 
-        assert_eq!(calls.len(), 4);
+        assert_eq!(calls.len(), 5);
         assert_eq!(calls[0].0, "workspace_search");
         assert!(calls[0]
             .1
             .contains("キャッシュフロー計算書の作成に関係するファイルを検索して"));
         assert_eq!(calls[1].0, "glob_search");
         assert!(calls[1].1.contains(r#""pattern":"**/*キャッシュ*フロー*""#));
-        assert_eq!(calls[2].0, "glob_search");
-        assert!(calls[2].1.contains(r#""pattern":"**/*CF*""#));
+        assert_eq!(calls[2].0, "office_search");
+        assert!(calls[2].1.contains(r#""regex":true"#));
+        assert!(calls[2]
+            .1
+            .contains(r#""include_ext":["docx","xlsx","pptx"]"#));
+        assert!(calls[2].1.contains(r#""max_results":30"#));
+        assert!(calls[2].1.contains(r#""max_files":80"#));
+        assert!(calls[2]
+            .1
+            .contains(r#""pattern":"キャッシュ[・\\s]*フロー|cash\\s*flow|\\bCF\\b|\\bCFS\\b""#));
         assert_eq!(calls[3].0, "glob_search");
-        assert!(calls[3].1.contains(r#""pattern":"**/*CFS*""#));
-        assert!(!calls.iter().any(|(name, _)| name == "office_search"));
+        assert!(calls[3].1.contains(r#""pattern":"**/*CF*""#));
+        assert_eq!(calls[4].0, "glob_search");
+        assert!(calls[4].1.contains(r#""pattern":"**/*CFS*""#));
     }
 
     #[test]
@@ -6708,11 +6789,10 @@ mod loop_controller_tests {
         )
         .expect("PDF-specific cash-flow lookup should get an initial local search plan");
 
-        assert!(!calls.iter().any(|(name, _)| name == "office_search"));
-        assert!(calls.iter().any(|(name, input)| {
-            name == "workspace_search"
-                && input.contains("キャッシュフロー計算書の作成に関係するPDFファイルを検索して")
-        }));
+        assert_eq!(calls[2].0, "office_search");
+        assert!(calls[2]
+            .1
+            .contains(r#""include_ext":["docx","xlsx","pptx","pdf"]"#));
     }
 
     #[test]

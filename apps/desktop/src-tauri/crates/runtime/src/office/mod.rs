@@ -656,6 +656,21 @@ pub struct OfficeSearchOutput {
     pub errors: Vec<OfficeSearchError>,
     #[serde(rename = "filesScanned")]
     pub files_scanned: usize,
+    pub pattern: String,
+    pub paths: Vec<String>,
+    pub regex: bool,
+    #[serde(rename = "include_ext")]
+    pub include_ext: Vec<String>,
+    #[serde(rename = "candidate_count")]
+    pub candidate_count: usize,
+    #[serde(rename = "candidate_sample")]
+    pub candidate_sample: Vec<String>,
+    #[serde(rename = "max_files")]
+    pub max_files: usize,
+    #[serde(rename = "max_results")]
+    pub max_results: usize,
+    #[serde(rename = "expansion_candidate_cap")]
+    pub expansion_candidate_cap: usize,
     #[serde(rename = "files_truncated")]
     pub files_truncated: bool,
     #[serde(rename = "results_truncated")]
@@ -688,9 +703,21 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
     let context = input.context.unwrap_or(80).min(MAX_OFFICE_SEARCH_CONTEXT);
     let started = Instant::now();
     let wall = Duration::from_secs(env_u64("RELAY_OFFICE_SEARCH_MAX_WALL_SECS", 600, 10, 3600));
-    let expansion =
-        expand_office_candidates(&input.paths, &include_ext, max_files, started + wall)?;
+    let expansion_candidate_cap = office_candidate_expansion_cap(max_files);
+    let expansion = expand_office_candidates_with_cap(
+        &input.paths,
+        &include_ext,
+        max_files,
+        expansion_candidate_cap,
+        started + wall,
+    )?;
     let candidates = expansion.candidates;
+    let candidate_count = candidates.len();
+    let candidate_sample = candidates
+        .iter()
+        .take(10)
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
     let files_truncated = expansion.files_truncated;
     let mut errors = expansion.errors;
     let mut wall_clock_truncated = expansion.wall_clock_truncated;
@@ -793,6 +820,15 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
                         results,
                         errors,
                         files_scanned: cursor,
+                        pattern: input.pattern.clone(),
+                        paths: input.paths.clone(),
+                        regex: input.regex.unwrap_or(false),
+                        include_ext: include_ext.iter().cloned().collect(),
+                        candidate_count,
+                        candidate_sample,
+                        max_files,
+                        max_results,
+                        expansion_candidate_cap,
                         files_truncated,
                         results_truncated,
                         wall_clock_truncated,
@@ -800,6 +836,15 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
                     tracing::info!(
                         target: "relay.runtime.search",
                         tool = "office_search",
+                        pattern = %output.pattern,
+                        paths = ?output.paths,
+                        regex = output.regex,
+                        include_ext = ?output.include_ext,
+                        candidate_count = output.candidate_count,
+                        candidate_sample = ?output.candidate_sample,
+                        max_files = output.max_files,
+                        max_results = output.max_results,
+                        expansion_candidate_cap = output.expansion_candidate_cap,
                         files_scanned = output.files_scanned,
                         results = output.results.len(),
                         errors = output.errors.len(),
@@ -845,6 +890,15 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
         results,
         errors,
         files_scanned: cursor,
+        pattern: input.pattern.clone(),
+        paths: input.paths.clone(),
+        regex: input.regex.unwrap_or(false),
+        include_ext: include_ext.iter().cloned().collect(),
+        candidate_count,
+        candidate_sample,
+        max_files,
+        max_results,
+        expansion_candidate_cap,
         files_truncated,
         results_truncated,
         wall_clock_truncated,
@@ -852,6 +906,15 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
     tracing::info!(
         target: "relay.runtime.search",
         tool = "office_search",
+        pattern = %output.pattern,
+        paths = ?output.paths,
+        regex = output.regex,
+        include_ext = ?output.include_ext,
+        candidate_count = output.candidate_count,
+        candidate_sample = ?output.candidate_sample,
+        max_files = output.max_files,
+        max_results = output.max_results,
+        expansion_candidate_cap = output.expansion_candidate_cap,
         files_scanned = output.files_scanned,
         results = output.results.len(),
         errors = output.errors.len(),
