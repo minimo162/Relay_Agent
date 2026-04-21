@@ -1,8 +1,8 @@
 use crate::app_services::AppServices;
 use crate::models::{
-    ListWorkspaceSlashCommandsRequest, RelayDiagnostics, RustAnalyzerProbeRequest,
+    ListWorkspaceSkillsRequest, ListWorkspaceSlashCommandsRequest, RelayDiagnostics, RustAnalyzerProbeRequest,
     RustAnalyzerProbeResponse, WorkspaceAllowlistCwdRequest, WorkspaceAllowlistRemoveToolRequest,
-    WorkspaceAllowlistSnapshot, WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
+    WorkspaceAllowlistSnapshot, WorkspaceInstructionSurfacesRequest, WorkspaceSkillRow, WorkspaceSlashCommandRow,
 };
 use tauri::State;
 
@@ -52,4 +52,11 @@ pub fn list_workspace_slash_commands(
     request: ListWorkspaceSlashCommandsRequest,
 ) -> Result<Vec<WorkspaceSlashCommandRow>, String> {
     crate::tauri_bridge::list_workspace_slash_commands(request)
+}
+
+#[tauri::command]
+pub fn list_workspace_skills(
+    request: ListWorkspaceSkillsRequest,
+) -> Result<Vec<WorkspaceSkillRow>, String> {
+    crate::tauri_bridge::list_workspace_skills(request)
 }

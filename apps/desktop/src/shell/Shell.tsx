@@ -29,7 +29,11 @@ import {
   type SlashCommand,
   type SlashCommandContext,
 } from "../lib/slash-commands";
+import { fetchWorkspaceSkills, type RelaySkill } from "../lib/skills";
 import { ApprovalOverlay } from "../components/ApprovalOverlay";
+import { CommandPalette } from "../components/CommandPalette";
+import { StatusToasts } from "../components/StatusToasts";
+import { showToast } from "../lib/status-toasts";
 import { UserQuestionOverlay } from "../components/UserQuestionOverlay";
 import { Composer } from "../components/Composer";
 import { FeedCrumb } from "../components/FeedCrumb";
@@ -98,6 +102,24 @@ function workspaceSlashRowsToCommands(rows: WorkspaceSlashCommandRow[]): SlashCo
   }));
 }
 
+function workspaceSkillsToCommands(skills: RelaySkill[]): SlashCommand[] {
+  return skills.map((skill) => ({
+    command: `/${skill.name}`,
+    description: skill.description?.trim() || "Workspace skill (.relay/skills)",
+    handler: async (args: string) => {
+      const prompt = skill.prompt.trim();
+      const a = args.trim();
+      const text = a.length ? `${prompt}\n\n${a}` : prompt;
+      showToast({
+        tone: "info",
+        message: `Skill activated · ${skill.name}`,
+        detail: skill.description || undefined,
+      });
+      return { kind: "send", text };
+    },
+  }));
+}
+
 async function applyAlwaysOnTopSetting(enabled: boolean) {
   if (!isTauri()) return;
   try {
@@ -115,6 +137,36 @@ export default function Shell(): JSX.Element {
   >({});
   const [sessionError, setSessionError] = createSignal<string | null>(null);
   const [settingsOpen, setSettingsOpen] = createSignal(false);
+  const [paletteOpen, setPaletteOpen] = createSignal(false);
+  const [reconnectInFlight, setReconnectInFlight] = createSignal(false);
+
+  const reconnectCopilot = () => {
+    setReconnectInFlight(true);
+    runCopilotWarmup(false);
+  };
+
+  // Surface a toast when a user-initiated reconnect resolves.
+  createEffect(() => {
+    if (!reconnectInFlight()) return;
+    const state = copilotState();
+    if (state.status === "checking") return;
+    setReconnectInFlight(false);
+    if (state.status === "ready") {
+      showToast({ tone: "ok", message: "Copilot reconnected" });
+    } else if (state.status === "needs_sign_in") {
+      showToast({
+        tone: "warn",
+        message: "Sign in required",
+        detail: "Open Edge and sign in to M365 Copilot.",
+      });
+    } else if (state.status === "error") {
+      showToast({
+        tone: "danger",
+        message: "Couldn't reach Copilot",
+        detail: state.message ?? undefined,
+      });
+    }
+  });
   const [workspaceLabel, setWorkspaceLabel] = createSignal(loadWorkspacePath().trim());
   const [browserSettings, setBrowserSettings] = createSignal(loadBrowserSettings());
   const [maxTurns, setMaxTurns] = createSignal(loadMaxTurns());
@@ -223,9 +275,18 @@ export default function Shell(): JSX.Element {
       setWorkspaceSlashCommands([]);
       return;
     }
-    void listWorkspaceSlashCommands(cwd.trim() || null)
-      .then((rows) => setWorkspaceSlashCommands(workspaceSlashRowsToCommands(rows)))
-      .catch(() => setWorkspaceSlashCommands([]));
+    const trimmed = cwd.trim() || null;
+    void Promise.all([
+      listWorkspaceSlashCommands(trimmed).catch(() => [] as WorkspaceSlashCommandRow[]),
+      fetchWorkspaceSkills(trimmed).catch(() => [] as RelaySkill[]),
+    ]).then(([slashRows, skills]) => {
+      // Skills are appended after slash commands so they win on name collisions —
+      // OpenWork-style: skills are the higher-level abstraction.
+      setWorkspaceSlashCommands([
+        ...workspaceSlashRowsToCommands(slashRows),
+        ...workspaceSkillsToCommands(skills),
+      ]);
+    });
   });
 
   createEffect(() => {
@@ -278,6 +339,11 @@ export default function Shell(): JSX.Element {
       const isAccelerator = event.metaKey || event.ctrlKey;
       if (!isAccelerator || event.shiftKey || event.altKey) return;
       const key = event.key;
+      if (key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+        return;
+      }
       if (key.toLowerCase() === "n") {
         event.preventDefault();
         handleNewSession();
@@ -771,7 +837,7 @@ export default function Shell(): JSX.Element {
           missingProject={firstRunMissingProject()}
           missingCopilot={firstRunMissingCopilot()}
           onChooseProject={() => void handleChooseProject()}
-          onReconnectCopilot={() => runCopilotWarmup(false)}
+          onReconnectCopilot={reconnectCopilot}
           onApproveOnce={handleApproveOnce}
           onApproveForSession={handleApproveForSession}
           onApproveForWorkspace={handleApproveForWorkspace}
@@ -812,7 +878,39 @@ export default function Shell(): JSX.Element {
           onClose={() => setSettingsOpen(false)}
           onApply={applySettings}
           copilotState={copilotState()}
-          onReconnectCopilot={() => runCopilotWarmup(false)}
+          onReconnectCopilot={reconnectCopilot}
+        />
+        <CommandPalette
+          open={paletteOpen()}
+          onClose={() => setPaletteOpen(false)}
+          sessions={sessions.sessionEntries()}
+          activeSessionId={sessions.activeSessionId()}
+          onSelectSession={(id) => {
+            setPaletteOpen(false);
+            selectSession(id);
+          }}
+          onNewSession={() => {
+            setPaletteOpen(false);
+            handleNewSession();
+          }}
+          onOpenSettings={() => {
+            setPaletteOpen(false);
+            openSettings();
+          }}
+          onRunSlashCommand={(commandText) => {
+            setPaletteOpen(false);
+            void (async () => {
+              const result = await runSlashCommand(commandText);
+              if (result.kind === "local" && result.display) {
+                sessions.setChunks((prev) => [
+                  ...prev,
+                  { kind: "assistant", text: result.display! },
+                ]);
+              } else if (result.kind === "send") {
+                await handleSend(result.text);
+              }
+            })();
+          }}
         />
       </main>
 
@@ -836,6 +934,8 @@ export default function Shell(): JSX.Element {
           onClick={() => setActiveDrawer("none")}
         />
       </Show>
+
+      <StatusToasts />
     </div>
   );
 }

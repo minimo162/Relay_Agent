@@ -10,12 +10,13 @@ use crate::agent_loop::{
 use crate::models::{
     BrowserAutomationSettings, CancelAgentRequest, ContinueAgentSessionRequest,
     CopilotBridgeFailureInfo, CopilotRepairStageFailureCount, CopilotRepairStageStats,
-    GetAgentSessionHistoryRequest, ListWorkspaceSlashCommandsRequest, McpAddServerRequest,
-    McpServerInfo, RelayDiagnostics, RespondAgentApprovalRequest, RespondUserQuestionRequest,
-    RustAnalyzerProbeRequest, RustAnalyzerProbeResponse, SessionWriteUndoRequest,
-    SessionWriteUndoStatusResponse, StartAgentRequest, WorkspaceAllowlistCwdRequest,
-    WorkspaceAllowlistEntryRow, WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
-    WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
+    GetAgentSessionHistoryRequest, ListWorkspaceSkillsRequest, ListWorkspaceSlashCommandsRequest,
+    McpAddServerRequest, McpServerInfo, RelayDiagnostics, RespondAgentApprovalRequest,
+    RespondUserQuestionRequest, RustAnalyzerProbeRequest, RustAnalyzerProbeResponse,
+    SessionWriteUndoRequest, SessionWriteUndoStatusResponse, StartAgentRequest,
+    WorkspaceAllowlistCwdRequest, WorkspaceAllowlistEntryRow, WorkspaceAllowlistRemoveToolRequest,
+    WorkspaceAllowlistSnapshot, WorkspaceInstructionSurfacesRequest, WorkspaceSkillRow,
+    WorkspaceSlashCommandRow,
 };
 use crate::tauri_bridge::{
     CdpConnectResult, CdpPromptResult, CdpSendPromptRequest, CompactAgentSessionRequest,
@@ -55,6 +56,8 @@ pub fn render_ipc_generated_ts() -> String {
         decl::<WorkspaceAllowlistCwdRequest>(),
         decl::<WorkspaceSlashCommandRow>(),
         decl::<ListWorkspaceSlashCommandsRequest>(),
+        decl::<WorkspaceSkillRow>(),
+        decl::<ListWorkspaceSkillsRequest>(),
         decl::<WorkspaceInstructionSurfacesRequest>(),
         decl::<InstructionSurface>(),
         decl::<WorkspaceInstructionSurfaces>(),

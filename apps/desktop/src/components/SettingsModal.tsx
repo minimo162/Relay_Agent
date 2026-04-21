@@ -1,8 +1,16 @@
-import { For, Show, createEffect, createSignal, type JSX } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, type JSX } from "solid-js";
 import { isTauri } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { BrowserAutomationSettings, WorkspaceAllowlistSnapshot } from "../lib/ipc";
-import { getRelayDiagnostics, getWorkspaceAllowlist, writeTextExport } from "../lib/ipc";
+import {
+  clearWorkspaceAllowlist,
+  getRelayDiagnostics,
+  getWorkspaceAllowlist,
+  removeWorkspaceAllowlistTool,
+  writeTextExport,
+} from "../lib/ipc";
+import { fetchWorkspaceSkills, type RelaySkill } from "../lib/skills";
+import { showToast } from "../lib/status-toasts";
 import {
   loadAlwaysOnTop,
   loadBrowserSettings,
@@ -56,6 +64,8 @@ export function SettingsModal(props: {
   const [hint, setHint] = createSignal<string | null>(null);
   const [exporting, setExporting] = createSignal(false);
   const [allowlistSnapshot, setAllowlistSnapshot] = createSignal<WorkspaceAllowlistSnapshot | null>(null);
+  const [skills, setSkills] = createSignal<RelaySkill[]>([]);
+  const [skillsLoaded, setSkillsLoaded] = createSignal(false);
 
   createEffect(() => {
     if (props.open && !wasOpen) {
@@ -84,6 +94,17 @@ export function SettingsModal(props: {
             });
           });
       }
+      setSkillsLoaded(false);
+      void fetchWorkspaceSkills(loadWorkspacePath().trim() || null)
+        .then((rows) => {
+          setSkills(rows);
+          setSkillsLoaded(true);
+        })
+        .catch((error) => {
+          console.error("[Settings] workspace skills load failed", error);
+          setSkills([]);
+          setSkillsLoaded(true);
+        });
       queueMicrotask(() => {
         (workspaceInputRef ?? closeButtonRef)?.focus();
       });
@@ -144,6 +165,7 @@ export function SettingsModal(props: {
     saveAlwaysOnTop(next.alwaysOnTop);
     props.onApply(next);
     setHint("Settings saved.");
+    showToast({ tone: "ok", message: "Settings saved" });
     props.onClose();
   };
 
@@ -264,6 +286,223 @@ export function SettingsModal(props: {
                     </Button>
                   </div>
                 </div>
+              </section>
+
+              <section class="ra-settings-card" data-ra-skills>
+                <div class="flex items-baseline gap-2">
+                  <p class="ra-type-system-micro text-[var(--ra-text-muted)]">Skills</p>
+                  <Show when={skills().length > 0}>
+                    <span class="ra-type-caption text-[var(--ra-text-muted)]">
+                      {skills().length} available
+                    </span>
+                  </Show>
+                </div>
+                <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
+                  Reusable prompt + tool hints loaded from
+                  {" "}
+                  <code class="ra-type-mono-small">.relay/skills/&lt;name&gt;.md</code>
+                  {" "}in the current workspace. Run with
+                  {" "}
+                  <code class="ra-type-mono-small">/skill &lt;name&gt;</code>.
+                </p>
+
+                <Show
+                  when={skillsLoaded() && skills().length > 0}
+                  fallback={
+                    <p class="ra-type-caption text-[var(--ra-text-muted)] mt-3">
+                      <Show when={!skillsLoaded()} fallback={
+                        <>
+                          No skills found. Add files like
+                          {" "}
+                          <code class="ra-type-mono-small">.relay/skills/audit-expenses.md</code>
+                          {" "}with YAML frontmatter
+                          {" "}
+                          (<code class="ra-type-mono-small">description</code>,
+                          {" "}
+                          <code class="ra-type-mono-small">tools</code>,
+                          {" "}
+                          <code class="ra-type-mono-small">allowlist</code>) and reopen Settings.
+                        </>
+                      }>
+                        Loading…
+                      </Show>
+                    </p>
+                  }
+                >
+                  <ul class="ra-skills-list mt-3">
+                    <For each={skills()}>
+                      {(skill) => (
+                        <li class="ra-skills-entry">
+                          <div class="ra-skills-entry__head">
+                            <code class="ra-skills-entry__name ra-type-mono-small">/{skill.name}</code>
+                            <Show when={skill.description}>
+                              <span class="ra-skills-entry__desc">
+                                {skill.description}
+                              </span>
+                            </Show>
+                          </div>
+                          <Show when={skill.tools.length > 0 || skill.allowlist.length > 0}>
+                            <div class="ra-skills-entry__chips mt-1">
+                              <For each={skill.tools}>
+                                {(tool) => (
+                                  <span class="ra-skills-chip ra-skills-chip--tool">
+                                    {tool}
+                                  </span>
+                                )}
+                              </For>
+                              <For each={skill.allowlist}>
+                                {(tool) => (
+                                  <span class="ra-skills-chip ra-skills-chip--allow">
+                                    allow · {tool}
+                                  </span>
+                                )}
+                              </For>
+                            </div>
+                          </Show>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Show>
+              </section>
+
+              <section class="ra-settings-card" data-ra-permissions>
+                <div class="flex items-baseline gap-2">
+                  <p class="ra-type-system-micro text-[var(--ra-text-muted)]">Permissions</p>
+                  <Show when={(allowlistSnapshot()?.entries.length ?? 0) > 0}>
+                    <span class="ra-type-caption text-[var(--ra-text-muted)]">
+                      {allowlistSnapshot()!.entries.length} workspace{allowlistSnapshot()!.entries.length === 1 ? "" : "s"}
+                    </span>
+                  </Show>
+                </div>
+                <p class="ra-type-caption text-[var(--ra-text-muted)] mt-1">
+                  Tools you’ve approved with “Always for this folder.” Revoke them here.
+                </p>
+
+                <Show
+                  when={(allowlistSnapshot()?.entries.length ?? 0) > 0}
+                  fallback={
+                    <p class="ra-type-caption text-[var(--ra-text-muted)] mt-3">
+                      No remembered workspace approvals.
+                    </p>
+                  }
+                >
+                  <ul class="ra-permissions-list mt-3">
+                    <For each={allowlistSnapshot()!.entries}>
+                      {(entry) => {
+                        const isCurrent = createMemo(
+                          () => entry.workspaceKey === workspace().trim(),
+                        );
+                        return (
+                          <li
+                            classList={{
+                              "ra-permissions-entry": true,
+                              "ra-permissions-entry--current": isCurrent(),
+                            }}
+                          >
+                            <div class="ra-permissions-entry__head">
+                              <div class="ra-permissions-entry__path-wrap">
+                                <Show when={isCurrent()}>
+                                  <span
+                                    class="ra-permissions-entry__current-badge"
+                                    aria-label="Current workspace"
+                                  >
+                                    Current
+                                  </span>
+                                </Show>
+                                <span
+                                  class="ra-permissions-entry__path ra-type-mono-small"
+                                  title={entry.workspaceKey}
+                                >
+                                  {entry.workspaceKey}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                class="ra-permissions-entry__clear"
+                                onClick={() => {
+                                  void clearWorkspaceAllowlist(entry.workspaceKey)
+                                    .then(() => getWorkspaceAllowlist())
+                                    .then((snap) => {
+                                      setAllowlistSnapshot(snap);
+                                      showToast({
+                                        tone: "ok",
+                                        message: "Permissions cleared",
+                                        detail: entry.workspaceKey,
+                                      });
+                                    })
+                                    .catch((err) => {
+                                      console.error("[Settings] clear allowlist failed", err);
+                                      showToast({
+                                        tone: "danger",
+                                        message: "Couldn't clear permissions",
+                                        detail: err instanceof Error ? err.message : String(err),
+                                      });
+                                    });
+                                }}
+                              >
+                                Clear all
+                              </button>
+                            </div>
+                            <Show
+                              when={entry.tools.length > 0}
+                              fallback={
+                                <p class="ra-type-caption text-[var(--ra-text-muted)] mt-2">
+                                  No tools allowed.
+                                </p>
+                              }
+                            >
+                              <ul class="ra-permissions-tools mt-2">
+                                <For each={entry.tools}>
+                                  {(toolName) => (
+                                    <li class="ra-permissions-tool">
+                                      <span class="ra-permissions-tool__name ra-type-mono-small">
+                                        {toolName}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        class="ra-permissions-tool__revoke"
+                                        aria-label={`Revoke ${toolName}`}
+                                        onClick={() => {
+                                          void removeWorkspaceAllowlistTool(
+                                            entry.workspaceKey,
+                                            toolName,
+                                          )
+                                            .then(() => getWorkspaceAllowlist())
+                                            .then((snap) => {
+                                              setAllowlistSnapshot(snap);
+                                              showToast({
+                                                tone: "ok",
+                                                message: "Permission revoked",
+                                                detail: toolName,
+                                              });
+                                            })
+                                            .catch((err) => {
+                                              console.error(
+                                                "[Settings] revoke tool failed",
+                                                err,
+                                              );
+                                              showToast({
+                                                tone: "danger",
+                                                message: "Couldn't revoke permission",
+                                                detail: err instanceof Error ? err.message : String(err),
+                                              });
+                                            });
+                                        }}
+                                      >
+                                        Revoke
+                                      </button>
+                                    </li>
+                                  )}
+                                </For>
+                              </ul>
+                            </Show>
+                          </li>
+                        );
+                      }}
+                    </For>
+                  </ul>
+                </Show>
               </section>
 
               <details class="ra-settings-card ra-settings-details">

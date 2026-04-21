@@ -19,6 +19,7 @@ mod session_write_undo;
 mod tauri_bridge;
 pub mod test_support;
 mod workspace_allowlist;
+mod workspace_skills;
 mod workspace_slash_commands;
 mod workspace_surfaces;
 
@@ -97,6 +98,7 @@ pub fn run() {
             commands::diagnostics::remove_workspace_allowlist_tool,
             commands::diagnostics::clear_workspace_allowlist,
             commands::diagnostics::list_workspace_slash_commands,
+            commands::diagnostics::list_workspace_skills,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

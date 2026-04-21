@@ -180,6 +180,17 @@ export interface ListWorkspaceSlashCommandsRequest {
   cwd?: string | null;
 }
 
+export interface WorkspaceSkillRow {
+  name: string;
+  description?: string | null;
+  body: string;
+  source: string;
+}
+
+export interface ListWorkspaceSkillsRequest {
+  cwd?: string | null;
+}
+
 export interface WorkspaceInstructionSurfacesRequest {
   cwd?: string | null;
 }

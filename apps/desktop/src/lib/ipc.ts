@@ -47,6 +47,7 @@ import type {
   StartAgentRequest as GeneratedStartAgentRequest,
   WorkspaceAllowlistSnapshot as GeneratedWorkspaceAllowlistSnapshot,
   WorkspaceInstructionSurfaces as GeneratedWorkspaceInstructionSurfaces,
+  WorkspaceSkillRow as GeneratedWorkspaceSkillRow,
   WorkspaceSlashCommandRow as GeneratedWorkspaceSlashCommandRow,
 } from "./ipc.generated";
 
@@ -190,6 +191,14 @@ export type WorkspaceSlashCommandRow = GeneratedWorkspaceSlashCommandRow;
 
 export async function listWorkspaceSlashCommands(cwd: string | null): Promise<WorkspaceSlashCommandRow[]> {
   return invoke<WorkspaceSlashCommandRow[]>("list_workspace_slash_commands", {
+    request: { cwd: cwd?.trim() || null },
+  });
+}
+
+export type WorkspaceSkillRow = GeneratedWorkspaceSkillRow;
+
+export async function listWorkspaceSkills(cwd: string | null): Promise<WorkspaceSkillRow[]> {
+  return invoke<WorkspaceSkillRow[]>("list_workspace_skills", {
     request: { cwd: cwd?.trim() || null },
   });
 }

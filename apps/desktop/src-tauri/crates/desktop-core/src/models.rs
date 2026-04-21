@@ -321,3 +321,20 @@ pub struct ListWorkspaceSlashCommandsRequest {
     #[serde(default)]
     pub cwd: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[skip_serializing_none]
+pub struct WorkspaceSkillRow {
+    pub name: String,
+    pub description: Option<String>,
+    pub body: String,
+    pub source: String,
+}
+
+#[derive(Clone, Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ListWorkspaceSkillsRequest {
+    #[serde(default)]
+    pub cwd: Option<String>,
+}

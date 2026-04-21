@@ -10,17 +10,6 @@ import {
 import { Button, IconButton, Input } from "./ui";
 import { workspaceBasename } from "../lib/workspace-display";
 
-function planGlyph(status: PlanTodoItem["status"]): string {
-  switch (status) {
-    case "completed":
-      return "●";
-    case "in_progress":
-      return "◐";
-    default:
-      return "○";
-  }
-}
-
 function isMacPlatform(): boolean {
   if (typeof navigator === "undefined") return false;
   const platform = (navigator.platform || "").toLowerCase();
@@ -117,10 +106,10 @@ export function RailPanel(props: {
   return (
     <aside class="ra-rail" aria-label="Context and tools" data-ra-shell-drawer="context">
       <div class="ra-rail__inner">
-        {/* ── Plan ── */}
-        <section class="ra-rail__card" data-ra-execution-plan>
+        {/* ── Execution plan (live timeline) ── */}
+        <section class="ra-rail__card ra-rail__card--plan" data-ra-execution-plan>
           <div class="ra-rail__card-head">
-            <span class="ra-rail__card-eyebrow">Plan</span>
+            <span class="ra-rail__card-eyebrow">Execution plan</span>
             <Show when={planStats()}>
               {(stats) => (
                 <span class="ra-rail__card-count">
@@ -129,6 +118,22 @@ export function RailPanel(props: {
               )}
             </Show>
           </div>
+          <Show when={planStats()}>
+            {(stats) => {
+              const pct = createMemo(() => {
+                const s = stats();
+                return s.total === 0 ? 0 : Math.round((s.done / s.total) * 100);
+              });
+              return (
+                <div class="ra-rail__plan-progress" aria-hidden="true">
+                  <div
+                    class="ra-rail__plan-progress-fill"
+                    style={{ width: `${pct()}%` }}
+                  />
+                </div>
+              );
+            }}
+          </Show>
           <Show
             when={latestPlan()}
             fallback={
@@ -138,23 +143,45 @@ export function RailPanel(props: {
             }
           >
             {(entry) => (
-              <ul class="ra-rail__plan-list">
+              <ol class="ra-rail__plan-timeline">
                 <For each={entry().todos}>
-                  {(todo: PlanTodoItem) => (
+                  {(todo: PlanTodoItem, index) => (
                     <li
-                      class="ra-rail__plan-item"
+                      class="ra-rail__plan-step"
                       data-status={todo.status}
+                      title={todo.content}
                     >
-                      <span class="ra-rail__plan-glyph" aria-hidden="true">
-                        {planGlyph(todo.status)}
+                      <span class="ra-rail__plan-step-indicator" aria-hidden="true">
+                        <span class="ra-rail__plan-step-dot" />
                       </span>
-                      <span class="ra-rail__plan-text">
-                        {todo.activeForm || todo.content}
+                      <span class="ra-rail__plan-step-body">
+                        <span class="ra-rail__plan-step-text">
+                          {todo.status === "in_progress"
+                            ? todo.activeForm || todo.content
+                            : todo.content}
+                        </span>
+                        <Show when={todo.status === "in_progress"}>
+                          <span class="ra-rail__plan-step-meta">
+                            <span class="ra-rail__plan-step-pulse" aria-hidden="true" />
+                            running…
+                          </span>
+                        </Show>
+                        <Show
+                          when={
+                            todo.status === "pending" &&
+                            index() ===
+                              entry().todos.findIndex((t) => t.status === "pending")
+                          }
+                        >
+                          <span class="ra-rail__plan-step-meta ra-rail__plan-step-meta--next">
+                            next
+                          </span>
+                        </Show>
                       </span>
                     </li>
                   )}
                 </For>
-              </ul>
+              </ol>
             )}
           </Show>
         </section>

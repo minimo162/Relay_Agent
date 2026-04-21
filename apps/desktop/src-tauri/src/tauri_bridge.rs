@@ -18,12 +18,12 @@ use crate::cdp_copilot;
 use crate::copilot_persistence::{self, PersistedSessionConfig};
 use crate::models::{
     BrowserAutomationSettings, CancelAgentRequest, ContinueAgentSessionRequest,
-    GetAgentSessionHistoryRequest, ListWorkspaceSlashCommandsRequest, McpAddServerRequest,
+    GetAgentSessionHistoryRequest, ListWorkspaceSkillsRequest, ListWorkspaceSlashCommandsRequest, McpAddServerRequest,
     McpServerInfo, RelayDiagnostics, RespondAgentApprovalRequest, RespondUserQuestionRequest,
     RustAnalyzerProbeRequest, RustAnalyzerProbeResponse, SessionWriteUndoRequest,
     SessionWriteUndoStatusResponse, StartAgentRequest, WorkspaceAllowlistCwdRequest,
     WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
-    WorkspaceInstructionSurfacesRequest, WorkspaceSlashCommandRow,
+    WorkspaceInstructionSurfacesRequest, WorkspaceSkillRow, WorkspaceSlashCommandRow,
 };
 use crate::registry::{SessionHandle, SessionRegistry, SessionRunState, SessionState};
 use runtime::MAX_TEXT_FILE_READ_BYTES;
@@ -2031,6 +2031,12 @@ pub fn list_workspace_slash_commands(
     request: ListWorkspaceSlashCommandsRequest,
 ) -> Result<Vec<WorkspaceSlashCommandRow>, String> {
     crate::workspace_slash_commands::list_for_cwd(request.cwd.as_deref())
+}
+
+pub fn list_workspace_skills(
+    request: ListWorkspaceSkillsRequest,
+) -> Result<Vec<WorkspaceSkillRow>, String> {
+    crate::workspace_skills::list_for_cwd(request.cwd.as_deref())
 }
 
 #[cfg(test)]

@@ -1,0 +1,1674 @@
+<!doctype html>
+<html lang="ja" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Relay Agent · v3 — quiet operational</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* ───────── Foundations ───────── */
+      :root {
+        /* Cool operational palette — drawn from OpenWork's quiet/premium direction,
+           shifted slightly cooler and with a precise electric accent for Relay. */
+        --page:           #f5f7fb;
+        --surface:        #ffffff;
+        --surface-quiet:  #f9fafc;
+        --sidebar:        #f3f5f9;
+        --rail:           #f7f8fb;
+
+        --ink:            #0b1320;
+        --ink-90:         rgba(11, 19, 32, 0.92);
+        --ink-72:         rgba(11, 19, 32, 0.72);
+        --ink-58:         rgba(11, 19, 32, 0.58);
+        --ink-44:         rgba(11, 19, 32, 0.44);
+        --ink-32:         rgba(11, 19, 32, 0.32);
+        --ink-18:         rgba(11, 19, 32, 0.18);
+        --ink-10:         rgba(11, 19, 32, 0.10);
+        --ink-06:         rgba(11, 19, 32, 0.06);
+        --ink-04:         rgba(11, 19, 32, 0.04);
+
+        --border:         #eaeef4;
+        --border-strong:  #dde3ec;
+        --hover:          #eef2f7;
+        --active:         #e6ecf5;
+
+        /* Relay accent — a precise electric cobalt. Used sparingly. */
+        --relay:          #2752f0;
+        --relay-deep:     #1a3dc6;
+        --relay-soft:     rgba(39, 82, 240, 0.10);
+        --relay-tint:     rgba(39, 82, 240, 0.06);
+        --relay-line:     rgba(39, 82, 240, 0.22);
+
+        /* Semantic — warm-balanced, not clinical */
+        --ok:             #1f8a65;
+        --ok-soft:        rgba(31, 138, 101, 0.10);
+        --warn:           #b45309;
+        --warn-soft:      rgba(180, 83, 9, 0.10);
+        --danger:         #c43055;
+        --danger-soft:    rgba(196, 48, 85, 0.10);
+
+        /* Tool-step accent dots — soft, distinct */
+        --t-read:         #5b8def;
+        --t-search:       #6aa66a;
+        --t-edit:         #b285dc;
+        --t-shell:        #d49454;
+        --t-think:        #c8a37a;
+        --t-pdf:          #7ec0c0;
+
+        /* Type stacks */
+        --f-ui:    "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        --f-mono:  "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        --f-edit:  "IBM Plex Serif", ui-serif, Georgia, "Times New Roman", serif;
+
+        /* Radii — generous; OpenWork-style stepped scale */
+        --r-control: 10px;
+        --r-card:    14px;
+        --r-shell:   22px;
+        --r-pill:    9999px;
+
+        /* Layout rhythm */
+        --col-sidebar: 256px;
+        --col-rail:    324px;
+        --turn-max:    720px;
+        --header-h:    48px;
+        --status-h:    28px;
+      }
+
+      [data-theme="dark"] {
+        --page:           #0c1018;
+        --surface:        #11151e;
+        --surface-quiet:  #141923;
+        --sidebar:        #0f131c;
+        --rail:           #11151e;
+
+        --ink:            #e8ecf4;
+        --ink-90:         rgba(232, 236, 244, 0.92);
+        --ink-72:         rgba(232, 236, 244, 0.72);
+        --ink-58:         rgba(232, 236, 244, 0.58);
+        --ink-44:         rgba(232, 236, 244, 0.44);
+        --ink-32:         rgba(232, 236, 244, 0.32);
+        --ink-18:         rgba(232, 236, 244, 0.18);
+        --ink-10:         rgba(232, 236, 244, 0.10);
+        --ink-06:         rgba(232, 236, 244, 0.06);
+        --ink-04:         rgba(232, 236, 244, 0.04);
+
+        --border:         #1c2231;
+        --border-strong:  #28304180;
+        --hover:          #1a2030;
+        --active:         #1f2638;
+
+        --relay:          #6f8dff;
+        --relay-deep:     #5572f0;
+        --relay-soft:     rgba(111, 141, 255, 0.14);
+        --relay-tint:     rgba(111, 141, 255, 0.08);
+        --relay-line:     rgba(111, 141, 255, 0.28);
+      }
+
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { height: 100%; }
+
+      body {
+        font-family: var(--f-ui);
+        font-size: 13.5px;
+        line-height: 1.55;
+        color: var(--ink);
+        background: var(--page);
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        font-feature-settings: "ss01", "ss02", "cv11", "tnum";
+        overflow: hidden;
+      }
+
+      ::selection { background: var(--relay-soft); color: var(--ink); }
+
+      button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+      a { color: var(--relay); text-decoration: none; }
+      a:hover { color: var(--relay-deep); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+
+      /* ───────── Type roles (OpenWork-style, restrained) ───────── */
+      .t-eyebrow {
+        font-family: var(--f-ui);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--ink-44);
+      }
+      .t-headline {
+        font-family: var(--f-ui);
+        font-size: 18px;
+        font-weight: 500;
+        line-height: 1.3;
+        letter-spacing: -0.005em;
+        color: var(--ink);
+      }
+      .t-title {
+        font-family: var(--f-ui);
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--ink);
+      }
+      .t-body {
+        font-family: var(--f-ui);
+        font-size: 13.5px;
+        font-weight: 400;
+        line-height: 1.6;
+        color: var(--ink-90);
+      }
+      .t-meta {
+        font-family: var(--f-ui);
+        font-size: 12px;
+        font-weight: 400;
+        color: var(--ink-58);
+      }
+      .t-micro {
+        font-family: var(--f-ui);
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--ink-44);
+      }
+      .t-mono {
+        font-family: var(--f-mono);
+        font-size: 12px;
+        color: var(--ink-72);
+        letter-spacing: -0.005em;
+      }
+      .t-mono-sm {
+        font-family: var(--f-mono);
+        font-size: 11px;
+        color: var(--ink-58);
+        letter-spacing: -0.005em;
+      }
+      .t-edit {
+        font-family: var(--f-edit);
+        font-size: 14.5px;
+        line-height: 1.6;
+        color: var(--ink);
+      }
+
+      /* ───────── App grid ───────── */
+      .app {
+        display: grid;
+        grid-template-columns: var(--col-sidebar) 1fr var(--col-rail);
+        height: 100vh;
+        overflow: hidden;
+      }
+      .app > * { min-width: 0; min-height: 0; }
+
+      /* ───────── Sidebar ───────── */
+      .sidebar {
+        background: var(--sidebar);
+        border-right: 1px solid var(--border);
+        display: grid;
+        grid-template-rows: auto auto 1fr auto;
+        height: 100vh;
+      }
+      .sidebar__brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 16px 18px 14px;
+      }
+      .brand-mark {
+        position: relative;
+        width: 24px;
+        height: 24px;
+        border-radius: 7px;
+        background:
+          radial-gradient(circle at 30% 30%, var(--relay) 0%, var(--relay-deep) 75%);
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+          inset 0 -3px 6px rgba(0, 0, 0, 0.18);
+      }
+      .brand-mark::after {
+        content: "";
+        position: absolute;
+        inset: 6px;
+        border-radius: 999px;
+        border: 1.25px solid rgba(255, 255, 255, 0.85);
+        border-right-color: transparent;
+        border-bottom-color: transparent;
+        transform: rotate(-25deg);
+      }
+      .brand-name {
+        font-weight: 600;
+        font-size: 13.5px;
+        letter-spacing: -0.005em;
+        color: var(--ink);
+      }
+      .brand-version {
+        margin-left: auto;
+        font-family: var(--f-mono);
+        font-size: 10.5px;
+        color: var(--ink-44);
+        letter-spacing: -0.01em;
+      }
+
+      .sidebar__newchat {
+        margin: 0 14px 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 12px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-pill);
+        color: var(--ink);
+        font-size: 12.5px;
+        font-weight: 500;
+        transition: background-color 120ms ease, border-color 120ms ease;
+      }
+      .sidebar__newchat:hover {
+        background: var(--hover);
+        border-color: var(--border-strong);
+      }
+      .sidebar__newchat .plus {
+        width: 16px; height: 16px;
+        display: grid; place-items: center;
+        border-radius: var(--r-pill);
+        background: var(--relay-tint);
+        color: var(--relay-deep);
+        font-weight: 600;
+        font-size: 13px;
+        line-height: 1;
+      }
+      .sidebar__newchat .kbd {
+        margin-left: auto;
+        font-family: var(--f-mono);
+        font-size: 10.5px;
+        color: var(--ink-44);
+        padding: 2px 6px;
+        border-radius: 5px;
+        background: var(--ink-04);
+      }
+
+      .sidebar__section {
+        padding: 14px 18px 6px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .sidebar__list {
+        overflow-y: auto;
+        padding: 0 10px 14px;
+      }
+      .chat-row {
+        display: grid;
+        grid-template-columns: 14px 1fr auto;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 10px;
+        border-radius: var(--r-control);
+        cursor: pointer;
+        color: var(--ink-72);
+      }
+      .chat-row:hover { background: var(--hover); color: var(--ink); }
+      .chat-row.is-active {
+        background: var(--surface);
+        color: var(--ink);
+        box-shadow: inset 0 0 0 1px var(--border);
+      }
+      .chat-row__dot {
+        width: 6px; height: 6px;
+        border-radius: 999px;
+        background: var(--ink-18);
+      }
+      .chat-row.is-running .chat-row__dot {
+        background: var(--relay);
+        box-shadow: 0 0 0 4px var(--relay-soft);
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      .chat-row__title {
+        font-size: 12.5px;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .chat-row__time {
+        font-family: var(--f-mono);
+        font-size: 10.5px;
+        color: var(--ink-44);
+      }
+
+      .sidebar__footer {
+        border-top: 1px solid var(--border);
+        padding: 12px 14px;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: center;
+        gap: 10px;
+      }
+      .ws-badge {
+        display: grid; place-items: center;
+        width: 28px; height: 28px;
+        border-radius: 9px;
+        background: var(--ink);
+        color: var(--surface);
+        font-family: var(--f-mono);
+        font-size: 11.5px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      .ws-meta {
+        min-width: 0;
+        line-height: 1.25;
+      }
+      .ws-meta__title {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--ink);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .ws-meta__path {
+        font-family: var(--f-mono);
+        font-size: 10.5px;
+        color: var(--ink-44);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .ws-cog {
+        width: 28px; height: 28px;
+        display: grid; place-items: center;
+        color: var(--ink-44);
+        border-radius: 8px;
+      }
+      .ws-cog:hover { background: var(--hover); color: var(--ink); }
+
+      /* ───────── Center (conversation) ───────── */
+      .center {
+        background: var(--page);
+        display: grid;
+        grid-template-rows: var(--header-h) 1fr auto var(--status-h);
+        height: 100vh;
+      }
+
+      /* Header */
+      .header {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        backdrop-filter: saturate(180%) blur(14px);
+        -webkit-backdrop-filter: saturate(180%) blur(14px);
+        background: color-mix(in srgb, var(--page) 78%, transparent);
+        border-bottom: 1px solid var(--border);
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        align-items: center;
+        padding: 0 16px;
+        gap: 10px;
+      }
+      .header__left {
+        display: flex; align-items: center; gap: 10px;
+        font-size: 12.5px;
+        color: var(--ink-72);
+      }
+      .header__left .crumb-sep { color: var(--ink-32); }
+      .header__title {
+        color: var(--ink);
+        font-weight: 500;
+        max-width: 320px;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .header__center { justify-self: center; }
+      .header__right {
+        justify-self: end;
+        display: flex; align-items: center; gap: 4px;
+      }
+
+      /* Status pill */
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 10px 4px 8px;
+        border-radius: var(--r-pill);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--ink-58);
+      }
+      .pill .dot {
+        width: 6px; height: 6px;
+        border-radius: 999px;
+        background: var(--ink-18);
+      }
+      .pill.is-ready { color: var(--ok); border-color: rgba(31, 138, 101, 0.22); background: var(--ok-soft); }
+      .pill.is-ready .dot { background: var(--ok); }
+      .pill.is-running { color: var(--relay-deep); border-color: var(--relay-line); background: var(--relay-soft); }
+      .pill.is-running .dot { background: var(--relay); animation: pulse 1.4s ease-in-out infinite; }
+      .pill.is-waiting { color: var(--warn); border-color: rgba(180, 83, 9, 0.22); background: var(--warn-soft); }
+      .pill.is-waiting .dot { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
+
+      .icon-btn {
+        display: grid; place-items: center;
+        width: 30px; height: 30px;
+        border-radius: 8px;
+        color: var(--ink-58);
+        transition: background-color 120ms ease, color 120ms ease;
+      }
+      .icon-btn:hover { background: var(--hover); color: var(--ink); }
+      .icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+      .icon-btn .ic { width: 16px; height: 16px; stroke-width: 1.6; }
+
+      /* Feed */
+      .feed-wrap {
+        overflow-y: auto;
+        scroll-behavior: smooth;
+      }
+      .feed {
+        max-width: var(--turn-max);
+        margin: 0 auto;
+        padding: 28px 28px 80px;
+        display: flex;
+        flex-direction: column;
+        gap: 22px;
+      }
+
+      /* Turn divider — date / context shift */
+      .turn-divider {
+        display: flex; align-items: center; gap: 10px;
+        margin: 6px 0 -6px;
+      }
+      .turn-divider::before, .turn-divider::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, var(--border), transparent);
+      }
+      .turn-divider span {
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--ink-44);
+      }
+
+      /* User message — flat, right-aligned, quiet */
+      .msg-user {
+        align-self: flex-end;
+        max-width: 80%;
+        padding: 10px 14px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 14px 14px 4px 14px;
+        color: var(--ink);
+        font-size: 13.5px;
+        line-height: 1.55;
+      }
+
+      /* Assistant message — borderless, generous, serif option for editorial passages */
+      .msg-assistant {
+        display: grid;
+        grid-template-columns: 22px 1fr;
+        gap: 12px;
+        align-items: flex-start;
+      }
+      .msg-assistant__avatar {
+        width: 22px; height: 22px;
+        margin-top: 2px;
+        border-radius: 7px;
+        background:
+          linear-gradient(135deg, var(--relay) 0%, var(--relay-deep) 100%);
+        position: relative;
+      }
+      .msg-assistant__avatar::after {
+        content: "";
+        position: absolute;
+        inset: 5px;
+        border-radius: 999px;
+        border: 1.1px solid rgba(255,255,255, 0.9);
+        border-right-color: transparent;
+        border-bottom-color: transparent;
+        transform: rotate(-25deg);
+      }
+      .msg-assistant__body {
+        font-family: var(--f-ui);
+        font-size: 13.5px;
+        line-height: 1.65;
+        color: var(--ink);
+      }
+      .msg-assistant__body p { margin: 0 0 10px; }
+      .msg-assistant__body p:last-child { margin-bottom: 0; }
+      .msg-assistant__body code {
+        font-family: var(--f-mono);
+        font-size: 0.92em;
+        padding: 1px 5px;
+        border-radius: 5px;
+        background: var(--ink-04);
+        color: var(--ink-90);
+      }
+      .msg-assistant__body strong { font-weight: 600; color: var(--ink); }
+      .msg-assistant__body em.cite {
+        font-family: var(--f-edit);
+        font-style: italic;
+        color: var(--ink-72);
+      }
+
+      /* Streaming caret */
+      .caret {
+        display: inline-block;
+        width: 1.5px; height: 1.05em;
+        background: var(--relay);
+        vertical-align: -0.18em;
+        margin-left: 2px;
+        animation: caret 1.05s steps(1, end) infinite;
+        border-radius: 1px;
+      }
+      @keyframes caret { 50% { opacity: 0; } }
+
+      /* ───────── Tool steps (timeline) ───────── */
+      .tool-spine {
+        position: relative;
+        margin-left: 11px;       /* aligns under assistant avatar */
+        padding-left: 18px;
+        display: flex; flex-direction: column; gap: 6px;
+        border-left: 1px dashed var(--border-strong);
+      }
+      .tool-step {
+        position: relative;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 10px 6px 12px;
+        border-radius: var(--r-control);
+        color: var(--ink-72);
+        transition: background-color 120ms ease;
+      }
+      .tool-step:hover { background: var(--ink-04); }
+      .tool-step::before {
+        content: "";
+        position: absolute;
+        left: -19px;
+        top: 50%;
+        width: 7px; height: 7px;
+        border-radius: 999px;
+        background: var(--surface);
+        border: 1.5px solid var(--ink-18);
+        transform: translateY(-50%);
+      }
+      .tool-step[data-status="running"]::before {
+        border-color: var(--relay);
+        background: var(--relay);
+        box-shadow: 0 0 0 3px var(--relay-soft);
+      }
+      .tool-step[data-status="done"]::before {
+        border-color: var(--ok);
+        background: var(--ok);
+      }
+      .tool-step[data-status="error"]::before {
+        border-color: var(--danger);
+        background: var(--danger);
+      }
+      .tool-step__label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11.5px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        color: var(--ink);
+        padding: 2px 8px;
+        border-radius: var(--r-pill);
+        background: var(--ink-04);
+        white-space: nowrap;
+      }
+      .tool-step__label .swatch {
+        width: 6px; height: 6px;
+        border-radius: 2px;
+        background: var(--t-read);
+      }
+      .tool-step[data-kind="search"] .swatch { background: var(--t-search); }
+      .tool-step[data-kind="edit"]   .swatch { background: var(--t-edit); }
+      .tool-step[data-kind="shell"]  .swatch { background: var(--t-shell); }
+      .tool-step[data-kind="think"]  .swatch { background: var(--t-think); }
+      .tool-step[data-kind="pdf"]    .swatch { background: var(--t-pdf); }
+
+      .tool-step__summary {
+        font-family: var(--f-mono);
+        font-size: 11.5px;
+        color: var(--ink-58);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .tool-step__time {
+        font-family: var(--f-mono);
+        font-size: 10.5px;
+        color: var(--ink-44);
+      }
+      .tool-step__progress {
+        position: absolute;
+        left: 0; right: 0; bottom: 0;
+        height: 1px;
+        overflow: hidden;
+        opacity: 0;
+      }
+      .tool-step[data-status="running"] .tool-step__progress {
+        opacity: 1;
+      }
+      .tool-step__progress::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(90deg, transparent, var(--relay), transparent);
+        animation: shimmer 2s linear infinite;
+      }
+
+      .tool-details {
+        margin: 4px 0 0 12px;
+        padding: 10px 12px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-card);
+      }
+      .tool-details summary {
+        list-style: none;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--ink-58);
+        letter-spacing: 0.04em;
+      }
+      .tool-details summary::-webkit-details-marker { display: none; }
+      .tool-details summary::before {
+        content: "›";
+        font-family: var(--f-mono);
+        color: var(--ink-32);
+        transition: transform 120ms ease;
+      }
+      .tool-details[open] summary::before { transform: rotate(90deg); }
+      .tool-details pre {
+        margin-top: 8px;
+        font-family: var(--f-mono);
+        font-size: 11.5px;
+        color: var(--ink-72);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      /* ───────── Inline cards (approval, question) ───────── */
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-card);
+        padding: 18px 20px;
+      }
+      .card.approval { border-color: var(--border); }
+      .card.approval[data-status="pending"] {
+        border-color: rgba(180, 83, 9, 0.28);
+        background:
+          linear-gradient(0deg, var(--warn-soft), var(--warn-soft)),
+          var(--surface);
+      }
+      .card__head {
+        display: flex; align-items: center; gap: 10px;
+        margin-bottom: 8px;
+      }
+      .card__head .pill { padding: 3px 9px; }
+      .card__title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--ink);
+      }
+      .card__body {
+        font-size: 13.5px;
+        color: var(--ink-90);
+        line-height: 1.6;
+      }
+      .card__meta {
+        display: flex; flex-wrap: wrap; gap: 6px;
+        margin-top: 10px;
+      }
+      .meta-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 8px;
+        border-radius: 6px;
+        background: var(--ink-04);
+        font-family: var(--f-mono);
+        font-size: 11px;
+        color: var(--ink-72);
+      }
+      .meta-chip .dot { width: 5px; height: 5px; border-radius: 999px; background: var(--ink-18); }
+      .card__actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 14px;
+        flex-wrap: wrap;
+      }
+      .btn {
+        display: inline-flex; align-items: center; gap: 7px;
+        height: 32px;
+        padding: 0 12px;
+        border-radius: var(--r-pill);
+        font-size: 12.5px;
+        font-weight: 500;
+        border: 1px solid transparent;
+        transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease, transform 120ms ease;
+      }
+      .btn:active { transform: translateY(0.5px); }
+      .btn--primary {
+        background: var(--ink);
+        color: var(--surface);
+      }
+      .btn--primary:hover { background: var(--relay-deep); }
+      .btn--secondary {
+        background: var(--surface);
+        border-color: var(--border-strong);
+        color: var(--ink);
+      }
+      .btn--secondary:hover { background: var(--hover); }
+      .btn--ghost {
+        background: transparent;
+        color: var(--ink-72);
+      }
+      .btn--ghost:hover { background: var(--hover); color: var(--ink); }
+      .btn--danger {
+        background: transparent;
+        color: var(--danger);
+      }
+      .btn--danger:hover { background: var(--danger-soft); }
+      .btn .ic { width: 14px; height: 14px; stroke-width: 1.8; }
+      .btn .kbd {
+        margin-left: 4px;
+        font-family: var(--f-mono);
+        font-size: 10.5px;
+        color: var(--ink-44);
+        padding: 1px 5px;
+        border-radius: 4px;
+        background: var(--ink-04);
+      }
+      .btn--primary .kbd { color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.12); }
+
+      .card__remember {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-left: auto;
+        padding: 3px 10px;
+        border-radius: var(--r-pill);
+        background: var(--ink-04);
+        font-size: 11.5px;
+        color: var(--ink-58);
+        cursor: pointer;
+      }
+      .card__remember:hover { background: var(--hover); color: var(--ink); }
+      .card__remember .ic { width: 12px; height: 12px; }
+
+      /* Question card — quiet */
+      .card.question { border-color: var(--border); }
+      .card.question .field {
+        margin-top: 12px;
+        position: relative;
+      }
+      .card.question textarea {
+        width: 100%;
+        min-height: 72px;
+        padding: 10px 12px;
+        background: var(--surface-quiet);
+        border: 1px solid var(--border);
+        border-radius: var(--r-control);
+        font-family: var(--f-ui);
+        font-size: 13px;
+        color: var(--ink);
+        resize: vertical;
+      }
+      .card.question textarea:focus {
+        outline: none;
+        border-color: var(--relay-line);
+        box-shadow: 0 0 0 3px var(--relay-tint);
+        background: var(--surface);
+      }
+
+      /* ───────── Composer ───────── */
+      .composer-wrap {
+        padding: 8px 28px 14px;
+        background: linear-gradient(180deg, transparent 0%, var(--page) 22%);
+      }
+      .composer {
+        max-width: var(--turn-max);
+        margin: 0 auto;
+        background: var(--surface);
+        border: 1px solid var(--border-strong);
+        border-radius: 18px;
+        transition: border-color 140ms ease, box-shadow 140ms ease;
+      }
+      .composer:focus-within {
+        border-color: var(--relay-line);
+        box-shadow: 0 0 0 4px var(--relay-tint);
+      }
+      .composer__editor {
+        min-height: 56px;
+        max-height: 280px;
+        padding: 12px 14px 8px;
+        font-family: var(--f-ui);
+        font-size: 14px;
+        color: var(--ink);
+        line-height: 1.55;
+        outline: none;
+      }
+      .composer__editor[data-empty]::before {
+        content: attr(data-placeholder);
+        color: var(--ink-44);
+      }
+      .composer__bar {
+        display: flex; align-items: center;
+        gap: 6px;
+        padding: 6px 8px 8px 10px;
+      }
+      .composer__bar .icon-btn { width: 28px; height: 28px; border-radius: 8px; }
+      .composer__hint {
+        margin: 0 6px 0 6px;
+        font-size: 11px;
+        color: var(--ink-44);
+        display: flex; align-items: center; gap: 6px;
+      }
+      .composer__send {
+        margin-left: auto;
+        display: inline-flex; align-items: center; gap: 8px;
+        height: 30px;
+        padding: 0 4px 0 12px;
+        border-radius: var(--r-pill);
+        background: var(--ink);
+        color: var(--surface);
+        font-size: 12.5px; font-weight: 500;
+        transition: background-color 120ms ease, transform 120ms ease;
+      }
+      .composer__send:hover { background: var(--relay-deep); }
+      .composer__send .send-glyph {
+        width: 22px; height: 22px;
+        margin-left: 4px;
+        display: grid; place-items: center;
+        background: rgba(255, 255, 255, 0.14);
+        border-radius: 999px;
+      }
+      .composer__send .ic { width: 12px; height: 12px; stroke-width: 2.2; }
+
+      /* ───────── Status bar ───────── */
+      .status {
+        background: var(--surface);
+        border-top: 1px solid var(--border);
+        display: grid;
+        grid-template-columns: auto 1fr auto auto auto;
+        gap: 14px;
+        align-items: center;
+        padding: 0 14px;
+        height: var(--status-h);
+        font-size: 11px;
+        color: var(--ink-58);
+      }
+      .status__item { display: inline-flex; align-items: center; gap: 6px; }
+      .status__item .ic { width: 11px; height: 11px; stroke-width: 1.8; }
+      .status__sep { width: 1px; height: 12px; background: var(--border); }
+      .status__path {
+        font-family: var(--f-mono);
+        font-size: 10.5px;
+        color: var(--ink-44);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .conn-dot {
+        width: 7px; height: 7px;
+        border-radius: 999px;
+        background: var(--ok);
+        box-shadow: 0 0 0 3px var(--ok-soft);
+      }
+      .token-meter {
+        display: inline-flex; align-items: center; gap: 6px;
+      }
+      .token-bar {
+        position: relative;
+        width: 84px; height: 4px;
+        border-radius: 999px;
+        background: var(--ink-06);
+        overflow: hidden;
+      }
+      .token-bar__fill {
+        position: absolute;
+        inset: 0 60% 0 0;
+        background: linear-gradient(90deg, var(--relay), var(--relay-deep));
+        border-radius: 999px;
+      }
+
+      /* ───────── Right rail ───────── */
+      .rail {
+        background: var(--rail);
+        border-left: 1px solid var(--border);
+        display: grid;
+        grid-template-rows: auto 1fr;
+        height: 100vh;
+      }
+      .rail__tabs {
+        display: flex;
+        gap: 4px;
+        padding: 12px 14px 4px;
+      }
+      .tab {
+        position: relative;
+        padding: 6px 12px;
+        border-radius: var(--r-pill);
+        font-size: 11.5px;
+        font-weight: 500;
+        color: var(--ink-58);
+      }
+      .tab:hover { color: var(--ink); }
+      .tab.is-active {
+        color: var(--ink);
+        background: var(--surface);
+        box-shadow: inset 0 0 0 1px var(--border);
+      }
+      .rail__body {
+        overflow-y: auto;
+        padding: 8px 14px 22px;
+      }
+
+      .rail-section { margin-top: 14px; }
+      .rail-section__head {
+        display: flex; align-items: center;
+        margin-bottom: 8px;
+      }
+      .rail-section__head .t-eyebrow { letter-spacing: 0.2em; }
+      .rail-section__head .count {
+        margin-left: auto;
+        font-family: var(--f-mono);
+        font-size: 10.5px;
+        color: var(--ink-44);
+      }
+
+      /* Plan list — TodoWrite snapshot */
+      .plan {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-card);
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .plan-row {
+        display: grid;
+        grid-template-columns: 16px 1fr;
+        gap: 8px;
+        align-items: flex-start;
+        padding: 6px 8px;
+        border-radius: 8px;
+      }
+      .plan-row:hover { background: var(--ink-04); }
+      .check {
+        margin-top: 2px;
+        width: 14px; height: 14px;
+        border-radius: 5px;
+        border: 1.4px solid var(--ink-18);
+        display: grid; place-items: center;
+        color: transparent;
+      }
+      .plan-row.is-done .check {
+        background: var(--ok);
+        border-color: var(--ok);
+        color: var(--surface);
+      }
+      .plan-row.is-running .check {
+        border-color: var(--relay);
+        position: relative;
+      }
+      .plan-row.is-running .check::after {
+        content: "";
+        position: absolute;
+        inset: 2px;
+        border-radius: 999px;
+        background: var(--relay);
+        animation: pulse 1.4s ease-in-out infinite;
+      }
+      .plan-row__text {
+        font-size: 12.5px;
+        line-height: 1.45;
+        color: var(--ink);
+      }
+      .plan-row.is-done .plan-row__text {
+        color: var(--ink-58);
+        text-decoration: line-through;
+        text-decoration-color: var(--ink-32);
+      }
+      .plan-row__sub {
+        font-family: var(--f-mono);
+        font-size: 10.5px;
+        color: var(--ink-44);
+        margin-top: 1px;
+      }
+
+      /* Integrations list */
+      .integrations {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-card);
+        overflow: hidden;
+      }
+      .integration {
+        display: grid;
+        grid-template-columns: 28px 1fr auto;
+        gap: 10px;
+        align-items: center;
+        padding: 11px 12px;
+        border-top: 1px solid var(--border);
+      }
+      .integration:first-child { border-top: 0; }
+      .icon-tile {
+        width: 28px; height: 28px;
+        border-radius: 9px;
+        display: grid; place-items: center;
+        background: var(--ink-04);
+        color: var(--ink-72);
+        font-family: var(--f-mono);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .icon-tile.is-relay { background: var(--relay-tint); color: var(--relay-deep); }
+      .icon-tile.is-ok    { background: var(--ok-soft); color: var(--ok); }
+      .icon-tile.is-warn  { background: var(--warn-soft); color: var(--warn); }
+      .integration__name {
+        font-size: 12.5px;
+        font-weight: 500;
+        color: var(--ink);
+        line-height: 1.25;
+      }
+      .integration__sub {
+        font-family: var(--f-mono);
+        font-size: 10.5px;
+        color: var(--ink-44);
+      }
+      .integration__pill {
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        padding: 3px 8px;
+        border-radius: var(--r-pill);
+        color: var(--ok);
+        background: var(--ok-soft);
+      }
+      .integration__pill.is-warn { color: var(--warn); background: var(--warn-soft); }
+      .integration__pill.is-off { color: var(--ink-58); background: var(--ink-06); }
+
+      /* Animations */
+      @keyframes pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.55; transform: scale(0.92); }
+      }
+      @keyframes shimmer {
+        0%   { transform: translateX(-100%); }
+        100% { transform: translateX(100%); }
+      }
+
+      /* Scrollbars — quiet */
+      ::-webkit-scrollbar { width: 10px; height: 10px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb {
+        background: var(--ink-10);
+        border-radius: 999px;
+        border: 3px solid var(--page);
+      }
+      ::-webkit-scrollbar-thumb:hover { background: var(--ink-18); }
+
+      /* Theme toggle (top-right of viewport) */
+      .theme-toggle {
+        position: fixed;
+        right: 12px;
+        bottom: 12px;
+        z-index: 100;
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 6px 10px 6px 8px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r-pill);
+        color: var(--ink-72);
+        font-size: 11px;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.04);
+      }
+      .theme-toggle:hover { color: var(--ink); border-color: var(--border-strong); }
+      .theme-toggle .ic { width: 12px; height: 12px; }
+    </style>
+  </head>
+
+  <body>
+    <div class="app">
+      <!-- ─────────── Sidebar ─────────── -->
+      <aside class="sidebar">
+        <div class="sidebar__brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <span class="brand-name">Relay Agent</span>
+          <span class="brand-version">v0.4.2</span>
+        </div>
+
+        <button class="sidebar__newchat" type="button">
+          <span class="plus" aria-hidden="true">+</span>
+          New chat
+          <span class="kbd">⌘N</span>
+        </button>
+
+        <div class="sidebar__list">
+          <div class="sidebar__section">
+            <span class="t-eyebrow">Today</span>
+          </div>
+          <div class="chat-row is-active is-running" role="button">
+            <span class="chat-row__dot" aria-hidden="true"></span>
+            <span class="chat-row__title">Audit Q1 expenses for outliers</span>
+            <span class="chat-row__time">now</span>
+          </div>
+          <div class="chat-row" role="button">
+            <span class="chat-row__dot" aria-hidden="true"></span>
+            <span class="chat-row__title">Draft incident postmortem · CDP timeout</span>
+            <span class="chat-row__time">2h</span>
+          </div>
+          <div class="chat-row" role="button">
+            <span class="chat-row__dot" aria-hidden="true"></span>
+            <span class="chat-row__title">Summarize PRD: payments v2</span>
+            <span class="chat-row__time">5h</span>
+          </div>
+
+          <div class="sidebar__section">
+            <span class="t-eyebrow">Yesterday</span>
+          </div>
+          <div class="chat-row" role="button">
+            <span class="chat-row__dot" aria-hidden="true"></span>
+            <span class="chat-row__title">Compare two vendor SOC2 reports</span>
+            <span class="chat-row__time">Mon</span>
+          </div>
+          <div class="chat-row" role="button">
+            <span class="chat-row__dot" aria-hidden="true"></span>
+            <span class="chat-row__title">Refactor agent_loop retry helper</span>
+            <span class="chat-row__time">Mon</span>
+          </div>
+
+          <div class="sidebar__section">
+            <span class="t-eyebrow">Earlier</span>
+          </div>
+          <div class="chat-row" role="button">
+            <span class="chat-row__dot" aria-hidden="true"></span>
+            <span class="chat-row__title">Pull weekly Copilot grounding metrics</span>
+            <span class="chat-row__time">Apr 14</span>
+          </div>
+          <div class="chat-row" role="button">
+            <span class="chat-row__dot" aria-hidden="true"></span>
+            <span class="chat-row__title">Onboarding doc for new engineers</span>
+            <span class="chat-row__time">Apr 11</span>
+          </div>
+        </div>
+
+        <div class="sidebar__footer">
+          <div class="ws-badge" aria-hidden="true">RA</div>
+          <div class="ws-meta">
+            <div class="ws-meta__title">Relay_Agent</div>
+            <div class="ws-meta__path">~/work/Relay_Agent</div>
+          </div>
+          <button class="ws-cog" type="button" aria-label="Settings">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.36.13.67.36.92.66"/>
+            </svg>
+          </button>
+        </div>
+      </aside>
+
+      <!-- ─────────── Center ─────────── -->
+      <section class="center">
+        <!-- Header -->
+        <header class="header">
+          <div class="header__left">
+            <span>Today</span>
+            <span class="crumb-sep">·</span>
+            <span class="header__title">Audit Q1 expenses for outliers</span>
+          </div>
+          <div class="header__center">
+            <span class="pill is-running" aria-live="polite">
+              <span class="dot" aria-hidden="true"></span>
+              Running · turn 3 / 16
+            </span>
+          </div>
+          <div class="header__right">
+            <button class="icon-btn" type="button" aria-label="Undo">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="9 14 4 9 9 4"/>
+                <path d="M20 20v-7a4 4 0 0 0-4-4H4"/>
+              </svg>
+            </button>
+            <button class="icon-btn" type="button" aria-label="Redo">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="15 14 20 9 15 4"/>
+                <path d="M4 20v-7a4 4 0 0 1 4-4h12"/>
+              </svg>
+            </button>
+            <button class="icon-btn" type="button" aria-label="Compact context">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 14h6v6"/><path d="M20 10h-6V4"/>
+                <path d="M14 10l7-7"/><path d="M3 21l7-7"/>
+              </svg>
+            </button>
+            <button class="icon-btn" type="button" aria-label="Cancel run" style="color: var(--danger);">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="6" y="6" width="12" height="12" rx="2"/>
+              </svg>
+            </button>
+            <span class="status__sep" style="margin: 0 6px;"></span>
+            <button class="icon-btn" type="button" aria-label="Settings">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"/>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.36.13.67.36.92.66"/>
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <!-- Conversation feed -->
+        <div class="feed-wrap">
+          <div class="feed">
+            <div class="turn-divider"><span>Turn 1 · 14:02</span></div>
+
+            <!-- User -->
+            <div class="msg-user">
+              Look through <code class="t-mono" style="background: var(--ink-04); padding:1px 5px; border-radius:5px;">~/work/Relay_Agent/exports/q1_expenses.csv</code>,
+              find any line items above the team's $5,000 threshold, group by vendor, and tell me which categories shifted most against Q4.
+            </div>
+
+            <!-- Assistant -->
+            <div class="msg-assistant">
+              <div class="msg-assistant__avatar" aria-hidden="true"></div>
+              <div class="msg-assistant__body">
+                <p>I'll inspect the file first, then aggregate by vendor and compare against last quarter. I'll only need read access for this turn.</p>
+              </div>
+            </div>
+
+            <!-- Tool spine -->
+            <div class="tool-spine">
+              <div class="tool-step" data-status="done" data-kind="read">
+                <span class="tool-step__label"><span class="swatch" aria-hidden="true"></span>Read file</span>
+                <span class="tool-step__summary">exports/q1_expenses.csv · 12,084 rows</span>
+                <span class="tool-step__time">0.4s</span>
+                <div class="tool-step__progress" aria-hidden="true"></div>
+              </div>
+              <div class="tool-step" data-status="done" data-kind="search">
+                <span class="tool-step__label"><span class="swatch" aria-hidden="true"></span>Search file contents</span>
+                <span class="tool-step__summary">amount &gt; 5000 · 184 matches across 27 vendors</span>
+                <span class="tool-step__time">0.7s</span>
+              </div>
+              <div class="tool-step" data-status="done" data-kind="read">
+                <span class="tool-step__label"><span class="swatch" aria-hidden="true"></span>Read file</span>
+                <span class="tool-step__summary">exports/q4_expenses.csv · 11,402 rows</span>
+                <span class="tool-step__time">0.3s</span>
+              </div>
+            </div>
+
+            <!-- Assistant continues with editorial passage -->
+            <div class="msg-assistant">
+              <div class="msg-assistant__avatar" aria-hidden="true"></div>
+              <div class="msg-assistant__body">
+                <p>
+                  <strong>3 categories shifted materially against Q4.</strong>
+                  Travel rose <strong>+38%</strong> driven by two vendors
+                  (<code>Atlas Charter</code>, <code>Lumen Hotels</code>);
+                  Software was effectively flat (<strong>+2%</strong>);
+                  Contractor spend fell <strong>−14%</strong> after the Brightline ramp-down.
+                </p>
+                <p>
+                  <em class="cite">Of the 184 line items above $5,000,
+                  the top 5 vendors account for 62% of the dollar value.</em>
+                  I've drafted a one-page brief — want me to write it to
+                  <code>reports/q1_outliers.md</code>?
+                </p>
+              </div>
+            </div>
+
+            <div class="turn-divider"><span>Turn 2 · 14:04</span></div>
+
+            <div class="msg-user">
+              Yes — write the brief. Use the same vendor table format we used last quarter.
+            </div>
+
+            <div class="msg-assistant">
+              <div class="msg-assistant__avatar" aria-hidden="true"></div>
+              <div class="msg-assistant__body">
+                <p>Drafting the brief. I'll need permission to write under <code>reports/</code>.</p>
+              </div>
+            </div>
+
+            <!-- Approval card (pending) -->
+            <section class="card approval" data-status="pending" aria-label="Permission required">
+              <div class="card__head">
+                <span class="pill is-waiting"><span class="dot" aria-hidden="true"></span>Needs approval</span>
+                <span class="card__title">Write a new file in your workspace</span>
+              </div>
+              <p class="card__body">
+                Relay wants to create
+                <strong>reports/q1_outliers.md</strong>
+                in your project folder. The file is new — no existing content will be overwritten.
+              </p>
+              <div class="card__meta">
+                <span class="meta-chip"><span class="dot" aria-hidden="true"></span>tool · <code>write_file</code></span>
+                <span class="meta-chip">~/work/Relay_Agent/reports/q1_outliers.md</span>
+                <span class="meta-chip">≈ 2.4 KB</span>
+              </div>
+              <div class="card__actions">
+                <button class="btn btn--primary" type="button">
+                  <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  Allow once
+                  <span class="kbd">↵</span>
+                </button>
+                <button class="btn btn--secondary" type="button">Always for this conversation</button>
+                <button class="btn btn--secondary" type="button">Always for this folder</button>
+                <button class="btn btn--danger" type="button">
+                  <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  Reject
+                </button>
+              </div>
+            </section>
+
+            <div class="turn-divider"><span>Turn 3 · 14:05 · ongoing</span></div>
+
+            <div class="msg-user">
+              Also flag any vendors that appear for the first time this quarter — separate section.
+            </div>
+
+            <div class="msg-assistant">
+              <div class="msg-assistant__avatar" aria-hidden="true"></div>
+              <div class="msg-assistant__body">
+                <p>Diffing the vendor lists between Q4 and Q1 now.</p>
+              </div>
+            </div>
+
+            <div class="tool-spine">
+              <div class="tool-step" data-status="done" data-kind="search">
+                <span class="tool-step__label"><span class="swatch" aria-hidden="true"></span>Search file contents</span>
+                <span class="tool-step__summary">distinct vendors in q1_expenses.csv · 312 found</span>
+                <span class="tool-step__time">0.5s</span>
+              </div>
+              <div class="tool-step" data-status="running" data-kind="think">
+                <span class="tool-step__label"><span class="swatch" aria-hidden="true"></span>Compare vendor sets</span>
+                <span class="tool-step__summary">building Q4↔Q1 diff…</span>
+                <span class="tool-step__time">1.2s</span>
+                <div class="tool-step__progress" aria-hidden="true"></div>
+              </div>
+            </div>
+
+            <!-- Streaming assistant -->
+            <div class="msg-assistant">
+              <div class="msg-assistant__avatar" aria-hidden="true"></div>
+              <div class="msg-assistant__body">
+                <p>
+                  <strong>27 vendors</strong> appear for the first time this quarter.
+                  Of those, 4 cross the $5,000 threshold:
+                  <code>Northwind Logistics</code>, <code>Atlas Charter</code>, <code>Helios Print</code>,
+                  and one I want to double-check<span class="caret" aria-hidden="true"></span>
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Composer -->
+        <div class="composer-wrap">
+          <div class="composer">
+            <div
+              class="composer__editor"
+              contenteditable="true"
+              data-placeholder="Send a follow-up — Enter inserts a newline, ⌘↵ to send"
+              role="textbox"
+              aria-multiline="true"
+            ></div>
+            <div class="composer__bar">
+              <button class="icon-btn" type="button" aria-label="Attach file">
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.41 17.41a2 2 0 0 1-2.83-2.83l8.49-8.49"/>
+                </svg>
+              </button>
+              <button class="icon-btn" type="button" aria-label="Slash command">
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="6" y1="20" x2="18" y2="4"/>
+                </svg>
+              </button>
+              <button class="icon-btn" type="button" aria-label="Pick model" title="Model: Copilot · M365">
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="9"/>
+                  <path d="M3 12h18"/>
+                  <path d="M12 3a14 14 0 0 1 0 18"/>
+                  <path d="M12 3a14 14 0 0 0 0 18"/>
+                </svg>
+              </button>
+              <span class="composer__hint">
+                <strong style="color: var(--ink);">M365 Copilot</strong>
+                · Edge CDP <span class="t-mono-sm">9360</span>
+              </span>
+              <button class="composer__send" type="button">
+                Send
+                <span class="send-glyph" aria-hidden="true">
+                  <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="5" y1="12" x2="19" y2="12"/>
+                    <polyline points="13 6 19 12 13 18"/>
+                  </svg>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Status bar -->
+        <div class="status">
+          <span class="status__item" title="Edge CDP connected">
+            <span class="conn-dot" aria-hidden="true"></span>
+            CDP · 9360
+          </span>
+          <span class="status__path">~/work/Relay_Agent</span>
+          <span class="status__item">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            <strong style="color: var(--ink);">Copilot</strong> · M365
+          </span>
+          <span class="token-meter" title="Context: ~40,000 / 128,000 tokens">
+            <span class="t-mono-sm" style="color: var(--ink-58);">40K</span>
+            <span class="token-bar"><span class="token-bar__fill"></span></span>
+            <span class="t-mono-sm" style="color: var(--ink-44);">128K</span>
+          </span>
+          <span class="status__item">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+            14:05
+          </span>
+        </div>
+      </section>
+
+      <!-- ─────────── Right rail ─────────── -->
+      <aside class="rail">
+        <div class="rail__tabs" role="tablist" aria-label="Side panel">
+          <button class="tab is-active" role="tab" aria-selected="true">Activity</button>
+          <button class="tab" role="tab">Integrations</button>
+          <button class="tab" role="tab">Files</button>
+        </div>
+
+        <div class="rail__body">
+          <!-- Plan / TodoWrite snapshot -->
+          <div class="rail-section">
+            <div class="rail-section__head">
+              <span class="t-eyebrow">Plan</span>
+              <span class="count">3 / 5</span>
+            </div>
+            <div class="plan">
+              <div class="plan-row is-done">
+                <span class="check" aria-hidden="true">
+                  <svg viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 8 7 12 13 4"/></svg>
+                </span>
+                <div>
+                  <div class="plan-row__text">Read Q1 + Q4 expense exports</div>
+                  <div class="plan-row__sub">2 files · 23,486 rows</div>
+                </div>
+              </div>
+              <div class="plan-row is-done">
+                <span class="check" aria-hidden="true">
+                  <svg viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 8 7 12 13 4"/></svg>
+                </span>
+                <div>
+                  <div class="plan-row__text">Filter line items above $5,000</div>
+                  <div class="plan-row__sub">184 matches · 27 vendors</div>
+                </div>
+              </div>
+              <div class="plan-row is-done">
+                <span class="check" aria-hidden="true">
+                  <svg viewBox="0 0 16 16" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 8 7 12 13 4"/></svg>
+                </span>
+                <div>
+                  <div class="plan-row__text">Compare against Q4 by category</div>
+                  <div class="plan-row__sub">3 categories shifted materially</div>
+                </div>
+              </div>
+              <div class="plan-row is-running">
+                <span class="check" aria-hidden="true"></span>
+                <div>
+                  <div class="plan-row__text">Diff vendor sets between quarters</div>
+                  <div class="plan-row__sub">running…</div>
+                </div>
+              </div>
+              <div class="plan-row">
+                <span class="check" aria-hidden="true"></span>
+                <div>
+                  <div class="plan-row__text">Write brief to <code>reports/q1_outliers.md</code></div>
+                  <div class="plan-row__sub">awaiting approval</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Recent tools (timeline summary) -->
+          <div class="rail-section">
+            <div class="rail-section__head">
+              <span class="t-eyebrow">Recent steps</span>
+              <span class="count">last 5</span>
+            </div>
+            <div class="plan">
+              <div class="plan-row">
+                <span class="check" style="border:0; background: var(--t-search); border-radius:3px;" aria-hidden="true"></span>
+                <div>
+                  <div class="plan-row__text">Search file contents</div>
+                  <div class="plan-row__sub">distinct vendors · 0.5s</div>
+                </div>
+              </div>
+              <div class="plan-row">
+                <span class="check" style="border:0; background: var(--t-read); border-radius:3px;" aria-hidden="true"></span>
+                <div>
+                  <div class="plan-row__text">Read file</div>
+                  <div class="plan-row__sub">q4_expenses.csv · 0.3s</div>
+                </div>
+              </div>
+              <div class="plan-row">
+                <span class="check" style="border:0; background: var(--t-search); border-radius:3px;" aria-hidden="true"></span>
+                <div>
+                  <div class="plan-row__text">Search file contents</div>
+                  <div class="plan-row__sub">amount &gt; 5000 · 0.7s</div>
+                </div>
+              </div>
+              <div class="plan-row">
+                <span class="check" style="border:0; background: var(--t-read); border-radius:3px;" aria-hidden="true"></span>
+                <div>
+                  <div class="plan-row__text">Read file</div>
+                  <div class="plan-row__sub">q1_expenses.csv · 0.4s</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Integrations -->
+          <div class="rail-section">
+            <div class="rail-section__head">
+              <span class="t-eyebrow">Integrations</span>
+              <span class="count">4</span>
+            </div>
+            <div class="integrations">
+              <div class="integration">
+                <span class="icon-tile is-relay" aria-hidden="true">C</span>
+                <div>
+                  <div class="integration__name">M365 Copilot bridge</div>
+                  <div class="integration__sub">Edge · CDP 9360 · session 4f2a</div>
+                </div>
+                <span class="integration__pill">Live</span>
+              </div>
+              <div class="integration">
+                <span class="icon-tile is-ok" aria-hidden="true">RG</span>
+                <div>
+                  <div class="integration__name">Local search · ripgrep</div>
+                  <div class="integration__sub">bundled · 14.1.1</div>
+                </div>
+                <span class="integration__pill">Ready</span>
+              </div>
+              <div class="integration">
+                <span class="icon-tile" aria-hidden="true">PD</span>
+                <div>
+                  <div class="integration__name">PDF · LiteParse</div>
+                  <div class="integration__sub">node sidecar · idle</div>
+                </div>
+                <span class="integration__pill is-off">Idle</span>
+              </div>
+              <div class="integration">
+                <span class="icon-tile is-warn" aria-hidden="true">M</span>
+                <div>
+                  <div class="integration__name">MCP · linear</div>
+                  <div class="integration__sub">stdio · waiting auth</div>
+                </div>
+                <span class="integration__pill is-warn">Auth</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <button class="theme-toggle" type="button" id="themeToggle" aria-label="Toggle theme">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+      </svg>
+      <span id="themeLabel">Dark</span>
+    </button>
+
+    <script>
+      // Empty-state placeholder for the contenteditable composer
+      const editor = document.querySelector(".composer__editor");
+      const setEmptyAttr = () => {
+        if (!editor) return;
+        if ((editor.textContent || "").trim().length === 0) {
+          editor.setAttribute("data-empty", "");
+        } else {
+          editor.removeAttribute("data-empty");
+        }
+      };
+      setEmptyAttr();
+      editor && editor.addEventListener("input", setEmptyAttr);
+
+      // Theme toggle
+      const root = document.documentElement;
+      const tt = document.getElementById("themeToggle");
+      const tl = document.getElementById("themeLabel");
+      tt?.addEventListener("click", () => {
+        const next = root.dataset.theme === "dark" ? "light" : "dark";
+        root.dataset.theme = next;
+        if (tl) tl.textContent = next === "dark" ? "Light" : "Dark";
+      });
+    </script>
+  </body>
+</html>
