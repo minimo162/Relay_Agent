@@ -8060,6 +8060,54 @@ Results:
 - `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
 - `git diff --check`: passed.
 
+## 2026-04-21 - Workspace search Office/PDF explicit-mode guard
+
+Fixed a startup-run stall risk in deterministic initial local search while
+keeping the search switch close to opencode's explicit `glob` / `grep` tool
+shape: `workspace_search` no longer infers Office/PDF extraction from extension
+filters in `mode:auto`; only explicit `mode:office` enters the Office/PDF search
+path. When Office/PDF search is enabled, the integration now checks the
+workspace search deadline before entering and between pattern passes, and the
+strategy trace only reports `office_preview_anchor_integration` when that
+retriever was actually enabled.
+
+Follow-up speedup: matched opencode's ripgrep-first search shape more closely by
+removing Relay's extra pre-search symlink WalkDir pass and collapsing multiple
+content-term ripgrep calls into one alternation search. Symlink escapes remain
+safe because ripgrep is invoked with link following disabled; the regression now
+asserts no external candidate/snippet is returned rather than requiring a
+precomputed skip record.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test -p runtime workspace_search_returns_ranked_candidates_snippets_and_limits --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test -p runtime workspace_search_only_scans_office_in_explicit_office_mode --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test -p runtime agentic_search_office_pdf --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test -p runtime workspace_search_does_not_follow_symlink_escape --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test -p runtime workspace_search_expands_agentic_search_implementation_terms --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test -p runtime workspace_search_handles_ambiguous_japanese_search_improvement_query --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test -p runtime workspace_search_ --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+pnpm check
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test -p runtime workspace_search_returns_ranked_candidates_snippets_and_limits --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed, 1 passed.
+- `cargo test -p runtime workspace_search_only_scans_office_in_explicit_office_mode --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed, 1 passed.
+- `cargo test -p runtime agentic_search_office_pdf --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed, 1 passed.
+- `cargo test -p runtime workspace_search_does_not_follow_symlink_escape --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed, 1 passed.
+- `cargo test -p runtime workspace_search_expands_agentic_search_implementation_terms --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed, 1 passed.
+- `cargo test -p runtime workspace_search_handles_ambiguous_japanese_search_improvement_query --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed, 1 passed.
+- `cargo test -p runtime workspace_search_ --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed, 23 passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`
