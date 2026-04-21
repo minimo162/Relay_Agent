@@ -15,6 +15,39 @@
 
 ## Milestone Log
 
+### 2026-04-21 opencode-aligned initial search unsticking
+
+Reviewed current `anomalyco/opencode` at
+`92c005866b99240a63b11602f3ffb541f844c257` (`grep.ts`, `glob.ts`, and
+`file/ripgrep.ts`). opencode's search flow keeps the first step as a direct
+rg-backed `glob` or `grep` call, with file/path resolution in the tool itself,
+instead of a host-injected multi-strategy search runner.
+
+- Changed Relay's deterministic initial local-search injection to emit one
+  simple `glob_search` / `grep_search` call instead of `workspace_search` or a
+  batch of `office_search` calls. Office/PDF lookups now start with an
+  extension-family `glob_search` such as `**/*.{docx,xlsx,pptx,pdf}`; code/text
+  lookups start with a bounded `grep_search` using the first meaningful query
+  term.
+- Kept external absolute anchors outside the configured Project from becoming
+  direct search roots; the initial opencode-style tool call falls back to the
+  active workspace path.
+- Counted `workspace_search` toward the runtime's per-turn local-search budget,
+  matching the existing budget message and preventing repeated broad searches
+  from keeping a turn alive indefinitely.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml initial_search_plan_ -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml document_lookup_ -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agentic_search_implementation_lookup_starts_with_opencode_grep -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml cash_flow_lookup_keeps_pdf_when_user_asks_for_pdf -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_budget_tool_error_escalates_to_summary_repair -- --nocapture`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_search_counts_toward_turn_search_budget -- --nocapture`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-21 agentic Office search expansion
 
 Aligned Relay's deterministic local document lookup more closely with

@@ -699,7 +699,10 @@ const TURN_TOOL_DUPLICATE_LIMIT: usize = 3;
 const TURN_LOCAL_SEARCH_TOOL_LIMIT: usize = 6;
 
 fn is_turn_level_local_search_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "glob_search" | "grep_search" | "office_search")
+    matches!(
+        tool_name,
+        "workspace_search" | "glob_search" | "grep_search" | "office_search"
+    )
 }
 
 fn pending_tool_uses_from_message(msg: &ConversationMessage) -> Vec<(String, String, String)> {
@@ -1829,6 +1832,11 @@ mod tests {
             "search-budget guard should report a ToolError outcome, got {:?}",
             summary.outcome,
         );
+    }
+
+    #[test]
+    fn workspace_search_counts_toward_turn_search_budget() {
+        assert!(super::is_turn_level_local_search_tool("workspace_search"));
     }
 
     #[test]

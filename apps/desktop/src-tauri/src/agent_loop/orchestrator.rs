@@ -6909,18 +6909,12 @@ mod loop_controller_tests {
         .expect("document lookup should get an initial local search plan");
 
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "workspace_search");
+        assert_eq!(calls[0].0, "glob_search");
         assert!(calls[0]
             .1
-            .contains("キャッシュフロー計算書の作成に関係するファイルを検索して"));
-        assert!(calls[0].1.contains(r#""mode":"office""#));
-        assert!(calls[0]
-            .1
-            .contains(r#""include_ext":["docx","xlsx","pptx","pdf"]"#));
-        assert!(!calls
-            .iter()
-            .any(|(_, input)| input.contains("**/*キャッシュ*")));
-        assert!(!calls.iter().any(|(_, input)| input.contains("**/*フロー*")));
+            .contains(r#""pattern":"**/*.{docx,xlsx,pptx,pdf}""#));
+        assert!(!calls[0].1.contains("workspace_search"));
+        assert!(!calls[0].1.contains("office_search"));
     }
 
     #[test]
@@ -6932,10 +6926,9 @@ mod loop_controller_tests {
         .expect("document lookup should get an initial local search plan");
 
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "workspace_search");
-        assert!(calls[0].1.contains(r#""include_ext":["xlsx"]"#));
-        assert!(calls[0].1.contains(r#""mode":"office""#));
-        assert!(!calls[0].1.contains("glob_search"));
+        assert_eq!(calls[0].0, "glob_search");
+        assert!(calls[0].1.contains(r#""pattern":"**/*.xlsx""#));
+        assert!(!calls[0].1.contains("workspace_search"));
     }
 
     #[test]
@@ -6947,8 +6940,8 @@ mod loop_controller_tests {
         .expect("PDF-specific cash-flow lookup should get an initial local search plan");
 
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "workspace_search");
-        assert!(calls[0].1.contains(r#""include_ext":["pdf"]"#));
+        assert_eq!(calls[0].0, "glob_search");
+        assert!(calls[0].1.contains(r#""pattern":"**/*.pdf""#));
     }
 
     #[test]
@@ -6959,20 +6952,14 @@ mod loop_controller_tests {
         )
         .expect("document lookup should get an initial local search plan");
 
-        assert!(calls.len() >= 3);
-        assert!(calls.iter().all(|(name, _)| name == "office_search"));
-        assert!(calls.iter().all(|(_, input)| input.contains(
-            r#""paths":["\\\\Dsfile622\\\\div622$\\\\shr1\\\\05_経理部\\\\03_連結財務G/**/*"]"#
-        )));
-        assert!(calls
-            .iter()
-            .all(|(_, input)| input.contains(r#""include_ext":["docx","xlsx","pptx","pdf"]"#)));
-        assert!(calls
-            .iter()
-            .any(|(_, input)| input.contains(r#""pattern":"CFS""#)));
-        assert!(calls
-            .iter()
-            .any(|(_, input)| input.contains(r#""pattern":"キャッシュ・フロー""#)));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "glob_search");
+        assert!(calls[0]
+            .1
+            .contains(r#""path":"C:\\Users\\m242054\\Relay_Agent""#));
+        assert!(calls[0]
+            .1
+            .contains(r#""pattern":"**/*.{docx,xlsx,pptx,pdf}""#));
     }
 
     #[test]
@@ -6983,21 +6970,14 @@ mod loop_controller_tests {
         )
         .expect("document lookup should get an initial local search plan");
 
-        assert!(calls.len() >= 3);
-        assert!(calls.iter().all(|(name, _)| name == "office_search"));
-        assert!(calls
-            .iter()
-            .all(|(_, input)| input
-                .contains(r#""paths":["H:\\shr1\\05_経理部\\03_連結財務G/**/*"]"#)));
-        assert!(calls
-            .iter()
-            .any(|(_, input)| input.contains(r#""pattern":"キャッシュフロー""#)));
-        assert!(calls
-            .iter()
-            .any(|(_, input)| input.contains(r#""pattern":"CFS""#)));
-        assert!(calls
-            .iter()
-            .all(|(_, input)| input.contains(r#""-i":true"#)));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "glob_search");
+        assert!(calls[0]
+            .1
+            .contains(r#""path":"C:\\Users\\m242054\\Relay_Agent""#));
+        assert!(calls[0]
+            .1
+            .contains(r#""pattern":"**/*.{docx,xlsx,pptx,pdf}""#));
     }
 
     #[test]
@@ -7009,10 +6989,10 @@ mod loop_controller_tests {
         .expect("document lookup should get an initial local search plan");
 
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "workspace_search");
+        assert_eq!(calls[0].0, "glob_search");
         assert!(calls[0]
             .1
-            .contains(r#""paths":["C:\\Users\\m242054\\Relay_Agent\\reports"]"#));
+            .contains(r#""path":"C:\\Users\\m242054\\Relay_Agent\\reports""#));
     }
 
     #[test]
@@ -7093,15 +7073,15 @@ mod loop_controller_tests {
     }
 
     #[test]
-    fn agentic_search_implementation_lookup_starts_with_workspace_search() {
+    fn agentic_search_implementation_lookup_starts_with_opencode_grep() {
         let calls = build_initial_local_search_tool_calls("agentic search の実装を探して", None)
-            .expect("agentic search lookup should get workspace_search");
+            .expect("agentic search lookup should get grep_search");
 
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "workspace_search");
-        assert!(calls[0]
-            .1
-            .contains(r#""query":"agentic search の実装を探して""#));
+        assert_eq!(calls[0].0, "grep_search");
+        assert!(calls[0].1.contains(r#""pattern":"agentic""#));
+        assert!(calls[0].1.contains(r#""output_mode":"content""#));
+        assert!(calls[0].1.contains(r#""max_count":20"#));
     }
 
     #[test]

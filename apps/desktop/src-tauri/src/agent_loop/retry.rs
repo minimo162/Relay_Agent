@@ -779,93 +779,6 @@ fn office_search_include_ext_for_search_request(text: &str) -> Vec<&'static str>
     }
 }
 
-fn office_search_paths_for_request(text: &str, path: Option<&str>) -> Vec<String> {
-    let base = path
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .unwrap_or(".");
-    let base = base.trim_end_matches(['/', '\\']);
-    let mut paths = expanded_search_terms_for_request(text)
-        .into_iter()
-        .take(8)
-        .map(|term| format!("{base}/**/*{}*", glob_literal_term(&term)))
-        .collect::<Vec<_>>();
-    paths.push(format!("{base}/**/*"));
-    paths
-}
-
-fn office_search_paths_for_explicit_root(path: &str) -> Vec<String> {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return vec![];
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    if lower.ends_with(".docx")
-        || lower.ends_with(".xlsx")
-        || lower.ends_with(".pptx")
-        || lower.ends_with(".pdf")
-    {
-        return vec![trimmed.to_string()];
-    }
-    let base = trimmed.trim_end_matches(['/', '\\']);
-    vec![format!("{base}/**/*")]
-}
-
-fn office_search_patterns_for_request(text: &str) -> Vec<String> {
-    let mut patterns = Vec::new();
-    let mut seen = BTreeSet::new();
-    if is_cash_flow_search_request(text) {
-        for pattern in [
-            "キャッシュフロー",
-            "キャッシュ・フロー",
-            "CFS",
-            "計算書",
-            "CF",
-        ] {
-            push_search_term(&mut patterns, &mut seen, pattern.to_string());
-        }
-    }
-    for term in expanded_search_terms_for_request(text) {
-        if path_is_absolute_like(&term) || term.contains(['/', '\\']) {
-            continue;
-        }
-        push_search_term(&mut patterns, &mut seen, term);
-        if patterns.len() >= 6 {
-            break;
-        }
-    }
-    if patterns.is_empty() {
-        push_search_term(&mut patterns, &mut seen, text.trim().to_string());
-    }
-    patterns.truncate(4);
-    patterns
-}
-
-fn build_office_search_tool_call_for_explicit_root(latest_request: &str, path: &str) -> Value {
-    let paths = office_search_paths_for_explicit_root(path);
-    let include_ext = office_search_include_ext_for_search_request(latest_request);
-    let calls = office_search_patterns_for_request(latest_request)
-        .into_iter()
-        .map(|pattern| {
-            json!({
-                "name": "office_search",
-                "relay_tool_call": true,
-                "input": {
-                    "pattern": pattern,
-                    "paths": paths.clone(),
-                    "regex": false,
-                    "-i": true,
-                    "include_ext": include_ext.clone(),
-                    "context": 120,
-                    "max_results": 40,
-                    "max_files": 200
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-    Value::Array(calls)
-}
-
 fn expanded_search_terms_for_request(text: &str) -> Vec<String> {
     let mut terms = Vec::new();
     let mut seen = BTreeSet::new();
@@ -1217,6 +1130,62 @@ fn build_search_tool_payload(
     build_workspace_search_tool_call(latest_request, path)
 }
 
+fn build_glob_search_tool_call(pattern: &str, path: Option<&str>) -> Value {
+    let mut input = serde_json::Map::new();
+    input.insert("pattern".to_string(), Value::String(pattern.to_string()));
+    if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
+        input.insert("path".to_string(), Value::String(path.trim().to_string()));
+    }
+    json!({
+        "name": "glob_search",
+        "relay_tool_call": true,
+        "input": Value::Object(input),
+    })
+}
+
+fn build_grep_search_tool_call(pattern: &str, path: Option<&str>) -> Value {
+    let mut input = serde_json::Map::new();
+    input.insert("pattern".to_string(), Value::String(pattern.to_string()));
+    if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
+        input.insert("path".to_string(), Value::String(path.trim().to_string()));
+    }
+    input.insert(
+        "output_mode".to_string(),
+        Value::String("content".to_string()),
+    );
+    input.insert("-n".to_string(), Value::Bool(true));
+    input.insert("-i".to_string(), Value::Bool(true));
+    input.insert(
+        "head_limit".to_string(),
+        Value::Number(serde_json::Number::from(100)),
+    );
+    input.insert(
+        "max_count".to_string(),
+        Value::Number(serde_json::Number::from(20)),
+    );
+    json!({
+        "name": "grep_search",
+        "relay_tool_call": true,
+        "input": Value::Object(input),
+    })
+}
+
+fn opencode_initial_office_glob_pattern(latest_request: &str) -> String {
+    let exts = office_search_include_ext_for_search_request(latest_request);
+    if exts.len() == 1 {
+        format!("**/*.{}", exts[0])
+    } else {
+        format!("**/*.{{{}}}", exts.join(","))
+    }
+}
+
+fn opencode_initial_grep_pattern(latest_request: &str) -> Option<String> {
+    expanded_search_terms_for_request(latest_request)
+        .into_iter()
+        .find(|term| !path_is_absolute_like(term) && !term.contains(['/', '\\']))
+        .map(|term| escape_regex_term(&term))
+}
+
 pub(crate) fn build_initial_local_search_tool_calls(
     latest_request: &str,
     cwd: Option<&str>,
@@ -1224,15 +1193,20 @@ pub(crate) fn build_initial_local_search_tool_calls(
     if !is_local_file_search_request(latest_request) {
         return None;
     }
-    let payload = if let Some(anchor) = explicit_external_absolute_anchor(latest_request, cwd) {
-        if is_office_content_search_request(latest_request) {
-            build_office_search_tool_call_for_explicit_root(latest_request, &anchor)
-        } else {
-            build_workspace_search_tool_call(latest_request, cwd)
-        }
+    let path_anchor = if explicit_external_absolute_anchor(latest_request, cwd).is_some() {
+        cwd.map(str::to_string)
     } else {
-        let path_anchor = initial_search_path_for_request(latest_request, cwd);
-        build_workspace_search_tool_call(latest_request, path_anchor.as_deref())
+        initial_search_path_for_request(latest_request, cwd)
+    };
+    let payload = if is_office_content_search_request(latest_request) {
+        build_glob_search_tool_call(
+            &opencode_initial_office_glob_pattern(latest_request),
+            path_anchor.as_deref(),
+        )
+    } else if let Some(pattern) = opencode_initial_grep_pattern(latest_request) {
+        build_grep_search_tool_call(&pattern, path_anchor.as_deref())
+    } else {
+        build_glob_search_tool_call("**/*", path_anchor.as_deref())
     };
     let calls = match payload {
         Value::Array(items) => items,
