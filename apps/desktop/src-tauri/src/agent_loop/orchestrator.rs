@@ -6687,27 +6687,18 @@ mod loop_controller_tests {
         )
         .expect("cash-flow lookup should get an initial local search plan");
 
-        assert_eq!(calls.len(), 5);
+        assert_eq!(calls.len(), 4);
         assert_eq!(calls[0].0, "workspace_search");
         assert!(calls[0]
             .1
             .contains("キャッシュフロー計算書の作成に関係するファイルを検索して"));
         assert_eq!(calls[1].0, "glob_search");
         assert!(calls[1].1.contains(r#""pattern":"**/*キャッシュ*フロー*""#));
-        assert_eq!(calls[2].0, "office_search");
-        assert!(calls[2].1.contains(r#""regex":true"#));
-        assert!(calls[2]
-            .1
-            .contains(r#""include_ext":["docx","xlsx","pptx"]"#));
-        assert!(calls[2].1.contains(r#""max_results":30"#));
-        assert!(calls[2].1.contains(r#""max_files":80"#));
-        assert!(calls[2]
-            .1
-            .contains(r#""pattern":"キャッシュ[・\\s]*フロー|cash\\s*flow|\\bCF\\b|\\bCFS\\b""#));
+        assert_eq!(calls[2].0, "glob_search");
+        assert!(calls[2].1.contains(r#""pattern":"**/*CF*""#));
         assert_eq!(calls[3].0, "glob_search");
-        assert!(calls[3].1.contains(r#""pattern":"**/*CF*""#));
-        assert_eq!(calls[4].0, "glob_search");
-        assert!(calls[4].1.contains(r#""pattern":"**/*CFS*""#));
+        assert!(calls[3].1.contains(r#""pattern":"**/*CFS*""#));
+        assert!(!calls.iter().any(|(name, _)| name == "office_search"));
     }
 
     #[test]
@@ -6717,10 +6708,11 @@ mod loop_controller_tests {
         )
         .expect("PDF-specific cash-flow lookup should get an initial local search plan");
 
-        assert_eq!(calls[2].0, "office_search");
-        assert!(calls[2]
-            .1
-            .contains(r#""include_ext":["docx","xlsx","pptx","pdf"]"#));
+        assert!(!calls.iter().any(|(name, _)| name == "office_search"));
+        assert!(calls.iter().any(|(name, input)| {
+            name == "workspace_search"
+                && input.contains("キャッシュフロー計算書の作成に関係するPDFファイルを検索して")
+        }));
     }
 
     #[test]

@@ -820,7 +820,12 @@ fn build_workspace_search_tool_call(latest_request: &str, path: Option<&str>) ->
     })
 }
 
-fn build_search_tool_payload(latest_request: &str, pattern: &str, path: Option<&str>) -> Value {
+fn build_search_tool_payload(
+    latest_request: &str,
+    pattern: &str,
+    path: Option<&str>,
+    include_office_content_search: bool,
+) -> Value {
     let workspace_call = build_workspace_search_tool_call(latest_request, path);
     let mut glob_input = serde_json::Map::new();
     glob_input.insert("pattern".to_string(), Value::String(pattern.to_string()));
@@ -834,6 +839,25 @@ fn build_search_tool_payload(latest_request: &str, pattern: &str, path: Option<&
     });
     if !is_office_content_search_request(latest_request) {
         return Value::Array(vec![workspace_call, glob_call]);
+    }
+    if !include_office_content_search {
+        let mut calls = vec![workspace_call, glob_call];
+        for alias in inferred_cash_flow_aliases(latest_request) {
+            let mut alias_glob_input = serde_json::Map::new();
+            alias_glob_input.insert(
+                "pattern".to_string(),
+                Value::String(format!("**/*{alias}*")),
+            );
+            if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
+                alias_glob_input.insert("path".to_string(), Value::String(path.trim().to_string()));
+            }
+            calls.push(json!({
+                "name": "glob_search",
+                "relay_tool_call": true,
+                "input": Value::Object(alias_glob_input),
+            }));
+        }
+        return Value::Array(calls);
     }
     let Some(office_pattern) = infer_office_search_pattern_for_search_request(latest_request)
     else {
@@ -904,7 +928,9 @@ pub(crate) fn build_initial_local_search_tool_calls(
         .into_iter()
         .next();
     let payload = infer_glob_pattern_for_search_request(latest_request)
-        .map(|pattern| build_search_tool_payload(latest_request, &pattern, path_anchor.as_deref()))
+        .map(|pattern| {
+            build_search_tool_payload(latest_request, &pattern, path_anchor.as_deref(), false)
+        })
         .unwrap_or_else(|| {
             build_workspace_search_tool_call(latest_request, path_anchor.as_deref())
         });
@@ -968,7 +994,7 @@ fn build_search_tool_protocol_repair_input(
     pattern: &str,
     path: Option<&str>,
 ) -> String {
-    let expected_payload = build_search_tool_payload(latest_request, pattern, path);
+    let expected_payload = build_search_tool_payload(latest_request, pattern, path, true);
     let expected_json =
         serde_json::to_string_pretty(&expected_payload).unwrap_or_else(|_| "{}".to_string());
     let search_instruction = if expected_payload.is_array() {

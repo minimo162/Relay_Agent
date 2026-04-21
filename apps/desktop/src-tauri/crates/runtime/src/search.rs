@@ -246,6 +246,7 @@ struct WorkspaceFileEntry {
     path_string: String,
     metadata: fs::Metadata,
     modified_ms: u128,
+    scan_priority: i64,
     accumulator: WorkspaceCandidateAccumulator,
 }
 
@@ -595,19 +596,23 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
             score_workspace_path(&path_string, &terms, &mut accumulator);
             score_extension(&canonical, &mut accumulator);
             score_recency_from_metadata(&metadata, &mut accumulator);
+            let scan_priority = workspace_search_scan_priority(&accumulator);
             file_entries.push(WorkspaceFileEntry {
                 modified_ms,
                 canonical,
                 path_string,
                 metadata,
+                scan_priority,
                 accumulator,
             });
         }
     }
 
     file_entries.sort_by(|left, right| {
-        Reverse(left.modified_ms)
-            .cmp(&Reverse(right.modified_ms))
+        right
+            .scan_priority
+            .cmp(&left.scan_priority)
+            .then_with(|| Reverse(left.modified_ms).cmp(&Reverse(right.modified_ms)))
             .then_with(|| left.path_string.cmp(&right.path_string))
     });
 
@@ -738,11 +743,12 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
         query: query.to_string(),
         plan,
         strategy: vec![
-            "intent:auto".to_string(),
-            "path_discovery".to_string(),
-            "literal_grep".to_string(),
-            "snippet_expansion".to_string(),
-            "office_preview_anchor_integration".to_string(),
+        "intent:auto".to_string(),
+        "path_discovery".to_string(),
+        "lightweight_candidate_ranking".to_string(),
+        "literal_grep".to_string(),
+        "snippet_expansion".to_string(),
+        "office_preview_anchor_integration".to_string(),
         ],
         needs_clarification,
         candidates,
@@ -1350,6 +1356,28 @@ fn score_workspace_path(
     }
 }
 
+fn workspace_search_scan_priority(accumulator: &WorkspaceCandidateAccumulator) -> i64 {
+    let mut priority = 0;
+    if accumulator.features.filename_match {
+        priority += 3_000;
+    }
+    if accumulator.features.path_match {
+        priority += 2_000;
+    }
+    if accumulator.features.symbol_match_count > 0 {
+        priority += 1_500;
+    }
+    if accumulator.features.office_anchor {
+        priority += 1_000;
+    }
+    priority += (accumulator.match_count.min(20) as i64) * 100;
+    priority += accumulator.score.round() as i64;
+    if accumulator.features.recently_modified {
+        priority += 25;
+    }
+    priority - i64::from(accumulator.features.ignored_generated_penalty.max(0))
+}
+
 fn score_extension(path: &Path, accumulator: &mut WorkspaceCandidateAccumulator) {
     let Some(ext) = path.extension().and_then(|extension| extension.to_str()) else {
         return;
@@ -1880,8 +1908,11 @@ mod tests {
         let dir = temp_path("workspace-search-path-budget");
         std::fs::create_dir_all(dir.join("a_old")).expect("old dir");
         std::fs::create_dir_all(dir.join("z_new")).expect("new dir");
-        fs::write(dir.join("a_old/agentic_search_router.rs"), "pub fn route() {}\n")
-            .expect("path target");
+        fs::write(
+            dir.join("a_old/agentic_search_router.rs"),
+            "pub fn route() {\n    // agentic search router\n}\n",
+        )
+        .expect("path target");
         std::thread::sleep(Duration::from_millis(1100));
         fs::write(dir.join("z_new/unrelated.rs"), "pub fn newer() {}\n").expect("newer file");
         std::env::set_current_dir(&dir).expect("set cwd");
@@ -1907,6 +1938,10 @@ mod tests {
             .path
             .ends_with("a_old/agentic_search_router.rs"));
         assert!(output.candidates[0].features.filename_match);
+        assert!(output
+            .snippets
+            .iter()
+            .any(|snippet| snippet.preview.contains("agentic search router")));
 
         std::env::set_current_dir(original_dir).expect("restore cwd");
         let _ = fs::remove_dir_all(dir);

@@ -960,6 +960,32 @@ fn expand_office_candidates(
     max_files: usize,
     deadline: Instant,
 ) -> io::Result<CandidateExpansion> {
+    expand_office_candidates_with_cap(
+        paths,
+        include_ext,
+        max_files,
+        office_candidate_expansion_cap(max_files),
+        deadline,
+    )
+}
+
+fn office_candidate_expansion_cap(max_files: usize) -> usize {
+    let default = max_files.saturating_mul(4).max(max_files + 1).max(200);
+    env_usize(
+        "RELAY_OFFICE_SEARCH_EXPANSION_CANDIDATE_CAP",
+        default,
+        max_files,
+        100_000,
+    )
+}
+
+fn expand_office_candidates_with_cap(
+    paths: &[String],
+    include_ext: &BTreeSet<String>,
+    max_files: usize,
+    expansion_cap: usize,
+    deadline: Instant,
+) -> io::Result<CandidateExpansion> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
     let mut errors = Vec::new();
@@ -1000,8 +1026,12 @@ fn expand_office_candidates(
                         reason: error.error().to_string(),
                     }),
                 }
+                if out.len() >= expansion_cap {
+                    files_truncated = true;
+                    break;
+                }
             }
-            if wall_clock_truncated {
+            if files_truncated || wall_clock_truncated {
                 break;
             }
         } else {
@@ -1013,6 +1043,10 @@ fn expand_office_candidates(
                 true,
                 &mut errors,
             );
+            if out.len() >= expansion_cap {
+                files_truncated = true;
+                break;
+            }
         }
     }
     sort_candidates_by_modified_desc(&mut out);
@@ -1594,6 +1628,32 @@ mod tests {
         assert!(!expansion
             .candidates
             .contains(&fs::canonicalize(&oldest).unwrap()));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expand_office_candidates_stops_at_expansion_cap() {
+        let root = test_dir();
+        for index in 0..5 {
+            fs::write(root.join(format!("{index}.xlsx")), b"candidate")
+                .expect("write candidate");
+        }
+        let pattern = root.join("*.xlsx").to_string_lossy().into_owned();
+        let include_ext =
+            normalize_include_ext(Some(&vec![String::from("xlsx")])).expect("include ext");
+
+        let expansion = expand_office_candidates_with_cap(
+            &[pattern],
+            &include_ext,
+            2,
+            3,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .expect("expand candidates");
+
+        assert!(expansion.files_truncated);
+        assert_eq!(expansion.candidates.len(), 2);
 
         let _ = fs::remove_dir_all(root);
     }

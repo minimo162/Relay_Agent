@@ -263,6 +263,9 @@ Acceptance criteria:
 - `workspace_search` returns ranked candidate files, evidence snippets,
   searched/skipped file and byte counts, structured skip reasons, truncation
   state, and an honest not-found / needs-clarification signal.
+- `workspace_search` stages lightweight path/filename/extension/recency ranking
+  before content reads so broad searches stay fast while tight budgets still
+  inspect likely relevant files first.
 - Standard ignore directories such as `.git`, `node_modules`, and `target`,
   plus `.gitignore` patterns, are skipped by default, and
   large/plainly unreadable/binary files do not bloat results.

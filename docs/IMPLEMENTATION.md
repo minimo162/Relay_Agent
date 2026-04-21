@@ -15,6 +15,63 @@
 
 ## Milestone Log
 
+### 2026-04-21 agentic search staged retrieval
+
+Improved `workspace_search` speed and precision using the same practical shape
+as claw-code/opencode style local search tools: cheap discovery first, bounded
+results, mtime-aware ordering, and full evidence expansion only after likely
+candidates are identified.
+
+- `workspace_search` now prioritizes content scanning by lightweight
+  path/filename/symbol/Office/recency signals instead of modified time alone.
+  This keeps recent-file ordering as a tie-breaker while allowing an older but
+  clearly named file to be read before a newer unrelated file under tight
+  `max_files` budgets.
+- The output strategy now records `lightweight_candidate_ranking`, making the
+  staged retrieval path visible in diagnostics.
+- Deterministic initial local document lookup no longer runs a broad standalone
+  `office_search` in the first batch. Initial lookup now uses `workspace_search`
+  plus filename globs; the heavier Office/PDF content search remains available
+  in protocol repair or narrower follow-up, avoiding duplicate broad scans when
+  `workspace_search` has already integrated Office/PDF previews.
+- The existing `office_search` candidate expansion cap from the latency fix is
+  part of this staged retrieval approach for large local/UNC corpora.
+
+References inspected:
+
+- `https://github.com/anomalyco/opencode/`: `grep` / `glob` tools use ripgrep,
+  respect ignore behavior, return bounded results, and sort matches by modified
+  time.
+- `https://github.com/ultraworkers/claw-code.git`: lightweight file search/read
+  tools keep low-level operations small and structured.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_search_ -- --nocapture`: passed, 20 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml cash_flow_lookup -- --nocapture`: passed, 2 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan_escalates_to_filename_and_content_search_repair -- --nocapture`: passed, 1 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-21 office_search expansion latency cap
+
+Fixed a follow-up performance regression from the recent-file ordering change:
+wide `office_search` globs such as `**/*` could spend too long discovering every
+candidate before extraction started. Candidate expansion now has a separate
+discovery cap, defaulting to `max(max_files * 4, max_files + 1, 200)` and
+configurable through `RELAY_OFFICE_SEARCH_EXPANSION_CANDIDATE_CAP`. The tool
+still sorts discovered candidates by modified time descending before applying
+`max_files`, but it no longer tries to enumerate an entire large workspace or
+UNC share during the initial lookup.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml expand_office_candidates -- --nocapture`: passed, 6 passed.
+- `cargo check -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-21 office_search recent-file truncation fix
 
 Fixed a remaining local document search ordering issue where `office_search`
