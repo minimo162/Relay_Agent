@@ -3537,20 +3537,36 @@ impl<R: Runtime> ToolExecutor for TauriToolExecutor<R> {
             _ => None,
         };
 
-        let result = match tools::execute_tool(tool_name, &input_value) {
-            Ok(result) => result,
-            Err(error) => {
-                let message = if tool_name == "read_file" {
-                    enrich_read_file_tool_error(
-                        error,
-                        original_read_file_path.as_deref(),
-                        resolved_read_file_path.as_deref(),
-                        self.cwd.as_deref(),
-                    )
-                } else {
-                    error
-                };
-                return Err(runtime::ToolError::new(message));
+        let result = if tool_name == "workspace_search" {
+            let search_input =
+                serde_json::from_value::<runtime::WorkspaceSearchInput>(input_value.clone())
+                    .map_err(|error| runtime::ToolError::new(error.to_string()))?;
+            let workspace_root = self
+                .cwd
+                .as_ref()
+                .map(|s| PathBuf::from(s.trim()))
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            let output = runtime::workspace_search_with_root(&search_input, &workspace_root)
+                .map_err(|error| runtime::ToolError::new(error.to_string()))?;
+            serde_json::to_string_pretty(&output)
+                .map_err(|error| runtime::ToolError::new(error.to_string()))?
+        } else {
+            match tools::execute_tool(tool_name, &input_value) {
+                Ok(result) => result,
+                Err(error) => {
+                    let message = if tool_name == "read_file" {
+                        enrich_read_file_tool_error(
+                            error,
+                            original_read_file_path.as_deref(),
+                            resolved_read_file_path.as_deref(),
+                            self.cwd.as_deref(),
+                        )
+                    } else {
+                        error
+                    };
+                    return Err(runtime::ToolError::new(message));
+                }
             }
         };
 

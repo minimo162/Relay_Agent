@@ -8031,6 +8031,35 @@ Results:
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml empty_office_search_result_false_evidence_claim_escalates_to_summary_repair -- --nocapture`: passed, 1 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml malformed_office_search_tool_json_after_results_escalates_to_summary_repair -- --nocapture`: passed, 1 passed.
 
+## 2026-04-21 - Workspace search session cwd boundary fix
+
+Fixed a `workspace_search` boundary mismatch where the runtime re-derived the
+workspace root from the desktop app process cwd instead of the active Relay
+session cwd. When the configured workspace was a mapped drive or UNC path, a
+local search request with no user-supplied absolute path could be reported back
+as an external path blocked by the workspace boundary. `workspace_search` now
+has a root-explicit entrypoint, and the Tauri tool executor calls it with the
+session cwd after the existing workspace path enforcement has normalized the
+tool input.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime workspace_search_with_root_uses_session_workspace_not_process_cwd -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop initial_search_plan_ -- --nocapture
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime workspace_search_with_root_uses_session_workspace_not_process_cwd -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop initial_search_plan_ -- --nocapture`: passed, 3 passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`

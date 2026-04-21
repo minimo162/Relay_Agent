@@ -102,8 +102,8 @@ pub use remote::{
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
 };
 pub use search::{
-    workspace_search, WorkspaceSearchCandidate, WorkspaceSearchInput, WorkspaceSearchLimits,
-    WorkspaceSearchOutput, WorkspaceSearchPlan, WorkspaceSearchRecommendedNextTool,
+    workspace_search, workspace_search_with_root, WorkspaceSearchCandidate, WorkspaceSearchInput,
+    WorkspaceSearchLimits, WorkspaceSearchOutput, WorkspaceSearchPlan, WorkspaceSearchRecommendedNextTool,
     WorkspaceSearchSkipped, WorkspaceSearchSnippet, WorkspaceSearchTrace,
 };
 pub use session::{ContentBlock, ConversationMessage, MessageRole, Session, SessionError};

@@ -18,11 +18,11 @@ use crate::cdp_copilot;
 use crate::copilot_persistence::{self, PersistedSessionConfig};
 use crate::models::{
     BrowserAutomationSettings, CancelAgentRequest, ContinueAgentSessionRequest,
-    GetAgentSessionHistoryRequest, ListWorkspaceSkillsRequest, ListWorkspaceSlashCommandsRequest, McpAddServerRequest,
-    McpServerInfo, RelayDiagnostics, RespondAgentApprovalRequest, RespondUserQuestionRequest,
-    RustAnalyzerProbeRequest, RustAnalyzerProbeResponse, SessionWriteUndoRequest,
-    SessionWriteUndoStatusResponse, StartAgentRequest, WorkspaceAllowlistCwdRequest,
-    WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
+    GetAgentSessionHistoryRequest, ListWorkspaceSkillsRequest, ListWorkspaceSlashCommandsRequest,
+    McpAddServerRequest, McpServerInfo, RelayDiagnostics, RespondAgentApprovalRequest,
+    RespondUserQuestionRequest, RustAnalyzerProbeRequest, RustAnalyzerProbeResponse,
+    SessionWriteUndoRequest, SessionWriteUndoStatusResponse, StartAgentRequest,
+    WorkspaceAllowlistCwdRequest, WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
     WorkspaceInstructionSurfacesRequest, WorkspaceSkillRow, WorkspaceSlashCommandRow,
 };
 use crate::registry::{SessionHandle, SessionRegistry, SessionRunState, SessionState};

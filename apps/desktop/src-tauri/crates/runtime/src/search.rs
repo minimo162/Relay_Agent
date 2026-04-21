@@ -564,6 +564,14 @@ struct SearchToolAdvice {
 }
 
 pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSearchOutput> {
+    let workspace_root = std::env::current_dir()?.canonicalize()?;
+    workspace_search_with_root(input, &workspace_root)
+}
+
+pub fn workspace_search_with_root(
+    input: &WorkspaceSearchInput,
+    workspace_root: &Path,
+) -> io::Result<WorkspaceSearchOutput> {
     let started = Instant::now();
     let query = input.query.trim();
     if query.is_empty() {
@@ -573,7 +581,7 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
         ));
     }
 
-    let workspace_root = std::env::current_dir()?.canonicalize()?;
+    let workspace_root = workspace_root.canonicalize()?;
     let search_roots = workspace_search_roots(input.paths.as_ref(), &workspace_root)?;
     let include_ext = normalize_workspace_search_exts(input.include_ext.as_ref());
     let budgets = SearchBudgets {
@@ -599,7 +607,14 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
     };
     let context = input.context.unwrap_or(2).min(10);
     let terms = workspace_search_terms(query);
-    let plan = build_workspace_search_plan(input, query, &terms, &search_roots, include_ext.as_ref());
+    let plan = build_workspace_search_plan(
+        input,
+        query,
+        &terms,
+        &search_roots,
+        include_ext.as_ref(),
+        &workspace_root,
+    );
     let ignore_matcher = WorkspaceIgnoreMatcher::load(&workspace_root);
     let mut state = SearchState::new();
     let mut candidate_map = BTreeMap::<String, WorkspaceCandidateAccumulator>::new();
@@ -875,9 +890,10 @@ fn build_workspace_search_plan(
     terms: &[String],
     search_roots: &[PathBuf],
     include_ext: Option<&HashSet<String>>,
+    workspace_root: &Path,
 ) -> WorkspaceSearchPlan {
     let mode = input.mode.as_deref().unwrap_or("auto");
-    let exact_path = exact_workspace_search_path(query);
+    let exact_path = exact_workspace_search_path(query, workspace_root);
     let advice = advise_workspace_search(input, query, exact_path.is_some(), include_ext);
     let intent = match advice.intent {
         SearchIntent::ExactPath => "exact_path_read_recommended",
@@ -911,15 +927,11 @@ fn build_workspace_search_plan(
         }
     }
 
-    let workspace_root = std::env::current_dir()
-        .ok()
-        .and_then(|path| path.canonicalize().ok());
     let scope = search_roots
         .iter()
         .map(|root| {
-            workspace_root
-                .as_ref()
-                .and_then(|workspace_root| root.strip_prefix(workspace_root).ok())
+            root.strip_prefix(workspace_root)
+                .ok()
                 .filter(|relative| !relative.as_os_str().is_empty())
                 .unwrap_or(root)
                 .to_string_lossy()
@@ -1054,7 +1066,7 @@ fn advise_workspace_search(
     }
 }
 
-fn exact_workspace_search_path(query: &str) -> Option<PathBuf> {
+fn exact_workspace_search_path(query: &str, workspace_root: &Path) -> Option<PathBuf> {
     let trimmed = query
         .trim()
         .trim_matches('`')
@@ -1063,7 +1075,6 @@ fn exact_workspace_search_path(query: &str) -> Option<PathBuf> {
     if trimmed.is_empty() || trimmed.chars().any(char::is_whitespace) {
         return None;
     }
-    let workspace_root = std::env::current_dir().ok()?.canonicalize().ok()?;
     let candidate = if Path::new(trimmed).is_absolute() {
         PathBuf::from(trimmed)
     } else {
@@ -1807,7 +1818,7 @@ mod tests {
     use std::io;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    use super::{workspace_search, WorkspaceSearchInput};
+    use super::{workspace_search, workspace_search_with_root, WorkspaceSearchInput};
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         let unique = SystemTime::now()
@@ -1892,6 +1903,52 @@ mod tests {
 
         std::env::set_current_dir(original_dir).expect("restore cwd");
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_with_root_uses_session_workspace_not_process_cwd() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let process_dir = temp_path("workspace-search-process-cwd");
+        let workspace_dir = temp_path("workspace-search-session-cwd");
+        std::fs::create_dir_all(&process_dir).expect("process dir should be created");
+        std::fs::create_dir_all(workspace_dir.join("docs")).expect("docs should be created");
+        fs::write(
+            workspace_dir.join("docs/evidence.md"),
+            "session workspace needle\n",
+        )
+        .expect("write evidence");
+        std::env::set_current_dir(&process_dir).expect("set process cwd");
+
+        let output = workspace_search_with_root(
+            &WorkspaceSearchInput {
+                query: String::from("session workspace needle"),
+                paths: Some(vec![String::from("docs")]),
+                mode: Some(String::from("text")),
+                include_ext: Some(vec![String::from("md")]),
+                max_files: Some(10),
+                max_snippets: Some(5),
+                max_bytes: Some(2 * 1024 * 1024),
+                max_duration_ms: Some(5_000),
+                context: Some(1),
+                literal: Some(true),
+            },
+            &workspace_dir,
+        )
+        .expect("workspace_search should use supplied session workspace root");
+
+        assert!(output
+            .candidates
+            .iter()
+            .any(|candidate| candidate.path.replace('\\', "/").ends_with("docs/evidence.md")));
+        assert!(output
+            .snippets
+            .iter()
+            .any(|snippet| snippet.preview.contains("session workspace needle")));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(process_dir);
+        let _ = fs::remove_dir_all(workspace_dir);
     }
 
     #[test]

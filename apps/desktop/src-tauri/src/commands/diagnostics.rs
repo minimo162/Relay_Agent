@@ -1,8 +1,9 @@
 use crate::app_services::AppServices;
 use crate::models::{
-    ListWorkspaceSkillsRequest, ListWorkspaceSlashCommandsRequest, RelayDiagnostics, RustAnalyzerProbeRequest,
-    RustAnalyzerProbeResponse, WorkspaceAllowlistCwdRequest, WorkspaceAllowlistRemoveToolRequest,
-    WorkspaceAllowlistSnapshot, WorkspaceInstructionSurfacesRequest, WorkspaceSkillRow, WorkspaceSlashCommandRow,
+    ListWorkspaceSkillsRequest, ListWorkspaceSlashCommandsRequest, RelayDiagnostics,
+    RustAnalyzerProbeRequest, RustAnalyzerProbeResponse, WorkspaceAllowlistCwdRequest,
+    WorkspaceAllowlistRemoveToolRequest, WorkspaceAllowlistSnapshot,
+    WorkspaceInstructionSurfacesRequest, WorkspaceSkillRow, WorkspaceSlashCommandRow,
 };
 use tauri::State;
 
