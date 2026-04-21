@@ -19,6 +19,7 @@ mod session_write_undo;
 mod tauri_bridge;
 pub mod test_support;
 mod workspace_allowlist;
+mod windows_job;
 mod workspace_skills;
 mod workspace_slash_commands;
 mod workspace_surfaces;
@@ -45,6 +46,7 @@ fn relay_apply_webview2_cdp_from_env() {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    windows_job::install_kill_on_close();
     relay_apply_webview2_cdp_from_env();
     agent_loop_smoke::apply_test_app_local_data_dir_override();
 
