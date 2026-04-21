@@ -10,11 +10,12 @@ mod electron_cdp;
 
 use reqwest::blocking::Client;
 use runtime::{
-    edit_file, execute_bash, glob_search, grep_search, merge_pdfs, office_search,
+    edit_file, execute_bash, glob_search_with_options, grep_search, merge_pdfs, office_search,
     pull_rust_diagnostics_blocking, read_background_task_output, read_file, workspace_search,
     reject_sensitive_file_path, split_pdf, task_create, task_get, task_list, task_output,
     task_stop, task_update, write_file, BackgroundTaskOutputInput, BashCommandInput,
-    GrepSearchInput, OfficeSearchInput, PdfSplitSegment, PermissionMode, WorkspaceSearchInput,
+    GlobSearchOptions, GrepSearchInput, OfficeSearchInput, PdfSplitSegment, PermissionMode,
+    WorkspaceSearchInput,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -840,7 +841,10 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "pattern": { "type": "string", "description": "Glob pattern. Brace groups are expanded, e.g. **/*.{docx,xlsx,pptx,pdf}." },
-                    "path": { "type": "string" }
+                    "path": { "type": "string" },
+                    "follow": { "type": "boolean", "description": "Follow symlinks. Defaults to false." },
+                    "max_depth": { "type": "integer", "minimum": 1, "description": "Maximum directory depth passed to ripgrep." },
+                    "hidden": { "type": "boolean", "description": "Include hidden files. Defaults to true; set false to exclude dotfiles." }
                 },
                 "required": ["pattern"],
                 "additionalProperties": false
@@ -867,7 +871,11 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
                     "type": { "type": "string" },
                     "head_limit": { "type": "integer", "minimum": 1 },
                     "offset": { "type": "integer", "minimum": 0 },
-                    "multiline": { "type": "boolean" }
+                    "multiline": { "type": "boolean" },
+                    "follow": { "type": "boolean", "description": "Follow symlinks on the rg-backed path. Defaults to false." },
+                    "max_depth": { "type": "integer", "minimum": 1, "description": "Maximum directory depth passed to ripgrep." },
+                    "hidden": { "type": "boolean", "description": "Include hidden files on the rg-backed path. Defaults to true; set false to exclude dotfiles." },
+                    "max_count": { "type": "integer", "minimum": 1, "description": "Per-file ripgrep --max-count value." }
                 },
                 "required": ["pattern"],
                 "additionalProperties": false
@@ -1789,7 +1797,18 @@ fn run_edit_file(input: EditFileInput) -> Result<String, String> {
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_glob_search(input: GlobSearchInputValue) -> Result<String, String> {
-    to_pretty_json(glob_search(&input.pattern, input.path.as_deref()).map_err(io_to_string)?)
+    to_pretty_json(
+        glob_search_with_options(
+            &input.pattern,
+            input.path.as_deref(),
+            &GlobSearchOptions {
+                follow: input.follow,
+                max_depth: input.max_depth,
+                hidden: input.hidden,
+            },
+        )
+        .map_err(io_to_string)?,
+    )
 }
 
 const GIT_OUTPUT_MAX_BYTES: usize = 256 * 1024;
@@ -2095,6 +2114,10 @@ struct EditFileInput {
 struct GlobSearchInputValue {
     pattern: String,
     path: Option<String>,
+    follow: Option<bool>,
+    #[serde(rename = "max_depth", alias = "maxDepth")]
+    max_depth: Option<usize>,
+    hidden: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

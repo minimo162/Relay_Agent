@@ -1619,8 +1619,17 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
             "max_duration_ms",
             "context",
         ],
-        "glob_search" => vec!["path"],
-        "grep_search" => vec!["path", "glob", "include", "context"],
+        "glob_search" => vec!["path", "follow", "max_depth", "hidden"],
+        "grep_search" => vec![
+            "path",
+            "glob",
+            "include",
+            "context",
+            "follow",
+            "max_depth",
+            "hidden",
+            "max_count",
+        ],
         "office_search" => vec![
             "paths",
             "regex",
@@ -3159,7 +3168,33 @@ fn enforce_workspace_tool_paths(
         "write_file" | "edit_file" | "LSP" => {
             normalize_key(obj, "path")?;
         }
-        "workspace_search" | "glob_search" | "grep_search" | "git_status" | "git_diff" => {
+        "workspace_search" => {
+            let has_paths = obj
+                .get("paths")
+                .and_then(Value::as_array)
+                .is_some_and(|paths| {
+                    paths
+                        .iter()
+                        .any(|path| path.as_str().is_some_and(|s| !s.trim().is_empty()))
+                });
+            if !has_paths {
+                let root = workspace
+                    .canonicalize()
+                    .map_err(|e| runtime::ToolError::new(e.to_string()))?;
+                obj.insert(
+                    "paths".to_string(),
+                    Value::Array(vec![Value::String(root.to_string_lossy().into_owned())]),
+                );
+            }
+            if let Some(Value::Array(paths)) = obj.get_mut("paths") {
+                for path in paths.iter_mut() {
+                    if let Value::String(s) = path {
+                        *path = Value::String(normalize_path_string(s)?);
+                    }
+                }
+            }
+        }
+        "glob_search" | "grep_search" | "git_status" | "git_diff" => {
             let has_path = obj
                 .get("path")
                 .and_then(|v| v.as_str())
@@ -5674,6 +5709,56 @@ I will inspect the file.
             "paths": ["../outside/**/*.docx"]
         });
         assert!(enforce_workspace_tool_paths("office_search", &mut outside, &root).is_err());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn workspace_enforcement_scopes_workspace_search_paths_key() {
+        let root = temp_dir();
+        fs::create_dir_all(root.join("reports")).expect("workspace reports dir");
+        let mut input = serde_json::json!({
+            "query": "キャッシュフロー計算書",
+            "mode": "office"
+        });
+
+        enforce_workspace_tool_paths("workspace_search", &mut input, &root)
+            .expect("workspace_search should default to workspace paths");
+
+        assert!(
+            input.get("path").is_none(),
+            "workspace_search does not accept path"
+        );
+        let paths = input
+            .get("paths")
+            .and_then(Value::as_array)
+            .expect("paths array");
+        let expected_root = root.canonicalize().unwrap().to_string_lossy().into_owned();
+        assert_eq!(paths[0].as_str(), Some(expected_root.as_str()));
+
+        let mut relative = serde_json::json!({
+            "query": "forecast",
+            "paths": ["reports"]
+        });
+        enforce_workspace_tool_paths("workspace_search", &mut relative, &root)
+            .expect("workspace_search relative paths should stay inside workspace");
+        let paths = relative
+            .get("paths")
+            .and_then(Value::as_array)
+            .expect("paths array");
+        let expected_reports = root
+            .join("reports")
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(paths[0].as_str(), Some(expected_reports.as_str()));
+
+        let mut outside = serde_json::json!({
+            "query": "secret",
+            "paths": ["../outside"]
+        });
+        assert!(enforce_workspace_tool_paths("workspace_search", &mut outside, &root).is_err());
 
         fs::remove_dir_all(root).expect("cleanup");
     }

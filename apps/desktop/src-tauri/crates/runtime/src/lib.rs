@@ -51,9 +51,10 @@ pub use conversation::{
     TurnOutcome, TurnSummary,
 };
 pub use file_ops::{
-    edit_file, glob_search, grep_search, read_file, write_file, EditFileOutput, GlobSearchOutput,
-    GrepSearchInput, GrepSearchOutput, ReadFileOutput, StructuredPatchHunk, TextFilePayload,
-    WriteFileOutput, MAX_TEXT_FILE_READ_BYTES, MAX_WRITE_FILE_BYTES,
+    edit_file, glob_search, glob_search_with_options, grep_search, read_file, write_file,
+    EditFileOutput, GlobSearchOptions, GlobSearchOutput, GrepSearchInput, GrepSearchOutput,
+    ReadFileOutput, StructuredPatchHunk, TextFilePayload, WriteFileOutput,
+    MAX_TEXT_FILE_READ_BYTES, MAX_WRITE_FILE_BYTES,
 };
 pub use hooks::{HookEvent, HookRunResult, HookRunner};
 pub use lsp_diagnostics::pull_rust_diagnostics_blocking;

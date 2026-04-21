@@ -1221,7 +1221,7 @@ fn expand_office_candidates_with_rg(
         return Ok(None);
     }
     let globs = office_rg_globs(&relative_glob, include_ext);
-    search_backend::rg_files(&cwd, &globs, limit)
+    search_backend::rg_files(&cwd, search_backend::RgFilesOptions::new(&globs, limit))
 }
 
 fn office_rg_globs(relative_glob: &str, include_ext: &BTreeSet<String>) -> Vec<String> {

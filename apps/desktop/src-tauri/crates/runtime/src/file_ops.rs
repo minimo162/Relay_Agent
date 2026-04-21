@@ -140,6 +140,12 @@ pub struct GrepSearchInput {
     pub head_limit: Option<usize>,
     pub offset: Option<usize>,
     pub multiline: Option<bool>,
+    pub follow: Option<bool>,
+    #[serde(rename = "max_depth", alias = "maxDepth")]
+    pub max_depth: Option<usize>,
+    pub hidden: Option<bool>,
+    #[serde(rename = "max_count", alias = "maxCount")]
+    pub max_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -564,7 +570,22 @@ pub fn edit_file(
     })
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct GlobSearchOptions {
+    pub follow: Option<bool>,
+    pub max_depth: Option<usize>,
+    pub hidden: Option<bool>,
+}
+
 pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOutput> {
+    glob_search_with_options(pattern, path, &GlobSearchOptions::default())
+}
+
+pub fn glob_search_with_options(
+    pattern: &str,
+    path: Option<&str>,
+    options: &GlobSearchOptions,
+) -> io::Result<GlobSearchOutput> {
     let started = Instant::now();
     let base_dir = path
         .map(normalize_path)
@@ -590,12 +611,23 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
     let expanded = expand_braces(&search_pattern);
 
     let (mut matches, rg_truncated) = if !Path::new(pattern).is_absolute() {
-        match search_backend::rg_files(&base_dir, &[pattern.to_string()], 101)? {
+        let globs = vec![pattern.to_string()];
+        let mut rg_options = search_backend::RgFilesOptions::new(&globs, 101);
+        rg_options.hidden = options.hidden.unwrap_or(true);
+        rg_options.follow = options.follow.unwrap_or(false);
+        rg_options.max_depth = options.max_depth;
+        match search_backend::rg_files(&base_dir, rg_options)? {
             Some(result) => (result.files, result.truncated),
-            None => (glob_search_fallback(pattern, &expanded, &base_dir)?, false),
+            None => (
+                glob_search_fallback(pattern, &expanded, &base_dir, options)?,
+                false,
+            ),
         }
     } else {
-        (glob_search_fallback(pattern, &expanded, &base_dir)?, false)
+        (
+            glob_search_fallback(pattern, &expanded, &base_dir, options)?,
+            false,
+        )
     };
 
     sort_paths_by_modified_desc(&mut matches);
@@ -636,6 +668,7 @@ fn glob_search_fallback(
     original_pattern: &str,
     expanded_patterns: &[String],
     base_dir: &Path,
+    options: &GlobSearchOptions,
 ) -> io::Result<Vec<PathBuf>> {
     let mut seen = HashSet::new();
     let mut matches = Vec::new();
@@ -649,7 +682,7 @@ fn glob_search_fallback(
         }
     }
     if matches.is_empty() && !Path::new(original_pattern).is_absolute() {
-        for matched in walk_glob_matches(base_dir, original_pattern)? {
+        for matched in walk_glob_matches(base_dir, original_pattern, options)? {
             if seen.insert(matched.clone()) {
                 matches.push(matched);
             }
@@ -658,7 +691,11 @@ fn glob_search_fallback(
     Ok(matches)
 }
 
-fn walk_glob_matches(base_dir: &Path, pattern: &str) -> io::Result<Vec<PathBuf>> {
+fn walk_glob_matches(
+    base_dir: &Path,
+    pattern: &str,
+    options: &GlobSearchOptions,
+) -> io::Result<Vec<PathBuf>> {
     let expanded = expand_braces(pattern);
     let patterns = expanded
         .iter()
@@ -668,15 +705,25 @@ fn walk_glob_matches(base_dir: &Path, pattern: &str) -> io::Result<Vec<PathBuf>>
         })
         .collect::<io::Result<Vec<_>>>()?;
     let mut matches = Vec::new();
-    for entry in WalkDir::new(base_dir)
+    let mut walker = WalkDir::new(base_dir).follow_links(options.follow.unwrap_or(false));
+    if let Some(max_depth) = options.max_depth {
+        walker = walker.max_depth(max_depth);
+    }
+    for entry in walker
         .into_iter()
-        .filter_entry(|entry| !is_ignored_search_path(entry.path()))
+        .filter_entry(|entry| {
+            !is_ignored_search_path(entry.path())
+                && (options.hidden.unwrap_or(true) || !is_hidden_search_path(base_dir, entry.path()))
+        })
     {
         let Ok(entry) = entry else {
             continue;
         };
         let path = entry.path();
-        if !path.is_file() || is_ignored_search_path(path) {
+        if !path.is_file()
+            || is_ignored_search_path(path)
+            || (!options.hidden.unwrap_or(true) && is_hidden_search_path(base_dir, path))
+        {
             continue;
         }
         let Ok(relative) = path.strip_prefix(base_dir) else {
@@ -720,8 +767,7 @@ fn grep_search_with_rg(
     base_path: &Path,
     output_mode: &str,
 ) -> io::Result<Option<GrepSearchOutput>> {
-    if base_path.is_file()
-        || input.case_insensitive.unwrap_or(false)
+    if input.case_insensitive.unwrap_or(false)
         || input.multiline.unwrap_or(false)
         || input.file_type.is_some()
         || output_mode == "count"
@@ -733,7 +779,33 @@ fn grep_search_with_rg(
         .as_ref()
         .map(|glob| vec![glob.clone()])
         .unwrap_or_default();
-    let Some(result) = search_backend::rg_search(base_path, &input.pattern, &globs, None)? else {
+    let (search_root, files) = if base_path.is_file() {
+        let parent = base_path.parent().unwrap_or_else(|| Path::new("."));
+        let file_name = base_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("grep_search path has no filename: {}", base_path.display()),
+                )
+            })?;
+        (parent, Some(vec![file_name]))
+    } else {
+        (base_path, None)
+    };
+    let Some(result) = search_backend::rg_search(
+        search_root,
+        search_backend::RgSearchOptions {
+            files: files.as_deref(),
+            follow: input.follow.unwrap_or(false),
+            max_depth: input.max_depth,
+            hidden: input.hidden.unwrap_or(true),
+            max_count: input.max_count,
+            ..search_backend::RgSearchOptions::new(&input.pattern, &globs)
+        },
+    )?
+    else {
         return Ok(None);
     };
     let mut matches = result.matches;
@@ -837,7 +909,7 @@ fn grep_search_fallback(
     let mut content_lines = Vec::new();
     let mut total_matches = 0usize;
 
-    let mut search_files = collect_search_files(base_path, input.glob.as_deref())?;
+    let mut search_files = collect_search_files(base_path, input)?;
     sort_paths_by_modified_desc(&mut search_files);
 
     for file_path in search_files {
@@ -850,7 +922,10 @@ fn grep_search_fallback(
         };
 
         if output_mode == "count" {
-            let count = regex.find_iter(&file_contents).count();
+            let count = match input.max_count {
+                Some(max_count) => regex.find_iter(&file_contents).take(max_count).count(),
+                None => regex.find_iter(&file_contents).count(),
+            };
             if count > 0 {
                 filenames.push(file_path.to_string_lossy().into_owned());
                 total_matches += count;
@@ -864,6 +939,12 @@ fn grep_search_fallback(
             if regex.is_match(line) {
                 total_matches += 1;
                 matched_lines.push(index);
+                if input
+                    .max_count
+                    .is_some_and(|max_count| matched_lines.len() >= max_count)
+                {
+                    break;
+                }
             }
         }
 
@@ -1354,24 +1435,38 @@ fn workspace_search_office_pattern(query: &str, terms: &[String]) -> String {
         .unwrap_or_else(|| query.to_string())
 }
 
-fn collect_search_files(base_path: &Path, glob: Option<&str>) -> io::Result<Vec<PathBuf>> {
+fn collect_search_files(base_path: &Path, input: &GrepSearchInput) -> io::Result<Vec<PathBuf>> {
     if base_path.is_file() {
         return Ok(vec![base_path.to_path_buf()]);
     }
 
-    if let Some(result) =
-        search_backend::rg_files(base_path, &glob.into_iter().map(String::from).collect::<Vec<_>>(), usize::MAX)?
-    {
+    let globs = input
+        .glob
+        .as_ref()
+        .map(|glob| vec![glob.clone()])
+        .unwrap_or_default();
+    let mut rg_options = search_backend::RgFilesOptions::new(&globs, usize::MAX);
+    rg_options.hidden = input.hidden.unwrap_or(true);
+    rg_options.follow = input.follow.unwrap_or(false);
+    rg_options.max_depth = input.max_depth;
+    if let Some(result) = search_backend::rg_files(base_path, rg_options)? {
         return Ok(result.files);
     }
 
     let mut files = Vec::new();
-    for entry in WalkDir::new(base_path).into_iter().filter_entry(|entry| {
+    let mut walker = WalkDir::new(base_path).follow_links(input.follow.unwrap_or(false));
+    if let Some(max_depth) = input.max_depth {
+        walker = walker.max_depth(max_depth);
+    }
+    for entry in walker.into_iter().filter_entry(|entry| {
         let path = entry.path();
         !is_ignored_search_path(path)
+            && (input.hidden.unwrap_or(true) || !is_hidden_search_path(base_path, path))
     }) {
         let entry = entry.map_err(|error| io::Error::other(error.to_string()))?;
-        if entry.file_type().is_file() {
+        if entry.file_type().is_file()
+            && (input.hidden.unwrap_or(true) || !is_hidden_search_path(base_path, entry.path()))
+        {
             files.push(entry.path().to_path_buf());
         }
     }
@@ -1393,6 +1488,16 @@ fn sort_paths_by_modified_desc(paths: &mut [PathBuf]) {
 fn is_ignored_search_path(path: &Path) -> bool {
     path.components()
         .any(|component| component.as_os_str() == ".git")
+}
+
+fn is_hidden_search_path(base_path: &Path, path: &Path) -> bool {
+    path.strip_prefix(base_path)
+        .unwrap_or(path)
+        .components()
+        .any(|component| {
+            let text = component.as_os_str().to_string_lossy();
+            text.starts_with('.') && text != "." && text != ".."
+        })
 }
 
 fn is_ignored_workspace_search_path(path: &Path) -> bool {
@@ -1554,9 +1659,10 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        edit_file, glob_search, grep_search, read_file, walk_glob_matches, workspace_search,
-        write_file, GrepSearchInput, WorkspaceSearchInput, MAX_GREP_LINE_LENGTH,
-        MAX_TEXT_FILE_READ_BYTES, MAX_WRITE_FILE_BYTES,
+        edit_file, glob_search, glob_search_with_options, grep_search, read_file,
+        walk_glob_matches, workspace_search, write_file, GlobSearchOptions, GrepSearchInput,
+        WorkspaceSearchInput, MAX_GREP_LINE_LENGTH, MAX_TEXT_FILE_READ_BYTES,
+        MAX_WRITE_FILE_BYTES,
     };
 
     fn temp_path(name: &str) -> std::path::PathBuf {
@@ -1685,6 +1791,10 @@ mod tests {
             head_limit: Some(10),
             offset: Some(0),
             multiline: Some(false),
+            follow: None,
+            max_depth: None,
+            hidden: None,
+            max_count: None,
         })
         .expect("grep should succeed");
         assert!(grep_output.content.unwrap_or_default().contains("hello"));
@@ -1722,6 +1832,28 @@ mod tests {
     }
 
     #[test]
+    fn glob_search_can_exclude_hidden_files() {
+        let dir = temp_path("glob-hidden");
+        std::fs::create_dir_all(dir.join(".secret")).expect("hidden dir should be created");
+        fs::write(dir.join("visible.txt"), "visible\n").expect("write visible");
+        fs::write(dir.join(".hidden.txt"), "hidden\n").expect("write hidden");
+        fs::write(dir.join(".secret/nested.txt"), "nested\n").expect("write nested hidden");
+
+        let globbed = glob_search_with_options(
+            "**/*.txt",
+            Some(dir.to_string_lossy().as_ref()),
+            &GlobSearchOptions {
+                hidden: Some(false),
+                ..GlobSearchOptions::default()
+            },
+        )
+        .expect("glob should succeed");
+
+        assert_eq!(globbed.num_files, 1);
+        assert!(globbed.filenames[0].ends_with("visible.txt"));
+    }
+
+    #[test]
     fn walk_glob_matches_finds_deep_relevant_filenames() {
         let dir = temp_path("glob-deep-fallback");
         let nested = dir.join("999連結/999期-9Q/連結決算/02精算表/ツール");
@@ -1729,7 +1861,8 @@ mod tests {
         let expected = nested.join("FY999-9Q_連結精算表(リンク).xlsx");
         fs::write(&expected, b"placeholder").expect("write workbook placeholder");
 
-        let matches = walk_glob_matches(&dir, "**/*精算表*").expect("walk glob should succeed");
+        let matches = walk_glob_matches(&dir, "**/*精算表*", &GlobSearchOptions::default())
+            .expect("walk glob should succeed");
 
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0], expected);
@@ -1778,12 +1911,92 @@ mod tests {
             head_limit: Some(10),
             offset: Some(0),
             multiline: Some(false),
+            follow: None,
+            max_depth: None,
+            hidden: None,
+            max_count: None,
         })
         .expect("grep should succeed");
 
         assert_eq!(output.filenames.len(), 2);
         assert!(output.filenames[0].ends_with("new.txt"));
         assert!(output.filenames[1].ends_with("old.txt"));
+    }
+
+    #[test]
+    fn grep_search_rg_path_can_target_single_file() {
+        let dir = temp_path("grep-single-file");
+        std::fs::create_dir_all(&dir).expect("directory should be created");
+        let wanted = dir.join("wanted.txt");
+        let ignored = dir.join("ignored.txt");
+        fs::write(&wanted, "needle wanted\n").expect("write wanted file");
+        fs::write(&ignored, "needle ignored\n").expect("write ignored file");
+
+        let output = grep_search(&GrepSearchInput {
+            pattern: String::from("needle"),
+            path: Some(wanted.to_string_lossy().into_owned()),
+            glob: None,
+            output_mode: Some(String::from("content")),
+            before: None,
+            after: None,
+            context_short: None,
+            context: None,
+            line_numbers: Some(true),
+            case_insensitive: Some(false),
+            file_type: None,
+            head_limit: Some(10),
+            offset: Some(0),
+            multiline: Some(false),
+            follow: None,
+            max_depth: None,
+            hidden: None,
+            max_count: None,
+        })
+        .expect("grep should succeed");
+
+        assert_eq!(output.num_files, 1);
+        assert!(output.filenames[0].ends_with("wanted.txt"));
+        let content = output.content.expect("content output");
+        assert!(content.contains("wanted.txt:1:needle wanted"));
+        assert!(!content.contains("ignored.txt"));
+    }
+
+    #[test]
+    fn grep_search_rg_options_support_hidden_max_depth_and_max_count() {
+        let dir = temp_path("grep-rg-options");
+        let nested = dir.join("nested");
+        std::fs::create_dir_all(&nested).expect("nested directory should be created");
+        fs::write(dir.join("root.txt"), "needle one\nneedle two\n").expect("write root");
+        fs::write(nested.join("nested.txt"), "needle nested\n").expect("write nested");
+        fs::write(dir.join(".hidden.txt"), "needle hidden\n").expect("write hidden");
+
+        let output = grep_search(&GrepSearchInput {
+            pattern: String::from("needle"),
+            path: Some(dir.to_string_lossy().into_owned()),
+            glob: Some(String::from("**/*.txt")),
+            output_mode: Some(String::from("content")),
+            before: None,
+            after: None,
+            context_short: None,
+            context: None,
+            line_numbers: Some(true),
+            case_insensitive: Some(false),
+            file_type: None,
+            head_limit: Some(10),
+            offset: Some(0),
+            multiline: Some(false),
+            follow: None,
+            max_depth: Some(1),
+            hidden: Some(false),
+            max_count: Some(1),
+        })
+        .expect("grep should succeed");
+
+        let content = output.content.expect("content output");
+        assert!(content.contains("root.txt:1:needle one"));
+        assert!(!content.contains("needle two"));
+        assert!(!content.contains("nested.txt"));
+        assert!(!content.contains(".hidden.txt"));
     }
 
     #[test]
@@ -1815,6 +2028,10 @@ mod tests {
             head_limit: Some(10),
             offset: Some(0),
             multiline: Some(false),
+            follow: None,
+            max_depth: None,
+            hidden: None,
+            max_count: None,
         })
         .expect("grep should succeed");
         assert_eq!(grep_output.filenames.len(), 1);
@@ -1846,6 +2063,10 @@ mod tests {
             head_limit: Some(10),
             offset: Some(0),
             multiline: Some(false),
+            follow: None,
+            max_depth: None,
+            hidden: None,
+            max_count: None,
         })
         .expect_err("empty pattern should be rejected");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
@@ -1874,6 +2095,10 @@ mod tests {
             head_limit: Some(10),
             offset: Some(0),
             multiline: Some(false),
+            follow: None,
+            max_depth: None,
+            hidden: None,
+            max_count: None,
         })
         .expect("grep should succeed");
 

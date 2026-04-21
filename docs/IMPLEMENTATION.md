@@ -15,6 +15,87 @@
 
 ## Milestone Log
 
+### 2026-04-21 workspace_search cwd scoping fix
+
+Fixed a live desktop search miss where the deterministic initial
+`workspace_search` plan for a local document lookup searched the Tauri process
+directory (`apps/desktop/src-tauri`) instead of the user-configured Project
+folder. The session workspace enforcement path was inserting a `path` field for
+`workspace_search`, but that tool's schema uses `paths`; Serde ignored the
+extra field and `workspace_search` fell back to `std::env::current_dir()`.
+
+- `workspace_search` tool input enforcement now defaults missing `paths` to the
+  canonical session `cwd` and normalizes every provided `paths[]` entry inside
+  the workspace boundary.
+- Existing `glob_search`, `grep_search`, `git_status`, and `git_diff` handling
+  keeps using their `path` field.
+- Added a unit regression covering default `paths`, relative in-workspace
+  `paths`, absence of the invalid `path` field, and rejection of `..` escapes.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_enforcement_scopes_workspace_search_paths_key`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-21 opencode-aligned grep file targeting
+
+Compared Relay search behavior against the current
+`anomalyco/opencode` search implementation (`packages/opencode/src/tool/grep.ts`,
+`glob.ts`, and `file/ripgrep.ts`). opencode's `grep` resolves `path` as either
+a directory or a file; when a file is provided it runs ripgrep from the parent
+directory with that file as the explicit search target.
+
+- Extended Relay's shared ripgrep backend so `rg_search` can receive explicit
+  file targets after the `-- <pattern>` separator, matching opencode's
+  `SearchInput.file` shape.
+- Updated `grep_search` so a file-valued `path` stays on the rg-backed fast
+  path instead of falling back to the Rust scanner. Directory-valued `path`
+  behavior is unchanged.
+- Added a regression proving `grep_search(path=<file>, output_mode=content)`
+  searches only that file and does not leak matches from sibling files.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml grep_search_rg_path_can_target_single_file -- --nocapture`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml grep_search_ -- --nocapture`: passed, 5 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_search_returns_ranked_candidates_snippets_and_limits -- --nocapture`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-21 opencode-style ripgrep backend options
+
+Pulled Relay's rg backend closer to opencode's `Ripgrep.Service` option shape.
+The shared backend now accepts common file/search options instead of positional
+`globs` / `limit` arguments, with opencode-aligned defaults:
+`hidden = true`, `follow = false`, and no max depth.
+
+- Added `RgFilesOptions` and `RgSearchOptions` in the runtime search backend,
+  covering `globs`, `hidden`, `follow`, `max_depth`, explicit `files`,
+  per-file `max_count` (`rg --max-count`), and Relay's existing total-result
+  `limit`.
+- Routed `glob_search`, `grep_search`, `workspace_search`, and
+  `office_search` candidate expansion through the new option structs.
+- Exposed `glob_search` options (`follow`, `max_depth`, `hidden`) and
+  `grep_search` options (`follow`, `max_depth`, `hidden`, `max_count`) in the
+  tool schema and CDP optional-argument summary.
+- `hidden: false` now gets an explicit backend post-filter too, because
+  ripgrep's `--glob=!.*` does not reliably remove every hidden-directory
+  descendant from all patterns.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml glob_search_can_exclude_hidden_files -- --nocapture`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml grep_search_rg_options_support_hidden_max_depth_and_max_count -- --nocapture`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml grep_search_ -- --nocapture`: passed, 6 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml glob_search_ -- --nocapture`: passed, 3 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_search_returns_ranked_candidates_snippets_and_limits -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_enforcement_scopes_workspace_search_paths_key -- --nocapture`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-21 Windows tauri dev sidecar lock cleanup
 
 Fixed a Windows `tauri dev` startup failure where `tauri-build` panicked while

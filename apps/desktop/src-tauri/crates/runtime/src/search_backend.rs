@@ -25,11 +25,56 @@ pub(crate) struct SearchOutput {
     pub(crate) partial: bool,
 }
 
-pub(crate) fn rg_files(
-    cwd: &Path,
-    globs: &[String],
-    limit: usize,
-) -> io::Result<Option<FileList>> {
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RgFilesOptions<'a> {
+    pub(crate) globs: &'a [String],
+    pub(crate) hidden: bool,
+    pub(crate) follow: bool,
+    pub(crate) max_depth: Option<usize>,
+    pub(crate) limit: usize,
+}
+
+impl<'a> RgFilesOptions<'a> {
+    pub(crate) fn new(globs: &'a [String], limit: usize) -> Self {
+        Self {
+            globs,
+            hidden: true,
+            follow: false,
+            max_depth: None,
+            limit,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RgSearchOptions<'a> {
+    pub(crate) pattern: &'a str,
+    pub(crate) globs: &'a [String],
+    pub(crate) files: Option<&'a [String]>,
+    pub(crate) hidden: bool,
+    pub(crate) follow: bool,
+    pub(crate) max_depth: Option<usize>,
+    pub(crate) max_count: Option<usize>,
+    pub(crate) limit: Option<usize>,
+}
+
+impl<'a> RgSearchOptions<'a> {
+    pub(crate) fn new(pattern: &'a str, globs: &'a [String]) -> Self {
+        Self {
+            pattern,
+            globs,
+            files: None,
+            hidden: true,
+            follow: false,
+            max_depth: None,
+            max_count: None,
+            limit: None,
+        }
+    }
+}
+
+pub(crate) fn rg_files(cwd: &Path, options: RgFilesOptions<'_>) -> io::Result<Option<FileList>> {
+    let limit = options.limit;
     if limit == 0 {
         return Ok(Some(FileList {
             files: Vec::new(),
@@ -45,9 +90,9 @@ pub(crate) fn rg_files(
         .current_dir(cwd)
         .arg("--no-config")
         .arg("--files")
-        .arg("--hidden")
         .arg("--glob=!.git/*");
-    for glob in globs {
+    apply_common_args(&mut command, options.hidden, options.follow, options.max_depth);
+    for glob in options.globs {
         command.arg(format!("--glob={glob}"));
     }
     command.arg(".");
@@ -74,7 +119,11 @@ pub(crate) fn rg_files(
             let _ = child.kill();
             break;
         }
-        files.push(cwd.join(clean_rg_path(&line)));
+        let clean = clean_rg_path(&line);
+        if !options.hidden && is_hidden_relative_path(clean) {
+            continue;
+        }
+        files.push(cwd.join(clean));
     }
     if truncated {
         let _ = child.wait_timeout(Duration::from_secs(1))?;
@@ -87,9 +136,7 @@ pub(crate) fn rg_files(
 
 pub(crate) fn rg_search(
     cwd: &Path,
-    pattern: &str,
-    globs: &[String],
-    limit: Option<usize>,
+    options: RgSearchOptions<'_>,
 ) -> io::Result<Option<SearchOutput>> {
     let Some(binary) = rg_binary() else {
         return Ok(None);
@@ -99,13 +146,23 @@ pub(crate) fn rg_search(
         .current_dir(cwd)
         .arg("--no-config")
         .arg("--json")
-        .arg("--hidden")
         .arg("--glob=!.git/*")
         .arg("--no-messages");
-    for glob in globs {
+    apply_common_args(&mut command, options.hidden, options.follow, options.max_depth);
+    if let Some(max_count) = options.max_count.filter(|value| *value > 0) {
+        command.arg(format!("--max-count={max_count}"));
+    }
+    for glob in options.globs {
         command.arg(format!("--glob={glob}"));
     }
-    command.arg("--").arg(pattern).arg(".");
+    command.arg("--").arg(options.pattern);
+    if let Some(files) = options.files.filter(|files| !files.is_empty()) {
+        for file in files {
+            command.arg(file);
+        }
+    } else {
+        command.arg(".");
+    }
     command.stdout(Stdio::piped()).stderr(Stdio::null());
 
     let mut child = match command.spawn() {
@@ -130,12 +187,16 @@ pub(crate) fn rg_search(
         let RgEvent::Match { data } = event else {
             continue;
         };
+        let clean_path = clean_rg_path(&data.path.text);
+        if !options.hidden && is_hidden_relative_path(clean_path) {
+            continue;
+        }
         matches.push(SearchMatch {
-            path: cwd.join(clean_rg_path(&data.path.text)),
+            path: cwd.join(clean_path),
             line_number: data.line_number,
             line: data.lines.text,
         });
-        if limit.is_some_and(|limit| matches.len() >= limit) {
+        if options.limit.is_some_and(|limit| matches.len() >= limit) {
             hit_limit = true;
             let _ = child.kill();
             break;
@@ -163,6 +224,25 @@ pub(crate) fn rg_search(
         }));
     }
     Ok(None)
+}
+
+fn apply_common_args(
+    command: &mut Command,
+    hidden: bool,
+    follow: bool,
+    max_depth: Option<usize>,
+) {
+    if hidden {
+        command.arg("--hidden");
+    } else {
+        command.arg("--glob=!.*");
+    }
+    if follow {
+        command.arg("--follow");
+    }
+    if let Some(max_depth) = max_depth {
+        command.arg(format!("--max-depth={max_depth}"));
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -263,4 +343,9 @@ fn clean_rg_path(path: &str) -> &str {
     path.strip_prefix("./")
         .or_else(|| path.strip_prefix(".\\"))
         .unwrap_or(path)
+}
+
+fn is_hidden_relative_path(path: &str) -> bool {
+    path.split(['/', '\\'])
+        .any(|part| part.starts_with('.') && part != "." && part != "..")
 }

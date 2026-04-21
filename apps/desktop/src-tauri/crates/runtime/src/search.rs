@@ -437,7 +437,10 @@ fn discover_workspace_paths(
     let globs = workspace_search_rg_globs(include_ext);
     for root in search_roots {
         record_workspace_symlink_skips(root, state);
-        match search_backend::rg_files(root, &globs, limit_per_root)? {
+        match search_backend::rg_files(
+            root,
+            search_backend::RgFilesOptions::new(&globs, limit_per_root),
+        )? {
             Some(result) => {
                 state.truncated |= result.truncated;
                 for path in result.files {
@@ -1130,7 +1133,13 @@ fn integrate_rg_content_search(
         let pattern = escape_rg_literal(term);
         let mut term_hits = Vec::new();
         for root in search_roots {
-            let result = match search_backend::rg_search(root, &pattern, &globs, Some(limit)) {
+            let result = match search_backend::rg_search(
+                root,
+                search_backend::RgSearchOptions {
+                    limit: Some(limit),
+                    ..search_backend::RgSearchOptions::new(&pattern, &globs)
+                },
+            ) {
                 Ok(Some(result)) => result,
                 Ok(None) => continue,
                 Err(error) => {
