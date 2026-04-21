@@ -20,6 +20,7 @@ mod permissions;
 mod prompt;
 mod remote;
 mod search;
+mod search_backend;
 pub mod sandbox;
 mod session;
 mod task_registry;

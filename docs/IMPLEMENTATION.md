@@ -47,10 +47,32 @@ search terms rather than full instruction sentences, explicit extensions such
 as `Excel` / `PDF` narrow `include_ext`, and control words like `検索`,
 `必要`, `関連度`, and `最新` are not mixed into query terms.
 
+Follow-up runtime simplification: `glob_search`, `grep_search` file
+enumeration, and Office candidate expansion now prefer a shared
+ripgrep-backed file listing backend (`rg --files --glob ...`) and retain the
+previous Rust glob/walkdir implementation as fallback. This moves Relay closer
+to opencode's search runtime shape instead of growing bespoke traversal logic
+around each tool.
+
+The standard `grep_search` path now also prefers `rg --json`, matching
+opencode's content-search backend more closely. Relay keeps the previous Rust
+regex implementation as fallback for modes where the existing API has
+different semantics (`count`, case-insensitive, multiline, file-type filters,
+or direct file-path searches).
+
+The CDP tool-selection guidance now advertises `glob_search` and `grep_search`
+as rg-backed narrow search tools, and the `grep_search` rg path emits the same
+completion telemetry as the fallback path with `backend=rg` and partial-output
+state. This keeps model planning and runtime diagnostics aligned with the
+opencode-style search backend.
+
 Verification:
 
 - `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
 - `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml globs_and_greps_directory -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml glob_search_with_braces_finds_unique_files -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml grep_search_orders_files_by_modified_time_desc -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml grep_search -- --nocapture`: passed, 4 passed.
 - `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml walk_glob_matches_finds_deep_relevant_filenames -- --nocapture`: passed, 1 passed.
 - `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml fold_office_path_result_records_filename_match -- --nocapture`: passed, 1 passed.
 - `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml sort_candidates_by_path_relevance_prefers_relevant_then_recent -- --nocapture`: passed, 1 passed.
@@ -59,6 +81,8 @@ Verification:
 - `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml document_lookup_query_ignores_instruction_words_and_honors_explicit_extension -- --nocapture`: passed, 1 passed.
 - `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml cash_flow_lookup -- --nocapture`: passed, 1 passed.
 - `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_answer_without_tools_escalates_to_local_search_repair -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_requires_search_before_general_answer -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml desktop_system_prompt_treats_required_file_questions_as_lookup -- --nocapture`: passed, 1 passed.
 - `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml empty_glob_search_result_is_labeled_as_filename_only_miss -- --nocapture`: passed, 1 passed.
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop`: passed.
 - `git diff --check`: passed.

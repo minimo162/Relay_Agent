@@ -15,6 +15,7 @@ use walkdir::WalkDir;
 
 use crate::office;
 use crate::pdf_liteparse;
+use crate::search_backend;
 use crate::tool_hard_denylist::reject_sensitive_file_path;
 
 /// Upper bound for loading a single file as UTF-8 text in `read_file` (plain text and `.ipynb` raw JSON).
@@ -588,28 +589,18 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
     // agents can batch extension families like `**/*.{docx,xlsx,pptx,pdf}`.
     let expanded = expand_braces(&search_pattern);
 
-    let mut seen = HashSet::new();
-    let mut matches = Vec::new();
-    for pattern in &expanded {
-        let entries = glob::glob(pattern)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
-        for entry in entries.flatten() {
-            if entry.is_file() && !is_ignored_search_path(&entry) && seen.insert(entry.clone()) {
-                matches.push(entry);
-            }
+    let (mut matches, rg_truncated) = if !Path::new(pattern).is_absolute() {
+        match search_backend::rg_files(&base_dir, &[pattern.to_string()], 101)? {
+            Some(result) => (result.files, result.truncated),
+            None => (glob_search_fallback(pattern, &expanded, &base_dir)?, false),
         }
-    }
-    if matches.is_empty() && !Path::new(pattern).is_absolute() {
-        for matched in walk_glob_matches(&base_dir, pattern)? {
-            if seen.insert(matched.clone()) {
-                matches.push(matched);
-            }
-        }
-    }
+    } else {
+        (glob_search_fallback(pattern, &expanded, &base_dir)?, false)
+    };
 
     sort_paths_by_modified_desc(&mut matches);
 
-    let truncated = matches.len() > 100;
+    let truncated = rg_truncated || matches.len() > 100;
     let filenames = matches
         .into_iter()
         .take(100)
@@ -639,6 +630,32 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
         "glob_search completed"
     );
     Ok(output)
+}
+
+fn glob_search_fallback(
+    original_pattern: &str,
+    expanded_patterns: &[String],
+    base_dir: &Path,
+) -> io::Result<Vec<PathBuf>> {
+    let mut seen = HashSet::new();
+    let mut matches = Vec::new();
+    for pattern in expanded_patterns {
+        let entries = glob::glob(pattern)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
+        for entry in entries.flatten() {
+            if entry.is_file() && !is_ignored_search_path(&entry) && seen.insert(entry.clone()) {
+                matches.push(entry);
+            }
+        }
+    }
+    if matches.is_empty() && !Path::new(original_pattern).is_absolute() {
+        for matched in walk_glob_matches(base_dir, original_pattern)? {
+            if seen.insert(matched.clone()) {
+                matches.push(matched);
+            }
+        }
+    }
+    Ok(matches)
 }
 
 fn walk_glob_matches(base_dir: &Path, pattern: &str) -> io::Result<Vec<PathBuf>> {
@@ -686,7 +703,121 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
         .map(normalize_path)
         .transpose()?
         .unwrap_or(std::env::current_dir()?);
+    let output_mode = input
+        .output_mode
+        .clone()
+        .unwrap_or_else(|| String::from("files_with_matches"));
 
+    if let Some(output) = grep_search_with_rg(input, &base_path, &output_mode)? {
+        return Ok(output);
+    }
+
+    grep_search_fallback(input, &base_path, &output_mode)
+}
+
+fn grep_search_with_rg(
+    input: &GrepSearchInput,
+    base_path: &Path,
+    output_mode: &str,
+) -> io::Result<Option<GrepSearchOutput>> {
+    if base_path.is_file()
+        || input.case_insensitive.unwrap_or(false)
+        || input.multiline.unwrap_or(false)
+        || input.file_type.is_some()
+        || output_mode == "count"
+    {
+        return Ok(None);
+    }
+    let globs = input
+        .glob
+        .as_ref()
+        .map(|glob| vec![glob.clone()])
+        .unwrap_or_default();
+    let Some(result) = search_backend::rg_search(base_path, &input.pattern, &globs)? else {
+        return Ok(None);
+    };
+    let mut matches = result.matches;
+    matches.sort_by(|left, right| {
+        Reverse(modified_ms(&left.path))
+            .cmp(&Reverse(modified_ms(&right.path)))
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.line_number.cmp(&right.line_number))
+    });
+    let mut filenames = Vec::new();
+    let mut seen = HashSet::new();
+    for item in &matches {
+        if seen.insert(item.path.clone()) {
+            filenames.push(item.path.to_string_lossy().into_owned());
+        }
+    }
+    if output_mode == "content" {
+        let lines = matches
+            .iter()
+            .map(|item| {
+                format!(
+                    "{}:{}:{}",
+                    item.path.to_string_lossy(),
+                    item.line_number,
+                    truncate_grep_line(item.line.trim_end_matches(['\r', '\n']))
+                )
+            })
+            .collect::<Vec<_>>();
+        let (lines, limit, offset) = apply_limit(lines, input.head_limit, input.offset);
+        let output = GrepSearchOutput {
+            mode: Some(output_mode.to_string()),
+            num_files: filenames.len(),
+            filenames,
+            content: Some(lines.join("\n")),
+            num_lines: Some(lines.len()),
+            num_matches: None,
+            applied_limit: limit,
+            applied_offset: offset,
+        };
+        tracing::info!(
+            target: "relay.runtime.search",
+            tool = "grep_search",
+            backend = "rg",
+            mode = ?output.mode,
+            num_files = output.num_files,
+            num_lines = output.num_lines.unwrap_or(0),
+            partial = result.partial,
+            applied_limit = output.applied_limit.unwrap_or(0),
+            applied_offset = output.applied_offset.unwrap_or(0),
+            "grep_search completed"
+        );
+        return Ok(Some(output));
+    }
+    let (filenames, applied_limit, applied_offset) =
+        apply_limit(filenames, input.head_limit, input.offset);
+    let output = GrepSearchOutput {
+        mode: Some(output_mode.to_string()),
+        num_files: filenames.len(),
+        filenames,
+        content: None,
+        num_lines: None,
+        num_matches: None,
+        applied_limit,
+        applied_offset,
+    };
+    tracing::info!(
+        target: "relay.runtime.search",
+        tool = "grep_search",
+        backend = "rg",
+        mode = ?output.mode,
+        num_files = output.num_files,
+        partial = result.partial,
+        applied_limit = output.applied_limit.unwrap_or(0),
+        applied_offset = output.applied_offset.unwrap_or(0),
+        "grep_search completed"
+    );
+    Ok(Some(output))
+}
+
+fn grep_search_fallback(
+    input: &GrepSearchInput,
+    base_path: &Path,
+    output_mode: &str,
+) -> io::Result<GrepSearchOutput> {
     let regex = RegexBuilder::new(&input.pattern)
         .case_insensitive(input.case_insensitive.unwrap_or(false))
         .dot_matches_new_line(input.multiline.unwrap_or(false))
@@ -700,17 +831,13 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
         .transpose()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
     let file_type = input.file_type.as_deref();
-    let output_mode = input
-        .output_mode
-        .clone()
-        .unwrap_or_else(|| String::from("files_with_matches"));
     let context = input.context.or(input.context_short).unwrap_or(0);
 
     let mut filenames = Vec::new();
     let mut content_lines = Vec::new();
     let mut total_matches = 0usize;
 
-    let mut search_files = collect_search_files(&base_path)?;
+    let mut search_files = collect_search_files(base_path, input.glob.as_deref())?;
     sort_paths_by_modified_desc(&mut search_files);
 
     for file_path in search_files {
@@ -766,7 +893,7 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
     let content_output = if output_mode == "content" {
         let (lines, limit, offset) = apply_limit(content_lines, input.head_limit, input.offset);
         let output = GrepSearchOutput {
-            mode: Some(output_mode),
+            mode: Some(output_mode.to_string()),
             num_files: filenames.len(),
             filenames,
             num_lines: Some(lines.len()),
@@ -791,7 +918,7 @@ pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
     };
 
     let output = GrepSearchOutput {
-        mode: Some(output_mode.clone()),
+        mode: Some(output_mode.to_string()),
         num_files: filenames.len(),
         filenames,
         content: content_output,
@@ -1227,9 +1354,15 @@ fn workspace_search_office_pattern(query: &str, terms: &[String]) -> String {
         .unwrap_or_else(|| query.to_string())
 }
 
-fn collect_search_files(base_path: &Path) -> io::Result<Vec<PathBuf>> {
+fn collect_search_files(base_path: &Path, glob: Option<&str>) -> io::Result<Vec<PathBuf>> {
     if base_path.is_file() {
         return Ok(vec![base_path.to_path_buf()]);
+    }
+
+    if let Some(result) =
+        search_backend::rg_files(base_path, &glob.into_iter().map(String::from).collect::<Vec<_>>(), usize::MAX)?
+    {
+        return Ok(result.files);
     }
 
     let mut files = Vec::new();

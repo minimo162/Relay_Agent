@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::pdf_liteparse;
+use crate::search_backend;
 use crate::tool_hard_denylist::reject_sensitive_file_path;
 
 mod docx;
@@ -1101,6 +1102,24 @@ fn expand_office_candidates_with_cap(
             continue;
         }
         if contains_glob_meta(raw) {
+            if let Some(result) = expand_office_candidates_with_rg(
+                raw,
+                include_ext,
+                expansion_cap.saturating_sub(out.len()),
+            )? {
+                for entry in result.files {
+                    push_candidate(&mut out, &mut seen, &entry, include_ext, false, &mut errors);
+                    if out.len() >= expansion_cap {
+                        files_truncated = true;
+                        break;
+                    }
+                }
+                files_truncated |= result.truncated;
+                if files_truncated {
+                    break;
+                }
+                continue;
+            }
             let glob_entries = match glob::glob(raw) {
                 Ok(entries) => entries,
                 Err(error) => {
@@ -1188,6 +1207,59 @@ fn sort_candidates_by_path_relevance(paths: &mut [PathBuf], regex: &Regex) {
             .then_with(|| Reverse(candidate_modified_ms(left)).cmp(&Reverse(candidate_modified_ms(right))))
             .then_with(|| left.cmp(right))
     });
+}
+
+fn expand_office_candidates_with_rg(
+    raw: &str,
+    include_ext: &BTreeSet<String>,
+    limit: usize,
+) -> io::Result<Option<search_backend::FileList>> {
+    let Some((cwd, relative_glob)) = split_glob_root(raw) else {
+        return Ok(None);
+    };
+    if !cwd.is_dir() {
+        return Ok(None);
+    }
+    let globs = office_rg_globs(&relative_glob, include_ext);
+    search_backend::rg_files(&cwd, &globs, limit)
+}
+
+fn office_rg_globs(relative_glob: &str, include_ext: &BTreeSet<String>) -> Vec<String> {
+    let lower = relative_glob.to_ascii_lowercase();
+    if lower.ends_with(".docx")
+        || lower.ends_with(".xlsx")
+        || lower.ends_with(".pptx")
+        || lower.ends_with(".pdf")
+    {
+        return vec![relative_glob.to_string()];
+    }
+    let stem = relative_glob.trim_end_matches(".*");
+    include_ext
+        .iter()
+        .map(|ext| format!("{stem}.{}", ext.trim_start_matches('.')))
+        .collect()
+}
+
+fn split_glob_root(raw: &str) -> Option<(PathBuf, String)> {
+    let path = Path::new(raw);
+    let mut root = PathBuf::new();
+    let mut relative = Vec::new();
+    let mut saw_glob = false;
+    for component in path.components() {
+        let text = component.as_os_str().to_string_lossy();
+        if !saw_glob && contains_glob_meta(&text) {
+            saw_glob = true;
+        }
+        if saw_glob {
+            relative.push(text.to_string());
+        } else {
+            root.push(component.as_os_str());
+        }
+    }
+    if !saw_glob || root.as_os_str().is_empty() {
+        return None;
+    }
+    Some((root, relative.join("/")))
 }
 
 fn contains_glob_meta(value: &str) -> bool {
