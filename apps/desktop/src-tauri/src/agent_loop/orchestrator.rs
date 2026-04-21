@@ -1807,7 +1807,7 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - **Evidence expansion before judgments:** `workspace_search` snippets are candidate evidence for discovery. Before making important conclusions, reviews, edits, comparisons, or recommendations about a file, call the `recommended_next_tools` `read_file` path(s) and ground the answer in that file text. If you have not read the file, describe the result as a candidate only.
 - **Authoritative evidence:** If `workspace_search` snippets and `read_file` content conflict, the `read_file` Tool Result is authoritative.
 - **Grounded final answer:** After `read_file`, include the evidence path and line anchor/startLine when making file-specific conclusions.
-- **Cash-flow lookup variants:** For cash-flow / キャッシュフロー lookup requests, include filename globs for Japanese and common abbreviations in the same first batch: `**/*キャッシュ*フロー*`, `**/*CF*`, and `**/*CFS*`. For Office/PDF body search, prefer one `office_search` with `regex:true` and pattern `キャッシュ[・\s]*フロー|cash\s*flow|\bCF\b|\bCFS\b` so both `キャッシュフロー` and `キャッシュ・フロー` are covered without spending extra turns.
+- **Query-driven lookup variants:** For document lookup requests, derive filename globs and Office/PDF search patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. Prefer query-specific globs before broad `**/*` scans, and treat newer matching files as stronger candidates when relevance is otherwise similar.
 - **Batch speculative searches:** For open-ended lookup, it is better to run a small batch of useful `glob_search` / `grep_search` / `office_search` calls in one reply than to spend a model turn announcing the first search. Keep each search concrete and narrow enough to be useful.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
 - **Path discipline:** If the latest user turn names a concrete path (absolute path, relative path, or bare filename with an extension), use that exact string in tool input. Do **not** rewrite it to a different directory from a prior turn. Treat bare filenames with an extension as workspace-root-relative unless the user gave another base.
@@ -4003,7 +4003,7 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "- For local file lookup requests, use workspace_search first for ranked candidates and evidence snippets; use glob_search for candidate paths, grep_search for plaintext/code contents, and office_search for Office/PDF contents when the follow-up is concrete. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
                 "- If the user gives an exact file path, prefer read_file directly over workspace_search.\n",
                 "- Treat workspace_search snippets as discovery evidence. Before important conclusions, reviews, edits, comparisons, or recommendations, read_file the recommended_next_tools path(s); otherwise describe matches as candidates only. If snippets conflict with read_file, read_file is authoritative. After read_file, cite evidence path and line anchor/startLine when available.\n",
-                "- For cash-flow / キャッシュフロー lookup requests, include `**/*キャッシュ*フロー*`, `**/*CF*`, and `**/*CFS*` filename globs, and use an office_search regex such as `キャッシュ[・\\s]*フロー|cash\\s*flow|\\bCF\\b|\\bCFS\\b` for Office/PDF body search.\n",
+                "- For document lookup requests, derive filename globs and Office/PDF patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. Search query-specific globs before broad `**/*` scans, and prefer newer matching files when relevance is otherwise similar.\n",
                 "- If the user's request is already concrete (paths, files, stated action), use tools in your first response; do not ask them to rephrase unless something essential is missing.\n",
                 "- To combine or split PDF files, use pdf_merge / pdf_split (workspace write); do not use bash for that."
             ),
@@ -4283,11 +4283,10 @@ mod cdp_copilot_tool_tests {
             .catalog_text
             .contains("If you have not read the file, describe the result as a candidate only"));
         assert!(bundle.catalog_text.contains("**/*.{docx,xlsx,pptx,pdf}"));
-        assert!(bundle.catalog_text.contains("Cash-flow lookup variants"));
-        assert!(bundle.catalog_text.contains("**/*CF*"));
+        assert!(bundle.catalog_text.contains("Query-driven lookup variants"));
         assert!(bundle
             .catalog_text
-            .contains(r"キャッシュ[・\s]*フロー|cash\s*flow|\bCF\b|\bCFS\b"));
+            .contains("query-specific globs before broad `**/*` scans"));
         assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::StandardFull);
     }
 
@@ -4343,8 +4342,8 @@ mod cdp_copilot_tool_tests {
         assert!(system.contains("read_file the top candidate path"));
         assert!(system.contains("`必要なファイル`"));
         assert!(system.contains("not invitations for generic domain checklists"));
-        assert!(system.contains("**/*CF*"));
-        assert!(system.contains(r"キャッシュ[・\s]*フロー|cash\s*flow|\bCF\b|\bCFS\b"));
+        assert!(system.contains("derive filename globs and Office/PDF patterns"));
+        assert!(system.contains("prefer newer matching files"));
     }
 
     #[test]
@@ -6741,45 +6740,73 @@ mod loop_controller_tests {
         assert!(next_input.contains("not Relay tool results"));
         assert!(next_input.contains(r#""name": "workspace_search""#));
         assert!(next_input.contains(r#""name": "glob_search""#));
-        assert!(next_input.contains(r#""pattern": "**/*キャッシュ*フロー*""#));
+        assert!(next_input.contains(r#""pattern": "**/*キャッシュフロー計算書*""#));
         assert!(next_input.contains(r#""name": "office_search""#));
         assert!(next_input.contains(r#""regex": true"#));
-        assert!(next_input
-            .contains(r#""pattern": "キャッシュ[・\\s]*フロー|cash\\s*flow|\\bCF\\b|\\bCFS\\b""#));
-        assert!(next_input.contains(r#""pattern": "**/*CF*""#));
-        assert!(next_input.contains(r#""pattern": "**/*CFS*""#));
+        assert!(next_input.contains("キャッシュフロー計算書"));
+        assert!(next_input.contains(r#""paths": ["#));
+        assert!(next_input.contains("**/*キャッシュフロー計算書*"));
         assert!(next_input.contains(r#""include_ext": ["#));
         assert!(!next_input.contains(r#""name": "write_file""#));
     }
 
     #[test]
-    fn cash_flow_lookup_gets_deterministic_initial_search_plan() {
+    fn document_lookup_gets_query_driven_initial_search_plan() {
         let calls = build_initial_local_search_tool_calls(
             "キャッシュフロー計算書の作成に関係するファイルを検索して",
         )
-        .expect("cash-flow lookup should get an initial local search plan");
+        .expect("document lookup should get an initial local search plan");
 
-        assert_eq!(calls.len(), 5);
+        assert_eq!(calls.len(), 6);
         assert_eq!(calls[0].0, "workspace_search");
         assert!(calls[0]
             .1
             .contains("キャッシュフロー計算書の作成に関係するファイルを検索して"));
         assert_eq!(calls[1].0, "glob_search");
-        assert!(calls[1].1.contains(r#""pattern":"**/*キャッシュ*フロー*""#));
+        assert!(calls[1]
+            .1
+            .contains(r#""pattern":"**/*キャッシュフロー計算書*""#));
         assert_eq!(calls[2].0, "office_search");
         assert!(calls[2].1.contains(r#""regex":true"#));
         assert!(calls[2]
             .1
-            .contains(r#""include_ext":["docx","xlsx","pptx"]"#));
+            .contains(r#""include_ext":["docx","xlsx","pptx","pdf"]"#));
         assert!(calls[2].1.contains(r#""max_results":30"#));
         assert!(calls[2].1.contains(r#""max_files":80"#));
         assert!(calls[2]
             .1
-            .contains(r#""pattern":"キャッシュ[・\\s]*フロー|cash\\s*flow|\\bCF\\b|\\bCFS\\b""#));
+            .contains(r#""pattern":"キャッシュフロー計算書|キャッシュフロー"#));
+        assert!(calls[2]
+            .1
+            .contains(r#""paths":["./**/*キャッシュフロー計算書*","#));
+        assert!(calls[2].1.contains(r#""./**/*計算書*""#));
         assert_eq!(calls[3].0, "glob_search");
-        assert!(calls[3].1.contains(r#""pattern":"**/*CF*""#));
+        assert!(calls[3].1.contains(r#""pattern":"**/*キャッシュフロー*""#));
         assert_eq!(calls[4].0, "glob_search");
-        assert!(calls[4].1.contains(r#""pattern":"**/*CFS*""#));
+        assert!(calls[4].1.contains(r#""pattern":"**/*計算書*""#));
+        assert_eq!(calls[5].0, "glob_search");
+        assert!(!calls
+            .iter()
+            .any(|(_, input)| input.contains("**/*キャッシュ*")));
+        assert!(!calls.iter().any(|(_, input)| input.contains("**/*フロー*")));
+    }
+
+    #[test]
+    fn document_lookup_query_ignores_instruction_words_and_honors_explicit_extension() {
+        let calls = build_initial_local_search_tool_calls(
+            "できるだけ新しく、関連度の高い予算精算表Excelファイルを検索して",
+        )
+        .expect("document lookup should get an initial local search plan");
+
+        assert_eq!(calls[1].0, "glob_search");
+        assert!(calls[1].1.contains(r#""pattern":"**/*予算精算表Excel*""#));
+        assert!(!calls[1].1.contains("できるだけ"));
+        assert!(!calls[1].1.contains("検索"));
+        assert_eq!(calls[2].0, "office_search");
+        assert!(calls[2].1.contains(r#""include_ext":["xlsx"]"#));
+        assert!(calls[2].1.contains(r#""pattern":"予算精算表Excel|精算表"#));
+        assert!(calls[2].1.contains(r#""./**/*予算精算表Excel*""#));
+        assert!(calls[2].1.contains(r#""./**/*精算表*""#));
     }
 
     #[test]
@@ -6790,9 +6817,7 @@ mod loop_controller_tests {
         .expect("PDF-specific cash-flow lookup should get an initial local search plan");
 
         assert_eq!(calls[2].0, "office_search");
-        assert!(calls[2]
-            .1
-            .contains(r#""include_ext":["docx","xlsx","pptx","pdf"]"#));
+        assert!(calls[2].1.contains(r#""include_ext":["pdf"]"#));
     }
 
     #[test]
@@ -6810,13 +6835,11 @@ mod loop_controller_tests {
         assert!(next_input.contains("This is a local document search request."));
         assert!(next_input.contains(r#""name": "workspace_search""#));
         assert!(next_input.contains(r#""name": "glob_search""#));
-        assert!(next_input.contains(r#""pattern": "**/*キャッシュ*フロー*""#));
+        assert!(next_input.contains(r#""pattern": "**/*キャッシュフロー計算書*""#));
         assert!(next_input.contains(r#""name": "office_search""#));
         assert!(next_input.contains(r#""regex": true"#));
-        assert!(next_input
-            .contains(r#""pattern": "キャッシュ[・\\s]*フロー|cash\\s*flow|\\bCF\\b|\\bCFS\\b""#));
-        assert!(next_input.contains(r#""pattern": "**/*CF*""#));
-        assert!(next_input.contains(r#""pattern": "**/*CFS*""#));
+        assert!(next_input.contains("キャッシュフロー計算書"));
+        assert!(next_input.contains("**/*キャッシュフロー計算書*"));
         assert!(!next_input.contains(r#""name": "write_file""#));
         assert_eq!(kind, LoopContinueKind::MetaNudge);
     }

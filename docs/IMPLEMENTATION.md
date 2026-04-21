@@ -30,13 +30,38 @@ as a known `FY160-4Q_連結CFS精算表(20260421).xlsx` file not appearing in
   the expansion candidate cap. This makes it clear whether a UNC/share folder
   was searched or whether the current workspace root was used instead.
 
+Follow-up search-quality fix: a live run showed `office_search` enumerating
+older period folders first and hitting the file cap before reaching newer,
+more relevant deep folders. Initial document-search plans now derive
+filename-biased Office globs from the user's concrete words, abbreviations,
+filenames, and path fragments before the broad `**/*` Office scan. Inspired by
+opencode's ripgrep-backed tool shape, candidates are bounded, path matches are
+surfaced before expensive Office parsing, and matching candidates are ordered
+by path relevance with modified time as the tie-breaker. `glob_search` also
+has a walkdir fallback for relative patterns so UNC/extended path glob misses
+can still find deep filenames.
+
+Query generation mirrors opencode's separation of concerns more closely:
+glob inputs are concrete filename patterns, Office regexes are built from
+search terms rather than full instruction sentences, explicit extensions such
+as `Excel` / `PDF` narrow `include_ext`, and control words like `検索`,
+`必要`, `関連度`, and `最新` are not mixed into query terms.
+
 Verification:
 
 - `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
 - `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml globs_and_greps_directory -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml walk_glob_matches_finds_deep_relevant_filenames -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml fold_office_path_result_records_filename_match -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml sort_candidates_by_path_relevance_prefers_relevant_then_recent -- --nocapture`: passed, 1 passed.
 - `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml expand_office_candidates -- --nocapture`: passed, 6 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml document_lookup_gets_query_driven_initial_search_plan -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml document_lookup_query_ignores_instruction_words_and_honors_explicit_extension -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml cash_flow_lookup -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_answer_without_tools_escalates_to_local_search_repair -- --nocapture`: passed, 1 passed.
 - `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml empty_glob_search_result_is_labeled_as_filename_only_miss -- --nocapture`: passed, 1 passed.
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop`: passed.
+- `git diff --check`: passed.
 
 ### 2026-04-21 agentic search staged retrieval
 

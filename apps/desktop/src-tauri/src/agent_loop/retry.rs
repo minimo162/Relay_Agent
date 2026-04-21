@@ -679,18 +679,10 @@ fn is_local_file_search_request(text: &str) -> bool {
 }
 
 fn infer_glob_pattern_for_search_request(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    if lower.contains("cash") && lower.contains("flow") {
-        return Some("**/*cash*flow*".to_string());
-    }
-    if trimmed.contains("キャッシュ") && trimmed.contains("フロー") {
-        return Some("**/*キャッシュ*フロー*".to_string());
-    }
-    None
+    expanded_search_terms_for_request(text)
+        .into_iter()
+        .next()
+        .map(|term| format!("**/*{}*", glob_literal_term(&term)))
 }
 
 fn is_office_content_search_request(text: &str) -> bool {
@@ -703,6 +695,7 @@ fn is_office_content_search_request(text: &str) -> bool {
         || lower.contains(".xlsx")
         || lower.contains(".pptx")
         || lower.contains(".pdf")
+        || lower.contains("cfs")
         || lower.contains("excel")
         || lower.contains("spreadsheet")
         || lower.contains("powerpoint")
@@ -727,65 +720,304 @@ fn is_office_content_search_request(text: &str) -> bool {
 }
 
 fn infer_office_search_pattern_for_search_request(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    if lower.contains("cash") && lower.contains("flow") {
-        return Some("cash flow".to_string());
-    }
-    if trimmed.contains("キャッシュ") && trimmed.contains("フロー") {
-        return Some("キャッシュフロー".to_string());
-    }
-    if trimmed.contains("計算書") {
-        return Some("計算書".to_string());
-    }
-    if trimmed.contains("精算表") {
-        return Some("精算表".to_string());
-    }
-    None
+    expanded_search_terms_for_request(text).into_iter().next()
 }
 
 fn infer_office_search_regex_for_search_request(text: &str) -> Option<String> {
-    if is_cash_flow_search_request(text) {
-        return Some(r"キャッシュ[・\s]*フロー|cash\s*flow|\bCF\b|\bCFS\b".to_string());
-    }
-    None
+    let terms = expanded_search_terms_for_request(text);
+    (!terms.is_empty()).then(|| {
+        terms
+            .into_iter()
+            .take(10)
+            .map(|term| escape_regex_term(&term))
+            .collect::<Vec<_>>()
+            .join("|")
+    })
 }
 
 fn is_cash_flow_search_request(text: &str) -> bool {
     let trimmed = text.trim();
     let lower = trimmed.to_ascii_lowercase();
     (lower.contains("cash") && lower.contains("flow"))
+        || lower.contains("cfs")
         || (trimmed.contains("キャッシュ") && trimmed.contains("フロー"))
-}
-
-fn inferred_cash_flow_aliases(text: &str) -> Vec<&'static str> {
-    if is_cash_flow_search_request(text) {
-        vec!["CF", "CFS"]
-    } else {
-        Vec::new()
-    }
 }
 
 fn office_search_include_ext_for_search_request(text: &str) -> Vec<&'static str> {
     let trimmed = text.trim();
     let lower = trimmed.to_ascii_lowercase();
-    let explicitly_wants_pdf =
-        lower.contains(".pdf") || lower.contains("pdf") || trimmed.contains("PDF");
-    if is_cash_flow_search_request(text) && !explicitly_wants_pdf {
-        vec!["docx", "xlsx", "pptx"]
-    } else {
+    let wants_docx =
+        lower.contains(".docx") || lower.contains("word") || trimmed.contains("ワード");
+    let wants_xlsx = lower.contains(".xlsx")
+        || lower.contains("excel")
+        || lower.contains("spreadsheet")
+        || trimmed.contains("Excel")
+        || trimmed.contains("エクセル");
+    let wants_pptx = lower.contains(".pptx")
+        || lower.contains("powerpoint")
+        || trimmed.contains("パワポ")
+        || trimmed.contains("パワーポイント");
+    let wants_pdf = lower.contains(".pdf") || lower.contains("pdf") || trimmed.contains("PDF");
+    let mut out = Vec::new();
+    if wants_docx {
+        out.push("docx");
+    }
+    if wants_xlsx {
+        out.push("xlsx");
+    }
+    if wants_pptx {
+        out.push("pptx");
+    }
+    if wants_pdf {
+        out.push("pdf");
+    }
+    if out.is_empty() {
         vec!["docx", "xlsx", "pptx", "pdf"]
+    } else {
+        out
     }
 }
 
-fn office_search_paths_for_anchor(path: Option<&str>) -> Vec<String> {
-    match path.map(str::trim).filter(|path| !path.is_empty()) {
-        Some(path) => vec![format!("{}/**/*", path.trim_end_matches(['/', '\\']))],
-        None => vec!["**/*".to_string()],
+fn office_search_paths_for_request(text: &str, path: Option<&str>) -> Vec<String> {
+    let base = path
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .unwrap_or(".");
+    let base = base.trim_end_matches(['/', '\\']);
+    let mut paths = expanded_search_terms_for_request(text)
+        .into_iter()
+        .take(8)
+        .map(|term| format!("{base}/**/*{}*", glob_literal_term(&term)))
+        .collect::<Vec<_>>();
+    paths.push(format!("{base}/**/*"));
+    paths
+}
+
+fn expanded_search_terms_for_request(text: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut seen = BTreeSet::new();
+    for anchor in extract_path_anchors_from_text(text) {
+        for component in anchor.split(['/', '\\']) {
+            if let Some(stem) = component.rsplit_once('.') {
+                push_search_term(&mut terms, &mut seen, stem.0.to_string());
+            }
+            push_search_term(&mut terms, &mut seen, component.to_string());
+        }
     }
+    for token in search_terms_for_request(text) {
+        push_search_term(&mut terms, &mut seen, token);
+    }
+    if is_cash_flow_search_request(text) {
+        for alias in ["CF", "CFS"] {
+            push_search_term(&mut terms, &mut seen, alias.to_string());
+        }
+    }
+    terms
+}
+
+fn push_search_term(terms: &mut Vec<String>, seen: &mut BTreeSet<String>, term: String) {
+    let normalized = term
+        .trim()
+        .trim_matches(['.', ',', '、', '。', '(', ')', '[', ']']);
+    if normalized.is_empty() || is_search_stopword(normalized) {
+        return;
+    }
+    let key = normalized.to_ascii_lowercase();
+    if seen.insert(key) {
+        terms.push(normalized.to_string());
+    }
+}
+
+fn search_terms_for_request(text: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut seen = BTreeSet::new();
+    for quoted in quoted_search_terms(text) {
+        push_search_term(&mut terms, &mut seen, quoted);
+    }
+    let text = remove_search_instruction_phrases(text);
+    let mut token = String::new();
+    for ch in text.chars() {
+        if is_search_token_char(ch) {
+            token.push(ch);
+        } else {
+            push_token_and_subterms(&mut terms, &mut seen, &mut token);
+        }
+    }
+    push_token_and_subterms(&mut terms, &mut seen, &mut token);
+    terms
+}
+
+fn quoted_search_terms(text: &str) -> Vec<String> {
+    let pairs = [('「', '」'), ('『', '』'), ('"', '"'), ('\'', '\'')];
+    let mut out = Vec::new();
+    for (open, close) in pairs {
+        let mut remaining = text;
+        while let Some(start) = remaining.find(open) {
+            let after_start = &remaining[start + open.len_utf8()..];
+            let Some(end) = after_start.find(close) else {
+                break;
+            };
+            out.push(after_start[..end].to_string());
+            remaining = &after_start[end + close.len_utf8()..];
+        }
+    }
+    out
+}
+
+fn remove_search_instruction_phrases(text: &str) -> String {
+    const PHRASES: &[&str] = &[
+        "検索してください",
+        "検索して",
+        "検索",
+        "探してください",
+        "探して",
+        "教えてください",
+        "教えて",
+        "必要になる",
+        "必要な",
+        "関連する",
+        "関係する",
+        "関連度の高い",
+        "関連度",
+        "に関する",
+        "に関連する",
+        "に関係する",
+        "作成する際に",
+        "作成する際",
+        "作成のための",
+        "作成に必要な",
+        "のための",
+        "ための",
+        "ファイル",
+        "資料",
+        "帳票",
+        "できるだけ",
+        "新しく",
+        "新しい",
+        "最新",
+    ];
+    let mut cleaned = text.to_string();
+    for phrase in PHRASES {
+        cleaned = cleaned.replace(phrase, " ");
+    }
+    cleaned
+}
+
+fn push_token_and_subterms(
+    terms: &mut Vec<String>,
+    seen: &mut BTreeSet<String>,
+    token: &mut String,
+) {
+    if token.is_empty() {
+        return;
+    }
+    let current = std::mem::take(token);
+    push_search_term(terms, seen, current.clone());
+    for subterm in meaningful_subterms(&current) {
+        push_search_term(terms, seen, subterm);
+    }
+}
+
+fn meaningful_subterms(token: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for subterm in ["キャッシュフロー", "計算書", "精算表", "決算", "連結"] {
+        if token.contains(subterm) {
+            out.push(subterm.to_string());
+        }
+    }
+    for marker in ["計算書", "精算表", "決算", "報告書", "明細"] {
+        if let Some(index) = token.find(marker) {
+            let end = index + marker.len();
+            let prefix_start = token[..index]
+                .char_indices()
+                .rev()
+                .nth(3)
+                .map_or(0, |(offset, ch)| offset + ch.len_utf8());
+            let phrase = &token[prefix_start..end];
+            if phrase != token && phrase.chars().count() >= 3 {
+                out.push(phrase.to_string());
+            }
+        }
+    }
+    out
+}
+
+fn is_search_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric()
+        || matches!(ch, '-' | '_' | '.')
+        || ('\u{30a0}'..='\u{30ff}').contains(&ch)
+        || ('\u{4e00}'..='\u{9fff}').contains(&ch)
+        || ('\u{ff10}'..='\u{ff5a}').contains(&ch)
+}
+
+fn is_search_stopword(term: &str) -> bool {
+    let char_count = term.chars().count();
+    if char_count <= 1 {
+        return true;
+    }
+    if char_count <= 2 && term.chars().all(|ch| ch.is_ascii_lowercase()) {
+        return true;
+    }
+    let lower = term.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "find"
+            | "search"
+            | "file"
+            | "files"
+            | "document"
+            | "documents"
+            | "needed"
+            | "required"
+            | "related"
+            | "relevant"
+            | "where"
+            | "list"
+            | "locate"
+            | "latest"
+            | "recent"
+    ) || matches!(
+        term,
+        "検索"
+            | "探"
+            | "一覧"
+            | "必要"
+            | "関連"
+            | "関係"
+            | "ファイル"
+            | "資料"
+            | "帳票"
+            | "作成"
+            | "ため"
+            | "教えて"
+            | "出力"
+            | "結果"
+            | "新しく"
+            | "高速"
+            | "正確"
+            | "ユーザー"
+            | "指示"
+    )
+}
+
+fn glob_literal_term(term: &str) -> String {
+    term.chars()
+        .filter(|ch| !matches!(ch, '*' | '?' | '[' | ']' | '{' | '}' | '/' | '\\'))
+        .collect()
+}
+
+fn escape_regex_term(term: &str) -> String {
+    let mut escaped = String::with_capacity(term.len());
+    for ch in term.chars() {
+        if matches!(
+            ch,
+            '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' | '\\'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 fn build_workspace_search_tool_call(latest_request: &str, path: Option<&str>) -> Value {
@@ -842,11 +1074,15 @@ fn build_search_tool_payload(
     }
     if !include_office_content_search {
         let mut calls = vec![workspace_call, glob_call];
-        for alias in inferred_cash_flow_aliases(latest_request) {
+        for term in expanded_search_terms_for_request(latest_request)
+            .into_iter()
+            .skip(1)
+            .take(3)
+        {
             let mut alias_glob_input = serde_json::Map::new();
             alias_glob_input.insert(
                 "pattern".to_string(),
-                Value::String(format!("**/*{alias}*")),
+                Value::String(format!("**/*{}*", glob_literal_term(&term))),
             );
             if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
                 alias_glob_input.insert("path".to_string(), Value::String(path.trim().to_string()));
@@ -864,7 +1100,7 @@ fn build_search_tool_payload(
         return Value::Array(vec![workspace_call, glob_call]);
     };
 
-    let office_paths = office_search_paths_for_anchor(path);
+    let office_paths = office_search_paths_for_request(latest_request, path);
     let office_regex = infer_office_search_regex_for_search_request(latest_request);
     let include_ext = office_search_include_ext_for_search_request(latest_request);
     let mut calls = vec![
@@ -885,11 +1121,15 @@ fn build_search_tool_payload(
             }
         }),
     ];
-    for alias in inferred_cash_flow_aliases(latest_request) {
+    for term in expanded_search_terms_for_request(latest_request)
+        .into_iter()
+        .skip(1)
+        .take(3)
+    {
         let mut alias_glob_input = serde_json::Map::new();
         alias_glob_input.insert(
             "pattern".to_string(),
-            Value::String(format!("**/*{alias}*")),
+            Value::String(format!("**/*{}*", glob_literal_term(&term))),
         );
         if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
             alias_glob_input.insert("path".to_string(), Value::String(path.trim().to_string()));
@@ -904,8 +1144,8 @@ fn build_search_tool_payload(
             "name": "office_search",
             "relay_tool_call": true,
             "input": {
-                    "pattern": alias,
-                    "paths": office_search_paths_for_anchor(path),
+                    "pattern": term,
+                    "paths": office_search_paths_for_request(latest_request, path),
                     "include_ext": office_search_include_ext_for_search_request(latest_request),
                     "-i": true,
                     "context": 40,

@@ -599,6 +599,13 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
             }
         }
     }
+    if matches.is_empty() && !Path::new(pattern).is_absolute() {
+        for matched in walk_glob_matches(&base_dir, pattern)? {
+            if seen.insert(matched.clone()) {
+                matches.push(matched);
+            }
+        }
+    }
 
     sort_paths_by_modified_desc(&mut matches);
 
@@ -632,6 +639,37 @@ pub fn glob_search(pattern: &str, path: Option<&str>) -> io::Result<GlobSearchOu
         "glob_search completed"
     );
     Ok(output)
+}
+
+fn walk_glob_matches(base_dir: &Path, pattern: &str) -> io::Result<Vec<PathBuf>> {
+    let expanded = expand_braces(pattern);
+    let patterns = expanded
+        .iter()
+        .map(|pattern| {
+            Pattern::new(pattern)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    let mut matches = Vec::new();
+    for entry in WalkDir::new(base_dir)
+        .into_iter()
+        .filter_entry(|entry| !is_ignored_search_path(entry.path()))
+    {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        if !path.is_file() || is_ignored_search_path(path) {
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(base_dir) else {
+            continue;
+        };
+        if patterns.iter().any(|pattern| pattern.matches_path(relative)) {
+            matches.push(path.to_path_buf());
+        }
+    }
+    Ok(matches)
 }
 
 pub fn grep_search(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
@@ -1383,9 +1421,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        edit_file, glob_search, grep_search, read_file, workspace_search, write_file,
-        GrepSearchInput, WorkspaceSearchInput, MAX_GREP_LINE_LENGTH, MAX_TEXT_FILE_READ_BYTES,
-        MAX_WRITE_FILE_BYTES,
+        edit_file, glob_search, grep_search, read_file, walk_glob_matches, workspace_search,
+        write_file, GrepSearchInput, WorkspaceSearchInput, MAX_GREP_LINE_LENGTH,
+        MAX_TEXT_FILE_READ_BYTES, MAX_WRITE_FILE_BYTES,
     };
 
     fn temp_path(name: &str) -> std::path::PathBuf {
@@ -1548,6 +1586,20 @@ mod tests {
         assert!(globbed.filenames.iter().any(|path| path.ends_with("one.rs")));
         assert!(globbed.filenames.iter().any(|path| path.ends_with("two.ts")));
         assert!(!globbed.filenames.iter().any(|path| path.ends_with("skip.md")));
+    }
+
+    #[test]
+    fn walk_glob_matches_finds_deep_relevant_filenames() {
+        let dir = temp_path("glob-deep-fallback");
+        let nested = dir.join("999連結/999期-9Q/連結決算/02精算表/ツール");
+        std::fs::create_dir_all(&nested).expect("directory should be created");
+        let expected = nested.join("FY999-9Q_連結精算表(リンク).xlsx");
+        fs::write(&expected, b"placeholder").expect("write workbook placeholder");
+
+        let matches = walk_glob_matches(&dir, "**/*精算表*").expect("walk glob should succeed");
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0], expected);
     }
 
     #[test]

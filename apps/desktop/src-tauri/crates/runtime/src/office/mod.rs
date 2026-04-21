@@ -711,7 +711,8 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
         expansion_candidate_cap,
         started + wall,
     )?;
-    let candidates = expansion.candidates;
+    let mut candidates = expansion.candidates;
+    sort_candidates_by_path_relevance(&mut candidates, &regex);
     let candidate_count = candidates.len();
     let candidate_sample = candidates
         .iter()
@@ -794,6 +795,11 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
         }
 
         if cursor < candidates.len() && outstanding < worker_count {
+            if fold_office_path_result(&regex, context, max_results, &candidates[cursor], &mut results)
+            {
+                results_truncated = true;
+                break;
+            }
             if work_tx.send((cursor, candidates[cursor].clone())).is_err() {
                 break;
             }
@@ -983,6 +989,38 @@ fn fold_office_search_result(
     false
 }
 
+fn fold_office_path_result(
+    regex: &Regex,
+    context: usize,
+    max_results: usize,
+    path: &Path,
+    results: &mut Vec<OfficeSearchHit>,
+) -> bool {
+    if results.len() >= max_results {
+        return true;
+    }
+    let display = path.to_string_lossy();
+    for mat in regex.find_iter(&display) {
+        if results.len() >= max_results {
+            return true;
+        }
+        let start = mat.start().saturating_sub(context);
+        let end = (mat.end() + context).min(display.len());
+        results.push(OfficeSearchHit {
+            path: display.to_string(),
+            anchor: String::from("path"),
+            matched: mat.as_str().to_string(),
+            preview: safe_preview(&display, start, end),
+            match_start: mat.start(),
+            match_end: mat.end(),
+        });
+        if results.len() >= max_results {
+            return true;
+        }
+    }
+    false
+}
+
 fn safe_preview(text: &str, requested_start: usize, requested_end: usize) -> String {
     let mut start = requested_start.min(text.len());
     while start > 0 && !text.is_char_boundary(start) {
@@ -1135,6 +1173,19 @@ fn sort_candidates_by_modified_desc(paths: &mut [PathBuf]) {
     paths.sort_by(|left, right| {
         Reverse(candidate_modified_ms(left))
             .cmp(&Reverse(candidate_modified_ms(right)))
+            .then_with(|| left.cmp(right))
+    });
+}
+
+fn sort_candidates_by_path_relevance(paths: &mut [PathBuf], regex: &Regex) {
+    paths.sort_by(|left, right| {
+        let left_text = left.to_string_lossy();
+        let right_text = right.to_string_lossy();
+        let left_matches = regex.find_iter(&left_text).count();
+        let right_matches = regex.find_iter(&right_text).count();
+        right_matches
+            .cmp(&left_matches)
+            .then_with(|| Reverse(candidate_modified_ms(left)).cmp(&Reverse(candidate_modified_ms(right))))
             .then_with(|| left.cmp(right))
     });
 }
@@ -1635,6 +1686,43 @@ mod tests {
         assert_eq!(results[0].match_start, 7);
         assert_eq!(results[0].match_end, 13);
         assert_eq!(results[0].preview, "re needle af");
+    }
+
+    #[test]
+    fn fold_office_path_result_records_filename_match() {
+        let regex = Regex::new(r"予算|精算表").expect("regex");
+        let path = Path::new(
+            "/tmp/999連結/999期-9Q/連結決算/02精算表/ツール/FY999-9Q_連結予算精算表(リンク).xlsx",
+        );
+        let mut results = Vec::new();
+
+        let truncated = fold_office_path_result(&regex, 12, 10, path, &mut results);
+
+        assert!(!truncated);
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].anchor, "path");
+        assert_eq!(results[0].matched, "精算表");
+        assert!(results[0].preview.contains("02精算表"));
+        assert!(results.iter().any(|hit| hit.preview.contains("連結予算精算表")));
+    }
+
+    #[test]
+    fn sort_candidates_by_path_relevance_prefers_relevant_then_recent() {
+        let root = test_dir();
+        let old_relevant = root.join("old_予算精算表.xlsx");
+        let new_irrelevant = root.join("new_report.xlsx");
+        fs::write(&old_relevant, b"old relevant").expect("write old relevant");
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(&new_irrelevant, b"new irrelevant").expect("write new irrelevant");
+        let mut candidates = vec![new_irrelevant.clone(), old_relevant.clone()];
+        let regex = Regex::new("予算|精算表").expect("regex");
+
+        sort_candidates_by_path_relevance(&mut candidates, &regex);
+
+        assert_eq!(candidates[0], old_relevant);
+        assert_eq!(candidates[1], new_irrelevant);
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
