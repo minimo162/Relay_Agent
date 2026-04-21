@@ -1141,39 +1141,47 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
     if workspace_search_should_include_office(input.mode.as_deref(), include_ext.as_ref()) {
         let office_paths = workspace_search_office_paths(&search_roots);
         if !office_paths.is_empty() && snippets.len() < max_snippets {
-            if let Ok(office_output) = office::office_search(&office::OfficeSearchInput {
-                pattern: workspace_search_office_pattern(query, &terms),
-                paths: office_paths,
-                regex: Some(false),
-                include_ext: Some(vec![
-                    "docx".to_string(),
-                    "xlsx".to_string(),
-                    "pptx".to_string(),
-                    "pdf".to_string(),
-                ]),
-                case_insensitive: Some(true),
-                context: Some(120),
-                max_results: Some(max_snippets.saturating_sub(snippets.len()).max(1)),
-                max_files: Some(max_files),
-            }) {
-                truncated |= office_output.files_truncated
-                    || office_output.results_truncated
-                    || office_output.wall_clock_truncated;
-                for hit in office_output.results {
-                    let entry = candidate_map
-                        .entry(hit.path.clone())
-                        .or_insert_with(|| WorkspaceCandidateAccumulator::new(hit.path.clone()));
-                    entry.score += 4.0;
-                    entry.match_count += 1;
-                    entry.push_reason(format!("office:{}", hit.anchor));
-                    if snippets.len() < max_snippets {
-                        snippets.push(WorkspaceSearchSnippet {
-                            path: hit.path,
-                            anchor: Some(hit.anchor),
-                            line_start: 0,
-                            line_end: 0,
-                            preview: hit.preview,
-                        });
+            let office_patterns = workspace_search_office_patterns(query, &terms);
+            let mut seen_office_snippets = HashSet::new();
+            for pattern in office_patterns {
+                if snippets.len() >= max_snippets {
+                    break;
+                }
+                if let Ok(office_output) = office::office_search(&office::OfficeSearchInput {
+                    pattern,
+                    paths: office_paths.clone(),
+                    regex: Some(false),
+                    include_ext: Some(vec![
+                        "docx".to_string(),
+                        "xlsx".to_string(),
+                        "pptx".to_string(),
+                        "pdf".to_string(),
+                    ]),
+                    case_insensitive: Some(true),
+                    context: Some(120),
+                    max_results: Some(max_snippets.saturating_sub(snippets.len()).max(1)),
+                    max_files: Some(max_files),
+                }) {
+                    truncated |= office_output.files_truncated
+                        || office_output.results_truncated
+                        || office_output.wall_clock_truncated;
+                    for hit in office_output.results {
+                        let entry = candidate_map
+                            .entry(hit.path.clone())
+                            .or_insert_with(|| WorkspaceCandidateAccumulator::new(hit.path.clone()));
+                        entry.score += 4.0;
+                        entry.match_count += 1;
+                        entry.push_reason(format!("office:{}", hit.anchor));
+                        let snippet_key = (hit.path.clone(), hit.anchor.clone(), hit.preview.clone());
+                        if snippets.len() < max_snippets && seen_office_snippets.insert(snippet_key) {
+                            snippets.push(WorkspaceSearchSnippet {
+                                path: hit.path,
+                                anchor: Some(hit.anchor),
+                                line_start: 0,
+                                line_end: 0,
+                                preview: hit.preview,
+                            });
+                        }
                     }
                 }
             }
@@ -1427,12 +1435,39 @@ fn workspace_search_office_paths(search_roots: &[PathBuf]) -> Vec<String> {
     paths
 }
 
-fn workspace_search_office_pattern(query: &str, terms: &[String]) -> String {
-    terms
-        .iter()
-        .find(|term| term.chars().count() >= 3)
-        .cloned()
-        .unwrap_or_else(|| query.to_string())
+fn workspace_search_office_patterns(query: &str, terms: &[String]) -> Vec<String> {
+    let mut patterns = Vec::new();
+    let mut seen = HashSet::new();
+    let lower_query = query.to_ascii_lowercase();
+    if (lower_query.contains("cash") && lower_query.contains("flow"))
+        || lower_query.contains("cfs")
+        || (query.contains("キャッシュ") && query.contains("フロー"))
+    {
+        for pattern in ["キャッシュフロー", "キャッシュ・フロー", "CFS", "計算書", "CF"] {
+            add_unique_office_pattern(&mut patterns, &mut seen, pattern);
+        }
+    }
+    for term in terms.iter().filter(|term| term.chars().count() >= 3) {
+        add_unique_office_pattern(&mut patterns, &mut seen, term);
+        if patterns.len() >= 6 {
+            break;
+        }
+    }
+    if patterns.is_empty() {
+        add_unique_office_pattern(&mut patterns, &mut seen, query);
+    }
+    patterns.truncate(4);
+    patterns
+}
+
+fn add_unique_office_pattern(patterns: &mut Vec<String>, seen: &mut HashSet<String>, pattern: &str) {
+    let trimmed = pattern.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if seen.insert(trimmed.to_ascii_lowercase()) {
+        patterns.push(trimmed.to_string());
+    }
 }
 
 fn collect_search_files(base_path: &Path, input: &GrepSearchInput) -> io::Result<Vec<PathBuf>> {

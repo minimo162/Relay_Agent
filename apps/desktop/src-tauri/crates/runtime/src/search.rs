@@ -1243,41 +1243,49 @@ fn integrate_office_search(
     if office_paths.is_empty() {
         return;
     }
-    match office::office_search(&office::OfficeSearchInput {
-        pattern: workspace_search_office_pattern(query, terms),
-        paths: office_paths,
-        regex: Some(false),
-        include_ext: Some(office_exts),
-        case_insensitive: Some(true),
-        context: Some(120),
-        max_results: Some(max_snippets.saturating_sub(snippets.len()).max(1)),
-        max_files: Some(max_files),
-    }) {
-        Ok(office_output) => {
-            state.truncated |= office_output.files_truncated
-                || office_output.results_truncated
-                || office_output.wall_clock_truncated;
-            for error in office_output.errors {
-                state.skip(error.path, format!("office_search:{}:{}", error.kind, error.reason));
-            }
-            for hit in office_output.results {
-                let entry = candidate_map
-                    .entry(hit.path.clone())
-                    .or_insert_with(|| WorkspaceCandidateAccumulator::new(hit.path.clone()));
-                entry.features.office_anchor = true;
-                entry.add(25.0, 1, format!("office anchor {}", hit.anchor));
-                if snippets.len() < max_snippets {
-                    snippets.push(WorkspaceSearchSnippet {
-                        path: hit.path,
-                        anchor: Some(hit.anchor),
-                        line_start: 0,
-                        line_end: 0,
-                        preview: hit.preview,
-                    });
+    let patterns = workspace_search_office_patterns(query, terms);
+    let mut seen_snippets = HashSet::new();
+    for pattern in patterns {
+        if snippets.len() >= max_snippets {
+            break;
+        }
+        match office::office_search(&office::OfficeSearchInput {
+            pattern,
+            paths: office_paths.clone(),
+            regex: Some(false),
+            include_ext: Some(office_exts.clone()),
+            case_insensitive: Some(true),
+            context: Some(120),
+            max_results: Some(max_snippets.saturating_sub(snippets.len()).max(1)),
+            max_files: Some(max_files),
+        }) {
+            Ok(office_output) => {
+                state.truncated |= office_output.files_truncated
+                    || office_output.results_truncated
+                    || office_output.wall_clock_truncated;
+                for error in office_output.errors {
+                    state.skip(error.path, format!("office_search:{}:{}", error.kind, error.reason));
+                }
+                for hit in office_output.results {
+                    let entry = candidate_map
+                        .entry(hit.path.clone())
+                        .or_insert_with(|| WorkspaceCandidateAccumulator::new(hit.path.clone()));
+                    entry.features.office_anchor = true;
+                    entry.add(25.0, 1, format!("office anchor {}", hit.anchor));
+                    let snippet_key = (hit.path.clone(), hit.anchor.clone(), hit.preview.clone());
+                    if snippets.len() < max_snippets && seen_snippets.insert(snippet_key) {
+                        snippets.push(WorkspaceSearchSnippet {
+                            path: hit.path,
+                            anchor: Some(hit.anchor),
+                            line_start: 0,
+                            line_end: 0,
+                            preview: hit.preview,
+                        });
+                    }
                 }
             }
+            Err(error) => state.skip("(office_search)", format!("office_search_error:{error}")),
         }
-        Err(error) => state.skip("(office_search)", format!("office_search_error:{error}")),
     }
 }
 
@@ -1738,12 +1746,39 @@ fn workspace_search_office_paths(search_roots: &[PathBuf], office_exts: &[String
     paths
 }
 
-fn workspace_search_office_pattern(query: &str, terms: &[String]) -> String {
-    terms
-        .iter()
-        .find(|term| term.chars().count() >= 3)
-        .cloned()
-        .unwrap_or_else(|| query.to_string())
+fn workspace_search_office_patterns(query: &str, terms: &[String]) -> Vec<String> {
+    let mut patterns = Vec::new();
+    let mut seen = HashSet::new();
+    let lower_query = query.to_ascii_lowercase();
+    if (lower_query.contains("cash") && lower_query.contains("flow"))
+        || lower_query.contains("cfs")
+        || (query.contains("キャッシュ") && query.contains("フロー"))
+    {
+        for pattern in ["キャッシュフロー", "キャッシュ・フロー", "CFS", "計算書", "CF"] {
+            add_unique_office_pattern(&mut patterns, &mut seen, pattern);
+        }
+    }
+    for term in terms.iter().filter(|term| term.chars().count() >= 3) {
+        add_unique_office_pattern(&mut patterns, &mut seen, term);
+        if patterns.len() >= 6 {
+            break;
+        }
+    }
+    if patterns.is_empty() {
+        add_unique_office_pattern(&mut patterns, &mut seen, query);
+    }
+    patterns.truncate(4);
+    patterns
+}
+
+fn add_unique_office_pattern(patterns: &mut Vec<String>, seen: &mut HashSet<String>, pattern: &str) {
+    let trimmed = pattern.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if seen.insert(trimmed.to_ascii_lowercase()) {
+        patterns.push(trimmed.to_string());
+    }
 }
 
 fn is_ignored_workspace_search_path(path: &Path) -> bool {
@@ -2776,6 +2811,24 @@ mod tests {
         let exts = super::workspace_search_office_exts(Some(&include_ext));
 
         assert_eq!(exts, vec![String::from("pdf")]);
+    }
+
+    #[test]
+    fn workspace_search_office_patterns_expand_cash_flow_aliases() {
+        let terms = super::workspace_search_terms("キャッシュフロー計算書 関連ファイル");
+
+        let patterns =
+            super::workspace_search_office_patterns("キャッシュフロー計算書 関連ファイル", &terms);
+
+        assert_eq!(
+            patterns,
+            vec![
+                String::from("キャッシュフロー"),
+                String::from("キャッシュ・フロー"),
+                String::from("CFS"),
+                String::from("計算書"),
+            ]
+        );
     }
 
     #[cfg(unix)]

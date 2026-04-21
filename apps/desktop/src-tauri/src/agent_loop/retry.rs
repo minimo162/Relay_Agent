@@ -811,34 +811,59 @@ fn office_search_paths_for_explicit_root(path: &str) -> Vec<String> {
     vec![format!("{base}/**/*")]
 }
 
-fn office_search_pattern_for_request(text: &str) -> String {
+fn office_search_patterns_for_request(text: &str) -> Vec<String> {
+    let mut patterns = Vec::new();
+    let mut seen = BTreeSet::new();
     if is_cash_flow_search_request(text) {
-        return "キャッシュフロー".to_string();
+        for pattern in [
+            "キャッシュフロー",
+            "キャッシュ・フロー",
+            "CFS",
+            "計算書",
+            "CF",
+        ] {
+            push_search_term(&mut patterns, &mut seen, pattern.to_string());
+        }
     }
-    let terms = search_terms_for_request(text)
-        .into_iter()
-        .filter(|term| !path_is_absolute_like(term) && !term.contains(['/', '\\']))
-        .collect::<Vec<_>>();
-    terms
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| text.trim().to_string())
+    for term in expanded_search_terms_for_request(text) {
+        if path_is_absolute_like(&term) || term.contains(['/', '\\']) {
+            continue;
+        }
+        push_search_term(&mut patterns, &mut seen, term);
+        if patterns.len() >= 6 {
+            break;
+        }
+    }
+    if patterns.is_empty() {
+        push_search_term(&mut patterns, &mut seen, text.trim().to_string());
+    }
+    patterns.truncate(4);
+    patterns
 }
 
 fn build_office_search_tool_call_for_explicit_root(latest_request: &str, path: &str) -> Value {
-    json!({
-        "name": "office_search",
-        "relay_tool_call": true,
-        "input": {
-            "pattern": office_search_pattern_for_request(latest_request),
-            "paths": office_search_paths_for_explicit_root(path),
-            "regex": false,
-            "include_ext": office_search_include_ext_for_search_request(latest_request),
-            "context": 120,
-            "max_results": 80,
-            "max_files": 200
-        }
-    })
+    let paths = office_search_paths_for_explicit_root(path);
+    let include_ext = office_search_include_ext_for_search_request(latest_request);
+    let calls = office_search_patterns_for_request(latest_request)
+        .into_iter()
+        .map(|pattern| {
+            json!({
+                "name": "office_search",
+                "relay_tool_call": true,
+                "input": {
+                    "pattern": pattern,
+                    "paths": paths.clone(),
+                    "regex": false,
+                    "-i": true,
+                    "include_ext": include_ext.clone(),
+                    "context": 120,
+                    "max_results": 40,
+                    "max_files": 200
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    Value::Array(calls)
 }
 
 fn expanded_search_terms_for_request(text: &str) -> Vec<String> {

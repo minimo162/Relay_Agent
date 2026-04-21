@@ -15,6 +15,26 @@
 
 ## Milestone Log
 
+### 2026-04-21 agentic Office search expansion
+
+Aligned Relay's deterministic local document lookup more closely with
+opencode's search model: broad lookup should not depend on one literal grep.
+When the user gives an explicit external Office/PDF root, the initial plan now
+emits a bounded batch of `office_search` calls for complementary literal
+patterns such as Japanese cash-flow spelling variants, `CFS`, and `計算書`,
+with case-insensitive matching. The `workspace_search` Office/PDF integration
+uses the same multi-pattern strategy internally, deduping snippets across
+patterns before returning ranked candidates.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml initial_search_plan_uses_external_mapped_drive_for_office_lookup -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml initial_search_plan_uses_workspace_cwd_instead_of_external_unc_anchor -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_search_office_patterns_expand_cash_flow_aliases -- --nocapture`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-21 initial search external path fallback
 
 Fixed a live desktop search failure where the deterministic initial

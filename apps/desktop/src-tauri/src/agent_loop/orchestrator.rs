@@ -6943,14 +6943,20 @@ mod loop_controller_tests {
         )
         .expect("document lookup should get an initial local search plan");
 
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "office_search");
-        assert!(calls[0].1.contains(
+        assert!(calls.len() >= 3);
+        assert!(calls.iter().all(|(name, _)| name == "office_search"));
+        assert!(calls.iter().all(|(_, input)| input.contains(
             r#""paths":["\\\\Dsfile622\\\\div622$\\\\shr1\\\\05_経理部\\\\03_連結財務G/**/*"]"#
-        ));
-        assert!(calls[0]
-            .1
-            .contains(r#""include_ext":["docx","xlsx","pptx","pdf"]"#));
+        )));
+        assert!(calls
+            .iter()
+            .all(|(_, input)| input.contains(r#""include_ext":["docx","xlsx","pptx","pdf"]"#)));
+        assert!(calls
+            .iter()
+            .any(|(_, input)| input.contains(r#""pattern":"CFS""#)));
+        assert!(calls
+            .iter()
+            .any(|(_, input)| input.contains(r#""pattern":"キャッシュ・フロー""#)));
     }
 
     #[test]
@@ -6961,12 +6967,21 @@ mod loop_controller_tests {
         )
         .expect("document lookup should get an initial local search plan");
 
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "office_search");
-        assert!(calls[0]
-            .1
-            .contains(r#""paths":["H:\\shr1\\05_経理部\\03_連結財務G/**/*"]"#));
-        assert!(calls[0].1.contains(r#""pattern":"キャッシュフロー"#));
+        assert!(calls.len() >= 3);
+        assert!(calls.iter().all(|(name, _)| name == "office_search"));
+        assert!(calls
+            .iter()
+            .all(|(_, input)| input
+                .contains(r#""paths":["H:\\shr1\\05_経理部\\03_連結財務G/**/*"]"#)));
+        assert!(calls
+            .iter()
+            .any(|(_, input)| input.contains(r#""pattern":"キャッシュフロー""#)));
+        assert!(calls
+            .iter()
+            .any(|(_, input)| input.contains(r#""pattern":"CFS""#)));
+        assert!(calls
+            .iter()
+            .all(|(_, input)| input.contains(r#""-i":true"#)));
     }
 
     #[test]
