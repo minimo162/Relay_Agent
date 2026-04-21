@@ -15,6 +15,37 @@
 
 ## Milestone Log
 
+### 2026-04-21 Copilot CDP prompt character budget
+
+Fixed a Copilot handoff failure where local search results could fit Relay's
+rough token estimate while still exceeding the M365 chat composer's practical
+128000-character input limit. The CDP prompt assembly now enforces a
+120000-character inline budget before sending, logs the pre-compaction character
+count, and bounds large tool-result bodies before they enter the prompt.
+`workspace_search`, `glob_search`, `grep_search`, and `office_search` results
+are capped to a compact evidence slice with an explicit truncation marker; large
+`read_file`, `git_status`, `git_diff`, and error outputs also have bounded CDP
+rendering. The full tool output remains in Relay's session state; this only
+limits the text pasted into Copilot.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop local_search_tool_result_is_bounded_for_cdp_prompt -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop inline_cdp_prompt_respects_character_limit_for_search_results -- --nocapture
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop local_search_tool_result_is_bounded_for_cdp_prompt -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop inline_cdp_prompt_respects_character_limit_for_search_results -- --nocapture`: passed, 1 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-21 workspace_search recency ordering fix
 
 Fixed a live local file-search quality issue where `workspace_search` could

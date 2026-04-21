@@ -20,6 +20,10 @@ use uuid::Uuid;
 const CDP_TOOL_FENCE: &str = "```relay_tool";
 
 const CDP_INLINE_PROMPT_MAX_TOKENS: usize = 128_000;
+const CDP_INLINE_PROMPT_MAX_CHARS: usize = 120_000;
+const CDP_LOCAL_SEARCH_TOOL_RESULT_MAX_CHARS: usize = 12_000;
+const CDP_READ_FILE_TOOL_RESULT_MAX_CHARS: usize = 32_000;
+const CDP_LARGE_TOOL_RESULT_MAX_CHARS: usize = 24_000;
 const COPILOT_UI_PROGRESS_POLL_MS: u64 = 350;
 
 fn estimate_cdp_prompt_tokens(prompt: &str) -> usize {
@@ -2807,7 +2811,10 @@ fn compact_request_messages_for_inline_cdp_with_flavor(
             catalog_flavor,
         );
         let estimated_tokens = estimate_cdp_prompt_tokens(&prompt_bundle.prompt);
-        if estimated_tokens <= CDP_INLINE_PROMPT_MAX_TOKENS {
+        let prompt_chars = prompt_bundle.total_chars();
+        if estimated_tokens <= CDP_INLINE_PROMPT_MAX_TOKENS
+            && prompt_chars <= CDP_INLINE_PROMPT_MAX_CHARS
+        {
             return Ok((messages, estimated_tokens, removed_message_count));
         }
 
@@ -2816,7 +2823,7 @@ fn compact_request_messages_for_inline_cdp_with_flavor(
         let result = runtime::compact_session(&session, runtime::CompactionConfig::default());
         if result.removed_message_count == 0 {
             return Err(RuntimeError::new(format!(
-                "Copilot inline prompt remains above the {CDP_INLINE_PROMPT_MAX_TOKENS}-token limit after compaction (estimated {estimated_tokens} tokens)"
+                "Copilot inline prompt remains above the inline delivery limit after compaction (estimated {estimated_tokens} tokens, {prompt_chars} chars; limits {CDP_INLINE_PROMPT_MAX_TOKENS} tokens, {CDP_INLINE_PROMPT_MAX_CHARS} chars)"
             )));
         }
 
@@ -2824,10 +2831,11 @@ fn compact_request_messages_for_inline_cdp_with_flavor(
         removed_message_count += result.removed_message_count;
         compaction_rounds += 1;
         tracing::info!(
-            "[CdpApiClient] compacted prompt context for inline delivery (round={}, removed_messages={}, est_tokens_before={}, flavor={:?})",
+            "[CdpApiClient] compacted prompt context for inline delivery (round={}, removed_messages={}, est_tokens_before={}, chars_before={}, flavor={:?})",
             compaction_rounds,
             result.removed_message_count,
             estimated_tokens,
+            prompt_chars,
             flavor
         );
     }
@@ -2981,9 +2989,42 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
     lines.join("\n")
 }
 
+fn cdp_tool_result_max_chars(tool_name: &str, is_error: bool) -> Option<usize> {
+    if is_error {
+        return Some(CDP_LARGE_TOOL_RESULT_MAX_CHARS);
+    }
+    match tool_name {
+        "workspace_search" | "glob_search" | "grep_search" | "office_search" => {
+            Some(CDP_LOCAL_SEARCH_TOOL_RESULT_MAX_CHARS)
+        }
+        "read_file" => Some(CDP_READ_FILE_TOOL_RESULT_MAX_CHARS),
+        "git_diff" => Some(CDP_LARGE_TOOL_RESULT_MAX_CHARS),
+        "git_status" => Some(CDP_LOCAL_SEARCH_TOOL_RESULT_MAX_CHARS),
+        _ => None,
+    }
+}
+
+fn truncate_tool_result_for_cdp(tool_name: &str, output: &str, max_chars: usize) -> String {
+    let char_count = output.chars().count();
+    if char_count <= max_chars {
+        return output.to_string();
+    }
+
+    let mut truncated = output.chars().take(max_chars).collect::<String>();
+    truncated.push_str(&format!(
+        "\n\n[truncated for M365 Copilot CDP prompt: tool={tool_name}, shown_chars={max_chars}, original_chars={char_count}]"
+    ));
+    truncated
+}
+
 fn format_cdp_tool_result(tool_name: &str, output: &str, is_error: bool) -> String {
     let status = if is_error { "error" } else { "ok" };
     let summarized_output = summarized_tool_result_body(tool_name, output, is_error);
+    let bounded_output = if let Some(max_chars) = cdp_tool_result_max_chars(tool_name, is_error) {
+        truncate_tool_result_for_cdp(tool_name, &summarized_output, max_chars)
+    } else {
+        summarized_output
+    };
     format!(
         concat!(
             "<UNTRUSTED_TOOL_OUTPUT tool=\"{tool_name}\" status=\"{status}\">\n",
@@ -2995,7 +3036,7 @@ fn format_cdp_tool_result(tool_name: &str, output: &str, is_error: bool) -> Stri
         ),
         tool_name = tool_name,
         status = status,
-        output = summarized_output,
+        output = bounded_output,
     )
 }
 
@@ -4547,6 +4588,76 @@ mod cdp_copilot_tool_tests {
         let rendered = format_cdp_tool_result("read_file", &output, false);
         assert!(rendered.contains(content));
         assert!(!rendered.contains(r#"id=\\\"game\\\""#));
+    }
+
+    #[test]
+    fn local_search_tool_result_is_bounded_for_cdp_prompt() {
+        let output = serde_json::to_string(&json!({
+            "query": "キャッシュフロー",
+            "results": [{
+                "path": "/workspace/report.xlsx",
+                "anchor": "Sheet1!A1",
+                "preview": "x".repeat(40_000)
+            }]
+        }))
+        .expect("serialize search output");
+
+        let rendered = format_cdp_tool_result("office_search", &output, false);
+        assert!(rendered.contains("path"));
+        assert!(rendered.contains("truncated for M365 Copilot CDP prompt"));
+        assert!(rendered.len() < CDP_LOCAL_SEARCH_TOOL_RESULT_MAX_CHARS + 1_000);
+    }
+
+    #[test]
+    fn inline_cdp_prompt_respects_character_limit_for_search_results() {
+        let large_search_output = serde_json::to_string(&json!({
+            "results": (0..5)
+                .map(|i| json!({
+                    "path": format!("/workspace/report-{i}.xlsx"),
+                    "anchor": "Sheet1!A1",
+                    "preview": "x".repeat(20_000)
+                }))
+                .collect::<Vec<_>>()
+        }))
+        .expect("serialize search output");
+        let messages = vec![
+            ConversationMessage::user_text("キャッシュフロー計算書作成に必要なファイルを検索して"),
+            ConversationMessage::tool_result(
+                "tool-1",
+                "workspace_search",
+                &large_search_output,
+                false,
+            ),
+            ConversationMessage::tool_result("tool-2", "glob_search", &large_search_output, false),
+            ConversationMessage::tool_result(
+                "tool-3",
+                "office_search",
+                &large_search_output,
+                false,
+            ),
+            ConversationMessage::tool_result("tool-4", "glob_search", &large_search_output, false),
+            ConversationMessage::tool_result(
+                "tool-5",
+                "office_search",
+                &large_search_output,
+                false,
+            ),
+        ];
+        let system: Vec<String> = vec![];
+        let request = ApiRequest {
+            system_prompt: &system,
+            messages: &messages,
+        };
+
+        let (compacted_messages, _, _) =
+            compact_request_messages_for_inline_cdp(&request).expect("prompt should fit");
+        let prompt = build_cdp_prompt_from_messages(&system, &compacted_messages);
+        assert!(
+            prompt.len() <= CDP_INLINE_PROMPT_MAX_CHARS,
+            "prompt should fit Copilot character budget, got {} chars",
+            prompt.len()
+        );
+        assert!(prompt.contains("truncated for M365 Copilot CDP prompt"));
     }
 
     #[test]
