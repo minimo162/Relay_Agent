@@ -15,6 +15,32 @@
 
 ## Milestone Log
 
+### 2026-04-21 workspace_search recency ordering fix
+
+Fixed a live local file-search quality issue where `workspace_search` could
+return older files first under tight `max_files` budgets. The root cause was
+that the high-level search pass walked files in filesystem/path order and
+applied the scan budget before content inspection, unlike `glob_search` and
+`office_search`, which already prefer recently modified candidates.
+
+- `workspace_search` now collects eligible file metadata first, sorts candidates
+  by modified time descending, and only then spends the scan/content budget.
+- Candidate tie-breaking now uses modified time before path name, so equally
+  relevant files favor recent work instead of lexicographically earlier paths.
+- Added a regression where an older `a_old/old.txt` would previously win a
+  one-file budget over newer `z_new/new.txt`.
+- Follow-up fix: path and filename matches are now preserved before spending the
+  content scan budget, so tight recency-ordered scans do not drop an older exact
+  filename/path candidate behind a newer unrelated file.
+
+Verification:
+
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_search_scans_recent_files_first_under_budget -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_search_preserves_path_match_under_recent_budget -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_search -- --nocapture`: passed, 20 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml search_ -- --nocapture`: passed, 39 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_ -- --nocapture`: passed, 5 passed.
+
 ### 2026-04-21 workspace_search plan/trace and evidence-expansion recommendations
 
 Tightened the Relay-only `workspace_search` contract so it behaves more like a

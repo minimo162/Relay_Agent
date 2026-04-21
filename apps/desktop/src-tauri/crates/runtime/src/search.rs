@@ -1,8 +1,9 @@
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use glob::Pattern;
 use serde::{Deserialize, Serialize};
@@ -154,16 +155,23 @@ struct WorkspaceCandidateAccumulator {
     reasons: Vec<String>,
     match_count: usize,
     features: WorkspaceSearchRankingFeatures,
+    modified_ms: u128,
 }
 
 impl WorkspaceCandidateAccumulator {
     fn new(path: String) -> Self {
+        let modified_ms = path_modified_ms(Path::new(&path));
+        Self::with_modified(path, modified_ms)
+    }
+
+    fn with_modified(path: String, modified_ms: u128) -> Self {
         Self {
             path,
             score: 0.0,
             reasons: Vec::new(),
             match_count: 0,
             features: WorkspaceSearchRankingFeatures::default(),
+            modified_ms,
         }
     }
 
@@ -186,6 +194,7 @@ impl WorkspaceCandidateAccumulator {
         self.features.office_anchor |= other.features.office_anchor;
         self.features.recently_modified |= other.features.recently_modified;
         self.features.ignored_generated_penalty += other.features.ignored_generated_penalty;
+        self.modified_ms = self.modified_ms.max(other.modified_ms);
         for reason in other.reasons {
             if !self.reasons.iter().any(|existing| existing == &reason) {
                 self.reasons.push(reason);
@@ -229,6 +238,15 @@ struct SearchState {
     scanned_bytes: u64,
     truncated: bool,
     skipped: Vec<WorkspaceSearchSkipped>,
+}
+
+#[derive(Debug)]
+struct WorkspaceFileEntry {
+    canonical: PathBuf,
+    path_string: String,
+    metadata: fs::Metadata,
+    modified_ms: u128,
+    accumulator: WorkspaceCandidateAccumulator,
 }
 
 impl SearchState {
@@ -489,6 +507,7 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
     let mut candidate_map = BTreeMap::<String, WorkspaceCandidateAccumulator>::new();
     let mut snippets = Vec::new();
     let mut fallbacks_used = vec![String::from("path_search"), String::from("text_search")];
+    let mut file_entries = Vec::new();
 
     for root in &search_roots {
         for entry in WalkDir::new(root)
@@ -568,63 +587,101 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
                 state.skip(canonical.to_string_lossy(), "max_bytes");
                 continue;
             }
-            if state.scanned_files >= budgets.max_files {
-                state.truncated = true;
-                state.skip(canonical.to_string_lossy(), "max_files");
-                break;
-            }
 
             let path_string = canonical.to_string_lossy().into_owned();
-            let mut accumulator = WorkspaceCandidateAccumulator::new(path_string.clone());
+            let modified_ms = metadata_modified_ms(&metadata);
+            let mut accumulator =
+                WorkspaceCandidateAccumulator::with_modified(path_string.clone(), modified_ms);
             score_workspace_path(&path_string, &terms, &mut accumulator);
             score_extension(&canonical, &mut accumulator);
-            score_recency(&canonical, &mut accumulator);
+            score_recency_from_metadata(&metadata, &mut accumulator);
+            file_entries.push(WorkspaceFileEntry {
+                modified_ms,
+                canonical,
+                path_string,
+                metadata,
+                accumulator,
+            });
+        }
+    }
 
-            if is_office_workspace_search_path(&canonical) {
-                state.scanned_files += 1;
-                state.scanned_bytes = state.scanned_bytes.saturating_add(metadata.len());
-                if accumulator.match_count > 0 {
-                    candidate_map.insert(path_string, accumulator);
-                }
-                continue;
-            }
+    file_entries.sort_by(|left, right| {
+        Reverse(left.modified_ms)
+            .cmp(&Reverse(right.modified_ms))
+            .then_with(|| left.path_string.cmp(&right.path_string))
+    });
 
-            let bytes = match fs::read(&canonical) {
-                Ok(bytes) => bytes,
-                Err(error) => {
-                    state.skip(path_string, format!("read_error:{error}"));
-                    continue;
-                }
-            };
-            if bytes.contains(&0) {
-                state.skip(path_string, "binary");
-                continue;
-            }
-            let content = match String::from_utf8(bytes) {
-                Ok(content) => content,
-                Err(_) => {
-                    state.skip(path_string, "non_utf8");
-                    continue;
-                }
-            };
+    for file_entry in &file_entries {
+        if file_entry.accumulator.match_count > 0 {
+            candidate_map.insert(
+                file_entry.path_string.clone(),
+                file_entry.accumulator.clone(),
+            );
+        }
+    }
+
+    for file_entry in file_entries {
+        if Instant::now() >= budgets.deadline {
+            state.truncated = true;
+            state.skip(file_entry.path_string, "duration_budget_exceeded");
+            break;
+        }
+        if state.scanned_files >= budgets.max_files {
+            state.truncated = true;
+            state.skip(file_entry.path_string, "max_files");
+            break;
+        }
+
+        let WorkspaceFileEntry {
+            canonical,
+            path_string,
+            metadata,
+            accumulator,
+            ..
+        } = file_entry;
+        let mut accumulator = accumulator;
+
+        if is_office_workspace_search_path(&canonical) {
             state.scanned_files += 1;
             state.scanned_bytes = state.scanned_bytes.saturating_add(metadata.len());
-
-            let file_snippets =
-                score_workspace_text(&path_string, &content, &terms, context, &mut accumulator);
             if accumulator.match_count > 0 {
-                candidate_map
-                    .entry(path_string)
-                    .and_modify(|existing| existing.merge(accumulator.clone()))
-                    .or_insert(accumulator);
+                candidate_map.insert(path_string, accumulator);
             }
-            for snippet in file_snippets {
-                if snippets.len() < budgets.max_snippets {
-                    snippets.push(snippet);
-                } else {
-                    state.truncated = true;
-                    break;
-                }
+            continue;
+        }
+
+        let bytes = match fs::read(&canonical) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                state.skip(path_string, format!("read_error:{error}"));
+                continue;
+            }
+        };
+        if bytes.contains(&0) {
+            state.skip(path_string, "binary");
+            continue;
+        }
+        let content = match String::from_utf8(bytes) {
+            Ok(content) => content,
+            Err(_) => {
+                state.skip(path_string, "non_utf8");
+                continue;
+            }
+        };
+        state.scanned_files += 1;
+        state.scanned_bytes = state.scanned_bytes.saturating_add(metadata.len());
+
+        let file_snippets =
+            score_workspace_text(&path_string, &content, &terms, context, &mut accumulator);
+        if accumulator.match_count > 0 {
+            candidate_map.insert(path_string, accumulator);
+        }
+        for snippet in file_snippets {
+            if snippets.len() < budgets.max_snippets {
+                snippets.push(snippet);
+            } else {
+                state.truncated = true;
+                break;
             }
         }
     }
@@ -646,17 +703,19 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
         );
     }
 
-    let mut candidates = candidate_map
-        .into_values()
-        .map(WorkspaceCandidateAccumulator::into_candidate)
-        .collect::<Vec<_>>();
-    candidates.sort_by(|a, b| {
+    let mut accumulators = candidate_map.into_values().collect::<Vec<_>>();
+    accumulators.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| b.match_count.cmp(&a.match_count))
+            .then_with(|| b.modified_ms.cmp(&a.modified_ms))
             .then_with(|| a.path.cmp(&b.path))
     });
+    let mut candidates = accumulators
+        .into_iter()
+        .map(WorkspaceCandidateAccumulator::into_candidate)
+        .collect::<Vec<_>>();
     if candidates.len() > budgets.max_files {
         candidates.truncate(budgets.max_files);
         state.truncated = true;
@@ -1304,8 +1363,11 @@ fn score_extension(path: &Path, accumulator: &mut WorkspaceCandidateAccumulator)
     accumulator.add(score, 0, format!("{ext} file"));
 }
 
-fn score_recency(path: &Path, accumulator: &mut WorkspaceCandidateAccumulator) {
-    let Ok(modified) = fs::metadata(path).and_then(|metadata| metadata.modified()) else {
+fn score_recency_from_metadata(
+    metadata: &fs::Metadata,
+    accumulator: &mut WorkspaceCandidateAccumulator,
+) {
+    let Ok(modified) = metadata.modified() else {
         return;
     };
     let Ok(age) = modified.elapsed() else {
@@ -1315,6 +1377,20 @@ fn score_recency(path: &Path, accumulator: &mut WorkspaceCandidateAccumulator) {
         accumulator.features.recently_modified = true;
         accumulator.add(5.0, 0, "recently modified");
     }
+}
+
+fn path_modified_ms(path: &Path) -> u128 {
+    fs::metadata(path)
+        .map(|metadata| metadata_modified_ms(&metadata))
+        .unwrap_or(0)
+}
+
+fn metadata_modified_ms(metadata: &fs::Metadata) -> u128 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_millis())
 }
 
 fn score_workspace_text(
@@ -1463,7 +1539,7 @@ fn is_ignored_workspace_search_path(path: &Path) -> bool {
 mod tests {
     use std::fs;
     use std::io;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::{workspace_search, WorkspaceSearchInput};
 
@@ -1756,6 +1832,81 @@ mod tests {
         assert!(!output.candidates.is_empty());
         assert!(output.limits.scanned_files >= 1);
         assert!(output.limits.skipped_files >= 1);
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_scans_recent_files_first_under_budget() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-recent-budget");
+        std::fs::create_dir_all(dir.join("a_old")).expect("old dir");
+        std::fs::create_dir_all(dir.join("z_new")).expect("new dir");
+        fs::write(dir.join("a_old/old.txt"), "needle old\n").expect("old file");
+        std::thread::sleep(Duration::from_millis(1100));
+        fs::write(dir.join("z_new/new.txt"), "needle new\n").expect("new file");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("needle"),
+            paths: None,
+            mode: Some(String::from("text")),
+            include_ext: Some(vec![String::from("txt")]),
+            max_files: Some(1),
+            max_snippets: Some(5),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(1),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert!(output.limits.truncated);
+        assert_eq!(output.limits.scanned_files, 1);
+        assert_eq!(output.candidates.len(), 1);
+        assert!(output.candidates[0].path.ends_with("z_new/new.txt"));
+        assert!(output.snippets[0].preview.contains("needle new"));
+
+        std::env::set_current_dir(original_dir).expect("restore cwd");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_search_preserves_path_match_under_recent_budget() {
+        let _guard = crate::test_env_lock();
+        let original_dir = std::env::current_dir().expect("cwd");
+        let dir = temp_path("workspace-search-path-budget");
+        std::fs::create_dir_all(dir.join("a_old")).expect("old dir");
+        std::fs::create_dir_all(dir.join("z_new")).expect("new dir");
+        fs::write(dir.join("a_old/agentic_search_router.rs"), "pub fn route() {}\n")
+            .expect("path target");
+        std::thread::sleep(Duration::from_millis(1100));
+        fs::write(dir.join("z_new/unrelated.rs"), "pub fn newer() {}\n").expect("newer file");
+        std::env::set_current_dir(&dir).expect("set cwd");
+
+        let output = workspace_search(&WorkspaceSearchInput {
+            query: String::from("agentic search router"),
+            paths: None,
+            mode: Some(String::from("path")),
+            include_ext: Some(vec![String::from("rs")]),
+            max_files: Some(1),
+            max_snippets: Some(5),
+            max_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(5_000),
+            context: Some(1),
+            literal: Some(true),
+        })
+        .expect("workspace_search should succeed");
+
+        assert!(output.limits.truncated);
+        assert_eq!(output.limits.scanned_files, 1);
+        assert_eq!(output.candidates.len(), 1);
+        assert!(output.candidates[0]
+            .path
+            .ends_with("a_old/agentic_search_router.rs"));
+        assert!(output.candidates[0].features.filename_match);
 
         std::env::set_current_dir(original_dir).expect("restore cwd");
         let _ = fs::remove_dir_all(dir);
