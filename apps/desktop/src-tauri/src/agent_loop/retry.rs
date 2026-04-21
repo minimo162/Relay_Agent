@@ -1235,6 +1235,7 @@ fn build_tool_result_summary_repair_input(
             "Relay already executed local tools for this turn. Your previous reply emitted repeated, malformed, or duplicate tool JSON instead of summarizing the tool results.\n",
             "Do not emit any `relay_tool` fence, JSON tool object, or additional tool call in the next reply.\n",
             "Use the prior tool results already present in the transcript as the only evidence. If duplicate-tool suppression notices are present, treat them only as a signal not to repeat the same search.\n",
+            "If the prior local search results are empty or contain only errors, say that Relay found no matching local files/results in the searched scope. Do not infer required files from general knowledge and do not claim files were confirmed.\n",
             "Now answer the user's original local document search request concisely, with file paths and anchors/previews from the existing `workspace_search` / `glob_search` / `office_search` results when available.\n\n",
             "Malformed or duplicate assistant text to replace:\n```text\n{assistant_text}\n```\n\n",
             "{latest_request_marker}{latest_request}\n```\n\n",
@@ -1528,6 +1529,83 @@ fn has_local_search_tool_result(summary: &runtime::TurnSummary) -> bool {
     })
 }
 
+fn local_search_output_has_hits(tool_name: &str, output: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(output) else {
+        return !output.trim().is_empty()
+            && !output.contains("Search tool budget reached")
+            && !output.contains("Duplicate tool call suppressed");
+    };
+    match tool_name {
+        "workspace_search" => ["candidates", "snippets", "recommended_next_tools"]
+            .iter()
+            .any(|key| {
+                value
+                    .get(*key)
+                    .and_then(Value::as_array)
+                    .is_some_and(|items| !items.is_empty())
+            }),
+        "glob_search" => {
+            value
+                .get("filenames")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty())
+                || value
+                    .get("numFiles")
+                    .or_else(|| value.get("num_files"))
+                    .and_then(Value::as_u64)
+                    .is_some_and(|count| count > 0)
+        }
+        "grep_search" => {
+            value
+                .get("filenames")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty())
+                || value
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|content| !content.trim().is_empty())
+                || value
+                    .get("numMatches")
+                    .or_else(|| value.get("num_matches"))
+                    .and_then(Value::as_u64)
+                    .is_some_and(|count| count > 0)
+        }
+        "office_search" => value
+            .get("results")
+            .and_then(Value::as_array)
+            .is_some_and(|items| !items.is_empty()),
+        _ => false,
+    }
+}
+
+fn local_search_results_are_empty(summary: &runtime::TurnSummary) -> bool {
+    let mut saw_search_result = false;
+    for message in &summary.tool_results {
+        for block in &message.blocks {
+            let ContentBlock::ToolResult {
+                tool_name,
+                output,
+                is_error,
+                ..
+            } = block
+            else {
+                continue;
+            };
+            if !matches!(
+                tool_name.as_str(),
+                "workspace_search" | "glob_search" | "grep_search" | "office_search"
+            ) {
+                continue;
+            }
+            saw_search_result = true;
+            if !*is_error && local_search_output_has_hits(tool_name, output) {
+                return false;
+            }
+        }
+    }
+    saw_search_result
+}
+
 fn has_local_search_guard_notice(summary: &runtime::TurnSummary) -> bool {
     let outcome_message_matches = matches!(
         &summary.outcome,
@@ -1673,6 +1751,31 @@ fn is_copilot_search_leak_text(text: &str) -> bool {
         || lower.contains("copilot search")
 }
 
+fn claims_local_search_found_evidence(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    lower.contains("based on the search results")
+        || lower.contains("based on local search")
+        || lower.contains("search results show")
+        || lower.contains("found files")
+        || lower.contains("matches found")
+        || lower.contains("confirmed from")
+        || trimmed.contains("検索結果に基づ")
+        || trimmed.contains("検索結果から")
+        || trimmed.contains("検索で確認")
+        || trimmed.contains("確認できます")
+        || trimmed.contains("確認できました")
+        || trimmed.contains("見つかりました")
+        || trimmed.contains("該当ファイル")
+        || trimmed.contains("根拠は")
+        || trimmed.contains("根拠として")
+        || trimmed.contains("以下が確認")
+        || trimmed.contains("✅")
+}
+
 fn build_evidence_expansion_repair_input(
     goal: &str,
     latest_request: &str,
@@ -1809,6 +1912,8 @@ pub(crate) fn decide_loop_after_success(
             || assistant_text.contains("```relay_tool"));
     let is_copilot_search_leak_after_local_search =
         has_local_search_tool_result(summary) && is_copilot_search_leak_text(assistant_text);
+    let is_empty_local_search_false_evidence_claim = local_search_results_are_empty(summary)
+        && claims_local_search_found_evidence(assistant_text);
     let recommended_read_paths = workspace_search_recommended_read_paths(summary);
     let missing_read_paths = unread_recommended_read_paths(summary, &recommended_read_paths);
     let is_important_conclusion_without_evidence = !missing_read_paths.is_empty()
@@ -1864,9 +1969,19 @@ pub(crate) fn decide_loop_after_success(
             path_repair_used,
             truncate_for_log(assistant_text, 240)
         );
+    } else if is_empty_local_search_false_evidence_claim {
+        tracing::info!(
+            "[RelayAgent] post-turn classification: outcome={:?} iterations={} meta_nudges_used={}/{} path_repair_used={} empty_local_search_false_evidence_claim=true assistant_excerpt={:?}",
+            summary.outcome,
+            summary.iterations,
+            meta_stall_nudges_used,
+            meta_stall_nudge_limit,
+            path_repair_used,
+            truncate_for_log(assistant_text, 240)
+        );
     }
 
-    if is_copilot_search_leak_after_local_search {
+    if is_copilot_search_leak_after_local_search || is_empty_local_search_false_evidence_claim {
         if meta_stall_nudges_used < meta_stall_nudge_limit {
             return LoopDecision::Continue {
                 next_input: build_tool_result_summary_repair_input(

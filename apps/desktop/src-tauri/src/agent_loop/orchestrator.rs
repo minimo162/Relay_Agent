@@ -7109,6 +7109,51 @@ mod loop_controller_tests {
     }
 
     #[test]
+    fn empty_office_search_result_false_evidence_claim_escalates_to_summary_repair() {
+        let assistant = "連結・単体のキャッシュフロー（CFS）作成に直接関係する実務ファイルは、現行の業務フロー資料と実データ系ファイルから以下が確認できます。根拠は実際の社内ファイル検索結果に基づいています。";
+        let office_output = serde_json::json!({
+            "results": [],
+            "errors": [],
+            "filesScanned": 0,
+            "pattern": "キャッシュフロー",
+            "paths": [r"H:\shr1\05_経理部\03_連結財務G/**/*"],
+            "regex": false,
+            "include_ext": ["docx", "xlsx", "pptx", "pdf"],
+            "candidate_count": 0,
+            "candidate_sample": [],
+            "max_files": 200,
+            "max_results": 80,
+            "expansion_candidate_cap": 400,
+            "files_truncated": false,
+            "results_truncated": false,
+            "wall_clock_truncated": false
+        })
+        .to_string();
+        let s = summary(
+            assistant,
+            vec![tool_success_result("office_search", &office_output)],
+            runtime::TurnOutcome::Completed,
+        );
+
+        let decision = decide_loop_after_success(
+            r"H:\shr1\05_経理部\03_連結財務G にあるキャッシュフロー計算書関連ファイルを検索して",
+            r"H:\shr1\05_経理部\03_連結財務G にあるキャッシュフロー計算書関連ファイルを検索して",
+            1,
+            0,
+            2,
+            false,
+            &s,
+        );
+        let LoopDecision::Continue { next_input, kind } = decision else {
+            panic!("expected empty search false evidence claim to request summary repair");
+        };
+        assert_eq!(kind, LoopContinueKind::MetaNudge);
+        assert!(next_input.contains("Tool result summary repair."));
+        assert!(next_input.contains("found no matching local files/results"));
+        assert!(next_input.contains("do not claim files were confirmed"));
+    }
+
+    #[test]
     fn important_conclusion_after_workspace_search_without_read_file_repairs_to_read_file() {
         let workspace_output = r#"{
             "query": "agentic search 改善",

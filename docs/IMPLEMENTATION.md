@@ -7987,6 +7987,30 @@ Results:
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_enforcement_normalizes_office_search_paths -- --nocapture`: passed, 1 passed.
 - `cargo fmt --check --all`: failed; rustfmt reported pre-existing formatting drift in `crates/runtime/src/{file_ops.rs,lib.rs,office/mod.rs,search.rs,search_backend.rs}` and `crates/tools/src/lib.rs`. Left untouched to avoid unrelated formatting churn.
 
+## 2026-04-21 - Empty local search false-evidence repair
+
+Fixed a follow-up failure where M365 Copilot could receive an empty
+`office_search` / local search Tool Result and still answer as if internal files
+had been confirmed by search. Relay now classifies local-search Tool Results
+with zero candidates/results/matches as empty evidence. If the assistant then
+claims files were confirmed, cites search results, or uses similar
+evidence-claim phrasing, the loop issues a Tool Result summary repair that
+requires an honest no-match answer instead of a generic required-file checklist.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml empty_office_search_result_false_evidence_claim_escalates_to_summary_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml malformed_office_search_tool_json_after_results_escalates_to_summary_repair -- --nocapture
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml empty_office_search_result_false_evidence_claim_escalates_to_summary_repair -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml malformed_office_search_tool_json_after_results_escalates_to_summary_repair -- --nocapture`: passed, 1 passed.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`
