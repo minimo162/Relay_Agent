@@ -26,7 +26,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/relay-node"],
+    "externalBin": ["binaries/relay-node", "binaries/relay-rg"],
     "resources": {
       "../../../examples/revenue-workflow-demo.csv": "examples/revenue-workflow-demo.csv",
       "liteparse-runner/": "liteparse-runner/"

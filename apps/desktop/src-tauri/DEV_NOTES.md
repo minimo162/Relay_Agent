@@ -33,8 +33,8 @@ cargo check
 ## PDF parsing (`read_file`)
 
 - **Runtime:** `crates/runtime` spawns Node with `liteparse-runner/parse.mjs` and `@llamaindex/liteparse` (`ocrEnabled: false`).
-- **Dev setup** (from `apps/desktop`): run `pnpm run prep:liteparse-runner` once so `liteparse-runner/node_modules` exists. Optionally `pnpm run prep:bundled-node` to populate `binaries/relay-node-*`; otherwise the host `node` on `PATH` is used when the sidecar is absent.
-- **Packaged app:** `lib.rs` `liteparse_env` sets `RELAY_LITEPARSE_RUNNER_ROOT` (bundle resources) and `RELAY_BUNDLED_NODE` (sidecar next to the executable). Run `pnpm run prep:tauri-bundle` before invoking raw `tauri build`; the package `tauri:build` script and release CI do this explicitly. Tauri `beforeBuildCommand` only runs the Vite build.
+- **Dev setup** (from `apps/desktop`): run `pnpm run prep:liteparse-runner` once so `liteparse-runner/node_modules` exists. Optionally run `pnpm run prep:bundled-node` and `pnpm run prep:bundled-ripgrep` to populate `binaries/relay-node-*` and `binaries/relay-rg-*`; otherwise the host `node` / `rg` on `PATH` is used when sidecars are absent.
+- **Packaged app:** `lib.rs` `liteparse_env` sets `RELAY_LITEPARSE_RUNNER_ROOT` (bundle resources), `RELAY_BUNDLED_NODE`, and `RELAY_BUNDLED_RIPGREP` (sidecars next to the executable). Run `pnpm run prep:tauri-bundle` before invoking raw `tauri build`; the package `tauri:build` script and release CI do this explicitly. Tauri `beforeBuildCommand` only runs the Vite build.
 - **Tuning:** `RELAY_PDF_PARSE_TIMEOUT_SECS` (default 120), `RELAY_LITEPARSE_MAX_PAGES` (passed to the runner).
 
 ## Windows Office hybrid read (COM + temp PDF + `read_file`)

@@ -9,8 +9,9 @@ use glob::Pattern;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::tool_hard_denylist::reject_sensitive_file_path;
 use crate::office;
+use crate::search_backend;
+use crate::tool_hard_denylist::reject_sensitive_file_path;
 
 const DEFAULT_WORKSPACE_SEARCH_MAX_FILES: usize = 50;
 const DEFAULT_WORKSPACE_SEARCH_MAX_SNIPPETS: usize = 30;
@@ -424,6 +425,99 @@ impl WorkspaceIgnoreMatcher {
     }
 }
 
+fn discover_workspace_paths(
+    search_roots: &[PathBuf],
+    include_ext: Option<&HashSet<String>>,
+    limit_per_root: usize,
+    state: &mut SearchState,
+    fallbacks_used: &mut Vec<String>,
+) -> io::Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let globs = workspace_search_rg_globs(include_ext);
+    for root in search_roots {
+        record_workspace_symlink_skips(root, state);
+        match search_backend::rg_files(root, &globs, limit_per_root)? {
+            Some(result) => {
+                state.truncated |= result.truncated;
+                for path in result.files {
+                    if seen.insert(path.clone()) {
+                        out.push(path);
+                    }
+                }
+            }
+            None => {
+                if !fallbacks_used.iter().any(|entry| entry == "walkdir_file_discovery") {
+                    fallbacks_used.push(String::from("walkdir_file_discovery"));
+                }
+                for entry in WalkDir::new(root)
+                    .follow_links(false)
+                    .into_iter()
+                    .filter_entry(|entry| !is_ignored_workspace_search_path(entry.path()))
+                {
+                    let entry = match entry {
+                        Ok(entry) => entry,
+                        Err(error) => {
+                            state.skip("(walkdir)", format!("walk_error:{error}"));
+                            continue;
+                        }
+                    };
+                    let path = entry.path().to_path_buf();
+                    if entry.file_type().is_symlink() {
+                        state.skip(path.to_string_lossy(), "symlink");
+                        continue;
+                    }
+                    if entry.file_type().is_file() && seen.insert(path.clone()) {
+                        out.push(path);
+                    }
+                    if out.len() >= limit_per_root {
+                        state.truncated = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn record_workspace_symlink_skips(root: &Path, state: &mut SearchState) {
+    for entry in WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| !is_ignored_workspace_search_path(entry.path()))
+    {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        if !entry.file_type().is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        match path.canonicalize() {
+            Ok(canonical) if canonical.starts_with(root) => {
+                state.skip(path.to_string_lossy(), "symlink");
+            }
+            Ok(canonical) => {
+                state.skip(canonical.to_string_lossy(), "outside_workspace");
+            }
+            Err(error) => {
+                state.skip(path.to_string_lossy(), format!("canonicalize_error:{error}"));
+            }
+        }
+    }
+}
+
+fn workspace_search_rg_globs(include_ext: Option<&HashSet<String>>) -> Vec<String> {
+    let Some(include_ext) = include_ext else {
+        return Vec::new();
+    };
+    include_ext
+        .iter()
+        .map(|ext| format!("**/*.{}", ext.trim_start_matches('.')))
+        .collect()
+}
+
 fn is_sensitive_workspace_search_path(path: &Path) -> bool {
     if reject_sensitive_file_path(path).is_err() {
         return true;
@@ -507,45 +601,24 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
     let mut state = SearchState::new();
     let mut candidate_map = BTreeMap::<String, WorkspaceCandidateAccumulator>::new();
     let mut snippets = Vec::new();
-    let mut fallbacks_used = vec![String::from("path_search"), String::from("text_search")];
+    let mut fallbacks_used = vec![
+        String::from("rg_file_discovery"),
+        String::from("rg_content_search"),
+    ];
     let mut file_entries = Vec::new();
 
-    for root in &search_roots {
-        for entry in WalkDir::new(root)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|entry| !is_ignored_workspace_search_path(entry.path()))
-        {
-            if Instant::now() >= budgets.deadline {
-                state.truncated = true;
-                state.skip(root.to_string_lossy(), "duration_budget_exceeded");
-                break;
-            }
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(error) => {
-                    state.skip("(walkdir)", format!("walk_error:{error}"));
-                    continue;
-                }
-            };
-            let path = entry.path().to_path_buf();
-            if entry.file_type().is_symlink() {
-                match path.canonicalize() {
-                    Ok(canonical) if canonical.starts_with(&workspace_root) => {
-                        state.skip(path.to_string_lossy(), "symlink");
-                    }
-                    Ok(canonical) => {
-                        state.skip(canonical.to_string_lossy(), "outside_workspace");
-                    }
-                    Err(error) => {
-                        state.skip(path.to_string_lossy(), format!("canonicalize_error:{error}"));
-                    }
-                }
-                continue;
-            }
-            if !entry.file_type().is_file() {
-                continue;
-            }
+    for path in discover_workspace_paths(
+        &search_roots,
+        include_ext.as_ref(),
+        budgets.max_files.saturating_mul(8).clamp(100, 2_000),
+        &mut state,
+        &mut fallbacks_used,
+    )? {
+        if Instant::now() >= budgets.deadline {
+            state.truncated = true;
+            state.skip(path.to_string_lossy(), "duration_budget_exceeded");
+            break;
+        }
             if is_ignored_workspace_search_path(&path) {
                 state.skip(path.to_string_lossy(), "default_ignore");
                 continue;
@@ -605,7 +678,6 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
                 scan_priority,
                 accumulator,
             });
-        }
     }
 
     file_entries.sort_by(|left, right| {
@@ -624,6 +696,19 @@ pub fn workspace_search(input: &WorkspaceSearchInput) -> io::Result<WorkspaceSea
             );
         }
     }
+
+    integrate_rg_content_search(
+        &terms,
+        &search_roots,
+        include_ext.as_ref(),
+        &workspace_root,
+        &ignore_matcher,
+        &mut candidate_map,
+        &mut snippets,
+        &mut state,
+        budgets.max_bytes,
+        budgets.max_snippets,
+    );
 
     for file_entry in file_entries {
         if Instant::now() >= budgets.deadline {
@@ -1019,6 +1104,115 @@ fn recommend_workspace_search_next_tools(
             "top ranked candidate; snippets are discovery evidence and need read_file expansion before important conclusions",
         ),
     }]
+}
+
+fn integrate_rg_content_search(
+    terms: &[String],
+    search_roots: &[PathBuf],
+    include_ext: Option<&HashSet<String>>,
+    workspace_root: &Path,
+    ignore_matcher: &WorkspaceIgnoreMatcher,
+    candidate_map: &mut BTreeMap<String, WorkspaceCandidateAccumulator>,
+    snippets: &mut Vec<WorkspaceSearchSnippet>,
+    state: &mut SearchState,
+    max_bytes: u64,
+    max_snippets: usize,
+) {
+    if snippets.len() >= max_snippets {
+        return;
+    }
+    let globs = workspace_search_rg_globs(include_ext);
+    let limit = max_snippets.saturating_mul(4).max(16);
+    for term in terms.iter().filter(|term| term.len() >= 2).take(6) {
+        if snippets.len() >= max_snippets {
+            break;
+        }
+        let pattern = escape_rg_literal(term);
+        let mut term_hits = Vec::new();
+        for root in search_roots {
+            let result = match search_backend::rg_search(root, &pattern, &globs, Some(limit)) {
+                Ok(Some(result)) => result,
+                Ok(None) => continue,
+                Err(error) => {
+                    state.skip(root.to_string_lossy(), format!("rg_search_error:{error}"));
+                    continue;
+                }
+            };
+            state.truncated |= result.partial;
+            for hit in result.matches {
+                let canonical = match hit.path.canonicalize() {
+                    Ok(canonical) if canonical.starts_with(workspace_root) => canonical,
+                    Ok(canonical) => {
+                        state.skip(canonical.to_string_lossy(), "outside_workspace");
+                        continue;
+                    }
+                    Err(error) => {
+                        state.skip(hit.path.to_string_lossy(), format!("canonicalize_error:{error}"));
+                        continue;
+                    }
+                };
+                if is_sensitive_workspace_search_path(&canonical)
+                    || is_ignored_workspace_search_path(&canonical)
+                    || ignore_matcher.is_match(workspace_root, &canonical)
+                    || !workspace_search_ext_allowed(&canonical, include_ext)
+                {
+                    continue;
+                }
+                let metadata = match fs::metadata(&canonical) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        state.skip(canonical.to_string_lossy(), format!("metadata_error:{error}"));
+                        continue;
+                    }
+                };
+                if metadata.len() > max_bytes {
+                    state.skip(canonical.to_string_lossy(), "max_bytes");
+                    continue;
+                }
+                term_hits.push((metadata_modified_ms(&metadata), canonical, hit));
+            }
+        }
+        term_hits.sort_by(|left, right| {
+            right
+                .0
+                .cmp(&left.0)
+                .then_with(|| left.1.cmp(&right.1))
+                .then_with(|| left.2.line_number.cmp(&right.2.line_number))
+        });
+        for (_, canonical, hit) in term_hits {
+            if snippets.len() >= max_snippets {
+                state.truncated = true;
+                break;
+            }
+            let path = canonical.to_string_lossy().into_owned();
+            let entry = candidate_map
+                .entry(path.clone())
+                .or_insert_with(|| WorkspaceCandidateAccumulator::new(path.clone()));
+            entry.features.content_match_count += 1;
+            entry.add(18.0, 1, format!("rg content match `{term}`"));
+            snippets.push(WorkspaceSearchSnippet {
+                path,
+                anchor: None,
+                line_start: hit.line_number,
+                line_end: hit.line_number,
+                preview: hit.line.trim_end_matches(['\r', '\n']).to_string(),
+            });
+        }
+    }
+}
+
+fn escape_rg_literal(term: &str) -> String {
+    let mut escaped = String::with_capacity(term.len());
+    for ch in term.chars() {
+        if matches!(
+            ch,
+            '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' | '\\'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 fn integrate_office_search(

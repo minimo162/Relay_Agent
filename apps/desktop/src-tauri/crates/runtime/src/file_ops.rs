@@ -733,7 +733,7 @@ fn grep_search_with_rg(
         .as_ref()
         .map(|glob| vec![glob.clone()])
         .unwrap_or_default();
-    let Some(result) = search_backend::rg_search(base_path, &input.pattern, &globs)? else {
+    let Some(result) = search_backend::rg_search(base_path, &input.pattern, &globs, None)? else {
         return Ok(None);
     };
     let mut matches = result.matches;

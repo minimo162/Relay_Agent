@@ -66,6 +66,24 @@ completion telemetry as the fallback path with `backend=rg` and partial-output
 state. This keeps model planning and runtime diagnostics aligned with the
 opencode-style search backend.
 
+Follow-up opencode alignment:
+
+- Added a bundled ripgrep sidecar path. `prep:tauri-bundle` now runs
+  `fetch-bundled-ripgrep.mjs`, Tauri `externalBin` includes `relay-rg`, and app
+  startup sets `RELAY_BUNDLED_RIPGREP` when the sidecar is present. The runtime
+  resolver now prefers `RELAY_RIPGREP_PATH`, then the bundled sidecar, then a
+  dev-prepared sidecar, then `rg` on `PATH`.
+- `workspace_search` now starts with rg-backed file discovery and rg-backed
+  content seeding, while preserving Relay safety filters for gitignore,
+  `.ignore`, configured global ignore files, sensitive path blocks, symlink
+  escape detection, and max-byte limits. WalkDir remains a fallback when rg is
+  unavailable.
+- Initial local lookup plans were simplified from a fixed broad batch
+  (`workspace_search` + glob aliases + broad `office_search`) to a single
+  `workspace_search` call. Follow-up prompt guidance now asks for small,
+  concrete rg-backed `glob_search` / `grep_search` / `office_search`
+  iterations only when the first result needs expansion.
+
 Verification:
 
 - `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
@@ -84,6 +102,9 @@ Verification:
 - `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_requires_search_before_general_answer -- --nocapture`: passed, 1 passed.
 - `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml desktop_system_prompt_treats_required_file_questions_as_lookup -- --nocapture`: passed, 1 passed.
 - `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml empty_glob_search_result_is_labeled_as_filename_only_miss -- --nocapture`: passed, 1 passed.
+- `node ./scripts/fetch-bundled-ripgrep.mjs` from `apps/desktop`: passed, wrote `src-tauri/binaries/relay-rg-x86_64-unknown-linux-gnu`.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_search_ -- --nocapture`: passed, 20 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml agentic_search_implementation_lookup_starts_with_workspace_search -- --nocapture`: passed, 1 passed.
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop`: passed.
 - `git diff --check`: passed.
 

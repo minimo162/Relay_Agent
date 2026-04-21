@@ -89,6 +89,7 @@ pub(crate) fn rg_search(
     cwd: &Path,
     pattern: &str,
     globs: &[String],
+    limit: Option<usize>,
 ) -> io::Result<Option<SearchOutput>> {
     let Some(binary) = rg_binary() else {
         return Ok(None);
@@ -117,6 +118,7 @@ pub(crate) fn rg_search(
         .take()
         .ok_or_else(|| io::Error::other("failed to capture rg stdout"))?;
     let mut matches = Vec::new();
+    let mut hit_limit = false;
     for line in BufReader::new(stdout).lines() {
         let line = line?;
         if line.trim().is_empty() {
@@ -133,8 +135,21 @@ pub(crate) fn rg_search(
             line_number: data.line_number,
             line: data.lines.text,
         });
+        if limit.is_some_and(|limit| matches.len() >= limit) {
+            hit_limit = true;
+            let _ = child.kill();
+            break;
+        }
     }
-    let status = child.wait()?;
+    let status = if hit_limit {
+        let _ = child.wait_timeout(Duration::from_secs(1))?;
+        return Ok(Some(SearchOutput {
+            matches,
+            partial: true,
+        }));
+    } else {
+        child.wait()?
+    };
     if status.success() || status.code() == Some(1) {
         return Ok(Some(SearchOutput {
             matches,
@@ -170,11 +185,78 @@ struct RgText {
     text: String,
 }
 
-fn rg_binary() -> Option<String> {
-    std::env::var("RELAY_RIPGREP_PATH")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| Some(String::from("rg")))
+fn rg_binary() -> Option<PathBuf> {
+    for env_key in ["RELAY_RIPGREP_PATH", "RELAY_BUNDLED_RIPGREP"] {
+        if let Some(path) = env_path(env_key) {
+            return Some(path);
+        }
+    }
+    if let Some(path) = adjacent_sidecar_path() {
+        return Some(path);
+    }
+    if let Some(path) = dev_sidecar_path() {
+        return Some(path);
+    }
+    Some(PathBuf::from(rg_exe_name()))
+}
+
+fn env_path(key: &str) -> Option<PathBuf> {
+    std::env::var_os(key)
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+}
+
+fn adjacent_sidecar_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe_dir = exe.parent()?;
+    let base = if exe_dir.ends_with("deps") {
+        exe_dir.parent().unwrap_or(exe_dir)
+    } else {
+        exe_dir
+    };
+    let path = base.join(format!("relay-rg{}", exe_suffix()));
+    path.is_file().then_some(path)
+}
+
+fn dev_sidecar_path() -> Option<PathBuf> {
+    let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from)?;
+    let path = manifest_dir.join("binaries").join(format!(
+        "relay-rg-{}{}",
+        target_triple(),
+        exe_suffix()
+    ));
+    path.is_file().then_some(path)
+}
+
+fn rg_exe_name() -> &'static str {
+    if cfg!(windows) {
+        "rg.exe"
+    } else {
+        "rg"
+    }
+}
+
+fn exe_suffix() -> &'static str {
+    if cfg!(windows) {
+        ".exe"
+    } else {
+        ""
+    }
+}
+
+fn target_triple() -> String {
+    let arch = std::env::consts::ARCH;
+    let os = std::env::consts::OS;
+    match (arch, os) {
+        ("x86_64", "windows") => "x86_64-pc-windows-msvc".to_string(),
+        ("aarch64", "windows") => "aarch64-pc-windows-msvc".to_string(),
+        ("x86", "windows") => "i686-pc-windows-msvc".to_string(),
+        ("x86_64", "macos") => "x86_64-apple-darwin".to_string(),
+        ("aarch64", "macos") => "aarch64-apple-darwin".to_string(),
+        ("x86_64", "linux") => "x86_64-unknown-linux-gnu".to_string(),
+        ("aarch64", "linux") => "aarch64-unknown-linux-gnu".to_string(),
+        _ => format!("{arch}-unknown-{os}"),
+    }
 }
 
 fn clean_rg_path(path: &str) -> &str {

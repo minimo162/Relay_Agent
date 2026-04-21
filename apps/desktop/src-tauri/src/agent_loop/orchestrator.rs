@@ -1803,12 +1803,12 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - **Exact path:** If the latest user message gives an exact file path, prefer `read_file` directly instead of `workspace_search`.
 - **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; emit `workspace_search` first for vague lookup, and only fall back to `glob_search` / `grep_search` / `office_search` for narrower follow-up.
 - **Initial lookup reply format:** When the latest user request is a local file/document lookup and there are no Relay Tool Result blocks for that lookup yet, the entire assistant reply must be exactly one fenced `relay_tool` or `json` block. Do not write `はい、...を検索します`, do not cite `turn*search*`, do not output `<File>...</File>` cards, and do not list candidate files from M365 before Relay tools run.
-- **Search tool selection:** Use `workspace_search` first for vague implementation search, related-file search, or "find relevant evidence" requests because it returns a plan, ranked candidates, snippets, recommended next tools, scope, trace, and truncation data. Use rg-backed `glob_search` for fast candidate filenames and folders, rg-backed `grep_search` for plaintext/code content, and `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content when the follow-up search is already concrete. `glob_search` supports brace groups, so use patterns like `**/*.{docx,xlsx,pptx,pdf}` or `**/*.{rs,ts,tsx}` when one extension-family search is enough.
+- **Search tool selection:** Use `workspace_search` once for vague implementation search, related-file search, or "find relevant evidence" requests because it returns ranked candidates, snippets, recommended next tools, scope, trace, and truncation data. After that first result, iterate with small concrete rg-backed `glob_search` / `grep_search` calls only when more precision is needed, and use `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content only when the follow-up is concrete. `glob_search` supports brace groups, so use patterns like `**/*.{docx,xlsx,pptx,pdf}` or `**/*.{rs,ts,tsx}` when one extension-family search is enough.
 - **Evidence expansion before judgments:** `workspace_search` snippets are candidate evidence for discovery. Before making important conclusions, reviews, edits, comparisons, or recommendations about a file, call the `recommended_next_tools` `read_file` path(s) and ground the answer in that file text. If you have not read the file, describe the result as a candidate only.
 - **Authoritative evidence:** If `workspace_search` snippets and `read_file` content conflict, the `read_file` Tool Result is authoritative.
 - **Grounded final answer:** After `read_file`, include the evidence path and line anchor/startLine when making file-specific conclusions.
 - **Query-driven lookup variants:** For document lookup requests, derive filename globs and Office/PDF search patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. Prefer query-specific globs before broad `**/*` scans, and treat newer matching files as stronger candidates when relevance is otherwise similar.
-- **Batch speculative searches:** For open-ended lookup, it is better to run a small batch of useful `glob_search` / `grep_search` / `office_search` calls in one reply than to spend a model turn announcing the first search. Keep each search concrete and narrow enough to be useful.
+- **Search iteration:** For open-ended lookup, do not front-load a large fixed search batch. Start with `workspace_search`; then batch one or two narrow `glob_search` / `grep_search` / `office_search` calls only if the result needs expansion. Keep each search concrete and narrow enough to be useful.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
 - **Path discipline:** If the latest user turn names a concrete path (absolute path, relative path, or bare filename with an extension), use that exact string in tool input. Do **not** rewrite it to a different directory from a prior turn. Treat bare filenames with an extension as workspace-root-relative unless the user gave another base.
 - **This turn, not “next message”:** Do **not** defer all tools to a follow-up assistant message when the current turn can already run `read_file` / `write_file` / `edit_file`.
@@ -1856,7 +1856,7 @@ M365 Copilot built-in results are outside the Relay tool protocol. Do not satisf
 - named new file create => `write_file`
 - local file lookup / needed files / related files => `workspace_search` first; do not answer from general knowledge before tools
 - codebase search/investigation => `workspace_search` before `glob_search` / `grep_search`, then `read_file` the top candidate(s) before important conclusions or changes
-- open-ended search => use `workspace_search` first; if more precision is needed, batch a few useful rg-style `glob_search` / `grep_search` / `office_search` calls in one later `relay_tool` array
+- open-ended search => use `workspace_search` first; if more precision is needed, iterate with one or two narrow rg-style `glob_search` / `grep_search` / `office_search` calls in a later `relay_tool` array
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
 
 {rendered_tools}
@@ -4000,7 +4000,7 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "- If a session workspace (`cwd`) is set, file-tool paths are resolved within that workspace and may be rejected when they escape it. Do not promise reads outside the workspace boundary; call the tool and surface the actual path error if access is denied.\n",
                 "- If no workspace is set, read_file, glob_search, grep_search, office_search, and workspace_search may use absolute local paths the OS user can read, except workspace_search always constrains itself to the current workspace root.\n",
                 "- read_file returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). `.docx`, `.xlsx`, and `.pptx` are parsed as plaintext extraction; use office_search for exact search across those files. Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted `.txt`/`.md` file.\n",
-                "- For local file lookup requests, use workspace_search first for ranked candidates and evidence snippets; use rg-backed glob_search for fast candidate paths, rg-backed grep_search for plaintext/code contents, and office_search for Office/PDF contents when the follow-up is concrete. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
+                "- For local file lookup requests, use workspace_search once for ranked candidates and evidence snippets; after that first result, use small rg-backed glob_search/grep_search follow-ups for fast candidate paths or plaintext/code contents, and office_search for Office/PDF contents when the follow-up is concrete. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
                 "- If the user gives an exact file path, prefer read_file directly over workspace_search.\n",
                 "- Treat workspace_search snippets as discovery evidence. Before important conclusions, reviews, edits, comparisons, or recommendations, read_file the top candidate path(s) from recommended_next_tools; otherwise describe matches as candidates only. If snippets conflict with read_file, read_file is authoritative. After read_file, cite evidence path and line anchor/startLine when available.\n",
                 "- For document lookup requests, derive filename globs and Office/PDF patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. Search query-specific globs before broad `**/*` scans, and prefer newer matching files when relevance is otherwise similar.\n",
@@ -4275,7 +4275,7 @@ mod cdp_copilot_tool_tests {
             .contains("M365/Copilot built-in search snippets, citations, and generated enterprise-search summaries are **not** Relay tool results"));
         assert!(bundle
             .catalog_text
-            .contains("Use `workspace_search` first for vague implementation search"));
+            .contains("Use `workspace_search` once for vague implementation search"));
         assert!(bundle
             .catalog_text
             .contains("Evidence expansion before judgments"));
@@ -4336,7 +4336,7 @@ mod cdp_copilot_tool_tests {
         )
         .join("\n");
 
-        assert!(system.contains("use workspace_search first for ranked candidates"));
+        assert!(system.contains("use workspace_search once for ranked candidates"));
         assert!(system.contains("office_search for Office/PDF contents"));
         assert!(system.contains("Before important conclusions"));
         assert!(system.contains("read_file the top candidate path"));
@@ -6734,19 +6734,15 @@ mod loop_controller_tests {
         else {
             panic!("expected search plan to escalate to targeted search repair");
         };
-        assert!(next_input.contains("This is a local document search request."));
+        assert!(next_input.contains("This is a local file/document search request."));
         assert!(next_input.contains("enterprise search"));
         assert!(next_input.contains("turn1search"));
         assert!(next_input.contains("not Relay tool results"));
         assert!(next_input.contains(r#""name": "workspace_search""#));
-        assert!(next_input.contains(r#""name": "glob_search""#));
-        assert!(next_input.contains(r#""pattern": "**/*キャッシュフロー計算書*""#));
-        assert!(next_input.contains(r#""name": "office_search""#));
-        assert!(next_input.contains(r#""regex": true"#));
+        assert!(next_input.contains(r#""mode": "office""#));
         assert!(next_input.contains("キャッシュフロー計算書"));
-        assert!(next_input.contains(r#""paths": ["#));
-        assert!(next_input.contains("**/*キャッシュフロー計算書*"));
         assert!(next_input.contains(r#""include_ext": ["#));
+        assert!(next_input.contains("small, concrete rg-backed"));
         assert!(!next_input.contains(r#""name": "write_file""#));
     }
 
@@ -6757,34 +6753,15 @@ mod loop_controller_tests {
         )
         .expect("document lookup should get an initial local search plan");
 
-        assert_eq!(calls.len(), 6);
+        assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "workspace_search");
         assert!(calls[0]
             .1
             .contains("キャッシュフロー計算書の作成に関係するファイルを検索して"));
-        assert_eq!(calls[1].0, "glob_search");
-        assert!(calls[1]
-            .1
-            .contains(r#""pattern":"**/*キャッシュフロー計算書*""#));
-        assert_eq!(calls[2].0, "office_search");
-        assert!(calls[2].1.contains(r#""regex":true"#));
-        assert!(calls[2]
+        assert!(calls[0].1.contains(r#""mode":"office""#));
+        assert!(calls[0]
             .1
             .contains(r#""include_ext":["docx","xlsx","pptx","pdf"]"#));
-        assert!(calls[2].1.contains(r#""max_results":30"#));
-        assert!(calls[2].1.contains(r#""max_files":80"#));
-        assert!(calls[2]
-            .1
-            .contains(r#""pattern":"キャッシュフロー計算書|キャッシュフロー"#));
-        assert!(calls[2]
-            .1
-            .contains(r#""paths":["./**/*キャッシュフロー計算書*","#));
-        assert!(calls[2].1.contains(r#""./**/*計算書*""#));
-        assert_eq!(calls[3].0, "glob_search");
-        assert!(calls[3].1.contains(r#""pattern":"**/*キャッシュフロー*""#));
-        assert_eq!(calls[4].0, "glob_search");
-        assert!(calls[4].1.contains(r#""pattern":"**/*計算書*""#));
-        assert_eq!(calls[5].0, "glob_search");
         assert!(!calls
             .iter()
             .any(|(_, input)| input.contains("**/*キャッシュ*")));
@@ -6798,15 +6775,11 @@ mod loop_controller_tests {
         )
         .expect("document lookup should get an initial local search plan");
 
-        assert_eq!(calls[1].0, "glob_search");
-        assert!(calls[1].1.contains(r#""pattern":"**/*予算精算表Excel*""#));
-        assert!(!calls[1].1.contains("できるだけ"));
-        assert!(!calls[1].1.contains("検索"));
-        assert_eq!(calls[2].0, "office_search");
-        assert!(calls[2].1.contains(r#""include_ext":["xlsx"]"#));
-        assert!(calls[2].1.contains(r#""pattern":"予算精算表Excel|精算表"#));
-        assert!(calls[2].1.contains(r#""./**/*予算精算表Excel*""#));
-        assert!(calls[2].1.contains(r#""./**/*精算表*""#));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "workspace_search");
+        assert!(calls[0].1.contains(r#""include_ext":["xlsx"]"#));
+        assert!(calls[0].1.contains(r#""mode":"office""#));
+        assert!(!calls[0].1.contains("glob_search"));
     }
 
     #[test]
@@ -6816,8 +6789,9 @@ mod loop_controller_tests {
         )
         .expect("PDF-specific cash-flow lookup should get an initial local search plan");
 
-        assert_eq!(calls[2].0, "office_search");
-        assert!(calls[2].1.contains(r#""include_ext":["pdf"]"#));
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "workspace_search");
+        assert!(calls[0].1.contains(r#""include_ext":["pdf"]"#));
     }
 
     #[test]
@@ -6832,14 +6806,11 @@ mod loop_controller_tests {
         let LoopDecision::Continue { next_input, kind } = decision else {
             panic!("expected required-file lookup to escalate to local search repair");
         };
-        assert!(next_input.contains("This is a local document search request."));
+        assert!(next_input.contains("This is a local file/document search request."));
         assert!(next_input.contains(r#""name": "workspace_search""#));
-        assert!(next_input.contains(r#""name": "glob_search""#));
-        assert!(next_input.contains(r#""pattern": "**/*キャッシュフロー計算書*""#));
-        assert!(next_input.contains(r#""name": "office_search""#));
-        assert!(next_input.contains(r#""regex": true"#));
+        assert!(next_input.contains(r#""mode": "office""#));
         assert!(next_input.contains("キャッシュフロー計算書"));
-        assert!(next_input.contains("**/*キャッシュフロー計算書*"));
+        assert!(next_input.contains(r#""include_ext": ["#));
         assert!(!next_input.contains(r#""name": "write_file""#));
         assert_eq!(kind, LoopContinueKind::MetaNudge);
     }

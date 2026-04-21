@@ -585,8 +585,8 @@ fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
         }
         "edit_file" => "Apply a targeted replacement inside an existing workspace file.",
         "workspace_search" => "Run a read-only agentic workspace search that combines file discovery, text/Office evidence snippets, candidate ranking, search plan/trace diagnostics, and recommended read_file follow-up before important judgments.",
-        "glob_search" => "Find candidate files by path pattern before reading, editing, or answering a local file lookup. Supports brace groups such as `**/*.{rs,ts,tsx}`.",
-        "grep_search" => "Search code or text content for concrete strings or regex matches.",
+        "glob_search" => "Fast rg-backed file pattern matching for concrete filename/path follow-ups. Supports brace groups such as `**/*.{rs,ts,tsx}`.",
+        "grep_search" => "Fast rg-backed code or text content search for concrete strings or regex matches.",
         "office_search" => "Search extracted DOCX/XLSX/PPTX/PDF text for concrete literal strings or regex matches before answering Office/PDF lookup questions.",
         "git_status" => "Inspect working tree changes without invoking a shell.",
         "git_diff" => "Inspect staged or unstaged diffs without invoking a shell.",
@@ -614,8 +614,8 @@ fn cdp_tool_use_when(name: &str) -> &'static str {
         "write_file" => "Use when creating a new target file or replacing a file with fully known content.",
         "edit_file" => "Use after reading the file when you need a targeted text replacement.",
         "workspace_search" => "Use first for vague or open-ended local search requests such as finding an implementation, related files, or relevant evidence before deciding which files to read. Use read_file on top candidates before important conclusions, reviews, edits, comparisons, or recommendations.",
-        "glob_search" => "Use to discover likely file paths before reading them, especially when the user asks which files are needed, related, relevant, or available. Batch extension families with braces, e.g. `**/*.{docx,xlsx,pptx,pdf}`.",
-        "grep_search" => "Use to find identifiers, strings, or patterns in the codebase before reading or editing.",
+        "glob_search" => "Use for narrow filename/path expansion after workspace_search or when the user gives a concrete glob. Batch extension families with braces, e.g. `**/*.{docx,xlsx,pptx,pdf}`.",
+        "grep_search" => "Use for narrow identifier, string, or regex follow-ups after workspace_search or before reading/editing concrete code candidates.",
         "office_search" => "Use for Office/PDF content discovery, including needed-file or related-file questions; derive a literal search term from the user request and set `regex: true` only when a real regex is needed.",
         "git_status" => "Use for a quick change overview when the task depends on current git state.",
         "git_diff" => "Use when you need to inspect exact code changes already present in the workspace.",
@@ -835,7 +835,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "glob_search",
-            description: "Find files by glob pattern. Use this before reading when the path is unknown, and for local lookup requests asking which files are needed, related, relevant, or available. Supports brace groups such as **/*.{rs,ts,tsx}.",
+            description: "Fast rg-backed file pattern matching. Use this for small, concrete filename/path follow-ups after workspace_search, or before reading when the path is unknown. Supports brace groups such as **/*.{rs,ts,tsx}.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -849,7 +849,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "grep_search",
-            description: "Search plaintext/code file contents with a regex pattern. Use this for code or text repositories; use office_search for DOCX/XLSX/PPTX/PDF.",
+            description: "Fast rg-backed plaintext/code content search with a regex pattern. Use this for small, concrete content follow-ups after workspace_search; use office_search for DOCX/XLSX/PPTX/PDF.",
             input_schema: json!({
                 "type": "object",
                 "properties": {

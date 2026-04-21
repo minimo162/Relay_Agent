@@ -51,9 +51,11 @@ jobs:
           test -f pnpm-lock.yaml
           test ! -f package-lock.json
 
-      - name: Fetch Tauri externalBin (relay-node)
+      - name: Fetch Tauri externalBin sidecars
         working-directory: apps/desktop
-        run: node ./scripts/fetch-bundled-node.mjs
+        run: |
+          node ./scripts/fetch-bundled-node.mjs
+          node ./scripts/fetch-bundled-ripgrep.mjs
 
       - name: Install LiteParse runner dependencies
         working-directory: apps/desktop

@@ -37,7 +37,7 @@ Copilot needs Edge signed in to M365. CDP defaults and pitfalls: [docs/COPILOT_E
 - **Composer** — **Enter** inserts a newline; **Ctrl+Enter** (**⌘+Enter** on macOS) or **Send** submits. Relay uses one standard conversation surface: it inspects first, answers directly for review/explanation requests, and asks for approval only when a risky tool run is needed. Assistant text streams live, and rewritten Copilot drafts replace the active bubble cleanly instead of duplicating text.
 - **Undo / Redo** — Header actions reverse the last successful workspace writes from the active session (`write_file`, `edit_file`, `NotebookEdit`, PDF tools), when the agent is idle.
 - **Audit readability** — Tool rows prefer human labels and per-tool summaries (`Read file`, `Search file contents`, PDF actions, file writes) instead of raw internal tool ids.
-- **Extras** — PDF via LiteParse through the bundled `relay-node` sidecar; Windows Office hybrid read (COM + PDF); MCP over stdio.
+- **Extras** — PDF via LiteParse through the bundled `relay-node` sidecar; rg-backed local search through the bundled `relay-rg` sidecar; Windows Office hybrid read (COM + PDF); MCP over stdio.
 
 Details, limits, and milestone notes: **[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)**. Roadmap and guardrails: **[PLANS.md](PLANS.md)**. Repo rules: **[AGENTS.md](AGENTS.md)**. Manual criteria for model grounding and tool protocol: **[docs/AGENT_EVALUATION_CRITERIA.md](docs/AGENT_EVALUATION_CRITERIA.md)**. Claw-code selective alignment (upstream pin, tool-shape notes, `compat-harness` parity-style tests, and deterministic full-session harness coverage): **[docs/CLAW_CODE_ALIGNMENT.md](docs/CLAW_CODE_ALIGNMENT.md)**.
 
@@ -64,14 +64,14 @@ Relay_Agent/
 │   ├── DESIGN.md                # Cursor Inspiration spec; live tokens + .ra-type-* in src/index.css
 │   ├── public/                  # Static assets (e.g. favicon.svg for Vite)
 │   ├── src-tauri/               # Tauri + Rust workspace crates
-│   ├── scripts/                 # fetch-bundled-node, inspect-copilot-dom, …
+│   ├── scripts/                 # fetch-bundled-node/ripgrep, inspect-copilot-dom, …
 │   └── tests/                   # Playwright + Tauri mocks (RELAY_E2E=1 build)
 └── Cargo.toml, package.json, pnpm-workspace.yaml
 ```
 
 **App icons:** Vector source is `apps/desktop/src-tauri/icons/source/relay-agent.svg`. From `apps/desktop/`, run `pnpm exec tauri icon src-tauri/icons/source/relay-agent.svg -o src-tauri/icons` to refresh `icon.ico`, `icon.icns`, and PNGs referenced in `tauri.conf.json`. Details: `docs/IMPLEMENTATION.md` (Milestone Log, 2026-04-09 Relay Agent app icon and favicon).
 
-**Bundled runtime assets:** `apps/desktop/src-tauri/tauri.conf.json` packages the `relay-node` external binary plus the `liteparse-runner/` resource directory. The production desktop path uses those bundled assets for the Copilot bridge and PDF parsing in release builds.
+**Bundled runtime assets:** `apps/desktop/src-tauri/tauri.conf.json` packages the `relay-node` and `relay-rg` external binaries plus the `liteparse-runner/` resource directory. The production desktop path uses those bundled assets for the Copilot bridge, PDF parsing, and rg-backed local search in release builds.
 Bundle prerequisites are prepared explicitly with `pnpm --filter @relay-agent/desktop prep:tauri-bundle` (also run by `tauri:build` and release CI); the Tauri build hook itself only runs the frontend build.
 
 ## IPC (commands you invoke)
@@ -155,7 +155,7 @@ Use the signed-in `RelayAgentEdgeProfile` on the same CDP port. A good run logs 
 
 **Live Copilot response probe (real CDP):** `pnpm --filter @relay-agent/desktop live:m365:copilot-response-probe -- --prompt "<prompt>" [--prompt "<prompt 2>"]` sends prompts through Playwright `connectOverCDP`, saves screenshots plus DOM/transcript artifacts under a temp directory, and records Relay-style DOM extracts next to the visible Copilot reply for mismatch analysis.
 
-**CI:** see `.github/workflows/` — main CI now runs a matrix: `ubuntu-latest` executes pnpm lockfile policy guard, bundled-node prep, LiteParse runner install, Linux Tauri deps, docs truth guards, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, `pnpm launch:test`, and `pnpm agent-loop:test`; `windows-latest` runs the same lockfile/runtime prep, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, and `pnpm smoke:windows`.
+**CI:** see `.github/workflows/` — main CI now runs a matrix: `ubuntu-latest` executes pnpm lockfile policy guard, bundled runtime prep (`relay-node`, `relay-rg`, LiteParse runner), Linux Tauri deps, docs truth guards, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, `pnpm launch:test`, and `pnpm agent-loop:test`; `windows-latest` runs the same lockfile/runtime prep, `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --test doctor_cli`, `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p compat-harness`, `pnpm check`, and `pnpm smoke:windows`.
 
 ## License
 

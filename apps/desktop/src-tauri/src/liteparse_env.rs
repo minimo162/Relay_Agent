@@ -1,4 +1,4 @@
-//! Set `RELAY_LITEPARSE_RUNNER_ROOT` and `RELAY_BUNDLED_NODE` before tools run (PDF via `LiteParse`).
+//! Set bundled sidecar environment variables before tools run.
 
 use tauri::Manager;
 
@@ -30,6 +30,15 @@ pub fn apply(app: &tauri::App) {
         if node.is_file() {
             std::env::set_var("RELAY_BUNDLED_NODE", &node);
             tracing::info!("[liteparse] RELAY_BUNDLED_NODE={}", node.display());
+        }
+
+        #[cfg(windows)]
+        let rg = base.join("relay-rg.exe");
+        #[cfg(not(windows))]
+        let rg = base.join("relay-rg");
+        if rg.is_file() {
+            std::env::set_var("RELAY_BUNDLED_RIPGREP", &rg);
+            tracing::info!("[search] RELAY_BUNDLED_RIPGREP={}", rg.display());
         }
     }
 }

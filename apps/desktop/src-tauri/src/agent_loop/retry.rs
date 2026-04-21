@@ -1033,6 +1033,18 @@ fn build_workspace_search_tool_call(latest_request: &str, path: Option<&str>) ->
         );
     }
     input.insert("mode".to_string(), Value::String("auto".to_string()));
+    if is_office_content_search_request(latest_request) {
+        input.insert("mode".to_string(), Value::String("office".to_string()));
+        input.insert(
+            "include_ext".to_string(),
+            Value::Array(
+                office_search_include_ext_for_search_request(latest_request)
+                    .into_iter()
+                    .map(|ext| Value::String(ext.to_string()))
+                    .collect(),
+            ),
+        );
+    }
     input.insert(
         "max_files".to_string(),
         Value::Number(serde_json::Number::from(80)),
@@ -1054,108 +1066,11 @@ fn build_workspace_search_tool_call(latest_request: &str, path: Option<&str>) ->
 
 fn build_search_tool_payload(
     latest_request: &str,
-    pattern: &str,
+    _pattern: &str,
     path: Option<&str>,
-    include_office_content_search: bool,
+    _include_office_content_search: bool,
 ) -> Value {
-    let workspace_call = build_workspace_search_tool_call(latest_request, path);
-    let mut glob_input = serde_json::Map::new();
-    glob_input.insert("pattern".to_string(), Value::String(pattern.to_string()));
-    if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
-        glob_input.insert("path".to_string(), Value::String(path.trim().to_string()));
-    }
-    let glob_call = json!({
-        "name": "glob_search",
-        "relay_tool_call": true,
-        "input": Value::Object(glob_input),
-    });
-    if !is_office_content_search_request(latest_request) {
-        return Value::Array(vec![workspace_call, glob_call]);
-    }
-    if !include_office_content_search {
-        let mut calls = vec![workspace_call, glob_call];
-        for term in expanded_search_terms_for_request(latest_request)
-            .into_iter()
-            .skip(1)
-            .take(3)
-        {
-            let mut alias_glob_input = serde_json::Map::new();
-            alias_glob_input.insert(
-                "pattern".to_string(),
-                Value::String(format!("**/*{}*", glob_literal_term(&term))),
-            );
-            if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
-                alias_glob_input.insert("path".to_string(), Value::String(path.trim().to_string()));
-            }
-            calls.push(json!({
-                "name": "glob_search",
-                "relay_tool_call": true,
-                "input": Value::Object(alias_glob_input),
-            }));
-        }
-        return Value::Array(calls);
-    }
-    let Some(office_pattern) = infer_office_search_pattern_for_search_request(latest_request)
-    else {
-        return Value::Array(vec![workspace_call, glob_call]);
-    };
-
-    let office_paths = office_search_paths_for_request(latest_request, path);
-    let office_regex = infer_office_search_regex_for_search_request(latest_request);
-    let include_ext = office_search_include_ext_for_search_request(latest_request);
-    let mut calls = vec![
-        workspace_call,
-        glob_call,
-        json!({
-            "name": "office_search",
-            "relay_tool_call": true,
-            "input": {
-                "pattern": office_regex.as_deref().unwrap_or(office_pattern.as_str()),
-                "paths": office_paths,
-                "regex": office_regex.is_some(),
-                "include_ext": include_ext,
-                "-i": true,
-                "context": 40,
-                "max_results": 30,
-                "max_files": 80
-            }
-        }),
-    ];
-    for term in expanded_search_terms_for_request(latest_request)
-        .into_iter()
-        .skip(1)
-        .take(3)
-    {
-        let mut alias_glob_input = serde_json::Map::new();
-        alias_glob_input.insert(
-            "pattern".to_string(),
-            Value::String(format!("**/*{}*", glob_literal_term(&term))),
-        );
-        if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
-            alias_glob_input.insert("path".to_string(), Value::String(path.trim().to_string()));
-        }
-        calls.push(json!({
-            "name": "glob_search",
-            "relay_tool_call": true,
-            "input": Value::Object(alias_glob_input),
-        }));
-        if office_regex.is_none() {
-            calls.push(json!({
-            "name": "office_search",
-            "relay_tool_call": true,
-            "input": {
-                    "pattern": term,
-                    "paths": office_search_paths_for_request(latest_request, path),
-                    "include_ext": office_search_include_ext_for_search_request(latest_request),
-                    "-i": true,
-                    "context": 40,
-                    "max_results": 30,
-                    "max_files": 80
-                }
-            }));
-        }
-    }
-    Value::Array(calls)
+    build_workspace_search_tool_call(latest_request, path)
 }
 
 pub(crate) fn build_initial_local_search_tool_calls(
@@ -1167,13 +1082,7 @@ pub(crate) fn build_initial_local_search_tool_calls(
     let path_anchor = extract_path_anchors_from_text(latest_request)
         .into_iter()
         .next();
-    let payload = infer_glob_pattern_for_search_request(latest_request)
-        .map(|pattern| {
-            build_search_tool_payload(latest_request, &pattern, path_anchor.as_deref(), true)
-        })
-        .unwrap_or_else(|| {
-            build_workspace_search_tool_call(latest_request, path_anchor.as_deref())
-        });
+    let payload = build_workspace_search_tool_call(latest_request, path_anchor.as_deref());
     let calls = match payload {
         Value::Array(items) => items,
         item => vec![item],
@@ -1237,11 +1146,7 @@ fn build_search_tool_protocol_repair_input(
     let expected_payload = build_search_tool_payload(latest_request, pattern, path, true);
     let expected_json =
         serde_json::to_string_pretty(&expected_payload).unwrap_or_else(|_| "{}".to_string());
-    let search_instruction = if expected_payload.is_array() {
-        "This is a local document search request. Emit exactly one `relay_tool` block containing the JSON array below: first `workspace_search` for ranked candidates and evidence snippets, then narrower search calls when included."
-    } else {
-        "This is a local file search request. Emit exactly one `workspace_search` Relay tool call now."
-    };
+    let search_instruction = "This is a local file/document search request. Emit exactly one `workspace_search` Relay tool call now. After Relay returns results, use only small, concrete rg-backed `glob_search` / `grep_search` / `office_search` follow-ups if the first result is insufficient.";
     format!(
         concat!(
             "Tool protocol repair.\n",
