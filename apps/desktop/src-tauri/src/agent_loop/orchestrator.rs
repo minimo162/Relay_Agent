@@ -3132,6 +3132,42 @@ where
 
 /* ── Tool executor ─── */
 
+fn tool_path_is_windows_absolute_like(path: &str) -> bool {
+    let trimmed = path.trim();
+    let bytes = trimmed.as_bytes();
+    trimmed.starts_with("\\\\")
+        || trimmed.starts_with("//")
+        || (bytes.len() >= 3
+            && bytes[1] == b':'
+            && bytes[0].is_ascii_alphabetic()
+            && matches!(bytes[2], b'\\' | b'/'))
+}
+
+fn tool_path_is_absolute_like(path: &str) -> bool {
+    let trimmed = path.trim();
+    std::path::Path::new(trimmed).is_absolute() || tool_path_is_windows_absolute_like(trimmed)
+}
+
+fn tool_normalize_windows_path_string(path: &str) -> String {
+    path.trim()
+        .trim_start_matches("\\\\?\\")
+        .trim_end_matches(['\\', '/'])
+        .replace('/', "\\")
+        .to_ascii_lowercase()
+}
+
+fn tool_path_string_starts_with(path: &str, root: &std::path::Path) -> bool {
+    if std::path::Path::new(path).starts_with(root) {
+        return true;
+    }
+    let path = tool_normalize_windows_path_string(path);
+    let root = tool_normalize_windows_path_string(&root.to_string_lossy());
+    path == root
+        || path
+            .strip_prefix(&root)
+            .is_some_and(|rest| rest.starts_with('\\') || rest.starts_with('/'))
+}
+
 /// When a session workspace (`cwd`) is set, require file-tool paths to resolve inside it
 /// (claw-code PARITY-style workspace boundary).
 fn enforce_workspace_tool_paths(
@@ -3214,7 +3250,17 @@ fn enforce_workspace_tool_paths(
             if let Some(Value::Array(paths)) = obj.get_mut("paths") {
                 for path in paths.iter_mut() {
                     if let Value::String(s) = path {
-                        *path = Value::String(normalize_path_string(s)?);
+                        if tool_path_is_absolute_like(s)
+                            && !tool_path_string_starts_with(s, workspace)
+                        {
+                            *path = Value::String(
+                                lexical_normalize(std::path::Path::new(s))
+                                    .to_string_lossy()
+                                    .into_owned(),
+                            );
+                        } else {
+                            *path = Value::String(normalize_path_string(s)?);
+                        }
                     }
                 }
             }
@@ -5710,6 +5756,13 @@ I will inspect the file.
         });
         assert!(enforce_workspace_tool_paths("office_search", &mut outside, &root).is_err());
 
+        let mut absolute_external = serde_json::json!({
+            "pattern": "forecast",
+            "paths": [r"H:\shr1\05_経理部\03_連結財務G\**\*"]
+        });
+        enforce_workspace_tool_paths("office_search", &mut absolute_external, &root)
+            .expect("office_search should allow explicit absolute read-only search roots");
+
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -6891,11 +6944,29 @@ mod loop_controller_tests {
         .expect("document lookup should get an initial local search plan");
 
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "workspace_search");
+        assert_eq!(calls[0].0, "office_search");
+        assert!(calls[0].1.contains(
+            r#""paths":["\\\\Dsfile622\\\\div622$\\\\shr1\\\\05_経理部\\\\03_連結財務G/**/*"]"#
+        ));
         assert!(calls[0]
             .1
-            .contains(r#""paths":["C:\\Users\\m242054\\Relay_Agent"]"#));
-        assert!(!calls[0].1.contains(r#""paths":["\\\\Dsfile622"#));
+            .contains(r#""include_ext":["docx","xlsx","pptx","pdf"]"#));
+    }
+
+    #[test]
+    fn initial_search_plan_uses_external_mapped_drive_for_office_lookup() {
+        let calls = build_initial_local_search_tool_calls(
+            r"H:\shr1\05_経理部\03_連結財務G にあるキャッシュフロー計算書関連ファイルを検索して",
+            Some(r"C:\Users\m242054\Relay_Agent"),
+        )
+        .expect("document lookup should get an initial local search plan");
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "office_search");
+        assert!(calls[0]
+            .1
+            .contains(r#""paths":["H:\\shr1\\05_経理部\\03_連結財務G/**/*"]"#));
+        assert!(calls[0].1.contains(r#""pattern":"キャッシュフロー"#));
     }
 
     #[test]

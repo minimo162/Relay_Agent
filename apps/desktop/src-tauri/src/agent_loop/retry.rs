@@ -794,6 +794,53 @@ fn office_search_paths_for_request(text: &str, path: Option<&str>) -> Vec<String
     paths
 }
 
+fn office_search_paths_for_explicit_root(path: &str) -> Vec<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return vec![];
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.ends_with(".docx")
+        || lower.ends_with(".xlsx")
+        || lower.ends_with(".pptx")
+        || lower.ends_with(".pdf")
+    {
+        return vec![trimmed.to_string()];
+    }
+    let base = trimmed.trim_end_matches(['/', '\\']);
+    vec![format!("{base}/**/*")]
+}
+
+fn office_search_pattern_for_request(text: &str) -> String {
+    if is_cash_flow_search_request(text) {
+        return "キャッシュフロー".to_string();
+    }
+    let terms = search_terms_for_request(text)
+        .into_iter()
+        .filter(|term| !path_is_absolute_like(term) && !term.contains(['/', '\\']))
+        .collect::<Vec<_>>();
+    terms
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| text.trim().to_string())
+}
+
+fn build_office_search_tool_call_for_explicit_root(latest_request: &str, path: &str) -> Value {
+    json!({
+        "name": "office_search",
+        "relay_tool_call": true,
+        "input": {
+            "pattern": office_search_pattern_for_request(latest_request),
+            "paths": office_search_paths_for_explicit_root(path),
+            "regex": false,
+            "include_ext": office_search_include_ext_for_search_request(latest_request),
+            "context": 120,
+            "max_results": 80,
+            "max_files": 200
+        }
+    })
+}
+
 fn expanded_search_terms_for_request(text: &str) -> Vec<String> {
     let mut terms = Vec::new();
     let mut seen = BTreeSet::new();
@@ -1079,6 +1126,18 @@ fn initial_search_path_for_request(latest_request: &str, cwd: Option<&str>) -> O
     cwd.map(str::to_string)
 }
 
+fn explicit_external_absolute_anchor(latest_request: &str, cwd: Option<&str>) -> Option<String> {
+    let cwd = cwd.map(str::trim).filter(|path| !path.is_empty());
+    extract_path_anchors_from_text(latest_request)
+        .into_iter()
+        .map(|anchor| anchor.trim().to_string())
+        .find(|anchor| {
+            !anchor.is_empty()
+                && path_is_absolute_like(anchor)
+                && cwd.is_none_or(|cwd| !path_string_starts_with(anchor, cwd))
+        })
+}
+
 fn path_anchor_allowed_for_initial_search(anchor: &str, cwd: Option<&str>) -> bool {
     let Some(cwd) = cwd else {
         return true;
@@ -1140,8 +1199,16 @@ pub(crate) fn build_initial_local_search_tool_calls(
     if !is_local_file_search_request(latest_request) {
         return None;
     }
-    let path_anchor = initial_search_path_for_request(latest_request, cwd);
-    let payload = build_workspace_search_tool_call(latest_request, path_anchor.as_deref());
+    let payload = if let Some(anchor) = explicit_external_absolute_anchor(latest_request, cwd) {
+        if is_office_content_search_request(latest_request) {
+            build_office_search_tool_call_for_explicit_root(latest_request, &anchor)
+        } else {
+            build_workspace_search_tool_call(latest_request, cwd)
+        }
+    } else {
+        let path_anchor = initial_search_path_for_request(latest_request, cwd);
+        build_workspace_search_tool_call(latest_request, path_anchor.as_deref())
+    };
     let calls = match payload {
         Value::Array(items) => items,
         item => vec![item],

@@ -205,7 +205,30 @@ fn is_bare_filename_with_extension(token: &str) -> bool {
 }
 
 fn is_path_candidate_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | '\\' | ':' | '~')
+    !ch.is_whitespace()
+        && !matches!(
+            ch,
+            '`' | '"'
+                | '\''
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '<'
+                | '>'
+                | ','
+                | ';'
+                | '!'
+                | '?'
+                | '。'
+                | '、'
+                | '，'
+                | '；'
+                | '！'
+                | '？'
+        )
 }
 
 pub(crate) fn extract_path_anchors_from_text(text: &str) -> Vec<String> {

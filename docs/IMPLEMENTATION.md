@@ -7959,6 +7959,34 @@ Results:
 - `cargo fmt --check --all`: passed.
 - `git diff --check`: passed.
 
+## 2026-04-21 - Shared-drive Office search initial routing
+
+Fixed a Windows shared-drive lookup failure where local document search requests
+that named an absolute mapped-drive or UNC path outside the configured workspace
+could be routed through `workspace_search` and then blocked by the workspace
+boundary. The initial local-search plan now routes explicit external
+Office/PDF lookup roots through read-only `office_search`, while paths inside
+the configured workspace still use `workspace_search`. Path-anchor extraction
+also now preserves Japanese path components and administrative share `$`
+segments so roots such as `H:\shr1\05_経理部\03_連結財務G` and
+`\\server\share$\05_経理部` are not truncated before tool planning.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml initial_search_plan -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_enforcement_normalizes_office_search_paths -- --nocapture
+cargo fmt --check --all
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml initial_search_plan -- --nocapture`: passed, 4 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_enforcement_normalizes_office_search_paths -- --nocapture`: passed, 1 passed.
+- `cargo fmt --check --all`: failed; rustfmt reported pre-existing formatting drift in `crates/runtime/src/{file_ops.rs,lib.rs,office/mod.rs,search.rs,search_backend.rs}` and `crates/tools/src/lib.rs`. Left untouched to avoid unrelated formatting churn.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`
