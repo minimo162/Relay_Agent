@@ -15,6 +15,32 @@
 
 ## Milestone Log
 
+### 2026-04-21 initial search external path fallback
+
+Fixed a live desktop search failure where the deterministic initial
+`workspace_search` plan copied an absolute UNC path from the user's request into
+`paths[]`. Workspace enforcement correctly rejected that path because it was
+outside the configured Project folder, but the first reply then reported that
+the requested UNC was blocked instead of searching the active workspace.
+
+- Initial local-search planning now receives the session `cwd`.
+- Absolute path anchors from the user request are only used when they are inside
+  the configured workspace. External Windows/UNC anchors are left in the search
+  query text but are not used as search roots.
+- When no allowed explicit path exists, the initial `workspace_search` plan
+  uses the session workspace `cwd`, matching the tool enforcement boundary.
+- Added regressions for external UNC fallback to workspace `cwd` and for keeping
+  an explicit subpath when it is inside the workspace.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml initial_search_plan_uses_workspace_cwd_instead_of_external_unc_anchor -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml initial_search_plan_keeps_path_anchor_inside_workspace_cwd -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml document_lookup_gets_query_driven_initial_search_plan -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml agentic_search_implementation_lookup_starts_with_workspace_search -- --nocapture`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+
 ### 2026-04-21 workspace_search cwd scoping fix
 
 Fixed a live desktop search miss where the deterministic initial

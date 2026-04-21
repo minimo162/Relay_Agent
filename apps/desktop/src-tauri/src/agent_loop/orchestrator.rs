@@ -767,7 +767,7 @@ pub fn run_agent_loop_impl<R: Runtime>(
         )
     };
 
-    let initial_tool_calls = build_initial_local_search_tool_calls(&turn_input);
+    let initial_tool_calls = build_initial_local_search_tool_calls(&turn_input, cwd.as_deref());
     if let Some(tool_calls) = &initial_tool_calls {
         tracing::info!(
             "[RelayAgent] session {} prepared deterministic initial local-search tool plan (calls={})",
@@ -6835,6 +6835,7 @@ mod loop_controller_tests {
     fn document_lookup_gets_query_driven_initial_search_plan() {
         let calls = build_initial_local_search_tool_calls(
             "キャッシュフロー計算書の作成に関係するファイルを検索して",
+            None,
         )
         .expect("document lookup should get an initial local search plan");
 
@@ -6857,6 +6858,7 @@ mod loop_controller_tests {
     fn document_lookup_query_ignores_instruction_words_and_honors_explicit_extension() {
         let calls = build_initial_local_search_tool_calls(
             "できるだけ新しく、関連度の高い予算精算表Excelファイルを検索して",
+            None,
         )
         .expect("document lookup should get an initial local search plan");
 
@@ -6871,12 +6873,44 @@ mod loop_controller_tests {
     fn cash_flow_lookup_keeps_pdf_when_user_asks_for_pdf() {
         let calls = build_initial_local_search_tool_calls(
             "キャッシュフロー計算書の作成に関係するPDFファイルを検索して",
+            None,
         )
         .expect("PDF-specific cash-flow lookup should get an initial local search plan");
 
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "workspace_search");
         assert!(calls[0].1.contains(r#""include_ext":["pdf"]"#));
+    }
+
+    #[test]
+    fn initial_search_plan_uses_workspace_cwd_instead_of_external_unc_anchor() {
+        let calls = build_initial_local_search_tool_calls(
+            r"\\Dsfile622\\div622$\\shr1\\05_経理部\\03_連結財務G にあるキャッシュフロー計算書関連ファイルを検索して",
+            Some(r"C:\Users\m242054\Relay_Agent"),
+        )
+        .expect("document lookup should get an initial local search plan");
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "workspace_search");
+        assert!(calls[0]
+            .1
+            .contains(r#""paths":["C:\\Users\\m242054\\Relay_Agent"]"#));
+        assert!(!calls[0].1.contains(r#""paths":["\\\\Dsfile622"#));
+    }
+
+    #[test]
+    fn initial_search_plan_keeps_path_anchor_inside_workspace_cwd() {
+        let calls = build_initial_local_search_tool_calls(
+            r"C:\Users\m242054\Relay_Agent\reports にあるExcelファイルを検索して",
+            Some(r"C:\Users\m242054\Relay_Agent"),
+        )
+        .expect("document lookup should get an initial local search plan");
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "workspace_search");
+        assert!(calls[0]
+            .1
+            .contains(r#""paths":["C:\\Users\\m242054\\Relay_Agent\\reports"]"#));
     }
 
     #[test]
@@ -6958,7 +6992,7 @@ mod loop_controller_tests {
 
     #[test]
     fn agentic_search_implementation_lookup_starts_with_workspace_search() {
-        let calls = build_initial_local_search_tool_calls("agentic search の実装を探して")
+        let calls = build_initial_local_search_tool_calls("agentic search の実装を探して", None)
             .expect("agentic search lookup should get workspace_search");
 
         assert_eq!(calls.len(), 1);

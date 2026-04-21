@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -1064,6 +1065,65 @@ fn build_workspace_search_tool_call(latest_request: &str, path: Option<&str>) ->
     })
 }
 
+fn initial_search_path_for_request(latest_request: &str, cwd: Option<&str>) -> Option<String> {
+    let cwd = cwd.map(str::trim).filter(|path| !path.is_empty());
+    for anchor in extract_path_anchors_from_text(latest_request) {
+        let anchor = anchor.trim();
+        if anchor.is_empty() {
+            continue;
+        }
+        if path_anchor_allowed_for_initial_search(anchor, cwd) {
+            return Some(anchor.to_string());
+        }
+    }
+    cwd.map(str::to_string)
+}
+
+fn path_anchor_allowed_for_initial_search(anchor: &str, cwd: Option<&str>) -> bool {
+    let Some(cwd) = cwd else {
+        return true;
+    };
+    if !path_is_absolute_like(anchor) {
+        return true;
+    }
+    path_string_starts_with(anchor, cwd)
+}
+
+fn path_is_absolute_like(path: &str) -> bool {
+    let trimmed = path.trim();
+    Path::new(trimmed).is_absolute() || windows_absolute_like(trimmed)
+}
+
+fn windows_absolute_like(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    path.starts_with("\\\\")
+        || path.starts_with("//")
+        || (bytes.len() >= 3
+            && bytes[1] == b':'
+            && bytes[0].is_ascii_alphabetic()
+            && matches!(bytes[2], b'\\' | b'/'))
+}
+
+fn path_string_starts_with(path: &str, root: &str) -> bool {
+    if Path::new(path).starts_with(Path::new(root)) {
+        return true;
+    }
+    let path = normalize_windows_path_string(path);
+    let root = normalize_windows_path_string(root);
+    path == root
+        || path
+            .strip_prefix(&root)
+            .is_some_and(|rest| rest.starts_with('\\') || rest.starts_with('/'))
+}
+
+fn normalize_windows_path_string(path: &str) -> String {
+    path.trim()
+        .trim_start_matches("\\\\?\\")
+        .trim_end_matches(['\\', '/'])
+        .replace('/', "\\")
+        .to_ascii_lowercase()
+}
+
 fn build_search_tool_payload(
     latest_request: &str,
     _pattern: &str,
@@ -1075,13 +1135,12 @@ fn build_search_tool_payload(
 
 pub(crate) fn build_initial_local_search_tool_calls(
     latest_request: &str,
+    cwd: Option<&str>,
 ) -> Option<Vec<(String, String)>> {
     if !is_local_file_search_request(latest_request) {
         return None;
     }
-    let path_anchor = extract_path_anchors_from_text(latest_request)
-        .into_iter()
-        .next();
+    let path_anchor = initial_search_path_for_request(latest_request, cwd);
     let payload = build_workspace_search_tool_call(latest_request, path_anchor.as_deref());
     let calls = match payload {
         Value::Array(items) => items,
