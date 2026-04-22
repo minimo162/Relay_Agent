@@ -1155,10 +1155,34 @@ fn expand_office_candidates_with_cap(
                 break;
             }
         } else {
+            let literal = PathBuf::from(raw);
+            if literal.is_dir() {
+                let globs = office_rg_globs("**/*", include_ext);
+                if let Some(result) = search_backend::rg_files(
+                    &literal,
+                    search_backend::RgFilesOptions::new(
+                        &globs,
+                        expansion_cap.saturating_sub(out.len()),
+                    ),
+                )? {
+                    for entry in result.files {
+                        push_candidate(&mut out, &mut seen, &entry, include_ext, false, &mut errors);
+                        if out.len() >= expansion_cap {
+                            files_truncated = true;
+                            break;
+                        }
+                    }
+                    files_truncated |= result.truncated;
+                    if files_truncated {
+                        break;
+                    }
+                    continue;
+                }
+            }
             push_candidate(
                 &mut out,
                 &mut seen,
-                &PathBuf::from(raw),
+                &literal,
                 include_ext,
                 true,
                 &mut errors,
@@ -1921,6 +1945,32 @@ mod tests {
         assert_eq!(expansion.candidates.len(), 2);
         assert_eq!(expansion.candidates[0], fs::canonicalize(&newer).unwrap());
         assert_eq!(expansion.candidates[1], fs::canonicalize(&older).unwrap());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn expand_office_candidates_recurses_literal_directory_paths() {
+        let root = test_dir();
+        let nested = root.join("nested");
+        fs::create_dir_all(&nested).expect("create nested dir");
+        let workbook = nested.join("cashflow.xlsx");
+        let ignored = nested.join("notes.txt");
+        fs::write(&workbook, b"candidate").expect("write workbook candidate");
+        fs::write(ignored, b"plain text").expect("write ignored file");
+        let include_ext =
+            normalize_include_ext(Some(&vec![String::from("xlsx")])).expect("include ext");
+
+        let expansion = expand_office_candidates(
+            &[root.to_string_lossy().into_owned()],
+            &include_ext,
+            10,
+            Instant::now() + Duration::from_secs(60),
+        )
+        .expect("expand candidates");
+
+        assert_eq!(expansion.candidates, vec![fs::canonicalize(&workbook).unwrap()]);
+        assert!(expansion.errors.is_empty());
 
         let _ = fs::remove_dir_all(root);
     }

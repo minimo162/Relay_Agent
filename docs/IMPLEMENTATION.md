@@ -15,6 +15,52 @@
 
 ## Milestone Log
 
+### 2026-04-22 office_search directory and duplicate-loop hardening
+
+Live `tauri:dev` logs showed `office_search` receiving a workspace/root
+directory path (`H:\shr1\05_経理部\03_連結財務G`) after path enforcement, then
+returning `candidate_count=0`, `files_scanned=0`, and one error because literal
+directories were treated as explicit files. The follow-up Copilot turn repeated
+the same `office_search` JSON, causing a duplicate no-op and another CDP wait.
+
+Aligned the behavior with the current opencode search shape inspected from
+`anomalyco/opencode` dev HEAD `22d33c57af94f3bac5022f64ec11c82a06c015c8`:
+search remains simple and evidence driven, with directory roots separated from
+file patterns and "No files found" style outputs instead of large JSON loops.
+
+Changes:
+
+- `office_search` now treats a literal directory in `paths` as a recursive
+  Office/PDF candidate root and expands it via rg-backed `**/*.{ext}` globs
+  under the existing expansion cap.
+- Turn-level duplicate suppression now stops immediately for repeated local
+  search calls (`glob`, `grep`, `office_search`) so the outer controller can
+  ask for a plain-text summary repair instead of waiting through another
+  Copilot response.
+- CDP follow-up rendering now summarizes `office_search` results in an
+  opencode-like compact form (`No files found` or `Found N Office/PDF matches`)
+  before truncation, reducing the chance that Copilot re-emits the prior tool
+  JSON.
+- Follow-up hardening aligned `grep` with opencode's evidence-first behavior:
+  default `grep` output is now line content with a 100-line default cap, while
+  explicit `files_with_matches` and `count` modes remain supported for
+  compatibility. Relay also treats `path: "undefined"` / `"null"` as omitted
+  for search tools, and validates regex syntax before using the rg backend so
+  malformed patterns fail clearly instead of becoming empty results.
+
+Verification:
+
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml expand_office_candidates_recurses_literal_directory_paths -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml repeating_identical_tool_call_is_suppressed_and_turn_terminates -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml empty_office_search_result_is_summarized_for_cdp_followup -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_budget_tool_error_escalates_to_summary_repair -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml expand_office_candidates -- --nocapture`: passed, 7 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_ -- --nocapture`: passed, 6 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml grep_ -- --nocapture`: passed, 7 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml file_ops::tests:: -- --nocapture`: passed, 24 passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml glob_and_grep_tools_cover_success_and_errors -- --nocapture`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop --manifest-path apps/desktop/src-tauri/Cargo.toml workspace_enforcement_normalizes_office_search_paths -- --nocapture`: passed, 1 passed.
+
 ### 2026-04-22 agentic Office search expansion repair
 
 Reviewed `anomalyco/opencode` dev HEAD

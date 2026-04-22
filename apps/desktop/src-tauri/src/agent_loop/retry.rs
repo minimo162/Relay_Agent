@@ -1524,6 +1524,7 @@ fn has_local_search_guard_notice(summary: &runtime::TurnSummary) -> bool {
         runtime::TurnOutcome::ToolError { message }
             if message.contains("local search tool budget")
                 || message.contains("repeated an identical tool call")
+                || message.contains("repeated an identical local search tool call")
     );
     outcome_message_matches
         || summary.tool_results.iter().any(|message| {

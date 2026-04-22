@@ -695,10 +695,7 @@ pub fn glob_with_options(
     options: &GlobSearchOptions,
 ) -> io::Result<GlobSearchOutput> {
     let started = Instant::now();
-    let base_dir = path
-        .map(normalize_path)
-        .transpose()?
-        .unwrap_or(std::env::current_dir()?);
+    let base_dir = normalize_optional_search_path(path)?;
     if base_dir.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -839,23 +836,28 @@ pub fn grep(input: &GrepSearchInput) -> io::Result<GrepSearchOutput> {
             "grep pattern is required",
         ));
     }
+    validate_grep_pattern(input)?;
 
-    let base_path = input
-        .path
-        .as_deref()
-        .map(normalize_path)
-        .transpose()?
-        .unwrap_or(std::env::current_dir()?);
+    let base_path = normalize_optional_search_path(input.path.as_deref())?;
     let output_mode = input
         .output_mode
         .clone()
-        .unwrap_or_else(|| String::from("files_with_matches"));
+        .unwrap_or_else(|| String::from("content"));
 
     if let Some(output) = grep_with_rg(input, &base_path, &output_mode)? {
         return Ok(output);
     }
 
     grep_fallback(input, &base_path, &output_mode)
+}
+
+fn validate_grep_pattern(input: &GrepSearchInput) -> io::Result<()> {
+    RegexBuilder::new(&input.pattern)
+        .case_insensitive(input.case_insensitive.unwrap_or(false))
+        .dot_matches_new_line(input.multiline.unwrap_or(false))
+        .build()
+        .map(|_| ())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))
 }
 
 fn grep_with_rg(
@@ -930,7 +932,7 @@ fn grep_with_rg(
                 )
             })
             .collect::<Vec<_>>();
-        let (lines, limit, offset) = apply_limit(lines, input.head_limit, input.offset);
+        let (lines, limit, offset) = apply_limit(lines, Some(input.head_limit.unwrap_or(100)), input.offset);
         let output = GrepSearchOutput {
             mode: Some(output_mode.to_string()),
             num_files: filenames.len(),
@@ -1068,7 +1070,8 @@ fn grep_fallback(
     let (filenames, applied_limit, applied_offset) =
         apply_limit(filenames, input.head_limit, input.offset);
     let content_output = if output_mode == "content" {
-        let (lines, limit, offset) = apply_limit(content_lines, input.head_limit, input.offset);
+        let (lines, limit, offset) =
+            apply_limit(content_lines, Some(input.head_limit.unwrap_or(100)), input.offset);
         let output = GrepSearchOutput {
             mode: Some(output_mode.to_string()),
             num_files: filenames.len(),
@@ -1115,6 +1118,19 @@ fn grep_fallback(
         "grep completed"
     );
     Ok(output)
+}
+
+fn normalize_optional_search_path(path: Option<&str>) -> io::Result<PathBuf> {
+    match path.map(str::trim) {
+        Some(value)
+            if !value.is_empty()
+                && !value.eq_ignore_ascii_case("undefined")
+                && !value.eq_ignore_ascii_case("null") =>
+        {
+            normalize_path(value)
+        }
+        _ => std::env::current_dir(),
+    }
 }
 
 fn collect_search_files(base_path: &Path, input: &GrepSearchInput) -> io::Result<Vec<PathBuf>> {
@@ -1306,9 +1322,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        edit, glob, glob_with_options, grep, read,
-        walk_glob_matches, write, GlobSearchOptions, GrepSearchInput, MAX_GREP_LINE_LENGTH, MAX_TEXT_FILE_READ_BYTES,
-        MAX_WRITE_FILE_BYTES,
+        edit, glob, glob_with_options, grep, normalize_optional_search_path, read,
+        walk_glob_matches, write, GlobSearchOptions, GrepSearchInput, MAX_GREP_LINE_LENGTH,
+        MAX_TEXT_FILE_READ_BYTES, MAX_WRITE_FILE_BYTES,
     };
 
     fn temp_path(name: &str) -> std::path::PathBuf {
@@ -1577,6 +1593,56 @@ mod tests {
             serde_json::from_str(r#"{"pattern":"hello","path":"src","include":"*.rs"}"#)
                 .expect("include alias should deserialize");
         assert_eq!(input.glob.as_deref(), Some("*.rs"));
+    }
+
+    #[test]
+    fn search_path_placeholders_default_to_current_directory() {
+        let cwd = std::env::current_dir().expect("current dir");
+
+        assert_eq!(normalize_optional_search_path(None).unwrap(), cwd);
+        assert_eq!(normalize_optional_search_path(Some("")).unwrap(), cwd);
+        assert_eq!(normalize_optional_search_path(Some("undefined")).unwrap(), cwd);
+        assert_eq!(normalize_optional_search_path(Some("null")).unwrap(), cwd);
+    }
+
+    #[test]
+    fn grep_defaults_to_opencode_content_output_with_limit() {
+        let dir = temp_path("grep-default-content");
+        std::fs::create_dir_all(&dir).expect("directory should be created");
+        let lines = (0..105)
+            .map(|index| format!("needle {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(dir.join("many.txt"), format!("{lines}\n")).expect("write file");
+
+        let output = grep(&GrepSearchInput {
+            pattern: String::from("needle"),
+            path: Some(dir.to_string_lossy().into_owned()),
+            glob: Some(String::from("*.txt")),
+            output_mode: None,
+            before: None,
+            after: None,
+            context_short: None,
+            context: None,
+            line_numbers: Some(true),
+            case_insensitive: Some(false),
+            file_type: None,
+            head_limit: None,
+            offset: Some(0),
+            multiline: Some(false),
+            follow: None,
+            max_depth: None,
+            hidden: None,
+            max_count: None,
+        })
+        .expect("grep should succeed");
+
+        assert_eq!(output.mode.as_deref(), Some("content"));
+        assert_eq!(output.num_lines, Some(100));
+        assert_eq!(output.applied_limit, Some(100));
+        let content = output.content.expect("content output");
+        assert!(content.contains("many.txt:1:needle 0"));
+        assert!(!content.contains("needle 104"));
     }
 
     #[test]

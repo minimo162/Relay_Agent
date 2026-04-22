@@ -2909,6 +2909,9 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
     if tool_name == "grep" {
         return summarize_grep_tool_result(output).unwrap_or_else(|| output.to_string());
     }
+    if tool_name == "office_search" {
+        return summarize_office_search_tool_result(output).unwrap_or_else(|| output.to_string());
+    }
     if !matches!(tool_name, "write" | "edit") {
         return output.to_string();
     }
@@ -3099,6 +3102,108 @@ fn summarize_grep_tool_result(output: &str) -> Option<String> {
     Some(lines.join("\n"))
 }
 
+fn summarize_office_search_tool_result(output: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(output).ok()?;
+    let object = value.as_object()?;
+    let results = object
+        .get("results")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let errors = object
+        .get("errors")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let candidate_count = object
+        .get("candidate_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let files_scanned = object
+        .get("filesScanned")
+        .or_else(|| object.get("files_scanned"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let truncated = object
+        .get("files_truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || object
+            .get("results_truncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        || object
+            .get("wall_clock_truncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
+    if results.is_empty() {
+        let pattern = object
+            .get("pattern")
+            .and_then(Value::as_str)
+            .unwrap_or("(unknown)");
+        let paths = object
+            .get("paths")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| "(unknown)".to_string());
+        let mut lines = vec![
+            "No files found".to_string(),
+            format!("pattern: {pattern}"),
+            format!("paths: {paths}"),
+            format!("candidate_count: {candidate_count}"),
+            format!("files_scanned: {files_scanned}"),
+        ];
+        if !errors.is_empty() {
+            lines.push(format!("errors: {}", errors.len()));
+            for error in errors.iter().take(3) {
+                let path = error
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .unwrap_or("(unknown)");
+                let kind = error.get("kind").and_then(Value::as_str).unwrap_or("Error");
+                let reason = error.get("reason").and_then(Value::as_str).unwrap_or("");
+                lines.push(format!("- {path}: {kind}: {reason}"));
+            }
+        }
+        return Some(lines.join("\n"));
+    }
+
+    let mut lines = vec![format!(
+        "Found {} Office/PDF matches{}",
+        results.len(),
+        if truncated { " (truncated)" } else { "" }
+    )];
+    for result in results.iter().take(100) {
+        let path = result
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("(unknown)");
+        let anchor = result
+            .get("anchor")
+            .and_then(Value::as_str)
+            .unwrap_or("doc");
+        let preview = result
+            .get("preview")
+            .and_then(Value::as_str)
+            .map(collapse_inline_whitespace)
+            .unwrap_or_default();
+        if preview.is_empty() {
+            lines.push(format!("{path}:{anchor}"));
+        } else {
+            lines.push(format!("{path}:{anchor}: {preview}"));
+        }
+    }
+    Some(lines.join("\n"))
+}
+
 fn cdp_tool_result_max_chars(tool_name: &str, is_error: bool) -> Option<usize> {
     if is_error {
         return Some(CDP_LARGE_TOOL_RESULT_MAX_CHARS);
@@ -3220,6 +3325,13 @@ fn tool_path_string_starts_with(path: &str, root: &std::path::Path) -> bool {
             .is_some_and(|rest| rest.starts_with('\\') || rest.starts_with('/'))
 }
 
+fn tool_path_is_omitted_placeholder(path: &str) -> bool {
+    let trimmed = path.trim();
+    trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("undefined")
+        || trimmed.eq_ignore_ascii_case("null")
+}
+
 /// When a session workspace (`cwd`) is set, require file-tool paths to resolve inside it
 /// (claw-code PARITY-style workspace boundary).
 fn enforce_workspace_tool_paths(
@@ -3262,7 +3374,7 @@ fn enforce_workspace_tool_paths(
             let has_path = obj
                 .get("path")
                 .and_then(|v| v.as_str())
-                .is_some_and(|s| !s.is_empty());
+                .is_some_and(|s| !tool_path_is_omitted_placeholder(s));
             if !has_path {
                 let root = workspace
                     .canonicalize()
@@ -4782,7 +4894,8 @@ mod cdp_copilot_tool_tests {
         .expect("serialize search output");
 
         let rendered = format_cdp_tool_result("office_search", &output, false);
-        assert!(rendered.contains("path"));
+        assert!(rendered.contains("Found 1 Office/PDF matches"));
+        assert!(rendered.contains("/workspace/report.xlsx:Sheet1!A1"));
         assert!(rendered.contains("truncated for M365 Copilot CDP prompt"));
         assert!(rendered.len() < CDP_LOCAL_SEARCH_TOOL_RESULT_MAX_CHARS + 1_000);
     }
@@ -4807,6 +4920,39 @@ mod cdp_copilot_tool_tests {
         assert!(rendered.contains("filename/glob-pattern miss"));
         assert!(rendered.contains("does not mean grep or office_search"));
         assert!(!rendered.contains(r#""filenames":[]"#));
+    }
+
+    #[test]
+    fn empty_office_search_result_is_summarized_for_cdp_followup() {
+        let output = serde_json::to_string(&json!({
+            "results": [],
+            "errors": [{
+                "path": r"H:\shr1\05_経理部\03_連結財務G",
+                "kind": "NotFile",
+                "reason": "path is not a regular file"
+            }],
+            "filesScanned": 0,
+            "pattern": "キャッシュフロー",
+            "paths": [r"H:\shr1\05_経理部\03_連結財務G"],
+            "regex": false,
+            "include_ext": ["xlsx", "xlsm", "pptx", "pdf", "docx"],
+            "candidate_count": 0,
+            "candidate_sample": [],
+            "max_files": 50,
+            "max_results": 100,
+            "expansion_candidate_cap": 200,
+            "files_truncated": false,
+            "results_truncated": false,
+            "wall_clock_truncated": false
+        }))
+        .expect("serialize office search output");
+
+        let rendered = format_cdp_tool_result("office_search", &output, false);
+        assert!(rendered.contains("No files found"));
+        assert!(rendered.contains("pattern: キャッシュフロー"));
+        assert!(rendered.contains("candidate_count: 0"));
+        assert!(rendered.contains("errors: 1"));
+        assert!(!rendered.contains(r#""relay_tool_call""#));
     }
 
     #[test]
@@ -5806,6 +5952,19 @@ I will inspect the file.
         });
         enforce_workspace_tool_paths("office_search", &mut absolute_external, &root)
             .expect("office_search should allow explicit absolute read-only search roots");
+
+        let mut placeholder_path = serde_json::json!({
+            "pattern": "*.rs",
+            "path": "undefined"
+        });
+        enforce_workspace_tool_paths("glob", &mut placeholder_path, &root)
+            .expect("glob placeholder path should use workspace root");
+        let expected_root = root.canonicalize().expect("canonical root");
+        let expected_root_text = expected_root.to_string_lossy().into_owned();
+        assert_eq!(
+            placeholder_path.get("path").and_then(Value::as_str),
+            Some(expected_root_text.as_str())
+        );
 
         fs::remove_dir_all(root).expect("cleanup");
     }

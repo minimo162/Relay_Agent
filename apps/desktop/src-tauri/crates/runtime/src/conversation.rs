@@ -459,10 +459,18 @@ where
                     let notice = format!(
                         "Duplicate tool call suppressed: this `{tool_name}` call was already executed earlier in this turn with the same input. The prior tool output remains in the transcript above. Do not repeat this call. Either summarize the existing findings for the user, or issue a different tool call (for example, narrow or broaden the pattern, change the target path, or switch tools)."
                     );
+                    let duplicate_is_local_search = is_turn_level_local_search_tool(&tool_name);
+                    let duplicate_tool_name = tool_name.clone();
                     let synthetic =
                         ConversationMessage::tool_result(tool_use_id, tool_name, notice, false);
                     self.session.messages.push(synthetic.clone());
                     tool_results.push(synthetic);
+                    if duplicate_is_local_search {
+                        *turn_guard_stop = Some(format!(
+                            "Turn stopped: the assistant repeated an identical local search tool call (`{duplicate_tool_name}`) without progress."
+                        ));
+                        break;
+                    }
                     if *duplicate_tool_hits >= TURN_TOOL_DUPLICATE_LIMIT {
                         break;
                     }
@@ -1754,6 +1762,10 @@ mod tests {
         assert!(
             synthetic_notices >= 1,
             "expected at least one synthesized 'duplicate suppressed' tool result"
+        );
+        assert_eq!(
+            summary.iterations, 2,
+            "local search duplicates should stop immediately after the first suppressed repeat"
         );
         assert!(
             matches!(summary.outcome, TurnOutcome::ToolError { .. }),
