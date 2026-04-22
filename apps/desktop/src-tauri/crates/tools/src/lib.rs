@@ -444,14 +444,7 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
         "read" => vec!["offset", "limit", "pages", "sheets", "slides"],
         "glob" => vec!["path"],
         "grep" => vec!["path", "include"],
-        "office_search" => vec![
-            "paths",
-            "regex",
-            "include_ext",
-            "context",
-            "max_results",
-            "max_files",
-        ],
+        "office_search" => vec!["paths", "regex", "include_ext"],
         "git_status" => vec!["path"],
         "git_diff" => vec!["path", "staged"],
         "WebSearch" => vec!["allowed_domains", "blocked_domains"],
@@ -564,14 +557,12 @@ fn cdp_tool_example(name: &str) -> Value {
 
 fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
     match name {
-        "read" => "Read local text, PDF, or Office content as grounded evidence.",
-        "write" => {
-            "Create or overwrite a workspace text file when the final content is known."
-        }
+        "read" => "Read a file or directory from the local filesystem.",
+        "write" => "Create or overwrite a workspace text file when the final content is known.",
         "edit" => "Apply a targeted replacement inside an existing workspace file.",
-        "glob" => "Fast rg-backed file pattern matching for concrete filename/path follow-ups.",
-        "grep" => "Fast rg-backed code or text content search for concrete strings or regex matches.",
-        "office_search" => "Search extracted DOCX/XLSX/XLSM/PPTX/PDF text for concrete literal strings or regex matches before answering Office/PDF lookup questions.",
+        "glob" => "Fast file pattern matching that works with any codebase size.",
+        "grep" => "Fast content search that works with any codebase size.",
+        "office_search" => "Relay extension for searching extracted DOCX/XLSX/XLSM/PPTX/PDF text.",
         "git_status" => "Inspect working tree changes without invoking a shell.",
         "git_diff" => "Inspect staged or unstaged diffs without invoking a shell.",
         "pdf_merge" => "Merge existing PDF files inside the workspace.",
@@ -594,12 +585,12 @@ fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
 
 fn cdp_tool_use_when(name: &str) -> &'static str {
     match name {
-        "read" => "Use for grounded inspection, PDF/Office reading, or before editing an existing file.",
+        "read" => "Use an absolute filePath. If unsure of the path, use glob first. Directories return entries; files return numbered lines.",
         "write" => "Use when creating a new target file or replacing a file with fully known content.",
         "edit" => "Use after reading the file when you need a targeted text replacement.",
-        "glob" => "Use for filename/path expansion or when the user gives a concrete glob. Keep one glob call to one simple pattern; avoid large brace fan-out on remote or broad workspaces. Results are newest-first and may be truncated, so narrow the path or pattern when needed.",
-        "grep" => "Use for concrete identifier, string, or regex searches before reading/editing code or text candidates. Use `include` for file filters such as `*.js` or `*.{ts,tsx}`.",
-        "office_search" => "Use for Office/PDF content discovery, including needed-file or related-file questions; derive concrete search terms from the user request. For abbreviation+noun queries such as `CFS 精算表`, use `regex: true` with a small alternation like `CFS|精算表` instead of searching only the abbreviation.",
+        "glob" => "Use when you need to find files by name patterns such as `**/*.js` or `src/**/*.ts`. You may call multiple useful search tools in one response.",
+        "grep" => "Use when you need to find files containing a regex pattern. Filter files with `include` such as `*.js` or `*.{ts,tsx}`.",
+        "office_search" => "Use only where opencode grep/read would be blocked by Office/PDF containers; keep inputs concrete with a pattern plus optional paths/include_ext.",
         "git_status" => "Use for a quick change overview when the task depends on current git state.",
         "git_diff" => "Use when you need to inspect exact code changes already present in the workspace.",
         "pdf_merge" => "Use when the user explicitly wants to combine PDF files in the workspace.",
@@ -623,9 +614,9 @@ fn cdp_tool_avoid_when(name: &str) -> &'static str {
         "read" => "Avoid using bash or PowerShell for file reads when `read` applies.",
         "write" => "Avoid for incremental edits to an existing file; prefer `edit` after `read`.",
         "edit" => "Avoid when the file does not exist or when replacing the full file would be simpler.",
-        "glob" => "Avoid when the exact file path is already known and no broader candidate search is needed.",
-        "grep" => "Avoid when the exact file path is already known and a direct `read` is enough.",
-        "office_search" => "Avoid for plaintext source files; use `grep` there. Do not use it as semantic ranking without a concrete search pattern, and do not treat truncated broad results as complete evidence.",
+        "glob" => "Avoid for content search; use grep for plaintext/code contents.",
+        "grep" => "Avoid for identifying/counting match totals across files; use bash with rg directly when that exact count is required.",
+        "office_search" => "Avoid for plaintext/code files; use grep there. Do not use it as semantic ranking without a concrete search pattern.",
         "git_status" => "Avoid when the task is pure file reading or editing with no git-state dependency.",
         "git_diff" => "Avoid when you only need the current file contents rather than a diff.",
         "pdf_merge" => "Avoid using bash for PDF merge when this dedicated tool applies.",
@@ -4265,16 +4256,15 @@ mod tests {
             .iter()
             .find(|spec| spec.name == "read")
             .expect("read cdp prompt spec");
-        assert!(read.use_when.contains("before editing an existing file"));
+        assert!(read.use_when.contains("Use an absolute filePath"));
         assert!(read.avoid_when.contains("bash"));
         assert!(read.important_optional_args.contains(&"offset".to_string()));
         let glob = specs
             .iter()
             .find(|spec| spec.name == "glob")
             .expect("glob cdp prompt spec");
-        assert!(glob.use_when.contains("filename/path expansion"));
-        assert!(glob.use_when.contains("one simple pattern"));
-        assert!(glob.use_when.contains("avoid large brace fan-out"));
+        assert!(glob.use_when.contains("find files by name patterns"));
+        assert!(glob.use_when.contains("multiple useful search tools"));
         assert_eq!(glob.important_optional_args, vec!["path".to_string()]);
         let grep = specs
             .iter()
@@ -4288,8 +4278,15 @@ mod tests {
             .iter()
             .find(|spec| spec.name == "office_search")
             .expect("office_search cdp prompt spec");
-        assert!(office.purpose.contains("Office/PDF lookup"));
-        assert!(office.use_when.contains("needed-file"));
+        assert!(office.purpose.contains("Relay extension"));
+        assert_eq!(
+            office.important_optional_args,
+            vec![
+                "paths".to_string(),
+                "regex".to_string(),
+                "include_ext".to_string()
+            ]
+        );
         assert!(office.avoid_when.contains("semantic ranking"));
     }
 

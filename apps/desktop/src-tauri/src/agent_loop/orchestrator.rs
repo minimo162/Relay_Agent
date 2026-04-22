@@ -1396,236 +1396,6 @@ fn cdp_windows_office_catalog_addon() -> &'static str {
     ""
 }
 
-fn cdp_catalog_sort_key(name: &str) -> usize {
-    match name {
-        "read" => 0,
-        "write" => 1,
-        "edit" => 2,
-        "glob" => 3,
-        "grep" => 4,
-        "office_search" => 5,
-        "git_status" => 6,
-        "git_diff" => 7,
-        "pdf_merge" => 10,
-        "pdf_split" => 11,
-        "WebFetch" => 20,
-        "WebSearch" => 21,
-        "ListMcpResources" => 30,
-        "ReadMcpResource" => 31,
-        "McpAuth" => 32,
-        "MCP" => 33,
-        "AskUserQuestion" => 40,
-        "TodoWrite" => 41,
-        "TaskCreate" => 42,
-        "TaskGet" => 43,
-        "TaskList" => 44,
-        "TaskStop" => 45,
-        "TaskUpdate" => 46,
-        "TaskOutput" => 47,
-        "BackgroundTaskOutput" => 48,
-        "Skill" => 50,
-        "ToolSearch" => 51,
-        "LSP" => 52,
-        "NotebookEdit" => 53,
-        "CliList" => 60,
-        "CliDiscover" => 61,
-        "CliRegister" => 62,
-        "CliUnregister" => 63,
-        "CliRun" => 64,
-        "ElectronApps" => 70,
-        "ElectronLaunch" => 71,
-        "ElectronEval" => 72,
-        "ElectronGetText" => 73,
-        "ElectronClick" => 74,
-        "ElectronTypeText" => 75,
-        "SendUserMessage" => 80,
-        "Sleep" => 81,
-        "Config" => 82,
-        "StructuredOutput" => 83,
-        "bash" => 90,
-        "PowerShell" => 91,
-        "REPL" => 92,
-        "Agent" => 93,
-        _ => 1_000,
-    }
-}
-
-fn cdp_tool_primary_use(name: &str, description: &str) -> String {
-    match name {
-        "read" => "Read local text, PDF, or Office content.".to_string(),
-        "write" => "Create or overwrite a workspace text file.".to_string(),
-        "edit" => "Replace text in an existing workspace file.".to_string(),
-        "glob" => "Find files by glob pattern.".to_string(),
-        "grep" => "Search file contents with a regex.".to_string(),
-        "office_search" => "Search extracted Office/PDF text literally or with regex.".to_string(),
-        "git_status" => "Inspect workspace git status.".to_string(),
-        "git_diff" => "Inspect workspace git diff.".to_string(),
-        "pdf_merge" => "Merge PDF files in the workspace.".to_string(),
-        "pdf_split" => "Split a PDF into multiple workspace files.".to_string(),
-        "WebFetch" => "Fetch one URL and answer from its contents.".to_string(),
-        "WebSearch" => "Search the web for current information.".to_string(),
-        "TodoWrite" => "Update the session todo list.".to_string(),
-        "Skill" => "Load a local skill and its instructions.".to_string(),
-        "Agent" => "Launch a specialized sub-agent task.".to_string(),
-        "ToolSearch" => "Search for deferred or specialized tools.".to_string(),
-        "NotebookEdit" => "Edit a Jupyter notebook cell.".to_string(),
-        "Sleep" => "Wait without holding a shell process.".to_string(),
-        "SendUserMessage" => "Send a message to the user via Relay.".to_string(),
-        "Config" => "Get or set Claw Code settings.".to_string(),
-        "StructuredOutput" => "Return structured output in a requested shape.".to_string(),
-        "REPL" => "Run code in a REPL-like subprocess.".to_string(),
-        "PowerShell" => "Run PowerShell for Windows automation tasks.".to_string(),
-        "CliList" => "List discoverable external CLIs.".to_string(),
-        "CliDiscover" => "Discover installed vs missing external CLIs.".to_string(),
-        "CliRegister" => "Register a custom external CLI.".to_string(),
-        "CliUnregister" => "Unregister a custom external CLI.".to_string(),
-        "CliRun" => "Execute an external CLI with arguments.".to_string(),
-        "ElectronApps" => "List known Electron apps and their CDP status.".to_string(),
-        "ElectronLaunch" => "Launch an Electron app with CDP enabled.".to_string(),
-        "ElectronEval" => "Run JavaScript in an Electron renderer via CDP.".to_string(),
-        "ElectronGetText" => "Read text from an Electron app via CDP.".to_string(),
-        "ElectronClick" => "Click an Electron app element via CDP.".to_string(),
-        "ElectronTypeText" => "Type text in an Electron app via CDP.".to_string(),
-        "ListMcpResources" => "List MCP resources from configured servers.".to_string(),
-        "ReadMcpResource" => "Read one MCP resource by URI.".to_string(),
-        "McpAuth" => "Inspect MCP OAuth or remote transport status.".to_string(),
-        "MCP" => "Use the unified MCP control surface.".to_string(),
-        "AskUserQuestion" => "Ask the user a question and wait for answers.".to_string(),
-        "LSP" => "Run supported language-server actions such as diagnostics.".to_string(),
-        "TaskCreate" => "Create an in-memory task record.".to_string(),
-        "TaskGet" => "Fetch one task by id.".to_string(),
-        "TaskList" => "List in-memory tasks.".to_string(),
-        "TaskStop" => "Mark a task as stopped.".to_string(),
-        "TaskUpdate" => "Update task state or append output.".to_string(),
-        "TaskOutput" => "Read or append task output.".to_string(),
-        "BackgroundTaskOutput" => "Read stdout or stderr from a background task.".to_string(),
-        "bash" => "Run a sandboxed shell command when file tools do not apply.".to_string(),
-        _ => {
-            let trimmed = description.trim();
-            let sentence = trimmed
-                .split_terminator(['.', '\n'])
-                .next()
-                .unwrap_or(trimmed)
-                .trim();
-            let mut out = sentence.chars().take(120).collect::<String>();
-            if sentence.chars().count() > 120 {
-                out.push_str("...");
-            }
-            if out.is_empty() {
-                name.to_string()
-            } else {
-                out
-            }
-        }
-    }
-}
-
-fn cdp_required_args(schema: &Value) -> Vec<String> {
-    let direct_required = |value: &Value| {
-        value
-            .get("required")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
-    };
-
-    if let Some(any_of) = schema.get("anyOf").and_then(Value::as_array) {
-        let variants = any_of
-            .iter()
-            .map(direct_required)
-            .filter(|items| !items.is_empty())
-            .map(|items| items.join(" + "))
-            .collect::<Vec<_>>();
-        if !variants.is_empty() {
-            return vec![variants.join(" or ")];
-        }
-    }
-
-    direct_required(schema)
-}
-
-fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
-    // Per-tool optional-arg curation kept one arm per tool for readability;
-    // collapsing identical arms now would make future per-tool tweaks noisier
-    // than the lint is worth.
-    #[allow(clippy::match_same_arms)]
-    let curated = match name {
-        "read" => vec!["offset", "limit", "pages", "sheets", "slides"],
-        "glob" => vec!["path"],
-        "grep" => vec!["path", "include"],
-        "office_search" => vec![
-            "paths",
-            "regex",
-            "include_ext",
-            "context",
-            "max_results",
-            "max_files",
-        ],
-        "git_status" => vec!["path"],
-        "git_diff" => vec!["path", "staged"],
-        "WebSearch" => vec!["allowed_domains", "blocked_domains"],
-        "WebFetch" => vec!["prompt"],
-        "edit" => vec!["replaceAll"],
-        "bash" => vec!["timeout", "description", "run_in_background"],
-        "PowerShell" => vec!["timeout", "description", "run_in_background"],
-        "CliRun" => vec!["timeout_ms"],
-        "ElectronLaunch" => vec!["cdp_port"],
-        "ElectronEval" => vec!["cdp_port"],
-        "ElectronGetText" => vec!["cdp_port", "selector"],
-        "ElectronClick" => vec!["cdp_port"],
-        "ElectronTypeText" => vec!["cdp_port"],
-        "MCP" => vec!["server", "name", "arguments"],
-        "AskUserQuestion" => vec!["options"],
-        "TaskUpdate" => vec!["status", "message", "output"],
-        "TaskOutput" => vec!["append", "offset", "tail"],
-        "BackgroundTaskOutput" => vec!["stream", "offset", "tail"],
-        _ => Vec::new(),
-    };
-    if !curated.is_empty() {
-        return curated.into_iter().map(ToString::to_string).collect();
-    }
-
-    let required = cdp_required_args(schema);
-    let required_set = required
-        .iter()
-        .flat_map(|item| item.split(" or "))
-        .collect::<HashSet<_>>();
-    let mut optional = schema
-        .get("properties")
-        .and_then(Value::as_object)
-        .map(|properties| {
-            properties
-                .keys()
-                .filter(|key| !required_set.contains(key.as_str()))
-                .filter(|key| {
-                    !matches!(
-                        key.as_str(),
-                        "dangerously_disable_sandbox"
-                            | "dangerouslyDisableSandbox"
-                            | "backgroundedBy"
-                            | "namespaceRestrictions"
-                            | "isolateNetwork"
-                            | "allowedMounts"
-                            | "serverName"
-                            | "task_id"
-                            | "file_path"
-                    )
-                })
-                .cloned()
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    optional.sort();
-    optional.truncate(3);
-    optional
-}
-
 fn text_mentions_windows_office_file(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     [".docx", ".xlsx", ".xlsm", ".pptx", ".msg"]
@@ -1762,12 +1532,11 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - **Exact path:** If the latest user message gives an exact file path, prefer `read` directly.
 - **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; use `glob`, `grep`, or `office_search`.
 - **Initial lookup reply format:** When the latest user request is a local file/document lookup and there are no Relay Tool Result blocks for that lookup yet, the entire assistant reply must be exactly one fenced `relay_tool` or `json` block. Do not write `はい、...を検索します`, do not cite `turn*search*`, do not output `<File>...</File>` cards, and do not list candidate files from M365 before Relay tools run.
-- **Search tool selection:** Use `glob` for simple file name/path expansion, `grep` for text/code content, and `office_search` for `.docx` / `.xlsx` / `.xlsm` / `.pptx` / `.pdf` content. Keep `glob` opencode-style: one call, one simple pattern. Do not combine many keywords and many extensions into one large brace-expanded glob on remote or broad workspaces. If the user gives a compact abbreviation plus a Japanese/English noun, such as `CFS 精算表`, search both terms with `office_search` (`regex:true`, pattern like `CFS|精算表`) instead of using only the abbreviation.
+- **Search tool selection:** Use `glob` for file name patterns, `grep` for plaintext/code content regex search, and `office_search` only where opencode-style grep/read cannot inspect Office/PDF containers. You may call multiple useful search tools in one `relay_tool` array.
 - **Evidence expansion before judgments:** Search snippets are discovery evidence. Before making important conclusions, reviews, edits, comparisons, or recommendations about a file, call `read` on the relevant path(s) and ground the answer in that file text. If you have not read the file, describe the result as a candidate only.
 - **Authoritative evidence:** If search snippets and `read` content conflict, the `read` Tool Result is authoritative.
 - **Grounded final answer:** After `read`, include the evidence path and line anchor/startLine when making file-specific conclusions.
-- **Query-driven lookup variants:** For document lookup requests, derive filename globs and Office/PDF search patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. Prefer query-specific globs before broad `**/*` scans, and treat newer matching files as stronger candidates when relevance is otherwise similar.
-- **Search iteration:** For open-ended lookup, do not front-load a large fixed search batch. Start with one or two concrete `glob` / `grep` / `office_search` calls, preferably in one `relay_tool` array when both are useful, matching opencode's speculative-but-bounded search style. Keep each search concrete and narrow enough to be useful; prefer `office_search` over a broad Office/PDF filename glob when content relevance is required. When a search result is truncated, narrow the path or pattern before drawing conclusions; do not treat the first truncated page as complete evidence. If Relay returns a duplicate-search or search-budget notice, stop searching and answer text-only from the accumulated results.
+- **Search iteration:** Follow opencode's simple loop: use concrete `glob` / `grep` calls for discovery, batch obviously useful searches when helpful, then `read` the best candidate(s). Use the Relay-only `office_search` extension only for Office/PDF content. If Relay returns a duplicate-search or search-budget notice, stop searching and answer text-only from the accumulated results.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
 - **Path discipline:** If the latest user turn names a concrete path (absolute path, relative path, or bare filename with an extension), use that exact string in tool input. Do **not** rewrite it to a different directory from a prior turn. Treat bare filenames with an extension as workspace-root-relative unless the user gave another base.
 - **This turn, not “next message”:** Do **not** defer all tools to a follow-up assistant message when the current turn can already run `read` / `write` / `edit`.
@@ -1815,7 +1584,7 @@ M365 Copilot built-in results are outside the Relay tool protocol. Do not satisf
 - named new file create => `write`
 - local file lookup / needed files / related files => `glob` / `grep` / `office_search`; for Office/PDF relevance, prefer `office_search` over a broad filename glob; do not answer from general knowledge before tools
 - codebase search/investigation => `grep` / `glob`, then `read` the top candidate(s) before important conclusions or changes
-- open-ended search => start with one or two narrow opencode-style `glob` / `grep` / `office_search` calls in a `relay_tool` array; batch complementary terms when useful, but keep each call narrow; after duplicate-search or search-budget notices, stop tools and summarize
+- open-ended search => follow opencode's `glob` / `grep` discovery style; batch obviously useful searches in one `relay_tool` array, then `read` top candidates; use `office_search` only for Office/PDF content
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
 
 {rendered_tools}
@@ -1856,7 +1625,7 @@ Example:
                 r#"## CDP session: Relay Agent local search
 
 - This reply is parsed by Relay Agent, not Microsoft Copilot tools.
-- Use only the local inspection/search tools below. This matches opencode's small, explicit search surface.
+- Use only the local inspection/search tools below. This keeps the prompt on opencode's small `read` / `glob` / `grep` search surface, with `office_search` only as Relay's Office/PDF adapter.
 - Tool calls must be one fenced `relay_tool` or `json` block containing only JSON.
 
 Do not use M365/Copilot search, web search, citations, uploaded files, Python/code execution, Pages, `<File>` cards, or `office365_search`-style actions.
@@ -1867,7 +1636,7 @@ Do not use M365/Copilot search, web search, citations, uploaded files, Python/co
 - filename/path lookup => `glob`
 - plaintext/code content lookup => `grep`
 - Office/PDF content lookup => `office_search`
-- open-ended lookup => one `relay_tool` array with one or two narrow calls; avoid broad search batches; after duplicate-search or search-budget notices, stop tools and summarize
+- open-ended lookup => one `relay_tool` array with the useful `glob` / `grep` searches; add `office_search` only for Office/PDF content; after duplicate-search or search-budget notices, stop tools and summarize
 
 {rendered_tools}
 
@@ -4326,10 +4095,10 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "- If a session workspace (`cwd`) is set, file-tool paths are resolved within that workspace and may be rejected when they escape it. Do not promise reads outside the workspace boundary; call the tool and surface the actual path error if access is denied.\n",
                 "- If no workspace is set, read, glob, grep, and office_search may use absolute local paths the OS user can read.\n",
                 "- read returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). `.docx`, `.xlsx`, `.xlsm`, and `.pptx` are parsed as plaintext extraction; use office_search for exact search across those files. Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted `.txt`/`.md` file.\n",
-                "- For local file lookup requests, use small rg-backed glob/grep calls for fast candidate paths or plaintext/code contents, and office_search for Office/PDF contents. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
+                "- For local file lookup requests, follow opencode's search shape: use glob for filename patterns, grep for plaintext/code regex search, and office_search only where Office/PDF containers block grep/read. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
                 "- If the user gives an exact file path, prefer read directly.\n",
                 "- Treat search snippets as discovery evidence. Before important conclusions, reviews, edits, comparisons, or recommendations, read the top candidate path(s); otherwise describe matches as candidates only. If snippets conflict with read, read is authoritative. After read, cite evidence path and line anchor/startLine when available.\n",
-                "- For document lookup requests, derive simple filename globs and Office/PDF patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. For compact abbreviation+noun queries such as `CFS 精算表`, search both terms with office_search (`regex:true`, alternation pattern) instead of only the abbreviation. Avoid large brace-expanded glob fan-out; use office_search for Office/PDF content relevance, and prefer newer matching files when relevance is otherwise similar. If Relay reports duplicate-search suppression or a search-budget limit, stop searching and summarize the accumulated results in text.\n",
+                "- Batch obviously useful search calls in one relay_tool array when helpful, then read the best candidate path(s). If Relay reports duplicate-search suppression or a search-budget limit, stop searching and summarize the accumulated results in text.\n",
                 "- If the user's request is already concrete (paths, files, stated action), use tools in your first response; do not ask them to rephrase unless something essential is missing.\n",
                 "- To combine or split PDF files, use pdf_merge / pdf_split (workspace write); do not use bash for that."
             ),
@@ -4605,7 +4374,7 @@ mod cdp_copilot_tool_tests {
         assert!(bundle.catalog_text.contains("Relay Agent local search"));
         assert!(bundle
             .catalog_text
-            .contains("small, explicit search surface"));
+            .contains("opencode's small `read` / `glob` / `grep` search surface"));
         assert!(bundle
             .catalog_text
             .contains("Do not write `はい、...を検索します`"));
@@ -4616,7 +4385,7 @@ mod cdp_copilot_tool_tests {
         assert!(bundle.catalog_text.contains("not Microsoft Copilot tools"));
         assert!(bundle
             .catalog_text
-            .contains("open-ended lookup => one `relay_tool` array"));
+            .contains("open-ended lookup => one `relay_tool` array with the useful"));
         assert!(bundle.catalog_text.contains("### `read`"));
         assert!(bundle.catalog_text.contains("### `glob`"));
         assert!(bundle.catalog_text.contains("### `grep`"));
@@ -4678,15 +4447,13 @@ mod cdp_copilot_tool_tests {
         )
         .join("\n");
 
-        assert!(system.contains("use small rg-backed glob/grep calls"));
-        assert!(system.contains("office_search for Office/PDF contents"));
+        assert!(system.contains("follow opencode's search shape"));
+        assert!(system.contains("office_search only where Office/PDF containers block grep/read"));
         assert!(system.contains("Before important conclusions"));
         assert!(system.contains("read the top candidate path"));
         assert!(system.contains("`必要なファイル`"));
         assert!(system.contains("not invitations for generic domain checklists"));
-        assert!(system.contains("derive simple filename globs and Office/PDF patterns"));
-        assert!(system.contains("Avoid large brace-expanded glob fan-out"));
-        assert!(system.contains("prefer newer matching files"));
+        assert!(system.contains("Batch obviously useful search calls"));
     }
 
     #[test]

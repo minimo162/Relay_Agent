@@ -15,6 +15,40 @@
 
 ## Milestone Log
 
+### 2026-04-22 reduce Relay-specific search catalog logic
+
+Reviewed current `anomalyco/opencode` HEAD
+`bfb954e7116bd3b9b43a30a35f02fae302062455`. The active `glob`, `grep`, and
+`read` tools keep a small schema and short descriptions: `glob` searches file
+name patterns, `grep` searches regex content with optional `include`, and `read`
+uses an absolute `filePath` with optional `offset`/`limit`.
+
+Removed a stale Relay-only CDP tool metadata copy from the desktop orchestrator.
+The prompt now relies on the canonical `tools::cdp_prompt_tool_specs()` output
+instead of maintaining a second local sort/arg/description implementation.
+Search catalog guidance was also thinned toward opencode's simple loop:
+`glob`/`grep` for discovery, batch obviously useful searches when helpful, then
+`read` top candidates. `office_search` remains only as a Relay adapter for
+Office/PDF containers that opencode's plain grep/read cannot inspect; its
+advertised optional args were reduced to `paths`, `regex`, and `include_ext`
+while backend compatibility with richer existing inputs remains.
+
+Verification:
+
+- `git ls-remote https://github.com/anomalyco/opencode.git HEAD`: passed,
+  `bfb954e7116bd3b9b43a30a35f02fae302062455`.
+- `git -C /tmp/opencode-relay-ref fetch --depth 1 origin HEAD && git -C /tmp/opencode-relay-ref checkout --detach FETCH_HEAD`: passed,
+  `bfb954e7116bd3b9b43a30a35f02fae302062455`.
+- `cargo fmt --all`: passed.
+- `cargo test -p tools cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop required_file_lookup_initial_prompt_uses_compact_search_catalog`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop local_search_catalog`: passed, 3 passed.
+- `cargo test -p relay-agent-desktop repair_`: passed, 17 passed, 1 ignored.
+- `cargo fmt --check --all`: passed.
+- `git diff --check`: passed.
+- `cargo test -p tools cdp_search_schema_matches_opencode_shape`: passed, 1 passed.
+- `pnpm check`: passed.
+
 ### 2026-04-22 compact local-search CDP catalog
 
 Reviewed the follow-up `tauri:dev` log for the same local Office/PDF lookup
