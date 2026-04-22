@@ -48,6 +48,7 @@ pub(crate) enum CdpPromptFlavor {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CdpCatalogFlavor {
     StandardFull,
+    LocalSearchOnly,
     RepairWriteFileOnly,
 }
 
@@ -372,10 +373,8 @@ pub(crate) fn cdp_catalog_flavor(
     let Some(text) = latest_user_text(messages) else {
         return CdpCatalogFlavor::StandardFull;
     };
-    let Some(attempt_index) = repair_attempt_index_from_text(&text) else {
-        return CdpCatalogFlavor::StandardFull;
-    };
-    if attempt_index < 1 {
+    let attempt_index = repair_attempt_index_from_text(&text);
+    if attempt_index.is_some_and(|index| index < 1) {
         return CdpCatalogFlavor::StandardFull;
     }
     let latest_request = extract_latest_request_from_text(&text)
@@ -387,11 +386,68 @@ pub(crate) fn cdp_catalog_flavor(
             )
         })
         .unwrap_or_else(|| text.trim().to_string());
-    if is_concrete_new_file_create_request(&latest_request) {
+    if attempt_index.is_some() && is_concrete_new_file_create_request(&latest_request) {
         CdpCatalogFlavor::RepairWriteFileOnly
+    } else if is_local_file_lookup_request_for_cdp_catalog(&latest_request) {
+        CdpCatalogFlavor::LocalSearchOnly
     } else {
         CdpCatalogFlavor::StandardFull
     }
+}
+
+fn is_local_file_lookup_request_for_cdp_catalog(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let wants_lookup = lower.contains("find")
+        || lower.contains("search")
+        || lower.contains("list")
+        || lower.contains("locate")
+        || lower.contains("where")
+        || lower.contains("needed file")
+        || lower.contains("required file")
+        || lower.contains("relevant file")
+        || lower.contains("related file")
+        || lower.contains("which file")
+        || lower.contains("files needed")
+        || lower.contains("files required")
+        || trimmed.contains("検索")
+        || trimmed.contains("探")
+        || trimmed.contains("一覧")
+        || trimmed.contains("どこ")
+        || trimmed.contains("必要")
+        || trimmed.contains("関連")
+        || trimmed.contains("関係")
+        || trimmed.contains("ファイルを教えて");
+    if !wants_lookup {
+        return false;
+    }
+    let local_target = lower.contains("file")
+        || lower.contains("folder")
+        || lower.contains("directory")
+        || lower.contains("workspace")
+        || lower.contains("path")
+        || lower.contains("implementation")
+        || lower.contains("codebase")
+        || lower.contains("source")
+        || trimmed.contains("ファイル")
+        || trimmed.contains("資料")
+        || trimmed.contains("実装")
+        || trimmed.contains("コード")
+        || trimmed.contains("配下")
+        || trimmed.contains("フォルダ")
+        || trimmed.contains("ワークスペース")
+        || !extract_path_anchors_from_text(trimmed).is_empty();
+    let web_target = lower.contains("web")
+        || lower.contains("internet")
+        || lower.contains("online")
+        || lower.contains("http://")
+        || lower.contains("https://")
+        || trimmed.contains("ウェブ")
+        || trimmed.contains("インターネット");
+    local_target && !web_target
 }
 
 pub(crate) fn build_repair_cdp_system_prompt(

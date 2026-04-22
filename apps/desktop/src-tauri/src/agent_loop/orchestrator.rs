@@ -1650,6 +1650,10 @@ fn cdp_catalog_specs_for_flavor(
     let specs = tools::cdp_prompt_tool_specs();
     match catalog_flavor {
         CdpCatalogFlavor::StandardFull => specs,
+        CdpCatalogFlavor::LocalSearchOnly => specs
+            .into_iter()
+            .filter(|spec| matches!(spec.name, "read" | "glob" | "grep" | "office_search"))
+            .collect(),
         CdpCatalogFlavor::RepairWriteFileOnly => specs
             .into_iter()
             .filter(|spec| spec.name == "write")
@@ -1684,6 +1688,23 @@ fn render_cdp_tool_entry(spec: &tools::CdpPromptToolSpec) -> String {
         purpose = spec.purpose,
         use_when = spec.use_when,
         avoid_when = spec.avoid_when,
+        required_args = format_cdp_tool_arg_list(&spec.required_args),
+        important_optional_args = format_cdp_tool_arg_list(&spec.important_optional_args),
+        example = example,
+    )
+}
+
+fn render_compact_cdp_tool_entry(spec: &tools::CdpPromptToolSpec) -> String {
+    let example = serde_json::to_string(&spec.example).unwrap_or_else(|_| "{}".to_string());
+    format!(
+        concat!(
+            "### `{name}`\n",
+            "use: {purpose}\n",
+            "args: required={required_args}; optional={important_optional_args}\n",
+            "example: `{example}`"
+        ),
+        name = spec.name,
+        purpose = spec.purpose,
         required_args = format_cdp_tool_arg_list(&spec.required_args),
         important_optional_args = format_cdp_tool_arg_list(&spec.important_optional_args),
         example = example,
@@ -1823,6 +1844,49 @@ Example:
 "#,
                 rendered_tools = rendered_tools,
                 win_addon = win_addon,
+            )
+        }
+        CdpCatalogFlavor::LocalSearchOnly => {
+            let rendered_tools = catalog
+                .iter()
+                .map(render_compact_cdp_tool_entry)
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            format!(
+                r#"## CDP session: Relay Agent local search
+
+- This reply is parsed by Relay Agent, not Microsoft Copilot tools.
+- Use only the local inspection/search tools below. This matches opencode's small, explicit search surface.
+- Tool calls must be one fenced `relay_tool` or `json` block containing only JSON.
+
+Do not use M365/Copilot search, web search, citations, uploaded files, Python/code execution, Pages, `<File>` cards, or `office365_search`-style actions.
+
+## Preferred sequences
+
+- exact path inspect => `read`
+- filename/path lookup => `glob`
+- plaintext/code content lookup => `grep`
+- Office/PDF content lookup => `office_search`
+- open-ended lookup => one `relay_tool` array with one or two narrow calls; avoid broad search batches; after duplicate-search or search-budget notices, stop tools and summarize
+
+{rendered_tools}
+
+## Tool invocation protocol
+
+For the initial lookup reply, output exactly one fenced `relay_tool` or `json` block with JSON only.
+
+- No prose before the fence.
+- No prose after the fence.
+- Do not write `はい、...を検索します`.
+- Prefer one JSON array when two complementary searches are useful.
+
+Example:
+
+```relay_tool
+{{"name":"office_search","relay_tool_call":true,"input":{{"pattern":"CFS|精算表","regex":true,"paths":["reports/**/*.xlsx"],"include_ext":["xlsx","pdf"]}}}}
+```
+"#,
+                rendered_tools = rendered_tools,
             )
         }
         CdpCatalogFlavor::RepairWriteFileOnly => {
@@ -4473,31 +4537,31 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn search_related_creation_text_keeps_full_repair_catalog() {
+    fn search_related_creation_text_uses_local_search_catalog() {
         let request = "キャッシュフロー計算書の作成に関係するファイルを検索して";
         let repair = build_tool_protocol_repair_input(request, request, 1);
         let messages = vec![ConversationMessage::user_text(repair)];
 
         assert_eq!(
             cdp_catalog_flavor(&messages),
-            CdpCatalogFlavor::StandardFull
+            CdpCatalogFlavor::LocalSearchOnly
         );
     }
 
     #[test]
-    fn required_file_lookup_creation_text_keeps_full_repair_catalog() {
+    fn required_file_lookup_creation_text_uses_local_search_catalog() {
         let request = "キャッシュフロー計算書を作成する際に必要なファイルを教えて";
         let repair = build_tool_protocol_repair_input(request, request, 1);
         let messages = vec![ConversationMessage::user_text(repair)];
 
         assert_eq!(
             cdp_catalog_flavor(&messages),
-            CdpCatalogFlavor::StandardFull
+            CdpCatalogFlavor::LocalSearchOnly
         );
     }
 
     #[test]
-    fn required_file_lookup_initial_prompt_requires_search_before_general_answer() {
+    fn required_file_lookup_initial_prompt_uses_compact_search_catalog() {
         let messages = vec![ConversationMessage::user_text(
             "キャッシュフロー計算書を作成する際に必要なファイルを教えて",
         )];
@@ -4505,50 +4569,41 @@ mod cdp_copilot_tool_tests {
             &[],
             &messages,
             CdpPromptFlavor::Standard,
-            CdpCatalogFlavor::StandardFull,
+            cdp_catalog_flavor(&messages),
         );
 
         assert!(bundle.prompt.starts_with("## Relay tool routing guard"));
         assert!(bundle
             .grounding_text
             .contains("first response must be exactly one fenced `relay_tool` JSON block"));
+        assert!(bundle.catalog_text.contains("Relay Agent local search"));
         assert!(bundle
             .catalog_text
-            .contains("Local file lookup means Relay tools only"));
-        assert!(bundle.catalog_text.contains("Initial lookup reply format"));
+            .contains("small, explicit search surface"));
         assert!(bundle
             .catalog_text
             .contains("Do not write `はい、...を検索します`"));
+        assert!(bundle.catalog_text.contains("<File>` cards"));
         assert!(bundle
             .catalog_text
-            .contains("do not output `<File>...</File>` cards"));
-        assert!(bundle.catalog_text.contains("必要なファイル"));
+            .contains("Do not use M365/Copilot search"));
+        assert!(bundle.catalog_text.contains("not Microsoft Copilot tools"));
         assert!(bundle
             .catalog_text
-            .contains("do not give a generic checklist"));
-        assert!(bundle
-            .catalog_text
-            .contains("`glob` / `grep` / `office_search`"));
-        assert!(bundle
-            .catalog_text
-            .contains("Do not satisfy a local workspace or Office/PDF lookup by using Copilot enterprise search"));
-        assert!(bundle
-            .catalog_text
-            .contains("M365/Copilot built-in search snippets, citations, and generated enterprise-search summaries are **not** Relay tool results"));
-        assert!(bundle
-            .catalog_text
-            .contains("Use `glob` for simple file name/path expansion"));
-        assert!(bundle.catalog_text.contains("one simple pattern"));
-        assert!(bundle.catalog_text.contains("large brace-expanded glob"));
-        assert!(bundle
-            .catalog_text
-            .contains("Evidence expansion before judgments"));
-        assert!(bundle
-            .catalog_text
-            .contains("If you have not read the file, describe the result as a candidate only"));
-        assert!(bundle.catalog_text.contains("Query-driven lookup variants"));
-        assert!(bundle.catalog_text.contains("avoid large brace fan-out"));
-        assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::StandardFull);
+            .contains("open-ended lookup => one `relay_tool` array"));
+        assert!(bundle.catalog_text.contains("### `read`"));
+        assert!(bundle.catalog_text.contains("### `glob`"));
+        assert!(bundle.catalog_text.contains("### `grep`"));
+        assert!(bundle.catalog_text.contains("### `office_search`"));
+        assert!(!bundle.catalog_text.contains("### `write`"));
+        assert!(!bundle.catalog_text.contains("### `bash`"));
+        assert!(!bundle.catalog_text.contains("### `WebSearch`"));
+        assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::LocalSearchOnly);
+        assert!(
+            bundle.catalog_chars() < 10_000,
+            "local search catalog should stay compact; got {} chars",
+            bundle.catalog_chars()
+        );
     }
 
     #[test]

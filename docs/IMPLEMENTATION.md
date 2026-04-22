@@ -15,6 +15,35 @@
 
 ## Milestone Log
 
+### 2026-04-22 compact local-search CDP catalog
+
+Reviewed the follow-up `tauri:dev` log for the same local Office/PDF lookup
+path. The captured run stopped before the assistant response and tool-result
+classification, but the visible CDP handoff still showed a 30k-character prompt
+with `catalog_chars=21518` for a 69-character local lookup request. That meant
+the first Copilot turn was still receiving the full general-purpose tool catalog
+even when the task was simply to find local files or Office/PDF evidence.
+
+Aligned this path further with `anomalyco/opencode` by adding a compact
+local-search catalog flavor for CDP prompts. Initial local file/document lookup
+requests now advertise only `read`, `glob`, `grep`, and `office_search`, with
+short opencode-style entries and a strict "one fenced JSON block, no prose"
+invocation rule. The catalog explicitly forbids M365/Copilot search, web
+search, citations, file cards, Python/code execution, and `office365_search`
+style actions. Open-ended lookups are nudged toward one or two narrow local
+search calls, then summarizing existing evidence when Relay reports duplicate
+search or budget exhaustion.
+
+Verification:
+
+- `cargo fmt --all`: passed.
+- `cargo test -p relay-agent-desktop local_search_catalog`: passed, 2 passed.
+- `cargo test -p relay-agent-desktop repair_`: passed, 16 passed, 1 ignored.
+- `cargo test -p relay-agent-desktop required_file_lookup_initial_prompt_uses_compact_search_catalog`: passed, 1 passed.
+- `cargo fmt --check --all`: passed.
+- `git diff --check`: passed.
+- `pnpm check`: passed.
+
 ### 2026-04-22 office_search directory and duplicate-loop hardening
 
 Live `tauri:dev` logs showed `office_search` receiving a workspace/root
