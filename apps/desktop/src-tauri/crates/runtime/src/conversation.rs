@@ -93,12 +93,12 @@ fn extract_mutation_text_fields(tool_name: &str, input: &str) -> Vec<String> {
         return Vec::new();
     };
     match tool_name {
-        "write_file" => obj
+        "write" => obj
             .get("content")
             .and_then(Value::as_str)
             .map(|text| vec![text.to_string()])
             .unwrap_or_default(),
-        "edit_file" => ["old_string", "new_string", "replace", "with", "content"]
+        "edit" => ["old_string", "new_string", "replace", "with", "content"]
             .into_iter()
             .filter_map(|key| obj.get(key).and_then(Value::as_str))
             .map(ToString::to_string)
@@ -141,7 +141,7 @@ fn looks_like_unresolved_local_file_placeholder(text: &str) -> bool {
 }
 
 fn invalid_local_file_mutation_reason(tool_name: &str, input: &str) -> Option<String> {
-    if !matches!(tool_name, "write_file" | "edit_file") {
+    if !matches!(tool_name, "write" | "edit") {
         return None;
     }
     if extract_mutation_text_fields(tool_name, input)
@@ -430,7 +430,7 @@ where
             if is_turn_level_local_search_tool(&tool_name) {
                 if *local_search_tool_calls >= TURN_LOCAL_SEARCH_TOOL_LIMIT {
                     let notice = format!(
-                        "Search tool budget reached: Relay already executed {TURN_LOCAL_SEARCH_TOOL_LIMIT} local search calls in this turn. The prior tool outputs remain in the transcript above. Do not issue more `glob_search`, `grep_search`, or `office_search` calls for this request; summarize the existing findings for the user."
+                        "Search tool budget reached: Relay already executed {TURN_LOCAL_SEARCH_TOOL_LIMIT} local search calls in this turn. The prior tool outputs remain in the transcript above. Do not issue more `glob`, `grep`, or `office_search` calls for this request; summarize the existing findings for the user."
                     );
                     tracing::info!(
                         "[runtime] synthesized no-op for search budget on {tool_name} (limit={TURN_LOCAL_SEARCH_TOOL_LIMIT})"
@@ -684,7 +684,7 @@ fn sort_json_value_in_place(v: &mut Value) {
 /// the same key here.
 fn turn_level_tool_dedup_key(tool_name: &str, input: &str) -> Option<String> {
     let mut value: Value = serde_json::from_str(input).ok()?;
-    if tool_name == "read_file" {
+    if tool_name == "read" {
         if let Some(obj) = value.as_object_mut() {
             if let Some(path) = obj.remove("file_path") {
                 obj.entry("path".to_string()).or_insert(path);
@@ -699,10 +699,7 @@ const TURN_TOOL_DUPLICATE_LIMIT: usize = 3;
 const TURN_LOCAL_SEARCH_TOOL_LIMIT: usize = 6;
 
 fn is_turn_level_local_search_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "workspace_search" | "glob_search" | "grep_search" | "office_search"
-    )
+    matches!(tool_name, "glob" | "grep" | "office_search")
 }
 
 fn pending_tool_uses_from_message(msg: &ConversationMessage) -> Vec<(String, String, String)> {
@@ -968,15 +965,15 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_write_file_placeholder_is_rejected_before_permission_prompt() {
+    fn unresolved_write_placeholder_is_rejected_before_permission_prompt() {
         let tool_calls = Arc::new(AtomicUsize::new(0));
         let executor_calls = Arc::clone(&tool_calls);
-        let tool_executor = StaticToolExecutor::new().register("write_file", move |_input| {
+        let tool_executor = StaticToolExecutor::new().register("write", move |_input| {
             executor_calls.fetch_add(1, Ordering::SeqCst);
             Ok("should not execute".to_string())
         });
         let permission_policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
-            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite);
+            .with_tool_requirement("write", PermissionMode::WorkspaceWrite);
         let system_prompt = vec!["system".to_string()];
         let api_client = ScriptedApiClient { call_count: 0 };
         let mut runtime = ConversationRuntime::new(
@@ -991,7 +988,7 @@ mod tests {
 
         let (message, outcome) = runtime.build_tool_result_message(
             "tool-1".to_string(),
-            "write_file".to_string(),
+            "write".to_string(),
             r#"{"path":"out.txt","content":"source: README.md\nsummary: <最初の文>"}"#,
             &mut prompt,
         );
@@ -1016,15 +1013,15 @@ mod tests {
     }
 
     #[test]
-    fn html_write_file_content_is_not_treated_as_placeholder() {
+    fn html_write_content_is_not_treated_as_placeholder() {
         let tool_calls = Arc::new(AtomicUsize::new(0));
         let executor_calls = Arc::clone(&tool_calls);
-        let tool_executor = StaticToolExecutor::new().register("write_file", move |_input| {
+        let tool_executor = StaticToolExecutor::new().register("write", move |_input| {
             executor_calls.fetch_add(1, Ordering::SeqCst);
             Ok("ok".to_string())
         });
         let permission_policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
-            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite);
+            .with_tool_requirement("write", PermissionMode::WorkspaceWrite);
         let system_prompt = vec!["system".to_string()];
         let api_client = ScriptedApiClient { call_count: 0 };
         let mut runtime = ConversationRuntime::new(
@@ -1037,7 +1034,7 @@ mod tests {
 
         let (message, outcome) = runtime.build_tool_result_message(
             "tool-1".to_string(),
-            "write_file".to_string(),
+            "write".to_string(),
             r#"{"path":"index.html","content":"<!doctype html>\n<html><body>Hello</body></html>"}"#,
             &mut None,
         );
@@ -1688,7 +1685,7 @@ mod tests {
             Ok(vec![
                 AssistantEvent::ToolUse {
                     id: tool_id,
-                    name: "glob_search".to_string(),
+                    name: "glob".to_string(),
                     input: r#"{"pattern":"**/*cash*flow*"}"#.to_string(),
                 },
                 AssistantEvent::MessageStop,
@@ -1700,12 +1697,12 @@ mod tests {
     fn repeating_identical_tool_call_is_suppressed_and_turn_terminates() {
         let runs = Arc::new(AtomicUsize::new(0));
         let run_counter = Arc::clone(&runs);
-        let tool_executor = StaticToolExecutor::new().register("glob_search", move |_input| {
+        let tool_executor = StaticToolExecutor::new().register("glob", move |_input| {
             run_counter.fetch_add(1, Ordering::SeqCst);
             Ok("[]".to_string())
         });
         let permission_policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
-            .with_tool_requirement("glob_search", PermissionMode::ReadOnly);
+            .with_tool_requirement("glob", PermissionMode::ReadOnly);
         let system_prompt = vec!["system".to_string()];
         let api_client = RepeatingSearchClient { call_count: 0 };
         let mut runtime = ConversationRuntime::new(
@@ -1726,7 +1723,7 @@ mod tests {
         assert_eq!(
             runs.load(Ordering::SeqCst),
             1,
-            "the executor should run glob_search exactly once; repeats must be suppressed",
+            "the executor should run glob exactly once; repeats must be suppressed",
         );
 
         let synthetic_notices = summary
@@ -1753,9 +1750,9 @@ mod tests {
     }
 
     #[test]
-    fn turn_level_dedup_key_treats_read_file_path_and_file_path_as_equal() {
-        let key_a = super::turn_level_tool_dedup_key("read_file", r#"{"path":"a.txt"}"#);
-        let key_b = super::turn_level_tool_dedup_key("read_file", r#"{"file_path":"a.txt"}"#);
+    fn turn_level_dedup_key_treats_read_path_and_file_path_as_equal() {
+        let key_a = super::turn_level_tool_dedup_key("read", r#"{"path":"a.txt"}"#);
+        let key_b = super::turn_level_tool_dedup_key("read", r#"{"file_path":"a.txt"}"#);
         assert!(key_a.is_some());
         assert_eq!(key_a, key_b);
     }
@@ -1778,7 +1775,7 @@ mod tests {
             Ok(vec![
                 AssistantEvent::ToolUse {
                     id: format!("search-{}", self.call_count),
-                    name: "glob_search".to_string(),
+                    name: "glob".to_string(),
                     input: format!(
                         r#"{{"path":"H:\\shr1","pattern":"**/*cash*flow*{}"}}"#,
                         self.call_count
@@ -1793,12 +1790,12 @@ mod tests {
     fn varying_search_loop_stops_at_turn_search_budget() {
         let runs = Arc::new(AtomicUsize::new(0));
         let run_counter = Arc::clone(&runs);
-        let tool_executor = StaticToolExecutor::new().register("glob_search", move |_input| {
+        let tool_executor = StaticToolExecutor::new().register("glob", move |_input| {
             run_counter.fetch_add(1, Ordering::SeqCst);
             Ok("[]".to_string())
         });
         let permission_policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
-            .with_tool_requirement("glob_search", PermissionMode::ReadOnly);
+            .with_tool_requirement("glob", PermissionMode::ReadOnly);
         let mut runtime = ConversationRuntime::new(
             Session::new(),
             VaryingSearchClient { call_count: 0 },
@@ -1835,16 +1832,19 @@ mod tests {
     }
 
     #[test]
-    fn workspace_search_counts_toward_turn_search_budget() {
-        assert!(super::is_turn_level_local_search_tool("workspace_search"));
+    fn local_search_tools_count_toward_turn_search_budget() {
+        assert!(super::is_turn_level_local_search_tool("glob"));
+        assert!(super::is_turn_level_local_search_tool("grep"));
+        assert!(super::is_turn_level_local_search_tool("office_search"));
+        assert!(!super::is_turn_level_local_search_tool("workspace"));
     }
 
     #[test]
     fn turn_level_dedup_key_is_insensitive_to_object_key_order() {
         let key_a =
-            super::turn_level_tool_dedup_key("glob_search", r#"{"pattern":"**/*","path":"src"}"#);
+            super::turn_level_tool_dedup_key("glob", r#"{"pattern":"**/*","path":"src"}"#);
         let key_b =
-            super::turn_level_tool_dedup_key("glob_search", r#"{"path":"src","pattern":"**/*"}"#);
+            super::turn_level_tool_dedup_key("glob", r#"{"path":"src","pattern":"**/*"}"#);
         assert_eq!(key_a, key_b);
     }
 }

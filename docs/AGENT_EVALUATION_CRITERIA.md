@@ -6,27 +6,25 @@ Use this checklist when validating **Relay + model** behavior (e.g. M365 Copilot
 
 - **No invented facts:** The assistant must not name bugs, identifiers, line-level errors, file paths, tool outcomes, or numbers that do **not** appear in tool results, user messages, or files the model has read. Applies to **code and any other domain**.
 - **Explicit uncertainty:** If verification was not run, the assistant must say so (aligned with `# Doing tasks` in `runtime::claw_style_discipline_sections`).
-- **Faithful tool narration:** Any “what we fixed” list must be checkable against **actual** `read_file` / diff / tool output—not generic templates.
+- **Faithful tool narration:** Any “what we fixed” list must be checkable against **actual** `read` / diff / tool output—not generic templates.
 
 ## Tool protocol (Relay)
 
 - When the user already gave a **concrete path** and action (read / improve / edit), the **first** substantive reply should include **`relay_tool`** (or accepted JSON fence) as required by the session bundle—not only prose.
-- When the user gave an **exact path**, prefer **`read_file` directly** over `workspace_search`.
-- For vague local lookup, `workspace_search` should return `plan`, `trace`,
-  ranked candidates, snippets, and `recommended_next_tools`. Treat snippets as
-  candidate discovery only.
+- When the user gave an **exact path**, prefer **`read` directly**.
+- For vague local lookup, use low-level search tools: `glob` for path
+  discovery, `grep` for plaintext/code content, and `office_search` for
+  Office/PDF content. Treat snippets/previews as candidate discovery only.
 - For important conclusions, reviews, edits, comparisons, or recommendations
-  after `workspace_search`, the model must call `read_file` on the recommended
-  path(s) before final prose. If it writes a conclusion from snippets only,
-  Relay should repair the turn with an `ImportantConclusionWithoutEvidence`
-  prompt.
-- If `workspace_search` snippets and `read_file` content disagree, `read_file`
-  is authoritative evidence. Treat conclusions based on the stale/conflicting
-  snippet as grounding failures.
+  after search results, the model must call `read` on the relevant path(s)
+  before final prose.
+- If search snippets/previews and `read` content disagree, `read` is
+  authoritative evidence. Treat conclusions based on stale/conflicting snippets
+  as grounding failures.
 - If the model leaks M365/Copilot search artifacts (`turn*search*`, citations,
   `office365_search`, enterprise-search summaries) into a local-file answer,
   Relay should repair back to Relay tool results.
-- File-specific final answers after `read_file` should cite the evidence path
+- File-specific final answers after `read` should cite the evidence path
   and line anchor/startLine when available.
 - **No duplicate prose blocks** repeating the same “next steps” (per CDP session rules in the bundle).
 
@@ -36,11 +34,7 @@ Use this checklist when validating **Relay + model** behavior (e.g. M365 Copilot
   (`search`/`検索`, `implementation`/`実装`, tool-call, approval/permission,
   cash-flow variants) without replacing exact matches. Case variants and
   fullwidth/halfwidth forms should resolve to the same practical search space.
-- Candidate ranking should expose structured `features`, `confidence`, and
-  `why` so the UI and tests can verify why a file was surfaced.
-- Tied top candidates should set `needs_clarification: true` and recommend
-  `read_file` for the tied candidates.
-- No-evidence searches should honestly report no candidates/snippets instead of
+- No-evidence searches should honestly report no matches/results instead of
   inferring from general knowledge.
 - `.gitignore`, `.ignore`, configured global ignore, includes, and negations
   should be respected.
@@ -48,11 +42,9 @@ Use this checklist when validating **Relay + model** behavior (e.g. M365 Copilot
   escapes should be skipped with structured reasons such as
   `ignored_by_gitignore`, `binary`, `max_bytes`, `outside_workspace`, and
   `sensitive_path`; sensitive paths should be redacted.
-- Large repos or budgets should surface truncation explicitly in `limits` and
-  `trace`.
-- Office/PDF discovery should flow through `workspace_search` into
-  `office_search` previews/anchors, followed by `read_file` for grounded
-  conclusions.
+- Large repos or budgets should surface truncation explicitly in tool output.
+- Office/PDF discovery should flow through `office_search` previews/anchors,
+  followed by `read` for grounded conclusions.
 
 ## Failure examples (treat as regression signals)
 
@@ -62,11 +54,11 @@ Use this checklist when validating **Relay + model** behavior (e.g. M365 Copilot
 
 ## Example: contradiction with Tool Result (not a host read failure)
 
-Sometimes the model claims **fatal syntax errors** or **missing HTML structure** (e.g. “`<head>` / `<style>` / `<body>` undefined”, “`x_size` / `y_size` undefined”) while the **`read_file` Tool Result in the same session** already contains a complete `<!DOCTYPE html>`, `<head>`, `<style>`, `<body>`, and working script—**without** those identifiers.
+Sometimes the model claims **fatal syntax errors** or **missing HTML structure** (e.g. “`<head>` / `<style>` / `<body>` undefined”, “`x_size` / `y_size` undefined”) while the **`read` Tool Result in the same session** already contains a complete `<!DOCTYPE html>`, `<head>`, `<style>`, `<body>`, and working script—**without** those identifiers.
 
 In that situation:
 
-- **Relay host `read_file`** (`crates/runtime/src/file_ops.rs`) returns UTF-8 bytes faithfully; it does not rewrite identifiers or strip tags. A successful tool result means the model **received** that text in context.
+- **Relay host `read`** (`crates/runtime/src/file_ops.rs`) returns UTF-8 bytes faithfully; it does not rewrite identifiers or strip tags. A successful tool result means the model **received** that text in context.
 - The mismatch is therefore a **grounding / narration** failure (template-style “fix lists”), not evidence that **Relay failed to read the file**.
 
 **Quick check:** Search the tool result `content` for identifiers the assistant cited. If they appear **only** in the assistant’s prose and **not** in `content`, flag the response as a regression.
@@ -78,13 +70,13 @@ In that situation:
 | **A.** Input not delivered | The bundle or tool payload is dropped or corrupted **before** the model sees it. |
 | **B.** Delivered but not used | The text is in context, but the model does not ground its explanation in it (attention, length, template pressure). |
 
-When the session log still contains the full **`read_file` Tool Result** with `file.content`, treating the problem as **A (Relay host failed to read)** is usually **weak**: the host returns UTF-8 faithfully (`file_ops.rs`), and a successful JSON payload implies that string was produced for the session. **B** (grounding / weak attention on long bundles) fits typical failure modes better. Proving **A** on the Copilot side would require Microsoft-internal visibility (tokenization / compression), which this repo cannot provide.
+When the session log still contains the full **`read` Tool Result** with `file.content`, treating the problem as **A (Relay host failed to read)** is usually **weak**: the host returns UTF-8 faithfully (`file_ops.rs`), and a successful JSON payload implies that string was produced for the session. **B** (grounding / weak attention on long bundles) fits typical failure modes better. Proving **A** on the Copilot side would require Microsoft-internal visibility (tokenization / compression), which this repo cannot provide.
 
 **Practical triage:** If `<head>` appears in `content` but the assistant says it is missing, or if `x_size` appears only in prose, classify as **B**, not attachment read failure.
 
 ## Copilot thread vs Relay session (context continuity)
 
-M365 Copilot in the browser **does not** automatically carry your **Relay workspace session** when you open a **new Copilot chat** or paste into a fresh thread: each Copilot thread has its own UI history, while Relay persists **session JSON** (messages, tool results) on the host. For **continuous** file/task context, prefer **multiple turns in the same Relay session** (same desktop session) so each CDP turn’s inline prompt bundle includes prior `read_file` / tool results. Starting a **new** Copilot-only chat each time makes “grounding” harder for the model because prior tool evidence is not in that thread unless Relay sends it again in the prompt.
+M365 Copilot in the browser **does not** automatically carry your **Relay workspace session** when you open a **new Copilot chat** or paste into a fresh thread: each Copilot thread has its own UI history, while Relay persists **session JSON** (messages, tool results) on the host. For **continuous** file/task context, prefer **multiple turns in the same Relay session** (same desktop session) so each CDP turn’s inline prompt bundle includes prior `read` / tool results. Starting a **new** Copilot-only chat each time makes “grounding” harder for the model because prior tool evidence is not in that thread unless Relay sends it again in the prompt.
 
 **Implementation note:** The Node `copilot_server.js` path (HTTP `/v1/chat/completions`) now isolates **one Copilot tab/thread per Relay session**. Requests must carry `relay_session_id` and `relay_request_id`; the bridge reuses the same Copilot tab for later turns in that Relay session and forces **new chat only on first use / recovery** for that session. `relay_new_chat: true` and `RELAY_COPILOT_NEW_CHAT_EACH_TURN=1` still exist for explicit resets, but the default is no longer “one global current thread for every session”.
 
@@ -92,8 +84,8 @@ M365 Copilot in the browser **does not** automatically carry your **Relay worksp
 
 ## Implementation reference
 
-- System prompt addition: `apps/desktop/src-tauri/crates/runtime/src/prompt.rs` — `get_simple_doing_tasks_section`, bullets on **grounded assertions**, **authoritative file text** (read_file / Tool Result / bundle as source of truth; traceable claims), and **partial reads** (state when only a slice was seen; use `offset`/`limit` before asserting unseen regions).
-- CDP prompt assembly: `apps/desktop/src-tauri/src/agent_loop.rs` — `build_cdp_prompt` plus inline pre-send compaction. The grounding paragraph forbids generic “fatal syntax / missing HTML / drawBlock” checklists unless those issues appear in the prompt bundle; concrete claims must stay traceable to `read_file` content.
+- System prompt addition: `apps/desktop/src-tauri/crates/runtime/src/prompt.rs` — `get_simple_doing_tasks_section`, bullets on **grounded assertions**, **authoritative file text** (read / Tool Result / bundle as source of truth; traceable claims), and **partial reads** (state when only a slice was seen; use `offset`/`limit` before asserting unseen regions).
+- CDP prompt assembly: `apps/desktop/src-tauri/src/agent_loop.rs` — `build_cdp_prompt` plus inline pre-send compaction. The grounding paragraph forbids generic “fatal syntax / missing HTML / drawBlock” checklists unless those issues appear in the prompt bundle; concrete claims must stay traceable to `read` content.
 - Node CDP bridge: `apps/desktop/src-tauri/binaries/copilot_server.js` — production path. Requires `relay_session_id` / `relay_request_id`, keeps one Copilot tab/thread per Relay session, accepts optional `relay_new_chat`, and scopes `POST /v1/chat/abort` to the matching request id. Anonymous `/health` exposes only `status`, `service`, and `instanceId`; mutable endpoints require `X-Relay-Boot-Token`.
 - CDP bundle prefix: `apps/desktop/src-tauri/src/agent_loop.rs` — `build_cdp_prompt` prepends `CDP_BUNDLE_GROUNDING_BLOCK` (identifiers must appear in Tool Result; quote or line numbers).
 
@@ -109,6 +101,6 @@ M365 Copilot in the browser **does not** automatically carry your **Relay worksp
 
 1. Copy `tests/fixtures/tetris_grounding.html` into your Relay workspace (any path).
 2. Build preset, goal such as: read that file and suggest minimal readability edits without inventing bugs.
-3. After `read_file` appears in the session, inspect the assistant reply: any concrete bug name or identifier (e.g. `x_size`, `bag.length0`) must **appear in the Tool Result**—if it appears only in prose, treat as a grounding regression (same as **Quick check** above).
+3. After `read` appears in the session, inspect the assistant reply: any concrete bug name or identifier (e.g. `x_size`, `bag.length0`) must **appear in the Tool Result**—if it appears only in prose, treat as a grounding regression (same as **Quick check** above).
 
 **Automated (Edge + CDP, opt-in):** Start **`node apps/desktop/src-tauri/binaries/copilot_server.js`** with **`--cdp-port`** matching Edge’s CDP port (same as `CDP_ENDPOINT`, e.g. `9360`). Default HTTP is `COPILOT_SERVER_URL=http://127.0.0.1:18080` — `GET /status` requires `X-Relay-Boot-Token` if the bridge was started with `--boot-token`, and Playwright helpers accept `COPILOT_SERVER_BOOT_TOKEN` for that header. `/health` no longer returns the boot token. With Edge running and signed in to M365 Copilot on `CDP_ENDPOINT` (Playwright / Relay live default `http://127.0.0.1:9360`; 必要なら `CDP_ENDPOINT` で指定), from `apps/desktop`: `RELAY_GROUNDING_E2E=1 pnpm run test:e2e:copilot-grounding` — Playwright **`06 — tetris_grounding`** and **`07 — tetris.html`** embed `tests/fixtures/tetris_grounding.html` and `tests/fixtures/tetris.html` via **`POST /v1/chat/completions`** (same entry as the desktop app) with `relay_new_chat: true` and per-request ids. **`07`** asks for **improvement suggestions** and asserts neither the HTTP `assistantText` nor the visible page text contains `x_size`, `y_size`, or `bag.length0` ( **`06`** checks the page tail). Flaky if Copilot mentions those tokens in unrelated prose. The describe block uses `test.setTimeout(360_000)` and 300s HTTP timeouts where needed. Paste, submit, and completion wait run inside **`copilot_server.js`** (not duplicated in Playwright).

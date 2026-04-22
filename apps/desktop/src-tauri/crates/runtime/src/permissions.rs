@@ -162,15 +162,15 @@ mod tests {
     #[test]
     fn allows_tools_when_active_mode_meets_requirement() {
         let policy = PermissionPolicy::new(PermissionMode::WorkspaceWrite)
-            .with_tool_requirement("read_file", PermissionMode::ReadOnly)
-            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite);
+            .with_tool_requirement("read", PermissionMode::ReadOnly)
+            .with_tool_requirement("write", PermissionMode::WorkspaceWrite);
 
         assert_eq!(
-            policy.authorize("read_file", "{}", None),
+            policy.authorize("read", "{}", None),
             PermissionOutcome::Allow
         );
         assert_eq!(
-            policy.authorize("write_file", "{}", None),
+            policy.authorize("write", "{}", None),
             PermissionOutcome::Allow
         );
     }
@@ -178,11 +178,11 @@ mod tests {
     #[test]
     fn denies_read_only_escalations_without_prompt() {
         let policy = PermissionPolicy::new(PermissionMode::ReadOnly)
-            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite)
+            .with_tool_requirement("write", PermissionMode::WorkspaceWrite)
             .with_tool_requirement("bash", PermissionMode::DangerFullAccess);
 
         assert!(matches!(
-            policy.authorize("write_file", "{}", None),
+            policy.authorize("write", "{}", None),
             PermissionOutcome::Deny { reason } if reason.contains("requires workspace-write permission")
         ));
         assert!(matches!(

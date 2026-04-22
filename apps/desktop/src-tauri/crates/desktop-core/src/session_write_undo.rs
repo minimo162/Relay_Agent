@@ -122,7 +122,7 @@ fn path_from_value(input: &Value, key: &str) -> Option<PathBuf> {
 pub fn snapshots_before_mutation(tool_name: &str, input: &Value) -> Option<Vec<PathUndoOp>> {
     let mut out = Vec::new();
     match tool_name {
-        "write_file" | "edit_file" => {
+        "write" | "edit" => {
             let path = path_from_value(input, "path")?;
             match read_snapshot(&path) {
                 Ok(prev) => out.push(PathUndoOp::Restore {

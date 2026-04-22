@@ -63,7 +63,6 @@ use crate::agent_loop::response_parser::{
 };
 use crate::agent_loop::retry::{
     build_best_tool_protocol_repair_input as retry_build_best_tool_protocol_repair_input,
-    build_initial_local_search_tool_calls,
     build_path_resolution_repair_input as retry_build_path_resolution_repair_input,
     build_tool_protocol_repair_input as retry_build_tool_protocol_repair_input,
     decide_loop_after_success as retry_decide_loop_after_success,
@@ -320,47 +319,6 @@ struct SuccessDecisionState<'a> {
     final_error_message: &'a mut Option<String>,
 }
 
-struct InitialToolPlanApiClient<C> {
-    inner: C,
-    initial_tool_calls: Option<Vec<(String, String)>>,
-}
-
-impl<C> InitialToolPlanApiClient<C> {
-    fn new(inner: C, initial_tool_calls: Option<Vec<(String, String)>>) -> Self {
-        Self {
-            inner,
-            initial_tool_calls,
-        }
-    }
-}
-
-impl<C> ApiClient for InitialToolPlanApiClient<C>
-where
-    C: ApiClient,
-{
-    fn stream(&mut self, request: &ApiRequest<'_>) -> Result<Vec<AssistantEvent>, RuntimeError> {
-        let Some(tool_calls) = self.initial_tool_calls.take() else {
-            return self.inner.stream(request);
-        };
-        tracing::info!(
-            "[RelayAgent] using deterministic initial local-search tool plan (calls={})",
-            tool_calls.len()
-        );
-        let mut events = tool_calls
-            .into_iter()
-            .enumerate()
-            .map(|(index, (name, input))| AssistantEvent::ToolUse {
-                id: format!("initial-local-search-{}", index + 1),
-                name,
-                input,
-            })
-            .collect::<Vec<_>>();
-        events.push(AssistantEvent::Usage(TokenUsage::default()));
-        events.push(AssistantEvent::MessageStop);
-        Ok(events)
-    }
-}
-
 fn apply_success_loop_decision(
     session_id: &str,
     goal: &str,
@@ -413,7 +371,7 @@ fn apply_success_loop_decision(
                 .starts_with("Path resolution repair.")
             {
                 tracing::info!(
-                    "[RelayAgent] session {} queued path-resolution repair after read_file ENOENT (iterations={}, assistant_excerpt={:?})",
+                    "[RelayAgent] session {} queued path-resolution repair after read ENOENT (iterations={}, assistant_excerpt={:?})",
                     session_id,
                     summary.iterations,
                     truncate_for_log(&summary.terminal_assistant_text, 240)
@@ -767,15 +725,6 @@ pub fn run_agent_loop_impl<R: Runtime>(
         )
     };
 
-    let initial_tool_calls = build_initial_local_search_tool_calls(&turn_input, cwd.as_deref());
-    if let Some(tool_calls) = &initial_tool_calls {
-        tracing::info!(
-            "[RelayAgent] session {} prepared deterministic initial local-search tool plan (calls={})",
-            session_id,
-            tool_calls.len()
-        );
-    }
-    let api_client = InitialToolPlanApiClient::new(api_client, initial_tool_calls);
     let tool_executor = build_tool_executor(app, session_id, cwd.clone(), registry.clone());
     let permission_policy = desktop_permission_policy();
     let system_prompt = build_desktop_system_prompt(&goal, cwd.as_deref());
@@ -1134,13 +1083,13 @@ fn fake_smoke_scenario_from_request(
 fn fake_smoke_tool_reply(scenario: &FakeSmokeScenario) -> Result<String, RuntimeError> {
     let payload = json!([
         {
-            "name": "read_file",
+            "name": "read",
             "input": {
                 "path": scenario.source_path,
             }
         },
         {
-            "name": "write_file",
+            "name": "write",
             "input": {
                 "path": scenario.output_path,
                 "content": scenario.expected_output,
@@ -1416,7 +1365,7 @@ fn cdp_windows_office_catalog_addon() -> &'static str {
 
 ## Windows desktop Office and .msg (PowerShell + COM)
 
-On **Windows**, for **desktop Word, Excel, PowerPoint**, and **`.msg`**, use the **`PowerShell` tool** with COM (`Word.Application`, `Excel.Application`, `PowerPoint.Application`; `.msg` via `Outlook.Application` when Outlook is installed) when the user needs high-fidelity layout, exact Excel formatting, or edits through Office itself. For text search or plaintext extraction from `.docx` / `.xlsx` / `.pptx`, use `office_search` or `read_file` first.
+On **Windows**, for **desktop Word, Excel, PowerPoint**, and **`.msg`**, use the **`PowerShell` tool** with COM (`Word.Application`, `Excel.Application`, `PowerPoint.Application`; `.msg` via `Outlook.Application` when Outlook is installed) when the user needs high-fidelity layout, exact Excel formatting, or edits through Office itself. For text search or plaintext extraction from `.docx` / `.xlsx` / `.pptx`, use `office_search` or `read` first.
 
 ### Hybrid read (data + layout)
 
@@ -1426,7 +1375,7 @@ When the user needs **accurate numbers/tables** and **layout-oriented text** for
 2. **Structured data (source of truth for Excel):** batch-read **`Range.Value2`** into a PowerShell array and emit **`ConvertTo-Json -Compress`** (or `Export-Csv` for a defined range to a temp path). **Never** per-cell COM loops.
 3. **Layout PDF:** COM **`ExportAsFixedFormat`** (Excel/Word) or the presentation export equivalent for PowerPoint; use **`OpenAfterPublish=$false`** / **`OpenAfterExport=$false`**. Write to a **unique path** under **`$env:TEMP\RelayAgent\office-layout\`** (create the folder; use a new GUID in the filename). **`Quit()`** hosts in `finally`.
 4. Print **one JSON object** to stdout with at least **`structured`** (or embed 2D data inline) and **`pdfPath`** (absolute path to the temp PDF). Optionally **`csvPath`** if you exported CSV.
-5. In the **same** `relay_tool` fence, include a second tool: **`read_file`** with **`path`** = `pdfPath` (and optional `pages` for large PDFs). **Two tools in one array** is intentional; still avoid splitting **one workbook** across many separate PowerShell invocations in one turn.
+5. In the **same** `relay_tool` fence, include a second tool: **`read`** with **`path`** = `pdfPath` (and optional `pages` for large PDFs). **Two tools in one array** is intentional; still avoid splitting **one workbook** across many separate PowerShell invocations in one turn.
 6. **Excel:** treat **LiteParse text from the PDF** as **layout hints only**; **numeric truth** is **`Value2` / CSV**. Scope PDF export to **one sheet or a defined print area** when workbooks are large (PDF parse timeouts and size limits apply).
 7. After use, you may **`Remove-Item`** the temp PDF (and CSV) if policy allows; otherwise rely on `%TEMP%` cleanup.
 
@@ -1449,13 +1398,12 @@ fn cdp_windows_office_catalog_addon() -> &'static str {
 
 fn cdp_catalog_sort_key(name: &str) -> usize {
     match name {
-        "read_file" => 0,
-        "write_file" => 1,
-        "edit_file" => 2,
-        "workspace_search" => 3,
-        "glob_search" => 4,
-        "grep_search" => 5,
-        "office_search" => 6,
+        "read" => 0,
+        "write" => 1,
+        "edit" => 2,
+        "glob" => 3,
+        "grep" => 4,
+        "office_search" => 5,
         "git_status" => 6,
         "git_diff" => 7,
         "pdf_merge" => 10,
@@ -1504,12 +1452,11 @@ fn cdp_catalog_sort_key(name: &str) -> usize {
 
 fn cdp_tool_primary_use(name: &str, description: &str) -> String {
     match name {
-        "read_file" => "Read local text, PDF, or Office content.".to_string(),
-        "write_file" => "Create or overwrite a workspace text file.".to_string(),
-        "edit_file" => "Replace text in an existing workspace file.".to_string(),
-        "workspace_search" => "Run a read-only Relay-only agentic workspace search with plan/trace diagnostics, ranked files, evidence snippets, and recommended read_file follow-up.".to_string(),
-        "glob_search" => "Find files by glob pattern.".to_string(),
-        "grep_search" => "Search file contents with a regex.".to_string(),
+        "read" => "Read local text, PDF, or Office content.".to_string(),
+        "write" => "Create or overwrite a workspace text file.".to_string(),
+        "edit" => "Replace text in an existing workspace file.".to_string(),
+        "glob" => "Find files by glob pattern.".to_string(),
+        "grep" => "Search file contents with a regex.".to_string(),
         "office_search" => "Search extracted Office/PDF text literally or with regex.".to_string(),
         "git_status" => "Inspect workspace git status.".to_string(),
         "git_diff" => "Inspect workspace git diff.".to_string(),
@@ -1609,18 +1556,9 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
     // than the lint is worth.
     #[allow(clippy::match_same_arms)]
     let curated = match name {
-        "read_file" => vec!["offset", "limit", "pages", "sheets", "slides"],
-        "workspace_search" => vec![
-            "paths",
-            "include_ext",
-            "max_files",
-            "max_snippets",
-            "max_bytes",
-            "max_duration_ms",
-            "context",
-        ],
-        "glob_search" => vec!["path", "follow", "max_depth", "hidden"],
-        "grep_search" => vec![
+        "read" => vec!["offset", "limit", "pages", "sheets", "slides"],
+        "glob" => vec!["path", "follow", "max_depth", "hidden"],
+        "grep" => vec![
             "path",
             "glob",
             "include",
@@ -1642,7 +1580,7 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
         "git_diff" => vec!["path", "staged"],
         "WebSearch" => vec!["allowed_domains", "blocked_domains"],
         "WebFetch" => vec!["prompt"],
-        "edit_file" => vec!["replace_all"],
+        "edit" => vec!["replace_all"],
         "bash" => vec!["timeout", "description", "run_in_background"],
         "PowerShell" => vec!["timeout", "description", "run_in_background"],
         "CliRun" => vec!["timeout_ms"],
@@ -1723,7 +1661,7 @@ fn cdp_catalog_specs_for_flavor(
         CdpCatalogFlavor::StandardFull => specs,
         CdpCatalogFlavor::RepairWriteFileOnly => specs
             .into_iter()
-            .filter(|spec| spec.name == "write_file")
+            .filter(|spec| spec.name == "write")
             .collect(),
     }
 }
@@ -1808,19 +1746,19 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 
 ## Immediate action rules
 
-- **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read_file` first** before edits.
-- **Exact path:** If the latest user message gives an exact file path, prefer `read_file` directly instead of `workspace_search`.
-- **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; emit `workspace_search` first for vague lookup, and only fall back to `glob_search` / `grep_search` / `office_search` for narrower follow-up.
+- **Action in the same turn:** If the **latest user message** already says what to do (e.g. file **paths**, verbs like improve/fix/edit/refactor, or clear targets), **output the necessary tool fences in this reply**—usually **`read` first** before edits.
+- **Exact path:** If the latest user message gives an exact file path, prefer `read` directly.
+- **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; use `glob`, `grep`, or `office_search`.
 - **Initial lookup reply format:** When the latest user request is a local file/document lookup and there are no Relay Tool Result blocks for that lookup yet, the entire assistant reply must be exactly one fenced `relay_tool` or `json` block. Do not write `はい、...を検索します`, do not cite `turn*search*`, do not output `<File>...</File>` cards, and do not list candidate files from M365 before Relay tools run.
-- **Search tool selection:** Use `workspace_search` once for vague implementation search, related-file search, or "find relevant evidence" requests because it returns ranked candidates, snippets, recommended next tools, scope, trace, and truncation data. After that first result, iterate with small concrete rg-backed `glob_search` / `grep_search` calls only when more precision is needed, and use `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content only when the follow-up is concrete. `glob_search` supports brace groups, so use patterns like `**/*.{docx,xlsx,pptx,pdf}` or `**/*.{rs,ts,tsx}` when one extension-family search is enough.
-- **Evidence expansion before judgments:** `workspace_search` snippets are candidate evidence for discovery. Before making important conclusions, reviews, edits, comparisons, or recommendations about a file, call the `recommended_next_tools` `read_file` path(s) and ground the answer in that file text. If you have not read the file, describe the result as a candidate only.
-- **Authoritative evidence:** If `workspace_search` snippets and `read_file` content conflict, the `read_file` Tool Result is authoritative.
-- **Grounded final answer:** After `read_file`, include the evidence path and line anchor/startLine when making file-specific conclusions.
+- **Search tool selection:** Use `glob` for file names or glob expansion, `grep` for text/code content, and `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content. `glob` supports brace groups, so use patterns like `**/*.{docx,xlsx,pptx,pdf}` or `**/*.{rs,ts,tsx}` when one extension-family search is enough.
+- **Evidence expansion before judgments:** Search snippets are discovery evidence. Before making important conclusions, reviews, edits, comparisons, or recommendations about a file, call `read` on the relevant path(s) and ground the answer in that file text. If you have not read the file, describe the result as a candidate only.
+- **Authoritative evidence:** If search snippets and `read` content conflict, the `read` Tool Result is authoritative.
+- **Grounded final answer:** After `read`, include the evidence path and line anchor/startLine when making file-specific conclusions.
 - **Query-driven lookup variants:** For document lookup requests, derive filename globs and Office/PDF search patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. Prefer query-specific globs before broad `**/*` scans, and treat newer matching files as stronger candidates when relevance is otherwise similar.
-- **Search iteration:** For open-ended lookup, do not front-load a large fixed search batch. Start with `workspace_search`; then batch one or two narrow `glob_search` / `grep_search` / `office_search` calls only if the result needs expansion. Keep each search concrete and narrow enough to be useful.
+- **Search iteration:** For open-ended lookup, do not front-load a large fixed search batch. Start with one or two concrete `glob` / `grep` / `office_search` calls. Keep each search concrete and narrow enough to be useful.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
 - **Path discipline:** If the latest user turn names a concrete path (absolute path, relative path, or bare filename with an extension), use that exact string in tool input. Do **not** rewrite it to a different directory from a prior turn. Treat bare filenames with an extension as workspace-root-relative unless the user gave another base.
-- **This turn, not “next message”:** Do **not** defer all tools to a follow-up assistant message when the current turn can already run `read_file` / `write_file` / `edit_file`.
+- **This turn, not “next message”:** Do **not** defer all tools to a follow-up assistant message when the current turn can already run `read` / `write` / `edit`.
 
 ## Grounding and anti-stall
 
@@ -1861,11 +1799,11 @@ M365 Copilot built-in results are outside the Relay tool protocol. Do not satisf
 
 ## Preferred sequences
 
-- named existing file inspect/edit/review => `read_file` then `edit_file`
-- named new file create => `write_file`
-- local file lookup / needed files / related files => `workspace_search` first; do not answer from general knowledge before tools
-- codebase search/investigation => `workspace_search` before `glob_search` / `grep_search`, then `read_file` the top candidate(s) before important conclusions or changes
-- open-ended search => use `workspace_search` first; if more precision is needed, iterate with one or two narrow rg-style `glob_search` / `grep_search` / `office_search` calls in a later `relay_tool` array
+- named existing file inspect/edit/review => `read` then `edit`
+- named new file create => `write`
+- local file lookup / needed files / related files => `glob` / `grep` / `office_search`; do not answer from general knowledge before tools
+- codebase search/investigation => `grep` / `glob`, then `read` the top candidate(s) before important conclusions or changes
+- open-ended search => start with one or two narrow rg-style `glob` / `grep` / `office_search` calls in a `relay_tool` array
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
 
 {rendered_tools}
@@ -1883,13 +1821,13 @@ When you need to call one or more tools, you may write a short user-facing expla
 - **Single tool:** one JSON object: `{{ "name": "<tool_name>", "relay_tool_call": true, "input": {{ ... }} }}`
 - **Optional:** `"id": "<string>"` — omit if unsure; the host will assign one.
 - **Multiple tools:** prefer **one** `relay_tool` fence with a JSON **array** of tool objects. Use multiple fences only when unavoidable. Repeating the same tool with identical `input` across fences wastes user approvals (the host dedupes, but you should not rely on it).
-- **File I/O:** use `read_file`, `write_file`, and `edit_file` for local files. Do **not** use `bash`, `PowerShell`, or `REPL` to read or write files when a file tool applies—prose Python/shell examples are not executed and encourage duplicate `relay_tool` calls. This matches the explicit, permission-gated tool model described at https://claw-code.codes/tool-system
-- **Windows Office exception:** For **`.docx` / `.xlsx` / `.pptx`**, use `office_search` or `read_file` first for plaintext extraction and search. Use **`PowerShell` + COM** when the user needs high-fidelity layout, exact Excel formatting, edits through Office itself, or **`.msg`** handling. For layout text, COM may write a **temporary `.pdf`**, then `read_file` can read that PDF (LiteParse). See **Hybrid read** under the Windows desktop Office section below; put `PowerShell` and `read_file` in **one** `relay_tool` JSON **array** when both are needed in the same turn.
+- **File I/O:** use `read`, `write`, and `edit` for local files. Do **not** use `bash`, `PowerShell`, or `REPL` to read or write files when a file tool applies—prose Python/shell examples are not executed and encourage duplicate `relay_tool` calls. This matches the explicit, permission-gated tool model described at https://claw-code.codes/tool-system
+- **Windows Office exception:** For **`.docx` / `.xlsx` / `.pptx`**, use `office_search` or `read` first for plaintext extraction and search. Use **`PowerShell` + COM** when the user needs high-fidelity layout, exact Excel formatting, edits through Office itself, or **`.msg`** handling. For layout text, COM may write a **temporary `.pdf`**, then `read` can read that PDF (LiteParse). See **Hybrid read** under the Windows desktop Office section below; put `PowerShell` and `read` in **one** `relay_tool` JSON **array** when both are needed in the same turn.
 {win_addon}
 Example:
 
 ```relay_tool
-{{"name":"read_file","relay_tool_call":true,"input":{{"path":"README.md"}}}}
+{{"name":"read","relay_tool_call":true,"input":{{"path":"README.md"}}}}
 ```
 "#,
                 rendered_tools = rendered_tools,
@@ -1909,7 +1847,7 @@ Only the single tool below is intentionally advertised for this repair turn. Do 
 
 ## Preferred sequence
 
-- concrete new file create repair => `write_file` now
+- concrete new file create repair => `write` now
 
 {rendered_tools}
 
@@ -1925,7 +1863,7 @@ Output exactly one fenced `relay_tool` block with JSON only.
 Example:
 
 ```relay_tool
-{{"name":"write_file","relay_tool_call":true,"input":{{"path":"tetris.html","content":"<!doctype html>\n<html lang=\"ja\">\n<head>...</head>\n<body>...</body>\n</html>"}}}}
+{{"name":"write","relay_tool_call":true,"input":{{"path":"tetris.html","content":"<!doctype html>\n<html lang=\"ja\">\n<head>...</head>\n<body>...</body>\n</html>"}}}}
 ```
 "#
             )
@@ -1968,7 +1906,7 @@ pub(crate) fn parse_copilot_tool_response(
     let mut calls = parse_tool_payloads(&payloads, &whitelist, sentinel_policy);
     let mut display = stripped;
     if calls.is_empty() {
-        if let Some((d, call)) = salvage_generated_write_file_from_reply(&display) {
+        if let Some((d, call)) = salvage_generated_write_from_reply(&display) {
             display = d;
             calls.push(call);
         }
@@ -2027,13 +1965,11 @@ fn should_try_inline_tool_json_fallback(
         })
 }
 
-fn salvage_generated_write_file_from_reply(
-    text: &str,
-) -> Option<(String, (String, String, String))> {
+fn salvage_generated_write_from_reply(text: &str) -> Option<(String, (String, String, String))> {
     let (display, content) = extract_generated_html_code_block(text)?;
     let path = select_generated_file_path_from_reply(text, &content)?;
     let value = json!({
-        "name": "write_file",
+        "name": "write",
         "relay_tool_call": true,
         "input": {
             "path": path,
@@ -2304,8 +2240,8 @@ fn is_concrete_local_file_write_goal(goal: &str) -> bool {
         return false;
     }
     let lower = trimmed.to_ascii_lowercase();
-    let mentions_target_file = lower.contains("write_file")
-        || lower.contains("edit_file")
+    let mentions_target_file = lower.contains("write")
+        || lower.contains("edit")
         || lower.contains("workspace")
         || lower.contains("/root/")
         || lower.contains("./")
@@ -2467,7 +2403,7 @@ fn sort_json_value_for_dedup(v: Value) -> Value {
 /// Clone of tool `input` used only for duplicate detection (does not change executed payloads).
 fn normalize_tool_input_for_dedup_key(tool_name: &str, input: &Value) -> Value {
     let mut v = input.clone();
-    if tool_name == "read_file" {
+    if matches!(tool_name, "read") {
         if let Some(obj) = v.as_object_mut() {
             let merged_path = obj
                 .get("path")
@@ -2701,7 +2637,7 @@ fn parse_one_tool_call(v: &Value) -> Option<(String, String, String)> {
 }
 
 fn normalize_html_file_mutation_input(tool_name: &str, input: &mut Value) {
-    if !matches!(tool_name, "write_file" | "edit_file") {
+    if !matches!(tool_name, "write" | "edit") {
         return;
     }
     let Some(obj) = input.as_object_mut() else {
@@ -2873,7 +2809,7 @@ fn build_cdp_prompt(request: &ApiRequest<'_>) -> String {
     .prompt
 }
 
-fn summarize_read_file_tool_result(output: &str) -> Option<String> {
+fn summarize_read_tool_result(output: &str) -> Option<String> {
     let value = serde_json::from_str::<Value>(output).ok()?;
     let object = value.as_object()?;
     let kind = object.get("type").and_then(Value::as_str).unwrap_or("text");
@@ -2935,13 +2871,13 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
     if is_error {
         return output.to_string();
     }
-    if tool_name == "read_file" {
-        return summarize_read_file_tool_result(output).unwrap_or_else(|| output.to_string());
+    if matches!(tool_name, "read") {
+        return summarize_read_tool_result(output).unwrap_or_else(|| output.to_string());
     }
-    if tool_name == "glob_search" {
-        return summarize_glob_search_tool_result(output).unwrap_or_else(|| output.to_string());
+    if tool_name == "glob" {
+        return summarize_glob_tool_result(output).unwrap_or_else(|| output.to_string());
     }
-    if !matches!(tool_name, "write_file" | "edit_file") {
+    if !matches!(tool_name, "write" | "edit") {
         return output.to_string();
     }
     let Ok(value) = serde_json::from_str::<Value>(output) else {
@@ -2966,7 +2902,7 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
     }
     if let Some(content) = object.get("content").and_then(Value::as_str) {
         lines.push(format!("content_chars: {}", content.len()));
-        if tool_name == "write_file"
+        if matches!(tool_name, "write")
             && object
                 .get("file_path")
                 .and_then(Value::as_str)
@@ -2980,7 +2916,7 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
                     .to_string(),
             );
             lines.push(
-                "follow_up_guidance: do_not_call_read_file_bash_powershell_backup_or_copy_commands_just_to_recheck_escaping"
+                "follow_up_guidance: do_not_call_read_bash_powershell_backup_or_copy_commands_just_to_recheck_escaping"
                     .to_string(),
             );
         }
@@ -3001,7 +2937,7 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
     lines.join("\n")
 }
 
-fn summarize_glob_search_tool_result(output: &str) -> Option<String> {
+fn summarize_glob_tool_result(output: &str) -> Option<String> {
     let value = serde_json::from_str::<Value>(output).ok()?;
     let object = value.as_object()?;
     let num_files = object
@@ -3031,11 +2967,11 @@ fn summarize_glob_search_tool_result(output: &str) -> Option<String> {
         .unwrap_or("(unknown)");
     Some(format!(
         concat!(
-            "glob_search filename pattern matches: 0\n",
+            "glob filename pattern matches: 0\n",
             "pattern: {}\n",
             "base_dir: {}\n",
             "search_pattern: {}\n",
-            "scope_note: this is only a filename/glob-pattern miss; it does not mean workspace_search, grep_search, or office_search found no relevant files.\n",
+            "scope_note: this is only a filename/glob-pattern miss; it does not mean grep or office_search found no relevant content.\n",
             "truncated: {}"
         ),
         pattern,
@@ -3050,10 +2986,8 @@ fn cdp_tool_result_max_chars(tool_name: &str, is_error: bool) -> Option<usize> {
         return Some(CDP_LARGE_TOOL_RESULT_MAX_CHARS);
     }
     match tool_name {
-        "workspace_search" | "glob_search" | "grep_search" | "office_search" => {
-            Some(CDP_LOCAL_SEARCH_TOOL_RESULT_MAX_CHARS)
-        }
-        "read_file" => Some(CDP_READ_FILE_TOOL_RESULT_MAX_CHARS),
+        "glob" | "grep" | "office_search" => Some(CDP_LOCAL_SEARCH_TOOL_RESULT_MAX_CHARS),
+        "read" => Some(CDP_READ_FILE_TOOL_RESULT_MAX_CHARS),
         "git_diff" => Some(CDP_LARGE_TOOL_RESULT_MAX_CHARS),
         "git_status" => Some(CDP_LOCAL_SEARCH_TOOL_RESULT_MAX_CHARS),
         _ => None,
@@ -3196,41 +3130,15 @@ fn enforce_workspace_tool_paths(
     };
 
     match tool_name {
-        "read_file" => {
+        "read" => {
             for key in ["path", "file_path"] {
                 normalize_key(obj, key)?;
             }
         }
-        "write_file" | "edit_file" | "LSP" => {
+        "write" | "edit" | "LSP" => {
             normalize_key(obj, "path")?;
         }
-        "workspace_search" => {
-            let has_paths = obj
-                .get("paths")
-                .and_then(Value::as_array)
-                .is_some_and(|paths| {
-                    paths
-                        .iter()
-                        .any(|path| path.as_str().is_some_and(|s| !s.trim().is_empty()))
-                });
-            if !has_paths {
-                let root = workspace
-                    .canonicalize()
-                    .map_err(|e| runtime::ToolError::new(e.to_string()))?;
-                obj.insert(
-                    "paths".to_string(),
-                    Value::Array(vec![Value::String(root.to_string_lossy().into_owned())]),
-                );
-            }
-            if let Some(Value::Array(paths)) = obj.get_mut("paths") {
-                for path in paths.iter_mut() {
-                    if let Value::String(s) = path {
-                        *path = Value::String(normalize_path_string(s)?);
-                    }
-                }
-            }
-        }
-        "glob_search" | "grep_search" | "git_status" | "git_diff" => {
+        "glob" | "grep" | "git_status" | "git_diff" => {
             let has_path = obj
                 .get("path")
                 .and_then(|v| v.as_str())
@@ -3300,7 +3208,7 @@ fn extract_path_like_input(input: &Value, keys: &[&str]) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn enrich_read_file_tool_error(
+fn enrich_read_tool_error(
     message: String,
     original_path: Option<&str>,
     resolved_path: Option<&str>,
@@ -3481,7 +3389,7 @@ impl<R: Runtime> ToolExecutor for TauriToolExecutor<R> {
 
         let mut input_value: Value =
             serde_json::from_str(input).unwrap_or_else(|_| serde_json::json!({}));
-        let original_read_file_path = if tool_name == "read_file" {
+        let original_read_path = if matches!(tool_name, "read") {
             extract_path_like_input(&input_value, &["path", "file_path"])
         } else {
             None
@@ -3524,49 +3432,33 @@ impl<R: Runtime> ToolExecutor for TauriToolExecutor<R> {
                 )?;
             }
         }
-        let resolved_read_file_path = if tool_name == "read_file" {
+        let resolved_read_path = if matches!(tool_name, "read") {
             extract_path_like_input(&input_value, &["path", "file_path"])
         } else {
             None
         };
 
         let undo_snap = match tool_name {
-            "write_file" | "edit_file" | "NotebookEdit" | "pdf_merge" | "pdf_split" => {
+            "write" | "edit" | "NotebookEdit" | "pdf_merge" | "pdf_split" => {
                 session_write_undo::snapshots_before_mutation(tool_name, &input_value)
             }
             _ => None,
         };
 
-        let result = if tool_name == "workspace_search" {
-            let search_input =
-                serde_json::from_value::<runtime::WorkspaceSearchInput>(input_value.clone())
-                    .map_err(|error| runtime::ToolError::new(error.to_string()))?;
-            let workspace_root = self
-                .cwd
-                .as_ref()
-                .map(|s| PathBuf::from(s.trim()))
-                .filter(|p| !p.as_os_str().is_empty())
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-            let output = runtime::workspace_search_with_root(&search_input, &workspace_root)
-                .map_err(|error| runtime::ToolError::new(error.to_string()))?;
-            serde_json::to_string_pretty(&output)
-                .map_err(|error| runtime::ToolError::new(error.to_string()))?
-        } else {
-            match tools::execute_tool(tool_name, &input_value) {
-                Ok(result) => result,
-                Err(error) => {
-                    let message = if tool_name == "read_file" {
-                        enrich_read_file_tool_error(
-                            error,
-                            original_read_file_path.as_deref(),
-                            resolved_read_file_path.as_deref(),
-                            self.cwd.as_deref(),
-                        )
-                    } else {
-                        error
-                    };
-                    return Err(runtime::ToolError::new(message));
-                }
+        let result = match tools::execute_tool(tool_name, &input_value) {
+            Ok(result) => result,
+            Err(error) => {
+                let message = if matches!(tool_name, "read") {
+                    enrich_read_tool_error(
+                        error,
+                        original_read_path.as_deref(),
+                        resolved_read_path.as_deref(),
+                        self.cwd.as_deref(),
+                    )
+                } else {
+                    error
+                };
+                return Err(runtime::ToolError::new(message));
             }
         };
 
@@ -4024,9 +3916,9 @@ pub fn msg_to_relay(msg: &ConversationMessage) -> RelayMessage {
 fn windows_desktop_office_system_prompt_addon() -> &'static str {
     r#"## Windows: desktop Office and .msg (PowerShell + COM)
 
-Use the **PowerShell** tool for **Word, Excel, PowerPoint**, and **`.msg`** (via `Outlook.Application` when Outlook is installed) when the user needs high-fidelity layout, exact Excel formatting, or edits through Office itself. For text search or plaintext extraction from `.docx` / `.xlsx` / `.pptx`, use `office_search` or `read_file` first.
+Use the **PowerShell** tool for **Word, Excel, PowerPoint**, and **`.msg`** (via `Outlook.Application` when Outlook is installed) when the user needs high-fidelity layout, exact Excel formatting, or edits through Office itself. For text search or plaintext extraction from `.docx` / `.xlsx` / `.pptx`, use `office_search` or `read` first.
 
-**Hybrid read (data + layout):** For **`.xlsx`/`.docx`/`.pptx`**, combine (a) **COM batch extraction** (`Range.Value2` → JSON, or `Export-Csv`) as the **numeric/table source of truth** for Excel, with (b) **COM `ExportAsFixedFormat`** to a **unique file under `%TEMP%\RelayAgent\office-layout\`**, then **`read_file` on that `.pdf`** in the **same** turn (same `relay_tool` JSON **array**: `PowerShell` then `read_file`). PowerShell stdout should be **one JSON** including **`pdfPath`**. PDF/LiteParse text is **layout hints** for Excel, not authoritative numbers. Use `OpenAfterPublish`/`OpenAfterExport` `$false`; `Quit()` in `finally`. Optional: `Remove-Item` temp files after.
+**Hybrid read (data + layout):** For **`.xlsx`/`.docx`/`.pptx`**, combine (a) **COM batch extraction** (`Range.Value2` → JSON, or `Export-Csv`) as the **numeric/table source of truth** for Excel, with (b) **COM `ExportAsFixedFormat`** to a **unique file under `%TEMP%\RelayAgent\office-layout\`**, then **`read` on that `.pdf`** in the **same** turn (same `relay_tool` JSON **array**: `PowerShell` then `read`). PowerShell stdout should be **one JSON** including **`pdfPath`**. PDF/LiteParse text is **layout hints** for Excel, not authoritative numbers. Use `OpenAfterPublish`/`OpenAfterExport` `$false`; `Quit()` in `finally`. Optional: `Remove-Item` temp files after.
 
 **Speed:** Copilot turns are slow—prefer **one PowerShell `command`** that does open → work → save → `Quit()` instead of splitting across many tool calls in one turn.
 
@@ -4072,7 +3964,7 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "You are Relay Agent running inside a Tauri desktop app.\n",
                 "Use only the registered tools.\n",
                 "Read state first, then write only when necessary.\n",
-                "For file access use read_file / write_file / edit_file; for PDF merge or split in the workspace use pdf_merge / pdf_split (not bash). Do not substitute shell or REPL for file I/O when those tools apply.\n\n",
+                "For file access use read / write / edit; for PDF merge or split in the workspace use pdf_merge / pdf_split (not bash). Do not substitute shell or REPL for file I/O when those tools apply.\n\n",
                 "When the model is M365 Copilot in Edge (CDP), the appended message includes the tool catalog and `relay_tool` protocol. ",
                 "Do not refuse to output fenced tool JSON by claiming browser Copilot cannot run tools—Relay executes parsed tool calls from your reply.\n\n",
                 "If the user asks for a review, explanation, or investigation, inspect the project first and answer directly. ",
@@ -4095,11 +3987,11 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "- Prefer read-only tools before mutating tools.\n",
                 "- When modifying files, prefer saving copies.\n",
                 "- If a session workspace (`cwd`) is set, file-tool paths are resolved within that workspace and may be rejected when they escape it. Do not promise reads outside the workspace boundary; call the tool and surface the actual path error if access is denied.\n",
-                "- If no workspace is set, read_file, glob_search, grep_search, office_search, and workspace_search may use absolute local paths the OS user can read, except workspace_search always constrains itself to the current workspace root.\n",
-                "- read_file returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). `.docx`, `.xlsx`, and `.pptx` are parsed as plaintext extraction; use office_search for exact search across those files. Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted `.txt`/`.md` file.\n",
-                "- For local file lookup requests, use workspace_search once for ranked candidates and evidence snippets; after that first result, use small rg-backed glob_search/grep_search follow-ups for fast candidate paths or plaintext/code contents, and office_search for Office/PDF contents when the follow-up is concrete. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
-                "- If the user gives an exact file path, prefer read_file directly over workspace_search.\n",
-                "- Treat workspace_search snippets as discovery evidence. Before important conclusions, reviews, edits, comparisons, or recommendations, read_file the top candidate path(s) from recommended_next_tools; otherwise describe matches as candidates only. If snippets conflict with read_file, read_file is authoritative. After read_file, cite evidence path and line anchor/startLine when available.\n",
+                "- If no workspace is set, read, glob, grep, and office_search may use absolute local paths the OS user can read.\n",
+                "- read returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). `.docx`, `.xlsx`, and `.pptx` are parsed as plaintext extraction; use office_search for exact search across those files. Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted `.txt`/`.md` file.\n",
+                "- For local file lookup requests, use small rg-backed glob/grep calls for fast candidate paths or plaintext/code contents, and office_search for Office/PDF contents. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
+                "- If the user gives an exact file path, prefer read directly.\n",
+                "- Treat search snippets as discovery evidence. Before important conclusions, reviews, edits, comparisons, or recommendations, read the top candidate path(s); otherwise describe matches as candidates only. If snippets conflict with read, read is authoritative. After read, cite evidence path and line anchor/startLine when available.\n",
                 "- For document lookup requests, derive filename globs and Office/PDF patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. Search query-specific globs before broad `**/*` scans, and prefer newer matching files when relevance is otherwise similar.\n",
                 "- If the user's request is already concrete (paths, files, stated action), use tools in your first response; do not ask them to rephrase unless something essential is missing.\n",
                 "- To combine or split PDF files, use pdf_merge / pdf_split (workspace write); do not use bash for that."
@@ -4112,8 +4004,8 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "## Concrete workspace file action\n",
                 "The current task is a concrete local workspace file create/edit request.\n",
                 "Do not start with WebSearch, web search, citations, Pages, uploads, or `office365_search`.\n",
-                "If the user already named the target path or file, use `write_file` / `edit_file` in the first response instead of searching for examples first.\n",
-                "If the requested content can be produced directly from the user instruction, emit `write_file` now instead of returning the file body as plain assistant text.\n",
+                "If the user already named the target path or file, use `write` / `edit` in the first response instead of searching for examples first.\n",
+                "If the requested content can be produced directly from the user instruction, emit `write` now instead of returning the file body as plain assistant text.\n",
                 "Do not answer with a plan to search before using the local file tools."
             ),
         );
@@ -4201,7 +4093,7 @@ mod cdp_copilot_tool_tests {
     #[test]
     fn catalog_lists_builtin_tools_and_protocol() {
         let s = cdp_tool_catalog_section();
-        assert!(s.contains("read_file"));
+        assert!(s.contains("read"));
         assert!(s.contains("relay_tool"));
         assert!(s.contains("purpose:"));
         assert!(s.contains("use_when:"));
@@ -4275,7 +4167,7 @@ mod cdp_copilot_tool_tests {
         assert!(bundle.message_text.contains("Tool protocol repair."));
         assert!(!bundle.message_text.contains("I will use Python"));
         assert!(!bundle.system_text.contains("# Project context"));
-        assert!(bundle.catalog_text.contains("### `write_file`"));
+        assert!(bundle.catalog_text.contains("### `write`"));
         assert!(bundle.catalog_text.contains("### `bash`"));
         assert!(bundle.catalog_text.contains("### `WebFetch`"));
         assert!(bundle.catalog_text.contains("purpose:"));
@@ -4283,7 +4175,7 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn late_new_file_repairs_use_write_file_only_catalog() {
+    fn late_new_file_repairs_use_write_only_catalog() {
         let repair = build_tool_protocol_repair_input(
             "htmlでテトリスを作成して",
             "htmlでテトリスを作成して",
@@ -4301,8 +4193,8 @@ mod cdp_copilot_tool_tests {
             cdp_catalog_flavor(&messages),
             CdpCatalogFlavor::RepairWriteFileOnly
         );
-        assert!(bundle.catalog_text.contains("### `write_file`"));
-        assert!(!bundle.catalog_text.contains("### `read_file`"));
+        assert!(bundle.catalog_text.contains("### `write`"));
+        assert!(!bundle.catalog_text.contains("### `read`"));
         assert!(!bundle.catalog_text.contains("### `bash`"));
         assert!(bundle.catalog_text.contains("Only the single tool below"));
     }
@@ -4361,9 +4253,9 @@ mod cdp_copilot_tool_tests {
         assert!(bundle
             .catalog_text
             .contains("do not give a generic checklist"));
-        assert!(bundle.catalog_text.contains(
-            "`workspace_search` first; do not answer from general knowledge before tools"
-        ));
+        assert!(bundle
+            .catalog_text
+            .contains("`glob` / `grep` / `office_search`"));
         assert!(bundle
             .catalog_text
             .contains("Do not satisfy a local workspace or Office/PDF lookup by using Copilot enterprise search"));
@@ -4372,7 +4264,7 @@ mod cdp_copilot_tool_tests {
             .contains("M365/Copilot built-in search snippets, citations, and generated enterprise-search summaries are **not** Relay tool results"));
         assert!(bundle
             .catalog_text
-            .contains("Use `workspace_search` once for vague implementation search"));
+            .contains("Use `glob` for file names or glob expansion"));
         assert!(bundle
             .catalog_text
             .contains("Evidence expansion before judgments"));
@@ -4395,12 +4287,12 @@ mod cdp_copilot_tool_tests {
             ),
             ConversationMessage::assistant(vec![ContentBlock::ToolUse {
                 id: "search-1".to_string(),
-                name: "glob_search".to_string(),
+                name: "glob".to_string(),
                 input: r#"{"path":"H:\\shr1","pattern":"**/*CF*"}"#.to_string(),
             }]),
             ConversationMessage::tool_result(
                 "search-1",
-                "glob_search",
+                "glob",
                 r#"{"matches":["H:\\shr1\\キャッシュフロー.xlsx"]}"#,
                 false,
             ),
@@ -4416,10 +4308,10 @@ mod cdp_copilot_tool_tests {
         assert!(bundle.prompt.contains("summarize those existing results"));
         assert!(bundle
             .prompt
-            .contains("A `glob_search` result with 0 files only means"));
+            .contains("A `glob` result with 0 files only means"));
         assert!(bundle
             .prompt
-            .contains("call `read_file` on the recommended top candidate"));
+            .contains("call `read` on the relevant top candidate"));
         assert!(bundle
             .prompt
             .contains("Duplicate-tool suppression or search-budget notices"));
@@ -4433,10 +4325,10 @@ mod cdp_copilot_tool_tests {
         )
         .join("\n");
 
-        assert!(system.contains("use workspace_search once for ranked candidates"));
+        assert!(system.contains("use small rg-backed glob/grep calls"));
         assert!(system.contains("office_search for Office/PDF contents"));
         assert!(system.contains("Before important conclusions"));
-        assert!(system.contains("read_file the top candidate path"));
+        assert!(system.contains("read the top candidate path"));
         assert!(system.contains("`必要なファイル`"));
         assert!(system.contains("not invitations for generic domain checklists"));
         assert!(system.contains("derive filename globs and Office/PDF patterns"));
@@ -4444,7 +4336,7 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn repair_prompt_stage2_and_stage3_strengthen_write_file_coercion() {
+    fn repair_prompt_stage2_and_stage3_strengthen_write_coercion() {
         let repair2 = build_best_tool_protocol_repair_input(
             "htmlでテトリスを作成して",
             "htmlでテトリスを作成して",
@@ -4452,7 +4344,7 @@ mod cdp_copilot_tool_tests {
         );
         assert!(repair2.contains("planning-only text instead of usable Relay tool JSON"));
         assert!(repair2.contains("`Show**...` wrappers"));
-        assert!(repair2.contains("Emit the actual `write_file` JSON now"));
+        assert!(repair2.contains("Emit the actual `write` JSON now"));
 
         let repair3 = build_best_tool_protocol_repair_input(
             "htmlでテトリスを作成して",
@@ -4478,10 +4370,10 @@ mod cdp_copilot_tool_tests {
             ConversationMessage::user_text(repair),
             ConversationMessage::assistant(vec![ContentBlock::ToolUse {
                 id: "tool-1".to_string(),
-                name: "read_file".to_string(),
+                name: "read".to_string(),
                 input: r#"{"path":"README.md"}"#.to_string(),
             }]),
-            ConversationMessage::tool_result("tool-1", "read_file", tool_output, false),
+            ConversationMessage::tool_result("tool-1", "read", tool_output, false),
         ];
 
         let bundle = build_cdp_prompt_bundle_from_messages(
@@ -4492,10 +4384,10 @@ mod cdp_copilot_tool_tests {
         );
 
         assert!(bundle.message_text.contains("Tool protocol repair."));
-        assert!(bundle.message_text.contains("[Tool Call: read_file]"));
+        assert!(bundle.message_text.contains("[Tool Call: read]"));
         assert!(bundle
             .message_text
-            .contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read_file\" status=\"ok\">"));
+            .contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read\" status=\"ok\">"));
         assert_eq!(bundle.tool_result_count(), 1);
         assert!(bundle.tool_result_chars() > 0);
     }
@@ -4515,7 +4407,7 @@ mod cdp_copilot_tool_tests {
             }]),
             ConversationMessage::tool_result(
                 "tool-1",
-                "read_file",
+                "read",
                 serde_json::json!({
                     "path": "README.md",
                     "content": "Desktop agent app: **Tauri v2**, **SolidJS**, **Rust**."
@@ -4533,7 +4425,7 @@ mod cdp_copilot_tool_tests {
         assert!(matches!(sliced[2].role, MessageRole::Tool));
         let rendered = render_cdp_messages(&sliced);
         assert!(rendered.contains("Repair follow-up"));
-        assert!(rendered.contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read_file\" status=\"ok\">"));
+        assert!(rendered.contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read\" status=\"ok\">"));
         assert!(!rendered.contains("Older assistant text"));
     }
 
@@ -4544,11 +4436,11 @@ mod cdp_copilot_tool_tests {
             CdpCatalogFlavor::StandardFull,
             &[],
         );
-        assert!(s.contains("read_file"));
-        assert!(s.contains("write_file"));
-        assert!(s.contains("edit_file"));
-        assert!(s.contains("glob_search"));
-        assert!(s.contains("grep_search"));
+        assert!(s.contains("read"));
+        assert!(s.contains("write"));
+        assert!(s.contains("edit"));
+        assert!(s.contains("glob"));
+        assert!(s.contains("grep"));
         assert!(s.contains("pdf_merge"));
         assert!(s.contains("pdf_split"));
         assert!(s.contains("### `bash`"));
@@ -4645,15 +4537,15 @@ mod cdp_copilot_tool_tests {
             CdpCatalogFlavor::StandardFull,
             &[],
         );
-        let read_index = s.find("### `read_file`").expect("read_file");
-        let write_index = s.find("### `write_file`").expect("write_file");
+        let read_index = s.find("### `read`").expect("read");
+        let write_index = s.find("### `write`").expect("write");
         let bash_index = s.find("### `bash`").expect("bash");
         assert!(read_index < bash_index);
         assert!(write_index < bash_index);
     }
 
     #[test]
-    fn write_file_success_is_summarized_for_cdp_followup() {
+    fn write_success_is_summarized_for_cdp_followup() {
         let output = serde_json::json!({
             "kind": "create",
             "file_path": "/root/Relay_Agent/tetris.html",
@@ -4664,7 +4556,7 @@ mod cdp_copilot_tool_tests {
         })
         .to_string();
 
-        let rendered = format_cdp_tool_result("write_file", &output, false);
+        let rendered = format_cdp_tool_result("write", &output, false);
         assert!(rendered.contains("CDP follow-up summary"));
         assert!(rendered.contains("file_path: /root/Relay_Agent/tetris.html"));
         assert!(rendered.contains("content_chars:"));
@@ -4678,15 +4570,15 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn edit_file_error_keeps_full_tool_output() {
+    fn edit_error_keeps_full_tool_output() {
         let output = r#"{"error":"old_string not found in file"}"#;
-        let rendered = format_cdp_tool_result("edit_file", output, true);
+        let rendered = format_cdp_tool_result("edit", output, true);
         assert!(rendered.contains("old_string not found in file"));
         assert!(!rendered.contains("CDP follow-up summary"));
     }
 
     #[test]
-    fn read_file_success_renders_raw_content_from_json() {
+    fn read_success_renders_raw_content_from_json() {
         let output = serde_json::to_string(&json!({
             "type": "text",
             "file": {
@@ -4697,8 +4589,8 @@ mod cdp_copilot_tool_tests {
                 "totalLines": 8
             }
         }))
-        .expect("serialize read_file output");
-        let rendered = format_cdp_tool_result("read_file", &output, false);
+        .expect("serialize read output");
+        let rendered = format_cdp_tool_result("read", &output, false);
         assert!(rendered.contains("file_path: /tmp/demo.html"));
         assert!(rendered.contains("html_document: already_decoded_valid_html"));
         assert!(rendered.contains("follow_up_guidance: no_unescape_needed"));
@@ -4709,16 +4601,16 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn read_file_error_keeps_full_tool_output() {
+    fn read_error_keeps_full_tool_output() {
         let output = "No such file or directory (os error 2)\nresolved path: /tmp/missing.html";
-        let rendered = format_cdp_tool_result("read_file", output, true);
+        let rendered = format_cdp_tool_result("read", output, true);
         assert!(rendered.contains("No such file or directory"));
         assert!(rendered.contains("resolved path: /tmp/missing.html"));
         assert!(!rendered.contains("content:"));
     }
 
     #[test]
-    fn read_file_success_preserves_literal_backslashes_from_file_content() {
+    fn read_success_preserves_literal_backslashes_from_file_content() {
         let content = r#"<div id="game">\"quoted\" \\ slash</div>"#;
         let output = serde_json::to_string(&json!({
             "type": "text",
@@ -4730,8 +4622,8 @@ mod cdp_copilot_tool_tests {
                 "totalLines": 1
             }
         }))
-        .expect("serialize read_file output");
-        let rendered = format_cdp_tool_result("read_file", &output, false);
+        .expect("serialize read output");
+        let rendered = format_cdp_tool_result("read", &output, false);
         assert!(rendered.contains(content));
         assert!(!rendered.contains(r#"id=\\\"game\\\""#));
     }
@@ -4755,7 +4647,7 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn empty_glob_search_result_is_labeled_as_filename_only_miss() {
+    fn empty_glob_result_is_labeled_as_filename_only_miss() {
         let output = serde_json::to_string(&json!({
             "durationMs": 23,
             "numFiles": 0,
@@ -4767,12 +4659,12 @@ mod cdp_copilot_tool_tests {
         }))
         .expect("serialize glob output");
 
-        let rendered = format_cdp_tool_result("glob_search", &output, false);
-        assert!(rendered.contains("glob_search filename pattern matches: 0"));
+        let rendered = format_cdp_tool_result("glob", &output, false);
+        assert!(rendered.contains("glob filename pattern matches: 0"));
         assert!(rendered.contains("pattern: **/*CFS*"));
         assert!(rendered.contains("base_dir: C:\\Users\\m242054\\Relay_Agent"));
         assert!(rendered.contains("filename/glob-pattern miss"));
-        assert!(rendered.contains("does not mean workspace_search"));
+        assert!(rendered.contains("does not mean grep or office_search"));
         assert!(!rendered.contains(r#""filenames":[]"#));
     }
 
@@ -4790,20 +4682,15 @@ mod cdp_copilot_tool_tests {
         .expect("serialize search output");
         let messages = vec![
             ConversationMessage::user_text("キャッシュフロー計算書作成に必要なファイルを検索して"),
-            ConversationMessage::tool_result(
-                "tool-1",
-                "workspace_search",
-                &large_search_output,
-                false,
-            ),
-            ConversationMessage::tool_result("tool-2", "glob_search", &large_search_output, false),
+            ConversationMessage::tool_result("tool-1", "grep", &large_search_output, false),
+            ConversationMessage::tool_result("tool-2", "glob", &large_search_output, false),
             ConversationMessage::tool_result(
                 "tool-3",
                 "office_search",
                 &large_search_output,
                 false,
             ),
-            ConversationMessage::tool_result("tool-4", "glob_search", &large_search_output, false),
+            ConversationMessage::tool_result("tool-4", "glob", &large_search_output, false),
             ConversationMessage::tool_result(
                 "tool-5",
                 "office_search",
@@ -4832,7 +4719,7 @@ mod cdp_copilot_tool_tests {
     fn latest_actionable_user_turn_skips_synthetic_control_prompts() {
         let messages = vec![
             ConversationMessage::user_text(
-                "同じセッションのまま、tetris_grounding_live_copy.html を read_file で読みます。"
+                "同じセッションのまま、tetris_grounding_live_copy.html を read で読みます。"
                     .to_string(),
             ),
             ConversationMessage::user_text("Continue.".to_string()),
@@ -4850,7 +4737,7 @@ mod cdp_copilot_tool_tests {
     #[test]
     fn prompt_bundle_keeps_bare_filename_in_latest_requested_paths() {
         let messages = vec![ConversationMessage::user_text(
-            "同じセッションのまま、tetris_grounding_live_copy.html を read_file で読みます。"
+            "同じセッションのまま、tetris_grounding_live_copy.html を read で読みます。"
                 .to_string(),
         )];
         let bundle = build_cdp_prompt_bundle_from_messages(
@@ -4933,11 +4820,11 @@ mod cdp_copilot_tool_tests {
         }
     }
 
-    /// CDP bundle must include the grounding block and verbatim `read_file` tool output.
+    /// CDP bundle must include the grounding block and verbatim `read` tool output.
     #[test]
     fn build_cdp_prompt_includes_grounding_block_and_tool_result_body() {
         let html = include_str!("../../../../../tests/fixtures/tetris_grounding.html");
-        let read_file_output = serde_json::to_string(&json!({
+        let read_output = serde_json::to_string(&json!({
             "type": "text",
             "file": {
                 "filePath": "/root/Relay_Agent/tests/fixtures/tetris_grounding.html",
@@ -4947,11 +4834,11 @@ mod cdp_copilot_tool_tests {
                 "totalLines": html.lines().count()
             }
         }))
-        .expect("serialize read_file fixture output");
+        .expect("serialize read fixture output");
         let messages = vec![ConversationMessage::tool_result(
             "tu1",
-            "read_file",
-            read_file_output,
+            "read",
+            read_output,
             false,
         )];
         let system: Vec<String> = vec![];
@@ -4982,11 +4869,11 @@ mod cdp_copilot_tool_tests {
         );
         assert!(
             out.contains("Tool Result:")
-                && out.contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read_file\" status=\"ok\">")
+                && out.contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read\" status=\"ok\">")
                 && out.contains(r#"<html lang="ja">"#)
                 && out.contains("paintCell")
                 && !out.contains(r#"lang=\"ja\""#),
-            "expected read_file narrative and fixture script in bundle"
+            "expected read narrative and fixture script in bundle"
         );
     }
 
@@ -4994,7 +4881,7 @@ mod cdp_copilot_tool_tests {
     fn build_cdp_prompt_adds_tool_result_continuation_reminder() {
         let messages = vec![ConversationMessage::tool_result(
             "tu1",
-            "read_file",
+            "read",
             serde_json::to_string(&json!({
                 "type": "text",
                 "file": {
@@ -5005,7 +4892,7 @@ mod cdp_copilot_tool_tests {
                     "totalLines": 1
                 }
             }))
-            .expect("serialize read_file output"),
+            .expect("serialize read output"),
             false,
         )];
         let bundle = build_cdp_prompt_bundle_from_messages(
@@ -5136,29 +5023,29 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
-    fn fallback_json_fence_read_file() {
+    fn fallback_json_fence_read() {
         let raw = r#"了解。read-only で確認します。
 
 ```json
-{"name":"read_file","relay_tool_call":true,"input":{"path":"C:\\Users\\x\\Downloads\\テトリス.html"}}
+{"name":"read","relay_tool_call":true,"input":{"path":"C:\\Users\\x\\Downloads\\テトリス.html"}}
 ```
 "#;
         let (vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "read_file");
+        assert_eq!(tools[0].1, "read");
         assert!(tools[0].2.contains("テトリス.html"));
-        assert!(!vis.contains("read_file"));
+        assert!(!vis.contains("read"));
         assert!(!vis.contains("```json"));
     }
 
     #[test]
     fn fallback_json_fence_without_sentinel_is_recovered_when_whitelisted() {
         let raw = r#"```json
-{"name":"read_file","input":{"path":"README.md"}}
+{"name":"read","input":{"path":"README.md"}}
 ```"#;
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "read_file");
+        assert_eq!(tools[0].1, "read");
         assert_eq!(tools[0].2, r#"{"path":"README.md"}"#);
     }
 
@@ -5166,12 +5053,12 @@ mod cdp_copilot_tool_tests {
     fn fallback_plain_triple_backtick_fence() {
         let raw = r#"x
 ```
-{"name":"glob_search","relay_tool_call":true,"input":{"pattern":"*.toml"}}
+{"name":"glob","relay_tool_call":true,"input":{"pattern":"*.toml"}}
 ```
 y"#;
         let (vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "glob_search");
+        assert_eq!(tools[0].1, "glob");
         assert!(vis.contains('x'));
         assert!(vis.contains('y'));
     }
@@ -5183,12 +5070,12 @@ y"#;
 not json
 ```
 ```json
-{"name":"read_file","relay_tool_call":true,"input":{"path":"C:\\a.html"}}
+{"name":"read","relay_tool_call":true,"input":{"path":"C:\\a.html"}}
 ```
 Tail"#;
         let (vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "read_file");
+        assert_eq!(tools[0].1, "read");
         assert!(vis.contains("Text"));
         assert!(vis.contains("Tail"));
     }
@@ -5205,10 +5092,10 @@ Tail"#;
     #[test]
     fn fallback_duplicate_json_fences_deduped() {
         let raw = r#"```json
-{"name":"read_file","relay_tool_call":true,"input":{"path":"same.txt"}}
+{"name":"read","relay_tool_call":true,"input":{"path":"same.txt"}}
 ```
 ```json
-{"name":"read_file","relay_tool_call":true,"input":{"path":"same.txt"}}
+{"name":"read","relay_tool_call":true,"input":{"path":"same.txt"}}
 ```"#;
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
@@ -5220,24 +5107,24 @@ Tail"#;
     #[test]
     fn unfenced_tool_json_in_prose() {
         let raw =
-            "了解。\n\n{\"name\":\"read_file\",\"relay_tool_call\":true,\"input\":{\"path\":\"C:\\\\x\\\\y.txt\"}}\n";
+            "了解。\n\n{\"name\":\"read\",\"relay_tool_call\":true,\"input\":{\"path\":\"C:\\\\x\\\\y.txt\"}}\n";
         let (vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "read_file");
-        assert!(!vis.contains("read_file"));
+        assert_eq!(tools[0].1, "read");
+        assert!(!vis.contains("read"));
 
         let (vis, tools) = parse_retry(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "read_file");
-        assert!(!vis.contains("read_file"));
+        assert_eq!(tools[0].1, "read");
+        assert!(!vis.contains("read"));
     }
 
     #[test]
-    fn unfenced_pretty_printed_read_file() {
+    fn unfenced_pretty_printed_read() {
         let raw = r#"了解。
 
 {
-  "name": "read_file",
+  "name": "read",
   "relay_tool_call": true,
   "input": {
     "path": "C:\\Users\\x\\Downloads\\テトリス.html"
@@ -5246,13 +5133,13 @@ Tail"#;
 "#;
         let (vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "read_file");
+        assert_eq!(tools[0].1, "read");
         assert!(tools[0].2.contains("テトリス.html"));
         assert!(!vis.contains("\"name\""));
 
         let (vis, tools) = parse_retry(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "read_file");
+        assert_eq!(tools[0].1, "read");
         assert!(tools[0].2.contains("テトリス.html"));
         assert!(!vis.contains("\"name\""));
     }
@@ -5264,7 +5151,7 @@ Tail"#;
 ```Plain Text
 relay_tool は完全にはサポートされていません。
 {
-  "name": "read_file",
+  "name": "read",
   "relay_tool_call": true,
   "input": {
     "path": "C:\\Users\\m242054\\Downloads\\テトリス.html"
@@ -5275,7 +5162,7 @@ relay_tool は完全にはサポートされていません。
 次に編集します。"#;
         let (vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "read_file");
+        assert_eq!(tools[0].1, "read");
         assert!(tools[0].2.contains("テトリス.html"));
         assert!(vis.contains("了解"));
         assert!(vis.contains("次に編集"));
@@ -5288,22 +5175,22 @@ relay_tool は完全にはサポートされていません。
 
 Plain Text
 relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
-{"name":"read_file","relay_tool_call":true,"input":{"path":"README.md"}}"#;
+{"name":"read","relay_tool_call":true,"input":{"path":"README.md"}}"#;
         let (vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "read_file");
+        assert_eq!(tools[0].1, "read");
         assert_eq!(tools[0].2, r#"{"path":"README.md"}"#);
         assert!(vis.contains("README.md を読み取り"));
         assert!(!vis.contains(r#""relay_tool_call""#));
     }
 
     #[test]
-    fn initial_mode_recovers_large_inline_plain_text_write_file_with_sentinel() {
+    fn initial_mode_recovers_large_inline_plain_text_write_with_sentinel() {
         let content = "x".repeat(40_000);
         let tool = format!(
             concat!(
                 "{{\n",
-                "  \"name\": \"write_file\",\n",
+                "  \"name\": \"write\",\n",
                 "  \"relay_tool_call\": true,\n",
                 "  \"input\": {{\n",
                 "    \"path\": \"tetris.html\",\n",
@@ -5319,7 +5206,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         );
         let (vis, tools) = parse_initial(&raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "write_file");
+        assert_eq!(tools[0].1, "write");
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(
@@ -5336,7 +5223,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     }
 
     #[test]
-    fn initial_mode_salvages_large_html_code_fence_into_write_file() {
+    fn initial_mode_salvages_large_html_code_fence_into_write() {
         let raw = concat!(
             "以下を `tetris.html` として保存してブラウザで開いてください。\n\n",
             "```html\n",
@@ -5355,7 +5242,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         );
         let (vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "write_file");
+        assert_eq!(tools[0].1, "write");
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(
@@ -5393,7 +5280,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         );
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "write_file");
+        assert_eq!(tools[0].1, "write");
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(
@@ -5403,17 +5290,17 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     }
 
     #[test]
-    fn initial_mode_recovers_compact_inline_write_file_in_prose_with_sentinel() {
+    fn initial_mode_recovers_compact_inline_write_in_prose_with_sentinel() {
         let raw = concat!(
             "README.md の冒頭説明を使って指定のファイルを作成します。\n\n",
-            "{\"name\":\"write_file\",\"relay_tool_call\":true,\"input\":",
+            "{\"name\":\"write\",\"relay_tool_call\":true,\"input\":",
             "{\"path\":\"/root/Relay_Agent/relay_live_m365_smoke.txt\",",
             "\"content\":\"source: README.md\\nsummary: Desktop agent app: **Tauri v2**, **SolidJS**, **Rust**.\"}}\n\n",
             "この操作以外に、他のファイルは変更しません。"
         );
         let (vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "write_file");
+        assert_eq!(tools[0].1, "write");
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(
@@ -5435,12 +5322,12 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     fn parse_initial_repairs_unbalanced_relay_tool_fence_json() {
         let raw = concat!(
             "```relay_tool\n",
-            "{ \"name\": \"read_file\", \"relay_tool_call\": true, \"input\": { \"path\": \"README.md\" }\n",
+            "{ \"name\": \"read\", \"relay_tool_call\": true, \"input\": { \"path\": \"README.md\" }\n",
             "```"
         );
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "read_file");
+        assert_eq!(tools[0].1, "read");
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
@@ -5449,10 +5336,10 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     #[test]
     fn parse_retry_repairs_unbalanced_unfenced_tool_json() {
         let raw =
-            "{ \"name\": \"read_file\", \"relay_tool_call\": true, \"input\": { \"path\": \"README.md\" }\n";
+            "{ \"name\": \"read\", \"relay_tool_call\": true, \"input\": { \"path\": \"README.md\" }\n";
         let (_vis, tools) = parse_retry(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "read_file");
+        assert_eq!(tools[0].1, "read");
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
@@ -5460,10 +5347,10 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
 
     #[test]
     fn parse_retry_recovers_unfenced_tool_array_when_name_is_not_first_key() {
-        let raw = r#"[ { "input": { "pattern": "**/*キャッシュ*フロー*" }, "name": "glob_search", "relay_tool_call": true }, { "input": { "-i": true, "include_ext": [ "docx", "xlsx", "pptx", "pdf" ], "max_files": 200, "max_results": 100, "paths": [ "**/*" ], "pattern": "キャッシュフロー" }, "name": "office_search", "relay_tool_call": true } ]"#;
+        let raw = r#"[ { "input": { "pattern": "**/*キャッシュ*フロー*" }, "name": "glob", "relay_tool_call": true }, { "input": { "-i": true, "include_ext": [ "docx", "xlsx", "pptx", "pdf" ], "max_files": 200, "max_results": 100, "paths": [ "**/*" ], "pattern": "キャッシュフロー" }, "name": "office_search", "relay_tool_call": true } ]"#;
         let (vis, tools) = parse_retry(raw);
         assert_eq!(tools.len(), 2);
-        assert_eq!(tools[0].1, "glob_search");
+        assert_eq!(tools[0].1, "glob");
         assert_eq!(tools[1].1, "office_search");
         assert!(!vis.contains(r#""relay_tool_call""#));
     }
@@ -5473,22 +5360,22 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     // unfenced fallback must recover the call on Initial parse — not only on
     // RetryRepair.
     #[test]
-    fn parse_initial_accepts_unfenced_read_file_with_sentinel() {
-        let raw = r#"{"name":"read_file","relay_tool_call":true,"input":{"path":"README.md"}}"#;
+    fn parse_initial_accepts_unfenced_read_with_sentinel() {
+        let raw = r#"{"name":"read","relay_tool_call":true,"input":{"path":"README.md"}}"#;
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "read_file");
+        assert_eq!(tools[0].1, "read");
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
     }
 
     #[test]
-    fn parse_initial_accepts_unfenced_glob_search_with_sentinel() {
-        let raw = r#"{"name":"glob_search","relay_tool_call":true,"input":{"pattern":"**/*.html","path":"tests/fixtures/"}}"#;
+    fn parse_initial_accepts_unfenced_glob_with_sentinel() {
+        let raw = r#"{"name":"glob","relay_tool_call":true,"input":{"pattern":"**/*.html","path":"tests/fixtures/"}}"#;
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "glob_search");
+        assert_eq!(tools[0].1, "glob");
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(
@@ -5498,11 +5385,11 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     }
 
     #[test]
-    fn parse_initial_accepts_unfenced_grep_search_with_sentinel() {
-        let raw = r#"{"name":"grep_search","relay_tool_call":true,"input":{"path":"README.md","pattern":"TODO","output_mode":"count"}}"#;
+    fn parse_initial_accepts_unfenced_grep_with_sentinel() {
+        let raw = r#"{"name":"grep","relay_tool_call":true,"input":{"path":"README.md","pattern":"TODO","output_mode":"count"}}"#;
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "grep_search");
+        assert_eq!(tools[0].1, "grep");
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(input.get("pattern").and_then(Value::as_str), Some("TODO"));
@@ -5518,7 +5405,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
 ```text
 Note line.
 {
-  "name": "glob_search",
+  "name": "glob",
   "relay_tool_call": true,
   "input": { "pattern": "*.rs" }
 }
@@ -5526,7 +5413,7 @@ Note line.
 post"#;
         let (vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "glob_search");
+        assert_eq!(tools[0].1, "glob");
         assert!(vis.contains("pre"));
         assert!(vis.contains("post"));
     }
@@ -5535,7 +5422,7 @@ post"#;
     fn mixed_prose_json_fence_without_sentinel_is_rejected() {
         let raw = r#"```json
 I will inspect the file.
-{"name":"read_file","input":{"path":"README.md"}}
+{"name":"read","input":{"path":"README.md"}}
 ```"#;
         let (_vis, tools) = parse_initial(raw);
         assert!(tools.is_empty());
@@ -5545,7 +5432,7 @@ I will inspect the file.
     fn unfenced_json_without_sentinel_is_rejected_even_on_retry() {
         let raw = r#"了解。
 
-{"name":"read_file","input":{"path":"README.md"}}"#;
+{"name":"read","input":{"path":"README.md"}}"#;
         let (_vis, tools) = parse_retry(raw);
         assert!(tools.is_empty());
     }
@@ -5555,35 +5442,35 @@ I will inspect the file.
         let raw = r#"Done.
 
 ```relay_tool
-{"name":"glob_search","input":{"pattern":"*.rs"}}
+{"name":"glob","input":{"pattern":"*.rs"}}
 ```"#;
         let (vis, tools) = parse_initial(raw);
         assert!(vis.contains("Done."));
         assert!(!vis.contains("relay_tool"));
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "glob_search");
+        assert_eq!(tools[0].1, "glob");
         assert!(tools[0].2.contains("*.rs"));
     }
 
     #[test]
     fn parse_array_inside_one_fence() {
         let raw = r#"```relay_tool
-[{"name":"read_file","input":{"path":"a.txt"}},{"name":"read_file","input":{"path":"b.txt"}}]
+[{"name":"read","input":{"path":"a.txt"}},{"name":"read","input":{"path":"b.txt"}}]
 ```"#;
         let (vis, tools) = parse_initial(raw);
         assert!(vis.is_empty());
         assert_eq!(tools.len(), 2);
-        assert_eq!(tools[0].1, "read_file");
-        assert_eq!(tools[1].1, "read_file");
+        assert_eq!(tools[0].1, "read");
+        assert_eq!(tools[1].1, "read");
     }
 
     #[test]
     fn parse_two_fences() {
         let raw = r#"```relay_tool
-{"name":"read_file","input":{"path":"x"}}
+{"name":"read","input":{"path":"x"}}
 ```
 ```relay_tool
-{"name":"read_file","input":{"path":"y"}}
+{"name":"read","input":{"path":"y"}}
 ```"#;
         let (vis, tools) = parse_initial(raw);
         assert!(vis.is_empty());
@@ -5593,7 +5480,7 @@ I will inspect the file.
     #[test]
     fn parse_preserves_explicit_id() {
         let raw = r#"```relay_tool
-{"id":"my-id","name":"read_file","input":{"path":"p"}}
+{"id":"my-id","name":"read","input":{"path":"p"}}
 ```"#;
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
@@ -5614,12 +5501,12 @@ I will inspect the file.
     fn relay_tool_fence_with_explanatory_text_recovers_tool_json() {
         let raw = r#"```relay_tool
 以下の条件でローカルから検索します。
-{"name":"glob_search","relay_tool_call":true,"input":{"pattern":"**/*キャッシュ*フロー*計算*書*"}}
+{"name":"glob","relay_tool_call":true,"input":{"pattern":"**/*キャッシュ*フロー*計算*書*"}}
 ```"#;
         let (vis, tools) = parse_initial(raw);
         assert!(vis.is_empty());
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "glob_search");
+        assert_eq!(tools[0].1, "glob");
         let input: Value =
             serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
         assert_eq!(
@@ -5631,48 +5518,48 @@ I will inspect the file.
     #[test]
     fn closing_fence_without_leading_newline() {
         let raw = r#"```relay_tool
-{"name":"read_file","input":{"path":"z"}}```"#;
+{"name":"read","input":{"path":"z"}}```"#;
         let (vis, tools) = parse_initial(raw);
         assert!(vis.is_empty());
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "read_file");
+        assert_eq!(tools[0].1, "read");
     }
 
     #[test]
-    fn parse_dedupes_repeated_write_file_fences() {
+    fn parse_dedupes_repeated_write_fences() {
         let raw = r#"```relay_tool
-{"name":"write_file","input":{"path":"C:\\a.txt","content":"x"}}
+{"name":"write","input":{"path":"C:\\a.txt","content":"x"}}
 ```
 ```relay_tool
-{"name":"write_file","input":{"path":"C:\\a.txt","content":"x"}}
+{"name":"write","input":{"path":"C:\\a.txt","content":"x"}}
 ```
 ```relay_tool
-{"name":"write_file","input":{"path":"C:\\a.txt","content":"x"}}
+{"name":"write","input":{"path":"C:\\a.txt","content":"x"}}
 ```"#;
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0].1, "write_file");
+        assert_eq!(tools[0].1, "write");
     }
 
     #[test]
-    fn parse_keeps_distinct_write_file_content() {
+    fn parse_keeps_distinct_write_content() {
         let raw = r#"```relay_tool
-{"name":"write_file","input":{"path":"p","content":"a"}}
+{"name":"write","input":{"path":"p","content":"a"}}
 ```
 ```relay_tool
-{"name":"write_file","input":{"path":"p","content":"b"}}
+{"name":"write","input":{"path":"p","content":"b"}}
 ```"#;
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 2);
     }
 
     #[test]
-    fn parse_dedupes_read_file_path_aliases() {
+    fn parse_dedupes_read_path_aliases() {
         let raw = r#"```relay_tool
-{"name":"read_file","input":{"path":"README.md"}}
+{"name":"read","input":{"path":"README.md"}}
 ```
 ```relay_tool
-{"name":"read_file","input":{"file_path":"README.md"}}
+{"name":"read","input":{"file_path":"README.md"}}
 ```"#;
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
@@ -5681,7 +5568,7 @@ I will inspect the file.
     #[test]
     fn parse_dedupes_duplicate_tools_inside_one_array_fence() {
         let raw = r#"```relay_tool
-[{"name":"read_file","input":{"path":"a.txt"}},{"name":"read_file","input":{"path":"a.txt"}}]
+[{"name":"read","input":{"path":"a.txt"}},{"name":"read","input":{"path":"a.txt"}}]
 ```"#;
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
@@ -5690,10 +5577,10 @@ I will inspect the file.
     #[test]
     fn parse_dedupes_identical_calls_key_order_differs() {
         let raw = r#"```relay_tool
-{"name":"write_file","input":{"content":"z","path":"p"}}
+{"name":"write","input":{"content":"z","path":"p"}}
 ```
 ```relay_tool
-{"name":"write_file","input":{"path":"p","content":"z"}}
+{"name":"write","input":{"path":"p","content":"z"}}
 ```"#;
         let (_vis, tools) = parse_initial(raw);
         assert_eq!(tools.len(), 1);
@@ -5783,56 +5670,6 @@ I will inspect the file.
     }
 
     #[test]
-    fn workspace_enforcement_scopes_workspace_search_paths_key() {
-        let root = temp_dir();
-        fs::create_dir_all(root.join("reports")).expect("workspace reports dir");
-        let mut input = serde_json::json!({
-            "query": "キャッシュフロー計算書",
-            "mode": "office"
-        });
-
-        enforce_workspace_tool_paths("workspace_search", &mut input, &root)
-            .expect("workspace_search should default to workspace paths");
-
-        assert!(
-            input.get("path").is_none(),
-            "workspace_search does not accept path"
-        );
-        let paths = input
-            .get("paths")
-            .and_then(Value::as_array)
-            .expect("paths array");
-        let expected_root = root.canonicalize().unwrap().to_string_lossy().into_owned();
-        assert_eq!(paths[0].as_str(), Some(expected_root.as_str()));
-
-        let mut relative = serde_json::json!({
-            "query": "forecast",
-            "paths": ["reports"]
-        });
-        enforce_workspace_tool_paths("workspace_search", &mut relative, &root)
-            .expect("workspace_search relative paths should stay inside workspace");
-        let paths = relative
-            .get("paths")
-            .and_then(Value::as_array)
-            .expect("paths array");
-        let expected_reports = root
-            .join("reports")
-            .canonicalize()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        assert_eq!(paths[0].as_str(), Some(expected_reports.as_str()));
-
-        let mut outside = serde_json::json!({
-            "query": "secret",
-            "paths": ["../outside"]
-        });
-        assert!(enforce_workspace_tool_paths("workspace_search", &mut outside, &root).is_err());
-
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
     fn desktop_prompt_prioritizes_direct_file_tools_for_concrete_file_write_goals() {
         let prompt = build_desktop_system_prompt(
             "Create ./tetris.html with a single-file playable HTML Tetris.",
@@ -5841,7 +5678,7 @@ I will inspect the file.
         .join("\n\n");
         assert!(prompt.contains("## Concrete workspace file action"));
         assert!(prompt.contains("Do not start with WebSearch"));
-        assert!(prompt.contains("use `write_file` / `edit_file` in the first response"));
+        assert!(prompt.contains("use `write` / `edit` in the first response"));
 
         let inspect_prompt =
             build_desktop_system_prompt("Inspect src/lib.rs", Some("/tmp/workspace")).join("\n\n");
@@ -5889,11 +5726,11 @@ mod desktop_permission_tests {
     fn allows_read_tools_without_prompt() {
         let p = desktop_permission_policy();
         assert_eq!(
-            p.authorize("read_file", r#"{"path":"a.txt"}"#, None),
+            p.authorize("read", r#"{"path":"a.txt"}"#, None),
             PermissionOutcome::Allow
         );
         assert_eq!(
-            p.authorize("glob_search", r#"{"pattern":"*.rs"}"#, None),
+            p.authorize("glob", r#"{"pattern":"*.rs"}"#, None),
             PermissionOutcome::Allow
         );
     }
@@ -5901,11 +5738,11 @@ mod desktop_permission_tests {
     #[test]
     fn write_requires_prompter_or_denies() {
         let p = desktop_permission_policy();
-        let out = p.authorize("write_file", r#"{"path":"x","content":"y"}"#, None);
+        let out = p.authorize("write", r#"{"path":"x","content":"y"}"#, None);
         assert!(matches!(out, PermissionOutcome::Deny { .. }));
 
         let mut pr = AllowPrompter;
-        let out2 = p.authorize("write_file", r#"{"path":"x","content":"y"}"#, Some(&mut pr));
+        let out2 = p.authorize("write", r#"{"path":"x","content":"y"}"#, Some(&mut pr));
         assert_eq!(out2, PermissionOutcome::Allow);
     }
 
@@ -5938,8 +5775,8 @@ mod desktop_permission_tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(runtime_snapshot.contains("read_file|workspace-write|read-only"));
-        assert!(runtime_snapshot.contains("write_file|workspace-write|danger-full-access"));
+        assert!(runtime_snapshot.contains("read|workspace-write|read-only"));
+        assert!(runtime_snapshot.contains("write|workspace-write|danger-full-access"));
         assert!(runtime_snapshot.contains("bash|workspace-write|danger-full-access"));
     }
 }
@@ -6257,12 +6094,12 @@ mod loop_controller_tests {
         };
         assert!(next_input.contains("Tool protocol repair."));
         assert!(next_input.contains("Create ./tetris.html"));
-        assert!(next_input.contains(r#""name": "write_file""#));
+        assert!(next_input.contains(r#""name": "write""#));
         assert!(next_input.contains(r#""path": "./tetris.html""#));
     }
 
     #[test]
-    fn existing_file_tool_drift_escalates_to_targeted_read_file_repair() {
+    fn existing_file_tool_drift_escalates_to_targeted_read_repair() {
         let s = summary(
             "I will use Pages and Python next, then include citations.",
             Vec::new(),
@@ -6282,9 +6119,9 @@ mod loop_controller_tests {
             kind: LoopContinueKind::MetaNudge,
         } = decision
         else {
-            panic!("expected targeted read_file repair");
+            panic!("expected targeted read repair");
         };
-        assert!(next_input.contains(r#""name": "read_file""#));
+        assert!(next_input.contains(r#""name": "read""#));
         assert!(next_input.contains(r#""path": "src/main.rs""#));
         assert!(next_input.contains("Inspect src/main.rs and fix the import ordering."));
     }
@@ -6334,7 +6171,7 @@ mod loop_controller_tests {
     fn tool_using_turn_never_blindly_continues() {
         let s = summary(
             "I read the file and found the issue.",
-            vec![tool_success_result("read_file", "contents")],
+            vec![tool_success_result("read", "contents")],
             runtime::TurnOutcome::Completed,
         );
         assert_eq!(
@@ -6348,7 +6185,7 @@ mod loop_controller_tests {
         let s = summary(
             "The write was blocked.",
             vec![tool_error_result(
-                "write_file",
+                "write",
                 "user rejected the tool execution",
             )],
             runtime::TurnOutcome::PermissionDenied {
@@ -6379,12 +6216,12 @@ mod loop_controller_tests {
     #[test]
     fn local_search_budget_tool_error_escalates_to_summary_repair() {
         let s = summary(
-            r#"[{"name":"glob_search","relay_tool_call":true,"input":{"pattern":"**/*CF*"}}]"#,
+            r#"[{"name":"glob","relay_tool_call":true,"input":{"pattern":"**/*CF*"}}]"#,
             vec![
-                tool_success_result("glob_search", r#"{"matches":["キャッシュフロー.xlsx"]}"#),
+                tool_success_result("glob", r#"{"matches":["キャッシュフロー.xlsx"]}"#),
                 tool_success_result(
-                    "glob_search",
-                    "Search tool budget reached: Relay already executed 6 local search calls in this turn. The prior tool outputs remain in the transcript above. Do not issue more `workspace_search`, `glob_search`, `grep_search`, or `office_search` calls for this request; summarize the existing findings for the user.",
+                    "glob",
+                    "Search tool budget reached: Relay already executed 6 local search calls in this turn. The prior tool outputs remain in the transcript above. Do not issue more `glob`, `grep`, or `office_search` calls for this request; summarize the existing findings for the user.",
                 ),
             ],
             runtime::TurnOutcome::ToolError {
@@ -6412,9 +6249,9 @@ mod loop_controller_tests {
     #[test]
     fn local_search_guard_stops_after_summary_repair_limit() {
         let s = summary(
-            r#"[{"name":"glob_search","relay_tool_call":true,"input":{"pattern":"**/*CF*"}}]"#,
+            r#"[{"name":"glob","relay_tool_call":true,"input":{"pattern":"**/*CF*"}}]"#,
             vec![tool_success_result(
-                "glob_search",
+                "glob",
                 "Search tool budget reached: Relay already executed 6 local search calls in this turn.",
             )],
             runtime::TurnOutcome::ToolError {
@@ -6436,15 +6273,15 @@ mod loop_controller_tests {
     }
 
     #[test]
-    fn read_file_enoent_in_build_session_gets_path_repair() {
+    fn read_enoent_in_build_session_gets_path_repair() {
         let summary = runtime::TurnSummary {
             assistant_messages: vec![ConversationMessage::assistant(vec![ContentBlock::ToolUse {
                 id: "tool-1".to_string(),
-                name: "read_file".to_string(),
+                name: "read".to_string(),
                 input: r#"{"path":"tests/fixtures/tetris_grounding_live_copy.html"}"#.to_string(),
             }])],
             tool_results: vec![tool_error_result(
-                "read_file",
+                "read",
                 "No such file or directory (os error 2)\nresolved path: /root/Relay_Agent/tests/fixtures/tetris_grounding_live_copy.html",
             )],
             iterations: 1,
@@ -6457,7 +6294,7 @@ mod loop_controller_tests {
         };
         let decision = decide_loop_after_success(
             "Read the requested file",
-            "同じセッションのまま、tetris_grounding_live_copy.html を read_file で読みます。",
+            "同じセッションのまま、tetris_grounding_live_copy.html を read で読みます。",
             0,
             0,
             2,
@@ -6481,11 +6318,11 @@ mod loop_controller_tests {
         let summary = runtime::TurnSummary {
             assistant_messages: vec![ConversationMessage::assistant(vec![ContentBlock::ToolUse {
                 id: "tool-1".to_string(),
-                name: "read_file".to_string(),
+                name: "read".to_string(),
                 input: r#"{"path":"tests/fixtures/tetris_grounding_live_copy.html"}"#.to_string(),
             }])],
             tool_results: vec![tool_error_result(
-                "read_file",
+                "read",
                 "No such file or directory (os error 2)\nresolved path: /root/Relay_Agent/tests/fixtures/tetris_grounding_live_copy.html",
             )],
             iterations: 1,
@@ -6498,7 +6335,7 @@ mod loop_controller_tests {
         };
         let decision = decide_loop_after_success(
             "Read the requested file",
-            "同じセッションのまま、tetris_grounding_live_copy.html を read_file で読みます。",
+            "同じセッションのまま、tetris_grounding_live_copy.html を read で読みます。",
             0,
             0,
             2,
@@ -6540,15 +6377,15 @@ mod loop_controller_tests {
     fn doom_loop_trips_after_three_identical_turns() {
         let repeated = vec![
             TurnActivitySignature {
-                tool_keys: vec![tool_use_key("read_file", r#"{"path":"a.txt"}"#)],
+                tool_keys: vec![tool_use_key("read", r#"{"path":"a.txt"}"#)],
                 assistant_prose: normalize_assistant_prose_for_loop_guard("Reading the same file."),
             },
             TurnActivitySignature {
-                tool_keys: vec![tool_use_key("read_file", r#"{"path":"a.txt"}"#)],
+                tool_keys: vec![tool_use_key("read", r#"{"path":"a.txt"}"#)],
                 assistant_prose: normalize_assistant_prose_for_loop_guard("Reading the same file."),
             },
             TurnActivitySignature {
-                tool_keys: vec![tool_use_key("read_file", r#"{"path":"a.txt"}"#)],
+                tool_keys: vec![tool_use_key("read", r#"{"path":"a.txt"}"#)],
                 assistant_prose: normalize_assistant_prose_for_loop_guard("Reading the same file."),
             },
         ];
@@ -6559,15 +6396,15 @@ mod loop_controller_tests {
     fn doom_loop_ignores_changed_tool_input() {
         let changing = vec![
             TurnActivitySignature {
-                tool_keys: vec![tool_use_key("read_file", r#"{"path":"a.txt"}"#)],
+                tool_keys: vec![tool_use_key("read", r#"{"path":"a.txt"}"#)],
                 assistant_prose: normalize_assistant_prose_for_loop_guard("Reading the same file."),
             },
             TurnActivitySignature {
-                tool_keys: vec![tool_use_key("read_file", r#"{"path":"b.txt"}"#)],
+                tool_keys: vec![tool_use_key("read", r#"{"path":"b.txt"}"#)],
                 assistant_prose: normalize_assistant_prose_for_loop_guard("Reading the same file."),
             },
             TurnActivitySignature {
-                tool_keys: vec![tool_use_key("read_file", r#"{"path":"a.txt"}"#)],
+                tool_keys: vec![tool_use_key("read", r#"{"path":"a.txt"}"#)],
                 assistant_prose: normalize_assistant_prose_for_loop_guard("Reading the same file."),
             },
         ];
@@ -6583,7 +6420,7 @@ mod loop_controller_tests {
                 },
                 ContentBlock::ToolUse {
                     id: "tool-1".to_string(),
-                    name: "read_file".to_string(),
+                    name: "read".to_string(),
                     input: r#"{"file_path":"README.md"}"#.to_string(),
                 },
             ])],
@@ -6598,7 +6435,7 @@ mod loop_controller_tests {
         assert_eq!(signature.tool_keys.len(), 1);
         assert_eq!(
             signature.tool_keys[0],
-            tool_use_key("read_file", r#"{"path":"README.md"}"#)
+            tool_use_key("read", r#"{"path":"README.md"}"#)
         );
     }
 
@@ -6699,7 +6536,7 @@ mod loop_controller_tests {
             "LOCAL_TOOLS_UNAVAILABLE because I can't use local workspace editing tools."
         ));
         assert!(is_tool_protocol_confusion_text(
-            "I'll use write_file to create the file. Adjusting tool use... ```"
+            "I'll use write to create the file. Adjusting tool use... ```"
         ));
         assert!(is_tool_protocol_confusion_text(
             "I need to switch to the Agent tool and Pages before I can continue."
@@ -6726,7 +6563,7 @@ mod loop_controller_tests {
             "{\n\"path\": \"tetris.html\",\n\"content\":"
         ));
         assert!(is_tool_protocol_confusion_text(
-            "[\n{\n\"name\": \"write_file\","
+            "[\n{\n\"name\": \"write\","
         ));
         // Long-form prose that happens to mention `"input"` must not match.
         assert!(!is_tool_protocol_confusion_text(
@@ -6740,7 +6577,7 @@ mod loop_controller_tests {
             "**Creating HTML Tetris**I'm planning to create a Tetris game in HTML with a single file that includes a canvas and controls, and I'll use Relay to save it as tetris.html."
         ));
         assert!(is_tool_protocol_confusion_text(
-            "I'll use the Relay write_file tool to save tetris.html now."
+            "I'll use the Relay write tool to save tetris.html now."
         ));
         assert!(is_tool_protocol_confusion_text(
             "Planning to create a Tetris game as a single HTML file with canvas controls."
@@ -6833,14 +6670,14 @@ mod loop_controller_tests {
             panic!("expected README deferral to escalate to repair");
         };
         assert!(next_input.contains("Tool protocol repair."));
-        assert!(next_input.contains(r#""name": "read_file""#));
+        assert!(next_input.contains(r#""name": "read""#));
         assert!(next_input.contains("README.md"));
     }
 
     #[test]
     fn build_false_completion_claim_escalates_to_repair() {
         let s = summary(
-            "完了しました。`/root/Relay_Agent/repair_small_case.txt` は write_file を使用して作成済みです。",
+            "完了しました。`/root/Relay_Agent/repair_small_case.txt` は write を使用して作成済みです。",
             Vec::new(),
             runtime::TurnOutcome::Completed,
         );
@@ -6861,7 +6698,7 @@ mod loop_controller_tests {
             panic!("expected false completion to escalate to repair");
         };
         assert!(next_input.contains("Tool protocol repair."));
-        assert!(next_input.contains(r#""name": "write_file""#));
+        assert!(next_input.contains(r#""name": "write""#));
         assert!(next_input.contains("repair_small_case.txt"));
     }
 
@@ -6892,107 +6729,11 @@ mod loop_controller_tests {
         assert!(next_input.contains("enterprise search"));
         assert!(next_input.contains("turn1search"));
         assert!(next_input.contains("not Relay tool results"));
-        assert!(next_input.contains(r#""name": "workspace_search""#));
-        assert!(next_input.contains(r#""mode": "office""#));
+        assert!(next_input.contains(r#""name": "office_search""#));
         assert!(next_input.contains("キャッシュフロー計算書"));
         assert!(next_input.contains(r#""include_ext": ["#));
-        assert!(next_input.contains("small, concrete rg-backed"));
-        assert!(!next_input.contains(r#""name": "write_file""#));
-    }
-
-    #[test]
-    fn document_lookup_gets_query_driven_initial_search_plan() {
-        let calls = build_initial_local_search_tool_calls(
-            "キャッシュフロー計算書の作成に関係するファイルを検索して",
-            None,
-        )
-        .expect("document lookup should get an initial local search plan");
-
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "glob_search");
-        assert!(calls[0]
-            .1
-            .contains(r#""pattern":"**/*.{docx,xlsx,pptx,pdf}""#));
-        assert!(!calls[0].1.contains("workspace_search"));
-        assert!(!calls[0].1.contains("office_search"));
-    }
-
-    #[test]
-    fn document_lookup_query_ignores_instruction_words_and_honors_explicit_extension() {
-        let calls = build_initial_local_search_tool_calls(
-            "できるだけ新しく、関連度の高い予算精算表Excelファイルを検索して",
-            None,
-        )
-        .expect("document lookup should get an initial local search plan");
-
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "glob_search");
-        assert!(calls[0].1.contains(r#""pattern":"**/*.xlsx""#));
-        assert!(!calls[0].1.contains("workspace_search"));
-    }
-
-    #[test]
-    fn cash_flow_lookup_keeps_pdf_when_user_asks_for_pdf() {
-        let calls = build_initial_local_search_tool_calls(
-            "キャッシュフロー計算書の作成に関係するPDFファイルを検索して",
-            None,
-        )
-        .expect("PDF-specific cash-flow lookup should get an initial local search plan");
-
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "glob_search");
-        assert!(calls[0].1.contains(r#""pattern":"**/*.pdf""#));
-    }
-
-    #[test]
-    fn initial_search_plan_uses_workspace_cwd_instead_of_external_unc_anchor() {
-        let calls = build_initial_local_search_tool_calls(
-            r"\\Dsfile622\\div622$\\shr1\\05_経理部\\03_連結財務G にあるキャッシュフロー計算書関連ファイルを検索して",
-            Some(r"C:\Users\m242054\Relay_Agent"),
-        )
-        .expect("document lookup should get an initial local search plan");
-
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "glob_search");
-        assert!(calls[0]
-            .1
-            .contains(r#""path":"C:\\Users\\m242054\\Relay_Agent""#));
-        assert!(calls[0]
-            .1
-            .contains(r#""pattern":"**/*.{docx,xlsx,pptx,pdf}""#));
-    }
-
-    #[test]
-    fn initial_search_plan_uses_external_mapped_drive_for_office_lookup() {
-        let calls = build_initial_local_search_tool_calls(
-            r"H:\shr1\05_経理部\03_連結財務G にあるキャッシュフロー計算書関連ファイルを検索して",
-            Some(r"C:\Users\m242054\Relay_Agent"),
-        )
-        .expect("document lookup should get an initial local search plan");
-
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "glob_search");
-        assert!(calls[0]
-            .1
-            .contains(r#""path":"C:\\Users\\m242054\\Relay_Agent""#));
-        assert!(calls[0]
-            .1
-            .contains(r#""pattern":"**/*.{docx,xlsx,pptx,pdf}""#));
-    }
-
-    #[test]
-    fn initial_search_plan_keeps_path_anchor_inside_workspace_cwd() {
-        let calls = build_initial_local_search_tool_calls(
-            r"C:\Users\m242054\Relay_Agent\reports にあるExcelファイルを検索して",
-            Some(r"C:\Users\m242054\Relay_Agent"),
-        )
-        .expect("document lookup should get an initial local search plan");
-
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "glob_search");
-        assert!(calls[0]
-            .1
-            .contains(r#""path":"C:\\Users\\m242054\\Relay_Agent\\reports""#));
+        assert!(next_input.contains("`office_search` for Office/PDF contents"));
+        assert!(!next_input.contains(r#""name": "write""#));
     }
 
     #[test]
@@ -7008,16 +6749,15 @@ mod loop_controller_tests {
             panic!("expected required-file lookup to escalate to local search repair");
         };
         assert!(next_input.contains("This is a local file/document search request."));
-        assert!(next_input.contains(r#""name": "workspace_search""#));
-        assert!(next_input.contains(r#""mode": "office""#));
+        assert!(next_input.contains(r#""name": "office_search""#));
         assert!(next_input.contains("キャッシュフロー計算書"));
         assert!(next_input.contains(r#""include_ext": ["#));
-        assert!(!next_input.contains(r#""name": "write_file""#));
+        assert!(!next_input.contains(r#""name": "write""#));
         assert_eq!(kind, LoopContinueKind::MetaNudge);
     }
 
     #[test]
-    fn local_file_search_without_known_keyword_still_gets_workspace_search_repair() {
+    fn local_file_search_without_known_keyword_still_gets_office_search_repair() {
         let s = summary(
             "対象ファイルを確認してから回答します。",
             Vec::new(),
@@ -7026,17 +6766,18 @@ mod loop_controller_tests {
         let request = "ワークスペース配下の関連資料を検索して";
         let decision = decide_loop_after_success(request, request, 1, 0, 2, false, &s);
         let LoopDecision::Continue { next_input, kind } = decision else {
-            panic!("expected generic local search request to emit workspace_search repair");
+            panic!("expected generic local search request to emit office_search repair");
         };
         assert!(next_input.contains("This is a local"));
         assert!(next_input.contains("search request."));
-        assert!(next_input.contains(r#""name": "workspace_search""#));
-        assert!(next_input.contains(r#""query": "ワークスペース配下の関連資料を検索して""#));
+        assert!(next_input.contains(r#""name": "office_search""#));
+        assert!(next_input.contains(r#""pattern":"#) || next_input.contains(r#""pattern": "#));
+        assert!(!next_input.contains(r#""name": "workspace""#));
         assert_eq!(kind, LoopContinueKind::MetaNudge);
     }
 
     #[test]
-    fn no_relay_tool_call_for_local_lookup_repairs_to_minimal_workspace_search() {
+    fn no_relay_tool_call_for_local_lookup_repairs_to_grep() {
         let s = summary(
             "関連しそうな実装を確認してから説明します。",
             Vec::new(),
@@ -7050,12 +6791,12 @@ mod loop_controller_tests {
 
         assert_eq!(kind, LoopContinueKind::MetaNudge);
         assert!(next_input.contains("Tool protocol repair."));
-        assert!(next_input.contains(r#""name": "workspace_search""#));
-        assert!(next_input.contains(r#""query": "agentic search の関連実装を探して""#));
+        assert!(next_input.contains(r#""name": "grep""#));
+        assert!(next_input.contains(r#""pattern": "agentic""#));
     }
 
     #[test]
-    fn repeated_generic_prose_before_tool_repairs_to_workspace_search() {
+    fn repeated_generic_prose_before_tool_repairs_to_grep() {
         let s = summary(
             "確認します。関連ファイルを確認します。確認してから回答します。",
             Vec::new(),
@@ -7069,30 +6810,23 @@ mod loop_controller_tests {
 
         assert_eq!(kind, LoopContinueKind::MetaNudge);
         assert!(next_input.contains("Tool protocol repair."));
-        assert!(next_input.contains(r#""name": "workspace_search""#));
-    }
-
-    #[test]
-    fn agentic_search_implementation_lookup_starts_with_opencode_grep() {
-        let calls = build_initial_local_search_tool_calls("agentic search の実装を探して", None)
-            .expect("agentic search lookup should get grep_search");
-
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].0, "grep_search");
-        assert!(calls[0].1.contains(r#""pattern":"agentic""#));
-        assert!(calls[0].1.contains(r#""output_mode":"content""#));
-        assert!(calls[0].1.contains(r#""max_count":20"#));
+        assert!(
+            next_input.contains(r#""name": "grep""#)
+                || next_input.contains(r#""name": "glob""#)
+                || next_input.contains(r#""name": "office_search""#)
+        );
+        assert!(!next_input.contains(r#""name": "workspace""#));
     }
 
     #[test]
     fn malformed_office_search_tool_json_after_results_escalates_to_summary_repair() {
-        let malformed = r#"[ { "name": "glob_search", "relay_tool_call": true, "input": { "pattern": "**/*キャッシュ*フロー*" } , }, "input": { "-i": true, "include_ext": [ "docx", "xlsx", "pptx", "pdf" ], "max_files": 200, "max_results": 100, "paths": [ "**/*" ], "pattern": "キャッシュフロー" } ]"#;
+        let malformed = r#"[ { "name": "glob", "relay_tool_call": true, "input": { "pattern": "**/*キャッシュ*フロー*" } , }, "input": { "-i": true, "include_ext": [ "docx", "xlsx", "pptx", "pdf" ], "max_files": 200, "max_results": 100, "paths": [ "**/*" ], "pattern": "キャッシュフロー" } ]"#;
         assert!(is_tool_protocol_confusion_text(malformed));
 
         let s = summary(
             malformed,
             vec![
-                tool_success_result("glob_search", r#"{"matches":["キャッシュフロー.xlsx"]}"#),
+                tool_success_result("glob", r#"{"matches":["キャッシュフロー.xlsx"]}"#),
                 tool_success_result(
                     "office_search",
                     r#"{"results":[{"path":"キャッシュフロー.xlsx","anchor":"Sheet1!A1","preview":"キャッシュフロー 作成"}]}"#,
@@ -7165,85 +6899,12 @@ mod loop_controller_tests {
     }
 
     #[test]
-    fn important_conclusion_after_workspace_search_without_read_file_repairs_to_read_file() {
-        let workspace_output = r#"{
-            "query": "agentic search 改善",
-            "candidates": [{"path": "/workspace/src/search.rs", "score": 42.0, "reasons": ["content matches"], "match_count": 1}],
-            "snippets": [{"path": "/workspace/src/search.rs", "anchor": null, "line_start": 10, "line_end": 12, "preview": "workspace_search snippets"}],
-            "recommended_next_tools": [{"tool": "read_file", "path": "/workspace/src/search.rs", "reason": "top ranked candidate"}],
-            "needs_clarification": false
-        }"#;
-        let s = summary(
-            "結論として search.rs を改善すべきです。",
-            vec![tool_success_result("workspace_search", workspace_output)],
-            runtime::TurnOutcome::Completed,
-        );
-        let request = "agentic search の改善案を実装して";
-        let decision = decide_loop_after_success(request, request, 0, 0, 2, false, &s);
-        let LoopDecision::Continue { next_input, kind } = decision else {
-            panic!("expected evidence expansion repair");
-        };
-
-        assert_eq!(kind, LoopContinueKind::MetaNudge);
-        assert!(next_input.contains("ImportantConclusionWithoutEvidence repair."));
-        assert!(next_input.contains(r#""name": "read_file""#));
-        assert!(next_input.contains("/workspace/src/search.rs"));
-    }
-
-    #[test]
-    fn unrelated_read_file_does_not_satisfy_workspace_search_recommendation() {
-        let workspace_output = r#"{
-            "query": "agentic search 改善",
-            "candidates": [{"path": "/workspace/src/search.rs", "score": 42.0, "reasons": ["content matches"], "match_count": 1}],
-            "snippets": [{"path": "/workspace/src/search.rs", "anchor": null, "line_start": 10, "line_end": 12, "preview": "workspace_search snippets"}],
-            "recommended_next_tools": [{"tool": "read_file", "path": "/workspace/src/search.rs", "reason": "top ranked candidate"}],
-            "needs_clarification": false
-        }"#;
-        let s = runtime::TurnSummary {
-            assistant_messages: vec![ConversationMessage::assistant(vec![
-                ContentBlock::ToolUse {
-                    id: "tool-read-other".to_string(),
-                    name: "read_file".to_string(),
-                    input: r#"{"path":"/workspace/src/other.rs"}"#.to_string(),
-                },
-                ContentBlock::Text {
-                    text: "結論として search.rs を改善すべきです。".to_string(),
-                },
-            ])],
-            tool_results: vec![
-                tool_success_result("workspace_search", workspace_output),
-                ConversationMessage::tool_result(
-                    "tool-read-other",
-                    "read_file",
-                    "other file content",
-                    false,
-                ),
-            ],
-            iterations: 1,
-            usage: TokenUsage::default(),
-            auto_compaction: None,
-            outcome: runtime::TurnOutcome::Completed,
-            terminal_assistant_text: "結論として search.rs を改善すべきです。".to_string(),
-        };
-        let request = "agentic search の改善案を実装して";
-        let decision = decide_loop_after_success(request, request, 0, 0, 2, false, &s);
-        let LoopDecision::Continue { next_input, kind } = decision else {
-            panic!("expected evidence expansion repair for unread recommended path");
-        };
-
-        assert_eq!(kind, LoopContinueKind::MetaNudge);
-        assert!(next_input.contains("ImportantConclusionWithoutEvidence repair."));
-        assert!(next_input.contains("/workspace/src/search.rs"));
-        assert!(!next_input.contains("/workspace/src/other.rs"));
-    }
-
-    #[test]
     fn copilot_search_leak_after_local_search_repairs_to_relay_summary() {
         let s = summary(
             "Copilot enterprise search found a file citeturn1search0.",
             vec![tool_success_result(
-                "workspace_search",
-                r#"{"candidates":[],"snippets":[],"recommended_next_tools":[]}"#,
+                "glob",
+                r#"{"filenames":[],"num_files":0}"#,
             )],
             runtime::TurnOutcome::Completed,
         );
@@ -7283,7 +6944,7 @@ mod loop_controller_tests {
             panic!("expected plain file body completion to escalate to repair");
         };
         assert!(next_input.contains("Tool protocol repair."));
-        assert!(next_input.contains(r#""name": "write_file""#));
+        assert!(next_input.contains(r#""name": "write""#));
         assert!(next_input.contains(r#""path": "./tetris.html""#));
     }
 
@@ -7315,7 +6976,7 @@ mod loop_controller_tests {
     }
 
     #[test]
-    fn pathless_html_tetris_request_uses_default_tetris_write_file_repair() {
+    fn pathless_html_tetris_request_uses_default_tetris_write_repair() {
         let s = summary(
             "Show**Planning Tetris HTML creation**I’m preparing to use the relay tool after deciding on the filename.",
             Vec::new(),
@@ -7335,9 +6996,9 @@ mod loop_controller_tests {
             kind: LoopContinueKind::MetaNudge,
         } = decision
         else {
-            panic!("expected targeted write_file repair for pathless html tetris request");
+            panic!("expected targeted write repair for pathless html tetris request");
         };
-        assert!(next_input.contains(r#""name": "write_file""#));
+        assert!(next_input.contains(r#""name": "write""#));
         assert!(next_input.contains(r#""path": "tetris.html""#));
         assert!(
             next_input.contains("Do not spend another turn choosing or explaining the filename")
@@ -7348,7 +7009,7 @@ mod loop_controller_tests {
     #[test]
     fn exhausted_false_completion_claim_stops_with_meta_stall() {
         let s = summary(
-            "Completed. `/root/Relay_Agent/repair_small_case.txt` has been created with write_file and status: ok.",
+            "Completed. `/root/Relay_Agent/repair_small_case.txt` has been created with write and status: ok.",
             Vec::new(),
             runtime::TurnOutcome::Completed,
         );
@@ -7583,12 +7244,12 @@ mod loop_controller_tests {
     }
 
     #[test]
-    fn large_inline_plain_text_write_file_executes_without_tool_protocol_repair() {
+    fn large_inline_plain_text_write_executes_without_tool_protocol_repair() {
         let content = "x".repeat(40_000);
         let tool = format!(
             concat!(
                 "{{\n",
-                "  \"name\": \"write_file\",\n",
+                "  \"name\": \"write\",\n",
                 "  \"relay_tool_call\": true,\n",
                 "  \"input\": {{\n",
                 "    \"path\": \"tetris.html\",\n",
@@ -7624,7 +7285,7 @@ mod loop_controller_tests {
                     input: tool_calls[0].2.clone(),
                 },
             ])],
-            tool_results: vec![tool_success_result("write_file", "executed write_file")],
+            tool_results: vec![tool_success_result("write", "executed write")],
             iterations: 1,
             usage: TokenUsage::default(),
             auto_compaction: None,
@@ -7657,7 +7318,7 @@ mod loop_controller_tests {
             }]),
             ConversationMessage::tool_result(
                 "tool-1",
-                "write_file",
+                "write",
                 serde_json::json!({
                     "kind": "create",
                     "file_path": "/root/Relay_Agent/tetris.html",
@@ -7685,7 +7346,7 @@ mod loop_controller_tests {
         assert!(bundle.tool_result_chars() > 0);
         assert_eq!(bundle.tool_result_count(), 1);
         assert!(bundle.catalog_chars() > 0);
-        assert!(bundle.catalog_text.contains("### `write_file`"));
+        assert!(bundle.catalog_text.contains("### `write`"));
         assert!(bundle.catalog_text.contains("### `bash`"));
     }
 

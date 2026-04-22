@@ -11,10 +11,10 @@ mod mock_parity_manifest {
     /// Must match [ultraworkers/claw-code](https://github.com/ultraworkers/claw-code) `rust/mock_parity_scenarios.json` array order.
     const EXPECTED_SCENARIO_NAMES: &[&str] = &[
         "streaming_text",
-        "read_file_roundtrip",
+        "read_roundtrip",
         "grep_chunk_assembly",
-        "write_file_allowed",
-        "write_file_denied",
+        "write_allowed",
+        "write_denied",
         "multi_tool_turn_roundtrip",
         "bash_stdout_roundtrip",
         "bash_permission_prompt_approved",
@@ -68,23 +68,23 @@ mod parity_style {
     }
 
     #[test]
-    fn read_file_roundtrip_under_temp_workspace() {
+    fn read_roundtrip_under_temp_workspace() {
         let dir = std::env::temp_dir().join(format!("relay-parity-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let f = dir.join("hello.txt");
         fs::write(&f, "parity").unwrap();
         let v = json!({ "path": f.to_string_lossy() });
-        let out = execute_tool("read_file", &v).expect("read_file");
+        let out = execute_tool("read", &v).expect("read");
         assert!(out.contains("parity"), "{out}");
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn write_file_denied_under_read_only_policy() {
+    fn write_denied_under_read_only_policy() {
         let policy = PermissionPolicy::new(PermissionMode::ReadOnly)
-            .with_tool_requirement("write_file", PermissionMode::WorkspaceWrite);
+            .with_tool_requirement("write", PermissionMode::WorkspaceWrite);
         assert!(matches!(
-            policy.authorize("write_file", "{}", None),
+            policy.authorize("write", "{}", None),
             PermissionOutcome::Deny { .. }
         ));
     }
@@ -166,7 +166,7 @@ mod parity_style {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("a.rs"), "fn x() {}").unwrap();
         let glob = execute_tool(
-            "glob_search",
+            "glob",
             &json!({
                 "pattern": "*.rs",
                 "path": dir.to_string_lossy(),
@@ -178,11 +178,11 @@ mod parity_style {
     }
 
     #[test]
-    fn workspace_search_agentic_scenario_returns_evidence_above_low_level_search() {
+    fn grep_agentic_scenario_returns_low_level_evidence() {
         let _guard = env_lock();
         let original_dir = std::env::current_dir().expect("cwd");
         let dir = std::env::temp_dir().join(format!(
-            "relay-agentic-search-parity-{}",
+            "relay-grep-search-parity-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);
@@ -201,25 +201,18 @@ mod parity_style {
         std::env::set_current_dir(&dir).expect("set cwd");
 
         let out = execute_tool(
-            "workspace_search",
+            "grep",
             &json!({
-                "query": "agentic search flow",
-                "paths": ["."],
-                "include_ext": ["rs"],
-                "max_files": 20,
-                "max_snippets": 10,
+                "pattern": "agentic_search_flow",
+                "path": "src",
+                "glob": "*.rs",
+                "output_mode": "content",
                 "context": 1
             }),
         )
-        .expect("workspace_search");
+        .expect("grep");
 
-        assert!(out.contains("\"candidates\""), "{out}");
-        assert!(out.contains("\"snippets\""), "{out}");
-        assert!(out.contains("\"plan\""), "{out}");
-        assert!(out.contains("\"trace\""), "{out}");
-        assert!(out.contains("\"recommended_next_tools\""), "{out}");
-        assert!(out.contains("\"read_file\""), "{out}");
-        assert!(out.contains("\"limits\""), "{out}");
+        assert!(out.contains("agentic_search_flow"), "{out}");
         assert!(out.contains("src/search.rs"), "{out}");
         assert!(!out.contains("target/debug/noise.rs"), "{out}");
 
@@ -227,9 +220,9 @@ mod parity_style {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// claw `mock_parity_scenarios.json`: `write_file_allowed`
+    /// claw `mock_parity_scenarios.json`: `write_allowed`
     #[test]
-    fn write_file_allowed_under_temp_workspace() {
+    fn write_allowed_under_temp_workspace() {
         let dir = std::env::temp_dir().join(format!("relay-write-parity-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let f = dir.join("out.txt");
@@ -237,7 +230,7 @@ mod parity_style {
             "path": f.to_string_lossy(),
             "content": "parity-write-ok\n",
         });
-        let out = execute_tool("write_file", &v).expect("write_file");
+        let out = execute_tool("write", &v).expect("write");
         assert!(
             out.contains("parity-write-ok") || out.contains("create") || out.contains("update"),
             "{out}"
@@ -248,7 +241,7 @@ mod parity_style {
 
     /// claw `mock_parity_scenarios.json`: `grep_chunk_assembly` — count mode (mock harness expects 2 "parity" hits in fixture.txt).
     #[test]
-    fn grep_search_count_mode_finds_expected_matches() {
+    fn grep_count_mode_finds_expected_matches() {
         let dir = std::env::temp_dir().join(format!("relay-grep-count-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(
@@ -257,14 +250,14 @@ mod parity_style {
         )
         .unwrap();
         let out = execute_tool(
-            "grep_search",
+            "grep",
             &json!({
                 "pattern": "parity",
                 "path": dir.join("fixture.txt").to_string_lossy(),
                 "output_mode": "count",
             }),
         )
-        .expect("grep_search");
+        .expect("grep");
         assert!(
             out.contains("\"numMatches\":2") || out.contains(r#""numMatches": 2"#),
             "expected 2 matches in count output: {out}"
@@ -274,12 +267,12 @@ mod parity_style {
 
     /// claw `mock_parity_scenarios.json`: `grep_chunk_assembly` (content mode)
     #[test]
-    fn grep_search_finds_match_in_workspace_file() {
+    fn grep_finds_match_in_workspace_file() {
         let dir = std::env::temp_dir().join(format!("relay-grep-parity-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("needle.rs"), "fn find_me() {}\n").unwrap();
         let out = execute_tool(
-            "grep_search",
+            "grep",
             &json!({
                 "pattern": "find_me",
                 "path": dir.to_string_lossy(),
@@ -287,14 +280,14 @@ mod parity_style {
                 "output_mode": "content",
             }),
         )
-        .expect("grep_search");
+        .expect("grep");
         assert!(out.contains("find_me"), "{out}");
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// claw `mock_parity_scenarios.json`: `multi_tool_turn_roundtrip` — behavioral: read_file then grep_search in one workspace.
+    /// claw `mock_parity_scenarios.json`: `multi_tool_turn_roundtrip` — behavioral: read then grep in one workspace.
     #[test]
-    fn multi_tool_read_file_then_grep_in_same_workspace() {
+    fn multi_tool_read_then_grep_in_same_workspace() {
         let dir =
             std::env::temp_dir().join(format!("relay-multi-tool-parity-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
@@ -305,19 +298,19 @@ mod parity_style {
         )
         .unwrap();
 
-        let read_out = execute_tool("read_file", &json!({ "path": fixture.to_string_lossy() }))
-            .expect("read_file");
+        let read_out = execute_tool("read", &json!({ "path": fixture.to_string_lossy() }))
+            .expect("read");
         assert!(read_out.contains("alpha parity line"), "{read_out}");
 
         let grep_out = execute_tool(
-            "grep_search",
+            "grep",
             &json!({
                 "pattern": "parity",
                 "path": fixture.to_string_lossy(),
                 "output_mode": "count",
             }),
         )
-        .expect("grep_search");
+        .expect("grep");
         assert!(
             grep_out.contains("\"numMatches\":2") || grep_out.contains(r#""numMatches": 2"#),
             "{grep_out}"
@@ -383,12 +376,12 @@ mod parity_style {
     }
 
     #[test]
-    fn read_file_hard_denylist_blocks_dot_env() {
+    fn read_hard_denylist_blocks_dot_env() {
         let dir = std::env::temp_dir().join(format!("relay-env-deny-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let f = dir.join(".env.local");
         fs::write(&f, "SECRET=x\n").unwrap();
-        let err = execute_tool("read_file", &json!({ "path": f.to_string_lossy() }))
+        let err = execute_tool("read", &json!({ "path": f.to_string_lossy() }))
             .expect_err(".env blocked");
         assert!(
             err.to_ascii_lowercase().contains("denylist")

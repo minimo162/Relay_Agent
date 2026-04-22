@@ -288,7 +288,7 @@ fn cdp_catalog_specs_for_flavor(catalog_flavor: CdpCatalogFlavor) -> Vec<tools::
         CdpCatalogFlavor::StandardFull => specs,
         CdpCatalogFlavor::RepairWriteFileOnly => specs
             .into_iter()
-            .filter(|spec| spec.name == "write_file")
+            .filter(|spec| spec.name == "write")
             .collect(),
     }
 }
@@ -378,10 +378,10 @@ Only the tools documented below are intentionally advertised to Copilot for this
 
 ## Preferred sequences
 
-- named existing file inspect/edit/review => `read_file` then `edit_file`
-- named new file create => `write_file`
-- codebase search/investigation => `glob_search` / `grep_search` before `bash`
-- open-ended search => batch a few likely useful `glob_search` / `grep_search` calls in one `relay_tool` array instead of narrating a search plan
+- named existing file inspect/edit/review => `read` then `edit`
+- named new file create => `write`
+- codebase search/investigation => `glob` / `grep` before `bash`
+- open-ended search => batch a few likely useful `glob` / `grep` calls in one `relay_tool` array instead of narrating a search plan
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
 
 {rendered_tools}
@@ -394,7 +394,7 @@ When you need to call tools, you may write a short user-facing explanation, then
 - If the user already named files and an action, call tools now instead of asking them to repeat the request.
 
 ```relay_tool
-{{"name":"read_file","relay_tool_call":true,"input":{{"path":"README.md"}}}}
+{{"name":"read","relay_tool_call":true,"input":{{"path":"README.md"}}}}
 ```
 {win_addon}
 "#,
@@ -414,7 +414,7 @@ Only the single tool below is intentionally advertised for this repair turn. Do 
 
 ## Preferred sequence
 
-- concrete new file create repair => `write_file` now
+- concrete new file create repair => `write` now
 
 {rendered_tools}
 
@@ -428,7 +428,7 @@ Output exactly one fenced `relay_tool` block with JSON only.
 - Do not emit a checklist, `Show**...` wrapper, or “preparing/requesting” sentence instead of the tool call.
 
 ```relay_tool
-{{"name":"write_file","relay_tool_call":true,"input":{{"path":"tetris.html","content":"<!doctype html>\n<html lang=\"ja\">\n<head>...</head>\n<body>...</body>\n</html>"}}}}
+{{"name":"write","relay_tool_call":true,"input":{{"path":"tetris.html","content":"<!doctype html>\n<html lang=\"ja\">\n<head>...</head>\n<body>...</body>\n</html>"}}}}
 ```
 "#
             )
@@ -471,7 +471,7 @@ pub fn parse_copilot_tool_response(
     let mut calls = parse_tool_payloads(&payloads);
     let mut display = stripped;
     if calls.is_empty() {
-        if let Some((d, call)) = salvage_generated_write_file_from_reply(&display) {
+        if let Some((d, call)) = salvage_generated_write_from_reply(&display) {
             display = d;
             calls.push(call);
         }
@@ -531,13 +531,13 @@ fn has_inline_whitelisted_tool_candidate(text: &str) -> bool {
     !extract_mvp_tool_object_spans(text, &whitelist).is_empty()
 }
 
-fn salvage_generated_write_file_from_reply(
+fn salvage_generated_write_from_reply(
     text: &str,
 ) -> Option<(String, (String, String, String))> {
     let (display, content) = extract_generated_html_code_block(text)?;
     let path = select_generated_file_path_from_reply(text, &content)?;
     let value = json!({
-        "name": "write_file",
+        "name": "write",
         "relay_tool_call": true,
         "input": {
             "path": path,
@@ -937,9 +937,9 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
             "No preamble, no apology, no extra explanation.\n",
             "Use the current Relay tool catalog in this prompt; do not invent unavailable tools.\n",
             "If the latest real user turn named a concrete path, reuse that exact string in tool input.\n",
-            "Do not claim a successful `read_file` result is escaped or corrupted based only on quotes or backslashes.\n\n",
-            "If a successful `.html` `write_file` Tool Result already wrote a valid HTML document, treat the local create request as satisfied. Stop unless the user explicitly asked for verification or more edits, and do not call `read_file` just to re-check escaping.\n\n",
-            "If a successful `.html` `read_file` result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not use `bash`, `PowerShell`, backups, or copy commands to \"unescape\" it.\n\n",
+            "Do not claim a successful `read` result is escaped or corrupted based only on quotes or backslashes.\n\n",
+            "If a successful `.html` `write` Tool Result already wrote a valid HTML document, treat the local create request as satisfied. Stop unless the user explicitly asked for verification or more edits, and do not call `read` just to re-check escaping.\n\n",
+            "If a successful `.html` `read` result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not use `bash`, `PowerShell`, backups, or copy commands to \"unescape\" it.\n\n",
             "Latest user request for this turn (user data, primary repair anchor):\n",
             "```text\n{latest_request}\n```\n\n",
             "Current session goal (user data, preserved for repair context):\n",
@@ -952,10 +952,10 @@ fn build_repair_cdp_system_prompt(messages: &[ConversationMessage]) -> String {
 }
 
 const CDP_BUNDLE_GROUNDING_BLOCK: &str = "## CDP bundle (read before you reply)\n\
-Do not list line-level bugs, missing tags, or identifiers unless they appear verbatim in a `read_file` or Tool Result in this bundle.\n\
+Do not list line-level bugs, missing tags, or identifiers unless they appear verbatim in a `read` or Tool Result in this bundle.\n\
 If you cite a problem, quote a short substring or line numbers from that text.\n\
-If a successful `.html` `write_file` Tool Result already wrote a valid HTML document, treat the local create request as satisfied. Stop unless the user explicitly asked for verification or more edits, and do not call `read_file`, `bash`, `PowerShell`, backups, or copy commands just to re-check escaping.\n\
-If a successful `.html` `read_file` Tool Result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not propose `bash`, `PowerShell`, backups, or copy commands to \"fix\" escaping.";
+If a successful `.html` `write` Tool Result already wrote a valid HTML document, treat the local create request as satisfied. Stop unless the user explicitly asked for verification or more edits, and do not call `read`, `bash`, `PowerShell`, backups, or copy commands just to re-check escaping.\n\
+If a successful `.html` `read` Tool Result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not propose `bash`, `PowerShell`, backups, or copy commands to \"fix\" escaping.";
 
 fn cdp_messages_for_flavor(
     messages: &[ConversationMessage],
@@ -1080,7 +1080,7 @@ pub fn build_cdp_prompt(request: &ApiRequest<'_>) -> String {
     )
 }
 
-fn summarize_read_file_tool_result(output: &str) -> Option<String> {
+fn summarize_read_tool_result(output: &str) -> Option<String> {
     let value = serde_json::from_str::<Value>(output).ok()?;
     let object = value.as_object()?;
     let kind = object.get("type").and_then(Value::as_str).unwrap_or("text");
@@ -1142,10 +1142,10 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
     if is_error {
         return output.to_string();
     }
-    if tool_name == "read_file" {
-        return summarize_read_file_tool_result(output).unwrap_or_else(|| output.to_string());
+    if tool_name == "read" {
+        return summarize_read_tool_result(output).unwrap_or_else(|| output.to_string());
     }
-    if !matches!(tool_name, "write_file" | "edit_file") {
+    if !matches!(tool_name, "write" | "edit") {
         return output.to_string();
     }
     let Ok(value) = serde_json::from_str::<Value>(output) else {
@@ -1170,7 +1170,7 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
     }
     if let Some(content) = object.get("content").and_then(Value::as_str) {
         lines.push(format!("content_chars: {}", content.len()));
-        if tool_name == "write_file"
+        if tool_name == "write"
             && object
                 .get("file_path")
                 .and_then(Value::as_str)
@@ -1184,7 +1184,7 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
                     .to_string(),
             );
             lines.push(
-                "follow_up_guidance: do_not_call_read_file_bash_powershell_backup_or_copy_commands_just_to_recheck_escaping"
+                "follow_up_guidance: do_not_call_read_bash_powershell_backup_or_copy_commands_just_to_recheck_escaping"
                     .to_string(),
             );
         }
@@ -1563,7 +1563,7 @@ fn sort_json_value_for_dedup(v: Value) -> Value {
 
 fn normalize_tool_input_for_dedup_key(tool_name: &str, input: &Value) -> Value {
     let mut v = input.clone();
-    if tool_name == "read_file" {
+    if tool_name == "read" {
         if let Some(obj) = v.as_object_mut() {
             let merged_path = obj
                 .get("path")
@@ -1774,7 +1774,7 @@ fn parse_one_tool_call(v: &Value) -> Option<(String, String, String)> {
 }
 
 fn normalize_html_file_mutation_input(tool_name: &str, input: &mut Value) {
-    if !matches!(tool_name, "write_file" | "edit_file") {
+    if !matches!(tool_name, "write" | "edit") {
         return;
     }
     let Some(obj) = input.as_object_mut() else {
@@ -1906,8 +1906,8 @@ fn is_false_completion_success_claim_text(text: &str) -> bool {
         return false;
     }
     let lower = trimmed.to_ascii_lowercase();
-    let mentions_local_file = lower.contains("write_file")
-        || lower.contains("edit_file")
+    let mentions_local_file = lower.contains("write")
+        || lower.contains("edit")
         || lower.contains("/root/")
         || lower.contains("workspace")
         || lower.contains(".html")
@@ -1939,8 +1939,8 @@ fn is_concrete_local_file_write_goal(goal: &str) -> bool {
         return false;
     }
     let lower = trimmed.to_ascii_lowercase();
-    let mentions_target_file = lower.contains("write_file")
-        || lower.contains("edit_file")
+    let mentions_target_file = lower.contains("write")
+        || lower.contains("edit")
         || lower.contains("workspace")
         || lower.contains("/root/")
         || lower.contains("./")
@@ -1980,7 +1980,7 @@ fn is_concrete_local_write_body_without_tools(
         (lower.contains("<!doctype html") || lower.contains("<html")) && lower.contains("</html>");
     // A full `<!doctype html>…</html>` (or the `<html>…</html>` pair) reply is
     // a strong enough deliverable-file signal on its own: the model clearly
-    // produced file-shaped content, so a missing write_file call is a
+    // produced file-shaped content, so a missing write call is a
     // tool-protocol miss even when the goal does not name an explicit path.
     if !body_is_complete_html_document && !is_concrete_local_file_write_goal(latest_turn_input) {
         return false;
@@ -2011,7 +2011,7 @@ fn contains_plain_relay_tool_mention(lower: &str) -> bool {
 /// tool call from it, and none of the prose-based confusion heuristics below
 /// match, so without this check the turn classified as `outcome=Completed`
 /// with no repair queued and the session exited cleanly without ever calling
-/// `write_file`. Treat any short (<400 char) unbalanced JSON opener that
+/// `write`. Treat any short (<400 char) unbalanced JSON opener that
 /// mentions a tool-shape key as confusion so the repair escalator fires.
 fn looks_like_truncated_relay_tool_fragment(trimmed: &str) -> bool {
     if trimmed.is_empty() {
@@ -2143,8 +2143,8 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
             || lower.contains("write the complete file")
             || lower.contains("using specific tools to write")
             || lower.contains("using a relay tool to write the complete file")
-            || lower.contains("write_file function")
-            || lower.contains("relay_tool's write_file action")
+            || lower.contains("write function")
+            || lower.contains("relay_tool's write action")
             || lower.contains("index.html")
             || lower.contains("html, js, and css")
             || lower.contains("specified tool")
@@ -2170,11 +2170,11 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
         && !lower.contains("\"relay_tool_call\"")
         && !lower.contains("<!doctype html")
         && !lower.contains("<html");
-    let mentioned_relay_tools_without_payload = (lower.contains("write_file")
-        || lower.contains("edit_file")
-        || lower.contains("read_file")
-        || lower.contains("glob_search")
-        || lower.contains("grep_search"))
+    let mentioned_relay_tools_without_payload = (lower.contains("write")
+        || lower.contains("edit")
+        || lower.contains("read")
+        || lower.contains("glob")
+        || lower.contains("grep"))
         && (lower.contains("```")
             || contains_plain_relay_tool_mention(&lower)
             || lower.contains("adjusting tool use"));
@@ -2200,7 +2200,7 @@ fn is_tool_protocol_confusion_text(text: &str) -> bool {
             || lower.contains("preparing to write"))
         && (lower.contains("html file")
             || lower.contains("tetris.html")
-            || lower.contains("write_file")
+            || lower.contains("write")
             || trimmed.contains("ファイルを作成")
             || trimmed.contains("書き込みます"))
         && (lower.contains("available tools")
@@ -2257,7 +2257,7 @@ fn tool_protocol_repair_escalation(attempt_index: usize) -> &'static str {
     match tool_protocol_repair_stage(attempt_index) {
         1 => concat!(
             "Use the Relay tool catalog and emit the next required `relay_tool` JSON block in this reply.\n",
-            "For local file creation or edits inside the workspace, prefer `write_file` / `edit_file` (and `read_file` first only when actually needed).\n",
+            "For local file creation or edits inside the workspace, prefer `write` / `edit` (and `read` first only when actually needed).\n",
             "Output exactly one fenced `relay_tool` block and nothing before or after it.\n",
             "Do not answer with prose only.\n",
             "Do not mention `relay_tool` in plain text.\n\n",
@@ -2269,7 +2269,7 @@ fn tool_protocol_repair_escalation(attempt_index: usize) -> &'static str {
             "Do not include any explanatory sentence before or after the fence.\n",
             "Do not emit plain-text `relay_tool` mentions.\n",
             "The following outputs are invalid for this repair turn: `Show**...` wrappers, 'preparing' text, 'requesting' text, 'specific function' text, or any sentence that says you are about to write the file.\n",
-            "If the task is to create or overwrite a workspace file and you already know the content, emit `write_file` now instead of describing Python, page creation, or the tool you plan to use.\n\n",
+            "If the task is to create or overwrite a workspace file and you already know the content, emit `write` now instead of describing Python, page creation, or the tool you plan to use.\n\n",
         ),
         _ => concat!(
             "Final repair for this turn.\n",
@@ -2282,7 +2282,7 @@ fn tool_protocol_repair_escalation(attempt_index: usize) -> &'static str {
     }
 }
 
-fn build_write_file_repair_action_instruction(
+fn build_write_repair_action_instruction(
     attempt_index: usize,
     requested_path: &str,
     inferred_path: bool,
@@ -2294,13 +2294,13 @@ fn build_write_file_repair_action_instruction(
     };
     match tool_protocol_repair_stage(attempt_index) {
         1 => format!(
-            "{path_sentence} Emit exactly one `write_file` Relay tool call now. Do not describe the content in prose; put the final file body in `input.content`."
+            "{path_sentence} Emit exactly one `write` Relay tool call now. Do not describe the content in prose; put the final file body in `input.content`."
         ),
         2 => format!(
-            "{path_sentence} Emit the actual `write_file` JSON now, not a wrapper that says you are preparing or requesting the write. `Show**...`, planning text, and plain-text `relay_tool` mentions are invalid."
+            "{path_sentence} Emit the actual `write` JSON now, not a wrapper that says you are preparing or requesting the write. `Show**...`, planning text, and plain-text `relay_tool` mentions are invalid."
         ),
         _ => format!(
-            "{path_sentence} Final repair for this turn: the only valid reply is exactly one fenced `relay_tool` block whose only tool is `write_file` for `{requested_path}`. Put the complete final HTML document in `input.content`. Do not use placeholders like `<full file content here>` or describe the HTML instead of writing it."
+            "{path_sentence} Final repair for this turn: the only valid reply is exactly one fenced `relay_tool` block whose only tool is `write` for `{requested_path}`. Put the complete final HTML document in `input.content`. Do not use placeholders like `<full file content here>` or describe the HTML instead of writing it."
         ),
     }
 }
@@ -2426,13 +2426,13 @@ fn build_best_tool_protocol_repair_input(
                 goal,
                 latest_request,
                 attempt_index,
-                "write_file",
+                "write",
                 &requested_path,
                 json!({
                     "path": requested_path.clone(),
                     "content": "<full file content here>"
                 }),
-                &build_write_file_repair_action_instruction(attempt_index, &requested_path, false),
+                &build_write_repair_action_instruction(attempt_index, &requested_path, false),
             );
         }
         if let Some(inferred_path) = infer_default_new_file_path(latest_request) {
@@ -2440,13 +2440,13 @@ fn build_best_tool_protocol_repair_input(
                 goal,
                 latest_request,
                 attempt_index,
-                "write_file",
+                "write",
                 &inferred_path,
                 json!({
                     "path": inferred_path.clone(),
                     "content": "<full file content here>"
                 }),
-                &build_write_file_repair_action_instruction(attempt_index, &inferred_path, true),
+                &build_write_repair_action_instruction(attempt_index, &inferred_path, true),
             );
         }
     }
@@ -2458,12 +2458,12 @@ fn build_best_tool_protocol_repair_input(
             goal,
             latest_request,
             attempt_index,
-            "read_file",
+            "read",
             &requested_path,
             json!({
                 "path": requested_path.clone()
             }),
-            "Emit exactly one `read_file` Relay tool call first so Relay can inspect the named file before editing, fixing, or reviewing it.",
+            "Emit exactly one `read` Relay tool call first so Relay can inspect the named file before editing, fixing, or reviewing it.",
         );
     }
     build_tool_protocol_repair_input(goal, latest_request, attempt_index)
@@ -2653,7 +2653,7 @@ mod tests {
             messages: &[ConversationMessage::assistant(vec![
                 ContentBlock::ToolResult {
                     tool_use_id: "tool-1".to_string(),
-                    tool_name: "write_file".to_string(),
+                    tool_name: "write".to_string(),
                     output: r#"{"file_path":"README.md","kind":"update","content":"hello"}"#
                         .to_string(),
                     is_error: false,
@@ -2707,7 +2707,7 @@ mod tests {
     }
 
     #[test]
-    fn write_file_success_is_summarized_for_html_followup() {
+    fn write_success_is_summarized_for_html_followup() {
         let output = serde_json::json!({
             "kind": "create",
             "file_path": "/root/Relay_Agent/tetris.html",
@@ -2715,7 +2715,7 @@ mod tests {
             "replace_all": false
         })
         .to_string();
-        let rendered = format_cdp_tool_result("write_file", &output, false);
+        let rendered = format_cdp_tool_result("write", &output, false);
         assert!(rendered.contains("CDP follow-up summary"));
         assert!(rendered.contains("html_document: already_valid_local_html"));
         assert!(rendered.contains("task_status: local_html_create_request_already_satisfied"));
@@ -2726,7 +2726,7 @@ mod tests {
     }
 
     #[test]
-    fn read_file_success_summarizes_decoded_html_guidance() {
+    fn read_success_summarizes_decoded_html_guidance() {
         let output = serde_json::to_string(&json!({
             "type": "text",
             "file": {
@@ -2737,8 +2737,8 @@ mod tests {
                 "totalLines": 2
             }
         }))
-        .expect("serialize read_file output");
-        let rendered = format_cdp_tool_result("read_file", &output, false);
+        .expect("serialize read output");
+        let rendered = format_cdp_tool_result("read", &output, false);
         assert!(rendered.contains("file_path: /root/Relay_Agent/tetris.html"));
         assert!(rendered.contains("html_document: already_decoded_valid_html"));
         assert!(rendered.contains("follow_up_guidance: no_unescape_needed"));
@@ -2786,7 +2786,7 @@ mod tests {
             messages: &[ConversationMessage::assistant(vec![
                 ContentBlock::ToolResult {
                     tool_use_id: "tool-1".to_string(),
-                    tool_name: "read_file".to_string(),
+                    tool_name: "read".to_string(),
                     output: "secret".to_string(),
                     is_error: false,
                 },
@@ -2804,7 +2804,7 @@ mod tests {
             messages: &[ConversationMessage::assistant(vec![
                 ContentBlock::ToolResult {
                     tool_use_id: "tool-1".to_string(),
-                    tool_name: "read_file".to_string(),
+                    tool_name: "read".to_string(),
                     output: serde_json::to_string(&json!({
                         "type": "text",
                         "file": {
@@ -2815,7 +2815,7 @@ mod tests {
                             "totalLines": 1
                         }
                     }))
-                    .expect("serialize read_file output"),
+                    .expect("serialize read output"),
                     is_error: false,
                 },
             ])],
@@ -2851,22 +2851,22 @@ mod tests {
     #[test]
     fn parse_single_object_fence() {
         let (display, calls) = parse_initial(
-            "Checking.\n```relay_tool\n{\"name\":\"read_file\",\"input\":{\"path\":\"README.md\"}}\n```",
+            "Checking.\n```relay_tool\n{\"name\":\"read\",\"input\":{\"path\":\"README.md\"}}\n```",
         );
         assert_eq!(display, "Checking.");
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, "read_file");
+        assert_eq!(calls[0].1, "read");
         assert_eq!(calls[0].2, r#"{"path":"README.md"}"#);
     }
 
     #[test]
     fn parse_array_inside_one_fence() {
         let (_, calls) = parse_initial(
-            "```relay_tool\n[{\"name\":\"read_file\",\"input\":{\"path\":\"README.md\"}},{\"name\":\"grep_search\",\"input\":{\"pattern\":\"TODO\"}}]\n```",
+            "```relay_tool\n[{\"name\":\"read\",\"input\":{\"path\":\"README.md\"}},{\"name\":\"grep\",\"input\":{\"pattern\":\"TODO\"}}]\n```",
         );
         assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].1, "read_file");
-        assert_eq!(calls[1].1, "grep_search");
+        assert_eq!(calls[0].1, "read");
+        assert_eq!(calls[1].1, "grep");
     }
 
     #[test]
@@ -2877,9 +2877,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_dedupes_read_file_path_aliases() {
+    fn parse_dedupes_read_path_aliases() {
         let (_, calls) = parse_initial(
-            "```relay_tool\n[{\"name\":\"read_file\",\"input\":{\"path\":\"README.md\"}},{\"name\":\"read_file\",\"input\":{\"file_path\":\"README.md\"}}]\n```",
+            "```relay_tool\n[{\"name\":\"read\",\"input\":{\"path\":\"README.md\"}},{\"name\":\"read\",\"input\":{\"file_path\":\"README.md\"}}]\n```",
         );
         assert_eq!(calls.len(), 1);
     }
@@ -2887,24 +2887,24 @@ mod tests {
     #[test]
     fn parse_json_fence_without_sentinel_is_recovered_when_whitelisted() {
         let (display, calls) = parse_initial(
-            "```json\n{\"name\":\"read_file\",\"input\":{\"path\":\"README.md\"}}\n```",
+            "```json\n{\"name\":\"read\",\"input\":{\"path\":\"README.md\"}}\n```",
         );
         assert_eq!(display, "");
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, "read_file");
+        assert_eq!(calls[0].1, "read");
         assert_eq!(calls[0].2, r#"{"path":"README.md"}"#);
     }
 
     #[test]
     fn parse_mixed_prose_json_fence_without_sentinel_is_rejected() {
-        let raw = "```json\nI will inspect it first.\n{\"name\":\"read_file\",\"input\":{\"path\":\"README.md\"}}\n```";
+        let raw = "```json\nI will inspect it first.\n{\"name\":\"read\",\"input\":{\"path\":\"README.md\"}}\n```";
         let (_display, calls) = parse_initial(raw);
         assert!(calls.is_empty());
     }
 
     #[test]
     fn parse_unfenced_json_without_sentinel_is_rejected_even_on_retry() {
-        let raw = "{\"name\":\"read_file\",\"input\":{\"path\":\"README.md\"}}";
+        let raw = "{\"name\":\"read\",\"input\":{\"path\":\"README.md\"}}";
         let (_display, calls) = parse_copilot_tool_response(raw, CdpToolParseMode::RetryRepair);
         assert!(calls.is_empty());
     }
@@ -2916,16 +2916,16 @@ mod tests {
         // `}` for the second object, so the array closed early with `]`. Autoclose
         // should truncate at the stray `]` and recover both tool calls as long as
         // the `"relay_tool_call": true` sentinel is present.
-        let raw = "了解しました。\n指定どおり 読み取り専用の調査として、まずツールを実行します。\n\n[\n{\n\"name\": \"glob_search\",\n\"relay_tool_call\": true,\n\"input\": {\n\"pattern\": \"**/*live_m365*\"\n}\n},\n{\n\"name\": \"grep_search\",\n\"relay_tool_call\": true,\n\"input\": {\n\"pattern\": \"relay_tool_call\",\n\"path\": \"apps/desktop/scripts\",\n\"output_mode\": \"files_with_matches\"\n}\n]\n\nツール結果が返り次第、その出力だけを根拠に報告します。";
+        let raw = "了解しました。\n指定どおり 読み取り専用の調査として、まずツールを実行します。\n\n[\n{\n\"name\": \"glob\",\n\"relay_tool_call\": true,\n\"input\": {\n\"pattern\": \"**/*live_m365*\"\n}\n},\n{\n\"name\": \"grep\",\n\"relay_tool_call\": true,\n\"input\": {\n\"pattern\": \"relay_tool_call\",\n\"path\": \"apps/desktop/scripts\",\n\"output_mode\": \"files_with_matches\"\n}\n]\n\nツール結果が返り次第、その出力だけを根拠に報告します。";
         let (_display, calls) = parse_initial(raw);
         let names: Vec<&str> = calls.iter().map(|(_, name, _)| name.as_str()).collect();
         assert!(
-            names.contains(&"glob_search"),
-            "expected glob_search in {names:?}"
+            names.contains(&"glob"),
+            "expected glob in {names:?}"
         );
         assert!(
-            names.contains(&"grep_search"),
-            "expected grep_search in {names:?}"
+            names.contains(&"grep"),
+            "expected grep in {names:?}"
         );
     }
 
@@ -2935,22 +2935,22 @@ mod tests {
 
 Plain Text
 relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
-{"name":"read_file","relay_tool_call":true,"input":{"path":"README.md"}}"#;
+{"name":"read","relay_tool_call":true,"input":{"path":"README.md"}}"#;
         let (display, calls) = parse_initial(raw);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, "read_file");
+        assert_eq!(calls[0].1, "read");
         assert_eq!(calls[0].2, r#"{"path":"README.md"}"#);
         assert!(display.contains("README.md を読み取り"));
         assert!(!display.contains(r#""relay_tool_call""#));
     }
 
     #[test]
-    fn parse_initial_recovers_large_inline_plain_text_write_file_with_sentinel() {
+    fn parse_initial_recovers_large_inline_plain_text_write_with_sentinel() {
         let content = "x".repeat(40_000);
         let tool = format!(
             concat!(
                 "{{\n",
-                "  \"name\": \"write_file\",\n",
+                "  \"name\": \"write\",\n",
                 "  \"relay_tool_call\": true,\n",
                 "  \"input\": {{\n",
                 "    \"path\": \"tetris.html\",\n",
@@ -2966,7 +2966,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         );
         let (display, calls) = parse_initial(&raw);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, "write_file");
+        assert_eq!(calls[0].1, "write");
         let input: Value =
             serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
         assert_eq!(
@@ -2983,7 +2983,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     }
 
     #[test]
-    fn parse_initial_salvages_large_html_code_fence_into_write_file() {
+    fn parse_initial_salvages_large_html_code_fence_into_write() {
         let raw = concat!(
             "以下を `tetris.html` として保存してブラウザで開いてください。\n\n",
             "```html\n",
@@ -3002,7 +3002,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         );
         let (display, calls) = parse_initial(raw);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, "write_file");
+        assert_eq!(calls[0].1, "write");
         let input: Value =
             serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
         assert_eq!(
@@ -3040,7 +3040,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         );
         let (_display, calls) = parse_initial(raw);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, "write_file");
+        assert_eq!(calls[0].1, "write");
         let input: Value =
             serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
         assert_eq!(
@@ -3050,17 +3050,17 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     }
 
     #[test]
-    fn parse_initial_recovers_compact_inline_write_file_in_prose_with_sentinel() {
+    fn parse_initial_recovers_compact_inline_write_in_prose_with_sentinel() {
         let raw = concat!(
             "README.md の冒頭説明を使って指定のファイルを作成します。\n\n",
-            "{\"name\":\"write_file\",\"relay_tool_call\":true,\"input\":",
+            "{\"name\":\"write\",\"relay_tool_call\":true,\"input\":",
             "{\"path\":\"/root/Relay_Agent/relay_live_m365_smoke.txt\",",
             "\"content\":\"source: README.md\\nsummary: Desktop agent app: **Tauri v2**, **SolidJS**, **Rust**.\"}}\n\n",
             "この操作以外に、他のファイルは変更しません。"
         );
         let (display, calls) = parse_initial(raw);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, "write_file");
+        assert_eq!(calls[0].1, "write");
         let input: Value =
             serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
         assert_eq!(
@@ -3082,12 +3082,12 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     fn parse_initial_repairs_unbalanced_relay_tool_fence_json() {
         let raw = concat!(
             "```relay_tool\n",
-            "{ \"name\": \"read_file\", \"relay_tool_call\": true, \"input\": { \"path\": \"README.md\" }\n",
+            "{ \"name\": \"read\", \"relay_tool_call\": true, \"input\": { \"path\": \"README.md\" }\n",
             "```"
         );
         let (_display, calls) = parse_initial(raw);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, "read_file");
+        assert_eq!(calls[0].1, "read");
         let input: Value =
             serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
         assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
@@ -3096,10 +3096,10 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     #[test]
     fn parse_retry_repairs_unbalanced_unfenced_tool_json() {
         let raw =
-            "{ \"name\": \"read_file\", \"relay_tool_call\": true, \"input\": { \"path\": \"README.md\" }\n";
+            "{ \"name\": \"read\", \"relay_tool_call\": true, \"input\": { \"path\": \"README.md\" }\n";
         let (_display, calls) = parse_copilot_tool_response(raw, CdpToolParseMode::RetryRepair);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, "read_file");
+        assert_eq!(calls[0].1, "read");
         let input: Value =
             serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
         assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
@@ -3107,10 +3107,10 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
 
     #[test]
     fn parse_retry_recovers_unfenced_tool_array_when_name_is_not_first_key() {
-        let raw = r#"[ { "input": { "pattern": "**/*キャッシュ*フロー*" }, "name": "glob_search", "relay_tool_call": true }, { "input": { "-i": true, "include_ext": [ "docx", "xlsx", "pptx", "pdf" ], "max_files": 200, "max_results": 100, "paths": [ "**/*" ], "pattern": "キャッシュフロー" }, "name": "office_search", "relay_tool_call": true } ]"#;
+        let raw = r#"[ { "input": { "pattern": "**/*キャッシュ*フロー*" }, "name": "glob", "relay_tool_call": true }, { "input": { "-i": true, "include_ext": [ "docx", "xlsx", "pptx", "pdf" ], "max_files": 200, "max_results": 100, "paths": [ "**/*" ], "pattern": "キャッシュフロー" }, "name": "office_search", "relay_tool_call": true } ]"#;
         let (display, calls) = parse_copilot_tool_response(raw, CdpToolParseMode::RetryRepair);
         assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].1, "glob_search");
+        assert_eq!(calls[0].1, "glob");
         assert_eq!(calls[1].1, "office_search");
         assert!(!display.contains(r#""relay_tool_call""#));
     }
@@ -3118,11 +3118,11 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     // Parity with orchestrator.rs: Initial parse must recover unfenced tool
     // JSON for read-only whitelisted tools when the sentinel is present.
     #[test]
-    fn parse_initial_accepts_unfenced_read_file_with_sentinel() {
-        let raw = r#"{"name":"read_file","relay_tool_call":true,"input":{"path":"README.md"}}"#;
+    fn parse_initial_accepts_unfenced_read_with_sentinel() {
+        let raw = r#"{"name":"read","relay_tool_call":true,"input":{"path":"README.md"}}"#;
         let (_display, calls) = parse_copilot_tool_response(raw, CdpToolParseMode::Initial);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, "read_file");
+        assert_eq!(calls[0].1, "read");
         let input: Value =
             serde_json::from_str(&calls[0].2).expect("tool input should be valid json");
         assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
@@ -3142,7 +3142,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         };
         assert!(next_input.contains("Tool protocol repair."));
         assert!(next_input.contains("Create ./tetris.html"));
-        assert!(next_input.contains(r#""name": "write_file""#));
+        assert!(next_input.contains(r#""name": "write""#));
     }
 
     #[test]
@@ -3174,7 +3174,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     }
 
     #[test]
-    fn existing_file_tool_drift_escalates_to_targeted_read_file_repair() {
+    fn existing_file_tool_drift_escalates_to_targeted_read_repair() {
         let s = summary(
             "I will use Pages and Python next, then include citations.",
             Vec::new(),
@@ -3189,14 +3189,14 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             &s,
         );
         let LoopDecision::Continue { next_input } = decision else {
-            panic!("expected targeted read_file repair");
+            panic!("expected targeted read repair");
         };
-        assert!(next_input.contains(r#""name": "read_file""#));
+        assert!(next_input.contains(r#""name": "read""#));
         assert!(next_input.contains(r#""path": "src/main.rs""#));
     }
 
     #[test]
-    fn readme_read_deferral_escalates_to_targeted_read_file_repair() {
+    fn readme_read_deferral_escalates_to_targeted_read_repair() {
         let s = summary(
             "了解しました。\nまず README.md の内容を正確に読む必要があります。以下で読み取ります。",
             Vec::new(),
@@ -3211,14 +3211,14 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             &s,
         );
         let LoopDecision::Continue { next_input } = decision else {
-            panic!("expected README deferral to escalate to targeted read_file repair");
+            panic!("expected README deferral to escalate to targeted read repair");
         };
-        assert!(next_input.contains(r#""name": "read_file""#));
+        assert!(next_input.contains(r#""name": "read""#));
         assert!(next_input.contains("README.md"));
     }
 
     #[test]
-    fn concrete_file_body_without_tool_call_escalates_to_targeted_write_file_repair() {
+    fn concrete_file_body_without_tool_call_escalates_to_targeted_write_repair() {
         let s = summary(
             "<!doctype html>\n<html><body><script>console.log('ready');</script></body></html>",
             Vec::new(),
@@ -3233,14 +3233,14 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             &s,
         );
         let LoopDecision::Continue { next_input } = decision else {
-            panic!("expected targeted write_file repair");
+            panic!("expected targeted write repair");
         };
-        assert!(next_input.contains(r#""name": "write_file""#));
+        assert!(next_input.contains(r#""name": "write""#));
         assert!(next_input.contains(r#""path": "./tetris.html""#));
     }
 
     #[test]
-    fn pathless_html_tetris_request_with_full_document_body_escalates_to_write_file_repair() {
+    fn pathless_html_tetris_request_with_full_document_body_escalates_to_write_repair() {
         // Live capture 2026-04-17: a signed-in M365 Copilot run answered the
         // prompt "htmlでテトリスを作成して" by streaming a complete
         // `<!doctype html>…</html>` document inline, with no `relay_tool_call`.
@@ -3269,14 +3269,14 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             &s,
         );
         let LoopDecision::Continue { next_input } = decision else {
-            panic!("expected targeted write_file repair for pathless full-document HTML body");
+            panic!("expected targeted write repair for pathless full-document HTML body");
         };
-        assert!(next_input.contains(r#""name": "write_file""#));
+        assert!(next_input.contains(r#""name": "write""#));
         assert!(next_input.contains(r#""path": "tetris.html""#));
     }
 
     #[test]
-    fn pathless_html_tetris_request_uses_default_tetris_write_file_repair() {
+    fn pathless_html_tetris_request_uses_default_tetris_write_repair() {
         let s = summary(
             "Show**Planning Tetris HTML creation**I’m preparing to use the relay tool after deciding on the filename.",
             Vec::new(),
@@ -3291,9 +3291,9 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             &s,
         );
         let LoopDecision::Continue { next_input } = decision else {
-            panic!("expected targeted write_file repair for pathless html tetris request");
+            panic!("expected targeted write repair for pathless html tetris request");
         };
-        assert!(next_input.contains(r#""name": "write_file""#));
+        assert!(next_input.contains(r#""name": "write""#));
         assert!(next_input.contains(r#""path": "tetris.html""#));
         assert!(
             next_input.contains("Do not spend another turn choosing or explaining the filename")
@@ -3302,7 +3302,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     }
 
     #[test]
-    fn late_new_file_repairs_use_write_file_only_catalog() {
+    fn late_new_file_repairs_use_write_only_catalog() {
         let repair = build_tool_protocol_repair_input(
             "htmlでテトリスを作成して",
             "htmlでテトリスを作成して",
@@ -3320,8 +3320,8 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             cdp_catalog_flavor(&messages),
             CdpCatalogFlavor::RepairWriteFileOnly
         );
-        assert!(bundle.contains("### `write_file`"));
-        assert!(!bundle.contains("### `read_file`"));
+        assert!(bundle.contains("### `write`"));
+        assert!(!bundle.contains("### `read`"));
         assert!(!bundle.contains("### `bash`"));
         assert!(bundle.contains("Only the single tool below"));
     }
@@ -3356,7 +3356,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
     }
 
     #[test]
-    fn repair_prompt_stage2_and_stage3_strengthen_write_file_coercion() {
+    fn repair_prompt_stage2_and_stage3_strengthen_write_coercion() {
         let repair2 = build_best_tool_protocol_repair_input(
             "htmlでテトリスを作成して",
             "htmlでテトリスを作成して",
@@ -3364,7 +3364,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         );
         assert!(repair2.contains("planning-only text instead of usable Relay tool JSON"));
         assert!(repair2.contains("`Show**...` wrappers"));
-        assert!(repair2.contains("Emit the actual `write_file` JSON now"));
+        assert!(repair2.contains("Emit the actual `write` JSON now"));
 
         let repair3 = build_best_tool_protocol_repair_input(
             "htmlでテトリスを作成して",
@@ -3390,10 +3390,10 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             ConversationMessage::user_text(repair),
             ConversationMessage::assistant(vec![ContentBlock::ToolUse {
                 id: "tool-1".to_string(),
-                name: "read_file".to_string(),
+                name: "read".to_string(),
                 input: r#"{"path":"README.md"}"#.to_string(),
             }]),
-            ConversationMessage::tool_result("tool-1", "read_file", tool_output, false),
+            ConversationMessage::tool_result("tool-1", "read", tool_output, false),
         ];
 
         let bundle = build_cdp_prompt_bundle_from_messages(
@@ -3408,8 +3408,8 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         ));
 
         assert!(bundle.contains("Tool protocol repair."));
-        assert!(bundle.contains("[Tool Call: read_file]"));
-        assert!(bundle.contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read_file\" status=\"ok\">"));
+        assert!(bundle.contains("[Tool Call: read]"));
+        assert!(bundle.contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read\" status=\"ok\">"));
         assert_eq!(breakdown.3, 1);
         assert!(breakdown.2 > 0);
     }
@@ -3429,7 +3429,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             }]),
             ConversationMessage::tool_result(
                 "tool-1",
-                "read_file",
+                "read",
                 serde_json::json!({
                     "path": "README.md",
                     "content": "Desktop agent app: **Tauri v2**, **SolidJS**, **Rust**."
@@ -3447,7 +3447,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         assert!(matches!(sliced[2].role, MessageRole::Tool));
         let (rendered, _) = render_cdp_messages_with_breakdown(&sliced);
         assert!(rendered.contains("Repair follow-up"));
-        assert!(rendered.contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read_file\" status=\"ok\">"));
+        assert!(rendered.contains("<UNTRUSTED_TOOL_OUTPUT tool=\"read\" status=\"ok\">"));
         assert!(!rendered.contains("Older assistant text"));
     }
 
@@ -3525,7 +3525,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             "{\n\"path\": \"tetris.html\",\n\"content\":"
         ));
         assert!(is_tool_protocol_confusion_text(
-            "[\n{\n\"name\": \"write_file\","
+            "[\n{\n\"name\": \"write\","
         ));
         // Live capture 2026-04-18 (logged-in M365, original turn): the entire
         // reply was the stripped Show/Hide planning narration with no tool
@@ -3535,7 +3535,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             "**Creating HTML Tetris**I'm planning to create a Tetris game in HTML with a single file that includes a canvas and controls, and I'll use Relay to save it as tetris.html."
         ));
         assert!(is_tool_protocol_confusion_text(
-            "I'll use the Relay write_file tool to save tetris.html now."
+            "I'll use the Relay write tool to save tetris.html now."
         ));
         assert!(is_tool_protocol_confusion_text(
             "Planning to create a Tetris game as a single HTML file with canvas controls."
@@ -3563,7 +3563,7 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
         // only reached when `summary.tool_results.is_empty()`. Still, guard
         // against a false positive on well-formed short objects.
         assert!(!is_tool_protocol_confusion_text(
-            "{\"name\":\"read_file\",\"input\":{\"path\":\"README.md\"},\"relay_tool_call\":true}"
+            "{\"name\":\"read\",\"input\":{\"path\":\"README.md\"},\"relay_tool_call\":true}"
         ));
         // Long-form prose that happens to mention `"input"` must not match.
         assert!(!is_tool_protocol_confusion_text(

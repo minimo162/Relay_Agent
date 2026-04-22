@@ -19,7 +19,6 @@ mod pdf_manip;
 mod permissions;
 mod prompt;
 mod remote;
-mod search;
 mod search_backend;
 pub mod sandbox;
 mod session;
@@ -51,9 +50,9 @@ pub use conversation::{
     TurnOutcome, TurnSummary,
 };
 pub use file_ops::{
-    edit_file, glob_search, glob_search_with_options, grep_search, read_file, write_file,
-    EditFileOutput, GlobSearchOptions, GlobSearchOutput, GrepSearchInput, GrepSearchOutput,
-    ReadFileOutput, StructuredPatchHunk, TextFilePayload, WriteFileOutput,
+    edit, glob, glob_with_options, grep, read, write, EditFileOutput, GlobSearchOptions,
+    GlobSearchOutput, GrepSearchInput, GrepSearchOutput, ReadFileOutput, StructuredPatchHunk,
+    TextFilePayload, WriteFileOutput,
     MAX_TEXT_FILE_READ_BYTES, MAX_WRITE_FILE_BYTES,
 };
 pub use hooks::{HookEvent, HookRunResult, HookRunner};
@@ -100,11 +99,6 @@ pub use remote::{
     inherited_upstream_proxy_env, no_proxy_list, read_token, upstream_proxy_ws_url,
     RemoteSessionContext, UpstreamProxyBootstrap, UpstreamProxyState, DEFAULT_REMOTE_BASE_URL,
     DEFAULT_SESSION_TOKEN_PATH, DEFAULT_SYSTEM_CA_BUNDLE, NO_PROXY_HOSTS, UPSTREAM_PROXY_ENV_KEYS,
-};
-pub use search::{
-    workspace_search, workspace_search_with_root, WorkspaceSearchCandidate, WorkspaceSearchInput,
-    WorkspaceSearchLimits, WorkspaceSearchOutput, WorkspaceSearchPlan, WorkspaceSearchRecommendedNextTool,
-    WorkspaceSearchSkipped, WorkspaceSearchSnippet, WorkspaceSearchTrace,
 };
 pub use session::{ContentBlock, ConversationMessage, MessageRole, Session, SessionError};
 pub use task_registry::{task_create, task_get, task_list, task_output, task_stop, task_update};

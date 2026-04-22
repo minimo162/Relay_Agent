@@ -49,14 +49,9 @@ Relay-specific areas remain:
 
 ## Tool Catalog Notes
 
-Relay keeps claw-compatible JSON where possible and documents Relay-only additions explicitly.
-
-- `workspace_search` is Relay-only. It is intentionally above claw-compatible
-  low-level search tools and returns machine-readable `plan`, `trace`,
-  structured skip reasons, ranked candidates with structured ranking features,
-  snippets, and `recommended_next_tools` for `read_file` evidence expansion.
-  Its internal SearchToolAdvisor-style intent selection is host-only; Relay does
-  not expose a general ToolSearch surface to M365 Copilot.
+Relay keeps claw-compatible JSON where possible and avoids Relay-only search
+abstractions in the active CDP tool surface. Local search is expressed through
+low-level `glob`, `grep`, and `office_search` calls.
 - `bash` accepts claw sandbox fields (`namespaceRestrictions`, `isolateNetwork`, `filesystemMode`, `allowedMounts`).
 - `Task*` accepts claw-style aliases such as `task_id` and `prompt`.
 - `AskUserQuestion` accepts claw’s single `question` + `options` shape and normalizes to Relay’s UI contract.
@@ -78,23 +73,23 @@ Relay uses **two** deterministic layers:
 - `full_session_harness`: drives the real desktop session loop through `start_agent_inner`, approvals, `agent:*` events, and final state
 
 Search-specific parity now also checks the Relay-only orchestration behavior:
-query expansion, exact-path `read_file` preference, `.gitignore` / `.ignore` /
+query expansion, exact-path `read` preference, `.gitignore` / `.ignore` /
 configured global ignore handling with negation, symlink/outside-workspace
 skips, sensitive-path redaction, large-file truncation, Office/PDF routing, and
 repair loops for Copilot search leakage, missing Relay tool calls, repeated
 generic prose before tools, or important conclusions written from snippets
-without `read_file`.
+without `read`.
 
 ### Scenario Map
 
 | claw scenario | Relay harness | Exact test |
 |---------------|---------------|------------|
 | `streaming_text` | `full_session_harness` | `streaming_text_full_session_harness_matches_desktop_event_flow` |
-| `read_file_roundtrip` | `parity_style` | `read_file_roundtrip_under_temp_workspace` |
-| `grep_chunk_assembly` | `parity_style` | `grep_search_finds_match_in_workspace_file`; `grep_search_count_mode_finds_expected_matches` |
-| `write_file_allowed` | `parity_style` | `write_file_allowed_under_temp_workspace` |
-| `write_file_denied` | `parity_style` | `write_file_denied_under_read_only_policy` |
-| `multi_tool_turn_roundtrip` | `parity_style` | `multi_tool_read_file_then_grep_in_same_workspace` |
+| `read_roundtrip` | `parity_style` | `read_roundtrip_under_temp_workspace` |
+| `grep_chunk_assembly` | `parity_style` | `grep_finds_match_in_workspace_file`; `grep_count_mode_finds_expected_matches` |
+| `write_allowed` | `parity_style` | `write_allowed_under_temp_workspace` |
+| `write_denied` | `parity_style` | `write_denied_under_read_only_policy` |
+| `multi_tool_turn_roundtrip` | `parity_style` | `multi_tool_read_then_grep_in_same_workspace` |
 | `bash_stdout_roundtrip` | `parity_style` | `bash_stdout_roundtrip_echo`; `bash_stdout_roundtrip_echo_danger_full_access` |
 | `bash_permission_prompt_approved` | `parity_style` | `bash_escalation_prompts_under_workspace_write_policy` |
 | `bash_permission_prompt_denied` | `parity_style` | `bash_permission_prompt_denied_under_workspace_write_policy` |
@@ -108,7 +103,7 @@ Additional Relay-only guards:
 - `glob_and_read_multi_step_style`
 - `bash_read_only_project_rejects_rm_via_execute_tool`
 - `bash_hard_denylist_blocks_sudo_even_when_workspace_write`
-- `read_file_hard_denylist_blocks_dot_env`
+- `read_hard_denylist_blocks_dot_env`
 
 ## Parity Checklist
 

@@ -233,17 +233,17 @@ Change targets:
 
 Acceptance criteria:
 
-- `.docx`, `.xlsx`, and `.pptx` `read_file` calls return extracted plaintext through stable line serialization.
+- `.docx`, `.xlsx`, and `.pptx` `read` calls return extracted plaintext through stable line serialization.
 - `.pdf` search uses `pdf_liteparse` payload-only extraction so the LiteParse banner is not indexed.
 - `office_search` accepts concrete paths or globs, validates `include_ext`, silently drops sensitive-path rejects, returns per-anchor hits, and reports parse failures in `errors`.
 - Extraction cache records are path-indexed, content-hash invalidated, schema-versioned, and store OS-native path bytes.
 - Office extraction enforces zip/XML/output limits, xlsx snapshot preflight, per-file timeout, per-path in-flight guarding, and a process-wide extraction cap.
-- Tool catalog and Copilot prompt guidance advertise `office_search` and remove the old blanket Office `read_file` exception.
+- Tool catalog and Copilot prompt guidance advertise `office_search` and remove the old blanket Office `read` exception.
 
 ### Cross-Cutting Feature: Agentic Workspace Search
 
-Goal: add a Relay-only read-only orchestration layer above `glob_search`,
-`grep_search`, `office_search`, and `read_file` style evidence expansion so
+Goal: add a Relay-only read-only orchestration layer above `glob`,
+`grep`, `office_search`, and `read` style evidence expansion so
 vague local lookup requests start with ranked candidates, snippets, searched
 scope, and truncation state instead of relying on the model to manually chain
 low-level tools.
@@ -258,29 +258,24 @@ Change targets:
 
 Acceptance criteria:
 
-- `workspace_search` is Relay-only and leaves claw-compatible
-  `glob_search` / `grep_search` schemas unchanged.
-- `workspace_search` returns ranked candidate files, evidence snippets,
-  searched/skipped file and byte counts, structured skip reasons, truncation
-  state, and an honest not-found / needs-clarification signal.
-- `workspace_search` stages lightweight path/filename/extension/recency ranking
-  before content reads so broad searches stay fast while tight budgets still
-  inspect likely relevant files first.
+- The active search surface stays close to opencode-style low-level tools:
+  `glob` for path discovery, `grep` for plaintext/code content,
+  and `office_search` for Office/PDF text.
 - Standard ignore directories such as `.git`, `node_modules`, and `target`,
   plus `.gitignore` patterns, are skipped by default, and
   large/plainly unreadable/binary files do not bloat results.
-- Existing `glob_search`, `grep_search`, and `office_search` emit baseline
+- `glob`, `grep`, and `office_search` emit baseline
   search telemetry for counts, elapsed time, truncation, and failure surfaces.
 - Search roots are constrained to the current workspace; paths or symlink
   resolutions that escape the workspace are not read.
-- CDP prompt guidance prefers `workspace_search` for vague implementation,
-  related-file, and evidence lookup requests before lower-level follow-up
-  searches.
+- CDP prompt guidance prefers concrete `glob`, `grep`, or
+  `office_search` calls for implementation, related-file, and evidence lookup
+  requests.
 - Important conclusions, reviews, edits, comparisons, and recommendations must
-  expand top `workspace_search` candidates with `read_file`; search snippets are
+  expand relevant search candidates with `read`; search snippets are
   candidate evidence, not a substitute for full-file inspection.
-- Deterministic runtime and compat-harness coverage verifies the higher-level
-  agentic search scenario.
+- Deterministic runtime and compat-harness coverage verifies low-level search
+  behavior.
 
 ## Forward-Looking Designs (Not Yet Scheduled)
 

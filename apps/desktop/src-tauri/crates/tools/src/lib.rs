@@ -10,12 +10,11 @@ mod electron_cdp;
 
 use reqwest::blocking::Client;
 use runtime::{
-    edit_file, execute_bash, glob_search_with_options, grep_search, merge_pdfs, office_search,
-    pull_rust_diagnostics_blocking, read_background_task_output, read_file, workspace_search,
-    reject_sensitive_file_path, split_pdf, task_create, task_get, task_list, task_output,
-    task_stop, task_update, write_file, BackgroundTaskOutputInput, BashCommandInput,
-    GlobSearchOptions, GrepSearchInput, OfficeSearchInput, PdfSplitSegment, PermissionMode,
-    WorkspaceSearchInput,
+    edit, execute_bash, glob_with_options, grep, merge_pdfs, office_search,
+    pull_rust_diagnostics_blocking, read, read_background_task_output, reject_sensitive_file_path,
+    split_pdf, task_create, task_get, task_list, task_output, task_stop, task_update, write,
+    BackgroundTaskOutputInput, BashCommandInput, GlobSearchOptions, GrepSearchInput,
+    OfficeSearchInput, PdfSplitSegment, PermissionMode,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -124,18 +123,18 @@ pub struct CdpPromptToolSpec {
 #[must_use]
 pub fn tool_metadata(name: &str) -> ToolMetadata {
     match name {
-        "read_file" => ToolMetadata {
+        "read" => ToolMetadata {
             target_extractor: ApprovalTargetExtractor::PathLike,
             tool_search_visible: false,
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
-        "workspace_search" | "glob_search" | "grep_search" | "office_search" => ToolMetadata {
+        "glob" | "grep" | "office_search" => ToolMetadata {
             tool_search_visible: false,
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
-        "write_file" => ToolMetadata {
+        "write" => ToolMetadata {
             approval_title: Some("Create or overwrite a file?"),
             target_extractor: ApprovalTargetExtractor::PathLike,
             risky_fields: &["path"],
@@ -143,7 +142,7 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
         },
-        "edit_file" => ToolMetadata {
+        "edit" => ToolMetadata {
             approval_title: Some("Edit a file?"),
             target_extractor: ApprovalTargetExtractor::PathLike,
             risky_fields: &["path", "replace_all"],
@@ -382,13 +381,12 @@ pub fn cdp_tool_specs_for_visibility(visibility: CdpToolVisibility) -> Vec<ToolS
 
 fn cdp_catalog_sort_key(name: &str) -> usize {
     match name {
-        "read_file" => 0,
-        "write_file" => 1,
-        "edit_file" => 2,
-        "workspace_search" => 3,
-        "glob_search" => 4,
-        "grep_search" => 5,
-        "office_search" => 6,
+        "read" => 0,
+        "write" => 1,
+        "edit" => 2,
+        "glob" => 3,
+        "grep" => 4,
+        "office_search" => 5,
         "git_status" => 7,
         "git_diff" => 8,
         "pdf_merge" => 10,
@@ -438,23 +436,14 @@ fn cdp_required_args(schema: &Value) -> Vec<String> {
 }
 
 fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
-    // Identical arms (e.g., `glob_search`/`git_status`) stay expanded so each
+    // Identical arms (e.g., `glob`/`git_status`) stay expanded so each
     // tool's curated optional-arg list is easy to tweak in place. Silence
     // pedantic `match_same_arms` rather than collapse them with `|`.
     #[allow(clippy::match_same_arms)]
     let curated = match name {
-        "read_file" => vec!["offset", "limit", "pages", "sheets", "slides"],
-        "workspace_search" => vec![
-            "paths",
-            "include_ext",
-            "max_files",
-            "max_snippets",
-            "max_bytes",
-            "max_duration_ms",
-            "context",
-        ],
-        "glob_search" => vec!["path"],
-        "grep_search" => vec!["path", "glob", "context"],
+        "read" => vec!["offset", "limit", "pages", "sheets", "slides"],
+        "glob" => vec!["path"],
+        "grep" => vec!["path", "include"],
         "office_search" => vec![
             "paths",
             "regex",
@@ -467,7 +456,7 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
         "git_diff" => vec!["path", "staged"],
         "WebSearch" => vec!["allowed_domains", "blocked_domains"],
         "WebFetch" => vec!["prompt"],
-        "edit_file" => vec!["replace_all"],
+        "edit" => vec!["replace_all"],
         "bash" => vec!["timeout", "description", "run_in_background"],
         "PowerShell" => vec!["timeout", "description", "run_in_background"],
         "MCP" => vec!["server", "name", "arguments"],
@@ -515,23 +504,20 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
 
 fn cdp_tool_example(name: &str) -> Value {
     match name {
-        "read_file" => {
-            json!({"name":"read_file","relay_tool_call":true,"input":{"path":"src/main.rs"}})
+        "read" => {
+            json!({"name":"read","relay_tool_call":true,"input":{"path":"src/main.rs"}})
         }
-        "write_file" => {
-            json!({"name":"write_file","relay_tool_call":true,"input":{"path":"notes.txt","content":"hello\n"}})
+        "write" => {
+            json!({"name":"write","relay_tool_call":true,"input":{"path":"notes.txt","content":"hello\n"}})
         }
-        "edit_file" => {
-            json!({"name":"edit_file","relay_tool_call":true,"input":{"path":"src/main.rs","old_string":"foo","new_string":"bar"}})
+        "edit" => {
+            json!({"name":"edit","relay_tool_call":true,"input":{"path":"src/main.rs","old_string":"foo","new_string":"bar"}})
         }
-        "workspace_search" => {
-            json!({"name":"workspace_search","relay_tool_call":true,"input":{"query":"agentic search implementation","paths":["apps/desktop/src-tauri"],"include_ext":["rs","md"],"max_files":50,"max_snippets":30,"context":2}})
+        "glob" => {
+            json!({"name":"glob","relay_tool_call":true,"input":{"pattern":"src/**/*.rs"}})
         }
-        "glob_search" => {
-            json!({"name":"glob_search","relay_tool_call":true,"input":{"pattern":"src/**/*.rs"}})
-        }
-        "grep_search" => {
-            json!({"name":"grep_search","relay_tool_call":true,"input":{"pattern":"TODO","path":"src"}})
+        "grep" => {
+            json!({"name":"grep","relay_tool_call":true,"input":{"pattern":"TODO","path":"src","include":"*.rs"}})
         }
         "office_search" => {
             json!({"name":"office_search","relay_tool_call":true,"input":{"pattern":"forecast","paths":["reports/**/*.xlsx"]}})
@@ -580,14 +566,13 @@ fn cdp_tool_example(name: &str) -> Value {
 
 fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
     match name {
-        "read_file" => "Read local text, PDF, or Office content as grounded evidence.",
-        "write_file" => {
+        "read" => "Read local text, PDF, or Office content as grounded evidence.",
+        "write" => {
             "Create or overwrite a workspace text file when the final content is known."
         }
-        "edit_file" => "Apply a targeted replacement inside an existing workspace file.",
-        "workspace_search" => "Run a read-only agentic workspace search that combines file discovery, text/Office evidence snippets, candidate ranking, search plan/trace diagnostics, and recommended read_file follow-up before important judgments.",
-        "glob_search" => "Fast rg-backed file pattern matching for concrete filename/path follow-ups. Supports brace groups such as `**/*.{rs,ts,tsx}`.",
-        "grep_search" => "Fast rg-backed code or text content search for concrete strings or regex matches.",
+        "edit" => "Apply a targeted replacement inside an existing workspace file.",
+        "glob" => "Fast rg-backed file pattern matching for concrete filename/path follow-ups.",
+        "grep" => "Fast rg-backed code or text content search for concrete strings or regex matches.",
         "office_search" => "Search extracted DOCX/XLSX/PPTX/PDF text for concrete literal strings or regex matches before answering Office/PDF lookup questions.",
         "git_status" => "Inspect working tree changes without invoking a shell.",
         "git_diff" => "Inspect staged or unstaged diffs without invoking a shell.",
@@ -611,12 +596,11 @@ fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
 
 fn cdp_tool_use_when(name: &str) -> &'static str {
     match name {
-        "read_file" => "Use for grounded inspection, PDF/Office reading, or before editing an existing file.",
-        "write_file" => "Use when creating a new target file or replacing a file with fully known content.",
-        "edit_file" => "Use after reading the file when you need a targeted text replacement.",
-        "workspace_search" => "Use first for vague or open-ended local search requests such as finding an implementation, related files, or relevant evidence before deciding which files to read. Use read_file on top candidates before important conclusions, reviews, edits, comparisons, or recommendations.",
-        "glob_search" => "Use for narrow filename/path expansion after workspace_search or when the user gives a concrete glob. Batch extension families with braces, e.g. `**/*.{docx,xlsx,pptx,pdf}`.",
-        "grep_search" => "Use for narrow identifier, string, or regex follow-ups after workspace_search or before reading/editing concrete code candidates.",
+        "read" => "Use for grounded inspection, PDF/Office reading, or before editing an existing file.",
+        "write" => "Use when creating a new target file or replacing a file with fully known content.",
+        "edit" => "Use after reading the file when you need a targeted text replacement.",
+        "glob" => "Use for filename/path expansion or when the user gives a concrete glob. Batch extension families with braces, e.g. `**/*.{rs,ts,tsx}`.",
+        "grep" => "Use for concrete identifier, string, or regex searches before reading/editing code or text candidates. Use `include` for file filters such as `*.js` or `*.{ts,tsx}`.",
         "office_search" => "Use for Office/PDF content discovery, including needed-file or related-file questions; derive a literal search term from the user request and set `regex: true` only when a real regex is needed.",
         "git_status" => "Use for a quick change overview when the task depends on current git state.",
         "git_diff" => "Use when you need to inspect exact code changes already present in the workspace.",
@@ -638,13 +622,12 @@ fn cdp_tool_use_when(name: &str) -> &'static str {
 
 fn cdp_tool_avoid_when(name: &str) -> &'static str {
     match name {
-        "read_file" => "Avoid using bash or PowerShell for file reads when `read_file` applies.",
-        "write_file" => "Avoid for incremental edits to an existing file; prefer `edit_file` after `read_file`.",
-        "edit_file" => "Avoid when the file does not exist or when replacing the full file would be simpler.",
-        "workspace_search" => "Avoid when the exact file path is already known and a direct `read_file` is enough. Do not treat snippets as full-file inspection for important decisions. This is Relay-only and does not replace claw-compatible low-level search schemas.",
-        "glob_search" => "Avoid when the exact file path is already known and no broader candidate search is needed.",
-        "grep_search" => "Avoid when the exact file path is already known and a direct `read_file` is enough.",
-        "office_search" => "Avoid for plaintext source files; use `grep_search` there. Do not use it as semantic ranking without a concrete search pattern.",
+        "read" => "Avoid using bash or PowerShell for file reads when `read` applies.",
+        "write" => "Avoid for incremental edits to an existing file; prefer `edit` after `read`.",
+        "edit" => "Avoid when the file does not exist or when replacing the full file would be simpler.",
+        "glob" => "Avoid when the exact file path is already known and no broader candidate search is needed.",
+        "grep" => "Avoid when the exact file path is already known and a direct `read` is enough.",
+        "office_search" => "Avoid for plaintext source files; use `grep` there. Do not use it as semantic ranking without a concrete search pattern.",
         "git_status" => "Avoid when the task is pure file reading or editing with no git-state dependency.",
         "git_diff" => "Avoid when you only need the current file contents rather than a diff.",
         "pdf_merge" => "Avoid using bash for PDF merge when this dedicated tool applies.",
@@ -656,8 +639,8 @@ fn cdp_tool_avoid_when(name: &str) -> &'static str {
         "TodoWrite" => "Avoid using it as a substitute for taking the next concrete action.",
         "Skill" => "Avoid loading unrelated skills just because they exist.",
         "LSP" => "Avoid unsupported actions or generic code inspection that normal file tools already cover.",
-        "NotebookEdit" => "Avoid for normal text files; use `read_file`, `write_file`, or `edit_file` instead.",
-        "bash" => "Avoid for local file I/O when `read_file`, `write_file`, `edit_file`, or PDF tools apply.",
+        "NotebookEdit" => "Avoid for normal text files; use `read`, `write`, or `edit` instead.",
+        "bash" => "Avoid for local file I/O when `read`, `write`, `edit`, or PDF tools apply.",
         "PowerShell" => "Avoid for non-Windows tasks or normal local file I/O that dedicated tools already cover.",
         _ => "Avoid when a more specific Relay tool already fits the task.",
     }
@@ -739,7 +722,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
     let mut specs = vec![
         ToolSpec {
             name: "bash",
-            description: "Execute a shell command (sandboxed on supported hosts). A host **hard denylist** always blocks high-risk commands (e.g. `sudo`, `rm -r`/`rm -rf`/`rm -f`, `rmdir`, destructive `find`, `xargs rm`, `git config`/`push`/`commit`/`reset`/`rebase`, `brew install`, `chmod` with `777`) regardless of permission mode. When `.claw` is read-only, additional mutating commands (e.g. `cp`, `mv`) are rejected—claw-style guard. Prefer read_file/write_file/edit_file for file I/O when those tools apply.",
+            description: "Execute a shell command (sandboxed on supported hosts). A host **hard denylist** always blocks high-risk commands (e.g. `sudo`, `rm -r`/`rm -rf`/`rm -f`, `rmdir`, destructive `find`, `xargs rm`, `git config`/`push`/`commit`/`reset`/`rebase`, `brew install`, `chmod` with `777`) regardless of permission mode. When `.claw` is read-only, additional mutating commands (e.g. `cp`, `mv`) are rejected—claw-style guard. Prefer read/write/edit for file I/O when those tools apply.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -761,7 +744,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
             required_permission: PermissionMode::DangerFullAccess,
         },
         ToolSpec {
-            name: "read_file",
+            name: "read",
             description: "Read a file by path: UTF-8 text (line offset/limit), .ipynb as numbered text, .pdf via LiteParse spatial text with optional pages (1-based, e.g. \"1-3\" or \"5\"; OCR off), .docx/.xlsx/.pptx as extracted text, common images as metadata only (no multimodal tool result yet).",
             input_schema: json!({
                 "type": "object",
@@ -783,7 +766,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
             required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
-            name: "write_file",
+            name: "write",
             description: "Write a text file in the workspace.",
             input_schema: json!({
                 "type": "object",
@@ -797,7 +780,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
             required_permission: PermissionMode::WorkspaceWrite,
         },
         ToolSpec {
-            name: "edit_file",
+            name: "edit",
             description: "Replace text in a workspace file.",
             input_schema: json!({
                 "type": "object",
@@ -813,30 +796,8 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
             required_permission: PermissionMode::WorkspaceWrite,
         },
         ToolSpec {
-            name: "workspace_search",
-            description: "Relay-only read-only agentic search across the current workspace. Returns a search plan, ranked candidate files, evidence snippets, recommended_next_tools read_file follow-up, trace diagnostics, scanned/skipped/truncation limits, and honest not-found state. Use before low-level glob/grep/office searches for vague implementation, related-file, or evidence lookup requests. For important conclusions, reviews, edits, comparisons, or recommendations, follow up with read_file on the recommended top candidate path(s); snippets are discovery evidence, not full-file inspection.",
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string" },
-                    "paths": { "type": "array", "items": { "type": "string" }, "description": "Workspace-relative search roots. Absolute paths must stay inside the current workspace." },
-                    "mode": { "type": "string", "enum": ["auto", "code", "text", "office", "path"] },
-                    "include_ext": { "type": "array", "items": { "type": "string" }, "description": "Optional extensions such as rs, ts, tsx, md, docx, xlsx, pptx, pdf." },
-                    "max_files": { "type": "integer", "minimum": 1, "maximum": 500 },
-                    "max_snippets": { "type": "integer", "minimum": 1, "maximum": 200 },
-                    "max_bytes": { "type": "integer", "minimum": 1, "maximum": 10485760, "description": "Per-file text read budget in bytes." },
-                    "max_duration_ms": { "type": "integer", "minimum": 1, "maximum": 60000, "description": "Wall-clock search budget." },
-                    "context": { "type": "integer", "minimum": 0, "maximum": 10 },
-                    "literal": { "type": "boolean", "description": "Reserved for compatibility; current implementation uses literal term matching." }
-                },
-                "required": ["query"],
-                "additionalProperties": false
-            }),
-            required_permission: PermissionMode::ReadOnly,
-        },
-        ToolSpec {
-            name: "glob_search",
-            description: "Fast rg-backed file pattern matching. Use this for small, concrete filename/path follow-ups after workspace_search, or before reading when the path is unknown. Supports brace groups such as **/*.{rs,ts,tsx}.",
+            name: "glob",
+            description: "Fast rg-backed file pattern matching. Use this for concrete filename/path lookup before reading when the path is unknown.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -852,8 +813,8 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
             required_permission: PermissionMode::ReadOnly,
         },
         ToolSpec {
-            name: "grep_search",
-            description: "Fast rg-backed plaintext/code content search with a regex pattern. Use this for small, concrete content follow-ups after workspace_search; use office_search for DOCX/XLSX/PPTX/PDF.",
+            name: "grep",
+            description: "Fast rg-backed plaintext/code content search with a regex pattern. Use this for concrete content lookup; use office_search for DOCX/XLSX/PPTX/PDF.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -929,7 +890,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "pdf_merge",
-            description: "Merge two or more existing PDF files into one output file in the given order (workspace write). Uses lopdf; v1 does not support encrypted PDFs. Page text should remain readable via read_file/LiteParse like the sources; complex PDFs may show viewer warnings after merge (see lopdf issue #424). Prefer this tool over bash for PDF merge.",
+            description: "Merge two or more existing PDF files into one output file in the given order (workspace write). Uses lopdf; v1 does not support encrypted PDFs. Page text should remain readable via read/LiteParse like the sources; complex PDFs may show viewer warnings after merge (see lopdf issue #424). Prefer this tool over bash for PDF merge.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -947,7 +908,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "pdf_split",
-            description: "Split one PDF into multiple output files. Each segment has output_path and pages (1-based, same grammar as read_file for PDFs, e.g. \"1-3,5\"). Workspace write. v1 does not support encrypted PDFs; focuses on page content rather than full ISO fidelity for annotations/forms. Prefer this tool over bash for PDF split.",
+            description: "Split one PDF into multiple output files. Each segment has output_path and pages (1-based, same grammar as read for PDFs, e.g. \"1-3,5\"). Workspace write. v1 does not support encrypted PDFs; focuses on page content rather than full ISO fidelity for annotations/forms. Prefer this tool over bash for PDF split.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -1204,7 +1165,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
             "Performance: Copilot turns are slow—put Open→work→Save→Quit in ONE command string; do not split the same workbook across multiple PowerShell tool calls in one turn. ",
             "Excel: NEVER loop COM per-cell; use 2D array assignment to Range.Value2, block ranges, CSV import, or similar batch APIs; prefer Application.ScreenUpdating=$false in try/finally. ",
             "Word/PowerPoint: prefer batch Find/Replace, range-level edits; avoid Select/Activate. ",
-            "Hybrid Office read: in one command, batch-extract data (Value2 as JSON or Export-Csv) plus COM ExportAsFixedFormat to a unique PDF under %TEMP%\\RelayAgent\\office-layout\\; stdout one JSON with pdfPath; pair with read_file on that PDF in the same relay_tool array for LiteParse layout text (Excel: PDF is layout hints only; numbers from Value2/CSV). ",
+            "Hybrid Office read: in one command, batch-extract data (Value2 as JSON or Export-Csv) plus COM ExportAsFixedFormat to a unique PDF under %TEMP%\\RelayAgent\\office-layout\\; stdout one JSON with pdfPath; pair with read on that PDF in the same relay_tool array for LiteParse layout text (Excel: PDF is layout hints only; numbers from Value2/CSV). ",
             "Return structured results with ConvertTo-Json -Compress on stdout when useful."
         ),
         input_schema: json!({
@@ -1659,12 +1620,11 @@ pub fn plan_mode_tool_json(entering: bool) -> Value {
 pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
     match name {
         "bash" => from_value::<BashCommandInput>(input).and_then(run_bash),
-        "read_file" => from_value::<ReadFileInput>(input).and_then(run_read_file),
-        "write_file" => from_value::<WriteFileInput>(input).and_then(run_write_file),
-        "edit_file" => from_value::<EditFileInput>(input).and_then(run_edit_file),
-        "workspace_search" => from_value::<WorkspaceSearchInput>(input).and_then(run_workspace_search),
-        "glob_search" => from_value::<GlobSearchInputValue>(input).and_then(run_glob_search),
-        "grep_search" => from_value::<GrepSearchInput>(input).and_then(run_grep_search),
+        "read" => from_value::<ReadFileInput>(input).and_then(run_read),
+        "write" => from_value::<WriteFileInput>(input).and_then(run_write),
+        "edit" => from_value::<EditFileInput>(input).and_then(run_edit),
+        "glob" => from_value::<GlobSearchInputValue>(input).and_then(run_glob),
+        "grep" => from_value::<GrepSearchInput>(input).and_then(run_grep),
         "office_search" => from_value::<OfficeSearchInput>(input).and_then(run_office_search),
         "git_status" => from_value::<GitCwdInput>(input).and_then(run_git_status),
         "git_diff" => from_value::<GitDiffToolInput>(input).and_then(run_git_diff),
@@ -1759,13 +1719,13 @@ fn run_bash(input: BashCommandInput) -> Result<String, String> {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_read_file(input: ReadFileInput) -> Result<String, String> {
+fn run_read(input: ReadFileInput) -> Result<String, String> {
     let path = input
         .path
         .or(input.file_path)
-        .ok_or_else(|| String::from("read_file requires path or file_path"))?;
+        .ok_or_else(|| String::from("read requires path or file_path"))?;
     to_pretty_json(
-        read_file(
+        read(
             &path,
             input.offset,
             input.limit,
@@ -1778,14 +1738,14 @@ fn run_read_file(input: ReadFileInput) -> Result<String, String> {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_write_file(input: WriteFileInput) -> Result<String, String> {
-    to_pretty_json(write_file(&input.path, &input.content).map_err(io_to_string)?)
+fn run_write(input: WriteFileInput) -> Result<String, String> {
+    to_pretty_json(write(&input.path, &input.content).map_err(io_to_string)?)
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_edit_file(input: EditFileInput) -> Result<String, String> {
+fn run_edit(input: EditFileInput) -> Result<String, String> {
     to_pretty_json(
-        edit_file(
+        edit(
             &input.path,
             &input.old_string,
             &input.new_string,
@@ -1796,9 +1756,9 @@ fn run_edit_file(input: EditFileInput) -> Result<String, String> {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_glob_search(input: GlobSearchInputValue) -> Result<String, String> {
+fn run_glob(input: GlobSearchInputValue) -> Result<String, String> {
     to_pretty_json(
-        glob_search_with_options(
+        glob_with_options(
             &input.pattern,
             input.path.as_deref(),
             &GlobSearchOptions {
@@ -1886,13 +1846,8 @@ fn run_git_diff(input: GitDiffToolInput) -> Result<String, String> {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_workspace_search(input: WorkspaceSearchInput) -> Result<String, String> {
-    to_pretty_json(workspace_search(&input).map_err(io_to_string)?)
-}
-
-#[allow(clippy::needless_pass_by_value)]
-fn run_grep_search(input: GrepSearchInput) -> Result<String, String> {
-    to_pretty_json(grep_search(&input).map_err(io_to_string)?)
+fn run_grep(input: GrepSearchInput) -> Result<String, String> {
+    to_pretty_json(grep(&input).map_err(io_to_string)?)
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -4100,7 +4055,7 @@ mod tests {
             .map(|spec| spec.name)
             .collect::<Vec<_>>();
         assert!(names.contains(&"bash"));
-        assert!(names.contains(&"read_file"));
+        assert!(names.contains(&"read"));
         assert!(names.contains(&"WebFetch"));
         assert!(names.contains(&"WebSearch"));
         assert!(names.contains(&"TodoWrite"));
@@ -4137,13 +4092,13 @@ mod tests {
 
     #[test]
     fn tool_metadata_matches_existing_behavior() {
-        let read = tool_metadata("read_file");
+        let read = tool_metadata("read");
         assert_eq!(read.target_extractor, ApprovalTargetExtractor::PathLike);
         assert!(!read.tool_search_visible);
         assert_eq!(read.approval_title, None);
         assert_eq!(read.cdp_visibility, CdpToolVisibility::Core);
 
-        let write = tool_metadata("write_file");
+        let write = tool_metadata("write");
         assert_eq!(write.approval_title, Some("Create or overwrite a file?"));
         assert_eq!(write.risky_fields, &["path"]);
         assert!(!write.tool_search_visible);
@@ -4192,8 +4147,8 @@ mod tests {
             .into_iter()
             .map(|spec| spec.name)
             .collect::<Vec<_>>();
-        assert!(names.contains(&"read_file"));
-        assert!(names.contains(&"write_file"));
+        assert!(names.contains(&"read"));
+        assert!(names.contains(&"write"));
         assert!(names.contains(&"WebFetch"));
     }
 
@@ -4206,12 +4161,11 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "read_file",
-                "write_file",
-                "edit_file",
-                "workspace_search",
-                "glob_search",
-                "grep_search",
+                "read",
+                "write",
+                "edit",
+                "glob",
+                "grep",
                 "office_search",
                 "git_status",
                 "git_diff",
@@ -4235,37 +4189,25 @@ mod tests {
         let specs = cdp_prompt_tool_specs();
         let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
         assert!(!names.contains(&"Agent"));
-        assert!(names.contains(&"workspace_search"));
-        assert!(names.contains(&"read_file"));
-        let read_file = specs
+        assert!(!names.iter().any(|name| name.contains("workspace")));
+        assert!(names.contains(&"read"));
+        let read = specs
             .iter()
-            .find(|spec| spec.name == "read_file")
-            .expect("read_file cdp prompt spec");
-        assert!(read_file
+            .find(|spec| spec.name == "read")
+            .expect("read cdp prompt spec");
+        assert!(read
             .use_when
             .contains("before editing an existing file"));
-        assert!(read_file.avoid_when.contains("bash"));
-        assert!(read_file
+        assert!(read.avoid_when.contains("bash"));
+        assert!(read
             .important_optional_args
             .contains(&"offset".to_string()));
-        let workspace = specs
-            .iter()
-            .find(|spec| spec.name == "workspace_search")
-            .expect("workspace_search cdp prompt spec");
-        assert!(workspace.purpose.contains("agentic workspace search"));
-        assert!(workspace.use_when.contains("Use first"));
-        assert!(workspace.use_when.contains("read_file on top candidates"));
-        assert!(workspace
-            .avoid_when
-            .contains("Do not treat snippets as full-file inspection"));
-        assert!(workspace.avoid_when.contains("Relay-only"));
         let glob = specs
             .iter()
-            .find(|spec| spec.name == "glob_search")
-            .expect("glob_search cdp prompt spec");
-        assert!(glob.use_when.contains("needed"));
-        assert!(glob.use_when.contains("related"));
-        assert!(glob.use_when.contains("**/*.{docx,xlsx,pptx,pdf}"));
+            .find(|spec| spec.name == "glob")
+            .expect("glob cdp prompt spec");
+        assert!(glob.use_when.contains("filename/path expansion"));
+        assert!(glob.use_when.contains("**/*.{rs,ts,tsx}"));
         let office = specs
             .iter()
             .find(|spec| spec.name == "office_search")
@@ -4306,8 +4248,8 @@ mod tests {
         let specs = mvp_tool_specs();
         let write = specs
             .iter()
-            .find(|spec| spec.name == "write_file")
-            .expect("write_file spec");
+            .find(|spec| spec.name == "write")
+            .expect("write spec");
         assert_eq!(
             required_permission_for_surface(write),
             PermissionMode::DangerFullAccess
@@ -4315,8 +4257,8 @@ mod tests {
 
         let read = specs
             .iter()
-            .find(|spec| spec.name == "read_file")
-            .expect("read_file spec");
+            .find(|spec| spec.name == "read")
+            .expect("read spec");
         assert_eq!(
             required_permission_for_surface(read),
             PermissionMode::ReadOnly
@@ -4386,8 +4328,8 @@ mod tests {
 
     #[test]
     fn tool_search_visibility_is_driven_by_metadata() {
-        assert!(!is_tool_visible_in_tool_search("read_file"));
-        assert!(!is_tool_visible_in_tool_search("write_file"));
+        assert!(!is_tool_visible_in_tool_search("read"));
+        assert!(!is_tool_visible_in_tool_search("write"));
         assert!(!is_tool_visible_in_tool_search("pdf_merge"));
         assert!(is_tool_visible_in_tool_search("WebFetch"));
         assert!(is_tool_visible_in_tool_search("MCP"));
@@ -5267,7 +5209,7 @@ mod tests {
         std::env::set_current_dir(&root).expect("set cwd");
 
         let write_create = execute_tool(
-            "write_file",
+            "write",
             &json!({ "path": "nested/demo.txt", "content": "alpha\nbeta\nalpha\n" }),
         )
         .expect("write create should succeed");
@@ -5277,7 +5219,7 @@ mod tests {
         assert!(root.join("nested/demo.txt").exists());
 
         let write_update = execute_tool(
-            "write_file",
+            "write",
             &json!({ "path": "nested/demo.txt", "content": "alpha\nbeta\ngamma\n" }),
         )
         .expect("write update should succeed");
@@ -5286,14 +5228,14 @@ mod tests {
         assert_eq!(write_update_output["type"], "update");
         assert_eq!(write_update_output["originalFile"], "alpha\nbeta\nalpha\n");
 
-        let read_full = execute_tool("read_file", &json!({ "path": "nested/demo.txt" }))
+        let read_full = execute_tool("read", &json!({ "path": "nested/demo.txt" }))
             .expect("read full should succeed");
         let read_full_output: serde_json::Value = serde_json::from_str(&read_full).expect("json");
         assert_eq!(read_full_output["file"]["content"], "alpha\nbeta\ngamma");
         assert_eq!(read_full_output["file"]["startLine"], 1);
 
         let read_via_file_path = execute_tool(
-            "read_file",
+            "read",
             &json!({ "file_path": "nested/demo.txt", "offset": 0, "limit": 2 }),
         )
         .expect("read via file_path should succeed");
@@ -5303,7 +5245,7 @@ mod tests {
         assert_eq!(read_via_file_path_output["file"]["startLine"], 1);
 
         let read_slice = execute_tool(
-            "read_file",
+            "read",
             &json!({ "path": "nested/demo.txt", "offset": 1, "limit": 1 }),
         )
         .expect("read slice should succeed");
@@ -5312,7 +5254,7 @@ mod tests {
         assert_eq!(read_slice_output["file"]["startLine"], 2);
 
         let read_past_end = execute_tool(
-            "read_file",
+            "read",
             &json!({ "path": "nested/demo.txt", "offset": 50 }),
         )
         .expect("read past EOF should succeed");
@@ -5321,14 +5263,14 @@ mod tests {
         assert_eq!(read_past_end_output["file"]["content"], "");
         assert_eq!(read_past_end_output["file"]["startLine"], 4);
 
-        let read_error = execute_tool("read_file", &json!({ "path": "missing.txt" }))
+        let read_error = execute_tool("read", &json!({ "path": "missing.txt" }))
             .expect_err("missing file should fail");
         assert!(read_error.contains("No such file or directory"));
         assert!(read_error.contains("resolved path:"));
         assert!(read_error.contains(&*root.join("missing.txt").to_string_lossy()));
 
         let edit_once = execute_tool(
-            "edit_file",
+            "edit",
             &json!({ "path": "nested/demo.txt", "old_string": "alpha", "new_string": "omega" }),
         )
         .expect("single edit should succeed");
@@ -5340,12 +5282,12 @@ mod tests {
         );
 
         execute_tool(
-            "write_file",
+            "write",
             &json!({ "path": "nested/demo.txt", "content": "alpha\nbeta\nalpha\n" }),
         )
         .expect("reset file");
         let edit_all = execute_tool(
-            "edit_file",
+            "edit",
             &json!({
                 "path": "nested/demo.txt",
                 "old_string": "alpha",
@@ -5362,14 +5304,14 @@ mod tests {
         );
 
         let edit_same = execute_tool(
-            "edit_file",
+            "edit",
             &json!({ "path": "nested/demo.txt", "old_string": "omega", "new_string": "omega" }),
         )
         .expect_err("identical old/new should fail");
         assert!(edit_same.contains("must differ"));
 
         let edit_missing = execute_tool(
-            "edit_file",
+            "edit",
             &json!({ "path": "nested/demo.txt", "old_string": "missing", "new_string": "omega" }),
         )
         .expect_err("missing substring should fail");
@@ -5399,7 +5341,7 @@ mod tests {
         .expect("write rust file");
         fs::write(root.join("nested/notes.txt"), "alpha\nbeta\n").expect("write txt file");
 
-        let globbed = execute_tool("glob_search", &json!({ "pattern": "nested/*.rs" }))
+        let globbed = execute_tool("glob", &json!({ "pattern": "nested/*.rs" }))
             .expect("glob should succeed");
         let globbed_output: serde_json::Value = serde_json::from_str(&globbed).expect("json");
         assert_eq!(globbed_output["numFiles"], 1);
@@ -5408,12 +5350,12 @@ mod tests {
             .expect("filename")
             .ends_with("nested/lib.rs"));
 
-        let glob_error = execute_tool("glob_search", &json!({ "pattern": "[" }))
+        let glob_error = execute_tool("glob", &json!({ "pattern": "[" }))
             .expect_err("invalid glob should fail");
         assert!(!glob_error.is_empty());
 
         let grep_content = execute_tool(
-            "grep_search",
+            "grep",
             &json!({
                 "pattern": "alpha",
                 "path": "nested",
@@ -5436,7 +5378,7 @@ mod tests {
             .contains("let alpha = 2;"));
 
         let grep_count = execute_tool(
-            "grep_search",
+            "grep",
             &json!({ "pattern": "alpha", "path": "nested", "output_mode": "count" }),
         )
         .expect("grep count should succeed");
@@ -5444,7 +5386,7 @@ mod tests {
         assert_eq!(grep_count_output["numMatches"], 3);
 
         let grep_error = execute_tool(
-            "grep_search",
+            "grep",
             &json!({ "pattern": "(alpha", "path": "nested" }),
         )
         .expect_err("invalid regex should fail");

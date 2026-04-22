@@ -346,7 +346,7 @@ pub fn validate_bash_hard_deny(command: &str) -> io::Result<()> {
 }
 
 const PATH_DENY_MSG: &str =
-    "read_file/write_file: path blocked by Relay hard denylist (.env*, id_rsa*, *.key, *.pem).";
+    "read/write: path blocked by Relay hard denylist (.env*, id_rsa*, *.key, *.pem).";
 
 fn path_deny() -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, PATH_DENY_MSG)

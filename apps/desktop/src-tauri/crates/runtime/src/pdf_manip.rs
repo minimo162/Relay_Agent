@@ -39,7 +39,7 @@ fn ensure_not_encrypted(doc: &Document) -> io::Result<()> {
     Ok(())
 }
 
-/// Parse a 1-based page list like `read_file` / `LiteParse`: `"1"`, `"1-3,5"` (comma-separated, ranges inclusive).
+/// Parse a 1-based page list like `read` / `LiteParse`: `"1"`, `"1-3,5"` (comma-separated, ranges inclusive).
 pub(crate) fn parse_pdf_pages_spec(spec: &str, max_page: u32) -> io::Result<BTreeSet<u32>> {
     let spec = spec.trim();
     if spec.is_empty() {
@@ -310,7 +310,7 @@ pub fn merge_pdfs(output_path: &str, input_paths: &[String]) -> io::Result<PathB
     Ok(out)
 }
 
-/// Write one PDF per segment; each `pages` string uses the same 1-based grammar as `read_file` for PDFs.
+/// Write one PDF per segment; each `pages` string uses the same 1-based grammar as `read` for PDFs.
 pub fn split_pdf(input_path: &str, segments: &[PdfSplitSegment]) -> io::Result<Vec<PathBuf>> {
     if segments.is_empty() {
         return Err(io::Error::new(

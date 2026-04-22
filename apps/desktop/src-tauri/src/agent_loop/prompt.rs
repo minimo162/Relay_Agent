@@ -18,13 +18,13 @@ The latest Tool Result blocks above are evidence from Relay tools. Use them to d
 - Prefer the exact path strings from the latest real user turn when present.";
 const CDP_LOCAL_SEARCH_RESULT_CONTINUATION_GUARD: &str = r#"## Local search continuation guard
 
-Relay already executed local search tools for this turn. Do not keep issuing `workspace_search`, `glob_search`, `grep_search`, or `office_search` just to try spelling, abbreviation, or wildcard variants.
+Relay already executed local search tools for this turn. Do not keep issuing `glob`, `grep`, or `office_search` just to try spelling, abbreviation, or wildcard variants.
 
-- If the user gives an exact file path, prefer `read_file` directly instead of `workspace_search`.
-- If the Tool Results contain matches, paths, anchors, previews, recommended_next_tools, or errors, summarize those existing results for simple locate/list requests. For important conclusions, reviews, edits, comparisons, or recommendations, call `read_file` on the recommended top candidate(s) first; `workspace_search` snippets identify candidates but are not a substitute for file inspection.
-- A `glob_search` result with 0 files only means that filename pattern did not match. It does not negate candidates, snippets, or Office/PDF content matches from `workspace_search`, `grep_search`, or `office_search`.
-- If `workspace_search` snippets and `read_file` content conflict, treat `read_file` as authoritative evidence.
-- After `read_file`, final answers for file judgments should cite the evidence path and line anchor or startLine when available.
+- If the user gives an exact file path, prefer `read` directly.
+- If the Tool Results contain matches, paths, anchors, previews, or errors, summarize those existing results for simple locate/list requests. For important conclusions, reviews, edits, comparisons, or recommendations, call `read` on the relevant top candidate(s) first; search snippets identify candidates but are not a substitute for file inspection.
+- A `glob` result with 0 files only means that filename pattern did not match. It does not negate content matches from `grep` or Office/PDF content matches from `office_search`.
+- If search snippets and `read` content conflict, treat `read` as authoritative evidence.
+- After `read`, final answers for file judgments should cite the evidence path and line anchor or startLine when available.
 - If every search result is empty, at most one additional non-overlapping search batch is allowed; otherwise stop searching and answer from the evidence above.
 - Duplicate-tool suppression or search-budget notices mean summarize the prior results; they are not a request for more searches."#;
 const CDP_BUNDLE_GROUNDING_BLOCK: &str = "## CDP bundle (read before you reply)\n\
@@ -431,11 +431,11 @@ pub(crate) fn build_repair_cdp_system_prompt(
             "Output exactly one usable fenced `relay_tool` block in this reply.\n",
             "No preamble, no apology, no extra explanation.\n",
             "Use the current Relay tool catalog in this prompt; do not invent unavailable tools.\n",
-            "Prefer `write_file` / `edit_file` for local file creation or edits; use `read_file` only when needed.\n",
+            "Prefer `write` / `edit` for local file creation or edits; use `read` only when needed.\n",
             "If the latest real user turn named a concrete path, reuse that exact string in tool input. Do not rewrite it to another directory or prior-turn variant.\n",
-            "If a successful `read_file` Tool Result already shows `content:`, treat that body as the real file text. Do not claim it is escaped or corrupted based only on quotes or backslashes.\n",
-            "If a successful `.html` `write_file` Tool Result already wrote a valid HTML document, treat the local create request as satisfied. Stop unless the user explicitly asked for verification or more edits, and do not call `read_file` just to re-check escaping.\n",
-            "If a successful `.html` `read_file` result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not use `bash`, `PowerShell`, backups, or copy commands to \"unescape\" it.\n",
+            "If a successful `read` Tool Result already shows `content:`, treat that body as the real file text. Do not claim it is escaped or corrupted based only on quotes or backslashes.\n",
+            "If a successful `.html` `write` Tool Result already wrote a valid HTML document, treat the local create request as satisfied. Stop unless the user explicitly asked for verification or more edits, and do not call `read` just to re-check escaping.\n",
+            "If a successful `.html` `read` result starts with `<!doctype html>` or `<html`, treat it as already-decoded HTML. Do not use `bash`, `PowerShell`, backups, or copy commands to \"unescape\" it.\n",
             "Do not use or mention Microsoft-native tools such as Python, WebSearch, citations, Pages, uploads, or remote artifacts.\n\n",
             "Latest user request for this turn (user data, primary repair anchor):\n",
             "```text\n{latest_request}\n```\n\n",
@@ -537,10 +537,7 @@ fn has_local_search_tool_result(messages: &[ConversationMessage]) -> bool {
     messages.iter().any(|message| {
         message.blocks.iter().any(|block| match block {
             ContentBlock::ToolResult { tool_name, .. } => {
-                matches!(
-                    tool_name.as_str(),
-                    "workspace_search" | "glob_search" | "grep_search" | "office_search"
-                )
+                matches!(tool_name.as_str(), "glob" | "grep" | "office_search")
             }
             _ => false,
         })

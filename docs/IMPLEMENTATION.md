@@ -15,6 +15,110 @@
 
 ## Milestone Log
 
+### 2026-04-22 expose opencode-style read/write/edit names
+
+Relay now advertises opencode-style `read`, `write`, and `edit` tool names
+instead of `read_file`, `write_file`, and `edit_file` in the CDP catalog,
+prompt guidance, repair skeletons, parser fixtures, and compact repair
+catalogs. Follow-up cleanup removed the old tool-name aliases from the direct
+executor, permission policy, runtime mutation validation, undo snapshot logic,
+compat harness fixtures, prompt text, and active source tests. Runtime file
+operations are now exposed internally as `read`, `write`, `edit`, `glob`, and
+`grep`, and the unused Relay-only `workspace_search` source file plus the
+remaining file-ops implementation were removed from active runtime code. The
+duplicated `desktop-core` prompt/parser implementation was updated the same way
+so future core/runtime alignment does not reintroduce the older Relay tool
+names.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml file_tools_cover_read_write_and_edit_behaviors -- --nocapture`: passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_core_catalog -- --nocapture`: passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_prompt_tool_specs -- --nocapture`: passed.
+- `cargo test -p desktop-core --manifest-path apps/desktop/src-tauri/Cargo.toml late_new_file_repairs_use_write_only_catalog -- --nocapture`: passed.
+- `cargo test -p desktop-core --manifest-path apps/desktop/src-tauri/Cargo.toml repair_prompt_stage2_and_stage3_strengthen_write_coercion -- --nocapture`: passed.
+- `cargo test -p desktop-core --manifest-path apps/desktop/src-tauri/Cargo.toml -- --nocapture`: passed, 78 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml -- --nocapture`: passed, 157 passed.
+- `cargo test -p compat-harness --manifest-path apps/desktop/src-tauri/Cargo.toml -- --nocapture`: passed, 21 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml no_relay_tool_call_for_local_lookup -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml repeated_generic_prose_before_tool -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml late_new_file_repairs_use_write_only_catalog -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml repair_prompt_stage2_and_stage3_strengthen_write_coercion -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml pathless_html_tetris_request_uses_default_tetris_write_repair -- --nocapture`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_tools_count_toward_turn_search_budget -- --nocapture`: passed.
+- `cargo test -p compat-harness --manifest-path apps/desktop/src-tauri/Cargo.toml grep_agentic_scenario_returns_low_level_evidence -- --nocapture`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
+### 2026-04-22 expose opencode-style glob/grep names
+
+Reviewed current `anomalyco/opencode` dev head
+`8043cfa68dcf97547ede3e26a9325af55583e1e4`; its built-in search tools are
+registered as `glob` and `grep`, with simple parameters (`pattern`, optional
+`path`, and `include` for grep). Relay now advertises those same tool names in
+the CDP catalog and local-search repair skeletons. The older
+`glob_search` / `grep_search` names remain executor aliases for direct/internal
+calls, but Copilot-facing guidance, tool ordering, local-search budgets, and
+repair examples use `glob` / `grep`.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_core_catalog -- --nocapture`: passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_prompt_tool_specs -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml no_relay_tool_call_for_local_lookup -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml repeated_generic_prose_before_tool -- --nocapture`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_tools_count_toward_turn_search_budget -- --nocapture`: passed.
+- `cargo test -p compat-harness --manifest-path apps/desktop/src-tauri/Cargo.toml grep_agentic_scenario_returns_low_level_evidence -- --nocapture`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `pnpm check`: passed.
+
+### 2026-04-21 remove deterministic initial search injection
+
+Reviewed current `anomalyco/opencode` at
+`8043cfa68dcf97547ede3e26a9325af55583e1e4` (`tool/glob.ts`,
+`tool/grep.ts`, and `file/ripgrep.ts`). Its search tools stay simple:
+`glob` lists files with ripgrep, `grep` searches content with ripgrep, and
+the model emits normal tool calls that the runtime executes.
+
+Removed Relay's host-injected deterministic initial local-search plan. The
+desktop loop no longer wraps the CDP client to synthesize first-turn
+`AssistantEvent::ToolUse` items before Copilot responds. Local lookup now stays
+on the normal opencode-like loop: prompt/tool catalog guidance asks for
+`glob`, `grep`, or `office_search`; the model emits the tool
+JSON; Relay parses, authorizes, and executes it. Existing tool-protocol repair
+still handles tool-less or malformed replies.
+
+Follow-up alignment: with compatibility no longer required for this surface,
+`workspace_search` was removed from the active tool catalog, direct tool
+executor, desktop workspace path-enforcement special case, runtime public
+exports, retry heuristics, turn-level search budget, and compat harness. Repair
+now emits low-level `glob`, `grep`, or `office_search` examples, matching
+opencode's plain `glob` / `grep` search shape more closely. The old
+`glob_search` / `grep_search` names remain accepted only as executor aliases
+for internal/direct calls; they are no longer advertised to Copilot.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan -- --nocapture`: passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_core_catalog -- --nocapture`: passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_prompt_tool_specs -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml no_relay_tool_call_for_local_lookup -- --nocapture`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml repeated_generic_prose_before_tool -- --nocapture`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml local_search_tools_count_toward_turn_search_budget -- --nocapture`: passed.
+- `cargo test -p compat-harness --manifest-path apps/desktop/src-tauri/Cargo.toml grep_agentic_scenario_returns_low_level_evidence -- --nocapture`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-21 opencode-aligned initial search unsticking
 
 Reviewed current `anomalyco/opencode` at
@@ -7385,13 +7489,13 @@ Follow-up tightening on 2026-04-17 (same exact live goal `htmlでテトリスを
 Additional verification after those tightenings:
 
 ```bash
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml pathless_html_tetris_request_uses_default_tetris_write_file_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml pathless_html_tetris_request_uses_default_tetris_write_repair -- --nocapture
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_confusion_heuristic_catches_foreign_tool_drift -- --nocapture
 ```
 
 Results:
 
-- `pathless_html_tetris_request_uses_default_tetris_write_file_repair`: passed after aligning the orchestrator-side heuristic with the new pathless `tetris.html` repair flow.
+- `pathless_html_tetris_request_uses_default_tetris_write_repair`: passed after aligning the orchestrator-side heuristic with the new pathless `tetris.html` repair flow.
 - `tool_protocol_confusion_heuristic_catches_foreign_tool_drift`: passed after extending the heuristic to cover the newly observed `Show**Preparing file request**...` and `Show**Generating file output**...` drifts, including the broader `Show**...` + `relay tool` + `write/file` wrapper catch-all.
 - The final heuristic generalization was validated by unit tests and by the captured live assistant texts above. A fresh end-to-end app rerun after that last generalization is still pending; the most recent live run before the final generalization still stopped at `repair1` on `Show**Generating file output**...`.
 
@@ -7517,15 +7621,15 @@ Commands run:
 ```bash
 cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all
 node --check apps/desktop/scripts/live_m365_tetris_html_smoke.mjs
-cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml repair_prompt_stage2_and_stage3_strengthen_write_file_coercion -- --nocapture
-cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml late_new_file_repairs_use_write_file_only_catalog -- --nocapture
-cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml pathless_html_tetris_request_uses_default_tetris_write_file_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml repair_prompt_stage2_and_stage3_strengthen_write_coercion -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml late_new_file_repairs_use_write_only_catalog -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml pathless_html_tetris_request_uses_default_tetris_write_repair -- --nocapture
 cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml tool_protocol_confusion_heuristic_catches_foreign_tool_drift -- --nocapture
 cargo test --manifest-path apps/desktop/src-tauri/crates/desktop-core/Cargo.toml build_cdp_prompt_ -- --nocapture
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml repair_prompt_stage2_and_stage3_strengthen_write_file_coercion -- --nocapture
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml late_new_file_repairs_use_write_file_only_catalog -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml repair_prompt_stage2_and_stage3_strengthen_write_coercion -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml late_new_file_repairs_use_write_only_catalog -- --nocapture
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_repair_stage_labels_distinguish_all_three_repairs -- --nocapture
-cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml pathless_html_tetris_request_uses_default_tetris_write_file_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml pathless_html_tetris_request_uses_default_tetris_write_repair -- --nocapture
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml tool_protocol_confusion_heuristic_catches_foreign_tool_drift -- --nocapture
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml build_cdp_prompt_ -- --nocapture
 pnpm live:m365:tetris-html

@@ -9,9 +9,9 @@
     ]
   },
   {
-    "name": "read_file_roundtrip",
+    "name": "read_roundtrip",
     "category": "file-tools",
-    "description": "Exercises read_file tool execution and final assistant synthesis.",
+    "description": "Exercises read tool execution and final assistant synthesis.",
     "parity_refs": [
       "Mock parity harness — milestone 1",
       "File tools — harness-validated flows"
@@ -20,25 +20,25 @@
   {
     "name": "grep_chunk_assembly",
     "category": "file-tools",
-    "description": "Validates grep_search partial JSON chunk assembly and follow-up synthesis.",
+    "description": "Validates grep partial JSON chunk assembly and follow-up synthesis.",
     "parity_refs": [
       "Mock parity harness — milestone 1",
       "File tools — harness-validated flows"
     ]
   },
   {
-    "name": "write_file_allowed",
+    "name": "write_allowed",
     "category": "file-tools",
-    "description": "Confirms workspace-write write_file success and filesystem side effects.",
+    "description": "Confirms workspace-write write success and filesystem side effects.",
     "parity_refs": [
       "Mock parity harness — milestone 1",
       "File tools — harness-validated flows"
     ]
   },
   {
-    "name": "write_file_denied",
+    "name": "write_denied",
     "category": "permissions",
-    "description": "Confirms read-only mode blocks write_file with an error result.",
+    "description": "Confirms read-only mode blocks write with an error result.",
     "parity_refs": [
       "Mock parity harness — milestone 1",
       "Permission enforcement across tool paths"
@@ -47,7 +47,7 @@
   {
     "name": "multi_tool_turn_roundtrip",
     "category": "multi-tool-turns",
-    "description": "Executes read_file and grep_search in the same assistant turn before the final reply.",
+    "description": "Executes read and grep in the same assistant turn before the final reply.",
     "parity_refs": [
       "Mock parity harness — milestone 2 (behavioral expansion)",
       "Multi-tool assistant turns"

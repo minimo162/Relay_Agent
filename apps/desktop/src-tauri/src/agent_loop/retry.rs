@@ -1,5 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -62,7 +61,7 @@ pub(crate) struct RetryHeuristicsFns {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ReadFileToolErrorContext {
+struct ReadToolErrorContext {
     requested_path: Option<String>,
     output: String,
 }
@@ -112,8 +111,11 @@ fn is_false_completion_success_claim_text(text: &str) -> bool {
         return false;
     }
     let lower = trimmed.to_ascii_lowercase();
-    let mentions_local_file = lower.contains("write_file")
-        || lower.contains("edit_file")
+    let mentions_local_file = lower.contains("write")
+        || lower.contains("edit")
+        || lower.contains("write")
+        || lower.contains("edit")
+        || lower.contains("read")
         || lower.contains("/root/")
         || lower.contains("workspace")
         || lower.contains(".html")
@@ -402,8 +404,8 @@ pub(crate) fn is_tool_protocol_confusion_text(text: &str) -> bool {
             || lower.contains("write the complete file")
             || lower.contains("using specific tools to write")
             || lower.contains("using a relay tool to write the complete file")
-            || lower.contains("write_file function")
-            || lower.contains("relay_tool's write_file action")
+            || lower.contains("write function")
+            || lower.contains("relay_tool's write action")
             || lower.contains("index.html")
             || lower.contains("html, js, and css")
             || lower.contains("specified tool")
@@ -429,12 +431,11 @@ pub(crate) fn is_tool_protocol_confusion_text(text: &str) -> bool {
         && !lower.contains("\"relay_tool_call\"")
         && !lower.contains("<!doctype html")
         && !lower.contains("<html");
-    let mentioned_relay_tools_without_payload = (lower.contains("write_file")
-        || lower.contains("edit_file")
-        || lower.contains("read_file")
-        || lower.contains("workspace_search")
-        || lower.contains("glob_search")
-        || lower.contains("grep_search"))
+    let mentioned_relay_tools_without_payload = (lower.contains("write")
+        || lower.contains("edit")
+        || lower.contains("read")
+        || lower.contains("glob")
+        || lower.contains("grep"))
         && (lower.contains("```")
             || contains_plain_relay_tool_mention(&lower)
             || lower.contains("adjusting tool use"));
@@ -460,7 +461,7 @@ pub(crate) fn is_tool_protocol_confusion_text(text: &str) -> bool {
             || lower.contains("preparing to write"))
         && (lower.contains("html file")
             || lower.contains("tetris.html")
-            || lower.contains("write_file")
+            || lower.contains("write")
             || trimmed.contains("ファイルを作成")
             || trimmed.contains("書き込みます"))
         && (lower.contains("available tools")
@@ -533,7 +534,7 @@ fn tool_protocol_repair_escalation(attempt_index: usize) -> &'static str {
     match tool_protocol_repair_stage(attempt_index) {
         1 => concat!(
             "Use the Relay tool catalog and emit the next required `relay_tool` JSON block in this reply.\n",
-            "For local file creation or edits inside the workspace, prefer `write_file` / `edit_file` (and `read_file` first only when actually needed).\n",
+            "For local file creation or edits inside the workspace, prefer `write` / `edit` (and `read` first only when actually needed).\n",
             "Output exactly one fenced `relay_tool` block and nothing before or after it.\n",
             "Do not answer with prose only.\n",
             "Do not mention `relay_tool` in plain text.\n\n",
@@ -545,7 +546,7 @@ fn tool_protocol_repair_escalation(attempt_index: usize) -> &'static str {
             "Do not include any explanatory sentence before or after the fence.\n",
             "Do not emit plain-text `relay_tool` mentions.\n",
             "The following outputs are invalid for this repair turn: `Show**...` wrappers, 'preparing' text, 'requesting' text, 'specific function' text, or any sentence that says you are about to write the file.\n",
-            "If the task is to create or overwrite a workspace file and you already know the content, emit `write_file` now instead of describing Python, page creation, or the tool you plan to use.\n\n",
+            "If the task is to create or overwrite a workspace file and you already know the content, emit `write` now instead of describing Python, page creation, or the tool you plan to use.\n\n",
         ),
         _ => concat!(
             "Final repair for this turn.\n",
@@ -558,7 +559,7 @@ fn tool_protocol_repair_escalation(attempt_index: usize) -> &'static str {
     }
 }
 
-fn build_write_file_repair_action_instruction(
+fn build_write_repair_action_instruction(
     attempt_index: usize,
     requested_path: &str,
     inferred_path: bool,
@@ -570,13 +571,13 @@ fn build_write_file_repair_action_instruction(
     };
     match tool_protocol_repair_stage(attempt_index) {
         1 => format!(
-            "{path_sentence} Emit exactly one `write_file` Relay tool call now. Do not describe the content in prose; put the final file body in `input.content`."
+            "{path_sentence} Emit exactly one `write` Relay tool call now. Do not describe the content in prose; put the final file body in `input.content`."
         ),
         2 => format!(
-            "{path_sentence} Emit the actual `write_file` JSON now, not a wrapper that says you are preparing or requesting the write. `Show**...`, planning text, and plain-text `relay_tool` mentions are invalid."
+            "{path_sentence} Emit the actual `write` JSON now, not a wrapper that says you are preparing or requesting the write. `Show**...`, planning text, and plain-text `relay_tool` mentions are invalid."
         ),
         _ => format!(
-            "{path_sentence} Final repair for this turn: the only valid reply is exactly one fenced `relay_tool` block whose only tool is `write_file` for `{requested_path}`. Put the complete final HTML document in `input.content`. Do not use placeholders like `<full file content here>` or describe the HTML instead of writing it."
+            "{path_sentence} Final repair for this turn: the only valid reply is exactly one fenced `relay_tool` block whose only tool is `write` for `{requested_path}`. Put the complete final HTML document in `input.content`. Do not use placeholders like `<full file content here>` or describe the HTML instead of writing it."
         ),
     }
 }
@@ -722,18 +723,6 @@ fn is_office_content_search_request(text: &str) -> bool {
 
 fn infer_office_search_pattern_for_search_request(text: &str) -> Option<String> {
     expanded_search_terms_for_request(text).into_iter().next()
-}
-
-fn infer_office_search_regex_for_search_request(text: &str) -> Option<String> {
-    let terms = expanded_search_terms_for_request(text);
-    (!terms.is_empty()).then(|| {
-        terms
-            .into_iter()
-            .take(10)
-            .map(|term| escape_regex_term(&term))
-            .collect::<Vec<_>>()
-            .join("|")
-    })
 }
 
 fn is_cash_flow_search_request(text: &str) -> bool {
@@ -992,158 +981,20 @@ fn glob_literal_term(term: &str) -> String {
         .collect()
 }
 
-fn escape_regex_term(term: &str) -> String {
-    let mut escaped = String::with_capacity(term.len());
-    for ch in term.chars() {
-        if matches!(
-            ch,
-            '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' | '\\'
-        ) {
-            escaped.push('\\');
-        }
-        escaped.push(ch);
-    }
-    escaped
-}
-
-fn build_workspace_search_tool_call(latest_request: &str, path: Option<&str>) -> Value {
-    let mut input = serde_json::Map::new();
-    input.insert(
-        "query".to_string(),
-        Value::String(latest_request.trim().to_string()),
-    );
-    if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
-        input.insert(
-            "paths".to_string(),
-            Value::Array(vec![Value::String(path.trim().to_string())]),
-        );
-    }
-    input.insert("mode".to_string(), Value::String("auto".to_string()));
-    if is_office_content_search_request(latest_request) {
-        input.insert("mode".to_string(), Value::String("office".to_string()));
-        input.insert(
-            "include_ext".to_string(),
-            Value::Array(
-                office_search_include_ext_for_search_request(latest_request)
-                    .into_iter()
-                    .map(|ext| Value::String(ext.to_string()))
-                    .collect(),
-            ),
-        );
-    }
-    input.insert(
-        "max_files".to_string(),
-        Value::Number(serde_json::Number::from(80)),
-    );
-    input.insert(
-        "max_snippets".to_string(),
-        Value::Number(serde_json::Number::from(40)),
-    );
-    input.insert(
-        "context".to_string(),
-        Value::Number(serde_json::Number::from(2)),
-    );
-    json!({
-        "name": "workspace_search",
-        "relay_tool_call": true,
-        "input": Value::Object(input),
-    })
-}
-
-fn initial_search_path_for_request(latest_request: &str, cwd: Option<&str>) -> Option<String> {
-    let cwd = cwd.map(str::trim).filter(|path| !path.is_empty());
-    for anchor in extract_path_anchors_from_text(latest_request) {
-        let anchor = anchor.trim();
-        if anchor.is_empty() {
-            continue;
-        }
-        if path_anchor_allowed_for_initial_search(anchor, cwd) {
-            return Some(anchor.to_string());
-        }
-    }
-    cwd.map(str::to_string)
-}
-
-fn explicit_external_absolute_anchor(latest_request: &str, cwd: Option<&str>) -> Option<String> {
-    let cwd = cwd.map(str::trim).filter(|path| !path.is_empty());
-    extract_path_anchors_from_text(latest_request)
-        .into_iter()
-        .map(|anchor| anchor.trim().to_string())
-        .find(|anchor| {
-            !anchor.is_empty()
-                && path_is_absolute_like(anchor)
-                && cwd.is_none_or(|cwd| !path_string_starts_with(anchor, cwd))
-        })
-}
-
-fn path_anchor_allowed_for_initial_search(anchor: &str, cwd: Option<&str>) -> bool {
-    let Some(cwd) = cwd else {
-        return true;
-    };
-    if !path_is_absolute_like(anchor) {
-        return true;
-    }
-    path_string_starts_with(anchor, cwd)
-}
-
-fn path_is_absolute_like(path: &str) -> bool {
-    let trimmed = path.trim();
-    Path::new(trimmed).is_absolute() || windows_absolute_like(trimmed)
-}
-
-fn windows_absolute_like(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    path.starts_with("\\\\")
-        || path.starts_with("//")
-        || (bytes.len() >= 3
-            && bytes[1] == b':'
-            && bytes[0].is_ascii_alphabetic()
-            && matches!(bytes[2], b'\\' | b'/'))
-}
-
-fn path_string_starts_with(path: &str, root: &str) -> bool {
-    if Path::new(path).starts_with(Path::new(root)) {
-        return true;
-    }
-    let path = normalize_windows_path_string(path);
-    let root = normalize_windows_path_string(root);
-    path == root
-        || path
-            .strip_prefix(&root)
-            .is_some_and(|rest| rest.starts_with('\\') || rest.starts_with('/'))
-}
-
-fn normalize_windows_path_string(path: &str) -> String {
-    path.trim()
-        .trim_start_matches("\\\\?\\")
-        .trim_end_matches(['\\', '/'])
-        .replace('/', "\\")
-        .to_ascii_lowercase()
-}
-
-fn build_search_tool_payload(
-    latest_request: &str,
-    _pattern: &str,
-    path: Option<&str>,
-    _include_office_content_search: bool,
-) -> Value {
-    build_workspace_search_tool_call(latest_request, path)
-}
-
-fn build_glob_search_tool_call(pattern: &str, path: Option<&str>) -> Value {
+fn build_glob_tool_call(pattern: &str, path: Option<&str>) -> Value {
     let mut input = serde_json::Map::new();
     input.insert("pattern".to_string(), Value::String(pattern.to_string()));
     if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
         input.insert("path".to_string(), Value::String(path.trim().to_string()));
     }
     json!({
-        "name": "glob_search",
+        "name": "glob",
         "relay_tool_call": true,
         "input": Value::Object(input),
     })
 }
 
-fn build_grep_search_tool_call(pattern: &str, path: Option<&str>) -> Value {
+fn build_grep_tool_call(pattern: &str, path: Option<&str>) -> Value {
     let mut input = serde_json::Map::new();
     input.insert("pattern".to_string(), Value::String(pattern.to_string()));
     if let Some(path) = path.filter(|path| !path.trim().is_empty()) {
@@ -1164,63 +1015,69 @@ fn build_grep_search_tool_call(pattern: &str, path: Option<&str>) -> Value {
         Value::Number(serde_json::Number::from(20)),
     );
     json!({
-        "name": "grep_search",
+        "name": "grep",
         "relay_tool_call": true,
         "input": Value::Object(input),
     })
 }
 
-fn opencode_initial_office_glob_pattern(latest_request: &str) -> String {
-    let exts = office_search_include_ext_for_search_request(latest_request);
-    if exts.len() == 1 {
-        format!("**/*.{}", exts[0])
-    } else {
-        format!("**/*.{{{}}}", exts.join(","))
+fn office_search_paths_for_repair(latest_request: &str, path: Option<&str>) -> Vec<Value> {
+    if let Some(path) = path.map(str::trim).filter(|path| !path.is_empty()) {
+        let lower = path.to_ascii_lowercase();
+        if matches!(
+            lower.rsplit('.').next(),
+            Some("docx" | "xlsx" | "pptx" | "pdf")
+        ) || path.contains(['*', '?', '[', ']', '{', '}'])
+        {
+            return vec![Value::String(path.to_string())];
+        }
+        let root = path.trim_end_matches(['/', '\\']);
+        return office_search_include_ext_for_search_request(latest_request)
+            .into_iter()
+            .map(|ext| Value::String(format!("{root}/**/*.{ext}")))
+            .collect();
     }
-}
-
-fn opencode_initial_grep_pattern(latest_request: &str) -> Option<String> {
-    expanded_search_terms_for_request(latest_request)
+    office_search_include_ext_for_search_request(latest_request)
         .into_iter()
-        .find(|term| !path_is_absolute_like(term) && !term.contains(['/', '\\']))
-        .map(|term| escape_regex_term(&term))
+        .map(|ext| Value::String(format!("**/*.{ext}")))
+        .collect()
 }
 
-pub(crate) fn build_initial_local_search_tool_calls(
-    latest_request: &str,
-    cwd: Option<&str>,
-) -> Option<Vec<(String, String)>> {
-    if !is_local_file_search_request(latest_request) {
-        return None;
-    }
-    let path_anchor = if explicit_external_absolute_anchor(latest_request, cwd).is_some() {
-        cwd.map(str::to_string)
-    } else {
-        initial_search_path_for_request(latest_request, cwd)
-    };
-    let payload = if is_office_content_search_request(latest_request) {
-        build_glob_search_tool_call(
-            &opencode_initial_office_glob_pattern(latest_request),
-            path_anchor.as_deref(),
-        )
-    } else if let Some(pattern) = opencode_initial_grep_pattern(latest_request) {
-        build_grep_search_tool_call(&pattern, path_anchor.as_deref())
-    } else {
-        build_glob_search_tool_call("**/*", path_anchor.as_deref())
-    };
-    let calls = match payload {
-        Value::Array(items) => items,
-        item => vec![item],
-    }
-    .into_iter()
-    .filter_map(|item| {
-        let name = item.get("name")?.as_str()?.to_string();
-        let input = item.get("input")?;
-        let input = serde_json::to_string(input).ok()?;
-        Some((name, input))
+fn build_office_search_tool_call(latest_request: &str, path: Option<&str>) -> Value {
+    let pattern = infer_office_search_pattern_for_search_request(latest_request)
+        .unwrap_or_else(|| latest_request.trim().to_string());
+    let include_ext = office_search_include_ext_for_search_request(latest_request)
+        .into_iter()
+        .map(|ext| Value::String(ext.to_string()))
+        .collect::<Vec<_>>();
+    json!({
+        "name": "office_search",
+        "relay_tool_call": true,
+        "input": {
+            "pattern": pattern,
+            "paths": office_search_paths_for_repair(latest_request, path),
+            "-i": true,
+            "include_ext": include_ext,
+            "max_files": 80,
+            "max_results": 30,
+            "context": 40,
+        },
     })
-    .collect::<Vec<_>>();
-    (!calls.is_empty()).then_some(calls)
+}
+
+fn build_search_tool_payload(
+    latest_request: &str,
+    pattern: &str,
+    path: Option<&str>,
+    _include_office_content_search: bool,
+) -> Value {
+    if is_office_content_search_request(latest_request) {
+        return build_office_search_tool_call(latest_request, path);
+    }
+    if let Some(term) = infer_office_search_pattern_for_search_request(latest_request) {
+        return build_grep_tool_call(&term, path);
+    }
+    build_glob_tool_call(pattern, path)
 }
 
 fn build_tool_result_summary_repair_input(
@@ -1235,7 +1092,7 @@ fn build_tool_result_summary_repair_input(
             "Do not emit any `relay_tool` fence, JSON tool object, or additional tool call in the next reply.\n",
             "Use the prior tool results already present in the transcript as the only evidence. If duplicate-tool suppression notices are present, treat them only as a signal not to repeat the same search.\n",
             "If the prior local search results are empty or contain only errors, say that Relay found no matching local files/results in the searched scope. Do not infer required files from general knowledge and do not claim files were confirmed.\n",
-            "Now answer the user's original local document search request concisely, with file paths and anchors/previews from the existing `workspace_search` / `glob_search` / `office_search` results when available.\n\n",
+            "Now answer the user's original local document search request concisely, with file paths and anchors/previews from the existing `glob` / `grep` / `office_search` results when available.\n\n",
             "Malformed or duplicate assistant text to replace:\n```text\n{assistant_text}\n```\n\n",
             "{latest_request_marker}{latest_request}\n```\n\n",
             "{original_goal_marker}{goal}\n```"
@@ -1272,7 +1129,7 @@ fn build_search_tool_protocol_repair_input(
     let expected_payload = build_search_tool_payload(latest_request, pattern, path, true);
     let expected_json =
         serde_json::to_string_pretty(&expected_payload).unwrap_or_else(|_| "{}".to_string());
-    let search_instruction = "This is a local file/document search request. Emit exactly one `workspace_search` Relay tool call now. After Relay returns results, use only small, concrete rg-backed `glob_search` / `grep_search` / `office_search` follow-ups if the first result is insufficient.";
+    let search_instruction = "This is a local file/document search request. Emit exactly one Relay local search tool call now: use `glob` for filenames, `grep` for plaintext/code contents, or `office_search` for Office/PDF contents.";
     format!(
         concat!(
             "Tool protocol repair.\n",
@@ -1283,7 +1140,7 @@ fn build_search_tool_protocol_repair_input(
             "{escalation}",
             "{search_instruction}\n",
             "Use the JSON skeleton below exactly unless the latest request clearly requires a smaller glob pattern or a narrower Office/PDF path set.\n",
-            "Do not use `read_file` for a directory or workspace search.\n\n",
+            "Do not use `read` for a directory or workspace search.\n\n",
             "Expected JSON for the next reply:\n",
             "```json\n{expected_json}\n```\n\n",
             "{latest_request_marker}{latest_request}\n```\n\n",
@@ -1391,13 +1248,13 @@ pub(crate) fn build_best_tool_protocol_repair_input(
                 goal,
                 latest_request,
                 attempt_index,
-                "write_file",
+                "write",
                 &requested_path,
                 &json!({
                     "path": requested_path.clone(),
                     "content": "<full file content here>"
                 }),
-                &build_write_file_repair_action_instruction(attempt_index, &requested_path, false),
+                &build_write_repair_action_instruction(attempt_index, &requested_path, false),
             );
         }
         if let Some(inferred_path) = infer_default_new_file_path(latest_request) {
@@ -1405,13 +1262,13 @@ pub(crate) fn build_best_tool_protocol_repair_input(
                 goal,
                 latest_request,
                 attempt_index,
-                "write_file",
+                "write",
                 &inferred_path,
                 &json!({
                     "path": inferred_path.clone(),
                     "content": "<full file content here>"
                 }),
-                &build_write_file_repair_action_instruction(attempt_index, &inferred_path, true),
+                &build_write_repair_action_instruction(attempt_index, &inferred_path, true),
             );
         }
     }
@@ -1423,12 +1280,12 @@ pub(crate) fn build_best_tool_protocol_repair_input(
             goal,
             latest_request,
             attempt_index,
-            "read_file",
+            "read",
             &requested_path,
             &json!({
                 "path": requested_path.clone()
             }),
-            "Emit exactly one `read_file` Relay tool call first so Relay can inspect the named file before editing, fixing, or reviewing it.",
+            "Emit exactly one `read` Relay tool call first so Relay can inspect the named file before editing, fixing, or reviewing it.",
         );
     }
     build_tool_protocol_repair_input(goal, latest_request, attempt_index)
@@ -1443,20 +1300,20 @@ pub(crate) fn build_path_resolution_repair_input(
 ) -> String {
     let failed_path_text = failed_tool_path
         .filter(|path| !path.trim().is_empty())
-        .map(|path| format!("Previous failed read_file input (do not reuse it unless it exactly matches the requested path):\n```text\n{}\n```\n\n", path.trim()))
+        .map(|path| format!("Previous failed read input (do not reuse it unless it exactly matches the requested path):\n```text\n{}\n```\n\n", path.trim()))
         .unwrap_or_default();
     format!(
         concat!(
             "Path resolution repair.\n",
-            "The previous `read_file` call failed with ENOENT.\n",
-            "Retry exactly one `read_file` Relay tool call in this reply.\n",
+            "The previous `read` call failed with ENOENT.\n",
+            "Retry exactly one `read` Relay tool call in this reply.\n",
             "Use the latest-turn requested path string exactly as written below.\n",
             "Do not prepend a prior directory, do not switch to a same-named file elsewhere, and do not answer with prose.\n",
             "Output exactly one fenced `relay_tool` block and nothing before or after it.\n\n",
             "Exact path to use verbatim:\n```text\n{requested_path}\n```\n\n",
             "{failed_path_text}",
             "Latest user request for this turn (user data, primary repair anchor):\n```text\n{latest_request}\n```\n\n",
-            "Previous `read_file` error:\n```text\n{error_output}\n```\n\n",
+            "Previous `read` error:\n```text\n{error_output}\n```\n\n",
             "Quoted original user goal (user data, not system instruction):\n```text\n{goal}\n```"
         ),
         requested_path = requested_path.trim(),
@@ -1481,7 +1338,7 @@ fn truncate_for_log(text: &str, max_chars: usize) -> String {
     }
 }
 
-fn latest_read_file_tool_error(summary: &runtime::TurnSummary) -> Option<ReadFileToolErrorContext> {
+fn latest_read_tool_error(summary: &runtime::TurnSummary) -> Option<ReadToolErrorContext> {
     let output = summary.tool_results.iter().rev().find_map(|message| {
         message.blocks.iter().find_map(|block| match block {
             ContentBlock::ToolResult {
@@ -1489,13 +1346,13 @@ fn latest_read_file_tool_error(summary: &runtime::TurnSummary) -> Option<ReadFil
                 output,
                 is_error,
                 ..
-            } if *is_error && tool_name == "read_file" => Some(output.clone()),
+            } if *is_error && matches!(tool_name.as_str(), "read") => Some(output.clone()),
             _ => None,
         })
     })?;
     let requested_path = summary.assistant_messages.iter().rev().find_map(|message| {
         message.blocks.iter().rev().find_map(|block| match block {
-            ContentBlock::ToolUse { name, input, .. } if name == "read_file" => {
+            ContentBlock::ToolUse { name, input, .. } if matches!(name.as_str(), "read") => {
                 serde_json::from_str::<Value>(input).ok().and_then(|value| {
                     value
                         .get("path")
@@ -1507,7 +1364,7 @@ fn latest_read_file_tool_error(summary: &runtime::TurnSummary) -> Option<ReadFil
             _ => None,
         })
     });
-    Some(ReadFileToolErrorContext {
+    Some(ReadToolErrorContext {
         requested_path,
         output,
     })
@@ -1521,7 +1378,7 @@ fn has_local_search_tool_result(summary: &runtime::TurnSummary) -> bool {
                 ContentBlock::ToolResult { tool_name, .. }
                     if matches!(
                         tool_name.as_str(),
-                        "workspace_search" | "glob_search" | "grep_search" | "office_search"
+                        "glob" | "grep" | "office_search"
                     )
             )
         })
@@ -1535,15 +1392,7 @@ fn local_search_output_has_hits(tool_name: &str, output: &str) -> bool {
             && !output.contains("Duplicate tool call suppressed");
     };
     match tool_name {
-        "workspace_search" => ["candidates", "snippets", "recommended_next_tools"]
-            .iter()
-            .any(|key| {
-                value
-                    .get(*key)
-                    .and_then(Value::as_array)
-                    .is_some_and(|items| !items.is_empty())
-            }),
-        "glob_search" => {
+        "glob" => {
             value
                 .get("filenames")
                 .and_then(Value::as_array)
@@ -1554,7 +1403,7 @@ fn local_search_output_has_hits(tool_name: &str, output: &str) -> bool {
                     .and_then(Value::as_u64)
                     .is_some_and(|count| count > 0)
         }
-        "grep_search" => {
+        "grep" => {
             value
                 .get("filenames")
                 .and_then(Value::as_array)
@@ -1590,10 +1439,7 @@ fn local_search_results_are_empty(summary: &runtime::TurnSummary) -> bool {
             else {
                 continue;
             };
-            if !matches!(
-                tool_name.as_str(),
-                "workspace_search" | "glob_search" | "grep_search" | "office_search"
-            ) {
+            if !matches!(tool_name.as_str(), "glob" | "grep" | "office_search") {
                 continue;
             }
             saw_search_result = true;
@@ -1622,121 +1468,6 @@ fn has_local_search_guard_notice(summary: &runtime::TurnSummary) -> bool {
                 _ => false,
             })
         })
-}
-
-fn successful_read_file_paths(summary: &runtime::TurnSummary) -> BTreeSet<String> {
-    let mut read_file_inputs = BTreeMap::<String, String>::new();
-    for message in &summary.assistant_messages {
-        for block in &message.blocks {
-            let ContentBlock::ToolUse { id, name, input } = block else {
-                continue;
-            };
-            if name != "read_file" {
-                continue;
-            }
-            let Some(path) = serde_json::from_str::<Value>(input).ok().and_then(|value| {
-                value
-                    .get("path")
-                    .or_else(|| value.get("file_path"))
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string)
-            }) else {
-                continue;
-            };
-            read_file_inputs.insert(id.clone(), path);
-        }
-    }
-
-    let mut paths = BTreeSet::new();
-    for message in &summary.tool_results {
-        for block in &message.blocks {
-            let ContentBlock::ToolResult {
-                tool_use_id,
-                tool_name,
-                is_error,
-                ..
-            } = block
-            else {
-                continue;
-            };
-            if tool_name == "read_file" && !is_error {
-                if let Some(path) = read_file_inputs.get(tool_use_id) {
-                    paths.insert(path.clone());
-                }
-            }
-        }
-    }
-    paths
-}
-
-fn unread_recommended_read_paths(
-    summary: &runtime::TurnSummary,
-    recommended_paths: &[String],
-) -> Vec<String> {
-    let read_paths = successful_read_file_paths(summary);
-    recommended_paths
-        .iter()
-        .filter(|recommended| !read_paths.contains(*recommended))
-        .cloned()
-        .collect()
-}
-
-fn workspace_search_recommended_read_paths(summary: &runtime::TurnSummary) -> Vec<String> {
-    let mut paths = Vec::new();
-    for message in &summary.tool_results {
-        for block in &message.blocks {
-            let ContentBlock::ToolResult {
-                tool_name, output, ..
-            } = block
-            else {
-                continue;
-            };
-            if tool_name != "workspace_search" {
-                continue;
-            }
-            let Ok(value) = serde_json::from_str::<Value>(output) else {
-                continue;
-            };
-            let Some(items) = value
-                .get("recommended_next_tools")
-                .and_then(Value::as_array)
-            else {
-                continue;
-            };
-            for item in items {
-                let is_read_file = item
-                    .get("tool")
-                    .and_then(Value::as_str)
-                    .is_some_and(|tool| tool == "read_file");
-                let Some(path) = item.get("path").and_then(Value::as_str) else {
-                    continue;
-                };
-                if is_read_file && !paths.iter().any(|existing| existing == path) {
-                    paths.push(path.to_string());
-                }
-            }
-        }
-    }
-    paths
-}
-
-fn is_important_local_evidence_request(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("improve")
-        || lower.contains("fix")
-        || lower.contains("review")
-        || lower.contains("compare")
-        || lower.contains("recommend")
-        || lower.contains("proposal")
-        || lower.contains("implement")
-        || lower.contains("conclusion")
-        || text.contains("改善")
-        || text.contains("修正")
-        || text.contains("レビュー")
-        || text.contains("比較")
-        || text.contains("提案")
-        || text.contains("実装")
-        || text.contains("結論")
 }
 
 fn is_copilot_search_leak_text(text: &str) -> bool {
@@ -1775,49 +1506,7 @@ fn claims_local_search_found_evidence(text: &str) -> bool {
         || trimmed.contains("✅")
 }
 
-fn build_evidence_expansion_repair_input(
-    goal: &str,
-    latest_request: &str,
-    assistant_text: &str,
-    paths: &[String],
-) -> String {
-    let calls = paths
-        .iter()
-        .take(3)
-        .map(|path| {
-            json!({
-                "name": "read_file",
-                "relay_tool_call": true,
-                "input": { "path": path }
-            })
-        })
-        .collect::<Vec<_>>();
-    let expected_json =
-        serde_json::to_string_pretty(&Value::Array(calls)).unwrap_or_else(|_| "[]".to_string());
-    format!(
-        concat!(
-            "ImportantConclusionWithoutEvidence repair.\n",
-            "Relay already executed `workspace_search`, but the previous reply moved toward an important conclusion using search snippets only.\n",
-            "`workspace_search` snippets are candidate discovery evidence, not final file evidence.\n",
-            "If a snippet conflicts with `read_file`, the `read_file` Tool Result is authoritative.\n",
-            "Emit exactly one `relay_tool` block containing the `read_file` call(s) below. Do not answer in prose yet.\n",
-            "After `read_file` returns, write the final answer with evidence path and line anchors when available.\n\n",
-            "Expected JSON for the next reply:\n",
-            "```json\n{expected_json}\n```\n\n",
-            "Previous assistant text to repair:\n```text\n{assistant_text}\n```\n\n",
-            "{latest_request_marker}{latest_request}\n```\n\n",
-            "{original_goal_marker}{goal}\n```"
-        ),
-        expected_json = expected_json,
-        assistant_text = assistant_text.trim(),
-        latest_request_marker = LATEST_REQUEST_MARKER,
-        latest_request = latest_request.trim(),
-        original_goal_marker = ORIGINAL_GOAL_MARKER,
-        goal = goal.trim(),
-    )
-}
-
-fn is_read_file_enoent(output: &str) -> bool {
+fn is_read_enoent(output: &str) -> bool {
     let lower = output.to_ascii_lowercase();
     lower.contains("no such file or directory") || lower.contains("os error 2")
 }
@@ -1874,8 +1563,8 @@ pub(crate) fn decide_loop_after_success(
                 return LoopDecision::Stop(LoopStopReason::MetaStall);
             }
             if !path_repair_used {
-                if let Some(error) = latest_read_file_tool_error(summary) {
-                    if is_read_file_enoent(&error.output) {
+                if let Some(error) = latest_read_tool_error(summary) {
+                    if is_read_enoent(&error.output) {
                         if let Some(requested_path) = select_path_repair_anchor(
                             latest_turn_input,
                             error.requested_path.as_deref(),
@@ -1913,11 +1602,6 @@ pub(crate) fn decide_loop_after_success(
         has_local_search_tool_result(summary) && is_copilot_search_leak_text(assistant_text);
     let is_empty_local_search_false_evidence_claim = local_search_results_are_empty(summary)
         && claims_local_search_found_evidence(assistant_text);
-    let recommended_read_paths = workspace_search_recommended_read_paths(summary);
-    let missing_read_paths = unread_recommended_read_paths(summary, &recommended_read_paths);
-    let is_important_conclusion_without_evidence = !missing_read_paths.is_empty()
-        && is_important_local_evidence_request(latest_turn_input)
-        && !assistant_text.trim().is_empty();
     let is_repair_refusal =
         summary.tool_results.is_empty() && is_repair_refusal_text(assistant_text);
     let is_false_completion = summary.tool_results.is_empty()
@@ -1987,21 +1671,6 @@ pub(crate) fn decide_loop_after_success(
                     goal,
                     latest_turn_input,
                     assistant_text,
-                ),
-                kind: LoopContinueKind::MetaNudge,
-            };
-        }
-        return LoopDecision::Stop(LoopStopReason::MetaStall);
-    }
-
-    if is_important_conclusion_without_evidence {
-        if meta_stall_nudges_used < meta_stall_nudge_limit {
-            return LoopDecision::Continue {
-                next_input: build_evidence_expansion_repair_input(
-                    goal,
-                    latest_turn_input,
-                    assistant_text,
-                    &missing_read_paths,
                 ),
                 kind: LoopContinueKind::MetaNudge,
             };
