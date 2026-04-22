@@ -137,7 +137,7 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
         "write" => ToolMetadata {
             approval_title: Some("Create or overwrite a file?"),
             target_extractor: ApprovalTargetExtractor::PathLike,
-            risky_fields: &["path"],
+            risky_fields: &["filePath", "path"],
             tool_search_visible: false,
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
@@ -145,7 +145,7 @@ pub fn tool_metadata(name: &str) -> ToolMetadata {
         "edit" => ToolMetadata {
             approval_title: Some("Edit a file?"),
             target_extractor: ApprovalTargetExtractor::PathLike,
-            risky_fields: &["path", "replace_all"],
+            risky_fields: &["filePath", "path", "replaceAll", "replace_all"],
             tool_search_visible: false,
             cdp_visibility: CdpToolVisibility::Core,
             ..DEFAULT_TOOL_METADATA
@@ -456,7 +456,7 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
         "git_diff" => vec!["path", "staged"],
         "WebSearch" => vec!["allowed_domains", "blocked_domains"],
         "WebFetch" => vec!["prompt"],
-        "edit" => vec!["replace_all"],
+        "edit" => vec!["replaceAll"],
         "bash" => vec!["timeout", "description", "run_in_background"],
         "PowerShell" => vec!["timeout", "description", "run_in_background"],
         "MCP" => vec!["server", "name", "arguments"],
@@ -504,14 +504,12 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
 
 fn cdp_tool_example(name: &str) -> Value {
     match name {
-        "read" => {
-            json!({"name":"read","relay_tool_call":true,"input":{"path":"src/main.rs"}})
-        }
+        "read" => json!({"name":"read","relay_tool_call":true,"input":{"filePath":"src/main.rs"}}),
         "write" => {
-            json!({"name":"write","relay_tool_call":true,"input":{"path":"notes.txt","content":"hello\n"}})
+            json!({"name":"write","relay_tool_call":true,"input":{"filePath":"notes.txt","content":"hello\n"}})
         }
         "edit" => {
-            json!({"name":"edit","relay_tool_call":true,"input":{"path":"src/main.rs","old_string":"foo","new_string":"bar"}})
+            json!({"name":"edit","relay_tool_call":true,"input":{"filePath":"src/main.rs","oldString":"foo","newString":"bar"}})
         }
         "glob" => {
             json!({"name":"glob","relay_tool_call":true,"input":{"pattern":"src/**/*.rs"}})
@@ -573,7 +571,7 @@ fn cdp_tool_purpose(name: &str, description: &'static str) -> &'static str {
         "edit" => "Apply a targeted replacement inside an existing workspace file.",
         "glob" => "Fast rg-backed file pattern matching for concrete filename/path follow-ups.",
         "grep" => "Fast rg-backed code or text content search for concrete strings or regex matches.",
-        "office_search" => "Search extracted DOCX/XLSX/PPTX/PDF text for concrete literal strings or regex matches before answering Office/PDF lookup questions.",
+        "office_search" => "Search extracted DOCX/XLSX/XLSM/PPTX/PDF text for concrete literal strings or regex matches before answering Office/PDF lookup questions.",
         "git_status" => "Inspect working tree changes without invoking a shell.",
         "git_diff" => "Inspect staged or unstaged diffs without invoking a shell.",
         "pdf_merge" => "Merge existing PDF files inside the workspace.",
@@ -599,7 +597,7 @@ fn cdp_tool_use_when(name: &str) -> &'static str {
         "read" => "Use for grounded inspection, PDF/Office reading, or before editing an existing file.",
         "write" => "Use when creating a new target file or replacing a file with fully known content.",
         "edit" => "Use after reading the file when you need a targeted text replacement.",
-        "glob" => "Use for filename/path expansion or when the user gives a concrete glob. Batch extension families with braces, e.g. `**/*.{rs,ts,tsx}`.",
+        "glob" => "Use for filename/path expansion or when the user gives a concrete glob. Keep one glob call to one simple pattern; avoid large brace fan-out on remote or broad workspaces.",
         "grep" => "Use for concrete identifier, string, or regex searches before reading/editing code or text candidates. Use `include` for file filters such as `*.js` or `*.{ts,tsx}`.",
         "office_search" => "Use for Office/PDF content discovery, including needed-file or related-file questions; derive a literal search term from the user request and set `regex: true` only when a real regex is needed.",
         "git_status" => "Use for a quick change overview when the task depends on current git state.",
@@ -745,22 +743,18 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "read",
-            description: "Read a file by path: UTF-8 text (line offset/limit), .ipynb as numbered text, .pdf via LiteParse spatial text with optional pages (1-based, e.g. \"1-3\" or \"5\"; OCR off), .docx/.xlsx/.pptx as extracted text, common images as metadata only (no multimodal tool result yet).",
+            description: "Read a file or directory by path: directory entries, UTF-8 text (line offset/limit), .ipynb as numbered text, .pdf via LiteParse spatial text with optional pages (1-based, e.g. \"1-3\" or \"5\"; OCR off), .docx/.xlsx/.xlsm/.pptx as extracted text, common images as metadata only (no multimodal tool result yet).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
-                    "file_path": { "type": "string", "description": "Claw-style alias for path" },
-                    "offset": { "type": "integer", "minimum": 0 },
+                    "filePath": { "type": "string", "description": "The path to the file to read. Relative paths resolve against the current workspace." },
+                    "offset": { "type": "integer", "minimum": 1, "description": "Line number to start reading from (1-indexed)." },
                     "limit": { "type": "integer", "minimum": 1 },
                     "pages": { "type": "string", "description": "PDF only: page range such as \"1-5\", \"3\", or \"10-20\" (1-based)" },
                     "sheets": { "type": "string", "description": "XLSX only: comma-separated sheet names" },
                     "slides": { "type": "string", "description": "PPTX only: slide range such as \"1-5\", \"3\", or \"10-20\" (1-based)" }
                 },
-                "anyOf": [
-                    { "required": ["path"] },
-                    { "required": ["file_path"] }
-                ],
+                "required": ["filePath"],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::ReadOnly,
@@ -771,10 +765,10 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
+                    "filePath": { "type": "string", "description": "The path to the file to write. Relative paths resolve against the current workspace." },
                     "content": { "type": "string" }
                 },
-                "required": ["path", "content"],
+                "required": ["filePath", "content"],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::WorkspaceWrite,
@@ -785,12 +779,12 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string" },
-                    "old_string": { "type": "string" },
-                    "new_string": { "type": "string" },
-                    "replace_all": { "type": "boolean" }
+                    "filePath": { "type": "string", "description": "The path to the file to modify. Relative paths resolve against the current workspace." },
+                    "oldString": { "type": "string", "description": "The text to replace." },
+                    "newString": { "type": "string", "description": "The replacement text. Must differ from oldString." },
+                    "replaceAll": { "type": "boolean", "description": "Replace all occurrences of oldString. Defaults to false." }
                 },
-                "required": ["path", "old_string", "new_string"],
+                "required": ["filePath", "oldString", "newString"],
                 "additionalProperties": false
             }),
             required_permission: PermissionMode::WorkspaceWrite,
@@ -801,7 +795,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "pattern": { "type": "string", "description": "Glob pattern. Brace groups are expanded, e.g. **/*.{docx,xlsx,pptx,pdf}." },
+                    "pattern": { "type": "string", "description": "Glob pattern to match files against." },
                     "path": { "type": "string", "description": "Directory to search. Omit to use the current workspace directory." }
                 },
                 "required": ["pattern"],
@@ -826,14 +820,14 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "office_search",
-            description: "Search extracted text across .docx, .xlsx, .pptx, and .pdf files. Use this before answering local Office/PDF lookup requests, including questions about needed, related, relevant, or available files. Defaults to literal substring search; set regex=true for regex patterns. No semantic ranking. Results include path, anchor, match offsets, and preview. Extraction omits unsupported embedded image/chart/SmartArt text.",
+            description: "Search extracted text across .docx, .xlsx, .xlsm, .pptx, and .pdf files. Use this before answering local Office/PDF lookup requests, including questions about needed, related, relevant, or available files. Defaults to literal substring search; set regex=true for regex patterns. No semantic ranking. Results include path, anchor, match offsets, and preview. Extraction omits unsupported embedded image/chart/SmartArt text.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "pattern": { "type": "string" },
                     "paths": { "type": "array", "items": { "type": "string" }, "description": "Concrete file paths or glob patterns such as reports/**/*.xlsx" },
                     "regex": { "type": "boolean", "description": "When true, treat pattern as a regex. Defaults to false literal substring search." },
-                    "include_ext": { "type": "array", "items": { "type": "string", "enum": ["docx", "xlsx", "pptx", "pdf", ".docx", ".xlsx", ".pptx", ".pdf"] } },
+                    "include_ext": { "type": "array", "items": { "type": "string", "enum": ["docx", "xlsx", "xlsm", "pptx", "pdf", ".docx", ".xlsx", ".xlsm", ".pptx", ".pdf"] } },
                     "-i": { "type": "boolean" },
                     "context": { "type": "integer", "minimum": 0 },
                     "max_results": { "type": "integer", "minimum": 1, "maximum": 1000 },
@@ -1702,9 +1696,8 @@ fn run_bash(input: BashCommandInput) -> Result<String, String> {
 #[allow(clippy::needless_pass_by_value)]
 fn run_read(input: ReadFileInput) -> Result<String, String> {
     let path = input
-        .path
-        .or(input.file_path)
-        .ok_or_else(|| String::from("read requires path or file_path"))?;
+        .file_path
+        .ok_or_else(|| String::from("read requires filePath"))?;
     to_pretty_json(
         read(
             &path,
@@ -1720,14 +1713,14 @@ fn run_read(input: ReadFileInput) -> Result<String, String> {
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_write(input: WriteFileInput) -> Result<String, String> {
-    to_pretty_json(write(&input.path, &input.content).map_err(io_to_string)?)
+    to_pretty_json(write(&input.file_path, &input.content).map_err(io_to_string)?)
 }
 
 #[allow(clippy::needless_pass_by_value)]
 fn run_edit(input: EditFileInput) -> Result<String, String> {
     to_pretty_json(
         edit(
-            &input.path,
+            &input.file_path,
             &input.old_string,
             &input.new_string,
             input.replace_all.unwrap_or(false),
@@ -2003,10 +1996,9 @@ fn io_to_string(error: std::io::Error) -> String {
 
 #[derive(Debug, Deserialize)]
 struct ReadFileInput {
-    #[serde(default)]
-    path: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "filePath", alias = "path", alias = "file_path")]
     file_path: Option<String>,
+    #[serde(default)]
     offset: Option<usize>,
     limit: Option<usize>,
     pages: Option<String>,
@@ -2016,7 +2008,8 @@ struct ReadFileInput {
 
 #[derive(Debug, Deserialize)]
 struct WriteFileInput {
-    path: String,
+    #[serde(rename = "filePath", alias = "path", alias = "file_path")]
+    file_path: String,
     content: String,
 }
 
@@ -2040,9 +2033,13 @@ struct PdfSplitInput {
 
 #[derive(Debug, Deserialize)]
 struct EditFileInput {
-    path: String,
+    #[serde(rename = "filePath", alias = "path", alias = "file_path")]
+    file_path: String,
+    #[serde(rename = "oldString", alias = "old_string")]
     old_string: String,
+    #[serde(rename = "newString", alias = "new_string")]
     new_string: String,
+    #[serde(rename = "replaceAll", alias = "replace_all")]
     replace_all: Option<bool>,
 }
 
@@ -4013,6 +4010,20 @@ mod tests {
     use runtime::PermissionMode;
     use serde_json::{json, Value};
 
+    fn required_schema_keys(schema: &Value) -> Vec<String> {
+        schema
+            .get("required")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
@@ -4202,6 +4213,48 @@ mod tests {
     }
 
     #[test]
+    fn cdp_file_schema_matches_opencode_shape() {
+        let specs = cdp_tool_specs_for_visibility(CdpToolVisibility::Core);
+        let read = specs
+            .iter()
+            .find(|spec| spec.name == "read")
+            .expect("read spec");
+        assert_eq!(
+            required_schema_keys(&read.input_schema),
+            vec!["filePath".to_string()]
+        );
+
+        let write = specs
+            .iter()
+            .find(|spec| spec.name == "write")
+            .expect("write spec");
+        assert_eq!(
+            required_schema_keys(&write.input_schema),
+            vec!["filePath".to_string(), "content".to_string()]
+        );
+
+        let edit = specs
+            .iter()
+            .find(|spec| spec.name == "edit")
+            .expect("edit spec");
+        assert_eq!(
+            required_schema_keys(&edit.input_schema),
+            vec![
+                "filePath".to_string(),
+                "oldString".to_string(),
+                "newString".to_string()
+            ]
+        );
+        let edit_props = edit
+            .input_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("edit properties");
+        assert!(edit_props.contains_key("replaceAll"));
+        assert!(!edit_props.contains_key("replace_all"));
+    }
+
+    #[test]
     fn cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance() {
         let specs = cdp_prompt_tool_specs();
         let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
@@ -4224,7 +4277,8 @@ mod tests {
             .find(|spec| spec.name == "glob")
             .expect("glob cdp prompt spec");
         assert!(glob.use_when.contains("filename/path expansion"));
-        assert!(glob.use_when.contains("**/*.{rs,ts,tsx}"));
+        assert!(glob.use_when.contains("one simple pattern"));
+        assert!(glob.use_when.contains("avoid large brace fan-out"));
         assert_eq!(glob.important_optional_args, vec!["path".to_string()]);
         let grep = specs
             .iter()
@@ -5246,7 +5300,7 @@ mod tests {
 
         let write_update = execute_tool(
             "write",
-            &json!({ "path": "nested/demo.txt", "content": "alpha\nbeta\ngamma\n" }),
+            &json!({ "filePath": "nested/demo.txt", "content": "alpha\nbeta\ngamma\n" }),
         )
         .expect("write update should succeed");
         let write_update_output: serde_json::Value =
@@ -5297,7 +5351,7 @@ mod tests {
 
         let edit_once = execute_tool(
             "edit",
-            &json!({ "path": "nested/demo.txt", "old_string": "alpha", "new_string": "omega" }),
+            &json!({ "filePath": "nested/demo.txt", "oldString": "alpha", "newString": "omega" }),
         )
         .expect("single edit should succeed");
         let edit_once_output: serde_json::Value = serde_json::from_str(&edit_once).expect("json");
@@ -5315,10 +5369,10 @@ mod tests {
         let edit_all = execute_tool(
             "edit",
             &json!({
-                "path": "nested/demo.txt",
-                "old_string": "alpha",
-                "new_string": "omega",
-                "replace_all": true
+                "filePath": "nested/demo.txt",
+                "oldString": "alpha",
+                "newString": "omega",
+                "replaceAll": true
             }),
         )
         .expect("replace all should succeed");

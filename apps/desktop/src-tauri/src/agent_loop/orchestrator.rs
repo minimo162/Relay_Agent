@@ -1365,7 +1365,7 @@ fn cdp_windows_office_catalog_addon() -> &'static str {
 
 ## Windows desktop Office and .msg (PowerShell + COM)
 
-On **Windows**, for **desktop Word, Excel, PowerPoint**, and **`.msg`**, use the **`PowerShell` tool** with COM (`Word.Application`, `Excel.Application`, `PowerPoint.Application`; `.msg` via `Outlook.Application` when Outlook is installed) when the user needs high-fidelity layout, exact Excel formatting, or edits through Office itself. For text search or plaintext extraction from `.docx` / `.xlsx` / `.pptx`, use `office_search` or `read` first.
+On **Windows**, for **desktop Word, Excel, PowerPoint**, and **`.msg`**, use the **`PowerShell` tool** with COM (`Word.Application`, `Excel.Application`, `PowerPoint.Application`; `.msg` via `Outlook.Application` when Outlook is installed) when the user needs high-fidelity layout, exact Excel formatting, or edits through Office itself. For text search or plaintext extraction from `.docx` / `.xlsx` / `.xlsm` / `.pptx`, use `office_search` or `read` first.
 
 ### Hybrid read (data + layout)
 
@@ -1571,7 +1571,7 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
         "git_diff" => vec!["path", "staged"],
         "WebSearch" => vec!["allowed_domains", "blocked_domains"],
         "WebFetch" => vec!["prompt"],
-        "edit" => vec!["replace_all"],
+        "edit" => vec!["replaceAll"],
         "bash" => vec!["timeout", "description", "run_in_background"],
         "PowerShell" => vec!["timeout", "description", "run_in_background"],
         "CliRun" => vec!["timeout_ms"],
@@ -1628,7 +1628,7 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
 
 fn text_mentions_windows_office_file(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    [".docx", ".xlsx", ".pptx", ".msg"]
+    [".docx", ".xlsx", ".xlsm", ".pptx", ".msg"]
         .iter()
         .any(|ext| lower.contains(ext))
 }
@@ -1741,12 +1741,12 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - **Exact path:** If the latest user message gives an exact file path, prefer `read` directly.
 - **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; use `glob`, `grep`, or `office_search`.
 - **Initial lookup reply format:** When the latest user request is a local file/document lookup and there are no Relay Tool Result blocks for that lookup yet, the entire assistant reply must be exactly one fenced `relay_tool` or `json` block. Do not write `はい、...を検索します`, do not cite `turn*search*`, do not output `<File>...</File>` cards, and do not list candidate files from M365 before Relay tools run.
-- **Search tool selection:** Use `glob` for file names or glob expansion, `grep` for text/code content, and `office_search` for `.docx` / `.xlsx` / `.pptx` / `.pdf` content. `glob` supports brace groups, so use patterns like `**/*.{docx,xlsx,pptx,pdf}` or `**/*.{rs,ts,tsx}` when one extension-family search is enough.
+- **Search tool selection:** Use `glob` for simple file name/path expansion, `grep` for text/code content, and `office_search` for `.docx` / `.xlsx` / `.xlsm` / `.pptx` / `.pdf` content. Keep `glob` opencode-style: one call, one simple pattern. Do not combine many keywords and many extensions into one large brace-expanded glob on remote or broad workspaces.
 - **Evidence expansion before judgments:** Search snippets are discovery evidence. Before making important conclusions, reviews, edits, comparisons, or recommendations about a file, call `read` on the relevant path(s) and ground the answer in that file text. If you have not read the file, describe the result as a candidate only.
 - **Authoritative evidence:** If search snippets and `read` content conflict, the `read` Tool Result is authoritative.
 - **Grounded final answer:** After `read`, include the evidence path and line anchor/startLine when making file-specific conclusions.
 - **Query-driven lookup variants:** For document lookup requests, derive filename globs and Office/PDF search patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. Prefer query-specific globs before broad `**/*` scans, and treat newer matching files as stronger candidates when relevance is otherwise similar.
-- **Search iteration:** For open-ended lookup, do not front-load a large fixed search batch. Start with one or two concrete `glob` / `grep` / `office_search` calls. Keep each search concrete and narrow enough to be useful.
+- **Search iteration:** For open-ended lookup, do not front-load a large fixed search batch. Start with one or two concrete `glob` / `grep` / `office_search` calls. Keep each search concrete and narrow enough to be useful; prefer `office_search` over a broad Office/PDF filename glob when content relevance is required.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
 - **Path discipline:** If the latest user turn names a concrete path (absolute path, relative path, or bare filename with an extension), use that exact string in tool input. Do **not** rewrite it to a different directory from a prior turn. Treat bare filenames with an extension as workspace-root-relative unless the user gave another base.
 - **This turn, not “next message”:** Do **not** defer all tools to a follow-up assistant message when the current turn can already run `read` / `write` / `edit`.
@@ -1792,9 +1792,9 @@ M365 Copilot built-in results are outside the Relay tool protocol. Do not satisf
 
 - named existing file inspect/edit/review => `read` then `edit`
 - named new file create => `write`
-- local file lookup / needed files / related files => `glob` / `grep` / `office_search`; do not answer from general knowledge before tools
+- local file lookup / needed files / related files => `glob` / `grep` / `office_search`; for Office/PDF relevance, prefer `office_search` over a broad filename glob; do not answer from general knowledge before tools
 - codebase search/investigation => `grep` / `glob`, then `read` the top candidate(s) before important conclusions or changes
-- open-ended search => start with one or two narrow rg-style `glob` / `grep` / `office_search` calls in a `relay_tool` array
+- open-ended search => start with one or two narrow opencode-style `glob` / `grep` / `office_search` calls in a `relay_tool` array
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
 
 {rendered_tools}
@@ -2397,12 +2397,36 @@ fn normalize_tool_input_for_dedup_key(tool_name: &str, input: &Value) -> Value {
     if matches!(tool_name, "read") {
         if let Some(obj) = v.as_object_mut() {
             let merged_path = obj
-                .get("path")
+                .get("filePath")
                 .cloned()
+                .or_else(|| obj.get("path").cloned())
                 .or_else(|| obj.get("file_path").cloned());
             if let Some(p) = merged_path {
+                obj.remove("filePath");
                 obj.remove("file_path");
                 obj.insert("path".to_string(), p);
+            }
+        }
+    } else if matches!(tool_name, "write" | "edit") {
+        if let Some(obj) = v.as_object_mut() {
+            let merged_path = obj
+                .get("filePath")
+                .cloned()
+                .or_else(|| obj.get("path").cloned())
+                .or_else(|| obj.get("file_path").cloned());
+            if let Some(p) = merged_path {
+                obj.remove("filePath");
+                obj.remove("file_path");
+                obj.insert("path".to_string(), p);
+            }
+            if let Some(old) = obj.remove("old_string") {
+                obj.entry("oldString".to_string()).or_insert(old);
+            }
+            if let Some(new) = obj.remove("new_string") {
+                obj.entry("newString".to_string()).or_insert(new);
+            }
+            if let Some(replace_all) = obj.remove("replace_all") {
+                obj.entry("replaceAll".to_string()).or_insert(replace_all);
             }
         }
     }
@@ -2635,13 +2659,15 @@ fn normalize_html_file_mutation_input(tool_name: &str, input: &mut Value) {
         return;
     };
     let is_html_path = obj
-        .get("path")
+        .get("filePath")
+        .or_else(|| obj.get("path"))
+        .or_else(|| obj.get("file_path"))
         .and_then(Value::as_str)
         .is_some_and(is_html_file_path);
     if !is_html_path {
         return;
     }
-    for key in ["content", "new_string"] {
+    for key in ["content", "newString", "new_string"] {
         let Some(current) = obj.get(key).and_then(Value::as_str) else {
             continue;
         };
@@ -2803,7 +2829,7 @@ fn build_cdp_prompt(request: &ApiRequest<'_>) -> String {
 fn summarize_read_tool_result(output: &str) -> Option<String> {
     let value = serde_json::from_str::<Value>(output).ok()?;
     let object = value.as_object()?;
-    let kind = object.get("type").and_then(Value::as_str).unwrap_or("text");
+    let kind = object.get("type").and_then(Value::as_str).unwrap_or("file");
     let file = object.get("file")?.as_object()?;
     let content = file.get("content").and_then(Value::as_str)?;
     let file_path = file
@@ -2811,40 +2837,52 @@ fn summarize_read_tool_result(output: &str) -> Option<String> {
         .and_then(Value::as_str)
         .or_else(|| file.get("file_path").and_then(Value::as_str));
 
-    let mut lines = vec![format!("type: {kind}")];
+    let mut lines = Vec::new();
     if let Some(path) = file_path {
-        lines.push(format!("file_path: {path}"));
+        lines.push(format!("<path>{path}</path>"));
     }
+    lines.push(format!("<type>{kind}</type>"));
+    lines.push("<content>".to_string());
+    let start_line = file.get("startLine").and_then(Value::as_u64);
+    let num_lines = file.get("numLines").and_then(Value::as_u64);
+    let total_lines = file.get("totalLines").and_then(Value::as_u64);
+    if kind == "directory" {
+        lines.extend(content.lines().map(ToString::to_string));
+    } else {
+        let first_line = start_line.unwrap_or(1);
+        for (idx, line) in content.lines().enumerate() {
+            lines.push(format!("{}: {line}", first_line + idx as u64));
+        }
+    }
+    if let (Some(start_line), Some(num_lines), Some(total_lines)) =
+        (start_line, num_lines, total_lines)
+    {
+        if num_lines == 0 {
+            lines.push(format!("(Empty slice - total {total_lines} lines)"));
+        } else {
+            let end_line = start_line.saturating_add(num_lines.saturating_sub(1));
+            if end_line < total_lines {
+                lines.push(format!(
+                    "(Showing lines {start_line}-{end_line} of {total_lines}. Use offset={} to continue.)",
+                    end_line + 1
+                ));
+            } else {
+                lines.push(format!("(End of file - total {total_lines} lines)"));
+            }
+        }
+    }
+    lines.push("</content>".to_string());
     if file_path.is_some_and(is_html_file_path) && looks_like_decoded_html_document(content) {
+        lines.push("<system-reminder>".to_string());
         lines.push("html_document: already_decoded_valid_html".to_string());
         lines.push("follow_up_guidance: no_unescape_needed".to_string());
         lines.push(
             "follow_up_guidance: do_not_propose_bash_powershell_backup_or_copy_commands"
                 .to_string(),
         );
+        lines.push("</system-reminder>".to_string());
     }
-    let start_line = file.get("startLine").and_then(Value::as_u64);
-    let num_lines = file.get("numLines").and_then(Value::as_u64);
-    let total_lines = file.get("totalLines").and_then(Value::as_u64);
-    if let (Some(start_line), Some(num_lines), Some(total_lines)) =
-        (start_line, num_lines, total_lines)
-    {
-        let line_summary = if num_lines == 0 {
-            format!("lines: empty slice / {total_lines}")
-        } else {
-            let end_line = start_line.saturating_add(num_lines.saturating_sub(1));
-            format!("lines: {start_line}-{end_line} / {total_lines}")
-        };
-        lines.push(line_summary);
-    }
-    lines.push("content:".to_string());
-
-    let mut rendered = lines.join("\n");
-    if !content.is_empty() {
-        rendered.push('\n');
-        rendered.push_str(content);
-    }
-    Some(rendered)
+    Some(lines.join("\n"))
 }
 
 fn is_html_file_path(path: &str) -> bool {
@@ -2868,6 +2906,9 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
     if tool_name == "glob" {
         return summarize_glob_tool_result(output).unwrap_or_else(|| output.to_string());
     }
+    if tool_name == "grep" {
+        return summarize_grep_tool_result(output).unwrap_or_else(|| output.to_string());
+    }
     if !matches!(tool_name, "write" | "edit") {
         return output.to_string();
     }
@@ -2882,20 +2923,33 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
         vec!["CDP follow-up summary: local file mutation already executed.".to_string()];
     lines.push(format!("tool: {tool_name}"));
     lines.push("status: ok".to_string());
-    if let Some(path) = object.get("file_path").and_then(Value::as_str) {
+    if let Some(path) = object
+        .get("filePath")
+        .or_else(|| object.get("file_path"))
+        .and_then(Value::as_str)
+    {
         lines.push(format!("file_path: {path}"));
     }
-    if let Some(kind) = object.get("kind").and_then(Value::as_str) {
+    if let Some(kind) = object
+        .get("type")
+        .or_else(|| object.get("kind"))
+        .and_then(Value::as_str)
+    {
         lines.push(format!("kind: {kind}"));
     }
-    if let Some(replace_all) = object.get("replace_all").and_then(Value::as_bool) {
+    if let Some(replace_all) = object
+        .get("replaceAll")
+        .or_else(|| object.get("replace_all"))
+        .and_then(Value::as_bool)
+    {
         lines.push(format!("replace_all: {replace_all}"));
     }
     if let Some(content) = object.get("content").and_then(Value::as_str) {
         lines.push(format!("content_chars: {}", content.len()));
         if matches!(tool_name, "write")
             && object
-                .get("file_path")
+                .get("filePath")
+                .or_else(|| object.get("file_path"))
                 .and_then(Value::as_str)
                 .is_some_and(is_html_file_path)
             && looks_like_decoded_html_document(content)
@@ -2912,10 +2966,17 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
             );
         }
     }
-    if let Some(original) = object.get("original_file").and_then(Value::as_str) {
+    if let Some(original) = object
+        .get("originalFile")
+        .or_else(|| object.get("original_file"))
+        .and_then(Value::as_str)
+    {
         lines.push(format!("original_file_chars: {}", original.len()));
     }
-    if let Some(structured_patch) = object.get("structured_patch") {
+    if let Some(structured_patch) = object
+        .get("structuredPatch")
+        .or_else(|| object.get("structured_patch"))
+    {
         let patch_chars = serde_json::to_string(structured_patch)
             .map(|text| text.len())
             .unwrap_or_default();
@@ -2923,7 +2984,10 @@ fn summarized_tool_result_body(tool_name: &str, output: &str, is_error: bool) ->
     }
     lines.push(format!(
         "git_diff_present: {}",
-        object.get("git_diff").is_some_and(|value| !value.is_null())
+        object
+            .get("gitDiff")
+            .or_else(|| object.get("git_diff"))
+            .is_some_and(|value| !value.is_null())
     ));
     lines.join("\n")
 }
@@ -2935,13 +2999,32 @@ fn summarize_glob_tool_result(output: &str) -> Option<String> {
         .get("numFiles")
         .or_else(|| object.get("num_files"))
         .and_then(Value::as_u64)?;
-    if num_files != 0 {
-        return None;
-    }
     let truncated = object
         .get("truncated")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    if num_files != 0 {
+        let filenames = object
+            .get("filenames")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let mut lines = filenames;
+        if truncated {
+            lines.push(String::new());
+            lines.push(
+                "(Results are truncated: showing first 100 results. Consider using a more specific path or pattern.)"
+                    .to_string(),
+            );
+        }
+        return Some(lines.join("\n"));
+    }
     let pattern = object
         .get("pattern")
         .and_then(Value::as_str)
@@ -2970,6 +3053,50 @@ fn summarize_glob_tool_result(output: &str) -> Option<String> {
         search_pattern,
         truncated
     ))
+}
+
+fn summarize_grep_tool_result(output: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(output).ok()?;
+    let object = value.as_object()?;
+    let matches = object
+        .get("numMatches")
+        .or_else(|| object.get("num_matches"))
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| {
+            object
+                .get("numLines")
+                .or_else(|| object.get("num_lines"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+        });
+    let truncated = object
+        .get("appliedLimit")
+        .or_else(|| object.get("applied_limit"))
+        .is_some();
+    if matches == 0 {
+        return Some("No files found".to_string());
+    }
+    let mut lines = vec![format!(
+        "Found {matches} matches{}",
+        if truncated {
+            " (showing first results)"
+        } else {
+            ""
+        }
+    )];
+    if let Some(content) = object.get("content").and_then(Value::as_str) {
+        if !content.is_empty() {
+            lines.push(content.to_string());
+        }
+    } else if let Some(filenames) = object.get("filenames").and_then(Value::as_array) {
+        lines.extend(
+            filenames
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string),
+        );
+    }
+    Some(lines.join("\n"))
 }
 
 fn cdp_tool_result_max_chars(tool_name: &str, is_error: bool) -> Option<usize> {
@@ -3122,12 +3249,14 @@ fn enforce_workspace_tool_paths(
 
     match tool_name {
         "read" => {
-            for key in ["path", "file_path"] {
+            for key in ["filePath", "path", "file_path"] {
                 normalize_key(obj, key)?;
             }
         }
         "write" | "edit" | "LSP" => {
-            normalize_key(obj, "path")?;
+            for key in ["filePath", "path", "file_path"] {
+                normalize_key(obj, key)?;
+            }
         }
         "glob" | "grep" | "git_status" | "git_diff" => {
             let has_path = obj
@@ -3381,7 +3510,7 @@ impl<R: Runtime> ToolExecutor for TauriToolExecutor<R> {
         let mut input_value: Value =
             serde_json::from_str(input).unwrap_or_else(|_| serde_json::json!({}));
         let original_read_path = if matches!(tool_name, "read") {
-            extract_path_like_input(&input_value, &["path", "file_path"])
+            extract_path_like_input(&input_value, &["filePath", "path", "file_path"])
         } else {
             None
         };
@@ -3424,7 +3553,7 @@ impl<R: Runtime> ToolExecutor for TauriToolExecutor<R> {
             }
         }
         let resolved_read_path = if matches!(tool_name, "read") {
-            extract_path_like_input(&input_value, &["path", "file_path"])
+            extract_path_like_input(&input_value, &["filePath", "path", "file_path"])
         } else {
             None
         };
@@ -3907,9 +4036,9 @@ pub fn msg_to_relay(msg: &ConversationMessage) -> RelayMessage {
 fn windows_desktop_office_system_prompt_addon() -> &'static str {
     r#"## Windows: desktop Office and .msg (PowerShell + COM)
 
-Use the **PowerShell** tool for **Word, Excel, PowerPoint**, and **`.msg`** (via `Outlook.Application` when Outlook is installed) when the user needs high-fidelity layout, exact Excel formatting, or edits through Office itself. For text search or plaintext extraction from `.docx` / `.xlsx` / `.pptx`, use `office_search` or `read` first.
+Use the **PowerShell** tool for **Word, Excel, PowerPoint**, and **`.msg`** (via `Outlook.Application` when Outlook is installed) when the user needs high-fidelity layout, exact Excel formatting, or edits through Office itself. For text search or plaintext extraction from `.docx` / `.xlsx` / `.xlsm` / `.pptx`, use `office_search` or `read` first.
 
-**Hybrid read (data + layout):** For **`.xlsx`/`.docx`/`.pptx`**, combine (a) **COM batch extraction** (`Range.Value2` → JSON, or `Export-Csv`) as the **numeric/table source of truth** for Excel, with (b) **COM `ExportAsFixedFormat`** to a **unique file under `%TEMP%\RelayAgent\office-layout\`**, then **`read` on that `.pdf`** in the **same** turn (same `relay_tool` JSON **array**: `PowerShell` then `read`). PowerShell stdout should be **one JSON** including **`pdfPath`**. PDF/LiteParse text is **layout hints** for Excel, not authoritative numbers. Use `OpenAfterPublish`/`OpenAfterExport` `$false`; `Quit()` in `finally`. Optional: `Remove-Item` temp files after.
+**Hybrid read (data + layout):** For **`.xlsx`/`.xlsm`/`.docx`/`.pptx`**, combine (a) **COM batch extraction** (`Range.Value2` → JSON, or `Export-Csv`) as the **numeric/table source of truth** for Excel, with (b) **COM `ExportAsFixedFormat`** to a **unique file under `%TEMP%\RelayAgent\office-layout\`**, then **`read` on that `.pdf`** in the **same** turn (same `relay_tool` JSON **array**: `PowerShell` then `read`). PowerShell stdout should be **one JSON** including **`pdfPath`**. PDF/LiteParse text is **layout hints** for Excel, not authoritative numbers. Use `OpenAfterPublish`/`OpenAfterExport` `$false`; `Quit()` in `finally`. Optional: `Remove-Item` temp files after.
 
 **Speed:** Copilot turns are slow—prefer **one PowerShell `command`** that does open → work → save → `Quit()` instead of splitting across many tool calls in one turn.
 
@@ -3979,11 +4108,11 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "- When modifying files, prefer saving copies.\n",
                 "- If a session workspace (`cwd`) is set, file-tool paths are resolved within that workspace and may be rejected when they escape it. Do not promise reads outside the workspace boundary; call the tool and surface the actual path error if access is denied.\n",
                 "- If no workspace is set, read, glob, grep, and office_search may use absolute local paths the OS user can read.\n",
-                "- read returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). `.docx`, `.xlsx`, and `.pptx` are parsed as plaintext extraction; use office_search for exact search across those files. Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted `.txt`/`.md` file.\n",
+                "- read returns UTF-8 text. `.pdf` files are parsed via LiteParse (spatial text, OCR off). `.docx`, `.xlsx`, `.xlsm`, and `.pptx` are parsed as plaintext extraction; use office_search for exact search across those files. Other binary types are not decoded; if the tool errors or output is unusable, ask for extracted text or a converted `.txt`/`.md` file.\n",
                 "- For local file lookup requests, use small rg-backed glob/grep calls for fast candidate paths or plaintext/code contents, and office_search for Office/PDF contents. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
                 "- If the user gives an exact file path, prefer read directly.\n",
                 "- Treat search snippets as discovery evidence. Before important conclusions, reviews, edits, comparisons, or recommendations, read the top candidate path(s); otherwise describe matches as candidates only. If snippets conflict with read, read is authoritative. After read, cite evidence path and line anchor/startLine when available.\n",
-                "- For document lookup requests, derive filename globs and Office/PDF patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. Search query-specific globs before broad `**/*` scans, and prefer newer matching files when relevance is otherwise similar.\n",
+                "- For document lookup requests, derive simple filename globs and Office/PDF patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. Avoid large brace-expanded glob fan-out; use office_search for Office/PDF content relevance, and prefer newer matching files when relevance is otherwise similar.\n",
                 "- If the user's request is already concrete (paths, files, stated action), use tools in your first response; do not ask them to rephrase unless something essential is missing.\n",
                 "- To combine or split PDF files, use pdf_merge / pdf_split (workspace write); do not use bash for that."
             ),
@@ -4255,18 +4384,17 @@ mod cdp_copilot_tool_tests {
             .contains("M365/Copilot built-in search snippets, citations, and generated enterprise-search summaries are **not** Relay tool results"));
         assert!(bundle
             .catalog_text
-            .contains("Use `glob` for file names or glob expansion"));
+            .contains("Use `glob` for simple file name/path expansion"));
+        assert!(bundle.catalog_text.contains("one simple pattern"));
+        assert!(bundle.catalog_text.contains("large brace-expanded glob"));
         assert!(bundle
             .catalog_text
             .contains("Evidence expansion before judgments"));
         assert!(bundle
             .catalog_text
             .contains("If you have not read the file, describe the result as a candidate only"));
-        assert!(bundle.catalog_text.contains("**/*.{docx,xlsx,pptx,pdf}"));
         assert!(bundle.catalog_text.contains("Query-driven lookup variants"));
-        assert!(bundle
-            .catalog_text
-            .contains("query-specific globs before broad `**/*` scans"));
+        assert!(bundle.catalog_text.contains("avoid large brace fan-out"));
         assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::StandardFull);
     }
 
@@ -4322,7 +4450,8 @@ mod cdp_copilot_tool_tests {
         assert!(system.contains("read the top candidate path"));
         assert!(system.contains("`必要なファイル`"));
         assert!(system.contains("not invitations for generic domain checklists"));
-        assert!(system.contains("derive filename globs and Office/PDF patterns"));
+        assert!(system.contains("derive simple filename globs and Office/PDF patterns"));
+        assert!(system.contains("Avoid large brace-expanded glob fan-out"));
         assert!(system.contains("prefer newer matching files"));
     }
 
@@ -4582,11 +4711,13 @@ mod cdp_copilot_tool_tests {
         }))
         .expect("serialize read output");
         let rendered = format_cdp_tool_result("read", &output, false);
-        assert!(rendered.contains("file_path: /tmp/demo.html"));
+        assert!(rendered.contains("<path>/tmp/demo.html</path>"));
+        assert!(rendered.contains("<content>"));
         assert!(rendered.contains("html_document: already_decoded_valid_html"));
         assert!(rendered.contains("follow_up_guidance: no_unescape_needed"));
-        assert!(rendered.contains("lines: 3-4 / 8"));
-        assert!(rendered.contains(r#"<div id="game">line 1"#));
+        assert!(rendered.contains("3: <!doctype html>"));
+        assert!(rendered.contains(r#"4: <html><body><div id="game">line 1"#));
+        assert!(rendered.contains("(Showing lines 3-4 of 8. Use offset=5 to continue.)"));
         assert!(!rendered.contains(r#"id=\"game\""#));
         assert!(!rendered.contains("CDP follow-up summary"));
     }
@@ -4617,6 +4748,25 @@ mod cdp_copilot_tool_tests {
         let rendered = format_cdp_tool_result("read", &output, false);
         assert!(rendered.contains(content));
         assert!(!rendered.contains(r#"id=\\\"game\\\""#));
+    }
+
+    #[test]
+    fn read_directory_renders_entries_without_line_numbers() {
+        let output = serde_json::to_string(&json!({
+            "type": "directory",
+            "file": {
+                "filePath": "/tmp/project",
+                "content": "src/\nREADME.md",
+                "numLines": 2,
+                "startLine": 1,
+                "totalLines": 2
+            }
+        }))
+        .expect("serialize read output");
+        let rendered = format_cdp_tool_result("read", &output, false);
+        assert!(rendered.contains("<type>directory</type>"));
+        assert!(rendered.contains("\nsrc/\nREADME.md\n"));
+        assert!(!rendered.contains("1: src/"));
     }
 
     #[test]

@@ -684,10 +684,23 @@ fn sort_json_value_in_place(v: &mut Value) {
 /// the same key here.
 fn turn_level_tool_dedup_key(tool_name: &str, input: &str) -> Option<String> {
     let mut value: Value = serde_json::from_str(input).ok()?;
-    if tool_name == "read" {
+    if matches!(tool_name, "read" | "write" | "edit") {
         if let Some(obj) = value.as_object_mut() {
-            if let Some(path) = obj.remove("file_path") {
+            let path = obj
+                .remove("filePath")
+                .or_else(|| obj.remove("path"))
+                .or_else(|| obj.remove("file_path"));
+            if let Some(path) = path {
                 obj.entry("path".to_string()).or_insert(path);
+            }
+            if let Some(old) = obj.remove("old_string") {
+                obj.entry("oldString".to_string()).or_insert(old);
+            }
+            if let Some(new) = obj.remove("new_string") {
+                obj.entry("newString".to_string()).or_insert(new);
+            }
+            if let Some(replace_all) = obj.remove("replace_all") {
+                obj.entry("replaceAll".to_string()).or_insert(replace_all);
             }
         }
     }
@@ -1753,6 +1766,22 @@ mod tests {
     fn turn_level_dedup_key_treats_read_path_and_file_path_as_equal() {
         let key_a = super::turn_level_tool_dedup_key("read", r#"{"path":"a.txt"}"#);
         let key_b = super::turn_level_tool_dedup_key("read", r#"{"file_path":"a.txt"}"#);
+        let key_c = super::turn_level_tool_dedup_key("read", r#"{"filePath":"a.txt"}"#);
+        assert!(key_a.is_some());
+        assert_eq!(key_a, key_b);
+        assert_eq!(key_a, key_c);
+    }
+
+    #[test]
+    fn turn_level_dedup_key_treats_edit_aliases_as_equal() {
+        let key_a = super::turn_level_tool_dedup_key(
+            "edit",
+            r#"{"path":"a.txt","old_string":"a","new_string":"b","replace_all":true}"#,
+        );
+        let key_b = super::turn_level_tool_dedup_key(
+            "edit",
+            r#"{"filePath":"a.txt","oldString":"a","newString":"b","replaceAll":true}"#,
+        );
         assert!(key_a.is_some());
         assert_eq!(key_a, key_b);
     }

@@ -18,9 +18,12 @@
 ### 2026-04-22 agentic Office search expansion repair
 
 Reviewed `anomalyco/opencode` dev HEAD
-`8043cfa68dcf97547ede3e26a9325af55583e1e4` again for the active low-level
+`e89543811ca02067732b9ae6637bc1c1572dc7c1` again for the active low-level
 search shape: search remains model-directed through simple `glob` / `grep`
-tools rather than host-injected deterministic search batches.
+tools rather than host-injected deterministic search batches. Current
+`packages/opencode/src/tool/glob.ts` still forwards `glob: [params.pattern]`
+as a single ripgrep glob, and `grep.ts` keeps the `pattern` / `path` /
+`include` search surface.
 
 Fixed a live failure mode where a local Office/PDF lookup could execute only a
 broad filename `glob` such as `**/*.{docx,xlsx,pptx,pdf}`, hit the 100-file
@@ -41,17 +44,74 @@ workspace allowlist test now use the opencode-style canonical tool names
 (`read`, `write`, `edit`, `glob`, `grep`) while retaining display compatibility
 for older aliases.
 
+Follow-up live-log fix: a signed-in M365 run still produced a large
+brace-expanded `glob`
+(`**/*{CFS,CF,キャッシュ,フロー,精算,PKG}*.{xlsx,xlsm,pdf,docx,pptx}`),
+which expanded to 30 UNC ripgrep patterns before content search. Removed the
+remaining brace-family examples from the CDP catalog/prompt and now explicitly
+instruct `glob` to stay opencode-style: one call, one simple pattern, no large
+keyword-by-extension brace fan-out on broad or remote workspaces. Office/PDF
+relevance lookup guidance now prefers `office_search` over broad filename globs.
+The Office plaintext/search pipeline also accepts `.xlsm` as an Excel workbook
+format, routed through the existing non-executing XLSX/calamine extraction path
+so VBA/macros are never run.
+
+Further opencode alignment: runtime `glob` no longer expands `{a,b}` brace
+groups host-side. Relay now forwards exactly one `glob` pattern to the ripgrep
+file backend, records that single submitted pattern in `expanded_patterns` for
+compatibility with existing diagnostics, and uses a single-pattern fallback path
+when ripgrep is unavailable. This removes Relay-specific multi-pattern fan-out
+from agentic search while preserving the public result shape.
+
+Next-priority opencode alignment: the CDP-facing `read`, `write`, and `edit`
+schemas now use opencode's camelCase file-operation surface (`filePath`,
+`oldString`, `newString`, `replaceAll`). Relay still accepts the older
+`path`/`file_path` and snake_case edit aliases in the executor, approval
+summary, workspace enforcement, and turn-level dedup so existing transcripts and
+UI flows remain compatible. CDP `read` results now render as opencode-style
+`<path>`, `<type>`, and numbered `<content>` blocks, while `glob` and `grep`
+results are summarized as plain newline-oriented search output for Copilot
+instead of raw JSON when possible. The `edit` runtime also normalizes incoming
+LF snippets to the target file's line ending before matching and writing, which
+preserves CRLF files during opencode-style edits.
+
+Additional opencode read/edit parity: `read` now handles directories directly,
+returning sorted entries with `/` suffixes for subdirectories, and missing-file
+errors include up to three nearby path suggestions from the parent directory.
+The CDP renderer preserves opencode's directory convention by listing entries
+without line numbers. `edit` also falls back to a line-trimmed block match when
+the exact `oldString` is not found, covering common model edits where indentation
+differs from the numbered `read` output while still rejecting ambiguous fallback
+matches unless `replaceAll` is safe.
+
 Verification:
 
 - `git ls-remote https://github.com/anomalyco/opencode.git HEAD`: passed,
-  `8043cfa68dcf97547ede3e26a9325af55583e1e4`.
-- `git clone --depth 1 https://github.com/anomalyco/opencode.git /tmp/opencode-relay-ref`: passed.
+  `e89543811ca02067732b9ae6637bc1c1572dc7c1`.
+- `git -C /tmp/opencode-relay-ref fetch --depth 1 origin HEAD && git -C /tmp/opencode-relay-ref checkout --detach FETCH_HEAD`: passed,
+  `e89543811ca02067732b9ae6637bc1c1572dc7c1`.
 - `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml glob_keeps_brace_pattern_as_single_rg_glob -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml globs_and_greps_directory -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml edit_preserves_crlf_when_input_uses_lf -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml read_directory_lists_sorted_entries_with_directory_suffix -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml read_missing_file_suggests_nearby_paths -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml edit_falls_back_to_line_trimmed_match -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml turn_level_dedup_key_treats_edit_aliases_as_equal -- --nocapture`: passed, 1 passed.
 - `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_search_schema_matches_opencode_shape -- --nocapture`: passed, 1 passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_file_schema_matches_opencode_shape -- --nocapture`: passed, 1 passed.
 - `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance -- --nocapture`: passed, 1 passed.
 - `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_core_catalog_matches_expected_surface -- --nocapture`: passed, 1 passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml file_tools_cover_read_write_and_edit_behaviors -- --nocapture`: passed, 1 passed.
+- `cargo test -p runtime --manifest-path apps/desktop/src-tauri/Cargo.toml xlsm_is_treated_as_excel_text_for_search -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml read_success_renders_raw_content_from_json -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml read_directory_renders_entries_without_line_numbers -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml write_success_is_summarized_for_cdp_followup -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml empty_glob_result_is_labeled_as_filename_only_miss -- --nocapture`: passed, 1 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml office_lookup -- --nocapture`: passed, 2 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml simple_office_file_listing -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup_initial_prompt_requires_search_before_general_answer -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml desktop_system_prompt_treats_required_file_questions_as_lookup -- --nocapture`: passed, 1 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup -- --nocapture`: passed, 3 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan -- --nocapture`: passed, 1 passed.
 - `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml no_relay_tool_call_for_local_lookup -- --nocapture`: passed, 1 passed.

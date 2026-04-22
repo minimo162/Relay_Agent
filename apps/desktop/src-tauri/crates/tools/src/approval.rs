@@ -48,7 +48,8 @@ fn extract_approval_target(
     match extractor {
         ApprovalTargetExtractor::None => None,
         ApprovalTargetExtractor::PathLike => input
-            .get("path")
+            .get("filePath")
+            .or_else(|| input.get("path"))
             .or_else(|| input.get("file_path"))
             .or_else(|| input.get("notebook_path"))
             .or_else(|| input.get("input_path"))

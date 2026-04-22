@@ -44,12 +44,12 @@ impl DocFormat {
             .as_deref()
         {
             Some("docx") => Ok(Self::Docx),
-            Some("xlsx") => Ok(Self::Xlsx),
+            Some("xlsx" | "xlsm") => Ok(Self::Xlsx),
             Some("pptx") => Ok(Self::Pptx),
             Some("pdf") => Ok(Self::Pdf),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "unsupported Office search format; expected .docx, .xlsx, .pptx, or .pdf",
+                "unsupported Office search format; expected .docx, .xlsx, .xlsm, .pptx, or .pdf",
             )),
         }
     }
@@ -1035,7 +1035,7 @@ fn safe_preview(text: &str, requested_start: usize, requested_end: usize) -> Str
 }
 
 fn normalize_include_ext(input: Option<&Vec<String>>) -> io::Result<BTreeSet<String>> {
-    let allowed = ["docx", "xlsx", "pptx", "pdf"]
+    let allowed = ["docx", "xlsx", "xlsm", "pptx", "pdf"]
         .into_iter()
         .map(String::from)
         .collect::<BTreeSet<_>>();
@@ -1228,6 +1228,7 @@ fn office_rg_globs(relative_glob: &str, include_ext: &BTreeSet<String>) -> Vec<S
     let lower = relative_glob.to_ascii_lowercase();
     if lower.ends_with(".docx")
         || lower.ends_with(".xlsx")
+        || lower.ends_with(".xlsm")
         || lower.ends_with(".pptx")
         || lower.ends_with(".pdf")
     {
@@ -1725,6 +1726,22 @@ mod tests {
         let regex = compile_office_search_regex(&input).expect("compile regex pattern");
 
         assert!(regex.is_match("Q1x2026"));
+    }
+
+    #[test]
+    fn xlsm_is_treated_as_excel_text_for_search() {
+        assert_eq!(
+            DocFormat::from_extension(Path::new("macro-enabled.xlsm")).expect("xlsm format"),
+            DocFormat::Xlsx
+        );
+
+        let include_ext =
+            normalize_include_ext(Some(&vec![String::from("xlsm")])).expect("include xlsm");
+        assert!(include_ext.contains("xlsm"));
+        assert_eq!(
+            office_rg_globs("**/*", &include_ext),
+            vec![String::from("**/*.xlsm")]
+        );
     }
 
     #[test]

@@ -758,6 +758,7 @@ fn office_search_include_ext_for_search_request(text: &str) -> Vec<&'static str>
     let wants_docx =
         lower.contains(".docx") || lower.contains("word") || trimmed.contains("ワード");
     let wants_xlsx = lower.contains(".xlsx")
+        || lower.contains(".xlsm")
         || lower.contains("excel")
         || lower.contains("spreadsheet")
         || trimmed.contains("Excel")
@@ -781,7 +782,7 @@ fn office_search_include_ext_for_search_request(text: &str) -> Vec<&'static str>
         out.push("pdf");
     }
     if out.is_empty() {
-        vec!["docx", "xlsx", "pptx", "pdf"]
+        vec!["docx", "xlsx", "xlsm", "pptx", "pdf"]
     } else {
         out
     }

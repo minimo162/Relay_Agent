@@ -177,6 +177,15 @@ pub fn read(
         .canonicalize()
         .map_err(|error| annotate_read_error(error, &attempted_path))?;
     let lossy_path = absolute_path.to_string_lossy().into_owned();
+    if absolute_path.is_dir() {
+        if pages.is_some() || sheets.is_some() || slides.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "`pages`, `sheets`, and `slides` do not apply to directories",
+            ));
+        }
+        return read_directory_listing(lossy_path, &absolute_path, offset, limit);
+    }
 
     let ext = absolute_path
         .extension()
@@ -210,11 +219,11 @@ pub fn read(
             office::read_docx_as_text(&absolute_path)
                 .map_err(|error| annotate_read_error(error, &absolute_path))?
         }
-        Some("xlsx") => {
+        Some("xlsx" | "xlsm") => {
             if pages.is_some() || slides.is_some() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "`pages` and `slides` do not apply to XLSX files",
+                    "`pages` and `slides` do not apply to Excel files",
                 ));
             }
             office::read_xlsx_as_text(&absolute_path, sheets)
@@ -277,17 +286,87 @@ pub fn read(
 
 fn annotate_read_error(error: io::Error, attempted_path: &Path) -> io::Error {
     if error.kind() == io::ErrorKind::NotFound {
+        let suggestions = read_missing_path_suggestions(attempted_path);
+        let suggestion_block = if suggestions.is_empty() {
+            String::new()
+        } else {
+            format!("\n\nDid you mean one of these?\n{}", suggestions.join("\n"))
+        };
         io::Error::new(
             error.kind(),
             format!(
-                "{}; resolved path: {}",
+                "{}; resolved path: {}{}",
                 error,
-                attempted_path.to_string_lossy()
+                attempted_path.to_string_lossy(),
+                suggestion_block
             ),
         )
     } else {
         error
     }
+}
+
+fn read_missing_path_suggestions(attempted_path: &Path) -> Vec<String> {
+    let Some(parent) = attempted_path.parent() else {
+        return Vec::new();
+    };
+    let Some(base) = attempted_path.file_name().and_then(|name| name.to_str()) else {
+        return Vec::new();
+    };
+    let base_lower = base.to_ascii_lowercase();
+    let base_stem_lower = attempted_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_else(|| base_lower.clone());
+    let Ok(entries) = fs::read_dir(parent) else {
+        return Vec::new();
+    };
+    let mut suggestions = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let name_lower = name.to_ascii_lowercase();
+            let name_stem_lower = entry
+                .path()
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_else(|| name_lower.clone());
+            (name_lower.contains(&base_lower)
+                || base_lower.contains(&name_lower)
+                || name_stem_lower.contains(&base_stem_lower)
+                || base_stem_lower.contains(&name_stem_lower))
+                .then(|| entry.path().to_string_lossy().into_owned())
+        })
+        .collect::<Vec<_>>();
+    suggestions.sort();
+    suggestions.truncate(3);
+    suggestions
+}
+
+fn read_directory_listing(
+    lossy_path: String,
+    absolute_path: &Path,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> io::Result<ReadFileOutput> {
+    let mut entries = fs::read_dir(absolute_path)?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            let mut name = entry.file_name().to_string_lossy().into_owned();
+            if file_type.is_dir() {
+                name.push('/');
+            }
+            Some(name)
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
+    let full_text = entries.join("\n");
+    let mut output = slice_text_payload(lossy_path, &full_text, offset, limit);
+    output.kind = String::from("directory");
+    Ok(output)
 }
 
 fn slice_text_payload(
@@ -473,7 +552,17 @@ pub fn edit(
             "old_string and new_string must differ",
         ));
     }
-    let occurrences = original_file.matches(old_string).count();
+    let line_ending = detect_line_ending(&original_file);
+    let old_string = convert_to_line_ending(&normalize_line_endings(old_string), line_ending);
+    let new_string = convert_to_line_ending(&normalize_line_endings(new_string), line_ending);
+    if old_string == new_string {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "old_string and new_string must differ",
+        ));
+    }
+    let matched_old_string = match_edit_old_string(&original_file, &old_string, replace_all)?;
+    let occurrences = original_file.matches(&matched_old_string).count();
     if occurrences == 0 {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -490,22 +579,103 @@ pub fn edit(
     }
 
     let updated = if replace_all {
-        original_file.replace(old_string, new_string)
+        original_file.replace(&matched_old_string, &new_string)
     } else {
-        original_file.replacen(old_string, new_string, 1)
+        original_file.replacen(&matched_old_string, &new_string, 1)
     };
     fs::write(&absolute_path, &updated)?;
 
     Ok(EditFileOutput {
         file_path: absolute_path.to_string_lossy().into_owned(),
-        old_string: old_string.to_owned(),
-        new_string: new_string.to_owned(),
+        old_string: matched_old_string,
+        new_string,
         original_file: original_file.clone(),
         structured_patch: make_patch(&original_file, &updated),
         user_modified: false,
         replace_all,
         git_diff: None,
     })
+}
+
+fn match_edit_old_string(
+    content: &str,
+    old_string: &str,
+    replace_all: bool,
+) -> io::Result<String> {
+    if content.contains(old_string) {
+        return Ok(old_string.to_string());
+    }
+
+    let trimmed_matches = line_trimmed_matches(content, old_string);
+    match trimmed_matches.len() {
+        0 => Ok(old_string.to_string()),
+        1 => Ok(trimmed_matches[0].clone()),
+        count if replace_all => {
+            let mut unique = trimmed_matches;
+            unique.sort();
+            unique.dedup();
+            if unique.len() == 1 {
+                Ok(unique.remove(0))
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "old_string matched {count} trimmed-line blocks with different original text; add exact context"
+                    ),
+                ))
+            }
+        }
+        count => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "old_string matched {count} trimmed-line blocks; add exact context or set replace_all"
+            ),
+        )),
+    }
+}
+
+fn line_trimmed_matches(content: &str, old_string: &str) -> Vec<String> {
+    let content_lines = content.split('\n').collect::<Vec<_>>();
+    let mut search_lines = old_string.split('\n').collect::<Vec<_>>();
+    if search_lines.last().is_some_and(|line| line.is_empty()) {
+        search_lines.pop();
+    }
+    if search_lines.is_empty() || search_lines.len() > content_lines.len() {
+        return Vec::new();
+    }
+
+    let mut matches = Vec::new();
+    for start in 0..=content_lines.len() - search_lines.len() {
+        let candidate = &content_lines[start..start + search_lines.len()];
+        if candidate
+            .iter()
+            .zip(search_lines.iter())
+            .all(|(actual, expected)| actual.trim() == expected.trim())
+        {
+            matches.push(candidate.join("\n"));
+        }
+    }
+    matches
+}
+
+fn normalize_line_endings(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
+fn detect_line_ending(text: &str) -> &'static str {
+    if text.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
+fn convert_to_line_ending(text: &str, ending: &str) -> String {
+    if ending == "\r\n" {
+        text.replace('\n', "\r\n")
+    } else {
+        text.to_string()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -544,10 +714,6 @@ pub fn glob_with_options(
         base_dir.join(pattern).to_string_lossy().into_owned()
     };
 
-    // The `glob` crate does not expand `{a,b}` groups. Expand them here so
-    // agents can batch extension families like `**/*.{docx,xlsx,pptx,pdf}`.
-    let expanded = expand_braces(&search_pattern);
-
     let (mut matches, rg_truncated) = if !Path::new(pattern).is_absolute() {
         let globs = vec![pattern.to_string()];
         let mut rg_options = search_backend::RgFilesOptions::new(&globs, 101);
@@ -557,13 +723,13 @@ pub fn glob_with_options(
         match search_backend::rg_files(&base_dir, rg_options)? {
             Some(result) => (result.files, result.truncated),
             None => (
-                glob_fallback(pattern, &expanded, &base_dir, options)?,
+                glob_fallback(pattern, &search_pattern, &base_dir, options)?,
                 false,
             ),
         }
     } else {
         (
-            glob_fallback(pattern, &expanded, &base_dir, options)?,
+            glob_fallback(pattern, &search_pattern, &base_dir, options)?,
             false,
         )
     };
@@ -585,7 +751,7 @@ pub fn glob_with_options(
         pattern: pattern.to_string(),
         base_dir: base_dir.to_string_lossy().into_owned(),
         search_pattern,
-        expanded_patterns: expanded,
+        expanded_patterns: vec![pattern.to_string()],
     };
     tracing::info!(
         target: "relay.runtime.search",
@@ -604,19 +770,17 @@ pub fn glob_with_options(
 
 fn glob_fallback(
     original_pattern: &str,
-    expanded_patterns: &[String],
+    search_pattern: &str,
     base_dir: &Path,
     options: &GlobSearchOptions,
 ) -> io::Result<Vec<PathBuf>> {
     let mut seen = HashSet::new();
     let mut matches = Vec::new();
-    for pattern in expanded_patterns {
-        let entries = glob::glob(pattern)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
-        for entry in entries.flatten() {
-            if entry.is_file() && !is_ignored_search_path(&entry) && seen.insert(entry.clone()) {
-                matches.push(entry);
-            }
+    let entries = glob::glob(search_pattern)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
+    for entry in entries.flatten() {
+        if entry.is_file() && !is_ignored_search_path(&entry) && seen.insert(entry.clone()) {
+            matches.push(entry);
         }
     }
     if matches.is_empty() && !Path::new(original_pattern).is_absolute() {
@@ -634,14 +798,8 @@ fn walk_glob_matches(
     pattern: &str,
     options: &GlobSearchOptions,
 ) -> io::Result<Vec<PathBuf>> {
-    let expanded = expand_braces(pattern);
-    let patterns = expanded
-        .iter()
-        .map(|pattern| {
-            Pattern::new(pattern)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))
-        })
-        .collect::<io::Result<Vec<_>>>()?;
+    let pattern = Pattern::new(pattern)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
     let mut matches = Vec::new();
     let mut walker = WalkDir::new(base_dir).follow_links(options.follow.unwrap_or(false));
     if let Some(max_depth) = options.max_depth {
@@ -667,7 +825,7 @@ fn walk_glob_matches(
         let Ok(relative) = path.strip_prefix(base_dir) else {
             continue;
         };
-        if patterns.iter().any(|pattern| pattern.matches_path(relative)) {
+        if pattern.matches_path(relative) {
             matches.push(path.to_path_buf());
         }
     }
@@ -1041,24 +1199,6 @@ fn truncate_grep_line(line: &str) -> String {
     format!("{}...", &line[..end])
 }
 
-fn expand_braces(pattern: &str) -> Vec<String> {
-    let Some(start) = pattern.find('{') else {
-        return vec![pattern.to_string()];
-    };
-    let Some(end_offset) = pattern[start + 1..].find('}') else {
-        return vec![pattern.to_string()];
-    };
-
-    let end = start + 1 + end_offset;
-    let prefix = &pattern[..start];
-    let body = &pattern[start + 1..end];
-    let suffix = &pattern[end + 1..];
-
-    body.split(',')
-        .flat_map(|part| expand_braces(&format!("{prefix}{part}{suffix}")))
-        .collect()
-}
-
 fn matches_optional_filters(
     path: &Path,
     glob_filter: Option<&Pattern>,
@@ -1199,6 +1339,36 @@ mod tests {
     }
 
     #[test]
+    fn read_directory_lists_sorted_entries_with_directory_suffix() {
+        let dir = temp_path("read-dir");
+        fs::create_dir_all(dir.join("beta")).expect("create nested dir");
+        fs::write(dir.join("alpha.txt"), "alpha").expect("write file");
+        let output =
+            read(dir.to_string_lossy().as_ref(), None, None, None, None, None).expect("read dir");
+        assert_eq!(output.kind, "directory");
+        assert_eq!(output.file.content, "alpha.txt\nbeta/");
+    }
+
+    #[test]
+    fn read_missing_file_suggests_nearby_paths() {
+        let dir = temp_path("read-missing-suggest");
+        fs::create_dir_all(&dir).expect("create dir");
+        fs::write(dir.join("report-final.md"), "report").expect("write report");
+        let err = read(
+            dir.join("report.md").to_string_lossy().as_ref(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect_err("missing read should fail");
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(err.to_string().contains("Did you mean one of these?"));
+        assert!(err.to_string().contains("report-final.md"));
+    }
+
+    #[test]
     fn edits_file_contents() {
         let path = temp_path("edit.txt");
         write(path.to_string_lossy().as_ref(), "alpha beta alpha")
@@ -1216,6 +1386,40 @@ mod tests {
         let err = edit(path.to_string_lossy().as_ref(), "alpha", "omega", false)
             .expect_err("ambiguous replace should fail");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn edit_preserves_crlf_when_input_uses_lf() {
+        let path = temp_path("edit-crlf.txt");
+        fs::write(&path, "alpha\r\nbeta\r\ngamma\r\n").expect("write crlf");
+        edit(
+            path.to_string_lossy().as_ref(),
+            "alpha\nbeta",
+            "omega\nbeta",
+            false,
+        )
+        .expect("edit should normalize input to file line endings");
+        assert_eq!(
+            fs::read_to_string(&path).expect("read crlf"),
+            "omega\r\nbeta\r\ngamma\r\n"
+        );
+    }
+
+    #[test]
+    fn edit_falls_back_to_line_trimmed_match() {
+        let path = temp_path("edit-trimmed.txt");
+        fs::write(&path, "fn main() {\n    println!(\"hi\");\n}\n").expect("write file");
+        edit(
+            path.to_string_lossy().as_ref(),
+            "fn main() {\nprintln!(\"hi\");\n}",
+            "fn main() {\n    println!(\"bye\");\n}",
+            false,
+        )
+        .expect("trimmed-line fallback should edit");
+        assert_eq!(
+            fs::read_to_string(&path).expect("read file"),
+            "fn main() {\n    println!(\"bye\");\n}\n"
+        );
     }
 
     #[test]
@@ -1307,22 +1511,7 @@ mod tests {
     }
 
     #[test]
-    fn expand_braces_expands_extension_families() {
-        let mut expanded = super::expand_braces("docs/**/*.{docx,xlsx,pptx,pdf}");
-        expanded.sort();
-        assert_eq!(
-            expanded,
-            vec![
-                "docs/**/*.docx",
-                "docs/**/*.pdf",
-                "docs/**/*.pptx",
-                "docs/**/*.xlsx"
-            ]
-        );
-    }
-
-    #[test]
-    fn glob_with_braces_finds_unique_files() {
+    fn glob_keeps_brace_pattern_as_single_rg_glob() {
         let dir = temp_path("glob-braces");
         std::fs::create_dir_all(&dir).expect("directory should be created");
         fs::write(dir.join("one.rs"), "fn one() {}\n").expect("write rs");
@@ -1331,10 +1520,8 @@ mod tests {
 
         let globbed = glob("**/*.{rs,ts,rs}", Some(dir.to_string_lossy().as_ref()))
             .expect("glob should succeed");
-        assert_eq!(globbed.num_files, 2);
-        assert!(globbed.filenames.iter().any(|path| path.ends_with("one.rs")));
-        assert!(globbed.filenames.iter().any(|path| path.ends_with("two.ts")));
-        assert!(!globbed.filenames.iter().any(|path| path.ends_with("skip.md")));
+        assert_eq!(globbed.pattern, "**/*.{rs,ts,rs}");
+        assert_eq!(globbed.expanded_patterns, vec!["**/*.{rs,ts,rs}".to_string()]);
     }
 
     #[test]

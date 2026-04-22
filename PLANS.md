@@ -233,7 +233,7 @@ Change targets:
 
 Acceptance criteria:
 
-- `.docx`, `.xlsx`, and `.pptx` `read` calls return extracted plaintext through stable line serialization.
+- `.docx`, `.xlsx`, `.xlsm`, and `.pptx` `read` calls return extracted plaintext through stable line serialization.
 - `.pdf` search uses `pdf_liteparse` payload-only extraction so the LiteParse banner is not indexed.
 - `office_search` accepts concrete paths or globs, validates `include_ext`, silently drops sensitive-path rejects, returns per-anchor hits, and reports parse failures in `errors`.
 - Extraction cache records are path-indexed, content-hash invalidated, schema-versioned, and store OS-native path bytes.
