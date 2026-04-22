@@ -801,8 +801,13 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
         }
 
         if cursor < candidates.len() && outstanding < worker_count {
-            if fold_office_path_result(&regex, context, max_results, &candidates[cursor], &mut results)
-            {
+            if fold_office_path_result(
+                &regex,
+                context,
+                max_results,
+                &candidates[cursor],
+                &mut results,
+            ) {
                 results_truncated = true;
                 break;
             }
@@ -1206,7 +1211,14 @@ fn expand_office_candidates_with_cap_inner(
                     ),
                 )? {
                     for entry in result.files {
-                        push_candidate(&mut out, &mut seen, &entry, include_ext, false, &mut errors);
+                        push_candidate(
+                            &mut out,
+                            &mut seen,
+                            &entry,
+                            include_ext,
+                            false,
+                            &mut errors,
+                        );
                         if out.len() >= expansion_cap {
                             files_truncated = true;
                             break;
@@ -1270,7 +1282,9 @@ fn sort_candidates_by_path_relevance(paths: &mut [PathBuf], regex: &Regex) {
         let right_matches = regex.find_iter(&right_text).count();
         right_matches
             .cmp(&left_matches)
-            .then_with(|| Reverse(candidate_modified_ms(left)).cmp(&Reverse(candidate_modified_ms(right))))
+            .then_with(|| {
+                Reverse(candidate_modified_ms(left)).cmp(&Reverse(candidate_modified_ms(right)))
+            })
             .then_with(|| left.cmp(right))
     });
 }
@@ -1858,7 +1872,9 @@ mod tests {
         assert_eq!(results[0].anchor, "path");
         assert_eq!(results[0].matched, "精算表");
         assert!(results[0].preview.contains("02精算表"));
-        assert!(results.iter().any(|hit| hit.preview.contains("連結予算精算表")));
+        assert!(results
+            .iter()
+            .any(|hit| hit.preview.contains("連結予算精算表")));
     }
 
     #[test]
@@ -1906,7 +1922,10 @@ mod tests {
         assert_eq!(output.candidate_count, 2);
         assert_eq!(output.files_scanned, 0);
         assert_eq!(output.results.len(), 1);
-        assert_eq!(output.results[0].path, fs::canonicalize(&old_relevant).unwrap().to_string_lossy());
+        assert_eq!(
+            output.results[0].path,
+            fs::canonicalize(&old_relevant).unwrap().to_string_lossy()
+        );
         assert_eq!(output.results[0].anchor, "path");
 
         let _ = fs::remove_dir_all(root);
@@ -1974,8 +1993,7 @@ mod tests {
     fn expand_office_candidates_stops_at_expansion_cap() {
         let root = test_dir();
         for index in 0..5 {
-            fs::write(root.join(format!("{index}.xlsx")), b"candidate")
-                .expect("write candidate");
+            fs::write(root.join(format!("{index}.xlsx")), b"candidate").expect("write candidate");
         }
         let pattern = root.join("*.xlsx").to_string_lossy().into_owned();
         let include_ext =
@@ -2043,7 +2061,10 @@ mod tests {
         )
         .expect("expand candidates");
 
-        assert_eq!(expansion.candidates, vec![fs::canonicalize(&workbook).unwrap()]);
+        assert_eq!(
+            expansion.candidates,
+            vec![fs::canonicalize(&workbook).unwrap()]
+        );
         assert!(expansion.errors.is_empty());
 
         let _ = fs::remove_dir_all(root);

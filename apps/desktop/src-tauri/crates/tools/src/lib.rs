@@ -4265,13 +4265,9 @@ mod tests {
             .iter()
             .find(|spec| spec.name == "read")
             .expect("read cdp prompt spec");
-        assert!(read
-            .use_when
-            .contains("before editing an existing file"));
+        assert!(read.use_when.contains("before editing an existing file"));
         assert!(read.avoid_when.contains("bash"));
-        assert!(read
-            .important_optional_args
-            .contains(&"offset".to_string()));
+        assert!(read.important_optional_args.contains(&"offset".to_string()));
         let glob = specs
             .iter()
             .find(|spec| spec.name == "glob")
@@ -5333,11 +5329,9 @@ mod tests {
         assert_eq!(read_slice_output["file"]["content"], "beta");
         assert_eq!(read_slice_output["file"]["startLine"], 2);
 
-        let read_past_end = execute_tool(
-            "read",
-            &json!({ "path": "nested/demo.txt", "offset": 50 }),
-        )
-        .expect("read past EOF should succeed");
+        let read_past_end =
+            execute_tool("read", &json!({ "path": "nested/demo.txt", "offset": 50 }))
+                .expect("read past EOF should succeed");
         let read_past_end_output: serde_json::Value =
             serde_json::from_str(&read_past_end).expect("json");
         assert_eq!(read_past_end_output["file"]["content"], "");
@@ -5430,8 +5424,8 @@ mod tests {
             .expect("filename")
             .ends_with("nested/lib.rs"));
 
-        let glob_error = execute_tool("glob", &json!({ "pattern": "[" }))
-            .expect_err("invalid glob should fail");
+        let glob_error =
+            execute_tool("glob", &json!({ "pattern": "[" })).expect_err("invalid glob should fail");
         assert!(!glob_error.is_empty());
 
         let grep_content = execute_tool(
@@ -5465,11 +5459,8 @@ mod tests {
         let grep_count_output: serde_json::Value = serde_json::from_str(&grep_count).expect("json");
         assert_eq!(grep_count_output["numMatches"], 3);
 
-        let grep_error = execute_tool(
-            "grep",
-            &json!({ "pattern": "(alpha", "path": "nested" }),
-        )
-        .expect_err("invalid regex should fail");
+        let grep_error = execute_tool("grep", &json!({ "pattern": "(alpha", "path": "nested" }))
+            .expect_err("invalid regex should fail");
         assert!(!grep_error.is_empty());
 
         std::env::set_current_dir(&original_dir).expect("restore cwd");

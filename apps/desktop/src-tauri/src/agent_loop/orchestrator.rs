@@ -1746,7 +1746,7 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - **Authoritative evidence:** If search snippets and `read` content conflict, the `read` Tool Result is authoritative.
 - **Grounded final answer:** After `read`, include the evidence path and line anchor/startLine when making file-specific conclusions.
 - **Query-driven lookup variants:** For document lookup requests, derive filename globs and Office/PDF search patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. Prefer query-specific globs before broad `**/*` scans, and treat newer matching files as stronger candidates when relevance is otherwise similar.
-- **Search iteration:** For open-ended lookup, do not front-load a large fixed search batch. Start with one or two concrete `glob` / `grep` / `office_search` calls. Keep each search concrete and narrow enough to be useful; prefer `office_search` over a broad Office/PDF filename glob when content relevance is required. When a search result is truncated, narrow the path or pattern before drawing conclusions; do not treat the first truncated page as complete evidence.
+- **Search iteration:** For open-ended lookup, do not front-load a large fixed search batch. Start with one or two concrete `glob` / `grep` / `office_search` calls, preferably in one `relay_tool` array when both are useful, matching opencode's speculative-but-bounded search style. Keep each search concrete and narrow enough to be useful; prefer `office_search` over a broad Office/PDF filename glob when content relevance is required. When a search result is truncated, narrow the path or pattern before drawing conclusions; do not treat the first truncated page as complete evidence. If Relay returns a duplicate-search or search-budget notice, stop searching and answer text-only from the accumulated results.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
 - **Path discipline:** If the latest user turn names a concrete path (absolute path, relative path, or bare filename with an extension), use that exact string in tool input. Do **not** rewrite it to a different directory from a prior turn. Treat bare filenames with an extension as workspace-root-relative unless the user gave another base.
 - **This turn, not “next message”:** Do **not** defer all tools to a follow-up assistant message when the current turn can already run `read` / `write` / `edit`.
@@ -1794,7 +1794,7 @@ M365 Copilot built-in results are outside the Relay tool protocol. Do not satisf
 - named new file create => `write`
 - local file lookup / needed files / related files => `glob` / `grep` / `office_search`; for Office/PDF relevance, prefer `office_search` over a broad filename glob; do not answer from general knowledge before tools
 - codebase search/investigation => `grep` / `glob`, then `read` the top candidate(s) before important conclusions or changes
-- open-ended search => start with one or two narrow opencode-style `glob` / `grep` / `office_search` calls in a `relay_tool` array; batch complementary terms when useful, but keep each call narrow
+- open-ended search => start with one or two narrow opencode-style `glob` / `grep` / `office_search` calls in a `relay_tool` array; batch complementary terms when useful, but keep each call narrow; after duplicate-search or search-budget notices, stop tools and summarize
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
 
 {rendered_tools}
@@ -4265,7 +4265,7 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "- For local file lookup requests, use small rg-backed glob/grep calls for fast candidate paths or plaintext/code contents, and office_search for Office/PDF contents. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
                 "- If the user gives an exact file path, prefer read directly.\n",
                 "- Treat search snippets as discovery evidence. Before important conclusions, reviews, edits, comparisons, or recommendations, read the top candidate path(s); otherwise describe matches as candidates only. If snippets conflict with read, read is authoritative. After read, cite evidence path and line anchor/startLine when available.\n",
-                "- For document lookup requests, derive simple filename globs and Office/PDF patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. For compact abbreviation+noun queries such as `CFS 精算表`, search both terms with office_search (`regex:true`, alternation pattern) instead of only the abbreviation. Avoid large brace-expanded glob fan-out; use office_search for Office/PDF content relevance, and prefer newer matching files when relevance is otherwise similar.\n",
+                "- For document lookup requests, derive simple filename globs and Office/PDF patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. For compact abbreviation+noun queries such as `CFS 精算表`, search both terms with office_search (`regex:true`, alternation pattern) instead of only the abbreviation. Avoid large brace-expanded glob fan-out; use office_search for Office/PDF content relevance, and prefer newer matching files when relevance is otherwise similar. If Relay reports duplicate-search suppression or a search-budget limit, stop searching and summarize the accumulated results in text.\n",
                 "- If the user's request is already concrete (paths, files, stated action), use tools in your first response; do not ask them to rephrase unless something essential is missing.\n",
                 "- To combine or split PDF files, use pdf_merge / pdf_split (workspace write); do not use bash for that."
             ),
@@ -7275,6 +7275,69 @@ mod loop_controller_tests {
         assert!(next_input.contains("Use the prior tool results already present"));
         assert!(!next_input.contains("Expected JSON for the next reply"));
         assert_eq!(kind, LoopContinueKind::MetaNudge);
+    }
+
+    #[test]
+    fn repair_summary_answer_after_local_search_stops_instead_of_repairing_again() {
+        let assistant = concat!(
+            "検索結果の要約です（既存の Relay 検索結果のみを根拠にしています）。\n",
+            "キャッシュフロー作成に直接関連する主なファイルは ",
+            r"H:\shr1\05_経理部\03_連結財務G\IFRS導入準備\０-3【連結キャッシュ・フロー計算書】（1Ｑ）.xlsx",
+            " です。シート preview から CFS 作成用途の候補として確認できます。"
+        );
+        let s = summary(assistant, Vec::new(), runtime::TurnOutcome::Completed);
+        let latest_turn_input = concat!(
+            "Tool protocol repair.\n",
+            "The previous assistant response answered a local file search request without using Relay tools.\n",
+            "```latest_user_request\n",
+            r"H:\shr1\05_経理部\03_連結財務G にあるキャッシュフロー計算書関連ファイルを検索して",
+            "\n```"
+        );
+
+        assert_eq!(
+            decide_loop_after_success(
+                r"H:\shr1\05_経理部\03_連結財務G にあるキャッシュフロー計算書関連ファイルを検索して",
+                latest_turn_input,
+                0,
+                2,
+                3,
+                false,
+                &s,
+            ),
+            LoopDecision::Stop(LoopStopReason::Completed)
+        );
+    }
+
+    #[test]
+    fn repair_toolless_search_promise_still_gets_another_repair_attempt() {
+        let s = summary(
+            "はい、'キャッシュフロー 作成' を検索します。",
+            Vec::new(),
+            runtime::TurnOutcome::Completed,
+        );
+        let latest_turn_input = concat!(
+            "Tool protocol repair.\n",
+            "The previous assistant response answered a local file search request without using Relay tools.\n",
+            "```latest_user_request\n",
+            "キャッシュフロー計算書の作成に関係するファイルを検索して\n",
+            "```"
+        );
+
+        let decision = decide_loop_after_success(
+            "キャッシュフロー計算書の作成に関係するファイルを検索して",
+            latest_turn_input,
+            0,
+            1,
+            3,
+            false,
+            &s,
+        );
+        let LoopDecision::Continue { next_input, kind } = decision else {
+            panic!("expected toolless search promise to continue repair");
+        };
+        assert_eq!(kind, LoopContinueKind::MetaNudge);
+        assert!(next_input.contains("Tool protocol repair."));
+        assert!(next_input.contains(r#""name": "office_search""#));
     }
 
     #[test]

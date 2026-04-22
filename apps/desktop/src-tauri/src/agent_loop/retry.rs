@@ -1143,7 +1143,8 @@ fn build_tool_result_summary_repair_input(
         concat!(
             "Tool result summary repair.\n",
             "Relay already executed local tools for this turn. Your previous reply emitted repeated, malformed, or duplicate tool JSON instead of summarizing the tool results.\n",
-            "Do not emit any `relay_tool` fence, JSON tool object, or additional tool call in the next reply.\n",
+            "Local search tools are disabled for this repair step. Do not emit any `relay_tool` fence, JSON tool object, or additional tool call in the next reply.\n",
+            "Respond with text only, like opencode's max-step fallback: summarize what the executed tools found, state what remains uncertain, and stop.\n",
             "Use the prior tool results already present in the transcript as the only evidence. If duplicate-tool suppression notices are present, treat them only as a signal not to repeat the same search.\n",
             "If the prior local search results are empty or contain only errors, say that Relay found no matching local files/results in the searched scope. Do not infer required files from general knowledge and do not claim files were confirmed.\n",
             "Now answer the user's original local document search request concisely, with file paths and anchors/previews from the existing `glob` / `grep` / `office_search` results when available.\n\n",
@@ -1572,6 +1573,31 @@ fn has_local_search_guard_notice(summary: &runtime::TurnSummary) -> bool {
         })
 }
 
+fn is_repair_turn_input(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with("Tool protocol repair.")
+        || trimmed.starts_with("Tool result summary repair.")
+}
+
+fn is_toolless_local_search_summary_answer(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    claims_local_search_found_evidence(trimmed)
+        || lower.contains("no matching local")
+        || lower.contains("no matching files")
+        || lower.contains("no files found")
+        || lower.contains("no search results")
+        || trimmed.contains("検索結果の要約")
+        || trimmed.contains("既存の Relay 検索結果")
+        || trimmed.contains("既存の検索結果")
+        || trimmed.contains("該当するファイルは見つかりません")
+        || trimmed.contains("該当ファイルは見つかりません")
+        || trimmed.contains("該当なし")
+}
+
 fn is_copilot_search_leak_text(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     lower.contains("turn1search")
@@ -1692,6 +1718,12 @@ pub(crate) fn decide_loop_after_success(
 
     let assistant_text = summary.terminal_assistant_text.as_str();
     let is_local_file_search = is_local_file_search_request(latest_turn_input);
+    let is_repair_turn = is_repair_turn_input(latest_turn_input);
+    let is_toolless_repair_summary_answer = summary.tool_results.is_empty()
+        && is_repair_turn
+        && is_toolless_local_search_summary_answer(assistant_text)
+        && !is_tool_protocol_confusion_text(assistant_text)
+        && !is_copilot_search_leak_text(assistant_text);
     let is_tool_protocol_confusion =
         summary.tool_results.is_empty() && is_tool_protocol_confusion_text(assistant_text);
     let is_tool_result_summary_needed = has_local_search_tool_result(summary)
@@ -1713,15 +1745,18 @@ pub(crate) fn decide_loop_after_success(
     let is_false_completion = summary.tool_results.is_empty()
         && !is_local_file_search
         && is_false_completion_success_claim_text(assistant_text);
-    let is_local_search_answer_without_tools =
-        summary.tool_results.is_empty() && is_local_file_search;
+    let is_local_search_answer_without_tools = summary.tool_results.is_empty()
+        && is_local_file_search
+        && !is_toolless_repair_summary_answer;
     let is_plain_file_body_completion = summary.tool_results.is_empty()
+        && !is_toolless_repair_summary_answer
         && is_concrete_local_write_body_without_tools(
             latest_turn_input,
             assistant_text,
             heuristics.is_concrete_local_file_write_goal,
         );
     let is_mutation_plan_without_tools = summary.tool_results.is_empty()
+        && !is_toolless_repair_summary_answer
         && is_concrete_local_mutation_plan_without_tools(
             latest_turn_input,
             assistant_text,

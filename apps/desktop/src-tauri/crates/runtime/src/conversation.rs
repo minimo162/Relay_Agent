@@ -456,11 +456,17 @@ where
                     tracing::info!(
                         "[runtime] synthesized no-op for duplicate tool call {tool_name} (turn-level dedup, hits={duplicate_tool_hits})"
                     );
-                    let notice = format!(
-                        "Duplicate tool call suppressed: this `{tool_name}` call was already executed earlier in this turn with the same input. The prior tool output remains in the transcript above. Do not repeat this call. Either summarize the existing findings for the user, or issue a different tool call (for example, narrow or broaden the pattern, change the target path, or switch tools)."
-                    );
                     let duplicate_is_local_search = is_turn_level_local_search_tool(&tool_name);
                     let duplicate_tool_name = tool_name.clone();
+                    let notice = if duplicate_is_local_search {
+                        format!(
+                            "Duplicate local search suppressed: this `{tool_name}` call was already executed earlier in this turn with the same input. The prior tool output remains in the transcript above. Local search tools (`glob`, `grep`, `office_search`) are now disabled for this request; do not issue another search variant. Respond with text only and summarize the existing findings, or say no matching local files/results were found in the searched scope."
+                        )
+                    } else {
+                        format!(
+                            "Duplicate tool call suppressed: this `{tool_name}` call was already executed earlier in this turn with the same input. The prior tool output remains in the transcript above. Do not repeat this call. Either summarize the existing findings for the user, or issue a different tool call (for example, narrow or broaden the pattern, change the target path, or switch tools)."
+                        )
+                    };
                     let synthetic =
                         ConversationMessage::tool_result(tool_use_id, tool_name, notice, false);
                     self.session.messages.push(synthetic.clone());
@@ -1754,6 +1760,7 @@ mod tests {
                 message.blocks.iter().any(|block| match block {
                     ContentBlock::ToolResult { output, .. } => {
                         output.contains("Duplicate tool call suppressed")
+                            || output.contains("Duplicate local search suppressed")
                     }
                     _ => false,
                 })
@@ -1762,6 +1769,17 @@ mod tests {
         assert!(
             synthetic_notices >= 1,
             "expected at least one synthesized 'duplicate suppressed' tool result"
+        );
+        assert!(
+            summary.tool_results.iter().any(|message| {
+                message.blocks.iter().any(|block| match block {
+                    ContentBlock::ToolResult { output, .. } => output.contains(
+                        "Local search tools (`glob`, `grep`, `office_search`) are now disabled",
+                    ),
+                    _ => false,
+                })
+            }),
+            "local search duplicate notice should force a text-only summary"
         );
         assert_eq!(
             summary.iterations, 2,
@@ -1882,10 +1900,8 @@ mod tests {
 
     #[test]
     fn turn_level_dedup_key_is_insensitive_to_object_key_order() {
-        let key_a =
-            super::turn_level_tool_dedup_key("glob", r#"{"pattern":"**/*","path":"src"}"#);
-        let key_b =
-            super::turn_level_tool_dedup_key("glob", r#"{"path":"src","pattern":"**/*"}"#);
+        let key_a = super::turn_level_tool_dedup_key("glob", r#"{"pattern":"**/*","path":"src"}"#);
+        let key_b = super::turn_level_tool_dedup_key("glob", r#"{"path":"src","pattern":"**/*"}"#);
         assert_eq!(key_a, key_b);
     }
 }

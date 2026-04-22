@@ -92,7 +92,12 @@ pub(crate) fn rg_files(cwd: &Path, options: RgFilesOptions<'_>) -> io::Result<Op
         .arg("--files")
         .arg("--glob=!.git/*");
     apply_default_ignore_globs(&mut command);
-    apply_common_args(&mut command, options.hidden, options.follow, options.max_depth);
+    apply_common_args(
+        &mut command,
+        options.hidden,
+        options.follow,
+        options.max_depth,
+    );
     for glob in options.globs {
         command.arg(format!("--glob={glob}"));
     }
@@ -150,7 +155,12 @@ pub(crate) fn rg_search(
         .arg("--glob=!.git/*")
         .arg("--no-messages");
     apply_default_ignore_globs(&mut command);
-    apply_common_args(&mut command, options.hidden, options.follow, options.max_depth);
+    apply_common_args(
+        &mut command,
+        options.hidden,
+        options.follow,
+        options.max_depth,
+    );
     if let Some(max_count) = options.max_count.filter(|value| *value > 0) {
         command.arg(format!("--max-count={max_count}"));
     }
@@ -228,12 +238,7 @@ pub(crate) fn rg_search(
     Ok(None)
 }
 
-fn apply_common_args(
-    command: &mut Command,
-    hidden: bool,
-    follow: bool,
-    max_depth: Option<usize>,
-) {
+fn apply_common_args(command: &mut Command, hidden: bool, follow: bool, max_depth: Option<usize>) {
     if hidden {
         command.arg("--hidden");
     } else {
@@ -301,7 +306,9 @@ fn apply_default_ignore_globs(command: &mut Command) {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum RgEvent {
-    Match { data: RgMatchData },
+    Match {
+        data: RgMatchData,
+    },
     #[serde(other)]
     Other,
 }
@@ -353,11 +360,10 @@ fn adjacent_sidecar_path() -> Option<PathBuf> {
 
 fn dev_sidecar_path() -> Option<PathBuf> {
     let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from)?;
-    let path = manifest_dir.join("binaries").join(format!(
-        "relay-rg-{}{}",
-        target_triple(),
-        exe_suffix()
-    ));
+    let path =
+        manifest_dir
+            .join("binaries")
+            .join(format!("relay-rg-{}{}", target_triple(), exe_suffix()));
     path.is_file().then_some(path)
 }
 

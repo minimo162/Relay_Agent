@@ -181,10 +181,8 @@ mod parity_style {
     fn grep_agentic_scenario_returns_low_level_evidence() {
         let _guard = env_lock();
         let original_dir = std::env::current_dir().expect("cwd");
-        let dir = std::env::temp_dir().join(format!(
-            "relay-grep-search-parity-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("relay-grep-search-parity-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::create_dir_all(dir.join("target/debug")).unwrap();
@@ -298,8 +296,8 @@ mod parity_style {
         )
         .unwrap();
 
-        let read_out = execute_tool("read", &json!({ "path": fixture.to_string_lossy() }))
-            .expect("read");
+        let read_out =
+            execute_tool("read", &json!({ "path": fixture.to_string_lossy() })).expect("read");
         assert!(read_out.contains("alpha parity line"), "{read_out}");
 
         let grep_out = execute_tool(

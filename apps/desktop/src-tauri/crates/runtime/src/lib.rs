@@ -19,8 +19,8 @@ mod pdf_manip;
 mod permissions;
 mod prompt;
 mod remote;
-mod search_backend;
 pub mod sandbox;
+mod search_backend;
 mod session;
 mod task_registry;
 mod tool_hard_denylist;
@@ -52,8 +52,7 @@ pub use conversation::{
 pub use file_ops::{
     edit, glob, glob_with_options, grep, read, write, EditFileOutput, GlobSearchOptions,
     GlobSearchOutput, GrepSearchInput, GrepSearchOutput, ReadFileOutput, StructuredPatchHunk,
-    TextFilePayload, WriteFileOutput,
-    MAX_TEXT_FILE_READ_BYTES, MAX_WRITE_FILE_BYTES,
+    TextFilePayload, WriteFileOutput, MAX_TEXT_FILE_READ_BYTES, MAX_WRITE_FILE_BYTES,
 };
 pub use hooks::{HookEvent, HookRunResult, HookRunner};
 pub use lsp_diagnostics::pull_rust_diagnostics_blocking;

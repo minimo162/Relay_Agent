@@ -337,7 +337,7 @@ fn read_missing_path_suggestions(attempted_path: &Path) -> Vec<String> {
                 || base_lower.contains(&name_lower)
                 || name_stem_lower.contains(&base_stem_lower)
                 || base_stem_lower.contains(&name_stem_lower))
-                .then(|| entry.path().to_string_lossy().into_owned())
+            .then(|| entry.path().to_string_lossy().into_owned())
         })
         .collect::<Vec<_>>();
     suggestions.sort();
@@ -597,11 +597,7 @@ pub fn edit(
     })
 }
 
-fn match_edit_old_string(
-    content: &str,
-    old_string: &str,
-    replace_all: bool,
-) -> io::Result<String> {
+fn match_edit_old_string(content: &str, old_string: &str, replace_all: bool) -> io::Result<String> {
     if content.contains(old_string) {
         return Ok(old_string.to_string());
     }
@@ -802,13 +798,10 @@ fn walk_glob_matches(
     if let Some(max_depth) = options.max_depth {
         walker = walker.max_depth(max_depth);
     }
-    for entry in walker
-        .into_iter()
-        .filter_entry(|entry| {
-            !is_ignored_search_path(entry.path())
-                && (options.hidden.unwrap_or(true) || !is_hidden_search_path(base_dir, entry.path()))
-        })
-    {
+    for entry in walker.into_iter().filter_entry(|entry| {
+        !is_ignored_search_path(entry.path())
+            && (options.hidden.unwrap_or(true) || !is_hidden_search_path(base_dir, entry.path()))
+    }) {
         let Ok(entry) = entry else {
             continue;
         };
@@ -932,7 +925,8 @@ fn grep_with_rg(
                 )
             })
             .collect::<Vec<_>>();
-        let (lines, limit, offset) = apply_limit(lines, Some(input.head_limit.unwrap_or(100)), input.offset);
+        let (lines, limit, offset) =
+            apply_limit(lines, Some(input.head_limit.unwrap_or(100)), input.offset);
         let output = GrepSearchOutput {
             mode: Some(output_mode.to_string()),
             num_files: filenames.len(),
@@ -1070,8 +1064,11 @@ fn grep_fallback(
     let (filenames, applied_limit, applied_offset) =
         apply_limit(filenames, input.head_limit, input.offset);
     let content_output = if output_mode == "content" {
-        let (lines, limit, offset) =
-            apply_limit(content_lines, Some(input.head_limit.unwrap_or(100)), input.offset);
+        let (lines, limit, offset) = apply_limit(
+            content_lines,
+            Some(input.head_limit.unwrap_or(100)),
+            input.offset,
+        );
         let output = GrepSearchOutput {
             mode: Some(output_mode.to_string()),
             num_files: filenames.len(),
@@ -1494,8 +1491,8 @@ mod tests {
         )
         .expect("file write should succeed");
 
-        let globbed = glob("**/*.rs", Some(dir.to_string_lossy().as_ref()))
-            .expect("glob should succeed");
+        let globbed =
+            glob("**/*.rs", Some(dir.to_string_lossy().as_ref())).expect("glob should succeed");
         assert_eq!(globbed.num_files, 1);
         assert_eq!(globbed.pattern, "**/*.rs");
         assert_eq!(globbed.base_dir, dir.to_string_lossy());
@@ -1537,7 +1534,10 @@ mod tests {
         let globbed = glob("**/*.{rs,ts,rs}", Some(dir.to_string_lossy().as_ref()))
             .expect("glob should succeed");
         assert_eq!(globbed.pattern, "**/*.{rs,ts,rs}");
-        assert_eq!(globbed.expanded_patterns, vec!["**/*.{rs,ts,rs}".to_string()]);
+        assert_eq!(
+            globbed.expanded_patterns,
+            vec!["**/*.{rs,ts,rs}".to_string()]
+        );
     }
 
     #[test]
@@ -1601,7 +1601,10 @@ mod tests {
 
         assert_eq!(normalize_optional_search_path(None).unwrap(), cwd);
         assert_eq!(normalize_optional_search_path(Some("")).unwrap(), cwd);
-        assert_eq!(normalize_optional_search_path(Some("undefined")).unwrap(), cwd);
+        assert_eq!(
+            normalize_optional_search_path(Some("undefined")).unwrap(),
+            cwd
+        );
         assert_eq!(normalize_optional_search_path(Some("null")).unwrap(), cwd);
     }
 
@@ -1766,8 +1769,8 @@ mod tests {
         fs::write(dir.join(".git/objects/hidden.txt"), "needle hidden\n").expect("write git file");
         fs::write(dir.join("src/visible.txt"), "needle visible\n").expect("write visible file");
 
-        let globbed = glob("**/*.txt", Some(dir.to_string_lossy().as_ref()))
-            .expect("glob should succeed");
+        let globbed =
+            glob("**/*.txt", Some(dir.to_string_lossy().as_ref())).expect("glob should succeed");
         assert_eq!(globbed.num_files, 1);
         assert!(globbed.filenames[0].ends_with("visible.txt"));
         assert!(!globbed.filenames.iter().any(|path| path.contains(".git")));
@@ -1866,5 +1869,4 @@ mod tests {
         assert!(content.ends_with("..."));
         assert!(content.len() < long_line.len());
     }
-
 }

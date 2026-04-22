@@ -8449,6 +8449,111 @@ Results:
 - `cargo test ... -p relay-agent-desktop grep_result_is_rendered_in_opencode_style_for_cdp_followup`: passed, 1 passed.
 - `cargo test ... -p relay-agent-desktop empty_glob_result_is_labeled_as_filename_only_miss`: passed, 1 passed.
 
+## 2026-04-22 - Agentic search repair summary stop
+
+Reviewed the 2026-04-22 CDP log for the `キャッシュフロー 作成` local
+document lookup and compared the search loop shape with
+`https://github.com/anomalyco/opencode.git`. The failure was not the first
+`office_search` execution itself; Relay executed it and produced useful hits.
+The loop then treated a later plain-text summary repair as another
+`local_search_without_tools` miss because that synthetic repair turn had no new
+tool results of its own. That caused extra tool-protocol repair attempts after a
+grounded answer had already been produced.
+
+Updated the retry classifier so a `Tool protocol repair.` or
+`Tool result summary repair.` turn that returns a substantive local-search
+summary or no-match statement is accepted as completed instead of being repaired
+again. A bare promise such as `検索します` is still repaired into a real tool
+call. This keeps Relay closer to opencode's bounded search-loop behavior: after
+the tool budget or duplicate guard forces a summary step, the model should
+summarize accumulated evidence rather than re-enter search.
+
+Verification commands run locally:
+
+```bash
+cargo test -p relay-agent-desktop repair_
+rustfmt --edition 2024 --check apps/desktop/src-tauri/src/agent_loop/retry.rs
+rustfmt --edition 2024 --check apps/desktop/src-tauri/src/agent_loop/orchestrator.rs
+cargo fmt --check --all
+git diff --check
+```
+
+Results:
+
+- `cargo test -p relay-agent-desktop repair_`: passed, 18 passed, 1 ignored.
+- `rustfmt --edition 2024 --check apps/desktop/src-tauri/src/agent_loop/retry.rs`:
+  failed on existing import ordering drift (`json, Value` vs rustfmt's
+  `Value, json`); code was left in the repository's current style.
+- `rustfmt --edition 2024 --check apps/desktop/src-tauri/src/agent_loop/orchestrator.rs`:
+  failed on existing import/assert formatting drift in that file; the new test
+  block was not part of the reported diff.
+- `cargo fmt --check --all`: failed on pre-existing formatting drift in
+  `orchestrator.rs` plus files outside this change, including
+  `crates/runtime/src/file_ops.rs`, `crates/runtime/src/office/mod.rs`, and
+  `crates/tools/src/lib.rs`.
+- `git diff --check`: passed.
+
+Follow-up alignment with opencode:
+
+- Changed duplicate local-search suppression from "try a different search" style
+  guidance to an opencode-like max-step fallback: local search tools are disabled
+  for the request, and the assistant must respond with text only from the prior
+  results.
+- Strengthened the CDP local-search continuation guard and catalog wording so
+  duplicate-search and search-budget notices end the search phase rather than
+  inviting more `glob` / `grep` / `office_search` variants.
+- Updated summary repair instructions to explicitly mirror opencode's
+  max-step fallback: summarize executed tool findings, state uncertainty, and
+  stop.
+
+Additional verification:
+
+```bash
+cargo test -p runtime repeating_identical_tool_call_is_suppressed_and_turn_terminates
+cargo test -p runtime search_budget
+cargo test -p relay-agent-desktop repair_
+cargo test -p relay-agent-desktop local_search_guard_stops_after_summary_repair_limit
+git diff --check
+```
+
+Results:
+
+- `cargo test -p runtime repeating_identical_tool_call_is_suppressed_and_turn_terminates`:
+  passed, 1 passed.
+- `cargo test -p runtime search_budget`: passed, 2 passed.
+- `cargo test -p relay-agent-desktop repair_`: passed, 18 passed, 1 ignored.
+- `cargo test -p relay-agent-desktop local_search_guard_stops_after_summary_repair_limit`:
+  passed, 1 passed.
+- `git diff --check`: passed.
+
+Formatting follow-up:
+
+Ran `cargo fmt --all` to resolve the pre-existing Rust formatting drift noted
+above. This applied rustfmt-only changes in the compat harness, desktop-core
+agent loop tests, runtime file/search/office modules, tools tests, and the
+agent-loop files touched by the search-loop work.
+
+Verification after formatting:
+
+```bash
+cargo fmt --check --all
+cargo test -p runtime repeating_identical_tool_call_is_suppressed_and_turn_terminates
+cargo test -p runtime search_budget
+cargo test -p relay-agent-desktop repair_
+pnpm check
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --check --all`: passed.
+- `cargo test -p runtime repeating_identical_tool_call_is_suppressed_and_turn_terminates`:
+  passed, 1 passed.
+- `cargo test -p runtime search_budget`: passed, 2 passed.
+- `cargo test -p relay-agent-desktop repair_`: passed, 18 passed, 1 ignored.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`

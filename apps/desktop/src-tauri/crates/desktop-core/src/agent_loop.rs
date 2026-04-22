@@ -531,9 +531,7 @@ fn has_inline_whitelisted_tool_candidate(text: &str) -> bool {
     !extract_mvp_tool_object_spans(text, &whitelist).is_empty()
 }
 
-fn salvage_generated_write_from_reply(
-    text: &str,
-) -> Option<(String, (String, String, String))> {
+fn salvage_generated_write_from_reply(text: &str) -> Option<(String, (String, String, String))> {
     let (display, content) = extract_generated_html_code_block(text)?;
     let path = select_generated_file_path_from_reply(text, &content)?;
     let value = json!({
@@ -2886,9 +2884,8 @@ mod tests {
 
     #[test]
     fn parse_json_fence_without_sentinel_is_recovered_when_whitelisted() {
-        let (display, calls) = parse_initial(
-            "```json\n{\"name\":\"read\",\"input\":{\"path\":\"README.md\"}}\n```",
-        );
+        let (display, calls) =
+            parse_initial("```json\n{\"name\":\"read\",\"input\":{\"path\":\"README.md\"}}\n```");
         assert_eq!(display, "");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, "read");
@@ -2919,14 +2916,8 @@ mod tests {
         let raw = "了解しました。\n指定どおり 読み取り専用の調査として、まずツールを実行します。\n\n[\n{\n\"name\": \"glob\",\n\"relay_tool_call\": true,\n\"input\": {\n\"pattern\": \"**/*live_m365*\"\n}\n},\n{\n\"name\": \"grep\",\n\"relay_tool_call\": true,\n\"input\": {\n\"pattern\": \"relay_tool_call\",\n\"path\": \"apps/desktop/scripts\",\n\"output_mode\": \"files_with_matches\"\n}\n]\n\nツール結果が返り次第、その出力だけを根拠に報告します。";
         let (_display, calls) = parse_initial(raw);
         let names: Vec<&str> = calls.iter().map(|(_, name, _)| name.as_str()).collect();
-        assert!(
-            names.contains(&"glob"),
-            "expected glob in {names:?}"
-        );
-        assert!(
-            names.contains(&"grep"),
-            "expected grep in {names:?}"
-        );
+        assert!(names.contains(&"glob"), "expected glob in {names:?}");
+        assert!(names.contains(&"grep"), "expected grep in {names:?}");
     }
 
     #[test]
