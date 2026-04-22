@@ -15,6 +15,52 @@
 
 ## Milestone Log
 
+### 2026-04-22 agentic Office search expansion repair
+
+Reviewed `anomalyco/opencode` dev HEAD
+`8043cfa68dcf97547ede3e26a9325af55583e1e4` again for the active low-level
+search shape: search remains model-directed through simple `glob` / `grep`
+tools rather than host-injected deterministic search batches.
+
+Fixed a live failure mode where a local Office/PDF lookup could execute only a
+broad filename `glob` such as `**/*.{docx,xlsx,pptx,pdf}`, hit the 100-file
+truncation limit, and then let Copilot summarize likely accounting documents
+from filenames or domain knowledge. The loop controller now classifies
+Office/PDF lookup turns that need content evidence (`必要`, `関連`, `関係`,
+`作成`, cash-flow/CFS queries, etc.) and have only `glob` results so far, then
+continues the turn with a single `office_search` repair request. Plain file
+listing requests, such as listing PDFs, still stop after a successful `glob`.
+
+Follow-up opencode alignment in the same pass: the Copilot-facing `glob` and
+`grep` schemas now match opencode's active search surface. `glob` advertises
+only `pattern` plus optional `path`; `grep` advertises only `pattern`, optional
+`path`, and optional `include`. Relay still accepts its richer internal search
+options in the executor for compatibility, but they are no longer part of the
+CDP catalog or important-optional-args prompt. Desktop activity labels and the
+workspace allowlist test now use the opencode-style canonical tool names
+(`read`, `write`, `edit`, `glob`, `grep`) while retaining display compatibility
+for older aliases.
+
+Verification:
+
+- `git ls-remote https://github.com/anomalyco/opencode.git HEAD`: passed,
+  `8043cfa68dcf97547ede3e26a9325af55583e1e4`.
+- `git clone --depth 1 https://github.com/anomalyco/opencode.git /tmp/opencode-relay-ref`: passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_search_schema_matches_opencode_shape -- --nocapture`: passed, 1 passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance -- --nocapture`: passed, 1 passed.
+- `cargo test -p tools --manifest-path apps/desktop/src-tauri/Cargo.toml cdp_core_catalog_matches_expected_surface -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml office_lookup -- --nocapture`: passed, 2 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml simple_office_file_listing -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml required_file_lookup -- --nocapture`: passed, 3 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml local_office_search_plan -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml no_relay_tool_call_for_local_lookup -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml write_store_cleans_duplicates_and_snapshot_sorts_entries -- --nocapture`: passed, 1 passed.
+- `pnpm --filter @relay-agent/desktop typecheck`: passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `pnpm check`: passed.
+- `git diff --check`: passed.
+
 ### 2026-04-22 expose opencode-style read/write/edit names
 
 Relay now advertises opencode-style `read`, `write`, and `edit` tool names

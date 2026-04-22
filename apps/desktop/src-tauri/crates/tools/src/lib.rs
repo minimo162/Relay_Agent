@@ -802,10 +802,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "pattern": { "type": "string", "description": "Glob pattern. Brace groups are expanded, e.g. **/*.{docx,xlsx,pptx,pdf}." },
-                    "path": { "type": "string" },
-                    "follow": { "type": "boolean", "description": "Follow symlinks. Defaults to false." },
-                    "max_depth": { "type": "integer", "minimum": 1, "description": "Maximum directory depth passed to ripgrep." },
-                    "hidden": { "type": "boolean", "description": "Include hidden files. Defaults to true; set false to exclude dotfiles." }
+                    "path": { "type": "string", "description": "Directory to search. Omit to use the current workspace directory." }
                 },
                 "required": ["pattern"],
                 "additionalProperties": false
@@ -819,24 +816,8 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "pattern": { "type": "string" },
-                    "path": { "type": "string" },
-                    "glob": { "type": "string" },
-                    "include": { "type": "string", "description": "Alias for glob, compatible with opencode-style grep include filters such as *.js or *.{ts,tsx}" },
-                    "output_mode": { "type": "string" },
-                    "-B": { "type": "integer", "minimum": 0 },
-                    "-A": { "type": "integer", "minimum": 0 },
-                    "-C": { "type": "integer", "minimum": 0 },
-                    "context": { "type": "integer", "minimum": 0 },
-                    "-n": { "type": "boolean" },
-                    "-i": { "type": "boolean" },
-                    "type": { "type": "string" },
-                    "head_limit": { "type": "integer", "minimum": 1 },
-                    "offset": { "type": "integer", "minimum": 0 },
-                    "multiline": { "type": "boolean" },
-                    "follow": { "type": "boolean", "description": "Follow symlinks on the rg-backed path. Defaults to false." },
-                    "max_depth": { "type": "integer", "minimum": 1, "description": "Maximum directory depth passed to ripgrep." },
-                    "hidden": { "type": "boolean", "description": "Include hidden files on the rg-backed path. Defaults to true; set false to exclude dotfiles." },
-                    "max_count": { "type": "integer", "minimum": 1, "description": "Per-file ripgrep --max-count value." }
+                    "path": { "type": "string", "description": "Directory or file to search. Defaults to the current workspace directory." },
+                    "include": { "type": "string", "description": "File pattern to include, e.g. *.js or *.{ts,tsx}." }
                 },
                 "required": ["pattern"],
                 "additionalProperties": false
@@ -4030,7 +4011,7 @@ mod tests {
         CdpToolVisibility, ToolSource, ToolSurface,
     };
     use runtime::PermissionMode;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -4185,6 +4166,42 @@ mod tests {
     }
 
     #[test]
+    fn cdp_search_schema_matches_opencode_shape() {
+        let specs = cdp_tool_specs_for_visibility(CdpToolVisibility::Core);
+        let glob = specs
+            .iter()
+            .find(|spec| spec.name == "glob")
+            .expect("glob spec");
+        let glob_props = glob
+            .input_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("glob properties");
+        assert_eq!(
+            glob_props.keys().cloned().collect::<Vec<_>>(),
+            vec!["path".to_string(), "pattern".to_string()]
+        );
+
+        let grep = specs
+            .iter()
+            .find(|spec| spec.name == "grep")
+            .expect("grep spec");
+        let grep_props = grep
+            .input_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("grep properties");
+        assert_eq!(
+            grep_props.keys().cloned().collect::<Vec<_>>(),
+            vec![
+                "include".to_string(),
+                "path".to_string(),
+                "pattern".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn cdp_prompt_tool_specs_hide_agent_and_keep_rich_guidance() {
         let specs = cdp_prompt_tool_specs();
         let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
@@ -4208,6 +4225,15 @@ mod tests {
             .expect("glob cdp prompt spec");
         assert!(glob.use_when.contains("filename/path expansion"));
         assert!(glob.use_when.contains("**/*.{rs,ts,tsx}"));
+        assert_eq!(glob.important_optional_args, vec!["path".to_string()]);
+        let grep = specs
+            .iter()
+            .find(|spec| spec.name == "grep")
+            .expect("grep cdp prompt spec");
+        assert_eq!(
+            grep.important_optional_args,
+            vec!["path".to_string(), "include".to_string()]
+        );
         let office = specs
             .iter()
             .find(|spec| spec.name == "office_search")

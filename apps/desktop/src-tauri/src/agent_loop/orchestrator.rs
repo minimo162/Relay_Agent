@@ -1557,17 +1557,8 @@ fn cdp_tool_important_optional_args(name: &str, schema: &Value) -> Vec<String> {
     #[allow(clippy::match_same_arms)]
     let curated = match name {
         "read" => vec!["offset", "limit", "pages", "sheets", "slides"],
-        "glob" => vec!["path", "follow", "max_depth", "hidden"],
-        "grep" => vec![
-            "path",
-            "glob",
-            "include",
-            "context",
-            "follow",
-            "max_depth",
-            "hidden",
-            "max_count",
-        ],
+        "glob" => vec!["path"],
+        "grep" => vec!["path", "include"],
         "office_search" => vec![
             "paths",
             "regex",
@@ -6734,6 +6725,68 @@ mod loop_controller_tests {
         assert!(next_input.contains(r#""include_ext": ["#));
         assert!(next_input.contains("`office_search` for Office/PDF contents"));
         assert!(!next_input.contains(r#""name": "write""#));
+    }
+
+    #[test]
+    fn glob_only_office_lookup_repairs_to_office_search_expansion() {
+        let s = summary(
+            "検索結果を踏まえると、キャッシュフロー計算書の作成に直接関係しそうなファイルは連結PKGや精算表です。",
+            vec![tool_success_result(
+                "glob",
+                r#"{"pattern":"**/*.{docx,xlsx,pptx,pdf}","numFiles":100,"filenames":["154連結(2020年3月期)/連結PKG.xlsx"],"truncated":true}"#,
+            )],
+            runtime::TurnOutcome::Completed,
+        );
+        let request = "キャッシュフロー計算書の作成に関係するファイルを検索して";
+        let decision = decide_loop_after_success(request, request, 0, 0, 2, false, &s);
+        let LoopDecision::Continue { next_input, kind } = decision else {
+            panic!("expected glob-only Office lookup to request office_search expansion");
+        };
+        assert_eq!(kind, LoopContinueKind::MetaNudge);
+        assert!(next_input.contains("Search expansion repair."));
+        assert!(next_input.contains(r#""name": "office_search""#));
+        assert!(next_input.contains(r#""pattern": "キャッシュフロー計算書""#));
+        assert!(next_input.contains("Filename candidates alone are not enough evidence"));
+    }
+
+    #[test]
+    fn office_lookup_with_office_search_result_can_summarize() {
+        let s = summary(
+            "office_search の結果から、候補は `CFテンプレート.xlsx` です。",
+            vec![
+                tool_success_result(
+                    "glob",
+                    r#"{"pattern":"**/*.{docx,xlsx,pptx,pdf}","numFiles":100,"filenames":["CFテンプレート.xlsx"],"truncated":true}"#,
+                ),
+                tool_success_result(
+                    "office_search",
+                    r#"{"pattern":"キャッシュフロー計算書","results":[{"path":"CFテンプレート.xlsx","anchor":"Sheet1!A1","preview":"キャッシュフロー計算書"}],"errors":[]}"#,
+                ),
+            ],
+            runtime::TurnOutcome::Completed,
+        );
+        let request = "キャッシュフロー計算書の作成に関係するファイルを検索して";
+        assert_eq!(
+            decide_loop_after_success(request, request, 0, 0, 2, false, &s),
+            LoopDecision::Stop(LoopStopReason::Completed)
+        );
+    }
+
+    #[test]
+    fn simple_office_file_listing_does_not_force_content_search() {
+        let s = summary(
+            "PDF は `minutes.pdf` です。",
+            vec![tool_success_result(
+                "glob",
+                r#"{"pattern":"**/*.pdf","numFiles":1,"filenames":["minutes.pdf"],"truncated":false}"#,
+            )],
+            runtime::TurnOutcome::Completed,
+        );
+        let request = "PDFファイルを一覧にして";
+        assert_eq!(
+            decide_loop_after_success(request, request, 0, 0, 2, false, &s),
+            LoopDecision::Stop(LoopStopReason::Completed)
+        );
     }
 
     #[test]

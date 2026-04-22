@@ -614,10 +614,16 @@ export type UiChunk =
 /** User-facing status while a tool runs (no internal tool names in the main line). */
 export function friendlyToolActivityLabel(toolName: string): string {
   const labels: Record<string, string> = {
+    read: "Reading a file…",
     read_file: "Reading a file…",
+    glob: "Searching the workspace for files…",
     glob_search: "Searching the workspace for files…",
+    grep: "Searching file contents…",
     grep_search: "Searching file contents…",
+    office_search: "Searching Office/PDF contents…",
+    write: "Writing a file…",
     write_file: "Writing a file…",
+    edit: "Updating a file…",
     edit_file: "Updating a file…",
     pdf_merge: "Merging PDFs…",
     pdf_split: "Splitting a PDF…",

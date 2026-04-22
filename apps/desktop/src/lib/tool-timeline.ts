@@ -38,13 +38,19 @@ function asArray(value: unknown): unknown[] | null {
 
 export function toolTimelineKind(toolName: string): ToolTimelineKind {
   switch (toolName) {
+    case "read":
     case "read_file":
     case "WebFetch":
       return "read";
+    case "grep":
+    case "glob":
+    case "office_search":
     case "grep_search":
     case "glob_search":
     case "ToolSearch":
       return "grep";
+    case "write":
+    case "edit":
     case "write_file":
     case "edit_file":
     case "NotebookEdit":
@@ -58,10 +64,16 @@ export function toolTimelineKind(toolName: string): ToolTimelineKind {
 
 export function humanToolLabel(toolName: string): string {
   const labels: Record<string, string> = {
+    read: "Read file",
     read_file: "Read file",
+    glob: "Find files",
     glob_search: "Find files",
+    grep: "Search file contents",
     grep_search: "Search file contents",
+    office_search: "Search Office/PDF contents",
+    write: "Write file",
     write_file: "Write file",
+    edit: "Edit file",
     edit_file: "Edit file",
     pdf_merge: "Merge PDFs",
     pdf_split: "Split PDF",
@@ -252,14 +264,19 @@ export function toolAuditPresentation(
   }
 
   switch (toolName) {
+    case "read":
     case "read_file":
       return summarizeReadFile(status, input, result);
+    case "glob":
     case "glob_search":
       return summarizeGlobSearch(status, input, result);
+    case "grep":
     case "grep_search":
       return summarizeGrepSearch(status, input, result);
+    case "write":
     case "write_file":
       return summarizeWriteFile(status, input, result);
+    case "edit":
     case "edit_file":
       return summarizeEditFile(status, input, result);
     case "pdf_merge":

@@ -470,7 +470,7 @@ mod tests {
         );
         store.workspaces.insert(
             "/a".to_string(),
-            vec!["read_file".to_string(), "glob_search".to_string()],
+            vec!["read".to_string(), "glob".to_string()],
         );
 
         write_store(&paths, &store).expect("write store");
