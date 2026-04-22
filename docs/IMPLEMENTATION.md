@@ -44,6 +44,27 @@ Verification:
 - `git diff --check`: passed.
 - `pnpm check`: passed.
 
+Follow-up live-log repair: a later run confirmed the initial handoff was compact
+(`catalog_flavor=LocalSearchOnly`, `catalog_chars=2389`), but Copilot still
+answered with prose-only "はい、...を検索します" and Relay's first protocol
+repair fell back to `StandardFull` with `catalog_chars=21518`. The catalog flavor
+selector now checks for local file/document lookup before preserving the
+general-purpose catalog for attempt-0 mutation repairs, so first local-search
+repairs stay on the same compact opencode-style `read` / `glob` / `grep` /
+`office_search` surface. Concrete new-file repair attempt 0 still keeps the full
+catalog, and later concrete create repairs still narrow to write-only.
+
+Verification:
+
+- `cargo fmt --all`: passed.
+- `cargo test -p relay-agent-desktop first_local_search_repair_uses_local_search_catalog`: passed, 1 passed.
+- `cargo test -p relay-agent-desktop repair_prompt_uses_latest_repair_message_and_full_catalog`: passed, 1 passed.
+- `cargo fmt --check --all`: passed.
+- `git diff --check`: passed.
+- `cargo test -p relay-agent-desktop local_search_catalog`: passed, 3 passed.
+- `cargo test -p relay-agent-desktop repair_`: passed, 17 passed, 1 ignored.
+- `pnpm check`: passed.
+
 ### 2026-04-22 office_search directory and duplicate-loop hardening
 
 Live `tauri:dev` logs showed `office_search` receiving a workspace/root

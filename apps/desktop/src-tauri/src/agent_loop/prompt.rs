@@ -374,9 +374,6 @@ pub(crate) fn cdp_catalog_flavor(
         return CdpCatalogFlavor::StandardFull;
     };
     let attempt_index = repair_attempt_index_from_text(&text);
-    if attempt_index.is_some_and(|index| index < 1) {
-        return CdpCatalogFlavor::StandardFull;
-    }
     let latest_request = extract_latest_request_from_text(&text)
         .or_else(|| {
             latest_actionable_user_text(
@@ -386,10 +383,12 @@ pub(crate) fn cdp_catalog_flavor(
             )
         })
         .unwrap_or_else(|| text.trim().to_string());
-    if attempt_index.is_some() && is_concrete_new_file_create_request(&latest_request) {
-        CdpCatalogFlavor::RepairWriteFileOnly
-    } else if is_local_file_lookup_request_for_cdp_catalog(&latest_request) {
+    if is_local_file_lookup_request_for_cdp_catalog(&latest_request) {
         CdpCatalogFlavor::LocalSearchOnly
+    } else if attempt_index.is_some_and(|index| index < 1) {
+        CdpCatalogFlavor::StandardFull
+    } else if attempt_index.is_some() && is_concrete_new_file_create_request(&latest_request) {
+        CdpCatalogFlavor::RepairWriteFileOnly
     } else {
         CdpCatalogFlavor::StandardFull
     }

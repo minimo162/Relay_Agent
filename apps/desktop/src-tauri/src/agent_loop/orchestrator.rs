@@ -4549,6 +4549,32 @@ mod cdp_copilot_tool_tests {
     }
 
     #[test]
+    fn first_local_search_repair_uses_local_search_catalog() {
+        let request = "キャッシュフロー計算書の作成に関係するファイルを検索して";
+        let repair = build_tool_protocol_repair_input(request, request, 0);
+        let messages = vec![ConversationMessage::user_text(repair)];
+        let bundle = build_cdp_prompt_bundle_from_messages(
+            &[],
+            &messages,
+            CdpPromptFlavor::Repair,
+            cdp_catalog_flavor(&messages),
+        );
+
+        assert_eq!(
+            cdp_catalog_flavor(&messages),
+            CdpCatalogFlavor::LocalSearchOnly
+        );
+        assert_eq!(bundle.catalog_flavor, CdpCatalogFlavor::LocalSearchOnly);
+        assert!(bundle.catalog_text.contains("### `office_search`"));
+        assert!(!bundle.catalog_text.contains("### `write`"));
+        assert!(
+            bundle.catalog_chars() < 10_000,
+            "first local search repair should keep the compact catalog; got {} chars",
+            bundle.catalog_chars()
+        );
+    }
+
+    #[test]
     fn required_file_lookup_creation_text_uses_local_search_catalog() {
         let request = "キャッシュフロー計算書を作成する際に必要なファイルを教えて";
         let repair = build_tool_protocol_repair_input(request, request, 1);
