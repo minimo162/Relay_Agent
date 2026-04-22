@@ -91,6 +91,7 @@ pub(crate) fn rg_files(cwd: &Path, options: RgFilesOptions<'_>) -> io::Result<Op
         .arg("--no-config")
         .arg("--files")
         .arg("--glob=!.git/*");
+    apply_default_ignore_globs(&mut command);
     apply_common_args(&mut command, options.hidden, options.follow, options.max_depth);
     for glob in options.globs {
         command.arg(format!("--glob={glob}"));
@@ -148,6 +149,7 @@ pub(crate) fn rg_search(
         .arg("--json")
         .arg("--glob=!.git/*")
         .arg("--no-messages");
+    apply_default_ignore_globs(&mut command);
     apply_common_args(&mut command, options.hidden, options.follow, options.max_depth);
     if let Some(max_count) = options.max_count.filter(|value| *value > 0) {
         command.arg(format!("--max-count={max_count}"));
@@ -242,6 +244,57 @@ fn apply_common_args(
     }
     if let Some(max_depth) = max_depth {
         command.arg(format!("--max-depth={max_depth}"));
+    }
+}
+
+fn apply_default_ignore_globs(command: &mut Command) {
+    // Keep Relay's low-level search behavior close to opencode's rg-backed
+    // file tools: include hidden files when requested, but skip bulky generated
+    // trees that rarely contain source evidence and often dominate broad walks.
+    const IGNORED_DIRS: &[&str] = &[
+        ".git",
+        ".svn",
+        ".hg",
+        "node_modules",
+        "bower_components",
+        ".pnpm-store",
+        "vendor",
+        "dist",
+        "build",
+        "out",
+        ".next",
+        "target",
+        "bin",
+        "obj",
+        ".vscode",
+        ".idea",
+        ".turbo",
+        ".output",
+        ".cache",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".gradle",
+    ];
+    const IGNORED_FILES: &[&str] = &[
+        "**/*.swp",
+        "**/*.swo",
+        "**/*.pyc",
+        "**/.DS_Store",
+        "**/Thumbs.db",
+        "**/logs/**",
+        "**/tmp/**",
+        "**/temp/**",
+        "**/*.log",
+        "**/coverage/**",
+        "**/.nyc_output/**",
+    ];
+
+    for dir in IGNORED_DIRS {
+        command.arg(format!("--glob=!**/{dir}/**"));
+    }
+    for pattern in IGNORED_FILES {
+        command.arg(format!("--glob=!{pattern}"));
     }
 }
 

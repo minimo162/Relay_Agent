@@ -725,6 +725,39 @@ fn infer_office_search_pattern_for_search_request(text: &str) -> Option<String> 
     expanded_search_terms_for_request(text).into_iter().next()
 }
 
+fn infer_office_search_pattern_and_regex_for_search_request(text: &str) -> Option<(String, bool)> {
+    let terms = expanded_search_terms_for_request(text);
+    let first = terms.first()?;
+    if terms.len() > 1 && should_use_office_search_term_batch(first) {
+        let pattern = terms
+            .iter()
+            .take(3)
+            .map(|term| regex_escape_literal(term))
+            .collect::<Vec<_>>()
+            .join("|");
+        return Some((pattern, true));
+    }
+    Some((first.clone(), false))
+}
+
+fn should_use_office_search_term_batch(first: &str) -> bool {
+    first.chars().count() <= 4 || first.chars().all(|ch| ch.is_ascii_alphanumeric())
+}
+
+fn regex_escape_literal(term: &str) -> String {
+    let mut escaped = String::new();
+    for ch in term.chars() {
+        if matches!(
+            ch,
+            '.' | '+' | '*' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '^' | '$' | '\\'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
+}
+
 fn is_cash_flow_search_request(text: &str) -> bool {
     let trimmed = text.trim();
     let lower = trimmed.to_ascii_lowercase();
@@ -1064,8 +1097,8 @@ fn office_search_paths_for_repair(latest_request: &str, path: Option<&str>) -> V
 }
 
 fn build_office_search_tool_call(latest_request: &str, path: Option<&str>) -> Value {
-    let pattern = infer_office_search_pattern_for_search_request(latest_request)
-        .unwrap_or_else(|| latest_request.trim().to_string());
+    let (pattern, regex) = infer_office_search_pattern_and_regex_for_search_request(latest_request)
+        .unwrap_or_else(|| (latest_request.trim().to_string(), false));
     let include_ext = office_search_include_ext_for_search_request(latest_request)
         .into_iter()
         .map(|ext| Value::String(ext.to_string()))
@@ -1076,6 +1109,7 @@ fn build_office_search_tool_call(latest_request: &str, path: Option<&str>) -> Va
         "input": {
             "pattern": pattern,
             "paths": office_search_paths_for_repair(latest_request, path),
+            "regex": regex,
             "-i": true,
             "include_ext": include_ext,
             "max_files": 80,
@@ -1138,7 +1172,7 @@ fn build_office_content_search_repair_input(
             "Search expansion repair.\n",
             "Relay has only executed filename/glob search for this local Office/PDF lookup. Filename candidates alone are not enough evidence for needed, related, or relevant document questions.\n",
             "Do not summarize from general accounting/domain knowledge and do not treat broad or truncated `glob` results as confirmed relevance.\n",
-            "Emit exactly one Relay `office_search` tool call now, using a concrete pattern derived from the user's request. Do not write prose before or after the JSON.\n\n",
+            "Emit exactly one Relay `office_search` tool call now, using concrete pattern terms derived from the user's request. For compact abbreviation+noun queries such as `CFS 精算表`, use `regex: true` with a small alternation instead of searching only the abbreviation. Do not write prose before or after the JSON.\n\n",
             "Expected JSON for the next reply:\n",
             "```json\n{expected_json}\n```\n\n",
             "{latest_request_marker}{latest_request}\n```\n\n",
@@ -1176,7 +1210,7 @@ fn build_search_tool_protocol_repair_input(
     let expected_payload = build_search_tool_payload(latest_request, pattern, path, true);
     let expected_json =
         serde_json::to_string_pretty(&expected_payload).unwrap_or_else(|_| "{}".to_string());
-    let search_instruction = "This is a local file/document search request. Emit exactly one Relay local search tool call now: use `glob` for filenames, `grep` for plaintext/code contents, or `office_search` for Office/PDF contents.";
+    let search_instruction = "This is a local file/document search request. Emit exactly one Relay local search tool call now: use `glob` for filenames, `grep` for plaintext/code contents, or `office_search` for Office/PDF contents. For abbreviation+noun Office/PDF queries such as `CFS 精算表`, use `office_search` with `regex: true` and a small alternation.";
     format!(
         concat!(
             "Tool protocol repair.\n",

@@ -597,9 +597,9 @@ fn cdp_tool_use_when(name: &str) -> &'static str {
         "read" => "Use for grounded inspection, PDF/Office reading, or before editing an existing file.",
         "write" => "Use when creating a new target file or replacing a file with fully known content.",
         "edit" => "Use after reading the file when you need a targeted text replacement.",
-        "glob" => "Use for filename/path expansion or when the user gives a concrete glob. Keep one glob call to one simple pattern; avoid large brace fan-out on remote or broad workspaces.",
+        "glob" => "Use for filename/path expansion or when the user gives a concrete glob. Keep one glob call to one simple pattern; avoid large brace fan-out on remote or broad workspaces. Results are newest-first and may be truncated, so narrow the path or pattern when needed.",
         "grep" => "Use for concrete identifier, string, or regex searches before reading/editing code or text candidates. Use `include` for file filters such as `*.js` or `*.{ts,tsx}`.",
-        "office_search" => "Use for Office/PDF content discovery, including needed-file or related-file questions; derive a literal search term from the user request and set `regex: true` only when a real regex is needed.",
+        "office_search" => "Use for Office/PDF content discovery, including needed-file or related-file questions; derive concrete search terms from the user request. For abbreviation+noun queries such as `CFS 精算表`, use `regex: true` with a small alternation like `CFS|精算表` instead of searching only the abbreviation.",
         "git_status" => "Use for a quick change overview when the task depends on current git state.",
         "git_diff" => "Use when you need to inspect exact code changes already present in the workspace.",
         "pdf_merge" => "Use when the user explicitly wants to combine PDF files in the workspace.",
@@ -625,7 +625,7 @@ fn cdp_tool_avoid_when(name: &str) -> &'static str {
         "edit" => "Avoid when the file does not exist or when replacing the full file would be simpler.",
         "glob" => "Avoid when the exact file path is already known and no broader candidate search is needed.",
         "grep" => "Avoid when the exact file path is already known and a direct `read` is enough.",
-        "office_search" => "Avoid for plaintext source files; use `grep` there. Do not use it as semantic ranking without a concrete search pattern.",
+        "office_search" => "Avoid for plaintext source files; use `grep` there. Do not use it as semantic ranking without a concrete search pattern, and do not treat truncated broad results as complete evidence.",
         "git_status" => "Avoid when the task is pure file reading or editing with no git-state dependency.",
         "git_diff" => "Avoid when you only need the current file contents rather than a diff.",
         "pdf_merge" => "Avoid using bash for PDF merge when this dedicated tool applies.",
@@ -820,7 +820,7 @@ fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "office_search",
-            description: "Search extracted text across .docx, .xlsx, .xlsm, .pptx, and .pdf files. Use this before answering local Office/PDF lookup requests, including questions about needed, related, relevant, or available files. Defaults to literal substring search; set regex=true for regex patterns. No semantic ranking. Results include path, anchor, match offsets, and preview. Extraction omits unsupported embedded image/chart/SmartArt text.",
+            description: "Search extracted text across .docx, .xlsx, .xlsm, .pptx, and .pdf files. Use this before answering local Office/PDF lookup requests, including questions about needed, related, relevant, or available files. Defaults to literal substring search; set regex=true for regex patterns or small alternations such as `CFS|精算表`. No semantic ranking. Results include path, anchor, match offsets, preview, and truncation metadata. Extraction omits unsupported embedded image/chart/SmartArt text.",
             input_schema: json!({
                 "type": "object",
                 "properties": {

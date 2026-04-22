@@ -705,7 +705,7 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
     let started = Instant::now();
     let wall = Duration::from_secs(env_u64("RELAY_OFFICE_SEARCH_MAX_WALL_SECS", 600, 10, 3600));
     let expansion_candidate_cap = office_candidate_expansion_cap(max_files);
-    let expansion = expand_office_candidates_with_cap(
+    let expansion = expand_office_candidates_for_search(
         &input.paths,
         &include_ext,
         max_files,
@@ -713,14 +713,19 @@ pub fn office_search(input: &OfficeSearchInput) -> io::Result<OfficeSearchOutput
         started + wall,
     )?;
     let mut candidates = expansion.candidates;
+    let discovered_candidate_count = candidates.len();
     sort_candidates_by_path_relevance(&mut candidates, &regex);
-    let candidate_count = candidates.len();
+    let mut files_truncated = expansion.files_truncated;
+    if candidates.len() > max_files {
+        files_truncated = true;
+        candidates.truncate(max_files);
+    }
+    let candidate_count = discovered_candidate_count;
     let candidate_sample = candidates
         .iter()
         .take(10)
         .map(|path| path.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
-    let files_truncated = expansion.files_truncated;
     let mut errors = expansion.errors;
     let mut wall_clock_truncated = expansion.wall_clock_truncated;
 
@@ -1088,6 +1093,41 @@ fn expand_office_candidates_with_cap(
     expansion_cap: usize,
     deadline: Instant,
 ) -> io::Result<CandidateExpansion> {
+    expand_office_candidates_with_cap_inner(
+        paths,
+        include_ext,
+        max_files,
+        expansion_cap,
+        deadline,
+        true,
+    )
+}
+
+fn expand_office_candidates_for_search(
+    paths: &[String],
+    include_ext: &BTreeSet<String>,
+    max_files: usize,
+    expansion_cap: usize,
+    deadline: Instant,
+) -> io::Result<CandidateExpansion> {
+    expand_office_candidates_with_cap_inner(
+        paths,
+        include_ext,
+        max_files,
+        expansion_cap,
+        deadline,
+        false,
+    )
+}
+
+fn expand_office_candidates_with_cap_inner(
+    paths: &[String],
+    include_ext: &BTreeSet<String>,
+    max_files: usize,
+    expansion_cap: usize,
+    deadline: Instant,
+    truncate_to_max_files: bool,
+) -> io::Result<CandidateExpansion> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
     let mut errors = Vec::new();
@@ -1194,8 +1234,10 @@ fn expand_office_candidates_with_cap(
         }
     }
     sort_candidates_by_modified_desc(&mut out);
-    files_truncated |= out.len() > max_files;
-    out.truncate(max_files);
+    if truncate_to_max_files {
+        files_truncated |= out.len() > max_files;
+        out.truncate(max_files);
+    }
     Ok(CandidateExpansion {
         candidates: out,
         errors,
@@ -1834,6 +1876,38 @@ mod tests {
 
         assert_eq!(candidates[0], old_relevant);
         assert_eq!(candidates[1], new_irrelevant);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn office_search_ranks_path_relevance_before_max_files_cutoff() {
+        let root = test_dir();
+        let old_relevant = root.join("old_target_report.xlsx");
+        let new_irrelevant = root.join("new_report.xlsx");
+        fs::write(&old_relevant, b"not a real workbook").expect("write old relevant");
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(&new_irrelevant, b"not a real workbook").expect("write new irrelevant");
+        let pattern = root.join("*.xlsx").to_string_lossy().into_owned();
+
+        let output = office_search(&OfficeSearchInput {
+            pattern: "target".to_string(),
+            paths: vec![pattern],
+            regex: None,
+            include_ext: Some(vec![String::from("xlsx")]),
+            case_insensitive: None,
+            context: Some(20),
+            max_results: Some(1),
+            max_files: Some(1),
+        })
+        .expect("office search");
+
+        assert!(output.files_truncated);
+        assert_eq!(output.candidate_count, 2);
+        assert_eq!(output.files_scanned, 0);
+        assert_eq!(output.results.len(), 1);
+        assert_eq!(output.results[0].path, fs::canonicalize(&old_relevant).unwrap().to_string_lossy());
+        assert_eq!(output.results[0].anchor, "path");
 
         let _ = fs::remove_dir_all(root);
     }

@@ -8397,6 +8397,58 @@ Results:
 - `pnpm check`: passed.
 - `git diff --check`: passed.
 
+## 2026-04-22 - Agentic search truncation and Office query repair
+
+Improved the agentic search path after a CDP log showed Copilot first using an
+M365 `office365_search` action and then narrowing Relay `office_search` to only
+`CFS`, causing a broad shared-folder scan to hit file/result truncation. Relay
+now keeps the opencode-style low-level `glob` / `grep` / `office_search` model
+but applies the same kind of rg-backed default ignore set for generated folders
+and temporary output. Office search candidate expansion now gathers up to the
+expansion cap, ranks candidates by path relevance to the search pattern, and
+only then applies `max_files`, so an older path-relevant workbook is not dropped
+just because newer unrelated Office files exist.
+
+Search repair and CDP catalog guidance now call out abbreviation+noun document
+queries such as `CFS 精算表`: use `office_search` with a small `regex:true`
+alternation (`CFS|精算表`) instead of searching only the first abbreviation.
+Truncated broad search results are explicitly treated as incomplete discovery
+evidence that should be narrowed or expanded with `read` before conclusions.
+CDP follow-up rendering for `glob` / `grep` is also closer to opencode's
+model-facing output: empty glob returns `No files found` plus Relay's
+filename-only scope note, and grep matches are grouped by file with
+`Line N:` rows instead of raw `path:line:text` JSON content.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime office_search_ranks_path_relevance_before_max_files_cutoff
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop office_lookup
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop local_office_search_plan
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop required_file_lookup
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime office::tests::
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools cdp
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop catalog_lists_builtin_tools_and_protocol
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop required_file_lookup_initial_prompt_requires_search_before_general_answer
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop grep_result_is_rendered_in_opencode_style_for_cdp_followup
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop empty_glob_result_is_labeled_as_filename_only_miss
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test ... -p runtime office_search_ranks_path_relevance_before_max_files_cutoff`: passed, 1 passed.
+- `cargo test ... -p relay-agent-desktop office_lookup`: passed, 2 passed.
+- `cargo test ... -p relay-agent-desktop local_office_search_plan`: passed, 1 passed.
+- `cargo test ... -p relay-agent-desktop required_file_lookup`: passed, 3 passed.
+- `cargo test ... -p runtime office::tests::`: passed, 14 passed.
+- `cargo test ... -p tools cdp`: passed, 8 passed.
+- `cargo test ... -p relay-agent-desktop catalog_lists_builtin_tools_and_protocol`: passed, 1 passed.
+- `cargo test ... -p relay-agent-desktop required_file_lookup_initial_prompt_requires_search_before_general_answer`: passed, 1 passed.
+- `cargo test ... -p relay-agent-desktop grep_result_is_rendered_in_opencode_style_for_cdp_followup`: passed, 1 passed.
+- `cargo test ... -p relay-agent-desktop empty_glob_result_is_labeled_as_filename_only_miss`: passed, 1 passed.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`

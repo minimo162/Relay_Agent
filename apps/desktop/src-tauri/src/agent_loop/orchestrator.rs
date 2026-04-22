@@ -1741,12 +1741,12 @@ const CDP_RELAY_RUNTIME_CATALOG_LEAD: &str = r#"## CDP session: you are Relay Ag
 - **Exact path:** If the latest user message gives an exact file path, prefer `read` directly.
 - **Local file lookup means Relay tools only:** If the user asks which files are needed, required, related, relevant, or available for a task (including Japanese `必要なファイル`, `関連ファイル`, `関係するファイル`, `ファイルを教えて`), treat it as a local file search request. Do **not** answer from general/domain knowledge first; use `glob`, `grep`, or `office_search`.
 - **Initial lookup reply format:** When the latest user request is a local file/document lookup and there are no Relay Tool Result blocks for that lookup yet, the entire assistant reply must be exactly one fenced `relay_tool` or `json` block. Do not write `はい、...を検索します`, do not cite `turn*search*`, do not output `<File>...</File>` cards, and do not list candidate files from M365 before Relay tools run.
-- **Search tool selection:** Use `glob` for simple file name/path expansion, `grep` for text/code content, and `office_search` for `.docx` / `.xlsx` / `.xlsm` / `.pptx` / `.pdf` content. Keep `glob` opencode-style: one call, one simple pattern. Do not combine many keywords and many extensions into one large brace-expanded glob on remote or broad workspaces.
+- **Search tool selection:** Use `glob` for simple file name/path expansion, `grep` for text/code content, and `office_search` for `.docx` / `.xlsx` / `.xlsm` / `.pptx` / `.pdf` content. Keep `glob` opencode-style: one call, one simple pattern. Do not combine many keywords and many extensions into one large brace-expanded glob on remote or broad workspaces. If the user gives a compact abbreviation plus a Japanese/English noun, such as `CFS 精算表`, search both terms with `office_search` (`regex:true`, pattern like `CFS|精算表`) instead of using only the abbreviation.
 - **Evidence expansion before judgments:** Search snippets are discovery evidence. Before making important conclusions, reviews, edits, comparisons, or recommendations about a file, call `read` on the relevant path(s) and ground the answer in that file text. If you have not read the file, describe the result as a candidate only.
 - **Authoritative evidence:** If search snippets and `read` content conflict, the `read` Tool Result is authoritative.
 - **Grounded final answer:** After `read`, include the evidence path and line anchor/startLine when making file-specific conclusions.
 - **Query-driven lookup variants:** For document lookup requests, derive filename globs and Office/PDF search patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. Prefer query-specific globs before broad `**/*` scans, and treat newer matching files as stronger candidates when relevance is otherwise similar.
-- **Search iteration:** For open-ended lookup, do not front-load a large fixed search batch. Start with one or two concrete `glob` / `grep` / `office_search` calls. Keep each search concrete and narrow enough to be useful; prefer `office_search` over a broad Office/PDF filename glob when content relevance is required.
+- **Search iteration:** For open-ended lookup, do not front-load a large fixed search batch. Start with one or two concrete `glob` / `grep` / `office_search` calls. Keep each search concrete and narrow enough to be useful; prefer `office_search` over a broad Office/PDF filename glob when content relevance is required. When a search result is truncated, narrow the path or pattern before drawing conclusions; do not treat the first truncated page as complete evidence.
 - Do **not** ask the user to “provide the concrete next step” or **restate** a task they already gave.
 - **Path discipline:** If the latest user turn names a concrete path (absolute path, relative path, or bare filename with an extension), use that exact string in tool input. Do **not** rewrite it to a different directory from a prior turn. Treat bare filenames with an extension as workspace-root-relative unless the user gave another base.
 - **This turn, not “next message”:** Do **not** defer all tools to a follow-up assistant message when the current turn can already run `read` / `write` / `edit`.
@@ -1794,7 +1794,7 @@ M365 Copilot built-in results are outside the Relay tool protocol. Do not satisf
 - named new file create => `write`
 - local file lookup / needed files / related files => `glob` / `grep` / `office_search`; for Office/PDF relevance, prefer `office_search` over a broad filename glob; do not answer from general knowledge before tools
 - codebase search/investigation => `grep` / `glob`, then `read` the top candidate(s) before important conclusions or changes
-- open-ended search => start with one or two narrow opencode-style `glob` / `grep` / `office_search` calls in a `relay_tool` array
+- open-ended search => start with one or two narrow opencode-style `glob` / `grep` / `office_search` calls in a `relay_tool` array; batch complementary terms when useful, but keep each call narrow
 - concrete path + concrete action already present => call the tool now, not a plan or checklist
 
 {rendered_tools}
@@ -3044,17 +3044,14 @@ fn summarize_glob_tool_result(output: &str) -> Option<String> {
         .unwrap_or("(unknown)");
     Some(format!(
         concat!(
-            "glob filename pattern matches: 0\n",
+            "No files found\n",
             "pattern: {}\n",
             "base_dir: {}\n",
             "search_pattern: {}\n",
             "scope_note: this is only a filename/glob-pattern miss; it does not mean grep or office_search found no relevant content.\n",
             "truncated: {}"
         ),
-        pattern,
-        base_dir,
-        search_pattern,
-        truncated
+        pattern, base_dir, search_pattern, truncated
     ))
 }
 
@@ -3075,7 +3072,7 @@ fn summarize_grep_tool_result(output: &str) -> Option<String> {
     let truncated = object
         .get("appliedLimit")
         .or_else(|| object.get("applied_limit"))
-        .is_some();
+        .is_some_and(|value| !value.is_null());
     if matches == 0 {
         return Some("No files found".to_string());
     }
@@ -3089,7 +3086,7 @@ fn summarize_grep_tool_result(output: &str) -> Option<String> {
     )];
     if let Some(content) = object.get("content").and_then(Value::as_str) {
         if !content.is_empty() {
-            lines.push(content.to_string());
+            lines.extend(format_opencode_grep_content(content));
         }
     } else if let Some(filenames) = object.get("filenames").and_then(Value::as_array) {
         lines.extend(
@@ -3100,6 +3097,50 @@ fn summarize_grep_tool_result(output: &str) -> Option<String> {
         );
     }
     Some(lines.join("\n"))
+}
+
+fn format_opencode_grep_content(content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current_path = String::new();
+    for line in content.lines() {
+        let Some((path, line_number, text)) = parse_grep_content_line(line) else {
+            out.push(line.to_string());
+            continue;
+        };
+        if current_path != path {
+            if !current_path.is_empty() {
+                out.push(String::new());
+            }
+            current_path = path.to_string();
+            out.push(format!("{path}:"));
+        }
+        out.push(format!("  Line {line_number}: {text}"));
+    }
+    out
+}
+
+fn parse_grep_content_line(line: &str) -> Option<(&str, &str, &str)> {
+    for (first_colon, _) in line.match_indices(':') {
+        let after_first = &line[first_colon + 1..];
+        let digit_len = after_first
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .map(char::len_utf8)
+            .sum::<usize>();
+        if digit_len == 0 {
+            continue;
+        }
+        if !after_first[digit_len..].starts_with(':') {
+            continue;
+        }
+        let second_colon = first_colon + 1 + digit_len;
+        return Some((
+            &line[..first_colon],
+            &line[first_colon + 1..second_colon],
+            &line[second_colon + 1..],
+        ));
+    }
+    None
 }
 
 fn summarize_office_search_tool_result(output: &str) -> Option<String> {
@@ -4224,7 +4265,7 @@ pub fn build_desktop_system_prompt(goal: &str, cwd: Option<&str>) -> Vec<String>
                 "- For local file lookup requests, use small rg-backed glob/grep calls for fast candidate paths or plaintext/code contents, and office_search for Office/PDF contents. Questions like `必要なファイル`, `関連ファイル`, `関係するファイル`, or `ファイルを教えて` are lookup requests, not invitations for generic domain checklists.\n",
                 "- If the user gives an exact file path, prefer read directly.\n",
                 "- Treat search snippets as discovery evidence. Before important conclusions, reviews, edits, comparisons, or recommendations, read the top candidate path(s); otherwise describe matches as candidates only. If snippets conflict with read, read is authoritative. After read, cite evidence path and line anchor/startLine when available.\n",
-                "- For document lookup requests, derive simple filename globs and Office/PDF patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. Avoid large brace-expanded glob fan-out; use office_search for Office/PDF content relevance, and prefer newer matching files when relevance is otherwise similar.\n",
+                "- For document lookup requests, derive simple filename globs and Office/PDF patterns from the user's concrete words, abbreviations, quoted filenames, and path fragments. For compact abbreviation+noun queries such as `CFS 精算表`, search both terms with office_search (`regex:true`, alternation pattern) instead of only the abbreviation. Avoid large brace-expanded glob fan-out; use office_search for Office/PDF content relevance, and prefer newer matching files when relevance is otherwise similar.\n",
                 "- If the user's request is already concrete (paths, files, stated action), use tools in your first response; do not ask them to rephrase unless something essential is missing.\n",
                 "- To combine or split PDF files, use pdf_merge / pdf_split (workspace write); do not use bash for that."
             ),
@@ -4914,12 +4955,33 @@ mod cdp_copilot_tool_tests {
         .expect("serialize glob output");
 
         let rendered = format_cdp_tool_result("glob", &output, false);
-        assert!(rendered.contains("glob filename pattern matches: 0"));
+        assert!(rendered.contains("No files found"));
         assert!(rendered.contains("pattern: **/*CFS*"));
         assert!(rendered.contains("base_dir: C:\\Users\\m242054\\Relay_Agent"));
         assert!(rendered.contains("filename/glob-pattern miss"));
         assert!(rendered.contains("does not mean grep or office_search"));
         assert!(!rendered.contains(r#""filenames":[]"#));
+    }
+
+    #[test]
+    fn grep_result_is_rendered_in_opencode_style_for_cdp_followup() {
+        let output = serde_json::to_string(&json!({
+            "mode": "content",
+            "numFiles": 2,
+            "filenames": ["/workspace/src/lib.rs", "C:\\workspace\\src\\main.rs"],
+            "content": "/workspace/src/lib.rs:12:let alpha = 1;\n/workspace/src/lib.rs:18:let alpha = 2;\nC:\\workspace\\src\\main.rs:4:alpha();",
+            "numLines": 3,
+            "appliedLimit": null,
+            "appliedOffset": null
+        }))
+        .expect("serialize grep output");
+
+        let rendered = format_cdp_tool_result("grep", &output, false);
+        assert!(rendered.contains("Found 3 matches"));
+        assert!(rendered.contains("/workspace/src/lib.rs:\n  Line 12: let alpha = 1;"));
+        assert!(rendered.contains("  Line 18: let alpha = 2;"));
+        assert!(rendered.contains("C:\\workspace\\src\\main.rs:\n  Line 4: alpha();"));
+        assert!(!rendered.contains("/workspace/src/lib.rs:12:let alpha"));
     }
 
     #[test]
