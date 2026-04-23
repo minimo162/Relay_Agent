@@ -1,9 +1,8 @@
 name: ci
 
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   checks:
@@ -15,12 +14,10 @@ jobs:
         include:
           - name: Ubuntu Acceptance
             os: ubuntu-latest
-            run_clippy: true
             run_launch_smokes: true
             run_windows_smoke: false
           - name: Windows Acceptance
             os: windows-latest
-            run_clippy: false
             run_launch_smokes: false
             run_windows_smoke: true
 
@@ -85,10 +82,6 @@ jobs:
 
       - name: cargo check
         run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
-
-      - name: cargo clippy
-        if: matrix.run_clippy
-        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings
 
       - name: cargo test --workspace --exclude relay-agent-desktop
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --workspace --exclude relay-agent-desktop

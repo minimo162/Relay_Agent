@@ -209,8 +209,9 @@ mod parity_style {
         .expect("grep");
 
         assert!(out.contains("agentic_search_flow"), "{out}");
-        assert!(out.contains("src/search.rs"), "{out}");
-        assert!(!out.contains("target/debug/noise.rs"), "{out}");
+        let normalized = out.replace('\\', "/");
+        assert!(normalized.contains("src/search.rs"), "{out}");
+        assert!(!normalized.contains("target/debug/noise.rs"), "{out}");
 
         std::env::set_current_dir(original_dir).expect("restore cwd");
         let _ = fs::remove_dir_all(&dir);
