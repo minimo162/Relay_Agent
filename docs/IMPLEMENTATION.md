@@ -15,6 +15,30 @@
 
 ## Milestone Log
 
+### 2026-04-23 Office/PDF extraction reuse speedup
+
+Reviewed the Office/PDF search path after the compact active-catalog changes.
+The runtime already had an on-disk extraction cache, but same-process follow-up
+steps still re-read and deserialize the JSON cache for files already extracted
+by the current agent loop.
+
+Changes:
+
+- Added a process-local extracted document cache keyed by normalized path hash,
+  mtime, and size. `office_search` and `read_file` now share parsed Office/PDF
+  payloads within the same desktop process after the first extraction.
+- Kept the existing disk cache and extraction timeout behavior intact; cache
+  misses still flow through the same guarded extractor.
+- Added `RELAY_OFFICE_MEMORY_CACHE_MAX_ENTRIES` with a default of 128 cached
+  documents to bound memory use during broad Office/PDF searches.
+
+Verification:
+
+- `cargo fmt --all --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime office_memory_cache_round_trips_extracted_doc -- --nocapture`: passed, 1 passed.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p runtime office_search -- --nocapture`: passed, 9 passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+
 ### 2026-04-23 CI trigger and failing check cleanup
 
 Reviewed failing GitHub Actions runs after direct pushes to `main`.

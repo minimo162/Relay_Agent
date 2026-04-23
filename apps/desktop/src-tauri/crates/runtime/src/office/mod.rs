@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
@@ -1400,6 +1400,41 @@ struct CacheRecord {
     anchors: Vec<AnchoredText>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct OfficeMemoryCacheKey {
+    path_hash: String,
+    mtime_sec: u64,
+    mtime_nsec: u32,
+    size: u64,
+}
+
+fn office_memory_cache() -> &'static Mutex<HashMap<OfficeMemoryCacheKey, ParsedDoc>> {
+    static CACHE: OnceLock<Mutex<HashMap<OfficeMemoryCacheKey, ParsedDoc>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn office_memory_cache_max_entries() -> usize {
+    env_usize("RELAY_OFFICE_MEMORY_CACHE_MAX_ENTRIES", 128, 1, 4_096)
+}
+
+fn lookup_memory_cached_doc(key: &OfficeMemoryCacheKey) -> Option<ParsedDoc> {
+    office_memory_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(key)
+        .cloned()
+}
+
+fn remember_memory_cached_doc(key: OfficeMemoryCacheKey, parsed: &ParsedDoc) {
+    let mut cache = office_memory_cache()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if cache.len() >= office_memory_cache_max_entries() {
+        cache.clear();
+    }
+    cache.insert(key, parsed.clone());
+}
+
 #[allow(clippy::similar_names)]
 fn load_or_extract(path: &Path) -> io::Result<ParsedDoc> {
     let canonical = fs::canonicalize(path)?;
@@ -1407,6 +1442,15 @@ fn load_or_extract(path: &Path) -> io::Result<ParsedDoc> {
     let (modified_sec, modified_nsec) = modified_parts(&metadata)?;
     let size = metadata.len();
     let path_hash = path_hash(&canonical);
+    let memory_key = OfficeMemoryCacheKey {
+        path_hash: path_hash.clone(),
+        mtime_sec: modified_sec,
+        mtime_nsec: modified_nsec,
+        size,
+    };
+    if let Some(parsed) = lookup_memory_cached_doc(&memory_key) {
+        return Ok(parsed);
+    }
     let path_bytes = os_native_path_bytes(&normalize_cache_path(&canonical));
     let cache_path = cache_record_path(&path_hash);
 
@@ -1419,11 +1463,13 @@ fn load_or_extract(path: &Path) -> io::Result<ParsedDoc> {
                     && record.mtime_nsec == modified_nsec
                     && record.size == size
                 {
-                    return Ok(ParsedDoc {
+                    let parsed = ParsedDoc {
                         source: canonical,
                         format: record.format,
                         anchors: record.anchors,
-                    });
+                    };
+                    remember_memory_cached_doc(memory_key, &parsed);
+                    return Ok(parsed);
                 }
                 if record.schema_version == CACHE_SCHEMA_VERSION
                     && record_source_bytes(&record).as_deref() == Some(path_bytes.as_slice())
@@ -1443,11 +1489,13 @@ fn load_or_extract(path: &Path) -> io::Result<ParsedDoc> {
                                 "office cache refresh write failed"
                             );
                         }
-                        return Ok(ParsedDoc {
+                        let parsed = ParsedDoc {
                             source: canonical,
                             format: updated.format,
                             anchors: updated.anchors,
-                        });
+                        };
+                        remember_memory_cached_doc(memory_key, &parsed);
+                        return Ok(parsed);
                     }
                 }
             } else {
@@ -1485,6 +1533,7 @@ fn load_or_extract(path: &Path) -> io::Result<ParsedDoc> {
             }
         }
     }
+    remember_memory_cached_doc(memory_key, &parsed);
     Ok(parsed)
 }
 
@@ -1801,6 +1850,36 @@ mod tests {
             office_rg_globs("**/*", &include_ext),
             vec![String::from("**/*.xlsm")]
         );
+    }
+
+    #[test]
+    fn office_memory_cache_round_trips_extracted_doc() {
+        let key = OfficeMemoryCacheKey {
+            path_hash: String::from("cache-key-for-test"),
+            mtime_sec: 1,
+            mtime_nsec: 2,
+            size: 3,
+        };
+        let parsed = ParsedDoc {
+            source: PathBuf::from("/tmp/report.docx"),
+            format: DocFormat::Docx,
+            anchors: vec![AnchoredText {
+                anchor: String::from("p1"),
+                text: String::from("cached body"),
+            }],
+        };
+        office_memory_cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+
+        remember_memory_cached_doc(key.clone(), &parsed);
+
+        assert_eq!(lookup_memory_cached_doc(&key), Some(parsed));
+        office_memory_cache()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     #[test]
