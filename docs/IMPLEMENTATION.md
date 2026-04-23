@@ -8722,6 +8722,94 @@ Results:
 - `pnpm --filter @relay-agent/desktop typecheck`: passed.
 - `pnpm check`: passed.
 
+## 2026-04-23 - Office search repair path normalization
+
+Aligned the Copilot local-search repair path shape with opencode's structured
+tool-call approach: Relay now keeps `office_search.paths` as search roots or
+explicit user-provided files/globs, while extension filtering stays in
+`include_ext`. The repair builder no longer expands a directory or missing path
+into separate `**/*.docx` / `**/*.xlsx` / `**/*.pdf` globs. This addresses the
+bad repair shape seen in the M365 Copilot CDP run where broad Office lookups
+became slow, over-narrowed extension globs. The LocalSearchOnly prompt example
+was updated to show `paths:["reports/**"]` with `include_ext` rather than an
+extension-specific glob.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop office_search_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop workspace_enforcement_normalizes_office_search_paths -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop local_office -- --nocapture
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test ... office_search_repair`: passed, 4 passed.
+- `cargo test ... workspace_enforcement_normalizes_office_search_paths`: passed, 1 passed.
+- `cargo test ... local_office`: passed, 1 passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
+- `git diff --check`: passed.
+
+## 2026-04-23 - OpenAI-compatible tool-call normalization
+
+Reduced another Relay-specific repair path by normalizing OpenAI-style
+tool-call envelopes directly in the CDP parser. Replies such as
+`{"tool_uses":[{"recipient_name":"functions.glob","parameters":{...}}]}` and
+OpenAI `tool_calls[].function.arguments` are now converted to Relay tool calls
+only when the resolved tool name is already in the advertised Relay catalog.
+Unknown external tools, including `functions.office365_search`, are mapped to a
+hidden `invalid` tool result instead of being translated into Relay tools. This
+mirrors opencode's narrow structural tool repair pattern more closely than
+asking Copilot for a broad natural-language protocol repair. As in opencode's
+`activeTools` filtering, the hidden `invalid` tool is not accepted when Copilot
+calls it directly; it is only emitted by Relay's parser repair path. Tool-only
+CDP responses also no longer get restored as visible assistant text after
+successful parsing.
+
+Verification commands run locally:
+
+```bash
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop openai_style -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop openai_function -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core openai_style -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core openai_function -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop invalid_tool -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core invalid_tool -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop sentinel -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p desktop-core sentinel -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p relay-agent-desktop office_search_repair -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools invalid_tool -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools exposes_mvp_tools -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools tool_metadata_matches_existing_behavior -- --nocapture
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -p tools required_permission_for_surface_preserves_current_policy -- --nocapture
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+git diff --check
+```
+
+Results:
+
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed.
+- `cargo test ... relay-agent-desktop openai_style`: passed, 2 passed.
+- `cargo test ... relay-agent-desktop openai_function`: passed, 1 passed.
+- `cargo test ... desktop-core openai_style`: passed, 2 passed.
+- `cargo test ... desktop-core openai_function`: passed, 1 passed.
+- `cargo test ... relay-agent-desktop invalid_tool`: passed, 1 passed.
+- `cargo test ... desktop-core invalid_tool`: passed, 1 passed.
+- `cargo test ... relay-agent-desktop sentinel`: passed, 9 passed.
+- `cargo test ... desktop-core sentinel`: passed, 7 passed.
+- `cargo test ... office_search_repair`: passed, 4 passed.
+- `cargo test ... tools invalid_tool`: passed, 1 passed.
+- `cargo test ... tools exposes_mvp_tools`: passed, 1 passed.
+- `cargo test ... tools tool_metadata_matches_existing_behavior`: passed, 1 passed.
+- `cargo test ... tools required_permission_for_surface_preserves_current_policy`: passed, 1 passed.
+- `cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check`: passed.
+- `git diff --check`: passed.
+
 ## 2026-04-20 - Local search budget summary repair
 
 Fixed a local file search loop where Copilot could keep emitting `glob_search`

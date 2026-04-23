@@ -1074,26 +1074,20 @@ fn build_grep_tool_call(pattern: &str, path: Option<&str>) -> Value {
     })
 }
 
-fn office_search_paths_for_repair(latest_request: &str, path: Option<&str>) -> Vec<Value> {
+fn office_search_paths_for_repair(_latest_request: &str, path: Option<&str>) -> Vec<Value> {
     if let Some(path) = path.map(str::trim).filter(|path| !path.is_empty()) {
         let lower = path.to_ascii_lowercase();
         if matches!(
             lower.rsplit('.').next(),
-            Some("docx" | "xlsx" | "pptx" | "pdf")
+            Some("docx" | "xlsx" | "xlsm" | "pptx" | "pdf")
         ) || path.contains(['*', '?', '[', ']', '{', '}'])
         {
             return vec![Value::String(path.to_string())];
         }
         let root = path.trim_end_matches(['/', '\\']);
-        return office_search_include_ext_for_search_request(latest_request)
-            .into_iter()
-            .map(|ext| Value::String(format!("{root}/**/*.{ext}")))
-            .collect();
+        return vec![Value::String(format!("{root}/**"))];
     }
-    office_search_include_ext_for_search_request(latest_request)
-        .into_iter()
-        .map(|ext| Value::String(format!("**/*.{ext}")))
-        .collect()
+    vec![Value::String("**".to_string())]
 }
 
 fn build_office_search_tool_call(latest_request: &str, path: Option<&str>) -> Value {
@@ -1942,4 +1936,51 @@ pub(crate) fn sleep_with_cancel(cancelled: &AtomicBool, duration: Duration) -> b
         remaining = remaining.saturating_sub(sleep_for);
     }
     !cancelled.load(Ordering::SeqCst)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn office_search_repair_uses_root_path_and_include_ext_filter() {
+        let payload = build_office_search_tool_call("キャッシュフロー計算書 CFS 精算表", None);
+        let input = payload
+            .get("input")
+            .and_then(Value::as_object)
+            .expect("office_search input");
+
+        assert_eq!(input.get("paths"), Some(&json!(["**"])));
+        assert_eq!(
+            input.get("include_ext"),
+            Some(&json!(["docx", "xlsx", "xlsm", "pptx", "pdf"]))
+        );
+    }
+
+    #[test]
+    fn office_search_repair_expands_directory_path_as_search_root() {
+        let payload = build_office_search_tool_call("CFS 精算表", Some("reports"));
+        let input = payload
+            .get("input")
+            .and_then(Value::as_object)
+            .expect("office_search input");
+
+        assert_eq!(input.get("paths"), Some(&json!(["reports/**"])));
+        assert_eq!(
+            input.get("include_ext"),
+            Some(&json!(["docx", "xlsx", "xlsm", "pptx", "pdf"]))
+        );
+    }
+
+    #[test]
+    fn office_search_repair_preserves_explicit_file_or_glob_paths() {
+        assert_eq!(
+            office_search_paths_for_repair("CFS", Some("reports/fy160.xlsm")),
+            vec![json!("reports/fy160.xlsm")]
+        );
+        assert_eq!(
+            office_search_paths_for_repair("CFS", Some("reports/**/*.xlsx")),
+            vec![json!("reports/**/*.xlsx")]
+        );
+    }
 }

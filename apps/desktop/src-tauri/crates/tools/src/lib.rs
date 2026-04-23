@@ -123,6 +123,11 @@ pub struct CdpPromptToolSpec {
 #[must_use]
 pub fn tool_metadata(name: &str) -> ToolMetadata {
     match name {
+        "invalid" => ToolMetadata {
+            tool_search_visible: false,
+            cdp_visibility: CdpToolVisibility::Hidden,
+            ..DEFAULT_TOOL_METADATA
+        },
         "read" => ToolMetadata {
             target_extractor: ApprovalTargetExtractor::PathLike,
             tool_search_visible: false,
@@ -709,6 +714,20 @@ fn compat_tool_surface_enabled() -> bool {
 #[allow(clippy::too_many_lines)]
 fn build_mvp_tool_specs(compat_mode: bool) -> Vec<ToolSpec> {
     let mut specs = vec![
+        ToolSpec {
+            name: "invalid",
+            description: "Internal hidden tool used to return structured errors for unknown or malformed provider tool calls. Do not call directly.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "tool": { "type": "string" },
+                    "error": { "type": "string" }
+                },
+                "required": ["tool", "error"],
+                "additionalProperties": false
+            }),
+            required_permission: PermissionMode::ReadOnly,
+        },
         ToolSpec {
             name: "bash",
             description: "Execute a shell command (sandboxed on supported hosts). A host **hard denylist** always blocks high-risk commands (e.g. `sudo`, `rm -r`/`rm -rf`/`rm -f`, `rmdir`, destructive `find`, `xargs rm`, `git config`/`push`/`commit`/`reset`/`rebase`, `brew install`, `chmod` with `777`) regardless of permission mode. When `.claw` is read-only, additional mutating commands (e.g. `cp`, `mv`) are rejected—claw-style guard. Prefer read/write/edit for file I/O when those tools apply.",
@@ -1585,6 +1604,7 @@ pub fn plan_mode_tool_json(entering: bool) -> Value {
 
 pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
     match name {
+        "invalid" => run_invalid(input),
         "bash" => from_value::<BashCommandInput>(input).and_then(run_bash),
         "read" => from_value::<ReadFileInput>(input).and_then(run_read),
         "write" => from_value::<WriteFileInput>(input).and_then(run_write),
@@ -1651,6 +1671,20 @@ pub fn execute_tool(name: &str, input: &Value) -> Result<String, String> {
         }),
         _ => Err(format!("unsupported tool: {name}")),
     }
+}
+
+fn run_invalid(input: &Value) -> Result<String, String> {
+    let tool = input
+        .get("tool")
+        .and_then(Value::as_str)
+        .unwrap_or("(unknown)");
+    let error = input
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown tool call error");
+    Ok(format!(
+        "The `{tool}` tool call is invalid in Relay Agent: {error}"
+    ))
 }
 
 fn run_lsp_tool(input: &Value) -> Result<String, String> {
@@ -4037,6 +4071,7 @@ mod tests {
             .into_iter()
             .map(|spec| spec.name)
             .collect::<Vec<_>>();
+        assert!(names.contains(&"invalid"));
         assert!(names.contains(&"bash"));
         assert!(names.contains(&"read"));
         assert!(names.contains(&"WebFetch"));
@@ -4075,6 +4110,10 @@ mod tests {
 
     #[test]
     fn tool_metadata_matches_existing_behavior() {
+        let invalid = tool_metadata("invalid");
+        assert!(!invalid.tool_search_visible);
+        assert_eq!(invalid.cdp_visibility, CdpToolVisibility::Hidden);
+
         let read = tool_metadata("read");
         assert_eq!(read.target_extractor, ApprovalTargetExtractor::PathLike);
         assert!(!read.tool_search_visible);
@@ -4083,7 +4122,7 @@ mod tests {
 
         let write = tool_metadata("write");
         assert_eq!(write.approval_title, Some("Create or overwrite a file?"));
-        assert_eq!(write.risky_fields, &["path"]);
+        assert_eq!(write.risky_fields, &["filePath", "path"]);
         assert!(!write.tool_search_visible);
         assert_eq!(write.cdp_visibility, CdpToolVisibility::Core);
 
@@ -4334,6 +4373,15 @@ mod tests {
             .expect("read spec");
         assert_eq!(
             required_permission_for_surface(read),
+            PermissionMode::ReadOnly
+        );
+
+        let invalid = specs
+            .iter()
+            .find(|spec| spec.name == "invalid")
+            .expect("invalid spec");
+        assert_eq!(
+            required_permission_for_surface(invalid),
             PermissionMode::ReadOnly
         );
 
@@ -5571,6 +5619,20 @@ mod tests {
             None => std::env::remove_var("CLAW_CONFIG_HOME"),
         }
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn invalid_tool_returns_model_visible_error_without_executor_failure() {
+        let result = execute_tool(
+            "invalid",
+            &json!({
+                "tool": "functions.office365_search",
+                "error": "tool is not in the Relay tool catalog"
+            }),
+        )
+        .expect("invalid tool should succeed with an error message");
+        assert!(result.contains("functions.office365_search"));
+        assert!(result.contains("not in the Relay tool catalog"));
     }
 
     #[test]

@@ -1294,7 +1294,10 @@ impl<R: Runtime> ApiClient for CdpApiClient<R> {
 
             let (mut visible_text, tool_calls) =
                 parse_copilot_tool_response(&response_text, parse_mode);
-            if visible_text.trim().is_empty() && !response_text.trim().is_empty() {
+            if visible_text.trim().is_empty()
+                && tool_calls.is_empty()
+                && !response_text.trim().is_empty()
+            {
                 visible_text = response_text.trim().to_string();
             }
             let visible_text = sanitize_copilot_visible_text(&visible_text);
@@ -1652,7 +1655,7 @@ For the initial lookup reply, output exactly one fenced `relay_tool` or `json` b
 Example:
 
 ```relay_tool
-{{"name":"office_search","relay_tool_call":true,"input":{{"pattern":"CFS|精算表","regex":true,"paths":["reports/**/*.xlsx"],"include_ext":["xlsx","pdf"]}}}}
+{{"name":"office_search","relay_tool_call":true,"input":{{"pattern":"CFS|精算表","regex":true,"paths":["reports/**"],"include_ext":["xlsx","pdf"]}}}}
 ```
 "#,
                 rendered_tools = rendered_tools,
@@ -1706,6 +1709,7 @@ fn cdp_tool_catalog_section() -> String {
 fn mvp_tool_names_whitelist() -> HashSet<String> {
     tools::mvp_tool_specs()
         .into_iter()
+        .filter(|s| s.name != "invalid")
         .map(|s| s.name.to_string())
         .collect()
 }
@@ -1730,6 +1734,14 @@ pub(crate) fn parse_copilot_tool_response(
     let mut calls = parse_tool_payloads(&payloads, &whitelist, sentinel_policy);
     let mut display = stripped;
     if calls.is_empty() {
+        if let Some((d, openai_calls)) =
+            parse_top_level_openai_compatible_tool_payload(&display, &whitelist)
+        {
+            display = d;
+            calls.extend(openai_calls);
+        }
+    }
+    if calls.is_empty() {
         if let Some((d, call)) = salvage_generated_write_from_reply(&display) {
             display = d;
             calls.push(call);
@@ -1747,6 +1759,18 @@ pub(crate) fn parse_copilot_tool_response(
             "fenced JSON fallback",
             parse_one_tool_call,
         ));
+        calls.extend(parse_openai_compatible_tool_payloads(
+            &fb_payloads,
+            &whitelist,
+        ));
+    }
+    if calls.is_empty() {
+        if let Some((d, openai_calls)) =
+            parse_top_level_openai_compatible_tool_payload(&display, &whitelist)
+        {
+            display = d;
+            calls.extend(openai_calls);
+        }
     }
     if calls.is_empty() && should_try_inline_tool_json_fallback(raw, &display, parse_mode) {
         let (d, uf_payloads) = extract_unfenced_tool_json_candidates(&display, &whitelist, |v| {
@@ -2451,19 +2475,38 @@ fn parse_tool_payloads(
             Value::Array(arr) => {
                 for item in arr {
                     if let Some(t) = parse_one_tool_call(&item) {
-                        out.push(t);
+                        push_primary_tool_call_if_allowed(t, whitelist, &mut out);
+                    } else {
+                        out.extend(parse_openai_compatible_tool_value(&item, whitelist));
                     }
                 }
             }
             Value::Object(_) => {
                 if let Some(t) = parse_one_tool_call(&v) {
-                    out.push(t);
+                    push_primary_tool_call_if_allowed(t, whitelist, &mut out);
+                } else {
+                    out.extend(parse_openai_compatible_tool_value(&v, whitelist));
                 }
             }
             _ => tracing::warn!("[CdpApiClient] relay_tool JSON must be object or array"),
         }
     }
     out
+}
+
+fn push_primary_tool_call_if_allowed(
+    call: (String, String, String),
+    whitelist: &HashSet<String>,
+    out: &mut Vec<(String, String, String)>,
+) {
+    if whitelist.contains(&call.1) {
+        out.push(call);
+    } else {
+        tracing::debug!(
+            name = %call.1,
+            "[CdpApiClient] skipped relay_tool call: not in active Relay catalog"
+        );
+    }
 }
 
 fn parse_one_tool_call(v: &Value) -> Option<(String, String, String)> {
@@ -2482,6 +2525,135 @@ fn parse_one_tool_call(v: &Value) -> Option<(String, String, String)> {
     normalize_html_file_mutation_input(&name, &mut input);
     let input_str = serde_json::to_string(&input).ok()?;
     Some((id, name, input_str))
+}
+
+fn parse_top_level_openai_compatible_tool_payload(
+    text: &str,
+    whitelist: &HashSet<String>,
+) -> Option<(String, Vec<(String, String, String)>)> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || !matches!(trimmed.as_bytes().first(), Some(b'{' | b'[')) {
+        return None;
+    }
+    let value = parse_tool_payload_value(trimmed)?;
+    let calls = parse_openai_compatible_tool_value(&value, whitelist);
+    (!calls.is_empty()).then_some((String::new(), calls))
+}
+
+fn parse_openai_compatible_tool_payloads(
+    payloads: &[String],
+    whitelist: &HashSet<String>,
+) -> Vec<(String, String, String)> {
+    payloads
+        .iter()
+        .filter_map(|payload| parse_tool_payload_value(payload))
+        .flat_map(|value| parse_openai_compatible_tool_value(&value, whitelist))
+        .collect()
+}
+
+fn parse_openai_compatible_tool_value(
+    value: &Value,
+    whitelist: &HashSet<String>,
+) -> Vec<(String, String, String)> {
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .flat_map(|item| parse_openai_compatible_tool_value(item, whitelist))
+            .collect(),
+        Value::Object(obj) => {
+            let mut calls = Vec::new();
+            if let Some(items) = obj.get("tool_uses").and_then(Value::as_array) {
+                for item in items {
+                    calls.extend(parse_openai_compatible_tool_value(item, whitelist));
+                }
+            }
+            if let Some(items) = obj.get("tool_calls").and_then(Value::as_array) {
+                for item in items {
+                    calls.extend(parse_openai_compatible_tool_value(item, whitelist));
+                }
+            }
+            if let Some(call) = parse_openai_compatible_tool_call(value, whitelist) {
+                calls.push(call);
+            }
+            calls
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn parse_openai_compatible_tool_call(
+    value: &Value,
+    whitelist: &HashSet<String>,
+) -> Option<(String, String, String)> {
+    let obj = value.as_object()?;
+    let raw_name = obj
+        .get("recipient_name")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            obj.get("function")
+                .and_then(Value::as_object)
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+        })?;
+    let name = normalize_known_tool_name(raw_name, whitelist).unwrap_or_else(|| "invalid".into());
+    let id = obj
+        .get("id")
+        .or_else(|| obj.get("call_id"))
+        .or_else(|| obj.get("tool_call_id"))
+        .and_then(Value::as_str)
+        .map(String::from)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let mut input = obj
+        .get("parameters")
+        .or_else(|| obj.get("input"))
+        .cloned()
+        .or_else(|| {
+            obj.get("function")
+                .and_then(Value::as_object)
+                .and_then(|function| function.get("arguments"))
+                .cloned()
+        })
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    if let Some(arguments) = input.as_str() {
+        input = serde_json::from_str(arguments).ok()?;
+    }
+    if !input.is_object() {
+        return None;
+    }
+    let normalized = if name == "invalid" {
+        json!({
+            "id": id,
+            "name": "invalid",
+            "relay_tool_call": true,
+            "input": {
+                "tool": raw_name,
+                "error": "tool is not in the Relay tool catalog; use one of the advertised Relay tools instead",
+            },
+        })
+    } else {
+        json!({
+            "id": id,
+            "name": name,
+            "relay_tool_call": true,
+            "input": input,
+        })
+    };
+    parse_one_tool_call(&normalized)
+}
+
+fn normalize_known_tool_name(raw_name: &str, whitelist: &HashSet<String>) -> Option<String> {
+    let candidate = raw_name
+        .trim()
+        .rsplit(['.', '/', ':'])
+        .next()
+        .unwrap_or(raw_name)
+        .trim();
+    if whitelist.contains(candidate) {
+        return Some(candidate.to_string());
+    }
+    let lower = candidate.to_ascii_lowercase();
+    whitelist.contains(&lower).then_some(lower)
 }
 
 fn normalize_html_file_mutation_input(tool_name: &str, input: &mut Value) {
@@ -5594,6 +5766,58 @@ relay_tool isn’t fully supported. Syntax highlighting is based on Plain Text.
             input.get("output_mode").and_then(Value::as_str),
             Some("count")
         );
+    }
+
+    #[test]
+    fn parse_initial_normalizes_known_openai_style_tool_uses() {
+        let raw = r#"{"tool_uses":[{"recipient_name":"functions.glob","parameters":{"pattern":"**/*.rs"}}]}"#;
+        let (vis, tools) = parse_initial(raw);
+        assert!(vis.is_empty());
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "glob");
+        let input: Value =
+            serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
+        assert_eq!(
+            input.get("pattern").and_then(Value::as_str),
+            Some("**/*.rs")
+        );
+    }
+
+    #[test]
+    fn parse_initial_maps_unknown_openai_style_tool_uses_to_invalid() {
+        let raw = r#"{"tool_uses":[{"recipient_name":"functions.office365_search","parameters":{"queries":[{"query":"CFS"}]}}]}"#;
+        let (vis, tools) = parse_initial(raw);
+        assert!(vis.is_empty());
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].1, "invalid");
+        let input: Value =
+            serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
+        assert_eq!(
+            input.get("tool").and_then(Value::as_str),
+            Some("functions.office365_search")
+        );
+    }
+
+    #[test]
+    fn parse_initial_rejects_direct_invalid_tool_call() {
+        let raw = r#"```relay_tool
+{"name":"invalid","relay_tool_call":true,"input":{"tool":"functions.office365_search","error":"bad"}}
+```"#;
+        let (_vis, tools) = parse_initial(raw);
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn parse_initial_normalizes_openai_function_tool_call_arguments() {
+        let raw = r#"{"tool_calls":[{"id":"call_1","function":{"name":"read","arguments":"{\"path\":\"README.md\"}"}}]}"#;
+        let (vis, tools) = parse_initial(raw);
+        assert!(vis.is_empty());
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].0, "call_1");
+        assert_eq!(tools[0].1, "read");
+        let input: Value =
+            serde_json::from_str(&tools[0].2).expect("tool input should be valid json");
+        assert_eq!(input.get("path").and_then(Value::as_str), Some("README.md"));
     }
 
     #[test]
